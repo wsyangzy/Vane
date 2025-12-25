@@ -20,7 +20,6 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Timer,
   ChevronDown,
   ChevronUp,
   Pause,
@@ -55,6 +54,7 @@ import {
   activateGroup,
   pauseGroup,
   resumeGroup,
+  getNextAvailableChannel,
   getConfig,
   isWailsEnvironment,
   openExternalURL,
@@ -159,6 +159,46 @@ const DeactivateChannelConfirmDialog = ({ channelName, onConfirm, onCancel, load
   );
 };
 
+const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loading }) => {
+  const confirmDisabled = loading;
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-3 bg-amber-100 rounded-full">
+            <AlertTriangle className="text-amber-700" size={24} />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900">确认暂停活跃渠道</h3>
+            <p className="text-sm text-slate-500">暂停后将按路由策略切换渠道</p>
+          </div>
+        </div>
+
+        <p className="text-slate-700 mb-4">
+          确定要暂停当前活跃渠道 <span className="font-semibold">“{channelName}”</span> 吗？
+          暂停后将自动切换到可用渠道。
+        </p>
+
+        <div className="flex justify-end gap-3">
+          <Button variant="ghost" onClick={onCancel} disabled={loading}>
+            取消
+          </Button>
+          <Button
+            variant="danger"
+            icon={Pause}
+            onClick={() => onConfirm?.()}
+            loading={loading}
+            disabled={confirmDisabled}
+          >
+            确认暂停
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ============================================
 // 端点表格行组件 (v5.0 增强版 - 参考 test.jsx 设计)
 // ============================================
@@ -183,38 +223,6 @@ const HealthBadge = ({ healthy, neverChecked }) => {
     <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100">
       <XCircle size={10} className="mr-1" />
       异常
-    </div>
-  );
-};
-
-// 冷却状态徽章
-const CooldownBadge = ({ inCooldown, cooldownUntil, cooldownReason }) => {
-  if (!inCooldown) return null;
-
-  // 格式化剩余冷却时间
-  const formatRemainingTime = (until) => {
-    if (!until) return '';
-    try {
-      const endTime = new Date(until);
-      const now = new Date();
-      const diffMs = endTime - now;
-      if (diffMs <= 0) return '即将恢复';
-      const diffMins = Math.ceil(diffMs / 60000);
-      if (diffMins < 60) return `${diffMins}分钟`;
-      const diffHours = Math.floor(diffMins / 60);
-      return `${diffHours}小时${diffMins % 60}分`;
-    } catch {
-      return '';
-    }
-  };
-
-  return (
-    <div
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-600 border border-amber-200 cursor-help"
-      title={`冷却原因: ${cooldownReason || '请求失败'}\n恢复时间: ${cooldownUntil}`}
-    >
-      <Timer size={10} className="mr-1 animate-pulse" />
-      冷却中 {formatRemainingTime(cooldownUntil)}
     </div>
   );
 };
@@ -269,6 +277,12 @@ const getAuthType = (endpoint) => {
   return null;
 };
 
+const normalizeBool = (value, defaultValue = true) => {
+  if (value === undefined || value === null) return defaultValue;
+  if (value === false || value === 0 || value === '0') return false;
+  return Boolean(value);
+};
+
 // ============================================
 // 端点精简卡片（参考基础定价卡片）
 // ============================================
@@ -277,6 +291,7 @@ const EndpointMiniCard = ({
   endpoint,
   isActiveChannel,
   isSqliteMode,
+  channelFailoverEnabled = true,
   onOpen,
   onToggleFailover,
   onEdit,
@@ -284,16 +299,35 @@ const EndpointMiniCard = ({
 }) => {
   if (!endpoint) return null;
 
-  const rowActive = isSqliteMode ? !!endpoint.enabled : !!isActiveChannel;
   const inScope = endpoint._health_scope !== false;
+  const channelPaused = endpoint._channel_paused === true;
+  const showPaused = channelFailoverEnabled && channelPaused;
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
   const isNeverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
   const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
 
   const authType = getAuthType(endpoint);
-  const failoverEnabled = endpoint.failoverEnabled !== false;
-  const supportsCountTokens = !!endpoint.supportsCountTokens;
+  const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const multiplier = endpoint.costMultiplier || 1.0;
+  const isChannelActive = typeof isActiveChannel === 'boolean'
+    ? isActiveChannel
+    : Boolean(endpoint.group_is_active || endpoint.groupIsActive);
+  const endpointEnabled = isSqliteMode ? normalizeBool(endpoint.enabled, true) : isChannelActive;
+  const rowActive = failoverEnabled && isChannelActive && (!isSqliteMode || endpointEnabled);
+  const statusBadgeText = !failoverEnabled
+    ? '未启用'
+    : (showPaused
+        ? '暂停'
+        : (!isChannelActive
+        ? (channelFailoverEnabled ? '等待' : '未启用')
+        : (!endpointEnabled ? '未启用' : '')));
+  const statusBadgeTitle = !failoverEnabled
+    ? '该端点不参与渠道内故障转移，因此不会被使用/检测'
+    : (showPaused
+        ? '渠道已暂停：不参与健康检查与故障转移'
+        : (!isChannelActive
+            ? (channelFailoverEnabled ? '备用渠道端点：当前渠道非活跃' : '未启用渠道端点：渠道间故障转移未启用')
+            : (!endpointEnabled ? '端点未启用' : '')));
 
   return (
     <div
@@ -319,9 +353,12 @@ const EndpointMiniCard = ({
               <h3 className="font-bold text-slate-900 truncate min-w-0 flex-initial text-sm leading-5">{endpoint.name}</h3>
               <PriorityBadge priority={endpoint.priority || 1} className="flex-shrink-0" />
               <LatencyBadge ms={responseTime} inScope={inScope} />
-              {!rowActive && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-500 border border-slate-200 whitespace-nowrap flex-shrink-0">
-                  未启用
+              {statusBadgeText && (
+                <span
+                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-500 border border-slate-200 whitespace-nowrap flex-shrink-0"
+                  title={statusBadgeTitle || undefined}
+                >
+                  {statusBadgeText}
                 </span>
               )}
             </div>
@@ -377,28 +414,13 @@ const EndpointMiniCard = ({
         </div>
 
         <div className="flex items-center gap-2 mt-2 flex-wrap">
-          <HealthBadge healthy={endpoint.healthy} neverChecked={!inScope || isNeverChecked} />
-          <CooldownBadge
-            inCooldown={endpoint.in_cooldown || endpoint.inCooldown}
-            cooldownUntil={endpoint.cooldown_until || endpoint.cooldownUntil}
-            cooldownReason={endpoint.cooldown_reason || endpoint.cooldownReason}
-          />
+          {inScope && (
+            <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} />
+          )}
           {authType && (
             <span className="inline-flex items-center text-[10px] text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
               <ShieldCheck size={10} className="mr-1 text-amber-500" />
               {authType}
-            </span>
-          )}
-          {!failoverEnabled && (
-            <span className="inline-flex items-center text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
-              <ArrowRightLeft size={10} className="mr-1" />
-              不参与渠道内故障转移
-            </span>
-          )}
-          {supportsCountTokens && (
-            <span className="inline-flex items-center text-[10px] text-purple-600 bg-purple-50 px-2 py-0.5 rounded border border-purple-100">
-              <Calculator size={10} className="mr-1" />
-              count_tokens
             </span>
           )}
           {multiplier && multiplier !== 1.0 && (
@@ -435,8 +457,9 @@ const EndpointDetailModal = ({
   const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
   const inScope = endpoint._health_scope !== false;
   const neverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
+  const healthNeverChecked = !inScope || neverChecked;
 
-  const failoverEnabled = endpoint.failoverEnabled !== false;
+  const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
   const multiplier = endpoint.costMultiplier || 1.0;
 
@@ -489,7 +512,7 @@ const EndpointDetailModal = ({
             </p>
 
             <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
-              <HealthBadge healthy={endpoint.healthy} neverChecked={!inScope || neverChecked} />
+              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} />
               <LatencyBadge ms={responseTime} inScope={inScope} />
               <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap min-w-0 truncate max-w-[140px]">
                 最后检查 {lastCheck}
@@ -1015,6 +1038,7 @@ const ChannelCard = ({
               endpoint={endpoint}
               isActiveChannel={isActive}
               isSqliteMode={isSqliteMode}
+              channelFailoverEnabled={channelFailoverEnabled}
               onOpen={onOpenEndpoint}
               onToggleFailover={onToggleEndpointFailover}
               onEdit={onEditEndpoint}
@@ -1103,6 +1127,7 @@ const ChannelsPage = () => {
   const [deleteChannelLoading, setDeleteChannelLoading] = useState(false);
   const [deactivateChannelTarget, setDeactivateChannelTarget] = useState(null);
   const [deactivateChannelLoading, setDeactivateChannelLoading] = useState(false);
+  const [pauseActiveChannelTarget, setPauseActiveChannelTarget] = useState(null);
   const [actionError, setActionError] = useState('');
 
   // 端点详情弹窗
@@ -1348,7 +1373,7 @@ const ChannelsPage = () => {
 
   const isEndpointInHealthScope = useCallback((ep) => {
     const channel = ep?.group || ep?.channel || ep?.name || 'default';
-    const endpointFailoverEnabled = ep?.failoverEnabled !== false;
+    const endpointFailoverEnabled = normalizeBool(ep?.failoverEnabled, true);
     if (!endpointFailoverEnabled) return false;
 
     if (channelFailoverEnabled) {
@@ -1362,9 +1387,10 @@ const ChannelsPage = () => {
   const scopedDisplayEndpoints = useMemo(() => {
     return (displayEndpoints || []).map((ep) => ({
       ...ep,
-      _health_scope: isEndpointInHealthScope(ep)
+      _health_scope: isEndpointInHealthScope(ep),
+      _channel_paused: Boolean(groupInfoMap.get(ep?.group || ep?.channel || ep?.name || 'default')?.paused)
     }));
-  }, [displayEndpoints, isEndpointInHealthScope]);
+  }, [displayEndpoints, groupInfoMap, isEndpointInHealthScope]);
 
   const channelSections = useMemo(() => {
     const getChannelKey = (ep) => ep.group || ep.channel || ep.name || 'default';
@@ -1438,7 +1464,9 @@ const ChannelsPage = () => {
         total: scopedDisplayEndpoints.length,
         healthy: scopedDisplayEndpoints.filter(e => e._health_scope && e.healthy).length,
         unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !e.healthy && (e.lastCheck || e.last_check)).length,
-        unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || e.never_checked || e.neverChecked || (!e.lastCheck && !e.last_check)).length,
+        unchecked: scopedDisplayEndpoints.filter(e =>
+          !e._health_scope || e.never_checked || e.neverChecked || (!e.lastCheck && !e.last_check)
+        ).length,
         cooldown: scopedDisplayEndpoints.filter(e => e.in_cooldown || e.inCooldown).length,
         healthPercentage: scopedDisplayEndpoints.filter(e => e._health_scope).length > 0
           ? ((scopedDisplayEndpoints.filter(e => e._health_scope && e.healthy).length / scopedDisplayEndpoints.filter(e => e._health_scope).length) * 100).toFixed(1)
@@ -1775,6 +1803,10 @@ const ChannelsPage = () => {
               onOpenEndpoint={openEndpointDetail}
               onToggleEndpointFailover={isSqliteMode ? handleToggleEndpointFailover : undefined}
               onActivate={async (channelName) => {
+                if (channelFailoverEnabled && section.groupInfo?.paused) {
+                  setActionError(`激活失败：渠道「${channelName}」已暂停，无法激活。\n请先点击「恢复」后再激活该渠道。`);
+                  return;
+                }
                 try {
                   setChannelActionLoading(true);
                   await activateGroup(channelName);
@@ -1802,6 +1834,21 @@ const ChannelsPage = () => {
                 await performDeactivateChannel(channelName);
               }}
               onPause={async (channelName) => {
+                if (channelFailoverEnabled && section.groupInfo?.active) {
+                  try {
+                    const next = await getNextAvailableChannel(channelName);
+                    if (!next) {
+                      setActionError(`暂停失败：渠道「${channelName}」为当前活跃渠道，但没有可切换的渠道。\n请检查是否其他渠道已全部暂停或无可用端点。`);
+                      return;
+                    }
+                    setPauseActiveChannelTarget({ name: channelName, next });
+                    return;
+                  } catch (err) {
+                    console.error('获取下一个可用渠道失败:', err);
+                    setActionError(`暂停失败: ${getErrorMessage(err, '无法获取可切换渠道')}`);
+                    return;
+                  }
+                }
                 try {
                   setChannelActionLoading(true);
                   await pauseGroup(channelName);
@@ -1934,6 +1981,34 @@ const ChannelsPage = () => {
             const name = deactivateChannelTarget.name;
             setDeactivateChannelTarget(null);
             await performDeactivateChannel(name);
+          }}
+        />
+      )}
+
+      {pauseActiveChannelTarget?.name && (
+        <PauseActiveChannelConfirmDialog
+          channelName={pauseActiveChannelTarget.name}
+          nextChannel={pauseActiveChannelTarget.next}
+          loading={channelActionLoading}
+          onCancel={() => setPauseActiveChannelTarget(null)}
+          onConfirm={async () => {
+            const name = pauseActiveChannelTarget.name;
+            setPauseActiveChannelTarget(null);
+            try {
+              setChannelActionLoading(true);
+              await pauseGroup(name);
+              if (isSqliteMode) {
+                await loadStorageStatus();
+              } else {
+                await refresh();
+              }
+              await loadGroups();
+            } catch (err) {
+              console.error('暂停活跃渠道失败:', err);
+              setActionError(`暂停失败: ${getErrorMessage(err, '未知错误')}`);
+            } finally {
+              setChannelActionLoading(false);
+            }
           }}
         />
       )}

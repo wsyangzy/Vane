@@ -76,6 +76,30 @@ func (a *App) GetGroups() []GroupInfo {
 	return result
 }
 
+// GetNextAvailableChannel 获取“排除指定渠道后的下一个可用渠道”（用于前端提示/确认）。
+// 注意：该方法仅用于 UI 辅助，不会改变任何状态。
+func (a *App) GetNextAvailableChannel(excludeChannel string) (string, error) {
+	a.mu.RLock()
+	manager := a.endpointManager
+	a.mu.RUnlock()
+
+	if manager == nil {
+		return "", fmt.Errorf("端点管理器未初始化")
+	}
+	cfg := manager.GetConfig()
+	if cfg == nil || !cfg.Failover.Enabled {
+		return "", fmt.Errorf("渠道间故障转移未启用")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// best-effort: 确保运行时的“渠道暂停状态”是最新的（SQLite 模式下来自 channels 表）
+	a.syncChannelFailoverEnabledToEndpointManager(ctx)
+
+	return manager.SelectNextAvailableChannel(excludeChannel)
+}
+
 // ActivateGroup 激活指定组
 // v6.0: 组名 = 渠道(channel)（SQLite 模式）；未配置 channel 时回退为端点名（YAML 模式兼容）
 func (a *App) ActivateGroup(name string) error {
@@ -116,22 +140,69 @@ func (a *App) PauseGroup(name string) error {
 	a.mu.RLock()
 	manager := a.endpointManager
 	channelService := a.channelService
+	endpointService := a.endpointService
 	a.mu.RUnlock()
 
 	if manager == nil {
 		return fmt.Errorf("端点管理器未初始化")
 	}
 
+	// 若暂停的是当前活跃渠道，并且启用了渠道间故障转移，则需要确保存在可切换渠道。
+	wasActive := false
+	if gm := manager.GetGroupManager(); gm != nil {
+		for _, g := range gm.GetActiveGroups() {
+			if g != nil && g.Name == name {
+				wasActive = true
+				break
+			}
+		}
+	}
+	autoSwitchEnabled := false
+	if cfg := manager.GetConfig(); cfg != nil {
+		autoSwitchEnabled = cfg.Failover.Enabled
+	}
+
 	// v6.2+: 暂停/恢复为“无限期直到手动恢复”，且在 SQLite 模式下持久化到 channels.failover_enabled
 	if channelService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
+		var next string
+		if wasActive && autoSwitchEnabled {
+			// best-effort: 先同步当前“渠道暂停状态”
+			a.syncChannelFailoverEnabledToEndpointManager(ctx)
+			var err error
+			next, err = manager.SelectNextAvailableChannel(name)
+			if err != nil || next == "" {
+				return fmt.Errorf("无法暂停活跃渠道（无可切换渠道）: %w", err)
+			}
+		}
+
 		if err := channelService.SetFailoverEnabled(ctx, name, false); err != nil {
 			return err
 		}
 		a.syncChannelFailoverEnabledToEndpointManager(ctx)
 		a.emitEndpointUpdate()
+
+		// SQLite 模式：暂停活跃渠道后，按路由策略自动切换到下一个可用渠道。
+		if wasActive && autoSwitchEnabled && next != "" {
+			if endpointService == nil {
+				return fmt.Errorf("无法自动切换渠道：端点服务未启用")
+			}
+			if err := endpointService.ActivateChannel(ctx, next); err != nil {
+				return fmt.Errorf("暂停成功但自动切换失败: %w", err)
+			}
+			a.emitEndpointUpdate()
+		}
+
 		return nil
+	}
+
+	// YAML 模式：预检查是否存在可切换渠道，避免暂停活跃渠道后无可用渠道。
+	if wasActive && autoSwitchEnabled {
+		if next, err := manager.SelectNextAvailableChannel(name); err != nil || next == "" {
+			return fmt.Errorf("无法暂停活跃渠道（无可切换渠道）: %w", err)
+		}
 	}
 
 	return manager.ManualPauseGroup(name, 0)

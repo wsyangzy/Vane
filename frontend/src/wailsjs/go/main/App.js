@@ -94,6 +94,10 @@ export function GetGroups() {
   return window['go']['main']['App']['GetGroups']();
 }
 
+export function GetNextAvailableChannel(arg1) {
+  return window['go']['main']['App']['GetNextAvailableChannel'](arg1);
+}
+
 export function GetKeysOverview() {
   return window['go']['main']['App']['GetKeysOverview']();
 }

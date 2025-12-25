@@ -104,8 +104,7 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 
 			if errorCtx.ErrorType == ErrorTypeNoHealthyEndpoints {
 				// 尝试获取所有活跃端点，忽略健康状态
-				allActiveEndpoints := rh.endpointManager.GetGroupManager().FilterEndpointsByActiveGroups(
-					rh.endpointManager.GetAllEndpoints())
+				allActiveEndpoints := rh.endpointManager.GetActiveEndpointsIgnoringHealth()
 
 				if len(allActiveEndpoints) > 0 {
 					slog.InfoContext(ctx, fmt.Sprintf("🔄 [健康检查回退] [%s] 忽略健康状态，尝试 %d 个活跃端点",

@@ -49,6 +49,8 @@ export function GetEndpointsByChannel(arg1:string):Promise<Array<main.EndpointRe
 
 export function GetGroups():Promise<Array<main.GroupInfo>>;
 
+export function GetNextAvailableChannel(arg1:string):Promise<string>;
+
 export function GetKeysOverview():Promise<main.KeysOverviewResult>;
 
 export function GetLogStreamStatus():Promise<boolean>;

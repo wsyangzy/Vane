@@ -395,6 +395,14 @@ export const getGroupsRaw = async () => {
   return Array.isArray(groups) ? groups : [];
 };
 
+// 获取下一个可用渠道（用于“暂停活跃渠道”前的提示/确认）
+export const getNextAvailableChannel = async (excludeChannel) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const name = String(excludeChannel || '').trim();
+  return await WailsApp.GetNextAvailableChannel(name);
+};
+
 export const activateGroup = async (groupName) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');

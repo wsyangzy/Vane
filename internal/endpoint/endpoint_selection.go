@@ -59,6 +59,35 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 	return nil
 }
 
+// GetActiveEndpointsIgnoringHealth 返回当前活跃渠道内“参与故障转移”的端点列表（忽略健康状态）。
+// 用途：当健康检查判定“无健康端点”时，作为兜底允许继续尝试请求转发；但必须仍然遵守 failover_enabled 语义。
+func (m *Manager) GetActiveEndpointsIgnoringHealth() []*Endpoint {
+	if m == nil || m.groupManager == nil {
+		return nil
+	}
+
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.GetAllEndpoints())
+	if len(activeEndpoints) == 0 {
+		return nil
+	}
+
+	filtered := make([]*Endpoint, 0, len(activeEndpoints))
+	for _, ep := range activeEndpoints {
+		if ep == nil {
+			continue
+		}
+		failoverEnabled := true
+		if ep.Config.FailoverEnabled != nil {
+			failoverEnabled = *ep.Config.FailoverEnabled
+		}
+		if !failoverEnabled {
+			continue
+		}
+		filtered = append(filtered, ep)
+	}
+	return filtered
+}
+
 // sortHealthyEndpoints sorts healthy endpoints based on strategy with optional logging
 func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*Endpoint {
 	// Sort based on strategy
