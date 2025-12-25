@@ -731,6 +731,9 @@ export const getEndpointRecords = async () => {
     headers: r.headers || {},
     priority: r.priority,
     failoverEnabled: r.failover_enabled,
+    // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+    skip_health_check: r.skip_health_check,
+    skipHealthCheck: r.skip_health_check,
     cooldownSeconds: r.cooldown_seconds,
     timeoutSeconds: r.timeout_seconds,
     supportsCountTokens: r.supports_count_tokens,
@@ -776,6 +779,9 @@ export const getEndpointRecord = async (name) => {
     headers: r.headers || {},
     priority: r.priority,
     failoverEnabled: r.failover_enabled,
+    // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+    skip_health_check: r.skip_health_check,
+    skipHealthCheck: r.skip_health_check,
     cooldownSeconds: r.cooldown_seconds,
     timeoutSeconds: r.timeout_seconds,
     supportsCountTokens: r.supports_count_tokens,
@@ -797,6 +803,8 @@ export const createEndpointRecord = async (input) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
+  const skipHealthCheck = input?.skipHealthCheck ?? input?.skip_health_check ?? false;
+
   // 转换为后端期望的格式
   const record = {
     channel: input.channel || '',
@@ -807,6 +815,7 @@ export const createEndpointRecord = async (input) => {
     headers: input.headers || {},
     priority: parseInt(input.priority) || 1,
     failover_enabled: input.failoverEnabled !== false,
+    skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
@@ -832,6 +841,8 @@ export const updateEndpointRecord = async (name, input) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
+  const skipHealthCheck = input?.skipHealthCheck ?? input?.skip_health_check ?? false;
+
   // 转换为后端期望的格式
   const record = {
     channel: input.channel || '',
@@ -842,6 +853,7 @@ export const updateEndpointRecord = async (name, input) => {
     headers: input.headers || {},
     priority: parseInt(input.priority) || 1,
     failover_enabled: input.failoverEnabled !== false,
+    skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
@@ -867,6 +879,8 @@ export const updateEndpointRecordByID = async (id, input) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
+  const skipHealthCheck = input?.skipHealthCheck ?? input?.skip_health_check ?? false;
+
   const record = {
     channel: input.channel || '',
     name: input.name || '',
@@ -876,6 +890,7 @@ export const updateEndpointRecordByID = async (id, input) => {
     headers: input.headers || {},
     priority: parseInt(input.priority) || 1,
     failover_enabled: input.failoverEnabled !== false,
+    skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,

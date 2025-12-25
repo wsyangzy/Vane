@@ -12,35 +12,55 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Timer
+  Timer,
+  ShieldOff
 } from 'lucide-react';
 import PriorityBadge from './PriorityBadge.jsx';
 
 // ============================================
 // 健康状态徽章
+// v6.1: 支持四种状态 - skipped/unchecked/healthy/unhealthy
 // ============================================
 
-const HealthBadge = ({ healthy, neverChecked }) => {
-  if (neverChecked) {
-    return (
-      <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-400 border border-slate-200">
-        <Clock size={10} className="mr-1" />
-        未检测
-      </div>
-    );
+const HealthBadge = ({ healthState }) => {
+  switch (healthState) {
+    case 'skipped':
+      return (
+        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-200 whitespace-nowrap flex-shrink-0">
+          <ShieldOff size={10} className="mr-1" />
+          跳过检测
+        </div>
+      );
+    case 'unchecked':
+      return (
+        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-400 border border-slate-200">
+          <Clock size={10} className="mr-1" />
+          未检测
+        </div>
+      );
+    case 'healthy':
+      return (
+        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-600 border border-emerald-100">
+          <CheckCircle2 size={10} className="mr-1" />
+          健康
+        </div>
+      );
+    case 'unhealthy':
+      return (
+        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100">
+          <XCircle size={10} className="mr-1" />
+          异常
+        </div>
+      );
+    default:
+      // 兼容：未提供 health_state 时回退到旧逻辑
+      return (
+        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-400 border border-slate-200">
+          <Clock size={10} className="mr-1" />
+          -
+        </div>
+      );
   }
-
-  return healthy ? (
-    <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-600 border border-emerald-100">
-      <CheckCircle2 size={10} className="mr-1" />
-      健康
-    </div>
-  ) : (
-    <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100">
-      <XCircle size={10} className="mr-1" />
-      异常
-    </div>
-  );
 };
 
 // ============================================
@@ -133,7 +153,8 @@ const EndpointRow = ({
   const isSqliteMode = storageMode === 'sqlite';
   const isActive = isSqliteMode ? endpoint.enabled : endpoint.group_is_active;
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
-  const isNeverChecked = endpoint.never_checked || !endpoint.lastCheck && !endpoint.last_check && !endpoint.updatedAt;
+  // v6.1: 使用 health_state 字段
+  const healthState = endpoint.health_state || endpoint.healthState;
 
   // 获取认证类型显示
   const getAuthType = () => {
@@ -181,7 +202,7 @@ const EndpointRow = ({
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
               {endpoint.channel || endpoint.group || '-'}
             </span>
-            <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} />
+            <HealthBadge healthState={healthState} />
             <CooldownBadge
               inCooldown={endpoint.in_cooldown || endpoint.inCooldown}
               cooldownUntil={endpoint.cooldown_until || endpoint.cooldownUntil}

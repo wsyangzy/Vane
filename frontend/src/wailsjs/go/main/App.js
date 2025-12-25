@@ -94,10 +94,6 @@ export function GetGroups() {
   return window['go']['main']['App']['GetGroups']();
 }
 
-export function GetNextAvailableChannel(arg1) {
-  return window['go']['main']['App']['GetNextAvailableChannel'](arg1);
-}
-
 export function GetKeysOverview() {
   return window['go']['main']['App']['GetKeysOverview']();
 }
@@ -116,6 +112,10 @@ export function GetModelPricingStorageStatus() {
 
 export function GetModelPricings() {
   return window['go']['main']['App']['GetModelPricings']();
+}
+
+export function GetNextAvailableChannel(arg1) {
+  return window['go']['main']['App']['GetNextAvailableChannel'](arg1);
 }
 
 export function GetPortInfo() {

@@ -39,11 +39,12 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
 		// 检查是否在请求冷却中
 		inCooldown := !endpoint.Status.CooldownUntil.IsZero() && now.Before(endpoint.Status.CooldownUntil)
 		endpoint.mutex.RUnlock()
 
-		if isHealthy && !inCooldown {
+		if (isHealthy || skipHealthCheck) && !inCooldown {
 			healthy = append(healthy, endpoint)
 		} else if inCooldown {
 			slog.Debug(fmt.Sprintf("⏭️ [端点选择] 跳过冷却中的端点: %s", endpoint.Config.Name))
@@ -145,10 +146,13 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 		}
 
 		endpoint.mutex.RLock()
-		if endpoint.Status.Healthy {
+		isHealthy := endpoint.Status.Healthy
+		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
+		endpoint.mutex.RUnlock()
+
+		if isHealthy || skipHealthCheck {
 			healthy = append(healthy, endpoint)
 		}
-		endpoint.mutex.RUnlock()
 	}
 
 	if len(healthy) == 0 {

@@ -49,8 +49,6 @@ export function GetEndpointsByChannel(arg1:string):Promise<Array<main.EndpointRe
 
 export function GetGroups():Promise<Array<main.GroupInfo>>;
 
-export function GetNextAvailableChannel(arg1:string):Promise<string>;
-
 export function GetKeysOverview():Promise<main.KeysOverviewResult>;
 
 export function GetLogStreamStatus():Promise<boolean>;
@@ -60,6 +58,8 @@ export function GetModelPricing(arg1:string):Promise<main.ModelPricingInfo>;
 export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageStatus>;
 
 export function GetModelPricings():Promise<Array<main.ModelPricingInfo>>;
+
+export function GetNextAvailableChannel(arg1:string):Promise<string>;
 
 export function GetPortInfo():Promise<main.PortInfo>;
 

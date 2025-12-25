@@ -80,23 +80,42 @@ const PasswordInput = ({ label, name, value, onChange, placeholder, required, he
   );
 };
 
-const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false }) => {
+const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, compact = false }) => {
   const isChecked = !!checked;
   const toggle = () => {
     if (disabled) return;
     onChange?.({ target: { name, type: 'checkbox', checked: !isChecked } });
   };
 
+  const sizeClasses = compact
+    ? {
+        wrapper: 'items-center p-2 rounded-lg',
+        label: 'text-xs font-semibold text-slate-800',
+        help: help ? <p className="text-[10px] text-slate-400 mt-0.5 leading-snug sm:hidden">{help}</p> : null,
+        switch: 'h-5 w-9',
+        knob: 'h-4 w-4',
+        knobTranslate: isChecked ? 'translate-x-4' : 'translate-x-0.5',
+      }
+    : {
+        wrapper: 'items-start p-3 rounded-xl',
+        label: 'text-sm font-medium text-slate-800',
+        help: help ? <p className="text-xs text-slate-400 mt-1">{help}</p> : null,
+        switch: 'h-6 w-11',
+        knob: 'h-5 w-5',
+        knobTranslate: isChecked ? 'translate-x-5' : 'translate-x-0.5',
+      };
+
   return (
     <div
       className={`
-        flex items-start justify-between gap-3 p-3 rounded-xl border transition-colors
+        flex justify-between gap-3 border transition-colors ${sizeClasses.wrapper}
         ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white hover:bg-slate-50/60'}
         ${isChecked ? 'border-emerald-200' : 'border-slate-200'}
       `}
       onClick={toggle}
       role="button"
       tabIndex={disabled ? -1 : 0}
+      title={compact ? help : undefined}
       onKeyDown={(e) => {
         if (disabled) return;
         if (e.key === 'Enter' || e.key === ' ') {
@@ -106,8 +125,8 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false }
       }}
     >
       <div className="min-w-0">
-        <div className="text-sm font-medium text-slate-800">{label}</div>
-        {help && <p className="text-xs text-slate-400 mt-1">{help}</p>}
+        <div className={sizeClasses.label}>{label}</div>
+        {sizeClasses.help}
       </div>
 
       <button
@@ -121,7 +140,7 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false }
           toggle();
         }}
         className={`
-          relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border transition-colors
+          relative inline-flex ${sizeClasses.switch} flex-shrink-0 items-center rounded-full border transition-colors
           focus:outline-none focus:ring-2 focus:ring-indigo-500/30
           ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}
           ${isChecked ? 'bg-emerald-500 border-emerald-500' : 'bg-slate-200 border-slate-200'}
@@ -129,8 +148,8 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false }
       >
         <span
           className={`
-            inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform
-            ${isChecked ? 'translate-x-5' : 'translate-x-0.5'}
+            inline-block ${sizeClasses.knob} rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform
+            ${sizeClasses.knobTranslate}
           `}
         />
       </button>
@@ -167,6 +186,7 @@ const EndpointForm = ({
         apiKey: endpoint.apiKey || '', // v5.0: 本地桌面应用，直接显示已保存的 ApiKey
         priority: endpoint.priority || 1,
         failoverEnabled: endpoint.failoverEnabled !== false,
+        skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false, // v6.1
         cooldownSeconds: endpoint.cooldownSeconds || '',
         timeoutSeconds: endpoint.timeoutSeconds || 300,
         supportsCountTokens: endpoint.supportsCountTokens || false,
@@ -186,6 +206,7 @@ const EndpointForm = ({
       apiKey: '',
       priority: 1,
       failoverEnabled: true,
+      skipHealthCheck: false, // v6.1: 默认不跳过健康检查
       cooldownSeconds: '',
       timeoutSeconds: 300,
       supportsCountTokens: false,
@@ -472,14 +493,25 @@ const EndpointForm = ({
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <FormCheckbox
                 label="参与渠道内故障转移"
                 name="failoverEnabled"
                 checked={formData.failoverEnabled}
                 onChange={handleChange}
                 disabled={loading}
+                compact
                 help="关闭后该端点不会参与同一渠道内的端点故障转移"
+              />
+
+              <FormCheckbox
+                label="跳过健康检查"
+                name="skipHealthCheck"
+                checked={formData.skipHealthCheck}
+                onChange={handleChange}
+                disabled={loading}
+                compact
+                help="部分中转商不支持健康检查端点，勾选后将跳过定时健康检测"
               />
 
               <FormCheckbox
@@ -488,6 +520,7 @@ const EndpointForm = ({
                 checked={formData.supportsCountTokens}
                 onChange={handleChange}
                 disabled={loading}
+                compact
                 help="端点是否支持 Token 计数 API"
               />
             </div>

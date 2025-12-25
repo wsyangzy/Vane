@@ -208,6 +208,7 @@ export namespace main {
 	    headers: Record<string, string>;
 	    priority: number;
 	    failover_enabled: boolean;
+	    skip_health_check: boolean;
 	    cooldown_seconds?: number;
 	    timeout_seconds: number;
 	    supports_count_tokens: boolean;
@@ -232,6 +233,7 @@ export namespace main {
 	        this.headers = source["headers"];
 	        this.priority = source["priority"];
 	        this.failover_enabled = source["failover_enabled"];
+	        this.skip_health_check = source["skip_health_check"];
 	        this.cooldown_seconds = source["cooldown_seconds"];
 	        this.timeout_seconds = source["timeout_seconds"];
 	        this.supports_count_tokens = source["supports_count_tokens"];
@@ -314,6 +316,8 @@ export namespace main {
 	    group_priority: number;
 	    group_is_active: boolean;
 	    healthy: boolean;
+	    health_state: string;
+	    skip_health_check: boolean;
 	    last_check: string;
 	    response_time_ms: number;
 	    consecutive_fail: number;
@@ -332,6 +336,8 @@ export namespace main {
 	        this.group_priority = source["group_priority"];
 	        this.group_is_active = source["group_is_active"];
 	        this.healthy = source["healthy"];
+	        this.health_state = source["health_state"];
+	        this.skip_health_check = source["skip_health_check"];
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
 	        this.consecutive_fail = source["consecutive_fail"];
@@ -405,6 +411,7 @@ export namespace main {
 	    headers: Record<string, string>;
 	    priority: number;
 	    failover_enabled: boolean;
+	    skip_health_check: boolean;
 	    cooldown_seconds?: number;
 	    timeout_seconds: number;
 	    supports_count_tokens: boolean;
@@ -440,6 +447,7 @@ export namespace main {
 	        this.headers = source["headers"];
 	        this.priority = source["priority"];
 	        this.failover_enabled = source["failover_enabled"];
+	        this.skip_health_check = source["skip_health_check"];
 	        this.cooldown_seconds = source["cooldown_seconds"];
 	        this.timeout_seconds = source["timeout_seconds"];
 	        this.supports_count_tokens = source["supports_count_tokens"];

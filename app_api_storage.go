@@ -33,6 +33,7 @@ type EndpointRecordInfo struct {
 	Headers                     map[string]string `json:"headers"`
 	Priority                    int               `json:"priority"`
 	FailoverEnabled             bool              `json:"failover_enabled"`
+	SkipHealthCheck             bool              `json:"skip_health_check"` // v6.1: 跳过健康检查
 	CooldownSeconds             *int              `json:"cooldown_seconds"`
 	TimeoutSeconds              int               `json:"timeout_seconds"`
 	SupportsCountTokens         bool              `json:"supports_count_tokens"`
@@ -64,6 +65,7 @@ type CreateEndpointInput struct {
 	Headers                       map[string]string `json:"headers"`
 	Priority                      int               `json:"priority"`
 	FailoverEnabled               bool              `json:"failover_enabled"`
+	SkipHealthCheck               bool              `json:"skip_health_check"` // v6.1: 跳过健康检查
 	CooldownSeconds               *int              `json:"cooldown_seconds"`
 	TimeoutSeconds                int               `json:"timeout_seconds"`
 	SupportsCountTokens           bool              `json:"supports_count_tokens"`
@@ -208,6 +210,9 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	if v, ok := detail["failover_enabled"].(bool); ok {
 		info.FailoverEnabled = v
 	}
+	if v, ok := detail["skip_health_check"].(bool); ok {
+		info.SkipHealthCheck = v
+	}
 	if v, ok := detail["timeout_seconds"].(int); ok {
 		info.TimeoutSeconds = v
 	}
@@ -266,6 +271,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		Headers:                       input.Headers,
 		Priority:                      input.Priority,
 		FailoverEnabled:               input.FailoverEnabled,
+		SkipHealthCheck:               input.SkipHealthCheck, // v6.1
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
@@ -391,6 +397,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		Headers:                       input.Headers,
 		Priority:                      input.Priority,
 		FailoverEnabled:               input.FailoverEnabled,
+		SkipHealthCheck:               input.SkipHealthCheck, // v6.1
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
@@ -522,6 +529,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 		Headers:                       input.Headers,
 		Priority:                      input.Priority,
 		FailoverEnabled:               input.FailoverEnabled,
+		SkipHealthCheck:               input.SkipHealthCheck, // v6.1
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
@@ -1265,6 +1273,7 @@ func (a *App) recordToInfo(r *store.EndpointRecord) EndpointRecordInfo {
 		Headers:                     r.Headers,
 		Priority:                    r.Priority,
 		FailoverEnabled:             r.FailoverEnabled,
+		SkipHealthCheck:             r.SkipHealthCheck, // v6.1
 		CooldownSeconds:             r.CooldownSeconds,
 		TimeoutSeconds:              r.TimeoutSeconds,
 		SupportsCountTokens:         r.SupportsCountTokens,

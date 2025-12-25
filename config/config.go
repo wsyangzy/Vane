@@ -212,6 +212,7 @@ type EndpointConfig struct {
 	GroupPriority       int               `yaml:"group-priority,omitempty"` // DEPRECATED in v4.0: use Priority instead
 	FailoverEnabled     *bool             `yaml:"failover_enabled,omitempty"` // v4.0: 是否参与故障转移，默认: true
 	Cooldown            *time.Duration    `yaml:"cooldown,omitempty"`       // v4.0: 端点级冷却时间（可选），默认使用全局配置
+	SkipHealthCheck     bool              `yaml:"skip_health_check,omitempty"` // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
 	Token               string            `yaml:"token,omitempty"`      // 单 Token 配置（向后兼容）
 	ApiKey              string            `yaml:"api-key,omitempty"`    // 单 API Key 配置（向后兼容）
 	Tokens              []TokenConfig     `yaml:"tokens,omitempty"`     // 多 Token 配置（新功能）

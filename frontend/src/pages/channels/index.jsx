@@ -17,6 +17,7 @@ import {
   ArrowRightLeft,
   Calculator,
   ShieldCheck,
+  ShieldOff,
   CheckCircle2,
   XCircle,
   Clock,
@@ -203,8 +204,16 @@ const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loa
 // 端点表格行组件 (v5.0 增强版 - 参考 test.jsx 设计)
 // ============================================
 
-// 健康状态徽章（健康/异常/未检测）
-const HealthBadge = ({ healthy, neverChecked }) => {
+// 健康状态徽章（健康/异常/未检测/跳过检测）
+const HealthBadge = ({ healthy, neverChecked, skipped }) => {
+  if (skipped) {
+    return (
+      <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-50 text-purple-600 border border-purple-200 whitespace-nowrap flex-shrink-0">
+        <ShieldOff size={10} className="mr-1" />
+        跳过检测
+      </div>
+    );
+  }
   if (neverChecked) {
     return (
       <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-50 text-slate-400 border border-slate-200">
@@ -304,6 +313,7 @@ const EndpointMiniCard = ({
   const showPaused = channelFailoverEnabled && channelPaused;
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
   const isNeverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
+  const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
   const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
 
   const authType = getAuthType(endpoint);
@@ -415,7 +425,7 @@ const EndpointMiniCard = ({
 
         <div className="flex items-center gap-2 mt-2 flex-wrap">
           {inScope && (
-            <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} />
+            <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} skipped={isSkipHealthCheck} />
           )}
           {authType && (
             <span className="inline-flex items-center text-[10px] text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
@@ -457,6 +467,7 @@ const EndpointDetailModal = ({
   const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
   const inScope = endpoint._health_scope !== false;
   const neverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
+  const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
   const healthNeverChecked = !inScope || neverChecked;
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
@@ -512,7 +523,7 @@ const EndpointDetailModal = ({
             </p>
 
             <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
-              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} />
+              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
               <LatencyBadge ms={responseTime} inScope={inScope} />
               <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap min-w-0 truncate max-w-[140px]">
                 最后检查 {lastCheck}
@@ -850,6 +861,10 @@ const ChannelCard = ({
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
 
+  const activeHighlightClass = channelFailoverEnabled
+    ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'
+    : 'border-indigo-300 ring-2 ring-indigo-100';
+
   const visibleEndpoints = expanded ? endpoints : endpoints.slice(0, 2);
   const hasMore = endpoints.length > 2;
   const pauseDisabled = loading || !channelFailoverEnabled;
@@ -878,7 +893,7 @@ const ChannelCard = ({
   return (
     <div className={`
       bg-white rounded-2xl border shadow-sm overflow-hidden h-full flex flex-col
-      ${isActive ? 'border-indigo-300 ring-2 ring-indigo-100' : 'border-slate-200/60'}
+      ${isActive ? activeHighlightClass : 'border-slate-200/60'}
     `}>
       {/* 渠道头部 */}
       <div className="px-6 py-4 border-b border-slate-100">

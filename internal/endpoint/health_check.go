@@ -5,6 +5,7 @@ package endpoint
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -173,6 +174,43 @@ func (m *Manager) performHealthChecks() {
 
 // checkEndpointHealth checks the health of a single endpoint
 func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
+	// v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+	if endpoint.Config.SkipHealthCheck {
+		// 仅进行“可达性/延迟探测”，不根据 HTTP 状态码判定健康与否，避免误判为不健康；
+		// 仍保留 NeverChecked = true，用于前端展示“跳过检测”。
+		start := time.Now()
+		responseTime := time.Duration(0)
+
+		baseURL := strings.TrimSpace(endpoint.Config.URL)
+		probeURL := baseURL + m.config.Health.HealthPath
+		req, err := http.NewRequestWithContext(m.ctx, http.MethodGet, probeURL, nil)
+		if err == nil {
+			token := m.GetTokenForEndpoint(endpoint)
+			if token == "" {
+				token = m.GetApiKeyForEndpoint(endpoint)
+			}
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+
+			resp, doErr := m.client.Do(req)
+			responseTime = time.Since(start)
+			if resp != nil && resp.Body != nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+				_ = resp.Body.Close()
+			}
+			_ = doErr
+		}
+
+		endpoint.mutex.Lock()
+		endpoint.Status.LastCheck = time.Now()
+		endpoint.Status.ResponseTime = responseTime
+		endpoint.Status.Healthy = true // 假定可用，依赖实际请求/兜底机制验证
+		// 保持 NeverChecked = true 以区分"跳过检测"与"正常健康"
+		endpoint.mutex.Unlock()
+		return
+	}
+
 	start := time.Now()
 
 	baseURL := strings.TrimSpace(endpoint.Config.URL)
@@ -277,6 +315,30 @@ func (e *Endpoint) GetStatus() EndpointStatus {
 	e.mutex.RLock()
 	defer e.mutex.RUnlock()
 	return e.Status
+}
+
+// GetHealthState 返回端点的健康状态字符串用于前端展示
+// 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "unhealthy"(不健康)
+func (e *Endpoint) GetHealthState() string {
+	// 1. 配置为跳过健康检查
+	if e.Config.SkipHealthCheck {
+		return "skipped"
+	}
+
+	e.mutex.RLock()
+	defer e.mutex.RUnlock()
+
+	// 2. 从未检测过
+	if e.Status.NeverChecked {
+		return "unchecked"
+	}
+
+	// 3. 健康或不健康
+	if e.Status.Healthy {
+		return "healthy"
+	}
+
+	return "unhealthy"
 }
 
 // ManualHealthCheck performs a manual health check on a specific endpoint by name
