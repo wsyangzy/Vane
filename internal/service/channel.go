@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"cc-forwarder/internal/store"
+	"claude-request-forwarder/internal/store"
 )
 
 type ChannelService struct {

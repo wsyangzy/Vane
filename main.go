@@ -1,4 +1,4 @@
-// main.go - CC-Forwarder Wails 应用入口
+// main.go - Claude Request Forwarder Wails 应用入口
 // 保留原有的核心功能，添加 Wails 桌面应用支持
 
 package main
@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/logging"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/logging"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -137,7 +137,7 @@ func main() {
 
 		// 单实例：当应用已隐藏到托盘时，再次启动会唤起主窗口
 		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "cc-forwarder-desktop",
+			UniqueId: "claude-request-forwarder-desktop",
 			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
 				if app != nil {
 					app.ShowMainWindow()

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // 全局配置实例，用于debug功能开关控制

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/middleware"
-	"cc-forwarder/internal/proxy"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/middleware"
+	"claude-request-forwarder/internal/proxy"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // StreamingTokenPreservationTestSuite 流式请求Token保存测试套件

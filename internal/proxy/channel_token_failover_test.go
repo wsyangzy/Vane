@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
 )
 
 type authCapturingServer struct {

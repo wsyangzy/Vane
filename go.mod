@@ -1,4 +1,4 @@
-module cc-forwarder
+module claude-request-forwarder
 
 go 1.23.0
 

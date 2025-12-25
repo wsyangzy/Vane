@@ -1,7 +1,7 @@
 package main
 
 import (
-	"cc-forwarder/internal/logging"
+	"claude-request-forwarder/internal/logging"
 )
 
 // ============================================

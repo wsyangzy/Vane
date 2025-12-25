@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/store"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/store"
 )
 
 // ============================================================

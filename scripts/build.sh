@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# CC-Forwarder 本地构建测试脚本
+# Claude Request Forwarder 本地构建测试脚本
 # 用于在推送标签前测试构建过程
 
 set -e
@@ -57,11 +57,11 @@ do
     GOARCH=${PLATFORM#*/}
     
     # 设置二进制文件名
-    BINARY_NAME="cc-forwarder"
-    ARCHIVE_NAME="cc-forwarder-${GOOS}-${GOARCH}"
+    BINARY_NAME="claude-request-forwarder"
+    ARCHIVE_NAME="claude-request-forwarder-${GOOS}-${GOARCH}"
     
     if [ "$GOOS" = "windows" ]; then
-        BINARY_NAME="cc-forwarder.exe"
+        BINARY_NAME="claude-request-forwarder.exe"
     fi
     
     echo -e "${YELLOW}📦 构建 ${GOOS}/${GOARCH}...${NC}"
@@ -133,7 +133,7 @@ echo 🌐 Web界面: http://localhost:8010 (如已启用)
 echo.
 
 echo 🚀 启动 CC-Forwarder...
-cc-forwarder.exe -config config\config.yaml
+claude-request-forwarder.exe -config config\config.yaml
 pause
 EOF
     else
@@ -163,7 +163,7 @@ echo "🌐 Web界面: http://localhost:8010 (如已启用)"
 echo ""
 
 echo "🚀 启动 CC-Forwarder..."
-./cc-forwarder -config config/config.yaml
+./claude-request-forwarder -config config/config.yaml
 EOF
         chmod +x "dist/${ARCHIVE_NAME}/start.sh"
         chmod +x "dist/${ARCHIVE_NAME}/${BINARY_NAME}"
@@ -194,10 +194,10 @@ ls -la dist/
 
 echo ""
 echo -e "${BLUE}🧪 测试版本信息:${NC}"
-if [ -f "dist/cc-forwarder-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64/cc-forwarder" ]; then
-    dist/cc-forwarder-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64/cc-forwarder -version
-elif [ -f "dist/cc-forwarder-darwin-arm64/cc-forwarder" ] && [ "$(uname -m)" = "arm64" ]; then
-    dist/cc-forwarder-darwin-arm64/cc-forwarder -version
+if [ -f "dist/claude-request-forwarder-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64/claude-request-forwarder" ]; then
+    dist/claude-request-forwarder-$(uname -s | tr '[:upper:]' '[:lower:]')-amd64/claude-request-forwarder -version
+elif [ -f "dist/claude-request-forwarder-darwin-arm64/claude-request-forwarder" ] && [ "$(uname -m)" = "arm64" ]; then
+    dist/claude-request-forwarder-darwin-arm64/claude-request-forwarder -version
 else
     echo "请手动运行对应平台的二进制文件测试版本信息"
 fi

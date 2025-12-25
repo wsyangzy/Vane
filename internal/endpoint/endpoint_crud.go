@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/events"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/events"
 )
 
 // SyncEndpoints 从数据库同步端点（v5.0 Desktop 专用）

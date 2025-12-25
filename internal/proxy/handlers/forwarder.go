@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/transport"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/transport"
 )
 
 // Forwarder 负责HTTP请求转发和头部处理

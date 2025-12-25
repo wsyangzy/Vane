@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"cc-forwarder/internal/events"
+	"claude-request-forwarder/internal/events"
 )
 
 // GetKeyManager 返回 Key 管理器

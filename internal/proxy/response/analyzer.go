@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/internal/monitor"
-	"cc-forwarder/internal/tracking"
-	"cc-forwarder/internal/utils"
+	"claude-request-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/utils"
 )
 
 // ResponseFormat 定义响应格式类型

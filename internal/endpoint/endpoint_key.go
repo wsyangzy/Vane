@@ -1,6 +1,6 @@
 package endpoint
 
-import "cc-forwarder/config"
+import "claude-request-forwarder/config"
 
 const endpointKeySeparator = "::"
 

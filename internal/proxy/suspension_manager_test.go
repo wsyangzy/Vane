@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

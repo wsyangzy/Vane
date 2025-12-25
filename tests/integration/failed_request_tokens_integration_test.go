@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/internal/middleware"
-	"cc-forwarder/internal/proxy"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/middleware"
+	"claude-request-forwarder/internal/proxy"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // TestFailedRequestTokensIntegration 集成测试：验证失败请求Token记录的完整流程

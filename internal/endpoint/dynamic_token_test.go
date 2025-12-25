@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 )
 
 func TestDynamicTokenResolution(t *testing.T) {

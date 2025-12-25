@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 )
 
 func TestTriggerRequestFailoverWithFailedEndpoints_SetsCooldownForAllFailedEndpoints(t *testing.T) {

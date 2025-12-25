@@ -8,14 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/events"
-	"cc-forwarder/internal/middleware"
-	"cc-forwarder/internal/monitor"
-	"cc-forwarder/internal/proxy/handlers"
-	"cc-forwarder/internal/proxy/response"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/events"
+	"claude-request-forwarder/internal/middleware"
+	"claude-request-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/proxy/handlers"
+	"claude-request-forwarder/internal/proxy/response"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // Context key for endpoint information

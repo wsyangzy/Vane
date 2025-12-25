@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/internal/middleware"
-	"cc-forwarder/internal/proxy"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/middleware"
+	"claude-request-forwarder/internal/proxy"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // TestStreamingTokenLossDetection 验证流式Token丢失问题检测

@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/events"
-	"cc-forwarder/internal/monitor"
-	"cc-forwarder/internal/proxy/handlers"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/events"
+	"claude-request-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/proxy/handlers"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // MonitoringMiddlewareInterface 定义监控中间件接口（扩展版）

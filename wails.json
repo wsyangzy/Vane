@@ -1,6 +1,6 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "cc-forwarder",
+  "name": "claude-request-forwarder",
   "outputfilename": "Claude Request Forwarder",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
@@ -15,7 +15,7 @@
     "companyName": "Claude Request Forwarder",
     "productName": "Claude Request Forwarder",
     "productVersion": "6.0.3",
-    "copyright": "Copyright © 2025 CC-Forwarder",
+    "copyright": "Copyright © 2025 Claude Request Forwarder",
     "comments": "Claude Request Forwarder 本地代理转发服务"
   }
 }

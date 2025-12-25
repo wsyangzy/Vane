@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // ErrorType 错误类型枚举

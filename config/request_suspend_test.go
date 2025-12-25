@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 )
 
 // TestRequestSuspendConfig_Defaults tests default values for RequestSuspendConfig

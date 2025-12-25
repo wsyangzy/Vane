@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 	_ "modernc.org/sqlite"
 )
 

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"cc-forwarder/internal/store"
+	"claude-request-forwarder/internal/store"
 )
 
 // SettingCategory 设置分类常量

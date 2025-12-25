@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"cc-forwarder/internal/store"
+	"claude-request-forwarder/internal/store"
 )
 
 // ============================================================

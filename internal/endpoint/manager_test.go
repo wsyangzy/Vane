@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/events"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/events"
 )
 
 // MockEventBus 用于测试的模拟EventBus

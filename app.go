@@ -19,18 +19,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/events"
-	"cc-forwarder/internal/logging"
-	"cc-forwarder/internal/middleware"
-	"cc-forwarder/internal/proxy"
-	"cc-forwarder/internal/service"
-	"cc-forwarder/internal/store"
-	"cc-forwarder/internal/tracking"
-	"cc-forwarder/internal/transport"
-	"cc-forwarder/internal/tray"
-	"cc-forwarder/internal/utils"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/events"
+	"claude-request-forwarder/internal/logging"
+	"claude-request-forwarder/internal/middleware"
+	"claude-request-forwarder/internal/proxy"
+	"claude-request-forwarder/internal/service"
+	"claude-request-forwarder/internal/store"
+	"claude-request-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/transport"
+	"claude-request-forwarder/internal/tray"
+	"claude-request-forwarder/internal/utils"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -113,7 +113,7 @@ func (a *App) startup(ctx context.Context) {
 	a.setupTray()
 
 	// 3. 显示启动信息
-	a.logger.Info("🚀 CC-Forwarder 桌面版启动中...",
+	a.logger.Info("🚀 Claude Request Forwarder 桌面版启动中...",
 		"version", Version,
 		"config_file", a.configPath)
 
@@ -190,7 +190,7 @@ func (a *App) startup(ctx context.Context) {
 	a.startHistoryCollector()
 
 	a.isRunning = true
-	a.logger.Info("✅ CC-Forwarder 启动完成",
+	a.logger.Info("✅ Claude Request Forwarder 启动完成",
 		"proxy_port", a.config.Server.Port)
 }
 
@@ -215,7 +215,7 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 
 	if logger != nil {
-		logger.Info("🛑 正在关闭 CC-Forwarder...")
+		logger.Info("🛑 正在关闭 Claude Request Forwarder...")
 	}
 
 	// 1. 停止接收新请求
@@ -291,7 +291,7 @@ func (a *App) shutdown(ctx context.Context) {
 	a.mu.Unlock()
 
 	if logger != nil {
-		logger.Info("✅ CC-Forwarder 已关闭")
+		logger.Info("✅ Claude Request Forwarder 已关闭")
 	}
 }
 
@@ -346,7 +346,7 @@ func (a *App) setupTray() {
 
 	controller, err := tray.Start(ctx, tray.Options{
 		Icon:    trayIconIco,
-		Tooltip: fmt.Sprintf("CC-Forwarder %s", Version),
+		Tooltip: fmt.Sprintf("Claude Request Forwarder %s", Version),
 		OnShow:  a.ShowMainWindow,
 		OnQuit:  a.RequestQuit,
 	})
@@ -889,7 +889,7 @@ func (a *App) setupStoreDB() {
 		if isLikelySQLiteBusyOrLocked(err) || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded") {
 			dbReady = false
 			a.logger.Warn("⚠️ 管理数据库连接暂不可用（可能被占用/初始化耗时较长），将继续启动并允许稍后重试", "error", err)
-			a.emitNotification("warning", "数据库暂不可用", "检测到数据库可能被占用或初始化耗时较长；管理功能（设置/渠道/定价）可能暂不可用。请确保只运行一个 CC-Forwarder 实例，稍等后点击刷新，必要时重启。")
+			a.emitNotification("warning", "数据库暂不可用", "检测到数据库可能被占用或初始化耗时较长；管理功能（设置/渠道/定价）可能暂不可用。请确保只运行一个 Claude Request Forwarder 实例，稍等后点击刷新，必要时重启。")
 		} else {
 			_ = db.Close()
 			a.logger.Warn("⚠️ 管理数据库连接不可用", "error", err)

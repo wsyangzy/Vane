@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/events"
-	"cc-forwarder/internal/transport"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/events"
+	"claude-request-forwarder/internal/transport"
 )
 
 // EndpointStatus represents the health status of an endpoint

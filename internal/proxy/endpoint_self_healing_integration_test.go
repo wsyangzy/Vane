@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // TestEndpointSelfHealingIntegration 完整的端点自愈集成测试

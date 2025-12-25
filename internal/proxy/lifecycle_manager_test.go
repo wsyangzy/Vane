@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/tracking"
 )
 
 func TestRequestLifecycleManager_NewRequestLifecycleManager(t *testing.T) {

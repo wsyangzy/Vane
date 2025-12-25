@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 )
 
 func TestGetHealthyEndpoints_PriorityScopedToActiveChannel(t *testing.T) {

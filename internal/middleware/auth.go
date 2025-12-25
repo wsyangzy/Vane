@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 	"net/http"
 	"strings"
 )

@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/transport"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/transport"
 )
 
 // CountTokensHandler 处理 /v1/messages/count_tokens 请求

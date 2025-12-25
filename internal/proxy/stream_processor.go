@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/internal/proxy/response"
-	"cc-forwarder/internal/tracking"
-	"cc-forwarder/internal/utils"
+	"claude-request-forwarder/internal/proxy/response"
+	"claude-request-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/utils"
 )
 
 // 缓冲区大小常量

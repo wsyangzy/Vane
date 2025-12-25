@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/internal/monitor"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/tracking"
 )
 
 // ParseResult 解析结果结构体

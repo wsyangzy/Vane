@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 )
 
 // TestEmergencyActivationScenarios 测试应急激活功能的各种场景

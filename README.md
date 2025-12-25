@@ -1,7 +1,7 @@
-# CC-Forwarder Desktop
+# Claude Request Forwarder Desktop
 
 <p align="center">
-  <img src="build/appicon.png" width="128" height="128" alt="CC-Forwarder Desktop">
+  <img src="build/appicon.png" width="128" height="128" alt="Claude Request Forwarder Desktop">
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 ## 概述
 
-CC-Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构建的跨平台桌面应用，专为 Claude API 用户设计。它作为本地代理运行，提供智能请求转发、多端点管理、自动故障恢复等企业级功能，同时记录完整的使用统计和成本数据。
+Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构建的跨平台桌面应用，专为 Claude API 用户设计。它作为本地代理运行，提供智能请求转发、多端点管理、自动故障恢复等企业级功能，同时记录完整的使用统计和成本数据。
 
 ### 为什么需要它？
 
@@ -76,14 +76,14 @@ CC-Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构建的跨平�
 
 ### 方式一：下载安装包
 
-从 [Releases](https://github.com/xiaozhaodong/cc-forwarder-desktop/releases) 页面下载：
+从 [Releases](https://github.com/xiaozhaodong/claude-request-forwarder-desktop/releases) 页面下载：
 
 | 平台 | 文件 |
 |------|------|
-| macOS (Intel) | `CC-Forwarder-darwin-amd64.zip` |
-| macOS (Apple Silicon) | `CC-Forwarder-darwin-arm64.zip` |
-| Windows | `CC-Forwarder-windows-amd64.zip` |
-| Linux | `CC-Forwarder-linux-amd64.tar.gz` |
+| macOS (Intel) | `Claude-Request-Forwarder-darwin-amd64.zip` |
+| macOS (Apple Silicon) | `Claude-Request-Forwarder-darwin-arm64.zip` |
+| Windows | `Claude-Request-Forwarder-windows-amd64.zip` |
+| Linux | `Claude-Request-Forwarder-linux-amd64.tar.gz` |
 
 ### 方式二：从源码构建
 
@@ -92,8 +92,8 @@ CC-Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构建的跨平�
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
 # 2. 克隆项目
-git clone https://github.com/xiaozhaodong/cc-forwarder-desktop.git
-cd cc-forwarder-desktop
+git clone https://github.com/xiaozhaodong/claude-request-forwarder-desktop.git
+cd claude-request-forwarder-desktop
 
 # 3. 安装前端依赖
 cd frontend && npm install && cd ..
@@ -165,7 +165,7 @@ usage_tracking:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      CC-Forwarder Desktop                     │
+│                 Claude Request Forwarder Desktop              │
 ├──────────────────────────────────────────────────────────────┤
 │                                                               │
 │  ┌─────────────────────┐      ┌─────────────────────────┐   │

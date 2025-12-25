@@ -41,7 +41,7 @@ go test ./...
 ## 项目结构
 
 ```
-cc-forwarder-desktop/
+claude-request-forwarder-desktop/
 ├── main.go                 # Wails 应用入口
 ├── app.go                  # 主应用逻辑，绑定前端 API
 ├── app_api_*.go           # 前端 API 接口模块

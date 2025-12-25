@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/internal/monitor"
-	"cc-forwarder/internal/proxy"
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/proxy"
+	"claude-request-forwarder/internal/tracking"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

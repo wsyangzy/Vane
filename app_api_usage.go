@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"cc-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/tracking"
 )
 
 const usageDBQueryTimeout = 8 * time.Second

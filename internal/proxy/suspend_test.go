@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/proxy"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/proxy"
 )
 
 // TestRetryHandler_GetSuspendedRequestsCount tests suspended requests count management

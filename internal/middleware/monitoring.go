@@ -8,9 +8,9 @@ import (
 	"runtime"
 	"time"
 
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/events"
-	"cc-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/events"
+	"claude-request-forwarder/internal/monitor"
 )
 
 // MonitoringMiddleware provides health and metrics endpoints

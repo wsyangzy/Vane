@@ -8,7 +8,7 @@
 - **tests/**：单元与集成测试分层，`tests/unit/{module}` 与 `tests/integration/request_suspend` 对应主要质量保障。
 
 ## 构建、测试与开发命令
-- `go build -o cc-forwarder`：构建本地二进制，默认启用当前平台。
+- `go build -o claude-request-forwarder`：构建本地二进制，默认启用当前平台。
 - `go run . -config config/config.yaml`：快速本地验证，支持 `--no-tui`。
 - `./scripts/build.sh vX.Y.Z`：多平台交叉编译并打包 dist，生成校验和。
 - `./scripts/run_tests.sh` 或 `--unit` / `--integration`：执行测试矩阵并输出 `test_reports`。

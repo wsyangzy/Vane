@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"log"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/store"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/store"
 
 	_ "github.com/mattn/go-sqlite3"
 )

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/proxy/handlers" // 🎯 [挂起取消区分] 新增handlers包导入
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/proxy/handlers" // 🎯 [挂起取消区分] 新增handlers包导入
 )
 
 // SuspensionManager 管理请求挂起逻辑

@@ -1,7 +1,7 @@
 package endpoint
 
 import (
-	"cc-forwarder/config"
+	"claude-request-forwarder/config"
 	"testing"
 	"time"
 )

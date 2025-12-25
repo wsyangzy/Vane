@@ -476,7 +476,7 @@
   - 简化 `shutdown()`：直接调用 `trayController.Stop()`，由 systray 自动清理。
   - 托盘菜单优化：保留"显示主窗口"和"退出"，移除"隐藏主窗口"（KISS 原则）。
 - 最终效果：
-  - ✅ Tooltip 正常显示（"CC-Forwarder {version}"）
+  - ✅ Tooltip 正常显示（"Claude Request Forwarder {version}"）
   - ✅ 右键菜单可靠响应（显示主窗口、退出）
   - ✅ 点击窗口 X 隐藏到托盘，后台服务持续运行
   - ✅ 托盘"退出"正常关闭应用

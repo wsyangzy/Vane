@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/transport"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/transport"
 )
 
 // FastTestResult represents the result of a fast endpoint test

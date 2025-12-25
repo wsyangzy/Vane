@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"cc-forwarder/internal/utils"
+	"claude-request-forwarder/internal/utils"
 )
 
 // SetOnHealthCheckComplete 设置健康检查完成回调

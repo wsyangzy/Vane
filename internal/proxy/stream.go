@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/monitor"
-	"cc-forwarder/internal/transport"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/monitor"
+	"claude-request-forwarder/internal/transport"
 )
 
 // handleSSERequest handles Server-Sent Events streaming requests

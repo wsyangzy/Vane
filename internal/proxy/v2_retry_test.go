@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
 )
 
 // mockEndpointServer 模拟端点服务器，支持配置失败次数

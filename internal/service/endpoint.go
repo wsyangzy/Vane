@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"time"
 
-	"cc-forwarder/config"
-	"cc-forwarder/internal/endpoint"
-	"cc-forwarder/internal/store"
+	"claude-request-forwarder/config"
+	"claude-request-forwarder/internal/endpoint"
+	"claude-request-forwarder/internal/store"
 )
 
 // EndpointService 端点管理业务服务
