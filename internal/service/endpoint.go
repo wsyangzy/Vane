@@ -527,6 +527,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		Headers:             record.Headers,
 		Timeout:             time.Duration(record.TimeoutSeconds) * time.Second,
 		SupportsCountTokens: record.SupportsCountTokens,
+		SkipHealthCheck:     record.SkipHealthCheck, // v6.1
 	}
 
 	// v5.0: 设置 Enabled（是否作为代理端点）
@@ -557,6 +558,7 @@ func (s *EndpointService) configToRecord(cfg config.EndpointConfig) *store.Endpo
 		Headers:             cfg.Headers,
 		Priority:            cfg.Priority,
 		FailoverEnabled:     true, // 默认参与故障转移
+		SkipHealthCheck:     cfg.SkipHealthCheck, // v6.1
 		TimeoutSeconds:      int(cfg.Timeout.Seconds()),
 		SupportsCountTokens: cfg.SupportsCountTokens,
 		CostMultiplier:      1.0,

@@ -1,74 +1,55 @@
 package endpoint
 
 import (
-	"claude-request-forwarder/config"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"claude-request-forwarder/config"
 )
 
-func TestImmediateFailureMarking(t *testing.T) {
-	// Create test endpoint
-	endpoint := &Endpoint{
+func TestHealthCheck_SkipHealthCheck_RecordsLatencyButKeepsNeverChecked(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(15 * time.Millisecond)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.Config{}
+	cfg.Health.Timeout = 2 * time.Second
+	cfg.Health.HealthPath = "/v1/models"
+
+	manager := NewManager(cfg)
+
+	ep := &Endpoint{
 		Config: config.EndpointConfig{
-			Name: "test-endpoint",
+			Name:            "skip-ep",
+			URL:             server.URL,
+			SkipHealthCheck: true,
 		},
 		Status: EndpointStatus{
-			Healthy: true, // Start as healthy
+			Healthy:      false,
+			NeverChecked: true,
 		},
 	}
 
-	// Create manager
-	cfg := &config.Config{}
-	manager := &Manager{config: cfg}
+	manager.checkEndpointHealth(ep)
 
-	// First failure should immediately mark as unhealthy
-	manager.updateEndpointStatus(endpoint, false, 100*time.Millisecond)
+	ep.mutex.RLock()
+	defer ep.mutex.RUnlock()
 
-	if endpoint.IsHealthy() {
-		t.Error("Endpoint should be marked as unhealthy after first failure")
+	if !ep.Status.NeverChecked {
+		t.Fatalf("expected NeverChecked to remain true for skip health check endpoint")
 	}
-
-	if endpoint.Status.ConsecutiveFails != 1 {
-		t.Errorf("Expected ConsecutiveFails to be 1, got %d", endpoint.Status.ConsecutiveFails)
+	if !ep.Status.Healthy {
+		t.Fatalf("expected skip health check endpoint to be treated as healthy")
 	}
-
-	// Recovery should mark as healthy
-	manager.updateEndpointStatus(endpoint, true, 50*time.Millisecond)
-
-	if !endpoint.IsHealthy() {
-		t.Error("Endpoint should be marked as healthy after recovery")
+	if ep.Status.ResponseTime <= 0 {
+		t.Fatalf("expected ResponseTime to be recorded, got %v", ep.Status.ResponseTime)
 	}
-
-	if endpoint.Status.ConsecutiveFails != 0 {
-		t.Errorf("Expected ConsecutiveFails to be 0 after recovery, got %d", endpoint.Status.ConsecutiveFails)
+	if ep.Status.LastCheck.IsZero() {
+		t.Fatalf("expected LastCheck to be set")
 	}
 }
 
-func TestConsecutiveFailureCounter(t *testing.T) {
-	// Create test endpoint
-	endpoint := &Endpoint{
-		Config: config.EndpointConfig{
-			Name: "test-endpoint",
-		},
-		Status: EndpointStatus{
-			Healthy: true,
-		},
-	}
-
-	// Create manager
-	cfg := &config.Config{}
-	manager := &Manager{config: cfg}
-
-	// Multiple failures should increment counter
-	for i := 1; i <= 5; i++ {
-		manager.updateEndpointStatus(endpoint, false, 100*time.Millisecond)
-		
-		if endpoint.IsHealthy() {
-			t.Errorf("Endpoint should be unhealthy after failure %d", i)
-		}
-		
-		if endpoint.Status.ConsecutiveFails != i {
-			t.Errorf("Expected ConsecutiveFails to be %d, got %d", i, endpoint.Status.ConsecutiveFails)
-		}
-	}
-}

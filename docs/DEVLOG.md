@@ -5,7 +5,7 @@
 本文件用于记录本轮“端点 → 渠道（channel）”重构及相关优化的**详细实现**，便于后续继续迭代、排查回归与快速定位代码。
 
 起始基线：`25e801c8ddf9b2be5c683dd4221e888477dbb8f3`（tag: `v5.1.0`）  
-当前 HEAD：`333efc8`（本地工作区存在未提交变更）  
+当前 HEAD：`a25ecec feat(channels): 实现暂停活跃渠道自动切换与确认机制`  
 合并节点：`919e510 Merge branch 'feat/channel-priority'`
 
 ---
@@ -487,7 +487,45 @@
   - `internal/tray/tray_windows.go.bak`：备份（原自定义实现）
   - `internal/tray/tray_stub.go`：更新 build tag
   - `app.go`：简化 `setupTray()`、`shutdown()`、`beforeClose()`；移除 `watchMinimiseToTray()` 和 `trayStopCh` 字段
-  - `main.go`：更新注释说明托盘语义
+- `main.go`：更新注释说明托盘语义
+
+### 7.17 `a25ecec` feat(channels): 实现暂停活跃渠道自动切换与确认机制
+- 做了什么（后端 + 前端联动）：
+  - 仅在启用“渠道间故障转移”时：
+    - 暂停当前活跃渠道前，先计算“下一个可用渠道”用于 UI 提示；若无可切换渠道则直接提示失败，避免“点击无效/暂停后无激活渠道”的困惑。
+    - SQLite 模式下，暂停活跃渠道后会按路由策略自动切换到下一个可用渠道（与停用渠道行为对齐）。
+  - 对“已暂停渠道”的激活操作给出明确提示（启用渠道间故障转移时），避免无效点击。
+- 怎么做：
+  - 后端新增 Wails API：`GetNextAvailableChannel(excludeChannel)`，复用 `SelectNextAvailableChannel` 的可用性判定逻辑，仅用于 UI 辅助。
+  - `PauseGroup` 增加“活跃渠道可切换性”的预检查；SQLite 模式下暂停后显式激活 next 渠道。
+  - 前端渠道页新增“暂停活跃渠道”确认弹窗，展示将切换到的目标渠道；无可切换时弹出错误提示。
+- 代表文件：
+  - `app_api_group.go`
+  - `internal/endpoint/failover.go`
+  - `internal/service/endpoint.go`
+  - `frontend/src/pages/channels/index.jsx`
+  - `frontend/src/utils/wailsApi.js`
+
+### 7.18（working tree）fix(health/skip): “跳过健康检查”独立状态 + 统计/图表对齐 + 延迟探测
+- 背景问题：
+  - 部分中转商不适配 `/v1/models` 健康检查，导致端点长期被判定为异常；需要允许“跳过健康检查”但仍可参与路由。
+  - 早期实现中：跳过检测的端点既会被 UI 当作“健康”，又无法记录延迟；且统计与概览图表无法区分“跳过检测”与“未检测”。
+- 做了什么：
+  - 运行时语义：`SkipHealthCheck=true` 的端点作为独立状态 `skipped` 展示，但路由候选仍视为“可用”（与兜底机制目标一致）。
+  - 延迟探测：跳过健康检查时不再用 HTTP 状态码判健康，但会进行一次轻量可达性探测以记录 `ResponseTime`（用于排序/展示）。
+  - 统计口径：渠道页顶部统计与概览端点健康图表新增第 4 类 `跳过检测`，不再混入“健康/未检测”。
+  - SQLite/Wails 数据对齐：补齐 `health_state/never_checked` 字段回传，避免前端统计口径偏差。
+  - UI：端点详情徽章与布局对齐，减少误导与信息噪声。
+- 代表文件：
+  - `internal/endpoint/health_check.go`
+  - `internal/endpoint/health_check_test.go`
+  - `app_api_storage.go`
+  - `app_api_chart.go`
+  - `frontend/src/pages/channels/index.jsx`
+  - `frontend/src/pages/overview/components/EndpointHealthChart.jsx`
+  - `frontend/src/hooks/useEndpointsData.js`
+  - `frontend/src/utils/api.js`
+  - `frontend/src/utils/wailsApi.js`
 
 ---
 

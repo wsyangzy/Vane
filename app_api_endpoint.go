@@ -22,6 +22,8 @@ type EndpointInfo struct {
 	GroupPriority   int     `json:"group_priority"`
 	GroupIsActive   bool    `json:"group_is_active"`
 	Healthy         bool    `json:"healthy"`
+	HealthState     string  `json:"health_state"`      // v6.1: 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
+	SkipHealthCheck bool    `json:"skip_health_check"` // v6.1: 是否跳过健康检查
 	LastCheck       string  `json:"last_check"`
 	ResponseTimeMs  float64 `json:"response_time_ms"`
 	ConsecutiveFail int     `json:"consecutive_fail"`
@@ -63,10 +65,12 @@ func (a *App) GetEndpoints() []EndpointInfo {
 		info := EndpointInfo{
 			Name:            ep.Config.Name,
 			URL:             ep.Config.URL,
-			Channel:         ep.Config.Channel, // v5.0: 渠道标签
+			Channel:         ep.Config.Channel,     // v5.0: 渠道标签
 			Group:           routeGroup,
 			Priority:        ep.Config.Priority,
 			Healthy:         status.Healthy,
+			HealthState:     ep.GetHealthState(),   // v6.1: 健康状态枚举
+			SkipHealthCheck: ep.Config.SkipHealthCheck, // v6.1: 跳过健康检查
 			ConsecutiveFail: status.ConsecutiveFails,
 			ResponseTimeMs:  float64(status.ResponseTime) / float64(time.Millisecond),
 		}

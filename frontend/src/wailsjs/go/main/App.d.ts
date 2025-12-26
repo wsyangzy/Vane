@@ -59,6 +59,8 @@ export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageS
 
 export function GetModelPricings():Promise<Array<main.ModelPricingInfo>>;
 
+export function GetNextAvailableChannel(arg1:string):Promise<string>;
+
 export function GetPortInfo():Promise<main.PortInfo>;
 
 export function GetProxyURL():Promise<string>;

@@ -269,6 +269,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE endpoints ADD COLUMN cache_read_cost_multiplier REAL DEFAULT 1.0",
 			description: "端点缓存读取成本倍率字段",
 		},
+		{
+			checkColumn: "skip_health_check",
+			alterSQL:    "ALTER TABLE endpoints ADD COLUMN skip_health_check INTEGER DEFAULT 0",
+			description: "端点跳过健康检查字段 (v6.1)",
+		},
 	}
 
 	// channels 迁移：早期可能只有 name，后续新增 website

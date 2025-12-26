@@ -129,6 +129,7 @@ type EndpointHealthData struct {
 	Healthy   int `json:"healthy"`
 	Unhealthy int `json:"unhealthy"`
 	Unchecked int `json:"unchecked"`
+	Skipped   int `json:"skipped"`
 	Total     int `json:"total"`
 }
 
@@ -149,6 +150,7 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 	healthyCount := 0
 	unhealthyCount := 0
 	uncheckedCount := 0
+	skippedCount := 0
 
 	// v6.x: 健康检查范围需要与运行时健康检查一致（避免 UI 统计与实际检查范围不一致）
 	// - 启用“渠道间故障转移”时：检查所有“参与渠道间故障转移”的渠道内、且“参与故障转移”的端点
@@ -199,6 +201,12 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 			continue
 		}
 
+		// v6.1: 配置为跳过健康检查的端点，单独计数为 skipped（可用但不参与主动健康判定）
+		if endpoint.Config.SkipHealthCheck {
+			skippedCount++
+			continue
+		}
+
 		status := endpoint.GetStatus()
 		if status.NeverChecked {
 			uncheckedCount++
@@ -215,6 +223,7 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 		Healthy:   healthyCount,
 		Unhealthy: unhealthyCount,
 		Unchecked: uncheckedCount,
+		Skipped:   skippedCount,
 		Total:     len(endpoints),
 	}
 }

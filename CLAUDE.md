@@ -2,11 +2,15 @@
 
 本文件为 Claude Code 提供项目指导信息。
 
+> 📅 **最后更新**: 2025-12-26 08:41:20
+> 🏗️ **架构版本**: v6.0.4
+> 📦 **模块数量**: 17 个核心模块（9 个后端 + 8 个前端）
+
 ## 项目概述
 
 **CC-Forwarder Desktop** 是一款基于 Wails 构建的跨平台桌面应用，用于 Claude API 请求的智能转发、负载均衡和故障恢复。
 
-- **当前版本**: v6.0.3
+- **当前版本**: v6.0.4
 - **技术栈**: Go + Wails v2 + React + Vite
 - **支持平台**: macOS / Windows / Linux
 
@@ -80,6 +84,113 @@ claude-request-forwarder-desktop/
 │   └── darwin/            # macOS 资源
 └── docs/                  # 文档
 ```
+
+## 架构全景图
+
+```mermaid
+graph TB
+    subgraph "Frontend (React)"
+        Pages["📱 Pages"]
+        Overview["概览 Overview"]
+        Channels["渠道 Channels"]
+        Requests["请求追踪 Requests"]
+        Settings["设置 Settings"]
+        Pricing["定价 Pricing"]
+        LogViewer["日志查看器"]
+
+        Pages --> Overview
+        Pages --> Channels
+        Pages --> Requests
+        Pages --> Settings
+        Pages --> Pricing
+        Pages --> LogViewer
+    end
+
+    subgraph "Backend (Go)"
+        App["🎯 App Entry<br/>(app.go)"]
+
+        subgraph "Core Modules"
+            Proxy["🔄 Proxy<br/>请求转发引擎"]
+            Endpoint["🎯 Endpoint<br/>端点管理"]
+            Tracking["📊 Tracking<br/>使用追踪"]
+            Service["⚙️ Service<br/>业务服务层"]
+            Store["💾 Store<br/>数据持久化"]
+        end
+
+        subgraph "Support Modules"
+            Events["📡 Events<br/>事件系统"]
+            Logging["📝 Logging<br/>日志系统"]
+            Middleware["🔐 Middleware<br/>中间件"]
+            Monitor["📈 Monitor<br/>监控"]
+            Tray["🖼️ Tray<br/>托盘管理"]
+        end
+    end
+
+    subgraph "Storage"
+        SQLite["SQLite DB"]
+        MySQL["MySQL DB"]
+        HotPool["🔥 Memory Hot Pool"]
+    end
+
+    Pages <-->|Wails Bindings| App
+    App --> Proxy
+    App --> Service
+
+    Proxy --> Endpoint
+    Proxy --> Tracking
+    Proxy --> Events
+
+    Service --> Store
+    Service --> Endpoint
+
+    Tracking --> HotPool
+    HotPool --> SQLite
+    HotPool --> MySQL
+
+    Store --> SQLite
+
+    Middleware --> Logging
+    Events --> Logging
+
+    style Proxy fill:#4a9eff
+    style Endpoint fill:#50c878
+    style Tracking fill:#ff6b6b
+    style HotPool fill:#ffd700
+```
+
+## 模块索引
+
+### 🎯 后端核心模块
+
+| 模块 | 路径 | 职责 | 详细文档 |
+|------|------|------|----------|
+| **Endpoint** | `internal/endpoint/` | 端点管理、健康检查、故障转移 | [📄 CLAUDE.md](internal/endpoint/CLAUDE.md) |
+| **Proxy** | `internal/proxy/` | 请求转发、流式处理、错误恢复 | [📄 CLAUDE.md](internal/proxy/CLAUDE.md) |
+| **Tracking** | `internal/tracking/` | 使用追踪、热池架构、数据归档 | [📄 CLAUDE.md](internal/tracking/CLAUDE.md) |
+| **Service** | `internal/service/` | 业务逻辑层（渠道/端点/定价） | [📄 CLAUDE.md](internal/service/CLAUDE.md) |
+| **Store** | `internal/store/` | 数据持久化层（SQLite 访问） | [📄 CLAUDE.md](internal/store/CLAUDE.md) |
+| **Events** | `internal/events/` | 事件总线系统 | 核心文件: `bus.go` |
+| **Logging** | `internal/logging/` | 日志广播与事件发射 | 核心文件: `broadcast_handler.go` |
+| **Middleware** | `internal/middleware/` | 认证、日志、监控中间件 | 核心文件: `auth.go` |
+| **Monitor** | `internal/monitor/` | 系统监控 | 核心文件: `monitor.go` |
+
+### 📱 前端页面模块
+
+| 页面 | 路径 | 功能描述 | 详细文档 |
+|------|------|----------|----------|
+| **Overview** | `frontend/src/pages/overview/` | KPI 概览、图表展示 | [📄 CLAUDE.md](frontend/src/pages/CLAUDE.md#overview) |
+| **Channels** | `frontend/src/pages/channels/` | 渠道管理、优先级配置 | [📄 CLAUDE.md](frontend/src/pages/CLAUDE.md#channels) |
+| **Requests** | `frontend/src/pages/requests/` | 请求实时追踪与过滤 | [📄 CLAUDE.md](frontend/src/pages/CLAUDE.md#requests) |
+| **Settings** | `frontend/src/pages/settings/` | 系统配置管理 | [📄 CLAUDE.md](frontend/src/pages/CLAUDE.md#settings) |
+| **Pricing** | `frontend/src/pages/pricing/` | 模型定价管理 | [📄 CLAUDE.md](frontend/src/pages/CLAUDE.md#pricing) |
+| **Log Viewer** | `frontend/src/pages/log-viewer/` | 实时日志查看器 | [📄 CLAUDE.md](frontend/src/pages/CLAUDE.md#log-viewer) |
+
+### 🔧 配置与构建
+
+| 类型 | 路径 | 说明 |
+|------|------|------|
+| **配置文件** | `config/` | YAML 配置管理 |
+| **构建资源** | `build/` | 图标、manifest、平台资源 |
 
 ## 核心架构
 

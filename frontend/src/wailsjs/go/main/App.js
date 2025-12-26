@@ -114,6 +114,10 @@ export function GetModelPricings() {
   return window['go']['main']['App']['GetModelPricings']();
 }
 
+export function GetNextAvailableChannel(arg1) {
+  return window['go']['main']['App']['GetNextAvailableChannel'](arg1);
+}
+
 export function GetPortInfo() {
   return window['go']['main']['App']['GetPortInfo']();
 }
