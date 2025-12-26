@@ -15,6 +15,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { fetchRequestTrendData } from '@utils/api.js';
+import { formatHHMM, padTimeSeries } from '@utils/chartTime.js';
 import { CustomSelect } from '@components/ui';
 
 // 时间范围选项
@@ -27,12 +28,22 @@ const TIME_RANGE_OPTIONS = [
   { value: 1440, label: '24小时' }
 ];
 
-const RequestTrendChart = () => {
+const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState(30);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshIntervalRef = useRef(null);
+
+  const maxMinutes = Math.max(1, Math.floor((uptimeSeconds || 0) / 60));
+  const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
+  const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
+
+  useEffect(() => {
+    if (timeRange > maxMinutes && options.length > 0) {
+      setTimeRange(options[options.length - 1].value);
+    }
+  }, [maxMinutes, options, timeRange]);
 
   // 加载数据
   const loadData = useCallback(async (showRefreshing = false) => {
@@ -41,7 +52,13 @@ const RequestTrendChart = () => {
     }
     try {
       const data = await fetchRequestTrendData(timeRange);
-      setChartData(data);
+      setChartData(
+        padTimeSeries(data, {
+          minutes: timeRange,
+          stepMs: 30 * 1000,
+          defaults: { total: 0, success: 0, fail: 0 },
+        })
+      );
     } catch (error) {
       console.error('加载请求趋势数据失败:', error);
     } finally {
@@ -72,21 +89,11 @@ const RequestTrendChart = () => {
   // 监听 SSE 图表更新事件
   useEffect(() => {
     const handleChartUpdate = (event) => {
-      const { chart_type, data } = event.detail || {};
+      const { chart_type } = event.detail || {};
       if (chart_type === 'request_trends' || chart_type === 'requestTrend') {
-        // 如果 SSE 推送的是 Chart.js 格式，需要转换
-        if (data?.labels && data?.datasets) {
-          const rechartsData = data.labels.map((label, index) => ({
-            time: label,
-            total: data.datasets[0]?.data?.[index] ?? 0,
-            success: data.datasets[1]?.data?.[index] ?? 0,
-            fail: data.datasets[2]?.data?.[index] ?? 0
-          }));
-          setChartData(rechartsData);
-        } else if (Array.isArray(data)) {
-          setChartData(data);
-        }
-        console.log('📊 [SSE] 请求趋势图已更新');
+        // 使用统一的加载逻辑，确保时间范围选择器生效
+        loadData(false);
+        console.log('📊 [SSE] 请求趋势图已触发刷新');
       }
     };
 
@@ -94,12 +101,14 @@ const RequestTrendChart = () => {
     return () => {
       document.removeEventListener('chartUpdate', handleChartUpdate);
     };
-  }, []);
+  }, [loadData]);
 
   // 手动刷新
   const handleRefresh = () => {
     loadData(true);
   };
+
+  const xKey = chartData.some(d => d?.timestamp) ? 'timestamp' : 'time';
 
   return (
     <div className="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm">
@@ -115,7 +124,7 @@ const RequestTrendChart = () => {
         <div className="flex items-center space-x-3">
           {/* 时间范围选择器 */}
           <CustomSelect
-            options={TIME_RANGE_OPTIONS}
+            options={options}
             value={timeRange}
             onChange={setTimeRange}
             size="sm"
@@ -166,15 +175,29 @@ const RequestTrendChart = () => {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-              <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} dy={10} />
+              <XAxis
+                dataKey={xKey}
+                axisLine={false}
+                tickLine={false}
+                tick={{ fill: '#94a3b8', fontSize: 12 }}
+                dy={10}
+                tickFormatter={formatHHMM}
+              />
               <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 12 }} />
-              <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+              <Tooltip
+                labelFormatter={formatHHMM}
+                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+              />
               <Area type="monotone" dataKey="total" stroke="#6366f1" strokeWidth={2} fillOpacity={1} fill="url(#colorTotal)" name="总请求" />
               <Area type="monotone" dataKey="success" stroke="#10b981" strokeWidth={2} fillOpacity={0} fill="transparent" name="成功" />
               <Area type="monotone" dataKey="fail" stroke="#f43f5e" strokeWidth={2} fillOpacity={0} fill="transparent" name="失败" />
             </AreaChart>
           </ResponsiveContainer>
         )}
+      </div>
+
+      <div className="mt-3 text-[11px] text-slate-400">
+        图表数据仅统计自启动以来的运行时历史（重启后清空），最多保留 24 小时。
       </div>
     </div>
   );

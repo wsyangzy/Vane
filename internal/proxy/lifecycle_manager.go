@@ -48,22 +48,26 @@ type RequestLifecycleManager struct {
 	recoverySignalManager *EndpointRecoverySignalManager // 端点恢复信号管理器
 	requestID             string                         // 请求唯一标识符
 	startTime             time.Time                      // 请求开始时间
-	modelMu               sync.RWMutex                   // 保护模型字段的读写锁
-	modelName             string                         // 模型名称
-	channel               string                         // 渠道标签
-	endpointName          string                         // 端点名称
-	groupName             string                         // 组名称
-	retryCount            int                            // 重试计数
-	lastStatus            string                         // 最后状态
-	lastError             error                          // 最后一次错误
-	finalStatusCode       int                            // 最终状态码
-	modelUpdatedInDB      bool                           // 标记是否已在数据库中更新过模型
-	modelUpdateMu         sync.Mutex                     // 保护模型更新标记
-	attemptCounter        int                            // 内部尝试计数器（语义修复：统一重试计数）
-	attemptMu             sync.Mutex                     // 保护尝试计数器的互斥锁
-	pendingErrorContext   *ErrorContext                  // 预先计算的错误上下文，仅对下一个HandleError有效
-	pendingErrorOriginal  error                          // 预先计算上下文对应的原始错误，用于校验匹配
-	pendingErrorMu        sync.Mutex                     // 保护预先计算错误上下文的互斥锁
+
+	// 状态锁：保护模型和更新标记
+	stateMu       sync.RWMutex // 保护模型相关字段
+	modelName     string       // 模型名称
+	modelUpdatedInDB bool      // 标记是否已在数据库中更新过模型
+
+	// 基础字段（无需锁保护，单线程访问）
+	channel          string // 渠道标签
+	endpointName     string // 端点名称
+	groupName        string // 组名称
+	retryCount       int    // 重试计数
+	lastStatus       string // 最后状态
+	lastError        error  // 最后一次错误
+	finalStatusCode  int    // 最终状态码
+
+	// 计数器锁：保护尝试计数和错误上下文
+	counterMu            sync.Mutex    // 保护计数器和错误上下文
+	attemptCounter       int           // 内部尝试计数器（语义修复：统一重试计数）
+	pendingErrorContext  *ErrorContext // 预先计算的错误上下文，仅对下一个HandleError有效
+	pendingErrorOriginal error         // 预先计算上下文对应的原始错误，用于校验匹配
 }
 
 // NewRequestLifecycleManager 创建新的请求生命周期管理器
@@ -136,14 +140,14 @@ func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, http
 		currentModel := rlm.GetModelName()
 
 		// 搭便车机制：检查是否需要更新模型到数据库
-		rlm.modelUpdateMu.Lock()
+		rlm.stateMu.Lock()
 		shouldUpdateModel := currentModel != "" &&
 			currentModel != "unknown" &&
 			!rlm.modelUpdatedInDB
 		if shouldUpdateModel {
 			rlm.modelUpdatedInDB = true // 标记为已更新，避免重复
 		}
-		rlm.modelUpdateMu.Unlock()
+		rlm.stateMu.Unlock()
 
 		if shouldUpdateModel {
 			// 第一次有模型信息时，执行带模型的更新
@@ -429,8 +433,8 @@ func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel
 // SetModel 设置模型名称（线程安全）
 // 简单版本，只在模型为空或unknown时设置
 func (rlm *RequestLifecycleManager) SetModel(modelName string) {
-	rlm.modelMu.Lock()
-	defer rlm.modelMu.Unlock()
+	rlm.stateMu.Lock()
+	defer rlm.stateMu.Unlock()
 
 	// 只在当前模型为空或unknown时设置，避免覆盖更准确的模型信息
 	if rlm.modelName == "" || rlm.modelName == "unknown" {
@@ -442,8 +446,8 @@ func (rlm *RequestLifecycleManager) SetModel(modelName string) {
 // SetModelWithComparison 设置模型名称并进行对比检查（线程安全）
 // 如果已有模型，会进行对比并在不一致时输出警告，最终以新模型为准
 func (rlm *RequestLifecycleManager) SetModelWithComparison(newModelName, source string) {
-	rlm.modelMu.Lock()
-	defer rlm.modelMu.Unlock()
+	rlm.stateMu.Lock()
+	defer rlm.stateMu.Unlock()
 
 	// 如果新模型为空或unknown，不进行设置
 	if newModelName == "" || newModelName == "unknown" {
@@ -477,15 +481,15 @@ func (rlm *RequestLifecycleManager) SetModelName(modelName string) {
 
 // GetModelName 获取当前模型名称（线程安全）
 func (rlm *RequestLifecycleManager) GetModelName() string {
-	rlm.modelMu.RLock()
-	defer rlm.modelMu.RUnlock()
+	rlm.stateMu.RLock()
+	defer rlm.stateMu.RUnlock()
 	return rlm.modelName
 }
 
 // HasModel 检查是否已有有效的模型名称（线程安全）
 func (rlm *RequestLifecycleManager) HasModel() bool {
-	rlm.modelMu.RLock()
-	defer rlm.modelMu.RUnlock()
+	rlm.stateMu.RLock()
+	defer rlm.stateMu.RUnlock()
 	return rlm.modelName != "" && rlm.modelName != "unknown"
 }
 
@@ -558,8 +562,8 @@ func (rlm *RequestLifecycleManager) GetStats() map[string]any {
 // PrepareErrorContext 预先注入错误上下文，在下次 HandleError 时复用
 // 仅针对同一个错误对象有效，避免重复分类与重复日志
 func (rlm *RequestLifecycleManager) PrepareErrorContext(errorCtx *handlers.ErrorContext) {
-	rlm.pendingErrorMu.Lock()
-	defer rlm.pendingErrorMu.Unlock()
+	rlm.counterMu.Lock()
+	defer rlm.counterMu.Unlock()
 
 	if errorCtx == nil {
 		rlm.pendingErrorContext = nil
@@ -585,8 +589,8 @@ func (rlm *RequestLifecycleManager) PrepareErrorContext(errorCtx *handlers.Error
 
 // consumePreparedErrorContext 尝试取出与指定错误匹配的预计算上下文
 func (rlm *RequestLifecycleManager) consumePreparedErrorContext(err error) *ErrorContext {
-	rlm.pendingErrorMu.Lock()
-	defer rlm.pendingErrorMu.Unlock()
+	rlm.counterMu.Lock()
+	defer rlm.counterMu.Unlock()
 
 	if rlm.pendingErrorContext == nil || err == nil {
 		return nil
@@ -780,8 +784,8 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 // IncrementAttempt 线程安全地增加尝试计数
 // 用于统一重试计数语义，每次端点切换或重试时调用
 func (rlm *RequestLifecycleManager) IncrementAttempt() int {
-	rlm.attemptMu.Lock()
-	defer rlm.attemptMu.Unlock()
+	rlm.counterMu.Lock()
+	defer rlm.counterMu.Unlock()
 	rlm.attemptCounter++
 	slog.Debug(fmt.Sprintf("🔢 [尝试计数] [%s] 当前尝试次数: %d", rlm.requestID, rlm.attemptCounter))
 	return rlm.attemptCounter
@@ -790,8 +794,8 @@ func (rlm *RequestLifecycleManager) IncrementAttempt() int {
 // GetAttemptCount 线程安全地获取当前尝试次数
 // 返回真实的尝试次数，用于数据库记录和监控
 func (rlm *RequestLifecycleManager) GetAttemptCount() int {
-	rlm.attemptMu.Lock()
-	defer rlm.attemptMu.Unlock()
+	rlm.counterMu.Lock()
+	defer rlm.counterMu.Unlock()
 	return rlm.attemptCounter
 }
 

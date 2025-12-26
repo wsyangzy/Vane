@@ -1435,6 +1435,7 @@ func (a *App) setupEventBridges() {
 			case <-ticker.C:
 				if a.isRunning {
 					a.emitSystemStatus()
+					a.emitUsageUpdate()
 				}
 			}
 		}

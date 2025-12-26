@@ -527,6 +527,22 @@
   - `frontend/src/utils/api.js`
   - `frontend/src/utils/wailsApi.js`
 
+### 7.19（working tree）fix(overview/charts): 概览图表时间范围生效 + 时间轴去重
+- 背景问题：
+  - 概览的“请求趋势 / 响应时间 / 连接活动”切换时间范围后，横轴显示经常只覆盖很短的最近窗口，难以确认选择器是否生效。
+- 做了什么：
+  - 后端图表数据补齐 `timestamp`（RFC3339Nano），前端可用真实时间轴渲染与对齐。
+  - 历史数据保留上限调整为 `24h@30s`（`MaxHistoryPoints=2880`），满足概览里更长范围的查看需求。
+  - 前端统一时间轴：按 `30s` 桶补齐缺失数据点，避免“只显示最后几分钟”的错觉；Tooltip 与横轴显示统一格式为 `HH:mm`。
+  - 请求趋势/连接活动由“累计值”改为“每 30 秒增量”，无新请求时自动归零（更符合“趋势/活动量”直觉）。
+- 代表文件：
+  - `internal/monitor/metrics.go`
+  - `app_api_chart.go`
+  - `frontend/src/utils/chartTime.js`
+  - `frontend/src/pages/overview/components/RequestTrendChart.jsx`
+  - `frontend/src/pages/overview/components/ResponseTimeChart.jsx`
+  - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
+
 ---
 
 ## 8. 验证与回归（建议保留的命令）

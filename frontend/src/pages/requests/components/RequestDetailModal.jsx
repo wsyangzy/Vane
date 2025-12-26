@@ -55,13 +55,13 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
         {copyable && (
           <button
             onClick={handleCopy}
-            className="p-1 opacity-0 group-hover:opacity-100 hover:bg-slate-100 rounded transition-all"
+            className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 hover:scale-110 rounded transition-all"
             title="复制"
           >
             {copied ? (
               <Check className="w-3.5 h-3.5 text-emerald-600" />
             ) : (
-              <Copy className="w-3.5 h-3.5 text-slate-400" />
+              <Copy className="w-3.5 h-3.5" />
             )}
           </button>
         )}
@@ -159,7 +159,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
         {/* Tab 导航 - 固定不滚动 */}
         <div className="flex-shrink-0 px-6 pt-4 border-b border-slate-100 bg-slate-50/50">
-          <div className="flex gap-1">
+          <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {[
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
@@ -168,11 +168,12 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-t-lg text-sm font-medium transition-all ${
+                aria-current={activeTab === tab.id ? 'page' : undefined}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
                   activeTab === tab.id
-                    ? 'bg-white text-indigo-600 shadow-sm border-t border-x border-slate-200'
-                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
-                }`}
+                    ? 'bg-white text-indigo-700 border-slate-200 shadow-sm'
+                    : 'bg-transparent text-slate-600 border-transparent hover:bg-white/60 hover:text-slate-900'
+                } focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50`}
               >
                 <tab.icon className="w-4 h-4" />
                 {tab.label}

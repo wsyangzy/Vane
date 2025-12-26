@@ -47,12 +47,19 @@ type ActiveRequest struct {
 	mu sync.RWMutex `json:"-"` // 保护单个请求的并发访问
 }
 
+// ArchivingEntry 归档中的请求条目（包含时间戳）
+type ArchivingEntry struct {
+	Request    *ActiveRequest
+	ArchivedAt time.Time
+}
+
 // HotPoolConfig 热池配置
 type HotPoolConfig struct {
-	MaxAge           time.Duration // 最大存活时间，防止泄漏（默认30分钟）
-	MaxSize          int           // 最大容量（默认10000）
-	CleanupInterval  time.Duration // 清理间隔（默认1分钟）
-	ArchiveOnCleanup bool          // 清理时是否归档（默认true）
+	MaxAge            time.Duration // 最大存活时间，防止泄漏（默认30分钟）
+	MaxSize           int           // 最大容量（默认10000）
+	CleanupInterval   time.Duration // 清理间隔（默认1分钟）
+	ArchiveOnCleanup  bool          // 清理时是否归档（默认true）
+	ArchivingTimeout  time.Duration // 归档超时时间（默认5分钟）
 }
 
 // DefaultHotPoolConfig 返回默认配置
@@ -62,6 +69,7 @@ func DefaultHotPoolConfig() HotPoolConfig {
 		MaxSize:          10000,
 		CleanupInterval:  1 * time.Minute,
 		ArchiveOnCleanup: true,
+		ArchivingTimeout: 5 * time.Minute,
 	}
 }
 
@@ -72,7 +80,7 @@ type HotPool struct {
 
 	// 归档中的请求（已完成但还没写入数据库）
 	// 这个缓存确保请求在"热池→数据库"过渡期间不会丢失
-	archiving map[string]*ActiveRequest
+	archiving map[string]*ArchivingEntry
 
 	config HotPoolConfig
 
@@ -110,10 +118,13 @@ func NewHotPool(config HotPoolConfig) *HotPool {
 	if config.CleanupInterval <= 0 {
 		config.CleanupInterval = 1 * time.Minute
 	}
+	if config.ArchivingTimeout <= 0 {
+		config.ArchivingTimeout = 5 * time.Minute
+	}
 
 	pool := &HotPool{
 		requests:  make(map[string]*ActiveRequest),
-		archiving: make(map[string]*ActiveRequest),
+		archiving: make(map[string]*ArchivingEntry),
 		config:    config,
 		ctx:       make(chan struct{}),
 	}
@@ -259,7 +270,10 @@ func (hp *HotPool) CompleteAndArchive(requestID string, finalizer func(*ActiveRe
 	}
 	// 从活跃列表移到归档中列表（而不是直接删除）
 	delete(hp.requests, requestID)
-	hp.archiving[requestID] = req
+	hp.archiving[requestID] = &ArchivingEntry{
+		Request:    req,
+		ArchivedAt: time.Now(),
+	}
 	callback := hp.archiveCallback
 	hp.mu.Unlock()
 
@@ -306,8 +320,8 @@ func (hp *HotPool) GetActive() []*ActiveRequest {
 	}
 
 	// 添加归档中的请求（确保过渡期不丢失）
-	for _, req := range hp.archiving {
-		result = append(result, req)
+	for _, entry := range hp.archiving {
+		result = append(result, entry.Request)
 	}
 
 	return result
@@ -422,6 +436,51 @@ func (hp *HotPool) cleanup() {
 			}
 		}
 	}
+}
+
+// cleanupStaleArchiving 清理超时的归档请求
+// 防止归档失败或崩溃导致的内存泄漏
+func (hp *HotPool) cleanupStaleArchiving() {
+	hp.mu.Lock()
+	defer hp.mu.Unlock()
+
+	now := time.Now()
+	timeout := hp.config.ArchivingTimeout
+	staleIDs := make([]string, 0)
+
+	for reqID, entry := range hp.archiving {
+		if now.Sub(entry.ArchivedAt) > timeout {
+			staleIDs = append(staleIDs, reqID)
+			delete(hp.archiving, reqID)
+		}
+	}
+
+	if len(staleIDs) > 0 {
+		slog.Warn("清理超时的归档请求",
+			"count", len(staleIDs),
+			"timeout", timeout.String(),
+			"request_ids", staleIDs)
+	}
+}
+
+// StartArchivingCleanup 启动归档超时清理goroutine
+// 在Manager初始化时调用
+func (hp *HotPool) StartArchivingCleanup() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-hp.ctx:
+				slog.Debug("停止归档清理goroutine")
+				return
+			case <-ticker.C:
+				hp.cleanupStaleArchiving()
+			}
+		}
+	}()
+	slog.Info("已启动归档超时清理goroutine", "interval", "1m", "timeout", hp.config.ArchivingTimeout)
 }
 
 // Close 关闭热池

@@ -525,6 +525,9 @@ func (ut *UsageTracker) initHotPool() {
 	slog.Info("🔥 热池模式已启用",
 		"max_age", hotPoolConfig.MaxAge,
 		"max_size", hotPoolConfig.MaxSize)
+
+	// 启动归档超时清理goroutine
+	ut.hotPool.StartArchivingCleanup()
 }
 
 // now 返回当前配置时区的时间

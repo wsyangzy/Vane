@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -489,10 +490,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body.Close()
 	}
 
-	// 异步解析请求体中的模型名称（不阻塞主转发流程）
+	// 异步解析请求体中的模型名称（不阻塞主转发流程，带超时保护）
 	go func(body []byte, path string) {
-		if modelName := h.extractModelFromRequestBody(body, path); modelName != "" {
-			lifecycleManager.SetModel(modelName)
+		// 创建带超时的context
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// 使用channel接收结果
+		resultChan := make(chan string, 1)
+		go func() {
+			if modelName := h.extractModelFromRequestBody(body, path); modelName != "" {
+				select {
+				case resultChan <- modelName:
+				default:
+				}
+			}
+		}()
+
+		// 等待结果或超时
+		select {
+		case modelName := <-resultChan:
+			if modelName != "" {
+				lifecycleManager.SetModel(modelName)
+			}
+		case <-ctx.Done():
+			slog.Warn("模型提取超时", "requestID", lifecycleManager.requestID)
 		}
 	}(append([]byte(nil), bodyBytes...), r.URL.Path) // 传递副本避免数据竞争
 

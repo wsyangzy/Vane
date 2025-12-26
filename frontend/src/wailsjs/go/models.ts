@@ -932,6 +932,9 @@ export namespace main {
 	    today_requests: number;
 	    success_requests: number;
 	    failed_requests: number;
+	    active_connections: number;
+	    average_response_time: string;
+	    total_tokens: number;
 	    total_input_tokens: number;
 	    total_output_tokens: number;
 	    total_cost: number;
@@ -951,6 +954,9 @@ export namespace main {
 	        this.today_requests = source["today_requests"];
 	        this.success_requests = source["success_requests"];
 	        this.failed_requests = source["failed_requests"];
+	        this.active_connections = source["active_connections"];
+	        this.average_response_time = source["average_response_time"];
+	        this.total_tokens = source["total_tokens"];
 	        this.total_input_tokens = source["total_input_tokens"];
 	        this.total_output_tokens = source["total_output_tokens"];
 	        this.total_cost = source["total_cost"];

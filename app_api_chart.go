@@ -48,7 +48,8 @@ func (a *App) GetRequestTrendChart(minutes int) []ChartDataPoint {
 	}
 
 	// 直接在原始 *Metrics 上调用，而不是获取副本
-	requestHistory := metrics.GetChartDataForRequestHistory(minutes)
+	// RequestHistory 存的是累计计数快照，这里转为相邻点增量，避免无请求时图表保持水平线
+	requestHistory := metrics.GetChartDataForRequestHistoryWithBaseline(minutes)
 
 	if logger != nil {
 		logger.Info("📊 GetRequestTrendChart",
@@ -56,14 +57,49 @@ func (a *App) GetRequestTrendChart(minutes int) []ChartDataPoint {
 			"history_points", len(requestHistory))
 	}
 
-	result := make([]ChartDataPoint, len(requestHistory))
-	for i, point := range requestHistory {
-		result[i] = ChartDataPoint{
-			Time:    point.Timestamp.Format("15:04"),
-			Total:   point.Total,
-			Success: point.Successful,
-			Fail:    point.Failed,
+	if len(requestHistory) == 0 {
+		return []ChartDataPoint{}
+	}
+
+	// 没有 baseline 时，返回累计值（保持兼容，避免首点出现“大跳变”）
+	if len(requestHistory) == 1 {
+		p := requestHistory[0]
+		return []ChartDataPoint{{
+			Time:      p.Timestamp.Format("15:04"),
+			Total:     p.Total,
+			Success:   p.Successful,
+			Fail:      p.Failed,
+			Timestamp: p.Timestamp.Format(time.RFC3339Nano),
+		}}
+	}
+
+	result := make([]ChartDataPoint, 0, len(requestHistory)-1)
+	prev := requestHistory[0]
+	for i := 1; i < len(requestHistory); i++ {
+		curr := requestHistory[i]
+
+		totalDelta := curr.Total - prev.Total
+		successDelta := curr.Successful - prev.Successful
+		failDelta := curr.Failed - prev.Failed
+		if totalDelta < 0 {
+			totalDelta = 0
 		}
+		if successDelta < 0 {
+			successDelta = 0
+		}
+		if failDelta < 0 {
+			failDelta = 0
+		}
+
+		result = append(result, ChartDataPoint{
+			Time:      curr.Timestamp.Format("15:04"),
+			Total:     totalDelta,
+			Success:   successDelta,
+			Fail:      failDelta,
+			Timestamp: curr.Timestamp.Format(time.RFC3339Nano),
+		})
+
+		prev = curr
 	}
 
 	return result
@@ -85,10 +121,11 @@ func (a *App) GetResponseTimeChart(minutes int) []ChartDataPoint {
 	result := make([]ChartDataPoint, len(responseHistory))
 	for i, point := range responseHistory {
 		result[i] = ChartDataPoint{
-			Time: point.Timestamp.Format("15:04"),
-			Avg:  float64(point.AverageTime) / float64(time.Millisecond),
-			Min:  float64(point.MinTime) / float64(time.Millisecond),
-			Max:  float64(point.MaxTime) / float64(time.Millisecond),
+			Time:      point.Timestamp.Format("15:04"),
+			Avg:       float64(point.AverageTime.Milliseconds()),
+			Min:       float64(point.MinTime.Milliseconds()),
+			Max:       float64(point.MaxTime.Milliseconds()),
+			Timestamp: point.Timestamp.Format(time.RFC3339Nano),
 		}
 	}
 
@@ -107,14 +144,36 @@ func (a *App) GetConnectionActivityChart(minutes int) []ChartDataPoint {
 
 	// 连接活动图表使用请求历史数据
 	metrics := monitoringMiddleware.GetMetrics()
-	requestHistory := metrics.GetChartDataForRequestHistory(minutes)
+	// RequestHistory 存的是累计计数快照，这里转为相邻点增量，作为“活动量”展示
+	requestHistory := metrics.GetChartDataForRequestHistoryWithBaseline(minutes)
 
-	result := make([]ChartDataPoint, len(requestHistory))
-	for i, point := range requestHistory {
-		result[i] = ChartDataPoint{
-			Time:  point.Timestamp.Format("15:04"),
-			Value: point.Total, // 使用总请求数作为连接活动指标
+	if len(requestHistory) == 0 {
+		return []ChartDataPoint{}
+	}
+
+	if len(requestHistory) == 1 {
+		p := requestHistory[0]
+		return []ChartDataPoint{{
+			Time:      p.Timestamp.Format("15:04"),
+			Value:     p.Total,
+			Timestamp: p.Timestamp.Format(time.RFC3339Nano),
+		}}
+	}
+
+	result := make([]ChartDataPoint, 0, len(requestHistory)-1)
+	prev := requestHistory[0]
+	for i := 1; i < len(requestHistory); i++ {
+		curr := requestHistory[i]
+		delta := curr.Total - prev.Total
+		if delta < 0 {
+			delta = 0
 		}
+		result = append(result, ChartDataPoint{
+			Time:      curr.Timestamp.Format("15:04"),
+			Value:     delta,
+			Timestamp: curr.Timestamp.Format(time.RFC3339Nano),
+		})
+		prev = curr
 	}
 
 	return result

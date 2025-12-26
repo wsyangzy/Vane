@@ -6,12 +6,15 @@ package main
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"claude-request-forwarder/internal/tracking"
+	"claude-request-forwarder/internal/utils"
 )
 
 const usageDBQueryTimeout = 8 * time.Second
+const usageDBStatsCacheTTL = 30 * time.Second
 
 // ============================================================
 // 使用统计 API
@@ -24,6 +27,9 @@ type UsageSummary struct {
 	TodayRequests        int64   `json:"today_requests"`          // 今日请求数（数据库）
 	SuccessRequests      int64   `json:"success_requests"`
 	FailedRequests       int64   `json:"failed_requests"`
+	ActiveConnections    int64   `json:"active_connections"`    // 运行时活跃连接数（内存）
+	AverageResponseTime  string  `json:"average_response_time"` // 运行时平均响应时间（内存）
+	TotalTokens          int64   `json:"total_tokens"`          // 运行时总 token（内存，含缓存）
 	TotalInputTokens     int64   `json:"total_input_tokens"`
 	TotalOutputTokens    int64   `json:"total_output_tokens"`
 	TotalCost            float64 `json:"total_cost"`            // 运行时成本
@@ -32,6 +38,20 @@ type UsageSummary struct {
 	TodayTokens          int64   `json:"today_tokens"`          // 今日 tokens（数据库）
 	AllTimeTotalTokens   int64   `json:"all_time_total_tokens"` // 全部历史 tokens（数据库）
 }
+
+type usageDBStatsCache struct {
+	mu sync.Mutex
+
+	updatedAt          time.Time
+	allTimeTotalCost   float64
+	allTimeTotalTokens int64
+	allTimeTotal       int64
+	todayCost          float64
+	todayTokens        int64
+	todayRequests      int64
+}
+
+var globalUsageDBStatsCache usageDBStatsCache
 
 // GetUsageSummary 获取使用统计摘要
 // 当没有传递时间参数时，返回运行时统计（从内存）+ 全部历史请求总数（从数据库）
@@ -57,36 +77,68 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr string) (UsageSummary, er
 		// 计算总 Token
 		totalInputTokens := stats.TotalTokenUsage.InputTokens
 		totalOutputTokens := stats.TotalTokenUsage.OutputTokens
+		totalTokens := stats.TotalTokenUsage.InputTokens + stats.TotalTokenUsage.OutputTokens +
+			stats.TotalTokenUsage.CacheCreationTokens + stats.TotalTokenUsage.CacheReadTokens
+		activeConnections := int64(len(stats.ActiveConnections))
+		avgResponseTime := utils.FormatResponseTime(stats.GetAverageResponseTime())
 
 		// 查询数据库获取全部历史和今日统计
-		var allTimeTotalCost float64
-		var allTimeTotalTokens int64
-		var allTimeTotal int64
-		var todayCost float64
-		var todayTokens int64
-		var todayRequests int64
+		var (
+			allTimeTotalCost   float64
+			allTimeTotalTokens int64
+			allTimeTotal       int64
+			todayCost          float64
+			todayTokens        int64
+			todayRequests      int64
+		)
 
 		if usageTracker != nil {
-			// 获取配置的时区
-			loc := time.Local
-			if cfg != nil && cfg.Timezone != "" {
-				if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
-					loc = parsedLoc
-				}
+			// DB 统计做缓存，避免前端轮询/事件推送时频繁查询导致阻塞
+			cache := &globalUsageDBStatsCache
+			cache.mu.Lock()
+			cacheFresh := !cache.updatedAt.IsZero() && time.Since(cache.updatedAt) < usageDBStatsCacheTTL
+			if cacheFresh {
+				allTimeTotalCost = cache.allTimeTotalCost
+				allTimeTotalTokens = cache.allTimeTotalTokens
+				allTimeTotal = cache.allTimeTotal
+				todayCost = cache.todayCost
+				todayTokens = cache.todayTokens
+				todayRequests = cache.todayRequests
 			}
+			cache.mu.Unlock()
 
-			// 直接从 request_logs 表查询全部历史统计
-			ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
-			allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now())
-			cancel()
+			if !cacheFresh {
+				// 获取配置的时区
+				loc := time.Local
+				if cfg != nil && cfg.Timezone != "" {
+					if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
+						loc = parsedLoc
+					}
+				}
 
-			// 查询今日统计（使用配置的时区）
-			now := time.Now().In(loc)
-			todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-			todayEnd := todayStart.Add(24 * time.Hour)
-			ctx, cancel = context.WithTimeout(context.Background(), usageDBQueryTimeout)
-			todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd)
-			cancel()
+				// 直接从 request_logs 表查询全部历史统计
+				ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+				allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now())
+				cancel()
+
+				// 查询今日统计（使用配置的时区）
+				now := time.Now().In(loc)
+				todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+				todayEnd := todayStart.Add(24 * time.Hour)
+				ctx, cancel = context.WithTimeout(context.Background(), usageDBQueryTimeout)
+				todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd)
+				cancel()
+
+				cache.mu.Lock()
+				cache.updatedAt = time.Now()
+				cache.allTimeTotalCost = allTimeTotalCost
+				cache.allTimeTotalTokens = allTimeTotalTokens
+				cache.allTimeTotal = allTimeTotal
+				cache.todayCost = todayCost
+				cache.todayTokens = todayTokens
+				cache.todayRequests = todayRequests
+				cache.mu.Unlock()
+			}
 		}
 
 		return UsageSummary{
@@ -95,6 +147,9 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr string) (UsageSummary, er
 			TodayRequests:        todayRequests,
 			SuccessRequests:      stats.SuccessfulRequests,
 			FailedRequests:       stats.FailedRequests,
+			ActiveConnections:    activeConnections,
+			AverageResponseTime:  avgResponseTime,
+			TotalTokens:          totalTokens,
 			TotalInputTokens:     totalInputTokens,
 			TotalOutputTokens:    totalOutputTokens,
 			TotalCost:            0, // 运行时统计不计算成本
