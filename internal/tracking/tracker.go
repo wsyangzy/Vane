@@ -1098,6 +1098,74 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 	}
 }
 
+// RecordPartialFailure 记录部分失败(流截断)的计费数据
+// 🚀 [Plan D实现] 2025-12-26: 双轨制 - 记录已消耗Token + 保持请求活跃以便重试
+// 此方法会创建独立的数据库记录，但不从热池移除请求
+func (ut *UsageTracker) RecordPartialFailure(requestID, modelName string, tokens *TokenUsage, duration time.Duration, failureReason, endpointName string) {
+	if ut.config == nil || !ut.config.Enabled {
+		return
+	}
+
+	// 🔥 热池模式：从热池获取请求信息，创建独立的部分失败记录
+	if ut.hotPoolEnabled && ut.hotPool != nil && ut.archiveManager != nil {
+		activeReq, exists := ut.hotPool.Get(requestID)
+		if exists {
+			// 创建部分失败记录的副本（不影响热池中的原请求）
+			partialReq := &ActiveRequest{
+				RequestID:             requestID + "-partial-" + ut.now().Format("20060102150405.000"),
+				ClientIP:              activeReq.ClientIP,
+				UserAgent:             activeReq.UserAgent,
+				Method:                activeReq.Method,
+				Path:                  activeReq.Path,
+				StartTime:             activeReq.StartTime,
+				EndpointName:          endpointName,
+				Channel:               activeReq.Channel,
+				GroupName:             activeReq.GroupName,
+				ModelName:             modelName,
+				IsStreaming:           activeReq.IsStreaming,
+				Status:                "partial_failed", // 特殊状态标记
+				HTTPStatus:            activeReq.HTTPStatus,
+				RetryCount:            activeReq.RetryCount,
+				FailureReason:         failureReason,
+				InputTokens:           0,
+				OutputTokens:          0,
+				CacheCreationTokens:   0,
+				CacheCreation5mTokens: 0,
+				CacheCreation1hTokens: 0,
+				CacheReadTokens:       0,
+				DurationMs:            duration.Milliseconds(),
+			}
+
+			// 设置Token信息（如果提供）
+			if tokens != nil {
+				partialReq.InputTokens = tokens.InputTokens
+				partialReq.OutputTokens = tokens.OutputTokens
+				partialReq.CacheCreationTokens = tokens.CacheCreationTokens
+				partialReq.CacheCreation5mTokens = tokens.CacheCreation5mTokens
+				partialReq.CacheCreation1hTokens = tokens.CacheCreation1hTokens
+				partialReq.CacheReadTokens = tokens.CacheReadTokens
+			}
+
+			// 设置结束时间
+			now := ut.now()
+			partialReq.EndTime = &now
+
+			// 直接归档（写入数据库），不从热池移除原请求
+			ut.archiveManager.Archive(partialReq)
+
+			slog.Info(fmt.Sprintf("📊 [部分失败记录] [%s] 端点: %s, Token: %d+%d, 原因: %s",
+				requestID, endpointName, partialReq.InputTokens, partialReq.OutputTokens, failureReason))
+			return
+		}
+		// 请求不在热池中，记录警告
+		slog.Warn(fmt.Sprintf("🔥 [部分失败记录失败] [%s] 请求不在热池中", requestID))
+	}
+
+	// 传统模式或热池不可用：记录日志
+	slog.Info(fmt.Sprintf("📊 [部分失败(传统模式)] [%s] 端点: %s, 模型: %s, 原因: %s",
+		requestID, endpointName, modelName, failureReason))
+}
+
 // RecoverRequestTokens 恢复请求的Token使用统计
 // 🔧 [Fallback修复] 专用于debug文件恢复场景，仅更新Token字段，不触发状态变更
 func (ut *UsageTracker) RecoverRequestTokens(requestID, modelName string, tokens *TokenUsage) {

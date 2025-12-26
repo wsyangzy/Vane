@@ -60,6 +60,15 @@ type RequestLifecycleManager interface {
 	MapErrorTypeToFailureReason(errorType ErrorType) string // 映射ErrorType到failure_reason
 	FailRequest(failureReason, errorDetail string, httpStatus int) // 标记请求为最终失败
 	CancelRequest(cancelReason string, tokens *tracking.TokenUsage) // 标记请求被取消
+	// 🔥 [重复计费防护] 2025-12-26: 重复计费防护相关方法
+	MarkOutputSent() // 标记已输出内容
+	HasOutputContent() bool // 检查是否已输出内容
+	// 🔄 [递归保护] 重启计数相关方法
+	CanRestart() bool // 检查是否可以重启
+	IncrementRestart() int // 增加重启次数并返回新值
+	GetMaxRestarts() int // 获取最大重启次数
+	// 🚀 [Plan D实现] 2025-12-26: 部分Token记录
+	RecordPartialTokens(tokens *tracking.TokenUsage, failureReason, endpointName string)
 }
 
 // ErrorRecoveryManager 错误恢复管理器接口
@@ -122,6 +131,7 @@ type TokenParser interface {
 // 修改版本：返回Token使用信息和模型名称而非直接记录到usageTracker
 type StreamProcessor interface {
 	ProcessStreamWithRetry(ctx context.Context, resp *http.Response) (*tracking.TokenUsage, string, error)
+	HasSentContent() bool // 🔥 [重复计费防护] 2025-12-26: 检查是否已发送实际模型输出
 }
 
 // RetryHandler 重试处理器接口  

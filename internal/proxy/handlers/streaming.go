@@ -302,10 +302,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 执行流式处理并获取Token信息和模型名称
 				finalTokenUsage, modelName, err := processor.ProcessStreamWithRetry(ctx, resp)
+
+				// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送实际模型输出
+				if processor.HasSentContent() {
+					lifecycleManager.MarkOutputSent()
+					slog.Debug(fmt.Sprintf("🔒 [重复计费防护] [%s] 检测到已发送内容，标记不可重试", connID))
+				}
+
 				if err != nil {
 					// 🔧 [结构化错误处理] 2025-12-11: 优先使用接口断言处理流不完整错误
 					if streamErr, ok := err.(StreamIncompleteErrorInterface); ok {
-						// 流不完整但请求已完成，需要标记 failure_reason
+						// 🚀 [Plan D实现] 2025-12-26: 流不完整时记录部分Token，但继续重试
 						parsedModelName := streamErr.GetModelName()
 						failureReason := streamErr.GetFailureReason()
 
@@ -316,12 +323,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							lifecycleManager.SetModelWithComparison(modelName, "stream_processor")
 						}
 
-						// 使用 CompleteRequestWithQuality 完成请求并标记数据质量问题
-						lifecycleManager.CompleteRequestWithQuality(finalTokenUsage, failureReason)
+						// 🚀 [Plan D核心修改] 记录部分Token到数据库，但不完成请求
+						lifecycleManager.RecordPartialTokens(finalTokenUsage, failureReason, ep.Config.Name)
 
-						slog.Info(fmt.Sprintf("⚠️ [流不完整但已完成] [%s] 端点: %s, failure_reason: %s, 模型: %s",
+						slog.Warn(fmt.Sprintf("⚠️ [流截断记录部分Token] [%s] 端点: %s, failure_reason: %s, 模型: %s, 将继续重试其他端点",
 							connID, ep.Config.Name, failureReason, parsedModelName))
-						return
+
+						// 🚀 [Plan D核心修改] 不再 return，而是继续执行重试逻辑
+						// 将此错误视为端点失败，触发故障转移
+						lastErr = err
+						endpointSuccess = false
+						continue // 跳过当前端点，尝试下一个
 					}
 
 					// 处理其他类型的错误（保留原有逻辑用于兼容）
@@ -485,12 +497,34 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					result := sh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, ep.Config.Name)
 					switch result {
 					case SuspensionSuccess:
-						slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新开始处理", connID, ep.Config.Name))
-						fmt.Fprintf(w, "data: resume: 端点已恢复，重新开始处理...\n\n")
-						flusher.Flush()
-						// 重新开始executeStreamingWithRetry
-						sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
-						return
+						// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
+						if lifecycleManager.CanRestart() {
+							// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
+							if lifecycleManager.HasOutputContent() {
+								slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 端点恢复成功但已发送内容，禁止重试", connID))
+								lifecycleManager.FailRequest("output_sent_no_retry",
+									"Cannot retry after sending partial output to client", http.StatusBadGateway)
+								fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
+								flusher.Flush()
+								return
+							}
+
+							restartCount := lifecycleManager.IncrementRestart()
+							slog.Info(fmt.Sprintf("🔄 [端点恢复重启] [%s] 端点 %s 已恢复，重启次数: %d/%d",
+								connID, ep.Config.Name, restartCount, lifecycleManager.GetMaxRestarts()))
+							fmt.Fprintf(w, "data: resume: 端点已恢复，重新开始处理...\n\n")
+							flusher.Flush()
+							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+							return
+						} else {
+							slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 已达最大重启次数 (%d)，终止请求",
+								connID, lifecycleManager.GetMaxRestarts()))
+							lifecycleManager.FailRequest("max_restarts_exceeded",
+								"Exceeded maximum restart attempts", http.StatusServiceUnavailable)
+							fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
+							flusher.Flush()
+							return
+						}
 					case SuspensionCancelled:
 						// 🎯 [挂起取消区分] 用户在挂起期间取消请求，应该记录为取消而非失败
 						slog.Info(fmt.Sprintf("🚫 [挂起期间取消] [%s] 用户在挂起期间取消请求", connID))
@@ -680,11 +714,34 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		if err == nil && newChannel != "" {
 			slog.Info(fmt.Sprintf("🔄 [请求级故障转移] [%s] 渠道已切换，最后失败端点: %s → 渠道: %s",
 				connID, lastFailedEndpoint, newChannel))
-			// 故障转移成功，重新获取端点列表继续处理
-			fmt.Fprintf(w, "data: failover: 渠道切换完成，恢复处理 (新渠道: %s)\n\n", newChannel)
-			flusher.Flush()
-			sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
-			return
+			// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
+			if lifecycleManager.CanRestart() {
+				// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
+				if lifecycleManager.HasOutputContent() {
+					slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 故障转移成功但已发送内容，禁止重试", connID))
+					lifecycleManager.FailRequest("output_sent_no_retry",
+						"Cannot retry after sending partial output to client", http.StatusBadGateway)
+					fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
+					flusher.Flush()
+					return
+				}
+
+				restartCount := lifecycleManager.IncrementRestart()
+				slog.Info(fmt.Sprintf("🔄 [故障转移重启] [%s] 渠道切换完成，重启次数: %d/%d",
+					connID, restartCount, lifecycleManager.GetMaxRestarts()))
+				fmt.Fprintf(w, "data: failover: 渠道切换完成，恢复处理 (新渠道: %s)\n\n", newChannel)
+				flusher.Flush()
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+				return
+			} else {
+				slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 故障转移成功但已达最大重启次数 (%d)，终止请求",
+					connID, lifecycleManager.GetMaxRestarts()))
+				lifecycleManager.FailRequest("max_restarts_exceeded",
+					"Exceeded maximum restart attempts after failover", http.StatusServiceUnavailable)
+				fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
+				flusher.Flush()
+				return
+			}
 		} else if err != nil {
 			slog.Warn(fmt.Sprintf("⚠️ [请求级故障转移失败] [%s] 端点: %s, 错误: %v",
 				connID, lastFailedEndpoint, err))
@@ -744,9 +801,32 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				}
 				lifecycleManager.SetEndpoint(firstEndpoint.Config.Name, firstRouteGroup, firstEndpoint.Config.Channel)
 
-				// 重新获取健康端点并重新尝试（递归调用）
-				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
-				return
+				// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
+				if lifecycleManager.CanRestart() {
+					// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
+					if lifecycleManager.HasOutputContent() {
+						slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 暂停恢复成功但已发送内容，禁止重试", connID))
+						lifecycleManager.FailRequest("output_sent_no_retry",
+							"Cannot retry after sending partial output to client", http.StatusBadGateway)
+						fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
+						flusher.Flush()
+						return
+					}
+
+					restartCount := lifecycleManager.IncrementRestart()
+					slog.Info(fmt.Sprintf("🔄 [暂停恢复重启] [%s] 获取新端点成功，重启次数: %d/%d",
+						connID, restartCount, lifecycleManager.GetMaxRestarts()))
+					sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+					return
+				} else {
+					slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 暂停恢复成功但已达最大重启次数 (%d)，终止请求",
+						connID, lifecycleManager.GetMaxRestarts()))
+					lifecycleManager.FailRequest("max_restarts_exceeded",
+						"Exceeded maximum restart attempts after suspension recovery", http.StatusServiceUnavailable)
+					fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
+					flusher.Flush()
+					return
+				}
 			}
 		case SuspensionCancelled:
 			// 🎯 [挂起取消区分] 用户在挂起期间取消请求，应该记录为取消而非失败

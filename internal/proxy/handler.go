@@ -81,6 +81,12 @@ func (spa *StreamProcessorAdapter) ProcessStreamWithRetry(ctx context.Context, r
 	return spa.innerProcessor.ProcessStreamWithRetry(ctx, resp)
 }
 
+// HasSentContent 检查是否已发送实际模型输出内容
+// 🔥 [重复计费防护] 2025-12-26
+func (spa *StreamProcessorAdapter) HasSentContent() bool {
+	return spa.innerProcessor.HasSentContent()
+}
+
 // ErrorRecoveryManagerAdapter 适配*ErrorRecoveryManager到handlers.ErrorRecoveryManager
 type ErrorRecoveryManagerAdapter struct {
 	innerManager *ErrorRecoveryManager
@@ -514,7 +520,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				lifecycleManager.SetModel(modelName)
 			}
 		case <-ctx.Done():
-			slog.Warn("模型提取超时", "requestID", lifecycleManager.requestID)
+			slog.Warn("模型提取超时", "requestID", lifecycleManager.GetRequestID())
 		}
 	}(append([]byte(nil), bodyBytes...), r.URL.Path) // 传递副本避免数据竞争
 
