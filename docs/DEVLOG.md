@@ -543,6 +543,38 @@
   - `frontend/src/pages/overview/components/ResponseTimeChart.jsx`
   - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
 
+### 7.20（working tree）fix(overview/runtime): 概览统计刷新 + 时间跨度按运行时长裁剪
+- 背景问题：
+  - 概览底部“总请求数/活跃连接/平均响应时间”等在桌面（Wails）环境下长期为 0：仅首屏加载一次，且缺少持续推送与字段对齐。
+  - 图表不做持久化时，提供超过当前运行时长的时间跨度会造成“选择无意义”的体验。
+- 做了什么：
+  - Wails 事件桥接：定时推送 `usage:update`，使概览底部统计随请求实时变化（KISS：复用现有 Wails 事件通道，不引入新接口）。
+  - 字段对齐：`UsageSummary` 补齐 `active_connections / average_response_time / total_tokens` 等概览字段；前端 Wails Events 做命名归一化（`success_requests` → `successful_requests`）。
+  - DB 查询降噪：历史/今日统计增加 30s 缓存，避免频繁查询导致 UI 卡顿（YAGNI：只缓存必要聚合字段）。
+  - 时间跨度裁剪：三张图表的可选跨度按 `uptime_seconds` 动态裁剪，并提示“仅统计自启动以来，重启后清空”（减少误解）。
+- 代表文件：
+  - `app.go`
+  - `app_api_usage.go`
+  - `frontend/src/hooks/useWailsEvents.js`
+  - `frontend/src/pages/overview/index.jsx`
+  - `frontend/src/pages/overview/components/RequestTrendChart.jsx`
+  - `frontend/src/pages/overview/components/ResponseTimeChart.jsx`
+  - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
+
+### 7.21（working tree）fix(ui/requests): 请求追踪切换不抖动 + 详情 Tab 样式统一
+- 背景问题：
+  - 请求追踪页点击“今天/7天/30天”切换时偶发抖动/跳动（滚动条出现/消失、loading 替换导致布局收缩）。
+  - 请求详情 Tab 点击后出现突兀的黑色焦点边框，且 active 边框样式不统一。
+- 做了什么：
+  - 全局滚动条稳定：`scrollbar-gutter: stable` 避免滚动条出现/消失带来的宽度跳变。
+  - 表格 loading 改为覆盖层（overlay），不再替换表格 DOM，避免加载期间布局变化导致跳动（DRY：复用同一张表格结构）。
+  - Tab 改为分段控件样式：统一边框/圆角/hover/focus-visible 交互态，去掉默认黑边。
+- 代表文件：
+  - `frontend/src/index.css`
+  - `frontend/src/pages/requests/components/RequestsTable.jsx`
+  - `frontend/src/pages/requests/components/Toolbar.jsx`
+  - `frontend/src/pages/requests/components/RequestDetailModal.jsx`
+
 ---
 
 ## 8. 验证与回归（建议保留的命令）
