@@ -32,6 +32,7 @@ const useEndpointsData = (options = {}) => {
     healthy: 0,
     unhealthy: 0,
     unchecked: 0,
+    skipped: 0,
     healthPercentage: 0,
     loading: false,
     error: null,
@@ -45,20 +46,44 @@ const useEndpointsData = (options = {}) => {
   // 计算端点统计
   const calculateStats = useCallback((endpoints) => {
     if (!endpoints || endpoints.length === 0) {
-      return { total: 0, healthy: 0, unhealthy: 0, unchecked: 0, healthPercentage: 0 };
+      return { total: 0, healthy: 0, unhealthy: 0, unchecked: 0, skipped: 0, healthPercentage: 0 };
     }
 
-    const healthy = endpoints.filter(e => e.healthy && !e.never_checked).length;
-    const unhealthy = endpoints.filter(e => !e.healthy && !e.never_checked).length;
-    const unchecked = endpoints.filter(e => e.never_checked).length;
+    const isSkipped = (e) =>
+      e?.health_state === 'skipped' ||
+      e?.healthState === 'skipped' ||
+      e?.skip_health_check === true ||
+      e?.skipHealthCheck === true;
+
+    let healthy = 0;
+    let unhealthy = 0;
+    let unchecked = 0;
+    let skipped = 0;
+    for (const e of endpoints) {
+      if (isSkipped(e)) {
+        skipped += 1;
+        continue;
+      }
+      if (e?.never_checked) {
+        unchecked += 1;
+        continue;
+      }
+      if (e?.healthy) {
+        healthy += 1;
+      } else {
+        unhealthy += 1;
+      }
+    }
     const total = endpoints.length;
+    const checkedTotal = healthy + unhealthy;
 
     return {
       total,
       healthy,
       unhealthy,
       unchecked,
-      healthPercentage: total > 0 ? ((healthy / total) * 100).toFixed(1) : 0
+      skipped,
+      healthPercentage: checkedTotal > 0 ? ((healthy / checkedTotal) * 100).toFixed(1) : 0
     };
   }, []);
 
@@ -186,7 +211,7 @@ const useEndpointsData = (options = {}) => {
             ? {
                 ...ep,
                 healthy: result.healthy !== false,
-                never_checked: false,
+                never_checked: (ep?.health_state === 'skipped' || ep?.healthState === 'skipped' || ep?.skip_health_check === true || ep?.skipHealthCheck === true) ? true : false,
                 last_check: new Date().toISOString(),
                 response_time: result.response_time || ep.response_time
               }
@@ -315,6 +340,7 @@ const useEndpointsData = (options = {}) => {
       healthy: data.healthy,
       unhealthy: data.unhealthy,
       unchecked: data.unchecked,
+      skipped: data.skipped,
       healthPercentage: data.healthPercentage
     },
 

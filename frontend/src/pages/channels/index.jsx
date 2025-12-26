@@ -525,9 +525,6 @@ const EndpointDetailModal = ({
             <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
               <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
               <LatencyBadge ms={responseTime} inScope={inScope} />
-              <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap min-w-0 truncate max-w-[140px]">
-                最后检查 {lastCheck}
-              </span>
 
               <span
                 className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[160px] ${
@@ -558,6 +555,10 @@ const EndpointDetailModal = ({
                   {multiplier}x
                 </span>
               )}
+
+              <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap flex-shrink-0">
+                最后检查 {lastCheck}
+              </span>
             </div>
           </div>
 
@@ -1474,20 +1475,24 @@ const ChannelsPage = () => {
   }, [channelSections.length, isTwoColumnLayout]);
 
   // 计算统计数据
+  const isSkippedEndpoint = (e) => e?.skipHealthCheck || e?.skip_health_check;
+  const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
+  const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
+
   const displayStats = isSqliteMode
     ? {
         total: scopedDisplayEndpoints.length,
-        healthy: scopedDisplayEndpoints.filter(e => e._health_scope && e.healthy).length,
-        unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !e.healthy && (e.lastCheck || e.last_check)).length,
-        unchecked: scopedDisplayEndpoints.filter(e =>
-          !e._health_scope || e.never_checked || e.neverChecked || (!e.lastCheck && !e.last_check)
-        ).length,
+        skipped: scopedDisplayEndpoints.filter(e => e._health_scope && isSkippedEndpoint(e)).length,
+        healthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length,
+        unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !e.healthy && hasLastCheck(e) && !isNeverCheckedEndpoint(e)).length,
+        unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || (!isSkippedEndpoint(e) && isNeverCheckedEndpoint(e))).length,
         cooldown: scopedDisplayEndpoints.filter(e => e.in_cooldown || e.inCooldown).length,
-        healthPercentage: scopedDisplayEndpoints.filter(e => e._health_scope).length > 0
-          ? ((scopedDisplayEndpoints.filter(e => e._health_scope && e.healthy).length / scopedDisplayEndpoints.filter(e => e._health_scope).length) * 100).toFixed(1)
+        healthPercentage: (scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) > 0
+          ? ((scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length /
+              scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) * 100).toFixed(1)
           : 0
       }
-    : { ...stats, cooldown: 0 };
+    : { ...stats, skipped: stats.skipped || 0, cooldown: 0 };
 
   // ============================================
   // CRUD 操作处理
@@ -1723,7 +1728,7 @@ const ChannelsPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-6 gap-4 mb-6">
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-900">{channelSections.length}</div>
           <div className="text-sm text-slate-500">总渠道数</div>
@@ -1744,6 +1749,10 @@ const ChannelsPage = () => {
         <div className="bg-white rounded-xl border border-emerald-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-emerald-600">{displayStats.healthy}</div>
           <div className="text-sm text-slate-500">健康端点</div>
+        </div>
+        <div className="bg-white rounded-xl border border-purple-200/60 p-4 shadow-sm">
+          <div className="text-2xl font-bold text-purple-600">{displayStats.skipped || 0}</div>
+          <div className="text-sm text-slate-500">跳过检测</div>
         </div>
         <div className="bg-white rounded-xl border border-rose-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-rose-600">{displayStats.unhealthy}</div>

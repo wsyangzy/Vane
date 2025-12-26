@@ -293,6 +293,7 @@ export namespace main {
 	    healthy: number;
 	    unhealthy: number;
 	    unchecked: number;
+	    skipped: number;
 	    total: number;
 	
 	    static createFrom(source: any = {}) {
@@ -304,6 +305,7 @@ export namespace main {
 	        this.healthy = source["healthy"];
 	        this.unhealthy = source["unhealthy"];
 	        this.unchecked = source["unchecked"];
+	        this.skipped = source["skipped"];
 	        this.total = source["total"];
 	    }
 	}
@@ -424,6 +426,8 @@ export namespace main {
 	    created_at: string;
 	    updated_at: string;
 	    healthy: boolean;
+	    health_state: string;
+	    never_checked: boolean;
 	    last_check: string;
 	    response_time_ms: number;
 	    in_cooldown: boolean;
@@ -460,6 +464,8 @@ export namespace main {
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	        this.healthy = source["healthy"];
+	        this.health_state = source["health_state"];
+	        this.never_checked = source["never_checked"];
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
 	        this.in_cooldown = source["in_cooldown"];

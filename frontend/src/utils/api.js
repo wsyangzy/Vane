@@ -490,10 +490,15 @@ export const fetchEndpointHealthData = async () => {
       const [healthy, unhealthy] = data.datasets[0]?.data || [0, 0];
       return { healthy, unhealthy, unchecked: 0 };
     }
-    return { healthy: data.healthy || 0, unhealthy: data.unhealthy || 0, unchecked: data.unchecked || 0 };
+    return {
+      healthy: data.healthy || 0,
+      unhealthy: data.unhealthy || 0,
+      unchecked: data.unchecked || 0,
+      skipped: data.skipped || 0
+    };
   } catch (error) {
     console.error('获取端点健康状态数据失败:', error);
-    return { healthy: 0, unhealthy: 0, unchecked: 0 };
+    return { healthy: 0, unhealthy: 0, unchecked: 0, skipped: 0 };
   }
 };
 

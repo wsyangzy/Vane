@@ -47,6 +47,8 @@ type EndpointRecordInfo struct {
 	UpdatedAt                   string            `json:"updated_at"`
 	// 运行时健康状态
 	Healthy        bool    `json:"healthy"`
+	HealthState    string  `json:"health_state"`   // v6.1: 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
+	NeverChecked   bool    `json:"never_checked"`  // v6.1: 是否从未检测过（跳过检测也保持为 true）
 	LastCheck      string  `json:"last_check"` // 最后健康检查时间
 	ResponseTimeMs float64 `json:"response_time_ms"`
 	// 冷却状态（请求级故障转移）
@@ -148,10 +150,22 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 		if endpointManager != nil {
 			status := endpointManager.GetEndpointStatus(endpoint.EndpointKey(r.Channel, r.Name))
 			info.Healthy = status.Healthy
+			info.NeverChecked = status.NeverChecked
 			info.ResponseTimeMs = float64(status.ResponseTime) / float64(time.Millisecond)
 			// 格式化最后检查时间
 			if !status.LastCheck.IsZero() {
 				info.LastCheck = status.LastCheck.Format("2006-01-02 15:04:05")
+			}
+			// v6.1: 统一健康状态枚举（用于前端统计/图表）
+			if info.SkipHealthCheck {
+				info.HealthState = "skipped"
+				info.NeverChecked = true
+			} else if status.NeverChecked {
+				info.HealthState = "unchecked"
+			} else if status.Healthy {
+				info.HealthState = "healthy"
+			} else {
+				info.HealthState = "unhealthy"
 			}
 			// 冷却状态
 			if !status.CooldownUntil.IsZero() && status.CooldownUntil.After(time.Now()) {
@@ -1283,6 +1297,8 @@ func (a *App) recordToInfo(r *store.EndpointRecord) EndpointRecordInfo {
 		CacheCreationCostMultiplier: r.CacheCreationCostMultiplier,
 		CacheReadCostMultiplier:     r.CacheReadCostMultiplier,
 		Enabled:                     r.Enabled,
+		HealthState:                 "",
+		NeverChecked:                false,
 	}
 
 	if !r.CreatedAt.IsZero() {

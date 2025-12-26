@@ -506,6 +506,27 @@
   - `frontend/src/pages/channels/index.jsx`
   - `frontend/src/utils/wailsApi.js`
 
+### 7.18（working tree）fix(health/skip): “跳过健康检查”独立状态 + 统计/图表对齐 + 延迟探测
+- 背景问题：
+  - 部分中转商不适配 `/v1/models` 健康检查，导致端点长期被判定为异常；需要允许“跳过健康检查”但仍可参与路由。
+  - 早期实现中：跳过检测的端点既会被 UI 当作“健康”，又无法记录延迟；且统计与概览图表无法区分“跳过检测”与“未检测”。
+- 做了什么：
+  - 运行时语义：`SkipHealthCheck=true` 的端点作为独立状态 `skipped` 展示，但路由候选仍视为“可用”（与兜底机制目标一致）。
+  - 延迟探测：跳过健康检查时不再用 HTTP 状态码判健康，但会进行一次轻量可达性探测以记录 `ResponseTime`（用于排序/展示）。
+  - 统计口径：渠道页顶部统计与概览端点健康图表新增第 4 类 `跳过检测`，不再混入“健康/未检测”。
+  - SQLite/Wails 数据对齐：补齐 `health_state/never_checked` 字段回传，避免前端统计口径偏差。
+  - UI：端点详情徽章与布局对齐，减少误导与信息噪声。
+- 代表文件：
+  - `internal/endpoint/health_check.go`
+  - `internal/endpoint/health_check_test.go`
+  - `app_api_storage.go`
+  - `app_api_chart.go`
+  - `frontend/src/pages/channels/index.jsx`
+  - `frontend/src/pages/overview/components/EndpointHealthChart.jsx`
+  - `frontend/src/hooks/useEndpointsData.js`
+  - `frontend/src/utils/api.js`
+  - `frontend/src/utils/wailsApi.js`
+
 ---
 
 ## 8. 验证与回归（建议保留的命令）
