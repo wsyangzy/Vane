@@ -458,6 +458,20 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			errorRecovery := sh.errorRecoveryFactory.NewErrorRecoveryManager(sh.usageTracker)
 			errorCtx := errorRecovery.ClassifyError(lastErr, connID, ep.Config.Name, routeGroup, attempt-1)
 
+			// 🔥 [计费感知分类] 2025-12-29: 根据HasOutputContent()动态调整Stream错误的可重试性
+			// 核心逻辑：token计费 = HasOutputContent() = true → 不可重试（避免重复计费）
+			//          0 tokens = HasOutputContent() = false → 可重试（连接阶段中断）
+			errStr := strings.ToLower(lastErr.Error())
+			if strings.HasPrefix(errStr, "stream_status:") || strings.Contains(errStr, "stream_error") {
+				if !lifecycleManager.HasOutputContent() {
+					slog.Info(fmt.Sprintf("🔄 [计费感知] [%s] Stream错误但未发送内容(0 tokens)，允许重试: %v", connID, lastErr))
+					errorCtx.RetryableAfter = time.Second * time.Duration(1<<uint(attempt-1))
+				} else {
+					slog.Warn(fmt.Sprintf("🚫 [计费感知] [%s] Stream错误且已发送内容(有计费)，禁止重试: %v", connID, lastErr))
+					errorCtx.RetryableAfter = 0
+				}
+			}
+
 			// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 			// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
 			lifecycleManager.PrepareErrorContext(&errorCtx)

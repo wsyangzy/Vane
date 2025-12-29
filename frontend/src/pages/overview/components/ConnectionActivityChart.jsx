@@ -51,6 +51,14 @@ const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
   const [timeRange, setTimeRange] = useState(60);
   const refreshIntervalRef = useRef(null);
 
+  const toCumulative = (data) => {
+    let connections = 0;
+    return (data || []).map((point) => {
+      connections += point?.connections || 0;
+      return { ...point, connections };
+    });
+  };
+
   const maxMinutes = Math.max(1, Math.floor((uptimeSeconds || 0) / 60));
   const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
   const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
@@ -69,11 +77,11 @@ const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
     try {
       const data = await fetchConnectionActivityData(timeRange);
       setChartData(
-        padTimeSeries(data, {
+        toCumulative(padTimeSeries(data, {
           minutes: timeRange,
           stepMs: 30 * 1000,
           defaults: { connections: 0 },
-        })
+        }))
       );
     } catch (error) {
       console.error('加载连接活动数据失败:', error);
@@ -209,7 +217,7 @@ const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
                 stroke="#8b5cf6"
                 strokeWidth={2}
                 fill="url(#colorConnections)"
-                name="连接数"
+                name="累计连接数"
                 dot={false}
                 activeDot={{ r: 4, fill: '#8b5cf6', strokeWidth: 0 }}
               />
@@ -223,7 +231,7 @@ const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
         <div className="flex justify-center space-x-6 mt-3 pt-3 border-t border-slate-100">
           <div className="flex items-center text-xs text-slate-500">
             <span className="w-3 h-3 rounded bg-violet-400 mr-2" />
-            活跃连接数
+            累计连接数
           </div>
         </div>
       )}

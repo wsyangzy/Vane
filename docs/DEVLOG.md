@@ -535,6 +535,7 @@
   - 历史数据保留上限调整为 `24h@30s`（`MaxHistoryPoints=2880`），满足概览里更长范围的查看需求。
   - 前端统一时间轴：按 `30s` 桶补齐缺失数据点，避免“只显示最后几分钟”的错觉；Tooltip 与横轴显示统一格式为 `HH:mm`。
   - 请求趋势/连接活动由“累计值”改为“每 30 秒增量”，无新请求时自动归零（更符合“趋势/活动量”直觉）。
+    - 补充：7.23 根据反馈恢复为“累计值”展示（后端仍保持 30s 桶数据，前端累加呈现）。
 - 代表文件：
   - `internal/monitor/metrics.go`
   - `app_api_chart.go`
@@ -574,6 +575,28 @@
   - `frontend/src/pages/requests/components/RequestsTable.jsx`
   - `frontend/src/pages/requests/components/Toolbar.jsx`
   - `frontend/src/pages/requests/components/RequestDetailModal.jsx`
+
+### 7.22（working tree）fix(ui/requests-filters): 筛选时间范围自定义日历弹层 + 显示格式优化
+- 背景问题：
+  - 原生 `datetime-local` 的日历弹层（WebView2/Chromium）不可控、样式突兀，且难以做到一致的美化。
+  - 输入值显示为 `2025-12-29T23:59`，可读性不佳（中间 `T` 影响阅读），同时希望内容居中对齐。
+- 做了什么：
+  - 引入轻量自定义 `DateTimePicker`：点击输入框弹出自绘日历（支持月份切换、今日/选中态、时间选择、清空/确定）。
+  - 保持数据层仍使用 `YYYY-MM-DDTHH:mm`（兼容现有筛选逻辑与 API 参数），仅对输入框展示做格式化：`YYYY-MM-DD HH:mm` 且居中显示。
+  - KISS：只覆盖请求追踪筛选面板的时间选择场景，不引入第三方日期组件库。
+- 代表文件：
+  - `frontend/src/pages/requests/components/DateTimePicker.jsx`
+  - `frontend/src/pages/requests/components/FiltersPanel.jsx`
+
+### 7.23（working tree）fix(overview/charts): 请求趋势/连接活动恢复累计值展示
+- 背景问题：
+  - 概览“请求趋势 / 连接活动”改为增量后，部分场景更希望看到随时间持续增长的累计曲线（便于直观对比时间段内总量）。
+- 做了什么：
+  - 前端对 30 秒桶序列做一次累加（cumulative sum），恢复为累计曲线展示（不改接口与数据结构，避免牵动后端与 SSE）。
+  - YAGNI：不新增“增量/累计”切换开关，按当前需求直接回退为累计展示。
+- 代表文件：
+  - `frontend/src/pages/overview/components/RequestTrendChart.jsx`
+  - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
 
 ---
 

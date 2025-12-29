@@ -442,6 +442,16 @@ func (erm *ErrorRecoveryManager) isNetworkError(err error) bool {
 
 	// 字符串匹配（不包括 EOF 和超时）
 	errStr := strings.ToLower(err.Error())
+
+	// 🔧 [Bug #3修复] 2025-12-29: 检测HTTP客户端连接阶段的EOF错误
+	// 格式: "Post \"url\": EOF" 或 "Get \"url\": unexpected EOF"
+	// 用户数据显示此类错误token=0，说明连接在建立阶段就失败了，可安全重试
+	if (strings.HasPrefix(errStr, "post \"") || strings.HasPrefix(errStr, "get \"") ||
+		strings.HasPrefix(errStr, "put \"") || strings.HasPrefix(errStr, "delete \"")) &&
+		(strings.Contains(errStr, "eof") || strings.Contains(errStr, "unexpected eof")) {
+		return true
+	}
+
 	networkErrors := []string{
 		"connection reset", "connection refused", "connection closed",
 		"network is unreachable", "no route to host", "broken pipe",
@@ -493,9 +503,13 @@ func (erm *ErrorRecoveryManager) isConnectionTimeoutError(err error) bool {
 	errStr := strings.ToLower(err.Error())
 
 	// 连接超时的特征：dial timeout, connection timeout
+	// 🔧 [Bug #1修复] 2025-12-29: 添加 "timeout awaiting response headers" 检测
+	// 此错误发生在HTTP/2连接建立后、服务器返回响应头之前，属于连接阶段超时
+	// 用户数据显示此类错误token=0，说明服务器未开始处理，可安全重试
 	connectionTimeoutErrors := []string{
 		"dial timeout", "dial tcp", "connection timed out",
 		"connect timeout", "dial i/o timeout",
+		"timeout awaiting response headers",
 	}
 
 	for _, ctErr := range connectionTimeoutErrors {

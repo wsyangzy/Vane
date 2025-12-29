@@ -90,6 +90,7 @@ const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
  */
 const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const [activeTab, setActiveTab] = useState('overview');
+  const [copiedError, setCopiedError] = useState(false);
 
   // ESC 键关闭 & 阻止滚动
   useEffect(() => {
@@ -121,6 +122,11 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
   const streamLabel = request.isStreaming ? '流式请求' : '常规请求';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
+
+  const errorText = [
+    request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
+    request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
+  ].filter(Boolean).join('\n');
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-start justify-center pt-[15vh] px-4">
@@ -239,11 +245,28 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               {(['failed', 'error', 'cancelled', 'timeout'].includes(request.status) ||
                 request.failure_reason || request.cancel_reason) && (
                 <div className="bg-rose-50 rounded-xl border border-rose-200 overflow-hidden">
-                  <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200">
+                  <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-rose-900 flex items-center gap-2">
                       <AlertCircle className="w-4 h-4" />
                       错误信息
                     </h3>
+                    {errorText && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(errorText);
+                          setCopiedError(true);
+                          setTimeout(() => setCopiedError(false), 2000);
+                        }}
+                        className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-100/80 hover:scale-110 rounded transition-all"
+                        title="复制错误信息"
+                      >
+                        {copiedError ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    )}
                   </div>
                   <div className="p-4 space-y-2">
                     {request.failure_reason && (

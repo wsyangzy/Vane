@@ -230,8 +230,7 @@ func (sp *StreamProcessor) processSSELine(line string) {
 			sp.contentSentMutex.Lock()
 			sp.hasContentSent = true
 			sp.contentSentMutex.Unlock()
-			slog.Debug(fmt.Sprintf("🔒 [内容发送标记] [%s] 检测到 content_block_delta 事件，标记已发送内容",
-				sp.requestID))
+			// 🔧 [日志优化] 2025-12-29: 移除高频Debug日志，减少日志噪音
 		}
 	}
 

@@ -45,7 +45,7 @@ func NewRequestStateManager(requestID string) *RequestStateManager {
 		requestID:   requestID,
 		startTime:   time.Now(),
 		status:      "pending",
-		maxRestarts: 2, // 默认最多2次重启
+		maxRestarts: 3, // 🔧 [会话保障] 2025-12-29: 设置为3次，平衡会话连续性与响应速度（总耗时约30秒）
 	}
 }
 

@@ -1,5 +1,6 @@
 // LogEntry.jsx - 单条日志显示组件
-import React from 'react';
+import React, { useState } from 'react';
+import { Copy, Check } from 'lucide-react';
 import { LOG_LEVELS } from '../constants';
 
 /**
@@ -8,6 +9,7 @@ import { LOG_LEVELS } from '../constants';
  * @param {string} searchQuery 搜索关键词
  */
 function LogEntry({ log, searchQuery }) {
+  const [copied, setCopied] = useState(false);
   const levelConfig = LOG_LEVELS[log.level] || LOG_LEVELS.INFO;
   const Icon = levelConfig.icon;
 
@@ -24,8 +26,41 @@ function LogEntry({ log, searchQuery }) {
     );
   };
 
+  // 复制日志内容
+  const handleCopy = async () => {
+    const timestamp = new Date(log.timestamp).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      fractionalSecondDigits: 3,
+    });
+
+    // 构建完整的日志文本
+    let logText = `[${timestamp}] [${log.level}] ${log.message}`;
+
+    // 添加附加属性
+    if (log.attrs && Object.keys(log.attrs).length > 0) {
+      const attrsText = Object.entries(log.attrs)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(' ');
+      logText += ` | ${attrsText}`;
+    }
+
+    try {
+      await navigator.clipboard.writeText(logText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('复制失败:', err);
+    }
+  };
+
   return (
-    <div className="flex items-start gap-3 px-4 py-2 hover:bg-slate-50 border-b border-slate-100 font-mono text-xs">
+    <div className="group flex items-start gap-3 px-4 py-2 hover:bg-slate-50 border-b border-slate-100 font-mono text-xs relative">
       {/* 时间戳 */}
       <div className="text-slate-400 whitespace-nowrap w-32 flex-shrink-0">
         {new Date(log.timestamp).toLocaleTimeString('zh-CN', {
@@ -61,6 +96,19 @@ function LogEntry({ log, searchQuery }) {
           )}
         </div>
       )}
+
+      {/* 复制按钮 - 鼠标悬浮时显示 */}
+      <button
+        onClick={handleCopy}
+        className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"
+        title="复制日志"
+      >
+        {copied ? (
+          <Check size={14} className="text-green-500" />
+        ) : (
+          <Copy size={14} />
+        )}
+      </button>
     </div>
   );
 }

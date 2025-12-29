@@ -35,6 +35,19 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshIntervalRef = useRef(null);
 
+  const toCumulative = (data) => {
+    let total = 0;
+    let success = 0;
+    let fail = 0;
+
+    return (data || []).map((point) => {
+      total += point?.total || 0;
+      success += point?.success || 0;
+      fail += point?.fail || 0;
+      return { ...point, total, success, fail };
+    });
+  };
+
   const maxMinutes = Math.max(1, Math.floor((uptimeSeconds || 0) / 60));
   const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
   const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
@@ -53,11 +66,11 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
     try {
       const data = await fetchRequestTrendData(timeRange);
       setChartData(
-        padTimeSeries(data, {
+        toCumulative(padTimeSeries(data, {
           minutes: timeRange,
           stepMs: 30 * 1000,
           defaults: { total: 0, success: 0, fail: 0 },
-        })
+        }))
       );
     } catch (error) {
       console.error('加载请求趋势数据失败:', error);

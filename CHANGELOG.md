@@ -5,6 +5,26 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [6.0.5] - 2025-12-29
+
+### 🐛 Bug 修复 (Bug Fixes)
+
+- **计费感知的错误分类**: 基于 `HasOutputContent()` 动态判断 Stream 错误是否可重试
+  - 0 tokens（未发送内容）→ 视为连接阶段中断 → 允许重试
+  - 有 token 计费（已发送内容）→ 禁止重试避免重复计费
+  - 适用于所有 `stream_status:error` 类型错误（EOF、timeout、wsarecv等）
+- **HTTP客户端EOF识别**: 修复 `Post "url": EOF` 等连接阶段EOF错误未被识别为网络错误的问题
+- **响应头超时识别**: 修复 `http2: timeout awaiting response headers` 被误判为响应超时（不可重试）的问题，现归类为连接超时（可重试）
+
+### 🔧 改进 (Improvements)
+
+- **会话保障增强**: 跨渠道故障转移最大重启次数从 2 次增加到 3 次，平衡会话连续性与响应速度（总耗时约30秒）
+- **日志优化**: 移除 `content_block_delta` 事件的高频 Debug 日志，减少日志噪音
+
+### 🎨 界面与体验 (UI/UX)
+
+- **日志复制功能**: 日志查看器中每条日志支持一键复制（鼠标悬浮显示复制按钮，复制成功显示绿色对勾）
+
 ## [6.0.4] - 2025-12-25
 
 ### 🐛 Bug 修复 (Bug Fixes)

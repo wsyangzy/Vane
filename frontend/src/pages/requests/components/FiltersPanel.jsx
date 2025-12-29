@@ -4,9 +4,10 @@
 // ============================================
 
 import { useMemo } from 'react';
-import { Filter, Calendar, X, Check } from 'lucide-react';
+import { Filter, X, Check } from 'lucide-react';
 import { CustomSelect } from '@components/ui';
 import { STATUS_SELECT_OPTIONS } from '../utils/constants.js';
+import DateTimePicker from './DateTimePicker.jsx';
 
 /**
  * FiltersPanel - 弹出式高级筛选面板组件
@@ -32,10 +33,8 @@ const FiltersPanel = ({
   models = [],
   channels = [],
   endpoints = [],
-  onQuickTimeSelect
+  onQuickTimeSelect: _onQuickTimeSelect
 }) => {
-  if (!isOpen) return null;
-
   // 模型选项（格式化为 CustomSelect 需要的格式）
   const modelOptions = useMemo(() => {
     const options = models.map(model => {
@@ -63,6 +62,8 @@ const FiltersPanel = ({
     return [{ value: '', label: '所有端点' }, ...options];
   }, [endpoints]);
 
+  if (!isOpen) return null;
+
   // 快捷时间范围按钮（暂时移除，太占空间）
   // const quickTimeRanges = ['今天', '昨天', '近1小时', '近24小时', '本周'];
 
@@ -84,25 +85,19 @@ const FiltersPanel = ({
         <div className="flex items-center gap-3">
           <label className="text-sm font-medium text-gray-700 min-w-[80px]">时间范围:</label>
           <div className="flex items-center gap-2">
-            <div className="relative">
-              <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="datetime-local"
-                value={filters.startDate}
-                onChange={(e) => updateFilter('startDate', e.target.value)}
-                className="w-[200px] pl-9 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-gray-600"
-              />
-            </div>
+            <DateTimePicker
+              value={filters.startDate}
+              onChange={(value) => updateFilter('startDate', value)}
+              defaultTime={{ hour: 0, minute: 0 }}
+              inputClassName="w-[200px] pl-9 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-gray-600"
+            />
             <span className="text-gray-400 text-sm">至</span>
-            <div className="relative">
-              <Calendar className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="datetime-local"
-                value={filters.endDate}
-                onChange={(e) => updateFilter('endDate', e.target.value)}
-                className="w-[200px] pl-9 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-gray-600"
-              />
-            </div>
+            <DateTimePicker
+              value={filters.endDate}
+              onChange={(value) => updateFilter('endDate', value)}
+              defaultTime={{ hour: 23, minute: 59 }}
+              inputClassName="w-[200px] pl-9 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-gray-600"
+            />
           </div>
         </div>
 
