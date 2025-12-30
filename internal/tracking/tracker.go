@@ -952,6 +952,18 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 		}
 	}
 
+	var legacyTokens *TokenUsage
+	if tokens != nil {
+		legacyTokens = &TokenUsage{
+			InputTokens:           inputTokens,
+			OutputTokens:          outputTokens,
+			CacheCreationTokens:   cacheCreationTokens,
+			CacheCreation5mTokens: cacheCreation5mTokens,
+			CacheCreation1hTokens: cacheCreation1hTokens,
+			CacheReadTokens:       cacheReadTokens,
+		}
+	}
+
 	// 🔥 v4.1 热池模式：完成失败请求并归档
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		now := ut.now()
@@ -977,6 +989,8 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 			// 根据状态设置原因字段
 			if status == "cancelled" {
 				req.CancelReason = reason
+				// 取消为终态：清理可能已写入的 failure_reason，避免前端同时展示 failure_reason + cancel_reason 造成误解。
+				req.FailureReason = ""
 			} else {
 				req.FailureReason = reason
 				if errorDetail != "" {
@@ -989,18 +1003,28 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 			slog.Debug("🔥 热池完成失败请求失败，降级到事件队列模式",
 				"request_id", requestID,
 				"error", err)
-			ut.recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail, duration, httpStatus, inputTokens, outputTokens, cacheCreationTokens, cacheCreation5mTokens, cacheCreation1hTokens, cacheReadTokens)
+			ut.recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail, duration, httpStatus, legacyTokens)
 		}
 		return
 	}
 
 	// 传统模式：发送事件到队列
-	ut.recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail, duration, httpStatus, inputTokens, outputTokens, cacheCreationTokens, cacheCreation5mTokens, cacheCreation1hTokens, cacheReadTokens)
+	ut.recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail, duration, httpStatus, legacyTokens)
 }
 
 // recordRequestFinalFailureLegacy 传统模式记录请求失败
 // 🔧 [修复] 2025-12-11: 添加 modelName 和 5m/1h 缓存字段参数
-func (ut *UsageTracker) recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail string, duration time.Duration, httpStatus int, inputTokens, outputTokens, cacheCreationTokens, cacheCreation5mTokens, cacheCreation1hTokens, cacheReadTokens int64) {
+func (ut *UsageTracker) recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail string, duration time.Duration, httpStatus int, tokens *TokenUsage) {
+	var inputTokens, outputTokens, cacheCreationTokens, cacheCreation5mTokens, cacheCreation1hTokens, cacheReadTokens interface{}
+	if tokens != nil {
+		inputTokens = tokens.InputTokens
+		outputTokens = tokens.OutputTokens
+		cacheCreationTokens = tokens.CacheCreationTokens
+		cacheCreation5mTokens = tokens.CacheCreation5mTokens
+		cacheCreation1hTokens = tokens.CacheCreation1hTokens
+		cacheReadTokens = tokens.CacheReadTokens
+	}
+
 	event := RequestEvent{
 		Type:      "final_failure",
 		RequestID: requestID,

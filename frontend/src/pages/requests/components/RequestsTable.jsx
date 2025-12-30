@@ -180,7 +180,7 @@ const RequestsTable = ({
             ) : (
               requests.map((req) => (
                 <RequestRow
-                  key={req.requestId}
+                  key={req.rawRequestId || req.requestId}
                   request={req}
                   visibleColumns={visibleColumns}
                   onCopyId={handleCopyId}

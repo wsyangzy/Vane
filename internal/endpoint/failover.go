@@ -159,7 +159,7 @@ func (m *Manager) SetOnFailoverTriggered(fn func(failedChannel, newChannel strin
 //
 // 返回: 新激活的渠道名，如果没有可用渠道则返回空字符串
 func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames []string, reason string) (string, error) {
-	slog.Warn(fmt.Sprintf("🔄 [故障转移] 触发请求级故障转移，原因: %s", reason))
+	slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] 触发请求级故障转移，原因: %s", reason))
 
 	// 未启用故障转移时不进行跨渠道切换（保持配置语义）
 	if m.config == nil {
@@ -223,7 +223,7 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames 
 		cooldownApplied++
 	}
 	if cooldownApplied > 0 {
-		slog.Info(fmt.Sprintf("⏱️ [故障转移] 端点冷却已应用: channel=%s endpoints=%d 恢复时间(示例): %s",
+		slog.Info(fmt.Sprintf("⏱️ [渠道间故障转移] 端点冷却已应用: channel=%s endpoints=%d 恢复时间(示例): %s",
 			failedChannel, cooldownApplied, lastUntil.Format("15:04:05")))
 	}
 
@@ -247,7 +247,7 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames 
 		}
 	}
 
-	slog.Info(fmt.Sprintf("✅ [故障转移] 已切换到渠道: %s", newChannel))
+	slog.Info(fmt.Sprintf("✅ [渠道间故障转移] 已切换到渠道: %s", newChannel))
 
 	// 5) 调用回调通知 App 层同步数据库
 	if m.onFailoverTriggered != nil {

@@ -323,13 +323,35 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							lifecycleManager.SetModelWithComparison(modelName, "stream_processor")
 						}
 
-						// 🚀 [Plan D核心修改] 记录部分Token到数据库，但不完成请求
+						// v6.1+: 端点出现流截断/不完整时，进入冷却，避免下一次请求立刻回到该端点反复截断。
+						// 注意：是否继续重试取决于是否已向客户端输出实际内容（避免重复计费风险）。
+						failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						if failedKey != "" {
+							until, cdErr := sh.endpointManager.SetEndpointCooldown(failedKey, failureReason)
+							if cdErr != nil {
+								slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+									connID, ep.Config.Name, failedKey, cdErr))
+							} else {
+								slog.Warn(fmt.Sprintf("⏱️ [端点冷却] [%s] endpoint=%s cooldown_until=%s reason=%s",
+									connID, ep.Config.Name, until.Format("15:04:05"), failureReason))
+							}
+						}
+
+						// 🔥 [重复计费防护] 若已向客户端输出内容，则不再尝试其他端点（避免“部分输出 + 重试”导致重复计费/重复内容）。
+						if lifecycleManager.HasOutputContent() {
+							lifecycleManager.RecordTokensForFailedRequest(finalTokenUsage, failureReason)
+							lifecycleManager.FailRequest(failureReason, err.Error(), http.StatusBadGateway)
+							fmt.Fprintf(w, "data: error: 流式响应中断，已发送部分内容，停止重试避免重复计费\n\n")
+							flusher.Flush()
+							return
+						}
+
+						// 🚀 [Plan D核心修改] 记录部分Token到数据库，但不完成请求；继续尝试其他端点完成响应。
 						lifecycleManager.RecordPartialTokens(finalTokenUsage, failureReason, ep.Config.Name)
 
 						slog.Warn(fmt.Sprintf("⚠️ [流截断记录部分Token] [%s] 端点: %s, failure_reason: %s, 模型: %s, 将继续重试其他端点",
 							connID, ep.Config.Name, failureReason, parsedModelName))
 
-						// 🚀 [Plan D核心修改] 不再 return，而是继续执行重试逻辑
 						// 将此错误视为端点失败，触发故障转移
 						lastErr = err
 						endpointSuccess = false
@@ -562,8 +584,24 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			if !decision.RetrySameEndpoint {
 				if decision.SwitchEndpoint {
-					slog.Info(fmt.Sprintf("🔀 [切换端点] [%s] 当前端点: %s, 原因: %s",
-						connID, ep.Config.Name, decision.Reason))
+					failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+					cooldownUntil := ""
+					if failedKey != "" {
+						until, cdErr := sh.endpointManager.SetEndpointCooldown(failedKey, decision.Reason)
+						if cdErr != nil {
+							slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+								connID, ep.Config.Name, failedKey, cdErr))
+						} else {
+							cooldownUntil = until.Format("15:04:05")
+						}
+					}
+					if cooldownUntil != "" {
+						slog.Warn(fmt.Sprintf("🔁 [渠道内故障转移] [%s] channel=%s endpoint=%s cooldown_until=%s reason=%s",
+							connID, ep.Config.Channel, ep.Config.Name, cooldownUntil, decision.Reason))
+					} else {
+						slog.Info(fmt.Sprintf("🔀 [切换端点] [%s] 当前端点: %s, 原因: %s",
+							connID, ep.Config.Name, decision.Reason))
+					}
 					break // 尝试下一个端点
 				} else {
 					// 🚀 [状态机重构] Phase 4: 最终失败处理
@@ -588,6 +626,19 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					}
 
 					// 使用新的FailRequest方法标记最终失败（修复：使用计算好的statusCode而非lastResp.StatusCode）
+					// v6.1+: 流式终态错误（不重试）仍然让端点进入冷却，避免下一次请求继续命中同一端点导致反复失败。
+					if errorCtx.ErrorType == ErrorTypeStream {
+						failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						if failedKey != "" {
+							if until, cdErr := sh.endpointManager.SetEndpointCooldown(failedKey, decision.Reason); cdErr != nil {
+								slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+									connID, ep.Config.Name, failedKey, cdErr))
+							} else {
+								slog.Warn(fmt.Sprintf("⏱️ [端点冷却] [%s] endpoint=%s cooldown_until=%s reason=%s",
+									connID, ep.Config.Name, until.Format("15:04:05"), decision.Reason))
+							}
+						}
+					}
 					lifecycleManager.FailRequest(failureReason, lastErr.Error(), statusCode)
 
 					// 终止重试

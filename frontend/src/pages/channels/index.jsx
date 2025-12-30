@@ -866,8 +866,10 @@ const ChannelCard = ({
     ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'
     : 'border-indigo-300 ring-2 ring-indigo-100';
 
-  const visibleEndpoints = expanded ? endpoints : endpoints.slice(0, 2);
-  const hasMore = endpoints.length > 2;
+  // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
+  const collapsedVisibleCount = 1;
+  const visibleEndpoints = expanded ? endpoints : endpoints.slice(0, collapsedVisibleCount);
+  const hasMore = endpoints.length > collapsedVisibleCount;
   const pauseDisabled = loading || !channelFailoverEnabled;
 
   const priorityValue = Number.isFinite(priority) ? Math.max(1, Math.floor(priority)) : null;
@@ -893,9 +895,9 @@ const ChannelCard = ({
 
   return (
     <div className={`
-      bg-white rounded-2xl border shadow-sm overflow-hidden h-full flex flex-col
+      bg-white rounded-2xl border shadow-sm overflow-hidden flex flex-col self-start
       ${isActive ? activeHighlightClass : 'border-slate-200/60'}
-    `}>
+    `} data-channel-card={channelName}>
       {/* 渠道头部 */}
       <div className="px-6 py-4 border-b border-slate-100">
         <div className="flex items-start justify-between gap-4">
@@ -1064,11 +1066,12 @@ const ChannelCard = ({
         )}
       </div>
 
-      {hasMore && (
-        <div className="px-4 py-3 border-t border-slate-100 bg-slate-50/40">
+      {/* 底部区域：用于“显示全部/收起”按钮；无更多端点时显示虚线占位，保证同行卡片底边对齐 */}
+      <div className="px-4 py-1.5 border-t border-slate-100 bg-slate-50/40">
+        {hasMore ? (
           <button
             onClick={() => onToggleExpanded?.()}
-            className="w-full flex items-center justify-center gap-2 text-sm text-slate-600 hover:text-indigo-600 transition-colors"
+            className="w-full h-7 flex items-center justify-center gap-2 text-sm text-slate-600 hover:text-indigo-600 transition-colors"
           >
             {expanded ? (
               <>
@@ -1082,8 +1085,13 @@ const ChannelCard = ({
               </>
             )}
           </button>
-        </div>
-      )}
+        ) : (
+          <div
+            className="w-full h-7 rounded-lg border border-dashed border-slate-200/80 bg-white/60"
+            aria-hidden="true"
+          />
+        )}
+      </div>
     </div>
   );
 };
@@ -1337,19 +1345,28 @@ const ChannelsPage = () => {
   // 获取要显示的端点列表
   const displayEndpoints = isSqliteMode ? storageEndpoints : endpoints;
 
-  // 视口是否为 2 列布局（lg 及以上），用于“同一行两个渠道卡片”展开/收起联动
-  const [isTwoColumnLayout, setIsTwoColumnLayout] = useState(false);
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
-    const mql = window.matchMedia('(min-width: 1024px)');
-    const update = () => setIsTwoColumnLayout(!!mql.matches);
-    update();
-    mql.addEventListener?.('change', update);
-    return () => mql.removeEventListener?.('change', update);
-  }, []);
+  // 渠道卡片“显示全部/收起”：只允许展开一个渠道，避免同一行两列联动展开导致误触
+  const [expandedChannelName, setExpandedChannelName] = useState('');
 
-  const [expandedRows, setExpandedRows] = useState(() => new Set());
-  const [expandedChannels, setExpandedChannels] = useState(() => new Set());
+  // 点击渠道卡片外部区域时自动收起
+  useEffect(() => {
+    if (!expandedChannelName) return;
+    if (typeof document === 'undefined') return;
+
+    const onPointerDown = (event) => {
+      const target = event?.target;
+      const card = target?.closest?.('[data-channel-card]');
+      const clickedChannelName = card?.getAttribute?.('data-channel-card') || '';
+      if (clickedChannelName !== expandedChannelName) {
+        setExpandedChannelName('');
+      }
+    };
+
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [expandedChannelName]);
 
   // v6.0: SQLite 模式下“enabled”语义为“激活渠道”，会同时启用该渠道下所有端点
   const activeChannel = useMemo(() => {
@@ -1468,11 +1485,10 @@ const ChannelsPage = () => {
     });
   }, [activeChannel, channelOptions, channelsMeta, groupInfoMap, scopedDisplayEndpoints]);
 
-  // 渠道列表变化时重置展开状态，避免“行索引重排”导致的错位联动
+  // 渠道列表变化时重置展开状态，避免展开指向已不存在的渠道
   useEffect(() => {
-    setExpandedRows(new Set());
-    setExpandedChannels(new Set());
-  }, [channelSections.length, isTwoColumnLayout]);
+    setExpandedChannelName('');
+  }, [channelSections.length]);
 
   // 计算统计数据
   const isSkippedEndpoint = (e) => e?.skipHealthCheck || e?.skip_health_check;
@@ -1791,8 +1807,8 @@ const ChannelsPage = () => {
             '暂无端点数据'
           )}
         </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+       ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           {channelSections.map((section, idx) => (
             <ChannelCard
               key={section.name}
@@ -1804,24 +1820,9 @@ const ChannelsPage = () => {
               activeChannelName={activeChannel}
               isSqliteMode={isSqliteMode}
               channelFailoverEnabled={channelFailoverEnabled}
-              expanded={isTwoColumnLayout ? expandedRows.has(Math.floor(idx / 2)) : expandedChannels.has(section.name)}
+              expanded={expandedChannelName === section.name}
               onToggleExpanded={() => {
-                if (isTwoColumnLayout) {
-                  const row = Math.floor(idx / 2);
-                  setExpandedRows((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(row)) next.delete(row);
-                    else next.add(row);
-                    return next;
-                  });
-                } else {
-                  setExpandedChannels((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(section.name)) next.delete(section.name);
-                    else next.add(section.name);
-                    return next;
-                  });
-                }
+                setExpandedChannelName((prev) => (prev === section.name ? '' : section.name));
               }}
               loading={channelActionLoading || deactivateChannelLoading}
               onOpenEndpoint={openEndpointDetail}

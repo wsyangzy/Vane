@@ -221,6 +221,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 </div>
                 <div className="p-4">
                   <InfoRow icon={FileText} label="请求 ID" value={request.requestId} copyable />
+                  {request.rawRequestId && request.rawRequestId !== request.requestId && (
+                    <InfoRow icon={FileText} label="记录 ID" value={request.rawRequestId} copyable />
+                  )}
                   <InfoRow icon={Calendar} label="时间戳" value={formatTimestamp(request.timestamp)} />
                   <InfoRow icon={Clock} label="持续时间" value={formatDuration(request.duration)} />
                   <InfoRow icon={Server} label="端点" value={request.endpoint} />
@@ -242,7 +245,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               </div>
 
               {/* 错误信息（如果有） */}
-              {(['failed', 'error', 'cancelled', 'timeout'].includes(request.status) ||
+              {(['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status) ||
                 request.failure_reason || request.cancel_reason) && (
                 <div className="bg-rose-50 rounded-xl border border-rose-200 overflow-hidden">
                   <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
