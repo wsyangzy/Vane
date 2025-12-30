@@ -95,6 +95,10 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 	switch m.config.Strategy.Type {
 	case "priority":
 		sort.Slice(healthy, func(i, j int) bool {
+			healthy[i].mutex.RLock()
+			healthy[j].mutex.RLock()
+			defer healthy[i].mutex.RUnlock()
+			defer healthy[j].mutex.RUnlock()
 			return healthy[i].Config.Priority < healthy[j].Config.Priority
 		})
 	case "fastest":

@@ -852,9 +852,8 @@ const ChannelCard = ({
   const hasEndpoints = totalCount > 0;
   const hasGroupInfo = !!groupInfo;
 
-  const isActive = isSqliteMode
-    ? endpoints.some(e => e.enabled)
-    : (groupInfo?.active ?? (activeChannelName === channelName));
+  const isActive = groupInfo?.active
+    ?? (isSqliteMode ? endpoints.some(e => e.enabled) : (activeChannelName === channelName));
 
   const isPaused = !!groupInfo?.paused;
   const computedPriority = Math.min(...endpoints.map(e => e.priority || 999));
@@ -1067,11 +1066,11 @@ const ChannelCard = ({
       </div>
 
       {/* 底部区域：用于“显示全部/收起”按钮；无更多端点时显示虚线占位，保证同行卡片底边对齐 */}
-      <div className="px-4 py-1.5 border-t border-slate-100 bg-slate-50/40">
+      <div className="px-4 py-1 border-t border-slate-100 bg-slate-50/40">
         {hasMore ? (
           <button
             onClick={() => onToggleExpanded?.()}
-            className="w-full h-7 flex items-center justify-center gap-2 text-sm text-slate-600 hover:text-indigo-600 transition-colors"
+            className="w-full h-6 flex items-center justify-center gap-2 text-[13px] leading-none text-slate-600 hover:text-indigo-600 transition-colors"
           >
             {expanded ? (
               <>
@@ -1087,7 +1086,7 @@ const ChannelCard = ({
           </button>
         ) : (
           <div
-            className="w-full h-7 rounded-lg border border-dashed border-slate-200/80 bg-white/60"
+            className="w-full h-6 rounded-lg border border-dashed border-slate-200/80 bg-white/60"
             aria-hidden="true"
           />
         )}
@@ -1494,6 +1493,7 @@ const ChannelsPage = () => {
   const isSkippedEndpoint = (e) => e?.skipHealthCheck || e?.skip_health_check;
   const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
   const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
+  const cooldownChannelCount = groups.filter(g => g?.in_cooldown).length;
 
   const displayStats = isSqliteMode
     ? {
@@ -1502,13 +1502,13 @@ const ChannelsPage = () => {
         healthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length,
         unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !e.healthy && hasLastCheck(e) && !isNeverCheckedEndpoint(e)).length,
         unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || (!isSkippedEndpoint(e) && isNeverCheckedEndpoint(e))).length,
-        cooldown: scopedDisplayEndpoints.filter(e => e.in_cooldown || e.inCooldown).length,
+        cooldown: cooldownChannelCount,
         healthPercentage: (scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) > 0
           ? ((scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length /
               scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) * 100).toFixed(1)
           : 0
       }
-    : { ...stats, skipped: stats.skipped || 0, cooldown: 0 };
+    : { ...stats, skipped: stats.skipped || 0, cooldown: cooldownChannelCount };
 
   // ============================================
   // CRUD 操作处理

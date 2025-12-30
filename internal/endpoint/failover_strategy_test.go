@@ -7,7 +7,7 @@ import (
 	"claude-request-forwarder/config"
 )
 
-func TestTriggerRequestFailoverWithFailedEndpoints_SelectsFastestChannel(t *testing.T) {
+func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(t *testing.T) {
 	cfg := &config.Config{
 		Strategy: config.StrategyConfig{
 			Type: "fastest",
@@ -49,12 +49,12 @@ func TestTriggerRequestFailoverWithFailedEndpoints_SelectsFastestChannel(t *test
 	if err != nil {
 		t.Fatalf("TriggerRequestFailoverWithFailedEndpoints error: %v", err)
 	}
-	if newChannel != "C" {
-		t.Fatalf("newChannel mismatch: got %q, want %q", newChannel, "C")
+	if newChannel != "B" {
+		t.Fatalf("newChannel mismatch: got %q, want %q", newChannel, "B")
 	}
 }
 
-func TestTriggerRequestFailoverWithFailedEndpoints_FastestSkipsPausedOrCooldown(t *testing.T) {
+func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown(t *testing.T) {
 	failoverFalse := false
 
 	cfg := &config.Config{

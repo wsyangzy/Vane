@@ -290,7 +290,7 @@ func (gm *GroupManager) updateActiveGroups() {
 			group.CooldownUntil = time.Time{}
 			slog.Info(fmt.Sprintf("🔄 [组管理] 组冷却结束: %s (优先级: %d) - %s",
 				group.Name, group.Priority,
-				map[bool]string{true: "自动激活", false: "等待手动激活"}[autoSwitchEnabled]))
+				map[bool]string{true: "可再次参与自动选择", false: "等待手动激活"}[autoSwitchEnabled]))
 		} else if !group.CooldownUntil.IsZero() && now.Before(group.CooldownUntil) {
 			// Still in cooldown
 			group.IsActive = false
@@ -305,28 +305,39 @@ func (gm *GroupManager) updateActiveGroups() {
 	// Determine which groups should be active based on priority
 	// Only auto-activate next group if auto switching is enabled
 	if autoSwitchEnabled {
-		// Auto mode: automatically activate highest priority available group
-		// Get all groups sorted by priority
+		// Auto mode: 保持“粘性”活跃渠道，避免渠道间故障转移后冷却结束又自动回跳到高优先级渠道
 		sortedGroups := gm.getSortedGroups()
 
-		// Find the highest priority group that's not in cooldown and not manually paused
-		activeGroupFound := false
-		for _, group := range sortedGroups {
-			isAvailable := group.CooldownUntil.IsZero() && !group.ManuallyPaused
-			if isAvailable {
-				if !activeGroupFound {
-					wasActive := group.IsActive
-					group.IsActive = true
-					activeGroupFound = true
-					// Check if this group became newly active
-					if !wasActive && group.IsActive {
-						newlyActivatedGroup = group.Name
-					}
-				} else {
-					group.IsActive = false // Only one group can be active at a time
+		var desiredActive *GroupInfo
+		for _, group := range gm.groups {
+			if group.IsActive {
+				desiredActive = group
+				break
+			}
+		}
+
+		isAvailable := func(g *GroupInfo) bool {
+			if g == nil {
+				return false
+			}
+			return g.CooldownUntil.IsZero() && !g.ManuallyPaused
+		}
+
+		if !isAvailable(desiredActive) {
+			desiredActive = nil
+			for _, group := range sortedGroups {
+				if isAvailable(group) {
+					desiredActive = group
+					break
 				}
-			} else {
-				group.IsActive = false
+			}
+		}
+
+		for _, group := range gm.groups {
+			wasActive := group.IsActive
+			group.IsActive = (desiredActive != nil && group == desiredActive)
+			if group.IsActive && !wasActive {
+				newlyActivatedGroup = group.Name
 			}
 		}
 	} else {
@@ -752,12 +763,18 @@ func (gm *GroupManager) ManualResumeGroup(groupName string) error {
 	gm.updateActiveGroups() // Re-evaluate active groups
 
 	// Check if any group became newly active
+	notified := false
 	for _, g := range gm.groups {
 		if g.IsActive && !prevActiveGroups[g.Name] {
 			gm.notifyGroupChange(g.Name)
 			slog.Debug(fmt.Sprintf("📡 [组通知] 因恢复组 %s 而激活组 %s", groupName, g.Name))
+			notified = true
 			break
 		}
+	}
+	if !notified {
+		// 即便“粘性活跃渠道”未导致自动回切，也应通知订阅者刷新状态（避免前端/测试卡住）
+		gm.notifyGroupChange(groupName)
 	}
 
 	slog.Info(fmt.Sprintf("▶️ [手动恢复] 组 %s 已恢复，重新参与自动选择", groupName))

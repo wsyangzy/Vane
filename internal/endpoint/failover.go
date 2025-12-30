@@ -19,6 +19,14 @@ type groupCandidate struct {
 }
 
 func (m *Manager) collectFailoverCandidates(excludeChannel string) []groupCandidate {
+	exclude := make(map[string]struct{}, 1)
+	if excludeChannel != "" {
+		exclude[excludeChannel] = struct{}{}
+	}
+	return m.collectFailoverCandidatesExcluding(exclude)
+}
+
+func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}) []groupCandidate {
 	// 说明：
 	// - 可用性判定不依赖“响应时间快慢”，而依赖：未暂停、未处于渠道冷却、渠道内至少存在一个可用端点
 	// - “fastest” 仅用于在候选渠道之间做排序（按渠道内可用端点的最小响应时间），不会因为慢就判定不可用
@@ -26,7 +34,10 @@ func (m *Manager) collectFailoverCandidates(excludeChannel string) []groupCandid
 	candidates := make([]groupCandidate, 0, 8)
 
 	for _, g := range m.groupManager.GetAllGroups() {
-		if g == nil || g.Name == "" || g.Name == excludeChannel {
+		if g == nil || g.Name == "" {
+			continue
+		}
+		if _, ok := exclude[g.Name]; ok {
 			continue
 		}
 		if g.ManuallyPaused {
@@ -135,12 +146,47 @@ func (m *Manager) SelectNextAvailableChannel(excludeChannel string) (string, err
 		return "", fmt.Errorf("没有可用的故障转移渠道")
 	}
 
-	strategy := "priority"
-	if m.config.Strategy.Type != "" {
-		strategy = m.config.Strategy.Type
-	}
-	sortFailoverCandidates(strategy, candidates)
+	// 方案B：渠道间故障转移顺序固定按优先级（避免 fastest 带来的“回切/抖动”）
+	sortFailoverCandidates("priority", candidates)
 
+	return candidates[0].name, nil
+}
+
+// SelectNextAvailableChannelExcluding 选择下一个可用渠道（排除多个渠道）。
+// 方案B：用于请求链路内的“渠道间故障转移”，避免冷却结束后回到已故障转移过的渠道造成循环。
+func (m *Manager) SelectNextAvailableChannelExcluding(excludeChannels []string) (string, error) {
+	if m == nil || m.groupManager == nil || m.config == nil {
+		return "", fmt.Errorf("配置未初始化")
+	}
+
+	exclude := make(map[string]struct{}, len(excludeChannels))
+	for _, name := range excludeChannels {
+		if name == "" {
+			continue
+		}
+		exclude[name] = struct{}{}
+	}
+
+	candidates := m.collectFailoverCandidatesExcluding(exclude)
+	if len(candidates) == 0 {
+		if m.config.Failover.AllowRevisitAfterExhausted {
+			// 可选开关：当“所有渠道都尝试过”时，允许回到最高优先级渠道继续尝试（仍跳过暂停/冷却渠道）
+			candidates = m.collectFailoverCandidatesExcluding(nil)
+			if len(candidates) == 0 {
+				return "", fmt.Errorf("没有可用的故障转移渠道")
+			}
+			sortFailoverCandidates("priority", candidates)
+			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 已尝试所有渠道，允许回访最高优先级渠道继续尝试: %s", candidates[0].name))
+			return candidates[0].name, nil
+		}
+		if len(exclude) > 0 {
+			return "", fmt.Errorf("没有可用的故障转移渠道（已尝试渠道数=%d）", len(exclude))
+		}
+		return "", fmt.Errorf("没有可用的故障转移渠道")
+	}
+
+	// 方案B：渠道间故障转移顺序固定按优先级
+	sortFailoverCandidates("priority", candidates)
 	return candidates[0].name, nil
 }
 
@@ -159,7 +205,13 @@ func (m *Manager) SetOnFailoverTriggered(fn func(failedChannel, newChannel strin
 //
 // 返回: 新激活的渠道名，如果没有可用渠道则返回空字符串
 func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames []string, reason string) (string, error) {
-	slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] 触发请求级故障转移，原因: %s", reason))
+	return m.TriggerRequestFailoverWithFailedEndpointsExcludingChannels(failedEndpointNames, nil, reason)
+}
+
+// TriggerRequestFailoverWithFailedEndpointsExcludingChannels 触发请求级故障转移（跨渠道切换）。
+// excludeChannels: 本次请求链路中已尝试过的渠道（方案B：不回访，避免循环）。
+func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(failedEndpointNames []string, excludeChannels []string, reason string) (string, error) {
+	slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] 触发渠道间故障转移，原因: %s", reason))
 
 	// 未启用故障转移时不进行跨渠道切换（保持配置语义）
 	if m.config == nil {
@@ -199,24 +251,38 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames 
 		return "", fmt.Errorf("无法解析失败渠道（端点不存在或未初始化）")
 	}
 
+	// 方案B：确保失败渠道被纳入“已尝试渠道”集合（不回访）
+	if failedChannel != "" {
+		found := false
+		for _, name := range excludeChannels {
+			if name == failedChannel {
+				found = true
+				break
+			}
+		}
+		if !found {
+			excludeChannels = append(excludeChannels, failedChannel)
+		}
+	}
+
 	// 2) 失败端点统一进入冷却（最佳努力：不阻塞跨渠道切换）
 	cooldownApplied := 0
 	var lastUntil time.Time
 	for _, name := range uniqueNames {
 		ep := m.GetEndpointByNameAny(name)
 		if ep == nil {
-			slog.Warn(fmt.Sprintf("⚠️ [故障转移] 设置端点冷却失败：端点不存在: %s", name))
+			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 设置端点冷却失败：端点不存在: %s", name))
 			continue
 		}
 		if ChannelKey(ep) != failedChannel {
-			slog.Warn(fmt.Sprintf("⚠️ [故障转移] 跳过不属于失败渠道的端点冷却: %s (channel=%s, failed_channel=%s)",
+			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 跳过不属于失败渠道的端点冷却: %s (channel=%s, failed_channel=%s)",
 				name, ChannelKey(ep), failedChannel))
 			continue
 		}
 
 		until, err := m.SetEndpointCooldown(name, reason)
 		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [故障转移] 设置端点冷却失败: %s, 错误: %v", name, err))
+			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 设置端点冷却失败: %s, 错误: %v", name, err))
 			continue
 		}
 		lastUntil = until
@@ -231,18 +297,19 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames 
 	m.groupManager.SetGroupCooldown(failedChannel)
 
 	// 4) 选择并激活下一个可用渠道（由 strategy + 可用性共同决定）
-	newChannel, err := m.SelectNextAvailableChannel(failedChannel)
+	// 方案B：不回访已尝试渠道；且渠道间切换顺序固定按优先级
+	newChannel, err := m.SelectNextAvailableChannelExcluding(excludeChannels)
 	if err != nil {
-		slog.Error("❌ [故障转移] 没有可用的故障转移渠道")
+		slog.Error("❌ [渠道间故障转移] 没有可用的故障转移渠道")
 		return "", err
 	}
 
 	if err := m.groupManager.ManualActivateGroup(newChannel); err != nil {
 		// 兼容：新渠道端点可能处于 neverChecked（尚未健康检查），但请求级故障转移应允许先切过去尝试。
 		// 这里回退到强制激活，避免因“尚未健康检查”而无法完成跨渠道切换。
-		slog.Warn(fmt.Sprintf("⚠️ [故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
+		slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
 		if err2 := m.groupManager.ManualActivateGroupWithForce(newChannel, true); err2 != nil {
-			slog.Error(fmt.Sprintf("❌ [故障转移] 强制激活新渠道失败: %v", err2))
+			slog.Error(fmt.Sprintf("❌ [渠道间故障转移] 强制激活新渠道失败: %v", err2))
 			return "", fmt.Errorf("激活新渠道失败: %w", err2)
 		}
 	}

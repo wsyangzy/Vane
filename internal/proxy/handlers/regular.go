@@ -92,6 +92,9 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 	retryMgr := rh.retryManagerFactory.NewRetryManager()
 	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
 
+	// 方案B：本次请求链路内“渠道间故障转移”不回访已尝试渠道，避免冷却结束后循环
+	triedChannels := make(map[string]struct{}, 4)
+
 	// 外层循环处理组切换逻辑
 	for {
 		// 获取端点列表
@@ -127,6 +130,15 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				http.Error(w, "No healthy endpoints available", http.StatusServiceUnavailable)
 				return
 			}
+		}
+
+		// 记录当前尝试的渠道（用于方案B：后续跨渠道故障转移时不回访）
+		currentChannel := endpoints[0].Config.Channel
+		if currentChannel == "" {
+			currentChannel = endpoints[0].Config.Name
+		}
+		if currentChannel != "" {
+			triedChannels[currentChannel] = struct{}{}
 		}
 
 		// 内层循环处理端点重试
@@ -332,23 +344,28 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				failedEndpointNames = append(failedEndpointNames, key)
 			}
 
-			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithFailedEndpoints(
+			excludeChannels := make([]string, 0, len(triedChannels))
+			for name := range triedChannels {
+				if name == "" {
+					continue
+				}
+				excludeChannels = append(excludeChannels, name)
+			}
+			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithFailedEndpointsExcludingChannels(
 				failedEndpointNames,
+				excludeChannels,
 				"all_retries_exhausted",
 			)
 
 			if err == nil && newChannel != "" {
-				failedChannel := lastEndpoint.Config.Channel
-				if failedChannel == "" {
-					failedChannel = lastEndpoint.Config.Name
-				}
-				slog.Info(fmt.Sprintf("🔄 [请求级故障转移] [%s] 渠道 %s (端点 %s) 已耗尽，切换到渠道 %s",
-					connID, failedChannel, lastEndpoint.Config.Name, newChannel))
+				failedChannel := currentChannel
+				slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s",
+					connID, failedChannel, newChannel, lastEndpoint.Config.Name, len(failedEndpointNames), "all_retries_exhausted"))
 				// 故障转移成功，重新获取端点列表继续处理
 				groupSwitchNeeded = true
 				continue
 			} else if err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [请求级故障转移失败] [%s] 端点: %s, 错误: %v",
+				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v",
 					connID, lastEndpoint.Config.Name, err))
 			}
 		}

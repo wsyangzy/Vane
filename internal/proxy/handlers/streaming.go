@@ -167,7 +167,8 @@ func (sh *StreamingHandler) handleStreamingV2(ctx context.Context, w http.Respon
 	}
 
 	// 继续执行流式请求处理
-	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+	triedChannels := make(map[string]struct{}, 4)
+	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
 }
 
 // setStreamingHeaders 设置流式响应头
@@ -181,7 +182,8 @@ func (sh *StreamingHandler) setStreamingHeaders(w http.ResponseWriter) {
 }
 
 // executeStreamingWithRetry 执行带重试的流式处理
-func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher) {
+// triedChannels: 本次请求链路内已尝试过的渠道（方案B：渠道间故障转移不回访，避免循环）
+func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}) {
 	connID := lifecycleManager.GetRequestID()
 	var lastFailedEndpoint string // 🚀 [端点自愈] 追踪最后失败的端点
 
@@ -227,6 +229,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			fmt.Fprintf(w, "data: error: No healthy endpoints available\n\n")
 			flusher.Flush()
 			return
+		}
+	}
+
+	// 方案B：记录当前尝试的渠道（用于后续跨渠道故障转移时不回访）
+	if triedChannels != nil && len(endpoints) > 0 && endpoints[0] != nil {
+		currentChannel := endpoints[0].Config.Channel
+		if currentChannel == "" {
+			currentChannel = endpoints[0].Config.Name
+		}
+		if currentChannel != "" {
+			triedChannels[currentChannel] = struct{}{}
 		}
 	}
 
@@ -550,7 +563,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 								connID, ep.Config.Name, restartCount, lifecycleManager.GetMaxRestarts()))
 							fmt.Fprintf(w, "data: resume: 端点已恢复，重新开始处理...\n\n")
 							flusher.Flush()
-							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
 							return
 						} else {
 							slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 已达最大重启次数 (%d)，终止请求",
@@ -771,14 +784,29 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			failedEndpointNames = append(failedEndpointNames, key)
 		}
 
-		newChannel, err := sh.endpointManager.TriggerRequestFailoverWithFailedEndpoints(
+		excludeChannels := make([]string, 0, len(triedChannels))
+		for name := range triedChannels {
+			if name == "" {
+				continue
+			}
+			excludeChannels = append(excludeChannels, name)
+		}
+		newChannel, err := sh.endpointManager.TriggerRequestFailoverWithFailedEndpointsExcludingChannels(
 			failedEndpointNames,
+			excludeChannels,
 			"all_retries_exhausted",
 		)
 
 		if err == nil && newChannel != "" {
-			slog.Info(fmt.Sprintf("🔄 [请求级故障转移] [%s] 渠道已切换，最后失败端点: %s → 渠道: %s",
-				connID, lastFailedEndpoint, newChannel))
+			failedChannel := ""
+			if len(endpoints) > 0 && endpoints[len(endpoints)-1] != nil {
+				failedChannel = endpoints[len(endpoints)-1].Config.Channel
+				if failedChannel == "" {
+					failedChannel = endpoints[len(endpoints)-1].Config.Name
+				}
+			}
+			slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s",
+				connID, failedChannel, newChannel, lastFailedEndpoint, len(failedEndpointNames), "all_retries_exhausted"))
 			// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
 			if lifecycleManager.CanRestart() {
 				// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
@@ -796,7 +824,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					connID, restartCount, lifecycleManager.GetMaxRestarts()))
 				fmt.Fprintf(w, "data: failover: 渠道切换完成，恢复处理 (新渠道: %s)\n\n", newChannel)
 				flusher.Flush()
-				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
 				return
 			} else {
 				slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 故障转移成功但已达最大重启次数 (%d)，终止请求",
@@ -808,7 +836,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				return
 			}
 		} else if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [请求级故障转移失败] [%s] 端点: %s, 错误: %v",
+			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v",
 				connID, lastFailedEndpoint, err))
 		}
 	}
@@ -881,7 +909,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					restartCount := lifecycleManager.IncrementRestart()
 					slog.Info(fmt.Sprintf("🔄 [暂停恢复重启] [%s] 获取新端点成功，重启次数: %d/%d",
 						connID, restartCount, lifecycleManager.GetMaxRestarts()))
-					sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+					sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
 					return
 				} else {
 					slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 暂停恢复成功但已达最大重启次数 (%d)，终止请求",

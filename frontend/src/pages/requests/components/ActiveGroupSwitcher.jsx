@@ -22,7 +22,28 @@ const ActiveGroupSwitcher = ({
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState('');
   const containerRef = useRef(null);
+
+  const getErrorMessage = (err, fallback = '未知错误') => {
+    if (!err) return fallback;
+    if (typeof err === 'string') return err || fallback;
+    if (err instanceof Error) return err.message || fallback;
+    if (typeof err === 'object') {
+      if (typeof err.message === 'string' && err.message) return err.message;
+      if (typeof err.error === 'string' && err.error) return err.error;
+      if (typeof err.msg === 'string' && err.msg) return err.msg;
+    }
+    return fallback;
+  };
+
+  const formatCooldownRemain = (ms) => {
+    const seconds = Math.ceil((Number(ms) || 0) / 1000);
+    if (!Number.isFinite(seconds) || seconds <= 0) return '';
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.ceil(seconds / 60);
+    return `${minutes}min`;
+  };
 
   // 按优先级排序（数值越小优先级越高）- Hook 必须在条件返回之前
   const sortedGroups = useMemo(() => {
@@ -56,10 +77,21 @@ const ActiveGroupSwitcher = ({
   // 处理渠道选择
   const handleChannelSelect = async (channel) => {
     if (switching) return;
+    setSwitchError('');
 
     // 如果选择的是当前活跃渠道，直接关闭
     if (channel.name === activeGroup) {
       setIsOpen(false);
+      return;
+    }
+
+    if (channel.in_cooldown) {
+      const remain = formatCooldownRemain(channel.cooldown_remain_ms);
+      setSwitchError(`渠道「${channel.name}」处于冷却中${remain ? `（剩余 ${remain}）` : ''}，暂不可切换。`);
+      return;
+    }
+    if (channel.paused) {
+      setSwitchError(`渠道「${channel.name}」已暂停，无法切换。`);
       return;
     }
 
@@ -70,7 +102,7 @@ const ActiveGroupSwitcher = ({
       setIsOpen(false);
     } catch (error) {
       console.error('切换失败:', error);
-      alert(`切换失败: ${error.message || '未知错误'}`);
+      setSwitchError(`切换失败：${getErrorMessage(error, '未知错误')}`);
     } finally {
       setSwitching(false);
     }
@@ -114,7 +146,10 @@ const ActiveGroupSwitcher = ({
     <div className="relative" ref={containerRef}>
       {/* 触发按钮 */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          setSwitchError('');
+          setIsOpen(!isOpen);
+        }}
         disabled={switching || loading}
         className={`group flex items-center gap-2 px-3 py-1.5 bg-white border rounded-lg text-sm font-medium transition-all shadow-sm ${
           isOpen
@@ -150,22 +185,36 @@ const ActiveGroupSwitcher = ({
             </div>
           </div>
 
+          {switchError && (
+            <div className="px-4 py-2 bg-rose-50 border-b border-rose-100 text-xs text-rose-700 flex items-start gap-2">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span className="leading-4">{switchError}</span>
+            </div>
+          )}
+
           {/* 渠道列表 */}
           <div className="p-2 max-h-[320px] overflow-y-auto">
             {sortedGroups.map((channel) => {
               const isActive = channel.name === activeGroup;
               const health = getHealthStyle(channel);
+              const isBlocked = !isActive && (channel.in_cooldown || channel.paused);
+              const cooldownLabel = formatCooldownRemain(channel.cooldown_remain_ms);
 
               return (
                 <button
                   key={channel.name}
                   onClick={() => handleChannelSelect(channel)}
-                  disabled={switching}
+                  disabled={switching || isBlocked}
+                  title={
+                    channel.in_cooldown
+                      ? `冷却中${cooldownLabel ? `（剩余 ${cooldownLabel}）` : ''}`
+                      : (channel.paused ? '已暂停' : undefined)
+                  }
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm text-left transition-colors ${
                     isActive
                       ? 'bg-indigo-50 text-indigo-700'
                       : 'hover:bg-gray-50 text-gray-700'
-                  } ${switching ? 'opacity-50 cursor-wait' : ''}`}
+                  } ${(switching || isBlocked) ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <div className="flex items-center gap-3">
                     {/* 健康状态指示点 */}
@@ -181,7 +230,7 @@ const ActiveGroupSwitcher = ({
                       {/* 健康状态 */}
                       <span className={`text-[10px] ${health.color}`}>
                         {health.text}
-                        {channel.in_cooldown && ' · 冷却中'}
+                        {channel.in_cooldown && ` · 冷却中${cooldownLabel ? `(${cooldownLabel})` : ''}`}
                       </span>
                     </div>
                   </div>

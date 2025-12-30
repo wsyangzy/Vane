@@ -1573,6 +1573,7 @@ func (a *App) applySettingsToConfig() {
 	// 故障转移配置
 	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
 	a.config.Failover.DefaultCooldown = a.settingsService.GetDuration(ctx, service.CategoryFailover, "default_cooldown", a.config.Failover.DefaultCooldown)
+	a.config.Failover.AllowRevisitAfterExhausted = a.settingsService.GetBool(ctx, service.CategoryFailover, "allow_revisit_after_exhausted", a.config.Failover.AllowRevisitAfterExhausted)
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
