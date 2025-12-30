@@ -13,7 +13,6 @@ import (
 	"claude-request-forwarder/config"
 	"claude-request-forwarder/internal/endpoint"
 	"claude-request-forwarder/internal/tracking"
-	"claude-request-forwarder/internal/transport"
 )
 
 // RegularHandler 常规请求处理器
@@ -462,15 +461,9 @@ func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, b
 	// 复制和修改头部
 	rh.forwarder.CopyHeaders(r, req, endpoint)
 
-	// 创建HTTP传输
-	httpTransport, err := transport.CreateTransport(rh.config)
+	client, err := rh.forwarder.NewClient(endpoint.Config.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
-	}
-
-	client := &http.Client{
-		Timeout:   endpoint.Config.Timeout,
-		Transport: httpTransport,
 	}
 
 	// 执行请求
@@ -580,15 +573,9 @@ func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.Respo
 		// Copy headers from original request
 		rh.forwarder.CopyHeaders(r, req, ep)
 
-		// Create HTTP client with timeout and proxy support
-		httpTransport, err := transport.CreateTransport(rh.config)
+		client, err := rh.forwarder.NewClient(ep.Config.Timeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		client := &http.Client{
-			Timeout:   ep.Config.Timeout,
-			Transport: httpTransport,
 		}
 
 		// Make the request

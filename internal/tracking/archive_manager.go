@@ -130,7 +130,7 @@ func (am *ArchiveManager) Archive(req *ActiveRequest) error {
 		Timestamp: time.Now(),
 	}
 
-	// 非阻塞发送
+	// 优先非阻塞发送；通道满时短暂等待，降低“完成后丢归档”的概率。
 	select {
 	case am.archiveChan <- event:
 		am.stats.mu.Lock()
@@ -138,6 +138,21 @@ func (am *ArchiveManager) Archive(req *ActiveRequest) error {
 		am.stats.mu.Unlock()
 		return nil
 	default:
+	}
+
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case am.archiveChan <- event:
+		am.stats.mu.Lock()
+		am.stats.TotalReceived++
+		am.stats.mu.Unlock()
+		slog.Debug("📦 归档通道短暂拥堵，延迟入队成功",
+			"request_id", req.RequestID,
+			"channel_length", len(am.archiveChan))
+		return nil
+	case <-timer.C:
 		am.stats.mu.Lock()
 		am.stats.TotalDropped++
 		am.stats.mu.Unlock()

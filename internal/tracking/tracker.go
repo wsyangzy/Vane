@@ -517,7 +517,11 @@ func (ut *UsageTracker) initHotPool() {
 	// 设置热池归档回调
 	ut.hotPool.SetArchiveCallback(func(req *ActiveRequest) {
 		if ut.archiveManager != nil {
-			ut.archiveManager.Archive(req)
+			if err := ut.archiveManager.Archive(req); err != nil {
+				slog.Warn("📦 归档事件发送失败",
+					"request_id", req.RequestID,
+					"error", err)
+			}
 		}
 	})
 
@@ -1874,83 +1878,128 @@ func (ut *UsageTracker) GetHotPoolAndArchiveOverview() map[string]interface{} {
 
 // ActiveRequestToDetail 将 ActiveRequest 转换为 RequestDetail
 func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail {
+	// 统一在请求级别加读锁，避免并发更新导致数据竞争
+	req.mu.RLock()
+	requestID := req.RequestID
+	clientIP := req.ClientIP
+	userAgent := req.UserAgent
+	method := req.Method
+	path := req.Path
+	startTime := req.StartTime
+	endTimeSnapshot := req.EndTime
+	durationMsSnapshot := req.DurationMs
+	endpointName := req.EndpointName
+	channel := req.Channel
+	groupName := req.GroupName
+	modelName := req.ModelName
+	isStreaming := req.IsStreaming
+	status := req.Status
+	httpStatusSnapshot := req.HTTPStatus
+	retryCount := req.RetryCount
+	failureReason := req.FailureReason
+	cancelReason := req.CancelReason
+	inputTokens := req.InputTokens
+	outputTokens := req.OutputTokens
+	cacheCreationTokens := req.CacheCreationTokens
+	cacheCreation5mTokens := req.CacheCreation5mTokens
+	cacheCreation1hTokens := req.CacheCreation1hTokens
+	cacheReadTokens := req.CacheReadTokens
+	req.mu.RUnlock()
+
 	var endTime *time.Time
 	var durationMs *int64
 	var httpStatus *int
 
-	if req.EndTime != nil {
-		endTime = req.EndTime
+	if endTimeSnapshot != nil {
+		t := *endTimeSnapshot
+		endTime = &t
 	}
-	if req.DurationMs > 0 {
-		durationMs = &req.DurationMs
+	if durationMsSnapshot > 0 {
+		d := durationMsSnapshot
+		durationMs = &d
 	}
-	if req.HTTPStatus > 0 {
-		httpStatus = &req.HTTPStatus
+	if httpStatusSnapshot > 0 {
+		s := httpStatusSnapshot
+		httpStatus = &s
 	}
 
 	// 计算成本（使用公共函数消除重复代码）
 	var cost CostBreakdown
+	var pricing ModelPricing
+	var hasPricing bool
+	var multiplier *EndpointMultiplier
+	var multiplierValue EndpointMultiplier
+
+	ut.mu.RLock()
 	if ut.pricing != nil {
-		pricing, exists := ut.pricing[req.ModelName]
+		p, exists := ut.pricing[modelName]
 		if !exists {
-			pricing, exists = ut.pricing["_default"]
+			p, exists = ut.pricing["_default"]
 		}
 		if exists {
-			// 获取端点倍率
-			var multiplier *EndpointMultiplier
-			if ut.endpointMu != nil {
-				if key := endpointMultiplierKey(req.Channel, req.GroupName, req.EndpointName); key != "" {
-					if m, ok := ut.endpointMu[key]; ok {
-						multiplier = &m
-					}
-				} else if m, ok := ut.endpointMu[req.EndpointName]; ok {
-					// 兼容旧 key：endpointName 作为唯一键
-					multiplier = &m
-				}
-			}
-
-			// 调用公共成本计算函数
-			// TODO: 需要从请求中识别缓存类型（5分钟 vs 1小时），暂时默认使用 5 分钟倍率
-			cost = CalculateCost(
-				req.InputTokens, req.OutputTokens, req.CacheCreationTokens, req.CacheReadTokens,
-				&pricing, multiplier, false,
-			)
+			pricing = p
+			hasPricing = true
 		}
+	}
+	if hasPricing && ut.endpointMu != nil {
+		if key := endpointMultiplierKey(channel, groupName, endpointName); key != "" {
+			if m, ok := ut.endpointMu[key]; ok {
+				multiplierValue = m
+				multiplier = &multiplierValue
+			}
+		} else if m, ok := ut.endpointMu[endpointName]; ok {
+			// 兼容旧 key：endpointName 作为唯一键
+			multiplierValue = m
+			multiplier = &multiplierValue
+		}
+	}
+	ut.mu.RUnlock()
+
+	if hasPricing {
+		usage := &TokenUsage{
+			InputTokens:           inputTokens,
+			OutputTokens:          outputTokens,
+			CacheCreationTokens:   cacheCreationTokens,
+			CacheCreation5mTokens: cacheCreation5mTokens,
+			CacheCreation1hTokens: cacheCreation1hTokens,
+			CacheReadTokens:       cacheReadTokens,
+		}
+		cost = CalculateCostV2(usage, &pricing, multiplier)
 	}
 
 	return RequestDetail{
 		ID:                    0, // 热池中的请求还没有数据库ID
-		RequestID:             req.RequestID,
-		ClientIP:              req.ClientIP,
-		UserAgent:             req.UserAgent,
-		Method:                req.Method,
-		Path:                  req.Path,
-		StartTime:             req.StartTime,
+		RequestID:             requestID,
+		ClientIP:              clientIP,
+		UserAgent:             userAgent,
+		Method:                method,
+		Path:                  path,
+		StartTime:             startTime,
 		EndTime:               endTime,
 		DurationMs:            durationMs,
-		EndpointName:          req.EndpointName,
-		Channel:               req.Channel, // v5.0: 渠道标签
-		GroupName:             req.GroupName,
-		ModelName:             req.ModelName,
-		IsStreaming:           req.IsStreaming,
-		Status:                req.Status,
+		EndpointName:          endpointName,
+		Channel:               channel, // v5.0: 渠道标签
+		GroupName:             groupName,
+		ModelName:             modelName,
+		IsStreaming:           isStreaming,
+		Status:                status,
 		HTTPStatusCode:        httpStatus,
-		RetryCount:            req.RetryCount,
-		FailureReason:         req.FailureReason,
+		RetryCount:            retryCount,
+		FailureReason:         failureReason,
 		LastFailureReason:     "",
-		CancelReason:          req.CancelReason,
-		InputTokens:           req.InputTokens,
-		OutputTokens:          req.OutputTokens,
-		CacheCreationTokens:   req.CacheCreationTokens,
-		CacheCreation5mTokens: req.CacheCreation5mTokens, // v5.0.1+
-		CacheCreation1hTokens: req.CacheCreation1hTokens, // v5.0.1+
-		CacheReadTokens:       req.CacheReadTokens,
+		CancelReason:          cancelReason,
+		InputTokens:           inputTokens,
+		OutputTokens:          outputTokens,
+		CacheCreationTokens:   cacheCreationTokens,
+		CacheCreation5mTokens: cacheCreation5mTokens, // v5.0.1+
+		CacheCreation1hTokens: cacheCreation1hTokens, // v5.0.1+
+		CacheReadTokens:       cacheReadTokens,
 		InputCostUSD:          cost.InputCost,
 		OutputCostUSD:         cost.OutputCost,
 		CacheCreationCostUSD:  cost.CacheCreationCost,
 		CacheReadCostUSD:      cost.CacheReadCost,
 		TotalCostUSD:          cost.TotalCost,
-		CreatedAt:             req.StartTime,
+		CreatedAt:             startTime,
 		UpdatedAt:             ut.now(),
 	}
 }
@@ -2058,43 +2107,73 @@ func (ut *UsageTracker) getFilteredHotPoolRequests(opts *QueryOptions) []Request
 		return nil
 	}
 
-	var filtered []RequestDetail
+	filtered := make([]RequestDetail, 0, len(activeRequests))
 	for _, req := range activeRequests {
-		// 应用过滤条件
-		if opts != nil {
-			// 状态过滤
-			if opts.Status != "" && req.Status != opts.Status {
-				continue
-			}
-			// 模型过滤
-			if opts.ModelName != "" && req.ModelName != opts.ModelName {
-				continue
-			}
-			// 渠道过滤（v5.0）
-			if opts.Channel != "" && req.Channel != opts.Channel {
-				continue
-			}
-			// 端点过滤
-			if opts.EndpointName != "" && req.EndpointName != opts.EndpointName {
-				continue
-			}
-			// 组过滤
-			if opts.GroupName != "" && req.GroupName != opts.GroupName {
-				continue
-			}
-			// 时间范围过滤
-			if opts.StartDate != nil && req.StartTime.Before(*opts.StartDate) {
-				continue
-			}
-			if opts.EndDate != nil && req.StartTime.After(*opts.EndDate) {
-				continue
-			}
+		if !activeRequestMatchesFilters(req, opts) {
+			continue
 		}
 
 		filtered = append(filtered, ut.ActiveRequestToDetail(req))
 	}
 
 	return filtered
+}
+
+func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
+	if opts == nil {
+		return true
+	}
+
+	req.mu.RLock()
+	status := req.Status
+	modelName := req.ModelName
+	channel := req.Channel
+	endpointName := req.EndpointName
+	groupName := req.GroupName
+	startTime := req.StartTime
+	req.mu.RUnlock()
+
+	// 状态过滤
+	if opts.Status != "" {
+		switch opts.Status {
+		case "failed":
+			switch status {
+			case "failed", "partial_failed", "error", "auth_error", "rate_limited", "server_error", "network_error", "stream_error", "timeout":
+				// ok
+			default:
+				return false
+			}
+		default:
+			if status != opts.Status {
+				return false
+			}
+		}
+	}
+	// 模型过滤
+	if opts.ModelName != "" && modelName != opts.ModelName {
+		return false
+	}
+	// 渠道过滤（v5.0）
+	if opts.Channel != "" && channel != opts.Channel {
+		return false
+	}
+	// 端点过滤
+	if opts.EndpointName != "" && endpointName != opts.EndpointName {
+		return false
+	}
+	// 组过滤
+	if opts.GroupName != "" && groupName != opts.GroupName {
+		return false
+	}
+	// 时间范围过滤
+	if opts.StartDate != nil && startTime.Before(*opts.StartDate) {
+		return false
+	}
+	if opts.EndDate != nil && startTime.After(*opts.EndDate) {
+		return false
+	}
+
+	return true
 }
 
 // GetHotPoolRequestCount 获取热池中符合条件的请求数量

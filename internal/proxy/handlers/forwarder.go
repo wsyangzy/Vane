@@ -18,6 +18,7 @@ import (
 type Forwarder struct {
 	config          *config.Config
 	endpointManager *endpoint.Manager
+	transport       *transport.Provider
 }
 
 // NewForwarder 创建新的Forwarder实例
@@ -25,7 +26,19 @@ func NewForwarder(cfg *config.Config, endpointManager *endpoint.Manager) *Forwar
 	return &Forwarder{
 		config:          cfg,
 		endpointManager: endpointManager,
+		transport:       transport.NewProvider(cfg),
 	}
+}
+
+func (f *Forwarder) NewClient(timeout time.Duration) (*http.Client, error) {
+	tr, err := f.transport.Default()
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: tr,
+	}, nil
 }
 
 // ForwardRequestToEndpoint 转发请求到指定端点
@@ -45,31 +58,11 @@ func (f *Forwarder) ForwardRequestToEndpoint(ctx context.Context, r *http.Reques
 	// 复制和修改头部
 	f.CopyHeaders(r, req, ep)
 
-	// 创建HTTP传输
-	httpTransport, err := transport.CreateTransport(f.config)
+	httpTransport, err := f.transport.Streaming()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
 	}
-	
-	// 优化传输设置用于流式处理
-	httpTransport.DisableKeepAlives = false
-	httpTransport.MaxIdleConns = 10
-	httpTransport.MaxIdleConnsPerHost = 2
-	httpTransport.IdleConnTimeout = 0 // 无空闲超时
-	httpTransport.TLSHandshakeTimeout = 10 * time.Second
-	httpTransport.ExpectContinueTimeout = 1 * time.Second
 
-	// 从配置中读取响应头超时时间，默认60秒
-	responseHeaderTimeout := f.config.Streaming.ResponseHeaderTimeout
-	if responseHeaderTimeout == 0 {
-		responseHeaderTimeout = 60 * time.Second
-	}
-	httpTransport.ResponseHeaderTimeout = responseHeaderTimeout
-
-	httpTransport.DisableCompression = true // 禁用压缩以防缓冲延迟
-	httpTransport.WriteBufferSize = 4096    // 较小的写缓冲区
-	httpTransport.ReadBufferSize = 4096     // 较小的读缓冲区
-	
 	client := &http.Client{
 		Timeout:   0, // 流式请求无超时
 		Transport: httpTransport,
@@ -98,13 +91,13 @@ func (f *Forwarder) CopyHeaders(src *http.Request, dst *http.Request, ep *endpoi
 		"authorization": true, // We'll add our own if configured
 		"x-api-key":     true, // Remove sensitive client API keys
 	}
-	
+
 	// Copy all headers except those we want to skip
 	for key, values := range src.Header {
 		if skipHeaders[strings.ToLower(key)] {
 			continue
 		}
-		
+
 		for _, value := range values {
 			dst.Header.Add(key, value)
 		}
@@ -137,7 +130,7 @@ func (f *Forwarder) CopyHeaders(src *http.Request, dst *http.Request, ep *endpoi
 	// Remove hop-by-hop headers
 	hopByHopHeaders := []string{
 		"Connection",
-		"Keep-Alive", 
+		"Keep-Alive",
 		"Proxy-Authenticate",
 		"Proxy-Authorization",
 		"Te",

@@ -5,6 +5,26 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [6.0.6] - 2025-12-30
+
+### 🐛 Bug 修复 (Bug Fixes)
+
+- **渠道页/请求追踪页崩溃**: 修复前端 `isTwoColumnLayout is not defined` 导致页面报错的问题
+- **渠道间故障转移回跳**: 默认采用“方案B（本次请求不回访已尝试渠道）”，避免冷却到期但未恢复时在渠道间循环重试
+- **热池查询一致性**: 修复热池请求快照读取的并发数据竞争风险，并统一成本计算为 `CalculateCostV2`（对齐 5m/1h 缓存字段）
+
+### 🔧 改进 (Improvements)
+
+- **渠道间切换顺序固定**: 渠道间切换顺序固定按渠道优先级，不再受 `strategy.type` 影响（`strategy.type` 仅用于渠道内端点排序）
+- **可选回访开关**: 新增 `failover.allow_revisit_after_exhausted`，允许“所有渠道都尝试过仍失败”时回到最高优先级渠道继续尝试（有循环风险，默认关闭）
+- **归档可靠性**: 归档通道满时短暂等待入队（降低“完成后丢归档”的概率），并补充归档事件发送失败日志
+- **网络性能**: 复用 `http.Transport`（默认/流式两套），提升连接复用并减少资源抖动；移除流式路径 `IdleConnTimeout=0`
+- **监控广播治理**: `StartPeriodicBroadcast` 仅启动一次并支持停止，避免重复启动 ticker goroutine；周期性输出改为 `slog.Debug`
+
+### 🧹 清理 (Chore)
+
+- **代理层解耦**: 移除未使用的 `internal/proxy/stream.go`，并将 `Handler` 中的适配器/工厂拆分为独立文件，降低杂糅与耦合
+
 ## [6.0.5] - 2025-12-29
 
 ### 🐛 Bug 修复 (Bug Fixes)
@@ -260,7 +280,7 @@
 
 - **config/config.go**: 新增 `ResponseHeaderTimeout` 字段和默认值设置
 - **internal/proxy/handlers/forwarder.go**: 从配置动态读取超时值
-- **internal/proxy/stream.go**: 从配置动态读取超时值
+- **internal/proxy/handlers/streaming.go**: 从配置动态读取超时值
 - **config/example.yaml**: 新增配置说明和最佳实践
 
 ### 📊 性能提升 (Performance)
