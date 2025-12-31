@@ -148,47 +148,49 @@ const RequestsTable = ({
       </div>
 
       {/* 表格 */}
-      {loading ? (
-        <LoadingSpinner text="加载请求数据..." />
-      ) : (
-        <div className="overflow-x-auto min-h-[300px]">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-gray-50/50 text-gray-500 border-b border-gray-100">
+      <div className="relative overflow-x-auto min-h-[300px]">
+        {loading && (
+          <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
+            <LoadingSpinner text="加载请求数据..." />
+          </div>
+        )}
+
+        <table className={`w-full text-left text-sm whitespace-nowrap ${loading ? 'opacity-60' : ''}`}>
+          <thead className="bg-gray-50/50 text-gray-500 border-b border-gray-100">
+            <tr>
+              {visibleColumnConfigs.map(col => (
+                <th
+                  key={col.id}
+                  className={`px-3 py-3 font-medium text-xs uppercase tracking-wider ${
+                    col.align === 'right' ? 'text-right' : ''
+                  }`}
+                >
+                  {col.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {requests.length === 0 ? (
               <tr>
-                {visibleColumnConfigs.map(col => (
-                  <th
-                    key={col.id}
-                    className={`px-3 py-3 font-medium text-xs uppercase tracking-wider ${
-                      col.align === 'right' ? 'text-right' : ''
-                    }`}
-                  >
-                    {col.label}
-                  </th>
-                ))}
+                <td colSpan={visibleColumnConfigs.length} className="px-5 py-12 text-center text-slate-500">
+                  暂无请求数据
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {requests.length === 0 ? (
-                <tr>
-                  <td colSpan={visibleColumnConfigs.length} className="px-5 py-12 text-center text-slate-500">
-                    暂无请求数据
-                  </td>
-                </tr>
-              ) : (
-                requests.map((req) => (
-                  <RequestRow
-                    key={req.requestId}
-                    request={req}
-                    visibleColumns={visibleColumns}
-                    onCopyId={handleCopyId}
-                    onDoubleClick={onRowDoubleClick}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+            ) : (
+              requests.map((req) => (
+                <RequestRow
+                  key={req.rawRequestId || req.requestId}
+                  request={req}
+                  visibleColumns={visibleColumns}
+                  onCopyId={handleCopyId}
+                  onDoubleClick={onRowDoubleClick}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {/* 分页 */}
       <Pagination

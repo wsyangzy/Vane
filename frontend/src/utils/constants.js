@@ -41,6 +41,7 @@ export const REQUEST_STATUS = {
   SUSPENDED: 'suspended',
   COMPLETED: 'completed',
   FAILED: 'failed',
+  PARTIAL_FAILED: 'partial_failed',
   ERROR: 'error',
   CANCELLED: 'cancelled',
   TIMEOUT: 'timeout'
@@ -83,6 +84,11 @@ export const STATUS_CONFIG = {
     icon: 'XCircle',
     color: 'bg-rose-100 text-rose-700 border-rose-200'
   },
+  [REQUEST_STATUS.PARTIAL_FAILED]: {
+    label: '部分失败',
+    icon: 'XCircle',
+    color: 'bg-amber-100 text-amber-700 border-amber-200'
+  },
   [REQUEST_STATUS.ERROR]: {
     label: '已失败',
     icon: 'XCircle',
@@ -109,6 +115,7 @@ export const FILTER_STATUS_OPTIONS = [
   { value: 'retry', label: '重试中' },
   { value: 'suspended', label: '已挂起' },
   { value: 'completed', label: '已完成' },
+  { value: 'partial_failed', label: '部分失败' },
   { value: 'failed', label: '已失败' },
   { value: 'cancelled', label: '已取消' }
 ];

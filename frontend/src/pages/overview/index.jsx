@@ -23,6 +23,7 @@ import ConnectionActivityChart from './components/ConnectionActivityChart.jsx';
 
 const OverviewPage = () => {
   const { data, refresh, isInitialized } = useOverviewData();
+  const uptimeSeconds = data?.status?.uptime_seconds || 0;
 
   if (data.error) {
     return (
@@ -57,12 +58,12 @@ const OverviewPage = () => {
       {/* 图表区域 */}
       <div className="space-y-6">
         {/* 请求趋势 - 全宽 */}
-        <RequestTrendChart />
+        <RequestTrendChart uptimeSeconds={uptimeSeconds} />
 
         {/* 性能指标 - 响应时间 & 连接活动 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <ResponseTimeChart />
-          <ConnectionActivityChart />
+          <ResponseTimeChart uptimeSeconds={uptimeSeconds} />
+          <ConnectionActivityChart uptimeSeconds={uptimeSeconds} />
         </div>
 
         {/* Token 成本 - 全宽 */}

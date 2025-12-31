@@ -165,6 +165,7 @@ export namespace main {
 	    tracking_enabled: boolean;
 	    failover_enabled: boolean;
 	    failover_default_cooldown_seconds: number;
+	    failover_allow_revisit_after_exhausted: boolean;
 	    endpoint_count: number;
 	
 	    static createFrom(source: any = {}) {
@@ -180,6 +181,7 @@ export namespace main {
 	        this.tracking_enabled = source["tracking_enabled"];
 	        this.failover_enabled = source["failover_enabled"];
 	        this.failover_default_cooldown_seconds = source["failover_default_cooldown_seconds"];
+	        this.failover_allow_revisit_after_exhausted = source["failover_allow_revisit_after_exhausted"];
 	        this.endpoint_count = source["endpoint_count"];
 	    }
 	}
@@ -932,6 +934,9 @@ export namespace main {
 	    today_requests: number;
 	    success_requests: number;
 	    failed_requests: number;
+	    active_connections: number;
+	    average_response_time: string;
+	    total_tokens: number;
 	    total_input_tokens: number;
 	    total_output_tokens: number;
 	    total_cost: number;
@@ -951,6 +956,9 @@ export namespace main {
 	        this.today_requests = source["today_requests"];
 	        this.success_requests = source["success_requests"];
 	        this.failed_requests = source["failed_requests"];
+	        this.active_connections = source["active_connections"];
+	        this.average_response_time = source["average_response_time"];
+	        this.total_tokens = source["total_tokens"];
 	        this.total_input_tokens = source["total_input_tokens"];
 	        this.total_output_tokens = source["total_output_tokens"];
 	        this.total_cost = source["total_cost"];

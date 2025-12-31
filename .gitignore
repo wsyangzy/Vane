@@ -83,3 +83,4 @@ internal/tracking/deprecated/
 .gocache
 .gomodcache
 CLAUDE.md
+docs/TODO.md

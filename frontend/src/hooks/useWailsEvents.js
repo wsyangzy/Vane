@@ -35,7 +35,7 @@ export const WAILS_STATUS = {
  */
 const useWailsEvents = (onDataUpdate, options = {}) => {
   const {
-    events = 'status,endpoint,group'
+    events = 'status,endpoint,group,connection'
   } = options;
 
   const [connectionStatus, setConnectionStatus] = useState(WAILS_STATUS.CONNECTING);
@@ -53,6 +53,8 @@ const useWailsEvents = (onDataUpdate, options = {}) => {
     'status': WAILS_EVENTS.SYSTEM_STATUS,
     'endpoint': WAILS_EVENTS.ENDPOINT_UPDATE,
     'group': WAILS_EVENTS.GROUP_UPDATE,
+    // Wails 侧没有独立的 connection 事件，复用 usage:update 作为连接统计推送源
+    'connection': WAILS_EVENTS.USAGE_UPDATE,
     'usage': WAILS_EVENTS.USAGE_UPDATE,
     'config': WAILS_EVENTS.CONFIG_RELOADED,
     'error': WAILS_EVENTS.ERROR,
@@ -97,11 +99,25 @@ const useWailsEvents = (onDataUpdate, options = {}) => {
           console.log(`📡 [Wails Events] 收到 ${eventType} 事件:`, data);
 
           if (onDataUpdateRef.current) {
+            // 兼容 useOverviewData 的连接统计字段命名：successful_requests 等
+            let normalizedData = data;
+            if (eventType === 'connection' && data && typeof data === 'object') {
+              normalizedData = { ...data };
+              if (normalizedData.successful_requests === undefined && normalizedData.success_requests !== undefined) {
+                normalizedData.successful_requests = normalizedData.success_requests;
+              }
+              if (normalizedData.total_tokens === undefined) {
+                const input = normalizedData.total_input_tokens || 0;
+                const output = normalizedData.total_output_tokens || 0;
+                normalizedData.total_tokens = input + output;
+              }
+            }
+
             // 转换数据格式以兼容 SSE 处理逻辑
             const wrappedData = {
-              data: data,
+              data: normalizedData,
               event: eventType,
-              ...data
+              ...(normalizedData || {})
             };
             onDataUpdateRef.current(wrappedData, eventType);
           }

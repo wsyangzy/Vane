@@ -12,7 +12,6 @@ import (
 
 	"claude-request-forwarder/config"
 	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/transport"
 )
 
 // CountTokensHandler 处理 /v1/messages/count_tokens 请求
@@ -96,14 +95,9 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 
 		h.forwarder.CopyHeaders(r, req, ep)
 
-		httpTransport, err := transport.CreateTransport(h.config)
+		client, err := h.forwarder.NewClient(ep.Config.Timeout)
 		if err != nil {
 			continue
-		}
-
-		client := &http.Client{
-			Timeout:   ep.Config.Timeout,
-			Transport: httpTransport,
 		}
 
 		resp, err := client.Do(req)

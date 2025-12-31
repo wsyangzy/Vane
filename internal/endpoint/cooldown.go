@@ -30,4 +30,3 @@ func (m *Manager) SetEndpointCooldown(endpointName string, reason string) (time.
 
 	return until, nil
 }
-

@@ -47,12 +47,19 @@ type ActiveRequest struct {
 	mu sync.RWMutex `json:"-"` // 保护单个请求的并发访问
 }
 
+// ArchivingEntry 归档中的请求条目（包含时间戳）
+type ArchivingEntry struct {
+	Request    *ActiveRequest
+	ArchivedAt time.Time
+}
+
 // HotPoolConfig 热池配置
 type HotPoolConfig struct {
 	MaxAge           time.Duration // 最大存活时间，防止泄漏（默认30分钟）
 	MaxSize          int           // 最大容量（默认10000）
 	CleanupInterval  time.Duration // 清理间隔（默认1分钟）
 	ArchiveOnCleanup bool          // 清理时是否归档（默认true）
+	ArchivingTimeout time.Duration // 归档超时时间（默认5分钟）
 }
 
 // DefaultHotPoolConfig 返回默认配置
@@ -62,6 +69,7 @@ func DefaultHotPoolConfig() HotPoolConfig {
 		MaxSize:          10000,
 		CleanupInterval:  1 * time.Minute,
 		ArchiveOnCleanup: true,
+		ArchivingTimeout: 5 * time.Minute,
 	}
 }
 
@@ -72,7 +80,7 @@ type HotPool struct {
 
 	// 归档中的请求（已完成但还没写入数据库）
 	// 这个缓存确保请求在"热池→数据库"过渡期间不会丢失
-	archiving map[string]*ActiveRequest
+	archiving map[string]*ArchivingEntry
 
 	config HotPoolConfig
 
@@ -89,14 +97,14 @@ type HotPool struct {
 
 // HotPoolStats 热池统计信息
 type HotPoolStats struct {
-	mu              sync.RWMutex
-	TotalAdded      int64 `json:"total_added"`       // 累计添加次数
-	TotalRemoved    int64 `json:"total_removed"`     // 累计移除次数
-	TotalArchived   int64 `json:"total_archived"`    // 累计归档次数
-	TotalExpired    int64 `json:"total_expired"`     // 累计过期清理次数
-	TotalOverflow   int64 `json:"total_overflow"`    // 累计溢出丢弃次数
-	CurrentSize     int   `json:"current_size"`      // 当前大小
-	PeakSize        int   `json:"peak_size"`         // 峰值大小
+	mu            sync.RWMutex
+	TotalAdded    int64 `json:"total_added"`    // 累计添加次数
+	TotalRemoved  int64 `json:"total_removed"`  // 累计移除次数
+	TotalArchived int64 `json:"total_archived"` // 累计归档次数
+	TotalExpired  int64 `json:"total_expired"`  // 累计过期清理次数
+	TotalOverflow int64 `json:"total_overflow"` // 累计溢出丢弃次数
+	CurrentSize   int   `json:"current_size"`   // 当前大小
+	PeakSize      int   `json:"peak_size"`      // 峰值大小
 }
 
 // NewHotPool 创建热池
@@ -110,10 +118,13 @@ func NewHotPool(config HotPoolConfig) *HotPool {
 	if config.CleanupInterval <= 0 {
 		config.CleanupInterval = 1 * time.Minute
 	}
+	if config.ArchivingTimeout <= 0 {
+		config.ArchivingTimeout = 5 * time.Minute
+	}
 
 	pool := &HotPool{
 		requests:  make(map[string]*ActiveRequest),
-		archiving: make(map[string]*ActiveRequest),
+		archiving: make(map[string]*ArchivingEntry),
 		config:    config,
 		ctx:       make(chan struct{}),
 	}
@@ -150,14 +161,15 @@ func (hp *HotPool) Add(req *ActiveRequest) error {
 		return fmt.Errorf("request %s already exists in hot pool", req.RequestID)
 	}
 
-	// 检查容量
-	if len(hp.requests) >= hp.config.MaxSize {
+	// 检查容量（包含正在归档中的请求，避免 archiving 堆积导致内存超预期）
+	if len(hp.requests)+len(hp.archiving) >= hp.config.MaxSize {
 		hp.stats.mu.Lock()
 		hp.stats.TotalOverflow++
 		hp.stats.mu.Unlock()
 		slog.Warn("🔥 HotPool 容量已满，拒绝新请求",
 			"request_id", req.RequestID,
 			"current_size", len(hp.requests),
+			"archiving_size", len(hp.archiving),
 			"max_size", hp.config.MaxSize)
 		return fmt.Errorf("hot pool is full (max: %d)", hp.config.MaxSize)
 	}
@@ -259,7 +271,10 @@ func (hp *HotPool) CompleteAndArchive(requestID string, finalizer func(*ActiveRe
 	}
 	// 从活跃列表移到归档中列表（而不是直接删除）
 	delete(hp.requests, requestID)
-	hp.archiving[requestID] = req
+	hp.archiving[requestID] = &ArchivingEntry{
+		Request:    req,
+		ArchivedAt: time.Now(),
+	}
 	callback := hp.archiveCallback
 	hp.mu.Unlock()
 
@@ -306,8 +321,8 @@ func (hp *HotPool) GetActive() []*ActiveRequest {
 	}
 
 	// 添加归档中的请求（确保过渡期不丢失）
-	for _, req := range hp.archiving {
-		result = append(result, req)
+	for _, entry := range hp.archiving {
+		result = append(result, entry.Request)
 	}
 
 	return result
@@ -379,66 +394,139 @@ func (hp *HotPool) startCleaner() {
 
 // cleanup 清理过期请求
 func (hp *HotPool) cleanup() {
-	hp.mu.Lock()
-	defer hp.mu.Unlock()
-
 	now := time.Now()
 	expiredRequests := make([]*ActiveRequest, 0)
+	var callback func(*ActiveRequest)
+	var archiveOnCleanup bool
+	var remaining int
+
+	hp.mu.Lock()
 
 	for id, req := range hp.requests {
 		if now.Sub(req.StartTime) > hp.config.MaxAge {
-			// 标记为超时
+			expiredRequests = append(expiredRequests, req)
+			delete(hp.requests, id)
+		}
+	}
+
+	callback = hp.archiveCallback
+	archiveOnCleanup = hp.config.ArchiveOnCleanup && callback != nil
+	remaining = len(hp.requests)
+
+	hp.mu.Unlock()
+
+	if len(expiredRequests) > 0 {
+		// 标记为超时（避免在持有 hp.mu 时进行 req.mu 操作）
+		for _, req := range expiredRequests {
 			req.mu.Lock()
 			req.Status = "timeout"
 			req.FailureReason = "hot pool cleanup: request exceeded max age"
 			req.EndTime = &now
 			req.DurationMs = now.Sub(req.StartTime).Milliseconds()
 			req.mu.Unlock()
-
-			expiredRequests = append(expiredRequests, req)
-			delete(hp.requests, id)
 		}
-	}
 
-	if len(expiredRequests) > 0 {
 		// 更新统计
 		hp.stats.mu.Lock()
 		hp.stats.TotalExpired += int64(len(expiredRequests))
 		hp.stats.TotalRemoved += int64(len(expiredRequests))
-		hp.stats.CurrentSize = len(hp.requests)
+		if archiveOnCleanup {
+			hp.stats.TotalArchived += int64(len(expiredRequests))
+		}
+		hp.stats.CurrentSize = remaining
 		hp.stats.mu.Unlock()
 
 		slog.Warn("🔥 HotPool 清理过期请求",
 			"expired_count", len(expiredRequests),
-			"remaining", len(hp.requests))
+			"remaining", remaining)
 
 		// 归档过期请求（如果启用）
-		if hp.config.ArchiveOnCleanup && hp.archiveCallback != nil {
+		if archiveOnCleanup {
 			for _, req := range expiredRequests {
-				hp.archiveCallback(req)
-				hp.stats.mu.Lock()
-				hp.stats.TotalArchived++
-				hp.stats.mu.Unlock()
+				callback(req)
 			}
 		}
 	}
 }
 
-// Close 关闭热池
-func (hp *HotPool) Close() error {
+// cleanupStaleArchiving 清理超时的归档请求
+// 防止归档失败或崩溃导致的内存泄漏
+func (hp *HotPool) cleanupStaleArchiving() {
 	hp.mu.Lock()
 	defer hp.mu.Unlock()
 
+	now := time.Now()
+	timeout := hp.config.ArchivingTimeout
+	staleIDs := make([]string, 0)
+
+	for reqID, entry := range hp.archiving {
+		if now.Sub(entry.ArchivedAt) > timeout {
+			staleIDs = append(staleIDs, reqID)
+			delete(hp.archiving, reqID)
+		}
+	}
+
+	if len(staleIDs) > 0 {
+		slog.Warn("清理超时的归档请求",
+			"count", len(staleIDs),
+			"timeout", timeout.String(),
+			"request_ids", staleIDs)
+	}
+}
+
+// StartArchivingCleanup 启动归档超时清理goroutine
+// 在Manager初始化时调用
+func (hp *HotPool) StartArchivingCleanup() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-hp.ctx:
+				slog.Debug("停止归档清理goroutine")
+				return
+			case <-ticker.C:
+				hp.cleanupStaleArchiving()
+			}
+		}
+	}()
+	slog.Info("已启动归档超时清理goroutine", "interval", "1m", "timeout", hp.config.ArchivingTimeout)
+}
+
+// Close 关闭热池
+func (hp *HotPool) Close() error {
+	hp.mu.Lock()
+
 	if hp.closed {
+		hp.mu.Unlock()
 		return nil
 	}
 
 	hp.closed = true
 	close(hp.ctx)
 
-	// 归档所有剩余请求
-	now := time.Now()
+	remainingRequests := make([]*ActiveRequest, 0, len(hp.requests))
 	for _, req := range hp.requests {
+		remainingRequests = append(remainingRequests, req)
+	}
+
+	callback := hp.archiveCallback
+	remaining := len(remainingRequests)
+	hp.requests = make(map[string]*ActiveRequest)
+	hp.stats.mu.Lock()
+	hp.stats.TotalRemoved += int64(remaining)
+	if callback != nil {
+		hp.stats.TotalArchived += int64(remaining)
+	}
+	hp.stats.CurrentSize = 0
+	hp.stats.mu.Unlock()
+
+	hp.mu.Unlock()
+
+	// 归档所有剩余请求（避免在持有 hp.mu 时执行回调）
+	now := time.Now()
+	for _, req := range remainingRequests {
 		req.mu.Lock()
 		if req.EndTime == nil {
 			req.EndTime = &now
@@ -450,18 +538,16 @@ func (hp *HotPool) Close() error {
 		}
 		req.mu.Unlock()
 
-		if hp.archiveCallback != nil {
-			hp.archiveCallback(req)
+		if callback != nil {
+			callback(req)
 		}
 	}
 
-	remaining := len(hp.requests)
-	hp.requests = make(map[string]*ActiveRequest)
-
+	stats := hp.GetStats()
 	slog.Info("🔥 HotPool 已关闭",
 		"archived_remaining", remaining,
-		"total_added", hp.stats.TotalAdded,
-		"total_archived", hp.stats.TotalArchived)
+		"total_added", stats.TotalAdded,
+		"total_archived", stats.TotalArchived)
 
 	return nil
 }

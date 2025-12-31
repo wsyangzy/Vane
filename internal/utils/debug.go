@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +22,87 @@ var (
 	// 清理节流控制：每 24 小时最多执行一次清理
 	lastCleanupTime time.Time
 	cleanupMutex    sync.Mutex
+
+	debugWriterOnce sync.Once
+	debugWriteCh    chan debugWriteJob
 )
+
+type debugWriteJob struct {
+	filename string
+	content  string
+}
+
+func startDebugWriter() {
+	debugWriteCh = make(chan debugWriteJob, 256)
+	go func() {
+		for job := range debugWriteCh {
+			if job.filename == "" || job.content == "" {
+				continue
+			}
+			// 最佳努力：确保目录存在
+			if dir := filepath.Dir(job.filename); dir != "" {
+				_ = os.MkdirAll(dir, 0755)
+			}
+
+			// 追加写入文件（失败时静默忽略，不影响主流程）
+			file, err := os.OpenFile(job.filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+			if err == nil {
+				_, _ = file.WriteString(job.content)
+				_ = file.Close()
+			}
+
+			// 🧹 触发清理（节流控制，每 24 小时最多执行一次）
+			cleanupDebugFiles()
+		}
+	}()
+}
+
+func enqueueDebugWrite(filename string, content string) {
+	debugWriterOnce.Do(startDebugWriter)
+
+	select {
+	case debugWriteCh <- debugWriteJob{filename: filename, content: content}:
+	default:
+		// 队列满时丢弃（保持“不影响主流程”的原则）
+	}
+}
+
+func sanitizeDebugFilenameComponent(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "unknown"
+	}
+
+	// 仅允许安全字符，避免路径穿越/非法文件名
+	const maxLen = 128
+	var b strings.Builder
+	b.Grow(len(s))
+	lastUnderscore := false
+	for _, r := range s {
+		allowed := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.'
+		if !allowed {
+			if !lastUnderscore {
+				b.WriteByte('_')
+				lastUnderscore = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		lastUnderscore = r == '_'
+		if b.Len() >= maxLen {
+			break
+		}
+	}
+
+	out := strings.Trim(b.String(), "._")
+	if out == "" || out == "." || out == ".." {
+		return "unknown"
+	}
+	return out
+}
 
 // SetDebugConfig 设置调试配置（应该在程序启动时调用）
 func SetDebugConfig(cfg *config.Config) {
@@ -152,38 +233,20 @@ func WriteTokenDebugResponse(requestID, endpoint, responseBody string) {
 		return
 	}
 
-	// 异步写入，不阻塞主流程
-	go func() {
-		logDir := getDebugLogDir()
-		// 确保日志目录存在
-		if err := os.MkdirAll(logDir, 0755); err != nil {
-			return // 静默失败，不影响主流程
-		}
+	logDir := getDebugLogDir()
+	filename := filepath.Join(logDir, fmt.Sprintf("%s.debug", sanitizeDebugFilenameComponent(requestID)))
 
-		// 文件名：logs/{requestID}.debug
-		filename := filepath.Join(logDir, fmt.Sprintf("%s.debug", requestID))
+	var b strings.Builder
+	b.WriteString("\n=== TOKEN解析失败调试信息 ===\n")
+	b.WriteString(fmt.Sprintf("请求ID: %s\n", requestID))
+	b.WriteString(fmt.Sprintf("端点: %s\n", endpoint))
+	b.WriteString(fmt.Sprintf("时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	b.WriteString(fmt.Sprintf("响应长度: %d 字节\n", len(responseBody)))
+	b.WriteString("=== 响应内容 ===\n")
+	b.WriteString(responseBody)
+	b.WriteString("\n=== 分割线 ===\n\n")
 
-		// 创建调试内容
-		debugContent := "\n=== TOKEN解析失败调试信息 ===\n"
-		debugContent += fmt.Sprintf("请求ID: %s\n", requestID)
-		debugContent += fmt.Sprintf("端点: %s\n", endpoint)
-		debugContent += fmt.Sprintf("时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-		debugContent += fmt.Sprintf("响应长度: %d 字节\n", len(responseBody))
-		debugContent += "=== 响应内容 ===\n" + responseBody + "\n"
-		debugContent += "=== 分割线 ===\n\n"
-
-		// 追加写入文件（如果失败，静默忽略）
-		file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return // 静默失败
-		}
-		defer file.Close()
-
-		file.WriteString(debugContent)
-
-		// 🧹 触发清理（节流控制，每 24 小时最多执行一次）
-		cleanupDebugFiles()
-	}()
+	enqueueDebugWrite(filename, b.String())
 }
 
 // WriteStreamDebugResponse 异步保存流式Token解析失败的调试数据
@@ -199,44 +262,23 @@ func WriteStreamDebugResponse(requestID, endpoint string, streamData []string, b
 		return
 	}
 
-	// 异步写入，不阻塞主流程
-	go func() {
-		logDir := getDebugLogDir()
-		// 确保日志目录存在
-		if err := os.MkdirAll(logDir, 0755); err != nil {
-			return // 静默失败，不影响主流程
-		}
+	logDir := getDebugLogDir()
+	filename := filepath.Join(logDir, fmt.Sprintf("%s.debug", sanitizeDebugFilenameComponent(requestID)))
 
-		// 文件名：logs/{requestID}.debug
-		filename := filepath.Join(logDir, fmt.Sprintf("%s.debug", requestID))
+	var b strings.Builder
+	b.WriteString("\n=== 流式TOKEN解析失败调试信息 ===\n")
+	b.WriteString(fmt.Sprintf("请求ID: %s\n", requestID))
+	b.WriteString(fmt.Sprintf("端点: %s\n", endpoint))
+	b.WriteString(fmt.Sprintf("时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	b.WriteString(fmt.Sprintf("已处理字节数: %d\n", bytesProcessed))
+	b.WriteString(fmt.Sprintf("流数据行数: %d\n", len(streamData)))
+	b.WriteString("=== 流式数据内容 ===\n")
+	for i, line := range streamData {
+		b.WriteString(fmt.Sprintf("[行%d] %s\n", i+1, line))
+	}
+	b.WriteString("=== 流式分割线 ===\n\n")
 
-		// 创建调试内容
-		debugContent := "\n=== 流式TOKEN解析失败调试信息 ===\n"
-		debugContent += fmt.Sprintf("请求ID: %s\n", requestID)
-		debugContent += fmt.Sprintf("端点: %s\n", endpoint)
-		debugContent += fmt.Sprintf("时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-		debugContent += fmt.Sprintf("已处理字节数: %d\n", bytesProcessed)
-		debugContent += fmt.Sprintf("流数据行数: %d\n", len(streamData))
-		debugContent += "=== 流式数据内容 ===\n"
-
-		for i, line := range streamData {
-			debugContent += fmt.Sprintf("[行%d] %s\n", i+1, line)
-		}
-
-		debugContent += "=== 流式分割线 ===\n\n"
-
-		// 追加写入文件（如果失败，静默忽略）
-		file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return // 静默失败
-		}
-		defer file.Close()
-
-		file.WriteString(debugContent)
-
-		// 🧹 触发清理（节流控制，每 24 小时最多执行一次）
-		cleanupDebugFiles()
-	}()
+	enqueueDebugWrite(filename, b.String())
 }
 
 // RecoverUsageFromDebugFile 从debug文件中恢复usage信息
@@ -252,7 +294,7 @@ func RecoverUsageFromDebugFile(requestID string) (*tracking.TokenUsage, error) {
 	}
 
 	logDir := getDebugLogDir()
-	filename := filepath.Join(logDir, fmt.Sprintf("%s.debug", requestID))
+	filename := filepath.Join(logDir, fmt.Sprintf("%s.debug", sanitizeDebugFilenameComponent(requestID)))
 
 	// 检查文件是否存在
 	if _, err := os.Stat(filename); os.IsNotExist(err) {

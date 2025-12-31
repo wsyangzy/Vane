@@ -15,6 +15,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { fetchConnectionActivityData } from '@utils/api.js';
+import { formatHHMM, padTimeSeries } from '@utils/chartTime.js';
 import { CustomSelect } from '@components/ui';
 
 // 时间范围选项
@@ -30,7 +31,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 
   return (
     <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
-      <p className="font-medium text-slate-900 mb-2">{label}</p>
+      <p className="font-medium text-slate-900 mb-2">{formatHHMM(label)}</p>
       {payload.map((entry, index) => (
         <div key={index} className="flex items-center justify-between gap-4">
           <span className="text-slate-500">{entry.name}:</span>
@@ -43,12 +44,30 @@ const CustomTooltip = ({ active, payload, label }) => {
   );
 };
 
-const ConnectionActivityChart = () => {
+const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [timeRange, setTimeRange] = useState(60);
   const refreshIntervalRef = useRef(null);
+
+  const toCumulative = (data) => {
+    let connections = 0;
+    return (data || []).map((point) => {
+      connections += point?.connections || 0;
+      return { ...point, connections };
+    });
+  };
+
+  const maxMinutes = Math.max(1, Math.floor((uptimeSeconds || 0) / 60));
+  const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
+  const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
+
+  useEffect(() => {
+    if (timeRange > maxMinutes && options.length > 0) {
+      setTimeRange(options[options.length - 1].value);
+    }
+  }, [maxMinutes, options, timeRange]);
 
   // 加载数据
   const loadData = useCallback(async (showRefreshing = false) => {
@@ -57,7 +76,13 @@ const ConnectionActivityChart = () => {
     }
     try {
       const data = await fetchConnectionActivityData(timeRange);
-      setChartData(data);
+      setChartData(
+        toCumulative(padTimeSeries(data, {
+          minutes: timeRange,
+          stepMs: 30 * 1000,
+          defaults: { connections: 0 },
+        }))
+      );
     } catch (error) {
       console.error('加载连接活动数据失败:', error);
     } finally {
@@ -87,20 +112,11 @@ const ConnectionActivityChart = () => {
   // 监听 SSE 图表更新事件
   useEffect(() => {
     const handleChartUpdate = (event) => {
-      const { chart_type, data } = event.detail || {};
+      const { chart_type } = event.detail || {};
       if (chart_type === 'connection_activity' || chart_type === 'connectionActivity') {
-        if (Array.isArray(data)) {
-          setChartData(data);
-        } else if (data?.labels && data?.datasets) {
-          // Chart.js 格式转换
-          const connectionsData = data.datasets[0]?.data || [];
-          const converted = data.labels.map((time, i) => ({
-            time,
-            connections: connectionsData[i] || 0
-          }));
-          setChartData(converted);
-        }
-        console.log('📊 [SSE] 连接活动图已更新');
+        // 使用统一的加载逻辑，确保时间范围选择器生效
+        loadData(false);
+        console.log('📊 [SSE] 连接活动图已触发刷新');
       }
     };
 
@@ -108,7 +124,7 @@ const ConnectionActivityChart = () => {
     return () => {
       document.removeEventListener('chartUpdate', handleChartUpdate);
     };
-  }, []);
+  }, [loadData]);
 
   // 手动刷新
   const handleRefresh = () => {
@@ -125,6 +141,8 @@ const ConnectionActivityChart = () => {
     ? Math.max(...chartData.map(d => d.connections || 0))
     : 0;
 
+  const xKey = chartData.some(d => d?.timestamp) ? 'timestamp' : 'time';
+
   return (
     <div className="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col h-full">
       <div className="flex justify-between items-start mb-1">
@@ -136,7 +154,7 @@ const ConnectionActivityChart = () => {
         </div>
         <div className="flex items-center space-x-2">
           <CustomSelect
-            options={TIME_RANGE_OPTIONS}
+            options={options}
             value={timeRange}
             onChange={setTimeRange}
             size="xs"
@@ -178,11 +196,12 @@ const ConnectionActivityChart = () => {
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis
-                dataKey="time"
+                dataKey={xKey}
                 axisLine={false}
                 tickLine={false}
                 tick={{ fill: '#94a3b8', fontSize: 10 }}
                 interval="preserveStartEnd"
+                tickFormatter={formatHHMM}
               />
               <YAxis
                 axisLine={false}
@@ -198,7 +217,7 @@ const ConnectionActivityChart = () => {
                 stroke="#8b5cf6"
                 strokeWidth={2}
                 fill="url(#colorConnections)"
-                name="连接数"
+                name="累计连接数"
                 dot={false}
                 activeDot={{ r: 4, fill: '#8b5cf6', strokeWidth: 0 }}
               />
@@ -212,7 +231,7 @@ const ConnectionActivityChart = () => {
         <div className="flex justify-center space-x-6 mt-3 pt-3 border-t border-slate-100">
           <div className="flex items-center text-xs text-slate-500">
             <span className="w-3 h-3 rounded bg-violet-400 mr-2" />
-            活跃连接数
+            累计连接数
           </div>
         </div>
       )}

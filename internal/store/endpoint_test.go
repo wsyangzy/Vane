@@ -42,6 +42,7 @@ func createTestDB(t *testing.T) (*sql.DB, func()) {
 			failover_enabled INTEGER DEFAULT 1,
 			cooldown_seconds INTEGER,
 			timeout_seconds INTEGER DEFAULT 300,
+			skip_health_check INTEGER DEFAULT 0,
 			supports_count_tokens INTEGER DEFAULT 0,
 			cost_multiplier REAL DEFAULT 1.0,
 			input_cost_multiplier REAL DEFAULT 1.0,

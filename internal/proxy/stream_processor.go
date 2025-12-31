@@ -59,6 +59,10 @@ type StreamProcessor struct {
 
 	// 🔍 [调试缓冲区] 轻量级调试数据收集（仅在token解析失败时使用）
 	debugLines []string // SSE行数据收集，最多保存DebugLineLimit行
+
+	// 🔥 [重复计费防护] 2025-12-26: 追踪是否已向客户端发送实际模型输出
+	hasContentSent   bool       // 是否已发送 content_block_delta 事件
+	contentSentMutex sync.Mutex // 保护 hasContentSent 的并发访问
 }
 
 // NewStreamProcessor 创建新的流式处理器实例
@@ -217,6 +221,19 @@ func (sp *StreamProcessor) parseTokensInBackground(data []byte) {
 // processSSELine 处理单个SSE行
 // 修改版本：仅进行 Token 解析，不再直接记录到 usageTracker
 func (sp *StreamProcessor) processSSELine(line string) {
+	// 🔥 [重复计费防护] 2025-12-26: 检测是否为实际模型输出事件
+	trimmedLine := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmedLine, "event:") {
+		eventType := strings.TrimSpace(strings.TrimPrefix(trimmedLine, "event:"))
+		if eventType == "content_block_delta" {
+			// 标记已向客户端发送实际内容
+			sp.contentSentMutex.Lock()
+			sp.hasContentSent = true
+			sp.contentSentMutex.Unlock()
+			// 🔧 [日志优化] 2025-12-29: 移除高频Debug日志，减少日志噪音
+		}
+	}
+
 	// 🔍 [调试数据收集] 轻量级收集SSE行数据（无性能影响）
 	if len(sp.debugLines) < DebugLineLimit {
 		sp.debugLines = append(sp.debugLines, line)
@@ -751,4 +768,12 @@ func (sp *StreamProcessor) collectAvailableInfoV2(cancelErr error, status string
 
 	// ✅ 返回包含完整信息的错误
 	return tokenUsage, fmt.Errorf("stream_status:%s:model:%s: %w", statusClassified, modelName, cancelErr)
+}
+
+// HasSentContent 检查是否已向客户端发送实际模型输出内容
+// 🔥 [重复计费防护] 2025-12-26: 用于判断流式请求是否应该重试
+func (sp *StreamProcessor) HasSentContent() bool {
+	sp.contentSentMutex.Lock()
+	defer sp.contentSentMutex.Unlock()
+	return sp.hasContentSent
 }

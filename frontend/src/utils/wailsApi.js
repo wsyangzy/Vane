@@ -625,6 +625,7 @@ export const getConnectionActivityChart = async (minutes = 60) => {
   // 转换为前端期望的格式 (connections 字段)
   return (data || []).map(point => ({
     time: point.time,
+    timestamp: point.timestamp,
     connections: point.value
   }));
 };

@@ -167,7 +167,8 @@ func (sh *StreamingHandler) handleStreamingV2(ctx context.Context, w http.Respon
 	}
 
 	// 继续执行流式请求处理
-	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
+	triedChannels := make(map[string]struct{}, 4)
+	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
 }
 
 // setStreamingHeaders 设置流式响应头
@@ -181,7 +182,8 @@ func (sh *StreamingHandler) setStreamingHeaders(w http.ResponseWriter) {
 }
 
 // executeStreamingWithRetry 执行带重试的流式处理
-func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher) {
+// triedChannels: 本次请求链路内已尝试过的渠道（方案B：渠道间故障转移不回访，避免循环）
+func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}) {
 	connID := lifecycleManager.GetRequestID()
 	var lastFailedEndpoint string // 🚀 [端点自愈] 追踪最后失败的端点
 
@@ -227,6 +229,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			fmt.Fprintf(w, "data: error: No healthy endpoints available\n\n")
 			flusher.Flush()
 			return
+		}
+	}
+
+	// 方案B：记录当前尝试的渠道（用于后续跨渠道故障转移时不回访）
+	if triedChannels != nil && len(endpoints) > 0 && endpoints[0] != nil {
+		currentChannel := endpoints[0].Config.Channel
+		if currentChannel == "" {
+			currentChannel = endpoints[0].Config.Name
+		}
+		if currentChannel != "" {
+			triedChannels[currentChannel] = struct{}{}
 		}
 	}
 
@@ -302,10 +315,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 执行流式处理并获取Token信息和模型名称
 				finalTokenUsage, modelName, err := processor.ProcessStreamWithRetry(ctx, resp)
+
+				// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送实际模型输出
+				if processor.HasSentContent() {
+					lifecycleManager.MarkOutputSent()
+					slog.Debug(fmt.Sprintf("🔒 [重复计费防护] [%s] 检测到已发送内容，标记不可重试", connID))
+				}
+
 				if err != nil {
 					// 🔧 [结构化错误处理] 2025-12-11: 优先使用接口断言处理流不完整错误
 					if streamErr, ok := err.(StreamIncompleteErrorInterface); ok {
-						// 流不完整但请求已完成，需要标记 failure_reason
+						// 🚀 [Plan D实现] 2025-12-26: 流不完整时记录部分Token，但继续重试
 						parsedModelName := streamErr.GetModelName()
 						failureReason := streamErr.GetFailureReason()
 
@@ -316,12 +336,39 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							lifecycleManager.SetModelWithComparison(modelName, "stream_processor")
 						}
 
-						// 使用 CompleteRequestWithQuality 完成请求并标记数据质量问题
-						lifecycleManager.CompleteRequestWithQuality(finalTokenUsage, failureReason)
+						// v6.1+: 端点出现流截断/不完整时，进入冷却，避免下一次请求立刻回到该端点反复截断。
+						// 注意：是否继续重试取决于是否已向客户端输出实际内容（避免重复计费风险）。
+						failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						if failedKey != "" {
+							until, cdErr := sh.endpointManager.SetEndpointCooldown(failedKey, failureReason)
+							if cdErr != nil {
+								slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+									connID, ep.Config.Name, failedKey, cdErr))
+							} else {
+								slog.Warn(fmt.Sprintf("⏱️ [端点冷却] [%s] endpoint=%s cooldown_until=%s reason=%s",
+									connID, ep.Config.Name, until.Format("15:04:05"), failureReason))
+							}
+						}
 
-						slog.Info(fmt.Sprintf("⚠️ [流不完整但已完成] [%s] 端点: %s, failure_reason: %s, 模型: %s",
+						// 🔥 [重复计费防护] 若已向客户端输出内容，则不再尝试其他端点（避免“部分输出 + 重试”导致重复计费/重复内容）。
+						if lifecycleManager.HasOutputContent() {
+							lifecycleManager.RecordTokensForFailedRequest(finalTokenUsage, failureReason)
+							lifecycleManager.FailRequest(failureReason, err.Error(), http.StatusBadGateway)
+							fmt.Fprintf(w, "data: error: 流式响应中断，已发送部分内容，停止重试避免重复计费\n\n")
+							flusher.Flush()
+							return
+						}
+
+						// 🚀 [Plan D核心修改] 记录部分Token到数据库，但不完成请求；继续尝试其他端点完成响应。
+						lifecycleManager.RecordPartialTokens(finalTokenUsage, failureReason, ep.Config.Name)
+
+						slog.Warn(fmt.Sprintf("⚠️ [流截断记录部分Token] [%s] 端点: %s, failure_reason: %s, 模型: %s, 将继续重试其他端点",
 							connID, ep.Config.Name, failureReason, parsedModelName))
-						return
+
+						// 将此错误视为端点失败，触发故障转移
+						lastErr = err
+						endpointSuccess = false
+						continue // 跳过当前端点，尝试下一个
 					}
 
 					// 处理其他类型的错误（保留原有逻辑用于兼容）
@@ -446,6 +493,20 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			errorRecovery := sh.errorRecoveryFactory.NewErrorRecoveryManager(sh.usageTracker)
 			errorCtx := errorRecovery.ClassifyError(lastErr, connID, ep.Config.Name, routeGroup, attempt-1)
 
+			// 🔥 [计费感知分类] 2025-12-29: 根据HasOutputContent()动态调整Stream错误的可重试性
+			// 核心逻辑：token计费 = HasOutputContent() = true → 不可重试（避免重复计费）
+			//          0 tokens = HasOutputContent() = false → 可重试（连接阶段中断）
+			errStr := strings.ToLower(lastErr.Error())
+			if strings.HasPrefix(errStr, "stream_status:") || strings.Contains(errStr, "stream_error") {
+				if !lifecycleManager.HasOutputContent() {
+					slog.Info(fmt.Sprintf("🔄 [计费感知] [%s] Stream错误但未发送内容(0 tokens)，允许重试: %v", connID, lastErr))
+					errorCtx.RetryableAfter = time.Second * time.Duration(1<<uint(attempt-1))
+				} else {
+					slog.Warn(fmt.Sprintf("🚫 [计费感知] [%s] Stream错误且已发送内容(有计费)，禁止重试: %v", connID, lastErr))
+					errorCtx.RetryableAfter = 0
+				}
+			}
+
 			// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 			// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
 			lifecycleManager.PrepareErrorContext(&errorCtx)
@@ -485,12 +546,34 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					result := sh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, ep.Config.Name)
 					switch result {
 					case SuspensionSuccess:
-						slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新开始处理", connID, ep.Config.Name))
-						fmt.Fprintf(w, "data: resume: 端点已恢复，重新开始处理...\n\n")
-						flusher.Flush()
-						// 重新开始executeStreamingWithRetry
-						sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
-						return
+						// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
+						if lifecycleManager.CanRestart() {
+							// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
+							if lifecycleManager.HasOutputContent() {
+								slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 端点恢复成功但已发送内容，禁止重试", connID))
+								lifecycleManager.FailRequest("output_sent_no_retry",
+									"Cannot retry after sending partial output to client", http.StatusBadGateway)
+								fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
+								flusher.Flush()
+								return
+							}
+
+							restartCount := lifecycleManager.IncrementRestart()
+							slog.Info(fmt.Sprintf("🔄 [端点恢复重启] [%s] 端点 %s 已恢复，重启次数: %d/%d",
+								connID, ep.Config.Name, restartCount, lifecycleManager.GetMaxRestarts()))
+							fmt.Fprintf(w, "data: resume: 端点已恢复，重新开始处理...\n\n")
+							flusher.Flush()
+							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
+							return
+						} else {
+							slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 已达最大重启次数 (%d)，终止请求",
+								connID, lifecycleManager.GetMaxRestarts()))
+							lifecycleManager.FailRequest("max_restarts_exceeded",
+								"Exceeded maximum restart attempts", http.StatusServiceUnavailable)
+							fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
+							flusher.Flush()
+							return
+						}
 					case SuspensionCancelled:
 						// 🎯 [挂起取消区分] 用户在挂起期间取消请求，应该记录为取消而非失败
 						slog.Info(fmt.Sprintf("🚫 [挂起期间取消] [%s] 用户在挂起期间取消请求", connID))
@@ -514,8 +597,24 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			if !decision.RetrySameEndpoint {
 				if decision.SwitchEndpoint {
-					slog.Info(fmt.Sprintf("🔀 [切换端点] [%s] 当前端点: %s, 原因: %s",
-						connID, ep.Config.Name, decision.Reason))
+					failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+					cooldownUntil := ""
+					if failedKey != "" {
+						until, cdErr := sh.endpointManager.SetEndpointCooldown(failedKey, decision.Reason)
+						if cdErr != nil {
+							slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+								connID, ep.Config.Name, failedKey, cdErr))
+						} else {
+							cooldownUntil = until.Format("15:04:05")
+						}
+					}
+					if cooldownUntil != "" {
+						slog.Warn(fmt.Sprintf("🔁 [渠道内故障转移] [%s] channel=%s endpoint=%s cooldown_until=%s reason=%s",
+							connID, ep.Config.Channel, ep.Config.Name, cooldownUntil, decision.Reason))
+					} else {
+						slog.Info(fmt.Sprintf("🔀 [切换端点] [%s] 当前端点: %s, 原因: %s",
+							connID, ep.Config.Name, decision.Reason))
+					}
 					break // 尝试下一个端点
 				} else {
 					// 🚀 [状态机重构] Phase 4: 最终失败处理
@@ -540,6 +639,19 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					}
 
 					// 使用新的FailRequest方法标记最终失败（修复：使用计算好的statusCode而非lastResp.StatusCode）
+					// v6.1+: 流式终态错误（不重试）仍然让端点进入冷却，避免下一次请求继续命中同一端点导致反复失败。
+					if errorCtx.ErrorType == ErrorTypeStream {
+						failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						if failedKey != "" {
+							if until, cdErr := sh.endpointManager.SetEndpointCooldown(failedKey, decision.Reason); cdErr != nil {
+								slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+									connID, ep.Config.Name, failedKey, cdErr))
+							} else {
+								slog.Warn(fmt.Sprintf("⏱️ [端点冷却] [%s] endpoint=%s cooldown_until=%s reason=%s",
+									connID, ep.Config.Name, until.Format("15:04:05"), decision.Reason))
+							}
+						}
+					}
 					lifecycleManager.FailRequest(failureReason, lastErr.Error(), statusCode)
 
 					// 终止重试
@@ -672,21 +784,59 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			failedEndpointNames = append(failedEndpointNames, key)
 		}
 
-		newChannel, err := sh.endpointManager.TriggerRequestFailoverWithFailedEndpoints(
+		excludeChannels := make([]string, 0, len(triedChannels))
+		for name := range triedChannels {
+			if name == "" {
+				continue
+			}
+			excludeChannels = append(excludeChannels, name)
+		}
+		newChannel, err := sh.endpointManager.TriggerRequestFailoverWithFailedEndpointsExcludingChannels(
 			failedEndpointNames,
+			excludeChannels,
 			"all_retries_exhausted",
 		)
 
 		if err == nil && newChannel != "" {
-			slog.Info(fmt.Sprintf("🔄 [请求级故障转移] [%s] 渠道已切换，最后失败端点: %s → 渠道: %s",
-				connID, lastFailedEndpoint, newChannel))
-			// 故障转移成功，重新获取端点列表继续处理
-			fmt.Fprintf(w, "data: failover: 渠道切换完成，恢复处理 (新渠道: %s)\n\n", newChannel)
-			flusher.Flush()
-			sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
-			return
+			failedChannel := ""
+			if len(endpoints) > 0 && endpoints[len(endpoints)-1] != nil {
+				failedChannel = endpoints[len(endpoints)-1].Config.Channel
+				if failedChannel == "" {
+					failedChannel = endpoints[len(endpoints)-1].Config.Name
+				}
+			}
+			slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s",
+				connID, failedChannel, newChannel, lastFailedEndpoint, len(failedEndpointNames), "all_retries_exhausted"))
+			// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
+			if lifecycleManager.CanRestart() {
+				// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
+				if lifecycleManager.HasOutputContent() {
+					slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 故障转移成功但已发送内容，禁止重试", connID))
+					lifecycleManager.FailRequest("output_sent_no_retry",
+						"Cannot retry after sending partial output to client", http.StatusBadGateway)
+					fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
+					flusher.Flush()
+					return
+				}
+
+				restartCount := lifecycleManager.IncrementRestart()
+				slog.Info(fmt.Sprintf("🔄 [故障转移重启] [%s] 渠道切换完成，重启次数: %d/%d",
+					connID, restartCount, lifecycleManager.GetMaxRestarts()))
+				fmt.Fprintf(w, "data: failover: 渠道切换完成，恢复处理 (新渠道: %s)\n\n", newChannel)
+				flusher.Flush()
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
+				return
+			} else {
+				slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 故障转移成功但已达最大重启次数 (%d)，终止请求",
+					connID, lifecycleManager.GetMaxRestarts()))
+				lifecycleManager.FailRequest("max_restarts_exceeded",
+					"Exceeded maximum restart attempts after failover", http.StatusServiceUnavailable)
+				fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
+				flusher.Flush()
+				return
+			}
 		} else if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [请求级故障转移失败] [%s] 端点: %s, 错误: %v",
+			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v",
 				connID, lastFailedEndpoint, err))
 		}
 	}
@@ -744,9 +894,32 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				}
 				lifecycleManager.SetEndpoint(firstEndpoint.Config.Name, firstRouteGroup, firstEndpoint.Config.Channel)
 
-				// 重新获取健康端点并重新尝试（递归调用）
-				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher)
-				return
+				// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
+				if lifecycleManager.CanRestart() {
+					// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
+					if lifecycleManager.HasOutputContent() {
+						slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 暂停恢复成功但已发送内容，禁止重试", connID))
+						lifecycleManager.FailRequest("output_sent_no_retry",
+							"Cannot retry after sending partial output to client", http.StatusBadGateway)
+						fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
+						flusher.Flush()
+						return
+					}
+
+					restartCount := lifecycleManager.IncrementRestart()
+					slog.Info(fmt.Sprintf("🔄 [暂停恢复重启] [%s] 获取新端点成功，重启次数: %d/%d",
+						connID, restartCount, lifecycleManager.GetMaxRestarts()))
+					sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels)
+					return
+				} else {
+					slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 暂停恢复成功但已达最大重启次数 (%d)，终止请求",
+						connID, lifecycleManager.GetMaxRestarts()))
+					lifecycleManager.FailRequest("max_restarts_exceeded",
+						"Exceeded maximum restart attempts after suspension recovery", http.StatusServiceUnavailable)
+					fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
+					flusher.Flush()
+					return
+				}
 			}
 		case SuspensionCancelled:
 			// 🎯 [挂起取消区分] 用户在挂起期间取消请求，应该记录为取消而非失败

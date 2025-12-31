@@ -604,12 +604,12 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 	duration, _ := data["duration"].(time.Duration)
 	httpStatus, _ := data["http_status"].(int)
 	modelName, _ := data["model_name"].(string) // 🔧 [修复] 2025-12-11: 读取模型名
-	inputTokens, _ := data["input_tokens"].(int64)
-	outputTokens, _ := data["output_tokens"].(int64)
-	cacheCreationTokens, _ := data["cache_creation_tokens"].(int64)
-	cacheCreation5mTokens, _ := data["cache_creation_5m_tokens"].(int64) // 🔧 [修复] 2025-12-11
-	cacheCreation1hTokens, _ := data["cache_creation_1h_tokens"].(int64) // 🔧 [修复] 2025-12-11
-	cacheReadTokens, _ := data["cache_read_tokens"].(int64)
+	inputTokens := data["input_tokens"]
+	outputTokens := data["output_tokens"]
+	cacheCreationTokens := data["cache_creation_tokens"]
+	cacheCreation5mTokens := data["cache_creation_5m_tokens"] // 🔧 [修复] 2025-12-11
+	cacheCreation1hTokens := data["cache_creation_1h_tokens"] // 🔧 [修复] 2025-12-11
+	cacheReadTokens := data["cache_read_tokens"]
 
 	// 根据状态设置相应的reason字段
 	var query string
@@ -621,14 +621,16 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			duration_ms = ?,
 			status = 'cancelled',
 			cancel_reason = ?,
+			failure_reason = NULL,
+			last_failure_reason = NULL,
 			http_status_code = ?,
 			model_name = COALESCE(NULLIF(NULLIF(?, ''), 'unknown'), model_name),
-			input_tokens = ?,
-			output_tokens = ?,
-			cache_creation_tokens = ?,
-			cache_creation_5m_tokens = ?,
-			cache_creation_1h_tokens = ?,
-			cache_read_tokens = ?,
+			input_tokens = COALESCE(?, input_tokens),
+			output_tokens = COALESCE(?, output_tokens),
+			cache_creation_tokens = COALESCE(?, cache_creation_tokens),
+			cache_creation_5m_tokens = COALESCE(?, cache_creation_5m_tokens),
+			cache_creation_1h_tokens = COALESCE(?, cache_creation_1h_tokens),
+			cache_read_tokens = COALESCE(?, cache_read_tokens),
 			updated_at = %s
 		WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
 
@@ -656,12 +658,12 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			last_failure_reason = ?,
 			http_status_code = ?,
 			model_name = COALESCE(NULLIF(NULLIF(?, ''), 'unknown'), model_name),
-			input_tokens = ?,
-			output_tokens = ?,
-			cache_creation_tokens = ?,
-			cache_creation_5m_tokens = ?,
-			cache_creation_1h_tokens = ?,
-			cache_read_tokens = ?,
+			input_tokens = COALESCE(?, input_tokens),
+			output_tokens = COALESCE(?, output_tokens),
+			cache_creation_tokens = COALESCE(?, cache_creation_tokens),
+			cache_creation_5m_tokens = COALESCE(?, cache_creation_5m_tokens),
+			cache_creation_1h_tokens = COALESCE(?, cache_creation_1h_tokens),
+			cache_read_tokens = COALESCE(?, cache_read_tokens),
 			updated_at = %s
 		WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
 

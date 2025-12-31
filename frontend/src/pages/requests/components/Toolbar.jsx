@@ -62,7 +62,7 @@ const Toolbar = ({
           <button
             key={range.value}
             onClick={() => onTimeRangeChange?.(range.value)}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
               activeTimeRange === range.value
                 ? 'bg-indigo-50 text-indigo-700 shadow-sm'
                 : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'

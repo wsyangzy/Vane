@@ -12,6 +12,7 @@ export const STATUS_OPTIONS = {
   retry: '重试中',
   suspended: '已挂起',
   completed: '已完成',
+  partial_failed: '部分失败',
   failed: '已失败',
   cancelled: '已取消'
 };

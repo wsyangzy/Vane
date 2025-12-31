@@ -319,7 +319,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			args = append(args, "completed")
 		case "failed":
 			// 失败状态：包含新架构的failed状态 + 旧版本的各种错误状态
-			query += " AND status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
+			query += " AND status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
 		case "processing":
 			// 处理中状态：精确匹配
 			query += " AND status = ?"
@@ -463,7 +463,7 @@ func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOp
 	query := `SELECT
 		COUNT(*) as total_requests,
 		COALESCE(SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END), 0) as success_requests,
-		COALESCE(SUM(CASE WHEN status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END), 0) as failed_requests,
+		COALESCE(SUM(CASE WHEN status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END), 0) as failed_requests,
 		COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
 		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN duration_ms ELSE 0 END), 0) as duration_sum_ms,
@@ -501,7 +501,7 @@ func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOp
 			// 与 QueryRequestDetails 一致：failed 为兼容集合查询，其余精确匹配。
 			switch opts.Status {
 			case "failed":
-				query += " AND status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
+				query += " AND status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
 			default:
 				query += " AND status = ?"
 				args = append(args, opts.Status)
@@ -545,7 +545,7 @@ func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, op
 		switch req.Status {
 		case "completed", "processing":
 			hotTotals.SuccessRequests++
-		case "failed", "error", "auth_error", "rate_limited", "server_error", "network_error", "stream_error", "timeout":
+		case "failed", "partial_failed", "error", "auth_error", "rate_limited", "server_error", "network_error", "stream_error", "timeout":
 			hotTotals.FailedRequests++
 		}
 
@@ -599,7 +599,7 @@ func (ut *UsageTracker) CountRequestDetails(ctx context.Context, opts *QueryOpti
 		// 与 QueryRequestDetails 保持一致：failed 代表一组失败/错误状态
 		switch opts.Status {
 		case "failed":
-			query += " AND status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
+			query += " AND status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
 		default:
 			query += " AND status = ?"
 			args = append(args, opts.Status)

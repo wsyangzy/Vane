@@ -2,8 +2,10 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"claude-request-forwarder/config"
@@ -168,7 +170,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "completed",
-			Reason:           "没有错误，无需重试",
+			Reason:            "没有错误，无需重试",
 		}
 	}
 
@@ -185,7 +187,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "cancelled",
-			Reason:           "客户端取消请求，立即停止",
+			Reason:            "客户端取消请求，立即停止",
 		}
 
 	case handlers.ErrorTypeEOF:
@@ -195,7 +197,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "eof_interrupted",
-			Reason:           "EOF连接中断，不重试避免重复计费",
+			Reason:            "EOF连接中断，不重试避免重复计费",
 		}
 
 	case handlers.ErrorTypeResponseTimeout:
@@ -205,7 +207,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "timeout",
-			Reason:           "响应超时，不重试避免重复计费",
+			Reason:            "响应超时，不重试避免重复计费",
 		}
 
 	case handlers.ErrorTypeTimeout:
@@ -215,7 +217,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "timeout",
-			Reason:           "超时错误，不重试避免重复计费",
+			Reason:            "超时错误，不重试避免重复计费",
 		}
 
 	case handlers.ErrorTypeConnectionTimeout:
@@ -225,8 +227,8 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 				RetrySameEndpoint: true,
 				SwitchEndpoint:    false,
 				SuspendRequest:    false,
-				Delay:            rm.calculateBackoff(localAttempt),
-				Reason:           "连接超时，在同一端点重试",
+				Delay:             rm.calculateBackoff(localAttempt),
+				Reason:            "连接超时，在同一端点重试",
 			}
 		}
 		// 达到最大重试次数，切换端点
@@ -234,7 +236,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			Reason:           "连接超时重试达到上限，切换端点",
+			Reason:            "连接超时重试达到上限，切换端点",
 		}
 
 	case handlers.ErrorTypeNetwork:
@@ -244,8 +246,8 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 				RetrySameEndpoint: true,
 				SwitchEndpoint:    false,
 				SuspendRequest:    false,
-				Delay:            rm.calculateBackoff(localAttempt),
-				Reason:           "网络错误，在同一端点重试",
+				Delay:             rm.calculateBackoff(localAttempt),
+				Reason:            "网络错误，在同一端点重试",
 			}
 		}
 		// 达到最大重试次数，尝试切换端点
@@ -253,17 +255,28 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			Reason:           "网络错误重试达到上限，切换端点",
+			Reason:            "网络错误重试达到上限，切换端点",
 		}
 
 	case handlers.ErrorTypeHTTP:
-		// HTTP错误：通常是4xx错误，不应重试
+		// HTTP错误：通常是4xx错误，不应在同一端点重试；
+		// 但部分4xx（如 400）在“多端点/多渠道”场景下可能是端点侧差异导致，允许切换端点继续尝试。
+		statusCode := handlers.GetStatusCodeFromError(errorCtx.OriginalError, nil)
+		if statusCode != 0 && handlers.IsRetryableStatus(statusCode) {
+			return handlers.RetryDecision{
+				RetrySameEndpoint: false,
+				SwitchEndpoint:    true,
+				SuspendRequest:    false,
+				FinalStatus:       "",
+				Reason:            fmt.Sprintf("HTTP %d，尝试切换端点", statusCode),
+			}
+		}
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "error",
-			Reason:           "HTTP错误，无需重试",
+			Reason:            "HTTP错误，无需重试",
 		}
 
 	case handlers.ErrorTypeServerError:
@@ -274,8 +287,8 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 				RetrySameEndpoint: true,
 				SwitchEndpoint:    false,
 				SuspendRequest:    false,
-				Delay:            rm.calculateBackoff(localAttempt),
-				Reason:           "服务器错误，在同一端点重试",
+				Delay:             rm.calculateBackoff(localAttempt),
+				Reason:            "服务器错误，在同一端点重试",
 			}
 		}
 		// 达到最大重试次数，尝试切换端点
@@ -283,7 +296,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			Reason:           "服务器错误重试达到上限，切换端点",
+			Reason:            "服务器错误重试达到上限，切换端点",
 		}
 
 	case handlers.ErrorTypeStream:
@@ -293,7 +306,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "stream_error",
-			Reason:           "流式处理错误，不重试避免重复计费",
+			Reason:            "流式处理错误，不重试避免重复计费",
 		}
 
 	case handlers.ErrorTypeAuth:
@@ -304,7 +317,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			SwitchEndpoint:    true, // 尝试切换到其他端点
 			SuspendRequest:    false,
 			FinalStatus:       "", // 不设最终状态，允许继续尝试其他端点
-			Reason:           "认证/权限错误，尝试切换端点",
+			Reason:            "认证/权限错误，尝试切换端点",
 		}
 
 	case handlers.ErrorTypeRateLimit:
@@ -315,8 +328,8 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 				RetrySameEndpoint: true,
 				SwitchEndpoint:    false,
 				SuspendRequest:    delay > 30*time.Second, // 如果延迟太长，考虑挂起
-				Delay:            delay,
-				Reason:           "限流错误，在同一端点重试",
+				Delay:             delay,
+				Reason:            "限流错误，在同一端点重试",
 			}
 		}
 		// 达到最大重试次数，尝试切换端点或挂起
@@ -324,7 +337,7 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			Reason:           "限流错误重试达到上限，切换端点",
+			Reason:            "限流错误重试达到上限，切换端点",
 		}
 
 	case handlers.ErrorTypeParsing:
@@ -333,8 +346,8 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			Delay:            rm.calculateBackoff(localAttempt),
-			Reason:           "解析错误，切换端点重试",
+			Delay:             rm.calculateBackoff(localAttempt),
+			Reason:            "解析错误，切换端点重试",
 		}
 
 	case handlers.ErrorTypeNoHealthyEndpoints:
@@ -343,22 +356,36 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			Delay:            0, // 立即尝试，不延迟
-			Reason:           "健康检查限制，尝试所有活跃端点",
+			Delay:             0, // 立即尝试，不延迟
+			Reason:            "健康检查限制，尝试所有活跃端点",
 		}
 
 	default:
-		// 未知错误：保守策略，不重试
+		// 未知错误：默认保守策略不重试。
+		// 但对明显的“端点配置/证书错误”，允许立即切换端点（同一端点重试没有意义）。
+		if errorCtx.OriginalError != nil {
+			errStr := strings.ToLower(errorCtx.OriginalError.Error())
+			if strings.Contains(errStr, "x509:") || strings.Contains(errStr, "tls: failed to verify certificate") {
+				return handlers.RetryDecision{
+					RetrySameEndpoint: false,
+					SwitchEndpoint:    true,
+					SuspendRequest:    false,
+					FinalStatus:       "",
+					Reason:            "TLS/证书校验失败，切换端点",
+				}
+			}
+		}
+
+		// 其他未知错误：保守策略，不重试
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
 			SwitchEndpoint:    false,
 			SuspendRequest:    false,
 			FinalStatus:       "error",
-			Reason:           "未知错误，保守策略不重试",
+			Reason:            "未知错误，保守策略不重试",
 		}
 	}
 }
-
 
 // GetDefaultStatusCodeForFinalStatus 根据最终状态获取默认HTTP状态码
 func GetDefaultStatusCodeForFinalStatus(finalStatus string) int {

@@ -55,13 +55,13 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
         {copyable && (
           <button
             onClick={handleCopy}
-            className="p-1 opacity-0 group-hover:opacity-100 hover:bg-slate-100 rounded transition-all"
+            className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 hover:scale-110 rounded transition-all"
             title="复制"
           >
             {copied ? (
               <Check className="w-3.5 h-3.5 text-emerald-600" />
             ) : (
-              <Copy className="w-3.5 h-3.5 text-slate-400" />
+              <Copy className="w-3.5 h-3.5" />
             )}
           </button>
         )}
@@ -90,6 +90,7 @@ const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
  */
 const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const [activeTab, setActiveTab] = useState('overview');
+  const [copiedError, setCopiedError] = useState(false);
 
   // ESC 键关闭 & 阻止滚动
   useEffect(() => {
@@ -121,6 +122,11 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
   const streamLabel = request.isStreaming ? '流式请求' : '常规请求';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
+
+  const errorText = [
+    request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
+    request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
+  ].filter(Boolean).join('\n');
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-start justify-center pt-[15vh] px-4">
@@ -159,7 +165,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
         {/* Tab 导航 - 固定不滚动 */}
         <div className="flex-shrink-0 px-6 pt-4 border-b border-slate-100 bg-slate-50/50">
-          <div className="flex gap-1">
+          <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {[
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
@@ -168,11 +174,12 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-t-lg text-sm font-medium transition-all ${
+                aria-current={activeTab === tab.id ? 'page' : undefined}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
                   activeTab === tab.id
-                    ? 'bg-white text-indigo-600 shadow-sm border-t border-x border-slate-200'
-                    : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
-                }`}
+                    ? 'bg-white text-indigo-700 border-slate-200 shadow-sm'
+                    : 'bg-transparent text-slate-600 border-transparent hover:bg-white/60 hover:text-slate-900'
+                } focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50`}
               >
                 <tab.icon className="w-4 h-4" />
                 {tab.label}
@@ -214,6 +221,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 </div>
                 <div className="p-4">
                   <InfoRow icon={FileText} label="请求 ID" value={request.requestId} copyable />
+                  {request.rawRequestId && request.rawRequestId !== request.requestId && (
+                    <InfoRow icon={FileText} label="记录 ID" value={request.rawRequestId} copyable />
+                  )}
                   <InfoRow icon={Calendar} label="时间戳" value={formatTimestamp(request.timestamp)} />
                   <InfoRow icon={Clock} label="持续时间" value={formatDuration(request.duration)} />
                   <InfoRow icon={Server} label="端点" value={request.endpoint} />
@@ -235,14 +245,31 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               </div>
 
               {/* 错误信息（如果有） */}
-              {(['failed', 'error', 'cancelled', 'timeout'].includes(request.status) ||
+              {(['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status) ||
                 request.failure_reason || request.cancel_reason) && (
                 <div className="bg-rose-50 rounded-xl border border-rose-200 overflow-hidden">
-                  <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200">
+                  <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-rose-900 flex items-center gap-2">
                       <AlertCircle className="w-4 h-4" />
                       错误信息
                     </h3>
+                    {errorText && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(errorText);
+                          setCopiedError(true);
+                          setTimeout(() => setCopiedError(false), 2000);
+                        }}
+                        className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-100/80 hover:scale-110 rounded transition-all"
+                        title="复制错误信息"
+                      >
+                        {copiedError ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    )}
                   </div>
                   <div className="p-4 space-y-2">
                     {request.failure_reason && (

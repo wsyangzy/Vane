@@ -65,6 +65,7 @@ const SettingsPage = () => {
   const [changes, setChanges] = useState({}); // 跟踪变更: { "category.key": newValue }
   const [saveMessage, setSaveMessage] = useState(null);
   const [expandedCategories, setExpandedCategories] = useState(new Set());
+  const [revisitConfirm, setRevisitConfirm] = useState(null); // { category, key, value }
 
   const isWails = isWailsEnvironment();
   const initRetryRef = useRef({ count: 0, timer: null });
@@ -172,6 +173,10 @@ const SettingsPage = () => {
 
   // 处理设置变更
   const handleSettingChange = useCallback((category, key, value) => {
+    if (category === 'failover' && key === 'allow_revisit_after_exhausted' && String(value) === 'true') {
+      setRevisitConfirm({ category, key, value });
+      return;
+    }
     const changeKey = `${category}.${key}`;
     setChanges(prev => ({
       ...prev,
@@ -277,6 +282,46 @@ const SettingsPage = () => {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+      {revisitConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="p-3 bg-amber-100 rounded-full">
+                <AlertCircle className="text-amber-700" size={24} />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">确认开启回访开关</h3>
+                <p className="text-sm text-slate-500">该功能可能导致循环重试</p>
+              </div>
+            </div>
+
+            <p className="text-slate-700 mb-4">
+              开启后，当本次请求已尝试所有可用渠道仍失败时，将允许回到<strong>最高优先级渠道</strong>继续尝试。
+              这可能导致渠道间循环重试，建议配合启用「请求挂起」以降低资源消耗与日志噪声。
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => setRevisitConfirm(null)} disabled={saving}>
+                取消
+              </Button>
+              <Button
+                variant="dangerSoft"
+                onClick={() => {
+                  const { category, key, value } = revisitConfirm;
+                  const changeKey = `${category}.${key}`;
+                  setChanges(prev => ({ ...prev, [changeKey]: value }));
+                  setRevisitConfirm(null);
+                  setSaveMessage({ type: 'info', text: '已开启：耗尽后回访最高优先级渠道（注意可能循环重试）' });
+                }}
+                disabled={saving}
+              >
+                我已知晓，继续开启
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 页面标题 */}
       <div className="flex justify-between items-end">
         <div>

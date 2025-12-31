@@ -119,8 +119,16 @@ func (m *Manager) performHealthChecks() {
 			}
 			endpointsToCheck = append(endpointsToCheck, ep)
 		}
-		slog.Debug(fmt.Sprintf("🩺 [健康检查] 渠道间故障转移模式：检查 %d 个参与端点 (总端点 %d)",
-			len(endpointsToCheck), len(snapshot)))
+		channelSet := make(map[string]struct{}, len(endpointsToCheck))
+		for _, ep := range endpointsToCheck {
+			key := ChannelKey(ep)
+			if key == "" {
+				continue
+			}
+			channelSet[key] = struct{}{}
+		}
+		slog.Debug(fmt.Sprintf("🩺 [健康检查] 渠道间故障转移模式：检查 %d 个渠道（%d 个参与端点）（总端点 %d）",
+			len(channelSet), len(endpointsToCheck), len(snapshot)))
 	} else {
 		active := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
 		for _, ep := range active {
@@ -136,8 +144,16 @@ func (m *Manager) performHealthChecks() {
 			}
 			endpointsToCheck = append(endpointsToCheck, ep)
 		}
-		slog.Debug(fmt.Sprintf("🩺 [健康检查] 非故障转移模式：检查活跃渠道 %d 个参与端点 (总端点 %d)",
-			len(endpointsToCheck), len(snapshot)))
+		channelSet := make(map[string]struct{}, len(endpointsToCheck))
+		for _, ep := range endpointsToCheck {
+			key := ChannelKey(ep)
+			if key == "" {
+				continue
+			}
+			channelSet[key] = struct{}{}
+		}
+		slog.Debug(fmt.Sprintf("🩺 [健康检查] 非故障转移模式：检查 %d 个活跃渠道（%d 个参与端点）（总端点 %d）",
+			len(channelSet), len(endpointsToCheck), len(snapshot)))
 	}
 
 	if len(endpointsToCheck) == 0 {

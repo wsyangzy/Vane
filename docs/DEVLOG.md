@@ -10,6 +10,27 @@
 
 ---
 
+## 2025-12-30（v6.0.6）本轮修复与质量优化摘要
+
+### 渠道/故障转移（后端 + 前端）
+
+- 渠道间故障转移默认采用“方案B”：**本次请求不回访已尝试渠道**，避免“冷却期结束≠恢复”引发的循环重试；渠道间切换顺序固定按渠道优先级。
+- 新增设置项 `failover.allow_revisit_after_exhausted`：允许在“所有渠道都尝试过仍失败”时回到最高优先级渠道继续尝试（默认关闭，并提示可能循环重试）。
+- 优化健康检查与故障转移日志表述：以“渠道数 + 端点数 + 总端点数”的形式输出，便于快速核对运行模式与参与对象。
+- 前端修复渠道管理/请求追踪页面崩溃：`isTwoColumnLayout` 未定义导致的 `ReferenceError`。
+
+### 热池（Usage Tracking HotPool）
+
+- 热池查询侧统一按请求级读锁读取快照，避免并发更新导致的数据竞争。
+- 热池明细成本计算统一为 `CalculateCostV2`，与归档写入路径保持一致（支持 5m/1h 缓存字段）。
+- 清理/关闭流程避免在持有 `HotPool` 全局锁时执行归档回调，降低锁竞争风险。
+
+### 性能与解耦
+
+- 复用 `http.Transport`（默认/流式两套）以提升连接复用，减少每次请求创建 Transport/Client 导致的资源抖动。
+- 监控系统统计的周期性广播：仅启动一次并支持停止，避免重复启动 ticker goroutine；周期性输出使用 `slog` 而非 `fmt.Printf`。
+- 代理层去杂糅：移除未使用的旧 `stream.go` 路径，将 `Handler` 的适配器/工厂拆分到独立文件，降低耦合与噪音。
+
 ## 0. 总体结论（一句话）
 
 请求路由以“**渠道**”为第一层边界：优先只在**当前激活渠道**内选择端点；渠道内端点失败按策略切端点；渠道内耗尽后触发**跨渠道故障转移**并按策略选择下一个可用渠道。
@@ -526,6 +547,77 @@
   - `frontend/src/hooks/useEndpointsData.js`
   - `frontend/src/utils/api.js`
   - `frontend/src/utils/wailsApi.js`
+
+### 7.19（working tree）fix(overview/charts): 概览图表时间范围生效 + 时间轴去重
+- 背景问题：
+  - 概览的“请求趋势 / 响应时间 / 连接活动”切换时间范围后，横轴显示经常只覆盖很短的最近窗口，难以确认选择器是否生效。
+- 做了什么：
+  - 后端图表数据补齐 `timestamp`（RFC3339Nano），前端可用真实时间轴渲染与对齐。
+  - 历史数据保留上限调整为 `24h@30s`（`MaxHistoryPoints=2880`），满足概览里更长范围的查看需求。
+  - 前端统一时间轴：按 `30s` 桶补齐缺失数据点，避免“只显示最后几分钟”的错觉；Tooltip 与横轴显示统一格式为 `HH:mm`。
+  - 请求趋势/连接活动由“累计值”改为“每 30 秒增量”，无新请求时自动归零（更符合“趋势/活动量”直觉）。
+    - 补充：7.23 根据反馈恢复为“累计值”展示（后端仍保持 30s 桶数据，前端累加呈现）。
+- 代表文件：
+  - `internal/monitor/metrics.go`
+  - `app_api_chart.go`
+  - `frontend/src/utils/chartTime.js`
+  - `frontend/src/pages/overview/components/RequestTrendChart.jsx`
+  - `frontend/src/pages/overview/components/ResponseTimeChart.jsx`
+  - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
+
+### 7.20（working tree）fix(overview/runtime): 概览统计刷新 + 时间跨度按运行时长裁剪
+- 背景问题：
+  - 概览底部“总请求数/活跃连接/平均响应时间”等在桌面（Wails）环境下长期为 0：仅首屏加载一次，且缺少持续推送与字段对齐。
+  - 图表不做持久化时，提供超过当前运行时长的时间跨度会造成“选择无意义”的体验。
+- 做了什么：
+  - Wails 事件桥接：定时推送 `usage:update`，使概览底部统计随请求实时变化（KISS：复用现有 Wails 事件通道，不引入新接口）。
+  - 字段对齐：`UsageSummary` 补齐 `active_connections / average_response_time / total_tokens` 等概览字段；前端 Wails Events 做命名归一化（`success_requests` → `successful_requests`）。
+  - DB 查询降噪：历史/今日统计增加 30s 缓存，避免频繁查询导致 UI 卡顿（YAGNI：只缓存必要聚合字段）。
+  - 时间跨度裁剪：三张图表的可选跨度按 `uptime_seconds` 动态裁剪，并提示“仅统计自启动以来，重启后清空”（减少误解）。
+- 代表文件：
+  - `app.go`
+  - `app_api_usage.go`
+  - `frontend/src/hooks/useWailsEvents.js`
+  - `frontend/src/pages/overview/index.jsx`
+  - `frontend/src/pages/overview/components/RequestTrendChart.jsx`
+  - `frontend/src/pages/overview/components/ResponseTimeChart.jsx`
+  - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
+
+### 7.21（working tree）fix(ui/requests): 请求追踪切换不抖动 + 详情 Tab 样式统一
+- 背景问题：
+  - 请求追踪页点击“今天/7天/30天”切换时偶发抖动/跳动（滚动条出现/消失、loading 替换导致布局收缩）。
+  - 请求详情 Tab 点击后出现突兀的黑色焦点边框，且 active 边框样式不统一。
+- 做了什么：
+  - 全局滚动条稳定：`scrollbar-gutter: stable` 避免滚动条出现/消失带来的宽度跳变。
+  - 表格 loading 改为覆盖层（overlay），不再替换表格 DOM，避免加载期间布局变化导致跳动（DRY：复用同一张表格结构）。
+  - Tab 改为分段控件样式：统一边框/圆角/hover/focus-visible 交互态，去掉默认黑边。
+- 代表文件：
+  - `frontend/src/index.css`
+  - `frontend/src/pages/requests/components/RequestsTable.jsx`
+  - `frontend/src/pages/requests/components/Toolbar.jsx`
+  - `frontend/src/pages/requests/components/RequestDetailModal.jsx`
+
+### 7.22（working tree）fix(ui/requests-filters): 筛选时间范围自定义日历弹层 + 显示格式优化
+- 背景问题：
+  - 原生 `datetime-local` 的日历弹层（WebView2/Chromium）不可控、样式突兀，且难以做到一致的美化。
+  - 输入值显示为 `2025-12-29T23:59`，可读性不佳（中间 `T` 影响阅读），同时希望内容居中对齐。
+- 做了什么：
+  - 引入轻量自定义 `DateTimePicker`：点击输入框弹出自绘日历（支持月份切换、今日/选中态、时间选择、清空/确定）。
+  - 保持数据层仍使用 `YYYY-MM-DDTHH:mm`（兼容现有筛选逻辑与 API 参数），仅对输入框展示做格式化：`YYYY-MM-DD HH:mm` 且居中显示。
+  - KISS：只覆盖请求追踪筛选面板的时间选择场景，不引入第三方日期组件库。
+- 代表文件：
+  - `frontend/src/pages/requests/components/DateTimePicker.jsx`
+  - `frontend/src/pages/requests/components/FiltersPanel.jsx`
+
+### 7.23（working tree）fix(overview/charts): 请求趋势/连接活动恢复累计值展示
+- 背景问题：
+  - 概览“请求趋势 / 连接活动”改为增量后，部分场景更希望看到随时间持续增长的累计曲线（便于直观对比时间段内总量）。
+- 做了什么：
+  - 前端对 30 秒桶序列做一次累加（cumulative sum），恢复为累计曲线展示（不改接口与数据结构，避免牵动后端与 SSE）。
+  - YAGNI：不新增“增量/累计”切换开关，按当前需求直接回退为累计展示。
+- 代表文件：
+  - `frontend/src/pages/overview/components/RequestTrendChart.jsx`
+  - `frontend/src/pages/overview/components/ConnectionActivityChart.jsx`
 
 ---
 

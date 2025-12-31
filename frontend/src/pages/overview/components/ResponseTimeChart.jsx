@@ -15,6 +15,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { fetchResponseTimeData } from '@utils/api.js';
+import { formatHHMM, padTimeSeries } from '@utils/chartTime.js';
 import { CustomSelect } from '@components/ui';
 
 // 时间范围选项
@@ -28,14 +29,19 @@ const TIME_RANGE_OPTIONS = [
 const CustomTooltip = ({ active, payload, label }) => {
   if (!active || !payload || !payload.length) return null;
 
+  const formatMs = (v) => {
+    if (typeof v !== 'number' || Number.isNaN(v)) return v;
+    return Math.round(v);
+  };
+
   return (
     <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
-      <p className="font-medium text-slate-900 mb-2">{label}</p>
+      <p className="font-medium text-slate-900 mb-2">{formatHHMM(label)}</p>
       {payload.map((entry, index) => (
         <div key={index} className="flex items-center justify-between gap-4">
           <span className="text-slate-500">{entry.name}:</span>
           <span className="font-mono font-medium" style={{ color: entry.color }}>
-            {entry.value}ms
+            {formatMs(entry.value)}ms
           </span>
         </div>
       ))}
@@ -43,12 +49,22 @@ const CustomTooltip = ({ active, payload, label }) => {
   );
 };
 
-const ResponseTimeChart = () => {
+const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [timeRange, setTimeRange] = useState(30);
   const refreshIntervalRef = useRef(null);
+
+  const maxMinutes = Math.max(1, Math.floor((uptimeSeconds || 0) / 60));
+  const availableOptions = TIME_RANGE_OPTIONS.filter(o => o.value <= maxMinutes);
+  const options = availableOptions.length > 0 ? availableOptions : TIME_RANGE_OPTIONS.slice(0, 1);
+
+  useEffect(() => {
+    if (timeRange > maxMinutes && options.length > 0) {
+      setTimeRange(options[options.length - 1].value);
+    }
+  }, [maxMinutes, options, timeRange]);
 
   // 加载数据
   const loadData = useCallback(async (showRefreshing = false) => {
@@ -57,7 +73,13 @@ const ResponseTimeChart = () => {
     }
     try {
       const data = await fetchResponseTimeData(timeRange);
-      setChartData(data);
+      setChartData(
+        padTimeSeries(data, {
+          minutes: timeRange,
+          stepMs: 30 * 1000,
+          defaults: { avg: 0, min: 0, max: 0 },
+        })
+      );
     } catch (error) {
       console.error('加载响应时间数据失败:', error);
     } finally {
@@ -87,24 +109,11 @@ const ResponseTimeChart = () => {
   // 监听 SSE 图表更新事件
   useEffect(() => {
     const handleChartUpdate = (event) => {
-      const { chart_type, data } = event.detail || {};
+      const { chart_type } = event.detail || {};
       if (chart_type === 'response_times' || chart_type === 'responseTimes') {
-        if (Array.isArray(data)) {
-          setChartData(data);
-        } else if (data?.labels && data?.datasets) {
-          // Chart.js 格式转换
-          const avgData = data.datasets[0]?.data || [];
-          const minData = data.datasets[1]?.data || [];
-          const maxData = data.datasets[2]?.data || [];
-          const converted = data.labels.map((time, i) => ({
-            time,
-            avg: avgData[i] || 0,
-            min: minData[i] || 0,
-            max: maxData[i] || 0
-          }));
-          setChartData(converted);
-        }
-        console.log('📊 [SSE] 响应时间图已更新');
+        // 使用统一的加载逻辑，确保时间范围选择器生效
+        loadData(false);
+        console.log('📊 [SSE] 响应时间图已触发刷新');
       }
     };
 
@@ -112,7 +121,7 @@ const ResponseTimeChart = () => {
     return () => {
       document.removeEventListener('chartUpdate', handleChartUpdate);
     };
-  }, []);
+  }, [loadData]);
 
   // 手动刷新
   const handleRefresh = () => {
@@ -123,6 +132,8 @@ const ResponseTimeChart = () => {
   const avgResponseTime = chartData.length > 0
     ? Math.round(chartData.reduce((sum, d) => sum + (d.avg || 0), 0) / chartData.length)
     : 0;
+
+  const xKey = chartData.some(d => d?.timestamp) ? 'timestamp' : 'time';
 
   return (
     <div className="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col h-full">
@@ -135,7 +146,7 @@ const ResponseTimeChart = () => {
         </div>
         <div className="flex items-center space-x-2">
           <CustomSelect
-            options={TIME_RANGE_OPTIONS}
+            options={options}
             value={timeRange}
             onChange={setTimeRange}
             size="xs"
@@ -158,7 +169,7 @@ const ResponseTimeChart = () => {
         {loading ? (
           <div className="h-full flex items-center justify-center text-slate-400">
             <RefreshCw size={20} className="animate-spin mr-2" />
-            ��载中...
+            加载中...
           </div>
         ) : chartData.length === 0 ? (
           <div className="h-full flex items-center justify-center text-slate-400 text-sm">
@@ -175,11 +186,12 @@ const ResponseTimeChart = () => {
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis
-                dataKey="time"
+                dataKey={xKey}
                 axisLine={false}
                 tickLine={false}
                 tick={{ fill: '#94a3b8', fontSize: 10 }}
                 interval="preserveStartEnd"
+                tickFormatter={formatHHMM}
               />
               <YAxis
                 axisLine={false}

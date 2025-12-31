@@ -13,7 +13,6 @@ import (
 	"claude-request-forwarder/config"
 	"claude-request-forwarder/internal/endpoint"
 	"claude-request-forwarder/internal/tracking"
-	"claude-request-forwarder/internal/transport"
 )
 
 // RegularHandler 常规请求处理器
@@ -92,6 +91,9 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 	retryMgr := rh.retryManagerFactory.NewRetryManager()
 	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
 
+	// 方案B：本次请求链路内“渠道间故障转移”不回访已尝试渠道，避免冷却结束后循环
+	triedChannels := make(map[string]struct{}, 4)
+
 	// 外层循环处理组切换逻辑
 	for {
 		// 获取端点列表
@@ -129,18 +131,27 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 			}
 		}
 
+		// 记录当前尝试的渠道（用于方案B：后续跨渠道故障转移时不回访）
+		currentChannel := endpoints[0].Config.Channel
+		if currentChannel == "" {
+			currentChannel = endpoints[0].Config.Name
+		}
+		if currentChannel != "" {
+			triedChannels[currentChannel] = struct{}{}
+		}
+
 		// 内层循环处理端点重试
 		groupSwitchNeeded := false
-		for i, endpoint := range endpoints {
-			routeGroup := endpoint.Config.Channel
+		for i, ep := range endpoints {
+			routeGroup := ep.Config.Channel
 			if routeGroup == "" {
-				routeGroup = endpoint.Config.Name
+				routeGroup = ep.Config.Name
 			}
-			lifecycleManager.SetEndpoint(endpoint.Config.Name, routeGroup, endpoint.Config.Channel)
+			lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
 			lifecycleManager.UpdateStatus("forwarding", i, 0)
 
 			// 🔧 [端点上下文修复] 立即设置端点信息到请求上下文，确保所有分支（成功/失败/取消）的日志都能正确记录端点
-			*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", endpoint.Config.Name))
+			*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", ep.Config.Name))
 
 		attemptLoop:
 			for attempt := 1; attempt <= retryMgr.GetMaxAttempts(); attempt++ {
@@ -161,39 +172,39 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				globalAttemptCount := lifecycleManager.IncrementAttempt()
 
 				// 执行请求
-				resp, err := rh.executeRequest(ctx, r, bodyBytes, endpoint)
+				resp, err := rh.executeRequest(ctx, r, bodyBytes, ep)
 
 				if err == nil && IsSuccessStatus(resp.StatusCode) {
 					// ✅ [重试决策] 成功请求的决策日志 - 保持监控完整性
 					slog.Info(fmt.Sprintf("✅ [重试决策] 请求成功完成 request_id=%s endpoint=%s attempt=%d reason=请求成功完成",
-						connID, endpoint.Config.Name, attempt))
+						connID, ep.Config.Name, attempt))
 
 					lifecycleManager.UpdateStatus("processing", globalAttemptCount, resp.StatusCode)
-					rh.processSuccessResponse(ctx, w, resp, lifecycleManager, endpoint.Config.Name, r)
+					rh.processSuccessResponse(ctx, w, resp, lifecycleManager, ep.Config.Name, r)
 					return
 				}
 
 				// 构造HTTP状态码错误（保持现有逻辑）
 				if err == nil && resp != nil && !IsSuccessStatus(resp.StatusCode) {
 					// 先尝试从HTTP错误中提取Token信息（如果可能）
-					rh.tryExtractTokensFromHttpError(resp, lifecycleManager, endpoint.Config.Name)
+					rh.tryExtractTokensFromHttpError(resp, lifecycleManager, ep.Config.Name)
 
 					closeErr := resp.Body.Close()
 					if closeErr != nil {
 						slog.Warn(fmt.Sprintf("⚠️ [响应体关闭失败] [%s] 端点: %s, Close错误: %v",
-							connID, endpoint.Config.Name, closeErr))
+							connID, ep.Config.Name, closeErr))
 					}
 					err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 				} else if err != nil && resp != nil {
 					closeErr := resp.Body.Close()
 					if closeErr != nil {
 						slog.Warn(fmt.Sprintf("⚠️ [错误响应体关闭失败] [%s] 端点: %s, Close错误: %v",
-							connID, endpoint.Config.Name, closeErr))
+							connID, ep.Config.Name, closeErr))
 					}
 				}
 
 				// 🔧 使用增强的RetryManager进行统一决策
-				errorCtx := errorRecovery.ClassifyError(err, connID, endpoint.Config.Name, routeGroup, attempt-1)
+				errorCtx := errorRecovery.ClassifyError(err, connID, ep.Config.Name, routeGroup, attempt-1)
 
 				// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 				// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
@@ -211,14 +222,14 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 						// 🚀 [状态机重构] Phase 4: 挂起时更新状态
 						lifecycleManager.UpdateStatus("suspended", globalAttemptCount, 0)
 						slog.Info(fmt.Sprintf("⏸️ [请求挂起] [%s] 原因: %s，失败端点: %s",
-							connID, decision.Reason, endpoint.Config.Name))
+							connID, decision.Reason, ep.Config.Name))
 
 						// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
-						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, endpoint.Config.Name)
+						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, ep.Config.Name)
 						switch result {
 						case SuspensionSuccess:
 							slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新获取端点列表",
-								connID, endpoint.Config.Name))
+								connID, ep.Config.Name))
 							groupSwitchNeeded = true
 							break
 						case SuspensionCancelled:
@@ -245,6 +256,30 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 
 				if !decision.RetrySameEndpoint {
 					if decision.SwitchEndpoint {
+						// v6.1+: 当端点因错误被切走时，给该端点加“请求失败冷却”，避免下一次请求立刻回到该端点导致反复切换。
+						nextName := ""
+						if i+1 < len(endpoints) && endpoints[i+1] != nil {
+							nextName = endpoints[i+1].Config.Name
+						}
+
+						failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						cooldownUntil := ""
+						if failedKey != "" {
+							until, cdErr := rh.endpointManager.SetEndpointCooldown(failedKey, decision.Reason)
+							if cdErr != nil {
+								slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
+									connID, ep.Config.Name, failedKey, cdErr))
+							} else {
+								cooldownUntil = until.Format("15:04:05")
+							}
+						}
+						if cooldownUntil != "" {
+							slog.Warn(fmt.Sprintf("🔁 [渠道内故障转移] [%s] channel=%s %s -> %s cooldown_until=%s reason=%s",
+								connID, routeGroup, ep.Config.Name, nextName, cooldownUntil, decision.Reason))
+						} else {
+							slog.Warn(fmt.Sprintf("🔁 [渠道内故障转移] [%s] channel=%s %s -> %s reason=%s",
+								connID, routeGroup, ep.Config.Name, nextName, decision.Reason))
+						}
 						break // 尝试下一个端点
 					} else {
 						// 🚀 [状态机重构] Phase 4: 最终失败处理
@@ -308,23 +343,28 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				failedEndpointNames = append(failedEndpointNames, key)
 			}
 
-			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithFailedEndpoints(
+			excludeChannels := make([]string, 0, len(triedChannels))
+			for name := range triedChannels {
+				if name == "" {
+					continue
+				}
+				excludeChannels = append(excludeChannels, name)
+			}
+			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithFailedEndpointsExcludingChannels(
 				failedEndpointNames,
+				excludeChannels,
 				"all_retries_exhausted",
 			)
 
 			if err == nil && newChannel != "" {
-				failedChannel := lastEndpoint.Config.Channel
-				if failedChannel == "" {
-					failedChannel = lastEndpoint.Config.Name
-				}
-				slog.Info(fmt.Sprintf("🔄 [请求级故障转移] [%s] 渠道 %s (端点 %s) 已耗尽，切换到渠道 %s",
-					connID, failedChannel, lastEndpoint.Config.Name, newChannel))
+				failedChannel := currentChannel
+				slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s",
+					connID, failedChannel, newChannel, lastEndpoint.Config.Name, len(failedEndpointNames), "all_retries_exhausted"))
 				// 故障转移成功，重新获取端点列表继续处理
 				groupSwitchNeeded = true
 				continue
 			} else if err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [请求级故障转移失败] [%s] 端点: %s, 错误: %v",
+				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v",
 					connID, lastEndpoint.Config.Name, err))
 			}
 		}
@@ -421,15 +461,9 @@ func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, b
 	// 复制和修改头部
 	rh.forwarder.CopyHeaders(r, req, endpoint)
 
-	// 创建HTTP传输
-	httpTransport, err := transport.CreateTransport(rh.config)
+	client, err := rh.forwarder.NewClient(endpoint.Config.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create transport: %w", err)
-	}
-
-	client := &http.Client{
-		Timeout:   endpoint.Config.Timeout,
-		Transport: httpTransport,
 	}
 
 	// 执行请求
@@ -539,15 +573,9 @@ func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.Respo
 		// Copy headers from original request
 		rh.forwarder.CopyHeaders(r, req, ep)
 
-		// Create HTTP client with timeout and proxy support
-		httpTransport, err := transport.CreateTransport(rh.config)
+		client, err := rh.forwarder.NewClient(ep.Config.Timeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		client := &http.Client{
-			Timeout:   ep.Config.Timeout,
-			Transport: httpTransport,
 		}
 
 		// Make the request

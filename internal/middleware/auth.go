@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"claude-request-forwarder/config"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 )
@@ -35,7 +36,8 @@ func (am *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		}
 
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if token != am.config.Token {
+		// 使用 constant-time 比较防止 timing attack
+		if subtle.ConstantTimeCompare([]byte(token), []byte(am.config.Token)) != 1 {
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
 			return
 		}

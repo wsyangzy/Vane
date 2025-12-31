@@ -273,10 +273,20 @@ export const fetchUsageStats = async (params = {}) => {
 
 export const fetchRequests = async (params = {}) => {
   // 标准化请求数据（提取到外部，Wails和HTTP环境共用）
-  const normalizeRequest = (request) => ({
-    ...request,
-    requestId: request.request_id || request.requestId || request.id,
-    id: request.request_id || request.requestId || request.id,
+  const normalizeRequest = (request) => {
+    const rawRequestId = request.request_id || request.requestId || request.id;
+    const rawRequestIdStr = typeof rawRequestId === 'string' ? rawRequestId : String(rawRequestId || '');
+
+    const partialMarker = '-partial-';
+    const markerIdx = rawRequestIdStr.indexOf(partialMarker);
+    const baseRequestId = markerIdx > 0 ? rawRequestIdStr.slice(0, markerIdx) : rawRequestIdStr;
+
+    return ({
+      ...request,
+      requestId: baseRequestId,
+      rawRequestId: rawRequestIdStr,
+      isPartialRecord: markerIdx > 0,
+      id: rawRequestIdStr,
     timestamp: request.start_time || request.timestamp,
     model: request.model_name || request.model || 'unknown',
     channel: request.channel || '',
@@ -292,7 +302,8 @@ export const fetchRequests = async (params = {}) => {
     cost: request.total_cost_usd || request.cost || 0,
     isStreaming: request.is_streaming || request.isStreaming || false,
     statusCode: request.status_code || request.statusCode
-  });
+    });
+  };
 
   // Wails 环境使用绑定
   if (isWailsEnvironment()) {
