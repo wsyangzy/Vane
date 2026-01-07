@@ -84,3 +84,4 @@ internal/tracking/deprecated/
 .gomodcache
 CLAUDE.md
 docs/TODO.md
+.ace-tool/

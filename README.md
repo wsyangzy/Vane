@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-5.0.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-6.0.7-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg" alt="Go">
@@ -38,8 +38,13 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 
 - **优先级路由** - 按优先级自动选择最优端点
 - **故障转移** - 端点异常时自动切换，支持配置冷却时间
+- **智能错误恢复** (v6.0.7+) - 三种恢复策略可选
+  - **智能等待** (`auto_wait`) - 所有端点耗尽后挂起请求，等待端点自愈（推荐生产环境）
+  - **循环重试** (`loop_retry`) - 回到最高优先级端点继续尝试（仅测试环境）
+  - **快速失败** (`fail_fast`) - 立即返回错误，不等待恢复（调试用）
 - **端点自愈** - 持续监测故障端点，恢复后自动重新启用
 - **流式传输** - 完整支持 SSE 流式响应，零延迟透传
+- **计费感知重试** (v6.0.5+) - 基于 Token 计费智能判断错误是否可重试，避免重复计费
 
 ### 📊 使用统计
 
@@ -61,6 +66,8 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 - **热池架构** - 内存缓存 + 异步写入，高性能低延迟
 - **本地存储** - SQLite 数据库，无需额外依赖
 - **跨平台** - macOS、Windows、Linux 全平台支持
+- **可视化设置** (v6.0.7+) - 设置页面支持枚举类型下拉选择、变更追踪、实时生效
+- **日志复制** (v6.0.5+) - 日志查看器支持一键复制，便于问题排查
 
 ## 截图
 
@@ -138,6 +145,25 @@ claude config set --global apiBaseUrl http://127.0.0.1:9090
 # 时区设置
 timezone: "Asia/Shanghai"
 
+# 服务器配置
+server:
+  host: "127.0.0.1"
+  port: 9090
+
+# 故障转移配置
+failover:
+  enabled: true
+  default_cooldown: "10m"
+
+# 请求控制 (v6.0.7+)
+request:
+  # 恢复策略：所有渠道耗尽后的处理方式
+  recovery_strategy: "auto_wait"  # auto_wait (推荐) | loop_retry | fail_fast
+
+  # 智能等待参数（仅 auto_wait 策略生效）
+  auto_wait_timeout: "300s"        # 最大等待时间（默认5分钟）
+  auto_wait_max_requests: 100      # 最大挂起请求数（默认100）
+
 # 日志配置
 logging:
   level: "info"              # debug, info, warn, error
@@ -160,6 +186,16 @@ usage_tracking:
     max_age: "30m"
     max_size: 10000
 ```
+
+#### 恢复策略详解
+
+当所有端点都不可用时，系统提供三种恢复策略：
+
+| 策略 | 行为 | 适用场景 | 优缺点 |
+|------|------|----------|--------|
+| **auto_wait**<br/>（智能等待） | 挂起请求，等待端点自动恢复 | **生产环境（推荐）** | ✅ 避免循环重试<br/>✅ 减少无效请求<br/>⚠️ 可能等待较长时间 |
+| **loop_retry**<br/>（循环重试） | 回到最高优先级端点继续尝试 | 测试环境或端点极少场景 | ✅ 持续尝试，不会超时<br/>❌ 可能循环重试浪费资源 |
+| **fail_fast**<br/>（快速失败） | 立即返回错误 | 调试环境 | ✅ 快速反馈错误<br/>❌ 可能错过即将恢复的端点 |
 
 ## 技术架构
 
@@ -219,6 +255,18 @@ usage_tracking:
 1. 确认代理端口（默认 9090）没有被占用
 2. 检查 Claude Code 的 `apiBaseUrl` 配置是否正确
 3. 确认至少配置了一个可用端点
+
+</details>
+
+<details>
+<summary><b>Q: 如何选择合适的恢复策略？</b></summary>
+
+**推荐配置**（v6.0.7+）：
+- **生产环境**: `auto_wait`（智能等待）- 避免无效重试，减少资源浪费
+- **测试环境**: `loop_retry`（循环重试）- 适合端点数量少且需要持续尝试的场景
+- **调试环境**: `fail_fast`（快速失败）- 快速反馈错误，便于问题定位
+
+在应用内「设置」页面可以实时切换策略，提供详细的对比说明。
 
 </details>
 
