@@ -4,7 +4,7 @@
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { CustomSelect } from '../../../components/ui';
 
 // 值类型到输入类型的映射
@@ -27,7 +27,9 @@ const SettingItem = ({
   setting,
   value,
   onChange,
-  disabled = false
+  disabled = false,
+  hasChange = false,
+  onRevert = null
 }) => {
   const [localValue, setLocalValue] = useState(value);
   const [showSecret, setShowSecret] = useState(false);
@@ -63,9 +65,12 @@ const SettingItem = ({
   if (valueType === 'bool') {
     const isChecked = localValue === 'true' || localValue === true;
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
+      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
+            {hasChange && (
+              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+            )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
@@ -78,25 +83,37 @@ const SettingItem = ({
             <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
           )}
         </div>
-        <label className="relative inline-flex items-center cursor-pointer">
-          <input
-            type="checkbox"
-            checked={isChecked}
-            onChange={handleChange}
-            disabled={disabled}
-            className="sr-only peer"
-          />
-          <div className={`
-            w-11 h-6 bg-slate-200 rounded-full peer
-            peer-checked:bg-indigo-600
-            peer-focus:ring-2 peer-focus:ring-indigo-300
-            after:content-[''] after:absolute after:top-0.5 after:left-[2px]
-            after:bg-white after:rounded-full after:h-5 after:w-5
-            after:transition-all after:shadow-sm
-            peer-checked:after:translate-x-full
-            ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-          `}></div>
-        </label>
+        <div className="flex items-center gap-2">
+          {hasChange && onRevert && (
+            <button
+              onClick={() => onRevert(setting.category, setting.key)}
+              disabled={disabled}
+              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+              title="撤销修改"
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isChecked}
+              onChange={handleChange}
+              disabled={disabled}
+              className="sr-only peer"
+            />
+            <div className={`
+              w-11 h-6 bg-slate-200 rounded-full peer
+              peer-checked:bg-indigo-600
+              peer-focus:ring-2 peer-focus:ring-indigo-300
+              after:content-[''] after:absolute after:top-0.5 after:left-[2px]
+              after:bg-white after:rounded-full after:h-5 after:w-5
+              after:transition-all after:shadow-sm
+              peer-checked:after:translate-x-full
+              ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+            `}></div>
+          </label>
+        </div>
       </div>
     );
   }
@@ -109,9 +126,12 @@ const SettingItem = ({
     };
 
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
+      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
+            {hasChange && (
+              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+            )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
@@ -124,13 +144,25 @@ const SettingItem = ({
             <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
           )}
         </div>
-        <CustomSelect
-          options={STRATEGY_OPTIONS}
-          value={localValue}
-          onChange={handleStrategyChange}
-          disabled={disabled}
-          size="md"
-        />
+        <div className="flex items-center gap-2">
+          {hasChange && onRevert && (
+            <button
+              onClick={() => onRevert(setting.category, setting.key)}
+              disabled={disabled}
+              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+              title="撤销修改"
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
+          <CustomSelect
+            options={STRATEGY_OPTIONS}
+            value={localValue}
+            onChange={handleStrategyChange}
+            disabled={disabled}
+            size="md"
+          />
+        </div>
       </div>
     );
   }
@@ -138,9 +170,12 @@ const SettingItem = ({
   // 密码类型（脱敏展示 + 可切换显示）
   if (valueType === 'password') {
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
+      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
+            {hasChange && (
+              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+            )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
@@ -154,33 +189,45 @@ const SettingItem = ({
           )}
         </div>
 
-        <div className={`relative ${setting.key === 'token' ? 'w-80' : 'w-32'}`}>
-          <input
-            type={showSecret ? 'text' : 'password'}
-            value={localValue}
-            onChange={handleChange}
-            disabled={disabled}
-            placeholder={config.placeholder}
-            className={`
-              w-full px-3 py-1.5 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
-              font-mono text-left
-              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-              ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-            `}
-          />
-          <button
-            type="button"
-            onClick={() => setShowSecret(v => !v)}
-            disabled={disabled}
-            className={`
-              absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors
-              ${disabled ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'}
-            `}
-            title={showSecret ? '隐藏' : '显示'}
-            aria-label={showSecret ? '隐藏' : '显示'}
-          >
-            {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
+        <div className="flex items-center gap-2">
+          {hasChange && onRevert && (
+            <button
+              onClick={() => onRevert(setting.category, setting.key)}
+              disabled={disabled}
+              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+              title="撤销修改"
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
+          <div className={`relative ${setting.key === 'token' ? 'w-80' : 'w-32'}`}>
+            <input
+              type={showSecret ? 'text' : 'password'}
+              value={localValue}
+              onChange={handleChange}
+              disabled={disabled}
+              placeholder={config.placeholder}
+              className={`
+                w-full px-3 py-1.5 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
+                font-mono text-left
+                focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+                ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+              `}
+            />
+            <button
+              type="button"
+              onClick={() => setShowSecret(v => !v)}
+              disabled={disabled}
+              className={`
+                absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors
+                ${disabled ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'}
+              `}
+              title={showSecret ? '隐藏' : '显示'}
+              aria-label={showSecret ? '隐藏' : '显示'}
+            >
+              {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -188,9 +235,12 @@ const SettingItem = ({
 
   // 其他类型使用文本/数字输入框
   return (
-    <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
+    <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
       <div className="flex-1 min-w-0 pr-4">
         <div className="flex items-center gap-2">
+          {hasChange && (
+            <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+          )}
           <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
           {setting.requires_restart && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
@@ -203,21 +253,33 @@ const SettingItem = ({
           <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
         )}
       </div>
-      <input
-        type={config.type}
-        value={localValue}
-        onChange={handleChange}
-        disabled={disabled}
-        step={config.step}
-        placeholder={config.placeholder}
-        className={`
-          w-32 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
-          font-mono text-right
-          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-          ${setting.key === 'token' ? 'w-80' : ''}
-        `}
-      />
+      <div className="flex items-center gap-2">
+        {hasChange && onRevert && (
+          <button
+            onClick={() => onRevert(setting.category, setting.key)}
+            disabled={disabled}
+            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+            title="撤销修改"
+          >
+            <RotateCcw size={14} />
+          </button>
+        )}
+        <input
+          type={config.type}
+          value={localValue}
+          onChange={handleChange}
+          disabled={disabled}
+          step={config.step}
+          placeholder={config.placeholder}
+          className={`
+            w-32 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
+            font-mono text-right
+            focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+            ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+            ${setting.key === 'token' ? 'w-80' : ''}
+          `}
+        />
+      </div>
     </div>
   );
 };
