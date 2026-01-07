@@ -748,6 +748,7 @@ export namespace main {
 	    label: string;
 	    description: string;
 	    display_order: number;
+	    enum_options?: store.EnumOption[];
 	    requires_restart: boolean;
 	    created_at: string;
 	    updated_at: string;
@@ -766,10 +767,29 @@ export namespace main {
 	        this.label = source["label"];
 	        this.description = source["description"];
 	        this.display_order = source["display_order"];
+	        this.enum_options = this.convertValues(source["enum_options"], store.EnumOption);
 	        this.requires_restart = source["requires_restart"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class SettingsStorageStatus {
 	    enabled: boolean;
@@ -966,6 +986,27 @@ export namespace main {
 	        this.all_time_total_cost = source["all_time_total_cost"];
 	        this.today_tokens = source["today_tokens"];
 	        this.all_time_total_tokens = source["all_time_total_tokens"];
+	    }
+	}
+
+}
+
+export namespace store {
+	
+	export class EnumOption {
+	    value: string;
+	    label: string;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnumOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	        this.description = source["description"];
 	    }
 	}
 

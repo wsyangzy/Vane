@@ -169,17 +169,21 @@ func (m *Manager) SelectNextAvailableChannelExcluding(excludeChannels []string) 
 
 	candidates := m.collectFailoverCandidatesExcluding(exclude)
 	if len(candidates) == 0 {
-		if m.config.Failover.AllowRevisitAfterExhausted {
-			// 可选开关：当“所有渠道都尝试过”时，允许回到最高优先级渠道继续尝试（仍跳过暂停/冷却渠道）
+		// v6.1: 使用统一的恢复策略替代原有的 AllowRevisitAfterExhausted 判断
+		if m.config.FailoverV2.RecoveryStrategy.ShouldLoopRetry() {
+			// 循环重试策略：当"所有渠道都尝试过"时，允许回到最高优先级渠道继续尝试（仍跳过暂停/冷却渠道）
 			candidates = m.collectFailoverCandidatesExcluding(nil)
 			if len(candidates) == 0 {
 				return "", fmt.Errorf("没有可用的故障转移渠道")
 			}
 			sortFailoverCandidates("priority", candidates)
-			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 已尝试所有渠道，允许回访最高优先级渠道继续尝试: %s", candidates[0].name))
+			slog.Warn(fmt.Sprintf("🔄 [循环重试策略] 已尝试所有渠道，回到最高优先级渠道继续尝试: %s", candidates[0].name))
 			return candidates[0].name, nil
 		}
 		if len(exclude) > 0 {
+			// 其他策略（auto_wait / fail_fast）：不允许循环重试
+			slog.Warn(fmt.Sprintf("⏸️ [恢复策略: %s] 已尝试所有渠道（%d个），等待恢复或快速失败",
+				m.config.FailoverV2.RecoveryStrategy.String(), len(exclude)))
 			return "", fmt.Errorf("没有可用的故障转移渠道（已尝试渠道数=%d）", len(exclude))
 		}
 		return "", fmt.Errorf("没有可用的故障转移渠道")

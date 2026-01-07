@@ -474,13 +474,23 @@ func (erm *ErrorRecoveryManager) isEOFError(err error) bool {
 		return false
 	}
 
+	// 🔧 [Bug #3修复] 2025-12-29: 排除HTTP客户端连接阶段的EOF错误
+	// 这些错误发生在连接建立阶段，服务器还未开始处理，可以安全重试
+	// 格式: "Post \"url\": EOF" 或 "Get \"url\": unexpected EOF"
+	errStr := strings.ToLower(err.Error())
+	if (strings.HasPrefix(errStr, "post \"") || strings.HasPrefix(errStr, "get \"") ||
+		strings.HasPrefix(errStr, "put \"") || strings.HasPrefix(errStr, "delete \"")) &&
+		(strings.Contains(errStr, "eof") || strings.Contains(errStr, "unexpected eof")) {
+		// 这是HTTP客户端连接阶段的EOF，应该被分类为网络错误
+		return false
+	}
+
 	// 检查标准库 EOF 错误
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 
 	// 字符串匹配
-	errStr := strings.ToLower(err.Error())
 	eofErrors := []string{
 		"eof", "unexpected eof",
 	}

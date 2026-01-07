@@ -55,9 +55,10 @@ func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
 		return false
 	}
 
-	// 检查功能是否启用
-	if !sm.config.RequestSuspend.Enabled {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 功能未启用，不挂起请求")
+	// 检查功能是否启用 (v6.1: 使用新的恢复策略判断)
+	if !sm.config.FailoverV2.RecoveryStrategy.ShouldWaitForRecovery() {
+		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 当前恢复策略不支持等待恢复 (策略: %s)，不挂起请求",
+			sm.config.FailoverV2.RecoveryStrategy.String()))
 		return false
 	}
 
@@ -72,9 +73,9 @@ func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
 	currentCount := sm.suspendedRequestsCount
 	sm.suspendedRequestsMutex.RUnlock()
 
-	if currentCount >= sm.config.RequestSuspend.MaxSuspendedRequests {
+	if currentCount >= sm.config.FailoverV2.AutoWaitMaxRequests {
 		slog.WarnContext(ctx, fmt.Sprintf("🚫 [挂起限制] 当前挂起请求数 %d 已达到最大限制 %d，不再挂起新请求",
-			currentCount, sm.config.RequestSuspend.MaxSuspendedRequests))
+			currentCount, sm.config.FailoverV2.AutoWaitMaxRequests))
 		return false
 	}
 
@@ -118,9 +119,9 @@ func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
 		return false
 	}
 
-	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 功能启用=%t, 当前挂起数=%d/%d, 可用备用组=%v",
-		!sm.config.Failover.Enabled, sm.config.RequestSuspend.Enabled,
-		currentCount, sm.config.RequestSuspend.MaxSuspendedRequests, availableGroups))
+	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 恢复策略=%s, 当前挂起数=%d/%d, 可用备用组=%v",
+		!sm.config.Failover.Enabled, sm.config.FailoverV2.RecoveryStrategy.String(),
+		currentCount, sm.config.FailoverV2.AutoWaitMaxRequests, availableGroups))
 
 	return true
 }
@@ -168,7 +169,7 @@ func (sm *SuspensionManager) WaitForGroupSwitch(ctx context.Context, connID stri
 	}()
 
 	// 创建超时context
-	timeout := sm.config.RequestSuspend.Timeout
+	timeout := sm.config.FailoverV2.AutoWaitTimeout
 	if timeout <= 0 {
 		timeout = 300 * time.Second // 默认5分钟
 	}
@@ -273,7 +274,7 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 		connID, failedEndpoint, currentCount))
 
 	// 创建超时context
-	timeout := sm.config.RequestSuspend.Timeout
+	timeout := sm.config.FailoverV2.AutoWaitTimeout
 	if timeout <= 0 {
 		timeout = 300 * time.Second // 默认5分钟
 	}
@@ -390,7 +391,7 @@ func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Conte
 		connID, failedEndpoint, currentCount))
 
 	// 创建超时context
-	timeout := sm.config.RequestSuspend.Timeout
+	timeout := sm.config.FailoverV2.AutoWaitTimeout
 	if timeout <= 0 {
 		timeout = 300 * time.Second // 默认5分钟
 	}

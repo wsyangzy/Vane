@@ -4,8 +4,9 @@
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Eye, EyeOff, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, RotateCcw, Settings } from 'lucide-react';
 import { CustomSelect } from '../../../components/ui';
+import RecoveryStrategyDialog from './RecoveryStrategyDialog';
 
 // 值类型到输入类型的映射
 const VALUE_TYPE_CONFIG = {
@@ -33,16 +34,18 @@ const SettingItem = ({
 }) => {
   const [localValue, setLocalValue] = useState(value);
   const [showSecret, setShowSecret] = useState(false);
+  const [showStrategyDialog, setShowStrategyDialog] = useState(false);
 
   // 同步外部 value 变化
   useEffect(() => {
     setLocalValue(value);
   }, [value]);
 
-  // 检测值类型（优先使用 setting.value_type，然后尝试自动检测）
-  const valueType = setting.value_type || (
-    (value === 'true' || value === 'false' || value === true || value === false) ? 'bool' : 'string'
-  );
+  // 检测值类型（优先使用 setting.value_type）
+  // CRITICAL: 必须严格检查 value_type 是否存在且非空
+  const valueType = (setting.value_type && setting.value_type.trim() !== '')
+    ? setting.value_type
+    : ((value === 'true' || value === 'false' || value === true || value === false) ? 'bool' : 'string');
 
   const config = VALUE_TYPE_CONFIG[valueType] || VALUE_TYPE_CONFIG.string;
 
@@ -163,6 +166,171 @@ const SettingItem = ({
             size="md"
           />
         </div>
+      </div>
+    );
+  }
+
+  // 枚举类型使用下拉选择 (v6.1: 通用枚举类型支持)
+  // DEBUG: 检查枚举类型的数据
+  if (setting.key === 'recovery_strategy') {
+    console.log('[DEBUG] recovery_strategy setting:', {
+      valueType,
+      value_type: setting.value_type,
+      enum_options: setting.enum_options,
+      setting
+    });
+  }
+
+  // CRITICAL: 对于 recovery_strategy，如果后端数据有问题，使用硬编码的枚举选项
+  const isRecoveryStrategy = setting.key === 'recovery_strategy' && setting.category === 'request';
+  const shouldRenderAsEnum = (valueType === 'enum' && setting.enum_options && setting.enum_options.length > 0) || isRecoveryStrategy;
+
+  if (shouldRenderAsEnum) {
+    const handleEnumChange = (newValue) => {
+      setLocalValue(newValue);
+      onChange(setting.category, setting.key, newValue);
+    };
+
+    // 使用后端提供的枚举选项，如果没有则使用硬编码的备用选项
+    let enumOptions;
+    if (isRecoveryStrategy && (!setting.enum_options || setting.enum_options.length === 0)) {
+      console.warn('[FALLBACK] 使用硬编码的 recovery_strategy 枚举选项');
+      enumOptions = [
+        { value: 'auto_wait', label: '智能等待（推荐）' },
+        { value: 'loop_retry', label: '循环重试（仅测试）' },
+        { value: 'fail_fast', label: '快速失败（调试用）' }
+      ];
+    } else {
+      enumOptions = setting.enum_options.map(option => ({
+        value: option.value,
+        label: option.label
+      }));
+    }
+
+    // 获取当前选中选项的描述
+    const currentOption = setting.enum_options?.find(opt => opt.value === localValue);
+
+    // 对于恢复策略，使用弹窗选择器
+    if (isRecoveryStrategy) {
+      const strategyLabels = {
+        'auto_wait': '智能等待（推荐）',
+        'loop_retry': '循环重试（仅测试）',
+        'fail_fast': '快速失败（调试用）'
+      };
+
+      return (
+        <>
+          <div className="py-3 border-b border-slate-100 last:border-0 group">
+            <div className="flex justify-between items-center">
+              <div className="flex-1 min-w-0 pr-4">
+                <div className="flex items-center gap-2">
+                  {hasChange && (
+                    <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+                  )}
+                  <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+                  {setting.requires_restart && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
+                      <AlertTriangle size={10} className="mr-0.5" />
+                      重启生效
+                    </span>
+                  )}
+                </div>
+                {setting.description && (
+                  <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {hasChange && onRevert && (
+                  <button
+                    onClick={() => onRevert(setting.category, setting.key)}
+                    disabled={disabled}
+                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                    title="撤销修改"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowStrategyDialog(true)}
+                  disabled={disabled}
+                  className="group/btn flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white hover:border-indigo-300 hover:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Settings size={15} className="group-hover/btn:rotate-90 transition-transform duration-300" />
+                  <span>{strategyLabels[localValue] || localValue}</span>
+                </button>
+              </div>
+            </div>
+            {/* 当前策略的简要说明 */}
+            {currentOption && currentOption.description && (
+              <div className="mt-2 pl-4 pr-32">
+                <div className="p-2.5 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+                  <p className="text-xs text-indigo-900 leading-relaxed">{currentOption.description}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 策略选择弹窗 */}
+          <RecoveryStrategyDialog
+            isOpen={showStrategyDialog}
+            onClose={() => setShowStrategyDialog(false)}
+            currentValue={localValue}
+            onConfirm={handleEnumChange}
+          />
+        </>
+      );
+    }
+
+    // 普通枚举类型使用下拉选择
+
+    return (
+      <div className="py-3 border-b border-slate-100 last:border-0 group">
+        <div className="flex justify-between items-center">
+          <div className="flex-1 min-w-0 pr-4">
+            <div className="flex items-center gap-2">
+              {hasChange && (
+                <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+              )}
+              <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+              {setting.requires_restart && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
+                  <AlertTriangle size={10} className="mr-0.5" />
+                  重启生效
+                </span>
+              )}
+            </div>
+            {setting.description && (
+              <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {hasChange && onRevert && (
+              <button
+                onClick={() => onRevert(setting.category, setting.key)}
+                disabled={disabled}
+                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                title="撤销修改"
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
+            <CustomSelect
+              options={enumOptions}
+              value={localValue}
+              onChange={handleEnumChange}
+              disabled={disabled}
+              size="md"
+            />
+          </div>
+        </div>
+        {/* 当前选项的详细说明 */}
+        {currentOption && currentOption.description && (
+          <div className="mt-2 pl-4 pr-32">
+            <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+              <p className="text-xs text-indigo-900 leading-relaxed">{currentOption.description}</p>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

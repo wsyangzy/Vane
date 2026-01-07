@@ -1,0 +1,59 @@
+# CC-Forwarder 配置文件 (v6.1)
+# 故障恢复策略重构示例
+
+server:
+  host: "127.0.0.1"
+  port: 9090
+
+# ============================================
+# v6.1 新配置格式（推荐）
+# ============================================
+failover:
+  enabled: true
+  default_cooldown: "10m"
+
+  # 🎯 恢复策略（三选一）
+  # - auto_wait:   智能等待恢复（推荐生产环境）
+  # - loop_retry:  循环重试所有渠道（仅测试环境）
+  # - fail_fast:   快速失败，不等待恢复
+  recovery_strategy: "auto_wait"
+
+  # 智能等待参数（仅 auto_wait 策略生效）
+  auto_wait_timeout: "300s"        # 最大等待时间（默认5分钟）
+  auto_wait_max_requests: 100      # 最大挂起请求数（默认100）
+
+# ============================================
+# v6.0.x 旧配置格式（向后兼容，将自动迁移）
+# ============================================
+# failover:
+#   enabled: true
+#   default_cooldown: "10m"
+#   allow_revisit_after_exhausted: false  # 映射到 recovery_strategy: "fail_fast"
+#
+# request_suspend:
+#   enabled: true                          # 映射到 recovery_strategy: "auto_wait"
+#   timeout: "300s"                        # 映射到 auto_wait_timeout
+#   max_suspended_requests: 100            # 映射到 auto_wait_max_requests
+
+# ============================================
+# 旧配置 → 新配置映射表
+# ============================================
+# | 旧配置组合                          | 新配置 recovery_strategy |
+# |------------------------------------|-----------------------|
+# | suspend=true + revisit=false       | auto_wait             |
+# | suspend=false + revisit=true       | loop_retry            |
+# | suspend=false + revisit=false      | fail_fast             |
+# | suspend=true + revisit=true        | auto_wait (优先)      |
+
+endpoints:
+  - name: "primary"
+    url: "https://api.anthropic.com"
+    channel: "official"
+    priority: 1
+    token: "sk-xxx"
+
+  - name: "backup"
+    url: "https://api.example.com"
+    channel: "third-party"
+    priority: 2
+    token: "sk-yyy"

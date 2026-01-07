@@ -36,6 +36,7 @@ const (
 	ValueTypeDuration = "duration"
 	ValueTypePassword = "password"
 	ValueTypeJSON     = "json"
+	ValueTypeEnum     = "enum" // v6.1: 新增枚举类型
 )
 
 // CategoryInfo 分类信息
@@ -97,7 +98,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 			CategoryRequest: {
 				Name:        CategoryRequest,
 				Label:       "请求控制",
-				Description: "配置全局超时和请求挂起",
+				Description: "配置请求超时、恢复策略和挂起行为",
 				Icon:        "⏱️",
 				Order:       6,
 			},
@@ -161,7 +162,13 @@ func (s *SettingsService) GetCategoryInfo(category string) *CategoryInfo {
 
 // Get 获取单个设置值
 func (s *SettingsService) Get(ctx context.Context, category, key string) (*store.SettingRecord, error) {
-	return s.store.Get(ctx, category, key)
+	record, err := s.store.Get(ctx, category, key)
+	if err != nil || record == nil {
+		return record, err
+	}
+	// 动态填充枚举选项
+	s.enrichEnumOptions([]*store.SettingRecord{record})
+	return record, nil
 }
 
 // GetValue 获取设置值（仅返回值字符串）
@@ -223,12 +230,54 @@ func (s *SettingsService) GetDuration(ctx context.Context, category, key string,
 
 // GetByCategory 获取分类下的所有设置
 func (s *SettingsService) GetByCategory(ctx context.Context, category string) ([]*store.SettingRecord, error) {
-	return s.store.GetByCategory(ctx, category)
+	records, err := s.store.GetByCategory(ctx, category)
+	if err != nil {
+		return nil, err
+	}
+	// 动态填充枚举选项
+	s.enrichEnumOptions(records)
+	return records, nil
 }
 
 // GetAll 获取所有设置
 func (s *SettingsService) GetAll(ctx context.Context) ([]*store.SettingRecord, error) {
-	return s.store.GetAll(ctx)
+	records, err := s.store.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// 动态填充枚举选项
+	s.enrichEnumOptions(records)
+	return records, nil
+}
+
+// enrichEnumOptions 为枚举类型的设置动态填充选项
+func (s *SettingsService) enrichEnumOptions(records []*store.SettingRecord) {
+	for _, record := range records {
+		if record.ValueType != ValueTypeEnum {
+			continue
+		}
+
+		// 根据 category + key 匹配默认配置中的枚举选项
+		defaults := s.getDefaultsForCategory(record.Category)
+		for _, def := range defaults {
+			if def.Key == record.Key && len(def.EnumOptions) > 0 {
+				record.EnumOptions = def.EnumOptions
+				slog.Debug("[enrichEnumOptions] 填充枚举选项",
+					"category", record.Category,
+					"key", record.Key,
+					"optionsCount", len(def.EnumOptions))
+				break
+			}
+		}
+
+		// DEBUG: 如果是 recovery_strategy，打印详细信息
+		if record.Key == "recovery_strategy" {
+			slog.Info("✅ [DEBUG] recovery_strategy 枚举选项",
+				"value_type", record.ValueType,
+				"enum_options_count", len(record.EnumOptions),
+				"has_options", record.EnumOptions != nil && len(record.EnumOptions) > 0)
+		}
+	}
 }
 
 // Set 设置单个值
@@ -302,10 +351,42 @@ func (s *SettingsService) triggerOnChange(category, key string) {
 func (s *SettingsService) InitDefaults(ctx context.Context) error {
 	defaults := s.GetAllDefaults()
 
+	// 清理废弃的配置项
+	if err := s.cleanupDeprecatedSettings(ctx); err != nil {
+		slog.Warn("清理废弃配置失败", "error", err)
+		// 不阻止初始化流程
+	}
+
 	// 始终同步元数据（label、description、value_type等）
 	// 这样即使数据库中已有数据，也能更新到最新的元数据
 	// 但会保留用户设置的 value 值
 	return s.store.SyncMetadata(ctx, defaults)
+}
+
+// cleanupDeprecatedSettings 清理废弃的配置项（v6.1.0 迁移）
+func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
+	deprecatedKeys := []struct {
+		category string
+		key      string
+	}{
+		// v6.1.0: 移除旧的请求挂起配置（已合并到 recovery_strategy）
+		{CategoryRequest, "suspend_enabled"},
+		{CategoryRequest, "suspend_timeout"},
+		{CategoryRequest, "max_suspended"},
+		// v6.1.0: 移除旧的故障转移配置（已合并到 recovery_strategy）
+		{CategoryFailover, "allow_revisit_after_exhausted"},
+	}
+
+	for _, dep := range deprecatedKeys {
+		if err := s.store.Delete(ctx, dep.category, dep.key); err != nil {
+			// 配置不存在时会返回错误，忽略
+			slog.Debug("删除废弃配置", "category", dep.category, "key", dep.key, "error", err)
+		} else {
+			slog.Info("✅ [SettingsService] 已删除废弃配置", "category", dep.category, "key", dep.key)
+		}
+	}
+
+	return nil
 }
 
 // IsInitialized 检查是否已初始化
@@ -382,19 +463,45 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		}
 
 	case CategoryFailover:
+		// v6.1: 渠道间故障转移配置
 		return []*store.SettingRecord{
-			{Category: CategoryFailover, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "渠道间故障转移", Description: "当前渠道内所有端点均重试耗尽时，自动切换到备用渠道。备用渠道选择固定按“渠道优先级”，并跳过暂停/冷却渠道。", DisplayOrder: 1},
+			{Category: CategoryFailover, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "渠道间故障转移", Description: "当前渠道内所有端点均重试耗尽时，自动切换到备用渠道。备用渠道选择固定按渠道优先级，并跳过暂停/冷却渠道。", DisplayOrder: 1},
 			{Category: CategoryFailover, Key: "default_cooldown", Value: "600s", ValueType: ValueTypeDuration, Label: "默认冷却时间", Description: "请求级故障转移触发后，失败端点/失败渠道进入冷却的等待时间", DisplayOrder: 2},
-			{Category: CategoryFailover, Key: "allow_revisit_after_exhausted", Value: "false", ValueType: ValueTypeBool, Label: "耗尽后回访最高优先级渠道", Description: "默认关闭：当本次请求已尝试所有可用渠道仍失败时，将进入挂起/等待恢复（若启用）。开启后：允许回到最高优先级渠道继续尝试，可能导致循环重试。", DisplayOrder: 3},
 		}
 
 	case CategoryRequest:
+		// v6.1: 请求控制配置（包含恢复策略）
 		return []*store.SettingRecord{
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
-			{Category: CategoryRequest, Key: "suspend_enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用请求挂起", Description: "当所有端点不可用时挂起请求等待恢复", DisplayOrder: 2},
-			{Category: CategoryRequest, Key: "suspend_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "挂起超时", Description: "请求挂起的最大等待时间", DisplayOrder: 3},
-			{Category: CategoryRequest, Key: "max_suspended", Value: "100", ValueType: ValueTypeInt, Label: "最大挂起数", Description: "同时挂起的最大请求数量", DisplayOrder: 4},
-			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 5},
+			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 2},
+			{
+				Category:     CategoryRequest,
+				Key:          "recovery_strategy",
+				Value:        "auto_wait",
+				ValueType:    ValueTypeEnum,
+				Label:        "恢复策略",
+				Description:  "所有渠道耗尽后的请求处理策略，决定请求如何等待或失败",
+				DisplayOrder: 3,
+				EnumOptions: []store.EnumOption{
+					{
+						Value:       "auto_wait",
+						Label:       "智能等待（推荐）",
+						Description: "挂起请求并智能等待端点自愈或渠道恢复。适合生产环境，能自动恢复服务而无需人工介入。当检测到端点恢复健康或有新渠道激活时，自动继续处理请求。",
+					},
+					{
+						Value:       "loop_retry",
+						Label:       "循环重试（仅测试）",
+						Description: "耗尽所有渠道后，立即回到最高优先级渠道继续尝试。可能导致无限循环重试，仅用于测试环境快速排查问题。不推荐生产环境使用。",
+					},
+					{
+						Value:       "fail_fast",
+						Label:       "快速失败（调试用）",
+						Description: "所有渠道耗尽后立即返回失败。适合调试场景，快速暴露问题。不等待恢复，直接向客户端返回错误。",
+					},
+				},
+			},
+			{Category: CategoryRequest, Key: "auto_wait_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "智能等待超时", Description: "auto_wait 策略下，挂起请求等待恢复的最大时间", DisplayOrder: 4},
+			{Category: CategoryRequest, Key: "auto_wait_max_requests", Value: "100", ValueType: ValueTypeInt, Label: "最大挂起请求数", Description: "auto_wait 策略下，允许同时挂起等待的最大请求数量", DisplayOrder: 5},
 		}
 
 	case CategoryStreaming:

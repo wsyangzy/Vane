@@ -20,17 +20,18 @@ import (
 
 // SettingInfo 设置信息（给前端用的结构体）
 type SettingInfo struct {
-	ID              int64  `json:"id"`
-	Category        string `json:"category"`
-	Key             string `json:"key"`
-	Value           string `json:"value"`
-	ValueType       string `json:"value_type"`
-	Label           string `json:"label"`
-	Description     string `json:"description"`
-	DisplayOrder    int    `json:"display_order"`
-	RequiresRestart bool   `json:"requires_restart"`
-	CreatedAt       string `json:"created_at"`
-	UpdatedAt       string `json:"updated_at"`
+	ID              int64              `json:"id"`
+	Category        string             `json:"category"`
+	Key             string             `json:"key"`
+	Value           string             `json:"value"`
+	ValueType       string             `json:"value_type"`
+	Label           string             `json:"label"`
+	Description     string             `json:"description"`
+	DisplayOrder    int                `json:"display_order"`
+	EnumOptions     []store.EnumOption `json:"enum_options,omitempty"` // v6.1: 枚举选项
+	RequiresRestart bool               `json:"requires_restart"`
+	CreatedAt       string             `json:"created_at"`
+	UpdatedAt       string             `json:"updated_at"`
 }
 
 // CategoryInfo 分类信息
@@ -383,6 +384,7 @@ func (a *App) settingRecordToInfo(r *store.SettingRecord) SettingInfo {
 		Label:           r.Label,
 		Description:     r.Description,
 		DisplayOrder:    r.DisplayOrder,
+		EnumOptions:     r.EnumOptions, // v6.1: 传递枚举选项
 		RequiresRestart: r.RequiresRestart,
 	}
 

@@ -66,7 +66,6 @@ const SettingsPage = () => {
   const [changes, setChanges] = useState({}); // 跟踪变更: { "category.key": newValue }
   const [saveMessage, setSaveMessage] = useState(null);
   const [expandedCategories, setExpandedCategories] = useState(new Set());
-  const [revisitConfirm, setRevisitConfirm] = useState(null); // { category, key, value }
   const [initRetryAttempt, setInitRetryAttempt] = useState(0); // 初始化重试次数
   const [messageTimer, setMessageTimer] = useState(null); // 消息自动消失定时器
 
@@ -123,6 +122,19 @@ const SettingsPage = () => {
           fetchAllSettings(),
           fetchPortInfo()
         ]);
+      }
+
+      // DEBUG: 打印所有设置数据，特别关注 recovery_strategy
+      console.log('=== 所有设置数据 ===');
+      const recoveryStrategy = settingsData.find(s => s.key === 'recovery_strategy');
+      if (recoveryStrategy) {
+        console.log('[CRITICAL] recovery_strategy 数据:', JSON.stringify(recoveryStrategy, null, 2));
+        console.log('  - value_type:', recoveryStrategy.value_type, typeof recoveryStrategy.value_type);
+        console.log('  - enum_options:', recoveryStrategy.enum_options);
+        console.log('  - enum_options 是否为数组:', Array.isArray(recoveryStrategy.enum_options));
+        console.log('  - enum_options 长度:', recoveryStrategy.enum_options?.length);
+      } else {
+        console.error('[ERROR] recovery_strategy 配置未找到！');
       }
 
       setCategories(categoriesData || []);
@@ -202,19 +214,6 @@ const SettingsPage = () => {
     return grouped;
   }, [settings]);
 
-  // 处理设置变更
-  const handleSettingChange = useCallback((category, key, value) => {
-    if (category === 'failover' && key === 'allow_revisit_after_exhausted' && String(value) === 'true') {
-      setRevisitConfirm({ category, key, value });
-      return;
-    }
-    const changeKey = `${category}.${key}`;
-    setChanges(prev => ({
-      ...prev,
-      [changeKey]: value
-    }));
-  }, []);
-
   // 获取当前值（优先使用变更值）
   const getCurrentValue = useCallback((setting) => {
     const changeKey = `${setting.category}.${setting.key}`;
@@ -223,6 +222,33 @@ const SettingsPage = () => {
     }
     return setting.value;
   }, [changes]);
+
+  // 判断设置项是否应该显示（条件显示逻辑）
+  const shouldShowSetting = useCallback((setting) => {
+    // 特殊处理：auto_wait 相关配置仅在 recovery_strategy === 'auto_wait' 时显示
+    if (setting.category === 'request' &&
+        (setting.key === 'auto_wait_timeout' || setting.key === 'auto_wait_max_requests')) {
+      // 获取当前 recovery_strategy 的值
+      const strategySettingArray = settingsByCategory['request'];
+      if (!strategySettingArray) return false;
+
+      const strategySetting = strategySettingArray.find(s => s.key === 'recovery_strategy');
+      if (!strategySetting) return false;
+
+      const currentStrategy = getCurrentValue(strategySetting);
+      return currentStrategy === 'auto_wait';
+    }
+    return true;
+  }, [settingsByCategory, getCurrentValue]);
+
+  // 处理设置变更
+  const handleSettingChange = useCallback((category, key, value) => {
+    const changeKey = `${category}.${key}`;
+    setChanges(prev => ({
+      ...prev,
+      [changeKey]: value
+    }));
+  }, []);
 
   // 保存所有变更
   const handleSave = useCallback(async () => {
@@ -379,46 +405,6 @@ const SettingsPage = () => {
         }
       `}</style>
 
-      {revisitConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-3 bg-amber-100 rounded-full">
-                <AlertCircle className="text-amber-700" size={24} />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">确认开启回访开关</h3>
-                <p className="text-sm text-slate-500">该功能可能导致循环重试</p>
-              </div>
-            </div>
-
-            <p className="text-slate-700 mb-4">
-              开启后，当本次请求已尝试所有可用渠道仍失败时，将允许回到<strong>最高优先级渠道</strong>继续尝试。
-              这可能导致渠道间循环重试，建议配合启用「请求挂起」以降低资源消耗与日志噪声。
-            </p>
-
-            <div className="flex justify-end gap-3">
-              <Button variant="ghost" onClick={() => setRevisitConfirm(null)} disabled={saving}>
-                取消
-              </Button>
-              <Button
-                variant="dangerSoft"
-                onClick={() => {
-                  const { category, key, value } = revisitConfirm;
-                  const changeKey = `${category}.${key}`;
-                  setChanges(prev => ({ ...prev, [changeKey]: value }));
-                  setRevisitConfirm(null);
-                  setAutoHideMessage({ type: 'info', text: '已开启：耗尽后回访最高优先级渠道（注意可能循环重试）' });
-                }}
-                disabled={saving}
-              >
-                我已知晓，继续开启
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 页面标题 */}
       <div className="flex justify-between items-end">
         <div>
@@ -546,7 +532,7 @@ const SettingsPage = () => {
         >
           <PortInfo portInfo={portInfo} loading={loading} />
           <div className="mt-4 pt-4 border-t border-slate-100">
-            {settingsByCategory['server']?.map(setting => {
+            {settingsByCategory['server']?.filter(shouldShowSetting).map(setting => {
               const changeKey = `${setting.category}.${setting.key}`;
               return (
                 <SettingItem
@@ -577,7 +563,7 @@ const SettingsPage = () => {
               onReset={() => handleResetCategory(category.name)}
               resetDisabled={saving}
             >
-              {settingsByCategory[category.name]?.map(setting => {
+              {settingsByCategory[category.name]?.filter(shouldShowSetting).map(setting => {
                 const changeKey = `${setting.category}.${setting.key}`;
                 return (
                   <SettingItem
@@ -591,7 +577,7 @@ const SettingsPage = () => {
                   />
                 );
               })}
-              {(!settingsByCategory[category.name] || settingsByCategory[category.name].length === 0) && (
+              {(!settingsByCategory[category.name] || settingsByCategory[category.name].filter(shouldShowSetting).length === 0) && (
                 <div className="text-sm text-slate-400 text-center py-4">
                   暂无设置项
                 </div>

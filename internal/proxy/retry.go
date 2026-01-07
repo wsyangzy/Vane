@@ -563,9 +563,10 @@ func (rh *RetryHandler) GetSuspendedRequestsCount() int {
 // shouldSuspendRequest determines if a request should be suspended
 // 条件：手动模式 + 有备用组 + 功能启用 + 未达到最大挂起数
 func (rh *RetryHandler) shouldSuspendRequest(ctx context.Context) bool {
-	// 检查功能是否启用
-	if !rh.config.RequestSuspend.Enabled {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 功能未启用，不挂起请求")
+	// 检查功能是否启用 (v6.1: 使用新的恢复策略判断)
+	if !rh.config.FailoverV2.RecoveryStrategy.ShouldWaitForRecovery() {
+		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 当前恢复策略不支持等待恢复 (策略: %s)，不挂起请求",
+			rh.config.FailoverV2.RecoveryStrategy.String()))
 		return false
 	}
 
@@ -580,9 +581,9 @@ func (rh *RetryHandler) shouldSuspendRequest(ctx context.Context) bool {
 	currentCount := rh.suspendedRequestsCount
 	rh.suspendedRequestsMutex.RUnlock()
 
-	if currentCount >= rh.config.RequestSuspend.MaxSuspendedRequests {
+	if currentCount >= rh.config.FailoverV2.AutoWaitMaxRequests {
 		slog.WarnContext(ctx, fmt.Sprintf("🚫 [挂起限制] 当前挂起请求数 %d 已达到最大限制 %d，不再挂起新请求",
-			currentCount, rh.config.RequestSuspend.MaxSuspendedRequests))
+			currentCount, rh.config.FailoverV2.AutoWaitMaxRequests))
 		return false
 	}
 
@@ -620,9 +621,9 @@ func (rh *RetryHandler) shouldSuspendRequest(ctx context.Context) bool {
 		return false
 	}
 
-	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 功能启用=%t, 当前挂起数=%d/%d, 可用备用组=%v",
-		!rh.config.Failover.Enabled, rh.config.RequestSuspend.Enabled,
-		currentCount, rh.config.RequestSuspend.MaxSuspendedRequests, availableGroups))
+	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 恢复策略=%s, 当前挂起数=%d/%d, 可用备用组=%v",
+		!rh.config.Failover.Enabled, rh.config.FailoverV2.RecoveryStrategy.String(),
+		currentCount, rh.config.FailoverV2.AutoWaitMaxRequests, availableGroups))
 
 	return true
 }
@@ -659,7 +660,7 @@ func (rh *RetryHandler) waitForGroupSwitch(ctx context.Context, connID string) b
 	}()
 
 	// 创建超时context
-	timeout := rh.config.RequestSuspend.Timeout
+	timeout := rh.config.FailoverV2.AutoWaitTimeout
 	if timeout <= 0 {
 		timeout = 300 * time.Second // 默认5分钟
 	}

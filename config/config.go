@@ -22,8 +22,9 @@ type Config struct {
 	Logging          LoggingConfig          `yaml:"logging"`
 	Streaming        StreamingConfig        `yaml:"streaming"`
 	Group            GroupConfig            `yaml:"group"`             // Group configuration (DEPRECATED: use Failover instead)
-	Failover         FailoverConfig         `yaml:"failover"`          // Failover configuration (v4.0+)
-	RequestSuspend   RequestSuspendConfig   `yaml:"request_suspend"`   // Request suspension configuration
+	Failover         FailoverConfig         `yaml:"failover"`          // Failover configuration (v4.0+, DEPRECATED in v6.1: use FailoverV2)
+	FailoverV2       FailoverConfigV2       `yaml:"failover_v2"`       // Failover configuration v2 (v6.1+, unified recovery strategy)
+	RequestSuspend   RequestSuspendConfig   `yaml:"request_suspend"`   // Request suspension configuration (DEPRECATED in v6.1: merged into FailoverV2)
 	UsageTracking    UsageTrackingConfig    `yaml:"usage_tracking"`    // Usage tracking configuration
 	TokenCounting    TokenCountingConfig    `yaml:"token_counting"`    // Token counting configuration
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration (v5.0+)
@@ -272,6 +273,26 @@ func LoadConfig(path string) (*Config, error) {
 			config.Failover.DefaultCooldown = config.Group.Cooldown
 		}
 		config.Failover.Enabled = config.Group.AutoSwitchBetweenGroups
+	}
+
+	// v6.0 → v6.1 配置迁移（向后兼容）
+	// 检查是否使用了新版 failover_v2 配置
+	hasFailoverV2Config := strings.Contains(string(data), "failover_v2:") ||
+		strings.Contains(string(data), "recovery_strategy:")
+
+	if !hasFailoverV2Config {
+		// 没有新版配置，从旧版配置自动迁移
+		slog.Info("📦 检测到旧版配置格式 (v6.0.x)，正在自动迁移到 v6.1 格式...")
+		config.FailoverV2.MigrateFromLegacy(&config.Failover, &config.RequestSuspend)
+		config.FailoverV2.SetDefaults()
+
+		// 记录迁移结果
+		slog.Info("✅ 配置迁移完成",
+			"recovery_strategy", config.FailoverV2.RecoveryStrategy,
+			"strategy_name", config.FailoverV2.RecoveryStrategy.String())
+	} else {
+		// 使用了新版配置，确保设置了默认值
+		config.FailoverV2.SetDefaults()
 	}
 
 	// Validate configuration
@@ -608,7 +629,7 @@ func (c *Config) validate() error {
 		}
 	}
 
-	// Validate request suspension configuration
+	// Validate request suspension configuration (DEPRECATED in v6.1)
 	if c.RequestSuspend.Enabled {
 		if c.RequestSuspend.Timeout <= 0 {
 			return fmt.Errorf("request suspend timeout must be greater than 0 when enabled")
@@ -618,6 +639,13 @@ func (c *Config) validate() error {
 		}
 		if c.RequestSuspend.MaxSuspendedRequests > 10000 {
 			return fmt.Errorf("max suspended requests cannot exceed 10000 for performance reasons")
+		}
+	}
+
+	// Validate failover v2 configuration (v6.1+)
+	if c.FailoverV2.Enabled || c.FailoverV2.RecoveryStrategy != "" {
+		if err := c.FailoverV2.Validate(); err != nil {
+			return fmt.Errorf("failover_v2 configuration error: %w", err)
 		}
 	}
 

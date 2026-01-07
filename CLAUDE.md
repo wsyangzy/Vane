@@ -249,16 +249,45 @@ endpoints:
     failover_enabled: true
     token: "sk-yyy"
 
-# 故障转移
-failover:
-  enabled: true
-  default_cooldown: "10m"
+# 故障转移（v6.1+ 推荐新格式）
+failover_v2:
+  enabled: true                      # 启用故障转移
+  default_cooldown: "10m"            # 默认冷却时间
+  recovery_strategy: "auto_wait"     # 恢复策略：auto_wait | loop_retry | fail_fast
+  auto_wait_timeout: "300s"          # 智能等待超时（仅 auto_wait 策略）
+  auto_wait_max_requests: 100        # 最大挂起请求数（仅 auto_wait 策略）
+
+# 旧格式（v6.0.x 兼容，会自动迁移到 failover_v2）
+# failover:
+#   enabled: true
+#   default_cooldown: "10m"
+#   allow_revisit_after_exhausted: false  # DEPRECATED: 使用 recovery_strategy 替代
+# request_suspend:
+#   enabled: true                          # DEPRECATED: 合并到 failover_v2.recovery_strategy
+#   timeout: "300s"
+#   max_suspended_requests: 100
 
 # 内存热池（可选）
 hot_pool:
   enabled: true
   max_active_requests: 1000
 ```
+
+### 恢复策略详解（v6.1+）
+
+当所有端点都不可用时，系统提供三种恢复策略：
+
+| 策略 | 行为 | 优点 | 缺点 | 推荐场景 |
+|------|------|------|------|----------|
+| **auto_wait**<br/>（智能等待） | 挂起请求，等待端点自动恢复信号（其他请求成功、冷却期到期） | 避免循环重试，减少无效请求 | 可能等待较长时间（最多 auto_wait_timeout） | **生产环境（推荐）** |
+| **loop_retry**<br/>（循环重试） | 回到最高优先级渠道继续尝试（跳过冷却中的端点） | 持续尝试，不会超时 | 可能在渠道间循环重试，浪费资源 | 测试环境或渠道极少场景 |
+| **fail_fast**<br/>（快速失败） | 立即返回错误，不等待恢复，不循环重试 | 明确错误信号，快速反馈 | 可能错过即将恢复的端点 | 调试环境或需要明确错误的场景 |
+
+**策略迁移映射**（v6.0 → v6.1）：
+- `suspend_enabled=true` → `auto_wait`
+- `allow_revisit_after_exhausted=true` + `suspend_enabled=false` → `loop_retry`
+- 两者都 `false` → `fail_fast`
+
 
 ## 开发命令
 

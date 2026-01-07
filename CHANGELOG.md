@@ -5,6 +5,58 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## [6.0.7] - 2026-01-07
+
+### 🔧 改进 (Improvements)
+
+- **配置简化 - 恢复策略**: 将"所有渠道耗尽后处理策略"从 2 个布尔值简化为 1 个枚举配置
+  - 旧方案: `allow_revisit_after_exhausted` + `suspend_enabled`（4种状态组合，语义混淆）
+  - 新方案: `recovery_strategy` 枚举（3选1，语义清晰）
+    - `auto_wait` (智能等待) - 推荐生产环境，挂起请求等待端点自愈
+    - `loop_retry` (循环重试) - 仅测试环境，立即回访最高优先级渠道
+    - `fail_fast` (快速失败) - 调试用，立即返回错误
+  - **YAGNI原则应用**: 移除未使用的 `suspend_enabled`/`suspend_timeout`/`max_suspended` 配置
+  - **KISS原则应用**: 配置复杂度降低 50%
+
+- **UI 增强 - 枚举类型支持**: 设置页面支持枚举配置下拉选择
+  - 后端: 新增 `ValueTypeEnum` 类型，支持 `EnumOption` 结构（value/label/description）
+  - 前端: `SettingItem` 组件自动渲染 `CustomSelect` 下拉选择器
+  - 交互优化: 选择选项后自动显示详细说明（70+ 字符描述帮助理解）
+  - **DRY原则应用**: 统一枚举类型处理逻辑，支持未来扩展
+
+- **条件显示逻辑**: `auto_wait` 专属配置仅在选择智能等待策略时显示
+  - `auto_wait_timeout` (智能等待超时) - 仅在 `recovery_strategy=auto_wait` 时显示
+  - `auto_wait_max_requests` (最大挂起请求数) - 仅在 `recovery_strategy=auto_wait` 时显示
+  - **YAGNI原则应用**: 避免显示无关配置，减少用户困惑
+
+- **配置语义优化**: 将恢复策略配置从"故障转移"迁移到"请求控制"分类
+  - 根因: `recovery_strategy` 控制的是单个请求的处理行为，而非渠道间故障转移行为
+  - 影响: `recovery_strategy`, `auto_wait_timeout`, `auto_wait_max_requests` 从 `CategoryFailover` 迁移到 `CategoryRequest`
+  - 改进: 配置分类语义更加准确，"故障转移"专注于渠道级别配置，"请求控制"专注于请求级别配置
+
+### 🐛 Bug 修复 (Bug Fixes)
+
+- **设置页崩溃**: 修复 `getCurrentValue is not defined` React Hooks 依赖顺序错误
+  - 根因: `shouldShowSetting` 在 `getCurrentValue` 定义前引用导致初始化失败
+  - 修复: 调整函数定义顺序，确保依赖关系正确
+
+- **枚举选项数据流修复**: 修复恢复策略无法渲染为下拉框的问题
+  - 根因: `SettingsService.Get()` 方法未调用 `enrichEnumOptions()` 导致单条记录查询时枚举选项为空
+  - 修复: 在 `Get()` 方法中添加 `enrichEnumOptions()` 调用，确保枚举选项动态填充
+  - 兜底: 前端增加硬编码 fallback 逻辑，即使后端数据不完整也能正确渲染下拉框
+
+- **废弃配置清理**: 自动清理 v6.1 之前的废弃配置项
+  - 移除: `suspend_enabled`, `suspend_timeout`, `max_suspended`, `allow_revisit_after_exhausted`
+  - 方法: 新增 `cleanupDeprecatedSettings()` 在服务初始化时自动执行
+  - 影响: 提升配置管理一致性，避免旧配置干扰
+
+### 📝 文档与代码质量 (Documentation & Code Quality)
+
+- **元数据同步**: 使用 `SyncMetadata` 机制更新设置元数据，保留用户配置值
+- **向后兼容**: 保持数据库 schema 兼容，现有配置自动迁移到新结构
+- **类型安全**: 前端严格检查 `value_type` 字段非空，避免类型判断误差
+- **数据库迁移**: 使用 DELETE + 服务默认值重新初始化的方式处理分类迁移，避免 UNIQUE 约束冲突
+
 ## [6.0.6] - 2025-12-30
 
 ### 🐛 Bug 修复 (Bug Fixes)
