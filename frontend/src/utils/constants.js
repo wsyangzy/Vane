@@ -32,13 +32,14 @@ export const API_ENDPOINTS = {
   CONFIG: '/api/v1/config'
 };
 
-// 请求状态配置 (v3.5.0 状态机)
+// 请求状态配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint)
 export const REQUEST_STATUS = {
   PENDING: 'pending',
   FORWARDING: 'forwarding',
   PROCESSING: 'processing',
   RETRY: 'retry',
   SUSPENDED: 'suspended',
+  AWAITING_ENDPOINT: 'awaiting_endpoint',  // v6.0.7+ 等待端点激活
   COMPLETED: 'completed',
   FAILED: 'failed',
   PARTIAL_FAILED: 'partial_failed',
@@ -73,6 +74,11 @@ export const STATUS_CONFIG = {
     label: '已挂起',
     icon: 'Pause',
     color: 'bg-slate-100 text-slate-700 border-slate-200'
+  },
+  [REQUEST_STATUS.AWAITING_ENDPOINT]: {
+    label: '等待端点',
+    icon: 'Clock',
+    color: 'bg-purple-100 text-purple-700 border-purple-200'
   },
   [REQUEST_STATUS.COMPLETED]: {
     label: '已完成',
@@ -114,6 +120,7 @@ export const FILTER_STATUS_OPTIONS = [
   { value: 'processing', label: '处理中' },
   { value: 'retry', label: '重试中' },
   { value: 'suspended', label: '已挂起' },
+  { value: 'awaiting_endpoint', label: '等待端点' },
   { value: 'completed', label: '已完成' },
   { value: 'partial_failed', label: '部分失败' },
   { value: 'failed', label: '已失败' },

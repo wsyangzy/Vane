@@ -1423,3 +1423,19 @@ export const checkPortAvailable = async (port) => {
 
   return await WailsApp.CheckPortAvailable(port);
 };
+
+// ============================================
+// v6.0.7+ 挂起请求计数 API
+// ============================================
+
+/**
+ * 获取当前挂起等待端点恢复的请求数量
+ * 用于渠道管理页面显示等待提示
+ * @returns {Promise<number>} - 挂起请求数量
+ */
+export const getSuspendedRequestsCount = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetSuspendedRequestsCount();
+};

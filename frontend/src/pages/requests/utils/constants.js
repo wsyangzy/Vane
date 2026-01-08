@@ -3,7 +3,7 @@
 // 2025-11-28 17:02:47
 // ============================================
 
-// 状态选项配置 (v3.5.0 状态机)
+// 状态选项配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint)
 export const STATUS_OPTIONS = {
   all: '全部状态',
   pending: '等待中',
@@ -11,6 +11,7 @@ export const STATUS_OPTIONS = {
   processing: '处理中',
   retry: '重试中',
   suspended: '已挂起',
+  awaiting_endpoint: '等待端点',
   completed: '已完成',
   partial_failed: '部分失败',
   failed: '已失败',

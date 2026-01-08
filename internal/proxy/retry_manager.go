@@ -90,6 +90,27 @@ func (rm *RetryManager) GetHealthyEndpoints(ctx context.Context) []*endpoint.End
 	return rm.endpointMgr.GetHealthyEndpoints()
 }
 
+// GetHealthyEndpointsExcluding 获取健康端点列表，排除已尝试的端点（v6.1+）
+// 用于实现严格优先级转移逻辑，确保在同一请求链路内只能向下一优先级转移
+func (rm *RetryManager) GetHealthyEndpointsExcluding(ctx context.Context, excludeKeys []string) []*endpoint.Endpoint {
+	return rm.endpointMgr.GetHealthyEndpointsExcluding(excludeKeys)
+}
+
+// GetRecoveredEndpointsInChannel 获取当前渠道内已恢复的端点（v6.1+）
+// 用于 auto_wait 策略下最后一个端点失败后的重试逻辑
+func (rm *RetryManager) GetRecoveredEndpointsInChannel(triedKeys []string) []*endpoint.Endpoint {
+	return rm.endpointMgr.GetRecoveredEndpointsInChannel(triedKeys)
+}
+
+// IsAutoWaitStrategy 检查是否为 auto_wait 策略（v6.1+）
+func (rm *RetryManager) IsAutoWaitStrategy() bool {
+	if rm.config == nil {
+		return false
+	}
+	// 检查 v6.1+ 的 RecoveryStrategy 配置
+	return rm.config.FailoverV2.RecoveryStrategy.ShouldWaitForRecovery()
+}
+
 // calculateBackoff 计算指数退避延迟
 func (rm *RetryManager) calculateBackoff(attempt int) time.Duration {
 	if attempt <= 0 {

@@ -393,6 +393,15 @@ func (h *Handler) UpdateConfig(cfg *config.Config) {
 	}
 }
 
+// GetSuspendedRequestsCount 获取当前挂起等待的请求数量
+// 用于前端展示当前有多少请求正在等待端点恢复
+func (h *Handler) GetSuspendedRequestsCount() int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetSuspendedRequestsCount()
+	}
+	return 0
+}
+
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
 // 用于测试和不支持Flusher的环境
 type noOpFlusher struct{}

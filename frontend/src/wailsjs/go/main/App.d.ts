@@ -81,6 +81,8 @@ export function GetSettingsByCategory(arg1:string):Promise<Array<main.SettingInf
 
 export function GetSettingsStorageStatus():Promise<main.SettingsStorageStatus>;
 
+export function GetSuspendedRequestsCount():Promise<number>;
+
 export function GetSystemStatus():Promise<main.SystemStatus>;
 
 export function GetTokenUsage():Promise<main.TokenUsageData>;

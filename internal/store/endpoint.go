@@ -75,6 +75,10 @@ type EndpointStore interface {
 	ListByChannel(ctx context.Context, channel string) ([]*EndpointRecord, error)
 	ListEnabled(ctx context.Context) ([]*EndpointRecord, error)
 
+	// v6.1+: 优先级管理
+	GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error)                     // 获取渠道内最大优先级
+	GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) // 根据渠道和优先级获取端点
+
 	// 统计
 	Count(ctx context.Context) (int, error)
 
@@ -705,4 +709,43 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// GetMaxPriorityByChannel 获取指定渠道内的最大优先级
+// v6.1+: 用于添加端点时自动递增优先级
+func (s *SQLiteEndpointStore) GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var maxPriority sql.NullInt64
+	query := `SELECT MAX(priority) FROM endpoints WHERE channel = ?`
+	err := s.getQuerier().QueryRowContext(ctx, query, channel).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("获取渠道最大优先级失败: %w", err)
+	}
+
+	// 如果渠道内没有端点，返回 0（新端点优先级将是 1）
+	if !maxPriority.Valid {
+		return 0, nil
+	}
+	return int(maxPriority.Int64), nil
+}
+
+// GetByChannelAndPriority 根据渠道和优先级获取端点
+// v6.1+: 用于修改优先级时检测冲突并实现对调
+func (s *SQLiteEndpointStore) GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, channel, name, url, token, api_key, headers,
+			priority, failover_enabled, cooldown_seconds, timeout_seconds,
+			skip_health_check, supports_count_tokens,
+			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
+			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			enabled, created_at, updated_at
+		FROM endpoints WHERE channel = ? AND priority = ?
+	`
+
+	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, priority))
 }

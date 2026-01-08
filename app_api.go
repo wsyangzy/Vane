@@ -191,6 +191,18 @@ func (a *App) IsProxyRunning() bool {
 	return a.isRunning
 }
 
+// GetSuspendedRequestsCount 获取当前挂起等待端点恢复的请求数量
+// 用于前端渠道管理页面显示等待提示
+func (a *App) GetSuspendedRequestsCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.proxyHandler != nil {
+		return a.proxyHandler.GetSuspendedRequestsCount()
+	}
+	return 0
+}
+
 // ============================================================
 // 辅助函数
 // ============================================================

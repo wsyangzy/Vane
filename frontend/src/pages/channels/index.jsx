@@ -59,7 +59,8 @@ import {
   getConfig,
   isWailsEnvironment,
   openExternalURL,
-  subscribeToEvent
+  subscribeToEvent,
+  getSuspendedRequestsCount
 } from '@utils/wailsApi.js';
 
 const getErrorMessage = (error, fallback = '操作失败') => {
@@ -1127,6 +1128,9 @@ const ChannelsPage = () => {
   const [failoverDefaultCooldownSeconds, setFailoverDefaultCooldownSeconds] = useState(600);
   const [channelsMeta, setChannelsMeta] = useState([]);
 
+  // v6.0.7+ 挂起请求计数（用于显示等待提示）
+  const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
+
   // 批量检测状态
   const [batchCheckLoading, setBatchCheckLoading] = useState(false);
 
@@ -1255,6 +1259,17 @@ const ChannelsPage = () => {
     }
   }, []);
 
+  // v6.0.7+ 加载挂起请求计数
+  const loadSuspendedCount = useCallback(async () => {
+    try {
+      const count = await getSuspendedRequestsCount();
+      setSuspendedRequestsCount(count || 0);
+    } catch (err) {
+      // 静默处理错误，不影响页面正常使用
+      console.debug('获取挂起请求数量失败:', err);
+    }
+  }, []);
+
   const handleToggleEndpointFailover = useCallback(async (endpoint, enabled) => {
     if (!endpoint?.id) return;
     try {
@@ -1277,6 +1292,13 @@ const ChannelsPage = () => {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  // v6.0.7+ 定时获取挂起请求数量（页面加载时立即获取，之后每2秒轮询）
+  useEffect(() => {
+    loadSuspendedCount();
+    const interval = setInterval(loadSuspendedCount, 2000);
+    return () => clearInterval(interval);
+  }, [loadSuspendedCount]);
 
   useEffect(() => {
     loadChannelsMeta();
@@ -1742,6 +1764,24 @@ const ChannelsPage = () => {
           )}
         </div>
       </div>
+
+      {/* v6.0.7+ 等待端点恢复提示 */}
+      {suspendedRequestsCount > 0 && (
+        <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-3">
+          <div className="p-2 bg-purple-100 rounded-full animate-pulse">
+            <Clock className="w-5 h-5 text-purple-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-medium text-purple-900">
+              {suspendedRequestsCount} 个请求正在等待端点恢复
+            </div>
+            <div className="text-sm text-purple-700 mt-0.5">
+              当前所有端点均处于冷却或不可用状态，请求已挂起等待端点自动恢复。
+              您可以手动激活其他渠道或等待端点冷却期结束。
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 统计卡片 */}
       <div className={displayStats.cooldown > 0 ? 'grid grid-cols-7 gap-4 mb-6' : 'grid grid-cols-6 gap-4 mb-6'}>
