@@ -865,9 +865,15 @@ const ChannelCard = ({
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
 
-  const activeHighlightClass = channelFailoverEnabled
-    ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'
-    : 'border-indigo-300 ring-2 ring-indigo-100';
+  // 判断是否处于"全部失败"警示状态：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
+  const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+
+  // 活跃渠道边框样式
+  const activeHighlightClass = isAllEndpointsFailed
+    ? 'border-rose-400 ring-2 ring-rose-100'  // 全部失败警示 → 淡红色
+    : channelFailoverEnabled
+      ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'
+      : 'border-indigo-300 ring-2 ring-indigo-100';
 
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;
@@ -946,16 +952,28 @@ const ChannelCard = ({
             </Button>
           )}
           {isActive && isSqliteMode && (
-            <Button
-              size="sm"
-              variant="dangerSoft"
-              className="px-2.5 py-1 rounded-full text-[11px] font-semibold hover:translate-y-0"
-              icon={Power}
-              onClick={() => onDeactivate?.(channelName)}
-              disabled={loading}
-            >
-              停用
-            </Button>
+            isAllEndpointsFailed ? (
+              <Button
+                size="sm"
+                icon={RefreshCw}
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
+                onClick={() => onActivate?.(channelName)}
+                disabled={loading}
+              >
+                重试
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="dangerSoft"
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold hover:translate-y-0"
+                icon={Power}
+                onClick={() => onDeactivate?.(channelName)}
+                disabled={loading}
+              >
+                停用
+              </Button>
+            )
           )}
           {hasGroupInfo && !isPaused ? (
             <Button
@@ -1038,6 +1056,11 @@ const ChannelCard = ({
               冷却中
             </span>
           )}
+          {isAllEndpointsFailed && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-600 border border-rose-200 whitespace-nowrap">
+              全部失败
+            </span>
+          )}
 
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap">
             端点 <span className="font-semibold text-slate-800">{totalCount}</span>
@@ -1052,6 +1075,25 @@ const ChannelCard = ({
             </span>
           </span>
         </div>
+
+        {/* 全部失败时的操作提示 */}
+        {isAllEndpointsFailed && (
+          <div className="mt-3 p-2.5 bg-rose-50/50 border border-rose-100 rounded-lg">
+            <p className="text-xs text-rose-600 mb-2">
+              当前渠道所有端点均不可用，请求将快速失败
+            </p>
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="text-slate-500">可选操作：</span>
+              <span className="px-2 py-0.5 bg-white border border-rose-200 rounded text-rose-600">
+                继续重试当前渠道
+              </span>
+              <span className="text-slate-400">或</span>
+              <span className="px-2 py-0.5 bg-white border border-indigo-200 rounded text-indigo-600">
+                手动切换其他渠道
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 端点卡片列表（精简展示） */}
