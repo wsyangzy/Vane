@@ -4,7 +4,7 @@
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Eye, EyeOff, RotateCcw, Settings } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, RotateCcw, Settings, Lock } from 'lucide-react';
 import { CustomSelect } from '../../../components/ui';
 import RecoveryStrategyDialog from './RecoveryStrategyDialog';
 
@@ -29,6 +29,7 @@ const SettingItem = ({
   value,
   onChange,
   disabled = false,
+  disabledReason = null,
   hasChange = false,
   onRevert = null
 }) => {
@@ -227,11 +228,17 @@ const SettingItem = ({
                   {hasChange && (
                     <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
                   )}
-                  <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+                  <span className={`text-sm font-medium ${disabled && disabledReason ? 'text-slate-400' : 'text-slate-700'}`}>{displayLabel}</span>
                   {setting.requires_restart && (
                     <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                       <AlertTriangle size={10} className="mr-0.5" />
                       重启生效
+                    </span>
+                  )}
+                  {disabled && disabledReason && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
+                      <Lock size={10} className="mr-0.5" />
+                      {disabledReason}
                     </span>
                   )}
                 </div>
@@ -251,17 +258,25 @@ const SettingItem = ({
                   </button>
                 )}
                 <button
-                  onClick={() => setShowStrategyDialog(true)}
+                  onClick={() => !disabled && setShowStrategyDialog(true)}
                   disabled={disabled}
-                  className="group/btn flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-white hover:border-indigo-300 hover:shadow-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className={`group/btn flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium rounded-lg transition-all duration-200
+                    ${disabled
+                      ? 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
+                      : 'text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white hover:border-indigo-300 hover:shadow-sm'
+                    }`}
                 >
-                  <Settings size={15} className="group-hover/btn:rotate-90 transition-transform duration-300" />
+                  {disabled && disabledReason ? (
+                    <Lock size={15} className="text-slate-400" />
+                  ) : (
+                    <Settings size={15} />
+                  )}
                   <span>{strategyLabels[localValue] || localValue}</span>
                 </button>
               </div>
             </div>
             {/* 当前策略的简要说明 */}
-            {currentOption && currentOption.description && (
+            {currentOption && currentOption.description && !disabled && (
               <div className="mt-2 pl-4 pr-32">
                 <div className="p-2.5 bg-indigo-50/50 border border-indigo-100 rounded-lg">
                   <p className="text-xs text-indigo-900 leading-relaxed">{currentOption.description}</p>

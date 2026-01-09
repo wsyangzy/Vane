@@ -223,6 +223,17 @@ const SettingsPage = () => {
     return setting.value;
   }, [changes]);
 
+  // 获取渠道间故障转移开关状态
+  const getChannelFailoverEnabled = useCallback(() => {
+    const failoverSettings = settingsByCategory['failover'];
+    if (!failoverSettings) return true; // 默认开启
+    // 设置项 key 是 "enabled"，category 是 "failover"
+    const channelFailoverSetting = failoverSettings.find(s => s.key === 'enabled');
+    if (!channelFailoverSetting) return true;
+    const value = getCurrentValue(channelFailoverSetting);
+    return value === 'true' || value === true;
+  }, [settingsByCategory, getCurrentValue]);
+
   // 判断设置项是否应该显示（条件显示逻辑）
   const shouldShowSetting = useCallback((setting) => {
     // 特殊处理：auto_wait 相关配置仅在 recovery_strategy === 'auto_wait' 时显示
@@ -240,6 +251,27 @@ const SettingsPage = () => {
     }
     return true;
   }, [settingsByCategory, getCurrentValue]);
+
+  // 判断设置项是否应该禁用（条件禁用逻辑）
+  const shouldDisableSetting = useCallback((setting) => {
+    // 恢复策略相关配置：仅在渠道间故障转移开启时可用
+    if (setting.category === 'request' &&
+        ['recovery_strategy', 'auto_wait_timeout', 'auto_wait_max_requests'].includes(setting.key)) {
+      return !getChannelFailoverEnabled();
+    }
+    return false;
+  }, [getChannelFailoverEnabled]);
+
+  // 获取禁用提示文案
+  const getDisabledReason = useCallback((setting) => {
+    if (setting.category === 'request' &&
+        ['recovery_strategy', 'auto_wait_timeout', 'auto_wait_max_requests'].includes(setting.key)) {
+      if (!getChannelFailoverEnabled()) {
+        return '需先开启渠道间故障转移';
+      }
+    }
+    return null;
+  }, [getChannelFailoverEnabled]);
 
   // 处理设置变更
   const handleSettingChange = useCallback((category, key, value) => {
@@ -565,13 +597,16 @@ const SettingsPage = () => {
             >
               {settingsByCategory[category.name]?.filter(shouldShowSetting).map(setting => {
                 const changeKey = `${setting.category}.${setting.key}`;
+                const isSettingDisabled = saving || shouldDisableSetting(setting);
+                const disabledReason = getDisabledReason(setting);
                 return (
                   <SettingItem
                     key={changeKey}
                     setting={setting}
                     value={getCurrentValue(setting)}
                     onChange={handleSettingChange}
-                    disabled={saving}
+                    disabled={isSettingDisabled}
+                    disabledReason={disabledReason}
                     hasChange={changeKey in changes}
                     onRevert={handleRevertSetting}
                   />

@@ -846,7 +846,10 @@ const ChannelCard = ({
   loading = false
 }) => {
   const scopedEndpoints = endpoints.filter(e => e._health_scope !== false);
-  const scopedHealthyCount = scopedEndpoints.filter(e => e.healthy).length;
+  // 跳过检测的端点数
+  const scopedSkippedCount = scopedEndpoints.filter(e => e.skipHealthCheck || e.skip_health_check).length;
+  // 健康统计：跳过检测的端点视为健康
+  const scopedHealthyCount = scopedEndpoints.filter(e => e.healthy || e.skipHealthCheck || e.skip_health_check).length;
   const scopedTotalCount = scopedEndpoints.length;
 
   const totalCount = endpoints.length;
@@ -885,13 +888,21 @@ const ChannelCard = ({
           ? 'bg-slate-50 text-slate-700 border-slate-200'
           : 'bg-slate-50 text-slate-500 border-slate-200';
 
+  // 健康标签颜色判断
+  // - 无端点/不在检查范围 → 灰色
+  // - 全部健康（无跳过贡献）→ 绿色
+  // - 全部健康（有跳过贡献）→ 紫色
+  // - 部分健康 → 橙色
+  // - 全部失败 → 红色
   const healthTone = !hasEndpoints || scopedTotalCount === 0
     ? 'bg-slate-50 text-slate-500 border-slate-200'
     : scopedHealthyCount === scopedTotalCount
-      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      ? scopedSkippedCount > 0
+        ? 'bg-purple-50 text-purple-700 border-purple-200'  // 全健康但有跳过 → 紫色
+        : 'bg-emerald-50 text-emerald-700 border-emerald-200'  // 全健康无跳过 → 绿色
       : scopedHealthyCount > 0
-        ? 'bg-amber-50 text-amber-800 border-amber-200'
-        : 'bg-rose-50 text-rose-700 border-rose-200';
+        ? 'bg-amber-50 text-amber-800 border-amber-200'  // 部分健康 → 橙色
+        : 'bg-rose-50 text-rose-700 border-rose-200';  // 全部失败 → 红色
 
   return (
     <div className={`
@@ -1017,7 +1028,7 @@ const ChannelCard = ({
               备用
             </span>
           )}
-          {isPaused && (
+          {isPaused && (channelFailoverEnabled || !isActive) && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
               已暂停
             </span>
