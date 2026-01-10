@@ -233,7 +233,8 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	healthURL := baseURL + m.config.Health.HealthPath
 	req, err := http.NewRequestWithContext(m.ctx, "GET", healthURL, nil)
 	if err != nil {
-		m.updateEndpointStatus(endpoint, false, 0)
+		// v6.2.10: 请求创建失败时记录错误原因
+		m.updateEndpointStatus(endpoint, false, 0, 0, fmt.Sprintf("创建请求失败: %s", err.Error()))
 		return
 	}
 
@@ -250,7 +251,8 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	responseTime := time.Since(start)
 
 	if err != nil {
-		m.updateEndpointStatus(endpoint, false, responseTime)
+		// v6.2.10: 网络错误时记录错误原因
+		m.updateEndpointStatus(endpoint, false, responseTime, 0, err.Error())
 		return
 	}
 
@@ -261,11 +263,20 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	// All other status codes (including 4xx, 5xx) are considered unhealthy
 	healthy := (resp.StatusCode >= 200 && resp.StatusCode < 300)
 
-	m.updateEndpointStatus(endpoint, healthy, responseTime)
+	// v6.2.10: 传递状态码和失败原因
+	failCode := 0
+	failReason := ""
+	if !healthy {
+		failCode = resp.StatusCode
+		failReason = fmt.Sprintf("HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+
+	m.updateEndpointStatus(endpoint, healthy, responseTime, failCode, failReason)
 }
 
 // updateEndpointStatus updates the health status of an endpoint
-func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, responseTime time.Duration) {
+// v6.2.10: 添加 failCode 和 failReason 参数用于记录失败详情
+func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, responseTime time.Duration, failCode int, failReason string) {
 	endpoint.mutex.Lock()
 
 	endpoint.Status.LastCheck = time.Now()
@@ -279,6 +290,9 @@ func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, respons
 		// Endpoint is healthy
 		endpoint.Status.Healthy = true
 		endpoint.Status.ConsecutiveFails = 0
+		// v6.2.10: 健康时清除错误信息
+		endpoint.Status.LastRequestFailCode = 0
+		endpoint.Status.LastRequestFailReason = ""
 
 		// Log recovery if endpoint was previously unhealthy
 		if wasUnhealthy {
@@ -293,10 +307,14 @@ func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, respons
 		// Mark as unhealthy immediately on any failure
 		endpoint.Status.Healthy = false
 
+		// v6.2.10: 记录失败详情
+		endpoint.Status.LastRequestFailCode = failCode
+		endpoint.Status.LastRequestFailReason = failReason
+
 		// Log the failure
 		if wasHealthy {
-			slog.Warn(fmt.Sprintf("❌ [健康检查] 端点标记为不可用: %s - 连续失败: %d次, 响应时间: %dms",
-				endpoint.Config.Name, endpoint.Status.ConsecutiveFails, responseTime.Milliseconds()))
+			slog.Warn(fmt.Sprintf("❌ [健康检查] 端点标记为不可用: %s - 连续失败: %d次, 响应时间: %dms, 状态码: %d, 原因: %s",
+				endpoint.Config.Name, endpoint.Status.ConsecutiveFails, responseTime.Milliseconds(), failCode, failReason))
 		}
 	}
 
