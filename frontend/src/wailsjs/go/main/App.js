@@ -186,6 +186,10 @@ export function IsProxyRunning() {
   return window['go']['main']['App']['IsProxyRunning']();
 }
 
+export function OpenLogDir() {
+  return window['go']['main']['App']['OpenLogDir']();
+}
+
 export function PauseGroup(arg1) {
   return window['go']['main']['App']['PauseGroup'](arg1);
 }

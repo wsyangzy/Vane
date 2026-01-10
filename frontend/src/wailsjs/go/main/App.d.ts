@@ -95,6 +95,8 @@ export function HideMainWindow():Promise<void>;
 
 export function IsProxyRunning():Promise<boolean>;
 
+export function OpenLogDir():Promise<void>;
+
 export function PauseGroup(arg1:string):Promise<void>;
 
 export function RequestQuit():Promise<void>;

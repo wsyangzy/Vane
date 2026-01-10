@@ -117,7 +117,7 @@ func (gm *GroupManager) UpdateChannelFailoverEnabled(enabled map[string]bool) {
 	}
 }
 
-// IsChannelFailoverEnabled 查询“渠道是否参与渠道间故障转移”。
+// IsChannelFailoverEnabled 查询"渠道是否参与渠道间故障转移"。
 // 默认值为 true（未配置时视为参与）。
 func (gm *GroupManager) IsChannelFailoverEnabled(channel string) bool {
 	gm.mutex.RLock()
@@ -130,6 +130,27 @@ func (gm *GroupManager) IsChannelFailoverEnabled(channel string) bool {
 		return true
 	}
 	return v
+}
+
+// SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
+// 仅更新指定渠道，不影响其他渠道的状态。
+// v6.2.5: 解决恢复一个渠道时影响其他渠道的问题。
+func (gm *GroupManager) SetSingleChannelFailoverEnabled(channel string, enabled bool) {
+	if channel == "" {
+		return
+	}
+
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+
+	// 更新映射表
+	gm.channelFailoverEnabled[channel] = enabled
+
+	// 仅更新对应组的 ManuallyPaused 状态
+	if group, ok := gm.groups[channel]; ok && group != nil {
+		group.ManuallyPaused = !enabled
+		slog.Info(fmt.Sprintf("🔄 [组管理] 渠道 [%s] 故障转移开关已设置为 %v", channel, enabled))
+	}
 }
 
 // UpdateGroups rebuilds group information from endpoints
@@ -637,6 +658,30 @@ func (gm *GroupManager) ManualPauseGroup(groupName string, duration time.Duratio
 	}
 
 	return nil
+}
+
+// ResetAllPausedGroups 重置所有渠道的暂停状态
+// 当启用渠道间转移时调用，确保所有渠道回到初始状态（显示"激活"而非"重试"）
+func (gm *GroupManager) ResetAllPausedGroups() {
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+
+	resetCount := 0
+	for name, group := range gm.groups {
+		if group == nil {
+			continue
+		}
+		if group.ManuallyPaused {
+			group.ManuallyPaused = false
+			gm.channelFailoverEnabled[name] = true
+			resetCount++
+		}
+	}
+
+	if resetCount > 0 {
+		slog.Info(fmt.Sprintf("🔄 [组管理] 已重置 %d 个渠道的暂停状态", resetCount))
+		gm.updateActiveGroups()
+	}
 }
 
 // ManualResumeGroup manually resumes a paused group

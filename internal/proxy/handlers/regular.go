@@ -83,6 +83,15 @@ func getDefaultStatusCodeForFinalStatus(finalStatus string) int {
 // HandleRegularRequestUnified 统一常规请求处理
 // 实现与StreamingHandler相同的重试循环模式，应用所有Critical修复
 func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
+	// 使用默认参数调用完整版本
+	rh.HandleRegularRequestUnifiedWithRetry(ctx, w, r, bodyBytes, lifecycleManager, nil, nil, 0)
+}
+
+// HandleRegularRequestUnifiedWithRetry 带重试状态的统一常规请求处理
+// triedChannels: 已尝试的渠道（用于跨渠道故障转移时避免回访）
+// triedEndpoints: 已尝试的端点（用于渠道内故障转移时避免回访）
+// loopCount: 当前循环重试轮数（用于限制最大循环次数）
+func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int) {
 	connID := lifecycleManager.GetRequestID()
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
@@ -92,11 +101,13 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
 
 	// 方案B：本次请求链路内"渠道间故障转移"不回访已尝试渠道，避免冷却结束后循环
-	triedChannels := make(map[string]struct{}, 4)
-
-	// v6.1+: 追踪本次请求链路内已尝试的端点（渠道内严格优先级转移）
-	// 确保即使端点从冷却恢复，也不会回退到已尝试过的端点
-	triedEndpoints := make(map[string]struct{}, 8)
+	// v6.2.8: 支持从外部传入已尝试状态（递归调用时保持状态）
+	if triedChannels == nil {
+		triedChannels = make(map[string]struct{}, 4)
+	}
+	if triedEndpoints == nil {
+		triedEndpoints = make(map[string]struct{}, 8)
+	}
 
 	// 外层循环处理组切换逻辑
 	for {
@@ -159,9 +170,10 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 						}
 					}
 
+					// v6.2.7: 使用 422 状态码，防止客户端自动重试
 					// 挂起失败或策略不支持挂起，返回错误
-					lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusServiceUnavailable)
-					http.Error(w, "No endpoints available in active groups", http.StatusServiceUnavailable)
+					lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusUnprocessableEntity)
+					http.Error(w, "No endpoints available in active groups", http.StatusUnprocessableEntity)
 					return
 				}
 			} else {
@@ -194,9 +206,10 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 					}
 				}
 
+				// v6.2.7: 使用 422 状态码，防止客户端自动重试
 				// 挂起失败或策略不支持挂起，返回错误
-				lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusServiceUnavailable)
-				http.Error(w, "No healthy endpoints available", http.StatusServiceUnavailable)
+				lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
+				http.Error(w, "No healthy endpoints available", http.StatusUnprocessableEntity)
 				return
 			}
 		}
@@ -315,10 +328,11 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 							http.Error(w, "Request cancelled during suspension", 499)
 							return
 						case SuspensionTimeout:
+							// v6.2.7: 使用 422 状态码，防止客户端自动重试
 							// 挂起等待超时，记录为失败
 							slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
-							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusBadGateway)
-							http.Error(w, "Request suspended but recovery timeout", http.StatusBadGateway)
+							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusUnprocessableEntity)
+							http.Error(w, "Request suspended but recovery timeout", http.StatusUnprocessableEntity)
 							return
 						}
 
@@ -329,6 +343,18 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				}
 
 				if !decision.RetrySameEndpoint {
+					// v6.2.9: 获取失败状态码并设置到端点，用于 UI 显示
+					failStatusCode := GetStatusCodeFromError(err, resp)
+					if failStatusCode == 0 {
+						failStatusCode = getDefaultStatusCodeForFinalStatus(decision.FinalStatus)
+					}
+					// v6.2.10: 设置端点的失败代码和原因，用于 UI 显示
+					failReason := decision.Reason
+					if err != nil && failReason == "" {
+						failReason = err.Error()
+					}
+					rh.endpointManager.SetEndpointLastRequestFail(ep.Config.Name, failStatusCode, failReason)
+
 					if decision.SwitchEndpoint {
 						// v6.2: 移除渠道内端点冷却，使用 triedEndpoints 追踪
 						nextName := ""
@@ -343,17 +369,9 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 						// 获取失败原因
 						failureReason := lifecycleManager.MapErrorTypeToFailureReason(errorCtx.ErrorType)
 
-						// 获取真实状态码，避免http.Error panic
-						statusCode := GetStatusCodeFromError(err, resp)
-
-						// 避免statusCode=0导致http.Error panic
-						if statusCode == 0 {
-							statusCode = getDefaultStatusCodeForFinalStatus(decision.FinalStatus)
-						}
-
 						// 使用新的FailRequest方法标记最终失败（修复：添加HTTP状态码）
-						lifecycleManager.FailRequest(failureReason, err.Error(), statusCode)
-						http.Error(w, decision.Reason, statusCode)
+						lifecycleManager.FailRequest(failureReason, err.Error(), failStatusCode)
+						http.Error(w, decision.Reason, failStatusCode)
 						return
 					}
 				}
@@ -471,22 +489,68 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				}
 				excludeChannels = append(excludeChannels, name)
 			}
-			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithFailedEndpointsExcludingChannels(
+
+			// v6.2.8: 使用带循环计数的故障转移方法
+			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithLoopCount(
 				failedEndpointNames,
 				excludeChannels,
 				"all_retries_exhausted",
+				loopCount,
 			)
 
 			if err == nil && newChannel != "" {
 				failedChannel := currentChannel
-				slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s",
-					connID, failedChannel, newChannel, lastEndpoint.Config.Name, len(failedEndpointNames), "all_retries_exhausted"))
+
+				// v6.2.8: 检测是否开始了新一轮循环
+				// 修复: 增加 failedChannel == newChannel 备用检查，解决 triedChannels 检查失效的 bug
+				// 当只有一个渠道时，故障转移返回的 newChannel 会与 failedChannel 相同，表示进入循环重试
+				newLoopCount := loopCount
+				_, alreadyTried := triedChannels[newChannel]
+				isSameChannel := failedChannel != "" && failedChannel == newChannel
+				if alreadyTried || isSameChannel {
+					// 开始新一轮：清空已尝试渠道和端点，增加循环计数
+					newLoopCount++
+					slog.Info(fmt.Sprintf("🔄 [循环轮次] [%s] 开始第 %d 轮循环，清空已尝试列表 (alreadyTried=%v, isSameChannel=%v)",
+						connID, newLoopCount, alreadyTried, isSameChannel))
+					// 清空已尝试的渠道和端点
+					for k := range triedChannels {
+						delete(triedChannels, k)
+					}
+					for k := range triedEndpoints {
+						delete(triedEndpoints, k)
+					}
+				}
+
+				slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s loop=%d",
+					connID, failedChannel, newChannel, lastEndpoint.Config.Name, len(failedEndpointNames), "all_retries_exhausted", newLoopCount))
+
+				// v6.2.8: 更新 loopCount 供下一轮使用
+				loopCount = newLoopCount
+
 				// 故障转移成功，重新获取端点列表继续处理
 				groupSwitchNeeded = true
 				continue
 			} else if err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v",
-					connID, lastEndpoint.Config.Name, err))
+				// v6.2.8: 故障转移失败时，根据恢复策略决定是否立即返回错误
+				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v loop=%d",
+					connID, lastEndpoint.Config.Name, err, loopCount))
+
+				// 检查是否是"没有可用渠道"或"达到最大循环轮数"的错误
+				// 这些情况下不应该继续挂起等待，应该直接返回错误
+				errStr := err.Error()
+				isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
+					strings.Contains(errStr, "已达到最大循环轮数")
+
+				if isNoChannelsError {
+					// 所有渠道都不可用或已达最大循环轮数，直接返回错误
+					// v6.2.7: 使用 422 而非 503，防止 Claude Code 客户端自动重试
+					statusCode := http.StatusUnprocessableEntity
+					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
+					slog.Error(fmt.Sprintf("❌ [所有渠道不可用] [%s] %s", connID, errStr))
+					http.Error(w, fmt.Sprintf("所有渠道均不可用: %s", errStr), statusCode)
+					return
+				}
 			}
 		}
 
@@ -543,7 +607,8 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 				lifecycleManager.SetEndpoint(firstEndpoint.Config.Name, firstRouteGroup, firstEndpoint.Config.Channel)
 
 				// 重新获取健康端点并重新尝试（递归调用）
-				rh.HandleRegularRequestUnified(ctx, w, r, bodyBytes, lifecycleManager)
+				// v6.2.8: 挂起恢复后，清空已尝试列表但保持循环计数
+				rh.HandleRegularRequestUnifiedWithRetry(ctx, w, r, bodyBytes, lifecycleManager, nil, nil, loopCount)
 				return
 			}
 		case SuspensionCancelled:
@@ -561,9 +626,9 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理
-	// 所有端点都失败了，使用FailRequest方法标记最终失败（修复：添加HTTP状态码）
-	lifecycleManager.FailRequest("endpoint_exhausted", "All endpoints failed", http.StatusBadGateway)
-	http.Error(w, "All endpoints failed", http.StatusBadGateway)
+	// v6.2.7: 所有端点都耗尽时，使用 422 状态码，防止客户端自动重试
+	lifecycleManager.FailRequest("endpoint_exhausted", "All endpoints failed", http.StatusUnprocessableEntity)
+	http.Error(w, "All endpoints failed", http.StatusUnprocessableEntity)
 }
 
 // executeRequest 执行单个请求
@@ -713,18 +778,19 @@ func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.Respo
 	finalResp, lastErr := rh.retryHandler.ExecuteWithContext(ctx, operation, connID)
 
 	if lastErr != nil {
+		// v6.2.7: 使用 422 状态码，防止客户端自动重试
 		// Check if the error is due to no healthy endpoints
 		if strings.Contains(lastErr.Error(), "no healthy endpoints") {
-			http.Error(w, "Service Unavailable: No healthy endpoints available", http.StatusServiceUnavailable)
+			http.Error(w, "Service Unavailable: No healthy endpoints available", http.StatusUnprocessableEntity)
 		} else {
 			// If all retries failed, return error
-			http.Error(w, "All endpoints failed: "+lastErr.Error(), http.StatusBadGateway)
+			http.Error(w, "All endpoints failed: "+lastErr.Error(), http.StatusUnprocessableEntity)
 		}
 		return
 	}
 
 	if finalResp == nil {
-		http.Error(w, "No response received from any endpoint", http.StatusBadGateway)
+		http.Error(w, "No response received from any endpoint", http.StatusUnprocessableEntity)
 		return
 	}
 

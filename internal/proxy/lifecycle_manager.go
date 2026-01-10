@@ -841,10 +841,9 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 // IncrementAttempt 线程安全地增加尝试计数
 // 🎯 [SRP重构] 委托给 stateManager
 // 用于统一重试计数语义，每次端点切换或重试时调用
+// v6.2.9: 移除高频 DEBUG 日志，避免循环重试时日志膨胀
 func (rlm *RequestLifecycleManager) IncrementAttempt() int {
-	newCount := rlm.stateManager.IncrementAttempt()
-	slog.Debug(fmt.Sprintf("🔢 [尝试计数] [%s] 当前尝试次数: %d", rlm.stateManager.GetRequestID(), newCount))
-	return newCount
+	return rlm.stateManager.IncrementAttempt()
 }
 
 // GetAttemptCount 线程安全地获取当前尝试次数

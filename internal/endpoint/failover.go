@@ -162,6 +162,16 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 		return "", fmt.Errorf("配置未初始化")
 	}
 
+	// v6.2.7: 在函数开头检查 loopCount 限制，防止绕过
+	// 当启用循环重试且 loopCount > 0 时，说明已经进入循环重试模式
+	if m.config.FailoverV2.ShouldLoopRetryOnExhausted() && loopCount > 0 {
+		maxLoops := m.config.FailoverV2.GetMaxLoops()
+		if maxLoops > 0 && loopCount >= maxLoops {
+			slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
+			return "", fmt.Errorf("已达到最大循环轮数 (%d)，所有渠道均不可用", maxLoops)
+		}
+	}
+
 	exclude := make(map[string]struct{}, len(excludeChannels))
 	for _, name := range excludeChannels {
 		if name == "" {
@@ -182,10 +192,11 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 			}
 
 			// 循环重试策略：当"所有渠道都尝试过"时，允许回到最高优先级渠道继续尝试
-			// v6.2: 冷却机制已移除，直接重新收集候选
+			// v6.2.7: 循环重试时，重置所有端点健康状态，允许重新选择
+			m.resetAllEndpointsHealthForLoopRetry()
 			candidates = m.collectFailoverCandidatesExcluding(nil)
 			if len(candidates) == 0 {
-				return "", fmt.Errorf("没有可用的故障转移渠道")
+				return "", fmt.Errorf("没有可用的故障转移渠道（无活跃端点）")
 			}
 			sortFailoverCandidates("priority", candidates)
 			slog.Warn(fmt.Sprintf("🔄 [循环重试] 已尝试所有渠道，开始第 %d 轮重试，回到最高优先级渠道: %s", loopCount+1, candidates[0].name))
@@ -289,6 +300,9 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 	}
 
 	// 2) v6.2: 冷却机制已移除，标记失败端点为不健康
+	// v6.2.6: 同时设置 NeverChecked = false，防止 neverChecked 端点被误认为"可用"而导致无限循环
+	// v6.2.9: 合并日志输出，避免循环重试时日志膨胀
+	var markedEndpoints []string
 	for _, name := range uniqueNames {
 		ep := m.GetEndpointByNameAny(name)
 		if ep == nil {
@@ -296,8 +310,12 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		}
 		ep.mutex.Lock()
 		ep.Status.Healthy = false
+		ep.Status.NeverChecked = false // 关键修复：防止 neverChecked 端点在故障转移候选中被误判为可用
 		ep.mutex.Unlock()
-		slog.Info(fmt.Sprintf("❌ [渠道间故障转移] 端点标记为不健康: %s", name))
+		markedEndpoints = append(markedEndpoints, name)
+	}
+	if len(markedEndpoints) > 0 {
+		slog.Info(fmt.Sprintf("❌ [渠道间故障转移] 端点标记为不健康: %v (共%d个)", markedEndpoints, len(markedEndpoints)))
 	}
 
 	// 3) 选择并激活下一个可用渠道（由 strategy + 可用性共同决定）
@@ -344,3 +362,47 @@ func (m *Manager) TriggerRequestFailover(failedEndpointName string, reason strin
 // - ClearEndpointCooldown
 // - GetEndpointCooldownInfo
 // 失败渠道通过手动"重试"按钮重新激活
+
+// resetAllEndpointsHealthForLoopRetry 循环重试时重置所有端点健康状态
+// v6.2.7: 循环重试策略下，允许对已失败的端点进行重新尝试
+// v6.2.10: 移除智能重置逻辑，统一重置所有端点（用户可通过 UI 查看失败原因）
+func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
+	if m == nil || m.groupManager == nil {
+		return
+	}
+
+	resetCount := 0
+
+	for _, g := range m.groupManager.GetAllGroups() {
+		if g == nil || g.ManuallyPaused {
+			continue
+		}
+		for _, ep := range g.Endpoints {
+			if ep == nil {
+				continue
+			}
+
+			// 检查 failover_enabled
+			failoverEnabled := true
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			if !failoverEnabled {
+				continue
+			}
+
+			ep.mutex.Lock()
+			if !ep.Status.Healthy {
+				ep.Status.Healthy = true
+				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
+				// 注意：不清除 LastRequestFailCode 和 LastRequestFailReason，保留给 UI 显示
+				resetCount++
+			}
+			ep.mutex.Unlock()
+		}
+	}
+
+	if resetCount > 0 {
+		slog.Info(fmt.Sprintf("🔄 [循环重试] 已重置 %d 个端点健康状态，准备新一轮尝试", resetCount))
+	}
+}

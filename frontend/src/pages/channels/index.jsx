@@ -612,6 +612,36 @@ const EndpointDetailModal = ({
             ))}
           </div>
 
+          {/* v6.2.10: 异常详情显示 - 有错误信息时显示 */}
+          {((endpoint.last_fail_code > 0) || endpoint.last_fail_reason) && (
+            <div className="mt-4">
+              <div className="bg-rose-50 rounded-xl p-4 border border-rose-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <XCircle size={16} className="text-rose-600" />
+                  <div className="text-sm font-medium text-rose-800">异常详情</div>
+                </div>
+                <div className="space-y-2 text-sm">
+                  {endpoint.last_fail_code > 0 && (
+                    <div className="flex items-start gap-2">
+                      <span className="text-rose-600 font-medium min-w-[70px]">状态码:</span>
+                      <span className="font-mono text-rose-900 bg-rose-100 px-2 py-0.5 rounded">
+                        {endpoint.last_fail_code}
+                      </span>
+                    </div>
+                  )}
+                  {endpoint.last_fail_reason && (
+                    <div className="flex items-start gap-2">
+                      <span className="text-rose-600 font-medium min-w-[70px]">失败原因:</span>
+                      <span className="text-rose-900 break-all">
+                        {endpoint.last_fail_reason}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* v6.2: 冷却时间显示已移除（loop_retry 模式下与循环重试逻辑冲突） */}
           <div className="mt-4">
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
@@ -936,33 +966,21 @@ const ChannelCard = ({
 
           {/* 渠道操作 */}
           <div className="flex items-center gap-2 flex-shrink-0">
-          {/* v6.2: 非激活渠道根据暂停状态显示"重试"或"激活" */}
+          {/* v6.2.5: 非激活渠道按钮逻辑
+              - 开启渠道间转移 + 渠道已暂停：显示"激活"（仅激活，需先点恢复）
+              - 其他情况：显示"激活"
+          */}
           {!isActive && isSqliteMode && hasEndpoints && (
-            isPaused ? (
-              <Button
-                size="sm"
-                icon={RefreshCw}
-                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
-                onClick={() => {
-                  onResume?.(channelName);
-                  onActivate?.(channelName);
-                }}
-                disabled={loading}
-                title="恢复暂停的渠道并激活"
-              >
-                重试
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                icon={Power}
-                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
-                onClick={() => onActivate?.(channelName)}
-                disabled={loading}
-              >
-                激活
-              </Button>
-            )
+            <Button
+              size="sm"
+              icon={Power}
+              className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
+              onClick={() => onActivate?.(channelName)}
+              disabled={loading || (channelFailoverEnabled && isPaused)}
+              title={channelFailoverEnabled && isPaused ? '请先点击"恢复"按钮取消暂停状态' : '激活此渠道'}
+            >
+              激活
+            </Button>
           )}
           {isActive && isSqliteMode && (
             isAllEndpointsFailed ? (
@@ -988,17 +1006,30 @@ const ChannelCard = ({
               </Button>
             )
           )}
-          {/* v6.2: 只在激活渠道显示暂停按钮，非激活渠道的恢复已整合到"重试"按钮 */}
-          {hasGroupInfo && isActive && !isPaused && (
+          {/* v6.2.5: 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
+          {channelFailoverEnabled && hasGroupInfo && !isPaused && (
             <Button
               size="sm"
               variant="ghost"
               icon={Pause}
               onClick={() => onPause?.(channelName)}
-              disabled={pauseDisabled}
-              title={!channelFailoverEnabled ? '已关闭渠道间故障转移：不可暂停渠道' : undefined}
+              disabled={loading}
+              title="暂停此渠道，使其不参与渠道间转移"
             >
               暂停
+            </Button>
+          )}
+          {/* 恢复按钮仅在非活跃且已暂停时显示（活跃渠道一定是未暂停的） */}
+          {channelFailoverEnabled && hasGroupInfo && isPaused && !isActive && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={Play}
+              onClick={() => onResume?.(channelName)}
+              disabled={loading}
+              title="恢复此渠道，使其重新参与渠道间转移"
+            >
+              恢复
             </Button>
           )}
           {isSqliteMode && (
@@ -1049,7 +1080,7 @@ const ChannelCard = ({
               备用
             </span>
           )}
-          {isPaused && (channelFailoverEnabled || !isActive) && (
+          {isPaused && channelFailoverEnabled && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
               已暂停
             </span>
@@ -1417,13 +1448,18 @@ const ChannelsPage = () => {
   // 渠道卡片“显示全部/收起”：只允许展开一个渠道，避免同一行两列联动展开导致误触
   const [expandedChannelName, setExpandedChannelName] = useState('');
 
-  // 点击渠道卡片外部区域时自动收起
+  // 点击渠道卡片外部区域时自动收起（排除弹窗区域）
   useEffect(() => {
     if (!expandedChannelName) return;
     if (typeof document === 'undefined') return;
 
     const onPointerDown = (event) => {
       const target = event?.target;
+
+      // 如果点击在弹窗内（固定定位的遮罩层或其内部），不收缩渠道
+      const inModal = target?.closest?.('.fixed.inset-0');
+      if (inModal) return;
+
       const card = target?.closest?.('[data-channel-card]');
       const clickedChannelName = card?.getAttribute?.('data-channel-card') || '';
       if (clickedChannelName !== expandedChannelName) {
@@ -1565,11 +1601,30 @@ const ChannelsPage = () => {
   const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
   const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
 
+  // v6.2.4: 计算检测范围内的渠道数
+  const scopedChannelCount = useMemo(() => {
+    if (!channelFailoverEnabled) {
+      // 关闭渠道间转移：仅活跃渠道
+      return activeChannel ? 1 : 0;
+    }
+    // 开启渠道间转移：参与的渠道数（非暂停）
+    return channelSections.filter(section => {
+      const gi = groupInfoMap.get(section.name);
+      return !gi?.paused;
+    }).length;
+  }, [channelFailoverEnabled, activeChannel, channelSections, groupInfoMap]);
+
+  // 检测范围内的端点数
+  const scopedEndpointCount = useMemo(() => {
+    return scopedDisplayEndpoints.filter(e => e._health_scope).length;
+  }, [scopedDisplayEndpoints]);
+
   const displayStats = isSqliteMode
     ? {
         total: scopedDisplayEndpoints.length,
         skipped: scopedDisplayEndpoints.filter(e => e._health_scope && isSkippedEndpoint(e)).length,
-        healthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length,
+        // v6.2.5: 健康端点包含跳过检测的端点（与概览页面一致）
+        healthy: scopedDisplayEndpoints.filter(e => e._health_scope && (isSkippedEndpoint(e) || (e.healthy && !isNeverCheckedEndpoint(e)))).length,
         unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !e.healthy && hasLastCheck(e) && !isNeverCheckedEndpoint(e)).length,
         unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || (!isSkippedEndpoint(e) && isNeverCheckedEndpoint(e))).length,
         healthPercentage: (scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) > 0
@@ -1824,7 +1879,7 @@ const ChannelsPage = () => {
             </div>
             <div className="text-sm text-purple-700 mt-0.5">
               当前所有端点均处于不可用状态，请求已挂起等待端点恢复。
-              您可以手动点击「重试」按钮重新激活已暂停的渠道。
+              您可以手动点击「恢复」按钮取消暂停状态，再激活渠道。
             </div>
           </div>
         </div>
@@ -1832,21 +1887,23 @@ const ChannelsPage = () => {
 
       {/* 统计卡片 */}
       <div className="grid grid-cols-6 gap-4 mb-6">
+        {/* v6.2.4: 检测范围统计 */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-slate-900">{channelSections.length}</div>
-          <div className="text-sm text-slate-500">总渠道数</div>
+          <div className="text-2xl font-bold text-slate-900">
+            {scopedChannelCount}
+            <span className="text-sm font-normal text-slate-400 ml-1">/ {channelSections.length}</span>
+          </div>
+          <div className="text-sm text-slate-500">
+            {channelFailoverEnabled ? '参与渠道' : '活跃渠道'}
+          </div>
         </div>
         <div className="bg-white rounded-xl border border-indigo-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-indigo-600">
-            {activeChannel ? 1 : 0}
+            {scopedEndpointCount}
+            <span className="text-sm font-normal text-slate-400 ml-1">/ {scopedDisplayEndpoints.length}</span>
           </div>
           <div className="text-sm text-slate-500">
-            当前激活
-            {activeChannel && (
-              <div className="text-xs text-indigo-500 mt-1 truncate">
-                {activeChannel}
-              </div>
-            )}
+            参与端点
           </div>
         </div>
         <div className="bg-white rounded-xl border border-emerald-200/60 p-4 shadow-sm">
@@ -1861,12 +1918,46 @@ const ChannelsPage = () => {
           <div className="text-2xl font-bold text-rose-600">{displayStats.unhealthy}</div>
           <div className="text-sm text-slate-500">异常端点</div>
         </div>
-        {/* v6.2: 冷却机制已移除 */}
+        {/* v6.2.5: 未参与端点（failoverEnabled=false 或 不在检测范围内） */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-400">{displayStats.unchecked}</div>
-          <div className="text-sm text-slate-500">未检测端点</div>
+          <div className="text-sm text-slate-500">未参与端点</div>
         </div>
       </div>
+
+      {/* v6.2.5: 全部端点失败警示 - 当参与检测的渠道中所有端点都不可用时显示 */}
+      {scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
+        <div className="mb-6 p-4 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-rose-100 rounded-full flex-shrink-0">
+            <AlertTriangle className="w-5 h-5 text-rose-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-rose-900">
+              所有端点均处于不可用状态
+            </div>
+            <div className="text-sm text-rose-700 mt-1">
+              {channelFailoverEnabled
+                ? `当前 ${scopedChannelCount} 个参与渠道共 ${scopedEndpointCount} 个端点全部异常，请求将根据恢复策略处理（快速失败/循环重试/智能等待）。`
+                : `活跃渠道的 ${scopedEndpointCount} 个端点全部异常，请求将立即失败。`
+              }
+            </div>
+            <div className="flex items-center gap-3 mt-3 text-[11px]">
+              <span className="text-slate-500">建议操作：</span>
+              <span className="px-2 py-0.5 bg-white border border-rose-200 rounded text-rose-600">
+                检查端点配置和网络连接
+              </span>
+              <span className="text-slate-400">或</span>
+              <span className="px-2 py-0.5 bg-white border border-indigo-200 rounded text-indigo-600">
+                恢复已暂停的渠道
+              </span>
+              <span className="text-slate-400">或</span>
+              <span className="px-2 py-0.5 bg-white border border-emerald-200 rounded text-emerald-600">
+                添加新的端点/渠道
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 渠道分块列表 */}
       {channelSections.length === 0 ? (

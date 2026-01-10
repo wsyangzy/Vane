@@ -292,8 +292,8 @@ export namespace main {
 	export class EndpointHealthData {
 	    healthy: number;
 	    unhealthy: number;
-	    unchecked: number;
 	    skipped: number;
+	    excluded: number;
 	    total: number;
 	
 	    static createFrom(source: any = {}) {
@@ -304,8 +304,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.healthy = source["healthy"];
 	        this.unhealthy = source["unhealthy"];
-	        this.unchecked = source["unchecked"];
 	        this.skipped = source["skipped"];
+	        this.excluded = source["excluded"];
 	        this.total = source["total"];
 	    }
 	}
@@ -323,6 +323,8 @@ export namespace main {
 	    last_check: string;
 	    response_time_ms: number;
 	    consecutive_fail: number;
+	    last_fail_code: number;
+	    last_fail_reason: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EndpointInfo(source);
@@ -343,6 +345,8 @@ export namespace main {
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
 	        this.consecutive_fail = source["consecutive_fail"];
+	        this.last_fail_code = source["last_fail_code"];
+	        this.last_fail_reason = source["last_fail_reason"];
 	    }
 	}
 	export class KeyInfo {
@@ -430,6 +434,8 @@ export namespace main {
 	    never_checked: boolean;
 	    last_check: string;
 	    response_time_ms: number;
+	    last_fail_code: number;
+	    last_fail_reason: string;
 	    in_cooldown: boolean;
 	    cooldown_until: string;
 	    cooldown_reason: string;
@@ -468,6 +474,8 @@ export namespace main {
 	        this.never_checked = source["never_checked"];
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
+	        this.last_fail_code = source["last_fail_code"];
+	        this.last_fail_reason = source["last_fail_reason"];
 	        this.in_cooldown = source["in_cooldown"];
 	        this.cooldown_until = source["cooldown_until"];
 	        this.cooldown_reason = source["cooldown_reason"];

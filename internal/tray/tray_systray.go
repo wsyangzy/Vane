@@ -67,6 +67,8 @@ func (c *systrayController) onReady() {
 	mShow := systray.AddMenuItem("显示主窗口", "显示应用主窗口")
 	systray.SetDefaultMenuItem(mShow)
 	systray.AddSeparator()
+	mOpenLogDir := systray.AddMenuItem("打开日志目录", "在资源管理器中打开日志文件目录")
+	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("退出", "退出应用")
 
 	go func() {
@@ -77,6 +79,10 @@ func (c *systrayController) onReady() {
 			case <-mShow.ClickedCh:
 				if c.opts.OnShow != nil {
 					c.opts.OnShow()
+				}
+			case <-mOpenLogDir.ClickedCh:
+				if c.opts.OnOpenLogDir != nil {
+					c.opts.OnOpenLogDir()
 				}
 			case <-mQuit.ClickedCh:
 				if c.opts.OnQuit != nil {

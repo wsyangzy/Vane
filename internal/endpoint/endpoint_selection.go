@@ -414,9 +414,9 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 	var healthy []*Endpoint
 	for _, endpoint := range activeEndpoints {
 		// 检查是否在排除列表中
+		// v6.2.9: 移除高频 DEBUG 日志，避免循环重试时日志膨胀
 		epKey := EndpointKey(endpoint.Config.Channel, endpoint.Config.Name)
 		if _, excluded := excludeSet[epKey]; excluded {
-			slog.Debug(fmt.Sprintf("⏭️ [端点选择] 跳过已尝试的端点: %s", endpoint.Config.Name))
 			continue
 		}
 

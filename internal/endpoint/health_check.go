@@ -396,23 +396,84 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 	return nil
 }
 
-// BatchHealthCheckAll 批量检测所有端点的健康状态
-// 并发执行所有端点的健康检查，提高效率
-// 使用信号量限制并发数量，避免资源耗尽
+// BatchHealthCheckAll 批量检测端点的健康状态
+// 检测范围与定时健康检查一致：
+// - 开启渠道间转移时：检测所有参与的渠道中所有参与转移的端点
+// - 关闭渠道间转移时：仅检测活跃渠道中参与转移的端点
+// 并发执行检查，使用信号量限制并发数量
 func (m *Manager) BatchHealthCheckAll() (int, int, error) {
-	slog.Info("🔍 [批量健康检测] 开始检测所有端点")
+	slog.Info("🔍 [批量健康检测] 开始检测端点")
 
 	// v5.0+: 使用快照机制获取端点列表
 	m.endpointsMu.RLock()
-	endpoints := make([]*Endpoint, len(m.endpoints))
-	copy(endpoints, m.endpoints)
+	snapshot := make([]*Endpoint, len(m.endpoints))
+	copy(snapshot, m.endpoints)
 	m.endpointsMu.RUnlock()
 
-	if len(endpoints) == 0 {
+	if len(snapshot) == 0 {
 		return 0, 0, fmt.Errorf("没有配置任何端点")
 	}
 
-	slog.Info(fmt.Sprintf("   共有 %d 个端点需要检测", len(endpoints)))
+	// 根据渠道间故障转移状态筛选需要检测的端点
+	var endpointsToCheck []*Endpoint
+
+	if m.config.Failover.Enabled {
+		// 开启渠道间转移：检测所有参与的渠道中参与转移的端点
+		for _, ep := range snapshot {
+			if ep == nil {
+				continue
+			}
+			// 渠道级开关：暂停渠道不检测
+			if m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+				continue
+			}
+			// 端点级开关：不参与故障转移的端点不检测
+			failoverEnabled := true
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			if !failoverEnabled {
+				continue
+			}
+			endpointsToCheck = append(endpointsToCheck, ep)
+		}
+		channelSet := make(map[string]struct{}, len(endpointsToCheck))
+		for _, ep := range endpointsToCheck {
+			if key := ChannelKey(ep); key != "" {
+				channelSet[key] = struct{}{}
+			}
+		}
+		slog.Info(fmt.Sprintf("🔍 [批量健康检测] 渠道间转移模式：检测 %d 个渠道（%d 个端点）",
+			len(channelSet), len(endpointsToCheck)))
+	} else {
+		// 关闭渠道间转移：仅检测活跃渠道中参与转移的端点
+		active := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
+		for _, ep := range active {
+			if ep == nil {
+				continue
+			}
+			failoverEnabled := true
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			if !failoverEnabled {
+				continue
+			}
+			endpointsToCheck = append(endpointsToCheck, ep)
+		}
+		channelSet := make(map[string]struct{}, len(endpointsToCheck))
+		for _, ep := range endpointsToCheck {
+			if key := ChannelKey(ep); key != "" {
+				channelSet[key] = struct{}{}
+			}
+		}
+		slog.Info(fmt.Sprintf("🔍 [批量健康检测] 单渠道模式：检测 %d 个活跃渠道（%d 个端点）",
+			len(channelSet), len(endpointsToCheck)))
+	}
+
+	if len(endpointsToCheck) == 0 {
+		return 0, 0, fmt.Errorf("没有符合条件的端点需要检测")
+	}
 
 	// 使用信号量限制并发数量（最多 20 个并发）
 	const maxConcurrentChecks = 20
@@ -423,7 +484,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	var healthyCount, unhealthyCount int
 	var countMu sync.Mutex
 
-	for _, endpoint := range endpoints {
+	for _, endpoint := range endpointsToCheck {
 		wg.Add(1)
 		semaphore <- struct{}{} // 获取信号量
 
@@ -466,7 +527,12 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	wg.Wait()
 
 	slog.Info(fmt.Sprintf("✅ [批量健康检测] 完成，共检测 %d 个端点 (健康: %d, 不健康: %d)",
-		len(endpoints), healthyCount, unhealthyCount))
+		len(endpointsToCheck), healthyCount, unhealthyCount))
+
+	// 触发健康检查完成回调（通知前端更新）
+	if m.onHealthCheckComplete != nil {
+		go m.onHealthCheckComplete()
+	}
 
 	return healthyCount, unhealthyCount, nil
 }

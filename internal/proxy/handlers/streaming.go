@@ -79,6 +79,25 @@ func sendAnthropicRetryableError(w http.ResponseWriter, flusher http.Flusher, me
 	flusher.Flush()
 }
 
+// terminateSSEStreamWithError 正确终止 SSE 流，确保客户端不会自动重连
+// v6.2.6: 修复客户端无限重连问题 - 发送完整的 SSE 结束序列
+func terminateSSEStreamWithError(w http.ResponseWriter, flusher http.Flusher, errorMsg string) {
+	// 1. 发送错误数据
+	fmt.Fprintf(w, "data: error: %s\n\n", errorMsg)
+	flusher.Flush()
+
+	// 2. 发送 Anthropic 格式的 error 事件（让客户端识别为 API 错误而非连接中断）
+	fmt.Fprintf(w, "event: error\n")
+	fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"%s\"}}\n\n",
+		escapeJSONString(errorMsg))
+	flusher.Flush()
+
+	// 3. 发送 message_stop 事件（关键！明确告知客户端流已正常结束）
+	fmt.Fprintf(w, "event: message_stop\n")
+	fmt.Fprintf(w, "data: {\"type\":\"message_stop\"}\n\n")
+	flusher.Flush()
+}
+
 // sendStreamInterruptedMessage 发送流中断消息，触发客户端自动重试
 // 模拟上游代理的行为：当 EOF 发生时，发送一个完整的新消息（第二个 message_start）
 // Claude Code 会识别这种模式并自动重试请求
@@ -191,6 +210,16 @@ func (sh *StreamingHandler) setStreamingHeaders(w http.ResponseWriter) {
 // loopCount: v6.2 当前循环轮数（用于 MaxLoops 限制）
 func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int) {
 	connID := lifecycleManager.GetRequestID()
+
+	// v6.2.7: 在函数开头检查 context 是否已取消（客户端断开连接）
+	select {
+	case <-ctx.Done():
+		slog.Info(fmt.Sprintf("🚫 [客户端断开] [%s] 检测到客户端已断开连接，停止重试 (loopCount=%d)", connID, loopCount))
+		lifecycleManager.CancelRequest("client disconnected", nil)
+		return
+	default:
+	}
+
 	var lastFailedEndpoint string // 🚀 [端点自愈] 追踪最后失败的端点
 
 	// v6.1+: 获取健康端点，排除已尝试的端点（实现严格优先级转移）
@@ -237,20 +266,23 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				// 真的没有端点
 				lifecycleManager.HandleError(noHealthyErr)
 				// 🔧 [修复] 2025-12-11: 所有端点不可用时必须终结请求
-				lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusServiceUnavailable)
-				w.WriteHeader(http.StatusServiceUnavailable)
-				fmt.Fprintf(w, "data: error: No endpoints available in active groups\n\n")
-				flusher.Flush()
+				// v6.2.7: 使用 422 (Unprocessable Entity) 而非 503，防止 Claude Code 客户端自动重试
+				// 503 表示"服务暂时不可用"，客户端会自动重试；422 表示"无法处理请求"，客户端不会重试
+				lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusUnprocessableEntity)
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+				terminateSSEStreamWithError(w, flusher, "No endpoints available in active groups")
 				return
 			}
 		} else {
 			// 按原来逻辑处理
 			lifecycleManager.HandleError(noHealthyErr)
 			// 🔧 [修复] 2025-12-11: 所有端点不可用时必须终结请求
-			lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusServiceUnavailable)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "data: error: No healthy endpoints available\n\n")
-			flusher.Flush()
+			// v6.2.7: 使用 422 (Unprocessable Entity) 而非 503，防止 Claude Code 客户端自动重试
+			lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+			terminateSSEStreamWithError(w, flusher, "No healthy endpoints available")
 			return
 		}
 	}
@@ -373,8 +405,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						if lifecycleManager.HasOutputContent() {
 							lifecycleManager.RecordTokensForFailedRequest(finalTokenUsage, failureReason)
 							lifecycleManager.FailRequest(failureReason, err.Error(), http.StatusBadGateway)
-							fmt.Fprintf(w, "data: error: 流式响应中断，已发送部分内容，停止重试避免重复计费\n\n")
-							flusher.Flush()
+							// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+							terminateSSEStreamWithError(w, flusher, "流式响应中断，已发送部分内容，停止重试避免重复计费")
 							return
 						}
 
@@ -468,8 +500,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						slog.Info(fmt.Sprintf("🔄 [EOF重试提示] [%s] 流式传输中断，发送中断消息触发客户端重试, 模型: %s", connID, interruptModelName))
 						sendStreamInterruptedMessage(w, flusher, "Connection interrupted", interruptModelName)
 					} else {
-						fmt.Fprintf(w, "data: error: 流式处理失败: %v\n\n", err)
-						flusher.Flush()
+						// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+						terminateSSEStreamWithError(w, flusher, fmt.Sprintf("流式处理失败: %v", err))
 					}
 					return
 				}
@@ -571,8 +603,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 								slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 端点恢复成功但已发送内容，禁止重试", connID))
 								lifecycleManager.FailRequest("output_sent_no_retry",
 									"Cannot retry after sending partial output to client", http.StatusBadGateway)
-								fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
-								flusher.Flush()
+								// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+								terminateSSEStreamWithError(w, flusher, "已发送部分内容，无法重试")
 								return
 							}
 
@@ -586,10 +618,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						} else {
 							slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 已达最大重启次数 (%d)，终止请求",
 								connID, lifecycleManager.GetMaxRestarts()))
+							// v6.2.7: 使用 422 而非 503，防止 Claude Code 客户端自动重试
 							lifecycleManager.FailRequest("max_restarts_exceeded",
-								"Exceeded maximum restart attempts", http.StatusServiceUnavailable)
-							fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
-							flusher.Flush()
+								"Exceeded maximum restart attempts", http.StatusUnprocessableEntity)
+							// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+							terminateSSEStreamWithError(w, flusher, "已达最大重启次数，请求终止")
 							return
 						}
 					case SuspensionCancelled:
@@ -606,14 +639,35 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						currentAttemptCount := lifecycleManager.GetAttemptCount()
 						lifecycleManager.UpdateStatus("error", currentAttemptCount, http.StatusBadGateway)
 						slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
-						fmt.Fprintf(w, "data: error: 挂起等待超时\n\n")
-						flusher.Flush()
+						// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+						terminateSSEStreamWithError(w, flusher, "挂起等待超时")
 						return
 					}
 				}
 			}
 
 			if !decision.RetrySameEndpoint {
+				// v6.2.9: 获取失败状态码并设置到端点，用于 UI 显示
+				failStatusCode := GetStatusCodeFromError(lastErr, lastResp)
+				if failStatusCode == 0 {
+					switch decision.FinalStatus {
+					case "cancelled":
+						failStatusCode = 499
+					case "auth_error":
+						failStatusCode = http.StatusUnauthorized
+					case "rate_limited":
+						failStatusCode = http.StatusTooManyRequests
+					default:
+						failStatusCode = http.StatusBadGateway
+					}
+				}
+				// v6.2.10: 设置端点的失败代码和原因，用于 UI 显示
+				failReason := decision.Reason
+				if lastErr != nil && failReason == "" {
+					failReason = lastErr.Error()
+				}
+				sh.endpointManager.SetEndpointLastRequestFail(ep.Config.Name, failStatusCode, failReason)
+
 				if decision.SwitchEndpoint {
 					// v6.2: 移除渠道内端点冷却，使用 triedEndpoints 追踪
 					slog.Info(fmt.Sprintf("🔀 [切换端点] [%s] channel=%s endpoint=%s reason=%s",
@@ -624,32 +678,15 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 获取失败原因
 					failureReason := lifecycleManager.MapErrorTypeToFailureReason(errorCtx.ErrorType)
 
-					// 使用GetStatusCodeFromError获取真实的HTTP状态码
-					statusCode := GetStatusCodeFromError(lastErr, lastResp)
-
-					// 如果无法获取状态码，使用合理的默认值
-					if statusCode == 0 {
-						switch decision.FinalStatus {
-						case "cancelled":
-							statusCode = 499 // nginx风格的客户端取消码
-						case "auth_error":
-							statusCode = http.StatusUnauthorized
-						case "rate_limited":
-							statusCode = http.StatusTooManyRequests
-						default:
-							statusCode = http.StatusBadGateway
-						}
-					}
-
-					// 使用新的FailRequest方法标记最终失败（修复：使用计算好的statusCode而非lastResp.StatusCode）
+					// 使用新的FailRequest方法标记最终失败
 					// v6.2: 移除流式终态错误时的端点冷却，使用 triedEndpoints 追踪
-					lifecycleManager.FailRequest(failureReason, lastErr.Error(), statusCode)
+					lifecycleManager.FailRequest(failureReason, lastErr.Error(), failStatusCode)
 
 					// 终止重试
 					slog.Info(fmt.Sprintf("🛑 [终止重试] [%s] 端点: %s, 状态: %s, 状态码: %d, 原因: %s",
-						connID, ep.Config.Name, decision.FinalStatus, statusCode, decision.Reason))
-					fmt.Fprintf(w, "data: error: %s\n\n", decision.Reason)
-					flusher.Flush()
+						connID, ep.Config.Name, decision.FinalStatus, failStatusCode, decision.Reason))
+					// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+					terminateSSEStreamWithError(w, flusher, decision.Reason)
 					return
 				}
 			}
@@ -729,8 +766,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						}
 					}
 					lifecycleManager.FailRequest(failureReason, lastDecision.Reason, statusCode)
-					fmt.Fprintf(w, "data: error: %s\n\n", lastDecision.Reason)
-					flusher.Flush()
+					// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+					terminateSSEStreamWithError(w, flusher, lastDecision.Reason)
 					return
 				}
 			}
@@ -905,12 +942,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				}
 			}
 
-			// v6.2: 检测是否开始了新一轮循环（新渠道在之前已尝试过）
+			// v6.2.8: 检测是否开始了新一轮循环
+			// 修复: 增加 failedChannel == newChannel 备用检查，解决 triedChannels 检查失效的 bug
+			// 当只有一个渠道时，故障转移返回的 newChannel 会与 failedChannel 相同，表示进入循环重试
 			newLoopCount := loopCount
-			if _, alreadyTried := triedChannels[newChannel]; alreadyTried {
+			_, alreadyTried := triedChannels[newChannel]
+			isSameChannel := failedChannel != "" && failedChannel == newChannel
+			if alreadyTried || isSameChannel {
 				// 开始新一轮：清空已尝试渠道和端点，增加循环计数
 				newLoopCount++
-				slog.Info(fmt.Sprintf("🔄 [循环轮次] [%s] 开始第 %d 轮循环，清空已尝试列表", connID, newLoopCount))
+				slog.Info(fmt.Sprintf("🔄 [循环轮次] [%s] 开始第 %d 轮循环，清空已尝试列表 (alreadyTried=%v, isSameChannel=%v)",
+					connID, newLoopCount, alreadyTried, isSameChannel))
 				// 清空已尝试的渠道和端点
 				for k := range triedChannels {
 					delete(triedChannels, k)
@@ -929,8 +971,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 故障转移成功但已发送内容，禁止重试", connID))
 					lifecycleManager.FailRequest("output_sent_no_retry",
 						"Cannot retry after sending partial output to client", http.StatusBadGateway)
-					fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
-					flusher.Flush()
+					// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+					terminateSSEStreamWithError(w, flusher, "已发送部分内容，无法重试")
 					return
 				}
 
@@ -944,15 +986,35 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			} else {
 				slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 故障转移成功但已达最大重启次数 (%d)，终止请求",
 					connID, lifecycleManager.GetMaxRestarts()))
+				// v6.2.7: 使用 422 而非 503，防止 Claude Code 客户端自动重试
 				lifecycleManager.FailRequest("max_restarts_exceeded",
-					"Exceeded maximum restart attempts after failover", http.StatusServiceUnavailable)
-				fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
-				flusher.Flush()
+					"Exceeded maximum restart attempts after failover", http.StatusUnprocessableEntity)
+				// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+				terminateSSEStreamWithError(w, flusher, "已达最大重启次数，请求终止")
 				return
 			}
 		} else if err != nil {
+			// v6.2.5: 故障转移失败时，根据恢复策略决定是否立即返回错误
 			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v loop=%d",
 				connID, lastFailedEndpoint, err, loopCount))
+
+			// 检查是否是"没有可用渠道"或"达到最大循环轮数"的错误
+			// 这些情况下不应该继续挂起等待，应该直接返回错误
+			errStr := err.Error()
+			isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
+				strings.Contains(errStr, "已达到最大循环轮数")
+
+			if isNoChannelsError {
+				// 所有渠道都不可用或已达最大循环轮数，直接返回错误
+				// v6.2.7: 使用 422 而非 503，防止 Claude Code 客户端自动重试
+				statusCode := http.StatusUnprocessableEntity
+				*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+				lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
+				slog.Error(fmt.Sprintf("❌ [所有渠道不可用] [%s] %s", connID, errStr))
+				// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+				terminateSSEStreamWithError(w, flusher, fmt.Sprintf("所有渠道均不可用: %s", errStr))
+				return
+			}
 		}
 	}
 
@@ -1016,8 +1078,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 暂停恢复成功但已发送内容，禁止重试", connID))
 						lifecycleManager.FailRequest("output_sent_no_retry",
 							"Cannot retry after sending partial output to client", http.StatusBadGateway)
-						fmt.Fprintf(w, "data: error: 已发送部分内容，无法重试\n\n")
-						flusher.Flush()
+						// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+						terminateSSEStreamWithError(w, flusher, "已发送部分内容，无法重试")
 						return
 					}
 
@@ -1029,10 +1091,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				} else {
 					slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 暂停恢复成功但已达最大重启次数 (%d)，终止请求",
 						connID, lifecycleManager.GetMaxRestarts()))
+					// v6.2.7: 使用 422 而非 503，防止 Claude Code 客户端自动重试
 					lifecycleManager.FailRequest("max_restarts_exceeded",
-						"Exceeded maximum restart attempts after suspension recovery", http.StatusServiceUnavailable)
-					fmt.Fprintf(w, "data: error: 已达最大重启次数，请求终止\n\n")
-					flusher.Flush()
+						"Exceeded maximum restart attempts after suspension recovery", http.StatusUnprocessableEntity)
+					// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+					terminateSSEStreamWithError(w, flusher, "已达最大重启次数，请求终止")
 					return
 				}
 			}
@@ -1052,16 +1115,15 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理
-	// 所有端点都失败了，使用FailRequest方法标记最终失败（修复：使用GetStatusCodeFromError计算正确状态码）
-	statusCode := GetStatusCodeFromError(lastErr, lastResp)
-	if statusCode == 0 {
-		statusCode = http.StatusBadGateway // 端点耗尽的默认状态码
-	}
+	// v6.2.7: 所有端点都耗尽时，强制使用 422 状态码，防止 Claude Code 客户端自动重试
+	// 不再依赖 GetStatusCodeFromError，因为上游可能返回 502/503 等可重试状态码
+	// 但在 "endpoint_exhausted" 场景下，重试没有意义（所有端点都已尝试过），应该明确告知客户端停止重试
+	statusCode := http.StatusUnprocessableEntity
 
 	// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 
 	lifecycleManager.FailRequest("endpoint_exhausted", "All endpoints failed, last error: "+fmt.Sprintf("%v", lastErr), statusCode)
-	fmt.Fprintf(w, "data: error: All endpoints failed, last error: %v\n\n", lastErr)
-	flusher.Flush()
+	// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
+	terminateSSEStreamWithError(w, flusher, fmt.Sprintf("All endpoints failed, last error: %v", lastErr))
 }

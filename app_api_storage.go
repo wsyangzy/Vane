@@ -51,6 +51,9 @@ type EndpointRecordInfo struct {
 	NeverChecked   bool    `json:"never_checked"`  // v6.1: 是否从未检测过（跳过检测也保持为 true）
 	LastCheck      string  `json:"last_check"` // 最后健康检查时间
 	ResponseTimeMs float64 `json:"response_time_ms"`
+	// v6.2.10: 错误信息
+	LastFailCode   int    `json:"last_fail_code"`   // HTTP 状态码（0 表示无失败或未知）
+	LastFailReason string `json:"last_fail_reason"` // 失败原因描述
 	// 冷却状态（请求级故障转移）
 	InCooldown     bool   `json:"in_cooldown"`     // 是否处于冷却中
 	CooldownUntil  string `json:"cooldown_until"`  // 冷却截止时间
@@ -167,6 +170,9 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 			} else {
 				info.HealthState = "unhealthy"
 			}
+			// v6.2.10: 填充错误信息
+			info.LastFailCode = status.LastRequestFailCode
+			info.LastFailReason = status.LastRequestFailReason
 			// v6.2: 冷却机制已移除
 			info.InCooldown = false
 			info.CooldownUntil = ""

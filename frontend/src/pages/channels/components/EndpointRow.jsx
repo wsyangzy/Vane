@@ -20,9 +20,19 @@ import PriorityBadge from './PriorityBadge.jsx';
 // ============================================
 // 健康状态徽章
 // v6.1: 支持四种状态 - skipped/unchecked/healthy/unhealthy
+// v6.2.10: 异常状态支持显示失败原因 tooltip
 // ============================================
 
-const HealthBadge = ({ healthState }) => {
+const HealthBadge = ({ healthState, failCode, failReason }) => {
+  // 构建失败原因的 tooltip 文本
+  const buildFailTooltip = () => {
+    if (!failCode && !failReason) return '端点当前不可用';
+    const parts = [];
+    if (failCode) parts.push(`状态码: ${failCode}`);
+    if (failReason) parts.push(`原因: ${failReason}`);
+    return parts.join('\n');
+  };
+
   switch (healthState) {
     case 'skipped':
       return (
@@ -47,9 +57,15 @@ const HealthBadge = ({ healthState }) => {
       );
     case 'unhealthy':
       return (
-        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100">
+        <div
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100 cursor-help"
+          title={buildFailTooltip()}
+        >
           <XCircle size={10} className="mr-1" />
           异常
+          {failCode > 0 && (
+            <span className="ml-1 font-mono">({failCode})</span>
+          )}
         </div>
       );
     default:
@@ -124,6 +140,9 @@ const EndpointRow = ({
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
   // v6.1: 使用 health_state 字段
   const healthState = endpoint.health_state || endpoint.healthState;
+  // v6.2.10: 获取失败信息
+  const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
+  const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
 
   // 获取认证类型显示
   const getAuthType = () => {
@@ -171,7 +190,7 @@ const EndpointRow = ({
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
               {endpoint.channel || endpoint.group || '-'}
             </span>
-            <HealthBadge healthState={healthState} />
+            <HealthBadge healthState={healthState} failCode={lastFailCode} failReason={lastFailReason} />
             {/* v6.2: CooldownBadge 已移除 */}
           </div>
         </div>

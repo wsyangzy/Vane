@@ -21,8 +21,11 @@ type Options struct {
 	// OnHide 用户希望隐藏主窗口时触发（如点击“隐藏”菜单）。
 	OnHide func()
 
-	// OnQuit 用户选择“退出”时触发。
+	// OnQuit 用户选择"退出"时触发。
 	OnQuit func()
+
+	// OnOpenLogDir 用户选择"打开日志目录"时触发。
+	OnOpenLogDir func()
 }
 
 // Start 启动系统托盘（平台相关实现）。

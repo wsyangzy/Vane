@@ -189,11 +189,16 @@ export const getEndpoints = async () => {
     group_priority: ep.group_priority,
     group_is_active: ep.group_is_active,
     healthy: ep.healthy,
+    health_state: ep.health_state,         // v6.1: 健康状态枚举
+    skip_health_check: ep.skip_health_check, // v6.1: 跳过健康检查
     status: ep.healthy ? 'healthy' : 'unhealthy',
     last_check: ep.last_check,
     response_time: ep.response_time_ms,
     consecutive_fail: ep.consecutive_fail,
-    never_checked: !ep.last_check
+    never_checked: !ep.last_check,
+    // v6.2.10: 错误信息字段
+    last_fail_code: ep.last_fail_code || 0,
+    last_fail_reason: ep.last_fail_reason || ''
   }));
 
   const healthy = formattedEndpoints.filter(e => e.healthy).length;
@@ -658,7 +663,7 @@ export const getTokenUsage = async () => {
 
 /**
  * 获取端点健康状态数据
- * @returns {Promise<Object>} - 健康状态数据 {healthy, unhealthy, total}
+ * @returns {Promise<Object>} - 健康状态数据 {healthy, unhealthy, skipped, excluded, total}
  */
 export const getEndpointHealthChart = async () => {
   await initWails();
@@ -668,8 +673,8 @@ export const getEndpointHealthChart = async () => {
   return {
     healthy: data.healthy || 0,
     unhealthy: data.unhealthy || 0,
-    unchecked: data.unchecked || 0,
     skipped: data.skipped || 0,
+    excluded: data.excluded || 0,
     total: data.total || 0
   };
 };
@@ -762,7 +767,10 @@ export const getEndpointRecords = async () => {
     cooldown_until: r.cooldown_until,
     cooldownUntil: r.cooldown_until,
     cooldown_reason: r.cooldown_reason,
-    cooldownReason: r.cooldown_reason
+    cooldownReason: r.cooldown_reason,
+    // v6.2.10: 错误信息
+    last_fail_code: r.last_fail_code || 0,
+    last_fail_reason: r.last_fail_reason || ''
   }));
 };
 
@@ -803,7 +811,10 @@ export const getEndpointRecord = async (name) => {
     updatedAt: r.updated_at,
     healthy: r.healthy,
     lastCheck: r.last_check,
-    responseTimeMs: r.response_time_ms
+    responseTimeMs: r.response_time_ms,
+    // v6.2.10: 错误信息
+    last_fail_code: r.last_fail_code || 0,
+    last_fail_reason: r.last_fail_reason || ''
   };
 };
 

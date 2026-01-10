@@ -162,15 +162,14 @@ func (a *App) PauseGroup(name string) error {
 		autoSwitchEnabled = cfg.Failover.Enabled
 	}
 
-	// v6.2+: 暂停/恢复为“无限期直到手动恢复”，且在 SQLite 模式下持久化到 channels.failover_enabled
+	// v6.2+: 暂停/恢复为"无限期直到手动恢复"，且在 SQLite 模式下持久化到 channels.failover_enabled
 	if channelService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		var next string
 		if wasActive && autoSwitchEnabled {
-			// best-effort: 先同步当前“渠道暂停状态”
-			a.syncChannelFailoverEnabledToEndpointManager(ctx)
+			// v6.2.5: 移除全量同步，运行时状态应该已经是准确的
 			var err error
 			next, err = manager.SelectNextAvailableChannel(name)
 			if err != nil || next == "" {
@@ -181,7 +180,8 @@ func (a *App) PauseGroup(name string) error {
 		if err := channelService.SetFailoverEnabled(ctx, name, false); err != nil {
 			return err
 		}
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		// v6.2.5: 仅更新单个渠道，避免影响其他渠道状态
+		manager.SetSingleChannelFailoverEnabled(name, false)
 		a.emitEndpointUpdate()
 
 		// SQLite 模式：暂停活跃渠道后，按路由策略自动切换到下一个可用渠道。
@@ -225,7 +225,8 @@ func (a *App) ResumeGroup(name string) error {
 		if err := channelService.SetFailoverEnabled(ctx, name, true); err != nil {
 			return err
 		}
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		// v6.2.5: 仅更新单个渠道，避免影响其他渠道状态
+		manager.SetSingleChannelFailoverEnabled(name, true)
 		a.emitEndpointUpdate()
 		return nil
 	}
