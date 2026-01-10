@@ -12,7 +12,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Timer,
+  // Timer, // v6.2: 已移除，冷却机制不再使用
   ShieldOff
 } from 'lucide-react';
 import PriorityBadge from './PriorityBadge.jsx';
@@ -64,39 +64,8 @@ const HealthBadge = ({ healthState }) => {
 };
 
 // ============================================
-// 冷却状态徽章
+// v6.2: CooldownBadge 已移除，冷却机制不再使用
 // ============================================
-
-const CooldownBadge = ({ inCooldown, cooldownUntil, cooldownReason }) => {
-  if (!inCooldown) return null;
-
-  // 格式化剩余冷却时间
-  const formatRemainingTime = (until) => {
-    if (!until) return '';
-    try {
-      const endTime = new Date(until);
-      const now = new Date();
-      const diffMs = endTime - now;
-      if (diffMs <= 0) return '即将恢复';
-      const diffMins = Math.ceil(diffMs / 60000);
-      if (diffMins < 60) return `${diffMins}分钟`;
-      const diffHours = Math.floor(diffMins / 60);
-      return `${diffHours}小时${diffMins % 60}分`;
-    } catch {
-      return '';
-    }
-  };
-
-  return (
-    <div
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-600 border border-amber-200 cursor-help"
-      title={`冷却原因: ${cooldownReason || '请求失败'}\n恢复时间: ${cooldownUntil}`}
-    >
-      <Timer size={10} className="mr-1 animate-pulse" />
-      冷却中 {formatRemainingTime(cooldownUntil)}
-    </div>
-  );
-};
 
 // ============================================
 // 延迟指示器
@@ -203,11 +172,7 @@ const EndpointRow = ({
               {endpoint.channel || endpoint.group || '-'}
             </span>
             <HealthBadge healthState={healthState} />
-            <CooldownBadge
-              inCooldown={endpoint.in_cooldown || endpoint.inCooldown}
-              cooldownUntil={endpoint.cooldown_until || endpoint.cooldownUntil}
-              cooldownReason={endpoint.cooldown_reason || endpoint.cooldownReason}
-            />
+            {/* v6.2: CooldownBadge 已移除 */}
           </div>
         </div>
       </td>

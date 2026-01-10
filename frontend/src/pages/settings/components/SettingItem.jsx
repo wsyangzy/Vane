@@ -1,12 +1,13 @@
 // ============================================
 // SettingItem - 可编辑的设置项组件
-// v5.1.0 (2025-12-08)
+// v6.2.1 (2026-01-10) - 循环重试使用双选弹窗
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Eye, EyeOff, RotateCcw, Settings, Lock } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, RotateCcw, Lock, RefreshCw, XCircle, ChevronRight } from 'lucide-react';
 import { CustomSelect } from '../../../components/ui';
-import RecoveryStrategyDialog from './RecoveryStrategyDialog';
+import LoopRetrySelector from './LoopRetrySelector';
+import DurationInput from './DurationInput';
 
 // 值类型到输入类型的映射
 const VALUE_TYPE_CONFIG = {
@@ -35,7 +36,7 @@ const SettingItem = ({
 }) => {
   const [localValue, setLocalValue] = useState(value);
   const [showSecret, setShowSecret] = useState(false);
-  const [showStrategyDialog, setShowStrategyDialog] = useState(false);
+  const [showLoopRetrySelector, setShowLoopRetrySelector] = useState(false);
 
   // 同步外部 value 变化
   useEffect(() => {
@@ -64,6 +65,76 @@ const SettingItem = ({
     setLocalValue(newValue);
     onChange(setting.category, setting.key, newValue);
   };
+
+  // loop_retry 使用弹窗选择器
+  if (setting.category === 'failover' && setting.key === 'loop_retry') {
+    const isLoopRetry = localValue === 'true' || localValue === true;
+    const currentLabel = isLoopRetry ? '循环重试' : '快速失败';
+    const CurrentIcon = isLoopRetry ? RefreshCw : XCircle;
+
+    const handleLoopRetrySelect = (newValue) => {
+      setLocalValue(newValue);
+      onChange(setting.category, setting.key, newValue);
+    };
+
+    return (
+      <>
+        <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
+          <div className="flex-1 min-w-0 pr-4">
+            <div className="flex items-center gap-2">
+              {hasChange && (
+                <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+              )}
+              <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+              {setting.requires_restart && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
+                  <AlertTriangle size={10} className="mr-0.5" />
+                  重启生效
+                </span>
+              )}
+            </div>
+            {setting.description && (
+              <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {hasChange && onRevert && (
+              <button
+                onClick={() => onRevert(setting.category, setting.key)}
+                disabled={disabled}
+                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                title="撤销修改"
+              >
+                <RotateCcw size={14} />
+              </button>
+            )}
+            <button
+              onClick={() => !disabled && setShowLoopRetrySelector(true)}
+              disabled={disabled}
+              className={`
+                flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors
+                ${disabled
+                  ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-white border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-700'
+                }
+              `}
+            >
+              <CurrentIcon size={14} className={isLoopRetry ? 'text-indigo-500' : 'text-slate-400'} />
+              <span className="text-sm font-medium">{currentLabel}</span>
+              <ChevronRight size={14} className="text-slate-400" />
+            </button>
+          </div>
+        </div>
+
+        <LoopRetrySelector
+          isOpen={showLoopRetrySelector}
+          currentValue={localValue}
+          onSelect={handleLoopRetrySelect}
+          onClose={() => setShowLoopRetrySelector(false)}
+        />
+      </>
+    );
+  }
 
   // 布尔类型使用 Toggle 开关
   if (valueType === 'bool') {
@@ -171,20 +242,8 @@ const SettingItem = ({
     );
   }
 
-  // 枚举类型使用下拉选择 (v6.1: 通用枚举类型支持)
-  // DEBUG: 检查枚举类型的数据
-  if (setting.key === 'recovery_strategy') {
-    console.log('[DEBUG] recovery_strategy setting:', {
-      valueType,
-      value_type: setting.value_type,
-      enum_options: setting.enum_options,
-      setting
-    });
-  }
-
-  // CRITICAL: 对于 recovery_strategy，如果后端数据有问题，使用硬编码的枚举选项
-  const isRecoveryStrategy = setting.key === 'recovery_strategy' && setting.category === 'request';
-  const shouldRenderAsEnum = (valueType === 'enum' && setting.enum_options && setting.enum_options.length > 0) || isRecoveryStrategy;
+  // 枚举类型使用下拉选择 (v6.2: 通用枚举类型支持)
+  const shouldRenderAsEnum = valueType === 'enum' && setting.enum_options && setting.enum_options.length > 0;
 
   if (shouldRenderAsEnum) {
     const handleEnumChange = (newValue) => {
@@ -192,112 +251,16 @@ const SettingItem = ({
       onChange(setting.category, setting.key, newValue);
     };
 
-    // 使用后端提供的枚举选项，如果没有则使用硬编码的备用选项
-    let enumOptions;
-    if (isRecoveryStrategy && (!setting.enum_options || setting.enum_options.length === 0)) {
-      console.warn('[FALLBACK] 使用硬编码的 recovery_strategy 枚举选项');
-      enumOptions = [
-        { value: 'auto_wait', label: '智能等待（推荐）' },
-        { value: 'loop_retry', label: '循环重试（仅测试）' },
-        { value: 'fail_fast', label: '快速失败（调试用）' }
-      ];
-    } else {
-      enumOptions = setting.enum_options.map(option => ({
-        value: option.value,
-        label: option.label
-      }));
-    }
+    // 使用后端提供的枚举选项
+    const enumOptions = setting.enum_options.map(option => ({
+      value: option.value,
+      label: option.label
+    }));
 
     // 获取当前选中选项的描述
     const currentOption = setting.enum_options?.find(opt => opt.value === localValue);
 
-    // 对于恢复策略，使用弹窗选择器
-    if (isRecoveryStrategy) {
-      const strategyLabels = {
-        'auto_wait': '智能等待（推荐）',
-        'loop_retry': '循环重试（仅测试）',
-        'fail_fast': '快速失败（调试用）'
-      };
-
-      return (
-        <>
-          <div className="py-3 border-b border-slate-100 last:border-0 group">
-            <div className="flex justify-between items-center">
-              <div className="flex-1 min-w-0 pr-4">
-                <div className="flex items-center gap-2">
-                  {hasChange && (
-                    <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
-                  )}
-                  <span className={`text-sm font-medium ${disabled && disabledReason ? 'text-slate-400' : 'text-slate-700'}`}>{displayLabel}</span>
-                  {setting.requires_restart && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
-                      <AlertTriangle size={10} className="mr-0.5" />
-                      重启生效
-                    </span>
-                  )}
-                  {disabled && disabledReason && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500">
-                      <Lock size={10} className="mr-0.5" />
-                      {disabledReason}
-                    </span>
-                  )}
-                </div>
-                {setting.description && (
-                  <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {hasChange && onRevert && (
-                  <button
-                    onClick={() => onRevert(setting.category, setting.key)}
-                    disabled={disabled}
-                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                    title="撤销修改"
-                  >
-                    <RotateCcw size={14} />
-                  </button>
-                )}
-                <button
-                  onClick={() => !disabled && setShowStrategyDialog(true)}
-                  disabled={disabled}
-                  className={`group/btn flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium rounded-lg transition-all duration-200
-                    ${disabled
-                      ? 'text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed'
-                      : 'text-slate-700 bg-slate-50 border border-slate-200 hover:bg-white hover:border-indigo-300 hover:shadow-sm'
-                    }`}
-                >
-                  {disabled && disabledReason ? (
-                    <Lock size={15} className="text-slate-400" />
-                  ) : (
-                    <Settings size={15} />
-                  )}
-                  <span>{strategyLabels[localValue] || localValue}</span>
-                </button>
-              </div>
-            </div>
-            {/* 当前策略的简要说明 */}
-            {currentOption && currentOption.description && !disabled && (
-              <div className="mt-2 pl-4 pr-32">
-                <div className="p-2.5 bg-indigo-50/50 border border-indigo-100 rounded-lg">
-                  <p className="text-xs text-indigo-900 leading-relaxed">{currentOption.description}</p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 策略选择弹窗 */}
-          <RecoveryStrategyDialog
-            isOpen={showStrategyDialog}
-            onClose={() => setShowStrategyDialog(false)}
-            currentValue={localValue}
-            onConfirm={handleEnumChange}
-          />
-        </>
-      );
-    }
-
-    // 普通枚举类型使用下拉选择
-
+    // 通用枚举类型使用下拉选择
     return (
       <div className="py-3 border-b border-slate-100 last:border-0 group">
         <div className="flex justify-between items-center">
@@ -346,6 +309,53 @@ const SettingItem = ({
             </div>
           </div>
         )}
+      </div>
+    );
+  }
+
+  // duration 类型使用数字+单位选择器
+  if (valueType === 'duration') {
+    const handleDurationChange = (newValue) => {
+      setLocalValue(newValue);
+      onChange(setting.category, setting.key, newValue);
+    };
+
+    return (
+      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
+        <div className="flex-1 min-w-0 pr-4">
+          <div className="flex items-center gap-2">
+            {hasChange && (
+              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+            )}
+            <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+            {setting.requires_restart && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
+                <AlertTriangle size={10} className="mr-0.5" />
+                重启生效
+              </span>
+            )}
+          </div>
+          {setting.description && (
+            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {hasChange && onRevert && (
+            <button
+              onClick={() => onRevert(setting.category, setting.key)}
+              disabled={disabled}
+              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+              title="撤销修改"
+            >
+              <RotateCcw size={14} />
+            </button>
+          )}
+          <DurationInput
+            value={localValue}
+            onChange={handleDurationChange}
+            disabled={disabled}
+          />
+        </div>
       </div>
     );
   }

@@ -826,7 +826,8 @@ export const createEndpointRecord = async (input) => {
     token: input.token || '',
     api_key: input.apiKey || '',
     headers: input.headers || {},
-    priority: parseInt(input.priority) || 1,
+    // v6.2.1: 传 0 时让后端自动递增，不再强制转为 1
+    priority: Number.isInteger(Number(input.priority)) ? Number(input.priority) : 1,
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
@@ -1004,7 +1005,8 @@ export const createChannel = async (input) => {
   const payload = {
     name: (input?.name || '').trim(),
     website: (input?.website || '').trim(),
-    priority: Number.isFinite(priority) && priority > 0 ? priority : 1
+    // v6.2.1: 传 0 时让后端自动递增
+    priority: Number.isInteger(priority) ? priority : 0
   };
 
   await WailsApp.CreateChannel(payload);

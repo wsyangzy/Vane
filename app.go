@@ -1572,8 +1572,8 @@ func (a *App) applySettingsToConfig() {
 
 	// 故障转移配置
 	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
-	a.config.Failover.DefaultCooldown = a.settingsService.GetDuration(ctx, service.CategoryFailover, "default_cooldown", a.config.Failover.DefaultCooldown)
-	a.config.Failover.AllowRevisitAfterExhausted = a.settingsService.GetBool(ctx, service.CategoryFailover, "allow_revisit_after_exhausted", a.config.Failover.AllowRevisitAfterExhausted)
+	// v6.2: default_cooldown 已移除（loop_retry 模式下冷却时间与循环重试逻辑冲突）
+	// v6.2: allow_revisit_after_exhausted 已移除，使用 FailoverV2.LoopRetry 替代
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)

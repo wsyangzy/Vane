@@ -46,84 +46,10 @@ func NewSuspensionManagerWithRecoverySignal(cfg *config.Config, endpointManager 
 }
 
 // ShouldSuspend 判断是否应该挂起请求
-// 迁移自 RetryHandler.shouldSuspendRequest，但专注于挂起逻辑判断
-// 条件：手动模式 + 有备用组 + 功能启用 + 未达到最大挂起数
+// v6.2: auto_wait 策略已移除，此方法始终返回 false
 func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
-	// 检查配置是否存在
-	if sm.config == nil {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 配置为空，不挂起请求")
-		return false
-	}
-
-	// 检查功能是否启用 (v6.1: 使用新的恢复策略判断)
-	if !sm.config.FailoverV2.RecoveryStrategy.ShouldWaitForRecovery() {
-		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 当前恢复策略不支持等待恢复 (策略: %s)，不挂起请求",
-			sm.config.FailoverV2.RecoveryStrategy.String()))
-		return false
-	}
-
-	// 检查是否为手动模式
-	if sm.config.Failover.Enabled {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 当前为自动切换模式，不挂起请求")
-		return false
-	}
-
-	// 检查当前挂起请求数量是否超过限制
-	sm.suspendedRequestsMutex.RLock()
-	currentCount := sm.suspendedRequestsCount
-	sm.suspendedRequestsMutex.RUnlock()
-
-	if currentCount >= sm.config.FailoverV2.AutoWaitMaxRequests {
-		slog.WarnContext(ctx, fmt.Sprintf("🚫 [挂起限制] 当前挂起请求数 %d 已达到最大限制 %d，不再挂起新请求",
-			currentCount, sm.config.FailoverV2.AutoWaitMaxRequests))
-		return false
-	}
-
-	// 检查groupManager是否存在
-	if sm.groupManager == nil {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 组管理器为空，不挂起请求")
-		return false
-	}
-
-	// 检查是否存在可用的备用组
-	allGroups := sm.groupManager.GetAllGroups()
-	hasAvailableBackupGroups := false
-	var availableGroups []string
-
-	slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 开始检查可用备用组，总共 %d 个组", len(allGroups)))
-
-	for _, group := range allGroups {
-		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 检查组 %s: IsActive=%t, InCooldown=%t",
-			group.Name, group.IsActive, sm.groupManager.IsGroupInCooldown(group.Name)))
-
-		// 检查非活跃组且不在冷却期的组
-		if !group.IsActive && !sm.groupManager.IsGroupInCooldown(group.Name) {
-			// 检查组内是否有健康端点
-			healthyCount := 0
-			for _, ep := range group.Endpoints {
-				if ep.IsHealthy() {
-					healthyCount++
-				}
-			}
-			slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 组 %s 健康端点数: %d", group.Name, healthyCount))
-
-			if healthyCount > 0 {
-				hasAvailableBackupGroups = true
-				availableGroups = append(availableGroups, fmt.Sprintf("%s(%d个健康端点)", group.Name, healthyCount))
-			}
-		}
-	}
-
-	if !hasAvailableBackupGroups {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 没有可用的备用组，不挂起请求")
-		return false
-	}
-
-	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 恢复策略=%s, 当前挂起数=%d/%d, 可用备用组=%v",
-		!sm.config.Failover.Enabled, sm.config.FailoverV2.RecoveryStrategy.String(),
-		currentCount, sm.config.FailoverV2.AutoWaitMaxRequests, availableGroups))
-
-	return true
+	// v6.2: 不再支持请求挂起功能
+	return false
 }
 
 // WaitForGroupSwitch 挂起请求并等待组切换通知

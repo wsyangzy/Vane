@@ -24,14 +24,13 @@ import (
 )
 
 // EndpointStatus represents the health status of an endpoint
+// v6.2: CooldownUntil 和 CooldownReason 已移除，失败渠道通过手动"重试"按钮重新激活
 type EndpointStatus struct {
 	Healthy          bool
 	LastCheck        time.Time
 	ResponseTime     time.Duration
 	ConsecutiveFails int
-	NeverChecked     bool      // 表示从未被检测过
-	CooldownUntil    time.Time // 请求失败冷却截止时间
-	CooldownReason   string    // 冷却原因（如 "HTTP 503"）
+	NeverChecked     bool // 表示从未被检测过
 }
 
 // Endpoint represents an endpoint with its configuration and status

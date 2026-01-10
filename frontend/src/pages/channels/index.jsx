@@ -456,7 +456,7 @@ const EndpointDetailModal = ({
   endpoint,
   isOpen,
   isSqliteMode,
-  failoverDefaultCooldownSeconds = 600,
+  // v6.2: failoverDefaultCooldownSeconds 已移除
   onClose,
   onEdit,
   onDelete
@@ -489,12 +489,17 @@ const EndpointDetailModal = ({
 
   const rows = [
     { label: '优先级', value: endpoint.priority ?? '-' },
-    { label: '超时(s)', value: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? '-' },
+    {
+      label: '超时',
+      value: (() => {
+        const timeout = endpoint.timeoutSeconds ?? endpoint.timeout_seconds;
+        if (!timeout || timeout === 300) return '默认 (300s)';
+        return `${timeout}s`;
+      })()
+    },
   ];
 
-  const endpointCooldownSeconds = endpoint.cooldownSeconds ?? endpoint.cooldown_seconds;
-  const cooldownUsesGlobal = endpointCooldownSeconds == null;
-  const cooldownSeconds = endpointCooldownSeconds ?? failoverDefaultCooldownSeconds ?? '-';
+  // v6.2: cooldown 相关变量已移除
   const hasToken = !!(tokenRaw || tokenMasked);
   const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
 
@@ -607,21 +612,8 @@ const EndpointDetailModal = ({
             ))}
           </div>
 
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-xs text-slate-500">冷却(s)</div>
-                {cooldownUsesGlobal && (
-                  <span className="text-[10px] text-slate-400 bg-white/70 px-2 py-0.5 rounded border border-slate-200">
-                    全局默认
-                  </span>
-                )}
-              </div>
-              <div className="text-sm font-semibold text-slate-900 break-all">
-                {String(cooldownSeconds)}
-              </div>
-            </div>
-
+          {/* v6.2: 冷却时间显示已移除（loop_retry 模式下与循环重试逻辑冲突） */}
+          <div className="mt-4">
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-xs text-slate-500">Token（脱敏）</div>
@@ -713,7 +705,8 @@ const CreateChannelModal = ({
   const isEdit = mode === 'edit';
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
-  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority || 1) : 1));
+  // v6.2.1: 新建时传 0，让后端自动递增；编辑时使用原有优先级
+  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority || 1) : 0));
   const [error, setError] = useState('');
 
   if (!open) return null;
@@ -758,8 +751,8 @@ const CreateChannelModal = ({
           )}
 
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="sm:col-span-2">
+            <div className={isEdit ? 'grid grid-cols-1 sm:grid-cols-3 gap-4' : ''}>
+              <div className={isEdit ? 'sm:col-span-2' : ''}>
                 <label className="block text-sm font-medium text-slate-700">
                   渠道名称 <span className="text-rose-500">*</span>
                 </label>
@@ -776,18 +769,21 @@ const CreateChannelModal = ({
                 )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700">优先级</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value)}
-                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  disabled={loading}
-                />
-                <p className="text-xs text-slate-400 mt-1">仅在启用渠道间故障转移时生效，数字越小越优先</p>
-              </div>
+              {/* 优先级字段仅在编辑模式显示，新建时自动递增 */}
+              {isEdit && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700">优先级</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    disabled={loading}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">数字越小越优先，相同则交换</p>
+                </div>
+              )}
             </div>
 
             <div>
@@ -940,16 +936,33 @@ const ChannelCard = ({
 
           {/* 渠道操作 */}
           <div className="flex items-center gap-2 flex-shrink-0">
+          {/* v6.2: 非激活渠道根据暂停状态显示"重试"或"激活" */}
           {!isActive && isSqliteMode && hasEndpoints && (
-            <Button
-              size="sm"
-              icon={Power}
-              className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
-              onClick={() => onActivate?.(channelName)}
-              disabled={loading}
-            >
-              激活
-            </Button>
+            isPaused ? (
+              <Button
+                size="sm"
+                icon={RefreshCw}
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
+                onClick={() => {
+                  onResume?.(channelName);
+                  onActivate?.(channelName);
+                }}
+                disabled={loading}
+                title="恢复暂停的渠道并激活"
+              >
+                重试
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                icon={Power}
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
+                onClick={() => onActivate?.(channelName)}
+                disabled={loading}
+              >
+                激活
+              </Button>
+            )
           )}
           {isActive && isSqliteMode && (
             isAllEndpointsFailed ? (
@@ -975,7 +988,8 @@ const ChannelCard = ({
               </Button>
             )
           )}
-          {hasGroupInfo && !isPaused ? (
+          {/* v6.2: 只在激活渠道显示暂停按钮，非激活渠道的恢复已整合到"重试"按钮 */}
+          {hasGroupInfo && isActive && !isPaused && (
             <Button
               size="sm"
               variant="ghost"
@@ -986,18 +1000,7 @@ const ChannelCard = ({
             >
               暂停
             </Button>
-          ) : hasGroupInfo ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={Play}
-              onClick={() => onResume?.(channelName)}
-              disabled={pauseDisabled}
-              title={!channelFailoverEnabled ? '已关闭渠道间故障转移：不可恢复渠道' : undefined}
-            >
-              恢复
-            </Button>
-          ) : null}
+          )}
           {isSqliteMode && (
             <Button
               size="sm"
@@ -1051,11 +1054,7 @@ const ChannelCard = ({
               已暂停
             </span>
           )}
-          {groupInfo?.in_cooldown && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
-              冷却中
-            </span>
-          )}
+          {/* v6.2: 冷却状态显示已移除 */}
           {isAllEndpointsFailed && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-600 border border-rose-200 whitespace-nowrap">
               全部失败
@@ -1178,7 +1177,7 @@ const ChannelsPage = () => {
   const [groups, setGroups] = useState([]);
   const [channelActionLoading, setChannelActionLoading] = useState(false);
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(true);
-  const [failoverDefaultCooldownSeconds, setFailoverDefaultCooldownSeconds] = useState(600);
+  // v6.2: failoverDefaultCooldownSeconds 已移除
   const [channelsMeta, setChannelsMeta] = useState([]);
 
   // v6.0.7+ 挂起请求计数（用于显示等待提示）
@@ -1300,15 +1299,11 @@ const ChannelsPage = () => {
       const cfg = await getConfig();
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(cfg?.failover_enabled !== false);
-      const cooldownSeconds = Number(cfg?.failover_default_cooldown_seconds);
-      setFailoverDefaultCooldownSeconds(
-        Number.isFinite(cooldownSeconds) && cooldownSeconds > 0 ? cooldownSeconds : 600
-      );
+      // v6.2: cooldownSeconds 加载已移除
     } catch (err) {
       console.error('获取配置失败:', err);
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(true);
-      setFailoverDefaultCooldownSeconds(600);
     }
   }, []);
 
@@ -1565,10 +1560,10 @@ const ChannelsPage = () => {
   }, [channelSections.length]);
 
   // 计算统计数据
+  // v6.2: 冷却机制已移除
   const isSkippedEndpoint = (e) => e?.skipHealthCheck || e?.skip_health_check;
   const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
   const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
-  const cooldownChannelCount = groups.filter(g => g?.in_cooldown).length;
 
   const displayStats = isSqliteMode
     ? {
@@ -1577,13 +1572,12 @@ const ChannelsPage = () => {
         healthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length,
         unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !e.healthy && hasLastCheck(e) && !isNeverCheckedEndpoint(e)).length,
         unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || (!isSkippedEndpoint(e) && isNeverCheckedEndpoint(e))).length,
-        cooldown: cooldownChannelCount,
         healthPercentage: (scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) > 0
           ? ((scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length /
               scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) * 100).toFixed(1)
           : 0
       }
-    : { ...stats, skipped: stats.skipped || 0, cooldown: cooldownChannelCount };
+    : { ...stats, skipped: stats.skipped || 0 };
 
   // ============================================
   // CRUD 操作处理
@@ -1829,15 +1823,15 @@ const ChannelsPage = () => {
               {suspendedRequestsCount} 个请求正在等待端点恢复
             </div>
             <div className="text-sm text-purple-700 mt-0.5">
-              当前所有端点均处于冷却或不可用状态，请求已挂起等待端点自动恢复。
-              您可以手动激活其他渠道或等待端点冷却期结束。
+              当前所有端点均处于不可用状态，请求已挂起等待端点恢复。
+              您可以手动点击「重试」按钮重新激活已暂停的渠道。
             </div>
           </div>
         </div>
       )}
 
       {/* 统计卡片 */}
-      <div className={displayStats.cooldown > 0 ? 'grid grid-cols-7 gap-4 mb-6' : 'grid grid-cols-6 gap-4 mb-6'}>
+      <div className="grid grid-cols-6 gap-4 mb-6">
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-900">{channelSections.length}</div>
           <div className="text-sm text-slate-500">总渠道数</div>
@@ -1867,13 +1861,7 @@ const ChannelsPage = () => {
           <div className="text-2xl font-bold text-rose-600">{displayStats.unhealthy}</div>
           <div className="text-sm text-slate-500">异常端点</div>
         </div>
-        {/* 冷却中端点卡片 - 仅在有冷却端点时显示 */}
-        {displayStats.cooldown > 0 && (
-          <div className="bg-white rounded-xl border border-amber-200/60 p-4 shadow-sm">
-            <div className="text-2xl font-bold text-amber-600">{displayStats.cooldown}</div>
-            <div className="text-sm text-slate-500">冷却中</div>
-          </div>
-        )}
+        {/* v6.2: 冷却机制已移除 */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-400">{displayStats.unchecked}</div>
           <div className="text-sm text-slate-500">未检测端点</div>
@@ -2157,7 +2145,6 @@ const ChannelsPage = () => {
         endpoint={detailTarget}
         isOpen={detailOpen}
         isSqliteMode={isSqliteMode}
-        failoverDefaultCooldownSeconds={failoverDefaultCooldownSeconds}
         onClose={closeEndpointDetail}
         onEdit={(ep) => {
           closeEndpointDetail();

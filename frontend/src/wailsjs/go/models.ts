@@ -165,7 +165,6 @@ export namespace main {
 	    tracking_enabled: boolean;
 	    failover_enabled: boolean;
 	    failover_default_cooldown_seconds: number;
-	    failover_allow_revisit_after_exhausted: boolean;
 	    endpoint_count: number;
 	
 	    static createFrom(source: any = {}) {
@@ -181,7 +180,6 @@ export namespace main {
 	        this.tracking_enabled = source["tracking_enabled"];
 	        this.failover_enabled = source["failover_enabled"];
 	        this.failover_default_cooldown_seconds = source["failover_default_cooldown_seconds"];
-	        this.failover_allow_revisit_after_exhausted = source["failover_allow_revisit_after_exhausted"];
 	        this.endpoint_count = source["endpoint_count"];
 	    }
 	}

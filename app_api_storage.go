@@ -167,12 +167,10 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 			} else {
 				info.HealthState = "unhealthy"
 			}
-			// 冷却状态
-			if !status.CooldownUntil.IsZero() && status.CooldownUntil.After(time.Now()) {
-				info.InCooldown = true
-				info.CooldownUntil = status.CooldownUntil.Format("2006-01-02 15:04:05")
-				info.CooldownReason = status.CooldownReason
-			}
+			// v6.2: 冷却机制已移除
+			info.InCooldown = false
+			info.CooldownUntil = ""
+			info.CooldownReason = ""
 		}
 
 		result = append(result, info)
@@ -262,10 +260,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		return fmt.Errorf("端点存储服务未启用")
 	}
 
-	// 设置默认值
-	if input.Priority == 0 {
-		input.Priority = 1
-	}
+	// 设置默认值（注意：Priority 由 service 层自动递增，这里不设默认值）
 	if input.TimeoutSeconds == 0 {
 		input.TimeoutSeconds = 300
 	}
@@ -972,9 +967,7 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	if input.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
-	if input.Priority <= 0 {
-		input.Priority = 1
-	}
+	// v6.2.1: Priority 由 service 层处理（自动递增或冲突交换）
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1021,9 +1014,7 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	if input.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
-	if input.Priority <= 0 {
-		input.Priority = 1
-	}
+	// v6.2.1: Priority 由 service 层处理（自动递增或冲突交换）
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1259,12 +1250,10 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 			if !status.LastCheck.IsZero() {
 				info.LastCheck = status.LastCheck.Format("2006-01-02 15:04:05")
 			}
-			// 冷却状态
-			if !status.CooldownUntil.IsZero() && status.CooldownUntil.After(time.Now()) {
-				info.InCooldown = true
-				info.CooldownUntil = status.CooldownUntil.Format("2006-01-02 15:04:05")
-				info.CooldownReason = status.CooldownReason
-			}
+			// v6.2: 冷却机制已移除
+			info.InCooldown = false
+			info.CooldownUntil = ""
+			info.CooldownReason = ""
 		}
 
 		result = append(result, info)

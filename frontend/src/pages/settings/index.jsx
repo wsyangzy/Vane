@@ -21,7 +21,7 @@ import {
   Archive,
   X
 } from 'lucide-react';
-import { Button, LoadingSpinner, ErrorMessage } from '@components/ui';
+import { Button, LoadingSpinner, ErrorMessage, ConfirmDialog } from '@components/ui';
 import { SettingItem, SettingsSection, PortInfo } from './components';
 import {
   isWailsEnvironment,
@@ -68,6 +68,7 @@ const SettingsPage = () => {
   const [expandedCategories, setExpandedCategories] = useState(new Set());
   const [initRetryAttempt, setInitRetryAttempt] = useState(0); // 初始化重试次数
   const [messageTimer, setMessageTimer] = useState(null); // 消息自动消失定时器
+  const [resetConfirm, setResetConfirm] = useState({ isOpen: false, category: '', label: '' }); // 重置确认弹窗
 
   const isWails = isWailsEnvironment();
   const initRetryRef = useRef({ count: 0, timer: null });
@@ -122,19 +123,6 @@ const SettingsPage = () => {
           fetchAllSettings(),
           fetchPortInfo()
         ]);
-      }
-
-      // DEBUG: 打印所有设置数据，特别关注 recovery_strategy
-      console.log('=== 所有设置数据 ===');
-      const recoveryStrategy = settingsData.find(s => s.key === 'recovery_strategy');
-      if (recoveryStrategy) {
-        console.log('[CRITICAL] recovery_strategy 数据:', JSON.stringify(recoveryStrategy, null, 2));
-        console.log('  - value_type:', recoveryStrategy.value_type, typeof recoveryStrategy.value_type);
-        console.log('  - enum_options:', recoveryStrategy.enum_options);
-        console.log('  - enum_options 是否为数组:', Array.isArray(recoveryStrategy.enum_options));
-        console.log('  - enum_options 长度:', recoveryStrategy.enum_options?.length);
-      } else {
-        console.error('[ERROR] recovery_strategy 配置未找到！');
       }
 
       setCategories(categoriesData || []);
@@ -234,44 +222,55 @@ const SettingsPage = () => {
     return value === 'true' || value === true;
   }, [settingsByCategory, getCurrentValue]);
 
-  // 判断设置项是否应该显示（条件显示逻辑）
-  const shouldShowSetting = useCallback((setting) => {
-    // 特殊处理：auto_wait 相关配置仅在 recovery_strategy === 'auto_wait' 时显示
-    if (setting.category === 'request' &&
-        (setting.key === 'auto_wait_timeout' || setting.key === 'auto_wait_max_requests')) {
-      // 获取当前 recovery_strategy 的值
-      const strategySettingArray = settingsByCategory['request'];
-      if (!strategySettingArray) return false;
-
-      const strategySetting = strategySettingArray.find(s => s.key === 'recovery_strategy');
-      if (!strategySetting) return false;
-
-      const currentStrategy = getCurrentValue(strategySetting);
-      return currentStrategy === 'auto_wait';
-    }
-    return true;
+  // 获取路由策略类型
+  const getStrategyType = useCallback(() => {
+    const strategySettings = settingsByCategory['strategy'];
+    if (!strategySettings) return 'priority';
+    const typeSetting = strategySettings.find(s => s.key === 'type');
+    if (!typeSetting) return 'priority';
+    return getCurrentValue(typeSetting);
   }, [settingsByCategory, getCurrentValue]);
 
-  // 判断设置项是否应该禁用（条件禁用逻辑）
-  const shouldDisableSetting = useCallback((setting) => {
-    // 恢复策略相关配置：仅在渠道间故障转移开启时可用
-    if (setting.category === 'request' &&
-        ['recovery_strategy', 'auto_wait_timeout', 'auto_wait_max_requests'].includes(setting.key)) {
-      return !getChannelFailoverEnabled();
+  // 获取循环重试开关状态
+  const getLoopRetryEnabled = useCallback(() => {
+    const failoverSettings = settingsByCategory['failover'];
+    if (!failoverSettings) return true;
+    const loopRetrySetting = failoverSettings.find(s => s.key === 'loop_retry');
+    if (!loopRetrySetting) return true;
+    const value = getCurrentValue(loopRetrySetting);
+    return value === 'true' || value === true;
+  }, [settingsByCategory, getCurrentValue]);
+
+  // 判断设置项是否应该显示（条件显示逻辑）
+  const shouldShowSetting = useCallback((setting) => {
+    // v6.2: 快速测试相关设置仅在 strategy.type === 'fastest' 时显示
+    if (setting.category === 'strategy' &&
+        ['fast_test_enabled', 'fast_test_cache_ttl', 'fast_test_timeout', 'fast_test_path'].includes(setting.key)) {
+      return getStrategyType() === 'fastest';
     }
+
+    // v6.2: loop_retry 和 max_loops 仅在渠道间故障转移开启时显示
+    if (setting.category === 'failover' && setting.key === 'loop_retry') {
+      return getChannelFailoverEnabled();
+    }
+
+    // v6.2: max_loops 仅在 loop_retry === true 时显示
+    if (setting.category === 'failover' && setting.key === 'max_loops') {
+      return getChannelFailoverEnabled() && getLoopRetryEnabled();
+    }
+
+    return true;
+  }, [getStrategyType, getChannelFailoverEnabled, getLoopRetryEnabled]);
+
+  // 判断设置项是否应该禁用（条件禁用逻辑）- 已通过 shouldShowSetting 处理
+  const shouldDisableSetting = useCallback((setting) => {
     return false;
-  }, [getChannelFailoverEnabled]);
+  }, []);
 
   // 获取禁用提示文案
   const getDisabledReason = useCallback((setting) => {
-    if (setting.category === 'request' &&
-        ['recovery_strategy', 'auto_wait_timeout', 'auto_wait_max_requests'].includes(setting.key)) {
-      if (!getChannelFailoverEnabled()) {
-        return '需先开启渠道间故障转移';
-      }
-    }
     return null;
-  }, [getChannelFailoverEnabled]);
+  }, []);
 
   // 处理设置变更
   const handleSettingChange = useCallback((category, key, value) => {
@@ -327,11 +326,15 @@ const SettingsPage = () => {
     }
   }, [changes, isWails, settings, loadSettings, setAutoHideMessage]);
 
-  // 重置分类设置
-  const handleResetCategory = useCallback(async (category) => {
-    if (!window.confirm(`确定要将「${category}」分类的设置重置为默认值吗？`)) {
-      return;
-    }
+  // 打开重置确认弹窗
+  const handleResetCategory = useCallback((category, label) => {
+    setResetConfirm({ isOpen: true, category, label: label || category });
+  }, []);
+
+  // 执行重置操作（静默刷新，不滚动页面）
+  const executeResetCategory = useCallback(async () => {
+    const { category, label } = resetConfirm;
+    setResetConfirm({ isOpen: false, category: '', label: '' });
 
     try {
       setSaving(true);
@@ -343,14 +346,38 @@ const SettingsPage = () => {
         await apiResetSettings(category);
       }
 
-      setAutoHideMessage({ type: 'success', text: `${category} 设置已重置为默认值` });
-      await loadSettings();
+      setAutoHideMessage({ type: 'success', text: `${label} 设置已重置为默认值` });
+
+      // 静默刷新设置数据，不触发 loading 状态
+      let settingsData;
+      if (isWails) {
+        settingsData = await getAllSettings();
+      } else {
+        settingsData = await fetchAllSettings();
+      }
+      setSettings(settingsData || []);
+
+      // 清除该分类相关的未保存变更
+      setChanges(prev => {
+        const newChanges = { ...prev };
+        for (const key of Object.keys(newChanges)) {
+          if (key.startsWith(`${category}.`)) {
+            delete newChanges[key];
+          }
+        }
+        return newChanges;
+      });
     } catch (err) {
       setSaveMessage({ type: 'error', text: err.message || '重置失败' });
     } finally {
       setSaving(false);
     }
-  }, [isWails, loadSettings, setAutoHideMessage]);
+  }, [resetConfirm, isWails, setAutoHideMessage]);
+
+  // 取消重置操作
+  const cancelResetCategory = useCallback(() => {
+    setResetConfirm({ isOpen: false, category: '', label: '' });
+  }, []);
 
   // 判断是否有未保存的变更
   const hasChanges = Object.keys(changes).length > 0;
@@ -559,7 +586,7 @@ const SettingsPage = () => {
           title="服务端口"
           icon={Server}
           description="API 服务端口配置"
-          onReset={() => handleResetCategory('server')}
+          onReset={() => handleResetCategory('server', '服务端口')}
           resetDisabled={saving}
         >
           <PortInfo portInfo={portInfo} loading={loading} />
@@ -592,7 +619,7 @@ const SettingsPage = () => {
               title={category.label}
               icon={CATEGORY_ICONS[category.name] || Settings}
               description={category.description}
-              onReset={() => handleResetCategory(category.name)}
+              onReset={() => handleResetCategory(category.name, category.label)}
               resetDisabled={saving}
             >
               {settingsByCategory[category.name]?.filter(shouldShowSetting).map(setting => {
@@ -620,6 +647,18 @@ const SettingsPage = () => {
             </SettingsSection>
           ))}
       </div>
+
+      {/* 重置确认弹窗 */}
+      <ConfirmDialog
+        isOpen={resetConfirm.isOpen}
+        title="重置设置"
+        message={`确定要将「${resetConfirm.label}」分类的设置重置为默认值吗？\n\n此操作无法撤销。`}
+        confirmText="重置"
+        cancelText="取消"
+        variant="warning"
+        onConfirm={executeResetCategory}
+        onCancel={cancelResetCategory}
+      />
     </div>
   );
 };

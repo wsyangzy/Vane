@@ -330,30 +330,13 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 
 				if !decision.RetrySameEndpoint {
 					if decision.SwitchEndpoint {
-						// v6.1+: 当端点因错误被切走时，给该端点加“请求失败冷却”，避免下一次请求立刻回到该端点导致反复切换。
+						// v6.2: 移除渠道内端点冷却，使用 triedEndpoints 追踪
 						nextName := ""
 						if i+1 < len(endpoints) && endpoints[i+1] != nil {
 							nextName = endpoints[i+1].Config.Name
 						}
-
-						failedKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
-						cooldownUntil := ""
-						if failedKey != "" {
-							until, cdErr := rh.endpointManager.SetEndpointCooldown(failedKey, decision.Reason)
-							if cdErr != nil {
-								slog.Warn(fmt.Sprintf("⚠️ [端点冷却] [%s] 设置冷却失败 endpoint=%s key=%s err=%v",
-									connID, ep.Config.Name, failedKey, cdErr))
-							} else {
-								cooldownUntil = until.Format("15:04:05")
-							}
-						}
-						if cooldownUntil != "" {
-							slog.Warn(fmt.Sprintf("🔁 [渠道内故障转移] [%s] channel=%s %s -> %s cooldown_until=%s reason=%s",
-								connID, routeGroup, ep.Config.Name, nextName, cooldownUntil, decision.Reason))
-						} else {
-							slog.Warn(fmt.Sprintf("🔁 [渠道内故障转移] [%s] channel=%s %s -> %s reason=%s",
-								connID, routeGroup, ep.Config.Name, nextName, decision.Reason))
-						}
+						slog.Info(fmt.Sprintf("🔀 [切换端点] [%s] channel=%s %s -> %s reason=%s",
+							connID, routeGroup, ep.Config.Name, nextName, decision.Reason))
 						break // 尝试下一个端点
 					} else {
 						// 🚀 [状态机重构] Phase 4: 最终失败处理

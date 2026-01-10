@@ -102,13 +102,10 @@ func (rm *RetryManager) GetRecoveredEndpointsInChannel(triedKeys []string) []*en
 	return rm.endpointMgr.GetRecoveredEndpointsInChannel(triedKeys)
 }
 
-// IsAutoWaitStrategy 检查是否为 auto_wait 策略（v6.1+）
+// IsAutoWaitStrategy 检查是否为 auto_wait 策略
+// v6.2: auto_wait 策略已移除，始终返回 false
 func (rm *RetryManager) IsAutoWaitStrategy() bool {
-	if rm.config == nil {
-		return false
-	}
-	// 检查 v6.1+ 的 RecoveryStrategy 配置
-	return rm.config.FailoverV2.RecoveryStrategy.ShouldWaitForRecovery()
+	return false // v6.2: auto_wait 已移除
 }
 
 // calculateBackoff 计算指数退避延迟
