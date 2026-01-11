@@ -30,6 +30,13 @@ type FailoverConfigV2 struct {
 	// v6.2.11: 新增，用于减少循环重试模式下的日志噪音
 	SkipHealthCheck bool `yaml:"skip_health_check"`
 
+	// InterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
+	// - true: 返回 422 状态码，中断客户端（如 Claude Code）的自动重试
+	// - false: 返回可重试错误格式，允许客户端自行决定是否重试
+	// 默认: true（中断重试，保护用户避免无限循环）
+	// v6.2.14: 新增，让用户选择耗尽后的客户端行为
+	InterruptClientOnExhausted *bool `yaml:"interrupt_client_on_exhausted"`
+
 	// ===== 以下字段已废弃，保留用于向后兼容 =====
 	// v6.1.x: 这些字段将在解析配置时自动映射到新字段
 	RecoveryStrategy        RecoveryStrategy `yaml:"recovery_strategy,omitempty"`         // DEPRECATED: 使用 loop_retry 替代
@@ -178,4 +185,15 @@ func (fc *FailoverConfigV2) GetMaxLoops() int {
 // 仅当启用循环重试且 SkipHealthCheck = true 时跳过
 func (fc *FailoverConfigV2) ShouldSkipHealthCheck() bool {
 	return fc.LoopRetry && fc.SkipHealthCheck
+}
+
+// ShouldInterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
+// 返回 true 时使用 422 状态码中断客户端自动重试
+// 返回 false 时允许客户端自行决定是否重试（503）
+// 默认返回 false（允许客户端重试）
+func (fc *FailoverConfigV2) ShouldInterruptClientOnExhausted() bool {
+	if fc.InterruptClientOnExhausted == nil {
+		return false // 默认允许客户端重试
+	}
+	return *fc.InterruptClientOnExhausted
 }
