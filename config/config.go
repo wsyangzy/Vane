@@ -275,21 +275,30 @@ func LoadConfig(path string) (*Config, error) {
 		config.Failover.Enabled = config.Group.AutoSwitchBetweenGroups
 	}
 
-	// v6.0 → v6.1 配置迁移（向后兼容）
-	// 检查是否使用了新版 failover_v2 配置
-	hasFailoverV2Config := strings.Contains(string(data), "failover_v2:") ||
-		strings.Contains(string(data), "recovery_strategy:")
+	// v6.0 → v6.2 配置迁移（向后兼容）
+	// 检查配置格式版本
+	hasFailoverV2Config := strings.Contains(string(data), "failover_v2:")
+	hasRecoveryStrategy := strings.Contains(string(data), "recovery_strategy:")
+	hasLoopRetry := strings.Contains(string(data), "loop_retry:")
 
-	if !hasFailoverV2Config {
-		// 没有新版配置，从旧版配置自动迁移
-		slog.Info("📦 检测到旧版配置格式 (v6.0.x)，正在自动迁移到 v6.1 格式...")
+	if !hasFailoverV2Config && !hasLoopRetry {
+		// 没有新版配置，从 v6.0.x 旧版配置自动迁移
+		slog.Info("📦 检测到旧版配置格式 (v6.0.x)，正在自动迁移到 v6.2 格式...")
 		config.FailoverV2.MigrateFromLegacy(&config.Failover, &config.RequestSuspend)
 		config.FailoverV2.SetDefaults()
 
 		// 记录迁移结果
 		slog.Info("✅ 配置迁移完成",
-			"recovery_strategy", config.FailoverV2.RecoveryStrategy,
-			"strategy_name", config.FailoverV2.RecoveryStrategy.String())
+			"loop_retry", config.FailoverV2.LoopRetry,
+			"max_loops", config.FailoverV2.MaxLoops)
+	} else if hasRecoveryStrategy && !hasLoopRetry {
+		// v6.1.x 配置迁移到 v6.2
+		slog.Info("📦 检测到 v6.1.x 配置格式，正在迁移到 v6.2 格式...")
+		config.FailoverV2.SetDefaults() // SetDefaults 内部会调用 MigrateFromV61
+
+		slog.Info("✅ 配置迁移完成",
+			"loop_retry", config.FailoverV2.LoopRetry,
+			"max_loops", config.FailoverV2.MaxLoops)
 	} else {
 		// 使用了新版配置，确保设置了默认值
 		config.FailoverV2.SetDefaults()
@@ -898,9 +907,22 @@ func (cw *ConfigWatcher) logConfigChanges(oldConfig, newConfig *Config) {
 	}
 
 	if oldConfig.RequestSuspend.Enabled != newConfig.RequestSuspend.Enabled {
-		cw.logger.Info("⏸️ 请求挂起状态变更",
+		cw.logger.Info("⏸️ 请求挂起状态变更（已废弃）",
 			"old_enabled", oldConfig.RequestSuspend.Enabled,
 			"new_enabled", newConfig.RequestSuspend.Enabled)
+	}
+
+	// v6.2: 记录新的故障转移配置变更
+	if oldConfig.FailoverV2.LoopRetry != newConfig.FailoverV2.LoopRetry {
+		cw.logger.Info("🔄 循环重试配置变更",
+			"old_loop_retry", oldConfig.FailoverV2.LoopRetry,
+			"new_loop_retry", newConfig.FailoverV2.LoopRetry)
+	}
+
+	if oldConfig.FailoverV2.MaxLoops != newConfig.FailoverV2.MaxLoops {
+		cw.logger.Info("🔄 最大循环轮数变更",
+			"old_max_loops", oldConfig.FailoverV2.MaxLoops,
+			"new_max_loops", newConfig.FailoverV2.MaxLoops)
 	}
 
 	if oldConfig.RequestSuspend.MaxSuspendedRequests != newConfig.RequestSuspend.MaxSuspendedRequests {

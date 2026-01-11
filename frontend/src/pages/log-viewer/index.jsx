@@ -3,6 +3,12 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { useWailsLogs } from '@/hooks/useWailsLogs';
 import { FileText, RefreshCw, AlertCircle } from 'lucide-react';
 import { LogEntry, LogControls, LogFilters } from './components';
+import { SaveResultDialog } from '@/components/ui';
+
+// v6.2.11: 直接调用 Go 方法（bindings 需要重新生成后可改用 import）
+const SaveLogFile = (content, defaultFileName) => {
+  return window['go']['main']['App']['SaveLogFile'](content, defaultFileName);
+};
 
 // 检测组件挂载状态
 function useComponentVisibility() {
@@ -44,6 +50,10 @@ function LogsPage() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const logsEndRef = useRef(null);
   const prevLogsLengthRef = useRef(0);
+
+  // v6.2.11: 保存结果弹窗状态
+  const [saveResult, setSaveResult] = useState(null);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
 
   // 过滤日志
   const filteredLogs = useMemo(() => {
@@ -97,18 +107,41 @@ function LogsPage() {
     prevLogsLengthRef.current = logs.length;
   }, [logs.length, autoScroll, loading, isInitialLoad]);
 
-  // 导出日志
-  const handleExport = () => {
+  // 导出日志 (v6.2.11: 使用原生文件对话框)
+  const handleExport = async () => {
     const content = filteredLogs
       .map(log => `[${log.timestamp}] [${log.level}] ${log.message}`)
       .join('\n');
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `logs-${new Date().toISOString()}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+
+    // 生成默认文件名
+    const now = new Date();
+    const defaultFileName = `logs-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.txt`;
+
+    try {
+      const result = await SaveLogFile(content, defaultFileName);
+
+      // 用户取消不显示弹窗
+      if (!result.success && result.error === 'cancelled') {
+        return;
+      }
+
+      // 显示结果弹窗
+      setSaveResult({
+        success: result.success,
+        fileName: result.file_name,
+        filePath: result.file_path,
+        fileSize: result.file_size,
+        error: result.error
+      });
+      setShowSaveDialog(true);
+    } catch (err) {
+      // API 调用失败
+      setSaveResult({
+        success: false,
+        error: err.message || '保存失败'
+      });
+      setShowSaveDialog(true);
+    }
   };
 
   // 清空日志
@@ -197,6 +230,13 @@ function LogsPage() {
           </>
         )}
       </div>
+
+      {/* v6.2.11: 保存结果弹窗 */}
+      <SaveResultDialog
+        isOpen={showSaveDialog}
+        result={saveResult}
+        onClose={() => setShowSaveDialog(false)}
+      />
     </div>
   );
 }

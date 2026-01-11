@@ -3,7 +3,7 @@
 // 2025-11-28 17:02:47
 // ============================================
 
-// 状态选项配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint)
+// 状态选项配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint, v6.2.2+ 新增 partial_recovery)
 export const STATUS_OPTIONS = {
   all: '全部状态',
   pending: '等待中',
@@ -14,6 +14,7 @@ export const STATUS_OPTIONS = {
   awaiting_endpoint: '等待端点',
   completed: '已完成',
   partial_failed: '部分失败',
+  partial_recovery: '部分恢复',
   failed: '已失败',
   cancelled: '已取消'
 };

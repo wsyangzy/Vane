@@ -100,8 +100,8 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 	var lastResp *http.Response
 	var totalEndpointsAttempted int
 
-	// Track groups that have been put into cooldown during this request
-	groupsSetToCooldownThisRequest := make(map[string]bool)
+	// v6.2: 冷却机制已移除，改为追踪已暂停的渠道
+	groupsPausedThisRequest := make(map[string]bool)
 
 	for {
 		// Get healthy endpoints from currently active groups only (no auto group switching)
@@ -290,20 +290,21 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 			}
 		}
 
-		// After trying all endpoints in current iteration, put failed groups into cooldown
+		// After trying all endpoints in current iteration, pause failed groups
+		// v6.2: 冷却机制已移除，SetGroupCooldown 现在只是暂停渠道
 		if rh.endpointManager.GetConfig().Failover.Enabled {
 			for groupName := range groupsFailedThisIteration {
-				if !groupsSetToCooldownThisRequest[groupName] {
-					slog.WarnContext(ctx, fmt.Sprintf("❄️ [组失败] 组 %s 中所有端点均已失败，将组设置为冷却状态", groupName))
+				if !groupsPausedThisRequest[groupName] {
+					slog.WarnContext(ctx, fmt.Sprintf("⏸️ [渠道暂停] 渠道 %s 中所有端点均已失败，暂停该渠道", groupName))
 					rh.endpointManager.GetGroupManager().SetGroupCooldown(groupName)
-					groupsSetToCooldownThisRequest[groupName] = true
+					groupsPausedThisRequest[groupName] = true
 				}
 			}
 		}
 
 		// Check if automatic switching between channels is enabled
 		if rh.endpointManager.GetConfig().Failover.Enabled {
-			// Auto mode: Check if there are still active groups available after cooldown
+			// Auto mode: Check if there are still active groups available
 			// Get fresh endpoint list to see if any new groups became active
 			var newEndpoints []*endpoint.Endpoint
 			if rh.endpointManager.GetConfig().Strategy.Type == "fastest" && rh.endpointManager.GetConfig().Strategy.FastTestEnabled {
@@ -368,7 +369,8 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 		allGroups := rh.endpointManager.GetGroupManager().GetAllGroups()
 		availableGroups := make([]string, 0)
 		for _, group := range allGroups {
-			if !group.IsActive && !rh.endpointManager.GetGroupManager().IsGroupInCooldown(group.Name) {
+			// v6.2: 冷却机制已移除，只检查是否活跃和是否被暂停
+			if !group.IsActive && !group.ManuallyPaused {
 				// Check if group has healthy endpoints
 				healthyInGroup := 0
 				for _, ep := range group.Endpoints {
@@ -388,9 +390,9 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 			return nil, fmt.Errorf("current active group exhausted after trying %d endpoints, available backup groups: %v, please switch manually via web interface, last error: %w",
 				totalEndpointsAttempted, availableGroups, lastErr)
 		} else {
-			slog.ErrorContext(ctx, fmt.Sprintf("💥 [全部不可用] 所有组均不可用 - 总共尝试了 %d 个端点 - 最后错误: %v",
+			slog.ErrorContext(ctx, fmt.Sprintf("💥 [全部不可用] 所有组均不可用或已暂停 - 总共尝试了 %d 个端点 - 最后错误: %v",
 				totalEndpointsAttempted, lastErr))
-			return nil, fmt.Errorf("all groups exhausted or in cooldown after trying %d endpoints, last error: %w", totalEndpointsAttempted, lastErr)
+			return nil, fmt.Errorf("all groups exhausted or paused after trying %d endpoints, last error: %w", totalEndpointsAttempted, lastErr)
 		}
 	}
 }
@@ -561,152 +563,15 @@ func (rh *RetryHandler) GetSuspendedRequestsCount() int {
 }
 
 // shouldSuspendRequest determines if a request should be suspended
-// 条件：手动模式 + 有备用组 + 功能启用 + 未达到最大挂起数
+// v6.2: auto_wait 策略已移除，此方法始终返回 false
 func (rh *RetryHandler) shouldSuspendRequest(ctx context.Context) bool {
-	// 检查功能是否启用 (v6.1: 使用新的恢复策略判断)
-	if !rh.config.FailoverV2.RecoveryStrategy.ShouldWaitForRecovery() {
-		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 当前恢复策略不支持等待恢复 (策略: %s)，不挂起请求",
-			rh.config.FailoverV2.RecoveryStrategy.String()))
-		return false
-	}
-
-	// 检查是否为手动模式
-	if rh.config.Failover.Enabled {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 当前为自动切换模式，不挂起请求")
-		return false
-	}
-
-	// 检查当前挂起请求数量是否超过限制
-	rh.suspendedRequestsMutex.RLock()
-	currentCount := rh.suspendedRequestsCount
-	rh.suspendedRequestsMutex.RUnlock()
-
-	if currentCount >= rh.config.FailoverV2.AutoWaitMaxRequests {
-		slog.WarnContext(ctx, fmt.Sprintf("🚫 [挂起限制] 当前挂起请求数 %d 已达到最大限制 %d，不再挂起新请求",
-			currentCount, rh.config.FailoverV2.AutoWaitMaxRequests))
-		return false
-	}
-
-	// 检查是否存在可用的备用组
-	allGroups := rh.endpointManager.GetGroupManager().GetAllGroups()
-	hasAvailableBackupGroups := false
-	availableGroups := []string{}
-
-	slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 开始检查可用备用组，总共 %d 个组", len(allGroups)))
-
-	for _, group := range allGroups {
-		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 检查组 %s: IsActive=%t, InCooldown=%t",
-			group.Name, group.IsActive, rh.endpointManager.GetGroupManager().IsGroupInCooldown(group.Name)))
-
-		// 检查非活跃组且不在冷却期的组
-		if !group.IsActive && !rh.endpointManager.GetGroupManager().IsGroupInCooldown(group.Name) {
-			// 检查组内是否有健康端点
-			healthyCount := 0
-			for _, ep := range group.Endpoints {
-				if ep.IsHealthy() {
-					healthyCount++
-				}
-			}
-			slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 组 %s 健康端点数: %d", group.Name, healthyCount))
-
-			if healthyCount > 0 {
-				hasAvailableBackupGroups = true
-				availableGroups = append(availableGroups, fmt.Sprintf("%s(%d个健康端点)", group.Name, healthyCount))
-			}
-		}
-	}
-
-	if !hasAvailableBackupGroups {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 没有可用的备用组，不挂起请求")
-		return false
-	}
-
-	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 恢复策略=%s, 当前挂起数=%d/%d, 可用备用组=%v",
-		!rh.config.Failover.Enabled, rh.config.FailoverV2.RecoveryStrategy.String(),
-		currentCount, rh.config.FailoverV2.AutoWaitMaxRequests, availableGroups))
-
-	return true
+	// v6.2: 不再支持请求挂起功能
+	return false
 }
 
 // waitForGroupSwitch suspends the request and waits for group switch notification
-// 挂起请求等待组切换，返回是否成功切换到新组
+// v6.2: auto_wait 策略已移除，此方法始终返回 false
 func (rh *RetryHandler) waitForGroupSwitch(ctx context.Context, connID string) bool {
-	// 增加挂起请求计数
-	rh.suspendedRequestsMutex.Lock()
-	rh.suspendedRequestsCount++
-	currentCount := rh.suspendedRequestsCount
-	rh.suspendedRequestsMutex.Unlock()
-
-	// 确保在退出时减少计数
-	defer func() {
-		rh.suspendedRequestsMutex.Lock()
-		rh.suspendedRequestsCount--
-		newCount := rh.suspendedRequestsCount
-		rh.suspendedRequestsMutex.Unlock()
-		slog.InfoContext(ctx, fmt.Sprintf("⬇️ [挂起结束] 连接 %s 请求挂起结束，当前挂起数: %d", connID, newCount))
-	}()
-
-	slog.InfoContext(ctx, fmt.Sprintf("⏸️ [请求挂起] 连接 %s 请求已挂起，等待组切换 (当前挂起数: %d)", connID, currentCount))
-
-	// 状态管理已迁移到LifecycleManager，此处不再记录状态
-	// 历史注释：更新请求状态为挂起状态
-
-	// 订阅组切换通知
-	groupChangeNotify := rh.endpointManager.GetGroupManager().SubscribeToGroupChanges()
-	defer func() {
-		// 确保清理订阅，防止内存泄漏
-		rh.endpointManager.GetGroupManager().UnsubscribeFromGroupChanges(groupChangeNotify)
-		slog.DebugContext(ctx, fmt.Sprintf("🔌 [订阅清理] 连接 %s 组切换通知订阅已清理", connID))
-	}()
-
-	// 创建超时context
-	timeout := rh.config.FailoverV2.AutoWaitTimeout
-	if timeout <= 0 {
-		timeout = 300 * time.Second // 默认5分钟
-	}
-
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, timeout)
-	defer timeoutCancel()
-
-	slog.InfoContext(ctx, fmt.Sprintf("⏰ [挂起超时] 连接 %s 挂起超时设置: %v，等待组切换通知...", connID, timeout))
-
-	// 等待组切换通知或超时
-	select {
-	case newGroupName := <-groupChangeNotify:
-		// 收到组切换通知
-		slog.InfoContext(ctx, fmt.Sprintf("📡 [组切换通知] 连接 %s 收到组切换通知: %s，验证新组可用性", connID, newGroupName))
-
-		// 验证新激活的组是否有健康端点
-		newEndpoints := rh.endpointManager.GetHealthyEndpoints()
-		if len(newEndpoints) > 0 {
-			slog.InfoContext(ctx, fmt.Sprintf("✅ [切换成功] 连接 %s 新组 %s 有 %d 个健康端点，恢复请求处理",
-				connID, newGroupName, len(newEndpoints)))
-			return true
-		} else {
-			slog.WarnContext(ctx, fmt.Sprintf("⚠️ [切换无效] 连接 %s 新组 %s 暂无健康端点，挂起失败",
-				connID, newGroupName))
-			return false
-		}
-
-	case <-timeoutCtx.Done():
-		// 挂起超时
-		if timeoutCtx.Err() == context.DeadlineExceeded {
-			slog.WarnContext(ctx, fmt.Sprintf("⏰ [挂起超时] 连接 %s 挂起等待超时 (%v)，停止等待", connID, timeout))
-		} else {
-			slog.InfoContext(ctx, fmt.Sprintf("🔄 [上下文取消] 连接 %s 挂起期间上下文被取消", connID))
-		}
-		return false
-
-	case <-ctx.Done():
-		// 原始请求被取消
-		ctxErr := ctx.Err()
-		if ctxErr == context.Canceled {
-			slog.InfoContext(ctx, fmt.Sprintf("❌ [请求取消] 连接 %s 原始请求被客户端取消，结束挂起", connID))
-		} else if ctxErr == context.DeadlineExceeded {
-			slog.InfoContext(ctx, fmt.Sprintf("⏰ [请求超时] 连接 %s 原始请求上下文超时，结束挂起", connID))
-		} else {
-			slog.InfoContext(ctx, fmt.Sprintf("❌ [请求异常] 连接 %s 原始请求上下文异常: %v，结束挂起", connID, ctxErr))
-		}
-		return false
-	}
+	// v6.2: 不再支持请求挂起功能
+	return false
 }

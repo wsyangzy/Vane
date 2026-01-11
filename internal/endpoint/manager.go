@@ -24,14 +24,17 @@ import (
 )
 
 // EndpointStatus represents the health status of an endpoint
+// v6.2: CooldownUntil 和 CooldownReason 已移除，失败渠道通过手动"重试"按钮重新激活
 type EndpointStatus struct {
 	Healthy          bool
 	LastCheck        time.Time
 	ResponseTime     time.Duration
 	ConsecutiveFails int
-	NeverChecked     bool      // 表示从未被检测过
-	CooldownUntil    time.Time // 请求失败冷却截止时间
-	CooldownReason   string    // 冷却原因（如 "HTTP 503"）
+	NeverChecked     bool // 表示从未被检测过
+	// v6.2.9: 记录最后一次请求失败的 HTTP 状态码，用于 UI 显示
+	LastRequestFailCode int
+	// v6.2.10: 记录最后一次请求失败的原因，用于 UI 显示
+	LastRequestFailReason string
 }
 
 // Endpoint represents an endpoint with its configuration and status
@@ -70,12 +73,21 @@ func (m *Manager) UpdateChannelPriorities(priorities map[string]int) {
 	m.groupManager.UpdateChannelPriorities(priorities)
 }
 
-// UpdateChannelFailoverEnabled 同步“渠道是否参与渠道间故障转移”的开关到运行时组管理器。
+// UpdateChannelFailoverEnabled 同步"渠道是否参与渠道间故障转移"的开关到运行时组管理器。
 func (m *Manager) UpdateChannelFailoverEnabled(enabled map[string]bool) {
 	if m == nil || m.groupManager == nil {
 		return
 	}
 	m.groupManager.UpdateChannelFailoverEnabled(enabled)
+}
+
+// SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
+// v6.2.5: 仅更新指定渠道，不影响其他渠道。
+func (m *Manager) SetSingleChannelFailoverEnabled(channel string, enabled bool) {
+	if m == nil || m.groupManager == nil {
+		return
+	}
+	m.groupManager.SetSingleChannelFailoverEnabled(channel, enabled)
 }
 
 // NewManager creates a new endpoint manager
@@ -279,4 +291,55 @@ func (m *Manager) GetConfig() *config.Config {
 // GetGroupManager returns the group manager
 func (m *Manager) GetGroupManager() *GroupManager {
 	return m.groupManager
+}
+
+// SetEndpointLastRequestFailCode 设置端点最后一次请求失败的 HTTP 状态码
+// v6.2.9: 用于 UI 显示失败原因
+// v6.2.10: 新增 reason 参数，记录详细错误信息
+func (m *Manager) SetEndpointLastRequestFailCode(endpointName string, httpCode int) {
+	m.SetEndpointLastRequestFail(endpointName, httpCode, "")
+}
+
+// SetEndpointLastRequestFail 设置端点最后一次请求失败的信息（状态码 + 原因）
+// v6.2.10: 用于 UI 显示详细失败原因
+func (m *Manager) SetEndpointLastRequestFail(endpointName string, httpCode int, reason string) {
+	if m == nil || endpointName == "" {
+		return
+	}
+
+	// 先尝试精确匹配
+	ep := m.GetEndpointByNameAny(endpointName)
+	if ep == nil {
+		return
+	}
+
+	ep.mutex.Lock()
+	ep.Status.LastRequestFailCode = httpCode
+	ep.Status.LastRequestFailReason = reason
+	ep.mutex.Unlock()
+}
+
+// SetEndpointSkipHealthCheck 设置端点是否跳过健康检测（运行时同步）
+// v6.2.11: 用于前端快捷开关
+func (m *Manager) SetEndpointSkipHealthCheck(endpointKey string, skip bool) {
+	if m == nil || endpointKey == "" {
+		return
+	}
+
+	m.endpointsMu.Lock()
+	defer m.endpointsMu.Unlock()
+
+	for _, ep := range m.endpoints {
+		key := EndpointKey(ep.Config.Channel, ep.Config.Name)
+		if key == endpointKey {
+			ep.mutex.Lock()
+			ep.Config.SkipHealthCheck = skip
+			// 如果设置为跳过检测，将状态设为健康（视为可用）
+			if skip {
+				ep.Status.Healthy = true
+			}
+			ep.mutex.Unlock()
+			return
+		}
+	}
 }

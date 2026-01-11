@@ -1,6 +1,6 @@
 // ============================================
 // 端点编辑表单组件 (v5.0+ SQLite 存储模式)
-// 2025-12-05
+// v6.2.1 (2026-01-10) - 新建时隐藏优先级和超时字段（自动递增/使用全局默认）
 // ============================================
 
 import { useState } from 'react';
@@ -188,7 +188,7 @@ const EndpointForm = ({
         failoverEnabled: endpoint.failoverEnabled !== false,
         skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false, // v6.1
         cooldownSeconds: endpoint.cooldownSeconds || '',
-        timeoutSeconds: endpoint.timeoutSeconds || 300,
+        timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
         costMultiplier: endpoint.costMultiplier || 1.0,
         inputCostMultiplier: endpoint.inputCostMultiplier || 1.0,
@@ -204,11 +204,11 @@ const EndpointForm = ({
       url: '',
       token: '',
       apiKey: '',
-      priority: 1,
+      priority: 0, // v6.2.1: 新建时传0，让后端自动递增
       failoverEnabled: true,
       skipHealthCheck: false, // v6.1: 默认不跳过健康检查
       cooldownSeconds: '',
-      timeoutSeconds: 300,
+      timeoutSeconds: 0, // v6.2.1: 新建时传0，使用全局默认超时
       supportsCountTokens: false,
       costMultiplier: 1.0,
       inputCostMultiplier: 1.0,
@@ -456,42 +456,38 @@ const EndpointForm = ({
             </div>
           </div>
 
-          {/* 路由配置 */}
+          {/* 路由配置（仅编辑模式显示标题和输入项） */}
           <div className="space-y-4 mb-6">
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-              路由配置
-            </h3>
+            {isEditMode && (
+              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
+                路由配置
+              </h3>
+            )}
 
-            <div className="grid grid-cols-3 gap-4">
-              <FormInput
-                label="优先级"
-                name="priority"
-                value={formData.priority}
-                onChange={handleChange}
-                type="number"
-                placeholder="1"
-                help="数字越小优先级越高"
-              />
+            {isEditMode && (
+              <div className="grid gap-4 grid-cols-2">
+                <FormInput
+                  label="优先级"
+                  name="priority"
+                  value={formData.priority}
+                  onChange={handleChange}
+                  type="number"
+                  placeholder="1"
+                  help="数字越小优先级越高，相同则交换"
+                />
 
-              <FormInput
-                label="超时时间 (秒)"
-                name="timeoutSeconds"
-                value={formData.timeoutSeconds}
-                onChange={handleChange}
-                type="number"
-                placeholder="300"
-              />
-
-              <FormInput
-                label="冷却时间 (秒)"
-                name="cooldownSeconds"
-                value={formData.cooldownSeconds}
-                onChange={handleChange}
-                type="number"
-                placeholder="使用全局配置"
-                help="留空使用全局配置"
-              />
-            </div>
+                {/* v6.2.1: 超时时间 - 留空使用全局默认值 */}
+                <FormInput
+                  label="超时时间 (秒)"
+                  name="timeoutSeconds"
+                  value={formData.timeoutSeconds || ''}
+                  onChange={handleChange}
+                  type="number"
+                  placeholder="默认: 300 (全局配置)"
+                  help="单次请求的最大等待时间，留空使用全局配置"
+                />
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <FormCheckbox

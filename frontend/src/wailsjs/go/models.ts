@@ -165,7 +165,6 @@ export namespace main {
 	    tracking_enabled: boolean;
 	    failover_enabled: boolean;
 	    failover_default_cooldown_seconds: number;
-	    failover_allow_revisit_after_exhausted: boolean;
 	    endpoint_count: number;
 	
 	    static createFrom(source: any = {}) {
@@ -181,7 +180,6 @@ export namespace main {
 	        this.tracking_enabled = source["tracking_enabled"];
 	        this.failover_enabled = source["failover_enabled"];
 	        this.failover_default_cooldown_seconds = source["failover_default_cooldown_seconds"];
-	        this.failover_allow_revisit_after_exhausted = source["failover_allow_revisit_after_exhausted"];
 	        this.endpoint_count = source["endpoint_count"];
 	    }
 	}
@@ -294,8 +292,8 @@ export namespace main {
 	export class EndpointHealthData {
 	    healthy: number;
 	    unhealthy: number;
-	    unchecked: number;
 	    skipped: number;
+	    excluded: number;
 	    total: number;
 	
 	    static createFrom(source: any = {}) {
@@ -306,8 +304,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.healthy = source["healthy"];
 	        this.unhealthy = source["unhealthy"];
-	        this.unchecked = source["unchecked"];
 	        this.skipped = source["skipped"];
+	        this.excluded = source["excluded"];
 	        this.total = source["total"];
 	    }
 	}
@@ -325,6 +323,8 @@ export namespace main {
 	    last_check: string;
 	    response_time_ms: number;
 	    consecutive_fail: number;
+	    last_fail_code: number;
+	    last_fail_reason: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EndpointInfo(source);
@@ -345,6 +345,8 @@ export namespace main {
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
 	        this.consecutive_fail = source["consecutive_fail"];
+	        this.last_fail_code = source["last_fail_code"];
+	        this.last_fail_reason = source["last_fail_reason"];
 	    }
 	}
 	export class KeyInfo {
@@ -432,6 +434,8 @@ export namespace main {
 	    never_checked: boolean;
 	    last_check: string;
 	    response_time_ms: number;
+	    last_fail_code: number;
+	    last_fail_reason: string;
 	    in_cooldown: boolean;
 	    cooldown_until: string;
 	    cooldown_reason: string;
@@ -470,6 +474,8 @@ export namespace main {
 	        this.never_checked = source["never_checked"];
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
+	        this.last_fail_code = source["last_fail_code"];
+	        this.last_fail_reason = source["last_fail_reason"];
 	        this.in_cooldown = source["in_cooldown"];
 	        this.cooldown_until = source["cooldown_until"];
 	        this.cooldown_reason = source["cooldown_reason"];
@@ -739,6 +745,26 @@ export namespace main {
 	    }
 	}
 	
+	export class SaveFileResult {
+	    success: boolean;
+	    file_path: string;
+	    file_name: string;
+	    file_size: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveFileResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.file_path = source["file_path"];
+	        this.file_name = source["file_name"];
+	        this.file_size = source["file_size"];
+	        this.error = source["error"];
+	    }
+	}
 	export class SettingInfo {
 	    id: number;
 	    category: string;

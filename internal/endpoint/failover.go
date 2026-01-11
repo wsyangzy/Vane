@@ -1,5 +1,5 @@
 // failover.go - 故障转移相关功能
-// 包含请求级故障转移、冷却机制、端点切换等
+// v6.2: 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
 
 package endpoint
 
@@ -26,11 +26,13 @@ func (m *Manager) collectFailoverCandidates(excludeChannel string) []groupCandid
 	return m.collectFailoverCandidatesExcluding(exclude)
 }
 
+// collectFailoverCandidatesExcluding 收集故障转移候选渠道
+// exclude: 要排除的渠道名称集合
+// v6.2: 冷却机制已移除
 func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}) []groupCandidate {
 	// 说明：
-	// - 可用性判定不依赖“响应时间快慢”，而依赖：未暂停、未处于渠道冷却、渠道内至少存在一个可用端点
-	// - “fastest” 仅用于在候选渠道之间做排序（按渠道内可用端点的最小响应时间），不会因为慢就判定不可用
-	now := time.Now()
+	// - 可用性判定不依赖"响应时间快慢"，而依赖：未暂停、渠道内至少存在一个可用端点
+	// - "fastest" 仅用于在候选渠道之间做排序（按渠道内可用端点的最小响应时间），不会因为慢就判定不可用
 	candidates := make([]groupCandidate, 0, 8)
 
 	for _, g := range m.groupManager.GetAllGroups() {
@@ -43,11 +45,8 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 		if g.ManuallyPaused {
 			continue
 		}
-		if !g.CooldownUntil.IsZero() && now.Before(g.CooldownUntil) {
-			continue
-		}
 
-		// 渠道内至少有一个“可用端点”才视为可切换（与渠道内路由候选保持一致）
+		// 渠道内至少有一个"可用端点"才视为可切换（与渠道内路由候选保持一致）
 		hasAvailableEndpoint := false
 
 		bestRT := time.Duration(math.MaxInt64)
@@ -66,22 +65,18 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 			}
 
 			ep.mutex.RLock()
-			inEndpointCooldown := !ep.Status.CooldownUntil.IsZero() && now.Before(ep.Status.CooldownUntil)
 			isHealthy := ep.Status.Healthy
 			neverChecked := ep.Status.NeverChecked
 			rt := ep.Status.ResponseTime
 			ep.mutex.RUnlock()
 
-			if inEndpointCooldown {
-				continue
-			}
 			if !(isHealthy || neverChecked) {
 				continue
 			}
 
 			hasAvailableEndpoint = true
 
-			// fastest 策略的排序依据：优先使用“已测得”的响应时间；未测得则不参与 bestRT
+			// fastest 策略的排序依据：优先使用"已测得"的响应时间；未测得则不参与 bestRT
 			if rt > 0 {
 				hasBestRT = true
 				if rt < bestRT {
@@ -153,10 +148,28 @@ func (m *Manager) SelectNextAvailableChannel(excludeChannel string) (string, err
 }
 
 // SelectNextAvailableChannelExcluding 选择下一个可用渠道（排除多个渠道）。
-// 方案B：用于请求链路内的“渠道间故障转移”，避免冷却结束后回到已故障转移过的渠道造成循环。
+// 方案B：用于请求链路内的"渠道间故障转移"，避免冷却结束后回到已故障转移过的渠道造成循环。
+// 向后兼容：不检查循环次数限制，使用 SelectNextAvailableChannelExcludingWithLoopCount 进行完整限制检查。
 func (m *Manager) SelectNextAvailableChannelExcluding(excludeChannels []string) (string, error) {
+	return m.SelectNextAvailableChannelExcludingWithLoopCount(excludeChannels, 0)
+}
+
+// SelectNextAvailableChannelExcludingWithLoopCount 选择下一个可用渠道（带循环计数限制）。
+// loopCount: 当前已完成的循环轮数（从 0 开始）。当所有渠道耗尽时，如果启用循环重试且未达到 MaxLoops，将开始新一轮。
+// 返回值: (新渠道名, 是否开始新循环, 错误)
+func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChannels []string, loopCount int) (string, error) {
 	if m == nil || m.groupManager == nil || m.config == nil {
 		return "", fmt.Errorf("配置未初始化")
+	}
+
+	// v6.2.7: 在函数开头检查 loopCount 限制，防止绕过
+	// 当启用循环重试且 loopCount > 0 时，说明已经进入循环重试模式
+	if m.config.FailoverV2.ShouldLoopRetryOnExhausted() && loopCount > 0 {
+		maxLoops := m.config.FailoverV2.GetMaxLoops()
+		if maxLoops > 0 && loopCount >= maxLoops {
+			slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
+			return "", fmt.Errorf("服务暂时不可用: 所有渠道均已尝试 (共循环 %d 轮), 请稍后重试", maxLoops)
+		}
 	}
 
 	exclude := make(map[string]struct{}, len(excludeChannels))
@@ -169,21 +182,29 @@ func (m *Manager) SelectNextAvailableChannelExcluding(excludeChannels []string) 
 
 	candidates := m.collectFailoverCandidatesExcluding(exclude)
 	if len(candidates) == 0 {
-		// v6.1: 使用统一的恢复策略替代原有的 AllowRevisitAfterExhausted 判断
-		if m.config.FailoverV2.RecoveryStrategy.ShouldLoopRetry() {
-			// 循环重试策略：当"所有渠道都尝试过"时，允许回到最高优先级渠道继续尝试（仍跳过暂停/冷却渠道）
+		// v6.2: 使用 LoopRetry 配置替代原有的 RecoveryStrategy 判断
+		if m.config.FailoverV2.ShouldLoopRetryOnExhausted() {
+			// 检查循环次数限制
+			maxLoops := m.config.FailoverV2.GetMaxLoops()
+			if maxLoops > 0 && loopCount >= maxLoops {
+				slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
+				return "", fmt.Errorf("服务暂时不可用: 所有渠道均已尝试 (共循环 %d 轮), 请稍后重试", maxLoops)
+			}
+
+			// 循环重试策略：当"所有渠道都尝试过"时，允许回到最高优先级渠道继续尝试
+			// v6.2.7: 循环重试时，重置所有端点健康状态，允许重新选择
+			m.resetAllEndpointsHealthForLoopRetry()
 			candidates = m.collectFailoverCandidatesExcluding(nil)
 			if len(candidates) == 0 {
-				return "", fmt.Errorf("没有可用的故障转移渠道")
+				return "", fmt.Errorf("没有可用的故障转移渠道（无活跃端点）")
 			}
 			sortFailoverCandidates("priority", candidates)
-			slog.Warn(fmt.Sprintf("🔄 [循环重试策略] 已尝试所有渠道，回到最高优先级渠道继续尝试: %s", candidates[0].name))
+			slog.Warn(fmt.Sprintf("🔄 [循环重试] 已尝试所有渠道，开始第 %d 轮重试，回到最高优先级渠道: %s", loopCount+1, candidates[0].name))
 			return candidates[0].name, nil
 		}
 		if len(exclude) > 0 {
-			// 其他策略（auto_wait / fail_fast）：不允许循环重试
-			slog.Warn(fmt.Sprintf("⏸️ [恢复策略: %s] 已尝试所有渠道（%d个），等待恢复或快速失败",
-				m.config.FailoverV2.RecoveryStrategy.String(), len(exclude)))
+			// 快速失败策略：不允许循环重试
+			slog.Warn(fmt.Sprintf("⏸️ [快速失败] 已尝试所有渠道（%d个），停止并提示用户", len(exclude)))
 			return "", fmt.Errorf("没有可用的故障转移渠道（已尝试渠道数=%d）", len(exclude))
 		}
 		return "", fmt.Errorf("没有可用的故障转移渠道")
@@ -214,7 +235,16 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpoints(failedEndpointNames 
 
 // TriggerRequestFailoverWithFailedEndpointsExcludingChannels 触发请求级故障转移（跨渠道切换）。
 // excludeChannels: 本次请求链路中已尝试过的渠道（方案B：不回访，避免循环）。
+// 向后兼容：不检查循环次数限制。
 func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(failedEndpointNames []string, excludeChannels []string, reason string) (string, error) {
+	return m.TriggerRequestFailoverWithLoopCount(failedEndpointNames, excludeChannels, reason, 0)
+}
+
+// TriggerRequestFailoverWithLoopCount 触发请求级故障转移（跨渠道切换，带循环计数限制）。
+// excludeChannels: 本次请求链路中已尝试过的渠道（方案B：不回访，避免循环）。
+// loopCount: 当前已完成的循环轮数（从 0 开始）。
+// v6.2: 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
+func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []string, excludeChannels []string, reason string, loopCount int) (string, error) {
 	slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] 触发渠道间故障转移，原因: %s", reason))
 
 	// 未启用故障转移时不进行跨渠道切换（保持配置语义）
@@ -255,7 +285,7 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(fai
 		return "", fmt.Errorf("无法解析失败渠道（端点不存在或未初始化）")
 	}
 
-	// 方案B：确保失败渠道被纳入“已尝试渠道”集合（不回访）
+	// 方案B：确保失败渠道被纳入"已尝试渠道"集合（不回访）
 	if failedChannel != "" {
 		found := false
 		for _, name := range excludeChannels {
@@ -269,40 +299,29 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(fai
 		}
 	}
 
-	// 2) 失败端点统一进入冷却（最佳努力：不阻塞跨渠道切换）
-	cooldownApplied := 0
-	var lastUntil time.Time
+	// 2) v6.2: 冷却机制已移除，标记失败端点为不健康
+	// v6.2.6: 同时设置 NeverChecked = false，防止 neverChecked 端点被误认为"可用"而导致无限循环
+	// v6.2.9: 合并日志输出，避免循环重试时日志膨胀
+	var markedEndpoints []string
 	for _, name := range uniqueNames {
 		ep := m.GetEndpointByNameAny(name)
 		if ep == nil {
-			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 设置端点冷却失败：端点不存在: %s", name))
 			continue
 		}
-		if ChannelKey(ep) != failedChannel {
-			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 跳过不属于失败渠道的端点冷却: %s (channel=%s, failed_channel=%s)",
-				name, ChannelKey(ep), failedChannel))
-			continue
-		}
-
-		until, err := m.SetEndpointCooldown(name, reason)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 设置端点冷却失败: %s, 错误: %v", name, err))
-			continue
-		}
-		lastUntil = until
-		cooldownApplied++
+		ep.mutex.Lock()
+		ep.Status.Healthy = false
+		ep.Status.NeverChecked = false // 关键修复：防止 neverChecked 端点在故障转移候选中被误判为可用
+		ep.mutex.Unlock()
+		markedEndpoints = append(markedEndpoints, name)
 	}
-	if cooldownApplied > 0 {
-		slog.Info(fmt.Sprintf("⏱️ [渠道间故障转移] 端点冷却已应用: channel=%s endpoints=%d 恢复时间(示例): %s",
-			failedChannel, cooldownApplied, lastUntil.Format("15:04:05")))
+	if len(markedEndpoints) > 0 {
+		slog.Info(fmt.Sprintf("❌ [渠道间故障转移] 端点标记为不健康: %v (共%d个)", markedEndpoints, len(markedEndpoints)))
 	}
 
-	// 3) 将失败渠道置为冷却，触发跨渠道切换
-	m.groupManager.SetGroupCooldown(failedChannel)
-
-	// 4) 选择并激活下一个可用渠道（由 strategy + 可用性共同决定）
+	// 3) 选择并激活下一个可用渠道（由 strategy + 可用性共同决定）
 	// 方案B：不回访已尝试渠道；且渠道间切换顺序固定按优先级
-	newChannel, err := m.SelectNextAvailableChannelExcluding(excludeChannels)
+	// v6.2: 使用带循环计数的方法，支持 MaxLoops 限制
+	newChannel, err := m.SelectNextAvailableChannelExcludingWithLoopCount(excludeChannels, loopCount)
 	if err != nil {
 		slog.Error("❌ [渠道间故障转移] 没有可用的故障转移渠道")
 		return "", err
@@ -310,7 +329,7 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(fai
 
 	if err := m.groupManager.ManualActivateGroup(newChannel); err != nil {
 		// 兼容：新渠道端点可能处于 neverChecked（尚未健康检查），但请求级故障转移应允许先切过去尝试。
-		// 这里回退到强制激活，避免因“尚未健康检查”而无法完成跨渠道切换。
+		// 这里回退到强制激活，避免因"尚未健康检查"而无法完成跨渠道切换。
 		slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
 		if err2 := m.groupManager.ManualActivateGroupWithForce(newChannel, true); err2 != nil {
 			slog.Error(fmt.Sprintf("❌ [渠道间故障转移] 强制激活新渠道失败: %v", err2))
@@ -320,12 +339,12 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(fai
 
 	slog.Info(fmt.Sprintf("✅ [渠道间故障转移] 已切换到渠道: %s", newChannel))
 
-	// 5) 调用回调通知 App 层同步数据库
+	// 4) 调用回调通知 App 层同步数据库
 	if m.onFailoverTriggered != nil {
 		go m.onFailoverTriggered(failedChannel, newChannel)
 	}
 
-	// 6) 触发前端刷新
+	// 5) 触发前端刷新
 	if m.onHealthCheckComplete != nil {
 		go m.onHealthCheckComplete()
 	}
@@ -338,47 +357,52 @@ func (m *Manager) TriggerRequestFailover(failedEndpointName string, reason strin
 	return m.TriggerRequestFailoverWithFailedEndpoints([]string{failedEndpointName}, reason)
 }
 
-// IsEndpointInCooldown 检查端点是否在冷却中
-func (m *Manager) IsEndpointInCooldown(name string) bool {
-	ep := m.GetEndpointByNameAny(name)
-	if ep == nil {
-		return false
-	}
+// v6.2: 以下冷却相关函数已移除
+// - IsEndpointInCooldown
+// - ClearEndpointCooldown
+// - GetEndpointCooldownInfo
+// 失败渠道通过手动"重试"按钮重新激活
 
-	ep.mutex.RLock()
-	defer ep.mutex.RUnlock()
-
-	return !ep.Status.CooldownUntil.IsZero() && time.Now().Before(ep.Status.CooldownUntil)
-}
-
-// ClearEndpointCooldown 清除端点冷却状态（用于手动激活时）
-func (m *Manager) ClearEndpointCooldown(name string) {
-	ep := m.GetEndpointByNameAny(name)
-	if ep == nil {
+// resetAllEndpointsHealthForLoopRetry 循环重试时重置所有端点健康状态
+// v6.2.7: 循环重试策略下，允许对已失败的端点进行重新尝试
+// v6.2.10: 移除智能重置逻辑，统一重置所有端点（用户可通过 UI 查看失败原因）
+func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
+	if m == nil || m.groupManager == nil {
 		return
 	}
 
-	ep.mutex.Lock()
-	defer ep.mutex.Unlock()
+	resetCount := 0
 
-	if !ep.Status.CooldownUntil.IsZero() {
-		slog.Info(fmt.Sprintf("🔓 [冷却] 清除端点冷却: %s (原因: %s)", name, ep.Status.CooldownReason))
-		ep.Status.CooldownUntil = time.Time{}
-		ep.Status.CooldownReason = ""
+	for _, g := range m.groupManager.GetAllGroups() {
+		if g == nil || g.ManuallyPaused {
+			continue
+		}
+		for _, ep := range g.Endpoints {
+			if ep == nil {
+				continue
+			}
+
+			// 检查 failover_enabled
+			failoverEnabled := true
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			if !failoverEnabled {
+				continue
+			}
+
+			ep.mutex.Lock()
+			if !ep.Status.Healthy {
+				ep.Status.Healthy = true
+				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
+				// 注意：不清除 LastRequestFailCode 和 LastRequestFailReason，保留给 UI 显示
+				resetCount++
+			}
+			ep.mutex.Unlock()
+		}
 	}
-}
 
-// GetEndpointCooldownInfo 获取端点冷却信息
-func (m *Manager) GetEndpointCooldownInfo(name string) (inCooldown bool, until time.Time, reason string) {
-	ep := m.GetEndpointByNameAny(name)
-	if ep == nil {
-		return false, time.Time{}, ""
+	if resetCount > 0 {
+		slog.Info(fmt.Sprintf("🔄 [循环重试] 已重置 %d 个端点健康状态，准备新一轮尝试", resetCount))
 	}
-
-	ep.mutex.RLock()
-	defer ep.mutex.RUnlock()
-
-	now := time.Now()
-	inCooldown = !ep.Status.CooldownUntil.IsZero() && now.Before(ep.Status.CooldownUntil)
-	return inCooldown, ep.Status.CooldownUntil, ep.Status.CooldownReason
 }

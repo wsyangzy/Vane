@@ -155,6 +155,20 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		)
 	}
 
+	// v6.2.3+: 渠道变更时，自动调整优先级为目标渠道的下一个可用值
+	// 避免转移后与目标渠道现有端点的优先级冲突
+	if record.Channel != existing.Channel {
+		maxPriority, err := s.store.GetMaxPriorityByChannel(ctx, record.Channel)
+		if err != nil {
+			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取目标渠道最大优先级失败: %v", err))
+			maxPriority = 0
+		}
+		newPriority := maxPriority + 1
+		slog.Info(fmt.Sprintf("🔄 [EndpointService] 端点渠道变更: %s -> %s，优先级自动调整: %d -> %d",
+			existing.Channel, record.Channel, record.Priority, newPriority))
+		record.Priority = newPriority
+	}
+
 	// v6.1+: 优先级冲突检测与对调
 	// 仅当优先级发生变化且在同一渠道内时触发
 	if record.Priority != existing.Priority && record.Channel == existing.Channel {

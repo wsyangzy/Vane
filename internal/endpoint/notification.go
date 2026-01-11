@@ -60,8 +60,7 @@ func (m *Manager) ManualActivateGroup(groupName string) error {
 		return err
 	}
 
-	// 清除端点的冷却状态（用户手动激活时取消冷却）
-	m.ClearEndpointCooldown(groupName)
+	// v6.2: 冷却机制已移除
 
 	// Notify web interface about group change
 	go m.notifyWebGroupChange("group_manually_activated", groupName)
@@ -76,8 +75,7 @@ func (m *Manager) ManualActivateGroupWithForce(groupName string, force bool) err
 		return err
 	}
 
-	// 清除端点的冷却状态（用户手动激活时取消冷却）
-	m.ClearEndpointCooldown(groupName)
+	// v6.2: 冷却机制已移除
 
 	// Notify web interface about group change
 	if force {

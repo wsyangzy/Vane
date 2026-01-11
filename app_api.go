@@ -14,8 +14,12 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // 端口检测缓存（避免频繁 TCP 连接）
@@ -135,10 +139,10 @@ type ConfigInfo struct {
 	ProxyEnabled    bool   `json:"proxy_enabled"`
 	TrackingEnabled bool   `json:"tracking_enabled"`
 	FailoverEnabled bool   `json:"failover_enabled"`
-	// FailoverDefaultCooldownSeconds 全局默认冷却时间（秒），用于前端在端点未设置专属冷却时展示“实际生效值”。
-	FailoverDefaultCooldownSeconds     int  `json:"failover_default_cooldown_seconds"`
-	FailoverAllowRevisitAfterExhausted bool `json:"failover_allow_revisit_after_exhausted"`
-	EndpointCount                      int  `json:"endpoint_count"`
+	// FailoverDefaultCooldownSeconds 全局默认冷却时间（秒），用于前端在端点未设置专属冷却时展示"实际生效值"。
+	// v6.2: 设置页面已移除此配置项（loop_retry 模式下冷却时间与循环重试逻辑冲突），使用固定默认值 600 秒。
+	FailoverDefaultCooldownSeconds int `json:"failover_default_cooldown_seconds"`
+	EndpointCount                  int `json:"endpoint_count"`
 }
 
 // GetConfig 获取当前配置（脱敏）
@@ -151,20 +155,14 @@ func (a *App) GetConfig() ConfigInfo {
 	}
 
 	return ConfigInfo{
-		ServerHost:                         a.config.Server.Host,
-		ServerPort:                         a.config.Server.Port,
-		AuthEnabled:                        a.config.Auth.Enabled,
-		ProxyEnabled:                       a.config.Proxy.Enabled,
-		TrackingEnabled:                    a.config.UsageTracking.Enabled,
-		FailoverEnabled:                    a.config.Failover.Enabled,
-		FailoverAllowRevisitAfterExhausted: a.config.Failover.AllowRevisitAfterExhausted,
-		FailoverDefaultCooldownSeconds: func() int {
-			if a.config.Failover.DefaultCooldown > 0 {
-				return int(a.config.Failover.DefaultCooldown.Seconds())
-			}
-			return 600
-		}(),
-		EndpointCount: len(a.config.Endpoints),
+		ServerHost:                     a.config.Server.Host,
+		ServerPort:                     a.config.Server.Port,
+		AuthEnabled:                    a.config.Auth.Enabled,
+		ProxyEnabled:                   a.config.Proxy.Enabled,
+		TrackingEnabled:                a.config.UsageTracking.Enabled,
+		FailoverEnabled:                a.config.Failover.Enabled,
+		FailoverDefaultCooldownSeconds: 600, // v6.2: 固定默认值，设置页面已移除此配置项
+		EndpointCount:                  len(a.config.Endpoints),
 	}
 }
 
@@ -267,4 +265,66 @@ func parseTimeWithLocation(s string, loc *time.Location) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unable to parse time: %s", s)
+}
+
+// ============================================================
+// 文件操作 API (v6.2.11+)
+// ============================================================
+
+// SaveFileResult 文件保存结果
+type SaveFileResult struct {
+	Success  bool   `json:"success"`
+	FilePath string `json:"file_path"`
+	FileName string `json:"file_name"`
+	FileSize int64  `json:"file_size"` // 字节数
+	Error    string `json:"error,omitempty"`
+}
+
+// SaveLogFile 保存日志到文件（使用原生文件对话框）
+// content: 日志内容
+// defaultFileName: 默认文件名
+func (a *App) SaveLogFile(content string, defaultFileName string) SaveFileResult {
+	if a.ctx == nil {
+		return SaveFileResult{Success: false, Error: "应用上下文未初始化"}
+	}
+
+	// 使用 Wails 原生保存文件对话框
+	filePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           "保存日志文件",
+		DefaultFilename: defaultFileName,
+		Filters: []runtime.FileFilter{
+			{DisplayName: "文本文件 (*.txt)", Pattern: "*.txt"},
+			{DisplayName: "日志文件 (*.log)", Pattern: "*.log"},
+			{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
+		},
+	})
+
+	if err != nil {
+		return SaveFileResult{Success: false, Error: fmt.Sprintf("打开保存对话框失败: %v", err)}
+	}
+
+	// 用户取消了对话框
+	if filePath == "" {
+		return SaveFileResult{Success: false, Error: "cancelled"}
+	}
+
+	// 写入文件
+	err = os.WriteFile(filePath, []byte(content), 0644)
+	if err != nil {
+		return SaveFileResult{Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
+	}
+
+	// 获取文件信息
+	fileInfo, _ := os.Stat(filePath)
+	var fileSize int64
+	if fileInfo != nil {
+		fileSize = fileInfo.Size()
+	}
+
+	return SaveFileResult{
+		Success:  true,
+		FilePath: filePath,
+		FileName: filepath.Base(filePath),
+		FileSize: fileSize,
+	}
 }

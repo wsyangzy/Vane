@@ -186,6 +186,10 @@ export function IsProxyRunning() {
   return window['go']['main']['App']['IsProxyRunning']();
 }
 
+export function OpenLogDir() {
+  return window['go']['main']['App']['OpenLogDir']();
+}
+
 export function PauseGroup(arg1) {
   return window['go']['main']['App']['PauseGroup'](arg1);
 }
@@ -202,6 +206,10 @@ export function ResumeGroup(arg1) {
   return window['go']['main']['App']['ResumeGroup'](arg1);
 }
 
+export function SaveLogFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveLogFile'](arg1, arg2);
+}
+
 export function SetDefaultModelPricing(arg1) {
   return window['go']['main']['App']['SetDefaultModelPricing'](arg1);
 }
@@ -216,6 +224,10 @@ export function SetEndpointFailoverEnabledByID(arg1, arg2) {
 
 export function SetEndpointPriority(arg1, arg2) {
   return window['go']['main']['App']['SetEndpointPriority'](arg1, arg2);
+}
+
+export function SetEndpointSkipHealthCheckByID(arg1, arg2) {
+  return window['go']['main']['App']['SetEndpointSkipHealthCheckByID'](arg1, arg2);
 }
 
 export function ShowMainWindow() {

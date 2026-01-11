@@ -10,101 +10,7 @@ import (
 	"claude-request-forwarder/config"
 )
 
-// TestEmergencyActivationCooldownScenarios 测试应急激活在冷却期间的行为
-func TestEmergencyActivationCooldownScenarios(t *testing.T) {
-	// 创建测试配置
-	cfg := &config.Config{
-		Group: config.GroupConfig{
-			Cooldown:                time.Second * 2, // 短冷却时间用于测试
-			AutoSwitchBetweenGroups: false,
-		},
-		Failover: config.FailoverConfig{
-			Enabled:         false,
-			DefaultCooldown: time.Second * 2,
-		},
-	}
-
-	// 创建组管理器
-	gm := NewGroupManager(cfg)
-
-	// 创建测试端点
-	// v4.0: 端点名即组名
-	endpoints := []*Endpoint{
-		{
-			Config: config.EndpointConfig{
-				Name:          "endpoint-1",
-				URL:           "https://api.example.com",
-				Group:         "test-group",  // v3.x兼容字段，v4.0中会被忽略
-				GroupPriority: 1,
-				Priority:      1,
-			},
-			Status: EndpointStatus{
-				Healthy: false,
-			},
-		},
-	}
-
-	gm.UpdateGroups(endpoints)
-
-	t.Run("冷却期间应急激活应该被拒绝", func(t *testing.T) {
-		t.Log("=== 测试冷却期间应急激活被拒绝 ===")
-
-		// v4.0: 组名是端点名
-		groupName := "endpoint-1"
-
-		// 手动设置组进入冷却状态
-		groups := gm.GetAllGroups()
-		testGroup := findGroupByName(groups, groupName)
-		require.NotNil(t, testGroup, "应该找到"+groupName)
-
-		// 直接设置冷却时间
-		gm.mutex.Lock()
-		gm.groups[groupName].CooldownUntil = time.Now().Add(time.Hour)
-		gm.mutex.Unlock()
-
-		// 尝试应急激活（应该被拒绝）
-		err := gm.ManualActivateGroupWithForce(groupName, true)
-		assert.Error(t, err, "冷却期间应急激活应该被拒绝")
-		assert.Contains(t, err.Error(), "仍在冷却中", "错误消息应该提到冷却")
-		assert.Contains(t, err.Error(), "剩余时间", "错误消息应该提到剩余时间")
-
-		t.Logf("✅ 冷却期间应急激活被正确拒绝: %v", err.Error())
-	})
-
-	t.Run("冷却结束后应急激活应该成功", func(t *testing.T) {
-		t.Log("=== 测试冷却结束后应急激活成功 ===")
-
-		// v4.0: 组名是端点名
-		groupName := "endpoint-1"
-
-		// 清除冷却状态
-		gm.mutex.Lock()
-		gm.groups[groupName].CooldownUntil = time.Time{}
-		gm.groups[groupName].IsActive = false
-		gm.groups[groupName].ForcedActivation = false
-		gm.groups[groupName].ForcedActivationTime = time.Time{}
-		gm.mutex.Unlock()
-
-		// 确保端点不健康
-		endpoints[0].Status.Healthy = false
-		gm.UpdateGroups(endpoints)
-
-		// 尝试应急激活（应该成功）
-		err := gm.ManualActivateGroupWithForce(groupName, true)
-		assert.NoError(t, err, "冷却结束后应急激活应该成功")
-
-		// 验证激活状态
-		groups := gm.GetAllGroups()
-		testGroup := findGroupByName(groups, groupName)
-		require.NotNil(t, testGroup, "应该找到"+groupName)
-
-		assert.True(t, testGroup.IsActive, "组应该已激活")
-		assert.True(t, testGroup.ForcedActivation, "应该标记为强制激活")
-		assert.False(t, testGroup.ForcedActivationTime.IsZero(), "应该有强制激活时间")
-
-		t.Logf("✅ 冷却结束后应急激活成功")
-	})
-}
+// v6.2: 冷却机制已移除，TestEmergencyActivationCooldownScenarios 测试已删除
 
 // TestEmergencyActivationEdgeCases 测试应急激活的边缘情况
 func TestEmergencyActivationEdgeCases(t *testing.T) {
@@ -188,7 +94,7 @@ func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 		for _, group := range gm.groups {
 			group.IsActive = false
 			group.ManuallyPaused = false
-			group.CooldownUntil = time.Time{}
+			// v6.2: CooldownUntil 已移除
 		}
 
 		// v4.0: 组名就是端点名

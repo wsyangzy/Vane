@@ -70,22 +70,22 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 			CategoryStrategy: {
 				Name:        CategoryStrategy,
 				Label:       "路由策略",
-				Description: "配置请求路由策略和快速测试",
+				Description: "配置渠道内端点选择策略",
 				Icon:        "🔀",
 				Order:       2,
-			},
-			CategoryRetry: {
-				Name:        CategoryRetry,
-				Label:       "重试配置",
-				Description: "配置请求失败重试行为",
-				Icon:        "🔄",
-				Order:       3,
 			},
 			CategoryHealth: {
 				Name:        CategoryHealth,
 				Label:       "健康检查",
 				Description: "配置端点健康检查参数",
 				Icon:        "❤️",
+				Order:       3,
+			},
+			CategoryRetry: {
+				Name:        CategoryRetry,
+				Label:       "重试配置",
+				Description: "配置请求失败重试行为",
+				Icon:        "🔄",
 				Order:       4,
 			},
 			CategoryFailover: {
@@ -98,7 +98,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 			CategoryRequest: {
 				Name:        CategoryRequest,
 				Label:       "请求控制",
-				Description: "配置请求超时、恢复策略和挂起行为",
+				Description: "配置请求超时和流式传输行为",
 				Icon:        "⏱️",
 				Order:       6,
 			},
@@ -269,14 +269,6 @@ func (s *SettingsService) enrichEnumOptions(records []*store.SettingRecord) {
 				break
 			}
 		}
-
-		// DEBUG: 如果是 recovery_strategy，打印详细信息
-		if record.Key == "recovery_strategy" {
-			slog.Info("✅ [DEBUG] recovery_strategy 枚举选项",
-				"value_type", record.ValueType,
-				"enum_options_count", len(record.EnumOptions),
-				"has_options", record.EnumOptions != nil && len(record.EnumOptions) > 0)
-		}
 	}
 }
 
@@ -363,18 +355,27 @@ func (s *SettingsService) InitDefaults(ctx context.Context) error {
 	return s.store.SyncMetadata(ctx, defaults)
 }
 
-// cleanupDeprecatedSettings 清理废弃的配置项（v6.1.0 迁移）
+// cleanupDeprecatedSettings 清理废弃的配置项
 func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 	deprecatedKeys := []struct {
 		category string
 		key      string
 	}{
-		// v6.1.0: 移除旧的请求挂起配置（已合并到 recovery_strategy）
+		// v6.1.0: 移除旧的请求挂起配置
 		{CategoryRequest, "suspend_enabled"},
 		{CategoryRequest, "suspend_timeout"},
 		{CategoryRequest, "max_suspended"},
-		// v6.1.0: 移除旧的故障转移配置（已合并到 recovery_strategy）
+		// v6.1.0: 移除旧的故障转移配置
 		{CategoryFailover, "allow_revisit_after_exhausted"},
+		// v6.2.0: 移除旧的恢复策略配置（已简化为 loop_retry）
+		{CategoryRequest, "recovery_strategy"},
+		{CategoryRequest, "auto_wait_timeout"},
+		{CategoryRequest, "auto_wait_max_requests"},
+		// v6.2.0: loop_retry 和 max_loops 从 request 移到 failover
+		{CategoryRequest, "loop_retry"},
+		{CategoryRequest, "max_loops"},
+		// v6.2.0: 移除 failover 的 default_cooldown（loop_retry 模式下与循环重试逻辑冲突）
+		{CategoryFailover, "default_cooldown"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -440,8 +441,8 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 
 	case CategoryStrategy:
 		return []*store.SettingRecord{
-			{Category: CategoryStrategy, Key: "type", Value: "priority", ValueType: ValueTypeString, Label: "策略类型", Description: "路由策略：priority（优先级）或 fastest（最快响应）", DisplayOrder: 1},
-			{Category: CategoryStrategy, Key: "fast_test_enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用快速测试", Description: "仅在 fastest 策略下生效", DisplayOrder: 2},
+			{Category: CategoryStrategy, Key: "type", Value: "priority", ValueType: ValueTypeString, Label: "策略类型", Description: "渠道内端点选择策略：priority（按优先级顺序）或 fastest（选择响应最快的端点）", DisplayOrder: 1},
+			{Category: CategoryStrategy, Key: "fast_test_enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用快速测试", Description: "定期测试端点响应速度，仅在 fastest 策略下生效", DisplayOrder: 2},
 			{Category: CategoryStrategy, Key: "fast_test_cache_ttl", Value: "3s", ValueType: ValueTypeDuration, Label: "缓存时间", Description: "快速测试结果缓存时间", DisplayOrder: 3},
 			{Category: CategoryStrategy, Key: "fast_test_timeout", Value: "1s", ValueType: ValueTypeDuration, Label: "测试超时", Description: "快速测试超时时间", DisplayOrder: 4},
 			{Category: CategoryStrategy, Key: "fast_test_path", Value: "/v1/models", ValueType: ValueTypeString, Label: "测试路径", Description: "快速测试请求路径", DisplayOrder: 5},
@@ -463,45 +464,20 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		}
 
 	case CategoryFailover:
-		// v6.1: 渠道间故障转移配置
+		// v6.2: 渠道间故障转移配置（含循环重试）
+		// 注意：default_cooldown 已移除，loop_retry 模式下冷却时间与循环重试逻辑冲突
 		return []*store.SettingRecord{
-			{Category: CategoryFailover, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "渠道间故障转移", Description: "当前渠道内所有端点均重试耗尽时，自动切换到备用渠道。备用渠道选择固定按渠道优先级，并跳过暂停/冷却渠道。", DisplayOrder: 1},
-			{Category: CategoryFailover, Key: "default_cooldown", Value: "600s", ValueType: ValueTypeDuration, Label: "默认冷却时间", Description: "请求级故障转移触发后，失败端点/失败渠道进入冷却的等待时间", DisplayOrder: 2},
+			{Category: CategoryFailover, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "渠道间故障转移", Description: "当前渠道内所有端点均重试耗尽时，自动切换到备用渠道", DisplayOrder: 1},
+			{Category: CategoryFailover, Key: "loop_retry", Value: "true", ValueType: ValueTypeBool, Label: "循环重试", Description: "所有渠道耗尽后，回到最高优先级渠道继续尝试。关闭则直接返回失败。", DisplayOrder: 2},
+			{Category: CategoryFailover, Key: "max_loops", Value: "3", ValueType: ValueTypeInt, Label: "最大循环轮数", Description: "循环重试启用时，最多循环的轮数（1-10），超过后返回失败", DisplayOrder: 3},
+			{Category: CategoryFailover, Key: "skip_health_check", Value: "false", ValueType: ValueTypeBool, Label: "跳过定时健康检测", Description: "启用后不再进行定时健康检测，端点状态仅通过实际请求更新。可减少日志噪音。", DisplayOrder: 4},
 		}
 
 	case CategoryRequest:
-		// v6.1: 请求控制配置（包含恢复策略）
+		// v6.2: 请求控制配置
 		return []*store.SettingRecord{
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
 			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 2},
-			{
-				Category:     CategoryRequest,
-				Key:          "recovery_strategy",
-				Value:        "auto_wait",
-				ValueType:    ValueTypeEnum,
-				Label:        "恢复策略",
-				Description:  "所有渠道耗尽后的请求处理策略，决定请求如何等待或失败",
-				DisplayOrder: 3,
-				EnumOptions: []store.EnumOption{
-					{
-						Value:       "auto_wait",
-						Label:       "智能等待（推荐）",
-						Description: "挂起请求并智能等待端点自愈或渠道恢复。适合生产环境，能自动恢复服务而无需人工介入。当检测到端点恢复健康或有新渠道激活时，自动继续处理请求。",
-					},
-					{
-						Value:       "loop_retry",
-						Label:       "循环重试（仅测试）",
-						Description: "耗尽所有渠道后，立即回到最高优先级渠道继续尝试。可能导致无限循环重试，仅用于测试环境快速排查问题。不推荐生产环境使用。",
-					},
-					{
-						Value:       "fail_fast",
-						Label:       "快速失败（调试用）",
-						Description: "所有渠道耗尽后立即返回失败。适合调试场景，快速暴露问题。不等待恢复，直接向客户端返回错误。",
-					},
-				},
-			},
-			{Category: CategoryRequest, Key: "auto_wait_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "智能等待超时", Description: "auto_wait 策略下，挂起请求等待恢复的最大时间", DisplayOrder: 4},
-			{Category: CategoryRequest, Key: "auto_wait_max_requests", Value: "100", ValueType: ValueTypeInt, Label: "最大挂起请求数", Description: "auto_wait 策略下，允许同时挂起等待的最大请求数量", DisplayOrder: 5},
 		}
 
 	case CategoryStreaming:

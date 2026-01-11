@@ -27,6 +27,9 @@ type EndpointInfo struct {
 	LastCheck       string  `json:"last_check"`
 	ResponseTimeMs  float64 `json:"response_time_ms"`
 	ConsecutiveFail int     `json:"consecutive_fail"`
+	// v6.2.10: 最后一次请求失败的信息，用于 UI 显示
+	LastFailCode   int    `json:"last_fail_code"`   // HTTP 状态码（0 表示无失败或未知）
+	LastFailReason string `json:"last_fail_reason"` // 失败原因描述
 }
 
 // GetEndpoints 获取所有端点状态
@@ -73,6 +76,9 @@ func (a *App) GetEndpoints() []EndpointInfo {
 			SkipHealthCheck: ep.Config.SkipHealthCheck, // v6.1: 跳过健康检查
 			ConsecutiveFail: status.ConsecutiveFails,
 			ResponseTimeMs:  float64(status.ResponseTime) / float64(time.Millisecond),
+			// v6.2.10: 填充失败信息
+			LastFailCode:   status.LastRequestFailCode,
+			LastFailReason: status.LastRequestFailReason,
 		}
 
 		// 获取组是否激活
