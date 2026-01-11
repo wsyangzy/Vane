@@ -947,6 +947,15 @@ export const setEndpointFailoverEnabledByID = async (id, enabled) => {
   return { success: true };
 };
 
+// v6.2.11: 设置端点是否跳过健康检测
+export const setEndpointSkipHealthCheckByID = async (id, skip) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  await WailsApp.SetEndpointSkipHealthCheckByID(id, !!skip);
+  return { success: true };
+};
+
 /**
  * 删除端点
  * @param {string} name - 端点名称

@@ -745,6 +745,26 @@ export namespace main {
 	    }
 	}
 	
+	export class SaveFileResult {
+	    success: boolean;
+	    file_path: string;
+	    file_name: string;
+	    file_size: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveFileResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.file_path = source["file_path"];
+	        this.file_name = source["file_name"];
+	        this.file_size = source["file_size"];
+	        this.error = source["error"];
+	    }
+	}
 	export class SettingInfo {
 	    id: number;
 	    category: string;

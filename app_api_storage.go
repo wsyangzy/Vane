@@ -668,6 +668,51 @@ func (a *App) SetEndpointFailoverEnabledByID(id int64, enabled bool) error {
 	return nil
 }
 
+// SetEndpointSkipHealthCheckByID 设置端点是否跳过健康检测（按ID，避免同名歧义）
+// v6.2.11: 新增快捷开关
+func (a *App) SetEndpointSkipHealthCheckByID(id int64, skip bool) error {
+	a.mu.RLock()
+	endpointService := a.endpointService
+	endpointManager := a.endpointManager
+	logger := a.logger
+	a.mu.RUnlock()
+
+	if endpointService == nil {
+		return fmt.Errorf("端点存储服务未启用")
+	}
+	if id <= 0 {
+		return fmt.Errorf("端点ID不能为空")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	record, err := endpointService.GetEndpointByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("获取端点失败: %w", err)
+	}
+	if record == nil {
+		return fmt.Errorf("端点不存在: %d", id)
+	}
+
+	record.SkipHealthCheck = skip
+	if err := endpointService.UpdateEndpoint(ctx, record); err != nil {
+		return fmt.Errorf("更新端点失败: %w", err)
+	}
+
+	// 同步到运行时 endpoint manager
+	if endpointManager != nil {
+		endpointManager.SetEndpointSkipHealthCheck(endpoint.EndpointKey(record.Channel, record.Name), skip)
+	}
+
+	if logger != nil {
+		logger.Info("✅ 端点跳过健康检测状态已更新", "id", id, "name", record.Name, "skip", skip)
+	}
+
+	a.emitEndpointUpdate()
+	return nil
+}
+
 // DeleteEndpointRecord 删除端点
 func (a *App) DeleteEndpointRecord(name string) error {
 	a.mu.RLock()

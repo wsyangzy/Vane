@@ -47,6 +47,7 @@ import {
   deleteEndpointRecordByID,
   toggleEndpointRecordByID,
   setEndpointFailoverEnabledByID,
+  setEndpointSkipHealthCheckByID, // v6.2.11: 跳过健康检测
   getChannels,
   createChannel,
   updateChannel,
@@ -304,6 +305,7 @@ const EndpointMiniCard = ({
   channelFailoverEnabled = true,
   onOpen,
   onToggleFailover,
+  onToggleSkipHealthCheck, // v6.2.11: 跳过健康检测回调
   onEdit,
   onDelete
 }) => {
@@ -398,6 +400,22 @@ const EndpointMiniCard = ({
                   aria-pressed={failoverEnabled}
                 >
                   <ArrowRightLeft size={14} />
+                </button>
+                {/* v6.2.11: 跳过健康检测快捷开关 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
+                  }}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    isSkipHealthCheck
+                      ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
+                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                  }`}
+                  title={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+                  aria-pressed={isSkipHealthCheck}
+                >
+                  <ShieldOff size={14} />
                 </button>
                 <button
                   onClick={(e) => {
@@ -867,6 +885,7 @@ const ChannelCard = ({
   onDeleteChannel,
   onOpenEndpoint,
   onToggleEndpointFailover,
+  onToggleEndpointSkipHealthCheck, // v6.2.11: 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
   loading = false
@@ -891,15 +910,19 @@ const ChannelCard = ({
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
 
-  // 判断是否处于"全部失败"警示状态：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
+  // 判断是否处于"全部失败"警示状态（用于渠道卡片内的提示框）：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
   const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
 
+  // v6.2.12: 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
+  const isActiveChannelAllFailed = isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+
   // 活跃渠道边框样式
-  const activeHighlightClass = isAllEndpointsFailed
-    ? 'border-rose-400 ring-2 ring-rose-100'  // 全部失败警示 → 淡红色
+  // v6.2.12: 优先判断全部失败，显示红色边框（无论是否启用渠道间转移）
+  const activeHighlightClass = isActiveChannelAllFailed
+    ? 'border-rose-400 ring-2 ring-rose-100'  // 全部失败 → 红色
     : channelFailoverEnabled
-      ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'
-      : 'border-indigo-300 ring-2 ring-indigo-100';
+      ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'  // 开启渠道间转移 → 橙色
+      : 'border-indigo-300 ring-2 ring-indigo-100';  // 关闭渠道间转移 → 靛蓝色
 
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;
@@ -1142,6 +1165,7 @@ const ChannelCard = ({
               channelFailoverEnabled={channelFailoverEnabled}
               onOpen={onOpenEndpoint}
               onToggleFailover={onToggleEndpointFailover}
+              onToggleSkipHealthCheck={onToggleEndpointSkipHealthCheck}
               onEdit={onEditEndpoint}
               onDelete={onDeleteEndpoint}
             />
@@ -1190,7 +1214,8 @@ const ChannelsPage = () => {
   const [storageLoading, setStorageLoading] = useState(false);
 
   // 判断存储模式（用于控制 Hook 行为）
-  const isSqliteMode = storageStatus?.storageType === 'sqlite' && storageStatus?.enabled;
+  // v6.2.12: 只检查 storageType，不再依赖 enabled（enabled 表示服务是否初始化，配置重载期间可能暂时为 false）
+  const isSqliteMode = storageStatus?.storageType === 'sqlite';
 
   // 使用端点数据 Hook（YAML 模式需要；SQLite 模式仅保留操作能力，避免后台自动拉取/订阅导致卡住）
   const {
@@ -1269,7 +1294,8 @@ const ChannelsPage = () => {
       setStorageStatus(status);
 
       // 如果是 SQLite 模式，加载存储的端点
-      if (status.storageType === 'sqlite' && status.enabled) {
+      // v6.2.12: 只检查 storageType，不再依赖 enabled
+      if (status.storageType === 'sqlite') {
         const records = await getEndpointRecords();
         if (seq !== storageLoadSeqRef.current) return;
         setStorageEndpoints(records);
@@ -1307,7 +1333,8 @@ const ChannelsPage = () => {
 
   const loadChannelsMeta = useCallback(async () => {
     const seq = ++channelsMetaLoadSeqRef.current;
-    const sqliteEnabled = storageStatus?.storageType === 'sqlite' && storageStatus?.enabled;
+    // v6.2.12: 只检查 storageType
+    const sqliteEnabled = storageStatus?.storageType === 'sqlite';
     if (!sqliteEnabled) {
       if (seq === channelsMetaLoadSeqRef.current) {
         setChannelsMeta([]);
@@ -1364,6 +1391,22 @@ const ChannelsPage = () => {
     }
   }, [loadGroups, loadStorageStatus]);
 
+  // v6.2.11: 跳过健康检测快捷开关处理函数
+  const handleToggleEndpointSkipHealthCheck = useCallback(async (endpoint, skip) => {
+    if (!endpoint?.id) return;
+    try {
+      setChannelActionLoading(true);
+      await setEndpointSkipHealthCheckByID(endpoint.id, skip);
+      await loadStorageStatus();
+      await loadGroups();
+    } catch (err) {
+      console.error('切换跳过健康检测状态失败:', err);
+      setActionError(`操作失败: ${getErrorMessage(err, '未知错误')}`);
+    } finally {
+      setChannelActionLoading(false);
+    }
+  }, [loadGroups, loadStorageStatus]);
+
   useEffect(() => {
     loadGroups();
   }, [loadGroups]);
@@ -1398,7 +1441,8 @@ const ChannelsPage = () => {
   // SQLite 模式下监听 Wails 事件，实时刷新端点数据
   const isSqliteModeRef = useRef(false);
   useEffect(() => {
-    isSqliteModeRef.current = storageStatus?.storageType === 'sqlite' && storageStatus?.enabled;
+    // v6.2.12: 只检查 storageType
+    isSqliteModeRef.current = storageStatus?.storageType === 'sqlite';
   }, [storageStatus]);
 
   useEffect(() => {
@@ -1925,8 +1969,8 @@ const ChannelsPage = () => {
         </div>
       </div>
 
-      {/* v6.2.5: 全部端点失败警示 - 当参与检测的渠道中所有端点都不可用时显示 */}
-      {scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
+      {/* v6.2.5: 全部端点失败警示 - 仅在启用渠道间故障转移时显示全局警示；未启用时在渠道卡片内显示 */}
+      {channelFailoverEnabled && scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
         <div className="mb-6 p-4 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-3">
           <div className="p-2 bg-rose-100 rounded-full flex-shrink-0">
             <AlertTriangle className="w-5 h-5 text-rose-600" />
@@ -1936,10 +1980,7 @@ const ChannelsPage = () => {
               所有端点均处于不可用状态
             </div>
             <div className="text-sm text-rose-700 mt-1">
-              {channelFailoverEnabled
-                ? `当前 ${scopedChannelCount} 个参与渠道共 ${scopedEndpointCount} 个端点全部异常，请求将根据恢复策略处理（快速失败/循环重试/智能等待）。`
-                : `活跃渠道的 ${scopedEndpointCount} 个端点全部异常，请求将立即失败。`
-              }
+              当前 {scopedChannelCount} 个参与渠道共 {scopedEndpointCount} 个端点全部异常，请求将根据恢复策略处理（快速失败/循环重试/智能等待）。
             </div>
             <div className="flex items-center gap-3 mt-3 text-[11px]">
               <span className="text-slate-500">建议操作：</span>
@@ -1999,6 +2040,7 @@ const ChannelsPage = () => {
               loading={channelActionLoading || deactivateChannelLoading}
               onOpenEndpoint={openEndpointDetail}
               onToggleEndpointFailover={isSqliteMode ? handleToggleEndpointFailover : undefined}
+              onToggleEndpointSkipHealthCheck={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
               onActivate={async (channelName) => {
                 if (channelFailoverEnabled && section.groupInfo?.paused) {
                   setActionError(`激活失败：渠道「${channelName}」已暂停，无法激活。\n请先点击「恢复」后再激活该渠道。`);

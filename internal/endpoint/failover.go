@@ -168,7 +168,7 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 		maxLoops := m.config.FailoverV2.GetMaxLoops()
 		if maxLoops > 0 && loopCount >= maxLoops {
 			slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
-			return "", fmt.Errorf("已达到最大循环轮数 (%d)，所有渠道均不可用", maxLoops)
+			return "", fmt.Errorf("服务暂时不可用: 所有渠道均已尝试 (共循环 %d 轮), 请稍后重试", maxLoops)
 		}
 	}
 
@@ -188,7 +188,7 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 			maxLoops := m.config.FailoverV2.GetMaxLoops()
 			if maxLoops > 0 && loopCount >= maxLoops {
 				slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
-				return "", fmt.Errorf("已达到最大循环轮数 (%d)，所有渠道均不可用", maxLoops)
+				return "", fmt.Errorf("服务暂时不可用: 所有渠道均已尝试 (共循环 %d 轮), 请稍后重试", maxLoops)
 			}
 
 			// 循环重试策略：当"所有渠道都尝试过"时，允许回到最高优先级渠道继续尝试

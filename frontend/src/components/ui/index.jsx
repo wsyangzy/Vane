@@ -17,9 +17,10 @@ import {
 
 // 导入独立组件
 import ConfirmDialog from './ConfirmDialog';
+import SaveResultDialog from './SaveResultDialog';
 
 // 导出独立组件
-export { ConfirmDialog };
+export { ConfirmDialog, SaveResultDialog };
 
 // ============================================
 // KPI 卡片组件

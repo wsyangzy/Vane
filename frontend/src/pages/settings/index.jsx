@@ -241,6 +241,16 @@ const SettingsPage = () => {
     return value === 'true' || value === true;
   }, [settingsByCategory, getCurrentValue]);
 
+  // v6.2.11: 获取跳过健康检测设置值
+  const getSkipHealthCheck = useCallback(() => {
+    const failoverSettings = settingsByCategory['failover'];
+    if (!failoverSettings) return false;
+    const skipHealthCheckSetting = failoverSettings.find(s => s.key === 'skip_health_check');
+    if (!skipHealthCheckSetting) return false;
+    const value = getCurrentValue(skipHealthCheckSetting);
+    return value === 'true' || value === true;
+  }, [settingsByCategory, getCurrentValue]);
+
   // 判断设置项是否应该显示（条件显示逻辑）
   const shouldShowSetting = useCallback((setting) => {
     // v6.2: 快速测试相关设置仅在 strategy.type === 'fastest' 时显示
@@ -257,6 +267,11 @@ const SettingsPage = () => {
     // v6.2: max_loops 仅在 loop_retry === true 时显示
     if (setting.category === 'failover' && setting.key === 'max_loops') {
       return getChannelFailoverEnabled() && getLoopRetryEnabled();
+    }
+
+    // v6.2.11: skip_health_check 不再作为单独设置项显示，改为在循环重试弹窗内控制
+    if (setting.category === 'failover' && setting.key === 'skip_health_check') {
+      return false; // 始终隐藏，通过 loop_retry 弹窗控制
     }
 
     return true;
@@ -280,6 +295,11 @@ const SettingsPage = () => {
       [changeKey]: value
     }));
   }, []);
+
+  // v6.2.11: 处理跳过健康检测变更（通过弹窗触发）
+  const handleSkipHealthCheckChange = useCallback((newValue) => {
+    handleSettingChange('failover', 'skip_health_check', newValue ? 'true' : 'false');
+  }, [handleSettingChange]);
 
   // 保存所有变更
   const handleSave = useCallback(async () => {
@@ -626,6 +646,8 @@ const SettingsPage = () => {
                 const changeKey = `${setting.category}.${setting.key}`;
                 const isSettingDisabled = saving || shouldDisableSetting(setting);
                 const disabledReason = getDisabledReason(setting);
+                // v6.2.11: 为 loop_retry 传递跳过健康检测相关 props
+                const isLoopRetrySetting = setting.category === 'failover' && setting.key === 'loop_retry';
                 return (
                   <SettingItem
                     key={changeKey}
@@ -636,6 +658,10 @@ const SettingsPage = () => {
                     disabledReason={disabledReason}
                     hasChange={changeKey in changes}
                     onRevert={handleRevertSetting}
+                    {...(isLoopRetrySetting && {
+                      skipHealthCheck: getSkipHealthCheck(),
+                      onSkipHealthCheckChange: handleSkipHealthCheckChange
+                    })}
                   />
                 );
               })}

@@ -318,3 +318,28 @@ func (m *Manager) SetEndpointLastRequestFail(endpointName string, httpCode int, 
 	ep.Status.LastRequestFailReason = reason
 	ep.mutex.Unlock()
 }
+
+// SetEndpointSkipHealthCheck 设置端点是否跳过健康检测（运行时同步）
+// v6.2.11: 用于前端快捷开关
+func (m *Manager) SetEndpointSkipHealthCheck(endpointKey string, skip bool) {
+	if m == nil || endpointKey == "" {
+		return
+	}
+
+	m.endpointsMu.Lock()
+	defer m.endpointsMu.Unlock()
+
+	for _, ep := range m.endpoints {
+		key := EndpointKey(ep.Config.Channel, ep.Config.Name)
+		if key == endpointKey {
+			ep.mutex.Lock()
+			ep.Config.SkipHealthCheck = skip
+			// 如果设置为跳过检测，将状态设为健康（视为可用）
+			if skip {
+				ep.Status.Healthy = true
+			}
+			ep.mutex.Unlock()
+			return
+		}
+	}
+}

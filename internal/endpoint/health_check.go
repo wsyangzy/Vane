@@ -84,6 +84,12 @@ func (m *Manager) healthCheckLoop() {
 
 // performHealthChecks performs health checks on all endpoints
 func (m *Manager) performHealthChecks() {
+	// v6.2.11: 循环重试模式下，如果配置了跳过健康检测，则不执行定时健康检查
+	if m.config.FailoverV2.ShouldSkipHealthCheck() {
+		slog.Debug("🩺 [健康检查] 循环重试模式已启用跳过检测，跳过定时健康检查")
+		return
+	}
+
 	// v5.0+: 使用快照机制，不阻塞动态增删操作
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))

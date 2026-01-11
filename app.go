@@ -1624,6 +1624,8 @@ func (a *App) applySettingsToConfig() {
 	// v6.2.7: 从数据库加载 loop_retry 和 max_loops 到 FailoverV2
 	a.config.FailoverV2.LoopRetry = a.settingsService.GetBool(ctx, service.CategoryFailover, "loop_retry", a.config.FailoverV2.LoopRetry)
 	a.config.FailoverV2.MaxLoops = a.settingsService.GetInt(ctx, service.CategoryFailover, "max_loops", a.config.FailoverV2.MaxLoops)
+	// v6.2.11: 从数据库加载 skip_health_check 到 FailoverV2
+	a.config.FailoverV2.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.FailoverV2.SkipHealthCheck)
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)

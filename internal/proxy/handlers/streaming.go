@@ -1002,7 +1002,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			// 这些情况下不应该继续挂起等待，应该直接返回错误
 			errStr := err.Error()
 			isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
-				strings.Contains(errStr, "已达到最大循环轮数")
+				strings.Contains(errStr, "所有渠道均已尝试")
 
 			if isNoChannelsError {
 				// 所有渠道都不可用或已达最大循环轮数，直接返回错误
@@ -1123,7 +1123,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 
-	lifecycleManager.FailRequest("endpoint_exhausted", "All endpoints failed, last error: "+fmt.Sprintf("%v", lastErr), statusCode)
+	lifecycleManager.FailRequest("endpoint_exhausted", fmt.Sprintf("服务暂时不可用: 当前渠道所有端点均不可用, 最后错误: %v", lastErr), statusCode)
 	// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
-	terminateSSEStreamWithError(w, flusher, fmt.Sprintf("All endpoints failed, last error: %v", lastErr))
+	terminateSSEStreamWithError(w, flusher, fmt.Sprintf("服务暂时不可用: 当前渠道所有端点均不可用, 最后错误: %v", lastErr))
 }

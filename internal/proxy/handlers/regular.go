@@ -539,7 +539,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// 这些情况下不应该继续挂起等待，应该直接返回错误
 				errStr := err.Error()
 				isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
-					strings.Contains(errStr, "已达到最大循环轮数")
+					strings.Contains(errStr, "所有渠道均已尝试")
 
 				if isNoChannelsError {
 					// 所有渠道都不可用或已达最大循环轮数，直接返回错误
@@ -627,8 +627,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理
 	// v6.2.7: 所有端点都耗尽时，使用 422 状态码，防止客户端自动重试
-	lifecycleManager.FailRequest("endpoint_exhausted", "All endpoints failed", http.StatusUnprocessableEntity)
-	http.Error(w, "All endpoints failed", http.StatusUnprocessableEntity)
+	lifecycleManager.FailRequest("endpoint_exhausted", "服务暂时不可用: 当前渠道所有端点均不可用", http.StatusUnprocessableEntity)
+	http.Error(w, "服务暂时不可用: 当前渠道所有端点均不可用", http.StatusUnprocessableEntity)
 }
 
 // executeRequest 执行单个请求

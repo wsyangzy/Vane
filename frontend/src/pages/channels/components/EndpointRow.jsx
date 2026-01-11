@@ -2,6 +2,7 @@
 // EndpointRow - 端点表格行组件
 // ============================================
 
+import { useState } from 'react';
 import {
   Globe,
   Pencil,
@@ -13,9 +14,16 @@ import {
   XCircle,
   Clock,
   // Timer, // v6.2: 已移除，冷却机制不再使用
-  ShieldOff
+  ShieldOff,
+  ShieldBan,
+  Loader2
 } from 'lucide-react';
 import PriorityBadge from './PriorityBadge.jsx';
+
+// v6.2.11: 调用 Go 后端设置跳过健康检测
+const SetEndpointSkipHealthCheckByID = (id, skip) => {
+  return window['go']['main']['App']['SetEndpointSkipHealthCheckByID'](id, skip);
+};
 
 // ============================================
 // 健康状态徽章
@@ -115,8 +123,12 @@ const EndpointRow = ({
   onEdit,
   onDelete,
   onToggle,
-  isGrouped = false
+  isGrouped = false,
+  onRefresh // v6.2.11: 刷新列表回调
 }) => {
+  // v6.2.11: 跳过健康检测切换状态
+  const [skipToggling, setSkipToggling] = useState(false);
+
   if (!endpoint) return null;
 
   // 格式化最后检查时间
@@ -143,6 +155,24 @@ const EndpointRow = ({
   // v6.2.10: 获取失败信息
   const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
   const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
+  // v6.2.11: 跳过健康检测状态
+  const skipHealthCheck = endpoint.skip_health_check || endpoint.skipHealthCheck || false;
+
+  // v6.2.11: 切换跳过健康检测
+  const handleToggleSkipHealthCheck = async () => {
+    if (!endpoint.id || skipToggling) return;
+
+    setSkipToggling(true);
+    try {
+      await SetEndpointSkipHealthCheckByID(endpoint.id, !skipHealthCheck);
+      // 刷新列表
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed to toggle skip health check:', err);
+    } finally {
+      setSkipToggling(false);
+    }
+  };
 
   // 获取认证类型显示
   const getAuthType = () => {
@@ -263,6 +293,27 @@ const EndpointRow = ({
         <div className="flex items-center justify-end space-x-1">
           {isSqliteMode && (
             <>
+              {/* v6.2.11: 跳过健康检测快捷开关 */}
+              <button
+                onClick={handleToggleSkipHealthCheck}
+                disabled={skipToggling}
+                className={`p-1.5 rounded-md transition-colors ${
+                  skipToggling
+                    ? 'opacity-50 cursor-wait'
+                    : skipHealthCheck
+                      ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                }`}
+                title={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+              >
+                {skipToggling ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : skipHealthCheck ? (
+                  <ShieldOff size={14} />
+                ) : (
+                  <ShieldBan size={14} />
+                )}
+              </button>
               <button
                 onClick={() => onEdit?.(endpoint)}
                 className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"

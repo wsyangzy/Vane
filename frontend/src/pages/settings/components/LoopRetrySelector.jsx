@@ -1,10 +1,11 @@
 // ============================================
 // LoopRetrySelector - 循环重试策略选择弹窗
 // v6.2.0 (2026-01-10) - 双选卡片布局
+// v6.2.11 (2026-01-11) - 新增跳过定时健康检测开关
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { X, RefreshCw, XCircle, Check } from 'lucide-react';
+import { X, RefreshCw, XCircle, Check, Timer } from 'lucide-react';
 
 const STRATEGY_OPTIONS = [
   {
@@ -25,17 +26,21 @@ const STRATEGY_OPTIONS = [
   }
 ];
 
-const LoopRetrySelector = ({ isOpen, currentValue, onSelect, onClose }) => {
+const LoopRetrySelector = ({ isOpen, currentValue, skipHealthCheck: initialSkipHealthCheck = false, onSelect, onClose }) => {
   const [selectedValue, setSelectedValue] = useState(currentValue);
+  const [skipHealthCheck, setSkipHealthCheck] = useState(initialSkipHealthCheck);
 
   useEffect(() => {
     setSelectedValue(currentValue);
-  }, [currentValue, isOpen]);
+    setSkipHealthCheck(initialSkipHealthCheck);
+  }, [currentValue, initialSkipHealthCheck, isOpen]);
 
   if (!isOpen) return null;
 
   const handleConfirm = () => {
-    onSelect(selectedValue);
+    // v6.2.11: 返回策略值和跳过健康检测设置
+    // 如果选择快速失败，跳过健康检测设置无效，重置为 false
+    onSelect(selectedValue, selectedValue === 'true' ? skipHealthCheck : false);
     onClose();
   };
 
@@ -135,6 +140,44 @@ const LoopRetrySelector = ({ isOpen, currentValue, onSelect, onClose }) => {
                       </li>
                     ))}
                   </ul>
+
+                  {/* v6.2.11: 循环重试选项内的跳过健康检测开关 */}
+                  {option.value === 'true' && isSelected && (
+                    <div
+                      className="mt-4 pt-3 border-t border-indigo-200"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={skipHealthCheck}
+                            onChange={(e) => setSkipHealthCheck(e.target.checked)}
+                            className="sr-only"
+                          />
+                          <div className={`
+                            w-9 h-5 rounded-full transition-colors duration-200
+                            ${skipHealthCheck ? 'bg-indigo-500' : 'bg-slate-300'}
+                          `}>
+                            <div className={`
+                              absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm
+                              transition-transform duration-200
+                              ${skipHealthCheck ? 'translate-x-4' : 'translate-x-0'}
+                            `} />
+                          </div>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <Timer size={12} className="text-indigo-500" />
+                            <span className="text-xs font-medium text-slate-700">跳过定时健康检测</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 leading-tight mt-0.5">
+                            减少日志噪音，端点状态仅通过实际请求更新
+                          </p>
+                        </div>
+                      </label>
+                    </div>
+                  )}
                 </button>
               );
             })}

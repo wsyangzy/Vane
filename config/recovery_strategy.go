@@ -23,6 +23,13 @@ type FailoverConfigV2 struct {
 	// 默认: 3
 	MaxLoops int `yaml:"max_loops"`
 
+	// SkipHealthCheck 跳过定时健康检测（仅当 LoopRetry = true 时生效）
+	// - true: 不进行定时健康检测，端点状态仅通过实际请求更新
+	// - false: 正常进行定时健康检测
+	// 默认: false
+	// v6.2.11: 新增，用于减少循环重试模式下的日志噪音
+	SkipHealthCheck bool `yaml:"skip_health_check"`
+
 	// ===== 以下字段已废弃，保留用于向后兼容 =====
 	// v6.1.x: 这些字段将在解析配置时自动映射到新字段
 	RecoveryStrategy        RecoveryStrategy `yaml:"recovery_strategy,omitempty"`         // DEPRECATED: 使用 loop_retry 替代
@@ -165,4 +172,10 @@ func (fc *FailoverConfigV2) GetMaxLoops() int {
 		return 0 // 无限制
 	}
 	return fc.MaxLoops
+}
+
+// ShouldSkipHealthCheck 是否应该跳过定时健康检测
+// 仅当启用循环重试且 SkipHealthCheck = true 时跳过
+func (fc *FailoverConfigV2) ShouldSkipHealthCheck() bool {
+	return fc.LoopRetry && fc.SkipHealthCheck
 }
