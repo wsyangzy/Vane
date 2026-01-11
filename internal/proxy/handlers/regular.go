@@ -636,9 +636,23 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理
-	// v6.2.7: 所有端点都耗尽时，使用 422 状态码，防止客户端自动重试
-	lifecycleManager.FailRequest("endpoint_exhausted", "服务暂时不可用: 当前渠道所有端点均不可用", http.StatusUnprocessableEntity)
-	http.Error(w, "服务暂时不可用: 当前渠道所有端点均不可用", http.StatusUnprocessableEntity)
+	// v6.2.14: 根据配置决定是中断客户端重试还是允许客户端自行决定
+	errMsg := "服务暂时不可用: 当前渠道所有端点均不可用"
+	if rh.config.FailoverV2.ShouldInterruptClientOnExhausted() {
+		// 使用 422 (Unprocessable Entity) 中断客户端自动重试
+		statusCode := http.StatusUnprocessableEntity
+		*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+		lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
+		slog.Error(fmt.Sprintf("❌ [当前渠道端点耗尽] [%s] %s (中断客户端重试)", connID, errMsg))
+		http.Error(w, errMsg, statusCode)
+	} else {
+		// 使用 503 (Service Unavailable) 允许客户端自行决定是否重试
+		statusCode := http.StatusServiceUnavailable
+		*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+		lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
+		slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (允许客户端重试)", connID, errMsg))
+		http.Error(w, errMsg+", 请稍后重试", statusCode)
+	}
 }
 
 // executeRequest 执行单个请求

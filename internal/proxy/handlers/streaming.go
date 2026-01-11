@@ -1125,15 +1125,21 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理
-	// v6.2.7: 所有端点都耗尽时，强制使用 422 状态码，防止 Claude Code 客户端自动重试
-	// 不再依赖 GetStatusCodeFromError，因为上游可能返回 502/503 等可重试状态码
-	// 但在 "endpoint_exhausted" 场景下，重试没有意义（所有端点都已尝试过），应该明确告知客户端停止重试
-	statusCode := http.StatusUnprocessableEntity
-
-	// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
-	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-
-	lifecycleManager.FailRequest("endpoint_exhausted", fmt.Sprintf("服务暂时不可用: 当前渠道所有端点均不可用, 最后错误: %v", lastErr), statusCode)
-	// v6.2.6: 使用正确的 SSE 终止序列，防止客户端自动重连
-	terminateSSEStreamWithError(w, flusher, fmt.Sprintf("服务暂时不可用: 当前渠道所有端点均不可用, 最后错误: %v", lastErr))
+	// v6.2.14: 根据配置决定是中断客户端重试还是允许客户端自行决定
+	errMsg := fmt.Sprintf("服务暂时不可用: 当前渠道所有端点均不可用, 最后错误: %v", lastErr)
+	if sh.config.FailoverV2.ShouldInterruptClientOnExhausted() {
+		// 使用 422 (Unprocessable Entity) 中断客户端自动重试
+		statusCode := http.StatusUnprocessableEntity
+		*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+		lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
+		slog.Error(fmt.Sprintf("❌ [当前渠道端点耗尽] [%s] %s (中断客户端重试)", connID, errMsg))
+		terminateSSEStreamWithError(w, flusher, errMsg)
+	} else {
+		// 使用 503 (Service Unavailable) 允许客户端自行决定是否重试
+		statusCode := http.StatusServiceUnavailable
+		*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+		lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
+		slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (允许客户端重试)", connID, errMsg))
+		sendStreamInterruptedMessage(w, flusher, errMsg, "claude-3-5-sonnet-20241022")
+	}
 }
