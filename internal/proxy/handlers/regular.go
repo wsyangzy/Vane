@@ -542,13 +542,23 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					strings.Contains(errStr, "所有渠道均已尝试")
 
 				if isNoChannelsError {
-					// 所有渠道都不可用或已达最大循环轮数，直接返回错误
-					// v6.2.7: 使用 422 而非 503，防止 Claude Code 客户端自动重试
-					statusCode := http.StatusUnprocessableEntity
-					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-					lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
-					slog.Error(fmt.Sprintf("❌ [所有渠道不可用] [%s] %s", connID, errStr))
-					http.Error(w, fmt.Sprintf("所有渠道均不可用: %s", errStr), statusCode)
+					// 所有渠道都不可用或已达最大循环轮数
+					// v6.2.14: 根据配置决定是中断客户端重试还是允许客户端自行决定
+					if rh.config.FailoverV2.ShouldInterruptClientOnExhausted() {
+						// 使用 422 (Unprocessable Entity) 中断客户端自动重试
+						statusCode := http.StatusUnprocessableEntity
+						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+						lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
+						slog.Error(fmt.Sprintf("❌ [所有渠道不可用] [%s] %s (中断客户端重试)", connID, errStr))
+						http.Error(w, fmt.Sprintf("所有渠道均不可用: %s", errStr), statusCode)
+					} else {
+						// 使用 503 (Service Unavailable) 允许客户端自行决定是否重试
+						statusCode := http.StatusServiceUnavailable
+						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+						lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
+						slog.Warn(fmt.Sprintf("⚠️ [所有渠道不可用] [%s] %s (允许客户端重试)", connID, errStr))
+						http.Error(w, fmt.Sprintf("所有渠道暂时不可用，请稍后重试: %s", errStr), statusCode)
+					}
 					return
 				}
 			}

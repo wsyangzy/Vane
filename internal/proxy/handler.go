@@ -260,7 +260,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var err error
 			bodyBytes, err = io.ReadAll(r.Body)
 			if err != nil {
-				http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+				// v6.2.13: 使用 422 状态码，避免 Claude Code 自动重试
+				http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
 				return
 			}
 			r.Body.Close()
@@ -291,7 +292,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, err = io.ReadAll(r.Body)
 		if err != nil {
 			lifecycleManager.HandleError(err)
-			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			// v6.2.13: 使用 422 状态码，避免 Claude Code 自动重试
+			http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
 			return
 		}
 		r.Body.Close()

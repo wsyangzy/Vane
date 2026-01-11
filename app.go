@@ -1633,6 +1633,11 @@ func (a *App) applySettingsToConfig() {
 	a.config.RequestSuspend.Timeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_timeout", a.config.RequestSuspend.Timeout)
 	a.config.RequestSuspend.MaxSuspendedRequests = a.settingsService.GetInt(ctx, service.CategoryRequest, "max_suspended", a.config.RequestSuspend.MaxSuspendedRequests)
 	a.config.RequestSuspend.EOFRetryHint = a.settingsService.GetBool(ctx, service.CategoryRequest, "eof_retry_hint", a.config.RequestSuspend.EOFRetryHint)
+	// v6.2.14: 从数据库加载 allow_retry_on_exhausted（控制所有端点失败时是否允许客户端重试）
+	// 注意：存储的是"允许重试"，但 FailoverV2 字段是"中断重试"，需要取反
+	allowRetry := a.settingsService.GetBool(ctx, service.CategoryRequest, "allow_retry_on_exhausted", true)
+	interruptRetry := !allowRetry
+	a.config.FailoverV2.InterruptClientOnExhausted = &interruptRetry
 
 	// 流式传输配置
 	a.config.Streaming.HeartbeatInterval = a.settingsService.GetDuration(ctx, service.CategoryStreaming, "heartbeat_interval", a.config.Streaming.HeartbeatInterval)
