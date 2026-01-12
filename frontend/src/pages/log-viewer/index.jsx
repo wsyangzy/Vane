@@ -1,5 +1,5 @@
 // LogsPage - 系统日志查看页面（主组件）
-// v6.2.15: 性能优化 - 搜索防抖 + 正则缓存 + 虚拟滚动
+// v6.2.16: 点击行选中 + 批量复制
 import { useState, useMemo, useRef, useEffect, useDeferredValue, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import { useWailsLogs } from '@/hooks/useWailsLogs';
@@ -56,6 +56,22 @@ function LogsPage() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const prevLogsLengthRef = useRef(0);
 
+  // v6.2.16: 多选状态
+  const [selectedIndices, setSelectedIndices] = useState(new Set());
+
+  // v6.2.16: 切换单条日志选择
+  const handleToggleSelect = useCallback((index) => {
+    setSelectedIndices(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  }, []);
+
   // v6.2.15: 虚拟滚动相关 refs
   const listRef = useRef(null);
   const containerRef = useRef(null);
@@ -77,6 +93,9 @@ function LogsPage() {
   // v6.2.11: 保存结果弹窗状态
   const [saveResult, setSaveResult] = useState(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
+
+  // v6.2.16: 批量复制成功提示
+  const [copySuccess, setCopySuccess] = useState(false);
 
   // 过滤日志（使用 deferredSearchQuery 实现防抖）
   const filteredLogs = useMemo(() => {
@@ -101,6 +120,52 @@ function LogsPage() {
 
     return result;
   }, [logs, levelFilter, deferredSearchQuery]);
+
+  // v6.2.16: 复制选中的日志
+  const handleCopySelected = useCallback(async () => {
+    if (selectedIndices.size === 0) return;
+
+    const sortedIndices = Array.from(selectedIndices).sort((a, b) => a - b);
+    const content = sortedIndices
+      .map(index => {
+        const log = filteredLogs[index];
+        if (!log) return '';
+        const timestamp = new Date(log.timestamp).toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour12: false,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          fractionalSecondDigits: 3,
+        });
+        let logText = `[${timestamp}] [${log.level}] ${log.message}`;
+        if (log.attrs && Object.keys(log.attrs).length > 0) {
+          const attrsText = Object.entries(log.attrs)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(' ');
+          logText += ` | ${attrsText}`;
+        }
+        return logText;
+      })
+      .filter(Boolean)
+      .join('\n');
+
+    try {
+      await navigator.clipboard.writeText(content);
+      setSelectedIndices(new Set());
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch (err) {
+      console.error('批量复制失败:', err);
+    }
+  }, [selectedIndices, filteredLogs]);
+
+  // v6.2.16: 过滤条件变化时清空选择
+  useEffect(() => {
+    setSelectedIndices(new Set());
+  }, [levelFilter, deferredSearchQuery]);
 
   // 统计信息
   const stats = useMemo(() => {
@@ -196,8 +261,27 @@ function LogsPage() {
     prevLogsLengthRef.current = 0;
   };
 
+  // v6.2.16: 点击外部清空选中（使用 document 级别监听）
+  const logContainerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      // 如果没有选中项，不处理
+      if (selectedIndices.size === 0) return;
+
+      // 检查点击是否在日志容器外部
+      if (logContainerRef.current && !logContainerRef.current.contains(e.target)) {
+        setSelectedIndices(new Set());
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [selectedIndices.size]);
+
   return (
     <div
+      ref={logContainerRef}
       className="flex flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm h-full"
       style={{
         // 填满 main 区域可用高度：100vh - Header(~92px) - main上边距(32px) - 安全边距(16px)
@@ -229,6 +313,9 @@ function LogsPage() {
             onRefresh={refresh}
             onClear={handleClear}
             onExport={handleExport}
+            selectedCount={selectedIndices.size}
+            onCopySelected={handleCopySelected}
+            copySuccess={copySuccess}
           />
         </div>
 
@@ -275,15 +362,20 @@ function LogsPage() {
             itemData={{
               logs: filteredLogs || [],
               searchQuery: deferredSearchQuery || '',
-              highlightRegex: highlightRegex || null
+              highlightRegex: highlightRegex || null,
+              selectedIndices,
+              onToggleSelect: handleToggleSelect
             }}
           >
             {({ index, style, data }) => (
               <div style={style}>
                 <LogEntry
                   log={data.logs[index]}
+                  index={index}
                   searchQuery={data.searchQuery}
                   highlightRegex={data.highlightRegex}
+                  isSelected={data.selectedIndices.has(index)}
+                  onToggleSelect={data.onToggleSelect}
                 />
               </div>
             )}

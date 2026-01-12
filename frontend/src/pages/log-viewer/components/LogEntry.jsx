@@ -1,5 +1,5 @@
 // LogEntry.jsx - 单条日志显示组件
-// v6.2.15: 性能优化 - React.memo + 正则缓存
+// v6.2.16: 支持多选复制
 import React, { useState, useMemo, memo } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { LOG_LEVELS } from '../constants';
@@ -10,10 +10,13 @@ const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /**
  * 单条日志组件（使用 React.memo 优化渲染）
  * @param {Object} log 日志对象
+ * @param {number} index 日志索引（用于多选）
  * @param {string} searchQuery 搜索关键词
  * @param {RegExp} highlightRegex 预编译的高亮正则（从父组件传入，避免重复编译）
+ * @param {boolean} isSelected 是否被选中
+ * @param {Function} onToggleSelect 切换选中状态的回调
  */
-function LogEntry({ log, searchQuery, highlightRegex }) {
+function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggleSelect }) {
   const [copied, setCopied] = useState(false);
 
   // 防御性检查：确保 log 对象有效
@@ -75,8 +78,21 @@ function LogEntry({ log, searchQuery, highlightRegex }) {
     }
   };
 
+  // v6.2.16: 点击行选中（阻止冒泡避免触发外层清空）
+  const handleRowClick = (e) => {
+    e.stopPropagation();
+    onToggleSelect?.(index);
+  };
+
   return (
-    <div className="group flex items-start gap-3 px-4 py-2 hover:bg-slate-50 border-b border-slate-100 font-mono text-xs relative">
+    <div
+      onClick={handleRowClick}
+      className={`group flex items-start gap-3 px-4 py-2 border-b border-slate-100 font-mono text-xs relative cursor-pointer transition-colors ${
+        isSelected
+          ? 'bg-blue-50 hover:bg-blue-100'
+          : 'hover:bg-slate-50'
+      }`}
+    >
       {/* 时间戳 */}
       <div className="text-slate-400 whitespace-nowrap w-32 flex-shrink-0">
         {new Date(log.timestamp).toLocaleTimeString('zh-CN', {
@@ -129,12 +145,13 @@ function LogEntry({ log, searchQuery, highlightRegex }) {
   );
 }
 
-// v6.2.15: 使用 React.memo 优化渲染
-// 只有在 log 对象或 searchQuery 变化时才重新渲染
+// v6.2.16: 使用 React.memo 优化渲染
+// log/searchQuery/isSelected 变化时才重新渲染
 export default memo(LogEntry, (prevProps, nextProps) => {
   return (
     prevProps.log === nextProps.log &&
-    prevProps.searchQuery === nextProps.searchQuery
+    prevProps.searchQuery === nextProps.searchQuery &&
+    prevProps.isSelected === nextProps.isSelected
   );
 });
 
