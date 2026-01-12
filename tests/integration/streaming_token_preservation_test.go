@@ -64,9 +64,6 @@ func setupTestSuite(t *testing.T) *StreamingTokenPreservationTestSuite {
 				Group:    "test-group",
 			},
 		},
-		Web: config.WebConfig{
-			Enabled: false,
-		},
 	}
 
 	endpointManager := endpoint.NewManager(cfg)
