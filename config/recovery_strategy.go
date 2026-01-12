@@ -182,9 +182,10 @@ func (fc *FailoverConfigV2) GetMaxLoops() int {
 }
 
 // ShouldSkipHealthCheck 是否应该跳过定时健康检测
-// 仅当启用循环重试且 SkipHealthCheck = true 时跳过
+// 仅当启用渠道间转移、循环重试且 SkipHealthCheck = true 时跳过
+// v6.2.17: 修复关闭渠道间转移后仍跳过健康检测的问题
 func (fc *FailoverConfigV2) ShouldSkipHealthCheck() bool {
-	return fc.LoopRetry && fc.SkipHealthCheck
+	return fc.Enabled && fc.LoopRetry && fc.SkipHealthCheck
 }
 
 // ShouldInterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
