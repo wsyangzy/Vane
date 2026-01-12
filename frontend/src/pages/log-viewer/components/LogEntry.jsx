@@ -1,29 +1,45 @@
 // LogEntry.jsx - 单条日志显示组件
-import React, { useState } from 'react';
+// v6.2.15: 性能优化 - React.memo + 正则缓存
+import React, { useState, useMemo, memo } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { LOG_LEVELS } from '../constants';
 
+// 转义正则表达式特殊字符
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
- * 单条日志组件
+ * 单条日志组件（使用 React.memo 优化渲染）
  * @param {Object} log 日志对象
  * @param {string} searchQuery 搜索关键词
+ * @param {RegExp} highlightRegex 预编译的高亮正则（从父组件传入，避免重复编译）
  */
-function LogEntry({ log, searchQuery }) {
+function LogEntry({ log, searchQuery, highlightRegex }) {
   const [copied, setCopied] = useState(false);
+
+  // 防御性检查：确保 log 对象有效
+  if (!log || !log.message) {
+    return null;
+  }
+
   const levelConfig = LOG_LEVELS[log.level] || LOG_LEVELS.INFO;
   const Icon = levelConfig.icon;
 
-  // 高亮搜索关键词
+  // 高亮搜索关键词（使用传入的预编译正则）
   const highlightText = (text) => {
-    if (!searchQuery) return text;
-    const parts = text.split(new RegExp(`(${searchQuery})`, 'gi'));
-    return parts.map((part, i) =>
-      part.toLowerCase() === searchQuery.toLowerCase() ? (
-        <mark key={i} className="bg-yellow-200 text-gray-900">{part}</mark>
-      ) : (
-        part
-      )
-    );
+    if (!searchQuery || !highlightRegex) return text;
+    try {
+      const parts = text.split(highlightRegex);
+      return parts.map((part, i) =>
+        part.toLowerCase() === searchQuery.toLowerCase() ? (
+          <mark key={i} className="bg-yellow-200 text-gray-900">{part}</mark>
+        ) : (
+          part
+        )
+      );
+    } catch {
+      // 正则解析失败时返回原文本
+      return text;
+    }
   };
 
   // 复制日志内容
@@ -113,4 +129,14 @@ function LogEntry({ log, searchQuery }) {
   );
 }
 
-export default LogEntry;
+// v6.2.15: 使用 React.memo 优化渲染
+// 只有在 log 对象或 searchQuery 变化时才重新渲染
+export default memo(LogEntry, (prevProps, nextProps) => {
+  return (
+    prevProps.log === nextProps.log &&
+    prevProps.searchQuery === nextProps.searchQuery
+  );
+});
+
+// 导出 escapeRegex 供父组件使用
+export { escapeRegex };

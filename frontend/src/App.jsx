@@ -69,8 +69,13 @@ function App() {
     return pages[activeTab] || <OverviewPage />;
   };
 
+  // 日志页面不需要底部 padding，且禁止外部滚动（页面内部自适应高度）
+  const containerClass = activeTab === 'logs'
+    ? 'h-screen bg-[#FAFAFA] font-sans text-slate-900 overflow-hidden'
+    : 'min-h-screen bg-[#FAFAFA] font-sans text-slate-900 pb-20';
+
   return (
-    <div className="min-h-screen bg-[#FAFAFA] font-sans text-slate-900 pb-20">
+    <div className={containerClass}>
       {/* 背景纹理 */}
       <div
         className="fixed inset-0 pointer-events-none opacity-[0.4]"
