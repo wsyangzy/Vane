@@ -393,6 +393,14 @@ func (h *Handler) UpdateConfig(cfg *config.Config) {
 	if h.sharedSuspensionManager != nil {
 		h.sharedSuspensionManager.UpdateConfig(cfg)
 	}
+
+	// v6.2.14: 更新子处理器配置，确保设置变更能传播到流式和常规处理器
+	if h.streamingHandler != nil {
+		h.streamingHandler.UpdateConfig(cfg)
+	}
+	if h.regularHandler != nil {
+		h.regularHandler.UpdateConfig(cfg)
+	}
 }
 
 // GetSuspendedRequestsCount 获取当前挂起等待的请求数量

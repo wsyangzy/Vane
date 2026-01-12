@@ -1612,11 +1612,23 @@ func (a *App) applySettingsToConfig() {
 	oldFailoverEnabled := a.config.Failover.Enabled
 	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
 	// v6.2.5: 当渠道间转移从禁用变为启用时，重置所有渠道的暂停状态
+	// v6.2.14: 同时更新数据库，避免后续从数据库同步时恢复旧的暂停状态
 	if !oldFailoverEnabled && a.config.Failover.Enabled && a.endpointManager != nil {
 		gm := a.endpointManager.GetGroupManager()
 		if gm != nil {
 			gm.ResetAllPausedGroups()
-			a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置")
+		}
+		// 同步更新数据库中的 failover_enabled 字段
+		if a.channelService != nil {
+			if resetCount, err := a.channelService.ResetAllFailoverEnabled(ctx); err != nil {
+				a.logger.Warn("⚠️ 重置数据库渠道状态失败", "error", err)
+			} else if resetCount > 0 {
+				a.logger.Info(fmt.Sprintf("✅ 渠道间转移已启用，已重置 %d 个渠道的暂停状态（内存+数据库）", resetCount))
+			} else {
+				a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置")
+			}
+		} else {
+			a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置（仅内存）")
 		}
 	}
 	// v6.2: default_cooldown 已移除（loop_retry 模式下冷却时间与循环重试逻辑冲突）

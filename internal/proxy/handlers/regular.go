@@ -904,3 +904,10 @@ func (rh *RegularHandler) tryExtractTokensFromHttpError(resp *http.Response, lif
 			lifecycleManager.GetRequestID(), endpointName, resp.StatusCode, modelName))
 	}
 }
+
+// UpdateConfig 更新常规处理器配置
+// v6.2.14: 支持运行时配置热更新，确保设置变更能立即生效
+func (rh *RegularHandler) UpdateConfig(cfg *config.Config) {
+	rh.config = cfg
+}
+

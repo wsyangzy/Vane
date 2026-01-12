@@ -138,7 +138,38 @@ func (s *ChannelService) SetFailoverEnabled(ctx context.Context, name string, en
 	return s.store.Update(ctx, existing)
 }
 
-// BackfillChannelsFromEndpoints 将历史 endpoints.channel 反写到 channels 表，确保“端点删光后渠道仍存在”。
+// ResetAllFailoverEnabled 重置所有渠道的 failover_enabled 为 true
+// 用于开启渠道间故障转移时，确保所有渠道都可参与故障转移。
+// v6.2.14: 修复开启渠道间转移后，暂停状态从数据库重新加载导致状态不一致的问题。
+func (s *ChannelService) ResetAllFailoverEnabled(ctx context.Context) (int, error) {
+	if s == nil || s.store == nil {
+		return 0, nil
+	}
+
+	channels, err := s.store.List(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("获取渠道列表失败: %w", err)
+	}
+
+	resetCount := 0
+	for _, ch := range channels {
+		if ch == nil {
+			continue
+		}
+		if !ch.FailoverEnabled {
+			ch.FailoverEnabled = true
+			if err := s.store.Update(ctx, ch); err != nil {
+				slog.Warn(fmt.Sprintf("⚠️ 重置渠道 failover_enabled 失败: %s - %v", ch.Name, err))
+				continue
+			}
+			resetCount++
+		}
+	}
+
+	return resetCount, nil
+}
+
+// BackfillChannelsFromEndpoints 将历史 endpoints.channel 反写到 channels 表，确保"端点删光后渠道仍存在"。
 // 说明：仅 best-effort，不因单个渠道写入失败而中断。
 func (s *ChannelService) BackfillChannelsFromEndpoints(ctx context.Context, endpointStore store.EndpointStore) (int, error) {
 	if s == nil || s.store == nil {

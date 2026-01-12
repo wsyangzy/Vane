@@ -1143,3 +1143,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		sendStreamInterruptedMessage(w, flusher, errMsg, "claude-3-5-sonnet-20241022")
 	}
 }
+
+// UpdateConfig 更新流式处理器配置
+// v6.2.14: 支持运行时配置热更新，确保设置变更能立即生效
+func (sh *StreamingHandler) UpdateConfig(cfg *config.Config) {
+	sh.config = cfg
+}
