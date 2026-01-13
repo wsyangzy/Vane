@@ -791,6 +791,7 @@ const CreateChannelModal = ({
             onSubmit?.({ name: trimmedName, website: website.trim(), priority });
           }}
           className="p-6 space-y-4"
+          autoComplete="off"
         >
           {(error || serverError) && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
@@ -808,9 +809,12 @@ const CreateChannelModal = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="例如：official / backup / openai"
-                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  disabled={loading}
-                  readOnly={isEdit}
+                  autoComplete="off"
+                  data-form-type="other"
+                  className={`mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 ${
+                    isEdit ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''
+                  }`}
+                  disabled={loading || isEdit}
                 />
                 {isEdit && (
                   <p className="text-xs text-slate-400 mt-1">渠道名称用于关联端点，不支持修改</p>
@@ -826,6 +830,8 @@ const CreateChannelModal = ({
                     min={1}
                     value={priority}
                     onChange={(e) => setPriority(e.target.value)}
+                    autoComplete="off"
+                    data-form-type="other"
                     className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                     disabled={loading}
                   />
@@ -840,6 +846,8 @@ const CreateChannelModal = ({
                 value={website}
                 onChange={(e) => setWebsite(e.target.value)}
                 placeholder="https://example.com (可选)"
+                autoComplete="off"
+                data-form-type="other"
                 className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 disabled={loading}
               />
