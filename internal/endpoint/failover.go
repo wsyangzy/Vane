@@ -67,10 +67,12 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 			ep.mutex.RLock()
 			isHealthy := ep.Status.Healthy
 			neverChecked := ep.Status.NeverChecked
+			isRequestFailed := ep.Status.RequestFailed // v6.1.0: 请求失败标记
 			rt := ep.Status.ResponseTime
 			ep.mutex.RUnlock()
 
-			if !(isHealthy || neverChecked) {
+			// v6.1.0: 端点可用条件 = (健康 || 未检查) && 未被请求失败标记
+			if !(isHealthy || neverChecked) || isRequestFailed {
 				continue
 			}
 
@@ -141,7 +143,7 @@ func (m *Manager) SelectNextAvailableChannel(excludeChannel string) (string, err
 		return "", fmt.Errorf("没有可用的故障转移渠道")
 	}
 
-	// 方案B：渠道间故障转移顺序固定按优先级（避免 fastest 带来的“回切/抖动”）
+	// 渠道间切换固定按优先级顺序（路由策略仅用于渠道内端点选择）
 	sortFailoverCandidates("priority", candidates)
 
 	return candidates[0].name, nil
@@ -302,6 +304,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 	// 2) v6.2: 冷却机制已移除，标记失败端点为不健康
 	// v6.2.6: 同时设置 NeverChecked = false，防止 neverChecked 端点被误认为"可用"而导致无限循环
 	// v6.2.9: 合并日志输出，避免循环重试时日志膨胀
+	// v6.1.0: 设置 RequestFailed = true，与 Healthy（健康检查状态）分离
 	var markedEndpoints []string
 	for _, name := range uniqueNames {
 		ep := m.GetEndpointByNameAny(name)
@@ -310,6 +313,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		}
 		ep.mutex.Lock()
 		ep.Status.Healthy = false
+		ep.Status.RequestFailed = true  // v6.1.0: 标记为请求失败，健康检查不会覆盖此状态
 		ep.Status.NeverChecked = false // 关键修复：防止 neverChecked 端点在故障转移候选中被误判为可用
 		ep.mutex.Unlock()
 		markedEndpoints = append(markedEndpoints, name)
@@ -344,10 +348,8 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		go m.onFailoverTriggered(failedChannel, newChannel)
 	}
 
-	// 5) 触发前端刷新
-	if m.onHealthCheckComplete != nil {
-		go m.onHealthCheckComplete()
-	}
+	// 5) v6.2: 使用防抖机制触发前端刷新
+	m.triggerHealthCheckCompleteDebounced()
 
 	return newChannel, nil
 }
@@ -366,6 +368,7 @@ func (m *Manager) TriggerRequestFailover(failedEndpointName string, reason strin
 // resetAllEndpointsHealthForLoopRetry 循环重试时重置所有端点健康状态
 // v6.2.7: 循环重试策略下，允许对已失败的端点进行重新尝试
 // v6.2.10: 移除智能重置逻辑，统一重置所有端点（用户可通过 UI 查看失败原因）
+// v6.1.0: 同时重置 RequestFailed 标记
 func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
 	if m == nil || m.groupManager == nil {
 		return
@@ -392,8 +395,9 @@ func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
 			}
 
 			ep.mutex.Lock()
-			if !ep.Status.Healthy {
+			if !ep.Status.Healthy || ep.Status.RequestFailed {
 				ep.Status.Healthy = true
+				ep.Status.RequestFailed = false // v6.1.0: 重置请求失败标记
 				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
 				// 注意：不清除 LastRequestFailCode 和 LastRequestFailReason，保留给 UI 显示
 				resetCount++

@@ -38,10 +38,12 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		if isHealthy || skipHealthCheck {
+		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
 	}
@@ -146,10 +148,12 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		if isHealthy || skipHealthCheck {
+		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
 	}
@@ -431,10 +435,12 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		if isHealthy || skipHealthCheck {
+		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
 	}
@@ -485,12 +491,14 @@ func (m *Manager) GetRecoveredEndpointsInChannel(triedKeys []string) []*Endpoint
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck
 		endpoint.mutex.RUnlock()
 
 		// v6.2: 只检查健康状态，不再检查冷却状态
+		// v6.1.0: 同时检查请求失败标记
 		if _, tried := triedSet[epKey]; tried {
-			if isHealthy || skipHealthCheck {
+			if (isHealthy || skipHealthCheck) && !isRequestFailed {
 				recovered = append(recovered, endpoint)
 				slog.Debug(fmt.Sprintf("🔄 [端点恢复] 发现可用端点: %s", endpoint.Config.Name))
 			}

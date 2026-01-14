@@ -5,7 +5,7 @@
 
 import { useState, Suspense, lazy, useCallback } from 'react';
 import Header from '@components/layout/Header.jsx';
-import { LoadingSpinner } from '@components/ui';
+import { LoadingSpinner, ToastProvider } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
 
 // 懒加载页面组件
@@ -75,31 +75,33 @@ function App() {
     : 'min-h-screen bg-[#FAFAFA] font-sans text-slate-900 pb-20';
 
   return (
-    <div className={containerClass}>
-      {/* 背景纹理 */}
-      <div
-        className="fixed inset-0 pointer-events-none opacity-[0.4]"
-        style={{
-          backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
-          backgroundSize: '24px 24px'
-        }}
-      />
+    <ToastProvider>
+      <div className={containerClass}>
+        {/* 背景纹理 */}
+        <div
+          className="fixed inset-0 pointer-events-none opacity-[0.4]"
+          style={{
+            backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
+            backgroundSize: '24px 24px'
+          }}
+        />
 
-      {/* 顶部导航 */}
-      <Header
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        connectionStatus={connectionStatus}
-        proxyStatus={proxyStatus}
-      />
+        {/* 顶部导航 */}
+        <Header
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          connectionStatus={connectionStatus}
+          proxyStatus={proxyStatus}
+        />
 
-      {/* 主内容区 */}
-      <main className="max-w-7xl mx-auto px-6 pt-8 relative z-10">
-        <Suspense fallback={<LoadingSpinner text="加载页面..." />}>
-          {renderPage()}
-        </Suspense>
-      </main>
-    </div>
+        {/* 主内容区 */}
+        <main className="max-w-7xl mx-auto px-6 pt-8 relative z-10">
+          <Suspense fallback={<LoadingSpinner text="加载页面..." />}>
+            {renderPage()}
+          </Suspense>
+        </main>
+      </div>
+    </ToastProvider>
   );
 }
 

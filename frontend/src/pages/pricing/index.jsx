@@ -21,7 +21,8 @@ import {
 import {
   Button,
   LoadingSpinner,
-  ErrorMessage
+  ErrorMessage,
+  useToast
 } from '@components/ui';
 import {
   getModelPricingStorageStatus,
@@ -492,6 +493,8 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
 // ============================================
 
 const PricingPage = () => {
+  const toast = useToast();
+
   // 数据状态
   const [storageStatus, setStorageStatus] = useState(null);
   const [pricings, setPricings] = useState([]);
@@ -555,7 +558,7 @@ const PricingPage = () => {
       await loadData();
     } catch (err) {
       console.error('设置默认定价失败:', err);
-      alert(`操作失败: ${err.message}`);
+      toast.error(err.message, '设置默认定价失败');
     }
   };
 
@@ -590,7 +593,7 @@ const PricingPage = () => {
       await loadData();
     } catch (err) {
       console.error('删除失败:', err);
-      alert(`删除失败: ${err.message}`);
+      toast.error(err.message, '删除失败');
     } finally {
       setDeleteLoading(false);
     }

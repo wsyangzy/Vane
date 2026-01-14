@@ -209,33 +209,33 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 		}
 
 	case handlers.ErrorTypeEOF:
-		// EOF 错误 - 连接中断，不重试（避免重复计费）
+		// v6.2.1: EOF 错误 - 连接中断，不在同一端点重试（避免重复计费），但允许切换端点
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
-			SwitchEndpoint:    false,
+			SwitchEndpoint:    true, // 切换到新端点可能成功
 			SuspendRequest:    false,
-			FinalStatus:       "eof_interrupted",
-			Reason:            "EOF连接中断，不重试避免重复计费",
+			FinalStatus:       "",   // 不设最终状态，允许继续尝试其他端点
+			Reason:            "EOF连接中断，不重试同端点，切换端点尝试",
 		}
 
 	case handlers.ErrorTypeResponseTimeout:
-		// 响应超时 - 服务器可能已处理，不重试（避免重复计费）
+		// v6.2.1: 响应超时 - 服务器可能已处理，不在同一端点重试，但允许切换端点
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
-			SwitchEndpoint:    false,
+			SwitchEndpoint:    true, // 当前端点可能有问题，切换可能成功
 			SuspendRequest:    false,
-			FinalStatus:       "timeout",
-			Reason:            "响应超时，不重试避免重复计费",
+			FinalStatus:       "",   // 不设最终状态，允许继续尝试其他端点
+			Reason:            "响应超时，不重试同端点，切换端点尝试",
 		}
 
 	case handlers.ErrorTypeTimeout:
-		// 兼容旧代码的超时错误 - 按响应超时处理，不重试
+		// v6.2.1: 兼容旧代码的超时错误 - 按响应超时处理，允许切换端点
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
-			SwitchEndpoint:    false,
+			SwitchEndpoint:    true,
 			SuspendRequest:    false,
-			FinalStatus:       "timeout",
-			Reason:            "超时错误，不重试避免重复计费",
+			FinalStatus:       "",
+			Reason:            "超时错误，切换端点尝试",
 		}
 
 	case handlers.ErrorTypeConnectionTimeout:
@@ -318,13 +318,14 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 		}
 
 	case handlers.ErrorTypeStream:
-		// 流式错误：响应已接收但解析失败，不重试（数据已部分发送）
+		// v6.2.1: 流式错误 - 响应已接收但解析失败，不在同一端点重试，但允许切换端点
+		// 切换端点不会导致重复计费（不同端点是独立请求）
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
-			SwitchEndpoint:    false,
+			SwitchEndpoint:    true, // 切换到新端点可能成功
 			SuspendRequest:    false,
-			FinalStatus:       "stream_error",
-			Reason:            "流式处理错误，不重试避免重复计费",
+			FinalStatus:       "",   // 不设最终状态，允许继续尝试其他端点
+			Reason:            "流式处理错误，切换端点尝试",
 		}
 
 	case handlers.ErrorTypeAuth:
@@ -379,8 +380,9 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 		}
 
 	default:
-		// 未知错误：默认保守策略不重试。
-		// 但对明显的“端点配置/证书错误”，允许立即切换端点（同一端点重试没有意义）。
+		// v6.2.1: 未知错误：默认允许切换端点
+		// 切换端点是安全的（不会重复计费），不切换只会让客户端中断
+		// 对明显的"端点配置/证书错误"，也允许切换端点
 		if errorCtx.OriginalError != nil {
 			errStr := strings.ToLower(errorCtx.OriginalError.Error())
 			if strings.Contains(errStr, "x509:") || strings.Contains(errStr, "tls: failed to verify certificate") {
@@ -394,13 +396,13 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			}
 		}
 
-		// 其他未知错误：保守策略，不重试
+		// 其他未知错误：允许切换端点尝试
 		return handlers.RetryDecision{
 			RetrySameEndpoint: false,
-			SwitchEndpoint:    false,
+			SwitchEndpoint:    true, // v6.2.1: 切换端点是安全的
 			SuspendRequest:    false,
-			FinalStatus:       "error",
-			Reason:            "未知错误，保守策略不重试",
+			FinalStatus:       "",   // 不设最终状态，允许继续尝试其他端点
+			Reason:            "未知错误，切换端点尝试",
 		}
 	}
 }

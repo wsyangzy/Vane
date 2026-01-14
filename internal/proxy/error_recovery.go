@@ -187,12 +187,41 @@ func (erm *ErrorRecoveryManager) ClassifyError(err error, requestID, endpoint, g
 			errorCtx.RetryableAfter = 0 // 不可重试
 			slog.Warn(fmt.Sprintf("🌊 [环境不支持] [%s] 端点: %s, 尝试: %d, 错误: %v",
 				requestID, endpoint, attempt, err))
-		} else {
-			errorCtx.ErrorType = ErrorTypeStream
-			errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
-			slog.Warn(fmt.Sprintf("🌊 [流处理错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-				requestID, endpoint, attempt, err))
+			return errorCtx
 		}
+
+		// v6.2: 优先识别流错误中的网络子错误
+		// 场景：流传输过程中发生网络中断，错误信息可能包含 stream_status:error 但根本原因是网络问题
+		// 这些错误应当允许切换端点重试，而非视为纯流处理错误
+		streamNetworkKeywords := []string{
+			"wsarecv",             // Windows socket receive error
+			"wsasend",             // Windows socket send error
+			"connection reset",    // TCP 连接被重置
+			"connection aborted",  // TCP 连接被中止
+			"connection refused",  // TCP 连接被拒绝
+			"broken pipe",         // 管道断开
+			"use of closed",       // 使用已关闭的连接
+			"timeout",             // 超时
+			"deadline exceeded",   // 截止时间超过
+			"eof",                 // 意外 EOF (小写匹配)
+			"network is unreachable", // 网络不可达
+			"no route to host",    // 无路由
+		}
+		for _, keyword := range streamNetworkKeywords {
+			if strings.Contains(errStr, keyword) {
+				errorCtx.ErrorType = ErrorTypeNetwork
+				errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
+				slog.Warn(fmt.Sprintf("🌐 [流内网络错误] [%s] 端点: %s, 尝试: %d, 关键词: %s, 错误: %v",
+					requestID, endpoint, attempt, keyword, err))
+				return errorCtx
+			}
+		}
+
+		// 普通流处理错误
+		errorCtx.ErrorType = ErrorTypeStream
+		errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
+		slog.Warn(fmt.Sprintf("🌊 [流处理错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
+			requestID, endpoint, attempt, err))
 		return errorCtx
 	}
 
@@ -580,27 +609,60 @@ func (erm *ErrorRecoveryManager) isTimeoutError(err error) bool {
 }
 
 // isClientCancelError 判断是否为客户端取消错误
+// v6.2: 区分真实用户取消 vs 网络中断导致的 context canceled
+// 网络中断（如 Post "url": context canceled）应该被识别为网络错误而非客户端取消
 func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// 检查context.Canceled
+	errStr := strings.ToLower(err.Error())
+
+	// v6.2: 检查 context.Canceled，但需要排除网络相关的 context 取消
 	if errors.Is(err, context.Canceled) {
+		// 网络相关的 context 取消关键词
+		// 这些错误实际上是网络问题，不是用户主动取消
+		networkIndicators := []string{
+			"dial", "connect", "read", "write",
+			"post \"", "get \"", "put \"", "delete \"", // HTTP 请求格式
+			"timeout", "deadline", "upstream", "tcp", "wsarecv",
+			"request failed", "http", "url",
+		}
+		for _, indicator := range networkIndicators {
+			if strings.Contains(errStr, indicator) {
+				// 这是网络错误导致的 context canceled，不是客户端主动取消
+				return false
+			}
+		}
+		// 纯粹的 context.Canceled（如用户关闭窗口），才是真正的客户端取消
 		return true
 	}
 
-	// 字符串匹配客户端取消相关错误
-	errStr := strings.ToLower(err.Error())
-	cancelErrors := []string{
-		"context canceled", "canceled", "client disconnected",
-		"connection closed by client", "client gone away",
+	// 明确的客户端断开连接短语（这些是确定的客户端行为）
+	clientDisconnectPhrases := []string{
+		"client disconnected",
+		"connection closed by client",
+		"client gone away",
 	}
-
-	for _, cancelErr := range cancelErrors {
-		if strings.Contains(errStr, cancelErr) {
+	for _, phrase := range clientDisconnectPhrases {
+		if strings.Contains(errStr, phrase) {
 			return true
 		}
+	}
+
+	// v6.2: "canceled" 关键词需要更谨慎处理
+	// 只有当不包含网络关键词时才判定为客户端取消
+	if strings.Contains(errStr, "canceled") {
+		networkIndicators := []string{
+			"dial", "connect", "read", "write", "post", "get",
+			"timeout", "deadline", "tcp", "http", "request",
+		}
+		for _, indicator := range networkIndicators {
+			if strings.Contains(errStr, indicator) {
+				return false
+			}
+		}
+		return true
 	}
 
 	return false
@@ -691,4 +753,156 @@ func stringPtr(s string) *string {
 // 辅助函数：创建int指针
 func intPtr(i int) *int {
 	return &i
+}
+
+// GetStatusCodeFromError 从错误信息中提取 HTTP 状态码
+// v6.2: 用于 ShouldSwitchEndpoint() 判断
+func GetStatusCodeFromError(err error) int {
+	if err == nil {
+		return 0
+	}
+	errStr := err.Error()
+
+	// 匹配 "endpoint returned error: 400" 格式
+	if idx := strings.Index(errStr, "endpoint returned error:"); idx != -1 {
+		substr := errStr[idx+24:] // 跳过 "endpoint returned error:"
+		substr = strings.TrimSpace(substr)
+		// 提取数字
+		var code int
+		for i, c := range substr {
+			if c >= '0' && c <= '9' {
+				code = code*10 + int(c-'0')
+			} else if i > 0 {
+				break
+			}
+		}
+		if code >= 100 && code < 600 {
+			return code
+		}
+	}
+
+	// 匹配 "HTTP 400" 或 "HTTP 400:" 格式
+	if idx := strings.Index(errStr, "HTTP "); idx != -1 {
+		substr := errStr[idx+5:] // 跳过 "HTTP "
+		var code int
+		for i, c := range substr {
+			if c >= '0' && c <= '9' {
+				code = code*10 + int(c-'0')
+			} else if i > 0 {
+				break
+			}
+		}
+		if code >= 100 && code < 600 {
+			return code
+		}
+	}
+
+	// 匹配 "status: 400" 格式
+	if idx := strings.Index(errStr, "status:"); idx != -1 {
+		substr := errStr[idx+7:] // 跳过 "status:"
+		substr = strings.TrimSpace(substr)
+		var code int
+		for _, c := range substr {
+			if c >= '0' && c <= '9' {
+				code = code*10 + int(c-'0')
+			} else {
+				break
+			}
+		}
+		if code >= 100 && code < 600 {
+			return code
+		}
+	}
+
+	return 0
+}
+
+// ShouldSwitchEndpoint 判断是否允许切换端点（即使不重试同一端点）
+// v6.2: 支持 400/403 等错误触发故障转移到其他端点
+// 与 ShouldRetry 的区别：
+// - ShouldRetry: 是否在同一端点重试（可能导致重复计费）
+// - ShouldSwitchEndpoint: 是否切换到其他端点尝试（不同端点可能表现不同）
+func (erm *ErrorRecoveryManager) ShouldSwitchEndpoint(errorCtx *ErrorContext) bool {
+	switch errorCtx.ErrorType {
+	case ErrorTypeHTTP:
+		// 400/403 等非 5xx 错误允许切换端点
+		// 原因：不同中转商对同一请求可能有不同的处理逻辑
+		statusCode := GetStatusCodeFromError(errorCtx.OriginalError)
+		switch statusCode {
+		case 400:
+			// 400 Bad Request: 可能是特定中转商不支持某些参数
+			slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] HTTP 400 允许切换端点（不同中转商表现可能不同）", errorCtx.RequestID))
+			return true
+		case 403:
+			// 403 Forbidden: 可能是特定端点的权限问题
+			slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] HTTP 403 允许切换端点", errorCtx.RequestID))
+			return true
+		case 404, 410:
+			// 404/410: 资源不存在，切换端点也没用
+			return false
+		default:
+			// 其他 4xx 错误，默认不切换
+			return false
+		}
+
+	case ErrorTypeAuth:
+		// 认证错误允许切换端点（不同端点有不同 token）
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 认证错误允许切换端点", errorCtx.RequestID))
+		return true
+
+	case ErrorTypeRateLimit:
+		// 限流错误允许切换端点
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 限流错误允许切换端点", errorCtx.RequestID))
+		return true
+
+	case ErrorTypeServerError:
+		// 5xx 服务器错误允许切换端点
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 服务器错误允许切换端点", errorCtx.RequestID))
+		return true
+
+	case ErrorTypeStream:
+		// v6.2.1: 流错误统一允许切换端点
+		// 原因：切换端点不会导致重复计费（不同端点是独立的请求）
+		// 即使当前端点已计费，在新端点上重新请求可能成功
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 流错误允许切换端点（切换不会重复计费）", errorCtx.RequestID))
+		return true
+
+	case ErrorTypeNetwork:
+		// 网络错误允许切换端点
+		return true
+
+	case ErrorTypeConnectionTimeout:
+		// 连接超时允许切换端点
+		return true
+
+	case ErrorTypeParsing:
+		// 解析错误允许切换端点
+		return true
+
+	case ErrorTypeClientCancel:
+		// 客户端取消不切换
+		return false
+
+	case ErrorTypeEOF:
+		// v6.2.1: EOF 错误允许切换端点
+		// 原因：即使当前端点可能已计费，切换到新端点不会重复计费
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] EOF错误允许切换端点", errorCtx.RequestID))
+		return true
+
+	case ErrorTypeResponseTimeout:
+		// v6.2.1: 响应超时允许切换端点
+		// 原因：当前端点可能有问题，切换到新端点可能成功
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 响应超时允许切换端点", errorCtx.RequestID))
+		return true
+
+	case ErrorTypeNoHealthyEndpoints:
+		// 没有健康端点：已经没有可切换的了
+		return false
+
+	default:
+		// v6.2.1: 未知错误默认允许切换端点
+		// 原因：切换端点是安全的（不会重复计费），不切换只会让客户端中断
+		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 未知错误允许切换端点", errorCtx.RequestID))
+		return true
+	}
 }

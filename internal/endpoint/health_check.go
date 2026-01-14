@@ -21,9 +21,34 @@ func (m *Manager) SetOnHealthCheckComplete(fn func()) {
 	m.onHealthCheckComplete = fn
 }
 
+// triggerHealthCheckCompleteDebounced 防抖触发健康检查完成回调
+// v6.2: 避免并发健康检查时多次触发回调导致日志膨胀
+// 500ms 内多次调用只会执行最后一次
+func (m *Manager) triggerHealthCheckCompleteDebounced() {
+	if m.onHealthCheckComplete == nil {
+		return
+	}
+
+	m.healthCheckDebounceMu.Lock()
+	defer m.healthCheckDebounceMu.Unlock()
+
+	// 取消之前的定时器（如果存在）
+	if m.healthCheckDebounceTimer != nil {
+		m.healthCheckDebounceTimer.Stop()
+	}
+
+	// 设置新的定时器，500ms 后触发回调
+	m.healthCheckDebounceTimer = time.AfterFunc(500*time.Millisecond, func() {
+		if m.onHealthCheckComplete != nil {
+			m.onHealthCheckComplete()
+		}
+	})
+}
+
 // refreshGroupActivation 刷新组激活状态
 // 当端点健康状态变化时调用，用于重新评估哪些组应该被激活
 // v5.0+: 解决新增端点后不会自动激活的问题
+// v6.2: 使用防抖机制触发回调，避免并发检查时多次触发
 func (m *Manager) refreshGroupActivation() {
 	// 防御性检查：确保 groupManager 已初始化
 	if m.groupManager == nil {
@@ -38,10 +63,8 @@ func (m *Manager) refreshGroupActivation() {
 	m.groupManager.UpdateGroups(snapshot)
 	slog.Debug("🔄 [组管理] 端点健康状态变化，已刷新组激活状态")
 
-	// 触发健康检查完成回调（通知前端更新）
-	if m.onHealthCheckComplete != nil {
-		go m.onHealthCheckComplete()
-	}
+	// v6.2: 使用防抖机制触发健康检查完成回调
+	m.triggerHealthCheckCompleteDebounced()
 }
 
 // healthCheckLoop runs the health check routine
@@ -188,10 +211,8 @@ func (m *Manager) performHealthChecks() {
 		}
 	}
 
-	// v5.0+ Wails 桌面应用：定时健康检查完成后触发回调推送事件
-	if m.onHealthCheckComplete != nil {
-		go m.onHealthCheckComplete()
-	}
+	// v6.2: 使用防抖机制触发回调，避免与 updateEndpointStatus 中的回调重复
+	m.triggerHealthCheckCompleteDebounced()
 }
 
 // checkEndpointHealth checks the health of a single endpoint
@@ -358,7 +379,8 @@ func (e *Endpoint) GetStatus() EndpointStatus {
 }
 
 // GetHealthState 返回端点的健康状态字符串用于前端展示
-// 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "unhealthy"(不健康)
+// 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "request_failed"(请求失败), "unhealthy"(不健康)
+// v6.1.0: 新增 request_failed 状态，区分健康检查失败和请求转发失败
 func (e *Endpoint) GetHealthState() string {
 	// 1. 配置为跳过健康检查
 	if e.Config.SkipHealthCheck {
@@ -373,7 +395,13 @@ func (e *Endpoint) GetHealthState() string {
 		return "unchecked"
 	}
 
-	// 3. 健康或不健康
+	// 3. v6.1.0: 请求失败标记（优先级高于健康检查状态）
+	// RequestFailed 表示端点因请求转发失败而被标记，即使健康检查通过也不可用
+	if e.Status.RequestFailed {
+		return "request_failed"
+	}
+
+	// 4. 健康或不健康（健康检查结果）
 	if e.Status.Healthy {
 		return "healthy"
 	}
@@ -553,10 +581,8 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	slog.Info(fmt.Sprintf("✅ [批量健康检测] 完成，共检测 %d 个端点 (健康: %d, 不健康: %d)",
 		len(endpointsToCheck), healthyCount, unhealthyCount))
 
-	// 触发健康检查完成回调（通知前端更新）
-	if m.onHealthCheckComplete != nil {
-		go m.onHealthCheckComplete()
-	}
+	// v6.2: 使用防抖机制触发回调
+	m.triggerHealthCheckCompleteDebounced()
 
 	return healthyCount, unhealthyCount, nil
 }

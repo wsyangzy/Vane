@@ -28,6 +28,7 @@ const SetEndpointSkipHealthCheckByID = (id, skip) => {
 // ============================================
 // 健康状态徽章
 // v6.1: 支持四种状态 - skipped/unchecked/healthy/unhealthy
+// v6.1.0: 新增 request_failed 状态，区分健康检查失败和请求转发失败
 // v6.2.10: 异常状态支持显示失败原因 tooltip
 // ============================================
 
@@ -61,6 +62,20 @@ const HealthBadge = ({ healthState, failCode, failReason }) => {
         <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-600 border border-emerald-100">
           <CheckCircle2 size={10} className="mr-1" />
           健康
+        </div>
+      );
+    // v6.1.0: 请求失败状态（与健康检查失败区分）
+    case 'request_failed':
+      return (
+        <div
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 cursor-help"
+          title={buildFailTooltip()}
+        >
+          <XCircle size={10} className="mr-1" />
+          请求失败
+          {failCode > 0 && (
+            <span className="ml-1 font-mono">({failCode})</span>
+          )}
         </div>
       );
     case 'unhealthy':

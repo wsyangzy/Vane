@@ -31,6 +31,12 @@ type EndpointStatus struct {
 	ResponseTime     time.Duration
 	ConsecutiveFails int
 	NeverChecked     bool // 表示从未被检测过
+	// v6.1.0: 请求失败标记，与 Healthy（健康检查状态）分离
+	// - Healthy: 由健康检查更新，表示端点是否"可达"
+	// - RequestFailed: 由请求转发更新，表示端点是否"因请求失败而被标记"
+	// 端点可用条件：Healthy=true && RequestFailed=false
+	// 重置时机：loop_retry 触发时重置为 false
+	RequestFailed bool
 	// v6.2.9: 记录最后一次请求失败的 HTTP 状态码，用于 UI 显示
 	LastRequestFailCode int
 	// v6.2.10: 记录最后一次请求失败的原因，用于 UI 显示
@@ -63,6 +69,9 @@ type Manager struct {
 	// 故障转移回调（用于同步数据库）
 	// 参数: failedChannel 失败的渠道名, newChannel 新激活的渠道名
 	onFailoverTriggered func(failedChannel, newChannel string)
+	// v6.2: 健康检查回调防抖机制，避免并发健康检查触发多次回调
+	healthCheckDebounceMu    sync.Mutex
+	healthCheckDebounceTimer *time.Timer
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
