@@ -786,6 +786,10 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					connID, ep.Config.Name, actualAttempts))
 			}
 
+			// v6.2.12: 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
+			// 这是关键修复：之前只有渠道间故障转移才设置 RequestFailed，导致禁用渠道间转移时端点循环
+			ep.MarkRequestFailed(lastErr)
+
 			// 如果不是最后一个端点，尝试下一个端点
 			if i < len(endpoints)-1 {
 				fmt.Fprintf(w, "data: retry: 切换到备用端点: %s\n\n", endpoints[i+1].Config.Name)

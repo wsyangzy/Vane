@@ -246,6 +246,17 @@ export const pauseGroup = async (groupName) => {
   return await fetchWithTimeout(url, { method: 'POST' });
 };
 
+// 检查是否启用渠道间故障转移
+// v6.2: 用于前端判断是否显示渠道切换器
+export const fetchInterChannelFailoverEnabled = async () => {
+  // Wails 环境使用绑定
+  if (isWailsEnvironment()) {
+    return await WailsApi.isInterChannelFailoverEnabled();
+  }
+  // HTTP 模式暂不支持（桌面应用专用功能）
+  return false;
+};
+
 // ============================================
 // 使用统计 API
 // ============================================

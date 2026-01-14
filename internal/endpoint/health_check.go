@@ -409,6 +409,22 @@ func (e *Endpoint) GetHealthState() string {
 	return "unhealthy"
 }
 
+// MarkRequestFailed 标记端点为请求失败状态
+// v6.2.12: 新增方法，用于渠道内端点切换时立即标记失败端点，防止端点循环
+// err: 失败的原因错误（可为 nil）
+func (e *Endpoint) MarkRequestFailed(err error) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	e.Status.RequestFailed = true
+	e.Status.NeverChecked = false // 防止 neverChecked 端点被误判为可用
+
+	// 记录失败原因供 UI 显示
+	if err != nil {
+		e.Status.LastRequestFailReason = err.Error()
+	}
+}
+
 // ManualHealthCheck performs a manual health check on a specific endpoint by name
 func (m *Manager) ManualHealthCheck(endpointName string) error {
 	var targetEndpoint *Endpoint

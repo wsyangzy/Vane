@@ -1,12 +1,13 @@
 // ============================================
 // Requests 页面 - 请求追踪（重构版）
 // 2025-12-06 10:40:38 v4.0: 简化端点切换（移除 Token 级联）
+// v6.2: 获取渠道间故障转移状态，控制渠道切换器显示
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { ErrorMessage } from '@components/ui';
-import { fetchRequests, fetchModels, fetchUsageStats, fetchEndpoints, fetchGroups, activateGroup } from '@utils/api.js';
+import { fetchRequests, fetchModels, fetchUsageStats, fetchEndpoints, fetchGroups, activateGroup, fetchInterChannelFailoverEnabled } from '@utils/api.js';
 import { useFilters } from './hooks/useFilters.js';
 import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
@@ -28,6 +29,7 @@ const RequestsPage = () => {
   const [endpoints, setEndpoints] = useState([]);
   const [groups, setGroups] = useState([]); // v6.0: 渠道列表（一个渠道=一个组）
   const [activeGroup, setActiveGroup] = useState(''); // v6.0: 当前活跃渠道名称（沿用字段名兼容历史）
+  const [interChannelFailoverEnabled, setInterChannelFailoverEnabled] = useState(false); // v6.2: 渠道间故障转移是否启用
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -99,7 +101,8 @@ const RequestsPage = () => {
       };
 
       // v4.0: 简化数据获取，移除 keysData
-      const [requestsData, statsData, modelsData, endpointsData, groupsData] = await Promise.all([
+      // v6.2: 添加渠道间故障转移状态获取
+      const [requestsData, statsData, modelsData, endpointsData, groupsData, failoverEnabled] = await Promise.all([
         fetchRequests({
           ...queryParams,
           page: pagination.page,
@@ -108,7 +111,8 @@ const RequestsPage = () => {
         fetchUsageStats(statsParams),
         fetchModels(),
         fetchEndpoints(),
-        fetchGroups()
+        fetchGroups(),
+        fetchInterChannelFailoverEnabled()
       ]);
 
       setRequests(requestsData.requests);
@@ -136,6 +140,9 @@ const RequestsPage = () => {
       if (activeGroupObj) {
         setActiveGroup(activeGroupObj.name);
       }
+
+      // v6.2: 设置渠道间故障转移状态
+      setInterChannelFailoverEnabled(failoverEnabled);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -280,6 +287,7 @@ const RequestsPage = () => {
           groups={groups}
           activeGroup={activeGroup}
           onGroupSwitch={handleGroupSwitch}
+          interChannelFailoverEnabled={interChannelFailoverEnabled}
         />
 
         {/* 筛选面板（弹出式） */}

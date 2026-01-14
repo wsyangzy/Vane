@@ -356,6 +356,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					rh.endpointManager.SetEndpointLastRequestFail(ep.Config.Name, failStatusCode, failReason)
 
 					if decision.SwitchEndpoint {
+						// v6.2.12: 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
+						ep.MarkRequestFailed(err)
+
 						// v6.2: 移除渠道内端点冷却，使用 triedEndpoints 追踪
 						nextName := ""
 						if i+1 < len(endpoints) && endpoints[i+1] != nil {

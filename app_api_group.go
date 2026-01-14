@@ -208,6 +208,21 @@ func (a *App) PauseGroup(name string) error {
 	return manager.ManualPauseGroup(name, 0)
 }
 
+// IsInterChannelFailoverEnabled 检查是否启用渠道间故障转移
+// v6.2: 前端用于判断是否显示渠道切换器
+func (a *App) IsInterChannelFailoverEnabled() bool {
+	a.mu.RLock()
+	manager := a.endpointManager
+	a.mu.RUnlock()
+
+	if manager == nil {
+		return false
+	}
+
+	cfg := manager.GetConfig()
+	return cfg != nil && cfg.Failover.Enabled
+}
+
 // ResumeGroup 恢复指定组
 func (a *App) ResumeGroup(name string) error {
 	a.mu.RLock()

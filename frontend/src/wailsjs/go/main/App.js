@@ -182,6 +182,10 @@ export function HideMainWindow() {
   return window['go']['main']['App']['HideMainWindow']();
 }
 
+export function IsInterChannelFailoverEnabled() {
+  return window['go']['main']['App']['IsInterChannelFailoverEnabled']();
+}
+
 export function IsProxyRunning() {
   return window['go']['main']['App']['IsProxyRunning']();
 }

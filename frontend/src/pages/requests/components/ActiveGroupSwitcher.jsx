@@ -1,6 +1,7 @@
 // ============================================
 // ActiveGroupSwitcher - 渠道快捷切换器
 // 2025-12-09 17:29:26 v5.0: 显示渠道名称，按优先级排序
+// v6.2: 仅在未开启渠道间故障转移时显示；优化状态显示逻辑
 // ============================================
 
 import { useState, useEffect, useRef, useMemo } from 'react';
@@ -109,12 +110,11 @@ const ActiveGroupSwitcher = ({
   };
 
   // 获取健康状态样式
-  const getHealthStyle = (endpoint) => {
-    const healthyCount = endpoint.healthy_endpoints ?? 0;
-    const totalCount = endpoint.total_endpoints ?? 1;
-    const isHealthy = healthyCount > 0;
+  // v6.2: 优化显示逻辑 - 活跃渠道显示为健康，其他显示为异常
+  const getHealthStyle = (channel) => {
+    const isActive = channel.name === activeGroup;
 
-    if (isHealthy) {
+    if (isActive) {
       return {
         dot: 'bg-emerald-400',
         text: '健康',
@@ -123,7 +123,7 @@ const ActiveGroupSwitcher = ({
     }
     return {
       dot: 'bg-rose-400',
-      text: '异常',
+      text: '非活跃',
       color: 'text-rose-600'
     };
   };

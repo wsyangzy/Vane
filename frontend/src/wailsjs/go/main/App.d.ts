@@ -93,6 +93,8 @@ export function GetUsageSummary(arg1:string,arg2:string):Promise<main.UsageSumma
 
 export function HideMainWindow():Promise<void>;
 
+export function IsInterChannelFailoverEnabled():Promise<boolean>;
+
 export function IsProxyRunning():Promise<boolean>;
 
 export function OpenLogDir():Promise<void>;

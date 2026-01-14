@@ -400,7 +400,16 @@ export const getGroupsRaw = async () => {
   return Array.isArray(groups) ? groups : [];
 };
 
-// 获取下一个可用渠道（用于“暂停活跃渠道”前的提示/确认）
+// 检查是否启用渠道间故障转移
+// v6.2: 用于前端判断是否显示渠道切换器
+export const isInterChannelFailoverEnabled = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.IsInterChannelFailoverEnabled();
+};
+
+// 获取下一个可用渠道（用于"暂停活跃渠道"前的提示/确认）
 export const getNextAvailableChannel = async (excludeChannel) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
