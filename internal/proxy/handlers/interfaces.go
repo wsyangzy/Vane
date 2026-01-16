@@ -238,6 +238,7 @@ type SuspensionManager interface {
 	// 🎯 [挂起取消区分] 新增带结果的端点恢复等待方法，能区分成功/超时/取消
 	WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) SuspensionResult
 	GetSuspendedRequestsCount() int
+	GetSuspendedEndpointCounts() map[string]int
 	// 🔧 [热更新] 更新配置
 	UpdateConfig(cfg *config.Config)
 }

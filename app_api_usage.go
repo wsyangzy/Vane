@@ -249,6 +249,7 @@ type RequestRecord struct {
 	Timestamp             string  `json:"timestamp"`
 	Channel               string  `json:"channel"` // v5.0: 渠道标签
 	Endpoint              string  `json:"endpoint"`
+	EndpointChain         string  `json:"endpoint_chain"` // 端点尝试链路（简略）
 	Group                 string  `json:"group"`
 	Model                 string  `json:"model"`
 	Status                string  `json:"status"`
@@ -380,6 +381,7 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 			Timestamp:             r.StartTime.Format("2006-01-02 15:04:05"),
 			Channel:               r.Channel, // v5.0: 渠道标签
 			Endpoint:              r.EndpointName,
+			EndpointChain:         r.EndpointChain,
 			Group:                 r.GroupName,
 			Model:                 r.ModelName,
 			Status:                r.Status,

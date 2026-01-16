@@ -579,6 +579,26 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 	targetGroup.ManualActivationTime = time.Now()
 	// v6.2: CooldownUntil 已移除
 
+	// v6.2.18: 重置目标组所有端点的 RequestFailed 状态
+	// 用户手动激活（重试）时，需要重置端点状态让它们重新参与请求路由
+	resetCount := 0
+	for _, ep := range targetGroup.Endpoints {
+		if ep == nil {
+			continue
+		}
+		ep.mutex.Lock()
+		if ep.Status.RequestFailed {
+			ep.Status.RequestFailed = false
+			ep.Status.Healthy = true      // 假定可用，依赖实际请求验证
+			ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
+			resetCount++
+		}
+		ep.mutex.Unlock()
+	}
+	if resetCount > 0 {
+		slog.Info(fmt.Sprintf("🔄 [手动激活] 重置组 %s 中 %d 个端点的请求失败状态", groupName, resetCount))
+	}
+
 	// 通知订阅者
 	gm.notifyGroupChange(groupName)
 

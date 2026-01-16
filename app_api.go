@@ -201,6 +201,17 @@ func (a *App) GetSuspendedRequestsCount() int {
 	return 0
 }
 
+// GetSuspendedEndpointCounts 获取当前挂起请求的端点计数
+func (a *App) GetSuspendedEndpointCounts() map[string]int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.proxyHandler != nil {
+		return a.proxyHandler.GetSuspendedEndpointCounts()
+	}
+	return map[string]int{}
+}
+
 // ============================================================
 // 辅助函数
 // ============================================================

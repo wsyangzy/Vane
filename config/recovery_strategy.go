@@ -30,14 +30,9 @@ type FailoverConfigV2 struct {
 	// v6.2.11: 新增，用于减少循环重试模式下的日志噪音
 	SkipHealthCheck bool `yaml:"skip_health_check"`
 
-	// InterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
-	// - true: 返回 422 状态码，中断客户端（如 Claude Code）的自动重试
-	// - false: 返回可重试错误格式，允许客户端自行决定是否重试
-	// 默认: true（中断重试，保护用户避免无限循环）
-	// v6.2.14: 新增，让用户选择耗尽后的客户端行为
-	InterruptClientOnExhausted *bool `yaml:"interrupt_client_on_exhausted"`
-
 	// ===== 以下字段已废弃，保留用于向后兼容 =====
+	// v6.2.19: InterruptClientOnExhausted 已废弃，始终保持连接挂起
+	InterruptClientOnExhausted *bool `yaml:"interrupt_client_on_exhausted,omitempty"` // DEPRECATED: v6.2.19 始终保持连接
 	// v6.1.x: 这些字段将在解析配置时自动映射到新字段
 	RecoveryStrategy        RecoveryStrategy `yaml:"recovery_strategy,omitempty"`         // DEPRECATED: 使用 loop_retry 替代
 	AutoWaitTimeout         time.Duration    `yaml:"auto_wait_timeout,omitempty"`         // DEPRECATED: 已移除 auto_wait 策略
@@ -189,12 +184,11 @@ func (fc *FailoverConfigV2) ShouldSkipHealthCheck() bool {
 }
 
 // ShouldInterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
-// 返回 true 时使用 422 状态码中断客户端自动重试
-// 返回 false 时允许客户端自行决定是否重试（503）
-// 默认返回 false（允许客户端重试）
+// v6.2.19: 始终返回 false，保持连接挂起等待恢复
+// 原因：简化配置（KISS），提供更好的用户体验
+// - 客户端连接不会突然断开
+// - 前端可以实时显示状态，用户可通过"重试"按钮控制恢复
+// DEPRECATED: InterruptClientOnExhausted 配置项已废弃，始终保持连接
 func (fc *FailoverConfigV2) ShouldInterruptClientOnExhausted() bool {
-	if fc.InterruptClientOnExhausted == nil {
-		return false // 默认允许客户端重试
-	}
-	return *fc.InterruptClientOnExhausted
+	return false // v6.2.19: 始终保持连接，不再支持 422 中断
 }

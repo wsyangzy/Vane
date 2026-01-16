@@ -312,7 +312,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							connID, decision.Reason, ep.Config.Name))
 
 						// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
-						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, ep.Config.Name)
+						failedEndpointKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey)
 						switch result {
 						case SuspensionSuccess:
 							slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新获取端点列表",
@@ -358,6 +359,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					if decision.SwitchEndpoint {
 						// v6.2.12: 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
 						ep.MarkRequestFailed(err)
+						// v6.2.19: 通知前端状态变化（使用防抖机制避免频繁刷新）
+						rh.endpointManager.NotifyEndpointStatusChange()
 
 						// v6.2: 移除渠道内端点冷却，使用 triedEndpoints 追踪
 						nextName := ""
@@ -538,6 +541,10 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v loop=%d",
 					connID, lastEndpoint.Config.Name, err, loopCount))
 
+				// v6.2.18: 故障转移失败时也要标记端点状态（即使渠道间转移被禁用）
+				// 这样前端可以正确显示端点失败状态
+				rh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, err)
+
 				// 检查是否是"没有可用渠道"或"达到最大循环轮数"的错误
 				// 这些情况下不应该继续挂起等待，应该直接返回错误
 				errStr := err.Error()
@@ -545,23 +552,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					strings.Contains(errStr, "所有渠道均已尝试")
 
 				if isNoChannelsError {
-					// 所有渠道都不可用或已达最大循环轮数
-					// v6.2.14: 根据配置决定是中断客户端重试还是允许客户端自行决定
-					if rh.config.FailoverV2.ShouldInterruptClientOnExhausted() {
-						// 使用 422 (Unprocessable Entity) 中断客户端自动重试
-						statusCode := http.StatusUnprocessableEntity
-						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-						lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
-						slog.Error(fmt.Sprintf("❌ [所有渠道不可用] [%s] %s (中断客户端重试)", connID, errStr))
-						http.Error(w, fmt.Sprintf("所有渠道均不可用: %s", errStr), statusCode)
-					} else {
-						// 使用 503 (Service Unavailable) 允许客户端自行决定是否重试
-						statusCode := http.StatusServiceUnavailable
-						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-						lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
-						slog.Warn(fmt.Sprintf("⚠️ [所有渠道不可用] [%s] %s (允许客户端重试)", connID, errStr))
-						http.Error(w, fmt.Sprintf("所有渠道暂时不可用，请稍后重试: %s", errStr), statusCode)
-					}
+					// v6.2.19: 所有渠道都不可用，使用 503 保持连接挂起
+					// 简化配置：始终允许客户端保持连接，前端可显示状态让用户点击重试
+					statusCode := http.StatusServiceUnavailable
+					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
+					slog.Warn(fmt.Sprintf("⚠️ [所有渠道不可用] [%s] %s (保持连接挂起)", connID, errStr))
+					http.Error(w, fmt.Sprintf("所有渠道暂时不可用，请稍后重试: %s", errStr), statusCode)
 					return
 				}
 			}
@@ -639,23 +636,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理
-	// v6.2.14: 根据配置决定是中断客户端重试还是允许客户端自行决定
+	// v6.2.19: 简化配置，始终使用 503 保持连接挂起
 	errMsg := "服务暂时不可用: 当前渠道所有端点均不可用"
-	if rh.config.FailoverV2.ShouldInterruptClientOnExhausted() {
-		// 使用 422 (Unprocessable Entity) 中断客户端自动重试
-		statusCode := http.StatusUnprocessableEntity
-		*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-		lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
-		slog.Error(fmt.Sprintf("❌ [当前渠道端点耗尽] [%s] %s (中断客户端重试)", connID, errMsg))
-		http.Error(w, errMsg, statusCode)
-	} else {
-		// 使用 503 (Service Unavailable) 允许客户端自行决定是否重试
-		statusCode := http.StatusServiceUnavailable
-		*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-		lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
-		slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (允许客户端重试)", connID, errMsg))
-		http.Error(w, errMsg+", 请稍后重试", statusCode)
-	}
+	statusCode := http.StatusServiceUnavailable
+	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
+	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (保持连接挂起)", connID, errMsg))
+	http.Error(w, errMsg+", 请稍后重试", statusCode)
 }
 
 // executeRequest 执行单个请求
@@ -913,4 +900,3 @@ func (rh *RegularHandler) tryExtractTokensFromHttpError(resp *http.Response, lif
 func (rh *RegularHandler) UpdateConfig(cfg *config.Config) {
 	rh.config = cfg
 }
-

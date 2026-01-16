@@ -382,27 +382,32 @@ func (e *Endpoint) GetStatus() EndpointStatus {
 // 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "request_failed"(请求失败), "unhealthy"(不健康)
 // v6.1.0: 新增 request_failed 状态，区分健康检查失败和请求转发失败
 func (e *Endpoint) GetHealthState() string {
-	// 1. 配置为跳过健康检查
-	if e.Config.SkipHealthCheck {
-		return "skipped"
-	}
+	skipHealthCheck := e.Config.SkipHealthCheck
 
 	e.mutex.RLock()
-	defer e.mutex.RUnlock()
+	neverChecked := e.Status.NeverChecked
+	requestFailed := e.Status.RequestFailed
+	healthy := e.Status.Healthy
+	e.mutex.RUnlock()
 
-	// 2. 从未检测过
-	if e.Status.NeverChecked {
-		return "unchecked"
-	}
-
-	// 3. v6.1.0: 请求失败标记（优先级高于健康检查状态）
+	// 1. v6.1.0: 请求失败标记（优先级高于健康检查状态）
 	// RequestFailed 表示端点因请求转发失败而被标记，即使健康检查通过也不可用
-	if e.Status.RequestFailed {
+	if requestFailed {
 		return "request_failed"
 	}
 
+	// 2. 配置为跳过健康检查
+	if skipHealthCheck {
+		return "skipped"
+	}
+
+	// 3. 从未检测过
+	if neverChecked {
+		return "unchecked"
+	}
+
 	// 4. 健康或不健康（健康检查结果）
-	if e.Status.Healthy {
+	if healthy {
 		return "healthy"
 	}
 
@@ -411,17 +416,59 @@ func (e *Endpoint) GetHealthState() string {
 
 // MarkRequestFailed 标记端点为请求失败状态
 // v6.2.12: 新增方法，用于渠道内端点切换时立即标记失败端点，防止端点循环
+// v6.2.19: 同时设置 Healthy = false，确保前端状态显示正确
 // err: 失败的原因错误（可为 nil）
 func (e *Endpoint) MarkRequestFailed(err error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	e.Status.Healthy = false       // v6.2.19: 前端依赖此字段显示状态
 	e.Status.RequestFailed = true
 	e.Status.NeverChecked = false // 防止 neverChecked 端点被误判为可用
 
 	// 记录失败原因供 UI 显示
 	if err != nil {
 		e.Status.LastRequestFailReason = err.Error()
+	}
+}
+
+// NotifyEndpointStatusChange 通知前端端点状态发生变化
+// v6.2.19: 新增公开方法，供 handlers 在调用 MarkRequestFailed 后触发前端刷新
+// 使用防抖机制，避免高并发时频繁触发
+func (m *Manager) NotifyEndpointStatusChange() {
+	m.triggerHealthCheckCompleteDebounced()
+}
+
+// MarkEndpointsRequestFailed 批量标记端点为请求失败状态
+// v6.2.18: 用于渠道间故障转移禁用时，标记所有失败端点
+// endpointKeys: 端点键列表（格式: channel::name 或 name）
+// lastError: 最后一个错误（用于记录失败原因）
+func (m *Manager) MarkEndpointsRequestFailed(endpointKeys []string, lastError error) {
+	if m == nil || len(endpointKeys) == 0 {
+		return
+	}
+
+	var markedEndpoints []string
+	for _, key := range endpointKeys {
+		ep := m.GetEndpointByNameAny(key)
+		if ep == nil {
+			continue
+		}
+		ep.mutex.Lock()
+		ep.Status.Healthy = false
+		ep.Status.RequestFailed = true
+		ep.Status.NeverChecked = false
+		if lastError != nil {
+			ep.Status.LastRequestFailReason = lastError.Error()
+		}
+		ep.mutex.Unlock()
+		markedEndpoints = append(markedEndpoints, key)
+	}
+
+	if len(markedEndpoints) > 0 {
+		slog.Info(fmt.Sprintf("❌ [端点状态更新] 端点标记为请求失败: %v (共%d个)", markedEndpoints, len(markedEndpoints)))
+		// 触发前端刷新
+		m.triggerHealthCheckCompleteDebounced()
 	}
 }
 

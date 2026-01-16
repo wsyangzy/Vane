@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,8 @@ type RequestStateManager struct {
 	endpointName string
 	groupName    string
 	channel      string
+	endpointChainMu sync.RWMutex
+	endpointChain   []string
 
 	// 状态信息
 	stateMu         sync.RWMutex
@@ -106,6 +109,35 @@ func (rsm *RequestStateManager) SetEndpoint(endpointName, groupName, channel str
 	rsm.endpointName = endpointName
 	rsm.groupName = groupName
 	rsm.channel = channel
+}
+
+// AppendEndpointChain 追加端点到链路（按切换去重）
+// endpointKey 建议使用 channel::name，便于前端展示渠道来源
+// 返回最新链路字符串（形如 "channelA::A -> channelB::B"）
+func (rsm *RequestStateManager) AppendEndpointChain(endpointKey string) string {
+	if endpointKey == "" {
+		return rsm.GetEndpointChain()
+	}
+
+	rsm.endpointChainMu.Lock()
+	defer rsm.endpointChainMu.Unlock()
+
+	chainLen := len(rsm.endpointChain)
+	if chainLen == 0 || rsm.endpointChain[chainLen-1] != endpointKey {
+		rsm.endpointChain = append(rsm.endpointChain, endpointKey)
+	}
+
+	return strings.Join(rsm.endpointChain, " -> ")
+}
+
+// GetEndpointChain 获取端点链路字符串
+func (rsm *RequestStateManager) GetEndpointChain() string {
+	rsm.endpointChainMu.RLock()
+	defer rsm.endpointChainMu.RUnlock()
+	if len(rsm.endpointChain) == 0 {
+		return ""
+	}
+	return strings.Join(rsm.endpointChain, " -> ")
 }
 
 // GetRequestID 获取请求ID

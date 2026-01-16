@@ -634,6 +634,7 @@ export namespace main {
 	    timestamp: string;
 	    channel: string;
 	    endpoint: string;
+	    endpoint_chain: string;
 	    group: string;
 	    model: string;
 	    status: string;
@@ -662,6 +663,7 @@ export namespace main {
 	        this.timestamp = source["timestamp"];
 	        this.channel = source["channel"];
 	        this.endpoint = source["endpoint"];
+	        this.endpoint_chain = source["endpoint_chain"];
 	        this.group = source["group"];
 	        this.model = source["model"];
 	        this.status = source["status"];

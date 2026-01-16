@@ -543,6 +543,7 @@ export const getRequests = async (params = {}) => {
     channel: r.channel || '',
     endpoint_name: r.endpoint,
     endpoint: r.endpoint,
+    endpoint_chain: r.endpoint_chain || r.endpointChain || '',
     group_name: r.group,
     group: r.group,
     model_name: r.model,
@@ -1469,4 +1470,15 @@ export const getSuspendedRequestsCount = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   return await WailsApp.GetSuspendedRequestsCount();
+};
+
+/**
+ * 获取当前挂起请求的端点计数
+ * @returns {Promise<Object>} - { [endpointName]: count }
+ */
+export const getSuspendedEndpointCounts = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetSuspendedEndpointCounts();
 };

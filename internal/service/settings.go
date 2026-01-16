@@ -379,6 +379,8 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		// v6.2.14: interrupt_client_on_exhausted 从 failover 移到 request，并更名为 allow_retry_on_exhausted
 		{CategoryFailover, "interrupt_client_on_exhausted"},
 		{CategoryRequest, "block_retry_on_exhausted"},
+		// v6.2.19: allow_retry_on_exhausted 已废弃，始终保持连接挂起
+		{CategoryRequest, "allow_retry_on_exhausted"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -478,10 +480,10 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 
 	case CategoryRequest:
 		// v6.2: 请求控制配置
+		// v6.2.19: 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*store.SettingRecord{
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
 			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 2},
-			{Category: CategoryRequest, Key: "allow_retry_on_exhausted", Value: "true", ValueType: ValueTypeBool, Label: "端点耗尽后允许重试", Description: "所有端点都不可用时，返回 503 允许客户端（如 Claude Code）自动重试。关闭则返回 422 阻止重试。", DisplayOrder: 3},
 		}
 
 	case CategoryStreaming:

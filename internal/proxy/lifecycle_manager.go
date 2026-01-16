@@ -455,15 +455,21 @@ func (rlm *RequestLifecycleManager) analyzeResponseType(responseContent string) 
 // v5.0: 立即更新热池中的端点和渠道信息，确保前端实时显示
 func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel string) {
 	// 更新 stateManager
+	endpointKey := endpoint.EndpointKey(channel, endpointName)
+	chain := rlm.stateManager.AppendEndpointChain(endpointKey)
 	rlm.stateManager.SetEndpoint(endpointName, groupName, channel)
 
 	// 立即更新热池中的端点和渠道信息
 	if rlm.usageTracker != nil && rlm.stateManager.GetRequestID() != "" {
-		rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), tracking.UpdateOptions{
+		updateOpts := tracking.UpdateOptions{
 			EndpointName: &endpointName,
 			GroupName:    &groupName,
 			Channel:      &channel,
-		})
+		}
+		if chain != "" {
+			updateOpts.EndpointChain = &chain
+		}
+		rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), updateOpts)
 	}
 }
 

@@ -292,27 +292,33 @@ export const fetchRequests = async (params = {}) => {
     const markerIdx = rawRequestIdStr.indexOf(partialMarker);
     const baseRequestId = markerIdx > 0 ? rawRequestIdStr.slice(0, markerIdx) : rawRequestIdStr;
 
+    const rawChain = request.endpoint_chain || request.endpointChain || '';
+    const endpointChain = Array.isArray(rawChain)
+      ? rawChain
+      : (typeof rawChain === 'string' ? rawChain.split(' -> ').filter(Boolean) : []);
+
     return ({
       ...request,
       requestId: baseRequestId,
       rawRequestId: rawRequestIdStr,
       isPartialRecord: markerIdx > 0,
       id: rawRequestIdStr,
-    timestamp: request.start_time || request.timestamp,
-    model: request.model_name || request.model || 'unknown',
-    channel: request.channel || '',
-    endpoint: request.endpoint_name || request.endpoint || 'unknown',
-    group: request.group_name || request.group || 'default',
-    duration: request.duration_ms || request.duration || 0,
-    inputTokens: request.input_tokens || request.inputTokens || 0,
-    outputTokens: request.output_tokens || request.outputTokens || 0,
-    cacheCreationTokens: request.cache_creation_tokens || request.cacheCreationTokens || 0,
-    cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0, // v5.0.1+
-    cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0, // v5.0.1+
-    cacheReadTokens: request.cache_read_tokens || request.cacheReadTokens || 0,
-    cost: request.total_cost_usd || request.cost || 0,
-    isStreaming: request.is_streaming || request.isStreaming || false,
-    statusCode: request.status_code || request.statusCode
+      timestamp: request.start_time || request.timestamp,
+      model: request.model_name || request.model || 'unknown',
+      channel: request.channel || '',
+      endpoint: request.endpoint_name || request.endpoint || 'unknown',
+      endpointChain,
+      group: request.group_name || request.group || 'default',
+      duration: request.duration_ms || request.duration || 0,
+      inputTokens: request.input_tokens || request.inputTokens || 0,
+      outputTokens: request.output_tokens || request.outputTokens || 0,
+      cacheCreationTokens: request.cache_creation_tokens || request.cacheCreationTokens || 0,
+      cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0, // v5.0.1+
+      cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0, // v5.0.1+
+      cacheReadTokens: request.cache_read_tokens || request.cacheReadTokens || 0,
+      cost: request.total_cost_usd || request.cost || 0,
+      isStreaming: request.is_streaming || request.isStreaming || false,
+      statusCode: request.status_code || request.statusCode
     });
   };
 

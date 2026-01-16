@@ -412,6 +412,14 @@ func (h *Handler) GetSuspendedRequestsCount() int {
 	return 0
 }
 
+// GetSuspendedEndpointCounts 获取当前挂起请求的端点计数
+func (h *Handler) GetSuspendedEndpointCounts() map[string]int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetSuspendedEndpointCounts()
+	}
+	return map[string]int{}
+}
+
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
 // 用于测试和不支持Flusher的环境
 type noOpFlusher struct{}

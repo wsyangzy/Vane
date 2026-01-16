@@ -158,6 +158,10 @@ export function GetSettingsStorageStatus() {
   return window['go']['main']['App']['GetSettingsStorageStatus']();
 }
 
+export function GetSuspendedEndpointCounts() {
+  return window['go']['main']['App']['GetSuspendedEndpointCounts']();
+}
+
 export function GetSuspendedRequestsCount() {
   return window['go']['main']['App']['GetSuspendedRequestsCount']();
 }

@@ -172,6 +172,19 @@ const EndpointRow = ({
   const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
   // v6.2.11: 跳过健康检测状态
   const skipHealthCheck = endpoint.skip_health_check || endpoint.skipHealthCheck || false;
+  const healthBadges = [];
+  if (skipHealthCheck) {
+    healthBadges.push(<HealthBadge key="skipped" healthState="skipped" />);
+  }
+  if (healthState && healthState !== 'skipped') {
+    healthBadges.push(
+      <HealthBadge key={healthState} healthState={healthState} failCode={lastFailCode} failReason={lastFailReason} />
+    );
+  } else if (!skipHealthCheck) {
+    healthBadges.push(
+      <HealthBadge key="unknown" healthState={healthState} failCode={lastFailCode} failReason={lastFailReason} />
+    );
+  }
 
   // v6.2.11: 切换跳过健康检测
   const handleToggleSkipHealthCheck = async () => {
@@ -235,7 +248,7 @@ const EndpointRow = ({
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
               {endpoint.channel || endpoint.group || '-'}
             </span>
-            <HealthBadge healthState={healthState} failCode={lastFailCode} failReason={lastFailReason} />
+            {healthBadges}
             {/* v6.2: CooldownBadge 已移除 */}
           </div>
         </div>

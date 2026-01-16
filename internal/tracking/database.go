@@ -475,6 +475,10 @@ func (ut *UsageTracker) buildFlexibleUpdateQuery(event RequestEvent) (string, []
 		setParts = append(setParts, "endpoint_name = ?")
 		args = append(args, *opts.EndpointName)
 	}
+	if opts.EndpointChain != nil {
+		setParts = append(setParts, "endpoint_chain = ?")
+		args = append(args, *opts.EndpointChain)
+	}
 	if opts.Channel != nil {
 		setParts = append(setParts, "channel = ?")
 		args = append(args, *opts.Channel)
