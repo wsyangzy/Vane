@@ -53,6 +53,10 @@ export function GetKeysOverview():Promise<main.KeysOverviewResult>;
 
 export function GetLogStreamStatus():Promise<boolean>;
 
+export function GetManualRetryChannelCounts():Promise<Record<string, number>>;
+
+export function GetManualRetryRequestsCount():Promise<number>;
+
 export function GetModelPricing(arg1:string):Promise<main.ModelPricingInfo>;
 
 export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageStatus>;

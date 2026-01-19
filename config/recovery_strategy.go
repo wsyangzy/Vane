@@ -30,6 +30,16 @@ type FailoverConfigV2 struct {
 	// v6.2.11: 新增，用于减少循环重试模式下的日志噪音
 	SkipHealthCheck bool `yaml:"skip_health_check"`
 
+	// SuspendTimeout 普通挂起等待超时
+	// - 当请求进入挂起等待（端点耗尽/等待切换）时的最大等待时间
+	// 默认: 120s
+	SuspendTimeout time.Duration `yaml:"suspend_timeout,omitempty"`
+
+	// LoopRetrySuspendTimeout 达到最大循环轮数后的手动等待超时
+	// - 当达到最大循环轮数时，仅等待用户操作的最大等待时间
+	// 默认: 120s
+	LoopRetrySuspendTimeout time.Duration `yaml:"loop_retry_suspend_timeout,omitempty"`
+
 	// ===== 以下字段已废弃，保留用于向后兼容 =====
 	// v6.2.19: InterruptClientOnExhausted 已废弃，始终保持连接挂起
 	InterruptClientOnExhausted *bool `yaml:"interrupt_client_on_exhausted,omitempty"` // DEPRECATED: v6.2.19 始终保持连接
@@ -113,6 +123,13 @@ func (fc *FailoverConfigV2) MigrateFromLegacy(oldFailover *FailoverConfig, oldSu
 		// 其他情况 → 新配置：不循环（快速失败）
 		fc.LoopRetry = false
 	}
+
+	if oldSuspend != nil && oldSuspend.Timeout > 0 {
+		fc.SuspendTimeout = oldSuspend.Timeout
+		if fc.LoopRetrySuspendTimeout == 0 {
+			fc.LoopRetrySuspendTimeout = oldSuspend.Timeout
+		}
+	}
 }
 
 // MigrateFromV61 从 v6.1.x 配置迁移
@@ -134,6 +151,15 @@ func (fc *FailoverConfigV2) MigrateFromV61() {
 		fc.LoopRetry = true
 		fc.AllowRevisitAfterExhausted = nil
 	}
+
+	if fc.AutoWaitTimeout > 0 {
+		if fc.SuspendTimeout == 0 {
+			fc.SuspendTimeout = fc.AutoWaitTimeout
+		}
+		if fc.LoopRetrySuspendTimeout == 0 {
+			fc.LoopRetrySuspendTimeout = fc.AutoWaitTimeout
+		}
+	}
 }
 
 // SetDefaults 设置默认值
@@ -144,6 +170,24 @@ func (fc *FailoverConfigV2) SetDefaults() {
 	// max_loops 默认值
 	if fc.MaxLoops == 0 {
 		fc.MaxLoops = 3 // 默认最多循环3轮
+	}
+
+	if fc.SuspendTimeout == 0 {
+		if fc.AutoWaitTimeout > 0 {
+			fc.SuspendTimeout = fc.AutoWaitTimeout
+		} else {
+			fc.SuspendTimeout = 120 * time.Second
+		}
+	}
+
+	if fc.LoopRetrySuspendTimeout == 0 {
+		if fc.SuspendTimeout > 0 {
+			fc.LoopRetrySuspendTimeout = fc.SuspendTimeout
+		} else if fc.AutoWaitTimeout > 0 {
+			fc.LoopRetrySuspendTimeout = fc.AutoWaitTimeout
+		} else {
+			fc.LoopRetrySuspendTimeout = 120 * time.Second
+		}
 	}
 
 	// 注意：loop_retry 默认为 false（Go 零值），表示快速失败
@@ -160,6 +204,13 @@ func (fc *FailoverConfigV2) Validate() error {
 		return fmt.Errorf("max_loops cannot exceed 100 for performance reasons")
 	}
 
+	if fc.SuspendTimeout < 0 {
+		return fmt.Errorf("suspend_timeout cannot be negative")
+	}
+	if fc.LoopRetrySuspendTimeout < 0 {
+		return fmt.Errorf("loop_retry_suspend_timeout cannot be negative")
+	}
+
 	return nil
 }
 
@@ -174,6 +225,37 @@ func (fc *FailoverConfigV2) GetMaxLoops() int {
 		return 0 // 无限制
 	}
 	return fc.MaxLoops
+}
+
+// GetSuspendTimeout 获取普通挂起等待超时
+func (fc *FailoverConfigV2) GetSuspendTimeout() time.Duration {
+	if fc == nil {
+		return 120 * time.Second
+	}
+	if fc.SuspendTimeout > 0 {
+		return fc.SuspendTimeout
+	}
+	if fc.AutoWaitTimeout > 0 {
+		return fc.AutoWaitTimeout
+	}
+	return 120 * time.Second
+}
+
+// GetLoopRetrySuspendTimeout 获取循环终止的手动等待超时
+func (fc *FailoverConfigV2) GetLoopRetrySuspendTimeout() time.Duration {
+	if fc == nil {
+		return 120 * time.Second
+	}
+	if fc.LoopRetrySuspendTimeout > 0 {
+		return fc.LoopRetrySuspendTimeout
+	}
+	if fc.SuspendTimeout > 0 {
+		return fc.SuspendTimeout
+	}
+	if fc.AutoWaitTimeout > 0 {
+		return fc.AutoWaitTimeout
+	}
+	return 120 * time.Second
 }
 
 // ShouldSkipHealthCheck 是否应该跳过定时健康检测

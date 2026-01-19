@@ -237,6 +237,13 @@ type SuspensionManager interface {
 	WaitForEndpointRecovery(ctx context.Context, connID, failedEndpoint string) bool // 🚀 [端点自愈] 新增端点恢复等待方法
 	// 🎯 [挂起取消区分] 新增带结果的端点恢复等待方法，能区分成功/超时/取消
 	WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) SuspensionResult
+	// 🛑 [循环终止] 仅等待用户操作的挂起（不监听端点自愈）
+	WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string) SuspensionResult
+	// 🛑 [循环终止] 手动重试计数与渠道标记
+	BeginManualRetry(requestID string, channels []string)
+	EndManualRetry(requestID string)
+	GetManualRetryRequestsCount() int
+	GetManualRetryChannelCounts() map[string]int
 	GetSuspendedRequestsCount() int
 	GetSuspendedEndpointCounts() map[string]int
 	// 🔧 [热更新] 更新配置

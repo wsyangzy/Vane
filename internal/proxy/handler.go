@@ -420,6 +420,22 @@ func (h *Handler) GetSuspendedEndpointCounts() map[string]int {
 	return map[string]int{}
 }
 
+// GetManualRetryRequestsCount 获取等待用户操作的挂起请求数量
+func (h *Handler) GetManualRetryRequestsCount() int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetManualRetryRequestsCount()
+	}
+	return 0
+}
+
+// GetManualRetryChannelCounts 获取等待用户操作的渠道计数
+func (h *Handler) GetManualRetryChannelCounts() map[string]int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetManualRetryChannelCounts()
+	}
+	return map[string]int{}
+}
+
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
 // 用于测试和不支持Flusher的环境
 type noOpFlusher struct{}

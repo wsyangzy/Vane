@@ -220,8 +220,12 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	default:
 	}
 
-var lastFailedEndpoint string // 🚀 [端点自愈] 追踪最后失败的端点
-var lastFailedEndpointKey string
+	manualRetryOnly := false
+	manualRetryChannels := []string{}
+	manualRetryEndpointKey := ""
+
+	var lastFailedEndpoint string // 🚀 [端点自愈] 追踪最后失败的端点
+	var lastFailedEndpointKey string
 
 	// v6.1+: 获取健康端点，排除已尝试的端点（实现严格优先级转移）
 	var endpoints []*endpoint.Endpoint
@@ -1012,11 +1016,31 @@ var lastFailedEndpointKey string
 			errStr := err.Error()
 			isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
 				strings.Contains(errStr, "所有渠道均已尝试")
+			isLoopLimitError := strings.Contains(errStr, "共循环") ||
+				strings.Contains(errStr, "最大循环轮数")
 
 			if isNoChannelsError {
 				// v6.2.18: 故障转移失败时也要标记端点状态（即使渠道间转移被禁用）
 				// 这样前端可以正确显示端点失败状态
 				sh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, err)
+
+				if isLoopLimitError {
+					// 达到最大循环轮数：进入手动等待（等待用户操作），不立即断开
+					manualRetryOnly = true
+					manualRetryEndpointKey = lastFailedEndpointKey
+					manualRetryChannels = manualRetryChannels[:0]
+					for name := range triedChannels {
+						if name == "" {
+							continue
+						}
+						manualRetryChannels = append(manualRetryChannels, name)
+					}
+					if len(manualRetryChannels) == 0 && currentChannel != "" {
+						manualRetryChannels = append(manualRetryChannels, currentChannel)
+					}
+					slog.Warn(fmt.Sprintf("🛑 [循环终止] [%s] %s (进入手动重试等待)", connID, errStr))
+					break
+				}
 
 				// v6.2.19: 所有渠道都不可用，使用 503 保持连接挂起
 				// 简化配置：始终允许客户端保持连接，前端可显示状态让用户点击重试
@@ -1046,16 +1070,30 @@ var lastFailedEndpointKey string
 
 		// 🚀 [状态机重构] Phase 4: 挂起时更新状态（移除重复的失败原因记录）
 		lifecycleManager.UpdateStatus("suspended", -1, 0)
-		fmt.Fprintf(w, "data: suspend: 当前所有组均不可用，请求已挂起等待组切换...\n\n")
+		waitEndpointKey := lastFailedEndpointKey
+		waitFn := suspensionMgr.WaitForEndpointRecoveryWithResult
+		waitLabel := "流式挂起"
+		waitNotice := "当前所有组均不可用，请求已挂起等待组切换..."
+		if manualRetryOnly {
+			waitEndpointKey = manualRetryEndpointKey
+			waitFn = suspensionMgr.WaitForEndpointRecoveryWithResultManual
+			waitLabel = "循环终止等待"
+			waitNotice = "已达到最大循环轮数，请求已挂起等待用户操作..."
+			if len(manualRetryChannels) > 0 {
+				suspensionMgr.BeginManualRetry(connID, manualRetryChannels)
+				defer suspensionMgr.EndManualRetry(connID)
+			}
+		}
+		fmt.Fprintf(w, "data: suspend: %s\n\n", waitNotice)
 		flusher.Flush()
 
 		// 🔢 [语义修复] 在日志中记录端点数量信息，但不影响重试计数语义
 		actualAttemptCount := lifecycleManager.GetAttemptCount()
-		slog.Info(fmt.Sprintf("⏸️ [流式挂起] [%s] 请求已挂起，尝试次数: %d, 健康端点数: %d, 最后失败端点: %s",
-			connID, actualAttemptCount, len(currentEndpoints), lastFailedEndpoint))
+		slog.Info(fmt.Sprintf("⏸️ [%s] [%s] 请求已挂起，尝试次数: %d, 健康端点数: %d, 最后失败端点: %s",
+			waitLabel, connID, actualAttemptCount, len(currentEndpoints), lastFailedEndpoint))
 
 		// 🚀 [端点自愈] 等待端点恢复，能区分成功/超时/取消
-		result := suspensionMgr.WaitForEndpointRecoveryWithResult(ctx, connID, lastFailedEndpointKey)
+		result := waitFn(ctx, connID, waitEndpointKey)
 		switch result {
 		case SuspensionSuccess:
 			slog.Info(fmt.Sprintf("🚀 [挂起恢复] [%s] 端点 %s 已恢复或组切换完成，重新获取端点", connID, lastFailedEndpoint))
@@ -1099,8 +1137,12 @@ var lastFailedEndpointKey string
 					restartCount := lifecycleManager.IncrementRestart()
 					slog.Info(fmt.Sprintf("🔄 [暂停恢复重启] [%s] 获取新端点成功，重启次数: %d/%d",
 						connID, restartCount, lifecycleManager.GetMaxRestarts()))
-					sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount)
-					return
+			nextLoopCount := loopCount
+			if manualRetryOnly {
+				nextLoopCount = 0
+			}
+			sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, nextLoopCount)
+			return
 				} else {
 					slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 暂停恢复成功但已达最大重启次数 (%d)，终止请求",
 						connID, lifecycleManager.GetMaxRestarts()))

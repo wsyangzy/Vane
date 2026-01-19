@@ -102,6 +102,14 @@ export function GetLogStreamStatus() {
   return window['go']['main']['App']['GetLogStreamStatus']();
 }
 
+export function GetManualRetryChannelCounts() {
+  return window['go']['main']['App']['GetManualRetryChannelCounts']();
+}
+
+export function GetManualRetryRequestsCount() {
+  return window['go']['main']['App']['GetManualRetryRequestsCount']();
+}
+
 export function GetModelPricing(arg1) {
   return window['go']['main']['App']['GetModelPricing'](arg1);
 }

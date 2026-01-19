@@ -72,6 +72,9 @@ type Manager struct {
 	// v6.2: 健康检查回调防抖机制，避免并发健康检查触发多次回调
 	healthCheckDebounceMu    sync.Mutex
 	healthCheckDebounceTimer *time.Timer
+	// 🛑 [手动重试] 故障转移排序起点（由用户选择的渠道）
+	failoverStartMu      sync.RWMutex
+	failoverStartChannel string
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
@@ -97,6 +100,26 @@ func (m *Manager) SetSingleChannelFailoverEnabled(channel string, enabled bool) 
 		return
 	}
 	m.groupManager.SetSingleChannelFailoverEnabled(channel, enabled)
+}
+
+// SetFailoverStartChannel 设置故障转移排序起点（用户手动重试选择的渠道）
+func (m *Manager) SetFailoverStartChannel(channel string) {
+	if m == nil {
+		return
+	}
+	m.failoverStartMu.Lock()
+	m.failoverStartChannel = channel
+	m.failoverStartMu.Unlock()
+}
+
+// GetFailoverStartChannel 获取故障转移排序起点
+func (m *Manager) GetFailoverStartChannel() string {
+	if m == nil {
+		return ""
+	}
+	m.failoverStartMu.RLock()
+	defer m.failoverStartMu.RUnlock()
+	return m.failoverStartChannel
 }
 
 // NewManager creates a new endpoint manager

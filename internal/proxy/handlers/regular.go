@@ -109,6 +109,10 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		triedEndpoints = make(map[string]struct{}, 8)
 	}
 
+	manualRetryOnly := false
+	manualRetryChannels := []string{}
+	manualRetryEndpointKey := ""
+
 	// 外层循环处理组切换逻辑
 	for {
 		// v6.1+: 获取端点时排除已尝试的端点
@@ -550,8 +554,28 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				errStr := err.Error()
 				isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
 					strings.Contains(errStr, "所有渠道均已尝试")
+				isLoopLimitError := strings.Contains(errStr, "共循环") ||
+					strings.Contains(errStr, "最大循环轮数")
 
 				if isNoChannelsError {
+					if isLoopLimitError {
+						// 达到最大循环轮数：进入手动等待（等待用户操作），不立即断开
+						manualRetryOnly = true
+						manualRetryEndpointKey = endpoint.EndpointKey(lastEndpoint.Config.Channel, lastEndpoint.Config.Name)
+						manualRetryChannels = manualRetryChannels[:0]
+						for name := range triedChannels {
+							if name == "" {
+								continue
+							}
+							manualRetryChannels = append(manualRetryChannels, name)
+						}
+						if len(manualRetryChannels) == 0 && currentChannel != "" {
+							manualRetryChannels = append(manualRetryChannels, currentChannel)
+						}
+						slog.Warn(fmt.Sprintf("🛑 [循环终止] [%s] %s (进入手动重试等待)", connID, errStr))
+						break
+					}
+
 					// v6.2.19: 所有渠道都不可用，使用 503 保持连接挂起
 					// 简化配置：始终允许客户端保持连接，前端可显示状态让用户点击重试
 					statusCode := http.StatusServiceUnavailable
@@ -584,14 +608,28 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		// 🚀 [状态机重构] Phase 4: 挂起时更新状态（移除重复的失败原因记录）
 		lifecycleManager.UpdateStatus("suspended", -1, 0)
 
+		waitEndpointKey := ""
+		waitFn := suspensionMgr.WaitForEndpointRecoveryWithResult
+		waitLabel := "常规挂起"
+		waitDesc := "当前所有组均不可用"
+		if manualRetryOnly {
+			waitEndpointKey = manualRetryEndpointKey
+			waitFn = suspensionMgr.WaitForEndpointRecoveryWithResultManual
+			waitLabel = "循环终止等待"
+			waitDesc = "已达到最大循环轮数，等待用户操作"
+			if len(manualRetryChannels) > 0 {
+				suspensionMgr.BeginManualRetry(connID, manualRetryChannels)
+				defer suspensionMgr.EndManualRetry(connID)
+			}
+		}
+
 		// 🔢 [语义修复] 在日志中记录端点数量信息，但不影响重试计数语义
 		actualAttemptCount := lifecycleManager.GetAttemptCount()
-		slog.Info(fmt.Sprintf("⏸️ [常规挂起] [%s] 请求已挂起，尝试次数: %d, 健康端点数: %d, 当前所有组均不可用",
-			connID, actualAttemptCount, len(currentEndpoints)))
+		slog.Info(fmt.Sprintf("⏸️ [%s] [%s] 请求已挂起，尝试次数: %d, 健康端点数: %d, %s",
+			waitLabel, connID, actualAttemptCount, len(currentEndpoints), waitDesc))
 
 		// 🚀 [端点自愈] 等待端点恢复，能区分成功/超时/取消
-		// 注意：常规模式没有lastFailedEndpoint概念，传空字符串
-		result := suspensionMgr.WaitForEndpointRecoveryWithResult(ctx, connID, "")
+		result := waitFn(ctx, connID, waitEndpointKey)
 		switch result {
 		case SuspensionSuccess:
 			slog.Info(fmt.Sprintf("🚀 [挂起恢复] [%s] 端点已恢复或组切换完成，重新获取端点", connID))
@@ -618,7 +656,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 重新获取健康端点并重新尝试（递归调用）
 				// v6.2.8: 挂起恢复后，清空已尝试列表但保持循环计数
-				rh.HandleRegularRequestUnifiedWithRetry(ctx, w, r, bodyBytes, lifecycleManager, nil, nil, loopCount)
+				nextLoopCount := loopCount
+				if manualRetryOnly {
+					nextLoopCount = 0
+				}
+				rh.HandleRegularRequestUnifiedWithRetry(ctx, w, r, bodyBytes, lifecycleManager, nil, nil, nextLoopCount)
 				return
 			}
 		case SuspensionCancelled:

@@ -1482,3 +1482,25 @@ export const getSuspendedEndpointCounts = async () => {
 
   return await WailsApp.GetSuspendedEndpointCounts();
 };
+
+/**
+ * 获取等待用户操作的挂起请求数量（达到最大循环轮数）
+ * @returns {Promise<number>} - 挂起请求数量
+ */
+export const getManualRetryRequestsCount = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetManualRetryRequestsCount();
+};
+
+/**
+ * 获取等待用户操作的渠道计数
+ * @returns {Promise<Object>} - { [channelName]: count }
+ */
+export const getManualRetryChannelCounts = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetManualRetryChannelCounts();
+};

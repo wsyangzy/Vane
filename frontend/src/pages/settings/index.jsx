@@ -269,6 +269,11 @@ const SettingsPage = () => {
       return getChannelFailoverEnabled() && getLoopRetryEnabled();
     }
 
+    // v6.2.20: loop_retry_wait_timeout 仅在 loop_retry === true 时显示
+    if (setting.category === 'failover' && setting.key === 'loop_retry_wait_timeout') {
+      return getChannelFailoverEnabled() && getLoopRetryEnabled();
+    }
+
     // v6.2.11: skip_health_check 不再作为单独设置项显示，改为在循环重试弹窗内控制
     if (setting.category === 'failover' && setting.key === 'skip_health_check') {
       return false; // 始终隐藏，通过 loop_retry 弹窗控制

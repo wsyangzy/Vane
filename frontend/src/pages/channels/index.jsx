@@ -62,7 +62,9 @@ import {
   openExternalURL,
   subscribeToEvent,
   getSuspendedRequestsCount,
-  getSuspendedEndpointCounts
+  getSuspendedEndpointCounts,
+  getManualRetryRequestsCount,
+  getManualRetryChannelCounts
 } from '@utils/wailsApi.js';
 
 const getErrorMessage = (error, fallback = '操作失败') => {
@@ -1004,6 +1006,7 @@ const ChannelCard = ({
   onToggleEndpointSkipHealthCheck, // v6.2.11: 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
+  manualRetryCount = 0,
   loading = false
 }) => {
   const scopedEndpoints = endpoints.filter(e => e._health_scope !== false);
@@ -1020,6 +1023,10 @@ const ChannelCard = ({
     const count = endpoint?.suspendedCount || endpoint?.suspended_count || 0;
     return Number(count) > 0;
   }).length;
+  const manualRetryCountValue = Number.isFinite(Number(manualRetryCount))
+    ? Number(manualRetryCount)
+    : 0;
+  const hasManualRetry = manualRetryCountValue > 0;
 
   const isActive = groupInfo?.active
     ?? (isSqliteMode ? endpoints.some(e => e.enabled) : (activeChannelName === channelName));
@@ -1034,7 +1041,8 @@ const ChannelCard = ({
   const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
   const hasSuspendedRequests = suspendedRequestsCount > 0;
   const showSuspendedPrompt = !channelFailoverEnabled && isActive && hasSuspendedRequests;
-  const showRetryButton = isAllEndpointsFailed || (isActive && hasSuspendedRequests);
+  const showRetryButton = isAllEndpointsFailed || (isActive && hasSuspendedRequests) || hasManualRetry;
+  const showRetryOnInactive = hasManualRetry;
 
   // v6.2.12: 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
   const isActiveChannelAllFailed = isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
@@ -1119,13 +1127,17 @@ const ChannelCard = ({
           {!isActive && isSqliteMode && hasEndpoints && (
             <Button
               size="sm"
-              icon={Power}
+              icon={showRetryOnInactive ? RefreshCw : Power}
               className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
               onClick={() => onActivate?.(channelName)}
               disabled={loading || (channelFailoverEnabled && isPaused)}
-              title={channelFailoverEnabled && isPaused ? '请先点击"恢复"按钮取消暂停状态' : '激活此渠道'}
+              title={
+                channelFailoverEnabled && isPaused
+                  ? '请先点击"恢复"按钮取消暂停状态'
+                  : (showRetryOnInactive ? '重试此渠道' : '激活此渠道')
+              }
             >
-              激活
+              {showRetryOnInactive ? '重试' : '激活'}
             </Button>
           )}
           {isActive && isSqliteMode && (
@@ -1237,7 +1249,13 @@ const ChannelCard = ({
               全部失败
             </span>
           )}
-          {suspendedEndpointCount > 0 && (
+          {hasManualRetry && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+              <RefreshCw size={10} />
+              待重试 <span className="font-semibold">{manualRetryCountValue}</span>
+            </span>
+          )}
+          {!hasManualRetry && suspendedEndpointCount > 0 && (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
               <Clock size={10} />
               挂起 <span className="font-semibold">{suspendedEndpointCount}</span>
@@ -1385,6 +1403,8 @@ const ChannelsPage = () => {
   // v6.0.7+ 挂起请求计数（用于显示等待提示）
   const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
   const [suspendedEndpointCounts, setSuspendedEndpointCounts] = useState({});
+  const [manualRetryRequestsCount, setManualRetryRequestsCount] = useState(0);
+  const [manualRetryChannelCounts, setManualRetryChannelCounts] = useState({});
 
   // 批量检测状态
   const [batchCheckLoading, setBatchCheckLoading] = useState(false);
@@ -1515,13 +1535,19 @@ const ChannelsPage = () => {
   // v6.0.7+ 加载挂起请求计数
   const loadSuspendedCount = useCallback(async () => {
     try {
-      const [count, endpointCounts] = await Promise.all([
+      const [count, endpointCounts, manualCount, manualChannelCounts] = await Promise.all([
         getSuspendedRequestsCount(),
-        getSuspendedEndpointCounts()
+        getSuspendedEndpointCounts(),
+        getManualRetryRequestsCount(),
+        getManualRetryChannelCounts()
       ]);
       setSuspendedRequestsCount(count || 0);
       setSuspendedEndpointCounts(
         endpointCounts && !Array.isArray(endpointCounts) ? endpointCounts : {}
+      );
+      setManualRetryRequestsCount(manualCount || 0);
+      setManualRetryChannelCounts(
+        manualChannelCounts && !Array.isArray(manualChannelCounts) ? manualChannelCounts : {}
       );
     } catch (err) {
       // 静默处理错误，不影响页面正常使用
@@ -2107,7 +2133,22 @@ const ChannelsPage = () => {
         </div>
       </div>
 
-      {channelFailoverEnabled && suspendedRequestsCount > 0 && (
+      {channelFailoverEnabled && manualRetryRequestsCount > 0 && (
+        <div className="mb-6 p-4 bg-amber-50/70 border border-amber-200 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-amber-100 rounded-full flex-shrink-0 animate-pulse">
+            <RefreshCw className="w-4 h-4 text-amber-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-amber-900">
+              已达到最大循环轮数，等待用户操作 ({manualRetryRequestsCount})
+            </div>
+            <div className="text-sm text-amber-700 mt-1">
+              请在参与失败的渠道上点击「重试」以重新开始转移链路。
+            </div>
+          </div>
+        </div>
+      )}
+      {channelFailoverEnabled && manualRetryRequestsCount === 0 && suspendedRequestsCount > 0 && (
         <div className="mb-6 p-4 bg-purple-50/70 border border-purple-200 rounded-xl flex items-start gap-3">
           <div className="p-2 bg-purple-100 rounded-full flex-shrink-0 animate-pulse">
             <Clock className="w-4 h-4 text-purple-600" />
@@ -2188,6 +2229,7 @@ const ChannelsPage = () => {
               isSqliteMode={isSqliteMode}
               channelFailoverEnabled={channelFailoverEnabled}
               suspendedRequestsCount={suspendedRequestsCount}
+              manualRetryCount={manualRetryChannelCounts?.[section.name] ?? 0}
               expanded={expandedChannelName === section.name}
               onToggleExpanded={() => {
                 setExpandedChannelName((prev) => (prev === section.name ? '' : section.name));
