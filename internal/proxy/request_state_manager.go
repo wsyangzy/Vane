@@ -64,11 +64,21 @@ func (rsm *RequestStateManager) UpdateStatus(status string, httpStatus int) {
 	}
 }
 
-// MarkCompleted 标记请求已完成
-func (rsm *RequestStateManager) MarkCompleted() {
+// MarkCompletedOnce 标记请求已完成（幂等）
+// 返回值: true 表示首次标记完成，false 表示已完成
+func (rsm *RequestStateManager) MarkCompletedOnce() bool {
 	rsm.stateMu.Lock()
 	defer rsm.stateMu.Unlock()
+	if rsm.isCompleted {
+		return false
+	}
 	rsm.isCompleted = true
+	return true
+}
+
+// MarkCompleted 标记请求已完成（兼容旧接口）
+func (rsm *RequestStateManager) MarkCompleted() {
+	rsm.MarkCompletedOnce()
 }
 
 // GetStatus 获取当前状态

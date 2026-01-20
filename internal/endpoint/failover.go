@@ -383,11 +383,11 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		return "", err
 	}
 
-	if err := m.groupManager.ManualActivateGroup(newChannel); err != nil {
+	if err := m.groupManager.ActivateGroupForFailover(newChannel, false); err != nil {
 		// 兼容：新渠道端点可能处于 neverChecked（尚未健康检查），但请求级故障转移应允许先切过去尝试。
 		// 这里回退到强制激活，避免因"尚未健康检查"而无法完成跨渠道切换。
 		slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
-		if err2 := m.groupManager.ManualActivateGroupWithForce(newChannel, true); err2 != nil {
+		if err2 := m.groupManager.ActivateGroupForFailover(newChannel, true); err2 != nil {
 			slog.Error(fmt.Sprintf("❌ [渠道间故障转移] 强制激活新渠道失败: %v", err2))
 			return "", fmt.Errorf("激活新渠道失败: %w", err2)
 		}

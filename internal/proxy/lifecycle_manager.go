@@ -122,6 +122,12 @@ func (rlm *RequestLifecycleManager) StartRequest(clientIP, userAgent, method, pa
 // 调用 RecordRequestUpdate 记录状态变化，并实现模型信息搭便车更新机制
 // 如果retryCount为-1，则使用内部attemptCounter
 func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, httpStatus int) {
+	if rlm.stateManager.IsCompleted() {
+		slog.Debug(fmt.Sprintf("⏭️ [状态忽略] [%s] 请求已终态，忽略状态更新: %s",
+			rlm.stateManager.GetRequestID(), status))
+		return
+	}
+
 	// 处理特殊的-1标记，使用内部计数器
 	actualRetryCount := retryCount
 	if retryCount == -1 {
@@ -228,6 +234,11 @@ func (rlm *RequestLifecycleManager) notifyStatusChange(status string, retryCount
 // 这是所有请求完成的统一入口，确保架构一致性
 func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage) {
 	endpointName := rlm.stateManager.GetEndpointName()
+	if !rlm.stateManager.MarkCompletedOnce() {
+		slog.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
+			rlm.stateManager.GetRequestID()))
+		return
+	}
 
 	// 🚀 [端点自愈] 无论usageTracker是否为空，都应该广播端点成功信号
 	// 这是端点自愈功能的关键，不应该依赖于数据库跟踪功能
@@ -279,9 +290,6 @@ func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage)
 		slog.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
 	}
 
-	// 🔧 [修复 isCompleted] 2025-12-27: 标记请求已完成
-	rlm.stateManager.MarkCompleted()
-
 	// 调用统一的状态通知方法
 	rlm.notifyStatusChange("completed", rlm.stateManager.GetRetryCount(), 200)
 }
@@ -297,6 +305,11 @@ func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage)
 func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.TokenUsage, failureReason string) {
 	duration := rlm.stateManager.GetDuration()
 	endpointName := rlm.stateManager.GetEndpointName()
+	if !rlm.stateManager.MarkCompletedOnce() {
+		slog.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
+			rlm.stateManager.GetRequestID()))
+		return
+	}
 
 	// 🚀 [端点自愈] 无论usageTracker是否为空，都应该广播端点成功信号
 	if rlm.recoverySignalManager != nil && endpointName != "" {
@@ -342,9 +355,6 @@ func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.
 		}
 		slog.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
 	}
-
-	// 🔧 [修复 isCompleted] 2025-12-27: 标记请求已完成
-	rlm.stateManager.MarkCompleted()
 
 	// 调用统一的状态通知方法
 	rlm.notifyStatusChange("completed", rlm.stateManager.GetRetryCount(), 200)
@@ -454,6 +464,12 @@ func (rlm *RequestLifecycleManager) analyzeResponseType(responseContent string) 
 // 🎯 [SRP重构] 更新 stateManager 并同步热池
 // v5.0: 立即更新热池中的端点和渠道信息，确保前端实时显示
 func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel string) {
+	if rlm.stateManager.IsCompleted() {
+		slog.Debug(fmt.Sprintf("⏭️ [端点忽略] [%s] 请求已终态，忽略端点更新: %s",
+			rlm.stateManager.GetRequestID(), endpointName))
+		return
+	}
+
 	// 更新 stateManager
 	endpointKey := endpoint.EndpointKey(channel, endpointName)
 	chain := rlm.stateManager.AppendEndpointChain(endpointKey)
@@ -667,6 +683,11 @@ func (rlm *RequestLifecycleManager) HandleError(err error) {
 	if err == nil {
 		return
 	}
+	if rlm.stateManager.IsCompleted() {
+		slog.Debug(fmt.Sprintf("⏭️ [错误忽略] [%s] 请求已终态，忽略错误: %v",
+			rlm.stateManager.GetRequestID(), err))
+		return
+	}
 
 	// 更新 stateManager 中的错误信息
 	rlm.stateManager.SetLastError(err)
@@ -718,6 +739,11 @@ func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail strin
 	modelName := rlm.getModelNameForCost()
 	requestID := rlm.stateManager.GetRequestID()
 	endpointName := rlm.stateManager.GetEndpointName()
+	if !rlm.stateManager.MarkCompletedOnce() {
+		slog.Debug(fmt.Sprintf("⏭️ [失败忽略] [%s] 请求已终态，忽略失败更新: %s",
+			requestID, failureReason))
+		return
+	}
 
 	// 🚀 [架构重构] 使用统一的最终失败记录方法，一次性更新所有相关字段
 	if rlm.usageTracker != nil {
@@ -726,9 +752,6 @@ func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail strin
 
 	slog.Error(fmt.Sprintf("❌ [请求最终失败] [%s] 端点: %s, 原因: %s, 状态码: %d, 耗时: %dms",
 		requestID, endpointName, failureReason, httpStatus, duration.Milliseconds()))
-
-	// 🔧 [修复 isCompleted] 2025-12-27: 标记请求已完成（失败也是终态）
-	rlm.stateManager.MarkCompleted()
 
 	// 调用统一的状态通知方法
 	rlm.notifyStatusChange("failed", rlm.stateManager.GetRetryCount(), httpStatus)
@@ -744,6 +767,11 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 	requestID := rlm.stateManager.GetRequestID()
 	endpointName := rlm.stateManager.GetEndpointName()
 	groupName := rlm.stateManager.GetGroupName()
+	if !rlm.stateManager.MarkCompletedOnce() {
+		slog.Debug(fmt.Sprintf("⏭️ [取消忽略] [%s] 请求已终态，忽略取消更新: %s",
+			requestID, cancelReason))
+		return
+	}
 
 	// 🚀 [架构重构] 使用统一的最终失败记录方法，一次性更新所有相关字段
 	if rlm.usageTracker != nil {
@@ -758,9 +786,6 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 		slog.Info(fmt.Sprintf("🚫 [请求被取消] [%s] 端点: %s, 组: %s, 耗时: %dms, 原因: %s",
 			requestID, endpointName, groupName, duration.Milliseconds(), cancelReason))
 	}
-
-	// 🔧 [修复 isCompleted] 2025-12-27: 标记请求已完成（取消也是终态）
-	rlm.stateManager.MarkCompleted()
 
 	// 调用统一的状态通知方法
 	rlm.notifyStatusChange("cancelled", rlm.stateManager.GetRetryCount(), 499)

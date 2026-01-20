@@ -475,6 +475,8 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 	currentCount := sm.suspendedRequestsCount
 	sm.suspendedRequestsMutex.Unlock()
 
+	waitStartTime := time.Now()
+
 	// 确保在退出时减少计数
 	defer func() {
 		sm.suspendedRequestsMutex.Lock()
@@ -552,6 +554,10 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 
 		case newGroupName := <-groupChangeNotify:
 			// 🔄 [优先级2] 组切换通知（用户点击重试按钮触发）
+			if manualOnly && !sm.groupManager.WasGroupManuallyActivatedSince(newGroupName, waitStartTime) {
+				slog.DebugContext(ctx, fmt.Sprintf("⏸️ [循环终止等待] 连接 %s 忽略非手动组切换通知: %s", connID, newGroupName))
+				continue
+			}
 			slog.InfoContext(ctx, fmt.Sprintf("📡 [组切换通知] 连接 %s 收到组切换通知: %s，验证新组可用性",
 				connID, newGroupName))
 

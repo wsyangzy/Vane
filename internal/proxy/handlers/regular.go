@@ -109,10 +109,6 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		triedEndpoints = make(map[string]struct{}, 8)
 	}
 
-	manualRetryOnly := false
-	manualRetryChannels := []string{}
-	manualRetryEndpointKey := ""
-
 	// 外层循环处理组切换逻辑
 	for {
 		// v6.1+: 获取端点时排除已尝试的端点
@@ -144,74 +140,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					endpoints = allActiveEndpoints
 					// 继续正常处理流程
 				} else {
-					// 真的没有端点 - 检查是否应该挂起等待恢复
+					// 真的没有端点，直接失败（不挂起）
 					lifecycleManager.HandleError(noHealthyErr)
-
-					// 🔧 [智能等待修复] 2026-01-07: 在返回错误前检查恢复策略
-					// 如果配置了 auto_wait，应该挂起请求等待端点恢复
-					suspensionMgr := rh.sharedSuspensionManager
-					if suspensionMgr != nil && suspensionMgr.ShouldSuspend(ctx) {
-						lifecycleManager.UpdateStatus("awaiting_endpoint", -1, 0)
-						slog.Info(fmt.Sprintf("⏸️ [初始挂起] [%s] 无可用端点，请求已挂起，等待端点恢复或渠道激活...", connID))
-
-						// 等待端点恢复
-						result := suspensionMgr.WaitForEndpointRecoveryWithResult(ctx, connID, "")
-						switch result {
-						case SuspensionSuccess:
-							slog.Info(fmt.Sprintf("🚀 [挂起恢复] [%s] 端点已恢复，重新获取端点列表", connID))
-							// 重新开始外层循环，获取新端点
-							continue
-						case SuspensionCancelled:
-							// 用户在挂起期间取消请求
-							slog.Info(fmt.Sprintf("🚫 [挂起期间取消] [%s] 用户在挂起期间取消请求", connID))
-							*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-							lifecycleManager.CancelRequest("suspended then cancelled", nil)
-							http.Error(w, "Request cancelled during suspension", 499)
-							return
-						case SuspensionTimeout:
-							slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复超时", connID))
-							// 继续执行下面的失败处理
-						}
-					}
-
-					// v6.2.7: 使用 422 状态码，防止客户端自动重试
-					// 挂起失败或策略不支持挂起，返回错误
 					lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusUnprocessableEntity)
 					http.Error(w, "No endpoints available in active groups", http.StatusUnprocessableEntity)
 					return
 				}
 			} else {
-				// 按原来逻辑处理 - 检查是否应该挂起等待恢复
+				// 按原来逻辑处理，直接失败（不挂起）
 				lifecycleManager.HandleError(noHealthyErr)
-
-				// 🔧 [智能等待修复] 2026-01-07: 在返回错误前检查恢复策略
-				suspensionMgr := rh.sharedSuspensionManager
-				if suspensionMgr != nil && suspensionMgr.ShouldSuspend(ctx) {
-					lifecycleManager.UpdateStatus("awaiting_endpoint", -1, 0)
-					slog.Info(fmt.Sprintf("⏸️ [初始挂起] [%s] 无可用健康端点，请求已挂起，等待端点恢复...", connID))
-
-					// 等待端点恢复
-					result := suspensionMgr.WaitForEndpointRecoveryWithResult(ctx, connID, "")
-					switch result {
-					case SuspensionSuccess:
-						slog.Info(fmt.Sprintf("🚀 [挂起恢复] [%s] 端点已恢复，重新获取端点列表", connID))
-						// 重新开始外层循环，获取新端点
-						continue
-					case SuspensionCancelled:
-						// 用户在挂起期间取消请求
-						slog.Info(fmt.Sprintf("🚫 [挂起期间取消] [%s] 用户在挂起期间取消请求", connID))
-						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-						lifecycleManager.CancelRequest("suspended then cancelled", nil)
-						http.Error(w, "Request cancelled during suspension", 499)
-						return
-					case SuspensionTimeout:
-						slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复超时", connID))
-						// 继续执行下面的失败处理
-					}
-				}
-
-				// v6.2.7: 使用 422 状态码，防止客户端自动重试
-				// 挂起失败或策略不支持挂起，返回错误
 				lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
 				http.Error(w, "No healthy endpoints available", http.StatusUnprocessableEntity)
 				return
@@ -264,6 +201,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 执行请求
 				resp, err := rh.executeRequest(ctx, r, bodyBytes, ep)
+				if err != nil && ctx.Err() != nil {
+					lifecycleManager.CancelRequest("client disconnected", nil)
+
+					// 🔧 [HTTP状态码修复] 设置最终状态码到请求上下文，而不是WriteHeader
+					statusCode := getDefaultStatusCodeForFinalStatus("cancelled") // 返回499
+					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					http.Error(w, "Client closed request", statusCode)
+					return
+				}
 
 				if err == nil && IsSuccessStatus(resp.StatusCode) {
 					// ✅ [重试决策] 成功请求的决策日志 - 保持监控完整性
@@ -306,6 +252,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// localAttempt: 当前端点内的尝试次数，用于退避计算
 				// globalAttemptCount: 全局尝试次数，用于限流策略
 				decision := retryMgr.ShouldRetryWithDecision(&errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
+				if decision.FinalStatus == "cancelled" {
+					lifecycleManager.CancelRequest("client disconnected", nil)
+					statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
+					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					http.Error(w, "Client closed request", statusCode)
+					return
+				}
 
 				// 处理挂起决策
 				if decision.SuspendRequest {
@@ -393,7 +346,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 					// 使用统一延迟
 					if decision.Delay > 0 {
-						time.Sleep(decision.Delay)
+						select {
+						case <-ctx.Done():
+							lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
+							statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
+							*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+							http.Error(w, "Client closed request", statusCode)
+							return
+						case <-time.After(decision.Delay):
+						}
 					}
 				}
 			}
@@ -451,6 +412,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 					// 执行请求
 					resp, err := rh.executeRequest(ctx, r, bodyBytes, ep)
+					if err != nil && ctx.Err() != nil {
+						lifecycleManager.CancelRequest("client disconnected during recovery retry", nil)
+						statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
+						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+						http.Error(w, "Client closed request", statusCode)
+						return
+					}
 
 					if err == nil && IsSuccessStatus(resp.StatusCode) {
 						slog.Info(fmt.Sprintf("✅ [auto_wait恢复重试成功] [%s] 端点 %s 重试成功",
@@ -558,31 +526,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					strings.Contains(errStr, "最大循环轮数")
 
 				if isNoChannelsError {
+					statusCode := http.StatusUnprocessableEntity
+					failureReason := "all_channels_unavailable"
 					if isLoopLimitError {
-						// 达到最大循环轮数：进入手动等待（等待用户操作），不立即断开
-						manualRetryOnly = true
-						manualRetryEndpointKey = endpoint.EndpointKey(lastEndpoint.Config.Channel, lastEndpoint.Config.Name)
-						manualRetryChannels = manualRetryChannels[:0]
-						for name := range triedChannels {
-							if name == "" {
-								continue
-							}
-							manualRetryChannels = append(manualRetryChannels, name)
-						}
-						if len(manualRetryChannels) == 0 && currentChannel != "" {
-							manualRetryChannels = append(manualRetryChannels, currentChannel)
-						}
-						slog.Warn(fmt.Sprintf("🛑 [循环终止] [%s] %s (进入手动重试等待)", connID, errStr))
-						break
+						failureReason = "max_loops_exceeded"
 					}
-
-					// v6.2.19: 所有渠道都不可用，使用 503 保持连接挂起
-					// 简化配置：始终允许客户端保持连接，前端可显示状态让用户点击重试
-					statusCode := http.StatusServiceUnavailable
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-					lifecycleManager.FailRequest("all_channels_unavailable", errStr, statusCode)
-					slog.Warn(fmt.Sprintf("⚠️ [所有渠道不可用] [%s] %s (保持连接挂起)", connID, errStr))
-					http.Error(w, fmt.Sprintf("所有渠道暂时不可用，请稍后重试: %s", errStr), statusCode)
+					lifecycleManager.FailRequest(failureReason, errStr, statusCode)
+					slog.Warn(fmt.Sprintf("🛑 [故障转移终止] [%s] %s (立即返回错误)", connID, errStr))
+					http.Error(w, errStr, statusCode)
 					return
 				}
 			}
@@ -592,99 +544,14 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		break
 	}
 
-	// 🔧 [统一挂起策略] 所有端点都失败后，检查是否应该挂起请求（与流式模式保持一致）
-	// 注意：客户端取消错误已在上面统一处理，这里不会执行到
-
-	// 🔧 [修复] 使用共享的SuspensionManager实例，确保全局挂起限制生效
-	suspensionMgr := rh.sharedSuspensionManager
-
-	// 检查是否应该挂起请求
-	if suspensionMgr.ShouldSuspend(ctx) {
-		currentEndpoints := rh.endpointManager.GetHealthyEndpoints()
-		if cfg := rh.endpointManager.GetConfig(); cfg != nil && cfg.Strategy.Type == "fastest" && cfg.Strategy.FastTestEnabled {
-			currentEndpoints = rh.endpointManager.GetFastestEndpointsWithRealTimeTest(ctx)
-		}
-
-		// 🚀 [状态机重构] Phase 4: 挂起时更新状态（移除重复的失败原因记录）
-		lifecycleManager.UpdateStatus("suspended", -1, 0)
-
-		waitEndpointKey := ""
-		waitFn := suspensionMgr.WaitForEndpointRecoveryWithResult
-		waitLabel := "常规挂起"
-		waitDesc := "当前所有组均不可用"
-		if manualRetryOnly {
-			waitEndpointKey = manualRetryEndpointKey
-			waitFn = suspensionMgr.WaitForEndpointRecoveryWithResultManual
-			waitLabel = "循环终止等待"
-			waitDesc = "已达到最大循环轮数，等待用户操作"
-			if len(manualRetryChannels) > 0 {
-				suspensionMgr.BeginManualRetry(connID, manualRetryChannels)
-				defer suspensionMgr.EndManualRetry(connID)
-			}
-		}
-
-		// 🔢 [语义修复] 在日志中记录端点数量信息，但不影响重试计数语义
-		actualAttemptCount := lifecycleManager.GetAttemptCount()
-		slog.Info(fmt.Sprintf("⏸️ [%s] [%s] 请求已挂起，尝试次数: %d, 健康端点数: %d, %s",
-			waitLabel, connID, actualAttemptCount, len(currentEndpoints), waitDesc))
-
-		// 🚀 [端点自愈] 等待端点恢复，能区分成功/超时/取消
-		result := waitFn(ctx, connID, waitEndpointKey)
-		switch result {
-		case SuspensionSuccess:
-			slog.Info(fmt.Sprintf("🚀 [挂起恢复] [%s] 端点已恢复或组切换完成，重新获取端点", connID))
-
-			// 重新获取健康端点
-			var newEndpoints []*endpoint.Endpoint
-			if rh.endpointManager.GetConfig().Strategy.Type == "fastest" && rh.endpointManager.GetConfig().Strategy.FastTestEnabled {
-				newEndpoints = rh.endpointManager.GetFastestEndpointsWithRealTimeTest(ctx)
-			} else {
-				newEndpoints = rh.endpointManager.GetHealthyEndpoints()
-			}
-
-			if len(newEndpoints) > 0 {
-				slog.Info(fmt.Sprintf("🔄 [重新开始] [%s] 获取到 %d 个新端点，重新开始常规处理", connID, len(newEndpoints)))
-
-				// 🔧 [生命周期修复] 恢复时必须更新生命周期管理器的端点信息
-				// 设置第一个新端点的信息到生命周期管理器
-				firstEndpoint := newEndpoints[0]
-				firstRouteGroup := firstEndpoint.Config.Channel
-				if firstRouteGroup == "" {
-					firstRouteGroup = firstEndpoint.Config.Name
-				}
-				lifecycleManager.SetEndpoint(firstEndpoint.Config.Name, firstRouteGroup, firstEndpoint.Config.Channel)
-
-				// 重新获取健康端点并重新尝试（递归调用）
-				// v6.2.8: 挂起恢复后，清空已尝试列表但保持循环计数
-				nextLoopCount := loopCount
-				if manualRetryOnly {
-					nextLoopCount = 0
-				}
-				rh.HandleRegularRequestUnifiedWithRetry(ctx, w, r, bodyBytes, lifecycleManager, nil, nil, nextLoopCount)
-				return
-			}
-		case SuspensionCancelled:
-			// 🎯 [挂起取消区分] 用户在挂起期间取消请求，应该记录为取消而非失败
-			slog.Info(fmt.Sprintf("🚫 [挂起期间取消] [%s] 用户在挂起期间取消请求", connID))
-			// 🔧 [状态码修复] 设置取消状态码到上下文用于日志记录
-			*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-			lifecycleManager.CancelRequest("suspended then cancelled", nil)
-			http.Error(w, "Request cancelled during suspension", 499)
-			return
-		case SuspensionTimeout:
-			slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 挂起等待超时", connID))
-			// 继续执行下面的失败处理逻辑
-		}
-	}
-
-	// 🚀 [状态机重构] Phase 4: 最终失败处理
-	// v6.2.19: 简化配置，始终使用 503 保持连接挂起
+	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
 	errMsg := "服务暂时不可用: 当前渠道所有端点均不可用"
-	statusCode := http.StatusServiceUnavailable
+	statusCode := http.StatusUnprocessableEntity
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
-	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (保持连接挂起)", connID, errMsg))
-	http.Error(w, errMsg+", 请稍后重试", statusCode)
+	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (立即返回错误)", connID, errMsg))
+	http.Error(w, errMsg, statusCode)
+	return
 }
 
 // executeRequest 执行单个请求

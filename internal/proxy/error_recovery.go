@@ -228,10 +228,12 @@ func (erm *ErrorRecoveryManager) ClassifyError(err error, requestID, endpoint, g
 	// HTTP错误分类（非5xx，非429）- 现在在限流和服务器错误检查之后，避免过早捕获特殊错误
 	// 2025-12-10: 移除对 400 的排除，400 作为普通 HTTP 错误处理（不重试）
 	// 注意：401/403 已被上方的认证/权限错误分类捕获，不会进入这里
-	if (strings.Contains(errStr, "http") || strings.Contains(errStr, "status") ||
+	// 2026-01-08: 避免误将 "https://..." 视为HTTP错误（如TLS证书错误）
+	if ((strings.Contains(errStr, "http ") || strings.Contains(errStr, "http:") ||
+		strings.Contains(errStr, "http/") || strings.Contains(errStr, "status") ||
 		strings.Contains(errStr, "endpoint returned error")) &&
 		!strings.Contains(errStr, "endpoint returned error: 5") && // 排除5xx
-		!strings.Contains(errStr, "429") && !strings.Contains(errStr, "rate") { // 排除429/限流
+		!strings.Contains(errStr, "429") && !strings.Contains(errStr, "rate")) { // 排除429/限流
 		errorCtx.ErrorType = ErrorTypeHTTP
 		// 非5xx HTTP错误通常不可重试
 		slog.Error(fmt.Sprintf("🔗 [HTTP错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
@@ -609,8 +611,8 @@ func (erm *ErrorRecoveryManager) isTimeoutError(err error) bool {
 }
 
 // isClientCancelError 判断是否为客户端取消错误
-// v6.2: 区分真实用户取消 vs 网络中断导致的 context canceled
-// 网络中断（如 Post "url": context canceled）应该被识别为网络错误而非客户端取消
+// v6.2: 以 context.Canceled 为准，确保用户取消时立即停止重试
+// 注意：一旦收到取消信号，应当直接终止，避免继续重试造成循环
 func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 	if err == nil {
 		return false
@@ -618,23 +620,14 @@ func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 
 	errStr := strings.ToLower(err.Error())
 
-	// v6.2: 检查 context.Canceled，但需要排除网络相关的 context 取消
+	// v6.2: 只要 context.Canceled，直接视为客户端取消
 	if errors.Is(err, context.Canceled) {
-		// 网络相关的 context 取消关键词
-		// 这些错误实际上是网络问题，不是用户主动取消
-		networkIndicators := []string{
-			"dial", "connect", "read", "write",
-			"post \"", "get \"", "put \"", "delete \"", // HTTP 请求格式
-			"timeout", "deadline", "upstream", "tcp", "wsarecv",
-			"request failed", "http", "url",
-		}
-		for _, indicator := range networkIndicators {
-			if strings.Contains(errStr, indicator) {
-				// 这是网络错误导致的 context canceled，不是客户端主动取消
-				return false
-			}
-		}
-		// 纯粹的 context.Canceled（如用户关闭窗口），才是真正的客户端取消
+		return true
+	}
+
+	// 兼容未包装的取消错误文本
+	if strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "request canceled") ||
+		strings.Contains(errStr, "cancelled") {
 		return true
 	}
 
@@ -655,7 +648,7 @@ func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 	if strings.Contains(errStr, "canceled") {
 		networkIndicators := []string{
 			"dial", "connect", "read", "write", "post", "get",
-			"timeout", "deadline", "tcp", "http", "request",
+			"timeout", "deadline", "tcp",
 		}
 		for _, indicator := range networkIndicators {
 			if strings.Contains(errStr, indicator) {
