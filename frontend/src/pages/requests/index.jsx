@@ -256,7 +256,7 @@ const RequestsPage = () => {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500 relative">
+    <div className="h-full flex flex-col gap-6 pb-4 animate-in fade-in slide-in-from-bottom-2 duration-500 relative min-h-0">
       {/* 页面标题 & 工具栏 */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-30">
         {/* 页面标题 */}
@@ -308,14 +308,16 @@ const RequestsPage = () => {
       </div>
 
       {/* 统计概览 - 面板打开时blur */}
-      <StatsOverview
-        stats={stats}
-        total={pagination.total}
-        isBlurred={isFilterOpen || isViewConfigOpen}
-      />
+      <div className="flex-none">
+        <StatsOverview
+          stats={stats}
+          total={pagination.total}
+          isBlurred={isFilterOpen || isViewConfigOpen}
+        />
+      </div>
 
       {/* 请求列表表格 - 面板打开时blur */}
-      <div className={`transition-all duration-300 ${isFilterOpen || isViewConfigOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
+      <div className={`flex-1 min-h-0 transition-all duration-300 ${isFilterOpen || isViewConfigOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
         <RequestsTable
           requests={requests}
           loading={loading}

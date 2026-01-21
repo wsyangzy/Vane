@@ -15,7 +15,7 @@ import Pagination from './Pagination.jsx';
 /**
  * 渲染单元格内容
  */
-const renderCell = (columnId, request) => {
+const renderCell = (columnId, request, visibleColumns = []) => {
   switch (columnId) {
     case 'requestId':
       const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -36,7 +36,15 @@ const renderCell = (columnId, request) => {
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':
-      return <span className="text-gray-600 text-xs">{request.endpoint}</span>;
+      const chainLength = Number.isFinite(request.endpointChainLength)
+        ? request.endpointChainLength
+        : (Array.isArray(request.endpointChain) ? request.endpointChain.length : 0);
+      const chainHead = request.endpointChainHead || request.endpoint || '';
+      const chainTail = request.endpointChainTail || chainHead || '';
+      const endpointLabel = chainLength > 1 && chainHead && chainTail
+        ? `${chainHead} -> ${chainTail} (${chainLength})`
+        : (chainHead || request.endpoint || '-');
+      return <span className="text-gray-600 text-xs">{endpointLabel}</span>;
     case 'duration':
       return <span className="text-gray-700 font-mono text-xs">{formatDuration(request.duration)}</span>;
     case 'inputTokens':
@@ -97,7 +105,7 @@ const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
           key={colId}
           className={`px-3 py-3 ${colId === 'cost' || colId.includes('Tokens') ? 'text-right' : ''}`}
         >
-          {renderCell(colId, request)}
+          {renderCell(colId, request, visibleColumns)}
         </td>
       ))}
     </tr>
@@ -135,7 +143,7 @@ const RequestsTable = ({
   const visibleColumnConfigs = columnConfigs.filter(col => visibleColumns.includes(col.id));
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-full min-h-0">
       {/* 表头 */}
       <div className="px-4 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/30">
         <div className="flex items-center gap-2">
@@ -148,7 +156,7 @@ const RequestsTable = ({
       </div>
 
       {/* 表格 */}
-      <div className="relative overflow-x-auto min-h-[300px]">
+      <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-auto">
         {loading && (
           <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
             <LoadingSpinner text="加载请求数据..." />

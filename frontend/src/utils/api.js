@@ -296,6 +296,18 @@ export const fetchRequests = async (params = {}) => {
     const endpointChain = Array.isArray(rawChain)
       ? rawChain
       : (typeof rawChain === 'string' ? rawChain.split(' -> ').filter(Boolean) : []);
+    const endpoint = request.endpoint_name || request.endpoint || 'unknown';
+
+    const rawChainHead = request.endpoint_chain_head || request.endpointChainHead || '';
+    const rawChainTail = request.endpoint_chain_tail || request.endpointChainTail || '';
+    const rawChainLength = request.endpoint_chain_length ?? request.endpointChainLength;
+    const parsedChainLength = rawChainLength === '' || rawChainLength === undefined || rawChainLength === null
+      ? Number.NaN
+      : Number(rawChainLength);
+    const fallbackChainLength = endpointChain.length > 0 ? endpointChain.length : (endpoint ? 1 : 0);
+    const endpointChainLength = Number.isFinite(parsedChainLength) ? parsedChainLength : fallbackChainLength;
+    const endpointChainHead = rawChainHead || endpointChain[0] || endpoint || '';
+    const endpointChainTail = rawChainTail || endpointChain[endpointChain.length - 1] || endpoint || '';
 
     return ({
       ...request,
@@ -306,8 +318,11 @@ export const fetchRequests = async (params = {}) => {
       timestamp: request.start_time || request.timestamp,
       model: request.model_name || request.model || 'unknown',
       channel: request.channel || '',
-      endpoint: request.endpoint_name || request.endpoint || 'unknown',
+      endpoint,
       endpointChain,
+      endpointChainHead,
+      endpointChainTail,
+      endpointChainLength,
       group: request.group_name || request.group || 'default',
       duration: request.duration_ms || request.duration || 0,
       inputTokens: request.input_tokens || request.inputTokens || 0,
