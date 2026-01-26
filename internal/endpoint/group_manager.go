@@ -506,10 +506,21 @@ func (gm *GroupManager) ManualActivateGroup(groupName string) error {
 	return gm.ManualActivateGroupWithForce(groupName, false)
 }
 
+// ActivateGroupForFailover 渠道间故障转移激活组（不记录手动激活时间）
+// force: 当为true时，即使组内没有健康端点也强制激活
+// v6.2: 冷却机制已移除
+func (gm *GroupManager) ActivateGroupForFailover(groupName string, force bool) error {
+	return gm.activateGroupInternal(groupName, force, false)
+}
+
 // ManualActivateGroupWithForce manually activates a specific group and deactivates others
 // force: 当为true时，即使组内没有健康端点也强制激活
 // v6.2: 冷却机制已移除
 func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force bool) error {
+	return gm.activateGroupInternal(groupName, force, true)
+}
+
+func (gm *GroupManager) activateGroupInternal(groupName string, force bool, recordManual bool) error {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
@@ -520,6 +531,10 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 
 	// v5.0: SQLite 模式下跳过健康检查（因为启动时健康检查还没开始）
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
+	activationLabel := "手动"
+	if !recordManual {
+		activationLabel = "故障转移"
+	}
 
 	// 检查健康端点
 	healthyCount := 0
@@ -547,8 +562,8 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 				return fmt.Errorf("组 %s 中没有健康的端点，无法激活。如需强制激活请使用强制模式", groupName)
 			}
 			// 强制激活：只有在没有健康端点时才允许
-			slog.Warn(fmt.Sprintf("⚠️ [强制激活] 用户强制激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
-				groupName, healthyCount, totalCount, time.Now().Format("2006-01-02 15:04:05")))
+			slog.Warn(fmt.Sprintf("⚠️ [强制激活] %s激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
+				activationLabel, groupName, healthyCount, totalCount, time.Now().Format("2006-01-02 15:04:05")))
 			slog.Error(fmt.Sprintf("🚨 [安全警告] 强制激活可能导致请求失败! 组: %s, 建议尽快检查端点健康状态", groupName))
 
 			// 标记强制激活
@@ -564,8 +579,8 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 			targetGroup.ForcedActivation = false
 			targetGroup.ForcedActivationTime = time.Time{}
 
-			slog.Info(fmt.Sprintf("🔄 [正常激活] 手动激活组: %s (健康端点: %d/%d)",
-				groupName, healthyCount, totalCount))
+			slog.Info(fmt.Sprintf("🔄 [正常激活] %s激活组: %s (健康端点: %d/%d)",
+				activationLabel, groupName, healthyCount, totalCount))
 		}
 	}
 
@@ -576,13 +591,52 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 
 	// 激活目标组
 	targetGroup.IsActive = true
-	targetGroup.ManualActivationTime = time.Now()
+	if recordManual {
+		targetGroup.ManualActivationTime = time.Now()
+	}
 	// v6.2: CooldownUntil 已移除
+
+	if recordManual {
+		// v6.2.18: 重置目标组所有端点的 RequestFailed 状态
+		// 用户手动激活（重试）时，需要重置端点状态让它们重新参与请求路由
+		resetCount := 0
+		for _, ep := range targetGroup.Endpoints {
+			if ep == nil {
+				continue
+			}
+			ep.mutex.Lock()
+			if ep.Status.RequestFailed {
+				ep.Status.RequestFailed = false
+				ep.Status.Healthy = true      // 假定可用，依赖实际请求验证
+				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
+				resetCount++
+			}
+			ep.mutex.Unlock()
+		}
+		if resetCount > 0 {
+			slog.Info(fmt.Sprintf("🔄 [手动激活] 重置组 %s 中 %d 个端点的请求失败状态", groupName, resetCount))
+		}
+	}
 
 	// 通知订阅者
 	gm.notifyGroupChange(groupName)
 
 	return nil
+}
+
+// WasGroupManuallyActivatedSince 判断组是否在指定时间之后被手动激活
+func (gm *GroupManager) WasGroupManuallyActivatedSince(groupName string, since time.Time) bool {
+	if gm == nil {
+		return false
+	}
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+
+	group, exists := gm.groups[groupName]
+	if !exists || group == nil || group.ManualActivationTime.IsZero() {
+		return false
+	}
+	return !group.ManualActivationTime.Before(since)
 }
 
 // DeactivateGroup 停用指定组（用于故障转移时停用失败的端点）

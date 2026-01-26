@@ -379,6 +379,8 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		// v6.2.14: interrupt_client_on_exhausted 从 failover 移到 request，并更名为 allow_retry_on_exhausted
 		{CategoryFailover, "interrupt_client_on_exhausted"},
 		{CategoryRequest, "block_retry_on_exhausted"},
+		// v6.2.19: allow_retry_on_exhausted 已废弃，始终保持连接挂起
+		{CategoryRequest, "allow_retry_on_exhausted"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -471,17 +473,19 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		// 注意：default_cooldown 已移除，loop_retry 模式下冷却时间与循环重试逻辑冲突
 		return []*store.SettingRecord{
 			{Category: CategoryFailover, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "渠道间故障转移", Description: "当前渠道内所有端点均重试耗尽时，自动切换到备用渠道", DisplayOrder: 1},
-			{Category: CategoryFailover, Key: "loop_retry", Value: "true", ValueType: ValueTypeBool, Label: "循环重试", Description: "所有渠道耗尽后，回到最高优先级渠道继续尝试。关闭则直接返回失败。", DisplayOrder: 2},
+			{Category: CategoryFailover, Key: "loop_retry", Value: "true", ValueType: ValueTypeBool, Label: "恢复策略", Description: "所有渠道耗尽后，回到最高优先级渠道继续尝试。关闭则直接返回失败。", DisplayOrder: 2},
 			{Category: CategoryFailover, Key: "max_loops", Value: "3", ValueType: ValueTypeInt, Label: "最大循环轮数", Description: "循环重试启用时，最多循环的轮数（1-10），超过后返回失败", DisplayOrder: 3},
-			{Category: CategoryFailover, Key: "skip_health_check", Value: "false", ValueType: ValueTypeBool, Label: "跳过定时健康检测", Description: "启用后不再进行定时健康检测，端点状态仅通过实际请求更新。可减少日志噪音。", DisplayOrder: 4},
+			{Category: CategoryFailover, Key: "loop_retry_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "循环终止等待", Description: "达到最大循环轮数后，等待用户操作的最大时间", DisplayOrder: 4},
+			{Category: CategoryFailover, Key: "skip_health_check", Value: "false", ValueType: ValueTypeBool, Label: "跳过定时健康检测", Description: "启用后不再进行定时健康检测，端点状态仅通过实际请求更新。可减少日志噪音。", DisplayOrder: 5},
 		}
 
 	case CategoryRequest:
 		// v6.2: 请求控制配置
+		// v6.2.19: 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*store.SettingRecord{
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
-			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 2},
-			{Category: CategoryRequest, Key: "allow_retry_on_exhausted", Value: "true", ValueType: ValueTypeBool, Label: "端点耗尽后允许重试", Description: "所有端点都不可用时，返回 503 允许客户端（如 Claude Code）自动重试。关闭则返回 422 阻止重试。", DisplayOrder: 3},
+			{Category: CategoryRequest, Key: "suspend_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "挂起等待超时", Description: "普通挂起等待端点恢复/渠道切换的最大时间", DisplayOrder: 2},
+			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 3},
 		}
 
 	case CategoryStreaming:

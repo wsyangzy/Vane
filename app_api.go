@@ -201,6 +201,39 @@ func (a *App) GetSuspendedRequestsCount() int {
 	return 0
 }
 
+// GetSuspendedEndpointCounts 获取当前挂起请求的端点计数
+func (a *App) GetSuspendedEndpointCounts() map[string]int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.proxyHandler != nil {
+		return a.proxyHandler.GetSuspendedEndpointCounts()
+	}
+	return map[string]int{}
+}
+
+// GetManualRetryRequestsCount 获取等待用户操作的挂起请求数量
+func (a *App) GetManualRetryRequestsCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.proxyHandler != nil {
+		return a.proxyHandler.GetManualRetryRequestsCount()
+	}
+	return 0
+}
+
+// GetManualRetryChannelCounts 获取等待用户操作的渠道计数
+func (a *App) GetManualRetryChannelCounts() map[string]int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.proxyHandler != nil {
+		return a.proxyHandler.GetManualRetryChannelCounts()
+	}
+	return map[string]int{}
+}
+
 // ============================================================
 // 辅助函数
 // ============================================================

@@ -131,6 +131,46 @@ func sortFailoverCandidates(strategy string, candidates []groupCandidate) {
 	}
 }
 
+func sortFailoverCandidatesWithStart(candidates []groupCandidate, startPriority int) {
+	if startPriority <= 0 {
+		sortFailoverCandidates("priority", candidates)
+		return
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		ai := candidates[i].priority
+		aj := candidates[j].priority
+		aiAfter := ai >= startPriority
+		ajAfter := aj >= startPriority
+		if aiAfter != ajAfter {
+			return aiAfter
+		}
+		if ai != aj {
+			return ai < aj
+		}
+		return candidates[i].name < candidates[j].name
+	})
+}
+
+func (m *Manager) getFailoverStartPriority() (int, bool) {
+	if m == nil || m.groupManager == nil {
+		return 0, false
+	}
+	startChannel := m.GetFailoverStartChannel()
+	if startChannel == "" {
+		return 0, false
+	}
+	for _, group := range m.groupManager.GetAllGroups() {
+		if group == nil || group.Name == "" {
+			continue
+		}
+		if group.Name == startChannel {
+			return group.Priority, true
+		}
+	}
+	return 0, false
+}
+
 // SelectNextAvailableChannel 选择下一个可用渠道（用于手动停用活跃渠道或请求级故障转移）。
 // excludeChannel: 要排除的渠道（例如当前活跃/失败渠道）。
 func (m *Manager) SelectNextAvailableChannel(excludeChannel string) (string, error) {
@@ -144,7 +184,11 @@ func (m *Manager) SelectNextAvailableChannel(excludeChannel string) (string, err
 	}
 
 	// 渠道间切换固定按优先级顺序（路由策略仅用于渠道内端点选择）
-	sortFailoverCandidates("priority", candidates)
+	if startPriority, ok := m.getFailoverStartPriority(); ok {
+		sortFailoverCandidatesWithStart(candidates, startPriority)
+	} else {
+		sortFailoverCandidates("priority", candidates)
+	}
 
 	return candidates[0].name, nil
 }
@@ -200,7 +244,11 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 			if len(candidates) == 0 {
 				return "", fmt.Errorf("没有可用的故障转移渠道（无活跃端点）")
 			}
-			sortFailoverCandidates("priority", candidates)
+			if startPriority, ok := m.getFailoverStartPriority(); ok {
+				sortFailoverCandidatesWithStart(candidates, startPriority)
+			} else {
+				sortFailoverCandidates("priority", candidates)
+			}
 			slog.Warn(fmt.Sprintf("🔄 [循环重试] 已尝试所有渠道，开始第 %d 轮重试，回到最高优先级渠道: %s", loopCount+1, candidates[0].name))
 			return candidates[0].name, nil
 		}
@@ -213,7 +261,11 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 	}
 
 	// 方案B：渠道间故障转移顺序固定按优先级
-	sortFailoverCandidates("priority", candidates)
+	if startPriority, ok := m.getFailoverStartPriority(); ok {
+		sortFailoverCandidatesWithStart(candidates, startPriority)
+	} else {
+		sortFailoverCandidates("priority", candidates)
+	}
 	return candidates[0].name, nil
 }
 
@@ -331,11 +383,11 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		return "", err
 	}
 
-	if err := m.groupManager.ManualActivateGroup(newChannel); err != nil {
+	if err := m.groupManager.ActivateGroupForFailover(newChannel, false); err != nil {
 		// 兼容：新渠道端点可能处于 neverChecked（尚未健康检查），但请求级故障转移应允许先切过去尝试。
 		// 这里回退到强制激活，避免因"尚未健康检查"而无法完成跨渠道切换。
 		slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
-		if err2 := m.groupManager.ManualActivateGroupWithForce(newChannel, true); err2 != nil {
+		if err2 := m.groupManager.ActivateGroupForFailover(newChannel, true); err2 != nil {
 			slog.Error(fmt.Sprintf("❌ [渠道间故障转移] 强制激活新渠道失败: %v", err2))
 			return "", fmt.Errorf("激活新渠道失败: %w", err2)
 		}

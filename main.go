@@ -83,10 +83,10 @@ func main() {
 	// 运行 Wails 应用
 	err := wails.Run(&options.App{
 		Title:     "Claude Request Forwarder",
-		Width:     1280,
-		Height:    800,
-		MinWidth:  1024,
-		MinHeight: 600,
+		Width:     1440,
+		Height:    900,
+		MinWidth:  1200,
+		MinHeight: 700,
 
 		// Windows：点击关闭隐藏到托盘；仅在显式"退出"时真正退出（由 OnBeforeClose + 托盘菜单控制）
 		HideWindowOnClose: false,

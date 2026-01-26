@@ -76,6 +76,7 @@ type RequestDetail struct {
 
 	Channel      string `json:"channel"` // 渠道标签
 	EndpointName string `json:"endpoint_name"`
+	EndpointChain string `json:"endpoint_chain"`
 	GroupName    string `json:"group_name"`
 	ModelName    string `json:"model_name"`
 	IsStreaming  bool   `json:"is_streaming"` // 是否为流式请求
@@ -269,6 +270,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		method, path, start_time, end_time, duration_ms,
 		COALESCE(channel, '') as channel,
 		COALESCE(endpoint_name, '') as endpoint_name,
+		COALESCE(endpoint_chain, '') as endpoint_chain,
 		COALESCE(group_name, '') as group_name,
 		COALESCE(model_name, '') as model_name,
 		COALESCE(is_streaming, false) as is_streaming,
@@ -375,7 +377,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			&detail.ID, &detail.RequestID,
 			&detail.ClientIP, &detail.UserAgent, &detail.Method, &detail.Path,
 			&detail.StartTime, &detail.EndTime, &detail.DurationMs,
-			&detail.Channel, &detail.EndpointName, &detail.GroupName, &detail.ModelName,
+			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
 			&detail.IsStreaming,
 			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,
 			&detail.FailureReason, &detail.LastFailureReason, &detail.CancelReason,

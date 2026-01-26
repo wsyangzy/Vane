@@ -61,7 +61,10 @@ import {
   isWailsEnvironment,
   openExternalURL,
   subscribeToEvent,
-  getSuspendedRequestsCount
+  getSuspendedRequestsCount,
+  getSuspendedEndpointCounts,
+  getManualRetryRequestsCount,
+  getManualRetryChannelCounts
 } from '@utils/wailsApi.js';
 
 const getErrorMessage = (error, fallback = '操作失败') => {
@@ -238,6 +241,29 @@ const HealthBadge = ({ healthy, neverChecked, skipped }) => {
   );
 };
 
+// 请求失败徽章（与健康异常区分）
+const RequestFailedBadge = ({ failCode, failReason }) => {
+  const hasFailCode = Number.isFinite(Number(failCode)) && Number(failCode) > 0;
+  const hasFailReason = !!failReason;
+  const tooltipParts = [];
+  if (hasFailCode) tooltipParts.push(`状态码: ${failCode}`);
+  if (hasFailReason) tooltipParts.push(`原因: ${failReason}`);
+  const tooltip = tooltipParts.length > 0 ? tooltipParts.join('\n') : '请求失败';
+
+  return (
+    <div
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 whitespace-nowrap flex-shrink-0"
+      title={tooltip}
+    >
+      <XCircle size={10} className="mr-1" />
+      请求失败
+      {hasFailCode && (
+        <span className="ml-1 font-mono">({failCode})</span>
+      )}
+    </div>
+  );
+};
+
 // 延迟指示器
 const LatencyBadge = ({ ms, inScope = true }) => {
   if (!inScope) {
@@ -294,6 +320,14 @@ const normalizeBool = (value, defaultValue = true) => {
   return Boolean(value);
 };
 
+const buildSuspendedEndpointKey = (endpoint) => {
+  const channel = endpoint?.channel || '';
+  const name = endpoint?.name || '';
+  if (!channel) return name || '';
+  if (!name) return channel;
+  return `${channel}::${name}`;
+};
+
 // ============================================
 // 端点精简卡片（参考基础定价卡片）
 // ============================================
@@ -317,6 +351,11 @@ const EndpointMiniCard = ({
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
   const isNeverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
   const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
+  const healthState = endpoint.health_state || endpoint.healthState || '';
+  const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
+  const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
+  const isRequestFailed = healthState === 'request_failed';
+  const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
   const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
 
   const authType = getAuthType(endpoint);
@@ -443,8 +482,11 @@ const EndpointMiniCard = ({
         </div>
 
         <div className="flex items-center gap-2 mt-2 flex-wrap">
-          {inScope && (
+          {showHealthBadge && (
             <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} skipped={isSkipHealthCheck} />
+          )}
+          {isRequestFailed && (
+            <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
           )}
           {authType && (
             <span className="inline-flex items-center text-[10px] text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
@@ -474,6 +516,7 @@ const EndpointDetailModal = ({
   endpoint,
   isOpen,
   isSqliteMode,
+  channelFailoverEnabled = true,
   // v6.2: failoverDefaultCooldownSeconds 已移除
   onClose,
   onEdit,
@@ -488,6 +531,16 @@ const EndpointDetailModal = ({
   const neverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
   const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
   const healthNeverChecked = !inScope || neverChecked;
+  const healthState = endpoint.health_state || endpoint.healthState || '';
+  const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
+  const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
+  const suspendedCountValue = Number.isFinite(Number(endpoint.suspendedCount || endpoint.suspended_count || 0))
+    ? Number(endpoint.suspendedCount || endpoint.suspended_count || 0)
+    : 0;
+  const isSuspended = suspendedCountValue > 0;
+  const isRequestFailed = healthState === 'request_failed';
+  const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
+  const hasFailDetail = (Number(lastFailCode) > 0) || !!lastFailReason;
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
@@ -547,7 +600,12 @@ const EndpointDetailModal = ({
             </p>
 
             <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
-              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
+              {showHealthBadge && (
+                <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
+              )}
+              {isRequestFailed && (
+                <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
+              )}
               <LatencyBadge ms={responseTime} inScope={inScope} />
 
               <span
@@ -630,8 +688,59 @@ const EndpointDetailModal = ({
             ))}
           </div>
 
+          {/* 挂起详情（挂起优先展示） */}
+          {isSuspended && (
+            <div className="mt-4">
+              <div className="bg-amber-50 rounded-xl p-4 border border-amber-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock size={16} className="text-amber-600" />
+                  <div className="text-sm font-medium text-amber-800">挂起详情</div>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-600 font-medium min-w-[70px]">挂起请求:</span>
+                    <span className="font-mono text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                      {suspendedCountValue}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-600 font-medium min-w-[70px]">等待说明:</span>
+                    <span className="text-amber-900">
+                      {channelFailoverEnabled
+                        ? '请求已挂起等待端点恢复或自动切换渠道。'
+                        : '请求已挂起，等待用户点击「重试」按钮重新尝试当前渠道。'}
+                    </span>
+                  </div>
+                  {hasFailDetail && (
+                    <div className="pt-2 border-t border-amber-200/60">
+                      <div className="text-xs text-amber-700 mb-1">最近失败</div>
+                      <div className="space-y-2 text-sm">
+                        {lastFailCode > 0 && (
+                          <div className="flex items-start gap-2">
+                            <span className="text-amber-600 font-medium min-w-[70px]">状态码:</span>
+                            <span className="font-mono text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                              {lastFailCode}
+                            </span>
+                          </div>
+                        )}
+                        {lastFailReason && (
+                          <div className="flex items-start gap-2">
+                            <span className="text-amber-600 font-medium min-w-[70px]">失败原因:</span>
+                            <span className="text-amber-900 break-all">
+                              {lastFailReason}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* v6.2.10: 异常详情显示 - 有错误信息时显示 */}
-          {((endpoint.last_fail_code > 0) || endpoint.last_fail_reason) && (
+          {!isSuspended && hasFailDetail && (
             <div className="mt-4">
               <div className="bg-rose-50 rounded-xl p-4 border border-rose-200">
                 <div className="flex items-center gap-2 mb-2">
@@ -639,19 +748,19 @@ const EndpointDetailModal = ({
                   <div className="text-sm font-medium text-rose-800">异常详情</div>
                 </div>
                 <div className="space-y-2 text-sm">
-                  {endpoint.last_fail_code > 0 && (
+                  {lastFailCode > 0 && (
                     <div className="flex items-start gap-2">
                       <span className="text-rose-600 font-medium min-w-[70px]">状态码:</span>
                       <span className="font-mono text-rose-900 bg-rose-100 px-2 py-0.5 rounded">
-                        {endpoint.last_fail_code}
+                        {lastFailCode}
                       </span>
                     </div>
                   )}
-                  {endpoint.last_fail_reason && (
+                  {lastFailReason && (
                     <div className="flex items-start gap-2">
                       <span className="text-rose-600 font-medium min-w-[70px]">失败原因:</span>
                       <span className="text-rose-900 break-all">
-                        {endpoint.last_fail_reason}
+                        {lastFailReason}
                       </span>
                     </div>
                   )}
@@ -882,6 +991,7 @@ const ChannelCard = ({
   activeChannelName = '',
   isSqliteMode = false,
   channelFailoverEnabled = true,
+  suspendedRequestsCount = 0,
   expanded = false,
   onToggleExpanded,
   onActivate,
@@ -896,6 +1006,7 @@ const ChannelCard = ({
   onToggleEndpointSkipHealthCheck, // v6.2.11: 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
+  manualRetryCount = 0,
   loading = false
 }) => {
   const scopedEndpoints = endpoints.filter(e => e._health_scope !== false);
@@ -908,6 +1019,14 @@ const ChannelCard = ({
   const totalCount = endpoints.length;
   const hasEndpoints = totalCount > 0;
   const hasGroupInfo = !!groupInfo;
+  const suspendedEndpointCount = endpoints.filter((endpoint) => {
+    const count = endpoint?.suspendedCount || endpoint?.suspended_count || 0;
+    return Number(count) > 0;
+  }).length;
+  const manualRetryCountValue = Number.isFinite(Number(manualRetryCount))
+    ? Number(manualRetryCount)
+    : 0;
+  const hasManualRetry = manualRetryCountValue > 0;
 
   const isActive = groupInfo?.active
     ?? (isSqliteMode ? endpoints.some(e => e.enabled) : (activeChannelName === channelName));
@@ -920,6 +1039,10 @@ const ChannelCard = ({
 
   // 判断是否处于"全部失败"警示状态（用于渠道卡片内的提示框）：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
   const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+  const hasSuspendedRequests = suspendedRequestsCount > 0;
+  const showSuspendedPrompt = !channelFailoverEnabled && isActive && hasSuspendedRequests;
+  const showRetryButton = isAllEndpointsFailed || (isActive && hasSuspendedRequests) || hasManualRetry;
+  const showRetryOnInactive = hasManualRetry;
 
   // v6.2.12: 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
   const isActiveChannelAllFailed = isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
@@ -1004,17 +1127,21 @@ const ChannelCard = ({
           {!isActive && isSqliteMode && hasEndpoints && (
             <Button
               size="sm"
-              icon={Power}
+              icon={showRetryOnInactive ? RefreshCw : Power}
               className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
               onClick={() => onActivate?.(channelName)}
               disabled={loading || (channelFailoverEnabled && isPaused)}
-              title={channelFailoverEnabled && isPaused ? '请先点击"恢复"按钮取消暂停状态' : '激活此渠道'}
+              title={
+                channelFailoverEnabled && isPaused
+                  ? '请先点击"恢复"按钮取消暂停状态'
+                  : (showRetryOnInactive ? '重试此渠道' : '激活此渠道')
+              }
             >
-              激活
+              {showRetryOnInactive ? '重试' : '激活'}
             </Button>
           )}
           {isActive && isSqliteMode && (
-            isAllEndpointsFailed ? (
+            showRetryButton ? (
               <Button
                 size="sm"
                 icon={RefreshCw}
@@ -1122,6 +1249,18 @@ const ChannelCard = ({
               全部失败
             </span>
           )}
+          {hasManualRetry && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+              <RefreshCw size={10} />
+              待重试 <span className="font-semibold">{manualRetryCountValue}</span>
+            </span>
+          )}
+          {!hasManualRetry && suspendedEndpointCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+              <Clock size={10} />
+              挂起 <span className="font-semibold">{suspendedEndpointCount}</span>
+            </span>
+          )}
 
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap">
             端点 <span className="font-semibold text-slate-800">{totalCount}</span>
@@ -1136,6 +1275,23 @@ const ChannelCard = ({
             </span>
           </span>
         </div>
+
+        {/* 挂起等待提示（仅在活跃渠道显示） */}
+        {showSuspendedPrompt && (
+          <div className="mt-3 p-2.5 bg-purple-50/70 border border-purple-200 rounded-lg flex items-start gap-2">
+            <div className="p-1.5 bg-purple-100 rounded-full flex-shrink-0 animate-pulse">
+              <Clock className="w-3.5 h-3.5 text-purple-600" />
+            </div>
+            <div className="flex-1 text-xs text-purple-800">
+              <div className="font-medium">
+                {suspendedRequestsCount} 个请求正在等待端点恢复
+              </div>
+              <div className="text-[11px] text-purple-700 mt-0.5">
+                请求已挂起，点击「重试」按钮重新尝试当前渠道或激活其他渠道。
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 全部失败时的操作提示 */}
         {isAllEndpointsFailed && (
@@ -1246,6 +1402,9 @@ const ChannelsPage = () => {
 
   // v6.0.7+ 挂起请求计数（用于显示等待提示）
   const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
+  const [suspendedEndpointCounts, setSuspendedEndpointCounts] = useState({});
+  const [manualRetryRequestsCount, setManualRetryRequestsCount] = useState(0);
+  const [manualRetryChannelCounts, setManualRetryChannelCounts] = useState({});
 
   // 批量检测状态
   const [batchCheckLoading, setBatchCheckLoading] = useState(false);
@@ -1376,8 +1535,20 @@ const ChannelsPage = () => {
   // v6.0.7+ 加载挂起请求计数
   const loadSuspendedCount = useCallback(async () => {
     try {
-      const count = await getSuspendedRequestsCount();
+      const [count, endpointCounts, manualCount, manualChannelCounts] = await Promise.all([
+        getSuspendedRequestsCount(),
+        getSuspendedEndpointCounts(),
+        getManualRetryRequestsCount(),
+        getManualRetryChannelCounts()
+      ]);
       setSuspendedRequestsCount(count || 0);
+      setSuspendedEndpointCounts(
+        endpointCounts && !Array.isArray(endpointCounts) ? endpointCounts : {}
+      );
+      setManualRetryRequestsCount(manualCount || 0);
+      setManualRetryChannelCounts(
+        manualChannelCounts && !Array.isArray(manualChannelCounts) ? manualChannelCounts : {}
+      );
     } catch (err) {
       // 静默处理错误，不影响页面正常使用
       console.debug('获取挂起请求数量失败:', err);
@@ -1577,10 +1748,13 @@ const ChannelsPage = () => {
   const scopedDisplayEndpoints = useMemo(() => {
     return (displayEndpoints || []).map((ep) => ({
       ...ep,
+      suspendedCount: Number.isFinite(Number(suspendedEndpointCounts?.[buildSuspendedEndpointKey(ep)] ?? 0))
+        ? Number(suspendedEndpointCounts?.[buildSuspendedEndpointKey(ep)] ?? 0)
+        : 0,
       _health_scope: isEndpointInHealthScope(ep),
       _channel_paused: Boolean(groupInfoMap.get(ep?.group || ep?.channel || ep?.name || 'default')?.paused)
     }));
-  }, [displayEndpoints, groupInfoMap, isEndpointInHealthScope]);
+  }, [displayEndpoints, groupInfoMap, isEndpointInHealthScope, suspendedEndpointCounts]);
 
   const channelSections = useMemo(() => {
     const getChannelKey = (ep) => ep.group || ep.channel || ep.name || 'default';
@@ -1919,24 +2093,6 @@ const ChannelsPage = () => {
         </div>
       </div>
 
-      {/* v6.0.7+ 等待端点恢复提示 */}
-      {suspendedRequestsCount > 0 && (
-        <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-xl flex items-center gap-3">
-          <div className="p-2 bg-purple-100 rounded-full animate-pulse">
-            <Clock className="w-5 h-5 text-purple-600" />
-          </div>
-          <div className="flex-1">
-            <div className="font-medium text-purple-900">
-              {suspendedRequestsCount} 个请求正在等待端点恢复
-            </div>
-            <div className="text-sm text-purple-700 mt-0.5">
-              当前所有端点均处于不可用状态，请求已挂起等待端点恢复。
-              您可以手动点击「恢复」按钮取消暂停状态，再激活渠道。
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 统计卡片 */}
       <div className="grid grid-cols-6 gap-4 mb-6">
         {/* v6.2.4: 检测范围统计 */}
@@ -1976,6 +2132,37 @@ const ChannelsPage = () => {
           <div className="text-sm text-slate-500">未参与端点</div>
         </div>
       </div>
+
+      {channelFailoverEnabled && manualRetryRequestsCount > 0 && (
+        <div className="mb-6 p-4 bg-amber-50/70 border border-amber-200 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-amber-100 rounded-full flex-shrink-0 animate-pulse">
+            <RefreshCw className="w-4 h-4 text-amber-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-amber-900">
+              已达到最大循环轮数，等待用户操作 ({manualRetryRequestsCount})
+            </div>
+            <div className="text-sm text-amber-700 mt-1">
+              请在参与失败的渠道上点击「重试」以重新开始转移链路。
+            </div>
+          </div>
+        </div>
+      )}
+      {channelFailoverEnabled && manualRetryRequestsCount === 0 && suspendedRequestsCount > 0 && (
+        <div className="mb-6 p-4 bg-purple-50/70 border border-purple-200 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-purple-100 rounded-full flex-shrink-0 animate-pulse">
+            <Clock className="w-4 h-4 text-purple-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-purple-900">
+              {suspendedRequestsCount} 个请求正在等待端点恢复
+            </div>
+            <div className="text-sm text-purple-700 mt-1">
+              请求已挂起等待端点恢复或自动切换渠道。
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* v6.2.5: 全部端点失败警示 - 仅在启用渠道间故障转移时显示全局警示；未启用时在渠道卡片内显示 */}
       {channelFailoverEnabled && scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
@@ -2041,6 +2228,8 @@ const ChannelsPage = () => {
               activeChannelName={activeChannel}
               isSqliteMode={isSqliteMode}
               channelFailoverEnabled={channelFailoverEnabled}
+              suspendedRequestsCount={suspendedRequestsCount}
+              manualRetryCount={manualRetryChannelCounts?.[section.name] ?? 0}
               expanded={expandedChannelName === section.name}
               onToggleExpanded={() => {
                 setExpandedChannelName((prev) => (prev === section.name ? '' : section.name));
@@ -2286,6 +2475,7 @@ const ChannelsPage = () => {
         endpoint={detailTarget}
         isOpen={detailOpen}
         isSqliteMode={isSqliteMode}
+        channelFailoverEnabled={channelFailoverEnabled}
         onClose={closeEndpointDetail}
         onEdit={(ep) => {
           closeEndpointDetail();

@@ -6,9 +6,11 @@ package main
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
+	"claude-request-forwarder/internal/endpoint"
 	"claude-request-forwarder/internal/tracking"
 	"claude-request-forwarder/internal/utils"
 )
@@ -249,6 +251,10 @@ type RequestRecord struct {
 	Timestamp             string  `json:"timestamp"`
 	Channel               string  `json:"channel"` // v5.0: 渠道标签
 	Endpoint              string  `json:"endpoint"`
+	EndpointChain         string  `json:"endpoint_chain"` // 端点尝试链路（简略）
+	EndpointChainHead     string  `json:"endpoint_chain_head"`
+	EndpointChainTail     string  `json:"endpoint_chain_tail"`
+	EndpointChainLength   int     `json:"endpoint_chain_length"`
 	Group                 string  `json:"group"`
 	Model                 string  `json:"model"`
 	Status                string  `json:"status"`
@@ -375,11 +381,17 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	for _, r := range requests {
 		// 使用统一的时间格式（2025-12-04 17:18:48）
 		// 数据库存储的就是配置时区的时间，直接格式化，不做时区转换
+		chainHead, chainTail, chainLength := buildEndpointChainSummary(r.EndpointChain, r.Channel, r.EndpointName)
+
 		record := RequestRecord{
 			RequestID:             r.RequestID,
 			Timestamp:             r.StartTime.Format("2006-01-02 15:04:05"),
 			Channel:               r.Channel, // v5.0: 渠道标签
 			Endpoint:              r.EndpointName,
+			EndpointChain:         r.EndpointChain,
+			EndpointChainHead:     chainHead,
+			EndpointChainTail:     chainTail,
+			EndpointChainLength:   chainLength,
 			Group:                 r.GroupName,
 			Model:                 r.ModelName,
 			Status:                r.Status,
@@ -408,6 +420,29 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	}
 
 	return result, nil
+}
+
+func buildEndpointChainSummary(chain, channel, endpointName string) (string, string, int) {
+	if chain != "" {
+		items := strings.Split(chain, " -> ")
+		filtered := make([]string, 0, len(items))
+		for _, item := range items {
+			trimmed := strings.TrimSpace(item)
+			if trimmed == "" {
+				continue
+			}
+			filtered = append(filtered, trimmed)
+		}
+		if len(filtered) > 0 {
+			return filtered[0], filtered[len(filtered)-1], len(filtered)
+		}
+	}
+
+	fallback := endpoint.EndpointKey(channel, endpointName)
+	if fallback == "" {
+		return "", "", 0
+	}
+	return fallback, fallback, 1
 }
 
 // ============================================================

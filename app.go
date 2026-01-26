@@ -1638,21 +1638,22 @@ func (a *App) applySettingsToConfig() {
 	a.config.FailoverV2.MaxLoops = a.settingsService.GetInt(ctx, service.CategoryFailover, "max_loops", a.config.FailoverV2.MaxLoops)
 	// v6.2.11: 从数据库加载 skip_health_check 到 FailoverV2
 	a.config.FailoverV2.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.FailoverV2.SkipHealthCheck)
+	// v6.2.20: 达到最大循环轮数后的手动等待超时
+	a.config.FailoverV2.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.FailoverV2.LoopRetrySuspendTimeout)
 	// v6.2.17: 同步 Failover.Enabled 到 FailoverV2.Enabled
 	// 确保 ShouldSkipHealthCheck() 等方法能正确检测渠道间转移的启用状态
 	a.config.FailoverV2.Enabled = a.config.Failover.Enabled
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
+	// v6.2.20: 普通挂起等待超时
+	a.config.FailoverV2.SuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_wait_timeout", a.config.FailoverV2.SuspendTimeout)
 	a.config.RequestSuspend.Enabled = a.settingsService.GetBool(ctx, service.CategoryRequest, "suspend_enabled", a.config.RequestSuspend.Enabled)
 	a.config.RequestSuspend.Timeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_timeout", a.config.RequestSuspend.Timeout)
 	a.config.RequestSuspend.MaxSuspendedRequests = a.settingsService.GetInt(ctx, service.CategoryRequest, "max_suspended", a.config.RequestSuspend.MaxSuspendedRequests)
 	a.config.RequestSuspend.EOFRetryHint = a.settingsService.GetBool(ctx, service.CategoryRequest, "eof_retry_hint", a.config.RequestSuspend.EOFRetryHint)
-	// v6.2.14: 从数据库加载 allow_retry_on_exhausted（控制所有端点失败时是否允许客户端重试）
-	// 注意：存储的是"允许重试"，但 FailoverV2 字段是"中断重试"，需要取反
-	allowRetry := a.settingsService.GetBool(ctx, service.CategoryRequest, "allow_retry_on_exhausted", true)
-	interruptRetry := !allowRetry
-	a.config.FailoverV2.InterruptClientOnExhausted = &interruptRetry
+	// v6.2.19: allow_retry_on_exhausted 配置已废弃，始终保持连接挂起
+	// 注释保留用于向后兼容文档记录
 
 	// 流式传输配置
 	a.config.Streaming.HeartbeatInterval = a.settingsService.GetDuration(ctx, service.CategoryStreaming, "heartbeat_interval", a.config.Streaming.HeartbeatInterval)

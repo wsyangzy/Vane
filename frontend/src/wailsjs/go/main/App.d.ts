@@ -53,6 +53,10 @@ export function GetKeysOverview():Promise<main.KeysOverviewResult>;
 
 export function GetLogStreamStatus():Promise<boolean>;
 
+export function GetManualRetryChannelCounts():Promise<Record<string, number>>;
+
+export function GetManualRetryRequestsCount():Promise<number>;
+
 export function GetModelPricing(arg1:string):Promise<main.ModelPricingInfo>;
 
 export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageStatus>;
@@ -80,6 +84,8 @@ export function GetSettingCategories():Promise<Array<main.CategoryInfo>>;
 export function GetSettingsByCategory(arg1:string):Promise<Array<main.SettingInfo>>;
 
 export function GetSettingsStorageStatus():Promise<main.SettingsStorageStatus>;
+
+export function GetSuspendedEndpointCounts():Promise<Record<string, number>>;
 
 export function GetSuspendedRequestsCount():Promise<number>;
 

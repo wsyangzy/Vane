@@ -543,6 +543,7 @@ export const getRequests = async (params = {}) => {
     channel: r.channel || '',
     endpoint_name: r.endpoint,
     endpoint: r.endpoint,
+    endpoint_chain: r.endpoint_chain || r.endpointChain || '',
     group_name: r.group,
     group: r.group,
     model_name: r.model,
@@ -1469,4 +1470,37 @@ export const getSuspendedRequestsCount = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   return await WailsApp.GetSuspendedRequestsCount();
+};
+
+/**
+ * 获取当前挂起请求的端点计数
+ * @returns {Promise<Object>} - { [endpointName]: count }
+ */
+export const getSuspendedEndpointCounts = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetSuspendedEndpointCounts();
+};
+
+/**
+ * 获取等待用户操作的挂起请求数量（达到最大循环轮数）
+ * @returns {Promise<number>} - 挂起请求数量
+ */
+export const getManualRetryRequestsCount = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetManualRetryRequestsCount();
+};
+
+/**
+ * 获取等待用户操作的渠道计数
+ * @returns {Promise<Object>} - { [channelName]: count }
+ */
+export const getManualRetryChannelCounts = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetManualRetryChannelCounts();
 };

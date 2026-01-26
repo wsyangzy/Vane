@@ -30,14 +30,19 @@ type FailoverConfigV2 struct {
 	// v6.2.11: 新增，用于减少循环重试模式下的日志噪音
 	SkipHealthCheck bool `yaml:"skip_health_check"`
 
-	// InterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
-	// - true: 返回 422 状态码，中断客户端（如 Claude Code）的自动重试
-	// - false: 返回可重试错误格式，允许客户端自行决定是否重试
-	// 默认: true（中断重试，保护用户避免无限循环）
-	// v6.2.14: 新增，让用户选择耗尽后的客户端行为
-	InterruptClientOnExhausted *bool `yaml:"interrupt_client_on_exhausted"`
+	// SuspendTimeout 普通挂起等待超时
+	// - 当请求进入挂起等待（端点耗尽/等待切换）时的最大等待时间
+	// 默认: 120s
+	SuspendTimeout time.Duration `yaml:"suspend_timeout,omitempty"`
+
+	// LoopRetrySuspendTimeout 达到最大循环轮数后的手动等待超时
+	// - 当达到最大循环轮数时，仅等待用户操作的最大等待时间
+	// 默认: 120s
+	LoopRetrySuspendTimeout time.Duration `yaml:"loop_retry_suspend_timeout,omitempty"`
 
 	// ===== 以下字段已废弃，保留用于向后兼容 =====
+	// v6.2.19: InterruptClientOnExhausted 已废弃，始终保持连接挂起
+	InterruptClientOnExhausted *bool `yaml:"interrupt_client_on_exhausted,omitempty"` // DEPRECATED: v6.2.19 始终保持连接
 	// v6.1.x: 这些字段将在解析配置时自动映射到新字段
 	RecoveryStrategy        RecoveryStrategy `yaml:"recovery_strategy,omitempty"`         // DEPRECATED: 使用 loop_retry 替代
 	AutoWaitTimeout         time.Duration    `yaml:"auto_wait_timeout,omitempty"`         // DEPRECATED: 已移除 auto_wait 策略
@@ -118,6 +123,13 @@ func (fc *FailoverConfigV2) MigrateFromLegacy(oldFailover *FailoverConfig, oldSu
 		// 其他情况 → 新配置：不循环（快速失败）
 		fc.LoopRetry = false
 	}
+
+	if oldSuspend != nil && oldSuspend.Timeout > 0 {
+		fc.SuspendTimeout = oldSuspend.Timeout
+		if fc.LoopRetrySuspendTimeout == 0 {
+			fc.LoopRetrySuspendTimeout = oldSuspend.Timeout
+		}
+	}
 }
 
 // MigrateFromV61 从 v6.1.x 配置迁移
@@ -139,6 +151,15 @@ func (fc *FailoverConfigV2) MigrateFromV61() {
 		fc.LoopRetry = true
 		fc.AllowRevisitAfterExhausted = nil
 	}
+
+	if fc.AutoWaitTimeout > 0 {
+		if fc.SuspendTimeout == 0 {
+			fc.SuspendTimeout = fc.AutoWaitTimeout
+		}
+		if fc.LoopRetrySuspendTimeout == 0 {
+			fc.LoopRetrySuspendTimeout = fc.AutoWaitTimeout
+		}
+	}
 }
 
 // SetDefaults 设置默认值
@@ -149,6 +170,24 @@ func (fc *FailoverConfigV2) SetDefaults() {
 	// max_loops 默认值
 	if fc.MaxLoops == 0 {
 		fc.MaxLoops = 3 // 默认最多循环3轮
+	}
+
+	if fc.SuspendTimeout == 0 {
+		if fc.AutoWaitTimeout > 0 {
+			fc.SuspendTimeout = fc.AutoWaitTimeout
+		} else {
+			fc.SuspendTimeout = 120 * time.Second
+		}
+	}
+
+	if fc.LoopRetrySuspendTimeout == 0 {
+		if fc.SuspendTimeout > 0 {
+			fc.LoopRetrySuspendTimeout = fc.SuspendTimeout
+		} else if fc.AutoWaitTimeout > 0 {
+			fc.LoopRetrySuspendTimeout = fc.AutoWaitTimeout
+		} else {
+			fc.LoopRetrySuspendTimeout = 120 * time.Second
+		}
 	}
 
 	// 注意：loop_retry 默认为 false（Go 零值），表示快速失败
@@ -163,6 +202,13 @@ func (fc *FailoverConfigV2) Validate() error {
 
 	if fc.MaxLoops > 100 {
 		return fmt.Errorf("max_loops cannot exceed 100 for performance reasons")
+	}
+
+	if fc.SuspendTimeout < 0 {
+		return fmt.Errorf("suspend_timeout cannot be negative")
+	}
+	if fc.LoopRetrySuspendTimeout < 0 {
+		return fmt.Errorf("loop_retry_suspend_timeout cannot be negative")
 	}
 
 	return nil
@@ -181,6 +227,37 @@ func (fc *FailoverConfigV2) GetMaxLoops() int {
 	return fc.MaxLoops
 }
 
+// GetSuspendTimeout 获取普通挂起等待超时
+func (fc *FailoverConfigV2) GetSuspendTimeout() time.Duration {
+	if fc == nil {
+		return 120 * time.Second
+	}
+	if fc.SuspendTimeout > 0 {
+		return fc.SuspendTimeout
+	}
+	if fc.AutoWaitTimeout > 0 {
+		return fc.AutoWaitTimeout
+	}
+	return 120 * time.Second
+}
+
+// GetLoopRetrySuspendTimeout 获取循环终止的手动等待超时
+func (fc *FailoverConfigV2) GetLoopRetrySuspendTimeout() time.Duration {
+	if fc == nil {
+		return 120 * time.Second
+	}
+	if fc.LoopRetrySuspendTimeout > 0 {
+		return fc.LoopRetrySuspendTimeout
+	}
+	if fc.SuspendTimeout > 0 {
+		return fc.SuspendTimeout
+	}
+	if fc.AutoWaitTimeout > 0 {
+		return fc.AutoWaitTimeout
+	}
+	return 120 * time.Second
+}
+
 // ShouldSkipHealthCheck 是否应该跳过定时健康检测
 // 仅当启用渠道间转移、循环重试且 SkipHealthCheck = true 时跳过
 // v6.2.17: 修复关闭渠道间转移后仍跳过健康检测的问题
@@ -189,12 +266,11 @@ func (fc *FailoverConfigV2) ShouldSkipHealthCheck() bool {
 }
 
 // ShouldInterruptClientOnExhausted 所有渠道耗尽后是否中断客户端重试
-// 返回 true 时使用 422 状态码中断客户端自动重试
-// 返回 false 时允许客户端自行决定是否重试（503）
-// 默认返回 false（允许客户端重试）
+// v6.2.19: 始终返回 false，保持连接挂起等待恢复
+// 原因：简化配置（KISS），提供更好的用户体验
+// - 客户端连接不会突然断开
+// - 前端可以实时显示状态，用户可通过"重试"按钮控制恢复
+// DEPRECATED: InterruptClientOnExhausted 配置项已废弃，始终保持连接
 func (fc *FailoverConfigV2) ShouldInterruptClientOnExhausted() bool {
-	if fc.InterruptClientOnExhausted == nil {
-		return false // 默认允许客户端重试
-	}
-	return *fc.InterruptClientOnExhausted
+	return false // v6.2.19: 始终保持连接，不再支持 422 中断
 }

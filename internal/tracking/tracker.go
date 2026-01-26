@@ -302,6 +302,7 @@ type WriteRequest struct {
 // 支持可选字段更新，只更新非nil的字段
 type UpdateOptions struct {
 	EndpointName  *string        // 端点名称
+	EndpointChain *string        // 端点链路（形如 "A -> B -> C"）
 	Channel       *string        // 渠道标签（v5.0）
 	GroupName     *string        // 组名称
 	Status        *string        // 状态
@@ -779,6 +780,9 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			// 只更新非nil的字段
 			if opts.EndpointName != nil {
 				req.EndpointName = *opts.EndpointName
+			}
+			if opts.EndpointChain != nil {
+				req.EndpointChain = *opts.EndpointChain
 			}
 			if opts.Channel != nil {
 				req.Channel = *opts.Channel
@@ -1889,6 +1893,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	endTimeSnapshot := req.EndTime
 	durationMsSnapshot := req.DurationMs
 	endpointName := req.EndpointName
+	endpointChain := req.EndpointChain
 	channel := req.Channel
 	groupName := req.GroupName
 	modelName := req.ModelName
@@ -1978,6 +1983,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		EndTime:               endTime,
 		DurationMs:            durationMs,
 		EndpointName:          endpointName,
+		EndpointChain:         endpointChain,
 		Channel:               channel, // v5.0: 渠道标签
 		GroupName:             groupName,
 		ModelName:             modelName,

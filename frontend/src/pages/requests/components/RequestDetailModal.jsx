@@ -123,6 +123,43 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const streamLabel = request.isStreaming ? '流式请求' : '常规请求';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
 
+  const rawEndpointChain = request.endpointChain || request.endpoint_chain || [];
+  const endpointChain = Array.isArray(rawEndpointChain)
+    ? rawEndpointChain
+    : (typeof rawEndpointChain === 'string' ? rawEndpointChain.split(' -> ').filter(Boolean) : []);
+  const chainNodes = endpointChain.map((item, index) => {
+    const raw = String(item || '').trim();
+    if (!raw) return null;
+    if (raw.includes('::')) {
+      const parts = raw.split('::');
+      const channel = parts.shift() || '';
+      const endpoint = parts.join('::') || '';
+      return { raw, channel, endpoint, index };
+    }
+    const fallbackChannel = endpointChain.length === 1 ? (request.channel || request.group || '') : '';
+    return { raw, channel: fallbackChannel, endpoint: raw, index };
+  }).filter(Boolean);
+  const hasUnknownChannel = chainNodes.some((node) => !node.channel);
+  const channelTones = [
+    { badge: 'bg-blue-50 text-blue-600 border-blue-100', border: 'border-blue-200/70' },
+    { badge: 'bg-emerald-50 text-emerald-600 border-emerald-100', border: 'border-emerald-200/70' },
+    { badge: 'bg-amber-50 text-amber-700 border-amber-200', border: 'border-amber-200/70' },
+    { badge: 'bg-rose-50 text-rose-600 border-rose-100', border: 'border-rose-200/70' },
+    { badge: 'bg-indigo-50 text-indigo-600 border-indigo-100', border: 'border-indigo-200/70' },
+    { badge: 'bg-teal-50 text-teal-600 border-teal-100', border: 'border-teal-200/70' },
+    { badge: 'bg-violet-50 text-violet-600 border-violet-100', border: 'border-violet-200/70' },
+    { badge: 'bg-cyan-50 text-cyan-600 border-cyan-100', border: 'border-cyan-200/70' }
+  ];
+  const defaultChannelTone = { badge: 'bg-slate-50 text-slate-500 border-slate-200', border: 'border-slate-200' };
+  const getChannelTone = (channel) => {
+    if (!channel) return defaultChannelTone;
+    let sum = 0;
+    for (let i = 0; i < channel.length; i += 1) {
+      sum += channel.charCodeAt(i);
+    }
+    return channelTones[sum % channelTones.length];
+  };
+
   const errorText = [
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
     request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
@@ -169,7 +206,8 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
             {[
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
-              { id: 'network', label: '网络信息', icon: Server }
+              { id: 'network', label: '网络信息', icon: Server },
+              { id: 'chain', label: '端点链路', icon: Layers }
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -287,6 +325,81 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 端点链路 Tab */}
+          {activeTab === 'chain' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">端点尝试链路</h3>
+                  <span className="text-xs text-slate-400">共 {chainNodes.length} 次尝试</span>
+                </div>
+                <div className="p-4">
+                  {chainNodes.length === 0 ? (
+                    <div className="text-sm text-slate-500">暂无端点链路记录</div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-3">
+                      {chainNodes.map((node, idx) => {
+                        const channelLabel = node.channel || '未知渠道';
+                        const endpointLabel = node.endpoint || node.raw || '-';
+                        const tone = getChannelTone(node.channel);
+                        return (
+                          <div key={`${node.raw}-${idx}`} className="flex items-center">
+                            <div className="flex flex-col items-center min-w-[160px]">
+                              <div className="text-[10px] text-slate-400">#{idx + 1}</div>
+                              <div className={`mt-1 bg-slate-50 border ${tone.border} rounded-lg px-3 py-2 w-full`}>
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border whitespace-nowrap ${tone.badge}`}>
+                                    渠道
+                                  </span>
+                                  <span className="text-xs text-slate-600 truncate" title={channelLabel}>
+                                    {channelLabel}
+                                  </span>
+                                </div>
+                                <div className="mt-1 text-sm font-semibold text-slate-900 truncate" title={endpointLabel}>
+                                  {endpointLabel}
+                                </div>
+                              </div>
+                            </div>
+                            {idx < chainNodes.length - 1 && (
+                              <div className="mx-2 text-slate-300 text-lg">→</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
+                <div className="text-sm font-semibold text-slate-800 mb-2">图例</div>
+                <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
+                      渠道
+                    </span>
+                    <span>渠道名称（颜色区分不同渠道）</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">
+                      端点
+                    </span>
+                    <span>端点名称</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400 text-sm">→</span>
+                    <span>尝试顺序</span>
+                  </div>
+                </div>
+                {hasUnknownChannel && (
+                  <div className="mt-2 text-xs text-amber-600">
+                    部分记录缺少渠道信息（历史记录），新请求会显示 channel::endpoint。
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

@@ -113,6 +113,9 @@ func (a *App) ActivateGroup(name string) error {
 		return fmt.Errorf("端点管理器未初始化")
 	}
 
+	// 🛑 [手动重试] 记录故障转移排序起点（用户选择的渠道）
+	manager.SetFailoverStartChannel(name)
+
 	// v5.0+: 如果有 endpointService，同步到数据库
 	if endpointService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
