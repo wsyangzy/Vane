@@ -28,6 +28,8 @@ type ChannelRecord struct {
 type ChannelStore interface {
 	Create(ctx context.Context, record *ChannelRecord) (*ChannelRecord, error)
 	Get(ctx context.Context, name string) (*ChannelRecord, error)
+	GetByPriority(ctx context.Context, priority int) (*ChannelRecord, error) // v6.2.1: 用于优先级冲突交换
+	GetMaxPriority(ctx context.Context) (int, error)                         // v6.2.1: 用于自动递增
 	List(ctx context.Context) ([]*ChannelRecord, error)
 	Update(ctx context.Context, record *ChannelRecord) error
 	Delete(ctx context.Context, name string) error
@@ -138,6 +140,62 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 	record.FailoverEnabled = failoverEnabled != 0
 
 	return &record, nil
+}
+
+// GetByPriority v6.2.1: 根据优先级获取渠道（用于优先级冲突交换）
+func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*ChannelRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), created_at, updated_at
+		FROM channels
+		WHERE priority = ?
+		LIMIT 1
+	`
+
+	var record ChannelRecord
+	var createdAt, updatedAt string
+	var failoverEnabled int
+
+	err := s.queryRowContext(ctx, query, priority).Scan(
+		&record.ID,
+		&record.Name,
+		&record.Website,
+		&record.Priority,
+		&failoverEnabled,
+		&createdAt,
+		&updatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("根据优先级获取渠道失败: %w", err)
+	}
+
+	record.CreatedAt = parseSQLiteDateTime(createdAt)
+	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
+	record.FailoverEnabled = failoverEnabled != 0
+
+	return &record, nil
+}
+
+// GetMaxPriority v6.2.1: 获取所有渠道的最大优先级（用于自动递增）
+func (s *SQLiteChannelStore) GetMaxPriority(ctx context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var maxPriority sql.NullInt64
+	err := s.queryRowContext(ctx, `SELECT MAX(priority) FROM channels`).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("获取渠道最大优先级失败: %w", err)
+	}
+
+	if !maxPriority.Valid {
+		return 0, nil // 没有渠道时返回 0
+	}
+	return int(maxPriority.Int64), nil
 }
 
 func (s *SQLiteChannelStore) List(ctx context.Context) ([]*ChannelRecord, error) {

@@ -20,9 +20,10 @@ type ActiveRequest struct {
 	IsStreaming bool      `json:"is_streaming"`
 
 	// 可变状态（频繁更新）
-	Status        string `json:"status"`         // pending/forwarding/processing/completed/failed/cancelled
+	Status        string `json:"status"`         // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
 	Channel       string `json:"channel"`        // 渠道标签（来自端点配置）
 	EndpointName  string `json:"endpoint_name"`  // 当前使用的端点
+	EndpointChain string `json:"endpoint_chain"` // 端点尝试链路（简略）
 	GroupName     string `json:"group_name"`     // 当前使用的组
 	RetryCount    int    `json:"retry_count"`    // 重试次数
 	HTTPStatus    int    `json:"http_status"`    // HTTP状态码

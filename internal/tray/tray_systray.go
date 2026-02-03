@@ -1,3 +1,4 @@
+//go:build !stub
 // +build !stub
 
 package tray
@@ -37,7 +38,7 @@ func start(ctx context.Context, opts Options) (Controller, error) {
 		quitCh: make(chan struct{}),
 	}
 
-	// systray.Run 会阻塞，在单独的 goroutine 中运行
+	// systray.Run 会阻塞，在单独的 goroutine 中运行。
 	go func() {
 		ctrl.runningMu.Lock()
 		ctrl.running = true
@@ -53,24 +54,23 @@ func start(ctx context.Context, opts Options) (Controller, error) {
 }
 
 func (c *systrayController) onReady() {
-	// 设置图标
 	if len(c.opts.Icon) > 0 {
 		systray.SetIcon(c.opts.Icon)
 	}
 
-	// 设置 tooltip
 	if c.opts.Tooltip != "" {
 		systray.SetTooltip(c.opts.Tooltip)
 	} else {
 		systray.SetTooltip("CC-Forwarder")
 	}
 
-	// 创建菜单（只保留显示和退出，隐藏交给窗口 X 按钮）
 	mShow := systray.AddMenuItem("显示主窗口", "显示应用主窗口")
+	systray.SetDefaultMenuItem(mShow)
+	systray.AddSeparator()
+	mOpenLogDir := systray.AddMenuItem("打开日志目录", "在资源管理器中打开日志文件目录")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("退出", "退出应用")
 
-	// 监听菜单点击
 	go func() {
 		for {
 			select {
@@ -79,6 +79,10 @@ func (c *systrayController) onReady() {
 			case <-mShow.ClickedCh:
 				if c.opts.OnShow != nil {
 					c.opts.OnShow()
+				}
+			case <-mOpenLogDir.ClickedCh:
+				if c.opts.OnOpenLogDir != nil {
+					c.opts.OnOpenLogDir()
 				}
 			case <-mQuit.ClickedCh:
 				if c.opts.OnQuit != nil {
@@ -90,5 +94,4 @@ func (c *systrayController) onReady() {
 }
 
 func (c *systrayController) onExit() {
-	// 清理
 }

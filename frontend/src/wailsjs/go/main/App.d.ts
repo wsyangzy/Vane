@@ -53,6 +53,10 @@ export function GetKeysOverview():Promise<main.KeysOverviewResult>;
 
 export function GetLogStreamStatus():Promise<boolean>;
 
+export function GetManualRetryChannelCounts():Promise<Record<string, number>>;
+
+export function GetManualRetryRequestsCount():Promise<number>;
+
 export function GetModelPricing(arg1:string):Promise<main.ModelPricingInfo>;
 
 export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageStatus>;
@@ -81,6 +85,10 @@ export function GetSettingsByCategory(arg1:string):Promise<Array<main.SettingInf
 
 export function GetSettingsStorageStatus():Promise<main.SettingsStorageStatus>;
 
+export function GetSuspendedEndpointCounts():Promise<Record<string, number>>;
+
+export function GetSuspendedRequestsCount():Promise<number>;
+
 export function GetSystemStatus():Promise<main.SystemStatus>;
 
 export function GetTokenUsage():Promise<main.TokenUsageData>;
@@ -91,7 +99,11 @@ export function GetUsageSummary(arg1:string,arg2:string):Promise<main.UsageSumma
 
 export function HideMainWindow():Promise<void>;
 
+export function IsInterChannelFailoverEnabled():Promise<boolean>;
+
 export function IsProxyRunning():Promise<boolean>;
+
+export function OpenLogDir():Promise<void>;
 
 export function PauseGroup(arg1:string):Promise<void>;
 
@@ -101,6 +113,8 @@ export function ResetCategorySettings(arg1:string):Promise<void>;
 
 export function ResumeGroup(arg1:string):Promise<void>;
 
+export function SaveLogFile(arg1:string,arg2:string):Promise<main.SaveFileResult>;
+
 export function SetDefaultModelPricing(arg1:string):Promise<void>;
 
 export function SetEndpointFailoverEnabled(arg1:string,arg2:boolean):Promise<void>;
@@ -108,6 +122,8 @@ export function SetEndpointFailoverEnabled(arg1:string,arg2:boolean):Promise<voi
 export function SetEndpointFailoverEnabledByID(arg1:number,arg2:boolean):Promise<void>;
 
 export function SetEndpointPriority(arg1:string,arg2:number):Promise<void>;
+
+export function SetEndpointSkipHealthCheckByID(arg1:number,arg2:boolean):Promise<void>;
 
 export function ShowMainWindow():Promise<void>;
 

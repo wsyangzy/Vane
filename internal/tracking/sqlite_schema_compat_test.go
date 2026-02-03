@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS channels (
 	}
 
 	// 3) 验证关键列已存在（由 migrateSchema 补齐）
-	for _, c := range []string{"cache_creation_5m_tokens", "cache_creation_1h_tokens", "cache_creation_5m_cost_usd", "cache_creation_1h_cost_usd"} {
+	for _, c := range []string{"endpoint_chain", "cache_creation_5m_tokens", "cache_creation_1h_tokens", "cache_creation_5m_cost_usd", "cache_creation_1h_cost_usd"} {
 		if !sqliteColumnExists(t, adapter.db, "request_logs", c) {
 			t.Fatalf("expected request_logs.%s to exist after InitSchema", c)
 		}

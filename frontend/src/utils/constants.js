@@ -32,16 +32,18 @@ export const API_ENDPOINTS = {
   CONFIG: '/api/v1/config'
 };
 
-// 请求状态配置 (v3.5.0 状态机)
+// 请求状态配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint, v6.2.2+ 新增 partial_recovery)
 export const REQUEST_STATUS = {
   PENDING: 'pending',
   FORWARDING: 'forwarding',
   PROCESSING: 'processing',
   RETRY: 'retry',
   SUSPENDED: 'suspended',
+  AWAITING_ENDPOINT: 'awaiting_endpoint',  // v6.0.7+ 等待端点激活
   COMPLETED: 'completed',
   FAILED: 'failed',
   PARTIAL_FAILED: 'partial_failed',
+  PARTIAL_RECOVERY: 'partial_recovery',    // v6.2.2+ 部分数据恢复（流中断）
   ERROR: 'error',
   CANCELLED: 'cancelled',
   TIMEOUT: 'timeout'
@@ -74,6 +76,11 @@ export const STATUS_CONFIG = {
     icon: 'Pause',
     color: 'bg-slate-100 text-slate-700 border-slate-200'
   },
+  [REQUEST_STATUS.AWAITING_ENDPOINT]: {
+    label: '等待端点',
+    icon: 'Clock',
+    color: 'bg-purple-100 text-purple-700 border-purple-200'
+  },
   [REQUEST_STATUS.COMPLETED]: {
     label: '已完成',
     icon: 'CheckCircle2',
@@ -87,6 +94,11 @@ export const STATUS_CONFIG = {
   [REQUEST_STATUS.PARTIAL_FAILED]: {
     label: '部分失败',
     icon: 'XCircle',
+    color: 'bg-amber-100 text-amber-700 border-amber-200'
+  },
+  [REQUEST_STATUS.PARTIAL_RECOVERY]: {
+    label: '部分恢复',
+    icon: 'RotateCw',
     color: 'bg-amber-100 text-amber-700 border-amber-200'
   },
   [REQUEST_STATUS.ERROR]: {
@@ -114,8 +126,10 @@ export const FILTER_STATUS_OPTIONS = [
   { value: 'processing', label: '处理中' },
   { value: 'retry', label: '重试中' },
   { value: 'suspended', label: '已挂起' },
+  { value: 'awaiting_endpoint', label: '等待端点' },
   { value: 'completed', label: '已完成' },
   { value: 'partial_failed', label: '部分失败' },
+  { value: 'partial_recovery', label: '部分恢复' },
   { value: 'failed', label: '已失败' },
   { value: 'cancelled', label: '已取消' }
 ];

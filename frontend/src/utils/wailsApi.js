@@ -189,11 +189,16 @@ export const getEndpoints = async () => {
     group_priority: ep.group_priority,
     group_is_active: ep.group_is_active,
     healthy: ep.healthy,
+    health_state: ep.health_state,         // v6.1: 健康状态枚举
+    skip_health_check: ep.skip_health_check, // v6.1: 跳过健康检查
     status: ep.healthy ? 'healthy' : 'unhealthy',
     last_check: ep.last_check,
     response_time: ep.response_time_ms,
     consecutive_fail: ep.consecutive_fail,
-    never_checked: !ep.last_check
+    never_checked: !ep.last_check,
+    // v6.2.10: 错误信息字段
+    last_fail_code: ep.last_fail_code || 0,
+    last_fail_reason: ep.last_fail_reason || ''
   }));
 
   const healthy = formattedEndpoints.filter(e => e.healthy).length;
@@ -395,7 +400,16 @@ export const getGroupsRaw = async () => {
   return Array.isArray(groups) ? groups : [];
 };
 
-// 获取下一个可用渠道（用于“暂停活跃渠道”前的提示/确认）
+// 检查是否启用渠道间故障转移
+// v6.2: 用于前端判断是否显示渠道切换器
+export const isInterChannelFailoverEnabled = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.IsInterChannelFailoverEnabled();
+};
+
+// 获取下一个可用渠道（用于"暂停活跃渠道"前的提示/确认）
 export const getNextAvailableChannel = async (excludeChannel) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -529,6 +543,7 @@ export const getRequests = async (params = {}) => {
     channel: r.channel || '',
     endpoint_name: r.endpoint,
     endpoint: r.endpoint,
+    endpoint_chain: r.endpoint_chain || r.endpointChain || '',
     group_name: r.group,
     group: r.group,
     model_name: r.model,
@@ -658,7 +673,7 @@ export const getTokenUsage = async () => {
 
 /**
  * 获取端点健康状态数据
- * @returns {Promise<Object>} - 健康状态数据 {healthy, unhealthy, total}
+ * @returns {Promise<Object>} - 健康状态数据 {healthy, unhealthy, skipped, excluded, total}
  */
 export const getEndpointHealthChart = async () => {
   await initWails();
@@ -668,8 +683,8 @@ export const getEndpointHealthChart = async () => {
   return {
     healthy: data.healthy || 0,
     unhealthy: data.unhealthy || 0,
-    unchecked: data.unchecked || 0,
     skipped: data.skipped || 0,
+    excluded: data.excluded || 0,
     total: data.total || 0
   };
 };
@@ -762,7 +777,10 @@ export const getEndpointRecords = async () => {
     cooldown_until: r.cooldown_until,
     cooldownUntil: r.cooldown_until,
     cooldown_reason: r.cooldown_reason,
-    cooldownReason: r.cooldown_reason
+    cooldownReason: r.cooldown_reason,
+    // v6.2.10: 错误信息
+    last_fail_code: r.last_fail_code || 0,
+    last_fail_reason: r.last_fail_reason || ''
   }));
 };
 
@@ -803,7 +821,10 @@ export const getEndpointRecord = async (name) => {
     updatedAt: r.updated_at,
     healthy: r.healthy,
     lastCheck: r.last_check,
-    responseTimeMs: r.response_time_ms
+    responseTimeMs: r.response_time_ms,
+    // v6.2.10: 错误信息
+    last_fail_code: r.last_fail_code || 0,
+    last_fail_reason: r.last_fail_reason || ''
   };
 };
 
@@ -826,7 +847,8 @@ export const createEndpointRecord = async (input) => {
     token: input.token || '',
     api_key: input.apiKey || '',
     headers: input.headers || {},
-    priority: parseInt(input.priority) || 1,
+    // v6.2.1: 传 0 时让后端自动递增，不再强制转为 1
+    priority: Number.isInteger(Number(input.priority)) ? Number(input.priority) : 1,
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
@@ -935,6 +957,15 @@ export const setEndpointFailoverEnabledByID = async (id, enabled) => {
   return { success: true };
 };
 
+// v6.2.11: 设置端点是否跳过健康检测
+export const setEndpointSkipHealthCheckByID = async (id, skip) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  await WailsApp.SetEndpointSkipHealthCheckByID(id, !!skip);
+  return { success: true };
+};
+
 /**
  * 删除端点
  * @param {string} name - 端点名称
@@ -1004,7 +1035,8 @@ export const createChannel = async (input) => {
   const payload = {
     name: (input?.name || '').trim(),
     website: (input?.website || '').trim(),
-    priority: Number.isFinite(priority) && priority > 0 ? priority : 1
+    // v6.2.1: 传 0 时让后端自动递增
+    priority: Number.isInteger(priority) ? priority : 0
   };
 
   await WailsApp.CreateChannel(payload);
@@ -1422,4 +1454,53 @@ export const checkPortAvailable = async (port) => {
   if (!WailsApp) throw new Error('Wails not available');
 
   return await WailsApp.CheckPortAvailable(port);
+};
+
+// ============================================
+// v6.0.7+ 挂起请求计数 API
+// ============================================
+
+/**
+ * 获取当前挂起等待端点恢复的请求数量
+ * 用于渠道管理页面显示等待提示
+ * @returns {Promise<number>} - 挂起请求数量
+ */
+export const getSuspendedRequestsCount = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetSuspendedRequestsCount();
+};
+
+/**
+ * 获取当前挂起请求的端点计数
+ * @returns {Promise<Object>} - { [endpointName]: count }
+ */
+export const getSuspendedEndpointCounts = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetSuspendedEndpointCounts();
+};
+
+/**
+ * 获取等待用户操作的挂起请求数量（达到最大循环轮数）
+ * @returns {Promise<number>} - 挂起请求数量
+ */
+export const getManualRetryRequestsCount = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetManualRetryRequestsCount();
+};
+
+/**
+ * 获取等待用户操作的渠道计数
+ * @returns {Promise<Object>} - { [channelName]: count }
+ */
+export const getManualRetryChannelCounts = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetManualRetryChannelCounts();
 };

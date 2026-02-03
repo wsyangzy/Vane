@@ -45,7 +45,7 @@ func TestErrorRecoveryManager_ClassifyError(t *testing.T) {
 		{errors.New("i/o timeout"), ErrorTypeResponseTimeout, "i/o timeout", false},               // 响应超时不可重试
 		{errors.New("context deadline exceeded"), ErrorTypeResponseTimeout, "deadline exceeded", false}, // 响应超时不可重试
 		{errors.New("HTTP 500 Internal Server Error"), ErrorTypeServerError, "HTTP 5xx error", true},
-		{errors.New("HTTP 400 Bad Request"), ErrorTypeRateLimit, "HTTP 400 error (now rate limit)", true},
+		{errors.New("HTTP 400 Bad Request"), ErrorTypeHTTP, "HTTP 400 error", false},  // 2025-12-10: 400 不再归类为限流
 		{errors.New("HTTP 404 Not Found"), ErrorTypeHTTP, "HTTP 4xx error (non-400)", false},
 		{errors.New("unauthorized access"), ErrorTypeAuth, "auth error", false},
 		{errors.New("rate limit exceeded"), ErrorTypeRateLimit, "rate limit", true},
@@ -75,9 +75,6 @@ func TestErrorRecoveryManager_ClassifyError(t *testing.T) {
 		shouldRetry := erm.ShouldRetry(errorCtx)
 		if tc.description == "HTTP 4xx error (non-400)" && shouldRetry {
 			t.Errorf("HTTP 4xx errors (non-400) should not be retryable")
-		}
-		if tc.description == "HTTP 400 error (now rate limit)" && !shouldRetry {
-			t.Errorf("HTTP 400 errors should now be retryable as rate limit")
 		}
 		if tc.description == "auth error" && shouldRetry {
 			t.Errorf("Auth errors should not be retryable")
@@ -336,7 +333,7 @@ func TestErrorRecoveryManager_ClassifyError_SyscallErrors(t *testing.T) {
 	}{
 		{syscall.ECONNREFUSED, ErrorTypeNetwork},
 		{syscall.ECONNRESET, ErrorTypeNetwork},
-		{syscall.ETIMEDOUT, ErrorTypeResponseTimeout}, // 系统超时归类为响应超时（不可重试）
+		{syscall.ETIMEDOUT, ErrorTypeConnectionTimeout}, // v6.2: 连接超时可重试，因为还没开始处理
 		{syscall.ENETUNREACH, ErrorTypeNetwork},
 		{syscall.EHOSTUNREACH, ErrorTypeNetwork},
 	}

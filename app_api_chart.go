@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"time"
+
+	"claude-request-forwarder/internal/endpoint"
 )
 
 // ============================================================
@@ -184,15 +186,21 @@ func (a *App) GetConnectionActivityChart(minutes int) []ChartDataPoint {
 // ============================================================
 
 // EndpointHealthData 端点健康状态数据结构
+// v6.2.5: 简化分类
+//   - healthy + unhealthy + excluded = total（当前检测范围内）
+//   - skipped 是 healthy 的子集，仅用于显示
 type EndpointHealthData struct {
-	Healthy   int `json:"healthy"`
-	Unhealthy int `json:"unhealthy"`
-	Unchecked int `json:"unchecked"`
-	Skipped   int `json:"skipped"`
-	Total     int `json:"total"`
+	Healthy   int `json:"healthy"`   // 健康（含跳过检测）
+	Unhealthy int `json:"unhealthy"` // 异常
+	Skipped   int `json:"skipped"`   // 跳过检测的数量（healthy 的子集）
+	Excluded  int `json:"excluded"`  // 不参与检测（不参与故障转移 或 尚未检测）
+	Total     int `json:"total"`     // 当前检测范围内的端点总数
 }
 
 // GetEndpointHealthChart 获取端点健康状态图表数据
+// v6.2.5: 统计当前检测范围内的端点
+//   - 启用渠道间转移：统计所有参与的渠道
+//   - 未启用：仅统计活跃渠道
 func (a *App) GetEndpointHealthChart() EndpointHealthData {
 	a.mu.RLock()
 	endpointManager := a.endpointManager
@@ -206,14 +214,7 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 	cfg := endpointManager.GetConfig()
 	gm := endpointManager.GetGroupManager()
 
-	healthyCount := 0
-	unhealthyCount := 0
-	uncheckedCount := 0
-	skippedCount := 0
-
-	// v6.x: 健康检查范围需要与运行时健康检查一致（避免 UI 统计与实际检查范围不一致）
-	// - 启用“渠道间故障转移”时：检查所有“参与渠道间故障转移”的渠道内、且“参与故障转移”的端点
-	// - 未启用时：仅检查“当前活跃渠道”内、且“参与故障转移”的端点
+	// 确定检测范围
 	autoSwitchEnabled := cfg != nil && cfg.Failover.Enabled
 	activeGroups := map[string]bool{}
 	if !autoSwitchEnabled && gm != nil {
@@ -225,52 +226,68 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 		}
 	}
 
-	for _, endpoint := range endpoints {
-		if endpoint == nil {
+	// 筛选当前检测范围内的端点
+	var inScopeEndpoints []*endpoint.Endpoint
+	for _, ep := range endpoints {
+		if ep == nil {
 			continue
 		}
 
-		// 组名（渠道 key）：优先用 Channel，缺省回退 Name（与 GetEndpoints 行为保持一致）
-		groupKey := endpoint.Config.Channel
+		groupKey := ep.Config.Channel
 		if groupKey == "" {
-			groupKey = endpoint.Config.Name
+			groupKey = ep.Config.Name
 		}
 
-		// 端点级“参与故障转移”开关：默认参与
-		failoverEnabled := true
-		if endpoint.Config.FailoverEnabled != nil {
-			failoverEnabled = *endpoint.Config.FailoverEnabled
-		}
-
-		inScope := failoverEnabled
+		inChannel := false
 		if autoSwitchEnabled {
-			// 渠道级开关：不参与跨渠道故障转移的渠道不在健康检查范围
-			if gm != nil && !gm.IsChannelFailoverEnabled(groupKey) {
-				inScope = false
+			// 渠道间转移模式：所有参与的渠道
+			if gm != nil && gm.IsChannelFailoverEnabled(groupKey) {
+				inChannel = true
 			}
 		} else {
-			// 未启用渠道间故障转移：只对活跃渠道做健康检查
-			if gm != nil && !activeGroups[groupKey] {
-				inScope = false
+			// 单渠道模式：仅活跃渠道
+			if activeGroups[groupKey] {
+				inChannel = true
 			}
 		}
 
-		if !inScope {
-			uncheckedCount++
+		if inChannel {
+			inScopeEndpoints = append(inScopeEndpoints, ep)
+		}
+	}
+
+	// 统计健康状态
+	healthyCount := 0
+	unhealthyCount := 0
+	skippedCount := 0
+	excludedCount := 0
+
+	for _, ep := range inScopeEndpoints {
+		// 端点级：不参与故障转移 → 不参与检测
+		failoverEnabled := true
+		if ep.Config.FailoverEnabled != nil {
+			failoverEnabled = *ep.Config.FailoverEnabled
+		}
+
+		if !failoverEnabled {
+			excludedCount++
 			continue
 		}
 
-		// v6.1: 配置为跳过健康检查的端点，单独计数为 skipped（可用但不参与主动健康判定）
-		if endpoint.Config.SkipHealthCheck {
-			skippedCount++
+		// 跳过检测 → 视为健康
+		if ep.Config.SkipHealthCheck {
+			healthyCount++
+			skippedCount++ // 记录跳过数量（healthy 子集）
 			continue
 		}
 
-		status := endpoint.GetStatus()
+		status := ep.GetStatus()
 		if status.NeverChecked {
-			uncheckedCount++
+			// 尚未检测 → 不参与当前统计
+			excludedCount++
 			continue
 		}
+
 		if status.Healthy {
 			healthyCount++
 		} else {
@@ -281,9 +298,9 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 	return EndpointHealthData{
 		Healthy:   healthyCount,
 		Unhealthy: unhealthyCount,
-		Unchecked: uncheckedCount,
 		Skipped:   skippedCount,
-		Total:     len(endpoints),
+		Excluded:  excludedCount,
+		Total:     len(inScopeEndpoints), // 当前范围内的端点总数
 	}
 }
 

@@ -20,12 +20,15 @@ type SettingRecord struct {
 
 	// 设置值
 	Value     string `json:"value"`      // 值 (支持 JSON)
-	ValueType string `json:"value_type"` // 类型: string, int, float, bool, duration, json
+	ValueType string `json:"value_type"` // 类型: string, int, float, bool, duration, json, password, enum
 
 	// 显示信息
 	Label        string `json:"label"`         // 显示名称
 	Description  string `json:"description"`   // 配置说明
 	DisplayOrder int    `json:"display_order"` // 显示顺序
+
+	// 枚举类型专用字段
+	EnumOptions []EnumOption `json:"enum_options,omitempty"` // 枚举可选值列表（仅 ValueType=enum 时有效）
 
 	// 元信息
 	RequiresRestart bool `json:"requires_restart"` // 是否需要重启生效
@@ -33,6 +36,13 @@ type SettingRecord struct {
 	// 审计字段
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EnumOption 枚举选项
+type EnumOption struct {
+	Value       string `json:"value"`       // 选项值
+	Label       string `json:"label"`       // 显示文本
+	Description string `json:"description"` // 选项说明
 }
 
 // SettingsStore 定义设置存储接口
@@ -176,16 +186,12 @@ func (s *SQLiteSettingsStore) Delete(ctx context.Context, category, key string) 
 
 	query := `DELETE FROM settings WHERE category = ? AND key = ?`
 
-	result, err := s.db.ExecContext(ctx, query, category, key)
+	_, err := s.db.ExecContext(ctx, query, category, key)
 	if err != nil {
 		return fmt.Errorf("删除设置失败: %w", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return fmt.Errorf("设置不存在: %s.%s", category, key)
-	}
-
+	// 注意：配置不存在时不视为错误（rowsAffected == 0 是正常的）
 	return nil
 }
 

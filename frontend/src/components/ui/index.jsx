@@ -15,6 +15,14 @@ import {
   Loader2
 } from 'lucide-react';
 
+// 导入独立组件
+import ConfirmDialog from './ConfirmDialog';
+import SaveResultDialog from './SaveResultDialog';
+import { ToastProvider, useToast } from './Toast';
+
+// 导出独立组件
+export { ConfirmDialog, SaveResultDialog, ToastProvider, useToast };
+
 // ============================================
 // KPI 卡片组件
 // ============================================
@@ -417,6 +425,7 @@ export const CustomSelect = ({
   size = 'sm',
   placeholder = '请选择',
   disabled = false,
+  minWidth = null,
   className = ''
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -501,6 +510,7 @@ export const CustomSelect = ({
         type="button"
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled}
+        style={minWidth ? { minWidth: `${minWidth}px` } : undefined}
         className={`
           group inline-flex items-center justify-between bg-white border rounded-lg
           transition-all duration-200 font-medium

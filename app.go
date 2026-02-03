@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -345,10 +346,11 @@ func (a *App) setupTray() {
 	}
 
 	controller, err := tray.Start(ctx, tray.Options{
-		Icon:    trayIconIco,
-		Tooltip: fmt.Sprintf("Claude Request Forwarder %s", Version),
-		OnShow:  a.ShowMainWindow,
-		OnQuit:  a.RequestQuit,
+		Icon:         trayIconIco,
+		Tooltip:      fmt.Sprintf("Claude Request Forwarder %s", Version),
+		OnShow:       a.ShowMainWindow,
+		OnQuit:       a.RequestQuit,
+		OnOpenLogDir: a.OpenLogDir,
 	})
 	if err != nil {
 		if a.logger != nil {
@@ -362,7 +364,7 @@ func (a *App) setupTray() {
 	a.mu.Unlock()
 }
 
-// RequestQuit 请求退出应用（托盘菜单“退出”使用）
+// RequestQuit 请求退出应用（托盘菜单"退出"使用）
 func (a *App) RequestQuit() {
 	a.mu.RLock()
 	ctx := a.ctx
@@ -372,6 +374,41 @@ func (a *App) RequestQuit() {
 	}
 	atomic.StoreInt32(&a.quitting, 1)
 	go runtime.Quit(ctx)
+}
+
+// OpenLogDir 打开日志目录（托盘菜单使用）
+func (a *App) OpenLogDir() {
+	logDir := utils.GetLogDir()
+
+	// 确保目录存在
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		if a.logger != nil {
+			a.logger.Warn("创建日志目录失败", "error", err)
+		}
+		return
+	}
+
+	// 跨平台打开目录
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", logDir)
+	case "darwin":
+		cmd = exec.Command("open", logDir)
+	case "linux":
+		cmd = exec.Command("xdg-open", logDir)
+	default:
+		if a.logger != nil {
+			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
+		}
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		if a.logger != nil {
+			a.logger.Warn("打开日志目录失败", "error", err, "path", logDir)
+		}
+	}
 }
 
 // beforeClose 在窗口关闭前调用，返回 true 阻止关闭
@@ -1571,16 +1608,52 @@ func (a *App) applySettingsToConfig() {
 	a.config.Health.HealthPath = a.getSettingString(ctx, service.CategoryHealth, "health_path", a.config.Health.HealthPath)
 
 	// 故障转移配置
+	// 记录旧值用于检测状态变化
+	oldFailoverEnabled := a.config.Failover.Enabled
 	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
-	a.config.Failover.DefaultCooldown = a.settingsService.GetDuration(ctx, service.CategoryFailover, "default_cooldown", a.config.Failover.DefaultCooldown)
-	a.config.Failover.AllowRevisitAfterExhausted = a.settingsService.GetBool(ctx, service.CategoryFailover, "allow_revisit_after_exhausted", a.config.Failover.AllowRevisitAfterExhausted)
+	// v6.2.5: 当渠道间转移从禁用变为启用时，重置所有渠道的暂停状态
+	// v6.2.14: 同时更新数据库，避免后续从数据库同步时恢复旧的暂停状态
+	if !oldFailoverEnabled && a.config.Failover.Enabled && a.endpointManager != nil {
+		gm := a.endpointManager.GetGroupManager()
+		if gm != nil {
+			gm.ResetAllPausedGroups()
+		}
+		// 同步更新数据库中的 failover_enabled 字段
+		if a.channelService != nil {
+			if resetCount, err := a.channelService.ResetAllFailoverEnabled(ctx); err != nil {
+				a.logger.Warn("⚠️ 重置数据库渠道状态失败", "error", err)
+			} else if resetCount > 0 {
+				a.logger.Info(fmt.Sprintf("✅ 渠道间转移已启用，已重置 %d 个渠道的暂停状态（内存+数据库）", resetCount))
+			} else {
+				a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置")
+			}
+		} else {
+			a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置（仅内存）")
+		}
+	}
+	// v6.2: default_cooldown 已移除（loop_retry 模式下冷却时间与循环重试逻辑冲突）
+	// v6.2: allow_revisit_after_exhausted 已移除，使用 FailoverV2.LoopRetry 替代
+	// v6.2.7: 从数据库加载 loop_retry 和 max_loops 到 FailoverV2
+	a.config.FailoverV2.LoopRetry = a.settingsService.GetBool(ctx, service.CategoryFailover, "loop_retry", a.config.FailoverV2.LoopRetry)
+	a.config.FailoverV2.MaxLoops = a.settingsService.GetInt(ctx, service.CategoryFailover, "max_loops", a.config.FailoverV2.MaxLoops)
+	// v6.2.11: 从数据库加载 skip_health_check 到 FailoverV2
+	a.config.FailoverV2.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.FailoverV2.SkipHealthCheck)
+	// v6.2.20: 达到最大循环轮数后的手动等待超时
+	a.config.FailoverV2.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.FailoverV2.LoopRetrySuspendTimeout)
+	// v6.2.17: 同步 Failover.Enabled 到 FailoverV2.Enabled
+	// 确保 ShouldSkipHealthCheck() 等方法能正确检测渠道间转移的启用状态
+	a.config.FailoverV2.Enabled = a.config.Failover.Enabled
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
+	// v6.2.20: 普通挂起等待超时
+	a.config.FailoverV2.SuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_wait_timeout", a.config.FailoverV2.SuspendTimeout)
 	a.config.RequestSuspend.Enabled = a.settingsService.GetBool(ctx, service.CategoryRequest, "suspend_enabled", a.config.RequestSuspend.Enabled)
 	a.config.RequestSuspend.Timeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_timeout", a.config.RequestSuspend.Timeout)
 	a.config.RequestSuspend.MaxSuspendedRequests = a.settingsService.GetInt(ctx, service.CategoryRequest, "max_suspended", a.config.RequestSuspend.MaxSuspendedRequests)
 	a.config.RequestSuspend.EOFRetryHint = a.settingsService.GetBool(ctx, service.CategoryRequest, "eof_retry_hint", a.config.RequestSuspend.EOFRetryHint)
+	// v6.2.19: allow_retry_on_exhausted 配置已废弃，始终保持连接挂起
+	// 注释保留用于向后兼容文档记录
 
 	// 流式传输配置
 	a.config.Streaming.HeartbeatInterval = a.settingsService.GetDuration(ctx, service.CategoryStreaming, "heartbeat_interval", a.config.Streaming.HeartbeatInterval)

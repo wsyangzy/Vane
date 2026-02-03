@@ -21,9 +21,34 @@ func (m *Manager) SetOnHealthCheckComplete(fn func()) {
 	m.onHealthCheckComplete = fn
 }
 
+// triggerHealthCheckCompleteDebounced 防抖触发健康检查完成回调
+// v6.2: 避免并发健康检查时多次触发回调导致日志膨胀
+// 500ms 内多次调用只会执行最后一次
+func (m *Manager) triggerHealthCheckCompleteDebounced() {
+	if m.onHealthCheckComplete == nil {
+		return
+	}
+
+	m.healthCheckDebounceMu.Lock()
+	defer m.healthCheckDebounceMu.Unlock()
+
+	// 取消之前的定时器（如果存在）
+	if m.healthCheckDebounceTimer != nil {
+		m.healthCheckDebounceTimer.Stop()
+	}
+
+	// 设置新的定时器，500ms 后触发回调
+	m.healthCheckDebounceTimer = time.AfterFunc(500*time.Millisecond, func() {
+		if m.onHealthCheckComplete != nil {
+			m.onHealthCheckComplete()
+		}
+	})
+}
+
 // refreshGroupActivation 刷新组激活状态
 // 当端点健康状态变化时调用，用于重新评估哪些组应该被激活
 // v5.0+: 解决新增端点后不会自动激活的问题
+// v6.2: 使用防抖机制触发回调，避免并发检查时多次触发
 func (m *Manager) refreshGroupActivation() {
 	// 防御性检查：确保 groupManager 已初始化
 	if m.groupManager == nil {
@@ -38,10 +63,8 @@ func (m *Manager) refreshGroupActivation() {
 	m.groupManager.UpdateGroups(snapshot)
 	slog.Debug("🔄 [组管理] 端点健康状态变化，已刷新组激活状态")
 
-	// 触发健康检查完成回调（通知前端更新）
-	if m.onHealthCheckComplete != nil {
-		go m.onHealthCheckComplete()
-	}
+	// v6.2: 使用防抖机制触发健康检查完成回调
+	m.triggerHealthCheckCompleteDebounced()
 }
 
 // healthCheckLoop runs the health check routine
@@ -84,6 +107,12 @@ func (m *Manager) healthCheckLoop() {
 
 // performHealthChecks performs health checks on all endpoints
 func (m *Manager) performHealthChecks() {
+	// v6.2.11: 循环重试模式下，如果配置了跳过健康检测，则不执行定时健康检查
+	if m.config.FailoverV2.ShouldSkipHealthCheck() {
+		slog.Debug("🩺 [健康检查] 循环重试模式已启用跳过检测，跳过定时健康检查")
+		return
+	}
+
 	// v5.0+: 使用快照机制，不阻塞动态增删操作
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))
@@ -182,10 +211,8 @@ func (m *Manager) performHealthChecks() {
 		}
 	}
 
-	// v5.0+ Wails 桌面应用：定时健康检查完成后触发回调推送事件
-	if m.onHealthCheckComplete != nil {
-		go m.onHealthCheckComplete()
-	}
+	// v6.2: 使用防抖机制触发回调，避免与 updateEndpointStatus 中的回调重复
+	m.triggerHealthCheckCompleteDebounced()
 }
 
 // checkEndpointHealth checks the health of a single endpoint
@@ -233,7 +260,8 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	healthURL := baseURL + m.config.Health.HealthPath
 	req, err := http.NewRequestWithContext(m.ctx, "GET", healthURL, nil)
 	if err != nil {
-		m.updateEndpointStatus(endpoint, false, 0)
+		// v6.2.10: 请求创建失败时记录错误原因
+		m.updateEndpointStatus(endpoint, false, 0, 0, fmt.Sprintf("创建请求失败: %s", err.Error()))
 		return
 	}
 
@@ -250,7 +278,8 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	responseTime := time.Since(start)
 
 	if err != nil {
-		m.updateEndpointStatus(endpoint, false, responseTime)
+		// v6.2.10: 网络错误时记录错误原因
+		m.updateEndpointStatus(endpoint, false, responseTime, 0, err.Error())
 		return
 	}
 
@@ -261,11 +290,20 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	// All other status codes (including 4xx, 5xx) are considered unhealthy
 	healthy := (resp.StatusCode >= 200 && resp.StatusCode < 300)
 
-	m.updateEndpointStatus(endpoint, healthy, responseTime)
+	// v6.2.10: 传递状态码和失败原因
+	failCode := 0
+	failReason := ""
+	if !healthy {
+		failCode = resp.StatusCode
+		failReason = fmt.Sprintf("HTTP %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	}
+
+	m.updateEndpointStatus(endpoint, healthy, responseTime, failCode, failReason)
 }
 
 // updateEndpointStatus updates the health status of an endpoint
-func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, responseTime time.Duration) {
+// v6.2.10: 添加 failCode 和 failReason 参数用于记录失败详情
+func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, responseTime time.Duration, failCode int, failReason string) {
 	endpoint.mutex.Lock()
 
 	endpoint.Status.LastCheck = time.Now()
@@ -279,6 +317,9 @@ func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, respons
 		// Endpoint is healthy
 		endpoint.Status.Healthy = true
 		endpoint.Status.ConsecutiveFails = 0
+		// v6.2.10: 健康时清除错误信息
+		endpoint.Status.LastRequestFailCode = 0
+		endpoint.Status.LastRequestFailReason = ""
 
 		// Log recovery if endpoint was previously unhealthy
 		if wasUnhealthy {
@@ -293,10 +334,14 @@ func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, respons
 		// Mark as unhealthy immediately on any failure
 		endpoint.Status.Healthy = false
 
+		// v6.2.10: 记录失败详情
+		endpoint.Status.LastRequestFailCode = failCode
+		endpoint.Status.LastRequestFailReason = failReason
+
 		// Log the failure
 		if wasHealthy {
-			slog.Warn(fmt.Sprintf("❌ [健康检查] 端点标记为不可用: %s - 连续失败: %d次, 响应时间: %dms",
-				endpoint.Config.Name, endpoint.Status.ConsecutiveFails, responseTime.Milliseconds()))
+			slog.Warn(fmt.Sprintf("❌ [健康检查] 端点标记为不可用: %s - 连续失败: %d次, 响应时间: %dms, 状态码: %d, 原因: %s",
+				endpoint.Config.Name, endpoint.Status.ConsecutiveFails, responseTime.Milliseconds(), failCode, failReason))
 		}
 	}
 
@@ -334,27 +379,97 @@ func (e *Endpoint) GetStatus() EndpointStatus {
 }
 
 // GetHealthState 返回端点的健康状态字符串用于前端展示
-// 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "unhealthy"(不健康)
+// 状态包括: "skipped"(跳过检测), "unchecked"(未检测), "healthy"(健康), "request_failed"(请求失败), "unhealthy"(不健康)
+// v6.1.0: 新增 request_failed 状态，区分健康检查失败和请求转发失败
 func (e *Endpoint) GetHealthState() string {
-	// 1. 配置为跳过健康检查
-	if e.Config.SkipHealthCheck {
+	skipHealthCheck := e.Config.SkipHealthCheck
+
+	e.mutex.RLock()
+	neverChecked := e.Status.NeverChecked
+	requestFailed := e.Status.RequestFailed
+	healthy := e.Status.Healthy
+	e.mutex.RUnlock()
+
+	// 1. v6.1.0: 请求失败标记（优先级高于健康检查状态）
+	// RequestFailed 表示端点因请求转发失败而被标记，即使健康检查通过也不可用
+	if requestFailed {
+		return "request_failed"
+	}
+
+	// 2. 配置为跳过健康检查
+	if skipHealthCheck {
 		return "skipped"
 	}
 
-	e.mutex.RLock()
-	defer e.mutex.RUnlock()
-
-	// 2. 从未检测过
-	if e.Status.NeverChecked {
+	// 3. 从未检测过
+	if neverChecked {
 		return "unchecked"
 	}
 
-	// 3. 健康或不健康
-	if e.Status.Healthy {
+	// 4. 健康或不健康（健康检查结果）
+	if healthy {
 		return "healthy"
 	}
 
 	return "unhealthy"
+}
+
+// MarkRequestFailed 标记端点为请求失败状态
+// v6.2.12: 新增方法，用于渠道内端点切换时立即标记失败端点，防止端点循环
+// v6.2.19: 同时设置 Healthy = false，确保前端状态显示正确
+// err: 失败的原因错误（可为 nil）
+func (e *Endpoint) MarkRequestFailed(err error) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+
+	e.Status.Healthy = false       // v6.2.19: 前端依赖此字段显示状态
+	e.Status.RequestFailed = true
+	e.Status.NeverChecked = false // 防止 neverChecked 端点被误判为可用
+
+	// 记录失败原因供 UI 显示
+	if err != nil {
+		e.Status.LastRequestFailReason = err.Error()
+	}
+}
+
+// NotifyEndpointStatusChange 通知前端端点状态发生变化
+// v6.2.19: 新增公开方法，供 handlers 在调用 MarkRequestFailed 后触发前端刷新
+// 使用防抖机制，避免高并发时频繁触发
+func (m *Manager) NotifyEndpointStatusChange() {
+	m.triggerHealthCheckCompleteDebounced()
+}
+
+// MarkEndpointsRequestFailed 批量标记端点为请求失败状态
+// v6.2.18: 用于渠道间故障转移禁用时，标记所有失败端点
+// endpointKeys: 端点键列表（格式: channel::name 或 name）
+// lastError: 最后一个错误（用于记录失败原因）
+func (m *Manager) MarkEndpointsRequestFailed(endpointKeys []string, lastError error) {
+	if m == nil || len(endpointKeys) == 0 {
+		return
+	}
+
+	var markedEndpoints []string
+	for _, key := range endpointKeys {
+		ep := m.GetEndpointByNameAny(key)
+		if ep == nil {
+			continue
+		}
+		ep.mutex.Lock()
+		ep.Status.Healthy = false
+		ep.Status.RequestFailed = true
+		ep.Status.NeverChecked = false
+		if lastError != nil {
+			ep.Status.LastRequestFailReason = lastError.Error()
+		}
+		ep.mutex.Unlock()
+		markedEndpoints = append(markedEndpoints, key)
+	}
+
+	if len(markedEndpoints) > 0 {
+		slog.Info(fmt.Sprintf("❌ [端点状态更新] 端点标记为请求失败: %v (共%d个)", markedEndpoints, len(markedEndpoints)))
+		// 触发前端刷新
+		m.triggerHealthCheckCompleteDebounced()
+	}
 }
 
 // ManualHealthCheck performs a manual health check on a specific endpoint by name
@@ -396,23 +511,84 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 	return nil
 }
 
-// BatchHealthCheckAll 批量检测所有端点的健康状态
-// 并发执行所有端点的健康检查，提高效率
-// 使用信号量限制并发数量，避免资源耗尽
+// BatchHealthCheckAll 批量检测端点的健康状态
+// 检测范围与定时健康检查一致：
+// - 开启渠道间转移时：检测所有参与的渠道中所有参与转移的端点
+// - 关闭渠道间转移时：仅检测活跃渠道中参与转移的端点
+// 并发执行检查，使用信号量限制并发数量
 func (m *Manager) BatchHealthCheckAll() (int, int, error) {
-	slog.Info("🔍 [批量健康检测] 开始检测所有端点")
+	slog.Info("🔍 [批量健康检测] 开始检测端点")
 
 	// v5.0+: 使用快照机制获取端点列表
 	m.endpointsMu.RLock()
-	endpoints := make([]*Endpoint, len(m.endpoints))
-	copy(endpoints, m.endpoints)
+	snapshot := make([]*Endpoint, len(m.endpoints))
+	copy(snapshot, m.endpoints)
 	m.endpointsMu.RUnlock()
 
-	if len(endpoints) == 0 {
+	if len(snapshot) == 0 {
 		return 0, 0, fmt.Errorf("没有配置任何端点")
 	}
 
-	slog.Info(fmt.Sprintf("   共有 %d 个端点需要检测", len(endpoints)))
+	// 根据渠道间故障转移状态筛选需要检测的端点
+	var endpointsToCheck []*Endpoint
+
+	if m.config.Failover.Enabled {
+		// 开启渠道间转移：检测所有参与的渠道中参与转移的端点
+		for _, ep := range snapshot {
+			if ep == nil {
+				continue
+			}
+			// 渠道级开关：暂停渠道不检测
+			if m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+				continue
+			}
+			// 端点级开关：不参与故障转移的端点不检测
+			failoverEnabled := true
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			if !failoverEnabled {
+				continue
+			}
+			endpointsToCheck = append(endpointsToCheck, ep)
+		}
+		channelSet := make(map[string]struct{}, len(endpointsToCheck))
+		for _, ep := range endpointsToCheck {
+			if key := ChannelKey(ep); key != "" {
+				channelSet[key] = struct{}{}
+			}
+		}
+		slog.Info(fmt.Sprintf("🔍 [批量健康检测] 渠道间转移模式：检测 %d 个渠道（%d 个端点）",
+			len(channelSet), len(endpointsToCheck)))
+	} else {
+		// 关闭渠道间转移：仅检测活跃渠道中参与转移的端点
+		active := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
+		for _, ep := range active {
+			if ep == nil {
+				continue
+			}
+			failoverEnabled := true
+			if ep.Config.FailoverEnabled != nil {
+				failoverEnabled = *ep.Config.FailoverEnabled
+			}
+			if !failoverEnabled {
+				continue
+			}
+			endpointsToCheck = append(endpointsToCheck, ep)
+		}
+		channelSet := make(map[string]struct{}, len(endpointsToCheck))
+		for _, ep := range endpointsToCheck {
+			if key := ChannelKey(ep); key != "" {
+				channelSet[key] = struct{}{}
+			}
+		}
+		slog.Info(fmt.Sprintf("🔍 [批量健康检测] 单渠道模式：检测 %d 个活跃渠道（%d 个端点）",
+			len(channelSet), len(endpointsToCheck)))
+	}
+
+	if len(endpointsToCheck) == 0 {
+		return 0, 0, fmt.Errorf("没有符合条件的端点需要检测")
+	}
 
 	// 使用信号量限制并发数量（最多 20 个并发）
 	const maxConcurrentChecks = 20
@@ -423,7 +599,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	var healthyCount, unhealthyCount int
 	var countMu sync.Mutex
 
-	for _, endpoint := range endpoints {
+	for _, endpoint := range endpointsToCheck {
 		wg.Add(1)
 		semaphore <- struct{}{} // 获取信号量
 
@@ -466,7 +642,10 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	wg.Wait()
 
 	slog.Info(fmt.Sprintf("✅ [批量健康检测] 完成，共检测 %d 个端点 (健康: %d, 不健康: %d)",
-		len(endpoints), healthyCount, unhealthyCount))
+		len(endpointsToCheck), healthyCount, unhealthyCount))
+
+	// v6.2: 使用防抖机制触发回调
+	m.triggerHealthCheckCompleteDebounced()
 
 	return healthyCount, unhealthyCount, nil
 }

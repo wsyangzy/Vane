@@ -202,6 +202,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		description string
 	}{
 		{
+			checkColumn: "endpoint_chain",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN endpoint_chain TEXT",
+			description: "端点链路字段",
+		},
+		{
 			checkColumn: "cache_creation_5m_tokens",
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN cache_creation_5m_tokens INTEGER DEFAULT 0",
 			description: "5分钟缓存创建tokens字段",

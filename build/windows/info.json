@@ -4,10 +4,10 @@
   },
   "info": {
     "0000": {
-      "ProductVersion": "6.0.0",
+      "ProductVersion": "6.1.1",
       "CompanyName": "Claude Request Forwarder",
       "FileDescription": "Claude Request Forwarder",
-      "LegalCopyright": "Copyright © 2025 CC-Forwarder",
+      "LegalCopyright": "Copyright © 2026 Claude Request Forwarder",
       "ProductName": "Claude Request Forwarder",
       "Comments": "Claude Request Forwarder 本地代理转发服务"
     }

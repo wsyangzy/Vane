@@ -246,6 +246,17 @@ export const pauseGroup = async (groupName) => {
   return await fetchWithTimeout(url, { method: 'POST' });
 };
 
+// 检查是否启用渠道间故障转移
+// v6.2: 用于前端判断是否显示渠道切换器
+export const fetchInterChannelFailoverEnabled = async () => {
+  // Wails 环境使用绑定
+  if (isWailsEnvironment()) {
+    return await WailsApi.isInterChannelFailoverEnabled();
+  }
+  // HTTP 模式暂不支持（桌面应用专用功能）
+  return false;
+};
+
 // ============================================
 // 使用统计 API
 // ============================================
@@ -281,27 +292,48 @@ export const fetchRequests = async (params = {}) => {
     const markerIdx = rawRequestIdStr.indexOf(partialMarker);
     const baseRequestId = markerIdx > 0 ? rawRequestIdStr.slice(0, markerIdx) : rawRequestIdStr;
 
+    const rawChain = request.endpoint_chain || request.endpointChain || '';
+    const endpointChain = Array.isArray(rawChain)
+      ? rawChain
+      : (typeof rawChain === 'string' ? rawChain.split(' -> ').filter(Boolean) : []);
+    const endpoint = request.endpoint_name || request.endpoint || 'unknown';
+
+    const rawChainHead = request.endpoint_chain_head || request.endpointChainHead || '';
+    const rawChainTail = request.endpoint_chain_tail || request.endpointChainTail || '';
+    const rawChainLength = request.endpoint_chain_length ?? request.endpointChainLength;
+    const parsedChainLength = rawChainLength === '' || rawChainLength === undefined || rawChainLength === null
+      ? Number.NaN
+      : Number(rawChainLength);
+    const fallbackChainLength = endpointChain.length > 0 ? endpointChain.length : (endpoint ? 1 : 0);
+    const endpointChainLength = Number.isFinite(parsedChainLength) ? parsedChainLength : fallbackChainLength;
+    const endpointChainHead = rawChainHead || endpointChain[0] || endpoint || '';
+    const endpointChainTail = rawChainTail || endpointChain[endpointChain.length - 1] || endpoint || '';
+
     return ({
       ...request,
       requestId: baseRequestId,
       rawRequestId: rawRequestIdStr,
       isPartialRecord: markerIdx > 0,
       id: rawRequestIdStr,
-    timestamp: request.start_time || request.timestamp,
-    model: request.model_name || request.model || 'unknown',
-    channel: request.channel || '',
-    endpoint: request.endpoint_name || request.endpoint || 'unknown',
-    group: request.group_name || request.group || 'default',
-    duration: request.duration_ms || request.duration || 0,
-    inputTokens: request.input_tokens || request.inputTokens || 0,
-    outputTokens: request.output_tokens || request.outputTokens || 0,
-    cacheCreationTokens: request.cache_creation_tokens || request.cacheCreationTokens || 0,
-    cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0, // v5.0.1+
-    cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0, // v5.0.1+
-    cacheReadTokens: request.cache_read_tokens || request.cacheReadTokens || 0,
-    cost: request.total_cost_usd || request.cost || 0,
-    isStreaming: request.is_streaming || request.isStreaming || false,
-    statusCode: request.status_code || request.statusCode
+      timestamp: request.start_time || request.timestamp,
+      model: request.model_name || request.model || 'unknown',
+      channel: request.channel || '',
+      endpoint,
+      endpointChain,
+      endpointChainHead,
+      endpointChainTail,
+      endpointChainLength,
+      group: request.group_name || request.group || 'default',
+      duration: request.duration_ms || request.duration || 0,
+      inputTokens: request.input_tokens || request.inputTokens || 0,
+      outputTokens: request.output_tokens || request.outputTokens || 0,
+      cacheCreationTokens: request.cache_creation_tokens || request.cacheCreationTokens || 0,
+      cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0, // v5.0.1+
+      cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0, // v5.0.1+
+      cacheReadTokens: request.cache_read_tokens || request.cacheReadTokens || 0,
+      cost: request.total_cost_usd || request.cost || 0,
+      isStreaming: request.is_streaming || request.isStreaming || false,
+      statusCode: request.status_code || request.statusCode
     });
   };
 

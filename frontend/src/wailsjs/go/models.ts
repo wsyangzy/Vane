@@ -165,7 +165,6 @@ export namespace main {
 	    tracking_enabled: boolean;
 	    failover_enabled: boolean;
 	    failover_default_cooldown_seconds: number;
-	    failover_allow_revisit_after_exhausted: boolean;
 	    endpoint_count: number;
 	
 	    static createFrom(source: any = {}) {
@@ -181,7 +180,6 @@ export namespace main {
 	        this.tracking_enabled = source["tracking_enabled"];
 	        this.failover_enabled = source["failover_enabled"];
 	        this.failover_default_cooldown_seconds = source["failover_default_cooldown_seconds"];
-	        this.failover_allow_revisit_after_exhausted = source["failover_allow_revisit_after_exhausted"];
 	        this.endpoint_count = source["endpoint_count"];
 	    }
 	}
@@ -294,8 +292,8 @@ export namespace main {
 	export class EndpointHealthData {
 	    healthy: number;
 	    unhealthy: number;
-	    unchecked: number;
 	    skipped: number;
+	    excluded: number;
 	    total: number;
 	
 	    static createFrom(source: any = {}) {
@@ -306,8 +304,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.healthy = source["healthy"];
 	        this.unhealthy = source["unhealthy"];
-	        this.unchecked = source["unchecked"];
 	        this.skipped = source["skipped"];
+	        this.excluded = source["excluded"];
 	        this.total = source["total"];
 	    }
 	}
@@ -325,6 +323,8 @@ export namespace main {
 	    last_check: string;
 	    response_time_ms: number;
 	    consecutive_fail: number;
+	    last_fail_code: number;
+	    last_fail_reason: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EndpointInfo(source);
@@ -345,6 +345,8 @@ export namespace main {
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
 	        this.consecutive_fail = source["consecutive_fail"];
+	        this.last_fail_code = source["last_fail_code"];
+	        this.last_fail_reason = source["last_fail_reason"];
 	    }
 	}
 	export class KeyInfo {
@@ -432,6 +434,8 @@ export namespace main {
 	    never_checked: boolean;
 	    last_check: string;
 	    response_time_ms: number;
+	    last_fail_code: number;
+	    last_fail_reason: string;
 	    in_cooldown: boolean;
 	    cooldown_until: string;
 	    cooldown_reason: string;
@@ -470,6 +474,8 @@ export namespace main {
 	        this.never_checked = source["never_checked"];
 	        this.last_check = source["last_check"];
 	        this.response_time_ms = source["response_time_ms"];
+	        this.last_fail_code = source["last_fail_code"];
+	        this.last_fail_reason = source["last_fail_reason"];
 	        this.in_cooldown = source["in_cooldown"];
 	        this.cooldown_until = source["cooldown_until"];
 	        this.cooldown_reason = source["cooldown_reason"];
@@ -628,6 +634,10 @@ export namespace main {
 	    timestamp: string;
 	    channel: string;
 	    endpoint: string;
+	    endpoint_chain: string;
+	    endpoint_chain_head: string;
+	    endpoint_chain_tail: string;
+	    endpoint_chain_length: number;
 	    group: string;
 	    model: string;
 	    status: string;
@@ -656,6 +666,10 @@ export namespace main {
 	        this.timestamp = source["timestamp"];
 	        this.channel = source["channel"];
 	        this.endpoint = source["endpoint"];
+	        this.endpoint_chain = source["endpoint_chain"];
+	        this.endpoint_chain_head = source["endpoint_chain_head"];
+	        this.endpoint_chain_tail = source["endpoint_chain_tail"];
+	        this.endpoint_chain_length = source["endpoint_chain_length"];
 	        this.group = source["group"];
 	        this.model = source["model"];
 	        this.status = source["status"];
@@ -739,6 +753,26 @@ export namespace main {
 	    }
 	}
 	
+	export class SaveFileResult {
+	    success: boolean;
+	    file_path: string;
+	    file_name: string;
+	    file_size: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SaveFileResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.file_path = source["file_path"];
+	        this.file_name = source["file_name"];
+	        this.file_size = source["file_size"];
+	        this.error = source["error"];
+	    }
+	}
 	export class SettingInfo {
 	    id: number;
 	    category: string;
@@ -748,6 +782,7 @@ export namespace main {
 	    label: string;
 	    description: string;
 	    display_order: number;
+	    enum_options?: store.EnumOption[];
 	    requires_restart: boolean;
 	    created_at: string;
 	    updated_at: string;
@@ -766,10 +801,29 @@ export namespace main {
 	        this.label = source["label"];
 	        this.description = source["description"];
 	        this.display_order = source["display_order"];
+	        this.enum_options = this.convertValues(source["enum_options"], store.EnumOption);
 	        this.requires_restart = source["requires_restart"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class SettingsStorageStatus {
 	    enabled: boolean;
@@ -966,6 +1020,27 @@ export namespace main {
 	        this.all_time_total_cost = source["all_time_total_cost"];
 	        this.today_tokens = source["today_tokens"];
 	        this.all_time_total_tokens = source["all_time_total_tokens"];
+	    }
+	}
+
+}
+
+export namespace store {
+	
+	export class EnumOption {
+	    value: string;
+	    label: string;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnumOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.label = source["label"];
+	        this.description = source["description"];
 	    }
 	}
 

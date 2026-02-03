@@ -1,4 +1,5 @@
 // LogControls.jsx - 日志控制按钮组件
+// v6.2.16: 添加批量复制按钮
 import React from 'react';
 import {
   Pause,
@@ -6,6 +7,8 @@ import {
   RefreshCw,
   Trash2,
   Download,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 /**
@@ -17,6 +20,9 @@ import {
  * @param {Function} onRefresh 刷新
  * @param {Function} onClear 清空
  * @param {Function} onExport 导出
+ * @param {number} selectedCount 选中数量
+ * @param {Function} onCopySelected 复制选中
+ * @param {boolean} copySuccess 复制成功状态
  */
 function LogControls({
   isStreaming,
@@ -26,6 +32,9 @@ function LogControls({
   onRefresh,
   onClear,
   onExport,
+  selectedCount = 0,
+  onCopySelected,
+  copySuccess,
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -36,6 +45,24 @@ function LogControls({
         }`} />
         {isStreaming ? '实时' : '已暂停'}
       </div>
+
+      {/* v6.2.16: 复制选中按钮 - 放在暂停按钮左边 */}
+      {selectedCount > 0 && (
+        <button
+          onClick={onCopySelected}
+          className="p-2 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all"
+          title={`复制选中 ${selectedCount} 条`}
+        >
+          <Copy size={16} />
+        </button>
+      )}
+
+      {/* v6.2.16: 复制成功提示 */}
+      {copySuccess && (
+        <div className="flex items-center gap-1 p-2 rounded-lg bg-green-100 text-green-700">
+          <Check size={16} />
+        </div>
+      )}
 
       {/* 暂停/开始按钮 */}
       <button

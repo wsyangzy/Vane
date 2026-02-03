@@ -9,6 +9,28 @@ import {
   GetLogStreamStatus
 } from '@wailsjs/go/main/App';
 
+const LOG_STREAM_USER_PAUSED_KEY = 'log_stream_user_paused';
+
+const readUserPaused = () => {
+  try {
+    return window.sessionStorage.getItem(LOG_STREAM_USER_PAUSED_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+};
+
+const writeUserPaused = (paused) => {
+  try {
+    if (paused) {
+      window.sessionStorage.setItem(LOG_STREAM_USER_PAUSED_KEY, '1');
+    } else {
+      window.sessionStorage.removeItem(LOG_STREAM_USER_PAUSED_KEY);
+    }
+  } catch (err) {
+    // ignore storage errors
+  }
+};
+
 /**
  * useWailsLogs Hook
  * @param {Object} options 配置选项
@@ -37,6 +59,8 @@ export function useWailsLogs(options = {}) {
   const isStartingRef = useRef(false);
   // 唯一实例 ID，用于防止 StrictMode 下的重复订阅
   const instanceIdRef = useRef(Date.now().toString(36) + Math.random().toString(36).slice(2));
+  // v6.2.14: 用户手动暂停标志，防止页面可见性控制自动恢复
+  const userPausedRef = useRef(false);
 
   // 日志级别过滤
   const filterLogs = useCallback((logList) => {
@@ -66,13 +90,19 @@ export function useWailsLogs(options = {}) {
   }, [maxLogs, filterLogs]);
 
   // 启动日志流
-  const startStreaming = useCallback(async () => {
+  const startStreaming = useCallback(async (options = {}) => {
+    const { userInitiated = true } = options;
     // 防止并发调用（解决 StrictMode 和异步竞态问题）
     if (isStartingRef.current) {
       console.log('📡 [日志流] 已有启动操作进行中，跳过');
       return;
     }
     isStartingRef.current = true;
+    // v6.2.14: 用户主动启动时清除暂停标志
+    if (userInitiated) {
+      userPausedRef.current = false;
+      writeUserPaused(false);
+    }
 
     try {
       // 检查是否已经在流式传输
@@ -123,7 +153,14 @@ export function useWailsLogs(options = {}) {
   }, [maxLogs, filterLogs]);
 
   // 停止日志流
-  const stopStreaming = useCallback(async () => {
+  const stopStreaming = useCallback(async (options = {}) => {
+    const { userInitiated = true } = options;
+    // v6.2.14: 标记为用户主动暂停，防止页面可见性控制自动恢复
+    if (userInitiated) {
+      userPausedRef.current = true;
+      writeUserPaused(true);
+    }
+
     try {
       // 更新实例 ID，使旧的回调失效
       instanceIdRef.current = Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -163,13 +200,14 @@ export function useWailsLogs(options = {}) {
     isStartingRef.current = false;
     // 生成新的实例 ID
     instanceIdRef.current = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    userPausedRef.current = readUserPaused();
 
     // 1. 加载历史日志
     loadRecentLogs();
 
     // 2. 自动启动流
-    if (autoStart) {
-      startStreaming();
+    if (autoStart && !userPausedRef.current) {
+      startStreaming({ userInitiated: false });
     }
 
     // 清理函数
@@ -192,23 +230,29 @@ export function useWailsLogs(options = {}) {
     if (!isMountedRef.current) return;
 
     if (!isActive && isStreaming) {
-      // 页面不可见，停止监听
+      // 页面不可见，停止监听（注意：这不是用户主动暂停，需要临时保存状态）
+      const wasUserPaused = userPausedRef.current;
       console.log('📴 日志页面不可见，停止日志流');
-      stopStreaming();
-    } else if (isActive && !isStreaming && autoStart && !isStartingRef.current) {
-      // 页面重新可见，重新启动（确保没有正在启动的操作）
+      stopStreaming({ userInitiated: false });
+      // 恢复之前的用户暂停状态（页面不可见导致的暂停不算用户主动暂停）
+      userPausedRef.current = wasUserPaused;
+    } else if (isActive && !isStreaming && autoStart && !isStartingRef.current && !userPausedRef.current) {
+      // v6.2.14: 页面重新可见，且用户没有主动暂停时才重新启动
       console.log('📡 日志页面可见，重新启动日志流');
-      startStreaming();
+      startStreaming({ userInitiated: false });
     }
   }, [isActive, isStreaming, autoStart, startStreaming, stopStreaming]);
+
+  const start = useCallback(() => startStreaming({ userInitiated: true }), [startStreaming]);
+  const stop = useCallback(() => stopStreaming({ userInitiated: true }), [stopStreaming]);
 
   return {
     logs,
     loading,
     error,
     isStreaming,
-    start: startStreaming,
-    stop: stopStreaming,
+    start,
+    stop,
     clear: clearLogs,
     refresh,
   };

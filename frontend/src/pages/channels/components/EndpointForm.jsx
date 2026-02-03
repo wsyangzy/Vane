@@ -1,6 +1,6 @@
 // ============================================
 // 端点编辑表单组件 (v5.0+ SQLite 存储模式)
-// 2025-12-05
+// v6.2.1 (2026-01-10) - 新建时隐藏优先级和超时字段（自动递增/使用全局默认）
 // ============================================
 
 import { useState } from 'react';
@@ -36,6 +36,8 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
       onChange={onChange}
       placeholder={placeholder}
       disabled={disabled}
+      autoComplete="off"
+      data-form-type="other"
       className={`
         w-full px-3 py-2 border border-slate-200 rounded-lg text-sm
         focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500
@@ -48,6 +50,7 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
 );
 
 // 密码输入组件（带显示/隐藏切换）
+// v6.2.18: 修复浏览器原生按钮与自定义按钮重复问题
 const PasswordInput = ({ label, name, value, onChange, placeholder, required, help }) => {
   const [showPassword, setShowPassword] = useState(false);
 
@@ -64,7 +67,9 @@ const PasswordInput = ({ label, name, value, onChange, placeholder, required, he
           value={value || ''}
           onChange={onChange}
           placeholder={placeholder}
-          className="w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          autoComplete="new-password"
+          data-form-type="other"
+          className="w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
         />
         <button
           type="button"
@@ -172,7 +177,8 @@ const EndpointForm = ({
   loading = false
 }) => {
   const isEditMode = !!endpoint;
-  const channelDisabled = loading || (!isEditMode && lockChannel);
+  // v6.2.18: 编辑模式下渠道名称不可修改（渠道是端点的核心标识之一）
+  const channelDisabled = loading || isEditMode || lockChannel;
   const uniqueChannels = Array.from(new Set((channels || []).filter(Boolean).map(String)));
 
   // 计算初始表单数据
@@ -188,7 +194,7 @@ const EndpointForm = ({
         failoverEnabled: endpoint.failoverEnabled !== false,
         skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false, // v6.1
         cooldownSeconds: endpoint.cooldownSeconds || '',
-        timeoutSeconds: endpoint.timeoutSeconds || 300,
+        timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
         costMultiplier: endpoint.costMultiplier || 1.0,
         inputCostMultiplier: endpoint.inputCostMultiplier || 1.0,
@@ -204,11 +210,11 @@ const EndpointForm = ({
       url: '',
       token: '',
       apiKey: '',
-      priority: 1,
+      priority: 0, // v6.2.1: 新建时传0，让后端自动递增
       failoverEnabled: true,
       skipHealthCheck: false, // v6.1: 默认不跳过健康检查
       cooldownSeconds: '',
-      timeoutSeconds: 300,
+      timeoutSeconds: 0, // v6.2.1: 新建时传0，使用全局默认超时
       supportsCountTokens: false,
       costMultiplier: 1.0,
       inputCostMultiplier: 1.0,
@@ -314,7 +320,7 @@ const EndpointForm = ({
         </div>
 
         {/* 表单内容 - 可滚动区域 */}
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden" autoComplete="off">
           <div className="p-6 overflow-y-auto flex-1">
           {/* 提交错误提示 */}
           {errors.submit && (
@@ -344,6 +350,8 @@ const EndpointForm = ({
                         value={formData.channel || ''}
                         onChange={handleChange}
                         disabled={channelDisabled}
+                        autoComplete="off"
+                        data-form-type="other"
                         className={`
                           w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm bg-white appearance-none
                           focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500
@@ -374,6 +382,8 @@ const EndpointForm = ({
                       onChange={handleChange}
                       placeholder="例如：official / backup"
                       disabled={channelDisabled}
+                      autoComplete="off"
+                      data-form-type="other"
                       className={`
                         w-full px-3 py-2 border border-slate-200 rounded-lg text-sm
                         focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500
@@ -456,42 +466,38 @@ const EndpointForm = ({
             </div>
           </div>
 
-          {/* 路由配置 */}
+          {/* 路由配置（仅编辑模式显示标题和输入项） */}
           <div className="space-y-4 mb-6">
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-              路由配置
-            </h3>
+            {isEditMode && (
+              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
+                路由配置
+              </h3>
+            )}
 
-            <div className="grid grid-cols-3 gap-4">
-              <FormInput
-                label="优先级"
-                name="priority"
-                value={formData.priority}
-                onChange={handleChange}
-                type="number"
-                placeholder="1"
-                help="数字越小优先级越高"
-              />
+            {isEditMode && (
+              <div className="grid gap-4 grid-cols-2">
+                <FormInput
+                  label="优先级"
+                  name="priority"
+                  value={formData.priority}
+                  onChange={handleChange}
+                  type="number"
+                  placeholder="1"
+                  help="数字越小优先级越高，相同则交换"
+                />
 
-              <FormInput
-                label="超时时间 (秒)"
-                name="timeoutSeconds"
-                value={formData.timeoutSeconds}
-                onChange={handleChange}
-                type="number"
-                placeholder="300"
-              />
-
-              <FormInput
-                label="冷却时间 (秒)"
-                name="cooldownSeconds"
-                value={formData.cooldownSeconds}
-                onChange={handleChange}
-                type="number"
-                placeholder="使用全局配置"
-                help="留空使用全局配置"
-              />
-            </div>
+                {/* v6.2.1: 超时时间 - 留空使用全局默认值 */}
+                <FormInput
+                  label="超时时间 (秒)"
+                  name="timeoutSeconds"
+                  value={formData.timeoutSeconds || ''}
+                  onChange={handleChange}
+                  type="number"
+                  placeholder="默认: 300 (全局配置)"
+                  help="单次请求的最大等待时间，留空使用全局配置"
+                />
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <FormCheckbox

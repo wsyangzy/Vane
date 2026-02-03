@@ -24,14 +24,23 @@ import (
 )
 
 // EndpointStatus represents the health status of an endpoint
+// v6.2: CooldownUntil 和 CooldownReason 已移除，失败渠道通过手动"重试"按钮重新激活
 type EndpointStatus struct {
 	Healthy          bool
 	LastCheck        time.Time
 	ResponseTime     time.Duration
 	ConsecutiveFails int
-	NeverChecked     bool      // 表示从未被检测过
-	CooldownUntil    time.Time // 请求失败冷却截止时间
-	CooldownReason   string    // 冷却原因（如 "HTTP 503"）
+	NeverChecked     bool // 表示从未被检测过
+	// v6.1.0: 请求失败标记，与 Healthy（健康检查状态）分离
+	// - Healthy: 由健康检查更新，表示端点是否"可达"
+	// - RequestFailed: 由请求转发更新，表示端点是否"因请求失败而被标记"
+	// 端点可用条件：Healthy=true && RequestFailed=false
+	// 重置时机：loop_retry 触发时重置为 false
+	RequestFailed bool
+	// v6.2.9: 记录最后一次请求失败的 HTTP 状态码，用于 UI 显示
+	LastRequestFailCode int
+	// v6.2.10: 记录最后一次请求失败的原因，用于 UI 显示
+	LastRequestFailReason string
 }
 
 // Endpoint represents an endpoint with its configuration and status
@@ -60,6 +69,12 @@ type Manager struct {
 	// 故障转移回调（用于同步数据库）
 	// 参数: failedChannel 失败的渠道名, newChannel 新激活的渠道名
 	onFailoverTriggered func(failedChannel, newChannel string)
+	// v6.2: 健康检查回调防抖机制，避免并发健康检查触发多次回调
+	healthCheckDebounceMu    sync.Mutex
+	healthCheckDebounceTimer *time.Timer
+	// 🛑 [手动重试] 故障转移排序起点（由用户选择的渠道）
+	failoverStartMu      sync.RWMutex
+	failoverStartChannel string
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
@@ -70,12 +85,41 @@ func (m *Manager) UpdateChannelPriorities(priorities map[string]int) {
 	m.groupManager.UpdateChannelPriorities(priorities)
 }
 
-// UpdateChannelFailoverEnabled 同步“渠道是否参与渠道间故障转移”的开关到运行时组管理器。
+// UpdateChannelFailoverEnabled 同步"渠道是否参与渠道间故障转移"的开关到运行时组管理器。
 func (m *Manager) UpdateChannelFailoverEnabled(enabled map[string]bool) {
 	if m == nil || m.groupManager == nil {
 		return
 	}
 	m.groupManager.UpdateChannelFailoverEnabled(enabled)
+}
+
+// SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
+// v6.2.5: 仅更新指定渠道，不影响其他渠道。
+func (m *Manager) SetSingleChannelFailoverEnabled(channel string, enabled bool) {
+	if m == nil || m.groupManager == nil {
+		return
+	}
+	m.groupManager.SetSingleChannelFailoverEnabled(channel, enabled)
+}
+
+// SetFailoverStartChannel 设置故障转移排序起点（用户手动重试选择的渠道）
+func (m *Manager) SetFailoverStartChannel(channel string) {
+	if m == nil {
+		return
+	}
+	m.failoverStartMu.Lock()
+	m.failoverStartChannel = channel
+	m.failoverStartMu.Unlock()
+}
+
+// GetFailoverStartChannel 获取故障转移排序起点
+func (m *Manager) GetFailoverStartChannel() string {
+	if m == nil {
+		return ""
+	}
+	m.failoverStartMu.RLock()
+	defer m.failoverStartMu.RUnlock()
+	return m.failoverStartChannel
 }
 
 // NewManager creates a new endpoint manager
@@ -279,4 +323,55 @@ func (m *Manager) GetConfig() *config.Config {
 // GetGroupManager returns the group manager
 func (m *Manager) GetGroupManager() *GroupManager {
 	return m.groupManager
+}
+
+// SetEndpointLastRequestFailCode 设置端点最后一次请求失败的 HTTP 状态码
+// v6.2.9: 用于 UI 显示失败原因
+// v6.2.10: 新增 reason 参数，记录详细错误信息
+func (m *Manager) SetEndpointLastRequestFailCode(endpointName string, httpCode int) {
+	m.SetEndpointLastRequestFail(endpointName, httpCode, "")
+}
+
+// SetEndpointLastRequestFail 设置端点最后一次请求失败的信息（状态码 + 原因）
+// v6.2.10: 用于 UI 显示详细失败原因
+func (m *Manager) SetEndpointLastRequestFail(endpointName string, httpCode int, reason string) {
+	if m == nil || endpointName == "" {
+		return
+	}
+
+	// 先尝试精确匹配
+	ep := m.GetEndpointByNameAny(endpointName)
+	if ep == nil {
+		return
+	}
+
+	ep.mutex.Lock()
+	ep.Status.LastRequestFailCode = httpCode
+	ep.Status.LastRequestFailReason = reason
+	ep.mutex.Unlock()
+}
+
+// SetEndpointSkipHealthCheck 设置端点是否跳过健康检测（运行时同步）
+// v6.2.11: 用于前端快捷开关
+func (m *Manager) SetEndpointSkipHealthCheck(endpointKey string, skip bool) {
+	if m == nil || endpointKey == "" {
+		return
+	}
+
+	m.endpointsMu.Lock()
+	defer m.endpointsMu.Unlock()
+
+	for _, ep := range m.endpoints {
+		key := EndpointKey(ep.Config.Channel, ep.Config.Name)
+		if key == endpointKey {
+			ep.mutex.Lock()
+			ep.Config.SkipHealthCheck = skip
+			// 如果设置为跳过检测，将状态设为健康（视为可用）
+			if skip {
+				ep.Status.Healthy = true
+			}
+			ep.mutex.Unlock()
+			return
+		}
+	}
 }

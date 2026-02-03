@@ -260,7 +260,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var err error
 			bodyBytes, err = io.ReadAll(r.Body)
 			if err != nil {
-				http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+				// v6.2.13: 使用 422 状态码，避免 Claude Code 自动重试
+				http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
 				return
 			}
 			r.Body.Close()
@@ -291,7 +292,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, err = io.ReadAll(r.Body)
 		if err != nil {
 			lifecycleManager.HandleError(err)
-			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+			// v6.2.13: 使用 422 状态码，避免 Claude Code 自动重试
+			http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
 			return
 		}
 		r.Body.Close()
@@ -391,6 +393,47 @@ func (h *Handler) UpdateConfig(cfg *config.Config) {
 	if h.sharedSuspensionManager != nil {
 		h.sharedSuspensionManager.UpdateConfig(cfg)
 	}
+
+	// v6.2.14: 更新子处理器配置，确保设置变更能传播到流式和常规处理器
+	if h.streamingHandler != nil {
+		h.streamingHandler.UpdateConfig(cfg)
+	}
+	if h.regularHandler != nil {
+		h.regularHandler.UpdateConfig(cfg)
+	}
+}
+
+// GetSuspendedRequestsCount 获取当前挂起等待的请求数量
+// 用于前端展示当前有多少请求正在等待端点恢复
+func (h *Handler) GetSuspendedRequestsCount() int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetSuspendedRequestsCount()
+	}
+	return 0
+}
+
+// GetSuspendedEndpointCounts 获取当前挂起请求的端点计数
+func (h *Handler) GetSuspendedEndpointCounts() map[string]int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetSuspendedEndpointCounts()
+	}
+	return map[string]int{}
+}
+
+// GetManualRetryRequestsCount 获取等待用户操作的挂起请求数量
+func (h *Handler) GetManualRetryRequestsCount() int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetManualRetryRequestsCount()
+	}
+	return 0
+}
+
+// GetManualRetryChannelCounts 获取等待用户操作的渠道计数
+func (h *Handler) GetManualRetryChannelCounts() map[string]int {
+	if h.sharedSuspensionManager != nil {
+		return h.sharedSuspensionManager.GetManualRetryChannelCounts()
+	}
+	return map[string]int{}
 }
 
 // noOpFlusher 是一个不执行实际flush操作的flusher实现

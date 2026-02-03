@@ -2,6 +2,7 @@
 // EndpointRow - 端点表格行组件
 // ============================================
 
+import { useState } from 'react';
 import {
   Globe,
   Pencil,
@@ -12,17 +13,35 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  Timer,
-  ShieldOff
+  // Timer, // v6.2: 已移除，冷却机制不再使用
+  ShieldOff,
+  ShieldBan,
+  Loader2
 } from 'lucide-react';
 import PriorityBadge from './PriorityBadge.jsx';
+
+// v6.2.11: 调用 Go 后端设置跳过健康检测
+const SetEndpointSkipHealthCheckByID = (id, skip) => {
+  return window['go']['main']['App']['SetEndpointSkipHealthCheckByID'](id, skip);
+};
 
 // ============================================
 // 健康状态徽章
 // v6.1: 支持四种状态 - skipped/unchecked/healthy/unhealthy
+// v6.1.0: 新增 request_failed 状态，区分健康检查失败和请求转发失败
+// v6.2.10: 异常状态支持显示失败原因 tooltip
 // ============================================
 
-const HealthBadge = ({ healthState }) => {
+const HealthBadge = ({ healthState, failCode, failReason }) => {
+  // 构建失败原因的 tooltip 文本
+  const buildFailTooltip = () => {
+    if (!failCode && !failReason) return '端点当前不可用';
+    const parts = [];
+    if (failCode) parts.push(`状态码: ${failCode}`);
+    if (failReason) parts.push(`原因: ${failReason}`);
+    return parts.join('\n');
+  };
+
   switch (healthState) {
     case 'skipped':
       return (
@@ -45,11 +64,31 @@ const HealthBadge = ({ healthState }) => {
           健康
         </div>
       );
+    // v6.1.0: 请求失败状态（与健康检查失败区分）
+    case 'request_failed':
+      return (
+        <div
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 cursor-help"
+          title={buildFailTooltip()}
+        >
+          <XCircle size={10} className="mr-1" />
+          请求失败
+          {failCode > 0 && (
+            <span className="ml-1 font-mono">({failCode})</span>
+          )}
+        </div>
+      );
     case 'unhealthy':
       return (
-        <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100">
+        <div
+          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100 cursor-help"
+          title={buildFailTooltip()}
+        >
           <XCircle size={10} className="mr-1" />
           异常
+          {failCode > 0 && (
+            <span className="ml-1 font-mono">({failCode})</span>
+          )}
         </div>
       );
     default:
@@ -64,39 +103,8 @@ const HealthBadge = ({ healthState }) => {
 };
 
 // ============================================
-// 冷却状态徽章
+// v6.2: CooldownBadge 已移除，冷却机制不再使用
 // ============================================
-
-const CooldownBadge = ({ inCooldown, cooldownUntil, cooldownReason }) => {
-  if (!inCooldown) return null;
-
-  // 格式化剩余冷却时间
-  const formatRemainingTime = (until) => {
-    if (!until) return '';
-    try {
-      const endTime = new Date(until);
-      const now = new Date();
-      const diffMs = endTime - now;
-      if (diffMs <= 0) return '即将恢复';
-      const diffMins = Math.ceil(diffMs / 60000);
-      if (diffMins < 60) return `${diffMins}分钟`;
-      const diffHours = Math.floor(diffMins / 60);
-      return `${diffHours}小时${diffMins % 60}分`;
-    } catch {
-      return '';
-    }
-  };
-
-  return (
-    <div
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-600 border border-amber-200 cursor-help"
-      title={`冷却原因: ${cooldownReason || '请求失败'}\n恢复时间: ${cooldownUntil}`}
-    >
-      <Timer size={10} className="mr-1 animate-pulse" />
-      冷却中 {formatRemainingTime(cooldownUntil)}
-    </div>
-  );
-};
 
 // ============================================
 // 延迟指示器
@@ -130,8 +138,12 @@ const EndpointRow = ({
   onEdit,
   onDelete,
   onToggle,
-  isGrouped = false
+  isGrouped = false,
+  onRefresh // v6.2.11: 刷新列表回调
 }) => {
+  // v6.2.11: 跳过健康检测切换状态
+  const [skipToggling, setSkipToggling] = useState(false);
+
   if (!endpoint) return null;
 
   // 格式化最后检查时间
@@ -155,6 +167,40 @@ const EndpointRow = ({
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
   // v6.1: 使用 health_state 字段
   const healthState = endpoint.health_state || endpoint.healthState;
+  // v6.2.10: 获取失败信息
+  const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
+  const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
+  // v6.2.11: 跳过健康检测状态
+  const skipHealthCheck = endpoint.skip_health_check || endpoint.skipHealthCheck || false;
+  const healthBadges = [];
+  if (skipHealthCheck) {
+    healthBadges.push(<HealthBadge key="skipped" healthState="skipped" />);
+  }
+  if (healthState && healthState !== 'skipped') {
+    healthBadges.push(
+      <HealthBadge key={healthState} healthState={healthState} failCode={lastFailCode} failReason={lastFailReason} />
+    );
+  } else if (!skipHealthCheck) {
+    healthBadges.push(
+      <HealthBadge key="unknown" healthState={healthState} failCode={lastFailCode} failReason={lastFailReason} />
+    );
+  }
+
+  // v6.2.11: 切换跳过健康检测
+  const handleToggleSkipHealthCheck = async () => {
+    if (!endpoint.id || skipToggling) return;
+
+    setSkipToggling(true);
+    try {
+      await SetEndpointSkipHealthCheckByID(endpoint.id, !skipHealthCheck);
+      // 刷新列表
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed to toggle skip health check:', err);
+    } finally {
+      setSkipToggling(false);
+    }
+  };
 
   // 获取认证类型显示
   const getAuthType = () => {
@@ -202,12 +248,8 @@ const EndpointRow = ({
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
               {endpoint.channel || endpoint.group || '-'}
             </span>
-            <HealthBadge healthState={healthState} />
-            <CooldownBadge
-              inCooldown={endpoint.in_cooldown || endpoint.inCooldown}
-              cooldownUntil={endpoint.cooldown_until || endpoint.cooldownUntil}
-              cooldownReason={endpoint.cooldown_reason || endpoint.cooldownReason}
-            />
+            {healthBadges}
+            {/* v6.2: CooldownBadge 已移除 */}
           </div>
         </div>
       </td>
@@ -279,6 +321,27 @@ const EndpointRow = ({
         <div className="flex items-center justify-end space-x-1">
           {isSqliteMode && (
             <>
+              {/* v6.2.11: 跳过健康检测快捷开关 */}
+              <button
+                onClick={handleToggleSkipHealthCheck}
+                disabled={skipToggling}
+                className={`p-1.5 rounded-md transition-colors ${
+                  skipToggling
+                    ? 'opacity-50 cursor-wait'
+                    : skipHealthCheck
+                      ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                }`}
+                title={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+              >
+                {skipToggling ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : skipHealthCheck ? (
+                  <ShieldOff size={14} />
+                ) : (
+                  <ShieldBan size={14} />
+                )}
+              </button>
               <button
                 onClick={() => onEdit?.(endpoint)}
                 className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"

@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     -- 转发信息
     channel TEXT DEFAULT '',                -- 渠道标签（来自端点配置）
     endpoint_name TEXT,                     -- 使用的端点名称
+    endpoint_chain TEXT,                    -- 端点尝试链路（简略）
     group_name TEXT,                        -- 所属组名
     model_name TEXT,                        -- Claude模型名称
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求

@@ -113,6 +113,9 @@ func (a *App) ActivateGroup(name string) error {
 		return fmt.Errorf("端点管理器未初始化")
 	}
 
+	// 🛑 [手动重试] 记录故障转移排序起点（用户选择的渠道）
+	manager.SetFailoverStartChannel(name)
+
 	// v5.0+: 如果有 endpointService，同步到数据库
 	if endpointService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -162,15 +165,14 @@ func (a *App) PauseGroup(name string) error {
 		autoSwitchEnabled = cfg.Failover.Enabled
 	}
 
-	// v6.2+: 暂停/恢复为“无限期直到手动恢复”，且在 SQLite 模式下持久化到 channels.failover_enabled
+	// v6.2+: 暂停/恢复为"无限期直到手动恢复"，且在 SQLite 模式下持久化到 channels.failover_enabled
 	if channelService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		var next string
 		if wasActive && autoSwitchEnabled {
-			// best-effort: 先同步当前“渠道暂停状态”
-			a.syncChannelFailoverEnabledToEndpointManager(ctx)
+			// v6.2.5: 移除全量同步，运行时状态应该已经是准确的
 			var err error
 			next, err = manager.SelectNextAvailableChannel(name)
 			if err != nil || next == "" {
@@ -181,7 +183,8 @@ func (a *App) PauseGroup(name string) error {
 		if err := channelService.SetFailoverEnabled(ctx, name, false); err != nil {
 			return err
 		}
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		// v6.2.5: 仅更新单个渠道，避免影响其他渠道状态
+		manager.SetSingleChannelFailoverEnabled(name, false)
 		a.emitEndpointUpdate()
 
 		// SQLite 模式：暂停活跃渠道后，按路由策略自动切换到下一个可用渠道。
@@ -208,6 +211,21 @@ func (a *App) PauseGroup(name string) error {
 	return manager.ManualPauseGroup(name, 0)
 }
 
+// IsInterChannelFailoverEnabled 检查是否启用渠道间故障转移
+// v6.2: 前端用于判断是否显示渠道切换器
+func (a *App) IsInterChannelFailoverEnabled() bool {
+	a.mu.RLock()
+	manager := a.endpointManager
+	a.mu.RUnlock()
+
+	if manager == nil {
+		return false
+	}
+
+	cfg := manager.GetConfig()
+	return cfg != nil && cfg.Failover.Enabled
+}
+
 // ResumeGroup 恢复指定组
 func (a *App) ResumeGroup(name string) error {
 	a.mu.RLock()
@@ -225,7 +243,8 @@ func (a *App) ResumeGroup(name string) error {
 		if err := channelService.SetFailoverEnabled(ctx, name, true); err != nil {
 			return err
 		}
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		// v6.2.5: 仅更新单个渠道，避免影响其他渠道状态
+		manager.SetSingleChannelFailoverEnabled(name, true)
 		a.emitEndpointUpdate()
 		return nil
 	}

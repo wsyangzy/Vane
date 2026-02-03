@@ -1,11 +1,12 @@
 // ============================================
 // Key 选择器组件 - Command Palette 风格
 // 用于显示和切换端点的 Token/API Key
-// 2025-12-01 升级版
+// 2025-12-01 升级版 (Updated 2026-01-13)
 // ============================================
 
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Key, Check, Search, Settings2, Gauge } from 'lucide-react';
+import { useToast } from '@components/ui';
 
 /**
  * 根据 Token 名称推断类型
@@ -245,6 +246,7 @@ const KeySelector = ({
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const toast = useToast();
 
   // 找到当前激活的 Key
   const activeKey = keys.find(k => k.is_active) || keys[0];
@@ -283,7 +285,7 @@ const KeySelector = ({
       setIsModalOpen(false);
     } catch (error) {
       console.error('Key 切换失败:', error);
-      alert('Key 切换失败: ' + (error.message || '未知错误'));
+      toast.error(error.message || '未知错误', 'Key 切换失败');
     } finally {
       setSwitching(false);
     }

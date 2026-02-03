@@ -2,15 +2,15 @@
 
 本文件为 Claude Code 提供项目指导信息。
 
-> 📅 **最后更新**: 2025-12-29 17:30:00
-> 🏗️ **架构版本**: v6.0.5
+> 📅 **最后更新**: 2026-01-07 20:00:00
+> 🏗️ **架构版本**: v6.0.7
 > 📦 **模块数量**: 17 个核心模块（9 个后端 + 8 个前端）
 
 ## 项目概述
 
 **CC-Forwarder Desktop** 是一款基于 Wails 构建的跨平台桌面应用，用于 Claude API 请求的智能转发、负载均衡和故障恢复。
 
-- **当前版本**: v6.0.5
+- **当前版本**: v6.0.7
 - **技术栈**: Go + Wails v2 + React + Vite
 - **支持平台**: macOS / Windows / Linux
 
@@ -18,10 +18,13 @@
 
 - 多端点智能路由与优先级调度
 - 自动故障转移与端点自愈
+- **智能恢复策略** (v6.0.7+) - 三种策略可选（auto_wait / loop_retry / fail_fast）
 - 请求生命周期追踪与状态管理
 - 流式响应处理（SSE）
+- **计费感知重试** (v6.0.5+) - 基于 Token 计费智能判断错误可重试性
 - 内存热池架构优化数据库写入
 - SQLite/MySQL 双数据库支持
+- **可视化设置界面** (v6.0.7+) - 枚举类型支持、变更追踪、实时生效
 
 ## 快速开始
 
@@ -231,7 +234,7 @@ graph TB
 
 ```yaml
 # 代理服务
-proxy:
+server:
   host: "127.0.0.1"
   port: 9090
 
@@ -239,26 +242,50 @@ proxy:
 endpoints:
   - name: "primary"
     url: "https://api.anthropic.com"
+    channel: "official"
     priority: 1
     failover_enabled: true
     token: "sk-xxx"
 
   - name: "backup"
     url: "https://api.example.com"
+    channel: "third-party"
     priority: 2
     failover_enabled: true
     token: "sk-yyy"
 
-# 故障转移
+# 故障转移配置
 failover:
   enabled: true
   default_cooldown: "10m"
+
+# 请求控制 (v6.0.7+)
+request:
+  # 恢复策略：所有渠道耗尽后的处理方式
+  recovery_strategy: "auto_wait"  # auto_wait (推荐) | loop_retry | fail_fast
+
+  # 智能等待参数（仅 auto_wait 策略生效）
+  auto_wait_timeout: "300s"        # 最大等待时间（默认5分钟）
+  auto_wait_max_requests: 100      # 最大挂起请求数（默认100）
 
 # 内存热池（可选）
 hot_pool:
   enabled: true
   max_active_requests: 1000
 ```
+
+### 恢复策略详解（v6.0.7+）
+
+当所有端点都不可用时，系统提供三种恢复策略：
+
+| 策略 | 行为 | 优点 | 缺点 | 推荐场景 |
+|------|------|------|------|----------|
+| **auto_wait**<br/>（智能等待） | 挂起请求，等待端点自动恢复信号（其他请求成功、冷却期到期） | 避免循环重试，减少无效请求 | 可能等待较长时间（最多 auto_wait_timeout） | **生产环境（推荐）** |
+| **loop_retry**<br/>（循环重试） | 回到最高优先级渠道继续尝试（跳过冷却中的端点） | 持续尝试，不会超时 | 可能在渠道间循环重试，浪费资源 | 测试环境或渠道极少场景 |
+| **fail_fast**<br/>（快速失败） | 立即返回错误，不等待恢复，不循环重试 | 明确错误信号，快速反馈 | 可能错过即将恢复的端点 | 调试环境或需要明确错误的场景 |
+
+**向后兼容**：旧版本配置（v6.0.x 之前）会自动迁移到新的 `recovery_strategy` 格式。
+
 
 ## 开发命令
 
@@ -309,6 +336,8 @@ go test -race ./internal/...
 
 | 版本 | 日期 | 主要更新 |
 |------|------|----------|
+| v6.0.7 | 2026-01-07 | 智能恢复策略（auto_wait / loop_retry / fail_fast），配置简化（KISS & YAGNI） |
+| v6.0.5 | 2025-12-29 | 计费感知重试，日志复制功能 |
 | v5.0.0 | 2025-12-08 | Wails 桌面应用重构，移除服务器版本 |
 | v4.1.0 | 2025-12-04 | 内存热池架构，80% 数据库写入优化 |
 | v4.0.0 | 2025-12-03 | 配置简化，移除"组"概念 |

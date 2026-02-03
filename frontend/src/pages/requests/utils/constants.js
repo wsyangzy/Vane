@@ -3,7 +3,7 @@
 // 2025-11-28 17:02:47
 // ============================================
 
-// 状态选项配置 (v3.5.0 状态机)
+// 状态选项配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint, v6.2.2+ 新增 partial_recovery)
 export const STATUS_OPTIONS = {
   all: '全部状态',
   pending: '等待中',
@@ -11,8 +11,10 @@ export const STATUS_OPTIONS = {
   processing: '处理中',
   retry: '重试中',
   suspended: '已挂起',
+  awaiting_endpoint: '等待端点',
   completed: '已完成',
   partial_failed: '部分失败',
+  partial_recovery: '部分恢复',
   failed: '已失败',
   cancelled: '已取消'
 };
@@ -46,7 +48,7 @@ export const TABLE_COLUMNS = [
   { id: 'status', label: '状态', alwaysVisible: false, width: 'auto' },
   { id: 'model', label: '模型', alwaysVisible: false, width: 'auto' },
   { id: 'channel', label: '渠道', alwaysVisible: false, width: 'auto' },
-  { id: 'endpoint', label: '端点', alwaysVisible: false, width: 'auto' },
+  { id: 'endpoint', label: '链路', alwaysVisible: false, width: 'auto' },
   { id: 'duration', label: '耗时', alwaysVisible: false, width: 'auto' },
   { id: 'inputTokens', label: '输入', alwaysVisible: false, width: 'auto', align: 'right' },
   { id: 'outputTokens', label: '输出', alwaysVisible: false, width: 'auto', align: 'right' },
@@ -57,7 +59,7 @@ export const TABLE_COLUMNS = [
 
 // 默认可见的列（v4.0: 添加缓存创建/读取列）
 export const DEFAULT_VISIBLE_COLUMNS = [
-  'requestId', 'timestamp', 'status', 'model', 'channel', 'endpoint',
+  'requestId', 'timestamp', 'status', 'model', 'endpoint',
   'duration', 'inputTokens', 'outputTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cost'
 ];
 

@@ -11,12 +11,12 @@ import (
 )
 
 // GroupInfo represents information about an endpoint group
+// v6.2: CooldownUntil 已移除，失败渠道通过手动"重试"按钮重新激活
 type GroupInfo struct {
-	Name          string
-	Priority      int
-	IsActive      bool
-	CooldownUntil time.Time
-	Endpoints     []*Endpoint
+	Name      string
+	Priority  int
+	IsActive  bool
+	Endpoints []*Endpoint
 	// Manual control states
 	ManuallyPaused       bool
 	ManualActivationTime time.Time
@@ -25,12 +25,12 @@ type GroupInfo struct {
 	ForcedActivationTime time.Time // 强制激活时间
 }
 
-// GroupManager manages endpoint groups and their cooldown states
+// GroupManager manages endpoint groups
+// v6.2: 冷却机制已移除
 type GroupManager struct {
 	groups                 map[string]*GroupInfo
 	config                 *config.Config
 	mutex                  sync.RWMutex
-	cooldownDuration       time.Duration
 	channelPriorities      map[string]int
 	channelFailoverEnabled map[string]bool
 	// Group change notification subscribers
@@ -39,21 +39,11 @@ type GroupManager struct {
 }
 
 // NewGroupManager creates a new group manager
-// v4.0: Support both old Group config and new Failover config
+// v6.2: 冷却机制已移除
 func NewGroupManager(cfg *config.Config) *GroupManager {
-	// v4.0: 优先使用 Failover 配置，如果没有则使用 Group 配置（向后兼容）
-	cooldownDuration := cfg.Group.Cooldown
-	if cfg.Failover.DefaultCooldown > 0 {
-		cooldownDuration = cfg.Failover.DefaultCooldown
-	}
-	if cooldownDuration == 0 {
-		cooldownDuration = 10 * time.Minute
-	}
-
 	return &GroupManager{
 		groups:                 make(map[string]*GroupInfo),
 		config:                 cfg,
-		cooldownDuration:       cooldownDuration,
 		channelPriorities:      make(map[string]int),
 		channelFailoverEnabled: make(map[string]bool),
 		groupChangeSubscribers: make([]chan string, 0),
@@ -61,22 +51,11 @@ func NewGroupManager(cfg *config.Config) *GroupManager {
 }
 
 // UpdateConfig updates the group manager configuration
-// v4.0: Support both old Group config and new Failover config
+// v6.2: 冷却机制已移除
 func (gm *GroupManager) UpdateConfig(cfg *config.Config) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
-
 	gm.config = cfg
-
-	// v4.0: 优先使用 Failover 配置，如果没有则使用 Group 配置（向后兼容）
-	if cfg.Failover.DefaultCooldown > 0 {
-		gm.cooldownDuration = cfg.Failover.DefaultCooldown
-	} else {
-		gm.cooldownDuration = cfg.Group.Cooldown
-	}
-	if gm.cooldownDuration == 0 {
-		gm.cooldownDuration = 10 * time.Minute
-	}
 }
 
 // UpdateChannelPriorities 更新“渠道(channel)”的优先级映射。
@@ -138,7 +117,7 @@ func (gm *GroupManager) UpdateChannelFailoverEnabled(enabled map[string]bool) {
 	}
 }
 
-// IsChannelFailoverEnabled 查询“渠道是否参与渠道间故障转移”。
+// IsChannelFailoverEnabled 查询"渠道是否参与渠道间故障转移"。
 // 默认值为 true（未配置时视为参与）。
 func (gm *GroupManager) IsChannelFailoverEnabled(channel string) bool {
 	gm.mutex.RLock()
@@ -153,8 +132,29 @@ func (gm *GroupManager) IsChannelFailoverEnabled(channel string) bool {
 	return v
 }
 
+// SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
+// 仅更新指定渠道，不影响其他渠道的状态。
+// v6.2.5: 解决恢复一个渠道时影响其他渠道的问题。
+func (gm *GroupManager) SetSingleChannelFailoverEnabled(channel string, enabled bool) {
+	if channel == "" {
+		return
+	}
+
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+
+	// 更新映射表
+	gm.channelFailoverEnabled[channel] = enabled
+
+	// 仅更新对应组的 ManuallyPaused 状态
+	if group, ok := gm.groups[channel]; ok && group != nil {
+		group.ManuallyPaused = !enabled
+		slog.Info(fmt.Sprintf("🔄 [组管理] 渠道 [%s] 故障转移开关已设置为 %v", channel, enabled))
+	}
+}
+
 // UpdateGroups rebuilds group information from endpoints
-// v4.0: Automatically creates one group per endpoint
+// v6.2: 冷却机制已移除
 func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
@@ -162,23 +162,21 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	// v5.0: SQLite 模式下需要保留 IsActive 状态
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
 
-	// Clear existing groups but preserve cooldown states (and IsActive for SQLite mode)
+	// 保留 IsActive 状态 (SQLite 模式)
 	oldGroups := make(map[string]*GroupInfo)
 	for name, group := range gm.groups {
-		// v5.0: SQLite 模式下保留 IsActive 状态
-		if isSQLiteMode || (!group.CooldownUntil.IsZero() && time.Now().Before(group.CooldownUntil)) {
+		if isSQLiteMode {
 			oldGroups[name] = &GroupInfo{
-				Name:          group.Name,
-				Priority:      group.Priority,
-				IsActive:      group.IsActive, // v5.0: 保留激活状态
-				CooldownUntil: group.CooldownUntil,
-				Endpoints:     nil, // Will be updated
+				Name:      group.Name,
+				Priority:  group.Priority,
+				IsActive:  group.IsActive,
+				Endpoints: nil,
 			}
 		}
 	}
 
 	// Rebuild groups from current endpoints
-	// v6.0: 以“渠道(channel)”作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
+	// v6.0: 以"渠道(channel)"作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
 	newGroups := make(map[string]*GroupInfo)
 
 	for _, ep := range endpoints {
@@ -186,20 +184,16 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 
 		group, exists := newGroups[groupName]
 		if !exists {
-			// Check if this group was in cooldown or had active state
-			var cooldownUntil time.Time
 			var wasActive bool
 			if oldGroup, existed := oldGroups[groupName]; existed {
-				cooldownUntil = oldGroup.CooldownUntil
-				wasActive = oldGroup.IsActive // v5.0: 恢复之前的激活状态
+				wasActive = oldGroup.IsActive
 			}
 
 			group = &GroupInfo{
-				Name:          groupName,
-				Endpoints:     make([]*Endpoint, 0, 2),
-				IsActive:      wasActive, // v5.0: SQLite 模式下保留之前的激活状态
-				CooldownUntil: cooldownUntil,
-				Priority:      ep.Config.Priority,
+				Name:      groupName,
+				Endpoints: make([]*Endpoint, 0, 2),
+				IsActive:  wasActive,
+				Priority:  ep.Config.Priority,
 			}
 			newGroups[groupName] = group
 		}
@@ -239,7 +233,6 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	}
 
 	// 端点级兜底：当且仅当组内所有端点都 failover_enabled=false 时，该组无法参与跨渠道故障转移。
-	// 为保持旧行为/测试预期，这种情况下也视为“暂停”（不会落库，只是运行时派生）。
 	for _, group := range newGroups {
 		if group == nil {
 			continue
@@ -262,19 +255,18 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 
 	gm.groups = newGroups
 
-	// Update active status based on cooldown timers
+	// Update active status
 	gm.updateActiveGroups()
 }
 
 // updateActiveGroups updates which groups are currently active
+// v6.2: 冷却机制已移除
 func (gm *GroupManager) updateActiveGroups() {
 	// v5.0: SQLite 模式下，禁用自动激活逻辑（由 enabled 字段控制）
-	// 但仍需处理冷却超时清理
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
-	// v6.0: Failover.Enabled 仅控制“渠道间”故障转移/自动切换行为
+	// v6.0: Failover.Enabled 仅控制"渠道间"故障转移/自动切换行为
 	autoSwitchEnabled := gm.config.Failover.Enabled
 
-	now := time.Now()
 	var newlyActivatedGroup string
 
 	// Track previous active state to detect changes
@@ -283,21 +275,7 @@ func (gm *GroupManager) updateActiveGroups() {
 		previousActiveGroups[group.Name] = group.IsActive
 	}
 
-	// First, check cooldown timers and clear expired cooldowns
-	for _, group := range gm.groups {
-		if !group.CooldownUntil.IsZero() && now.After(group.CooldownUntil) {
-			// Cooldown expired, clear it but don't auto-activate in manual mode
-			group.CooldownUntil = time.Time{}
-			slog.Info(fmt.Sprintf("🔄 [组管理] 组冷却结束: %s (优先级: %d) - %s",
-				group.Name, group.Priority,
-				map[bool]string{true: "可再次参与自动选择", false: "等待手动激活"}[autoSwitchEnabled]))
-		} else if !group.CooldownUntil.IsZero() && now.Before(group.CooldownUntil) {
-			// Still in cooldown
-			group.IsActive = false
-		}
-	}
-
-	// v5.0: SQLite 模式下跳过自动激活逻辑（手动控制），仅处理冷却状态即可
+	// v5.0: SQLite 模式下跳过自动激活逻辑（手动控制）
 	if isSQLiteMode {
 		return
 	}
@@ -305,7 +283,7 @@ func (gm *GroupManager) updateActiveGroups() {
 	// Determine which groups should be active based on priority
 	// Only auto-activate next group if auto switching is enabled
 	if autoSwitchEnabled {
-		// Auto mode: 保持“粘性”活跃渠道，避免渠道间故障转移后冷却结束又自动回跳到高优先级渠道
+		// Auto mode: 保持"粘性"活跃渠道
 		sortedGroups := gm.getSortedGroups()
 
 		var desiredActive *GroupInfo
@@ -320,7 +298,7 @@ func (gm *GroupManager) updateActiveGroups() {
 			if g == nil {
 				return false
 			}
-			return g.CooldownUntil.IsZero() && !g.ManuallyPaused
+			return !g.ManuallyPaused
 		}
 
 		if !isAvailable(desiredActive) {
@@ -342,19 +320,10 @@ func (gm *GroupManager) updateActiveGroups() {
 		}
 	} else {
 		// Manual mode: Only activate priority 1 group at startup if no groups are active
-		// Don't auto-switch between groups during runtime
 		currentActiveCount := 0
 		for _, group := range gm.groups {
 			if group.IsActive {
 				currentActiveCount++
-			}
-		}
-
-		// Handle cooldown states first
-		for _, group := range gm.groups {
-			if !group.CooldownUntil.IsZero() && now.Before(group.CooldownUntil) {
-				// Still in cooldown, keep inactive
-				group.IsActive = false
 			}
 		}
 
@@ -363,7 +332,7 @@ func (gm *GroupManager) updateActiveGroups() {
 			// Check if this is truly startup (no groups have ever failed) or runtime failure
 			isActualStartup := true
 			for _, group := range gm.groups {
-				if !group.CooldownUntil.IsZero() || group.ManuallyPaused {
+				if group.ManuallyPaused {
 					isActualStartup = false
 					break
 				}
@@ -372,18 +341,14 @@ func (gm *GroupManager) updateActiveGroups() {
 			// Determine activation strategy based on startup vs runtime context
 			var shouldAutoActivate bool
 			if isActualStartup {
-				// 启动时：激活最高优先级可用组（更符合用户直觉）
 				shouldAutoActivate = true
 				slog.Debug("🚀 [组管理] 检测到系统启动 - 尝试激活最高优先级可用组")
 			} else {
-				// This is runtime failure - respect manual mode + suspend settings
-				// v6.0: Failover.Enabled 仅控制“渠道间”故障转移/自动切换行为
 				autoSwitchEnabled := gm.config.Failover.Enabled
 				if !autoSwitchEnabled && gm.config.RequestSuspend.Enabled {
 					shouldAutoActivate = false
 					slog.Debug("⏸️ [组管理] 运行时故障且启用挂起 - 不激活其他组，等待挂起处理")
 				} else {
-					// Manual mode without suspend, or auto mode - allow activation
 					shouldAutoActivate = true
 					slog.Debug("🔄 [组管理] 运行时故障但未启用挂起 - 尝试激活可用组")
 				}
@@ -392,9 +357,7 @@ func (gm *GroupManager) updateActiveGroups() {
 			if shouldAutoActivate {
 				sortedGroups := gm.getSortedGroups()
 				for _, group := range sortedGroups {
-					// 关键修复：检查组是否被手动暂停（包括因失败而暂停的组）
-					if group.CooldownUntil.IsZero() && !group.ManuallyPaused {
-						// Check if this group has healthy endpoints
+					if !group.ManuallyPaused {
 						hasHealthyEndpoints := false
 						for _, ep := range group.Endpoints {
 							if ep.IsHealthy() {
@@ -405,7 +368,6 @@ func (gm *GroupManager) updateActiveGroups() {
 						if hasHealthyEndpoints {
 							wasActive := group.IsActive
 							group.IsActive = true
-							// v6.0: Failover.Enabled 仅控制“渠道间”故障转移/自动切换行为
 							autoSwitchEnabled := gm.config.Failover.Enabled
 							if isActualStartup {
 								if autoSwitchEnabled {
@@ -416,14 +378,12 @@ func (gm *GroupManager) updateActiveGroups() {
 							} else {
 								slog.Info(fmt.Sprintf("🔄 [运行时] 激活可用组: %s (优先级: %d, 有健康端点)", group.Name, group.Priority))
 							}
-							// Check if this group became newly active
 							if !wasActive && group.IsActive {
 								newlyActivatedGroup = group.Name
 							}
-							break // Only activate one group
+							break
 						}
 					} else if group.ManuallyPaused {
-						// 记录被暂停的组，说明为什么没有激活
 						slog.Debug(fmt.Sprintf("⏸️ [手动模式] 跳过已暂停组: %s (优先级: %d) - 等待手动恢复", group.Name, group.Priority))
 					}
 				}
@@ -433,7 +393,6 @@ func (gm *GroupManager) updateActiveGroups() {
 
 	// Notify subscribers if a group was newly activated
 	if newlyActivatedGroup != "" {
-		// Check if this is truly a state change (not just the same group remaining active)
 		if !previousActiveGroups[newlyActivatedGroup] {
 			slog.Debug(fmt.Sprintf("📡 [组通知] 检测到组状态变化: %s 变为活跃", newlyActivatedGroup))
 			gm.notifyGroupChange(newlyActivatedGroup)
@@ -506,40 +465,25 @@ func (gm *GroupManager) GetAllGroups() []*GroupInfo {
 	return groups
 }
 
-// SetGroupCooldown sets a group into cooldown mode (only in auto mode)
+// SetGroupCooldown 将组标记为暂停并停用
+// v6.2: 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
 func (gm *GroupManager) SetGroupCooldown(groupName string) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
 	if group, exists := gm.groups[groupName]; exists {
-		// In manual mode, mark group as manually paused to prevent re-activation
-		// v6.0: Failover.Enabled 仅控制“渠道间”故障转移/自动切换行为
-		autoSwitchEnabled := gm.config.Failover.Enabled
-		if !autoSwitchEnabled {
-			group.IsActive = false
-			group.ManuallyPaused = true // 👈 关键修复：防止组被自动重新激活
-			slog.Warn(fmt.Sprintf("⚠️ [手动模式] 组 %s 失败已停用并标记为暂停状态，需要手动切换到其他组", groupName))
-			slog.Info(fmt.Sprintf("🚫 [组状态] 组 %s 已设置 ManuallyPaused=true，不会被自动重新激活", groupName))
-			return
-		}
-
-		// Auto mode: use cooldown mechanism
-		now := time.Now()
-		group.CooldownUntil = now.Add(gm.cooldownDuration)
 		group.IsActive = false
+		group.ManuallyPaused = true
+		slog.Warn(fmt.Sprintf("⏸️ [渠道暂停] 渠道 %s 已停用，需要手动点击\"重试\"按钮重新激活", groupName))
 
-		slog.Warn(fmt.Sprintf("❄️ [自动模式] 组进入冷却状态: %s (冷却时长: %v, 恢复时间: %s)",
-			groupName, gm.cooldownDuration, group.CooldownUntil.Format("15:04:05")))
-
-		// Update active groups after cooldown change
+		// Update active groups after state change
 		gm.updateActiveGroups()
 
 		// Log and notify about next active group
 		for _, g := range gm.getSortedGroups() {
 			if g.IsActive {
-				slog.Info(fmt.Sprintf("🔄 [自动模式] 切换到下一优先级组: %s (优先级: %d)",
+				slog.Info(fmt.Sprintf("🔄 [渠道切换] 切换到下一优先级渠道: %s (优先级: %d)",
 					g.Name, g.Priority))
-				// Notify subscribers about the group switch
 				gm.notifyGroupChange(g.Name)
 				break
 			}
@@ -547,29 +491,13 @@ func (gm *GroupManager) SetGroupCooldown(groupName string) {
 	}
 }
 
-// IsGroupInCooldown checks if a group is currently in cooldown
+// IsGroupInCooldown v6.2: 冷却机制已移除，返回 false（向后兼容）
 func (gm *GroupManager) IsGroupInCooldown(groupName string) bool {
-	gm.mutex.RLock()
-	defer gm.mutex.RUnlock()
-
-	if group, exists := gm.groups[groupName]; exists {
-		return !group.CooldownUntil.IsZero() && time.Now().Before(group.CooldownUntil)
-	}
-
 	return false
 }
 
-// GetGroupCooldownRemaining returns remaining cooldown time for a group
+// GetGroupCooldownRemaining v6.2: 冷却机制已移除，返回 0（向后兼容）
 func (gm *GroupManager) GetGroupCooldownRemaining(groupName string) time.Duration {
-	gm.mutex.RLock()
-	defer gm.mutex.RUnlock()
-
-	if group, exists := gm.groups[groupName]; exists {
-		if !group.CooldownUntil.IsZero() && time.Now().Before(group.CooldownUntil) {
-			return group.CooldownUntil.Sub(time.Now())
-		}
-	}
-
 	return 0
 }
 
@@ -578,9 +506,21 @@ func (gm *GroupManager) ManualActivateGroup(groupName string) error {
 	return gm.ManualActivateGroupWithForce(groupName, false)
 }
 
+// ActivateGroupForFailover 渠道间故障转移激活组（不记录手动激活时间）
+// force: 当为true时，即使组内没有健康端点也强制激活
+// v6.2: 冷却机制已移除
+func (gm *GroupManager) ActivateGroupForFailover(groupName string, force bool) error {
+	return gm.activateGroupInternal(groupName, force, false)
+}
+
 // ManualActivateGroupWithForce manually activates a specific group and deactivates others
 // force: 当为true时，即使组内没有健康端点也强制激活
+// v6.2: 冷却机制已移除
 func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force bool) error {
+	return gm.activateGroupInternal(groupName, force, true)
+}
+
+func (gm *GroupManager) activateGroupInternal(groupName string, force bool, recordManual bool) error {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
@@ -589,14 +529,12 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 		return fmt.Errorf("组不存在: %s", groupName)
 	}
 
-	// 检查冷却状态（强制激活仍需检查冷却）
-	if !targetGroup.CooldownUntil.IsZero() && time.Now().Before(targetGroup.CooldownUntil) {
-		remaining := targetGroup.CooldownUntil.Sub(time.Now())
-		return fmt.Errorf("组 %s 仍在冷却中，剩余时间: %v", groupName, remaining.Round(time.Second))
-	}
-
 	// v5.0: SQLite 模式下跳过健康检查（因为启动时健康检查还没开始）
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
+	activationLabel := "手动"
+	if !recordManual {
+		activationLabel = "故障转移"
+	}
 
 	// 检查健康端点
 	healthyCount := 0
@@ -624,8 +562,8 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 				return fmt.Errorf("组 %s 中没有健康的端点，无法激活。如需强制激活请使用强制模式", groupName)
 			}
 			// 强制激活：只有在没有健康端点时才允许
-			slog.Warn(fmt.Sprintf("⚠️ [强制激活] 用户强制激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
-				groupName, healthyCount, totalCount, time.Now().Format("2006-01-02 15:04:05")))
+			slog.Warn(fmt.Sprintf("⚠️ [强制激活] %s激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
+				activationLabel, groupName, healthyCount, totalCount, time.Now().Format("2006-01-02 15:04:05")))
 			slog.Error(fmt.Sprintf("🚨 [安全警告] 强制激活可能导致请求失败! 组: %s, 建议尽快检查端点健康状态", groupName))
 
 			// 标记强制激活
@@ -641,8 +579,8 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 			targetGroup.ForcedActivation = false
 			targetGroup.ForcedActivationTime = time.Time{}
 
-			slog.Info(fmt.Sprintf("🔄 [正常激活] 手动激活组: %s (健康端点: %d/%d)",
-				groupName, healthyCount, totalCount))
+			slog.Info(fmt.Sprintf("🔄 [正常激活] %s激活组: %s (健康端点: %d/%d)",
+				activationLabel, groupName, healthyCount, totalCount))
 		}
 	}
 
@@ -653,13 +591,52 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 
 	// 激活目标组
 	targetGroup.IsActive = true
-	targetGroup.ManualActivationTime = time.Now()
-	targetGroup.CooldownUntil = time.Time{}
+	if recordManual {
+		targetGroup.ManualActivationTime = time.Now()
+	}
+	// v6.2: CooldownUntil 已移除
+
+	if recordManual {
+		// v6.2.18: 重置目标组所有端点的 RequestFailed 状态
+		// 用户手动激活（重试）时，需要重置端点状态让它们重新参与请求路由
+		resetCount := 0
+		for _, ep := range targetGroup.Endpoints {
+			if ep == nil {
+				continue
+			}
+			ep.mutex.Lock()
+			if ep.Status.RequestFailed {
+				ep.Status.RequestFailed = false
+				ep.Status.Healthy = true      // 假定可用，依赖实际请求验证
+				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
+				resetCount++
+			}
+			ep.mutex.Unlock()
+		}
+		if resetCount > 0 {
+			slog.Info(fmt.Sprintf("🔄 [手动激活] 重置组 %s 中 %d 个端点的请求失败状态", groupName, resetCount))
+		}
+	}
 
 	// 通知订阅者
 	gm.notifyGroupChange(groupName)
 
 	return nil
+}
+
+// WasGroupManuallyActivatedSince 判断组是否在指定时间之后被手动激活
+func (gm *GroupManager) WasGroupManuallyActivatedSince(groupName string, since time.Time) bool {
+	if gm == nil {
+		return false
+	}
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+
+	group, exists := gm.groups[groupName]
+	if !exists || group == nil || group.ManualActivationTime.IsZero() {
+		return false
+	}
+	return !group.ManualActivationTime.Before(since)
 }
 
 // DeactivateGroup 停用指定组（用于故障转移时停用失败的端点）
@@ -737,6 +714,30 @@ func (gm *GroupManager) ManualPauseGroup(groupName string, duration time.Duratio
 	return nil
 }
 
+// ResetAllPausedGroups 重置所有渠道的暂停状态
+// 当启用渠道间转移时调用，确保所有渠道回到初始状态（显示"激活"而非"重试"）
+func (gm *GroupManager) ResetAllPausedGroups() {
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+
+	resetCount := 0
+	for name, group := range gm.groups {
+		if group == nil {
+			continue
+		}
+		if group.ManuallyPaused {
+			group.ManuallyPaused = false
+			gm.channelFailoverEnabled[name] = true
+			resetCount++
+		}
+	}
+
+	if resetCount > 0 {
+		slog.Info(fmt.Sprintf("🔄 [组管理] 已重置 %d 个渠道的暂停状态", resetCount))
+		gm.updateActiveGroups()
+	}
+}
+
 // ManualResumeGroup manually resumes a paused group
 func (gm *GroupManager) ManualResumeGroup(groupName string) error {
 	gm.mutex.Lock()
@@ -806,18 +807,13 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 
 		var status string
 		var statusColor string
-		var cooldownRemaining time.Duration
 
 		if group.IsActive {
 			status = "活跃"
 			statusColor = "success"
 		} else if group.ManuallyPaused {
-			status = "手动暂停"
+			status = "已暂停"
 			statusColor = "warning"
-		} else if !group.CooldownUntil.IsZero() && time.Now().Before(group.CooldownUntil) {
-			status = "冷却中"
-			statusColor = "danger"
-			cooldownRemaining = group.CooldownUntil.Sub(time.Now())
 		} else if healthyCount == 0 {
 			status = "无健康端点"
 			statusColor = "danger"
@@ -826,6 +822,7 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 			statusColor = "secondary"
 		}
 
+		// v6.2: 冷却机制已移除，简化状态字段
 		groupData := map[string]interface{}{
 			"name":                   group.Name,
 			"priority":               group.Priority,
@@ -836,15 +833,15 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 			"healthy_endpoints":      healthyCount,
 			"unhealthy_endpoints":    unhealthyCount,
 			"manually_paused":        group.ManuallyPaused,
-			"in_cooldown":            !group.CooldownUntil.IsZero() && time.Now().Before(group.CooldownUntil),
-			"cooldown_remaining":     cooldownRemaining.Round(time.Second).String(),
-			"can_activate":           healthyCount > 0 && !group.IsActive && (group.CooldownUntil.IsZero() || time.Now().After(group.CooldownUntil)),
+			"in_cooldown":            false, // v6.2: 冷却机制已移除，始终为 false
+			"cooldown_remaining":     "0s",  // v6.2: 向后兼容
+			"can_activate":           healthyCount > 0 && !group.IsActive,
 			"can_pause":              !group.ManuallyPaused,
 			"can_resume":             group.ManuallyPaused,
 			"forced_activation":      group.ForcedActivation,
 			"forced_activation_time": "",
 			"activation_type":        "normal",
-			"can_force_activate":     healthyCount == 0 && !group.IsActive && (group.CooldownUntil.IsZero() || time.Now().After(group.CooldownUntil)),
+			"can_force_activate":     healthyCount == 0 && !group.IsActive,
 		}
 
 		// 添加强制激活时间

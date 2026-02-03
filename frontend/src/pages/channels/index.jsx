@@ -47,6 +47,7 @@ import {
   deleteEndpointRecordByID,
   toggleEndpointRecordByID,
   setEndpointFailoverEnabledByID,
+  setEndpointSkipHealthCheckByID, // v6.2.11: 跳过健康检测
   getChannels,
   createChannel,
   updateChannel,
@@ -59,7 +60,11 @@ import {
   getConfig,
   isWailsEnvironment,
   openExternalURL,
-  subscribeToEvent
+  subscribeToEvent,
+  getSuspendedRequestsCount,
+  getSuspendedEndpointCounts,
+  getManualRetryRequestsCount,
+  getManualRetryChannelCounts
 } from '@utils/wailsApi.js';
 
 const getErrorMessage = (error, fallback = '操作失败') => {
@@ -236,6 +241,29 @@ const HealthBadge = ({ healthy, neverChecked, skipped }) => {
   );
 };
 
+// 请求失败徽章（与健康异常区分）
+const RequestFailedBadge = ({ failCode, failReason }) => {
+  const hasFailCode = Number.isFinite(Number(failCode)) && Number(failCode) > 0;
+  const hasFailReason = !!failReason;
+  const tooltipParts = [];
+  if (hasFailCode) tooltipParts.push(`状态码: ${failCode}`);
+  if (hasFailReason) tooltipParts.push(`原因: ${failReason}`);
+  const tooltip = tooltipParts.length > 0 ? tooltipParts.join('\n') : '请求失败';
+
+  return (
+    <div
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 whitespace-nowrap flex-shrink-0"
+      title={tooltip}
+    >
+      <XCircle size={10} className="mr-1" />
+      请求失败
+      {hasFailCode && (
+        <span className="ml-1 font-mono">({failCode})</span>
+      )}
+    </div>
+  );
+};
+
 // 延迟指示器
 const LatencyBadge = ({ ms, inScope = true }) => {
   if (!inScope) {
@@ -292,6 +320,14 @@ const normalizeBool = (value, defaultValue = true) => {
   return Boolean(value);
 };
 
+const buildSuspendedEndpointKey = (endpoint) => {
+  const channel = endpoint?.channel || '';
+  const name = endpoint?.name || '';
+  if (!channel) return name || '';
+  if (!name) return channel;
+  return `${channel}::${name}`;
+};
+
 // ============================================
 // 端点精简卡片（参考基础定价卡片）
 // ============================================
@@ -303,6 +339,7 @@ const EndpointMiniCard = ({
   channelFailoverEnabled = true,
   onOpen,
   onToggleFailover,
+  onToggleSkipHealthCheck, // v6.2.11: 跳过健康检测回调
   onEdit,
   onDelete
 }) => {
@@ -314,6 +351,11 @@ const EndpointMiniCard = ({
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
   const isNeverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
   const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
+  const healthState = endpoint.health_state || endpoint.healthState || '';
+  const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
+  const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
+  const isRequestFailed = healthState === 'request_failed';
+  const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
   const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
 
   const authType = getAuthType(endpoint);
@@ -398,6 +440,22 @@ const EndpointMiniCard = ({
                 >
                   <ArrowRightLeft size={14} />
                 </button>
+                {/* v6.2.11: 跳过健康检测快捷开关 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
+                  }}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    isSkipHealthCheck
+                      ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
+                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                  }`}
+                  title={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+                  aria-pressed={isSkipHealthCheck}
+                >
+                  <ShieldOff size={14} />
+                </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -424,8 +482,11 @@ const EndpointMiniCard = ({
         </div>
 
         <div className="flex items-center gap-2 mt-2 flex-wrap">
-          {inScope && (
+          {showHealthBadge && (
             <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} skipped={isSkipHealthCheck} />
+          )}
+          {isRequestFailed && (
+            <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
           )}
           {authType && (
             <span className="inline-flex items-center text-[10px] text-slate-500 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
@@ -455,7 +516,8 @@ const EndpointDetailModal = ({
   endpoint,
   isOpen,
   isSqliteMode,
-  failoverDefaultCooldownSeconds = 600,
+  channelFailoverEnabled = true,
+  // v6.2: failoverDefaultCooldownSeconds 已移除
   onClose,
   onEdit,
   onDelete
@@ -469,6 +531,16 @@ const EndpointDetailModal = ({
   const neverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
   const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
   const healthNeverChecked = !inScope || neverChecked;
+  const healthState = endpoint.health_state || endpoint.healthState || '';
+  const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
+  const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
+  const suspendedCountValue = Number.isFinite(Number(endpoint.suspendedCount || endpoint.suspended_count || 0))
+    ? Number(endpoint.suspendedCount || endpoint.suspended_count || 0)
+    : 0;
+  const isSuspended = suspendedCountValue > 0;
+  const isRequestFailed = healthState === 'request_failed';
+  const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
+  const hasFailDetail = (Number(lastFailCode) > 0) || !!lastFailReason;
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
@@ -488,12 +560,17 @@ const EndpointDetailModal = ({
 
   const rows = [
     { label: '优先级', value: endpoint.priority ?? '-' },
-    { label: '超时(s)', value: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? '-' },
+    {
+      label: '超时',
+      value: (() => {
+        const timeout = endpoint.timeoutSeconds ?? endpoint.timeout_seconds;
+        if (!timeout || timeout === 300) return '默认 (300s)';
+        return `${timeout}s`;
+      })()
+    },
   ];
 
-  const endpointCooldownSeconds = endpoint.cooldownSeconds ?? endpoint.cooldown_seconds;
-  const cooldownUsesGlobal = endpointCooldownSeconds == null;
-  const cooldownSeconds = endpointCooldownSeconds ?? failoverDefaultCooldownSeconds ?? '-';
+  // v6.2: cooldown 相关变量已移除
   const hasToken = !!(tokenRaw || tokenMasked);
   const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
 
@@ -523,7 +600,12 @@ const EndpointDetailModal = ({
             </p>
 
             <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
-              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
+              {showHealthBadge && (
+                <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
+              )}
+              {isRequestFailed && (
+                <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
+              )}
               <LatencyBadge ms={responseTime} inScope={inScope} />
 
               <span
@@ -606,21 +688,89 @@ const EndpointDetailModal = ({
             ))}
           </div>
 
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-xs text-slate-500">冷却(s)</div>
-                {cooldownUsesGlobal && (
-                  <span className="text-[10px] text-slate-400 bg-white/70 px-2 py-0.5 rounded border border-slate-200">
-                    全局默认
-                  </span>
-                )}
-              </div>
-              <div className="text-sm font-semibold text-slate-900 break-all">
-                {String(cooldownSeconds)}
+          {/* 挂起详情（挂起优先展示） */}
+          {isSuspended && (
+            <div className="mt-4">
+              <div className="bg-amber-50 rounded-xl p-4 border border-amber-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock size={16} className="text-amber-600" />
+                  <div className="text-sm font-medium text-amber-800">挂起详情</div>
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-600 font-medium min-w-[70px]">挂起请求:</span>
+                    <span className="font-mono text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                      {suspendedCountValue}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-amber-600 font-medium min-w-[70px]">等待说明:</span>
+                    <span className="text-amber-900">
+                      {channelFailoverEnabled
+                        ? '请求已挂起等待端点恢复或自动切换渠道。'
+                        : '请求已挂起，等待用户点击「重试」按钮重新尝试当前渠道。'}
+                    </span>
+                  </div>
+                  {hasFailDetail && (
+                    <div className="pt-2 border-t border-amber-200/60">
+                      <div className="text-xs text-amber-700 mb-1">最近失败</div>
+                      <div className="space-y-2 text-sm">
+                        {lastFailCode > 0 && (
+                          <div className="flex items-start gap-2">
+                            <span className="text-amber-600 font-medium min-w-[70px]">状态码:</span>
+                            <span className="font-mono text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                              {lastFailCode}
+                            </span>
+                          </div>
+                        )}
+                        {lastFailReason && (
+                          <div className="flex items-start gap-2">
+                            <span className="text-amber-600 font-medium min-w-[70px]">失败原因:</span>
+                            <span className="text-amber-900 break-all">
+                              {lastFailReason}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
+          )}
 
+          {/* v6.2.10: 异常详情显示 - 有错误信息时显示 */}
+          {!isSuspended && hasFailDetail && (
+            <div className="mt-4">
+              <div className="bg-rose-50 rounded-xl p-4 border border-rose-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <XCircle size={16} className="text-rose-600" />
+                  <div className="text-sm font-medium text-rose-800">异常详情</div>
+                </div>
+                <div className="space-y-2 text-sm">
+                  {lastFailCode > 0 && (
+                    <div className="flex items-start gap-2">
+                      <span className="text-rose-600 font-medium min-w-[70px]">状态码:</span>
+                      <span className="font-mono text-rose-900 bg-rose-100 px-2 py-0.5 rounded">
+                        {lastFailCode}
+                      </span>
+                    </div>
+                  )}
+                  {lastFailReason && (
+                    <div className="flex items-start gap-2">
+                      <span className="text-rose-600 font-medium min-w-[70px]">失败原因:</span>
+                      <span className="text-rose-900 break-all">
+                        {lastFailReason}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* v6.2: 冷却时间显示已移除（loop_retry 模式下与循环重试逻辑冲突） */}
+          <div className="mt-4">
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-xs text-slate-500">Token（脱敏）</div>
@@ -712,7 +862,8 @@ const CreateChannelModal = ({
   const isEdit = mode === 'edit';
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
-  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority || 1) : 1));
+  // v6.2.1: 新建时传 0，让后端自动递增；编辑时使用原有优先级
+  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority || 1) : 0));
   const [error, setError] = useState('');
 
   if (!open) return null;
@@ -749,6 +900,7 @@ const CreateChannelModal = ({
             onSubmit?.({ name: trimmedName, website: website.trim(), priority });
           }}
           className="p-6 space-y-4"
+          autoComplete="off"
         >
           {(error || serverError) && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
@@ -757,8 +909,8 @@ const CreateChannelModal = ({
           )}
 
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="sm:col-span-2">
+            <div className={isEdit ? 'grid grid-cols-1 sm:grid-cols-3 gap-4' : ''}>
+              <div className={isEdit ? 'sm:col-span-2' : ''}>
                 <label className="block text-sm font-medium text-slate-700">
                   渠道名称 <span className="text-rose-500">*</span>
                 </label>
@@ -766,27 +918,35 @@ const CreateChannelModal = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="例如：official / backup / openai"
-                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  disabled={loading}
-                  readOnly={isEdit}
+                  autoComplete="off"
+                  data-form-type="other"
+                  className={`mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 ${
+                    isEdit ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''
+                  }`}
+                  disabled={loading || isEdit}
                 />
                 {isEdit && (
                   <p className="text-xs text-slate-400 mt-1">渠道名称用于关联端点，不支持修改</p>
                 )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-slate-700">优先级</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value)}
-                  className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  disabled={loading}
-                />
-                <p className="text-xs text-slate-400 mt-1">仅在启用渠道间故障转移时生效，数字越小越优先</p>
-              </div>
+              {/* 优先级字段仅在编辑模式显示，新建时自动递增 */}
+              {isEdit && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700">优先级</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value)}
+                    autoComplete="off"
+                    data-form-type="other"
+                    className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    disabled={loading}
+                  />
+                  <p className="text-xs text-slate-400 mt-1">数字越小越优先，相同则交换</p>
+                </div>
+              )}
             </div>
 
             <div>
@@ -795,6 +955,8 @@ const CreateChannelModal = ({
                 value={website}
                 onChange={(e) => setWebsite(e.target.value)}
                 placeholder="https://example.com (可选)"
+                autoComplete="off"
+                data-form-type="other"
                 className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 disabled={loading}
               />
@@ -829,6 +991,7 @@ const ChannelCard = ({
   activeChannelName = '',
   isSqliteMode = false,
   channelFailoverEnabled = true,
+  suspendedRequestsCount = 0,
   expanded = false,
   onToggleExpanded,
   onActivate,
@@ -840,17 +1003,30 @@ const ChannelCard = ({
   onDeleteChannel,
   onOpenEndpoint,
   onToggleEndpointFailover,
+  onToggleEndpointSkipHealthCheck, // v6.2.11: 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
+  manualRetryCount = 0,
   loading = false
 }) => {
   const scopedEndpoints = endpoints.filter(e => e._health_scope !== false);
-  const scopedHealthyCount = scopedEndpoints.filter(e => e.healthy).length;
+  // 跳过检测的端点数
+  const scopedSkippedCount = scopedEndpoints.filter(e => e.skipHealthCheck || e.skip_health_check).length;
+  // 健康统计：跳过检测的端点视为健康
+  const scopedHealthyCount = scopedEndpoints.filter(e => e.healthy || e.skipHealthCheck || e.skip_health_check).length;
   const scopedTotalCount = scopedEndpoints.length;
 
   const totalCount = endpoints.length;
   const hasEndpoints = totalCount > 0;
   const hasGroupInfo = !!groupInfo;
+  const suspendedEndpointCount = endpoints.filter((endpoint) => {
+    const count = endpoint?.suspendedCount || endpoint?.suspended_count || 0;
+    return Number(count) > 0;
+  }).length;
+  const manualRetryCountValue = Number.isFinite(Number(manualRetryCount))
+    ? Number(manualRetryCount)
+    : 0;
+  const hasManualRetry = manualRetryCountValue > 0;
 
   const isActive = groupInfo?.active
     ?? (isSqliteMode ? endpoints.some(e => e.enabled) : (activeChannelName === channelName));
@@ -861,9 +1037,23 @@ const ChannelCard = ({
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
 
-  const activeHighlightClass = channelFailoverEnabled
-    ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'
-    : 'border-indigo-300 ring-2 ring-indigo-100';
+  // 判断是否处于"全部失败"警示状态（用于渠道卡片内的提示框）：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
+  const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+  const hasSuspendedRequests = suspendedRequestsCount > 0;
+  const showSuspendedPrompt = !channelFailoverEnabled && isActive && hasSuspendedRequests;
+  const showRetryButton = isAllEndpointsFailed || (isActive && hasSuspendedRequests) || hasManualRetry;
+  const showRetryOnInactive = hasManualRetry;
+
+  // v6.2.12: 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
+  const isActiveChannelAllFailed = isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+
+  // 活跃渠道边框样式
+  // v6.2.12: 优先判断全部失败，显示红色边框（无论是否启用渠道间转移）
+  const activeHighlightClass = isActiveChannelAllFailed
+    ? 'border-rose-400 ring-2 ring-rose-100'  // 全部失败 → 红色
+    : channelFailoverEnabled
+      ? 'border-[#FF9933] ring-2 ring-[#FF9933]/20'  // 开启渠道间转移 → 橙色
+      : 'border-indigo-300 ring-2 ring-indigo-100';  // 关闭渠道间转移 → 靛蓝色
 
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;
@@ -884,13 +1074,21 @@ const ChannelCard = ({
           ? 'bg-slate-50 text-slate-700 border-slate-200'
           : 'bg-slate-50 text-slate-500 border-slate-200';
 
+  // 健康标签颜色判断
+  // - 无端点/不在检查范围 → 灰色
+  // - 全部健康（无跳过贡献）→ 绿色
+  // - 全部健康（有跳过贡献）→ 紫色
+  // - 部分健康 → 橙色
+  // - 全部失败 → 红色
   const healthTone = !hasEndpoints || scopedTotalCount === 0
     ? 'bg-slate-50 text-slate-500 border-slate-200'
     : scopedHealthyCount === scopedTotalCount
-      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      ? scopedSkippedCount > 0
+        ? 'bg-purple-50 text-purple-700 border-purple-200'  // 全健康但有跳过 → 紫色
+        : 'bg-emerald-50 text-emerald-700 border-emerald-200'  // 全健康无跳过 → 绿色
       : scopedHealthyCount > 0
-        ? 'bg-amber-50 text-amber-800 border-amber-200'
-        : 'bg-rose-50 text-rose-700 border-rose-200';
+        ? 'bg-amber-50 text-amber-800 border-amber-200'  // 部分健康 → 橙色
+        : 'bg-rose-50 text-rose-700 border-rose-200';  // 全部失败 → 红色
 
   return (
     <div className={`
@@ -922,52 +1120,76 @@ const ChannelCard = ({
 
           {/* 渠道操作 */}
           <div className="flex items-center gap-2 flex-shrink-0">
+          {/* v6.2.5: 非激活渠道按钮逻辑
+              - 开启渠道间转移 + 渠道已暂停：显示"激活"（仅激活，需先点恢复）
+              - 其他情况：显示"激活"
+          */}
           {!isActive && isSqliteMode && hasEndpoints && (
             <Button
               size="sm"
-              icon={Power}
+              icon={showRetryOnInactive ? RefreshCw : Power}
               className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
               onClick={() => onActivate?.(channelName)}
-              disabled={loading}
+              disabled={loading || (channelFailoverEnabled && isPaused)}
+              title={
+                channelFailoverEnabled && isPaused
+                  ? '请先点击"恢复"按钮取消暂停状态'
+                  : (showRetryOnInactive ? '重试此渠道' : '激活此渠道')
+              }
             >
-              激活
+              {showRetryOnInactive ? '重试' : '激活'}
             </Button>
           )}
           {isActive && isSqliteMode && (
-            <Button
-              size="sm"
-              variant="dangerSoft"
-              className="px-2.5 py-1 rounded-full text-[11px] font-semibold hover:translate-y-0"
-              icon={Power}
-              onClick={() => onDeactivate?.(channelName)}
-              disabled={loading}
-            >
-              停用
-            </Button>
+            showRetryButton ? (
+              <Button
+                size="sm"
+                icon={RefreshCw}
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold border border-transparent hover:translate-y-0"
+                onClick={() => onActivate?.(channelName)}
+                disabled={loading}
+              >
+                重试
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="dangerSoft"
+                className="px-2.5 py-1 rounded-full text-[11px] font-semibold hover:translate-y-0"
+                icon={Power}
+                onClick={() => onDeactivate?.(channelName)}
+                disabled={loading}
+              >
+                停用
+              </Button>
+            )
           )}
-          {hasGroupInfo && !isPaused ? (
+          {/* v6.2.5: 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
+          {channelFailoverEnabled && hasGroupInfo && !isPaused && (
             <Button
               size="sm"
               variant="ghost"
               icon={Pause}
               onClick={() => onPause?.(channelName)}
-              disabled={pauseDisabled}
-              title={!channelFailoverEnabled ? '已关闭渠道间故障转移：不可暂停渠道' : undefined}
+              disabled={loading}
+              title="暂停此渠道，使其不参与渠道间转移"
             >
               暂停
             </Button>
-          ) : hasGroupInfo ? (
+          )}
+          {/* 恢复按钮仅在非活跃且已暂停时显示（活跃渠道一定是未暂停的） */}
+          {channelFailoverEnabled && hasGroupInfo && isPaused && !isActive && (
             <Button
               size="sm"
               variant="ghost"
               icon={Play}
               onClick={() => onResume?.(channelName)}
-              disabled={pauseDisabled}
-              title={!channelFailoverEnabled ? '已关闭渠道间故障转移：不可恢复渠道' : undefined}
+              disabled={loading}
+              title="恢复此渠道，使其重新参与渠道间转移"
             >
               恢复
             </Button>
-          ) : null}
+          )}
           {isSqliteMode && (
             <Button
               size="sm"
@@ -1016,14 +1238,27 @@ const ChannelCard = ({
               备用
             </span>
           )}
-          {isPaused && (
+          {isPaused && channelFailoverEnabled && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
               已暂停
             </span>
           )}
-          {groupInfo?.in_cooldown && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
-              冷却中
+          {/* v6.2: 冷却状态显示已移除 */}
+          {isAllEndpointsFailed && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-600 border border-rose-200 whitespace-nowrap">
+              全部失败
+            </span>
+          )}
+          {hasManualRetry && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+              <RefreshCw size={10} />
+              待重试 <span className="font-semibold">{manualRetryCountValue}</span>
+            </span>
+          )}
+          {!hasManualRetry && suspendedEndpointCount > 0 && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+              <Clock size={10} />
+              挂起 <span className="font-semibold">{suspendedEndpointCount}</span>
             </span>
           )}
 
@@ -1040,6 +1275,42 @@ const ChannelCard = ({
             </span>
           </span>
         </div>
+
+        {/* 挂起等待提示（仅在活跃渠道显示） */}
+        {showSuspendedPrompt && (
+          <div className="mt-3 p-2.5 bg-purple-50/70 border border-purple-200 rounded-lg flex items-start gap-2">
+            <div className="p-1.5 bg-purple-100 rounded-full flex-shrink-0 animate-pulse">
+              <Clock className="w-3.5 h-3.5 text-purple-600" />
+            </div>
+            <div className="flex-1 text-xs text-purple-800">
+              <div className="font-medium">
+                {suspendedRequestsCount} 个请求正在等待端点恢复
+              </div>
+              <div className="text-[11px] text-purple-700 mt-0.5">
+                请求已挂起，点击「重试」按钮重新尝试当前渠道或激活其他渠道。
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 全部失败时的操作提示 */}
+        {isAllEndpointsFailed && (
+          <div className="mt-3 p-2.5 bg-rose-50/50 border border-rose-100 rounded-lg">
+            <p className="text-xs text-rose-600 mb-2">
+              当前渠道所有端点均不可用，请求将快速失败
+            </p>
+            <div className="flex items-center gap-2 text-[11px]">
+              <span className="text-slate-500">可选操作：</span>
+              <span className="px-2 py-0.5 bg-white border border-rose-200 rounded text-rose-600">
+                继续重试当前渠道
+              </span>
+              <span className="text-slate-400">或</span>
+              <span className="px-2 py-0.5 bg-white border border-indigo-200 rounded text-indigo-600">
+                手动切换其他渠道
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 端点卡片列表（精简展示） */}
@@ -1058,6 +1329,7 @@ const ChannelCard = ({
               channelFailoverEnabled={channelFailoverEnabled}
               onOpen={onOpenEndpoint}
               onToggleFailover={onToggleEndpointFailover}
+              onToggleSkipHealthCheck={onToggleEndpointSkipHealthCheck}
               onEdit={onEditEndpoint}
               onDelete={onDeleteEndpoint}
             />
@@ -1106,7 +1378,8 @@ const ChannelsPage = () => {
   const [storageLoading, setStorageLoading] = useState(false);
 
   // 判断存储模式（用于控制 Hook 行为）
-  const isSqliteMode = storageStatus?.storageType === 'sqlite' && storageStatus?.enabled;
+  // v6.2.12: 只检查 storageType，不再依赖 enabled（enabled 表示服务是否初始化，配置重载期间可能暂时为 false）
+  const isSqliteMode = storageStatus?.storageType === 'sqlite';
 
   // 使用端点数据 Hook（YAML 模式需要；SQLite 模式仅保留操作能力，避免后台自动拉取/订阅导致卡住）
   const {
@@ -1124,8 +1397,14 @@ const ChannelsPage = () => {
   const [groups, setGroups] = useState([]);
   const [channelActionLoading, setChannelActionLoading] = useState(false);
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(true);
-  const [failoverDefaultCooldownSeconds, setFailoverDefaultCooldownSeconds] = useState(600);
+  // v6.2: failoverDefaultCooldownSeconds 已移除
   const [channelsMeta, setChannelsMeta] = useState([]);
+
+  // v6.0.7+ 挂起请求计数（用于显示等待提示）
+  const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
+  const [suspendedEndpointCounts, setSuspendedEndpointCounts] = useState({});
+  const [manualRetryRequestsCount, setManualRetryRequestsCount] = useState(0);
+  const [manualRetryChannelCounts, setManualRetryChannelCounts] = useState({});
 
   // 批量检测状态
   const [batchCheckLoading, setBatchCheckLoading] = useState(false);
@@ -1182,7 +1461,8 @@ const ChannelsPage = () => {
       setStorageStatus(status);
 
       // 如果是 SQLite 模式，加载存储的端点
-      if (status.storageType === 'sqlite' && status.enabled) {
+      // v6.2.12: 只检查 storageType，不再依赖 enabled
+      if (status.storageType === 'sqlite') {
         const records = await getEndpointRecords();
         if (seq !== storageLoadSeqRef.current) return;
         setStorageEndpoints(records);
@@ -1220,7 +1500,8 @@ const ChannelsPage = () => {
 
   const loadChannelsMeta = useCallback(async () => {
     const seq = ++channelsMetaLoadSeqRef.current;
-    const sqliteEnabled = storageStatus?.storageType === 'sqlite' && storageStatus?.enabled;
+    // v6.2.12: 只检查 storageType
+    const sqliteEnabled = storageStatus?.storageType === 'sqlite';
     if (!sqliteEnabled) {
       if (seq === channelsMetaLoadSeqRef.current) {
         setChannelsMeta([]);
@@ -1243,15 +1524,34 @@ const ChannelsPage = () => {
       const cfg = await getConfig();
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(cfg?.failover_enabled !== false);
-      const cooldownSeconds = Number(cfg?.failover_default_cooldown_seconds);
-      setFailoverDefaultCooldownSeconds(
-        Number.isFinite(cooldownSeconds) && cooldownSeconds > 0 ? cooldownSeconds : 600
-      );
+      // v6.2: cooldownSeconds 加载已移除
     } catch (err) {
       console.error('获取配置失败:', err);
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(true);
-      setFailoverDefaultCooldownSeconds(600);
+    }
+  }, []);
+
+  // v6.0.7+ 加载挂起请求计数
+  const loadSuspendedCount = useCallback(async () => {
+    try {
+      const [count, endpointCounts, manualCount, manualChannelCounts] = await Promise.all([
+        getSuspendedRequestsCount(),
+        getSuspendedEndpointCounts(),
+        getManualRetryRequestsCount(),
+        getManualRetryChannelCounts()
+      ]);
+      setSuspendedRequestsCount(count || 0);
+      setSuspendedEndpointCounts(
+        endpointCounts && !Array.isArray(endpointCounts) ? endpointCounts : {}
+      );
+      setManualRetryRequestsCount(manualCount || 0);
+      setManualRetryChannelCounts(
+        manualChannelCounts && !Array.isArray(manualChannelCounts) ? manualChannelCounts : {}
+      );
+    } catch (err) {
+      // 静默处理错误，不影响页面正常使用
+      console.debug('获取挂起请求数量失败:', err);
     }
   }, []);
 
@@ -1270,6 +1570,22 @@ const ChannelsPage = () => {
     }
   }, [loadGroups, loadStorageStatus]);
 
+  // v6.2.11: 跳过健康检测快捷开关处理函数
+  const handleToggleEndpointSkipHealthCheck = useCallback(async (endpoint, skip) => {
+    if (!endpoint?.id) return;
+    try {
+      setChannelActionLoading(true);
+      await setEndpointSkipHealthCheckByID(endpoint.id, skip);
+      await loadStorageStatus();
+      await loadGroups();
+    } catch (err) {
+      console.error('切换跳过健康检测状态失败:', err);
+      setActionError(`操作失败: ${getErrorMessage(err, '未知错误')}`);
+    } finally {
+      setChannelActionLoading(false);
+    }
+  }, [loadGroups, loadStorageStatus]);
+
   useEffect(() => {
     loadGroups();
   }, [loadGroups]);
@@ -1277,6 +1593,13 @@ const ChannelsPage = () => {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  // v6.0.7+ 定时获取挂起请求数量（页面加载时立即获取，之后每2秒轮询）
+  useEffect(() => {
+    loadSuspendedCount();
+    const interval = setInterval(loadSuspendedCount, 2000);
+    return () => clearInterval(interval);
+  }, [loadSuspendedCount]);
 
   useEffect(() => {
     loadChannelsMeta();
@@ -1297,7 +1620,8 @@ const ChannelsPage = () => {
   // SQLite 模式下监听 Wails 事件，实时刷新端点数据
   const isSqliteModeRef = useRef(false);
   useEffect(() => {
-    isSqliteModeRef.current = storageStatus?.storageType === 'sqlite' && storageStatus?.enabled;
+    // v6.2.12: 只检查 storageType
+    isSqliteModeRef.current = storageStatus?.storageType === 'sqlite';
   }, [storageStatus]);
 
   useEffect(() => {
@@ -1347,13 +1671,18 @@ const ChannelsPage = () => {
   // 渠道卡片“显示全部/收起”：只允许展开一个渠道，避免同一行两列联动展开导致误触
   const [expandedChannelName, setExpandedChannelName] = useState('');
 
-  // 点击渠道卡片外部区域时自动收起
+  // 点击渠道卡片外部区域时自动收起（排除弹窗区域）
   useEffect(() => {
     if (!expandedChannelName) return;
     if (typeof document === 'undefined') return;
 
     const onPointerDown = (event) => {
       const target = event?.target;
+
+      // 如果点击在弹窗内（固定定位的遮罩层或其内部），不收缩渠道
+      const inModal = target?.closest?.('.fixed.inset-0');
+      if (inModal) return;
+
       const card = target?.closest?.('[data-channel-card]');
       const clickedChannelName = card?.getAttribute?.('data-channel-card') || '';
       if (clickedChannelName !== expandedChannelName) {
@@ -1419,10 +1748,13 @@ const ChannelsPage = () => {
   const scopedDisplayEndpoints = useMemo(() => {
     return (displayEndpoints || []).map((ep) => ({
       ...ep,
+      suspendedCount: Number.isFinite(Number(suspendedEndpointCounts?.[buildSuspendedEndpointKey(ep)] ?? 0))
+        ? Number(suspendedEndpointCounts?.[buildSuspendedEndpointKey(ep)] ?? 0)
+        : 0,
       _health_scope: isEndpointInHealthScope(ep),
       _channel_paused: Boolean(groupInfoMap.get(ep?.group || ep?.channel || ep?.name || 'default')?.paused)
     }));
-  }, [displayEndpoints, groupInfoMap, isEndpointInHealthScope]);
+  }, [displayEndpoints, groupInfoMap, isEndpointInHealthScope, suspendedEndpointCounts]);
 
   const channelSections = useMemo(() => {
     const getChannelKey = (ep) => ep.group || ep.channel || ep.name || 'default';
@@ -1490,25 +1822,43 @@ const ChannelsPage = () => {
   }, [channelSections.length]);
 
   // 计算统计数据
+  // v6.2: 冷却机制已移除
   const isSkippedEndpoint = (e) => e?.skipHealthCheck || e?.skip_health_check;
   const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
   const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
-  const cooldownChannelCount = groups.filter(g => g?.in_cooldown).length;
+
+  // v6.2.4: 计算检测范围内的渠道数
+  const scopedChannelCount = useMemo(() => {
+    if (!channelFailoverEnabled) {
+      // 关闭渠道间转移：仅活跃渠道
+      return activeChannel ? 1 : 0;
+    }
+    // 开启渠道间转移：参与的渠道数（非暂停）
+    return channelSections.filter(section => {
+      const gi = groupInfoMap.get(section.name);
+      return !gi?.paused;
+    }).length;
+  }, [channelFailoverEnabled, activeChannel, channelSections, groupInfoMap]);
+
+  // 检测范围内的端点数
+  const scopedEndpointCount = useMemo(() => {
+    return scopedDisplayEndpoints.filter(e => e._health_scope).length;
+  }, [scopedDisplayEndpoints]);
 
   const displayStats = isSqliteMode
     ? {
         total: scopedDisplayEndpoints.length,
         skipped: scopedDisplayEndpoints.filter(e => e._health_scope && isSkippedEndpoint(e)).length,
-        healthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length,
+        // v6.2.5: 健康端点包含跳过检测的端点（与概览页面一致）
+        healthy: scopedDisplayEndpoints.filter(e => e._health_scope && (isSkippedEndpoint(e) || (e.healthy && !isNeverCheckedEndpoint(e)))).length,
         unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !e.healthy && hasLastCheck(e) && !isNeverCheckedEndpoint(e)).length,
         unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || (!isSkippedEndpoint(e) && isNeverCheckedEndpoint(e))).length,
-        cooldown: cooldownChannelCount,
         healthPercentage: (scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) > 0
           ? ((scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && e.healthy && !isNeverCheckedEndpoint(e)).length /
               scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !isNeverCheckedEndpoint(e)).length) * 100).toFixed(1)
           : 0
       }
-    : { ...stats, skipped: stats.skipped || 0, cooldown: cooldownChannelCount };
+    : { ...stats, skipped: stats.skipped || 0 };
 
   // ============================================
   // CRUD 操作处理
@@ -1744,22 +2094,24 @@ const ChannelsPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className={displayStats.cooldown > 0 ? 'grid grid-cols-7 gap-4 mb-6' : 'grid grid-cols-6 gap-4 mb-6'}>
+      <div className="grid grid-cols-6 gap-4 mb-6">
+        {/* v6.2.4: 检测范围统计 */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-slate-900">{channelSections.length}</div>
-          <div className="text-sm text-slate-500">总渠道数</div>
+          <div className="text-2xl font-bold text-slate-900">
+            {scopedChannelCount}
+            <span className="text-sm font-normal text-slate-400 ml-1">/ {channelSections.length}</span>
+          </div>
+          <div className="text-sm text-slate-500">
+            {channelFailoverEnabled ? '参与渠道' : '活跃渠道'}
+          </div>
         </div>
         <div className="bg-white rounded-xl border border-indigo-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-indigo-600">
-            {activeChannel ? 1 : 0}
+            {scopedEndpointCount}
+            <span className="text-sm font-normal text-slate-400 ml-1">/ {scopedDisplayEndpoints.length}</span>
           </div>
           <div className="text-sm text-slate-500">
-            当前激活
-            {activeChannel && (
-              <div className="text-xs text-indigo-500 mt-1 truncate">
-                {activeChannel}
-              </div>
-            )}
+            参与端点
           </div>
         </div>
         <div className="bg-white rounded-xl border border-emerald-200/60 p-4 shadow-sm">
@@ -1774,18 +2126,74 @@ const ChannelsPage = () => {
           <div className="text-2xl font-bold text-rose-600">{displayStats.unhealthy}</div>
           <div className="text-sm text-slate-500">异常端点</div>
         </div>
-        {/* 冷却中端点卡片 - 仅在有冷却端点时显示 */}
-        {displayStats.cooldown > 0 && (
-          <div className="bg-white rounded-xl border border-amber-200/60 p-4 shadow-sm">
-            <div className="text-2xl font-bold text-amber-600">{displayStats.cooldown}</div>
-            <div className="text-sm text-slate-500">冷却中</div>
-          </div>
-        )}
+        {/* v6.2.5: 未参与端点（failoverEnabled=false 或 不在检测范围内） */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-400">{displayStats.unchecked}</div>
-          <div className="text-sm text-slate-500">未检测端点</div>
+          <div className="text-sm text-slate-500">未参与端点</div>
         </div>
       </div>
+
+      {channelFailoverEnabled && manualRetryRequestsCount > 0 && (
+        <div className="mb-6 p-4 bg-amber-50/70 border border-amber-200 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-amber-100 rounded-full flex-shrink-0 animate-pulse">
+            <RefreshCw className="w-4 h-4 text-amber-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-amber-900">
+              已达到最大循环轮数，等待用户操作 ({manualRetryRequestsCount})
+            </div>
+            <div className="text-sm text-amber-700 mt-1">
+              请在参与失败的渠道上点击「重试」以重新开始转移链路。
+            </div>
+          </div>
+        </div>
+      )}
+      {channelFailoverEnabled && manualRetryRequestsCount === 0 && suspendedRequestsCount > 0 && (
+        <div className="mb-6 p-4 bg-purple-50/70 border border-purple-200 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-purple-100 rounded-full flex-shrink-0 animate-pulse">
+            <Clock className="w-4 h-4 text-purple-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-purple-900">
+              {suspendedRequestsCount} 个请求正在等待端点恢复
+            </div>
+            <div className="text-sm text-purple-700 mt-1">
+              请求已挂起等待端点恢复或自动切换渠道。
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v6.2.5: 全部端点失败警示 - 仅在启用渠道间故障转移时显示全局警示；未启用时在渠道卡片内显示 */}
+      {channelFailoverEnabled && scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
+        <div className="mb-6 p-4 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-3">
+          <div className="p-2 bg-rose-100 rounded-full flex-shrink-0">
+            <AlertTriangle className="w-5 h-5 text-rose-600" />
+          </div>
+          <div className="flex-1">
+            <div className="font-semibold text-rose-900">
+              所有端点均处于不可用状态
+            </div>
+            <div className="text-sm text-rose-700 mt-1">
+              当前 {scopedChannelCount} 个参与渠道共 {scopedEndpointCount} 个端点全部异常，请求将根据恢复策略处理（快速失败/循环重试/智能等待）。
+            </div>
+            <div className="flex items-center gap-3 mt-3 text-[11px]">
+              <span className="text-slate-500">建议操作：</span>
+              <span className="px-2 py-0.5 bg-white border border-rose-200 rounded text-rose-600">
+                检查端点配置和网络连接
+              </span>
+              <span className="text-slate-400">或</span>
+              <span className="px-2 py-0.5 bg-white border border-indigo-200 rounded text-indigo-600">
+                恢复已暂停的渠道
+              </span>
+              <span className="text-slate-400">或</span>
+              <span className="px-2 py-0.5 bg-white border border-emerald-200 rounded text-emerald-600">
+                添加新的端点/渠道
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 渠道分块列表 */}
       {channelSections.length === 0 ? (
@@ -1820,6 +2228,8 @@ const ChannelsPage = () => {
               activeChannelName={activeChannel}
               isSqliteMode={isSqliteMode}
               channelFailoverEnabled={channelFailoverEnabled}
+              suspendedRequestsCount={suspendedRequestsCount}
+              manualRetryCount={manualRetryChannelCounts?.[section.name] ?? 0}
               expanded={expandedChannelName === section.name}
               onToggleExpanded={() => {
                 setExpandedChannelName((prev) => (prev === section.name ? '' : section.name));
@@ -1827,6 +2237,7 @@ const ChannelsPage = () => {
               loading={channelActionLoading || deactivateChannelLoading}
               onOpenEndpoint={openEndpointDetail}
               onToggleEndpointFailover={isSqliteMode ? handleToggleEndpointFailover : undefined}
+              onToggleEndpointSkipHealthCheck={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
               onActivate={async (channelName) => {
                 if (channelFailoverEnabled && section.groupInfo?.paused) {
                   setActionError(`激活失败：渠道「${channelName}」已暂停，无法激活。\n请先点击「恢复」后再激活该渠道。`);
@@ -2064,7 +2475,7 @@ const ChannelsPage = () => {
         endpoint={detailTarget}
         isOpen={detailOpen}
         isSqliteMode={isSqliteMode}
-        failoverDefaultCooldownSeconds={failoverDefaultCooldownSeconds}
+        channelFailoverEnabled={channelFailoverEnabled}
         onClose={closeEndpointDetail}
         onEdit={(ep) => {
           closeEndpointDetail();

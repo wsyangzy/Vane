@@ -9,12 +9,12 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"time"
 )
 
 // GetHealthyEndpoints returns a list of healthy endpoints from active groups based on strategy.
-// v6.0: 以“渠道(channel)”为单位路由，优先只返回当前激活渠道内的端点；
+// v6.0: 以"渠道(channel)"为单位路由，优先只返回当前激活渠道内的端点；
 // 跨渠道切换由请求级故障转移触发（见 TriggerRequestFailover）。
+// v6.2: 冷却机制已移除
 func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 	// v5.0+: 使用快照机制
 	m.endpointsMu.RLock()
@@ -25,7 +25,6 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 	// 1. 首先尝试获取活跃组（当前激活渠道）的端点
 	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
 
-	now := time.Now()
 	var healthy []*Endpoint
 	for _, endpoint := range activeEndpoints {
 		// 检查是否参与故障转移（默认为 true），不参与则不作为代理候选
@@ -39,15 +38,13 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
-		// 检查是否在请求冷却中
-		inCooldown := !endpoint.Status.CooldownUntil.IsZero() && now.Before(endpoint.Status.CooldownUntil)
 		endpoint.mutex.RUnlock()
 
-		if (isHealthy || skipHealthCheck) && !inCooldown {
+		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
-		} else if inCooldown {
-			slog.Debug(fmt.Sprintf("⏭️ [端点选择] 跳过冷却中的端点: %s", endpoint.Config.Name))
 		}
 	}
 
@@ -151,10 +148,12 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		if isHealthy || skipHealthCheck {
+		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
 	}
@@ -392,4 +391,124 @@ func (m *Manager) GetEndpointCount() int {
 	m.endpointsMu.RLock()
 	defer m.endpointsMu.RUnlock()
 	return len(m.endpoints)
+}
+
+// GetHealthyEndpointsExcluding 获取健康端点列表，排除已尝试的端点
+// v6.1: 用于实现严格优先级转移逻辑，确保在同一请求链路内只能向下一优先级转移
+// v6.2: 冷却机制已移除
+// excludeKeys: 已尝试端点的 key 列表（channel::name 格式）
+func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint {
+	// 构建排除集合
+	excludeSet := make(map[string]struct{}, len(excludeKeys))
+	for _, key := range excludeKeys {
+		if key != "" {
+			excludeSet[key] = struct{}{}
+		}
+	}
+
+	// v5.0+: 使用快照机制
+	m.endpointsMu.RLock()
+	snapshot := make([]*Endpoint, len(m.endpoints))
+	copy(snapshot, m.endpoints)
+	m.endpointsMu.RUnlock()
+
+	// 1. 首先尝试获取活跃组（当前激活渠道）的端点
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
+
+	var healthy []*Endpoint
+	for _, endpoint := range activeEndpoints {
+		// 检查是否在排除列表中
+		// v6.2.9: 移除高频 DEBUG 日志，避免循环重试时日志膨胀
+		epKey := EndpointKey(endpoint.Config.Channel, endpoint.Config.Name)
+		if _, excluded := excludeSet[epKey]; excluded {
+			continue
+		}
+
+		// 检查是否参与故障转移（默认为 true），不参与则不作为代理候选
+		failoverEnabled := true
+		if endpoint.Config.FailoverEnabled != nil {
+			failoverEnabled = *endpoint.Config.FailoverEnabled
+		}
+		if !failoverEnabled {
+			continue
+		}
+
+		endpoint.mutex.RLock()
+		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
+		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
+		endpoint.mutex.RUnlock()
+
+		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		if (isHealthy || skipHealthCheck) && !isRequestFailed {
+			healthy = append(healthy, endpoint)
+		}
+	}
+
+	// 2. 如果当前激活渠道有可用端点，直接返回
+	if len(healthy) > 0 {
+		return m.sortHealthyEndpoints(healthy, false) // 不打印日志，避免重复
+	}
+
+	// 当前渠道没有可用端点：由上层触发跨渠道故障转移
+	return nil
+}
+
+// GetRecoveredEndpointsInChannel 获取当前渠道内已恢复的端点
+// v6.2: 冷却机制已移除，此函数现在返回所有健康的已尝试端点（用于循环重试）
+// triedKeys: 本次请求已尝试过的端点 key 列表
+// 返回：按优先级排序的健康端点列表
+func (m *Manager) GetRecoveredEndpointsInChannel(triedKeys []string) []*Endpoint {
+	// 构建已尝试集合
+	triedSet := make(map[string]struct{}, len(triedKeys))
+	for _, key := range triedKeys {
+		if key != "" {
+			triedSet[key] = struct{}{}
+		}
+	}
+
+	// v5.0+: 使用快照机制
+	m.endpointsMu.RLock()
+	snapshot := make([]*Endpoint, len(m.endpoints))
+	copy(snapshot, m.endpoints)
+	m.endpointsMu.RUnlock()
+
+	// 获取活跃渠道的端点
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
+
+	var recovered []*Endpoint
+	for _, endpoint := range activeEndpoints {
+		epKey := EndpointKey(endpoint.Config.Channel, endpoint.Config.Name)
+
+		// 检查是否参与故障转移
+		failoverEnabled := true
+		if endpoint.Config.FailoverEnabled != nil {
+			failoverEnabled = *endpoint.Config.FailoverEnabled
+		}
+		if !failoverEnabled {
+			continue
+		}
+
+		endpoint.mutex.RLock()
+		isHealthy := endpoint.Status.Healthy
+		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
+		skipHealthCheck := endpoint.Config.SkipHealthCheck
+		endpoint.mutex.RUnlock()
+
+		// v6.2: 只检查健康状态，不再检查冷却状态
+		// v6.1.0: 同时检查请求失败标记
+		if _, tried := triedSet[epKey]; tried {
+			if (isHealthy || skipHealthCheck) && !isRequestFailed {
+				recovered = append(recovered, endpoint)
+				slog.Debug(fmt.Sprintf("🔄 [端点恢复] 发现可用端点: %s", endpoint.Config.Name))
+			}
+		}
+	}
+
+	// 按优先级排序
+	if len(recovered) > 0 {
+		return m.sortHealthyEndpoints(recovered, false)
+	}
+
+	return nil
 }

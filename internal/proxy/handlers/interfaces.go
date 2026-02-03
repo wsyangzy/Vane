@@ -212,6 +212,12 @@ type RetryDecision struct {
 type RetryManager interface {
 	ShouldRetry(errorCtx *ErrorContext, attempt int) (bool, time.Duration)
 	GetHealthyEndpoints(ctx context.Context) []*endpoint.Endpoint
+	// GetHealthyEndpointsExcluding 获取健康端点，排除已尝试的端点（v6.1+）
+	// 用于实现严格优先级转移逻辑，确保在同一请求链路内只能向下一优先级转移
+	GetHealthyEndpointsExcluding(ctx context.Context, excludeKeys []string) []*endpoint.Endpoint
+	// GetRecoveredEndpointsInChannel 获取当前渠道内已恢复的端点（v6.1+）
+	// 用于 auto_wait 策略下最后一个端点失败后的重试逻辑
+	GetRecoveredEndpointsInChannel(triedKeys []string) []*endpoint.Endpoint
 	GetMaxAttempts() int
 	// ShouldRetryWithDecision 统一重试决策方法
 	// 完全复制retry/policy.go的决策逻辑，确保行为一致
@@ -220,6 +226,8 @@ type RetryManager interface {
 	// globalAttempt: 全局尝试次数（用于限流策略）
 	// isStreaming: 是否为流式请求
 	ShouldRetryWithDecision(errorCtx *ErrorContext, localAttempt int, globalAttempt int, isStreaming bool) RetryDecision
+	// IsAutoWaitStrategy 检查是否为 auto_wait 策略（v6.1+）
+	IsAutoWaitStrategy() bool
 }
 
 // SuspensionManager 挂起管理器接口
@@ -229,7 +237,15 @@ type SuspensionManager interface {
 	WaitForEndpointRecovery(ctx context.Context, connID, failedEndpoint string) bool // 🚀 [端点自愈] 新增端点恢复等待方法
 	// 🎯 [挂起取消区分] 新增带结果的端点恢复等待方法，能区分成功/超时/取消
 	WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) SuspensionResult
+	// 🛑 [循环终止] 仅等待用户操作的挂起（不监听端点自愈）
+	WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string) SuspensionResult
+	// 🛑 [循环终止] 手动重试计数与渠道标记
+	BeginManualRetry(requestID string, channels []string)
+	EndManualRetry(requestID string)
+	GetManualRetryRequestsCount() int
+	GetManualRetryChannelCounts() map[string]int
 	GetSuspendedRequestsCount() int
+	GetSuspendedEndpointCounts() map[string]int
 	// 🔧 [热更新] 更新配置
 	UpdateConfig(cfg *config.Config)
 }

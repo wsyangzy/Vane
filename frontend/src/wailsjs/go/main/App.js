@@ -102,6 +102,14 @@ export function GetLogStreamStatus() {
   return window['go']['main']['App']['GetLogStreamStatus']();
 }
 
+export function GetManualRetryChannelCounts() {
+  return window['go']['main']['App']['GetManualRetryChannelCounts']();
+}
+
+export function GetManualRetryRequestsCount() {
+  return window['go']['main']['App']['GetManualRetryRequestsCount']();
+}
+
 export function GetModelPricing(arg1) {
   return window['go']['main']['App']['GetModelPricing'](arg1);
 }
@@ -158,6 +166,14 @@ export function GetSettingsStorageStatus() {
   return window['go']['main']['App']['GetSettingsStorageStatus']();
 }
 
+export function GetSuspendedEndpointCounts() {
+  return window['go']['main']['App']['GetSuspendedEndpointCounts']();
+}
+
+export function GetSuspendedRequestsCount() {
+  return window['go']['main']['App']['GetSuspendedRequestsCount']();
+}
+
 export function GetSystemStatus() {
   return window['go']['main']['App']['GetSystemStatus']();
 }
@@ -178,8 +194,16 @@ export function HideMainWindow() {
   return window['go']['main']['App']['HideMainWindow']();
 }
 
+export function IsInterChannelFailoverEnabled() {
+  return window['go']['main']['App']['IsInterChannelFailoverEnabled']();
+}
+
 export function IsProxyRunning() {
   return window['go']['main']['App']['IsProxyRunning']();
+}
+
+export function OpenLogDir() {
+  return window['go']['main']['App']['OpenLogDir']();
 }
 
 export function PauseGroup(arg1) {
@@ -198,6 +222,10 @@ export function ResumeGroup(arg1) {
   return window['go']['main']['App']['ResumeGroup'](arg1);
 }
 
+export function SaveLogFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveLogFile'](arg1, arg2);
+}
+
 export function SetDefaultModelPricing(arg1) {
   return window['go']['main']['App']['SetDefaultModelPricing'](arg1);
 }
@@ -212,6 +240,10 @@ export function SetEndpointFailoverEnabledByID(arg1, arg2) {
 
 export function SetEndpointPriority(arg1, arg2) {
   return window['go']['main']['App']['SetEndpointPriority'](arg1, arg2);
+}
+
+export function SetEndpointSkipHealthCheckByID(arg1, arg2) {
+  return window['go']['main']['App']['SetEndpointSkipHealthCheckByID'](arg1, arg2);
 }
 
 export function ShowMainWindow() {

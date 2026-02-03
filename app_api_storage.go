@@ -51,6 +51,9 @@ type EndpointRecordInfo struct {
 	NeverChecked   bool    `json:"never_checked"`  // v6.1: 是否从未检测过（跳过检测也保持为 true）
 	LastCheck      string  `json:"last_check"` // 最后健康检查时间
 	ResponseTimeMs float64 `json:"response_time_ms"`
+	// v6.2.10: 错误信息
+	LastFailCode   int    `json:"last_fail_code"`   // HTTP 状态码（0 表示无失败或未知）
+	LastFailReason string `json:"last_fail_reason"` // 失败原因描述
 	// 冷却状态（请求级故障转移）
 	InCooldown     bool   `json:"in_cooldown"`     // 是否处于冷却中
 	CooldownUntil  string `json:"cooldown_until"`  // 冷却截止时间
@@ -167,12 +170,13 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 			} else {
 				info.HealthState = "unhealthy"
 			}
-			// 冷却状态
-			if !status.CooldownUntil.IsZero() && status.CooldownUntil.After(time.Now()) {
-				info.InCooldown = true
-				info.CooldownUntil = status.CooldownUntil.Format("2006-01-02 15:04:05")
-				info.CooldownReason = status.CooldownReason
-			}
+			// v6.2.10: 填充错误信息
+			info.LastFailCode = status.LastRequestFailCode
+			info.LastFailReason = status.LastRequestFailReason
+			// v6.2: 冷却机制已移除
+			info.InCooldown = false
+			info.CooldownUntil = ""
+			info.CooldownReason = ""
 		}
 
 		result = append(result, info)
@@ -262,10 +266,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		return fmt.Errorf("端点存储服务未启用")
 	}
 
-	// 设置默认值
-	if input.Priority == 0 {
-		input.Priority = 1
-	}
+	// 设置默认值（注意：Priority 由 service 层自动递增，这里不设默认值）
 	if input.TimeoutSeconds == 0 {
 		input.TimeoutSeconds = 300
 	}
@@ -667,6 +668,51 @@ func (a *App) SetEndpointFailoverEnabledByID(id int64, enabled bool) error {
 	return nil
 }
 
+// SetEndpointSkipHealthCheckByID 设置端点是否跳过健康检测（按ID，避免同名歧义）
+// v6.2.11: 新增快捷开关
+func (a *App) SetEndpointSkipHealthCheckByID(id int64, skip bool) error {
+	a.mu.RLock()
+	endpointService := a.endpointService
+	endpointManager := a.endpointManager
+	logger := a.logger
+	a.mu.RUnlock()
+
+	if endpointService == nil {
+		return fmt.Errorf("端点存储服务未启用")
+	}
+	if id <= 0 {
+		return fmt.Errorf("端点ID不能为空")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	record, err := endpointService.GetEndpointByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("获取端点失败: %w", err)
+	}
+	if record == nil {
+		return fmt.Errorf("端点不存在: %d", id)
+	}
+
+	record.SkipHealthCheck = skip
+	if err := endpointService.UpdateEndpoint(ctx, record); err != nil {
+		return fmt.Errorf("更新端点失败: %w", err)
+	}
+
+	// 同步到运行时 endpoint manager
+	if endpointManager != nil {
+		endpointManager.SetEndpointSkipHealthCheck(endpoint.EndpointKey(record.Channel, record.Name), skip)
+	}
+
+	if logger != nil {
+		logger.Info("✅ 端点跳过健康检测状态已更新", "id", id, "name", record.Name, "skip", skip)
+	}
+
+	a.emitEndpointUpdate()
+	return nil
+}
+
 // DeleteEndpointRecord 删除端点
 func (a *App) DeleteEndpointRecord(name string) error {
 	a.mu.RLock()
@@ -972,9 +1018,7 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	if input.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
-	if input.Priority <= 0 {
-		input.Priority = 1
-	}
+	// v6.2.1: Priority 由 service 层处理（自动递增或冲突交换）
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1021,9 +1065,7 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	if input.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
-	if input.Priority <= 0 {
-		input.Priority = 1
-	}
+	// v6.2.1: Priority 由 service 层处理（自动递增或冲突交换）
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1259,12 +1301,10 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 			if !status.LastCheck.IsZero() {
 				info.LastCheck = status.LastCheck.Format("2006-01-02 15:04:05")
 			}
-			// 冷却状态
-			if !status.CooldownUntil.IsZero() && status.CooldownUntil.After(time.Now()) {
-				info.InCooldown = true
-				info.CooldownUntil = status.CooldownUntil.Format("2006-01-02 15:04:05")
-				info.CooldownReason = status.CooldownReason
-			}
+			// v6.2: 冷却机制已移除
+			info.InCooldown = false
+			info.CooldownUntil = ""
+			info.CooldownReason = ""
 		}
 
 		result = append(result, info)

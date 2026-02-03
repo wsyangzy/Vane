@@ -24,6 +24,13 @@ type SuspensionManager struct {
 	// 挂起请求计数相关字段
 	suspendedRequestsMutex sync.RWMutex
 	suspendedRequestsCount int
+	suspendedEndpointCounts map[string]int // 按端点键统计当前挂起请求数（channel::name）
+
+	// 🛑 [循环终止] 等待用户操作的挂起计数
+	manualRetryMutex         sync.RWMutex
+	manualRetryRequestsCount int
+	manualRetryRequests      map[string][]string
+	manualRetryChannelCounts map[string]int
 }
 
 // NewSuspensionManager 创建新的挂起管理器
@@ -32,6 +39,9 @@ func NewSuspensionManager(cfg *config.Config, endpointManager *endpoint.Manager,
 		config:          cfg,
 		endpointManager: endpointManager,
 		groupManager:    groupManager,
+		suspendedEndpointCounts: make(map[string]int),
+		manualRetryRequests:      make(map[string][]string),
+		manualRetryChannelCounts: make(map[string]int),
 	}
 }
 
@@ -42,93 +52,29 @@ func NewSuspensionManagerWithRecoverySignal(cfg *config.Config, endpointManager 
 		endpointManager:       endpointManager,
 		groupManager:          groupManager,
 		recoverySignalManager: recoverySignalManager,
+		suspendedEndpointCounts: make(map[string]int),
+		manualRetryRequests:      make(map[string][]string),
+		manualRetryChannelCounts: make(map[string]int),
 	}
 }
 
 // ShouldSuspend 判断是否应该挂起请求
-// 迁移自 RetryHandler.shouldSuspendRequest，但专注于挂起逻辑判断
-// 条件：手动模式 + 有备用组 + 功能启用 + 未达到最大挂起数
+// v6.2.18: 恢复挂起功能，当"允许客户端重试"开启时挂起请求等待用户点击重试按钮
+// 挂起条件：InterruptClientOnExhausted = false（即不中断客户端重试）
 func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
-	// 检查配置是否存在
 	if sm.config == nil {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 配置为空，不挂起请求")
 		return false
 	}
-
-	// 检查功能是否启用
-	if !sm.config.RequestSuspend.Enabled {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 功能未启用，不挂起请求")
-		return false
-	}
-
-	// 检查是否为手动模式
-	if sm.config.Failover.Enabled {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 当前为自动切换模式，不挂起请求")
-		return false
-	}
-
-	// 检查当前挂起请求数量是否超过限制
-	sm.suspendedRequestsMutex.RLock()
-	currentCount := sm.suspendedRequestsCount
-	sm.suspendedRequestsMutex.RUnlock()
-
-	if currentCount >= sm.config.RequestSuspend.MaxSuspendedRequests {
-		slog.WarnContext(ctx, fmt.Sprintf("🚫 [挂起限制] 当前挂起请求数 %d 已达到最大限制 %d，不再挂起新请求",
-			currentCount, sm.config.RequestSuspend.MaxSuspendedRequests))
-		return false
-	}
-
-	// 检查groupManager是否存在
-	if sm.groupManager == nil {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 组管理器为空，不挂起请求")
-		return false
-	}
-
-	// 检查是否存在可用的备用组
-	allGroups := sm.groupManager.GetAllGroups()
-	hasAvailableBackupGroups := false
-	var availableGroups []string
-
-	slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 开始检查可用备用组，总共 %d 个组", len(allGroups)))
-
-	for _, group := range allGroups {
-		slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 检查组 %s: IsActive=%t, InCooldown=%t",
-			group.Name, group.IsActive, sm.groupManager.IsGroupInCooldown(group.Name)))
-
-		// 检查非活跃组且不在冷却期的组
-		if !group.IsActive && !sm.groupManager.IsGroupInCooldown(group.Name) {
-			// 检查组内是否有健康端点
-			healthyCount := 0
-			for _, ep := range group.Endpoints {
-				if ep.IsHealthy() {
-					healthyCount++
-				}
-			}
-			slog.InfoContext(ctx, fmt.Sprintf("🔍 [挂起检查] 组 %s 健康端点数: %d", group.Name, healthyCount))
-
-			if healthyCount > 0 {
-				hasAvailableBackupGroups = true
-				availableGroups = append(availableGroups, fmt.Sprintf("%s(%d个健康端点)", group.Name, healthyCount))
-			}
-		}
-	}
-
-	if !hasAvailableBackupGroups {
-		slog.InfoContext(ctx, "🔍 [挂起检查] 没有可用的备用组，不挂起请求")
-		return false
-	}
-
-	slog.InfoContext(ctx, fmt.Sprintf("✅ [挂起检查] 满足挂起条件: 手动模式=%t, 功能启用=%t, 当前挂起数=%d/%d, 可用备用组=%v",
-		!sm.config.Failover.Enabled, sm.config.RequestSuspend.Enabled,
-		currentCount, sm.config.RequestSuspend.MaxSuspendedRequests, availableGroups))
-
-	return true
+	// 当配置为"不中断客户端重试"时，应该挂起请求等待恢复
+	// 这样客户端不会收到错误响应，而是保持连接等待
+	return !sm.config.FailoverV2.ShouldInterruptClientOnExhausted()
 }
 
 // WaitForGroupSwitch 挂起请求并等待组切换通知
 // 迁移自 RetryHandler.waitForGroupSwitch，但移除状态管理部分，只保留挂起等待逻辑
 // 返回是否成功切换到新组
 func (sm *SuspensionManager) WaitForGroupSwitch(ctx context.Context, connID string) bool {
+	failedEndpoint := ""
 	// 检查配置和管理器是否存在
 	if sm.config == nil {
 		slog.InfoContext(ctx, "🔍 [挂起等待] 配置为空，无法挂起请求")
@@ -152,6 +98,15 @@ func (sm *SuspensionManager) WaitForGroupSwitch(ctx context.Context, connID stri
 	defer func() {
 		sm.suspendedRequestsMutex.Lock()
 		sm.suspendedRequestsCount--
+		if failedEndpoint != "" && sm.suspendedEndpointCounts != nil {
+			if count, exists := sm.suspendedEndpointCounts[failedEndpoint]; exists {
+				if count <= 1 {
+					delete(sm.suspendedEndpointCounts, failedEndpoint)
+				} else {
+					sm.suspendedEndpointCounts[failedEndpoint] = count - 1
+				}
+			}
+		}
 		newCount := sm.suspendedRequestsCount
 		sm.suspendedRequestsMutex.Unlock()
 		slog.InfoContext(ctx, fmt.Sprintf("⬇️ [挂起结束] 连接 %s 请求挂起结束，当前挂起数: %d", connID, newCount))
@@ -168,9 +123,9 @@ func (sm *SuspensionManager) WaitForGroupSwitch(ctx context.Context, connID stri
 	}()
 
 	// 创建超时context
-	timeout := sm.config.RequestSuspend.Timeout
+	timeout := sm.config.FailoverV2.GetSuspendTimeout()
 	if timeout <= 0 {
-		timeout = 300 * time.Second // 默认5分钟
+		timeout = 120 * time.Second
 	}
 
 	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, timeout)
@@ -226,6 +181,118 @@ func (sm *SuspensionManager) GetSuspendedRequestsCount() int {
 	return sm.suspendedRequestsCount
 }
 
+// GetSuspendedEndpointCounts 返回当前挂起请求的端点计数
+func (sm *SuspensionManager) GetSuspendedEndpointCounts() map[string]int {
+	sm.suspendedRequestsMutex.RLock()
+	defer sm.suspendedRequestsMutex.RUnlock()
+
+	if len(sm.suspendedEndpointCounts) == 0 {
+		return map[string]int{}
+	}
+
+	result := make(map[string]int, len(sm.suspendedEndpointCounts))
+	for endpointName, count := range sm.suspendedEndpointCounts {
+		result[endpointName] = count
+	}
+	return result
+}
+
+// BeginManualRetry 记录“等待用户操作”的挂起请求（达到最大循环轮数）
+func (sm *SuspensionManager) BeginManualRetry(requestID string, channels []string) {
+	if requestID == "" || len(channels) == 0 {
+		return
+	}
+
+	uniqueChannels := make([]string, 0, len(channels))
+	seen := make(map[string]struct{}, len(channels))
+	for _, name := range channels {
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		uniqueChannels = append(uniqueChannels, name)
+	}
+	if len(uniqueChannels) == 0 {
+		return
+	}
+
+	sm.manualRetryMutex.Lock()
+	defer sm.manualRetryMutex.Unlock()
+
+	if sm.manualRetryRequests == nil {
+		sm.manualRetryRequests = make(map[string][]string)
+	}
+	if sm.manualRetryChannelCounts == nil {
+		sm.manualRetryChannelCounts = make(map[string]int)
+	}
+	if _, exists := sm.manualRetryRequests[requestID]; exists {
+		return
+	}
+
+	sm.manualRetryRequests[requestID] = uniqueChannels
+	sm.manualRetryRequestsCount++
+	for _, name := range uniqueChannels {
+		sm.manualRetryChannelCounts[name]++
+	}
+}
+
+// EndManualRetry 结束“等待用户操作”的挂起请求
+func (sm *SuspensionManager) EndManualRetry(requestID string) {
+	if requestID == "" {
+		return
+	}
+
+	sm.manualRetryMutex.Lock()
+	defer sm.manualRetryMutex.Unlock()
+
+	channels, exists := sm.manualRetryRequests[requestID]
+	if !exists {
+		return
+	}
+	delete(sm.manualRetryRequests, requestID)
+	if sm.manualRetryRequestsCount > 0 {
+		sm.manualRetryRequestsCount--
+	}
+	for _, name := range channels {
+		if name == "" {
+			continue
+		}
+		if count, ok := sm.manualRetryChannelCounts[name]; ok {
+			if count <= 1 {
+				delete(sm.manualRetryChannelCounts, name)
+			} else {
+				sm.manualRetryChannelCounts[name] = count - 1
+			}
+		}
+	}
+}
+
+// GetManualRetryRequestsCount 获取等待用户操作的挂起请求数
+func (sm *SuspensionManager) GetManualRetryRequestsCount() int {
+	sm.manualRetryMutex.RLock()
+	defer sm.manualRetryMutex.RUnlock()
+	return sm.manualRetryRequestsCount
+}
+
+// GetManualRetryChannelCounts 获取等待用户操作的渠道计数
+func (sm *SuspensionManager) GetManualRetryChannelCounts() map[string]int {
+	sm.manualRetryMutex.RLock()
+	defer sm.manualRetryMutex.RUnlock()
+
+	if len(sm.manualRetryChannelCounts) == 0 {
+		return map[string]int{}
+	}
+
+	result := make(map[string]int, len(sm.manualRetryChannelCounts))
+	for name, count := range sm.manualRetryChannelCounts {
+		result[name] = count
+	}
+	return result
+}
+
 // UpdateConfig 更新配置
 func (sm *SuspensionManager) UpdateConfig(cfg *config.Config) {
 	sm.config = cfg
@@ -257,6 +324,12 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 	// 增加挂起请求计数
 	sm.suspendedRequestsMutex.Lock()
 	sm.suspendedRequestsCount++
+	if failedEndpoint != "" {
+		if sm.suspendedEndpointCounts == nil {
+			sm.suspendedEndpointCounts = make(map[string]int)
+		}
+		sm.suspendedEndpointCounts[failedEndpoint]++
+	}
 	currentCount := sm.suspendedRequestsCount
 	sm.suspendedRequestsMutex.Unlock()
 
@@ -264,6 +337,15 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 	defer func() {
 		sm.suspendedRequestsMutex.Lock()
 		sm.suspendedRequestsCount--
+		if failedEndpoint != "" && sm.suspendedEndpointCounts != nil {
+			if count, exists := sm.suspendedEndpointCounts[failedEndpoint]; exists {
+				if count <= 1 {
+					delete(sm.suspendedEndpointCounts, failedEndpoint)
+				} else {
+					sm.suspendedEndpointCounts[failedEndpoint] = count - 1
+				}
+			}
+		}
 		newCount := sm.suspendedRequestsCount
 		sm.suspendedRequestsMutex.Unlock()
 		slog.InfoContext(ctx, fmt.Sprintf("⬇️ [挂起结束] 连接 %s 请求挂起结束，当前挂起数: %d", connID, newCount))
@@ -273,9 +355,9 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 		connID, failedEndpoint, currentCount))
 
 	// 创建超时context
-	timeout := sm.config.RequestSuspend.Timeout
+	timeout := sm.config.FailoverV2.GetSuspendTimeout()
 	if timeout <= 0 {
-		timeout = 300 * time.Second // 默认5分钟
+		timeout = 120 * time.Second
 	}
 
 	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, timeout)
@@ -356,7 +438,17 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 // WaitForEndpointRecoveryWithResult 🎯 [挂起取消区分] 带结果的端点恢复等待方法
 // 功能与WaitForEndpointRecovery相同，但返回详细的结果类型以区分成功、超时、取消
 // 这是对现有方法的增强版本，保持向后兼容性
+// v6.2.18: 当渠道间转移禁用时，仅监听用户点击"重试"按钮的组切换通知，不监听端点自愈信号
 func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) handlers.SuspensionResult {
+	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, false)
+}
+
+// WaitForEndpointRecoveryWithResultManual 🛑 [循环终止] 仅等待用户操作的挂起
+func (sm *SuspensionManager) WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string) handlers.SuspensionResult {
+	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, true)
+}
+
+func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string, manualOnly bool) handlers.SuspensionResult {
 	// 检查配置和管理器是否存在
 	if sm.config == nil {
 		slog.InfoContext(ctx, "🔍 [端点恢复等待] 配置为空，无法挂起请求")
@@ -374,36 +466,67 @@ func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Conte
 	// 增加挂起请求计数
 	sm.suspendedRequestsMutex.Lock()
 	sm.suspendedRequestsCount++
+	if failedEndpoint != "" {
+		if sm.suspendedEndpointCounts == nil {
+			sm.suspendedEndpointCounts = make(map[string]int)
+		}
+		sm.suspendedEndpointCounts[failedEndpoint]++
+	}
 	currentCount := sm.suspendedRequestsCount
 	sm.suspendedRequestsMutex.Unlock()
+
+	waitStartTime := time.Now()
 
 	// 确保在退出时减少计数
 	defer func() {
 		sm.suspendedRequestsMutex.Lock()
 		sm.suspendedRequestsCount--
+		if failedEndpoint != "" && sm.suspendedEndpointCounts != nil {
+			if count, exists := sm.suspendedEndpointCounts[failedEndpoint]; exists {
+				if count <= 1 {
+					delete(sm.suspendedEndpointCounts, failedEndpoint)
+				} else {
+					sm.suspendedEndpointCounts[failedEndpoint] = count - 1
+				}
+			}
+		}
 		newCount := sm.suspendedRequestsCount
 		sm.suspendedRequestsMutex.Unlock()
 		slog.InfoContext(ctx, fmt.Sprintf("⬇️ [挂起结束] 连接 %s 请求挂起结束，当前挂起数: %d", connID, newCount))
 	}()
 
-	slog.InfoContext(ctx, fmt.Sprintf("⏸️ [端点恢复挂起] 连接 %s 请求已挂起，等待端点 %s 恢复或组切换 (当前挂起数: %d)",
-		connID, failedEndpoint, currentCount))
+	// v6.2.18: 根据渠道间转移配置决定等待模式
+	isChannelFailoverEnabled := sm.config.Failover.Enabled
+	allowEndpointRecovery := isChannelFailoverEnabled && !manualOnly
+	if manualOnly {
+		slog.InfoContext(ctx, fmt.Sprintf("⏸️ [循环终止等待] 连接 %s 请求已挂起，等待用户操作 (当前挂起数: %d)",
+			connID, currentCount))
+	} else if allowEndpointRecovery {
+		slog.InfoContext(ctx, fmt.Sprintf("⏸️ [端点恢复挂起] 连接 %s 请求已挂起，等待端点 %s 恢复或组切换 (当前挂起数: %d)",
+			connID, failedEndpoint, currentCount))
+	} else {
+		slog.InfoContext(ctx, fmt.Sprintf("⏸️ [重试按钮等待] 连接 %s 请求已挂起，等待用户点击重试按钮 (当前挂起数: %d)",
+			connID, currentCount))
+	}
 
 	// 创建超时context
-	timeout := sm.config.RequestSuspend.Timeout
+	timeout := sm.config.FailoverV2.GetSuspendTimeout()
+	if manualOnly {
+		timeout = sm.config.FailoverV2.GetLoopRetrySuspendTimeout()
+	}
 	if timeout <= 0 {
-		timeout = 300 * time.Second // 默认5分钟
+		timeout = 120 * time.Second
 	}
 
 	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, timeout)
 	defer timeoutCancel()
 
-	slog.InfoContext(ctx, fmt.Sprintf("⏰ [挂起超时] 连接 %s 挂起超时设置: %v，等待端点 %s 恢复或组切换...",
-		connID, timeout, failedEndpoint))
+	slog.InfoContext(ctx, fmt.Sprintf("⏰ [挂起超时] 连接 %s 挂起超时设置: %v", connID, timeout))
 
-	// 订阅端点恢复信号（如果有恢复信号管理器）
+	// v6.2.18: 仅当渠道间转移启用时才订阅端点恢复信号
+	// 当渠道间转移禁用/手动等待时，仅监听用户点击"重试"按钮的组切换通知
 	var endpointRecoveryCh chan string
-	if sm.recoverySignalManager != nil && failedEndpoint != "" {
+	if allowEndpointRecovery && sm.recoverySignalManager != nil && failedEndpoint != "" {
 		endpointRecoveryCh = sm.recoverySignalManager.Subscribe(failedEndpoint)
 		defer func() {
 			if endpointRecoveryCh != nil {
@@ -412,7 +535,7 @@ func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Conte
 		}()
 	}
 
-	// 订阅组切换通知
+	// 订阅组切换通知（用户点击"重试"按钮会触发此通知）
 	groupChangeNotify := sm.groupManager.SubscribeToGroupChanges()
 	defer func() {
 		// 确保清理订阅，防止内存泄漏
@@ -420,17 +543,21 @@ func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Conte
 		slog.DebugContext(ctx, fmt.Sprintf("🔌 [订阅清理] 连接 %s 组切换通知订阅已清理", connID))
 	}()
 
-	// 等待恢复信号：端点恢复 > 组切换 > 超时 > 取消
+	// 等待恢复信号
 	for {
 		select {
 		case recoveredEndpoint := <-endpointRecoveryCh:
-			// 🚀 [优先级1] 端点恢复信号 - 立即重试原端点
+			// 🚀 [优先级1] 端点恢复信号 - 仅当渠道间转移启用时有效
 			slog.InfoContext(ctx, fmt.Sprintf("🎯 [端点自愈] 连接 %s 端点 %s 已恢复，立即重试原端点",
 				connID, recoveredEndpoint))
 			return handlers.SuspensionSuccess
 
 		case newGroupName := <-groupChangeNotify:
-			// 🔄 [优先级2] 组切换通知
+			// 🔄 [优先级2] 组切换通知（用户点击重试按钮触发）
+			if manualOnly && !sm.groupManager.WasGroupManuallyActivatedSince(newGroupName, waitStartTime) {
+				slog.DebugContext(ctx, fmt.Sprintf("⏸️ [循环终止等待] 连接 %s 忽略非手动组切换通知: %s", connID, newGroupName))
+				continue
+			}
 			slog.InfoContext(ctx, fmt.Sprintf("📡 [组切换通知] 连接 %s 收到组切换通知: %s，验证新组可用性",
 				connID, newGroupName))
 

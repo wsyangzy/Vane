@@ -13,10 +13,10 @@ func TestRequestLifecycleManager_NewRequestLifecycleManager(t *testing.T) {
 
 	rlm := NewRequestLifecycleManager(nil, nil, requestID, nil)
 
-	if rlm.requestID != requestID {
+	if rlm.GetRequestID() != requestID {
 		t.Error("RequestID not set correctly")
 	}
-	if rlm.lastStatus != "pending" {
+	if rlm.GetLastStatus() != "pending" {
 		t.Error("Initial status should be 'pending'")
 	}
 }
@@ -43,8 +43,8 @@ func TestRequestLifecycleManager_SettersAndGetters(t *testing.T) {
 		t.Errorf("Expected group 'test-group', got '%s'", rlm.GetGroupName())
 	}
 
-	if rlm.modelName != "claude-3-sonnet" {
-		t.Errorf("Expected model 'claude-3-sonnet', got '%s'", rlm.modelName)
+	if rlm.GetModelName() != "claude-3-sonnet" {
+		t.Errorf("Expected model 'claude-3-sonnet', got '%s'", rlm.GetModelName())
 	}
 
 	if rlm.GetFinalStatusCode() != 404 {
@@ -63,11 +63,11 @@ func TestRequestLifecycleManager_UpdateStatus(t *testing.T) {
 	rlm.UpdateStatus("processing", 1, 200)
 
 	// 验证状态更新
-	if rlm.lastStatus != "processing" {
-		t.Errorf("Expected status 'processing', got '%s'", rlm.lastStatus)
+	if rlm.GetLastStatus() != "processing" {
+		t.Errorf("Expected status 'processing', got '%s'", rlm.GetLastStatus())
 	}
-	if rlm.retryCount != 1 {
-		t.Errorf("Expected retry count 1, got %d", rlm.retryCount)
+	if rlm.GetRetryCount() != 1 {
+		t.Errorf("Expected retry count 1, got %d", rlm.GetRetryCount())
 	}
 }
 
@@ -232,17 +232,17 @@ func TestRequestLifecycleManager_UpdateStatusWithAttemptCounter(t *testing.T) {
 	rlm.UpdateStatus("suspended", -1, 0)
 
 	// 验证状态更新使用了内部计数器的值
-	if rlm.lastStatus != "suspended" {
-		t.Errorf("Expected status 'suspended', got '%s'", rlm.lastStatus)
+	if rlm.GetLastStatus() != "suspended" {
+		t.Errorf("Expected status 'suspended', got '%s'", rlm.GetLastStatus())
 	}
-	if rlm.retryCount != 3 {
-		t.Errorf("Expected retry count to use internal counter (3), got %d", rlm.retryCount)
+	if rlm.GetRetryCount() != 3 {
+		t.Errorf("Expected retry count to use internal counter (3), got %d", rlm.GetRetryCount())
 	}
 
 	// 测试使用正常retryCount时，应该使用提供的值
 	rlm.UpdateStatus("processing", 5, 200)
-	if rlm.retryCount != 5 {
-		t.Errorf("Expected retry count to use provided value (5), got %d", rlm.retryCount)
+	if rlm.GetRetryCount() != 5 {
+		t.Errorf("Expected retry count to use provided value (5), got %d", rlm.GetRetryCount())
 	}
 }
 

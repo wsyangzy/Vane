@@ -1,11 +1,12 @@
 // ============================================
 // 操作按钮组件
 // 端点行操作按钮（激活组、更新优先级）
-// 2025-11-28
+// 2025-11-28 (Updated 2026-01-13)
 // ============================================
 
 import { useState } from 'react';
 import { Zap, Save } from 'lucide-react';
+import { useToast } from '@components/ui';
 
 /**
  * 操作按钮组件
@@ -21,6 +22,7 @@ const ActionButtons = ({
   disabled = false
 }) => {
   const [activateLoading, setActivateLoading] = useState(false);
+  const toast = useToast();
 
   // 判断是否有有效的组配置
   const hasValidGroup = endpoint.group && endpoint.group !== 'default';
@@ -38,7 +40,7 @@ const ActionButtons = ({
       await onActivateGroup(endpoint.name, endpoint.group);
     } catch (error) {
       console.error('激活组失败:', error);
-      alert(`激活组失败: ${error.message}`);
+      toast.error(error.message, '激活组失败');
     } finally {
       setActivateLoading(false);
     }
