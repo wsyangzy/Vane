@@ -513,10 +513,6 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v loop=%d",
 					connID, lastEndpoint.Config.Name, err, loopCount))
 
-				// v6.2.18: 故障转移失败时也要标记端点状态（即使渠道间转移被禁用）
-				// 这样前端可以正确显示端点失败状态
-				rh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, err)
-
 				// 检查是否是"没有可用渠道"或"达到最大循环轮数"的错误
 				// 这些情况下不应该继续挂起等待，应该直接返回错误
 				errStr := err.Error()
@@ -526,6 +522,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					strings.Contains(errStr, "最大循环轮数")
 
 				if isNoChannelsError {
+					// v6.2.19: 传递 nil 而不是 err，保留端点在 SetEndpointLastRequestFail 中设置的真实失败原因
+					// 避免用故障转移函数返回的错误（如"故障转移未启用"）覆盖端点实际失败原因
+					rh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, nil)
 					statusCode := http.StatusUnprocessableEntity
 					failureReason := "all_channels_unavailable"
 					if isLoopLimitError {

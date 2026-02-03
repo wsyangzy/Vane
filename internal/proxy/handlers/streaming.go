@@ -1036,9 +1036,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				strings.Contains(errStr, "最大循环轮数")
 
 			if isNoChannelsError {
-				// v6.2.18: 故障转移失败时也要标记端点状态（即使渠道间转移被禁用）
-				// 这样前端可以正确显示端点失败状态
-				sh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, err)
+				// v6.2.19: 传递 nil 而不是 err 或 lastErr，保留端点在 SetEndpointLastRequestFail 中设置的真实失败原因
+				// 避免用故障转移函数返回的错误（如"故障转移未启用"）覆盖端点实际失败原因
+				sh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, nil)
 
 				statusCode := http.StatusUnprocessableEntity
 				failureReason := "all_channels_unavailable"
