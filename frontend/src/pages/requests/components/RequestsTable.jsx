@@ -4,13 +4,149 @@
 // 更新：添加双击查看详情功能
 // ============================================
 
-import React from 'react';
-import { Waves, RefreshCw } from 'lucide-react';
+import React, { useState } from 'react';
+import { Waves, RefreshCw, GitBranch, ChevronRight } from 'lucide-react';
 import { LoadingSpinner } from '@components/ui';
 import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
+
+/**
+ * 解析链路端点，提取端点名称（去除 channel:: 前缀）
+ */
+const parseEndpointName = (fullKey) => {
+  if (!fullKey) return '';
+  const parts = fullKey.split('::');
+  return parts.length > 1 ? parts[1] : parts[0];
+};
+
+/**
+ * 解析链路端点，提取渠道名称
+ */
+const parseChannelName = (fullKey) => {
+  if (!fullKey) return '';
+  const parts = fullKey.split('::');
+  return parts.length > 1 ? parts[0] : '';
+};
+
+/**
+ * EndpointChainCell - 端点链路单元格组件（折叠显示 + 悬浮 Tooltip）
+ */
+const EndpointChainCell = ({ request }) => {
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  // 获取链路长度（api.js 已转换为 camelCase）
+  const chainLength = Number.isFinite(request.endpointChainLength)
+    ? request.endpointChainLength
+    : (Array.isArray(request.endpointChain) ? request.endpointChain.length : 0);
+  const chainHead = request.endpointChainHead || request.endpoint || '';
+  const chainTail = request.endpointChainTail || chainHead || '';
+
+  // 解析端点名称（去除 channel:: 前缀以简化显示）
+  const tailEndpoint = parseEndpointName(chainTail);
+
+  // 单端点情况
+  if (chainLength <= 1) {
+    const singleEndpoint = parseEndpointName(chainHead);
+    const singleChannel = parseChannelName(chainHead);
+    if (!singleEndpoint) return <span className="text-gray-400 text-xs">-</span>;
+    return (
+      <div
+        className="relative inline-flex items-center"
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+      >
+        <span className="text-gray-600 text-xs truncate max-w-[140px]">
+          {singleEndpoint}
+        </span>
+        {showTooltip && singleChannel && (
+          <div className="absolute left-0 bottom-full mb-2 z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-2.5 whitespace-nowrap">
+            <div className="flex items-center gap-1.5">
+              <span className="px-1.5 py-0.5 bg-slate-700/80 text-slate-300 text-[9px] rounded font-medium">
+                {singleChannel}
+              </span>
+              <span className="text-slate-100">{singleEndpoint}</span>
+            </div>
+            {/* 尖角在底部指向下方 */}
+            <div className="absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // 多端点情况：折叠显示，悬浮查看完整路径
+  // endpointChain 在 api.js 中已被转换为数组
+  const chainItems = Array.isArray(request.endpointChain)
+    ? request.endpointChain
+    : (typeof request.endpoint_chain === 'string'
+        ? request.endpoint_chain.split(' -> ').filter(s => s.trim())
+        : []);
+
+  return (
+    <div
+      className="relative inline-flex items-center gap-1.5"
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      {/* 主显示：最终端点 + 跳数徽章 */}
+      <span className="text-gray-700 text-xs font-medium truncate max-w-[100px]">
+        {tailEndpoint}
+      </span>
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-medium rounded-full border border-indigo-100 whitespace-nowrap">
+        <GitBranch className="w-2.5 h-2.5" />
+        <span>{chainLength}</span>
+      </span>
+
+      {/* 悬浮 Tooltip：显示完整链路（正上方弹出） */}
+      {showTooltip && chainItems.length > 0 && (
+        <div className="absolute left-0 bottom-full mb-2 z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 min-w-[220px] max-w-[360px]">
+          <div className="text-[10px] text-slate-400 mb-2 font-medium uppercase tracking-wide">转移路径</div>
+          <div className="space-y-1">
+            {chainItems.map((item, idx) => {
+              const channel = parseChannelName(item);
+              const endpoint = parseEndpointName(item);
+              const isLast = idx === chainItems.length - 1;
+              const isFirst = idx === 0;
+              const isMiddle = !isFirst && !isLast;
+              return (
+                <div key={idx}>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] w-4 shrink-0 text-center ${isLast ? 'text-emerald-400' : isFirst ? 'text-blue-400' : 'text-slate-500'}`}>
+                      {isFirst ? '起' : isLast ? '终' : '·'}
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                      {channel && (
+                        <span className="px-1.5 py-0.5 bg-slate-700/80 text-slate-300 text-[9px] rounded shrink-0 font-medium">
+                          {channel}
+                        </span>
+                      )}
+                      <span className={`truncate ${isLast ? 'text-emerald-400 font-semibold' : isFirst ? 'text-blue-300' : 'text-slate-300'}`}>
+                        {endpoint || item}
+                      </span>
+                    </div>
+                  </div>
+                  {/* 中间连接线 */}
+                  {!isLast && (
+                    <div className="flex items-center gap-2 py-0.5">
+                      <span className="w-4 shrink-0 flex justify-center">
+                        <span className="w-px h-2 bg-slate-600" />
+                      </span>
+                      <ChevronRight className="w-3 h-3 text-slate-600" />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {/* 尖角在底部指向下方 */}
+          <div className="absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800" />
+        </div>
+      )}
+    </div>
+  );
+};
 
 /**
  * 渲染单元格内容
@@ -36,15 +172,7 @@ const renderCell = (columnId, request, visibleColumns = []) => {
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':
-      const chainLength = Number.isFinite(request.endpointChainLength)
-        ? request.endpointChainLength
-        : (Array.isArray(request.endpointChain) ? request.endpointChain.length : 0);
-      const chainHead = request.endpointChainHead || request.endpoint || '';
-      const chainTail = request.endpointChainTail || chainHead || '';
-      const endpointLabel = chainLength > 1 && chainHead && chainTail
-        ? `${chainHead} -> ${chainTail} (${chainLength})`
-        : (chainHead || request.endpoint || '-');
-      return <span className="text-gray-600 text-xs">{endpointLabel}</span>;
+      return <EndpointChainCell request={request} />;
     case 'duration':
       return <span className="text-gray-700 font-mono text-xs">{formatDuration(request.duration)}</span>;
     case 'inputTokens':
