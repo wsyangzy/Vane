@@ -63,10 +63,10 @@ func (s *SQLiteAdapter) Open() error {
 	dbPath := s.config.DatabasePath
 	if dbPath == "" {
 		// 使用跨平台用户目录作为默认路径
-		// Windows: %APPDATA%\CC-Forwarder\data\cc-forwarder.db
-		// macOS: ~/Library/Application Support/CC-Forwarder/data/cc-forwarder.db
-		// Linux: ~/.local/share/cc-forwarder/data/cc-forwarder.db
-		dbPath = filepath.Join(getSQLiteAppDataDir(), "data", "cc-forwarder.db")
+		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
+		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
+		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		dbPath = filepath.Join(getSQLiteAppDataDir(), "data", "usage.db")
 		s.logger.Info("使用默认数据库路径", "path", dbPath)
 	}
 
@@ -774,9 +774,9 @@ func (s *SQLiteAdapter) diagnoseTimezoneSettings() {
 
 // getSQLiteAppDataDir 获取应用数据目录（跨平台）
 // 复制自 internal/utils/appdir.go，避免循环依赖
-// Windows: %APPDATA%\CC-Forwarder
-// macOS: ~/Library/Application Support/CC-Forwarder
-// Linux: ~/.local/share/cc-forwarder
+// Windows: %APPDATA%\Claude-Request-Forwarder
+// macOS: ~/Library/Application Support/Claude-Request-Forwarder
+// Linux: ~/.local/share/claude-request-forwarder
 func getSQLiteAppDataDir() string {
 	var baseDir string
 
@@ -786,22 +786,22 @@ func getSQLiteAppDataDir() string {
 		if baseDir == "" {
 			baseDir = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
 		}
-		return filepath.Join(baseDir, "CC-Forwarder")
+		return filepath.Join(baseDir, "Claude-Request-Forwarder")
 
 	case "darwin":
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, "Library", "Application Support", "CC-Forwarder")
+		return filepath.Join(homeDir, "Library", "Application Support", "Claude-Request-Forwarder")
 
 	case "linux":
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "cc-forwarder")
+			return filepath.Join(xdgDataHome, "claude-request-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "cc-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".cc-forwarder")
+		return filepath.Join(homeDir, ".claude-request-forwarder")
 	}
 }

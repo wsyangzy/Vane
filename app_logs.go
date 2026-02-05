@@ -31,7 +31,7 @@ func (a *App) GetRecentLogs(limit int) []logging.LogEntry {
 // 前端调用后，开始通过 Wails Events 推送新日志
 func (a *App) StartLogStream() {
 	if a.logEmitter != nil {
-		a.logEmitter.Start(a.ctx)
+		a.logEmitter.Start(a.window)
 	}
 }
 

@@ -64,14 +64,16 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
       setIsRefreshing(true);
     }
     try {
+      console.log('📊 [RequestTrendChart] 开始加载数据, timeRange:', timeRange);
       const data = await fetchRequestTrendData(timeRange);
-      setChartData(
-        toCumulative(padTimeSeries(data, {
-          minutes: timeRange,
-          stepMs: 30 * 1000,
-          defaults: { total: 0, success: 0, fail: 0 },
-        }))
-      );
+      console.log('📊 [RequestTrendChart] 获取到原始数据:', data);
+      const processedData = toCumulative(padTimeSeries(data, {
+        minutes: timeRange,
+        stepMs: 30 * 1000,
+        defaults: { total: 0, success: 0, fail: 0 },
+      }));
+      console.log('📊 [RequestTrendChart] 处理后数据:', processedData?.length, '个点');
+      setChartData(processedData);
     } catch (error) {
       console.error('加载请求趋势数据失败:', error);
     } finally {

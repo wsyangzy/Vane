@@ -6,40 +6,39 @@ import (
 	"runtime"
 )
 
+// AppName 应用目录名（各平台统一使用此常量）
+const AppName = "Claude-Request-Forwarder"
+
 // GetAppDataDir 获取应用数据目录（跨平台）
-// Windows: %APPDATA%\CC-Forwarder
-// macOS: ~/Library/Application Support/CC-Forwarder
-// Linux: ~/.local/share/cc-forwarder
+// Windows: %APPDATA%\Claude-Request-Forwarder
+// macOS: ~/Library/Application Support/Claude-Request-Forwarder
+// Linux: ~/.local/share/claude-request-forwarder
 func GetAppDataDir() string {
 	var baseDir string
 
 	switch runtime.GOOS {
 	case "windows":
-		// Windows: %APPDATA%\CC-Forwarder
 		baseDir = os.Getenv("APPDATA")
 		if baseDir == "" {
 			baseDir = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
 		}
-		return filepath.Join(baseDir, "CC-Forwarder")
+		return filepath.Join(baseDir, AppName)
 
 	case "darwin":
-		// macOS: ~/Library/Application Support/CC-Forwarder
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, "Library", "Application Support", "CC-Forwarder")
+		return filepath.Join(homeDir, "Library", "Application Support", AppName)
 
 	case "linux":
-		// Linux: ~/.local/share/cc-forwarder
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "cc-forwarder")
+			return filepath.Join(xdgDataHome, "claude-request-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "cc-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
 
 	default:
-		// 其他系统：使用 ~/.cc-forwarder
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".cc-forwarder")
+		return filepath.Join(homeDir, ".claude-request-forwarder")
 	}
 }
 
@@ -53,18 +52,12 @@ func GetLogDir() string {
 	return filepath.Join(GetAppDataDir(), "logs")
 }
 
-// GetConfigDir 获取配置目录
-func GetConfigDir() string {
-	return filepath.Join(GetAppDataDir(), "config")
-}
-
 // EnsureAppDirs 确保应用所需的所有目录存在
 func EnsureAppDirs() error {
 	dirs := []string{
 		GetAppDataDir(),
 		GetDataDir(),
 		GetLogDir(),
-		GetConfigDir(),
 	}
 
 	for _, dir := range dirs {

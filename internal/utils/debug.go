@@ -128,7 +128,7 @@ func getDebugLogDir() string {
 			return debugConfig.SavePath
 		}
 		// 相对路径：使用应用数据目录下的日志目录
-		// macOS: ~/Library/Application Support/CC-Forwarder/logs
+		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/logs
 		return GetLogDir()
 	}
 	// 默认：使用应用数据目录下的日志目录

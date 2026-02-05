@@ -30,17 +30,17 @@ import (
 	"claude-request-forwarder/internal/store"
 	"claude-request-forwarder/internal/tracking"
 	"claude-request-forwarder/internal/transport"
-	"claude-request-forwarder/internal/tray"
 	"claude-request-forwarder/internal/utils"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // App 是 Wails 应用的核心结构
 // 它封装了所有业务组件，并暴露方法给前端调用
 type App struct {
-	// Wails 上下文
-	ctx context.Context
+	// Wails v3 应用与窗口引用
+	wailsApp *application.App
+	window   *application.WebviewWindow
 
 	// 核心组件
 	config               *config.Config
@@ -83,35 +83,30 @@ type App struct {
 	mu        sync.RWMutex
 	isRunning bool
 	quitting  int32
+	stopChan  chan struct{} // goroutine 退出信号
 
 	// 日志处理器（用于查询和广播）
 	logHandler *logging.BroadcastHandler
 	logEmitter *logging.EventEmitter
-
-	// 托盘控制器（Windows）
-	trayController tray.Controller
 }
 
 // NewApp 创建新的应用实例
 func NewApp() *App {
 	return &App{
 		startTime: time.Now(),
+		stopChan:  make(chan struct{}),
 	}
 }
 
 // startup 在 Wails 应用启动时调用
 // 这里初始化所有组件并启动代理服务器
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
+func (a *App) startup() {
 
 	// 1. 加载配置
 	a.loadConfig()
 
 	// 2. 初始化日志
 	a.setupLogger()
-
-	// 2.5 初始化托盘（最小化到托盘/托盘菜单退出）
-	a.setupTray()
 
 	// 3. 显示启动信息
 	a.logger.Info("🚀 Claude Request Forwarder 桌面版启动中...",
@@ -164,7 +159,7 @@ func (a *App) startup(ctx context.Context) {
 	a.setupModelPricingStore()
 
 	// 7.6 同步端点倍率到 UsageTracker（用于成本计算）
-	a.syncEndpointMultipliersToTracker(ctx)
+	a.syncEndpointMultipliersToTracker(context.Background())
 
 	// 8. 启动端点管理器（此时端点已从数据库加载完成）
 	a.endpointManager.Start()
@@ -196,7 +191,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // shutdown 在 Wails 应用关闭时调用
-func (a *App) shutdown(ctx context.Context) {
+func (a *App) shutdown() {
 	a.mu.Lock()
 	logger := a.logger
 	proxyServer := a.proxyServer
@@ -206,14 +201,11 @@ func (a *App) shutdown(ctx context.Context) {
 	eventBus := a.eventBus
 	configWatcher := a.configWatcher
 	logEmitter := a.logEmitter
-	trayController := a.trayController
 	a.isRunning = false
 	a.mu.Unlock()
 
-	// 0. 关闭托盘
-	if trayController != nil {
-		trayController.Stop()
-	}
+	// 0. 关闭 goroutine 退出信号
+	close(a.stopChan)
 
 	if logger != nil {
 		logger.Info("🛑 正在关闭 Claude Request Forwarder...")
@@ -221,7 +213,7 @@ func (a *App) shutdown(ctx context.Context) {
 
 	// 1. 停止接收新请求
 	if proxyServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := proxyServer.Shutdown(shutdownCtx); err != nil {
 			_ = proxyServer.Close()
@@ -296,84 +288,45 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
-// domReady 在前端 DOM 准备就绪时调用
-func (a *App) domReady(ctx context.Context) {
+// onWindowReady 在窗口首次准备就绪时调用（替代 v2 的 domReady）
+func (a *App) onWindowReady() {
 	// 发送初始状态给前端
 	a.emitSystemStatus()
 }
 
+// isQuitting 检查是否正在退出
+func (a *App) isQuitting() bool {
+	return atomic.LoadInt32(&a.quitting) == 1
+}
+
 // ShowMainWindow 显示主窗口（用于托盘菜单/单实例唤起）
 func (a *App) ShowMainWindow() {
-	a.mu.RLock()
-	ctx := a.ctx
-	a.mu.RUnlock()
-	if ctx == nil {
+	if a.window == nil {
 		return
 	}
-	// 直接调用 Wails Runtime（不依赖 JS；窗口隐藏时也可用）
-	runtime.WindowShow(ctx)
-	runtime.WindowUnminimise(ctx)
+	a.window.Show()
+	a.window.Focus()
 }
 
 // HideMainWindow 隐藏主窗口（用于托盘菜单）
 func (a *App) HideMainWindow() {
-	a.mu.RLock()
-	ctx := a.ctx
-	a.mu.RUnlock()
-	if ctx == nil {
+	if a.window == nil {
 		return
 	}
-	// 直接调用 Wails Runtime（不依赖 JS）
-	runtime.WindowHide(ctx)
-}
-
-// setupTray 初始化系统托盘（Windows 生效；其它平台为 noop）
-func (a *App) setupTray() {
-	if goruntime.GOOS != "windows" {
-		return
-	}
-
-	a.mu.Lock()
-	if a.trayController != nil {
-		a.mu.Unlock()
-		return
-	}
-	ctx := a.ctx
-	a.mu.Unlock()
-
-	if ctx == nil {
-		return
-	}
-
-	controller, err := tray.Start(ctx, tray.Options{
-		Icon:         trayIconIco,
-		Tooltip:      fmt.Sprintf("Claude Request Forwarder %s", Version),
-		OnShow:       a.ShowMainWindow,
-		OnQuit:       a.RequestQuit,
-		OnOpenLogDir: a.OpenLogDir,
-	})
-	if err != nil {
-		if a.logger != nil {
-			a.logger.Warn("托盘初始化失败（将忽略最小化到托盘）", "error", err)
-		}
-		return
-	}
-
-	a.mu.Lock()
-	a.trayController = controller
-	a.mu.Unlock()
+	a.window.Hide()
 }
 
 // RequestQuit 请求退出应用（托盘菜单"退出"使用）
 func (a *App) RequestQuit() {
-	a.mu.RLock()
-	ctx := a.ctx
-	a.mu.RUnlock()
-	if ctx == nil {
-		return
-	}
 	atomic.StoreInt32(&a.quitting, 1)
-	go runtime.Quit(ctx)
+	if a.wailsApp != nil {
+		a.wailsApp.Quit()
+	}
+	// 确保进程完全退出（dev 模式下 Quit() 可能不会终止 watcher）
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(0)
+	}()
 }
 
 // OpenLogDir 打开日志目录（托盘菜单使用）
@@ -411,31 +364,6 @@ func (a *App) OpenLogDir() {
 	}
 }
 
-// beforeClose 在窗口关闭前调用，返回 true 阻止关闭
-func (a *App) beforeClose(ctx context.Context) bool {
-	// 非 Windows：保持默认"关闭即退出"
-	if goruntime.GOOS != "windows" {
-		return false
-	}
-
-	// 显式退出（托盘"退出"/应用主动 Quit）放行关闭
-	if atomic.LoadInt32(&a.quitting) == 1 {
-		return false
-	}
-
-	// 没有托盘能力时，不拦截关闭，避免用户无法退出
-	a.mu.RLock()
-	trayEnabled := a.trayController != nil
-	a.mu.RUnlock()
-	if !trayEnabled {
-		return false
-	}
-
-	// 用户点击 X：隐藏到托盘并阻止真正关闭（确保后台服务不停止）
-	runtime.WindowHide(ctx)
-	return true
-}
-
 // loadConfig 加载配置
 func (a *App) loadConfig() {
 	// 创建临时 logger 用于初始化
@@ -455,7 +383,7 @@ func (a *App) loadConfig() {
 	tempLogger.Info("📝 从嵌入配置加载")
 
 	// 将嵌入的配置写入临时文件进行解析
-	tmpConfigPath := filepath.Join(os.TempDir(), "cc-forwarder-config.yaml")
+	tmpConfigPath := filepath.Join(os.TempDir(), "claude-request-forwarder-config.yaml")
 
 	// 先修改配置内容，替换路径为用户目录
 	configContent := string(defaultConfigContent)
@@ -478,7 +406,7 @@ func (a *App) loadConfig() {
 	// ⚠️ 关键：立即覆盖所有路径为用户目录（在任何组件初始化之前）
 	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), "app.log")
 	// v6.1+：为避免与旧版本共享同一 usage.db 产生锁冲突，默认切换到新文件名，并在启动时自动迁移旧数据。
-	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "cc-forwarder.db")
+	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "usage.db")
 
 	// 同时设置 Database 配置（如果存在）
 	if cfg.UsageTracking.Database != nil {
@@ -836,7 +764,7 @@ func (a *App) getEffectiveUsageDBPath() string {
 	if a.config.UsageTracking.DatabasePath != "" {
 		return a.config.UsageTracking.DatabasePath
 	}
-	return filepath.Join(utils.GetDataDir(), "cc-forwarder.db")
+	return filepath.Join(utils.GetDataDir(), "usage.db")
 }
 
 // setupUsageTracker 设置使用追踪
@@ -970,7 +898,7 @@ func isLikelySQLiteBusyOrLocked(err error) bool {
 		strings.Contains(msg, "locked")
 }
 
-// migrateLegacyDatabaseIfNeeded 将旧版本默认库 usage.db 迁移到新版本默认库 cc-forwarder.db。
+// migrateLegacyDatabaseIfNeeded 将旧版本默认库 usage.db 迁移到新版本默认库 usage.db。
 // 目的：避免新旧版本同时运行时共享同一 SQLite 文件导致锁冲突（创建渠道/写入配置“无响应”）。
 func (a *App) migrateLegacyDatabaseIfNeeded() {
 	newPath := a.getEffectiveUsageDBPath()
@@ -979,7 +907,7 @@ func (a *App) migrateLegacyDatabaseIfNeeded() {
 	}
 
 	// 仅对默认路径场景启用迁移，避免覆盖用户显式配置
-	defaultNew := filepath.Join(utils.GetDataDir(), "cc-forwarder.db")
+	defaultNew := filepath.Join(utils.GetDataDir(), "usage.db")
 	defaultOld := filepath.Join(utils.GetDataDir(), "usage.db")
 	if filepath.Clean(newPath) != filepath.Clean(defaultNew) {
 		return
@@ -991,13 +919,13 @@ func (a *App) migrateLegacyDatabaseIfNeeded() {
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		legacyCandidates = append(legacyCandidates,
-			filepath.Join(exeDir, "data", "cc-forwarder.db"),
+			filepath.Join(exeDir, "data", "usage.db"),
 			filepath.Join(exeDir, "data", "usage.db"),
 		)
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		legacyCandidates = append(legacyCandidates,
-			filepath.Join(cwd, "data", "cc-forwarder.db"),
+			filepath.Join(cwd, "data", "usage.db"),
 			filepath.Join(cwd, "data", "usage.db"),
 		)
 	}
@@ -1467,7 +1395,7 @@ func (a *App) setupEventBridges() {
 
 		for {
 			select {
-			case <-a.ctx.Done():
+			case <-a.stopChan:
 				return
 			case <-ticker.C:
 				if a.isRunning {
@@ -1506,7 +1434,7 @@ func (a *App) startHistoryCollector() {
 
 		for {
 			select {
-			case <-a.ctx.Done():
+			case <-a.stopChan:
 				a.logger.Info("📊 历史数据收集器已停止")
 				return
 			case <-ticker.C:
@@ -1523,8 +1451,8 @@ func (a *App) startHistoryCollector() {
 
 // emitError 发送错误通知到前端
 func (a *App) emitError(title, message string) {
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "error", map[string]string{
+	if a.window != nil {
+		a.window.EmitEvent("error", map[string]string{
 			"title":   title,
 			"message": message,
 		})
@@ -1533,8 +1461,8 @@ func (a *App) emitError(title, message string) {
 
 // emitConfigReloaded 通知前端配置已重载
 func (a *App) emitConfigReloaded() {
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "config:reloaded", nil)
+	if a.window != nil {
+		a.window.EmitEvent("config:reloaded", nil)
 	}
 }
 

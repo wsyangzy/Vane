@@ -11,10 +11,7 @@ import { SaveResultDialog } from '@/components/ui';
 // v6.2.15: 日志项固定高度（用于虚拟滚动）
 const LOG_ITEM_HEIGHT = 40;
 
-// v6.2.11: 直接调用 Go 方法（bindings 需要重新生成后可改用 import）
-const SaveLogFile = (content, defaultFileName) => {
-  return window['go']['main']['App']['SaveLogFile'](content, defaultFileName);
-};
+import { SaveLogFile } from '@wailsjs/go/main/App';
 
 // 检测组件挂载状态
 function useComponentVisibility() {
