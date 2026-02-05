@@ -21,7 +21,7 @@ import (
 
 // 版本信息（通过 ldflags 注入）
 var (
-	Version   = "6.2"
+	Version   = "6.3"
 	Commit    = "unknown"
 	BuildTime = "unknown"
 )

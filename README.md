@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-6.0.7-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-6.3-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg" alt="Go">
@@ -38,13 +38,13 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 
 - **优先级路由** - 按优先级自动选择最优端点
 - **故障转移** - 端点异常时自动切换，支持配置冷却时间
-- **智能错误恢复** (v6.0.7+) - 三种恢复策略可选
+- **智能错误恢复** - 三种恢复策略可选
   - **智能等待** (`auto_wait`) - 所有端点耗尽后挂起请求，等待端点自愈（推荐生产环境）
   - **循环重试** (`loop_retry`) - 回到最高优先级端点继续尝试（仅测试环境）
   - **快速失败** (`fail_fast`) - 立即返回错误，不等待恢复（调试用）
 - **端点自愈** - 持续监测故障端点，恢复后自动重新启用
 - **流式传输** - 完整支持 SSE 流式响应，零延迟透传
-- **计费感知重试** (v6.0.5+) - 基于 Token 计费智能判断错误是否可重试，避免重复计费
+- **计费感知重试** - 基于 Token 计费智能判断错误是否可重试，避免重复计费
 
 ### 📊 使用统计
 
@@ -66,8 +66,8 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 - **热池架构** - 内存缓存 + 异步写入，高性能低延迟
 - **本地存储** - SQLite 数据库，无需额外依赖
 - **跨平台** - macOS、Windows、Linux 全平台支持
-- **可视化设置** (v6.0.7+) - 设置页面支持枚举类型下拉选择、变更追踪、实时生效
-- **日志复制** (v6.0.5+) - 日志查看器支持一键复制，便于问题排查
+- **可视化设置** - 设置页面支持枚举类型下拉选择、变更追踪、实时生效
+- **日志复制** - 日志查看器支持一键复制，便于问题排查
 
 ## 截图
 
@@ -95,8 +95,8 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 ### 方式二：从源码构建
 
 ```bash
-# 1. 安装 Wails CLI
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+# 1. 安装 Wails v3 CLI
+go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 
 # 2. 克隆项目
 git clone https://github.com/xiaozhaodong/claude-request-forwarder-desktop.git
@@ -106,10 +106,10 @@ cd claude-request-forwarder-desktop
 cd frontend && npm install && cd ..
 
 # 4. 开发模式运行
-wails dev
+wails3 dev
 
 # 5. 构建生产版本
-wails build
+wails3 task build
 ```
 
 ### 配置 Claude Code
@@ -155,7 +155,7 @@ failover:
   enabled: true
   default_cooldown: "10m"
 
-# 请求控制 (v6.0.7+)
+# 请求控制
 request:
   # 恢复策略：所有渠道耗尽后的处理方式
   recovery_strategy: "auto_wait"  # auto_wait (推荐) | loop_retry | fail_fast
@@ -426,7 +426,7 @@ usage_tracking:
 <details>
 <summary><b>Q: 如何选择合适的恢复策略？</b></summary>
 
-**推荐配置**（v6.0.7+）：
+**推荐配置**：
 - **生产环境**: `auto_wait`（智能等待）- 避免无效重试，减少资源浪费
 - **测试环境**: `loop_retry`（循环重试）- 适合端点数量少且需要持续尝试的场景
 - **调试环境**: `fail_fast`（快速失败）- 快速反馈错误，便于问题定位
