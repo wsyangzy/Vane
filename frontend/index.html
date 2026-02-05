@@ -16,7 +16,17 @@
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#666;">
+        Loading...
+      </div>
+    </div>
+    <script>
+      // Wails v3: 确保 window._wails 在任何模块加载前就已存在
+      // 这样 isWailsEnvironment() 从首次渲染开始就返回一致的值
+      // @wailsio/runtime 之后会补充完整的属性
+      window._wails = window._wails || {};
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

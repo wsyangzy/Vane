@@ -578,10 +578,10 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 	// 设置默认数据库路径 - 使用跨平台用户目录
 	if dbConfig.DatabasePath == "" {
 		// 使用 internal/utils 提供的跨平台目录
-		// Windows: %APPDATA%\CC-Forwarder\data\cc-forwarder.db
-		// macOS: ~/Library/Application Support/CC-Forwarder/data/cc-forwarder.db
-		// Linux: ~/.local/share/cc-forwarder/data/cc-forwarder.db
-		dbConfig.DatabasePath = filepath.Join(getAppDataDir(), "data", "cc-forwarder.db")
+		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
+		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
+		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		dbConfig.DatabasePath = filepath.Join(getAppDataDir(), "data", "usage.db")
 	}
 
 	// 时区级联逻辑：优先级 database.timezone > global.timezone > 默认值
@@ -597,9 +597,9 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 
 // getAppDataDir 获取应用数据目录（跨平台）
 // 复制自 internal/utils/appdir.go，避免循环依赖
-// Windows: %APPDATA%\CC-Forwarder
-// macOS: ~/Library/Application Support/CC-Forwarder
-// Linux: ~/.local/share/cc-forwarder
+// Windows: %APPDATA%\Claude-Request-Forwarder
+// macOS: ~/Library/Application Support/Claude-Request-Forwarder
+// Linux: ~/.local/share/claude-request-forwarder
 func getAppDataDir() string {
 	var baseDir string
 
@@ -609,23 +609,23 @@ func getAppDataDir() string {
 		if baseDir == "" {
 			baseDir = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
 		}
-		return filepath.Join(baseDir, "CC-Forwarder")
+		return filepath.Join(baseDir, "Claude-Request-Forwarder")
 
 	case "darwin":
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, "Library", "Application Support", "CC-Forwarder")
+		return filepath.Join(homeDir, "Library", "Application Support", "Claude-Request-Forwarder")
 
 	case "linux":
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "cc-forwarder")
+			return filepath.Join(xdgDataHome, "claude-request-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "cc-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".cc-forwarder")
+		return filepath.Join(homeDir, ".claude-request-forwarder")
 	}
 }
 

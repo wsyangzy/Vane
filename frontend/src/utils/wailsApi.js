@@ -5,8 +5,9 @@
 // ============================================
 
 // 检测是否在 Wails 环境中运行
+// v3: 使用 window._wails 替代 v2 的 window.go
 export const isWailsEnvironment = () => {
-  return typeof window !== 'undefined' && window.go !== undefined;
+  return typeof window !== 'undefined' && (window._wails !== undefined || window.go !== undefined);
 };
 
 // 动态导入 Wails 绑定（避免在非 Wails 环境中报错）

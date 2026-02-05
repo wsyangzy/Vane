@@ -1,35 +1,21 @@
-// main.go - Claude Request Forwarder Wails 应用入口
-// 保留原有的核心功能，添加 Wails 桌面应用支持
+//go:build desktop
+
+// main.go - Claude Request Forwarder Wails v3 应用入口
+// 使用 Wails v3 原生系统托盘支持
+//
+// 注意：全局变量（Version, assets, setupLogger 等）定义在 globals.go 中
+// 以便 IDE 在无 desktop build tag 时也能正确解析
 
 package main
 
 import (
-	"context"
-	"embed"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
-	"runtime"
-	"strconv"
-	"strings"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/logging"
-
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
-)
-
-// 版本信息
-var (
-	Version   = "6.1.1"
-	Commit    = "unknown"
-	BuildTime = "unknown"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 // 命令行参数
@@ -38,31 +24,8 @@ var (
 	showVersion = flag.Bool("version", false, "显示版本信息")
 )
 
-// 嵌入前端资源
-//
-//go:embed all:frontend/dist
-var assets embed.FS
-
-// 嵌入应用图标
-//
-//go:embed build/appicon.png
-var icon []byte
-
-// 嵌入 Windows 托盘图标
-//
-//go:embed build/windows/icon.ico
-var trayIconIco []byte
-
-// 嵌入默认配置文件
-//
-//go:embed config/config.yaml
-var defaultConfigContent []byte
-
 // 运行时变量
-var (
-	startTime         = time.Now()
-	currentLogHandler *SimpleHandler
-)
+var startTime = time.Now()
 
 func main() {
 	flag.Parse()
@@ -77,227 +40,152 @@ func main() {
 	}
 
 	// 创建应用实例
-	app := NewApp()
-	app.configPath = *configPath
+	appInstance := NewApp()
+	appInstance.configPath = *configPath
 
-	// 运行 Wails 应用
-	err := wails.Run(&options.App{
-		Title:     "Claude Request Forwarder",
-		Width:     1440,
-		Height:    900,
-		MinWidth:  1200,
-		MinHeight: 700,
-
-		// Windows：点击关闭隐藏到托盘；仅在显式"退出"时真正退出（由 OnBeforeClose + 托盘菜单控制）
-		HideWindowOnClose: false,
-
-		// 资源服务器
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+	// 创建 Wails v3 应用
+	wailsApp := application.New(application.Options{
+		Name:        "Claude Request Forwarder",
+		Description: "Claude API 请求转发服务",
+		Icon:        icon, // 设置应用图标
+		Services: []application.Service{
+			application.NewService(appInstance),
 		},
-
-		// 背景色 (加载时显示)
-		BackgroundColour: &options.RGBA{R: 26, G: 26, B: 46, A: 1},
-
-		// 生命周期回调
-		OnStartup:     app.startup,
-		OnDomReady:    app.domReady,
-		OnBeforeClose: app.beforeClose,
-		OnShutdown:    app.shutdown,
-
-		// 绑定到前端的方法
-		Bind: []interface{}{
-			app,
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
 		},
-
-		// macOS 配置
-		Mac: &mac.Options{
-			TitleBar: &mac.TitleBar{
-				TitlebarAppearsTransparent: true,
-				HideTitle:                  true,
-				HideTitleBar:               false,
-				FullSizeContent:            true,
-				UseToolbar:                 false,
-			},
-			About: &mac.AboutInfo{
-				Title:   "Claude Request Forwarder",
-				Message: fmt.Sprintf("Claude Request Forwarder 本地代理转发服务\n版本 %s", Version),
-				Icon:    icon,
-			},
-			WebviewIsTransparent: true,
-			WindowIsTranslucent:  false,
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
-
-		// Windows 配置
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-			DisableWindowIcon:    false,
-		},
-
-		// 单实例：当应用已隐藏到托盘时，再次启动会唤起主窗口
-		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: "claude-request-forwarder-desktop",
-			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
-				if app != nil {
-					app.ShowMainWindow()
+		// 单实例锁
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "claude-request-forwarder-desktop",
+			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+				// 当第二个实例启动时，显示主窗口
+				if appInstance != nil && appInstance.window != nil {
+					appInstance.window.Show()
+					appInstance.window.Focus()
 				}
 			},
 		},
 	})
 
+	// 保存 wailsApp 引用到 App 实例
+	appInstance.wailsApp = wailsApp
+
+	// 创建主窗口
+	window := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:     "Claude Request Forwarder",
+		Width:     1440,
+		Height:    900,
+		MinWidth:  1200,
+		MinHeight: 700,
+		BackgroundColour: application.RGBA{Red: 26, Green: 26, Blue: 46, Alpha: 255},
+		Mac: application.MacWindow{
+			InvisibleTitleBarHeight: 50,
+			Backdrop:                application.MacBackdropTranslucent,
+			TitleBar:                application.MacTitleBarHiddenInset,
+		},
+		Windows: application.WindowsWindow{
+			DisableIcon: false,
+		},
+		URL: "/",
+		// 启用开发者工具（用于调试前端问题）
+		DevToolsEnabled: true,
+	})
+
+	// 保存窗口引用
+	appInstance.window = window
+
+	// 注册窗口关闭钩子：隐藏到托盘而非真正关闭
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		// 如果不是显式退出请求，隐藏窗口而非关闭
+		if !appInstance.isQuitting() {
+			window.Hide()
+			e.Cancel() // 阻止窗口关闭
+		}
+	})
+
+	// 注册窗口显示钩子（相当于 domReady）
+	window.RegisterHook(events.Common.WindowShow, func(e *application.WindowEvent) {
+		// 首次显示时执行初始化
+		appInstance.onWindowReady()
+	})
+
+	// 创建系统托盘
+	setupSystemTray(wailsApp, window, appInstance)
+
+	// 启动应用初始化
+	appInstance.startup()
+
+	// 运行应用
+	err := wailsApp.Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// ============================================================
-// 日志相关函数 (从原 main.go 保留)
-// ============================================================
+// setupSystemTray 配置系统托盘（使用 Wails v3 原生支持）
+func setupSystemTray(app *application.App, window *application.WebviewWindow, appInstance *App) {
+	systray := app.SystemTray.New()
 
-// setupLogger 配置结构化日志
-func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
-	var level slog.Level
-	switch cfg.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "info":
-		level = slog.LevelInfo
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
+	// 设置托盘图标（使用专用托盘图标，避免缩放模糊）
+	systray.SetIcon(trayIcon)
 
-	var fileRotator *logging.FileRotator
-	// 设置文件日志
-	if cfg.FileEnabled {
-		maxSize, err := logging.ParseSize(cfg.MaxFileSize)
-		if err != nil {
-			fmt.Printf("警告：无法解析日志文件大小配置 '%s'，使用默认值 100MB: %v\n", cfg.MaxFileSize, err)
-			maxSize = 100 * 1024 * 1024
-		}
+	// 设置工具提示
+	systray.SetTooltip(fmt.Sprintf("Claude Request Forwarder %s", Version))
 
-		fileRotator, err = logging.NewFileRotator(cfg.FilePath, maxSize, cfg.MaxFiles, cfg.CompressRotated)
-		if err != nil {
-			fmt.Printf("警告：无法创建日志文件轮转器: %v\n", err)
-			fileRotator = nil
-		}
-	}
+	// 创建托盘菜单
+	menu := app.Menu.New()
 
-	// 创建 SimpleHandler（文件和控制台输出）
-	simpleHandler := &SimpleHandler{
-		level:                    level,
-		fileRotator:              fileRotator,
-		disableFileResponseLimit: cfg.FileEnabled && cfg.DisableResponseLimit,
-	}
-	currentLogHandler = simpleHandler
-
-	// 用 BroadcastHandler 包装（添加日志查看功能）
-	broadcastHandler := logging.NewBroadcastHandler(simpleHandler, 1000)
-
-	if cfg.FileEnabled {
-		fmt.Printf("🔧 文件日志已启用: 路径=%s\n", cfg.FilePath)
-	}
-
-	return slog.New(broadcastHandler), broadcastHandler
-}
-
-// SimpleHandler 简化的日志处理器
-type SimpleHandler struct {
-	level                    slog.Level
-	fileRotator              *logging.FileRotator
-	disableFileResponseLimit bool
-}
-
-func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
-}
-
-func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
-	message := r.Message
-
-	var attrs []string
-	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, fmt.Sprintf("%s=%v", a.Key, a.Value))
-		return true
+	// 显示主窗口
+	mShow := menu.Add("显示主窗口")
+	mShow.OnClick(func(ctx *application.Context) {
+		window.Show()
+		window.Focus()
 	})
 
-	if len(attrs) > 0 {
-		message = message + " " + strings.Join(attrs, " ")
-	}
+	menu.AddSeparator()
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
-	pid := os.Getpid()
-	gid := getGoroutineID()
-	level := "INFO"
-	switch r.Level {
-	case slog.LevelDebug:
-		level = "DEBUG"
-	case slog.LevelWarn:
-		level = "WARN"
-	case slog.LevelError:
-		level = "ERROR"
-	}
-
-	// 文件输出
-	if h.fileRotator != nil {
-		fileMessage := message
-		if !h.disableFileResponseLimit && len(message) > 500 {
-			fileMessage = message[:500] + "... (文件日志截断)"
+	// 打开日志目录
+	mOpenLogDir := menu.Add("打开日志目录")
+	mOpenLogDir.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			appInstance.OpenLogDir()
 		}
-		formattedMessage := fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s\n", timestamp, pid, gid, level, fileMessage)
-		h.fileRotator.Write([]byte(formattedMessage))
-	}
+	})
 
-	// 控制台输出
-	displayMessage := message
-	if len(displayMessage) > 500 {
-		displayMessage = displayMessage[:500] + "... (显示截断)"
-	}
+	menu.AddSeparator()
 
-	consoleMessage := fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s", timestamp, pid, gid, level, displayMessage)
-	fmt.Println(consoleMessage)
+	// 退出
+	mQuit := menu.Add("退出")
+	mQuit.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			appInstance.RequestQuit()
+		}
+	})
 
-	return nil
+	systray.SetMenu(menu)
+
+	// 托盘图标点击事件：显示/隐藏窗口
+	systray.OnClick(func() {
+		if window.IsVisible() {
+			window.Hide()
+		} else {
+			window.Show()
+			window.Focus()
+		}
+	})
+
+	// 右键点击显示菜单
+	systray.OnRightClick(func() {
+		systray.OpenMenu()
+	})
+
+	// 双击显示窗口
+	systray.OnDoubleClick(func() {
+		window.Show()
+		window.Focus()
+	})
 }
-
-func (h *SimpleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *SimpleHandler) WithGroup(name string) slog.Handler {
-	return h
-}
-
-func (h *SimpleHandler) Close() error {
-	if h.fileRotator != nil {
-		h.fileRotator.Sync()
-		return h.fileRotator.Close()
-	}
-	return nil
-}
-
-func getGoroutineID() int {
-	buf := make([]byte, 64)
-	buf = buf[:runtime.Stack(buf, false)]
-	idField := strings.Fields(string(buf))[1]
-	id, err := strconv.Atoi(idField)
-	if err != nil {
-		return 0
-	}
-	return id
-}
-
-// ============================================================
-// 配置转换函数 (从原 main.go 保留)
-// ============================================================
-
-// v5.0+ 注意：convertModelPricing 和 convertModelPricingSingle 已移除
-// 模型定价现在从 SQLite model_pricing 表加载，不再依赖 config.yaml
-// 相关代码参见：
-//   - app.go: syncPricingToTracker()
-//   - internal/service/model_pricing.go: ToTrackingPricing()

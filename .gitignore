@@ -77,12 +77,16 @@ build/bin/
 build/dist/
 build.log
 
+# Wails v3 构建中间文件
+*.syso
+.task/
+
 # 废弃代码
 internal/tracking/deprecated/
-.cunzhi-memory
 .gocache
 .gomodcache
 CLAUDE.md
 docs/TODO.md
 .ace-tool/
 AGENTS.md
+.trellis

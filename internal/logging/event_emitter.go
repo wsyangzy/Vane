@@ -1,19 +1,18 @@
 package logging
 
 import (
-	"context"
 	"sync"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// EventEmitter Wails 事件发射器
-// 负责将日志通过 Wails Runtime Events 推送到前端
+// EventEmitter Wails v3 事件发射器
+// 负责将日志通过 Wails Events 推送到前端
 type EventEmitter struct {
 	mu sync.Mutex
 
-	ctx     context.Context
+	window  *application.WebviewWindow
 	enabled bool
 
 	batchSize     int
@@ -33,7 +32,7 @@ func NewEventEmitter() *EventEmitter {
 }
 
 // Start 启动事件发射器（前端订阅后调用）
-func (e *EventEmitter) Start(ctx context.Context) {
+func (e *EventEmitter) Start(window *application.WebviewWindow) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -41,7 +40,7 @@ func (e *EventEmitter) Start(ctx context.Context) {
 		return // 已启动
 	}
 
-	e.ctx = ctx
+	e.window = window
 	e.enabled = true
 	e.stopChan = make(chan struct{})
 	e.doneChan = make(chan struct{})
@@ -53,8 +52,8 @@ func (e *EventEmitter) Start(ctx context.Context) {
 	}
 	e.queue = make(chan LogEntry, queueCap)
 
-	// 启动批量发送 goroutine（EventsEmit 在锁外调用）
-	go e.batchSendLoop(e.ctx, e.queue, e.stopChan, e.doneChan, e.batchSize, e.flushInterval)
+	// 启动批量发送 goroutine（EmitEvent 在锁外调用）
+	go e.batchSendLoop(e.window, e.queue, e.stopChan, e.doneChan, e.batchSize, e.flushInterval)
 }
 
 // Stop 停止事件发射器
@@ -109,7 +108,7 @@ func (e *EventEmitter) Emit(entry LogEntry) {
 }
 
 func (e *EventEmitter) batchSendLoop(
-	ctx context.Context,
+	window *application.WebviewWindow,
 	queue <-chan LogEntry,
 	stop <-chan struct{},
 	done chan<- struct{},
@@ -133,8 +132,8 @@ func (e *EventEmitter) batchSendLoop(
 		if len(buffer) == 0 {
 			return
 		}
-		if ctx != nil {
-			runtime.EventsEmit(ctx, "log:batch", buffer)
+		if window != nil {
+			window.EmitEvent("log:batch", buffer)
 		}
 		buffer = buffer[:0]
 	}
