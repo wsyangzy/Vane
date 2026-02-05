@@ -118,7 +118,20 @@ const GlobalAlerts = () => {
 
       if (latestFailureId && latestFailureId !== lastFailureIdRef.current) {
         if (shouldNotifyFailoverFailure(failureReason)) {
-          toast.error(buildFailoverFailureMessage(failureReason), '请求失败');
+          // v6.2.19: 根据失败类型选择不同的提示级别
+          // max_loops_exceeded 和 max_restarts_exceeded 需要用户手动处理，使用 warning 级别
+          // 避免与真正的错误混淆（如并发场景下其他请求还在正常运行）
+          const isManualInterventionNeeded =
+            failureReason.includes('max_loops_exceeded') ||
+            failureReason.includes('max_restarts_exceeded') ||
+            failureReason.includes('最大循环轮数') ||
+            failureReason.includes('最大重启次数');
+
+          if (isManualInterventionNeeded) {
+            toast.warning(buildFailoverFailureMessage(failureReason), '需要处理');
+          } else {
+            toast.error(buildFailoverFailureMessage(failureReason), '请求失败');
+          }
         }
         lastFailureIdRef.current = latestFailureId;
       }

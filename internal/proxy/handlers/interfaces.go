@@ -43,6 +43,7 @@ type RequestLifecycleManager interface {
 	SetModel(modelName string)                               // 简单设置模型
 	SetModelWithComparison(modelName, source string)        // 带对比的设置模型
 	HasModel() bool                                          // 检查是否已有模型
+	GetModelName() string                                    // 获取当前模型名称
 	UpdateStatus(status string, endpointIndex, statusCode int)
 	HandleError(err error)
 	PrepareErrorContext(errorCtx *ErrorContext)
