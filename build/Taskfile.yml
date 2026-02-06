@@ -1,0 +1,48 @@
+# Wails v3 Common Taskfile - Claude Request Forwarder
+# Platform-independent tasks for frontend and code generation
+
+version: '3'
+
+tasks:
+  install:frontend:deps:
+    summary: Install frontend dependencies
+    dir: frontend
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/*
+    cmds:
+      - npm install
+
+  build:frontend:
+    summary: Build the frontend project
+    dir: frontend
+    deps:
+      - install:frontend:deps
+    cmds:
+      - npm run build
+
+  dev:frontend:
+    summary: Runs the frontend dev server
+    dir: frontend
+    deps:
+      - install:frontend:deps
+    cmds:
+      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+
+  generate:bindings:
+    summary: Generates Wails v3 bindings
+    cmds:
+      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true
+
+  generate:icons:
+    summary: Generates icons from appicon.png
+    cmds:
+      - wails3 generate icons -input build/appicon.png -output build
+
+  go:mod:tidy:
+    summary: Runs go mod tidy
+    internal: true
+    cmds:
+      - go mod tidy

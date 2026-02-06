@@ -133,8 +133,12 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 	// 设置托盘图标（使用专用托盘图标，避免缩放模糊）
 	systray.SetIcon(trayIcon)
 
-	// 设置工具提示
-	systray.SetTooltip(fmt.Sprintf("Claude Request Forwarder %s", Version))
+	// 设置工具提示（dev 模式显示 dev 后缀）
+	versionDisplay := Version
+	if BuildMode == "dev" {
+		versionDisplay = Version + "-dev"
+	}
+	systray.SetTooltip(fmt.Sprintf("Claude Request Forwarder %s", versionDisplay))
 
 	// 创建托盘菜单
 	menu := app.Menu.New()

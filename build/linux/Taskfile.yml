@@ -1,0 +1,43 @@
+# Wails v3 Linux Taskfile - Claude Request Forwarder
+# Linux-specific build, run, and package tasks
+# Note: CGO_ENABLED=1 required for go-sqlite3
+
+version: '3'
+
+vars:
+  VERSION: '{{default "6.3" .VERSION}}'
+  COMMIT: '{{default "unknown" .COMMIT}}'
+  BUILD_TIME: '{{now | date "2006-01-02T15:04:05Z07:00"}}'
+  DEV: '{{default "false" .DEV}}'
+
+tasks:
+  build:
+    summary: Builds the application for Linux
+    vars:
+      BUILD_FLAGS: >-
+        {{if eq .DEV "true"}}
+        -tags desktop -buildvcs=false -gcflags="all=-l"
+        {{else}}
+        -tags production,desktop -trimpath -buildvcs=false
+        -ldflags="-w -s
+        -X main.Version={{.VERSION}}
+        -X main.Commit={{.COMMIT}}
+        -X main.BuildTime={{.BUILD_TIME}}
+        -X main.BuildMode=release"
+        {{end}}
+    env:
+      CGO_ENABLED: "1"
+    cmds:
+      - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}"
+
+  run:
+    summary: Runs the built Linux application
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}"'
+
+  package:
+    summary: Packages the Linux application (placeholder)
+    deps:
+      - build
+    cmds:
+      - echo "Linux packaging - binary at {{.BIN_DIR}}/{{.APP_NAME}}"

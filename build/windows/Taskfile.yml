@@ -1,0 +1,50 @@
+# Wails v3 Windows Taskfile - Claude Request Forwarder
+# Windows-specific build, run, and package tasks
+# Note: CGO_ENABLED=1 required for go-sqlite3
+
+version: '3'
+
+vars:
+  # Version info for ldflags injection
+  VERSION: '{{default "6.3" .VERSION}}'
+  COMMIT: '{{default "unknown" .COMMIT}}'
+  BUILD_TIME: '{{now | date "2006-01-02T15:04:05Z07:00"}}'
+  DEV: '{{default "false" .DEV}}'
+
+tasks:
+  build:
+    summary: Builds the application for Windows
+    vars:
+      # Dev 构建：添加 -dev 后缀，注入 BuildMode=dev
+      # Release 构建：正常文件名，注入 BuildMode=release
+      OUTPUT_NAME: '{{if eq .DEV "true"}}{{.APP_NAME}}-dev{{else}}{{.APP_NAME}}{{end}}'
+      BUILD_FLAGS: >-
+        {{if eq .DEV "true"}}
+        -tags desktop -buildvcs=false -gcflags="all=-l"
+        -ldflags="-X main.BuildMode=dev"
+        {{else}}
+        -tags production,desktop -trimpath -buildvcs=false
+        -ldflags="-w -s -H windowsgui
+        -X main.Version={{.VERSION}}
+        -X main.Commit={{.COMMIT}}
+        -X main.BuildTime={{.BUILD_TIME}}
+        -X main.BuildMode=release"
+        {{end}}
+    env:
+      CGO_ENABLED: "1"
+    cmds:
+      # 使用 goversioninfo 生成包含图标的 syso 文件
+      - goversioninfo -o resource_windows.syso
+      - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.OUTPUT_NAME}}.exe"
+
+  run:
+    summary: Runs the built Windows application
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+
+  package:
+    summary: Packages the Windows application (placeholder)
+    deps:
+      - build
+    cmds:
+      - echo "Windows packaging complete - binary at {{.BIN_DIR}}/{{.APP_NAME}}.exe"
