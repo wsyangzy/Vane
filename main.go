@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -168,14 +169,45 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 
 	systray.SetMenu(menu)
 
-	// 托盘图标点击事件：显示/隐藏窗口
+	// 托盘点击防抖处理
+	// 问题：双击时 OnClick 会被调用两次，导致窗口状态反复切换
+	// 解决：使用防抖延迟，如果在双击时间窗口内收到 OnDoubleClick，则取消单击操作
+	var (
+		clickMu      sync.Mutex
+		clickPending bool
+		clickTimer   *time.Timer
+	)
+	const doubleClickDelay = 250 * time.Millisecond // Windows 默认双击间隔约 500ms
+
+	// 托盘图标单击事件：延迟处理，等待可能的双击
 	systray.OnClick(func() {
-		if window.IsVisible() {
-			window.Hide()
-		} else {
-			window.Show()
-			window.Focus()
+		clickMu.Lock()
+		defer clickMu.Unlock()
+
+		// 如果已有待处理的点击，说明是双击的第二下，忽略
+		if clickPending {
+			return
 		}
+
+		// 标记有待处理的点击
+		clickPending = true
+
+		// 延迟执行，给双击事件留出时间
+		clickTimer = time.AfterFunc(doubleClickDelay, func() {
+			clickMu.Lock()
+			defer clickMu.Unlock()
+
+			// 如果仍然标记为待处理，说明不是双击，执行单击操作
+			if clickPending {
+				clickPending = false
+				if window.IsVisible() {
+					window.Hide()
+				} else {
+					window.Show()
+					window.Focus()
+				}
+			}
+		})
 	})
 
 	// 右键点击显示菜单
@@ -183,8 +215,18 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 		systray.OpenMenu()
 	})
 
-	// 双击显示窗口
+	// 双击显示窗口：取消待处理的单击，直接显示
 	systray.OnDoubleClick(func() {
+		clickMu.Lock()
+		defer clickMu.Unlock()
+
+		// 取消待处理的单击操作
+		clickPending = false
+		if clickTimer != nil {
+			clickTimer.Stop()
+		}
+
+		// 双击始终显示并聚焦窗口
 		window.Show()
 		window.Focus()
 	})

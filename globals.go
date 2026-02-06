@@ -24,6 +24,7 @@ var (
 	Version   = "6.3"
 	Commit    = "unknown"
 	BuildTime = "unknown"
+	BuildMode = "dev" // 构建模式: "dev" 或 "release"（生产构建通过 ldflags 注入 "release"）
 )
 
 // 嵌入默认配置文件
@@ -55,8 +56,16 @@ var currentLogHandler *SimpleHandler
 
 // setupLogger 配置结构化日志
 func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
+	logLevel := cfg.Level
+
+	// 生产构建时，自动将 debug 级别提升为 info（减少日志量）
+	if BuildMode == "release" && logLevel == "debug" {
+		logLevel = "info"
+		fmt.Println("🔧 [Release Mode] 日志级别自动调整: debug → info")
+	}
+
 	var level slog.Level
-	switch cfg.Level {
+	switch logLevel {
 	case "debug":
 		level = slog.LevelDebug
 	case "info":

@@ -1390,6 +1390,15 @@ func (a *App) setupEventBridges() {
 	// 注意：当前 EventBus 实现不支持订阅回调
 	// 我们使用定时轮询来更新前端状态
 	go func() {
+		// 添加 panic recovery 防止后台 goroutine 崩溃导致程序闪退
+		defer func() {
+			if r := recover(); r != nil {
+				if a.logger != nil {
+					a.logger.Error("📡 事件桥接 goroutine 发生 panic", "recover", r)
+				}
+			}
+		}()
+
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
@@ -1398,7 +1407,13 @@ func (a *App) setupEventBridges() {
 			case <-a.stopChan:
 				return
 			case <-ticker.C:
-				if a.isRunning {
+				// 使用读锁检查运行状态，避免竞态条件
+				a.mu.RLock()
+				running := a.isRunning
+				window := a.window
+				a.mu.RUnlock()
+
+				if running && window != nil {
 					a.emitSystemStatus()
 					a.emitUsageUpdate()
 				}
@@ -1427,6 +1442,15 @@ func (a *App) startHistoryCollector() {
 	}
 
 	go func() {
+		// 添加 panic recovery 防止后台 goroutine 崩溃导致程序闪退
+		defer func() {
+			if r := recover(); r != nil {
+				if a.logger != nil {
+					a.logger.Error("📊 历史数据收集器 goroutine 发生 panic", "recover", r)
+				}
+			}
+		}()
+
 		ticker := time.NewTicker(30 * time.Second) // 每30秒收集一次
 		defer ticker.Stop()
 
@@ -1451,19 +1475,15 @@ func (a *App) startHistoryCollector() {
 
 // emitError 发送错误通知到前端
 func (a *App) emitError(title, message string) {
-	if a.window != nil {
-		a.window.EmitEvent("error", map[string]string{
-			"title":   title,
-			"message": message,
-		})
-	}
+	a.safeEmitEvent("error", map[string]string{
+		"title":   title,
+		"message": message,
+	})
 }
 
 // emitConfigReloaded 通知前端配置已重载
 func (a *App) emitConfigReloaded() {
-	if a.window != nil {
-		a.window.EmitEvent("config:reloaded", nil)
-	}
+	a.safeEmitEvent("config:reloaded", nil)
 }
 
 // setupSettingsStore 设置系统设置存储 (v5.1+ SQLite)
