@@ -20,10 +20,7 @@ import {
 } from 'lucide-react';
 import PriorityBadge from './PriorityBadge.jsx';
 
-// v6.2.11: 调用 Go 后端设置跳过健康检测
-const SetEndpointSkipHealthCheckByID = (id, skip) => {
-  return window['go']['main']['App']['SetEndpointSkipHealthCheckByID'](id, skip);
-};
+import { SetEndpointSkipHealthCheckByID } from '@wailsjs/go/main/App';
 
 // ============================================
 // 健康状态徽章

@@ -18,8 +18,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // 端口检测缓存（避免频繁 TCP 连接）
@@ -317,20 +315,18 @@ type SaveFileResult struct {
 // content: 日志内容
 // defaultFileName: 默认文件名
 func (a *App) SaveLogFile(content string, defaultFileName string) SaveFileResult {
-	if a.ctx == nil {
-		return SaveFileResult{Success: false, Error: "应用上下文未初始化"}
+	if a.wailsApp == nil {
+		return SaveFileResult{Success: false, Error: "应用未初始化"}
 	}
 
-	// 使用 Wails 原生保存文件对话框
-	filePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "保存日志文件",
-		DefaultFilename: defaultFileName,
-		Filters: []runtime.FileFilter{
-			{DisplayName: "文本文件 (*.txt)", Pattern: "*.txt"},
-			{DisplayName: "日志文件 (*.log)", Pattern: "*.log"},
-			{DisplayName: "所有文件 (*.*)", Pattern: "*.*"},
-		},
-	})
+	// 使用 Wails v3 原生保存文件对话框
+	filePath, err := a.wailsApp.Dialog.SaveFile().
+		SetMessage("保存日志文件").
+		SetFilename(defaultFileName).
+		AddFilter("文本文件", "*.txt").
+		AddFilter("日志文件", "*.log").
+		AddFilter("所有文件", "*.*").
+		PromptForSingleSelection()
 
 	if err != nil {
 		return SaveFileResult{Success: false, Error: fmt.Sprintf("打开保存对话框失败: %v", err)}

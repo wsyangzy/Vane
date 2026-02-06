@@ -1,0 +1,55 @@
+# Wails v3 Taskfile - Claude Request Forwarder
+# Root task definitions with platform-specific includes
+
+version: '3'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+
+vars:
+  APP_NAME: "Claude Request Forwarder"
+  BIN_DIR: "build/bin"
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 5173}}'
+
+tasks:
+  clean:
+    summary: Clean build artifacts
+    cmds:
+      - cmd: powershell -Command "if (Test-Path '{{.BIN_DIR}}') { Remove-Item -Path '{{.BIN_DIR}}/*' -Recurse -Force -ErrorAction SilentlyContinue }; Remove-Item -Path 'resource_windows.syso' -Force -ErrorAction SilentlyContinue"
+        platforms: [windows]
+        ignore_error: true
+      - cmd: rm -rf "{{.BIN_DIR}}/*" resource_windows.syso 2>/dev/null || true
+        platforms: [linux, darwin]
+
+  build:
+    summary: Full production build (frontend + Go binary)
+    deps:
+      - clean
+      - common:build:frontend
+    cmds:
+      - task: "{{OS}}:build"
+
+  dev:build:
+    summary: Dev build (Go binary only, vite dev server handles frontend)
+    cmds:
+      - task: "{{OS}}:build"
+        vars:
+          DEV: "true"
+
+  run:
+    summary: Runs the built application
+    cmds:
+      - task: "{{OS}}:run"
+
+  package:
+    summary: Packages a production build
+    cmds:
+      - task: "{{OS}}:package"
+
+  dev:
+    summary: Runs the application in development mode
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

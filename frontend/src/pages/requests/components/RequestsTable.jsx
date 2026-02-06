@@ -32,9 +32,17 @@ const parseChannelName = (fullKey) => {
 
 /**
  * EndpointChainCell - 端点链路单元格组件（折叠显示 + 悬浮 Tooltip）
+ * @param {Object} request - 请求数据
+ * @param {number} rowIndex - 行索引，用于决定悬浮框方向（前2行向下弹出）
  */
-const EndpointChainCell = ({ request }) => {
+const EndpointChainCell = ({ request, rowIndex = 0 }) => {
   const [showTooltip, setShowTooltip] = useState(false);
+
+  // 前两行向下弹出，其他向上弹出（避免被容器裁剪）
+  const tooltipPosition = rowIndex < 2 ? 'top-full mt-2' : 'bottom-full mb-2';
+  const arrowPosition = rowIndex < 2
+    ? 'absolute -top-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[6px] border-b-slate-800'
+    : 'absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800';
 
   // 获取链路长度（api.js 已转换为 camelCase）
   const chainLength = Number.isFinite(request.endpointChainLength)
@@ -61,15 +69,15 @@ const EndpointChainCell = ({ request }) => {
           {singleEndpoint}
         </span>
         {showTooltip && singleChannel && (
-          <div className="absolute left-0 bottom-full mb-2 z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-2.5 whitespace-nowrap">
+          <div className={`absolute left-0 ${tooltipPosition} z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-2.5 whitespace-nowrap`}>
             <div className="flex items-center gap-1.5">
               <span className="px-1.5 py-0.5 bg-slate-700/80 text-slate-300 text-[9px] rounded font-medium">
                 {singleChannel}
               </span>
               <span className="text-slate-100">{singleEndpoint}</span>
             </div>
-            {/* 尖角在底部指向下方 */}
-            <div className="absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800" />
+            {/* 箭头 */}
+            <div className={arrowPosition} />
           </div>
         )}
       </div>
@@ -99,9 +107,9 @@ const EndpointChainCell = ({ request }) => {
         <span>{chainLength}</span>
       </span>
 
-      {/* 悬浮 Tooltip：显示完整链路（正上方弹出） */}
+      {/* 悬浮 Tooltip：显示完整链路 */}
       {showTooltip && chainItems.length > 0 && (
-        <div className="absolute left-0 bottom-full mb-2 z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 min-w-[220px] max-w-[360px]">
+        <div className={`absolute left-0 ${tooltipPosition} z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 min-w-[220px] max-w-[360px]`}>
           <div className="text-[10px] text-slate-400 mb-2 font-medium uppercase tracking-wide">转移路径</div>
           <div className="space-y-1">
             {chainItems.map((item, idx) => {
@@ -140,8 +148,8 @@ const EndpointChainCell = ({ request }) => {
               );
             })}
           </div>
-          {/* 尖角在底部指向下方 */}
-          <div className="absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800" />
+          {/* 箭头 */}
+          <div className={arrowPosition} />
         </div>
       )}
     </div>
@@ -150,8 +158,12 @@ const EndpointChainCell = ({ request }) => {
 
 /**
  * 渲染单元格内容
+ * @param {string} columnId - 列 ID
+ * @param {Object} request - 请求数据
+ * @param {Array} visibleColumns - 可见列配置
+ * @param {number} rowIndex - 行索引
  */
-const renderCell = (columnId, request, visibleColumns = []) => {
+const renderCell = (columnId, request, visibleColumns = [], rowIndex = 0) => {
   switch (columnId) {
     case 'requestId':
       const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -172,7 +184,7 @@ const renderCell = (columnId, request, visibleColumns = []) => {
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':
-      return <EndpointChainCell request={request} />;
+      return <EndpointChainCell request={request} rowIndex={rowIndex} />;
     case 'duration':
       return <span className="text-gray-700 font-mono text-xs">{formatDuration(request.duration)}</span>;
     case 'inputTokens':
@@ -193,7 +205,7 @@ const renderCell = (columnId, request, visibleColumns = []) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
+const RequestRow = ({ request, visibleColumns, rowIndex, onCopyId, onDoubleClick }) => {
   const [clickCount, setClickCount] = React.useState(0);
   const [clickTimer, setClickTimer] = React.useState(null);
 
@@ -233,7 +245,7 @@ const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
           key={colId}
           className={`px-3 py-3 ${colId === 'cost' || colId.includes('Tokens') ? 'text-right' : ''}`}
         >
-          {renderCell(colId, request, visibleColumns)}
+          {renderCell(colId, request, visibleColumns, rowIndex)}
         </td>
       ))}
     </tr>
@@ -314,11 +326,12 @@ const RequestsTable = ({
                 </td>
               </tr>
             ) : (
-              requests.map((req) => (
+              requests.map((req, index) => (
                 <RequestRow
                   key={req.rawRequestId || req.requestId}
                   request={req}
                   visibleColumns={visibleColumns}
+                  rowIndex={index}
                   onCopyId={handleCopyId}
                   onDoubleClick={onRowDoubleClick}
                 />

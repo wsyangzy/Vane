@@ -35,11 +35,13 @@ export const SSE_STATUS = {
  * @param {Object} options - 配置选项
  */
 const useSSE = (onDataUpdate, options = {}) => {
-  // 在 Wails 环境中使用 Wails Events
+  // React Rules of Hooks: 必须无条件调用所有 hooks
+  // 两个 hook 始终调用，根据环境选择返回哪个结果
+  const isWails = isWailsEnvironment();
   const wailsEvents = useWailsEvents(onDataUpdate, options);
+  const sseInternal = useSSEInternal(isWails ? () => {} : onDataUpdate, options, isWails);
 
-  // 如果是 Wails 环境，直接返回 Wails Events 结果
-  if (isWailsEnvironment()) {
+  if (isWails) {
     return {
       connectionStatus: wailsEvents.connectionStatus === WAILS_STATUS.CONNECTED
         ? SSE_STATUS.CONNECTED
@@ -54,14 +56,16 @@ const useSSE = (onDataUpdate, options = {}) => {
     };
   }
 
-  // 以下是原有的 SSE 实现，用于非 Wails 环境
-  return useSSEInternal(onDataUpdate, options);
+  return sseInternal;
 };
 
 /**
  * 内部 SSE 实现（仅用于非 Wails 环境）
+ * @param {Function} onDataUpdate - 数据更新回调
+ * @param {Object} options - 配置选项
+ * @param {boolean} skip - 是否跳过实际连接（Wails 环境下为 true）
  */
-const useSSEInternal = (onDataUpdate, options = {}) => {
+const useSSEInternal = (onDataUpdate, options = {}, skip = false) => {
   const {
     events = 'status,endpoint,group,connection,log,chart',
     maxReconnectAttempts = 5,
@@ -85,6 +89,11 @@ const useSSEInternal = (onDataUpdate, options = {}) => {
 
   // 连接 SSE
   const connect = useCallback(() => {
+    // Wails 环境下跳过 SSE 连接
+    if (skip) {
+      return;
+    }
+
     if (connectionRef.current) {
       return;
     }
@@ -146,7 +155,7 @@ const useSSEInternal = (onDataUpdate, options = {}) => {
         handleReconnectRef.current();
       }
     }
-  }, [events]);
+  }, [events, skip]);
 
   // 处理重连
   const handleReconnect = useCallback(() => {
@@ -203,6 +212,11 @@ const useSSEInternal = (onDataUpdate, options = {}) => {
 
   // 组件挂载时自动连接 - 使用延迟初始化避免 effect 同步 setState
   useEffect(() => {
+    // Wails 环境下跳过 SSE 连接
+    if (skip) {
+      return;
+    }
+
     // 使用 setTimeout 延迟执行，避免 React 18 严格模式下的问题
     const timer = setTimeout(() => {
       connect();
@@ -212,7 +226,7 @@ const useSSEInternal = (onDataUpdate, options = {}) => {
       clearTimeout(timer);
       disconnect();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [skip]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     connectionStatus,

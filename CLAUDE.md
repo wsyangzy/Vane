@@ -2,44 +2,41 @@
 
 本文件为 Claude Code 提供项目指导信息。
 
-> 📅 **最后更新**: 2026-01-07 20:00:00
-> 🏗️ **架构版本**: v6.0.7
+> 📅 **最后更新**: 2026-02-06
+> 🏗️ **架构版本**: v6.3
 > 📦 **模块数量**: 17 个核心模块（9 个后端 + 8 个前端）
 
 ## 项目概述
 
 **CC-Forwarder Desktop** 是一款基于 Wails 构建的跨平台桌面应用，用于 Claude API 请求的智能转发、负载均衡和故障恢复。
 
-- **当前版本**: v6.0.7
-- **技术栈**: Go + Wails v2 + React + Vite
+- **当前版本**: v6.3
+- **技术栈**: Go + Wails v3 + React + Vite
 - **支持平台**: macOS / Windows / Linux
 
 ### 核心功能
 
 - 多端点智能路由与优先级调度
 - 自动故障转移与端点自愈
-- **智能恢复策略** (v6.0.7+) - 三种策略可选（auto_wait / loop_retry / fail_fast）
+- **智能恢复策略** - 三种策略可选（auto_wait / loop_retry / fail_fast）
 - 请求生命周期追踪与状态管理
 - 流式响应处理（SSE）
-- **计费感知重试** (v6.0.5+) - 基于 Token 计费智能判断错误可重试性
+- **计费感知重试** - 基于 Token 计费智能判断错误可重试性
 - 内存热池架构优化数据库写入
 - SQLite/MySQL 双数据库支持
-- **可视化设置界面** (v6.0.7+) - 枚举类型支持、变更追踪、实时生效
+- **可视化设置界面** - 枚举类型支持、变更追踪、实时生效
 
 ## 快速开始
 
 ```bash
 # 开发模式运行
-wails dev
+wails3 dev
 
 # 构建当前平台
-wails build
+wails3 task build
 
-# 构建 Windows 版本（交叉编译）
-wails build -platform windows/amd64
-
-# 构建 macOS 版本
-wails build -platform darwin/amd64
+# 仅构建后端（开发调试用）
+wails3 task dev:build
 
 # 运行测试
 go test ./...
@@ -50,9 +47,10 @@ go test ./...
 ```
 claude-request-forwarder-desktop/
 ├── main.go                 # Wails 应用入口
+├── globals.go              # 全局变量和共享函数
 ├── app.go                  # 主应用逻辑，绑定前端 API
 ├── app_api_*.go           # 前端 API 接口模块
-├── wails.json             # Wails 配置
+├── Taskfile.yml           # Wails v3 构建配置
 ├── frontend/              # React 前端
 │   ├── src/
 │   │   ├── pages/         # 页面组件
@@ -259,7 +257,7 @@ failover:
   enabled: true
   default_cooldown: "10m"
 
-# 请求控制 (v6.0.7+)
+# 请求控制
 request:
   # 恢复策略：所有渠道耗尽后的处理方式
   recovery_strategy: "auto_wait"  # auto_wait (推荐) | loop_retry | fail_fast
@@ -274,7 +272,7 @@ hot_pool:
   max_active_requests: 1000
 ```
 
-### 恢复策略详解（v6.0.7+）
+### 恢复策略详解
 
 当所有端点都不可用时，系统提供三种恢复策略：
 
@@ -336,6 +334,7 @@ go test -race ./internal/...
 
 | 版本 | 日期 | 主要更新 |
 |------|------|----------|
+| v6.3 | 2026-02-06 | **Wails v3 升级**：原生系统托盘、Taskfile 构建系统、前端 runtime 迁移 |
 | v6.0.7 | 2026-01-07 | 智能恢复策略（auto_wait / loop_retry / fail_fast），配置简化（KISS & YAGNI） |
 | v6.0.5 | 2025-12-29 | 计费感知重试，日志复制功能 |
 | v5.0.0 | 2025-12-08 | Wails 桌面应用重构，移除服务器版本 |
