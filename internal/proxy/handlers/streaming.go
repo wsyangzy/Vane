@@ -11,8 +11,6 @@ import (
 	"claude-request-forwarder/config"
 	"claude-request-forwarder/internal/endpoint"
 	"claude-request-forwarder/internal/tracking"
-
-	"github.com/google/uuid"
 )
 
 // StreamingHandler 流式请求处理器
@@ -98,44 +96,22 @@ func terminateSSEStreamWithError(w http.ResponseWriter, flusher http.Flusher, er
 	flusher.Flush()
 }
 
-// sendStreamInterruptedMessage 发送流中断消息，触发客户端自动重试
-// 模拟上游代理的行为：当 EOF 发生时，发送一个完整的新消息（第二个 message_start）
-// Claude Code 会识别这种模式并自动重试请求
-// 参考: req-fd3a8dd9.debug 中观察到的上游代理行为
+// sendStreamInterruptedMessage 发送流中断错误，触发客户端自动重试
+// v6.3.1: 改用 Anthropic API 标准的 overloaded_error 格式
+// 之前的实现发送"假装完整"的消息，Claude Code 不会识别为需要重试
+// 现在发送 overloaded_error，这是 Anthropic 定义的可重试错误类型
+// 参考: https://docs.anthropic.com/en/api/errors
 func sendStreamInterruptedMessage(w http.ResponseWriter, flusher http.Flusher, message string, modelName string) {
-	// 使用 UUID 作为 message id（模拟上游代理的行为，与正常的 msg_ 前缀不同）
-	msgID := uuid.New().String()
+	// modelName 参数保留以保持向后兼容，但不再使用
+	_ = modelName
 
-	// 1. message_start - 新消息开始（使用 Anthropic 格式的 usage 字段）
-	fmt.Fprintf(w, "event: message_start\n")
-	fmt.Fprintf(w, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"%s\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"%s\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n",
-		msgID, escapeJSONString(modelName))
-	flusher.Flush()
+	slog.Debug("📡 发送可重试错误信号", "message", message, "error_type", "overloaded_error")
 
-	// 2. content_block_start - 开始 text 类型的内容块
-	fmt.Fprintf(w, "event: content_block_start\n")
-	fmt.Fprintf(w, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
-	flusher.Flush()
-
-	// 3. content_block_delta - 发送错误信息内容
-	fmt.Fprintf(w, "event: content_block_delta\n")
-	fmt.Fprintf(w, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"%s\"}}\n\n",
+	// 发送 Anthropic 标准格式的可重试错误事件
+	// overloaded_error 类型表示服务暂时过载，客户端应该重试
+	fmt.Fprintf(w, "event: error\n")
+	fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"%s\"}}\n\n",
 		escapeJSONString(message))
-	flusher.Flush()
-
-	// 4. content_block_stop - 内容块结束
-	fmt.Fprintf(w, "event: content_block_stop\n")
-	fmt.Fprintf(w, "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
-	flusher.Flush()
-
-	// 5. message_delta - 消息增量更新（包含 stop_reason 和 usage，让客户端认为流完整）
-	fmt.Fprintf(w, "event: message_delta\n")
-	fmt.Fprintf(w, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n")
-	flusher.Flush()
-
-	// 6. message_stop - 消息结束（关键！让客户端识别为完整消息从而触发重试）
-	fmt.Fprintf(w, "event: message_stop\n")
-	fmt.Fprintf(w, "data: {\"type\":\"message_stop\"}\n\n")
 	flusher.Flush()
 }
 

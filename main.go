@@ -133,8 +133,12 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 	// 设置托盘图标（使用专用托盘图标，避免缩放模糊）
 	systray.SetIcon(trayIcon)
 
-	// 设置工具提示
-	systray.SetTooltip(fmt.Sprintf("Claude Request Forwarder %s", Version))
+	// 设置工具提示（dev 模式显示 dev 后缀）
+	versionDisplay := Version
+	if BuildMode == "dev" {
+		versionDisplay = Version + "-dev"
+	}
+	systray.SetTooltip(fmt.Sprintf("Claude Request Forwarder %s", versionDisplay))
 
 	// 创建托盘菜单
 	menu := app.Menu.New()
@@ -168,22 +172,22 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 
 	systray.SetMenu(menu)
 
-	// 托盘图标点击事件：显示/隐藏窗口
+	// 托盘图标点击事件处理
+	// 简化设计：左键（单击/双击）始终显示窗口，右键显示菜单
+	// 不使用 toggle 逻辑，避免复杂的防抖和锁机制导致的死锁问题
+
+	// 左键单击：显示窗口
 	systray.OnClick(func() {
-		if window.IsVisible() {
-			window.Hide()
-		} else {
-			window.Show()
-			window.Focus()
-		}
+		window.Show()
+		window.Focus()
 	})
 
-	// 右键点击显示菜单
+	// 右键点击：显示菜单
 	systray.OnRightClick(func() {
 		systray.OpenMenu()
 	})
 
-	// 双击显示窗口
+	// 双击：显示窗口
 	systray.OnDoubleClick(func() {
 		window.Show()
 		window.Focus()

@@ -14,19 +14,52 @@ const (
 	EventNotification   = "notification"
 )
 
+// safeEmitEvent 安全地发射事件到前端
+// 使用 recover 防止在窗口销毁过程中调用 EmitEvent 导致 panic
+func (a *App) safeEmitEvent(eventName string, data interface{}) {
+	defer func() {
+		if r := recover(); r != nil {
+			if a.logger != nil {
+				a.logger.Debug("📡 事件发射被跳过（窗口可能已销毁）", "event", eventName, "recover", r)
+			}
+		}
+	}()
+
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
+		return
+	}
+
+	window.EmitEvent(eventName, data)
+}
+
 // emitSystemStatus 发送系统状态更新到前端
 func (a *App) emitSystemStatus() {
-	if a.window == nil {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
 		return
 	}
 
 	status := a.GetSystemStatus()
-	a.window.EmitEvent(EventSystemStatus, status)
+	a.safeEmitEvent(EventSystemStatus, status)
 }
 
 // emitEndpointUpdate 发送端点状态更新到前端
 func (a *App) emitEndpointUpdate() {
-	if a.window == nil {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
 		return
 	}
 
@@ -40,36 +73,51 @@ func (a *App) emitEndpointUpdate() {
 		a.logger.Debug("📡 [Wails Event] 推送端点更新", "count", len(endpoints))
 	}
 
-	a.window.EmitEvent(EventEndpointUpdate, data)
+	a.safeEmitEvent(EventEndpointUpdate, data)
 }
 
 // emitGroupUpdate 发送组状态更新到前端
 func (a *App) emitGroupUpdate() {
-	if a.window == nil {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
 		return
 	}
 
 	groups := a.GetGroups()
-	a.window.EmitEvent(EventGroupUpdate, groups)
+	a.safeEmitEvent(EventGroupUpdate, groups)
 }
 
 // emitUsageUpdate 发送使用统计更新到前端
 func (a *App) emitUsageUpdate() {
-	if a.window == nil {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
 		return
 	}
 
 	summary, _ := a.GetUsageSummary("", "")
-	a.window.EmitEvent(EventUsageUpdate, summary)
+	a.safeEmitEvent(EventUsageUpdate, summary)
 }
 
 // emitNotification 发送通知到前端
 func (a *App) emitNotification(level, title, message string) {
-	if a.window == nil {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
 		return
 	}
 
-	a.window.EmitEvent(EventNotification, map[string]string{
+	a.safeEmitEvent(EventNotification, map[string]string{
 		"level":   level, // "info", "warning", "error", "success"
 		"title":   title,
 		"message": message,
