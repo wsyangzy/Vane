@@ -1,6 +1,6 @@
 // LogEntry.jsx - 单条日志显示组件
-// v6.2.16: 支持多选复制
-import React, { useState, useMemo, memo } from 'react';
+// 支持多选复制
+import { useState, memo } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { LOG_LEVELS } from '../constants';
 
@@ -78,7 +78,7 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
     }
   };
 
-  // v6.2.16: 点击行选中（阻止冒泡避免触发外层清空）
+  // 点击行选中（阻止冒泡避免触发外层清空）
   const handleRowClick = (e) => {
     e.stopPropagation();
     onToggleSelect?.(index);
@@ -145,7 +145,7 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
   );
 }
 
-// v6.2.16: 使用 React.memo 优化渲染
+// 使用 React.memo 优化渲染
 // log/searchQuery/isSelected 变化时才重新渲染
 export default memo(LogEntry, (prevProps, nextProps) => {
   return (
@@ -156,4 +156,5 @@ export default memo(LogEntry, (prevProps, nextProps) => {
 });
 
 // 导出 escapeRegex 供父组件使用
+// eslint-disable-next-line react-refresh/only-export-components
 export { escapeRegex };

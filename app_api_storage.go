@@ -1,4 +1,4 @@
-// app_api_storage.go - v5.0+ 端点存储管理 API (Wails Bindings)
+// app_api_storage.go - 端点存储管理 API (Wails Bindings)
 // 提供 SQLite 端点存储的增删改查功能
 
 package main
@@ -15,7 +15,7 @@ import (
 )
 
 // ============================================================
-// v5.0+ 端点存储管理 API (SQLite)
+// 端点存储管理 API (SQLite)
 // ============================================================
 // 这些 API 仅在 endpoints_storage.type 为 "sqlite" 时可用
 // 提供端点的增删改查功能
@@ -26,14 +26,14 @@ type EndpointRecordInfo struct {
 	Channel                     string            `json:"channel"`
 	Name                        string            `json:"name"`
 	URL                         string            `json:"url"`
-	Token                       string            `json:"token"`        // v5.0: 本地桌面应用，直接返回原始 Token
-	ApiKey                      string            `json:"api_key"`      // v5.0: 本地桌面应用，直接返回原始 ApiKey
+	Token                       string            `json:"token"`        // 本地桌面应用，直接返回原始 Token
+	ApiKey                      string            `json:"api_key"`      // 本地桌面应用，直接返回原始 ApiKey
 	TokenMasked                 string            `json:"token_masked"` // 脱敏后的 Token（列表展示用）
 	ApiKeyMasked                string            `json:"api_key_masked"`
 	Headers                     map[string]string `json:"headers"`
 	Priority                    int               `json:"priority"`
 	FailoverEnabled             bool              `json:"failover_enabled"`
-	SkipHealthCheck             bool              `json:"skip_health_check"` // v6.1: 跳过健康检查
+	SkipHealthCheck             bool              `json:"skip_health_check"` // 跳过健康检查
 	CooldownSeconds             *int              `json:"cooldown_seconds"`
 	TimeoutSeconds              int               `json:"timeout_seconds"`
 	SupportsCountTokens         bool              `json:"supports_count_tokens"`
@@ -47,11 +47,11 @@ type EndpointRecordInfo struct {
 	UpdatedAt                   string            `json:"updated_at"`
 	// 运行时健康状态
 	Healthy        bool    `json:"healthy"`
-	HealthState    string  `json:"health_state"`   // v6.1: 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
-	NeverChecked   bool    `json:"never_checked"`  // v6.1: 是否从未检测过（跳过检测也保持为 true）
+	HealthState    string  `json:"health_state"`   // 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
+	NeverChecked   bool    `json:"never_checked"`  // 是否从未检测过（跳过检测也保持为 true）
 	LastCheck      string  `json:"last_check"` // 最后健康检查时间
 	ResponseTimeMs float64 `json:"response_time_ms"`
-	// v6.2.10: 错误信息
+	// 错误信息
 	LastFailCode   int    `json:"last_fail_code"`   // HTTP 状态码（0 表示无失败或未知）
 	LastFailReason string `json:"last_fail_reason"` // 失败原因描述
 	// 冷却状态（请求级故障转移）
@@ -70,7 +70,7 @@ type CreateEndpointInput struct {
 	Headers                       map[string]string `json:"headers"`
 	Priority                      int               `json:"priority"`
 	FailoverEnabled               bool              `json:"failover_enabled"`
-	SkipHealthCheck               bool              `json:"skip_health_check"` // v6.1: 跳过健康检查
+	SkipHealthCheck               bool              `json:"skip_health_check"` // 跳过健康检查
 	CooldownSeconds               *int              `json:"cooldown_seconds"`
 	TimeoutSeconds                int               `json:"timeout_seconds"`
 	SupportsCountTokens           bool              `json:"supports_count_tokens"`
@@ -159,7 +159,7 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 			if !status.LastCheck.IsZero() {
 				info.LastCheck = status.LastCheck.Format("2006-01-02 15:04:05")
 			}
-			// v6.1: 统一健康状态枚举（用于前端统计/图表）
+			// 统一健康状态枚举（用于前端统计/图表）
 			if info.SkipHealthCheck {
 				info.HealthState = "skipped"
 				info.NeverChecked = true
@@ -170,10 +170,10 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 			} else {
 				info.HealthState = "unhealthy"
 			}
-			// v6.2.10: 填充错误信息
+			// 填充错误信息
 			info.LastFailCode = status.LastRequestFailCode
 			info.LastFailReason = status.LastRequestFailReason
-			// v6.2: 冷却机制已移除
+			// 冷却机制已移除
 			info.InCooldown = false
 			info.CooldownUntil = ""
 			info.CooldownReason = ""
@@ -286,7 +286,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		Headers:                       input.Headers,
 		Priority:                      input.Priority,
 		FailoverEnabled:               input.FailoverEnabled,
-		SkipHealthCheck:               input.SkipHealthCheck, // v6.1
+		SkipHealthCheck:               input.SkipHealthCheck,
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
@@ -296,13 +296,13 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		CacheCreationCostMultiplier:   input.CacheCreationCostMultiplier,
 		CacheCreationCostMultiplier1h: input.CacheCreationCostMultiplier1h,
 		CacheReadCostMultiplier:       input.CacheReadCostMultiplier,
-		Enabled:                       false, // v5.0: 新建端点默认不激活，需手动激活
+		Enabled:                       false, // 新建端点默认不激活，需手动激活
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// v6.1+: 若渠道表已启用，确保渠道已存在（兼容旧数据：允许端点创建时补齐渠道记录）
+	// 若渠道表已启用，确保渠道已存在（兼容旧数据：允许端点创建时补齐渠道记录）
 	if channelService != nil && input.Channel != "" {
 		_ = channelService.EnsureChannel(ctx, input.Channel)
 	}
@@ -316,10 +316,10 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		logger.Info("✅ 端点已创建", "name", input.Name, "channel", input.Channel)
 	}
 
-	// v5.0: endpointService.CreateEndpoint 已经将端点添加到内存并触发健康检测
+	// endpointService.CreateEndpoint 已经将端点添加到内存并触发健康检测
 	// 不需要再次调用 AddEndpoint，否则会导致 "端点已存在" 错误
 
-	// v5.0: 创建成功后，异步同步端点倍率到 UsageTracker
+	// 创建成功后，异步同步端点倍率到 UsageTracker
 	go a.syncEndpointMultipliersToTracker(context.Background())
 
 	return nil
@@ -346,7 +346,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// v6.2+: endpoints 允许不同渠道同名，旧接口仅靠 name 定位会产生歧义。
+	// endpoints 允许不同渠道同名，旧接口仅靠 name 定位会产生歧义。
 	// 当检测到 name 在多个渠道重复时，要求前端使用按 ID 更新接口。
 	db := storeDB
 	if db == nil && usageTracker != nil {
@@ -361,7 +361,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		}
 	}
 
-	// v5.0: 从数据库获取当前记录，用于保留敏感字段
+	// 从数据库获取当前记录，用于保留敏感字段
 	existingRecord, err := endpointService.GetEndpoint(ctx, oldName)
 	if err != nil {
 		return fmt.Errorf("获取端点失败: %w", err)
@@ -412,7 +412,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		Headers:                       input.Headers,
 		Priority:                      input.Priority,
 		FailoverEnabled:               input.FailoverEnabled,
-		SkipHealthCheck:               input.SkipHealthCheck, // v6.1
+		SkipHealthCheck:               input.SkipHealthCheck,
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
@@ -459,7 +459,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		)
 	}
 
-	// v5.0: 更新成功后，异步同步端点倍率到 UsageTracker
+	// 更新成功后，异步同步端点倍率到 UsageTracker
 	// 确保成本计算使用最新的倍率配置
 	go a.syncEndpointMultipliersToTracker(context.Background())
 
@@ -544,7 +544,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 		Headers:                       input.Headers,
 		Priority:                      input.Priority,
 		FailoverEnabled:               input.FailoverEnabled,
-		SkipHealthCheck:               input.SkipHealthCheck, // v6.1
+		SkipHealthCheck:               input.SkipHealthCheck,
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
@@ -669,7 +669,7 @@ func (a *App) SetEndpointFailoverEnabledByID(id int64, enabled bool) error {
 }
 
 // SetEndpointSkipHealthCheckByID 设置端点是否跳过健康检测（按ID，避免同名歧义）
-// v6.2.11: 新增快捷开关
+// 新增快捷开关
 func (a *App) SetEndpointSkipHealthCheckByID(id int64, skip bool) error {
 	a.mu.RLock()
 	endpointService := a.endpointService
@@ -735,7 +735,7 @@ func (a *App) DeleteEndpointRecord(name string) error {
 		logger.Info("✅ 端点已删除", "name", name)
 	}
 
-	// v5.0: 删除成功后，异步同步端点倍率到 UsageTracker
+	// 删除成功后，异步同步端点倍率到 UsageTracker
 	go a.syncEndpointMultipliersToTracker(context.Background())
 
 	return nil
@@ -772,7 +772,7 @@ func (a *App) DeleteEndpointRecordByID(id int64) error {
 }
 
 // ToggleEndpointRecord 切换端点启用状态
-// v6.0: 切换语义升级为“激活/停用渠道(channel)”
+// 切换语义升级为“激活/停用渠道(channel)”
 func (a *App) ToggleEndpointRecord(name string, enabled bool) error {
 	a.mu.RLock()
 	endpointService := a.endpointService
@@ -822,7 +822,7 @@ func (a *App) ToggleEndpointRecord(name string, enabled bool) error {
 }
 
 // ToggleEndpointRecordByID 切换端点启用状态（按ID，避免同名歧义）
-// v6.0: 切换语义升级为“激活/停用渠道(channel)”
+// 切换语义升级为“激活/停用渠道(channel)”
 func (a *App) ToggleEndpointRecordByID(id int64, enabled bool) error {
 	a.mu.RLock()
 	endpointService := a.endpointService
@@ -1018,7 +1018,7 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	if input.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
-	// v6.2.1: Priority 由 service 层处理（自动递增或冲突交换）
+	// Priority 由 service 层处理（自动递增或冲突交换）
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1065,7 +1065,7 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	if input.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
-	// v6.2.1: Priority 由 service 层处理（自动递增或冲突交换）
+	// Priority 由 service 层处理（自动递增或冲突交换）
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1301,7 +1301,7 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 			if !status.LastCheck.IsZero() {
 				info.LastCheck = status.LastCheck.Format("2006-01-02 15:04:05")
 			}
-			// v6.2: 冷却机制已移除
+			// 冷却机制已移除
 			info.InCooldown = false
 			info.CooldownUntil = ""
 			info.CooldownReason = ""
@@ -1320,14 +1320,14 @@ func (a *App) recordToInfo(r *store.EndpointRecord) EndpointRecordInfo {
 		Channel:                     r.Channel,
 		Name:                        r.Name,
 		URL:                         r.URL,
-		Token:                       r.Token,  // v5.0: 本地桌面应用，直接返回原始 Token
-		ApiKey:                      r.ApiKey, // v5.0: 本地桌面应用，直接返回原始 ApiKey
+		Token:                       r.Token,  // 本地桌面应用，直接返回原始 Token
+		ApiKey:                      r.ApiKey, // 本地桌面应用，直接返回原始 ApiKey
 		TokenMasked:                 maskToken(r.Token),
 		ApiKeyMasked:                maskToken(r.ApiKey),
 		Headers:                     r.Headers,
 		Priority:                    r.Priority,
 		FailoverEnabled:             r.FailoverEnabled,
-		SkipHealthCheck:             r.SkipHealthCheck, // v6.1
+		SkipHealthCheck:             r.SkipHealthCheck,
 		CooldownSeconds:             r.CooldownSeconds,
 		TimeoutSeconds:              r.TimeoutSeconds,
 		SupportsCountTokens:         r.SupportsCountTokens,

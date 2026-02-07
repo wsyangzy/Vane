@@ -142,7 +142,7 @@ func (eh *ErrorHandler) attemptReconnection() bool {
 			return false
 		}
 
-		// v4.1+: 数据库连接由 adapter 统一管理，避免产生“孤儿连接”导致 Windows 无法删除/替换数据库文件。
+		// 数据库连接由 adapter 统一管理，避免产生“孤儿连接”导致 Windows 无法删除/替换数据库文件。
 		// 这里用 writeMu 阻止写线程并发访问 writeDB，再在 mu 保护下重建 adapter 连接。
 		eh.tracker.writeMu.Lock()
 		err := func() error {

@@ -101,7 +101,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
 
 	// 方案B：本次请求链路内"渠道间故障转移"不回访已尝试渠道，避免冷却结束后循环
-	// v6.2.8: 支持从外部传入已尝试状态（递归调用时保持状态）
+	// 支持从外部传入已尝试状态（递归调用时保持状态）
 	if triedChannels == nil {
 		triedChannels = make(map[string]struct{}, 4)
 	}
@@ -111,7 +111,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	// 外层循环处理组切换逻辑
 	for {
-		// v6.1+: 获取端点时排除已尝试的端点
+		// 获取端点时排除已尝试的端点
 		var endpoints []*endpoint.Endpoint
 		if len(triedEndpoints) == 0 {
 			// 首次获取，不排除任何端点
@@ -167,7 +167,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		// 内层循环处理端点重试
 		groupSwitchNeeded := false
 		for i, ep := range endpoints {
-			// v6.1+: 记录已尝试的端点（确保严格优先级转移，不回退）
+			// 记录已尝试的端点（确保严格优先级转移，不回退）
 			epKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
 			triedEndpoints[epKey] = struct{}{}
 
@@ -286,7 +286,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							http.Error(w, "Request cancelled during suspension", 499)
 							return
 						case SuspensionTimeout:
-							// v6.2.7: 使用 422 状态码，防止客户端自动重试
+							// 使用 422 状态码，防止客户端自动重试
 							// 挂起等待超时，记录为失败
 							slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
 							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusUnprocessableEntity)
@@ -301,12 +301,12 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				}
 
 				if !decision.RetrySameEndpoint {
-					// v6.2.9: 获取失败状态码并设置到端点，用于 UI 显示
+					// 获取失败状态码并设置到端点，用于 UI 显示
 					failStatusCode := GetStatusCodeFromError(err, resp)
 					if failStatusCode == 0 {
 						failStatusCode = getDefaultStatusCodeForFinalStatus(decision.FinalStatus)
 					}
-					// v6.2.10: 设置端点的失败代码和原因，用于 UI 显示
+					// 设置端点的失败代码和原因，用于 UI 显示
 					failReason := decision.Reason
 					if err != nil && failReason == "" {
 						failReason = err.Error()
@@ -314,12 +314,12 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					rh.endpointManager.SetEndpointLastRequestFail(ep.Config.Name, failStatusCode, failReason)
 
 					if decision.SwitchEndpoint {
-						// v6.2.12: 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
+						// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
 						ep.MarkRequestFailed(err)
-						// v6.2.19: 通知前端状态变化（使用防抖机制避免频繁刷新）
+						// 通知前端状态变化（使用防抖机制避免频繁刷新）
 						rh.endpointManager.NotifyEndpointStatusChange()
 
-						// v6.2: 移除渠道内端点冷却，使用 triedEndpoints 追踪
+						// 移除渠道内端点冷却，使用 triedEndpoints 追踪
 						nextName := ""
 						if i+1 < len(endpoints) && endpoints[i+1] != nil {
 							nextName = endpoints[i+1].Config.Name
@@ -370,7 +370,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			continue
 		}
 
-		// v6.1+: [auto_wait策略特殊处理] 在跨渠道故障转移前，检查渠道内是否有已恢复的端点
+		// [auto_wait策略特殊处理] 在跨渠道故障转移前，检查渠道内是否有已恢复的端点
 		// 仅当策略为 auto_wait 时才执行此逻辑
 		if len(endpoints) > 0 && retryMgr.IsAutoWaitStrategy() {
 			// 获取已尝试端点的 key 列表
@@ -445,7 +445,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		if len(endpoints) > 0 {
 			lastEndpoint := endpoints[len(endpoints)-1]
 
-			// v6.0+：跨渠道切换时，将本次请求中失败过的端点统一进入冷却，避免下一次请求立即重复撞同一批端点
+			// 跨渠道切换时，将本次请求中失败过的端点统一进入冷却，避免下一次请求立即重复撞同一批端点
 			failedEndpointNames := make([]string, 0, len(endpoints))
 			seen := make(map[string]struct{}, len(endpoints))
 			for _, ep := range endpoints {
@@ -468,7 +468,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				excludeChannels = append(excludeChannels, name)
 			}
 
-			// v6.2.8: 使用带循环计数的故障转移方法
+			// 使用带循环计数的故障转移方法
 			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithLoopCount(
 				failedEndpointNames,
 				excludeChannels,
@@ -479,7 +479,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			if err == nil && newChannel != "" {
 				failedChannel := currentChannel
 
-				// v6.2.8: 检测是否开始了新一轮循环
+				// 检测是否开始了新一轮循环
 				// 修复: 增加 failedChannel == newChannel 备用检查，解决 triedChannels 检查失效的 bug
 				// 当只有一个渠道时，故障转移返回的 newChannel 会与 failedChannel 相同，表示进入循环重试
 				newLoopCount := loopCount
@@ -502,14 +502,14 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s loop=%d",
 					connID, failedChannel, newChannel, lastEndpoint.Config.Name, len(failedEndpointNames), "all_retries_exhausted", newLoopCount))
 
-				// v6.2.8: 更新 loopCount 供下一轮使用
+				// 更新 loopCount 供下一轮使用
 				loopCount = newLoopCount
 
 				// 故障转移成功，重新获取端点列表继续处理
 				groupSwitchNeeded = true
 				continue
 			} else if err != nil {
-				// v6.2.8: 故障转移失败时，根据恢复策略决定是否立即返回错误
+				// 故障转移失败时，根据恢复策略决定是否立即返回错误
 				slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移失败] [%s] last_endpoint=%s err=%v loop=%d",
 					connID, lastEndpoint.Config.Name, err, loopCount))
 
@@ -522,7 +522,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					strings.Contains(errStr, "最大循环轮数")
 
 				if isNoChannelsError {
-					// v6.2.19: 传递 nil 而不是 err，保留端点在 SetEndpointLastRequestFail 中设置的真实失败原因
+					// 传递 nil 而不是 err，保留端点在 SetEndpointLastRequestFail 中设置的真实失败原因
 					// 避免用故障转移函数返回的错误（如"故障转移未启用"）覆盖端点实际失败原因
 					rh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, nil)
 					statusCode := http.StatusUnprocessableEntity
@@ -700,7 +700,7 @@ func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.Respo
 	finalResp, lastErr := rh.retryHandler.ExecuteWithContext(ctx, operation, connID)
 
 	if lastErr != nil {
-		// v6.2.7: 使用 422 状态码，防止客户端自动重试
+		// 使用 422 状态码，防止客户端自动重试
 		// Check if the error is due to no healthy endpoints
 		if strings.Contains(lastErr.Error(), "no healthy endpoints") {
 			http.Error(w, "Service Unavailable: No healthy endpoints available", http.StatusUnprocessableEntity)
@@ -804,7 +804,7 @@ func (rh *RegularHandler) tryExtractTokensFromHttpError(resp *http.Response, lif
 }
 
 // UpdateConfig 更新常规处理器配置
-// v6.2.14: 支持运行时配置热更新，确保设置变更能立即生效
+// 支持运行时配置热更新，确保设置变更能立即生效
 func (rh *RegularHandler) UpdateConfig(cfg *config.Config) {
 	rh.config = cfg
 }

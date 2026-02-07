@@ -209,7 +209,7 @@ const TokenSelectionModal = ({ isOpen, onClose, keys, activeKey, onSelect, switc
             })
           ) : (
             <div className="p-8 text-center text-slate-500">
-              <p>未找到 "{searchTerm}"</p>
+              <p>未找到 &quot;{searchTerm}&quot;</p>
               <button className="mt-2 text-indigo-600 font-medium text-sm hover:underline">
                 创建新 Token
               </button>

@@ -201,9 +201,9 @@ func TestFastestStrategyLogging(t *testing.T) {
 }
 
 // TestGetEndpointByNameWithGroups tests endpoint selection with group priority
-// v4.0: 适配一端点一组架构，组名 = 端点名
+// 适配一端点一组架构，组名 = 端点名
 func TestGetEndpointByNameWithGroups(t *testing.T) {
-	// v4.0: 创建两个不同优先级的端点，每个端点自动成为一个独立的组
+	// 创建两个不同优先级的端点，每个端点自动成为一个独立的组
 	cfg := &config.Config{
 		Health: config.HealthConfig{
 			CheckInterval: 30 * time.Second,
@@ -222,7 +222,7 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 			{
 				Name:     "primary-endpoint",
 				URL:      "https://primary.example.com",
-				Priority: 1, // v4.0: 使用 Priority 替代 GroupPriority
+				Priority: 1, // 使用 Priority 替代 GroupPriority
 				Token:    "primary-token",
 				Timeout:  30 * time.Second,
 			},
@@ -245,14 +245,14 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 		ep.mutex.Unlock()
 	}
 
-	// v4.0: 必须手动激活一个组，因为 GroupManager 在启动时会检查健康端点
+	// 必须手动激活一个组，因为 GroupManager 在启动时会检查健康端点
 	// 先激活 primary-endpoint 组（优先级最高）
 	err := manager.ManualActivateGroup("primary-endpoint")
 	if err != nil {
 		t.Fatalf("Failed to activate primary-endpoint group: %v", err)
 	}
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	// Test: With primary-endpoint group active (priority 1), should return that endpoint
 	endpoint := manager.GetEndpointByName("primary-endpoint")
 	if endpoint == nil {
@@ -275,7 +275,7 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 	}
 
 	// Test: Put primary-endpoint group in cooldown
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	manager.GetGroupManager().SetGroupCooldown("primary-endpoint")
 
 	// Now GetEndpointByName for primary-endpoint should return nil
@@ -285,7 +285,7 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 		t.Errorf("Expected nil when endpoint's group is in cooldown, got: %s", endpoint.Config.Name)
 	}
 
-	// v4.0: 必须先激活 backup-endpoint 组才能通过 GetEndpointByName 访问它
+	// 必须先激活 backup-endpoint 组才能通过 GetEndpointByName 访问它
 	err = manager.ManualActivateGroup("backup-endpoint")
 	if err != nil {
 		t.Fatalf("Failed to activate backup-endpoint group: %v", err)
@@ -311,7 +311,7 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 }
 
 // TestGetEndpointByNameWithNoActiveGroups tests behavior when no groups are active
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGetEndpointByNameWithNoActiveGroups(t *testing.T) {
 	cfg := &config.Config{
 		Health: config.HealthConfig{
@@ -336,7 +336,7 @@ func TestGetEndpointByNameWithNoActiveGroups(t *testing.T) {
 	manager := NewManager(cfg)
 
 	// Put the only group in cooldown
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	manager.GetGroupManager().SetGroupCooldown("test-endpoint")
 
 	// GetEndpointByName should return nil (no active groups)
@@ -356,7 +356,7 @@ func TestGetEndpointByNameWithNoActiveGroups(t *testing.T) {
 }
 
 // TestGroupEventBusPublish 测试EventBus组事件发布功能
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupEventBusPublish(t *testing.T) {
 	// 创建模拟EventBus
 	mockEventBus := &MockEventBus{
@@ -364,7 +364,7 @@ func TestGroupEventBusPublish(t *testing.T) {
 	}
 
 	// 创建测试配置
-	// v4.0: 端点名 = 组名
+	// 端点名 = 组名
 	cfg := &config.Config{
 		Health: config.HealthConfig{
 			CheckInterval: 30 * time.Second,
@@ -396,7 +396,7 @@ func TestGroupEventBusPublish(t *testing.T) {
 	// 设置EventBus
 	manager.SetEventBus(mockEventBus)
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	// 调用notifyWebGroupChange方法
 	manager.notifyWebGroupChange("group_manually_activated", "test-endpoint")
 
@@ -441,7 +441,7 @@ func TestGroupEventBusPublish(t *testing.T) {
 		t.Errorf("Expected event 'group_manually_activated', got '%v'", data["event"])
 	}
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	if data["group"] != "test-endpoint" {
 		t.Errorf("Expected group 'test-endpoint', got '%v'", data["group"])
 	}
@@ -458,7 +458,7 @@ func TestGroupEventBusPublish(t *testing.T) {
 }
 
 // TestGroupEventBusPublishWithoutEventBus 测试没有EventBus时的处理
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupEventBusPublishWithoutEventBus(t *testing.T) {
 	// 创建测试配置
 	cfg := &config.Config{
@@ -491,12 +491,12 @@ func TestGroupEventBusPublishWithoutEventBus(t *testing.T) {
 		}
 	}()
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	manager.notifyWebGroupChange("group_manually_activated", "test-endpoint")
 }
 
 // TestGroupEventBusIntegration 测试组管理和EventBus的集成
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupEventBusIntegration(t *testing.T) {
 	// 创建模拟EventBus
 	mockEventBus := &MockEventBus{
@@ -504,7 +504,7 @@ func TestGroupEventBusIntegration(t *testing.T) {
 	}
 
 	// 创建测试配置
-	// v4.0: 每个端点自动成为一个独立的组，组名 = 端点名
+	// 每个端点自动成为一个独立的组，组名 = 端点名
 	cfg := &config.Config{
 		Health: config.HealthConfig{
 			CheckInterval: 30 * time.Second,
@@ -549,7 +549,7 @@ func TestGroupEventBusIntegration(t *testing.T) {
 		ep.mutex.Unlock()
 	}
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	// 测试手动激活组
 	err := manager.ManualActivateGroup("backup-endpoint")
 	if err != nil {
@@ -573,7 +573,7 @@ func TestGroupEventBusIntegration(t *testing.T) {
 		if event.Data["event"] != "group_manually_activated" {
 			t.Errorf("Expected group_manually_activated event, got %v", event.Data["event"])
 		}
-		// v4.0: 组名 = 端点名
+		// 组名 = 端点名
 		if event.Data["group"] != "backup-endpoint" {
 			t.Errorf("Expected backup-endpoint group, got %v", event.Data["group"])
 		}
@@ -605,7 +605,7 @@ func TestGroupEventBusIntegration(t *testing.T) {
 		if event.Data["event"] != "group_manually_paused" {
 			t.Errorf("Expected group_manually_paused event, got %v", event.Data["event"])
 		}
-		// v4.0: 组名 = 端点名
+		// 组名 = 端点名
 		if event.Data["group"] != "backup-endpoint" {
 			t.Errorf("Expected backup-endpoint group, got %v", event.Data["group"])
 		}
@@ -637,7 +637,7 @@ func TestGroupEventBusIntegration(t *testing.T) {
 		if event.Data["event"] != "group_manually_resumed" {
 			t.Errorf("Expected group_manually_resumed event, got %v", event.Data["event"])
 		}
-		// v4.0: 组名 = 端点名
+		// 组名 = 端点名
 		if event.Data["group"] != "backup-endpoint" {
 			t.Errorf("Expected backup-endpoint group, got %v", event.Data["group"])
 		}

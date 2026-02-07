@@ -1,6 +1,6 @@
 // ============================================
 // Settings 页面 - 系统设置管理（可编辑）
-// v5.1.0 (2025-12-08)
+// (2025-12-08)
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -21,7 +21,7 @@ import {
   Archive,
   X
 } from 'lucide-react';
-import { Button, LoadingSpinner, ErrorMessage, ConfirmDialog } from '@components/ui';
+import { Button, ErrorMessage, ConfirmDialog } from '@components/ui';
 import { SettingItem, SettingsSection, PortInfo } from './components';
 import {
   isWailsEnvironment,
@@ -65,9 +65,7 @@ const SettingsPage = () => {
   const [error, setError] = useState(null);
   const [changes, setChanges] = useState({}); // 跟踪变更: { "category.key": newValue }
   const [saveMessage, setSaveMessage] = useState(null);
-  const [expandedCategories, setExpandedCategories] = useState(new Set());
   const [initRetryAttempt, setInitRetryAttempt] = useState(0); // 初始化重试次数
-  const [messageTimer, setMessageTimer] = useState(null); // 消息自动消失定时器
   const [resetConfirm, setResetConfirm] = useState({ isOpen: false, category: '', label: '' }); // 重置确认弹窗
 
   const isWails = isWailsEnvironment();
@@ -136,10 +134,6 @@ const SettingsPage = () => {
         initRetryRef.current.timer = null;
       }
 
-      // 默认展开所有分类
-      if (categoriesData && categoriesData.length > 0) {
-        setExpandedCategories(new Set(categoriesData.map(c => c.name)));
-      }
     } catch (err) {
       const msg = err?.message || String(err) || '加载设置失败';
       const maxRetry = 12;
@@ -169,7 +163,7 @@ const SettingsPage = () => {
         setInitRetryAttempt(0);
       }
     }
-  }, [isWails, isRetriableInitError]);
+  }, [isWails, isRetriableInitError, setAutoHideMessage]);
 
   useEffect(() => () => {
     if (initRetryRef.current.timer) {
@@ -241,7 +235,7 @@ const SettingsPage = () => {
     return value === 'true' || value === true;
   }, [settingsByCategory, getCurrentValue]);
 
-  // v6.2.11: 获取跳过健康检测设置值
+  // 获取跳过健康检测设置值
   const getSkipHealthCheck = useCallback(() => {
     const failoverSettings = settingsByCategory['failover'];
     if (!failoverSettings) return false;
@@ -253,28 +247,28 @@ const SettingsPage = () => {
 
   // 判断设置项是否应该显示（条件显示逻辑）
   const shouldShowSetting = useCallback((setting) => {
-    // v6.2: 快速测试相关设置仅在 strategy.type === 'fastest' 时显示
+    // 快速测试相关设置仅在 strategy.type === 'fastest' 时显示
     if (setting.category === 'strategy' &&
         ['fast_test_enabled', 'fast_test_cache_ttl', 'fast_test_timeout', 'fast_test_path'].includes(setting.key)) {
       return getStrategyType() === 'fastest';
     }
 
-    // v6.2: loop_retry 和 max_loops 仅在渠道间故障转移开启时显示
+    // loop_retry 和 max_loops 仅在渠道间故障转移开启时显示
     if (setting.category === 'failover' && setting.key === 'loop_retry') {
       return getChannelFailoverEnabled();
     }
 
-    // v6.2: max_loops 仅在 loop_retry === true 时显示
+    // max_loops 仅在 loop_retry === true 时显示
     if (setting.category === 'failover' && setting.key === 'max_loops') {
       return getChannelFailoverEnabled() && getLoopRetryEnabled();
     }
 
-    // v6.2.20: loop_retry_wait_timeout 仅在 loop_retry === true 时显示
+    // loop_retry_wait_timeout 仅在 loop_retry === true 时显示
     if (setting.category === 'failover' && setting.key === 'loop_retry_wait_timeout') {
       return getChannelFailoverEnabled() && getLoopRetryEnabled();
     }
 
-    // v6.2.11: skip_health_check 不再作为单独设置项显示，改为在循环重试弹窗内控制
+    // skip_health_check 不再作为单独设置项显示，改为在循环重试弹窗内控制
     if (setting.category === 'failover' && setting.key === 'skip_health_check') {
       return false; // 始终隐藏，通过 loop_retry 弹窗控制
     }
@@ -283,12 +277,12 @@ const SettingsPage = () => {
   }, [getStrategyType, getChannelFailoverEnabled, getLoopRetryEnabled]);
 
   // 判断设置项是否应该禁用（条件禁用逻辑）- 已通过 shouldShowSetting 处理
-  const shouldDisableSetting = useCallback((setting) => {
+  const shouldDisableSetting = useCallback(() => {
     return false;
   }, []);
 
   // 获取禁用提示文案
-  const getDisabledReason = useCallback((setting) => {
+  const getDisabledReason = useCallback(() => {
     return null;
   }, []);
 
@@ -301,7 +295,7 @@ const SettingsPage = () => {
     }));
   }, []);
 
-  // v6.2.11: 处理跳过健康检测变更（通过弹窗触发）
+  // 处理跳过健康检测变更（通过弹窗触发）
   const handleSkipHealthCheckChange = useCallback((newValue) => {
     handleSettingChange('failover', 'skip_health_check', newValue ? 'true' : 'false');
   }, [handleSettingChange]);
@@ -651,7 +645,7 @@ const SettingsPage = () => {
                 const changeKey = `${setting.category}.${setting.key}`;
                 const isSettingDisabled = saving || shouldDisableSetting(setting);
                 const disabledReason = getDisabledReason(setting);
-                // v6.2.11: 为 loop_retry 传递跳过健康检测相关 props
+                // 为 loop_retry 传递跳过健康检测相关 props
                 const isLoopRetrySetting = setting.category === 'failover' && setting.key === 'loop_retry';
                 return (
                   <SettingItem

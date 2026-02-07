@@ -10,7 +10,7 @@ import (
 )
 
 // DatabaseAdapter 定义数据库操作接口
-// v4.1.0: 简化为仅支持 SQLite，热池架构下无需外部数据库依赖
+// 简化为仅支持 SQLite，热池架构下无需外部数据库依赖
 type DatabaseAdapter interface {
 	// 基础连接管理
 	Open() error
@@ -45,7 +45,7 @@ type DatabaseAdapter interface {
 }
 
 // DatabaseConfig 数据库配置结构
-// v4.1.0: 简化配置，仅保留 SQLite 相关字段
+// 简化配置，仅保留 SQLite 相关字段
 type DatabaseConfig struct {
 	// 数据库类型（保留用于向后兼容，但只支持 "sqlite"）
 	Type string `yaml:"type"` // 仅支持 "sqlite"
@@ -81,7 +81,7 @@ type ConnectionStats struct {
 }
 
 // NewDatabaseAdapter 数据库适配器工厂函数
-// v4.1.0: 简化为仅创建 SQLite 适配器
+// 简化为仅创建 SQLite 适配器
 func NewDatabaseAdapter(config DatabaseConfig) (DatabaseAdapter, error) {
 	// 确定数据库类型
 	dbType := getDatabaseType(config)
@@ -111,7 +111,7 @@ func getDatabaseType(config DatabaseConfig) string {
 }
 
 // setDefaultConfig 设置数据库配置默认值
-// v4.1.0: 简化为仅处理 SQLite 配置
+// 简化为仅处理 SQLite 配置
 func setDefaultConfig(config *DatabaseConfig) {
 	// SQLite 默认配置
 	if config.DatabasePath == "" {

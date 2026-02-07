@@ -1,6 +1,6 @@
 // LogsPage - 系统日志查看页面
 // 提供实时日志流查看、过滤、搜索功能
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useWailsLogs } from '@/hooks/useWailsLogs';
 import {
   FileText,
@@ -9,7 +9,6 @@ import {
   Trash2,
   RefreshCw,
   Search,
-  Filter,
   Download,
   AlertCircle,
   Info,
@@ -18,21 +17,9 @@ import {
   CheckCircle,
 } from 'lucide-react';
 
-// 自定义Hook：检测组件是否挂载和可见
+// 自定义Hook：日志页挂载时始终视为可见
 function useComponentVisibility() {
-  const [isVisible, setIsVisible] = useState(true);
-
-  useEffect(() => {
-    // 组件挂载时设为可见
-    setIsVisible(true);
-
-    // 组件卸载时设为不可见
-    return () => {
-      setIsVisible(false);
-    };
-  }, []);
-
-  return isVisible;
+  return true;
 }
 
 // 日志级别配置
@@ -122,7 +109,7 @@ function LogsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [levelFilter, setLevelFilter] = useState('ALL');
   const [autoScroll, setAutoScroll] = useState(true);
-  const [isInitialLoad, setIsInitialLoad] = useState(true); // 标记初次加载
+  const isInitialLoadRef = useRef(true); // 标记初次加载
   const logsEndRef = useRef(null);
   const logsContainerRef = useRef(null);
   const prevLogsLengthRef = useRef(0); // 记录上次日志数量
@@ -151,8 +138,8 @@ function LogsPage() {
   // 自动滚动到底部（只在接收到新日志且启用自动滚动时触发）
   useEffect(() => {
     // 初次加载完成后，标记为非初次加载
-    if (isInitialLoad && !loading && logs.length > 0) {
-      setIsInitialLoad(false);
+    if (isInitialLoadRef.current && !loading && logs.length > 0) {
+      isInitialLoadRef.current = false;
       prevLogsLengthRef.current = logs.length;
       return; // 初次加载不滚动，避免闪烁
     }
@@ -169,7 +156,7 @@ function LogsPage() {
     }
 
     prevLogsLengthRef.current = logs.length;
-  }, [logs.length, autoScroll, loading, isInitialLoad]);
+  }, [logs.length, autoScroll, loading]);
 
   // 导出日志
   const handleExport = () => {
@@ -199,7 +186,7 @@ function LogsPage() {
   // 清空日志时重置初始加载状态
   const handleClear = () => {
     clear();
-    setIsInitialLoad(true);
+    isInitialLoadRef.current = true;
     prevLogsLengthRef.current = 0;
   };
 

@@ -35,8 +35,8 @@ type ActiveRequest struct {
 	InputTokens           int64 `json:"input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	CacheCreationTokens   int64 `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存 (v5.0.1+)
-	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存 (v5.0.1+)
+	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens       int64 `json:"cache_read_tokens"`
 
 	// 完成信息（只在结束时填充）

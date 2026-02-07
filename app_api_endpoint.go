@@ -16,18 +16,18 @@ import (
 type EndpointInfo struct {
 	Name            string  `json:"name"`
 	URL             string  `json:"url"`
-	Channel         string  `json:"channel"` // v5.0: 渠道标签
+	Channel         string  `json:"channel"` // 渠道标签
 	Group           string  `json:"group"`
 	Priority        int     `json:"priority"`
 	GroupPriority   int     `json:"group_priority"`
 	GroupIsActive   bool    `json:"group_is_active"`
 	Healthy         bool    `json:"healthy"`
-	HealthState     string  `json:"health_state"`      // v6.1: 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
-	SkipHealthCheck bool    `json:"skip_health_check"` // v6.1: 是否跳过健康检查
+	HealthState     string  `json:"health_state"`      // 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
+	SkipHealthCheck bool    `json:"skip_health_check"` // 是否跳过健康检查
 	LastCheck       string  `json:"last_check"`
 	ResponseTimeMs  float64 `json:"response_time_ms"`
 	ConsecutiveFail int     `json:"consecutive_fail"`
-	// v6.2.10: 最后一次请求失败的信息，用于 UI 显示
+	// 最后一次请求失败的信息，用于 UI 显示
 	LastFailCode   int    `json:"last_fail_code"`   // HTTP 状态码（0 表示无失败或未知）
 	LastFailReason string `json:"last_fail_reason"` // 失败原因描述
 }
@@ -59,7 +59,7 @@ func (a *App) GetEndpoints() []EndpointInfo {
 	for _, ep := range endpoints {
 		status := ep.GetStatus()
 
-		// v6.0: 路由组 = 渠道(channel)，未配置 channel 则回退为端点名（兼容旧逻辑）
+		// 路由组 = 渠道(channel)，未配置 channel 则回退为端点名（兼容旧逻辑）
 		routeGroup := ep.Config.Channel
 		if routeGroup == "" {
 			routeGroup = ep.Config.Name
@@ -68,15 +68,15 @@ func (a *App) GetEndpoints() []EndpointInfo {
 		info := EndpointInfo{
 			Name:            ep.Config.Name,
 			URL:             ep.Config.URL,
-			Channel:         ep.Config.Channel,     // v5.0: 渠道标签
+			Channel:         ep.Config.Channel,     // 渠道标签
 			Group:           routeGroup,
 			Priority:        ep.Config.Priority,
 			Healthy:         status.Healthy,
-			HealthState:     ep.GetHealthState(),   // v6.1: 健康状态枚举
-			SkipHealthCheck: ep.Config.SkipHealthCheck, // v6.1: 跳过健康检查
+			HealthState:     ep.GetHealthState(),   // 健康状态枚举
+			SkipHealthCheck: ep.Config.SkipHealthCheck, // 跳过健康检查
 			ConsecutiveFail: status.ConsecutiveFails,
 			ResponseTimeMs:  float64(status.ResponseTime) / float64(time.Millisecond),
-			// v6.2.10: 填充失败信息
+			// 填充失败信息
 			LastFailCode:   status.LastRequestFailCode,
 			LastFailReason: status.LastRequestFailReason,
 		}

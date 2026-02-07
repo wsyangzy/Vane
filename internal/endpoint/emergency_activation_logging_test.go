@@ -24,7 +24,7 @@ type LogEntry struct {
 }
 
 // TestEmergencyActivationLogging 专门测试应急激活功能的日志记录
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestEmergencyActivationLogging(t *testing.T) {
 	// 设置测试用的日志缓冲区
 	var logBuffer bytes.Buffer
@@ -56,7 +56,7 @@ func TestEmergencyActivationLogging(t *testing.T) {
 	// 创建组管理器
 	gm := NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点，每个端点自动成为一个独立的组
+	// 创建测试端点，每个端点自动成为一个独立的组
 	endpoints := []*Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -88,7 +88,7 @@ func TestEmergencyActivationLogging(t *testing.T) {
 		// 清空日志缓冲区
 		logBuffer.Reset()
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		err := gm.ManualActivateGroupWithForce("healthy-endpoint", false)
 		require.NoError(t, err, "正常激活应该成功")
 
@@ -139,7 +139,7 @@ func TestEmergencyActivationLogging(t *testing.T) {
 		endpoints[0].Status.Healthy = false
 		gm.UpdateGroups(endpoints)
 
-		// v4.0: 执行应急激活，组名就是端点名
+		// 执行应急激活，组名就是端点名
 		err := gm.ManualActivateGroupWithForce("unhealthy-endpoint", true)
 		require.NoError(t, err, "应急激活应该成功")
 
@@ -172,7 +172,7 @@ func TestEmergencyActivationLogging(t *testing.T) {
 
 		// 验证WARN日志格式和内容
 		assert.True(t, strings.HasPrefix(emergencyWarnLog.Message, "⚠️ [强制激活]"), "WARN日志应该以⚠️ [强制激活]开头")
-		assert.Contains(t, emergencyWarnLog.Message, "用户强制激活无健康端点组: unhealthy-endpoint", "应该包含组名信息")
+		assert.Contains(t, emergencyWarnLog.Message, "手动激活无健康端点组: unhealthy-endpoint", "应该包含组名信息")
 		assert.Contains(t, emergencyWarnLog.Message, "健康端点: 0/1", "应该包含健康端点统计")
 		assert.Contains(t, emergencyWarnLog.Message, "操作时间:", "应该包含操作时间")
 		assert.Contains(t, emergencyWarnLog.Message, "风险等级: HIGH", "应该包含风险等级")
@@ -209,7 +209,7 @@ func TestEmergencyActivationLogging(t *testing.T) {
 		// 手动暂停组以确保它不会自动激活
 		gm.ManualPauseGroup("healthy-endpoint", 0)
 
-		// v4.0: 尝试强制激活健康端点（应该被拒绝）
+		// 尝试强制激活健康端点（应该被拒绝）
 		err := gm.ManualActivateGroupWithForce("healthy-endpoint", true)
 		assert.Error(t, err, "强制激活应该被拒绝")
 
@@ -257,7 +257,7 @@ func TestEmergencyActivationLogging(t *testing.T) {
 		endpoints[0].Status.Healthy = false
 		gm.UpdateGroups(endpoints)
 
-		// v4.0: 执行应急激活
+		// 执行应急激活
 		err := gm.ManualActivateGroupWithForce("unhealthy-endpoint", true)
 		require.NoError(t, err, "应急激活应该成功")
 
@@ -314,14 +314,14 @@ func parseLogEntries(t *testing.T, logContent string) []*LogEntry {
 }
 
 // TestLogFormatCompliance 测试日志格式是否符合设计文档要求
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestLogFormatCompliance(t *testing.T) {
 	t.Log("=== 日志格式符合性测试 ===")
 
 	// 设计文档中定义的日志格式
 	expectedFormats := map[string]string{
 		"normal_activation": "🔄 [正常激活] 手动激活组: %s (健康端点: %d/%d)",
-		"force_activation":  "⚠️ [强制激活] 用户强制激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
+		"force_activation":  "⚠️ [强制激活] 手动激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
 		"safety_warning":    "🚨 [安全警告] 强制激活可能导致请求失败! 组: %s, 建议尽快检查端点健康状态",
 	}
 
@@ -339,7 +339,7 @@ func TestLogFormatCompliance(t *testing.T) {
 
 	gm := NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -365,7 +365,7 @@ func TestLogFormatCompliance(t *testing.T) {
 		slog.SetDefault(slog.New(jsonHandler))
 		defer slog.SetDefault(originalLogger)
 
-		// v4.0: 执行正常激活，组名就是端点名
+		// 执行正常激活，组名就是端点名
 		err := gm.ManualActivateGroupWithForce("test-endpoint", false)
 		require.NoError(t, err)
 
@@ -404,7 +404,7 @@ func TestLogFormatCompliance(t *testing.T) {
 		endpoints[0].Status.Healthy = false
 		gm.UpdateGroups(endpoints)
 
-		// v4.0: 执行应急激活
+		// 执行应急激活
 		err := gm.ManualActivateGroupWithForce("test-endpoint", true)
 		require.NoError(t, err)
 
@@ -426,7 +426,7 @@ func TestLogFormatCompliance(t *testing.T) {
 		require.NotNil(t, warningLog, "应该找到安全警告日志")
 
 		// 由于时间可能有细微差异，我们分别验证各个部分
-		assert.Contains(t, forceLog.Message, "⚠️ [强制激活] 用户强制激活无健康端点组: test-endpoint", "强制激活日志应该包含正确的前缀")
+		assert.Contains(t, forceLog.Message, "⚠️ [强制激活] 手动激活无健康端点组: test-endpoint", "强制激活日志应该包含正确的前缀")
 		assert.Contains(t, forceLog.Message, "健康端点: 0/1", "应该包含正确的端点统计")
 		assert.Contains(t, forceLog.Message, "操作时间:", "应该包含操作时间")
 		assert.Contains(t, forceLog.Message, "风险等级: HIGH", "应该包含风险等级")

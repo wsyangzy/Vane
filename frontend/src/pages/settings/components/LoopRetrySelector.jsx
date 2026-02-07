@@ -1,10 +1,10 @@
 // ============================================
 // LoopRetrySelector - 循环重试策略选择弹窗
-// v6.2.0 (2026-01-10) - 双选卡片布局
-// v6.2.11 (2026-01-11) - 新增跳过定时健康检测开关
+// (2026-01-10) - 双选卡片布局
+// (2026-01-11) - 新增跳过定时健康检测开关
 // ============================================
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { X, RefreshCw, XCircle, Check, Timer } from 'lucide-react';
 
 const STRATEGY_OPTIONS = [
@@ -26,19 +26,12 @@ const STRATEGY_OPTIONS = [
   }
 ];
 
-const LoopRetrySelector = ({ isOpen, currentValue, skipHealthCheck: initialSkipHealthCheck = false, onSelect, onClose }) => {
+const LoopRetrySelectorContent = ({ currentValue, initialSkipHealthCheck = false, onSelect, onClose }) => {
   const [selectedValue, setSelectedValue] = useState(currentValue);
   const [skipHealthCheck, setSkipHealthCheck] = useState(initialSkipHealthCheck);
 
-  useEffect(() => {
-    setSelectedValue(currentValue);
-    setSkipHealthCheck(initialSkipHealthCheck);
-  }, [currentValue, initialSkipHealthCheck, isOpen]);
-
-  if (!isOpen) return null;
-
   const handleConfirm = () => {
-    // v6.2.11: 返回策略值和跳过健康检测设置
+    // 返回策略值和跳过健康检测设置
     // 如果选择快速失败，跳过健康检测设置无效，重置为 false
     onSelect(selectedValue, selectedValue === 'true' ? skipHealthCheck : false);
     onClose();
@@ -141,7 +134,7 @@ const LoopRetrySelector = ({ isOpen, currentValue, skipHealthCheck: initialSkipH
                     ))}
                   </ul>
 
-                  {/* v6.2.11: 循环重试选项内的跳过健康检测开关 */}
+                  {/* 循环重试选项内的跳过健康检测开关 */}
                   {option.value === 'true' && isSelected && (
                     <div
                       className="mt-4 pt-3 border-t border-indigo-200"
@@ -201,6 +194,20 @@ const LoopRetrySelector = ({ isOpen, currentValue, skipHealthCheck: initialSkipH
         </div>
       </div>
     </div>
+  );
+};
+
+const LoopRetrySelector = ({ isOpen, currentValue, skipHealthCheck: initialSkipHealthCheck = false, onSelect, onClose }) => {
+  if (!isOpen) return null;
+
+  return (
+    <LoopRetrySelectorContent
+      key={`${currentValue}-${initialSkipHealthCheck}`}
+      currentValue={currentValue}
+      initialSkipHealthCheck={initialSkipHealthCheck}
+      onSelect={onSelect}
+      onClose={onClose}
+    />
   );
 };
 

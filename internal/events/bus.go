@@ -325,7 +325,7 @@ func (eb *eventBus) eventProcessor() {
 
 // 处理单个事件
 func (eb *eventBus) processEvent(event Event) {
-	// v5.0 优化：Wails 桌面应用不使用 SSE 广播，提前返回避免无用的过滤/限流操作
+	// 优化：Wails 桌面应用不使用 SSE 广播，提前返回避免无用的过滤/限流操作
 	if eb.sseBroadcaster == nil {
 		return
 	}

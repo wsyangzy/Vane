@@ -184,7 +184,7 @@ func (s *SQLiteAdapter) InitSchema() error {
 		}
 	}
 
-	// v5.0.1+: 执行迁移添加新字段
+	// 执行迁移添加新字段
 	if err := s.migrateSchema(ctx); err != nil {
 		return fmt.Errorf("failed to migrate schema: %w", err)
 	}
@@ -193,7 +193,7 @@ func (s *SQLiteAdapter) InitSchema() error {
 	return nil
 }
 
-// migrateSchema 执行数据库迁移（v5.0.1+: 添加 5m/1h 缓存字段）
+// migrateSchema 执行数据库迁移（添加 5m/1h 缓存字段）
 func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	// request_logs 迁移：历史上先上线 usage tracking，后续补充缓存字段
 	requestLogMigrations := []struct {
@@ -341,7 +341,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := runMigrations("endpoints", endpointsMigrations); err != nil {
 		return err
 	}
-	// v6.2+: 允许不同渠道端点同名（约束从 name 全局唯一调整为 (channel,name) 渠道内唯一）。
+	// 允许不同渠道端点同名（约束从 name 全局唯一调整为 (channel,name) 渠道内唯一）。
 	// SQLite 无法直接移除旧 UNIQUE(name) 约束，需要在发现旧约束时重建表。
 	if err := s.ensureEndpointsUniqueByChannelAndName(ctx); err != nil {
 		return err

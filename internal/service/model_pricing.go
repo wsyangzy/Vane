@@ -1,5 +1,5 @@
 // Package service 提供业务逻辑层实现
-// 模型定价服务 - v5.0.0 新增 (2025-12-06)
+// 模型定价服务 - 新增 (2025-12-06)
 package service
 
 import (

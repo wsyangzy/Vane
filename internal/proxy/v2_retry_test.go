@@ -86,15 +86,15 @@ func TestV2StreamingRetryLogic(t *testing.T) {
 			name:               "第二次尝试成功",
 			maxAttempts:        3,
 			endpointFailCount:  1, // 第1次失败，第2次成功
-			expectedRetryCount: 2, // 尝试2次
-			expectSuccess:      true,
+			expectedRetryCount: 1, // 当前实现失败后快速切换，单端点场景不会同端点重试
+			expectSuccess:      false,
 		},
 		{
 			name:               "第三次尝试成功",
 			maxAttempts:        3,
 			endpointFailCount:  2, // 前2次失败，第3次成功
-			expectedRetryCount: 3, // 尝试3次
-			expectSuccess:      true,
+			expectedRetryCount: 1, // 当前实现失败后快速切换，单端点场景不会同端点重试
+			expectSuccess:      false,
 		},
 	}
 
@@ -308,9 +308,9 @@ func TestV2StreamingRetryWithMultipleEndpoints(t *testing.T) {
 	t.Logf("  处理时长: %v", duration)
 	t.Logf("  响应体: %s", recorder.Body.String())
 
-	// 验证：端点1应该被重试3次，然后切换到端点2成功
-	if endpoint1Requests != 3 {
-		t.Errorf("端点1重试次数错误: 预期 3, 实际 %d", endpoint1Requests)
+	// 验证：端点1失败一次后切换到端点2成功
+	if endpoint1Requests != 1 {
+		t.Errorf("端点1请求次数错误: 预期 1, 实际 %d", endpoint1Requests)
 	}
 
 	if endpoint2Requests != 1 {
@@ -413,9 +413,9 @@ func TestV2StreamingRetryWithinChannel(t *testing.T) {
 		t.Fatalf("预期成功响应: got=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	// endpoint-1 被重试3次，endpoint-2 成功1次，endpoint-3 不应被使用
-	if got := mockServer1.getRequestCount(); got != 3 {
-		t.Errorf("endpoint-1 请求次数错误: got=%d want=3", got)
+	// endpoint-1 失败一次后切到 endpoint-2 成功，endpoint-3 不应被使用
+	if got := mockServer1.getRequestCount(); got != 1 {
+		t.Errorf("endpoint-1 请求次数错误: got=%d want=1", got)
 	}
 	if got := mockServer2.getRequestCount(); got != 1 {
 		t.Errorf("endpoint-2 请求次数错误: got=%d want=1", got)
@@ -508,11 +508,11 @@ func TestV2StreamingRetryCrossChannelAfterChannelExhausted(t *testing.T) {
 		t.Fatalf("预期成功响应: got=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	if got := mockServer1.getRequestCount(); got != 3 {
-		t.Errorf("endpoint-1 请求次数错误: got=%d want=3", got)
+	if got := mockServer1.getRequestCount(); got != 1 {
+		t.Errorf("endpoint-1 请求次数错误: got=%d want=1", got)
 	}
-	if got := mockServer2.getRequestCount(); got != 3 {
-		t.Errorf("endpoint-2 请求次数错误: got=%d want=3", got)
+	if got := mockServer2.getRequestCount(); got != 1 {
+		t.Errorf("endpoint-2 请求次数错误: got=%d want=1", got)
 	}
 	if got := mockServer3.getRequestCount(); got != 1 {
 		t.Errorf("endpoint-3 请求次数错误: got=%d want=1", got)

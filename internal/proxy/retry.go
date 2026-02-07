@@ -100,7 +100,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 	var lastResp *http.Response
 	var totalEndpointsAttempted int
 
-	// v6.2: 冷却机制已移除，改为追踪已暂停的渠道
+	// 冷却机制已移除，改为追踪已暂停的渠道
 	groupsPausedThisRequest := make(map[string]bool)
 
 	for {
@@ -291,7 +291,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 		}
 
 		// After trying all endpoints in current iteration, pause failed groups
-		// v6.2: 冷却机制已移除，SetGroupCooldown 现在只是暂停渠道
+		// 冷却机制已移除，SetGroupCooldown 现在只是暂停渠道
 		if rh.endpointManager.GetConfig().Failover.Enabled {
 			for groupName := range groupsFailedThisIteration {
 				if !groupsPausedThisRequest[groupName] {
@@ -369,7 +369,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 		allGroups := rh.endpointManager.GetGroupManager().GetAllGroups()
 		availableGroups := make([]string, 0)
 		for _, group := range allGroups {
-			// v6.2: 冷却机制已移除，只检查是否活跃和是否被暂停
+			// 冷却机制已移除，只检查是否活跃和是否被暂停
 			if !group.IsActive && !group.ManuallyPaused {
 				// Check if group has healthy endpoints
 				healthyInGroup := 0
@@ -563,15 +563,15 @@ func (rh *RetryHandler) GetSuspendedRequestsCount() int {
 }
 
 // shouldSuspendRequest determines if a request should be suspended
-// v6.2: auto_wait 策略已移除，此方法始终返回 false
+// auto_wait 策略已移除，此方法始终返回 false
 func (rh *RetryHandler) shouldSuspendRequest(ctx context.Context) bool {
-	// v6.2: 不再支持请求挂起功能
+	// 不再支持请求挂起功能
 	return false
 }
 
 // waitForGroupSwitch suspends the request and waits for group switch notification
-// v6.2: auto_wait 策略已移除，此方法始终返回 false
+// auto_wait 策略已移除，此方法始终返回 false
 func (rh *RetryHandler) waitForGroupSwitch(ctx context.Context, connID string) bool {
-	// v6.2: 不再支持请求挂起功能
+	// 不再支持请求挂起功能
 	return false
 }

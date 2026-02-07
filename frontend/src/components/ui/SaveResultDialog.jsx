@@ -1,10 +1,10 @@
 // ============================================
 // SaveResultDialog - 文件保存结果弹窗
-// v6.2.11 (2026-01-11) - 优化视觉效果
+// (2026-01-11) - 优化视觉效果
 // ============================================
 
 import { CheckCircle, XCircle, FolderOpen, X, FileText, Copy, Check, Sparkles } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 // 格式化文件大小
 const formatFileSize = (bytes) => {
@@ -24,19 +24,10 @@ const formatFileSize = (bytes) => {
  */
 const SaveResultDialog = ({ isOpen, result, onClose, onOpenFolder }) => {
   const [copied, setCopied] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
-
-  // 成功动画延迟显示
-  useEffect(() => {
-    if (isOpen && result?.success) {
-      const timer = setTimeout(() => setShowSuccess(true), 100);
-      return () => clearTimeout(timer);
-    } else {
-      setShowSuccess(false);
-    }
-  }, [isOpen, result?.success]);
 
   if (!isOpen || !result) return null;
+
+  const showSuccess = isOpen && !!result.success;
 
   const { success, fileName, filePath, fileSize, error } = result;
 

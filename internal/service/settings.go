@@ -1,5 +1,5 @@
 // Package service 提供业务逻辑层实现
-// 设置服务 - v5.1.0 新增 (2025-12-08)
+// 设置服务 - 新增 (2025-12-08)
 package service
 
 import (
@@ -36,7 +36,7 @@ const (
 	ValueTypeDuration = "duration"
 	ValueTypePassword = "password"
 	ValueTypeJSON     = "json"
-	ValueTypeEnum     = "enum" // v6.1: 新增枚举类型
+	ValueTypeEnum     = "enum" // 新增枚举类型
 )
 
 // CategoryInfo 分类信息
@@ -361,25 +361,25 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		category string
 		key      string
 	}{
-		// v6.1.0: 移除旧的请求挂起配置
+		// 移除旧的请求挂起配置
 		{CategoryRequest, "suspend_enabled"},
 		{CategoryRequest, "suspend_timeout"},
 		{CategoryRequest, "max_suspended"},
-		// v6.1.0: 移除旧的故障转移配置
+		// 移除旧的故障转移配置
 		{CategoryFailover, "allow_revisit_after_exhausted"},
-		// v6.2.0: 移除旧的恢复策略配置（已简化为 loop_retry）
+		// 移除旧的恢复策略配置（已简化为 loop_retry）
 		{CategoryRequest, "recovery_strategy"},
 		{CategoryRequest, "auto_wait_timeout"},
 		{CategoryRequest, "auto_wait_max_requests"},
-		// v6.2.0: loop_retry 和 max_loops 从 request 移到 failover
+		// loop_retry 和 max_loops 从 request 移到 failover
 		{CategoryRequest, "loop_retry"},
 		{CategoryRequest, "max_loops"},
-		// v6.2.0: 移除 failover 的 default_cooldown（loop_retry 模式下与循环重试逻辑冲突）
+		// 移除 failover 的 default_cooldown（loop_retry 模式下与循环重试逻辑冲突）
 		{CategoryFailover, "default_cooldown"},
-		// v6.2.14: interrupt_client_on_exhausted 从 failover 移到 request，并更名为 allow_retry_on_exhausted
+		// interrupt_client_on_exhausted 从 failover 移到 request，并更名为 allow_retry_on_exhausted
 		{CategoryFailover, "interrupt_client_on_exhausted"},
 		{CategoryRequest, "block_retry_on_exhausted"},
-		// v6.2.19: allow_retry_on_exhausted 已废弃，始终保持连接挂起
+		// allow_retry_on_exhausted 已废弃，始终保持连接挂起
 		{CategoryRequest, "allow_retry_on_exhausted"},
 	}
 
@@ -469,7 +469,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		}
 
 	case CategoryFailover:
-		// v6.2: 渠道间故障转移配置（含循环重试）
+		// 渠道间故障转移配置（含循环重试）
 		// 注意：default_cooldown 已移除，loop_retry 模式下冷却时间与循环重试逻辑冲突
 		return []*store.SettingRecord{
 			{Category: CategoryFailover, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "渠道间故障转移", Description: "当前渠道内所有端点均重试耗尽时，自动切换到备用渠道", DisplayOrder: 1},
@@ -480,8 +480,8 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		}
 
 	case CategoryRequest:
-		// v6.2: 请求控制配置
-		// v6.2.19: 移除 allow_retry_on_exhausted，始终保持连接挂起
+		// 请求控制配置
+		// 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*store.SettingRecord{
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
 			{Category: CategoryRequest, Key: "suspend_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "挂起等待超时", Description: "普通挂起等待端点恢复/渠道切换的最大时间", DisplayOrder: 2},

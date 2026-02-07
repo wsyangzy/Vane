@@ -12,11 +12,11 @@ import (
 )
 
 // GetHealthyEndpoints returns a list of healthy endpoints from active groups based on strategy.
-// v6.0: 以"渠道(channel)"为单位路由，优先只返回当前激活渠道内的端点；
+// 以"渠道(channel)"为单位路由，优先只返回当前激活渠道内的端点；
 // 跨渠道切换由请求级故障转移触发（见 TriggerRequestFailover）。
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (m *Manager) GetHealthyEndpoints() []*Endpoint {
-	// v5.0+: 使用快照机制
+	// 使用快照机制
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))
 	copy(snapshot, m.endpoints)
@@ -38,11 +38,11 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
-		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
-		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
+		isRequestFailed := endpoint.Status.RequestFailed // 请求失败标记
+		skipHealthCheck := endpoint.Config.SkipHealthCheck // 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		// 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
 		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
@@ -124,9 +124,9 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 }
 
 // GetFastestEndpointsWithRealTimeTest returns endpoints from active groups sorted by real-time testing.
-// v6.0: 以“渠道(channel)”为单位路由，只测试/排序当前激活渠道内端点。
+// 以“渠道(channel)”为单位路由，只测试/排序当前激活渠道内端点。
 func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*Endpoint {
-	// v5.0+: 使用快照机制
+	// 使用快照机制
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))
 	copy(snapshot, m.endpoints)
@@ -148,11 +148,11 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
-		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
-		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
+		isRequestFailed := endpoint.Status.RequestFailed // 请求失败标记
+		skipHealthCheck := endpoint.Config.SkipHealthCheck // 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		// 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
 		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
@@ -270,7 +270,7 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 // GetEndpointByName returns an endpoint by key, only from active groups.
 // 兼容：YAML 模式下 key == name。
 func (m *Manager) GetEndpointByName(endpointKey string) *Endpoint {
-	// v5.0+: 使用快照机制
+	// 使用快照机制
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))
 	copy(snapshot, m.endpoints)
@@ -386,7 +386,7 @@ func (m *Manager) GetEndpointStatus(endpointKey string) EndpointStatus {
 	return EndpointStatus{}
 }
 
-// GetEndpointCount 返回当前端点数量（v5.0+ 新增）
+// GetEndpointCount 返回当前端点数量（新增）
 func (m *Manager) GetEndpointCount() int {
 	m.endpointsMu.RLock()
 	defer m.endpointsMu.RUnlock()
@@ -394,8 +394,8 @@ func (m *Manager) GetEndpointCount() int {
 }
 
 // GetHealthyEndpointsExcluding 获取健康端点列表，排除已尝试的端点
-// v6.1: 用于实现严格优先级转移逻辑，确保在同一请求链路内只能向下一优先级转移
-// v6.2: 冷却机制已移除
+// 用于实现严格优先级转移逻辑，确保在同一请求链路内只能向下一优先级转移
+// 冷却机制已移除
 // excludeKeys: 已尝试端点的 key 列表（channel::name 格式）
 func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint {
 	// 构建排除集合
@@ -406,7 +406,7 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 		}
 	}
 
-	// v5.0+: 使用快照机制
+	// 使用快照机制
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))
 	copy(snapshot, m.endpoints)
@@ -418,7 +418,7 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 	var healthy []*Endpoint
 	for _, endpoint := range activeEndpoints {
 		// 检查是否在排除列表中
-		// v6.2.9: 移除高频 DEBUG 日志，避免循环重试时日志膨胀
+		// 移除高频 DEBUG 日志，避免循环重试时日志膨胀
 		epKey := EndpointKey(endpoint.Config.Channel, endpoint.Config.Name)
 		if _, excluded := excludeSet[epKey]; excluded {
 			continue
@@ -435,11 +435,11 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
-		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
-		skipHealthCheck := endpoint.Config.SkipHealthCheck // v6.1: 跳过健康检查的端点也视为可用
+		isRequestFailed := endpoint.Status.RequestFailed // 请求失败标记
+		skipHealthCheck := endpoint.Config.SkipHealthCheck // 跳过健康检查的端点也视为可用
 		endpoint.mutex.RUnlock()
 
-		// v6.1.0: 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
+		// 端点可用条件 = (健康检查通过 || 跳过健康检查) && 未被请求失败标记
 		if (isHealthy || skipHealthCheck) && !isRequestFailed {
 			healthy = append(healthy, endpoint)
 		}
@@ -455,7 +455,7 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 }
 
 // GetRecoveredEndpointsInChannel 获取当前渠道内已恢复的端点
-// v6.2: 冷却机制已移除，此函数现在返回所有健康的已尝试端点（用于循环重试）
+// 冷却机制已移除，此函数现在返回所有健康的已尝试端点（用于循环重试）
 // triedKeys: 本次请求已尝试过的端点 key 列表
 // 返回：按优先级排序的健康端点列表
 func (m *Manager) GetRecoveredEndpointsInChannel(triedKeys []string) []*Endpoint {
@@ -467,7 +467,7 @@ func (m *Manager) GetRecoveredEndpointsInChannel(triedKeys []string) []*Endpoint
 		}
 	}
 
-	// v5.0+: 使用快照机制
+	// 使用快照机制
 	m.endpointsMu.RLock()
 	snapshot := make([]*Endpoint, len(m.endpoints))
 	copy(snapshot, m.endpoints)
@@ -491,12 +491,12 @@ func (m *Manager) GetRecoveredEndpointsInChannel(triedKeys []string) []*Endpoint
 
 		endpoint.mutex.RLock()
 		isHealthy := endpoint.Status.Healthy
-		isRequestFailed := endpoint.Status.RequestFailed // v6.1.0: 请求失败标记
+		isRequestFailed := endpoint.Status.RequestFailed // 请求失败标记
 		skipHealthCheck := endpoint.Config.SkipHealthCheck
 		endpoint.mutex.RUnlock()
 
-		// v6.2: 只检查健康状态，不再检查冷却状态
-		// v6.1.0: 同时检查请求失败标记
+		// 只检查健康状态，不再检查冷却状态
+		// 同时检查请求失败标记
 		if _, tried := triedSet[epKey]; tried {
 			if (isHealthy || skipHealthCheck) && !isRequestFailed {
 				recovered = append(recovered, endpoint)

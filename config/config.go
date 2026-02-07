@@ -22,12 +22,12 @@ type Config struct {
 	Logging          LoggingConfig          `yaml:"logging"`
 	Streaming        StreamingConfig        `yaml:"streaming"`
 	Group            GroupConfig            `yaml:"group"`             // Group configuration (DEPRECATED: use Failover instead)
-	Failover         FailoverConfig         `yaml:"failover"`          // Failover configuration (v4.0+, DEPRECATED in v6.1: use FailoverV2)
-	FailoverV2       FailoverConfigV2       `yaml:"failover_v2"`       // Failover configuration v2 (v6.1+, unified recovery strategy)
-	RequestSuspend   RequestSuspendConfig   `yaml:"request_suspend"`   // Request suspension configuration (DEPRECATED in v6.1: merged into FailoverV2)
+	Failover         FailoverConfig         `yaml:"failover"`          // Failover configuration (, DEPRECATED in use FailoverV2)
+	FailoverV2       FailoverConfigV2       `yaml:"failover_v2"`       // Failover configuration v2 (, unified recovery strategy)
+	RequestSuspend   RequestSuspendConfig   `yaml:"request_suspend"`   // Request suspension configuration (DEPRECATED in merged into FailoverV2)
 	UsageTracking    UsageTrackingConfig    `yaml:"usage_tracking"`    // Usage tracking configuration
 	TokenCounting    TokenCountingConfig    `yaml:"token_counting"`    // Token counting configuration
-	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration (v5.0+)
+	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration
 	Proxy            ProxyConfig            `yaml:"proxy"`
 	Auth             AuthConfig             `yaml:"auth"`
 	TUI              TUIConfig              `yaml:"tui"`            // TUI configuration (DEPRECATED: TUI has been removed)
@@ -92,14 +92,14 @@ type StreamingConfig struct {
 	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"` // 响应头超时时间，默认: 60s
 }
 
-// GroupConfig (DEPRECATED in v4.0: use FailoverConfig instead)
-// Kept for backward compatibility with v3.x configurations
+// GroupConfig (DEPRECATED in use FailoverConfig instead)
+// Kept for backward compatibility with configurations
 type GroupConfig struct {
 	Cooldown                time.Duration `yaml:"cooldown"`                   // Cooldown duration for groups when all endpoints fail
 	AutoSwitchBetweenGroups bool          `yaml:"auto_switch_between_groups"` // Whether to automatically switch between groups, default: true
 }
 
-// FailoverConfig v4.0 故障转移配置
+// FailoverConfig 故障转移配置
 type FailoverConfig struct {
 	Enabled         bool          `yaml:"enabled"`          // 启用故障转移，默认: true
 	DefaultCooldown time.Duration `yaml:"default_cooldown"` // 默认冷却时间，默认: 10m
@@ -117,7 +117,7 @@ type RequestSuspendConfig struct {
 }
 
 // ModelPricing 模型定价配置
-// Deprecated: v5.0+ 定价配置已迁移到 SQLite model_pricing 表，通过前端「定价」页面管理
+// Deprecated: 定价配置已迁移到 SQLite model_pricing 表，通过前端「定价」页面管理
 // 保留此结构体仅为向后兼容，不再使用
 type ModelPricing struct {
 	Input         float64 `yaml:"input"`          // per 1M tokens
@@ -142,14 +142,14 @@ type UsageTrackingConfig struct {
 	RetentionDays   int           `yaml:"retention_days"`   // Data retention days (0=permanent), default: 90
 	CleanupInterval time.Duration `yaml:"cleanup_interval"` // Cleanup task execution interval, default: 24h
 
-	// Deprecated: v5.0+ 以下定价配置已废弃，迁移到 SQLite model_pricing 表
+	// Deprecated: 以下定价配置已废弃，迁移到 SQLite model_pricing 表
 	// 通过前端「定价」页面管理，这些字段仅保留用于向后兼容解析
 	ModelPricing   map[string]ModelPricing `yaml:"model_pricing,omitempty"`   // [废弃] Model pricing configuration
 	DefaultPricing ModelPricing            `yaml:"default_pricing,omitempty"` // [废弃] Default pricing for unknown models
 }
 
 // DatabaseBackendConfig 数据库后端配置
-// v4.1.0: 简化为仅支持 SQLite，热池架构下无需外部数据库依赖
+// 简化为仅支持 SQLite，热池架构下无需外部数据库依赖
 type DatabaseBackendConfig struct {
 	Type string `yaml:"type"` // 仅支持 "sqlite"（保留用于向后兼容）
 
@@ -161,16 +161,16 @@ type DatabaseBackendConfig struct {
 
 	// ===== 以下字段已废弃，保留用于配置文件向后兼容（解析不报错）=====
 	// 这些字段不再生效，请从配置文件中删除
-	Host            string        `yaml:"host,omitempty"`               // DEPRECATED: MySQL not supported in v4.1+
-	Port            int           `yaml:"port,omitempty"`               // DEPRECATED: MySQL not supported in v4.1+
-	Database        string        `yaml:"database,omitempty"`           // DEPRECATED: MySQL not supported in v4.1+
-	Username        string        `yaml:"username,omitempty"`           // DEPRECATED: MySQL not supported in v4.1+
-	Password        string        `yaml:"password,omitempty"`           // DEPRECATED: MySQL not supported in v4.1+
-	MaxOpenConns    int           `yaml:"max_open_conns,omitempty"`     // DEPRECATED: MySQL not supported in v4.1+
-	MaxIdleConns    int           `yaml:"max_idle_conns,omitempty"`     // DEPRECATED: MySQL not supported in v4.1+
-	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime,omitempty"`  // DEPRECATED: MySQL not supported in v4.1+
-	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time,omitempty"` // DEPRECATED: MySQL not supported in v4.1+
-	Charset         string        `yaml:"charset,omitempty"`            // DEPRECATED: MySQL not supported in v4.1+
+	Host            string        `yaml:"host,omitempty"`               // DEPRECATED: MySQL not supported in
+	Port            int           `yaml:"port,omitempty"`               // DEPRECATED: MySQL not supported in
+	Database        string        `yaml:"database,omitempty"`           // DEPRECATED: MySQL not supported in
+	Username        string        `yaml:"username,omitempty"`           // DEPRECATED: MySQL not supported in
+	Password        string        `yaml:"password,omitempty"`           // DEPRECATED: MySQL not supported in
+	MaxOpenConns    int           `yaml:"max_open_conns,omitempty"`     // DEPRECATED: MySQL not supported in
+	MaxIdleConns    int           `yaml:"max_idle_conns,omitempty"`     // DEPRECATED: MySQL not supported in
+	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime,omitempty"`  // DEPRECATED: MySQL not supported in
+	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time,omitempty"` // DEPRECATED: MySQL not supported in
+	Charset         string        `yaml:"charset,omitempty"`            // DEPRECATED: MySQL not supported in
 }
 
 type ProxyConfig struct {
@@ -188,7 +188,7 @@ type AuthConfig struct {
 	Token   string `yaml:"token,omitempty"` // Bearer token for authentication
 }
 
-// TUIConfig is DEPRECATED - TUI has been removed in v4.0
+// TUIConfig is DEPRECATED - TUI has been removed in
 // Kept for backward compatibility with old configuration files
 type TUIConfig struct {
 	Enabled           bool          `yaml:"enabled"`             // DEPRECATED: TUI has been removed
@@ -202,7 +202,7 @@ type TokenCountingConfig struct {
 	EstimationRatio float64 `yaml:"estimation_ratio"` // Token估算比例 (1 token ≈ N 字符)
 }
 
-// EndpointsStorageConfig 端点存储配置 (v5.0+)
+// EndpointsStorageConfig 端点存储配置
 // 支持从 YAML 文件或 SQLite 数据库加载端点配置
 type EndpointsStorageConfig struct {
 	Type string `yaml:"type"` // 存储类型: "yaml" | "sqlite"，默认 "yaml"
@@ -211,13 +211,13 @@ type EndpointsStorageConfig struct {
 type EndpointConfig struct {
 	Name                string            `yaml:"name"`
 	URL                 string            `yaml:"url"`
-	Channel             string            `yaml:"channel,omitempty"` // v5.0: 渠道标签（用于分组展示）
+	Channel             string            `yaml:"channel,omitempty"` // 渠道标签（用于分组展示）
 	Priority            int               `yaml:"priority"`
-	Group               string            `yaml:"group,omitempty"`             // DEPRECATED in v4.0
-	GroupPriority       int               `yaml:"group-priority,omitempty"`    // DEPRECATED in v4.0: use Priority instead
-	FailoverEnabled     *bool             `yaml:"failover_enabled,omitempty"`  // v4.0: 是否参与故障转移，默认: true
-	Cooldown            *time.Duration    `yaml:"cooldown,omitempty"`          // v4.0: 端点级冷却时间（可选），默认使用全局配置
-	SkipHealthCheck     bool              `yaml:"skip_health_check,omitempty"` // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+	Group               string            `yaml:"group,omitempty"`             // DEPRECATED in
+	GroupPriority       int               `yaml:"group-priority,omitempty"`    // DEPRECATED in use Priority instead
+	FailoverEnabled     *bool             `yaml:"failover_enabled,omitempty"`  // 是否参与故障转移，默认: true
+	Cooldown            *time.Duration    `yaml:"cooldown,omitempty"`          // 端点级冷却时间（可选），默认使用全局配置
+	SkipHealthCheck     bool              `yaml:"skip_health_check,omitempty"` // 跳过健康检查（部分中转商不支持健康检查端点）
 	Token               string            `yaml:"token,omitempty"`             // 单 Token 配置（向后兼容）
 	ApiKey              string            `yaml:"api-key,omitempty"`           // 单 API Key 配置（向后兼容）
 	Tokens              []TokenConfig     `yaml:"tokens,omitempty"`            // 多 Token 配置（新功能）
@@ -225,7 +225,7 @@ type EndpointConfig struct {
 	Timeout             time.Duration     `yaml:"timeout"`
 	Headers             map[string]string `yaml:"headers,omitempty"`
 	SupportsCountTokens bool              `yaml:"supports_count_tokens,omitempty"` // 是否支持count_tokens端点
-	Enabled             *bool             `yaml:"enabled,omitempty"`               // v5.0: 是否激活为代理端点（SQLite模式），默认: true
+	Enabled             *bool             `yaml:"enabled,omitempty"`               // 是否激活为代理端点（SQLite模式），默认: true
 }
 
 // TokenConfig Token 配置项，用于多 Token 切换功能
@@ -250,7 +250,7 @@ func LoadConfig(path string) (*Config, error) {
 	// Check if auto_switch_between_groups is explicitly set in YAML
 	hasAutoSwitchConfig := strings.Contains(string(data), "auto_switch_between_groups")
 
-	// Check if v4.0 failover config is present
+	// Check if failover config is present
 	hasFailoverConfig := strings.Contains(string(data), "failover:")
 
 	var config Config
@@ -266,7 +266,7 @@ func LoadConfig(path string) (*Config, error) {
 		config.Group.AutoSwitchBetweenGroups = true // Default to auto mode for backward compatibility
 	}
 
-	// v3.x → v4.0 配置映射（向后兼容）
+	// → 配置映射（向后兼容）
 	if !hasFailoverConfig {
 		// 没有v4.0配置，尝试从v3.x group配置映射
 		if config.Group.Cooldown > 0 {
@@ -275,14 +275,14 @@ func LoadConfig(path string) (*Config, error) {
 		config.Failover.Enabled = config.Group.AutoSwitchBetweenGroups
 	}
 
-	// v6.0 → v6.2 配置迁移（向后兼容）
+	// → 配置迁移（向后兼容）
 	// 检查配置格式版本
 	hasFailoverV2Config := strings.Contains(string(data), "failover_v2:")
 	hasRecoveryStrategy := strings.Contains(string(data), "recovery_strategy:")
 	hasLoopRetry := strings.Contains(string(data), "loop_retry:")
 
 	if !hasFailoverV2Config && !hasLoopRetry {
-		// 没有新版配置，从 v6.0.x 旧版配置自动迁移
+		// 没有新版配置，从 旧版配置自动迁移
 		slog.Info("📦 检测到旧版配置格式 (v6.0.x)，正在自动迁移到 v6.2 格式...")
 		config.FailoverV2.MigrateFromLegacy(&config.Failover, &config.RequestSuspend)
 		config.FailoverV2.SetDefaults()
@@ -292,7 +292,7 @@ func LoadConfig(path string) (*Config, error) {
 			"loop_retry", config.FailoverV2.LoopRetry,
 			"max_loops", config.FailoverV2.MaxLoops)
 	} else if hasRecoveryStrategy && !hasLoopRetry {
-		// v6.1.x 配置迁移到 v6.2
+		// 配置迁移到
 		slog.Info("📦 检测到 v6.1.x 配置格式，正在迁移到 v6.2 格式...")
 		config.FailoverV2.SetDefaults() // SetDefaults 内部会调用 MigrateFromV61
 
@@ -406,12 +406,12 @@ func (c *Config) setDefaults() {
 		c.Timezone = "Asia/Shanghai" // Default timezone for all components
 	}
 
-	// Set group defaults (DEPRECATED: kept for v3.x compatibility)
+	// Set group defaults (DEPRECATED: kept for compatibility)
 	if c.Group.Cooldown == 0 {
 		c.Group.Cooldown = 600 * time.Second // Default 10 minutes cooldown for groups
 	}
 
-	// Set failover defaults (v4.0+)
+	// Set failover defaults
 	// Failover.Enabled defaults to true if not explicitly set
 	// Note: We check for zero value and set default here
 	if c.Failover.DefaultCooldown == 0 {
@@ -419,7 +419,7 @@ func (c *Config) setDefaults() {
 	}
 	// Failover.Enabled has no explicit default here - will be set by LoadConfig compatibility logic
 
-	// Set endpoints storage defaults (v5.0+)
+	// Set endpoints storage defaults
 	if c.EndpointsStorage.Type == "" {
 		c.EndpointsStorage.Type = "yaml" // Default to YAML for backward compatibility
 	}
@@ -463,13 +463,13 @@ func (c *Config) setDefaults() {
 	if c.UsageTracking.CleanupInterval == 0 {
 		c.UsageTracking.CleanupInterval = 24 * time.Hour // Default cleanup interval
 	}
-	// v5.0+ 注意：model_pricing 和 default_pricing 已废弃
+	// 注意：model_pricing 和 default_pricing 已废弃
 	// 定价配置现在从 SQLite model_pricing 表加载，通过前端「定价」页面管理
 	// 这里不再设置默认值，保留字段仅为向后兼容解析旧配置文件
 
 	// UsageTracking.Enabled defaults to false (zero value) for backward compatibility
 
-	// TUI has been removed in v4.0 - no defaults needed
+	// TUI has been removed in no defaults needed
 
 	// Set Token Counting defaults
 	if c.TokenCounting.EstimationRatio == 0 {
@@ -488,7 +488,7 @@ func (c *Config) setDefaults() {
 	var currentGroupPriority int = 1    // Default group priority
 
 	for i := range c.Endpoints {
-		// v3.x → v4.0 兼容：group-priority 映射到 priority
+		// → 兼容：group-priority 映射到 priority
 		if c.Endpoints[i].Priority == 0 && c.Endpoints[i].GroupPriority > 0 {
 			c.Endpoints[i].Priority = c.Endpoints[i].GroupPriority
 		}
@@ -615,7 +615,7 @@ func (c *Config) findEndpointIndex(name string) int {
 
 // validate validates the configuration
 func (c *Config) validate() error {
-	// v5.0+: 当使用 SQLite 存储端点时，允许 YAML 中 endpoints 为空
+	// 当使用 SQLite 存储端点时，允许 YAML 中 endpoints 为空
 	// 端点会从数据库加载，不再要求 YAML 必须配置
 	if len(c.Endpoints) == 0 && c.EndpointsStorage.Type != "sqlite" {
 		return fmt.Errorf("at least one endpoint must be configured (or set endpoints_storage.type: sqlite)")
@@ -638,7 +638,7 @@ func (c *Config) validate() error {
 		}
 	}
 
-	// Validate request suspension configuration (DEPRECATED in v6.1)
+	// Validate request suspension configuration (DEPRECATED in )
 	if c.RequestSuspend.Enabled {
 		if c.RequestSuspend.Timeout <= 0 {
 			return fmt.Errorf("request suspend timeout must be greater than 0 when enabled")
@@ -651,7 +651,7 @@ func (c *Config) validate() error {
 		}
 	}
 
-	// Validate failover v2 configuration (v6.1+)
+	// Validate failover v2 configuration
 	if c.FailoverV2.Enabled || c.FailoverV2.RecoveryStrategy != "" {
 		if err := c.FailoverV2.Validate(); err != nil {
 			return fmt.Errorf("failover_v2 configuration error: %w", err)
@@ -912,7 +912,7 @@ func (cw *ConfigWatcher) logConfigChanges(oldConfig, newConfig *Config) {
 			"new_enabled", newConfig.RequestSuspend.Enabled)
 	}
 
-	// v6.2: 记录新的故障转移配置变更
+	// 记录新的故障转移配置变更
 	if oldConfig.FailoverV2.LoopRetry != newConfig.FailoverV2.LoopRetry {
 		cw.logger.Info("🔄 循环重试配置变更",
 			"old_loop_retry", oldConfig.FailoverV2.LoopRetry,

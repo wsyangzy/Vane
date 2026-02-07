@@ -7,7 +7,7 @@
 // - app_api_group.go    - 组管理
 // - app_api_usage.go    - 使用统计 + 请求记录
 // - app_api_chart.go    - 图表数据
-// - app_api_storage.go  - v5.0+ 端点存储管理 (SQLite)
+// app_api_storage.go - 端点存储管理 (SQLite)
 
 package main
 
@@ -138,7 +138,7 @@ type ConfigInfo struct {
 	TrackingEnabled bool   `json:"tracking_enabled"`
 	FailoverEnabled bool   `json:"failover_enabled"`
 	// FailoverDefaultCooldownSeconds 全局默认冷却时间（秒），用于前端在端点未设置专属冷却时展示"实际生效值"。
-	// v6.2: 设置页面已移除此配置项（loop_retry 模式下冷却时间与循环重试逻辑冲突），使用固定默认值 600 秒。
+	// 设置页面已移除此配置项（loop_retry 模式下冷却时间与循环重试逻辑冲突），使用固定默认值 600 秒。
 	FailoverDefaultCooldownSeconds int `json:"failover_default_cooldown_seconds"`
 	EndpointCount                  int `json:"endpoint_count"`
 }
@@ -159,7 +159,7 @@ func (a *App) GetConfig() ConfigInfo {
 		ProxyEnabled:                   a.config.Proxy.Enabled,
 		TrackingEnabled:                a.config.UsageTracking.Enabled,
 		FailoverEnabled:                a.config.Failover.Enabled,
-		FailoverDefaultCooldownSeconds: 600, // v6.2: 固定默认值，设置页面已移除此配置项
+		FailoverDefaultCooldownSeconds: 600, // 固定默认值，设置页面已移除此配置项
 		EndpointCount:                  len(a.config.Endpoints),
 	}
 }
@@ -299,7 +299,7 @@ func parseTimeWithLocation(s string, loc *time.Location) (time.Time, error) {
 }
 
 // ============================================================
-// 文件操作 API (v6.2.11+)
+// 文件操作 API
 // ============================================================
 
 // SaveFileResult 文件保存结果

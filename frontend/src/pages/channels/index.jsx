@@ -1,6 +1,6 @@
 // ============================================
 // Channels 页面 - 渠道管理（渠道内端点故障转移）
-// 2025-11-28 (Updated 2025-12-06 for v5.0 SQLite Storage)
+// 2025-11-28 (Updated 2025-12-06 for SQLite Storage)
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -47,7 +47,7 @@ import {
   deleteEndpointRecordByID,
   toggleEndpointRecordByID,
   setEndpointFailoverEnabledByID,
-  setEndpointSkipHealthCheckByID, // v6.2.11: 跳过健康检测
+  setEndpointSkipHealthCheckByID, // 跳过健康检测
   getChannels,
   createChannel,
   updateChannel,
@@ -206,7 +206,7 @@ const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loa
 };
 
 // ============================================
-// 端点表格行组件 (v5.0 增强版 - 参考 test.jsx 设计)
+// 端点表格行组件 (增强版 - 参考 test.jsx 设计)
 // ============================================
 
 // 健康状态徽章（健康/异常/未检测/跳过检测）
@@ -339,7 +339,7 @@ const EndpointMiniCard = ({
   channelFailoverEnabled = true,
   onOpen,
   onToggleFailover,
-  onToggleSkipHealthCheck, // v6.2.11: 跳过健康检测回调
+  onToggleSkipHealthCheck, // 跳过健康检测回调
   onEdit,
   onDelete
 }) => {
@@ -440,7 +440,7 @@ const EndpointMiniCard = ({
                 >
                   <ArrowRightLeft size={14} />
                 </button>
-                {/* v6.2.11: 跳过健康检测快捷开关 */}
+                {/* 跳过健康检测快捷开关 */}
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -517,7 +517,7 @@ const EndpointDetailModal = ({
   isOpen,
   isSqliteMode,
   channelFailoverEnabled = true,
-  // v6.2: failoverDefaultCooldownSeconds 已移除
+  // failoverDefaultCooldownSeconds 已移除
   onClose,
   onEdit,
   onDelete
@@ -570,7 +570,7 @@ const EndpointDetailModal = ({
     },
   ];
 
-  // v6.2: cooldown 相关变量已移除
+  // cooldown 相关变量已移除
   const hasToken = !!(tokenRaw || tokenMasked);
   const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
 
@@ -739,7 +739,7 @@ const EndpointDetailModal = ({
             </div>
           )}
 
-          {/* v6.2.10: 异常详情显示 - 有错误信息时显示 */}
+          {/* 异常详情显示 - 有错误信息时显示 */}
           {!isSuspended && hasFailDetail && (
             <div className="mt-4">
               <div className="bg-rose-50 rounded-xl p-4 border border-rose-200">
@@ -769,7 +769,7 @@ const EndpointDetailModal = ({
             </div>
           )}
 
-          {/* v6.2: 冷却时间显示已移除（loop_retry 模式下与循环重试逻辑冲突） */}
+          {/* 冷却时间显示已移除（loop_retry 模式下与循环重试逻辑冲突） */}
           <div className="mt-4">
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
               <div className="flex items-center justify-between mb-1">
@@ -862,7 +862,7 @@ const CreateChannelModal = ({
   const isEdit = mode === 'edit';
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
-  // v6.2.1: 新建时传 0，让后端自动递增；编辑时使用原有优先级
+  // 新建时传 0，让后端自动递增；编辑时使用原有优先级
   const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority || 1) : 0));
   const [error, setError] = useState('');
 
@@ -1003,7 +1003,7 @@ const ChannelCard = ({
   onDeleteChannel,
   onOpenEndpoint,
   onToggleEndpointFailover,
-  onToggleEndpointSkipHealthCheck, // v6.2.11: 跳过健康检测回调
+  onToggleEndpointSkipHealthCheck, // 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
   manualRetryCount = 0,
@@ -1044,11 +1044,11 @@ const ChannelCard = ({
   const showRetryButton = isAllEndpointsFailed || (isActive && hasSuspendedRequests) || hasManualRetry;
   const showRetryOnInactive = hasManualRetry;
 
-  // v6.2.12: 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
+  // 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
   const isActiveChannelAllFailed = isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
 
   // 活跃渠道边框样式
-  // v6.2.12: 优先判断全部失败，显示红色边框（无论是否启用渠道间转移）
+  // 优先判断全部失败，显示红色边框（无论是否启用渠道间转移）
   const activeHighlightClass = isActiveChannelAllFailed
     ? 'border-rose-400 ring-2 ring-rose-100'  // 全部失败 → 红色
     : channelFailoverEnabled
@@ -1059,7 +1059,6 @@ const ChannelCard = ({
   const collapsedVisibleCount = 1;
   const visibleEndpoints = expanded ? endpoints : endpoints.slice(0, collapsedVisibleCount);
   const hasMore = endpoints.length > collapsedVisibleCount;
-  const pauseDisabled = loading || !channelFailoverEnabled;
 
   const priorityValue = Number.isFinite(priority) ? Math.max(1, Math.floor(priority)) : null;
   const hasValidPriority = priorityValue != null && priorityValue > 0 && priorityValue < 999;
@@ -1120,7 +1119,7 @@ const ChannelCard = ({
 
           {/* 渠道操作 */}
           <div className="flex items-center gap-2 flex-shrink-0">
-          {/* v6.2.5: 非激活渠道按钮逻辑
+          {/* 非激活渠道按钮逻辑
               - 开启渠道间转移 + 渠道已暂停：显示"激活"（仅激活，需先点恢复）
               - 其他情况：显示"激活"
           */}
@@ -1164,7 +1163,7 @@ const ChannelCard = ({
               </Button>
             )
           )}
-          {/* v6.2.5: 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
+          {/* 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
           {channelFailoverEnabled && hasGroupInfo && !isPaused && (
             <Button
               size="sm"
@@ -1243,7 +1242,7 @@ const ChannelCard = ({
               已暂停
             </span>
           )}
-          {/* v6.2: 冷却状态显示已移除 */}
+            {/* 冷却状态显示已移除 */}
           {isAllEndpointsFailed && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-600 border border-rose-200 whitespace-nowrap">
               全部失败
@@ -1378,7 +1377,7 @@ const ChannelsPage = () => {
   const [storageLoading, setStorageLoading] = useState(false);
 
   // 判断存储模式（用于控制 Hook 行为）
-  // v6.2.12: 只检查 storageType，不再依赖 enabled（enabled 表示服务是否初始化，配置重载期间可能暂时为 false）
+  // 只检查 storageType，不再依赖 enabled（enabled 表示服务是否初始化，配置重载期间可能暂时为 false）
   const isSqliteMode = storageStatus?.storageType === 'sqlite';
 
   // 使用端点数据 Hook（YAML 模式需要；SQLite 模式仅保留操作能力，避免后台自动拉取/订阅导致卡住）
@@ -1397,10 +1396,10 @@ const ChannelsPage = () => {
   const [groups, setGroups] = useState([]);
   const [channelActionLoading, setChannelActionLoading] = useState(false);
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(true);
-  // v6.2: failoverDefaultCooldownSeconds 已移除
+  // failoverDefaultCooldownSeconds 已移除
   const [channelsMeta, setChannelsMeta] = useState([]);
 
-  // v6.0.7+ 挂起请求计数（用于显示等待提示）
+  // 挂起请求计数（用于显示等待提示）
   const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
   const [suspendedEndpointCounts, setSuspendedEndpointCounts] = useState({});
   const [manualRetryRequestsCount, setManualRetryRequestsCount] = useState(0);
@@ -1461,7 +1460,7 @@ const ChannelsPage = () => {
       setStorageStatus(status);
 
       // 如果是 SQLite 模式，加载存储的端点
-      // v6.2.12: 只检查 storageType，不再依赖 enabled
+      // 只检查 storageType，不再依赖 enabled
       if (status.storageType === 'sqlite') {
         const records = await getEndpointRecords();
         if (seq !== storageLoadSeqRef.current) return;
@@ -1500,7 +1499,7 @@ const ChannelsPage = () => {
 
   const loadChannelsMeta = useCallback(async () => {
     const seq = ++channelsMetaLoadSeqRef.current;
-    // v6.2.12: 只检查 storageType
+    // 只检查 storageType
     const sqliteEnabled = storageStatus?.storageType === 'sqlite';
     if (!sqliteEnabled) {
       if (seq === channelsMetaLoadSeqRef.current) {
@@ -1524,7 +1523,7 @@ const ChannelsPage = () => {
       const cfg = await getConfig();
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(cfg?.failover_enabled !== false);
-      // v6.2: cooldownSeconds 加载已移除
+      // cooldownSeconds 加载已移除
     } catch (err) {
       console.error('获取配置失败:', err);
       if (seq !== configLoadSeqRef.current) return;
@@ -1532,7 +1531,7 @@ const ChannelsPage = () => {
     }
   }, []);
 
-  // v6.0.7+ 加载挂起请求计数
+  // 加载挂起请求计数
   const loadSuspendedCount = useCallback(async () => {
     try {
       const [count, endpointCounts, manualCount, manualChannelCounts] = await Promise.all([
@@ -1570,7 +1569,7 @@ const ChannelsPage = () => {
     }
   }, [loadGroups, loadStorageStatus]);
 
-  // v6.2.11: 跳过健康检测快捷开关处理函数
+  // 跳过健康检测快捷开关处理函数
   const handleToggleEndpointSkipHealthCheck = useCallback(async (endpoint, skip) => {
     if (!endpoint?.id) return;
     try {
@@ -1594,7 +1593,7 @@ const ChannelsPage = () => {
     loadConfig();
   }, [loadConfig]);
 
-  // v6.0.7+ 定时获取挂起请求数量（页面加载时立即获取，之后每2秒轮询）
+  // 定时获取挂起请求数量（页面加载时立即获取，之后每2秒轮询）
   useEffect(() => {
     loadSuspendedCount();
     const interval = setInterval(loadSuspendedCount, 2000);
@@ -1620,7 +1619,7 @@ const ChannelsPage = () => {
   // SQLite 模式下监听 Wails 事件，实时刷新端点数据
   const isSqliteModeRef = useRef(false);
   useEffect(() => {
-    // v6.2.12: 只检查 storageType
+    // 只检查 storageType
     isSqliteModeRef.current = storageStatus?.storageType === 'sqlite';
   }, [storageStatus]);
 
@@ -1696,7 +1695,7 @@ const ChannelsPage = () => {
     };
   }, [expandedChannelName]);
 
-  // v6.0: SQLite 模式下“enabled”语义为“激活渠道”，会同时启用该渠道下所有端点
+  // SQLite 模式下“enabled”语义为“激活渠道”，会同时启用该渠道下所有端点
   const activeChannel = useMemo(() => {
     if (isSqliteMode) {
       return storageEndpoints.find(e => e.enabled)?.channel || '';
@@ -1822,12 +1821,12 @@ const ChannelsPage = () => {
   }, [channelSections.length]);
 
   // 计算统计数据
-  // v6.2: 冷却机制已移除
+  // 冷却机制已移除
   const isSkippedEndpoint = (e) => e?.skipHealthCheck || e?.skip_health_check;
   const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
   const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
 
-  // v6.2.4: 计算检测范围内的渠道数
+  // 计算检测范围内的渠道数
   const scopedChannelCount = useMemo(() => {
     if (!channelFailoverEnabled) {
       // 关闭渠道间转移：仅活跃渠道
@@ -1849,7 +1848,7 @@ const ChannelsPage = () => {
     ? {
         total: scopedDisplayEndpoints.length,
         skipped: scopedDisplayEndpoints.filter(e => e._health_scope && isSkippedEndpoint(e)).length,
-        // v6.2.5: 健康端点包含跳过检测的端点（与概览页面一致）
+        // 健康端点包含跳过检测的端点（与概览页面一致）
         healthy: scopedDisplayEndpoints.filter(e => e._health_scope && (isSkippedEndpoint(e) || (e.healthy && !isNeverCheckedEndpoint(e)))).length,
         unhealthy: scopedDisplayEndpoints.filter(e => e._health_scope && !isSkippedEndpoint(e) && !e.healthy && hasLastCheck(e) && !isNeverCheckedEndpoint(e)).length,
         unchecked: scopedDisplayEndpoints.filter(e => !e._health_scope || (!isSkippedEndpoint(e) && isNeverCheckedEndpoint(e))).length,
@@ -2095,7 +2094,7 @@ const ChannelsPage = () => {
 
       {/* 统计卡片 */}
       <div className="grid grid-cols-6 gap-4 mb-6">
-        {/* v6.2.4: 检测范围统计 */}
+        {/* 检测范围统计 */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-900">
             {scopedChannelCount}
@@ -2126,7 +2125,7 @@ const ChannelsPage = () => {
           <div className="text-2xl font-bold text-rose-600">{displayStats.unhealthy}</div>
           <div className="text-sm text-slate-500">异常端点</div>
         </div>
-        {/* v6.2.5: 未参与端点（failoverEnabled=false 或 不在检测范围内） */}
+        {/* 未参与端点（failoverEnabled=false 或 不在检测范围内） */}
         <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
           <div className="text-2xl font-bold text-slate-400">{displayStats.unchecked}</div>
           <div className="text-sm text-slate-500">未参与端点</div>
@@ -2164,7 +2163,7 @@ const ChannelsPage = () => {
         </div>
       )}
 
-      {/* v6.2.5: 全部端点失败警示 - 仅在启用渠道间故障转移时显示全局警示；未启用时在渠道卡片内显示 */}
+      {/* 全部端点失败警示 - 仅在启用渠道间故障转移时显示全局警示；未启用时在渠道卡片内显示 */}
       {channelFailoverEnabled && scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
         <div className="mb-6 p-4 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-3">
           <div className="p-2 bg-rose-100 rounded-full flex-shrink-0">
@@ -2217,7 +2216,7 @@ const ChannelsPage = () => {
         </div>
        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-          {channelSections.map((section, idx) => (
+          {channelSections.map((section) => (
             <ChannelCard
               key={section.name}
               channelName={section.name}

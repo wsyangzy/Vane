@@ -10,7 +10,7 @@ import (
 	"claude-request-forwarder/config"
 )
 
-// v6.2: 冷却机制已移除，TestEmergencyActivationCooldownScenarios 测试已删除
+// 冷却机制已移除，TestEmergencyActivationCooldownScenarios 测试已删除
 
 // TestEmergencyActivationEdgeCases 测试应急激活的边缘情况
 func TestEmergencyActivationEdgeCases(t *testing.T) {
@@ -48,7 +48,7 @@ func TestEmergencyActivationEdgeCases(t *testing.T) {
 }
 
 // TestEmergencyActivationComprehensiveAPI 测试应急激活的完整API响应
-// v4.0: 一端点一组架构
+// 一端点一组架构
 func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -63,7 +63,7 @@ func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 
 	gm := NewGroupManager(cfg)
 
-	// v4.0: 创建端点用于测试，每个端点自动成为一个独立的组
+	// 创建端点用于测试，每个端点自动成为一个独立的组
 	endpoints := []*Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -94,10 +94,10 @@ func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 		for _, group := range gm.groups {
 			group.IsActive = false
 			group.ManuallyPaused = false
-			// v6.2: CooldownUntil 已移除
+			// CooldownUntil 已移除
 		}
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		gm.ManualPauseGroup("healthy-endpoint", 0)
 		gm.ManualPauseGroup("unhealthy-endpoint", 0)
 
@@ -127,7 +127,7 @@ func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 	})
 
 	t.Run("测试强制激活后状态变化", func(t *testing.T) {
-		// v4.0: 强制激活unhealthy-endpoint（组名=端点名）
+		// 强制激活unhealthy-endpoint（组名=端点名）
 		err := gm.ManualActivateGroupWithForce("unhealthy-endpoint", true)
 		require.NoError(t, err, "应该成功强制激活")
 

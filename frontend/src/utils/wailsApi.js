@@ -128,7 +128,7 @@ export const subscribeToEvent = (eventName, callback) => {
 export const unsubscribeAll = () => {
   if (!WailsRuntime) return;
 
-  eventListeners.forEach((listeners, eventName) => {
+  eventListeners.forEach((listeners) => {
     listeners.forEach(({ unsubscribe }) => {
       if (typeof unsubscribe === 'function') {
         unsubscribe();
@@ -184,20 +184,20 @@ export const getEndpoints = async () => {
   const formattedEndpoints = endpoints.map(ep => ({
     name: ep.name,
     url: ep.url,
-    channel: ep.channel || '', // v5.0: 渠道标签
+    channel: ep.channel || '', // 渠道标签
     group: ep.group,
     priority: ep.priority,
     group_priority: ep.group_priority,
     group_is_active: ep.group_is_active,
     healthy: ep.healthy,
-    health_state: ep.health_state,         // v6.1: 健康状态枚举
-    skip_health_check: ep.skip_health_check, // v6.1: 跳过健康检查
+    health_state: ep.health_state,         // 健康状态枚举
+    skip_health_check: ep.skip_health_check, // 跳过健康检查
     status: ep.healthy ? 'healthy' : 'unhealthy',
     last_check: ep.last_check,
     response_time: ep.response_time_ms,
     consecutive_fail: ep.consecutive_fail,
     never_checked: !ep.last_check,
-    // v6.2.10: 错误信息字段
+    // 错误信息字段
     last_fail_code: ep.last_fail_code || 0,
     last_fail_reason: ep.last_fail_reason || ''
   }));
@@ -310,7 +310,7 @@ export const getGroups = async () => {
     WailsApp.GetKeysOverview().catch(() => ({ endpoints: [] })) // 容错：获取 keys 失败不影响主流程
   ]);
 
-  // v6.0: 组名 = 渠道(channel)（后端已在 GetEndpoints 中映射到 ep.group）
+  // 组名 = 渠道(channel)（后端已在 GetEndpoints 中映射到 ep.group）
   // 计算每个组的健康端点统计
   const groupHealthMap = new Map();
   endpointsData.forEach(ep => {
@@ -364,12 +364,12 @@ export const getGroups = async () => {
   // 转换为前端期望的格式
   const formattedGroups = groups.map(g => {
     const healthStats = groupHealthMap.get(g.name) || { total: 0, healthy: 0 };
-    // v6.0: 组名 = 渠道(channel)，聚合组内所有端点 tokens
+    // 组名 = 渠道(channel)，聚合组内所有端点 tokens
     const tokens = groupTokensMap.get(g.name) || [];
 
     return {
       name: g.name,
-      channel: g.channel,  // v5.0: 渠道名称
+      channel: g.channel,  // 渠道名称
       is_active: g.active,
       paused: g.paused,
       priority: g.priority,
@@ -402,7 +402,7 @@ export const getGroupsRaw = async () => {
 };
 
 // 检查是否启用渠道间故障转移
-// v6.2: 用于前端判断是否显示渠道切换器
+// 用于前端判断是否显示渠道切换器
 export const isInterChannelFailoverEnabled = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -556,8 +556,8 @@ export const getRequests = async (params = {}) => {
     input_tokens: r.input_tokens,
     output_tokens: r.output_tokens,
     cache_creation_tokens: r.cache_creation_tokens,
-    cache_creation_5m_tokens: r.cache_creation_5m_tokens,  // v5.0.1+
-    cache_creation_1h_tokens: r.cache_creation_1h_tokens,  // v5.0.1+
+    cache_creation_5m_tokens: r.cache_creation_5m_tokens,
+    cache_creation_1h_tokens: r.cache_creation_1h_tokens,
     cache_read_tokens: r.cache_read_tokens,
     duration_ms: r.response_time,
     duration: r.response_time,
@@ -708,7 +708,7 @@ export const getEndpointCosts = async () => {
 };
 
 // ============================================
-// v5.0+ 端点存储管理 API (SQLite)
+// 端点存储管理 API (SQLite)
 // ============================================
 
 /**
@@ -742,17 +742,17 @@ export const getEndpointRecords = async () => {
     channel: r.channel,
     name: r.name,
     url: r.url,
-    token: r.token,       // v5.0: 本地桌面应用，直接返回原始 Token
-    apiKey: r.api_key,    // v5.0: 本地桌面应用，直接返回原始 ApiKey
+    token: r.token,       // 本地桌面应用，直接返回原始 Token
+    apiKey: r.api_key,    // 本地桌面应用，直接返回原始 ApiKey
     tokenMasked: r.token_masked,
     apiKeyMasked: r.api_key_masked,
     headers: r.headers || {},
     priority: r.priority,
     failoverEnabled: r.failover_enabled,
-    // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+    // 跳过健康检查（部分中转商不支持健康检查端点）
     skip_health_check: r.skip_health_check,
     skipHealthCheck: r.skip_health_check,
-    // v6.1: 健康状态枚举（用于统计/展示）
+    // 健康状态枚举（用于统计/展示）
     health_state: r.health_state,
     healthState: r.health_state,
     never_checked: r.never_checked,
@@ -779,7 +779,7 @@ export const getEndpointRecords = async () => {
     cooldownUntil: r.cooldown_until,
     cooldown_reason: r.cooldown_reason,
     cooldownReason: r.cooldown_reason,
-    // v6.2.10: 错误信息
+    // 错误信息
     last_fail_code: r.last_fail_code || 0,
     last_fail_reason: r.last_fail_reason || ''
   }));
@@ -805,10 +805,10 @@ export const getEndpointRecord = async (name) => {
     headers: r.headers || {},
     priority: r.priority,
     failoverEnabled: r.failover_enabled,
-    // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+    // 跳过健康检查（部分中转商不支持健康检查端点）
     skip_health_check: r.skip_health_check,
     skipHealthCheck: r.skip_health_check,
-    // v6.1: 健康状态枚举（用于统计/展示）
+    // 健康状态枚举（用于统计/展示）
     health_state: r.health_state,
     healthState: r.health_state,
     never_checked: r.never_checked,
@@ -823,7 +823,7 @@ export const getEndpointRecord = async (name) => {
     healthy: r.healthy,
     lastCheck: r.last_check,
     responseTimeMs: r.response_time_ms,
-    // v6.2.10: 错误信息
+    // 错误信息
     last_fail_code: r.last_fail_code || 0,
     last_fail_reason: r.last_fail_reason || ''
   };
@@ -848,7 +848,7 @@ export const createEndpointRecord = async (input) => {
     token: input.token || '',
     api_key: input.apiKey || '',
     headers: input.headers || {},
-    // v6.2.1: 传 0 时让后端自动递增，不再强制转为 1
+    // 传 0 时让后端自动递增，不再强制转为 1
     priority: Number.isInteger(Number(input.priority)) ? Number(input.priority) : 1,
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
@@ -958,7 +958,7 @@ export const setEndpointFailoverEnabledByID = async (id, enabled) => {
   return { success: true };
 };
 
-// v6.2.11: 设置端点是否跳过健康检测
+// 设置端点是否跳过健康检测
 export const setEndpointSkipHealthCheckByID = async (id, skip) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -1036,7 +1036,7 @@ export const createChannel = async (input) => {
   const payload = {
     name: (input?.name || '').trim(),
     website: (input?.website || '').trim(),
-    // v6.2.1: 传 0 时让后端自动递增
+    // 传 0 时让后端自动递增
     priority: Number.isInteger(priority) ? priority : 0
   };
 
@@ -1098,7 +1098,7 @@ export const getEndpointsByChannel = async (channel) => {
 };
 
 // ============================================
-// v5.0+ 模型定价管理 API (SQLite)
+// 模型定价管理 API (SQLite)
 // ============================================
 
 /**
@@ -1248,7 +1248,7 @@ export const setDefaultModelPricing = async (modelName) => {
 };
 
 // ============================================
-// v5.1+ 系统设置管理 API (SQLite)
+// 系统设置管理 API (SQLite)
 // ============================================
 
 /**
@@ -1458,7 +1458,7 @@ export const checkPortAvailable = async (port) => {
 };
 
 // ============================================
-// v6.0.7+ 挂起请求计数 API
+// 挂起请求计数 API
 // ============================================
 
 /**

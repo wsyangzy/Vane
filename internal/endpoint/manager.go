@@ -24,22 +24,22 @@ import (
 )
 
 // EndpointStatus represents the health status of an endpoint
-// v6.2: CooldownUntil 和 CooldownReason 已移除，失败渠道通过手动"重试"按钮重新激活
+// CooldownUntil 和 CooldownReason 已移除，失败渠道通过手动"重试"按钮重新激活
 type EndpointStatus struct {
 	Healthy          bool
 	LastCheck        time.Time
 	ResponseTime     time.Duration
 	ConsecutiveFails int
 	NeverChecked     bool // 表示从未被检测过
-	// v6.1.0: 请求失败标记，与 Healthy（健康检查状态）分离
+	// 请求失败标记，与 Healthy（健康检查状态）分离
 	// - Healthy: 由健康检查更新，表示端点是否"可达"
 	// - RequestFailed: 由请求转发更新，表示端点是否"因请求失败而被标记"
 	// 端点可用条件：Healthy=true && RequestFailed=false
 	// 重置时机：loop_retry 触发时重置为 false
 	RequestFailed bool
-	// v6.2.9: 记录最后一次请求失败的 HTTP 状态码，用于 UI 显示
+	// 记录最后一次请求失败的 HTTP 状态码，用于 UI 显示
 	LastRequestFailCode int
-	// v6.2.10: 记录最后一次请求失败的原因，用于 UI 显示
+	// 记录最后一次请求失败的原因，用于 UI 显示
 	LastRequestFailReason string
 }
 
@@ -53,7 +53,7 @@ type Endpoint struct {
 // Manager manages endpoints and their health status
 type Manager struct {
 	endpoints    []*Endpoint
-	endpointsMu  sync.RWMutex // v5.0+: 保护 endpoints 切片的并发访问
+	endpointsMu  sync.RWMutex // 保护 endpoints 切片的并发访问
 	config       *config.Config
 	client       *http.Client
 	ctx          context.Context
@@ -69,7 +69,7 @@ type Manager struct {
 	// 故障转移回调（用于同步数据库）
 	// 参数: failedChannel 失败的渠道名, newChannel 新激活的渠道名
 	onFailoverTriggered func(failedChannel, newChannel string)
-	// v6.2: 健康检查回调防抖机制，避免并发健康检查触发多次回调
+	// 健康检查回调防抖机制，避免并发健康检查触发多次回调
 	healthCheckDebounceMu    sync.Mutex
 	healthCheckDebounceTimer *time.Timer
 	// 🛑 [手动重试] 故障转移排序起点（由用户选择的渠道）
@@ -94,7 +94,7 @@ func (m *Manager) UpdateChannelFailoverEnabled(enabled map[string]bool) {
 }
 
 // SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
-// v6.2.5: 仅更新指定渠道，不影响其他渠道。
+// 仅更新指定渠道，不影响其他渠道。
 func (m *Manager) SetSingleChannelFailoverEnabled(channel string, enabled bool) {
 	if m == nil || m.groupManager == nil {
 		return
@@ -193,7 +193,7 @@ func (m *Manager) Stop() {
 }
 
 // UpdateConfig updates the manager configuration (hot-reload)
-// v5.0 Desktop: 只更新配置参数，不重建端点（端点完全由数据库管理）
+// Desktop: 只更新配置参数，不重建端点（端点完全由数据库管理）
 func (m *Manager) UpdateConfig(cfg *config.Config) {
 	m.config = cfg
 
@@ -240,7 +240,7 @@ func (m *Manager) GetTokenForEndpoint(ep *Endpoint) string {
 		groupName = "Default"
 	}
 
-	// v5.0+: 使用读锁遍历 endpoints
+	// 使用读锁遍历 endpoints
 	m.endpointsMu.RLock()
 	defer m.endpointsMu.RUnlock()
 
@@ -286,7 +286,7 @@ func (m *Manager) GetApiKeyForEndpoint(ep *Endpoint) string {
 		groupName = "Default"
 	}
 
-	// v5.0+: 使用读锁遍历 endpoints
+	// 使用读锁遍历 endpoints
 	m.endpointsMu.RLock()
 	defer m.endpointsMu.RUnlock()
 
@@ -326,14 +326,14 @@ func (m *Manager) GetGroupManager() *GroupManager {
 }
 
 // SetEndpointLastRequestFailCode 设置端点最后一次请求失败的 HTTP 状态码
-// v6.2.9: 用于 UI 显示失败原因
-// v6.2.10: 新增 reason 参数，记录详细错误信息
+// 用于 UI 显示失败原因
+// 新增 reason 参数，记录详细错误信息
 func (m *Manager) SetEndpointLastRequestFailCode(endpointName string, httpCode int) {
 	m.SetEndpointLastRequestFail(endpointName, httpCode, "")
 }
 
 // SetEndpointLastRequestFail 设置端点最后一次请求失败的信息（状态码 + 原因）
-// v6.2.10: 用于 UI 显示详细失败原因
+// 用于 UI 显示详细失败原因
 func (m *Manager) SetEndpointLastRequestFail(endpointName string, httpCode int, reason string) {
 	if m == nil || endpointName == "" {
 		return
@@ -352,7 +352,7 @@ func (m *Manager) SetEndpointLastRequestFail(endpointName string, httpCode int, 
 }
 
 // SetEndpointSkipHealthCheck 设置端点是否跳过健康检测（运行时同步）
-// v6.2.11: 用于前端快捷开关
+// 用于前端快捷开关
 func (m *Manager) SetEndpointSkipHealthCheck(endpointKey string, skip bool) {
 	if m == nil || endpointKey == "" {
 		return

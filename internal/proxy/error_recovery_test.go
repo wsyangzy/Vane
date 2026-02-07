@@ -333,7 +333,7 @@ func TestErrorRecoveryManager_ClassifyError_SyscallErrors(t *testing.T) {
 	}{
 		{syscall.ECONNREFUSED, ErrorTypeNetwork},
 		{syscall.ECONNRESET, ErrorTypeNetwork},
-		{syscall.ETIMEDOUT, ErrorTypeConnectionTimeout}, // v6.2: 连接超时可重试，因为还没开始处理
+		{syscall.ETIMEDOUT, ErrorTypeConnectionTimeout}, // 连接超时可重试，因为还没开始处理
 		{syscall.ENETUNREACH, ErrorTypeNetwork},
 		{syscall.EHOSTUNREACH, ErrorTypeNetwork},
 	}

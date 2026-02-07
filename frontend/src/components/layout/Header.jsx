@@ -24,17 +24,17 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
   const tabs = [
     { name: 'overview', label: '概览' },
     { name: 'channels', label: '渠道管理' },
-    // v4.0: 组管理入口已移除，配置简化后不再需要独立的组管理页面
+    // 组管理入口已移除，配置简化后不再需要独立的组管理页面
     // { name: 'groups', label: '组管理' },
     { name: 'requests', label: '请求追踪' },
     { name: 'pricing', label: '基础定价' },
-    // v5.1: 新增日志页面
+    // 新增日志页面
     { name: 'logs', label: '系统日志' },
-    // v5.1: 配置改为设置
+    // 配置改为设置
     { name: 'settings', label: '设置' }
   ];
 
-  // v5.1+: 使用真实的代理网关状态
+  // 使用真实的代理网关状态
   const { running: proxyRunning = false, port: proxyPort = 0 } = proxyStatus;
 
   // 确定显示状态：优先使用代理网关真实状态，回退到连接状态

@@ -249,7 +249,7 @@ const useEndpointsData = (options = {}) => {
     }
   }, [loadData]);
 
-  // 激活端点（v4.0: 通过激活对应的组实现）
+  // 激活端点（通过激活对应的组实现）
   const activateEndpointGroup = useCallback(async (endpointName, groupName) => {
     if (!groupName) {
       throw new Error('端点配置错误');

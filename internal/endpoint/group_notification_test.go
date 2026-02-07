@@ -10,7 +10,7 @@ import (
 )
 
 // TestGroupChangeNotifications tests the group change notification system
-// v4.0: 适配一端点一组架构，组名 = 端点名
+// 适配一端点一组架构，组名 = 端点名
 func TestGroupChangeNotifications(t *testing.T) {
 	// Create test configuration
 	cfg := &config.Config{
@@ -27,7 +27,7 @@ func TestGroupChangeNotifications(t *testing.T) {
 	// Create group manager
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点，每个端点自动成为一个独立的组
+	// 创建测试端点，每个端点自动成为一个独立的组
 	// 组名就是端点名
 	endpoints := []*endpoint.Endpoint{
 		{
@@ -59,7 +59,7 @@ func TestGroupChangeNotifications(t *testing.T) {
 	ch1 := gm.SubscribeToGroupChanges()
 	ch2 := gm.SubscribeToGroupChanges()
 
-	// v4.0: 组名 = 端点名，激活 secondary 端点对应的组
+	// 组名 = 端点名，激活 secondary 端点对应的组
 	err := gm.ManualActivateGroup("secondary")
 	if err != nil {
 		t.Fatalf("Failed to activate secondary group: %v", err)
@@ -100,7 +100,7 @@ func TestGroupChangeNotifications(t *testing.T) {
 	// Test unsubscribe
 	gm.UnsubscribeFromGroupChanges(ch1)
 
-	// Activate another group (v4.0: 组名 = 端点名)
+	// Activate another group (组名 = 端点名)
 	err = gm.ManualActivateGroup("primary")
 	if err != nil {
 		t.Fatalf("Failed to activate primary group: %v", err)
@@ -131,7 +131,7 @@ func TestGroupChangeNotifications(t *testing.T) {
 }
 
 // TestGroupCooldownNotifications tests notifications when groups enter cooldown
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupCooldownNotifications(t *testing.T) {
 	// Create test configuration with short cooldown for testing
 	cfg := &config.Config{
@@ -147,7 +147,7 @@ func TestGroupCooldownNotifications(t *testing.T) {
 
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -204,7 +204,7 @@ func TestGroupCooldownNotifications(t *testing.T) {
 }
 
 // TestGroupPauseResumeNotifications tests pause and resume notifications
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupPauseResumeNotifications(t *testing.T) {
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -219,7 +219,7 @@ func TestGroupPauseResumeNotifications(t *testing.T) {
 
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -308,7 +308,7 @@ func TestGroupPauseResumeNotifications(t *testing.T) {
 }
 
 // TestGroupNotificationConcurrency tests notification system under concurrent access
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupNotificationConcurrency(t *testing.T) {
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -323,7 +323,7 @@ func TestGroupNotificationConcurrency(t *testing.T) {
 
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点，每个端点自动成为一个组
+	// 创建测试端点，每个端点自动成为一个组
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -379,7 +379,7 @@ func TestGroupNotificationConcurrency(t *testing.T) {
 	}
 
 	// Perform concurrent group operations
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	go func() {
 		for i := 0; i < 5; i++ {
 			time.Sleep(100 * time.Millisecond)
@@ -407,7 +407,7 @@ func TestGroupNotificationConcurrency(t *testing.T) {
 }
 
 // TestGroupNotificationMemoryLeak tests for potential memory leaks in notification system
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupNotificationMemoryLeak(t *testing.T) {
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -422,7 +422,7 @@ func TestGroupNotificationMemoryLeak(t *testing.T) {
 
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -460,7 +460,7 @@ func TestGroupNotificationMemoryLeak(t *testing.T) {
 	ch := gm.SubscribeToGroupChanges()
 	defer gm.UnsubscribeFromGroupChanges(ch)
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	err := gm.ManualActivateGroup("endpoint1")
 	if err != nil {
 		t.Fatalf("Failed to activate group: %v", err)
@@ -477,7 +477,7 @@ func TestGroupNotificationMemoryLeak(t *testing.T) {
 }
 
 // TestGroupNotificationBuffering tests notification buffering behavior
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupNotificationBuffering(t *testing.T) {
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -492,7 +492,7 @@ func TestGroupNotificationBuffering(t *testing.T) {
 
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -523,7 +523,7 @@ func TestGroupNotificationBuffering(t *testing.T) {
 	defer gm.UnsubscribeFromGroupChanges(ch)
 
 	// Send rapid group changes (faster than consumer)
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	for i := 0; i < 10; i++ {
 		if i%2 == 0 {
 			gm.ManualActivateGroup("endpoint1")
@@ -553,7 +553,7 @@ done:
 }
 
 // TestGroupNotificationErrorConditions tests error conditions in notification system
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestGroupNotificationErrorConditions(t *testing.T) {
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -578,7 +578,7 @@ func TestGroupNotificationErrorConditions(t *testing.T) {
 	gm.UnsubscribeFromGroupChanges(fakeCh) // Should not panic
 
 	// Test notification with no subscribers
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -595,7 +595,7 @@ func TestGroupNotificationErrorConditions(t *testing.T) {
 	gm.UpdateGroups(endpoints)
 
 	// This should not block or panic even with no subscribers
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	err := gm.ManualActivateGroup("endpoint1")
 	if err != nil {
 		t.Errorf("Manual activation should succeed even with no subscribers: %v", err)
@@ -644,7 +644,7 @@ func BenchmarkGroupNotificationBroadcast(b *testing.B) {
 
 	gm := endpoint.NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点
+	// 创建测试端点
 	endpoints := []*endpoint.Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -668,7 +668,7 @@ func BenchmarkGroupNotificationBroadcast(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// v4.0: 组名 = 端点名
+		// 组名 = 端点名
 		gm.ManualActivateGroup("endpoint1")
 	}
 

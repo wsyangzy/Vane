@@ -1,6 +1,6 @@
 // app_api_group.go - 组管理 API (Wails Bindings)
 // 包含组状态查询、激活、暂停、恢复等功能
-// 2025-12-06 10:49:09 v5.0: 激活端点时同步到数据库
+// 激活端点时同步到数据库
 
 package main
 
@@ -17,7 +17,7 @@ import (
 // GroupInfo 组信息
 type GroupInfo struct {
 	Name             string `json:"name"`
-	Channel          string `json:"channel"` // v5.0: 渠道名称（从端点配置获取）
+	Channel          string `json:"channel"` // 渠道名称（从端点配置获取）
 	Active           bool   `json:"active"`
 	Paused           bool   `json:"paused"`
 	Priority         int    `json:"priority"`
@@ -101,7 +101,7 @@ func (a *App) GetNextAvailableChannel(excludeChannel string) (string, error) {
 }
 
 // ActivateGroup 激活指定组
-// v6.0: 组名 = 渠道(channel)（SQLite 模式）；未配置 channel 时回退为端点名（YAML 模式兼容）
+// 组名 = 渠道(channel)（SQLite 模式）；未配置 channel 时回退为端点名（YAML 模式兼容）
 func (a *App) ActivateGroup(name string) error {
 	a.mu.RLock()
 	manager := a.endpointManager
@@ -116,7 +116,7 @@ func (a *App) ActivateGroup(name string) error {
 	// 🛑 [手动重试] 记录故障转移排序起点（用户选择的渠道）
 	manager.SetFailoverStartChannel(name)
 
-	// v5.0+: 如果有 endpointService，同步到数据库
+	// 如果有 endpointService，同步到数据库
 	if endpointService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -165,14 +165,14 @@ func (a *App) PauseGroup(name string) error {
 		autoSwitchEnabled = cfg.Failover.Enabled
 	}
 
-	// v6.2+: 暂停/恢复为"无限期直到手动恢复"，且在 SQLite 模式下持久化到 channels.failover_enabled
+	// 暂停/恢复为"无限期直到手动恢复"，且在 SQLite 模式下持久化到 channels.failover_enabled
 	if channelService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
 		var next string
 		if wasActive && autoSwitchEnabled {
-			// v6.2.5: 移除全量同步，运行时状态应该已经是准确的
+			// 移除全量同步，运行时状态应该已经是准确的
 			var err error
 			next, err = manager.SelectNextAvailableChannel(name)
 			if err != nil || next == "" {
@@ -183,7 +183,7 @@ func (a *App) PauseGroup(name string) error {
 		if err := channelService.SetFailoverEnabled(ctx, name, false); err != nil {
 			return err
 		}
-		// v6.2.5: 仅更新单个渠道，避免影响其他渠道状态
+		// 仅更新单个渠道，避免影响其他渠道状态
 		manager.SetSingleChannelFailoverEnabled(name, false)
 		a.emitEndpointUpdate()
 
@@ -212,7 +212,7 @@ func (a *App) PauseGroup(name string) error {
 }
 
 // IsInterChannelFailoverEnabled 检查是否启用渠道间故障转移
-// v6.2: 前端用于判断是否显示渠道切换器
+// 前端用于判断是否显示渠道切换器
 func (a *App) IsInterChannelFailoverEnabled() bool {
 	a.mu.RLock()
 	manager := a.endpointManager
@@ -243,7 +243,7 @@ func (a *App) ResumeGroup(name string) error {
 		if err := channelService.SetFailoverEnabled(ctx, name, true); err != nil {
 			return err
 		}
-		// v6.2.5: 仅更新单个渠道，避免影响其他渠道状态
+		// 仅更新单个渠道，避免影响其他渠道状态
 		manager.SetSingleChannelFailoverEnabled(name, true)
 		a.emitEndpointUpdate()
 		return nil

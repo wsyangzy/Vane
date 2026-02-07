@@ -1,5 +1,5 @@
 // failover.go - 故障转移相关功能
-// v6.2: 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
+// 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
 
 package endpoint
 
@@ -28,7 +28,7 @@ func (m *Manager) collectFailoverCandidates(excludeChannel string) []groupCandid
 
 // collectFailoverCandidatesExcluding 收集故障转移候选渠道
 // exclude: 要排除的渠道名称集合
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}) []groupCandidate {
 	// 说明：
 	// - 可用性判定不依赖"响应时间快慢"，而依赖：未暂停、渠道内至少存在一个可用端点
@@ -67,11 +67,11 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 			ep.mutex.RLock()
 			isHealthy := ep.Status.Healthy
 			neverChecked := ep.Status.NeverChecked
-			isRequestFailed := ep.Status.RequestFailed // v6.1.0: 请求失败标记
+			isRequestFailed := ep.Status.RequestFailed // 请求失败标记
 			rt := ep.Status.ResponseTime
 			ep.mutex.RUnlock()
 
-			// v6.1.0: 端点可用条件 = (健康 || 未检查) && 未被请求失败标记
+			// 端点可用条件 = (健康 || 未检查) && 未被请求失败标记
 			if !(isHealthy || neverChecked) || isRequestFailed {
 				continue
 			}
@@ -121,7 +121,7 @@ func sortFailoverCandidates(strategy string, candidates []groupCandidate) {
 		})
 	default:
 		// priority（或未知策略）：
-		// 以渠道优先级（GroupInfo.Priority，v6.1+ 为 channel.priority）为主，保持稳定
+		// 以渠道优先级（GroupInfo.Priority，为 channel.priority）为主，保持稳定
 		sort.Slice(candidates, func(i, j int) bool {
 			if candidates[i].priority != candidates[j].priority {
 				return candidates[i].priority < candidates[j].priority
@@ -208,7 +208,7 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 		return "", fmt.Errorf("配置未初始化")
 	}
 
-	// v6.2.7: 在函数开头检查 loopCount 限制，防止绕过
+	// 在函数开头检查 loopCount 限制，防止绕过
 	// 当启用循环重试且 loopCount > 0 时，说明已经进入循环重试模式
 	if m.config.FailoverV2.ShouldLoopRetryOnExhausted() && loopCount > 0 {
 		maxLoops := m.config.FailoverV2.GetMaxLoops()
@@ -228,7 +228,7 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 
 	candidates := m.collectFailoverCandidatesExcluding(exclude)
 	if len(candidates) == 0 {
-		// v6.2: 使用 LoopRetry 配置替代原有的 RecoveryStrategy 判断
+		// 使用 LoopRetry 配置替代原有的 RecoveryStrategy 判断
 		if m.config.FailoverV2.ShouldLoopRetryOnExhausted() {
 			// 检查循环次数限制
 			maxLoops := m.config.FailoverV2.GetMaxLoops()
@@ -238,7 +238,7 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 			}
 
 			// 循环重试策略：当"所有渠道都尝试过"时，允许回到最高优先级渠道继续尝试
-			// v6.2.7: 循环重试时，重置所有端点健康状态，允许重新选择
+			// 循环重试时，重置所有端点健康状态，允许重新选择
 			m.resetAllEndpointsHealthForLoopRetry()
 			candidates = m.collectFailoverCandidatesExcluding(nil)
 			if len(candidates) == 0 {
@@ -297,7 +297,7 @@ func (m *Manager) TriggerRequestFailoverWithFailedEndpointsExcludingChannels(fai
 // TriggerRequestFailoverWithLoopCount 触发请求级故障转移（跨渠道切换，带循环计数限制）。
 // excludeChannels: 本次请求链路中已尝试过的渠道（方案B：不回访，避免循环）。
 // loopCount: 当前已完成的循环轮数（从 0 开始）。
-// v6.2: 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
+// 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
 func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []string, excludeChannels []string, reason string, loopCount int) (string, error) {
 	slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] 触发渠道间故障转移，原因: %s", reason))
 
@@ -353,10 +353,10 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		}
 	}
 
-	// 2) v6.2: 冷却机制已移除，标记失败端点为不健康
-	// v6.2.6: 同时设置 NeverChecked = false，防止 neverChecked 端点被误认为"可用"而导致无限循环
-	// v6.2.9: 合并日志输出，避免循环重试时日志膨胀
-	// v6.1.0: 设置 RequestFailed = true，与 Healthy（健康检查状态）分离
+	// 2) 冷却机制已移除，标记失败端点为不健康
+	// 同时设置 NeverChecked = false，防止 neverChecked 端点被误认为"可用"而导致无限循环
+	// 合并日志输出，避免循环重试时日志膨胀
+	// 设置 RequestFailed = true，与 Healthy（健康检查状态）分离
 	var markedEndpoints []string
 	for _, name := range uniqueNames {
 		ep := m.GetEndpointByNameAny(name)
@@ -365,7 +365,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		}
 		ep.mutex.Lock()
 		ep.Status.Healthy = false
-		ep.Status.RequestFailed = true  // v6.1.0: 标记为请求失败，健康检查不会覆盖此状态
+		ep.Status.RequestFailed = true  // 标记为请求失败，健康检查不会覆盖此状态
 		ep.Status.NeverChecked = false // 关键修复：防止 neverChecked 端点在故障转移候选中被误判为可用
 		ep.mutex.Unlock()
 		markedEndpoints = append(markedEndpoints, name)
@@ -376,7 +376,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 
 	// 3) 选择并激活下一个可用渠道（由 strategy + 可用性共同决定）
 	// 方案B：不回访已尝试渠道；且渠道间切换顺序固定按优先级
-	// v6.2: 使用带循环计数的方法，支持 MaxLoops 限制
+	// 使用带循环计数的方法，支持 MaxLoops 限制
 	newChannel, err := m.SelectNextAvailableChannelExcludingWithLoopCount(excludeChannels, loopCount)
 	if err != nil {
 		slog.Error("❌ [渠道间故障转移] 没有可用的故障转移渠道")
@@ -400,7 +400,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		go m.onFailoverTriggered(failedChannel, newChannel)
 	}
 
-	// 5) v6.2: 使用防抖机制触发前端刷新
+	// 5) 使用防抖机制触发前端刷新
 	m.triggerHealthCheckCompleteDebounced()
 
 	return newChannel, nil
@@ -411,16 +411,16 @@ func (m *Manager) TriggerRequestFailover(failedEndpointName string, reason strin
 	return m.TriggerRequestFailoverWithFailedEndpoints([]string{failedEndpointName}, reason)
 }
 
-// v6.2: 以下冷却相关函数已移除
+// 以下冷却相关函数已移除
 // - IsEndpointInCooldown
 // - ClearEndpointCooldown
 // - GetEndpointCooldownInfo
 // 失败渠道通过手动"重试"按钮重新激活
 
 // resetAllEndpointsHealthForLoopRetry 循环重试时重置所有端点健康状态
-// v6.2.7: 循环重试策略下，允许对已失败的端点进行重新尝试
-// v6.2.10: 移除智能重置逻辑，统一重置所有端点（用户可通过 UI 查看失败原因）
-// v6.1.0: 同时重置 RequestFailed 标记
+// 循环重试策略下，允许对已失败的端点进行重新尝试
+// 移除智能重置逻辑，统一重置所有端点（用户可通过 UI 查看失败原因）
+// 同时重置 RequestFailed 标记
 func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
 	if m == nil || m.groupManager == nil {
 		return
@@ -449,7 +449,7 @@ func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
 			ep.mutex.Lock()
 			if !ep.Status.Healthy || ep.Status.RequestFailed {
 				ep.Status.Healthy = true
-				ep.Status.RequestFailed = false // v6.1.0: 重置请求失败标记
+				ep.Status.RequestFailed = false // 重置请求失败标记
 				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
 				// 注意：不清除 LastRequestFailCode 和 LastRequestFailReason，保留给 UI 显示
 				resetCount++

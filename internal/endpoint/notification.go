@@ -60,7 +60,7 @@ func (m *Manager) ManualActivateGroup(groupName string) error {
 		return err
 	}
 
-	// v6.2: 冷却机制已移除
+	// 冷却机制已移除
 
 	// Notify web interface about group change
 	go m.notifyWebGroupChange("group_manually_activated", groupName)
@@ -75,7 +75,7 @@ func (m *Manager) ManualActivateGroupWithForce(groupName string, force bool) err
 		return err
 	}
 
-	// v6.2: 冷却机制已移除
+	// 冷却机制已移除
 
 	// Notify web interface about group change
 	if force {

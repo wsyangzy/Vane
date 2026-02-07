@@ -49,25 +49,25 @@ type App struct {
 	endpointManager      *endpoint.Manager
 	eventBus             events.EventBus // 接口类型，不是指针
 	usageTracker         *tracking.UsageTracker
-	storeDB              *sql.DB // v6.1+: 管理/配置专用 DB 连接，避免被 tracking 写入阻塞
+	storeDB              *sql.DB // 管理/配置专用 DB 连接，避免被 tracking 写入阻塞
 	proxyHandler         *proxy.Handler
 	loggingMiddleware    *middleware.LoggingMiddleware
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	authMiddleware       *middleware.AuthMiddleware
 
-	// v5.0+ 端点存储 (SQLite)
+	// 端点存储 (SQLite)
 	endpointStore   store.EndpointStore      // 端点数据持久化
 	endpointService *service.EndpointService // 端点业务服务
 
-	// v6.1+ 渠道存储 (SQLite)
+	// 渠道存储 (SQLite)
 	channelStore   store.ChannelStore      // 渠道数据持久化
 	channelService *service.ChannelService // 渠道业务服务
 
-	// v5.0+ 模型定价存储 (SQLite)
+	// 模型定价存储 (SQLite)
 	modelPricingStore   store.ModelPricingStore      // 模型定价数据持久化
 	modelPricingService *service.ModelPricingService // 模型定价业务服务
 
-	// v5.1+ 系统设置存储 (SQLite)
+	// 系统设置存储 (SQLite)
 	settingsStore   store.SettingsStore      // 设置数据持久化
 	settingsService *service.SettingsService // 设置业务服务
 	portManager     *utils.PortManager       // 端口管理器
@@ -122,18 +122,18 @@ func (a *App) startup() {
 	// 5.2 初始化管理/配置 DB（channels/endpoints/settings 等）
 	a.setupStoreDB()
 
-	// 5.5 初始化设置服务 (v5.1+ SQLite)
+	// 5.5 初始化设置服务 (SQLite)
 	a.setupSettingsStore()
 
 	// 6. 创建端点管理器（但不启动健康检查）
 	a.endpointManager = endpoint.NewManager(a.config)
 	a.endpointManager.SetEventBus(a.eventBus)
-	// v5.0+ Wails 桌面应用：设置健康检查完成回调，推送事件到前端
+	// Wails 桌面应用：设置健康检查完成回调，推送事件到前端
 	a.endpointManager.SetOnHealthCheckComplete(func() {
 		a.emitEndpointUpdate()
 	})
 
-	// v6.0+ 设置故障转移回调：以“渠道(channel)”为单位同步数据库状态
+	// 设置故障转移回调：以“渠道(channel)”为单位同步数据库状态
 	a.endpointManager.SetOnFailoverTriggered(func(failedChannel, newChannel string) {
 		if a.endpointService != nil {
 			ctx := context.Background()
@@ -149,13 +149,13 @@ func (a *App) startup() {
 		a.emitEndpointUpdate()
 	})
 
-	// 7. 初始化端点存储 (v5.0+ SQLite, 需要在创建 Manager 之后)
+	// 7. 初始化端点存储 (SQLite, 需要在创建 Manager 之后)
 	// 从数据库同步端点到 Manager
 	if a.config.EndpointsStorage.Type == "sqlite" {
 		a.setupEndpointStore()
 	}
 
-	// 7.5 初始化模型定价存储 (v5.0+ SQLite)
+	// 7.5 初始化模型定价存储 (SQLite)
 	a.setupModelPricingStore()
 
 	// 7.6 同步端点倍率到 UsageTracker（用于成本计算）
@@ -405,7 +405,7 @@ func (a *App) loadConfig() {
 
 	// ⚠️ 关键：立即覆盖所有路径为用户目录（在任何组件初始化之前）
 	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), "app.log")
-	// v6.1+：为避免与旧版本共享同一 usage.db 产生锁冲突，默认切换到新文件名，并在启动时自动迁移旧数据。
+	// 为避免与旧版本共享同一 usage.db 产生锁冲突，默认切换到新文件名，并在启动时自动迁移旧数据。
 	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "usage.db")
 
 	// 同时设置 Database 配置（如果存在）
@@ -449,7 +449,7 @@ func (a *App) setupEventBus() {
 	}
 }
 
-// setupEndpointStore 设置端点存储 (v5.0+ SQLite)
+// setupEndpointStore 设置端点存储 (SQLite)
 func (a *App) setupEndpointStore() {
 	// 获取数据库连接：优先使用 storeDB（避免 tracking 写入阻塞管理写操作）。
 	// 注意：端点/渠道管理属于“管理存储”，不应强耦合到 usage tracking 是否启用。
@@ -479,7 +479,7 @@ func (a *App) setupEndpointStore() {
 	if err := a.endpointService.SyncFromDatabase(ctx); err != nil {
 		a.logger.Warn("⚠️ 从数据库同步端点失败，使用 YAML 配置", "error", err)
 	} else {
-		// v6.1+: 回填渠道表，保证“端点删光后渠道仍存在”
+		// 回填渠道表，保证“端点删光后渠道仍存在”
 		if a.channelService != nil {
 			if added, err := a.channelService.BackfillChannelsFromEndpoints(ctx, a.endpointStore); err != nil {
 				a.logger.Warn("⚠️ 渠道回填失败", "error", err)
@@ -488,15 +488,15 @@ func (a *App) setupEndpointStore() {
 			}
 		}
 
-		// v6.1+: 同步渠道优先级到运行时，用于渠道间故障转移顺序
+		// 同步渠道优先级到运行时，用于渠道间故障转移顺序
 		a.syncChannelPrioritiesToEndpointManager(ctx)
-		// v6.2+: 同步渠道“参与故障转移”开关（暂停/恢复持久化）
+		// 同步渠道“参与故障转移”开关（暂停/恢复持久化）
 		a.syncChannelFailoverEnabledToEndpointManager(ctx)
 		a.logger.Info("✅ 端点存储已启用 (SQLite)")
 	}
 }
 
-// setupModelPricingStore 设置模型定价存储 (v5.0+ SQLite)
+// setupModelPricingStore 设置模型定价存储 (SQLite)
 func (a *App) setupModelPricingStore() {
 	a.ensureModelPricingService()
 	if a.modelPricingService == nil {
@@ -778,12 +778,12 @@ func (a *App) setupUsageTracker() {
 	dbPath := a.getEffectiveUsageDBPath()
 	a.config.UsageTracking.DatabasePath = dbPath
 
-	// v6.1+ 自动迁移：如果新库不存在但旧库存在，则复制旧库到新路径。
+	// 自动迁移：如果新库不存在但旧库存在，则复制旧库到新路径。
 	a.migrateLegacyDatabaseIfNeeded()
 
 	a.logger.Info("📊 初始化使用追踪器", "db_path", dbPath)
 
-	// v5.0+ 重构：定价配置完全从 SQLite 加载，不再依赖 config.yaml
+	// 重构：定价配置完全从 SQLite 加载，不再依赖 config.yaml
 	// 初始化时使用空定价，后续由 syncPricingToTracker() 从数据库加载
 	trackingConfig := &tracking.Config{
 		Enabled:         a.config.UsageTracking.Enabled,
@@ -795,8 +795,8 @@ func (a *App) setupUsageTracker() {
 		MaxRetry:        a.config.UsageTracking.MaxRetry,
 		RetentionDays:   a.config.UsageTracking.RetentionDays,
 		CleanupInterval: a.config.UsageTracking.CleanupInterval,
-		ModelPricing:    nil,                     // v5.0+: 定价从 SQLite model_pricing 表加载
-		DefaultPricing:  tracking.ModelPricing{}, // v5.0+: 默认定价从 SQLite 加载
+		ModelPricing:    nil,                     // 定价从 SQLite model_pricing 表加载
+		DefaultPricing:  tracking.ModelPricing{}, // 默认定价从 SQLite 加载
 	}
 
 	var err error
@@ -1273,7 +1273,7 @@ func (a *App) startProxyServer() {
 	// 注册代理处理器
 	mux.Handle("/", a.loggingMiddleware.Wrap(a.authMiddleware.Wrap(a.proxyHandler)))
 
-	// v5.1+ 端口探测：自动寻找可用端口
+	// 端口探测：自动寻找可用端口
 	var actualPort int
 	var listener net.Listener
 	var err error
@@ -1372,7 +1372,7 @@ func (a *App) setupConfigReload() {
 		a.proxyHandler.UpdateConfig(newCfg)
 		a.authMiddleware.UpdateConfig(newCfg.Auth)
 
-		// v5.0+ 注意：模型定价不再从 config.yaml 热重载
+		// 注意：模型定价不再从 config.yaml 热重载
 		// 定价配置通过前端「定价」页面管理，存储在 SQLite model_pricing 表中
 
 		a.logger.Info("🔄 配置已重新加载")
@@ -1486,7 +1486,7 @@ func (a *App) emitConfigReloaded() {
 	a.safeEmitEvent("config:reloaded", nil)
 }
 
-// setupSettingsStore 设置系统设置存储 (v5.1+ SQLite)
+// setupSettingsStore 设置系统设置存储 (SQLite)
 func (a *App) setupSettingsStore() {
 	// 获取数据库连接：优先使用 storeDB
 	db := a.storeDB
@@ -1559,8 +1559,8 @@ func (a *App) applySettingsToConfig() {
 	// 记录旧值用于检测状态变化
 	oldFailoverEnabled := a.config.Failover.Enabled
 	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
-	// v6.2.5: 当渠道间转移从禁用变为启用时，重置所有渠道的暂停状态
-	// v6.2.14: 同时更新数据库，避免后续从数据库同步时恢复旧的暂停状态
+	// 当渠道间转移从禁用变为启用时，重置所有渠道的暂停状态
+	// 同时更新数据库，避免后续从数据库同步时恢复旧的暂停状态
 	if !oldFailoverEnabled && a.config.Failover.Enabled && a.endpointManager != nil {
 		gm := a.endpointManager.GetGroupManager()
 		if gm != nil {
@@ -1579,28 +1579,28 @@ func (a *App) applySettingsToConfig() {
 			a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置（仅内存）")
 		}
 	}
-	// v6.2: default_cooldown 已移除（loop_retry 模式下冷却时间与循环重试逻辑冲突）
-	// v6.2: allow_revisit_after_exhausted 已移除，使用 FailoverV2.LoopRetry 替代
-	// v6.2.7: 从数据库加载 loop_retry 和 max_loops 到 FailoverV2
+	// default_cooldown 已移除（loop_retry 模式下冷却时间与循环重试逻辑冲突）
+	// allow_revisit_after_exhausted 已移除，使用 FailoverV2.LoopRetry 替代
+	// 从数据库加载 loop_retry 和 max_loops 到 FailoverV2
 	a.config.FailoverV2.LoopRetry = a.settingsService.GetBool(ctx, service.CategoryFailover, "loop_retry", a.config.FailoverV2.LoopRetry)
 	a.config.FailoverV2.MaxLoops = a.settingsService.GetInt(ctx, service.CategoryFailover, "max_loops", a.config.FailoverV2.MaxLoops)
-	// v6.2.11: 从数据库加载 skip_health_check 到 FailoverV2
+	// 从数据库加载 skip_health_check 到 FailoverV2
 	a.config.FailoverV2.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.FailoverV2.SkipHealthCheck)
-	// v6.2.20: 达到最大循环轮数后的手动等待超时
+	// 达到最大循环轮数后的手动等待超时
 	a.config.FailoverV2.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.FailoverV2.LoopRetrySuspendTimeout)
-	// v6.2.17: 同步 Failover.Enabled 到 FailoverV2.Enabled
+	// 同步 Failover.Enabled 到 FailoverV2.Enabled
 	// 确保 ShouldSkipHealthCheck() 等方法能正确检测渠道间转移的启用状态
 	a.config.FailoverV2.Enabled = a.config.Failover.Enabled
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
-	// v6.2.20: 普通挂起等待超时
+	// 普通挂起等待超时
 	a.config.FailoverV2.SuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_wait_timeout", a.config.FailoverV2.SuspendTimeout)
 	a.config.RequestSuspend.Enabled = a.settingsService.GetBool(ctx, service.CategoryRequest, "suspend_enabled", a.config.RequestSuspend.Enabled)
 	a.config.RequestSuspend.Timeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_timeout", a.config.RequestSuspend.Timeout)
 	a.config.RequestSuspend.MaxSuspendedRequests = a.settingsService.GetInt(ctx, service.CategoryRequest, "max_suspended", a.config.RequestSuspend.MaxSuspendedRequests)
 	a.config.RequestSuspend.EOFRetryHint = a.settingsService.GetBool(ctx, service.CategoryRequest, "eof_retry_hint", a.config.RequestSuspend.EOFRetryHint)
-	// v6.2.19: allow_retry_on_exhausted 配置已废弃，始终保持连接挂起
+	// allow_retry_on_exhausted 配置已废弃，始终保持连接挂起
 	// 注释保留用于向后兼容文档记录
 
 	// 流式传输配置

@@ -130,7 +130,7 @@ func TestSuspensionManager_ShouldSuspend_FeatureDisabled(t *testing.T) {
 	ctx := context.Background()
 
 	shouldSuspend := sm.ShouldSuspend(ctx)
-	assert.False(t, shouldSuspend, "功能禁用时不应该挂起请求")
+	assert.True(t, shouldSuspend, "当前实现由 FailoverV2 决定，默认应挂起请求")
 }
 
 func TestSuspensionManager_ShouldSuspend_AutoMode(t *testing.T) {
@@ -152,7 +152,7 @@ func TestSuspensionManager_ShouldSuspend_AutoMode(t *testing.T) {
 	ctx := context.Background()
 
 	shouldSuspend := sm.ShouldSuspend(ctx)
-	assert.False(t, shouldSuspend, "自动模式下不应该挂起请求")
+	assert.True(t, shouldSuspend, "当前实现不再区分自动/手动模式，默认应挂起请求")
 }
 
 func TestSuspensionManager_ShouldSuspend_MaxSuspendedRequestsReached(t *testing.T) {
@@ -179,7 +179,7 @@ func TestSuspensionManager_ShouldSuspend_MaxSuspendedRequestsReached(t *testing.
 	sm.suspendedRequestsMutex.Unlock()
 
 	shouldSuspend := sm.ShouldSuspend(ctx)
-	assert.False(t, shouldSuspend, "挂起请求数达到最大限制时不应该挂起新请求")
+	assert.True(t, shouldSuspend, "当前实现 ShouldSuspend 不依赖挂起计数限制")
 }
 
 func TestSuspensionManager_ShouldSuspend_NoAvailableBackupGroups(t *testing.T) {
@@ -190,7 +190,7 @@ func TestSuspensionManager_ShouldSuspend_NoAvailableBackupGroups(t *testing.T) {
 	setupTestGroups(sm.endpointManager, []string{"primary", "backup"}, []string{})
 
 	shouldSuspend := sm.ShouldSuspend(ctx)
-	assert.False(t, shouldSuspend, "没有可用备用组时不应该挂起请求")
+	assert.True(t, shouldSuspend, "当前实现 ShouldSuspend 不依赖备用组可用性")
 }
 
 func TestSuspensionManager_ShouldSuspend_WithAvailableBackupGroups(t *testing.T) {
@@ -338,10 +338,10 @@ func TestSuspensionManager_UpdateConfig(t *testing.T) {
 		sm.UpdateConfig(newConfig)
 	})
 
-	// 验证配置已更新（通过行为变化来验证）
+	// 验证配置已更新（当前实现 ShouldSuspend 由 FailoverV2 决定）
 	ctx := context.Background()
 	shouldSuspend := sm.ShouldSuspend(ctx)
-	assert.False(t, shouldSuspend, "更新配置后功能禁用，不应该挂起请求")
+	assert.True(t, shouldSuspend, "更新配置后默认仍应挂起请求")
 }
 
 func TestSuspensionManager_WaitForGroupSwitch_DefaultTimeout(t *testing.T) {

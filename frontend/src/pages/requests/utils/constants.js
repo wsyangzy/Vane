@@ -3,7 +3,7 @@
 // 2025-11-28 17:02:47
 // ============================================
 
-// 状态选项配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint, v6.2.2+ 新增 partial_recovery)
+// 状态选项配置 (状态机, 新增 awaiting_endpoint, 新增 partial_recovery)
 export const STATUS_OPTIONS = {
   all: '全部状态',
   pending: '等待中',
@@ -31,7 +31,7 @@ export const PAGINATION_CONFIG = {
   PAGE_SIZE_OPTIONS: [10, 20, 50, 100]
 };
 
-// 默认筛选器状态（v4.0: 移除group筛选）
+// 默认筛选器状态（移除group筛选）
 export const DEFAULT_FILTERS = {
   status: 'all',
   model: '',
@@ -57,7 +57,7 @@ export const TABLE_COLUMNS = [
   { id: 'cost', label: '成本', alwaysVisible: false, width: 'auto', align: 'right' }
 ];
 
-// 默认可见的列（v4.0: 添加缓存创建/读取列）
+// 默认可见的列（添加缓存创建/读取列）
 export const DEFAULT_VISIBLE_COLUMNS = [
   'requestId', 'timestamp', 'status', 'model', 'endpoint',
   'duration', 'inputTokens', 'outputTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cost'

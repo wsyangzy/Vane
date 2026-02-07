@@ -1,9 +1,9 @@
 // ============================================
 // DurationInput - 时间输入组件（数字+单位选择）
-// v6.2.2 (2026-01-10) - 简化单位标签、调整下拉框宽度
+// (2026-01-10) - 简化单位标签、调整下拉框宽度
 // ============================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useMemo, useCallback } from 'react';
 import { CustomSelect } from '../../../components/ui';
 
 // 时间单位选项（简洁标签）
@@ -51,40 +51,20 @@ const DurationInput = ({
   disabled = false,
   className = ''
 }) => {
-  const [parsed, setParsed] = useState(() => parseDuration(value));
-
-  // 同步外部 value 变化
-  useEffect(() => {
-    const newParsed = parseDuration(value);
-    setParsed(newParsed);
-  }, [value]);
+  const parsed = useMemo(() => parseDuration(value), [value]);
 
   // 处理数字变更
   const handleNumberChange = useCallback((e) => {
     const newNumber = e.target.value;
-    setParsed(prev => {
-      const newParsed = { ...prev, number: newNumber };
-      // 触发外部更新
-      const formatted = formatDuration(newNumber, prev.unit);
-      if (formatted) {
-        onChange(formatted);
-      }
-      return newParsed;
-    });
-  }, [onChange]);
+    const formatted = formatDuration(newNumber, parsed.unit);
+    onChange(formatted);
+  }, [onChange, parsed.unit]);
 
   // 处理单位变更
   const handleUnitChange = useCallback((newUnit) => {
-    setParsed(prev => {
-      const newParsed = { ...prev, unit: newUnit };
-      // 触发外部更新
-      const formatted = formatDuration(prev.number, newUnit);
-      if (formatted) {
-        onChange(formatted);
-      }
-      return newParsed;
-    });
-  }, [onChange]);
+    const formatted = formatDuration(parsed.number, newUnit);
+    onChange(formatted);
+  }, [onChange, parsed.number]);
 
   return (
     <div className={`flex items-center gap-1.5 ${className}`}>

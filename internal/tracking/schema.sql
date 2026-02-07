@@ -26,32 +26,32 @@ CREATE TABLE IF NOT EXISTS request_logs (
     model_name TEXT,                        -- Claude模型名称
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
     
-    -- 状态信息 (v3.5.0更新: 生命周期状态与错误原因分离 - 2025-09-28)
+    -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled
     http_status_code INTEGER,               -- HTTP状态码
     retry_count INTEGER DEFAULT 0,          -- 重试次数
 
-    -- 失败信息 (状态机重构新增字段 v3.5.0 - 2025-09-28)
+    -- 失败信息 (状态机重构新增字段 2025-09-28)
     failure_reason TEXT,                    -- 当前失败原因类型: rate_limited/server_error/network_error/timeout/empty_response/invalid_response
     last_failure_reason TEXT,               -- 最后一次失败的详细错误信息
 
-    -- 取消信息 (状态机重构新增字段 v3.5.0 - 2025-09-28)
+    -- 取消信息 (状态机重构新增字段 2025-09-28)
     cancel_reason TEXT,                     -- 取消原因 (取消时间使用end_time字段)
     
     -- Token统计
     input_tokens INTEGER DEFAULT 0,        -- 输入token数
     output_tokens INTEGER DEFAULT 0,       -- 输出token数
     cache_creation_tokens INTEGER DEFAULT 0, -- 缓存创建token数（总计，向后兼容）
-    cache_creation_5m_tokens INTEGER DEFAULT 0, -- 5分钟缓存创建token数 (v5.0.1+)
-    cache_creation_1h_tokens INTEGER DEFAULT 0, -- 1小时缓存创建token数 (v5.0.1+)
+    cache_creation_5m_tokens INTEGER DEFAULT 0, -- 5分钟缓存创建token数
+    cache_creation_1h_tokens INTEGER DEFAULT 0, -- 1小时缓存创建token数
     cache_read_tokens INTEGER DEFAULT 0,   -- 缓存读取token数
 
     -- 成本计算（包含缓存）
     input_cost_usd REAL DEFAULT 0,         -- 输入token成本
     output_cost_usd REAL DEFAULT 0,        -- 输出token成本
     cache_creation_cost_usd REAL DEFAULT 0, -- 缓存创建成本（总计，向后兼容）
-    cache_creation_5m_cost_usd REAL DEFAULT 0, -- 5分钟缓存创建成本 (v5.0.1+)
-    cache_creation_1h_cost_usd REAL DEFAULT 0, -- 1小时缓存创建成本 (v5.0.1+)
+    cache_creation_5m_cost_usd REAL DEFAULT 0, -- 5分钟缓存创建成本
+    cache_creation_1h_cost_usd REAL DEFAULT 0, -- 1小时缓存创建成本
     cache_read_cost_usd REAL DEFAULT 0,    -- 缓存读取成本
     total_cost_usd REAL DEFAULT 0,         -- 总成本
     
@@ -121,7 +121,7 @@ BEGIN
 END;
 
 -- ============================================================================
--- 端点配置表 (v5.0.0 新增 - 2025-12-05)
+-- 端点配置表 (新增 - 2025-12-05)
 -- 将端点配置从 config.yaml 迁移到 SQLite，支持动态增删改查
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS endpoints (
@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
 
     -- ========== 功能支持 ==========
     supports_count_tokens INTEGER DEFAULT 0,        -- 是否支持 count_tokens 端点
-    skip_health_check INTEGER DEFAULT 0,            -- 跳过健康检查 (v6.1, 1=跳过, 0=正常检查)
+    skip_health_check INTEGER DEFAULT 0,            -- 跳过健康检查 (, 1=跳过, 0=正常检查)
 
     -- ========== 成本倍率 ==========
     cost_multiplier REAL DEFAULT 1.0,               -- 总成本倍率
@@ -182,7 +182,7 @@ BEGIN
 END;
 
 -- ============================================================================
--- 渠道表 (v6.1.0 新增)
+-- 渠道表 (新增)
 -- 支持“先创建渠道，再在渠道下创建端点”的管理流程
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS channels (
@@ -208,7 +208,7 @@ BEGIN
 END;
 
 -- ============================================================================
--- 模型定价表 (v5.0.0 新增 - 2025-12-06, 更新于 2025-12-06 支持 5m/1h 缓存)
+-- 模型定价表 (新增 - 2025-12-06, 更新于 2025-12-06 支持 5m/1h 缓存)
 -- 将模型定价从 config.yaml 迁移到 SQLite，支持动态管理
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS model_pricing (
@@ -248,7 +248,7 @@ BEGIN
 END;
 
 -- ============================================================================
--- 系统设置表 (v5.1.0 新增 - 2025-12-08)
+-- 系统设置表 (新增 - 2025-12-08)
 -- 将运行时可调配置从 config.yaml 迁移到 SQLite，支持动态管理和热更新
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS settings (

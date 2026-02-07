@@ -190,7 +190,7 @@ func (erm *ErrorRecoveryManager) ClassifyError(err error, requestID, endpoint, g
 			return errorCtx
 		}
 
-		// v6.2: 优先识别流错误中的网络子错误
+		// 优先识别流错误中的网络子错误
 		// 场景：流传输过程中发生网络中断，错误信息可能包含 stream_status:error 但根本原因是网络问题
 		// 这些错误应当允许切换端点重试，而非视为纯流处理错误
 		streamNetworkKeywords := []string{
@@ -611,7 +611,7 @@ func (erm *ErrorRecoveryManager) isTimeoutError(err error) bool {
 }
 
 // isClientCancelError 判断是否为客户端取消错误
-// v6.2: 以 context.Canceled 为准，确保用户取消时立即停止重试
+// 以 context.Canceled 为准，确保用户取消时立即停止重试
 // 注意：一旦收到取消信号，应当直接终止，避免继续重试造成循环
 func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 	if err == nil {
@@ -620,7 +620,7 @@ func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 
 	errStr := strings.ToLower(err.Error())
 
-	// v6.2: 只要 context.Canceled，直接视为客户端取消
+	// 只要 context.Canceled，直接视为客户端取消
 	if errors.Is(err, context.Canceled) {
 		return true
 	}
@@ -643,7 +643,7 @@ func (erm *ErrorRecoveryManager) isClientCancelError(err error) bool {
 		}
 	}
 
-	// v6.2: "canceled" 关键词需要更谨慎处理
+	// "canceled" 关键词需要更谨慎处理
 	// 只有当不包含网络关键词时才判定为客户端取消
 	if strings.Contains(errStr, "canceled") {
 		networkIndicators := []string{
@@ -749,7 +749,7 @@ func intPtr(i int) *int {
 }
 
 // GetStatusCodeFromError 从错误信息中提取 HTTP 状态码
-// v6.2: 用于 ShouldSwitchEndpoint() 判断
+// 用于 ShouldSwitchEndpoint 判断
 func GetStatusCodeFromError(err error) int {
 	if err == nil {
 		return 0
@@ -811,7 +811,7 @@ func GetStatusCodeFromError(err error) int {
 }
 
 // ShouldSwitchEndpoint 判断是否允许切换端点（即使不重试同一端点）
-// v6.2: 支持 400/403 等错误触发故障转移到其他端点
+// 支持 400/403 等错误触发故障转移到其他端点
 // 与 ShouldRetry 的区别：
 // - ShouldRetry: 是否在同一端点重试（可能导致重复计费）
 // - ShouldSwitchEndpoint: 是否切换到其他端点尝试（不同端点可能表现不同）
@@ -854,7 +854,7 @@ func (erm *ErrorRecoveryManager) ShouldSwitchEndpoint(errorCtx *ErrorContext) bo
 		return true
 
 	case ErrorTypeStream:
-		// v6.2.1: 流错误统一允许切换端点
+		// 流错误统一允许切换端点
 		// 原因：切换端点不会导致重复计费（不同端点是独立的请求）
 		// 即使当前端点已计费，在新端点上重新请求可能成功
 		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 流错误允许切换端点（切换不会重复计费）", errorCtx.RequestID))
@@ -877,13 +877,13 @@ func (erm *ErrorRecoveryManager) ShouldSwitchEndpoint(errorCtx *ErrorContext) bo
 		return false
 
 	case ErrorTypeEOF:
-		// v6.2.1: EOF 错误允许切换端点
+		// EOF 错误允许切换端点
 		// 原因：即使当前端点可能已计费，切换到新端点不会重复计费
 		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] EOF错误允许切换端点", errorCtx.RequestID))
 		return true
 
 	case ErrorTypeResponseTimeout:
-		// v6.2.1: 响应超时允许切换端点
+		// 响应超时允许切换端点
 		// 原因：当前端点可能有问题，切换到新端点可能成功
 		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 响应超时允许切换端点", errorCtx.RequestID))
 		return true
@@ -893,7 +893,7 @@ func (erm *ErrorRecoveryManager) ShouldSwitchEndpoint(errorCtx *ErrorContext) bo
 		return false
 
 	default:
-		// v6.2.1: 未知错误默认允许切换端点
+		// 未知错误默认允许切换端点
 		// 原因：切换端点是安全的（不会重复计费），不切换只会让客户端中断
 		slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] 未知错误允许切换端点", errorCtx.RequestID))
 		return true

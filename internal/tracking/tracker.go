@@ -87,8 +87,8 @@ type RequestCompleteData struct {
 	InputTokens           int64         `json:"input_tokens"`
 	OutputTokens          int64         `json:"output_tokens"`
 	CacheCreationTokens   int64         `json:"cache_creation_tokens"`
-	CacheCreation5mTokens int64         `json:"cache_creation_5m_tokens"` // v5.0.1+
-	CacheCreation1hTokens int64         `json:"cache_creation_1h_tokens"` // v5.0.1+
+	CacheCreation5mTokens int64         `json:"cache_creation_5m_tokens"`
+	CacheCreation1hTokens int64         `json:"cache_creation_1h_tokens"`
 	CacheReadTokens       int64         `json:"cache_read_tokens"`
 	Duration              time.Duration `json:"duration"`
 	FailureReason         string        `json:"failure_reason,omitempty"` // 可选：失败原因
@@ -113,7 +113,7 @@ type ModelPricing struct {
 	CacheRead       float64 `yaml:"cache_read"`        // per 1M tokens (缓存读取)
 }
 
-// EndpointMultiplier 端点成本倍率（v5.0+ 支持端点级别的成本调整）
+// EndpointMultiplier 端点成本倍率（支持端点级别的成本调整）
 // 成本计算公式：模型基础定价 * 端点倍率
 type EndpointMultiplier struct {
 	CostMultiplier                float64 // 总体倍率（如果 > 0，会覆盖分项倍率）
@@ -147,7 +147,7 @@ type CostBreakdown struct {
 	TotalCost           float64
 }
 
-// CalculateCostV2 统一的成本计算函数（v5.0+ 支持分开的缓存定价）
+// CalculateCostV2 统一的成本计算函数（支持分开的缓存定价）
 // 消除 archive_manager.go 和 tracker.go 中的重复代码
 //
 // 参数:
@@ -276,7 +276,7 @@ type Config struct {
 	ModelPricing    map[string]ModelPricing `yaml:"model_pricing"`
 	DefaultPricing  ModelPricing            `yaml:"default_pricing"`
 
-	// 🔥 v4.1 新增：热池配置
+	// 🔥 新增：热池配置
 	HotPool *HotPoolSettings `yaml:"hot_pool,omitempty"`
 }
 
@@ -303,7 +303,7 @@ type WriteRequest struct {
 type UpdateOptions struct {
 	EndpointName  *string        // 端点名称
 	EndpointChain *string        // 端点链路（形如 "A -> B -> C"）
-	Channel       *string        // 渠道标签（v5.0）
+	Channel       *string        // 渠道标签
 	GroupName     *string        // 组名称
 	Status        *string        // 状态
 	RetryCount    *int           // 重试次数
@@ -341,7 +341,7 @@ type UsageTracker struct {
 	writeMu    sync.Mutex        // 写操作保护锁
 	writeWg    sync.WaitGroup    // 写处理器等待组
 
-	// 🔥 v4.1 新增：内存热池 + 归档架构
+	// 🔥 新增：内存热池 + 归档架构
 	hotPool        *HotPool        // 内存热池（活跃请求）
 	archiveManager *ArchiveManager // 归档管理器（批量写入）
 	hotPoolEnabled bool            // 是否启用热池模式
@@ -460,7 +460,7 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 	ut.wg.Add(1)
 	go ut.periodicBackup()
 
-	// 🔥 v4.1 初始化热池架构
+	// 🔥 初始化热池架构
 	ut.initHotPool()
 
 	slog.Info("✅ 使用跟踪器初始化完成",
@@ -544,11 +544,11 @@ func (ut *UsageTracker) now() time.Time {
 }
 
 // buildDatabaseConfig 从Config构建DatabaseConfig
-// v4.1.0: 简化为仅支持 SQLite
+// 简化为仅支持 SQLite
 func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig, error) {
 	var dbConfig DatabaseConfig
 
-	// 设置数据库类型（v4.1+ 仅支持 SQLite）
+	// 设置数据库类型（仅支持 SQLite）
 	dbConfig.Type = "sqlite"
 
 	// 优先使用新的Database配置
@@ -687,7 +687,7 @@ func (ut *UsageTracker) Close() error {
 		ut.writeQueue = nil
 	}
 
-	// 🔥 v4.1 关闭热池和归档管理器
+	// 🔥 关闭热池和归档管理器
 	if ut.hotPool != nil {
 		if err := ut.hotPool.Close(); err != nil {
 			slog.Error("Failed to close hot pool", "error", err)
@@ -725,7 +725,7 @@ func (ut *UsageTracker) RecordRequestStart(requestID, clientIP, userAgent, metho
 		return
 	}
 
-	// 🔥 v4.1 热池模式：直接添加到内存热池
+	// 🔥 热池模式：直接添加到内存热池
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		req := NewActiveRequest(requestID, clientIP, userAgent, method, path, isStreaming)
 		if err := ut.hotPool.Add(req); err != nil {
@@ -774,7 +774,7 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 		return
 	}
 
-	// 🔥 v4.1 热池模式：直接更新内存（核心优化点：无数据库写入）
+	// 🔥 热池模式：直接更新内存（核心优化点：无数据库写入）
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		err := ut.hotPool.Update(requestID, func(req *ActiveRequest) {
 			// 只更新非nil的字段
@@ -854,7 +854,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 
 	// 🚀 [架构修复] 支持 nil tokens，确保耗时信息总是被记录
 	var inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64
-	var cacheCreation5mTokens, cacheCreation1hTokens int64 // v5.0.1+
+	var cacheCreation5mTokens, cacheCreation1hTokens int64
 	if tokens != nil {
 		inputTokens = tokens.InputTokens
 		outputTokens = tokens.OutputTokens
@@ -863,7 +863,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
 		cacheReadTokens = tokens.CacheReadTokens
 
-		// 🔧 [向后兼容修复] v5.0.1+: 如果 5m/1h 都是 0 但总数不为 0，
+		// 🔧 [向后兼容修复] 如果 5m/1h 都是 0 但总数不为 0，
 		// 将总数分配给 5m 字段，与成本计算逻辑保持一致（tracker.go:185-193）
 		if cacheCreation5mTokens == 0 && cacheCreation1hTokens == 0 && cacheCreationTokens > 0 {
 			cacheCreation5mTokens = cacheCreationTokens // 默认按 5m 缓存处理
@@ -874,7 +874,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 	}
 	// 如果 tokens 为 nil，所有 token 字段都是 0，但 duration 仍然会被记录
 
-	// 🔥 v4.1 热池模式：完成请求并归档（核心：单次数据库写入）
+	// 🔥 热池模式：完成请求并归档（核心：单次数据库写入）
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		now := ut.now()
 		err := ut.hotPool.CompleteAndArchive(requestID, func(req *ActiveRequest) {
@@ -883,8 +883,8 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 			req.InputTokens = inputTokens
 			req.OutputTokens = outputTokens
 			req.CacheCreationTokens = cacheCreationTokens
-			req.CacheCreation5mTokens = cacheCreation5mTokens // v5.0.1+
-			req.CacheCreation1hTokens = cacheCreation1hTokens // v5.0.1+
+			req.CacheCreation5mTokens = cacheCreation5mTokens
+			req.CacheCreation1hTokens = cacheCreation1hTokens
 			req.CacheReadTokens = cacheReadTokens
 			req.EndTime = &now
 			req.DurationMs = duration.Milliseconds()
@@ -953,7 +953,7 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
 		cacheReadTokens = tokens.CacheReadTokens
 
-		// 🔧 [向后兼容修复] v5.0.1+: 如果 5m/1h 都是 0 但总数不为 0，
+		// 🔧 [向后兼容修复] 如果 5m/1h 都是 0 但总数不为 0，
 		// 将总数分配给 5m 字段，与成本计算逻辑保持一致
 		if cacheCreation5mTokens == 0 && cacheCreation1hTokens == 0 && cacheCreationTokens > 0 {
 			cacheCreation5mTokens = cacheCreationTokens
@@ -972,7 +972,7 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 		}
 	}
 
-	// 🔥 v4.1 热池模式：完成失败请求并归档
+	// 🔥 热池模式：完成失败请求并归档
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		now := ut.now()
 		err := ut.hotPool.CompleteAndArchive(requestID, func(req *ActiveRequest) {
@@ -1069,7 +1069,7 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 		return
 	}
 
-	// 🔥 v4.1 热池模式：直接更新内存中的请求数据
+	// 🔥 热池模式：直接更新内存中的请求数据
 	// 这样后续的 CompleteAndArchive 会将正确的 token 信息写入数据库
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		err := ut.hotPool.Update(requestID, func(req *ActiveRequest) {
@@ -1205,7 +1205,7 @@ func (ut *UsageTracker) RecoverRequestTokens(requestID, modelName string, tokens
 		return
 	}
 
-	// 🔥 v4.1 热池模式：如果请求还在热池中，先更新热池
+	// 🔥 热池模式：如果请求还在热池中，先更新热池
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		err := ut.hotPool.Update(requestID, func(req *ActiveRequest) {
 			// 更新 Token 信息
@@ -1766,7 +1766,7 @@ func (ut *UsageTracker) initDatabaseWithWriteDB() error {
 }
 
 // ============================================================================
-// 🔥 v4.1 热池相关方法
+// 🔥 热池相关方法
 // ============================================================================
 
 // GetActiveRequests 获取热池中的活跃请求
@@ -1877,7 +1877,7 @@ func (ut *UsageTracker) GetHotPoolAndArchiveOverview() map[string]interface{} {
 }
 
 // ============================================================================
-// 🔥 v4.1 双源查询方法（热池 + 数据库）
+// 🔥 双源查询方法（热池 + 数据库）
 // ============================================================================
 
 // ActiveRequestToDetail 将 ActiveRequest 转换为 RequestDetail
@@ -1984,7 +1984,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		DurationMs:            durationMs,
 		EndpointName:          endpointName,
 		EndpointChain:         endpointChain,
-		Channel:               channel, // v5.0: 渠道标签
+		Channel:               channel, // 渠道标签
 		GroupName:             groupName,
 		ModelName:             modelName,
 		IsStreaming:           isStreaming,
@@ -1997,8 +1997,8 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		InputTokens:           inputTokens,
 		OutputTokens:          outputTokens,
 		CacheCreationTokens:   cacheCreationTokens,
-		CacheCreation5mTokens: cacheCreation5mTokens, // v5.0.1+
-		CacheCreation1hTokens: cacheCreation1hTokens, // v5.0.1+
+		CacheCreation5mTokens: cacheCreation5mTokens,
+		CacheCreation1hTokens: cacheCreation1hTokens,
 		CacheReadTokens:       cacheReadTokens,
 		InputCostUSD:          cost.InputCost,
 		OutputCostUSD:         cost.OutputCost,
@@ -2159,7 +2159,7 @@ func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
 	if opts.ModelName != "" && modelName != opts.ModelName {
 		return false
 	}
-	// 渠道过滤（v5.0）
+	// 渠道过滤
 	if opts.Channel != "" && channel != opts.Channel {
 		return false
 	}

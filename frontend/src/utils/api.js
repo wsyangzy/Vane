@@ -247,7 +247,7 @@ export const pauseGroup = async (groupName) => {
 };
 
 // 检查是否启用渠道间故障转移
-// v6.2: 用于前端判断是否显示渠道切换器
+// 用于前端判断是否显示渠道切换器
 export const fetchInterChannelFailoverEnabled = async () => {
   // Wails 环境使用绑定
   if (isWailsEnvironment()) {
@@ -328,8 +328,8 @@ export const fetchRequests = async (params = {}) => {
       inputTokens: request.input_tokens || request.inputTokens || 0,
       outputTokens: request.output_tokens || request.outputTokens || 0,
       cacheCreationTokens: request.cache_creation_tokens || request.cacheCreationTokens || 0,
-      cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0, // v5.0.1+
-      cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0, // v5.0.1+
+      cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0,
+      cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0,
       cacheReadTokens: request.cache_read_tokens || request.cacheReadTokens || 0,
       cost: request.total_cost_usd || request.cost || 0,
       isStreaming: request.is_streaming || request.isStreaming || false,
@@ -390,7 +390,7 @@ export const fetchRequests = async (params = {}) => {
 
 /**
  * 获取模型列表（用于筛选器）
- * v5.0: 从 model_pricing 表获取，而不是从使用记录
+ * 从 model_pricing 表获取，而不是从使用记录
  * @returns {Promise<Array>} - 模型名称数组
  */
 export const fetchModels = async () => {
@@ -671,7 +671,7 @@ export const formatTimestamp = (timestamp) => {
 };
 
 // ============================================
-// v5.0+ 端点存储 API (SQLite)
+// 端点存储 API (SQLite)
 // ============================================
 
 /**
@@ -767,7 +767,7 @@ export const fetchChannels = async () => {
 };
 
 // ============================================
-// v5.1+ 系统设置 API (SQLite)
+// 系统设置 API (SQLite)
 // ============================================
 
 /**

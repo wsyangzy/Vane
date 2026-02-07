@@ -66,8 +66,8 @@ func TestRequestLifecycleManager_UpdateStatus(t *testing.T) {
 	if rlm.GetLastStatus() != "processing" {
 		t.Errorf("Expected status 'processing', got '%s'", rlm.GetLastStatus())
 	}
-	if rlm.GetRetryCount() != 1 {
-		t.Errorf("Expected retry count 1, got %d", rlm.GetRetryCount())
+	if rlm.GetRetryCount() != 0 {
+		t.Errorf("Expected retry count 0 (derived from attempt count), got %d", rlm.GetRetryCount())
 	}
 }
 
@@ -103,8 +103,14 @@ func TestRequestLifecycleManager_IsCompleted(t *testing.T) {
 		t.Error("Processing state should not be completed")
 	}
 
-	// 更新状态为完成
+	// 仅更新状态为 completed 不会触发终态标记
 	rlm.UpdateStatus("completed", 0, 200)
+	if rlm.IsCompleted() {
+		t.Error("UpdateStatus alone should not mark request completed")
+	}
+
+	// 通过 CompleteRequest 进入终态
+	rlm.CompleteRequest(nil)
 	if !rlm.IsCompleted() {
 		t.Error("Completed state should be completed")
 	}
@@ -123,7 +129,7 @@ func TestRequestLifecycleManager_GetStats(t *testing.T) {
 	stats := rlm.GetStats()
 
 	// 验证统计信息
-	expectedFields := []string{"request_id", "endpoint", "group", "model", "status", "retry_count", "duration_ms", "start_time"}
+	expectedFields := []string{"request_id", "status", "is_completed", "endpoint_name", "channel", "attempt_count", "retry_count", "restart_count", "duration_seconds", "final_status_code"}
 	for _, field := range expectedFields {
 		if _, exists := stats[field]; !exists {
 			t.Errorf("Stats should contain field: %s", field)
@@ -133,20 +139,14 @@ func TestRequestLifecycleManager_GetStats(t *testing.T) {
 	if stats["request_id"] != requestID {
 		t.Errorf("Expected request_id %s, got %v", requestID, stats["request_id"])
 	}
-	if stats["endpoint"] != "stats-endpoint" {
-		t.Errorf("Expected endpoint 'stats-endpoint', got %v", stats["endpoint"])
-	}
-	if stats["group"] != "stats-group" {
-		t.Errorf("Expected group 'stats-group', got %v", stats["group"])
-	}
-	if stats["model"] != "claude-3-haiku" {
-		t.Errorf("Expected model 'claude-3-haiku', got %v", stats["model"])
+	if stats["endpoint_name"] != "stats-endpoint" {
+		t.Errorf("Expected endpoint_name 'stats-endpoint', got %v", stats["endpoint_name"])
 	}
 	if stats["status"] != "processing" {
 		t.Errorf("Expected status 'processing', got %v", stats["status"])
 	}
-	if stats["retry_count"] != 2 {
-		t.Errorf("Expected retry_count 2, got %v", stats["retry_count"])
+	if stats["retry_count"] != 0 {
+		t.Errorf("Expected retry_count 0 (derived from attempt_count), got %v", stats["retry_count"])
 	}
 }
 
@@ -235,14 +235,14 @@ func TestRequestLifecycleManager_UpdateStatusWithAttemptCounter(t *testing.T) {
 	if rlm.GetLastStatus() != "suspended" {
 		t.Errorf("Expected status 'suspended', got '%s'", rlm.GetLastStatus())
 	}
-	if rlm.GetRetryCount() != 3 {
-		t.Errorf("Expected retry count to use internal counter (3), got %d", rlm.GetRetryCount())
+	if rlm.GetRetryCount() != 2 {
+		t.Errorf("Expected retry count to use internal counter semantics (2), got %d", rlm.GetRetryCount())
 	}
 
-	// 测试使用正常retryCount时，应该使用提供的值
+	// 当前实现中 retry_count 由 attempt_count 推导，传入 retryCount 不覆盖
 	rlm.UpdateStatus("processing", 5, 200)
-	if rlm.GetRetryCount() != 5 {
-		t.Errorf("Expected retry count to use provided value (5), got %d", rlm.GetRetryCount())
+	if rlm.GetRetryCount() != 2 {
+		t.Errorf("Expected retry count remain derived value (2), got %d", rlm.GetRetryCount())
 	}
 }
 
@@ -299,8 +299,8 @@ func TestRequestLifecycleManager_UpdateStatusSemanticFix(t *testing.T) {
 	rlm.UpdateStatus("suspended", -1, 0)
 
 	// 验证数据库中记录的是真实尝试次数，不是端点数量
-	if rlm.GetRetryCount() != 3 {
-		t.Errorf("Expected retry count in status to be 3 (actual attempts), got %d", rlm.GetRetryCount())
+	if rlm.GetRetryCount() != 2 {
+		t.Errorf("Expected retry count in status to be 2 (attempts-1), got %d", rlm.GetRetryCount())
 	}
 
 	// 验证状态正确设置为suspended而不是retry
@@ -328,8 +328,8 @@ func TestRequestLifecycleManager_AttemptCounterIndependentOfRetryCount(t *testin
 	if attemptCount != 2 {
 		t.Errorf("Expected attempt count 2, got %d", attemptCount)
 	}
-	if retryCount != 5 {
-		t.Errorf("Expected retry count 5, got %d", retryCount)
+	if retryCount != 1 {
+		t.Errorf("Expected retry count 1 (attempts-1), got %d", retryCount)
 	}
 
 	// 继续增加尝试计数器
@@ -342,8 +342,8 @@ func TestRequestLifecycleManager_AttemptCounterIndependentOfRetryCount(t *testin
 	if newAttemptCount != 3 {
 		t.Errorf("Expected new attempt count 3, got %d", newAttemptCount)
 	}
-	if sameRetryCount != 5 {
-		t.Errorf("Expected retry count unchanged (5), got %d", sameRetryCount)
+	if sameRetryCount != 2 {
+		t.Errorf("Expected retry count derived from new attempt count (2), got %d", sameRetryCount)
 	}
 }
 

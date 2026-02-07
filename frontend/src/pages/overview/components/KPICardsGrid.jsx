@@ -1,7 +1,7 @@
 // ============================================
 // KPI 卡片网格组件
-// 2025-12-06 v4.0: 一个端点 = 一个组
-// 2025-12-12 v5.1: 服务状态改为成本和 tokens 统计
+// 一个端点 = 一个组
+// 服务状态改为成本和 tokens 统计
 // ============================================
 
 import {
@@ -30,9 +30,9 @@ const formatTokens = (tokens) => {
 };
 
 const KPICardsGrid = ({ data }) => {
-  const { status, endpoints, connections, groups } = data;
+  const { endpoints, connections, groups } = data;
 
-  // v4.0: 一个端点 = 一个组，显示当前活动端点
+  // 一个端点 = 一个组，显示当前活动端点
   // 优先从 groups 获取活跃状态，因为 group.is_active 才表示"正在使用"
   const activeGroup = groups.groups?.find(g => g.is_active);
 
@@ -41,7 +41,7 @@ const KPICardsGrid = ({ data }) => {
   let activeEndpointStatusColor = 'bg-slate-50 text-slate-600';
   let activeEndpointTooltip = activeGroup ? activeGroup.name : '无活动端点';
   if (activeGroup) {
-    // v6.0+: 端点健康三态：健康/异常/未检测（未检测=灰色）
+    // 端点健康三态：健康/异常/未检测（未检测=灰色）
     const activeGroupName = activeGroup.name;
     const list = endpoints.endpoints || [];
     const inGroup = list.filter((e) => (e.group || e.channel || e.name) === activeGroupName);
@@ -68,7 +68,7 @@ const KPICardsGrid = ({ data }) => {
     activeEndpointStatusColor = 'bg-emerald-50 text-emerald-600';
   }
 
-  // v5.1+: 成本和 tokens 数据
+  // 成本和 tokens 数据
   const todayCost = formatCost(connections.today_cost);
   const totalCost = formatCost(connections.all_time_total_cost);
   const todayTokens = formatTokens(connections.today_tokens);

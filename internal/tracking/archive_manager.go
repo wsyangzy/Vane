@@ -307,7 +307,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	}
 	defer tx.Rollback()
 
-	// v5.0.1+: 添加分开的 5m/1h 缓存字段和成本
+	// 添加分开的 5m/1h 缓存字段和成本
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO request_logs (
 			request_id, client_ip, user_agent, method, path,
@@ -332,7 +332,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	for _, event := range events {
 		req := event.Request
 
-		// v5.0.1+: 计算分开的成本
+		// 计算分开的成本
 		costBreakdown := am.calculateCostV2(req)
 
 		// 格式化时间
@@ -390,7 +390,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	return nil
 }
 
-// calculateCostV2 计算请求成本（v5.0.1+: 支持分开的 5m/1h 缓存）
+// calculateCostV2 计算请求成本（支持分开的 5m/1h 缓存）
 func (am *ArchiveManager) calculateCostV2(req *ActiveRequest) CostBreakdown {
 	if am.pricing == nil {
 		return CostBreakdown{}
@@ -428,7 +428,7 @@ func (am *ArchiveManager) calculateCostV2(req *ActiveRequest) CostBreakdown {
 		CacheReadTokens:       req.CacheReadTokens,
 	}
 
-	// 调用公共成本计算函数（v5.0.1+）
+	// 调用公共成本计算函数
 	return CalculateCostV2(usage, &pricing, multiplier)
 }
 

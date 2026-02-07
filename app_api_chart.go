@@ -186,7 +186,7 @@ func (a *App) GetConnectionActivityChart(minutes int) []ChartDataPoint {
 // ============================================================
 
 // EndpointHealthData 端点健康状态数据结构
-// v6.2.5: 简化分类
+// 简化分类
 //   - healthy + unhealthy + excluded = total（当前检测范围内）
 //   - skipped 是 healthy 的子集，仅用于显示
 type EndpointHealthData struct {
@@ -198,7 +198,7 @@ type EndpointHealthData struct {
 }
 
 // GetEndpointHealthChart 获取端点健康状态图表数据
-// v6.2.5: 统计当前检测范围内的端点
+// 统计当前检测范围内的端点
 //   - 启用渠道间转移：统计所有参与的渠道
 //   - 未启用：仅统计活跃渠道
 func (a *App) GetEndpointHealthChart() EndpointHealthData {

@@ -59,7 +59,7 @@ func NewSuspensionManagerWithRecoverySignal(cfg *config.Config, endpointManager 
 }
 
 // ShouldSuspend 判断是否应该挂起请求
-// v6.2.18: 恢复挂起功能，当"允许客户端重试"开启时挂起请求等待用户点击重试按钮
+// 恢复挂起功能，当"允许客户端重试"开启时挂起请求等待用户点击重试按钮
 // 挂起条件：InterruptClientOnExhausted = false（即不中断客户端重试）
 func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
 	if sm.config == nil {
@@ -438,7 +438,7 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 // WaitForEndpointRecoveryWithResult 🎯 [挂起取消区分] 带结果的端点恢复等待方法
 // 功能与WaitForEndpointRecovery相同，但返回详细的结果类型以区分成功、超时、取消
 // 这是对现有方法的增强版本，保持向后兼容性
-// v6.2.18: 当渠道间转移禁用时，仅监听用户点击"重试"按钮的组切换通知，不监听端点自愈信号
+// 当渠道间转移禁用时，仅监听用户点击"重试"按钮的组切换通知，不监听端点自愈信号
 func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) handlers.SuspensionResult {
 	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, false)
 }
@@ -495,7 +495,7 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 		slog.InfoContext(ctx, fmt.Sprintf("⬇️ [挂起结束] 连接 %s 请求挂起结束，当前挂起数: %d", connID, newCount))
 	}()
 
-	// v6.2.18: 根据渠道间转移配置决定等待模式
+	// 根据渠道间转移配置决定等待模式
 	isChannelFailoverEnabled := sm.config.Failover.Enabled
 	allowEndpointRecovery := isChannelFailoverEnabled && !manualOnly
 	if manualOnly {
@@ -523,7 +523,7 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 
 	slog.InfoContext(ctx, fmt.Sprintf("⏰ [挂起超时] 连接 %s 挂起超时设置: %v", connID, timeout))
 
-	// v6.2.18: 仅当渠道间转移启用时才订阅端点恢复信号
+	// 仅当渠道间转移启用时才订阅端点恢复信号
 	// 当渠道间转移禁用/手动等待时，仅监听用户点击"重试"按钮的组切换通知
 	var endpointRecoveryCh chan string
 	if allowEndpointRecovery && sm.recoverySignalManager != nil && failedEndpoint != "" {

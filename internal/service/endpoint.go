@@ -1,5 +1,5 @@
 // Package service 提供业务逻辑层实现
-// 端点服务 - v5.0.0 新增 (2025-12-05)
+// 端点服务 - 新增 (2025-12-05)
 package service
 
 import (
@@ -37,14 +37,14 @@ func NewEndpointService(
 // CreateEndpoint 创建新端点
 // 1. 保存到数据库
 // 2. 添加到运行时管理器
-// v6.1+: 优先级自动递增（若未指定或为0，则设为渠道内最大优先级+1）
+// 优先级自动递增（若未指定或为0，则设为渠道内最大优先级+1）
 func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.EndpointRecord) (*store.EndpointRecord, error) {
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {
 		return nil, err
 	}
 
-	// v6.2+: 允许不同渠道同名端点，但同一渠道内必须唯一
+	// 允许不同渠道同名端点，但同一渠道内必须唯一
 	if existing, err := s.store.GetByChannelAndName(ctx, record.Channel, record.Name); err != nil {
 		return nil, fmt.Errorf("校验端点名称失败: %w", err)
 	} else if existing != nil {
@@ -55,7 +55,7 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 		)
 	}
 
-	// v6.1+: 优先级自动递增
+	// 优先级自动递增
 	if record.Priority <= 0 {
 		maxPriority, err := s.store.GetMaxPriorityByChannel(ctx, record.Channel)
 		if err != nil {
@@ -124,7 +124,7 @@ func (s *EndpointService) ListEndpointsByChannel(ctx context.Context, channel st
 // UpdateEndpoint 更新端点配置
 // 1. 更新数据库
 // 2. 更新运行时管理器
-// v6.1+: 优先级冲突时自动对调
+// 优先级冲突时自动对调
 func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.EndpointRecord) error {
 	if record == nil || record.ID <= 0 {
 		return fmt.Errorf("端点ID不能为空")
@@ -144,7 +144,7 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		return err
 	}
 
-	// v6.2+: 允许不同渠道同名，需确保"同渠道内唯一"约束
+	// 允许不同渠道同名，需确保"同渠道内唯一"约束
 	if other, err := s.store.GetByChannelAndName(ctx, record.Channel, record.Name); err != nil {
 		return fmt.Errorf("校验端点名称失败: %w", err)
 	} else if other != nil && other.ID != record.ID {
@@ -155,7 +155,7 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		)
 	}
 
-	// v6.2.3+: 渠道变更时，自动调整优先级为目标渠道的下一个可用值
+	// 渠道变更时，自动调整优先级为目标渠道的下一个可用值
 	// 避免转移后与目标渠道现有端点的优先级冲突
 	if record.Channel != existing.Channel {
 		maxPriority, err := s.store.GetMaxPriorityByChannel(ctx, record.Channel)
@@ -169,7 +169,7 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		record.Priority = newPriority
 	}
 
-	// v6.1+: 优先级冲突检测与对调
+	// 优先级冲突检测与对调
 	// 仅当优先级发生变化且在同一渠道内时触发
 	if record.Priority != existing.Priority && record.Channel == existing.Channel {
 		conflicting, err := s.store.GetByChannelAndPriority(ctx, record.Channel, record.Priority)
@@ -396,7 +396,7 @@ func (s *EndpointService) DeactivateChannel(ctx context.Context, channel string)
 }
 
 // DisableAllEndpoints 禁用所有端点
-// v5.0: 用于实现互斥激活（激活一个端点前先禁用所有）
+// 用于实现互斥激活（激活一个端点前先禁用所有）
 func (s *EndpointService) DisableAllEndpoints(ctx context.Context) error {
 	records, err := s.store.List(ctx)
 	if err != nil {
@@ -461,7 +461,7 @@ func (s *EndpointService) ImportFromYAML(ctx context.Context, endpoints []config
 }
 
 // SyncFromDatabase 从数据库同步端点到管理器
-// v5.0 Desktop: 加载所有端点参与健康检查，并同步 enabled=true 的端点到组激活状态
+// Desktop: 加载所有端点参与健康检查，并同步 enabled=true 的端点到组激活状态
 func (s *EndpointService) SyncFromDatabase(ctx context.Context) error {
 	// 获取所有端点（包括 enabled=false 的）
 	records, err := s.store.List(ctx)
@@ -485,7 +485,7 @@ func (s *EndpointService) SyncFromDatabase(ctx context.Context) error {
 	// 使用专门的同步方法（不走 UpdateConfig）
 	s.manager.SyncEndpoints(endpoints)
 
-	// 同步 enabled=true 的渠道到组激活状态（v6.0: 以渠道为路由单位）
+	// 同步 enabled=true 的渠道到组激活状态（以渠道为路由单位）
 	if len(enabledChannelCount) > 0 {
 		// 选择 enabled 端点数最多的渠道；若并列则按字典序稳定选择
 		var selectedChannel string
@@ -586,10 +586,10 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		Headers:             record.Headers,
 		Timeout:             time.Duration(record.TimeoutSeconds) * time.Second,
 		SupportsCountTokens: record.SupportsCountTokens,
-		SkipHealthCheck:     record.SkipHealthCheck, // v6.1
+		SkipHealthCheck:     record.SkipHealthCheck,
 	}
 
-	// v5.0: 设置 Enabled（是否作为代理端点）
+	// 设置 Enabled（是否作为代理端点）
 	enabled := record.Enabled
 	cfg.Enabled = &enabled
 
@@ -617,7 +617,7 @@ func (s *EndpointService) configToRecord(cfg config.EndpointConfig) *store.Endpo
 		Headers:             cfg.Headers,
 		Priority:            cfg.Priority,
 		FailoverEnabled:     true, // 默认参与故障转移
-		SkipHealthCheck:     cfg.SkipHealthCheck, // v6.1
+		SkipHealthCheck:     cfg.SkipHealthCheck,
 		TimeoutSeconds:      int(cfg.Timeout.Seconds()),
 		SupportsCountTokens: cfg.SupportsCountTokens,
 		CostMultiplier:      1.0,

@@ -8,7 +8,7 @@ import (
 )
 
 // TestForceActivation tests the force activation feature
-// v4.0: 适配一端点一组架构，组名 = 端点名
+// 适配一端点一组架构，组名 = 端点名
 func TestForceActivation(t *testing.T) {
 	// Create test configuration
 	cfg := &config.Config{
@@ -25,7 +25,7 @@ func TestForceActivation(t *testing.T) {
 	// Create group manager
 	gm := NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点，每个端点自动成为一个独立的组
+	// 创建测试端点，每个端点自动成为一个独立的组
 	// 组名就是端点名
 	endpoints := []*Endpoint{
 		{
@@ -42,7 +42,7 @@ func TestForceActivation(t *testing.T) {
 
 	gm.UpdateGroups(endpoints)
 
-	// v4.0: 组名 = 端点名
+	// 组名 = 端点名
 	groupName := "test-endpoint"
 
 	t.Run("Normal activation with healthy endpoints", func(t *testing.T) {

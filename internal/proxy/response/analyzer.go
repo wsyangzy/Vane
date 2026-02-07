@@ -29,7 +29,7 @@ type RequestLifecycleManager interface {
 	GetDuration() time.Duration
 }
 
-// ParseResult v5.0+: 解析结果结构体
+// ParseResult 解析结果结构体
 type ParseResult struct {
 	TokenUsage  *tracking.TokenUsage
 	ModelName   string
@@ -41,7 +41,7 @@ type ParseResult struct {
 type TokenParser interface {
 	ParseSSELine(line string) *monitor.TokenUsage
 	SetModelName(model string)
-	GetFinalUsage() *tracking.TokenUsage // v5.0+: 获取完整的 TokenUsage（包含 5m/1h 缓存字段）
+	GetFinalUsage() *tracking.TokenUsage // 获取完整的 TokenUsage（包含 5m/1h 缓存字段）
 }
 
 // TokenParserProvider 提供token parser创建功能
@@ -348,7 +348,7 @@ func (a *TokenAnalyzer) parseSSEForTokens(responseStr, connID, endpointName stri
 				modelName = tp.GetModelName()
 			}
 
-			// v5.0+: 使用 GetFinalUsage 获取完整的 TokenUsage（包含 5m/1h 缓存字段）
+			// 使用 GetFinalUsage 获取完整的 TokenUsage（包含 5m/1h 缓存字段）
 			foundTokenUsage = tokenParser.GetFinalUsage()
 			if foundTokenUsage == nil {
 				// 回退：如果 GetFinalUsage 为空，使用返回的 tokenUsage
@@ -403,7 +403,7 @@ func (a *TokenAnalyzer) parseJSONForTokens(responseStr, connID, endpointName str
 	}
 
 	// 将JSON包装为SSE message_delta事件进行解析
-	// v5.0+: 使用 ParseSSELine 触发解析，然后通过 GetFinalUsage 获取包含 5m/1h 缓存字段的完整结果
+	// 使用 ParseSSELine 触发解析，然后通过 GetFinalUsage 获取包含 5m/1h 缓存字段的完整结果
 	tokenParser.ParseSSELine("event: message_delta")
 	tokenParser.ParseSSELine("data: " + responseStr)
 	if tokenParser.ParseSSELine("") != nil {

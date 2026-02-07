@@ -462,7 +462,7 @@ func (rlm *RequestLifecycleManager) analyzeResponseType(responseContent string) 
 
 // SetEndpoint 设置端点信息
 // 🎯 [SRP重构] 更新 stateManager 并同步热池
-// v5.0: 立即更新热池中的端点和渠道信息，确保前端实时显示
+// 立即更新热池中的端点和渠道信息，确保前端实时显示
 func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel string) {
 	if rlm.stateManager.IsCompleted() {
 		slog.Debug(fmt.Sprintf("⏭️ [端点忽略] [%s] 请求已终态，忽略端点更新: %s",
@@ -872,7 +872,7 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 // IncrementAttempt 线程安全地增加尝试计数
 // 🎯 [SRP重构] 委托给 stateManager
 // 用于统一重试计数语义，每次端点切换或重试时调用
-// v6.2.9: 移除高频 DEBUG 日志，避免循环重试时日志膨胀
+// 移除高频 DEBUG 日志，避免循环重试时日志膨胀
 func (rlm *RequestLifecycleManager) IncrementAttempt() int {
 	return rlm.stateManager.IncrementAttempt()
 }

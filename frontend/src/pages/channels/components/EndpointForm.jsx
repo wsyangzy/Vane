@@ -1,6 +1,6 @@
 // ============================================
-// 端点编辑表单组件 (v5.0+ SQLite 存储模式)
-// v6.2.1 (2026-01-10) - 新建时隐藏优先级和超时字段（自动递增/使用全局默认）
+// 端点编辑表单组件 (SQLite 存储模式)
+// (2026-01-10) - 新建时隐藏优先级和超时字段（自动递增/使用全局默认）
 // ============================================
 
 import { useState } from 'react';
@@ -50,7 +50,7 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
 );
 
 // 密码输入组件（带显示/隐藏切换）
-// v6.2.18: 修复浏览器原生按钮与自定义按钮重复问题
+// 修复浏览器原生按钮与自定义按钮重复问题
 const PasswordInput = ({ label, name, value, onChange, placeholder, required, help }) => {
   const [showPassword, setShowPassword] = useState(false);
 
@@ -177,7 +177,7 @@ const EndpointForm = ({
   loading = false
 }) => {
   const isEditMode = !!endpoint;
-  // v6.2.18: 编辑模式下渠道名称不可修改（渠道是端点的核心标识之一）
+  // 编辑模式下渠道名称不可修改（渠道是端点的核心标识之一）
   const channelDisabled = loading || isEditMode || lockChannel;
   const uniqueChannels = Array.from(new Set((channels || []).filter(Boolean).map(String)));
 
@@ -188,11 +188,11 @@ const EndpointForm = ({
         channel: endpoint.channel || '',
         name: endpoint.name || '',
         url: endpoint.url || '',
-        token: endpoint.token || '', // v5.0: 本地桌面应用，直接显示已保存的 Token
-        apiKey: endpoint.apiKey || '', // v5.0: 本地桌面应用，直接显示已保存的 ApiKey
+        token: endpoint.token || '', // 本地桌面应用，直接显示已保存的 Token
+        apiKey: endpoint.apiKey || '', // 本地桌面应用，直接显示已保存的 ApiKey
         priority: endpoint.priority || 1,
         failoverEnabled: endpoint.failoverEnabled !== false,
-        skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false, // v6.1
+        skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false,
         cooldownSeconds: endpoint.cooldownSeconds || '',
         timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
@@ -210,11 +210,11 @@ const EndpointForm = ({
       url: '',
       token: '',
       apiKey: '',
-      priority: 0, // v6.2.1: 新建时传0，让后端自动递增
+      priority: 0, // 新建时传0，让后端自动递增
       failoverEnabled: true,
-      skipHealthCheck: false, // v6.1: 默认不跳过健康检查
+      skipHealthCheck: false, // 默认不跳过健康检查
       cooldownSeconds: '',
-      timeoutSeconds: 0, // v6.2.1: 新建时传0，使用全局默认超时
+      timeoutSeconds: 0, // 新建时传0，使用全局默认超时
       supportsCountTokens: false,
       costMultiplier: 1.0,
       inputCostMultiplier: 1.0,
@@ -486,7 +486,7 @@ const EndpointForm = ({
                   help="数字越小优先级越高，相同则交换"
                 />
 
-                {/* v6.2.1: 超时时间 - 留空使用全局默认值 */}
+                {/* 超时时间 - 留空使用全局默认值 */}
                 <FormInput
                   label="超时时间 (秒)"
                   name="timeoutSeconds"

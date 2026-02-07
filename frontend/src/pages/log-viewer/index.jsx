@@ -1,5 +1,5 @@
 // LogsPage - 系统日志查看页面（主组件）
-// v6.2.16: 点击行选中 + 批量复制
+// 点击行选中 + 批量复制
 import { useState, useMemo, useRef, useEffect, useDeferredValue, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import { useWailsLogs } from '@/hooks/useWailsLogs';
@@ -8,21 +8,14 @@ import { LogEntry, LogControls, LogFilters } from './components';
 import { escapeRegex } from './components/LogEntry';
 import { SaveResultDialog } from '@/components/ui';
 
-// v6.2.15: 日志项固定高度（用于虚拟滚动）
+// 日志项固定高度（用于虚拟滚动）
 const LOG_ITEM_HEIGHT = 40;
 
 import { SaveLogFile } from '@wailsjs/go/main/App';
 
 // 检测组件挂载状态
 function useComponentVisibility() {
-  const [isVisible, setIsVisible] = useState(true);
-
-  useEffect(() => {
-    setIsVisible(true);
-    return () => setIsVisible(false);
-  }, []);
-
-  return isVisible;
+  return true;
 }
 
 // 主页面组件
@@ -50,13 +43,24 @@ function LogsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [levelFilter, setLevelFilter] = useState('ALL');
   const [autoScroll, setAutoScroll] = useState(true);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const isInitialLoadRef = useRef(true);
   const prevLogsLengthRef = useRef(0);
 
-  // v6.2.16: 多选状态
+  // 多选状态
   const [selectedIndices, setSelectedIndices] = useState(new Set());
 
-  // v6.2.16: 切换单条日志选择
+  // 过滤器变更时清空选中
+  const handleLevelFilterChange = useCallback((nextLevel) => {
+    setLevelFilter(nextLevel);
+    setSelectedIndices(new Set());
+  }, []);
+
+  const handleSearchChange = useCallback((nextQuery) => {
+    setSearchQuery(nextQuery);
+    setSelectedIndices(new Set());
+  }, []);
+
+  // 切换单条日志选择
   const handleToggleSelect = useCallback((index) => {
     setSelectedIndices(prev => {
       const next = new Set(prev);
@@ -69,15 +73,21 @@ function LogsPage() {
     });
   }, []);
 
-  // v6.2.15: 虚拟滚动相关 refs
+  // 虚拟滚动相关 refs
   const listRef = useRef(null);
   const containerRef = useRef(null);
   const [listHeight, setListHeight] = useState(400);
+  const setContainerRef = useCallback((node) => {
+    if (!node) return;
+    containerRef.current = node;
+    const nextHeight = node.clientHeight || 400;
+    setListHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+  }, []);
 
-  // v6.2.15: 搜索防抖 - 使用 useDeferredValue 延迟过滤计算
+  // 搜索防抖 - 使用 useDeferredValue 延迟过滤计算
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
-  // v6.2.15: 缓存正则表达式（仅在 deferredSearchQuery 变化时重新编译）
+  // 缓存正则表达式（仅在 deferredSearchQuery 变化时重新编译）
   const highlightRegex = useMemo(() => {
     if (!deferredSearchQuery) return null;
     try {
@@ -87,11 +97,11 @@ function LogsPage() {
     }
   }, [deferredSearchQuery]);
 
-  // v6.2.11: 保存结果弹窗状态
+  // 保存结果弹窗状态
   const [saveResult, setSaveResult] = useState(null);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
 
-  // v6.2.16: 批量复制成功提示
+  // 批量复制成功提示
   const [copySuccess, setCopySuccess] = useState(false);
 
   // 过滤日志（使用 deferredSearchQuery 实现防抖）
@@ -118,7 +128,7 @@ function LogsPage() {
     return result;
   }, [logs, levelFilter, deferredSearchQuery]);
 
-  // v6.2.16: 复制选中的日志
+  // 复制选中的日志
   const handleCopySelected = useCallback(async () => {
     if (selectedIndices.size === 0) return;
 
@@ -159,11 +169,6 @@ function LogsPage() {
     }
   }, [selectedIndices, filteredLogs]);
 
-  // v6.2.16: 过滤条件变化时清空选择
-  useEffect(() => {
-    setSelectedIndices(new Set());
-  }, [levelFilter, deferredSearchQuery]);
-
   // 统计信息
   const stats = useMemo(() => {
     const counts = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 };
@@ -177,10 +182,10 @@ function LogsPage() {
     return counts;
   }, [logs]);
 
-  // 自动滚动逻辑（v6.2.15: 适配虚拟滚动）
+  // 自动滚动逻辑（适配虚拟滚动）
   useEffect(() => {
-    if (isInitialLoad && !loading && logs.length > 0) {
-      setIsInitialLoad(false);
+    if (isInitialLoadRef.current && !loading && logs.length > 0) {
+      isInitialLoadRef.current = false;
       prevLogsLengthRef.current = logs.length;
       // 初始加载时滚动到底部
       if (listRef.current) {
@@ -196,25 +201,9 @@ function LogsPage() {
     }
 
     prevLogsLengthRef.current = logs.length;
-  }, [logs.length, filteredLogs.length, autoScroll, loading, isInitialLoad]);
+  }, [logs.length, filteredLogs.length, autoScroll, loading]);
 
-  // v6.2.15: 监听容器高度变化
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const updateHeight = () => {
-      setListHeight(container.clientHeight);
-    };
-
-    updateHeight();
-    const resizeObserver = new ResizeObserver(updateHeight);
-    resizeObserver.observe(container);
-
-    return () => resizeObserver.disconnect();
-  }, []);
-
-  // 导出日志 (v6.2.11: 使用原生文件对话框)
+  // 导出日志 (使用原生文件对话框)
   const handleExport = async () => {
     const content = filteredLogs
       .map(log => `[${log.timestamp}] [${log.level}] ${log.message}`)
@@ -254,31 +243,12 @@ function LogsPage() {
   // 清空日志
   const handleClear = () => {
     clear();
-    setIsInitialLoad(true);
+    isInitialLoadRef.current = true;
     prevLogsLengthRef.current = 0;
   };
 
-  // v6.2.16: 点击外部清空选中（使用 document 级别监听）
-  const logContainerRef = useRef(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      // 如果没有选中项，不处理
-      if (selectedIndices.size === 0) return;
-
-      // 检查点击是否在日志容器外部
-      if (logContainerRef.current && !logContainerRef.current.contains(e.target)) {
-        setSelectedIndices(new Set());
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [selectedIndices.size]);
-
   return (
     <div
-      ref={logContainerRef}
       className="flex flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm h-full"
       style={{
         // 填满 main 区域可用高度：100vh - Header(~92px) - main上边距(32px) - 安全边距(16px)
@@ -320,17 +290,17 @@ function LogsPage() {
         <LogFilters
           stats={stats}
           levelFilter={levelFilter}
-          onLevelFilterChange={setLevelFilter}
+          onLevelFilterChange={handleLevelFilterChange}
           searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
+          onSearchChange={handleSearchChange}
           autoScroll={autoScroll}
           onAutoScrollChange={setAutoScroll}
           totalLogs={logs.length}
         />
       </div>
 
-      {/* 日志内容区域 - 虚拟滚动 (v6.2.15) */}
-      <div ref={containerRef} className="flex-1 overflow-hidden bg-white">
+      {/* 日志内容区域 - 虚拟滚动 */}
+      <div ref={setContainerRef} className="flex-1 overflow-hidden bg-white">
         {loading && logs.length === 0 ? (
           <div className="flex items-center justify-center h-full text-slate-400">
             <RefreshCw size={24} className="animate-spin mr-2" />
@@ -380,7 +350,7 @@ function LogsPage() {
         )}
       </div>
 
-      {/* v6.2.11: 保存结果弹窗 */}
+      {/* 保存结果弹窗 */}
       <SaveResultDialog
         isOpen={showSaveDialog}
         result={saveResult}

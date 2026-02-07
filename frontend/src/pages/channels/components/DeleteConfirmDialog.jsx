@@ -2,7 +2,6 @@
 // DeleteConfirmDialog - 删除确认对话框
 // ============================================
 
-import React from 'react';
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Button } from '@components/ui';
 

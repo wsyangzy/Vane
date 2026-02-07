@@ -226,7 +226,7 @@ func TestTokenParserV2_ErrorEvent(t *testing.T) {
 	}
 }
 
-// ===== v5.0.1+: Cache Creation 5m/1h 分开解析测试 =====
+// ===== Cache Creation 5m/1h 分开解析测试 =====
 
 // TestTokenParserV2_CacheCreation1hTokens 测试 1 小时缓存 token 解析
 func TestTokenParserV2_CacheCreation1hTokens(t *testing.T) {
@@ -270,7 +270,7 @@ func TestTokenParserV2_CacheCreation1hTokens(t *testing.T) {
 		t.Errorf("Expected CacheReadTokens=10000, got %d", result.TokenUsage.CacheReadTokens)
 	}
 
-	// v5.0.1+: 验证分开的 5m/1h 缓存 tokens
+	// 验证分开的 5m/1h 缓存 tokens
 	if result.TokenUsage.CacheCreation5mTokens != 0 {
 		t.Errorf("Expected CacheCreation5mTokens=0, got %d", result.TokenUsage.CacheCreation5mTokens)
 	}

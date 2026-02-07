@@ -249,7 +249,7 @@ type RequestRecord struct {
 	ID                    string  `json:"id"`
 	RequestID             string  `json:"request_id"`
 	Timestamp             string  `json:"timestamp"`
-	Channel               string  `json:"channel"` // v5.0: 渠道标签
+	Channel               string  `json:"channel"` // 渠道标签
 	Endpoint              string  `json:"endpoint"`
 	EndpointChain         string  `json:"endpoint_chain"` // 端点尝试链路（简略）
 	EndpointChainHead     string  `json:"endpoint_chain_head"`
@@ -265,8 +265,8 @@ type RequestRecord struct {
 	InputTokens           int64   `json:"input_tokens"`
 	OutputTokens          int64   `json:"output_tokens"`
 	CacheCreationTokens   int64   `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens int64   `json:"cache_creation_5m_tokens"` // v5.0.1: 5分钟缓存
-	CacheCreation1hTokens int64   `json:"cache_creation_1h_tokens"` // v5.0.1: 1小时缓存
+	CacheCreation5mTokens int64   `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens int64   `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens       int64   `json:"cache_read_tokens"`
 	ResponseTime          int64   `json:"response_time"`
 	IsStreaming           bool    `json:"is_streaming"`
@@ -289,7 +289,7 @@ type RequestQueryParams struct {
 	EndDate   string `json:"end_date"`   // 格式：2025-12-05T23:59 或 2025-12-05T23:59:59+08:00
 	Status    string `json:"status"`     // 可选：completed, failed, pending 等
 	Model     string `json:"model"`      // 可选：模型名称
-	Channel   string `json:"channel"`    // 可选：渠道名称（v5.0）
+	Channel   string `json:"channel"`    // 可选：渠道名称
 	Endpoint  string `json:"endpoint"`   // 可选：端点名称
 	Group     string `json:"group"`      // 可选：组名称
 }
@@ -358,7 +358,7 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		StartDate:    &startTime,
 		EndDate:      &endTime,
 		ModelName:    params.Model,
-		Channel:      params.Channel, // v5.0: 渠道筛选
+		Channel:      params.Channel, // 渠道筛选
 		EndpointName: params.Endpoint,
 		GroupName:    params.Group,
 		Status:       params.Status,
@@ -386,7 +386,7 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		record := RequestRecord{
 			RequestID:             r.RequestID,
 			Timestamp:             r.StartTime.Format("2006-01-02 15:04:05"),
-			Channel:               r.Channel, // v5.0: 渠道标签
+			Channel:               r.Channel, // 渠道标签
 			Endpoint:              r.EndpointName,
 			EndpointChain:         r.EndpointChain,
 			EndpointChainHead:     chainHead,
@@ -401,8 +401,8 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 			InputTokens:           r.InputTokens,
 			OutputTokens:          r.OutputTokens,
 			CacheCreationTokens:   r.CacheCreationTokens,
-			CacheCreation5mTokens: r.CacheCreation5mTokens, // v5.0.1+
-			CacheCreation1hTokens: r.CacheCreation1hTokens, // v5.0.1+
+			CacheCreation5mTokens: r.CacheCreation5mTokens,
+			CacheCreation1hTokens: r.CacheCreation1hTokens,
 			CacheReadTokens:       r.CacheReadTokens,
 			IsStreaming:           r.IsStreaming,
 			Cost:                  r.TotalCostUSD,
@@ -467,7 +467,7 @@ type UsageStatsQueryParams struct {
 	EndDate   string `json:"end_date"`   // 结束时间（优先于 period）
 	Status    string `json:"status"`     // 可选：状态筛选
 	Model     string `json:"model"`      // 可选：模型筛选
-	Channel   string `json:"channel"`    // 可选：渠道筛选（v5.0）
+	Channel   string `json:"channel"`    // 可选：渠道筛选
 	Endpoint  string `json:"endpoint"`   // 可选：端点筛选
 	Group     string `json:"group"`      // 可选：组筛选
 }
@@ -544,7 +544,7 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 			StartDate:    &startTime,
 			EndDate:      &endTime,
 			ModelName:    params.Model,
-			Channel:      params.Channel, // v5.0: 渠道筛选
+			Channel:      params.Channel, // 渠道筛选
 			EndpointName: params.Endpoint,
 			GroupName:    params.Group,
 			Status:       params.Status,

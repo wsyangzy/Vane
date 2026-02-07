@@ -85,7 +85,7 @@ type RequestDetail struct {
 	HTTPStatusCode *int   `json:"http_status_code"`
 	RetryCount     int    `json:"retry_count"`
 
-	// v3.5.0状态机重构新增字段 - 错误原因分离
+	// 状态机重构新增字段 - 错误原因分离
 	FailureReason     string `json:"failure_reason"`      // 失败原因类型
 	LastFailureReason string `json:"last_failure_reason"` // 最后一次失败的详细信息
 	CancelReason      string `json:"cancel_reason"`       // 取消原因
@@ -93,8 +93,8 @@ type RequestDetail struct {
 	InputTokens           int64 `json:"input_tokens"`
 	OutputTokens          int64 `json:"output_tokens"`
 	CacheCreationTokens   int64 `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // v5.0.1: 5分钟缓存
-	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // v5.0.1: 1小时缓存
+	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens       int64 `json:"cache_read_tokens"`
 
 	InputCostUSD         float64 `json:"input_cost_usd"`
@@ -313,7 +313,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		args = append(args, opts.GroupName)
 	}
 	if opts.Status != "" {
-		// v3.5.0状态机重构 - 状态与错误分离的兼容查询
+		// 状态机重构 - 状态与错误分离的兼容查询
 		switch opts.Status {
 		case "completed":
 			// 已完成状态：精确匹配

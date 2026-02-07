@@ -14,7 +14,7 @@ const LOG_STREAM_USER_PAUSED_KEY = 'log_stream_user_paused';
 const readUserPaused = () => {
   try {
     return window.sessionStorage.getItem(LOG_STREAM_USER_PAUSED_KEY) === '1';
-  } catch (err) {
+  } catch {
     return false;
   }
 };
@@ -26,7 +26,7 @@ const writeUserPaused = (paused) => {
     } else {
       window.sessionStorage.removeItem(LOG_STREAM_USER_PAUSED_KEY);
     }
-  } catch (err) {
+  } catch {
     // ignore storage errors
   }
 };
@@ -59,7 +59,7 @@ export function useWailsLogs(options = {}) {
   const isStartingRef = useRef(false);
   // 唯一实例 ID，用于防止 StrictMode 下的重复订阅
   const instanceIdRef = useRef(Date.now().toString(36) + Math.random().toString(36).slice(2));
-  // v6.2.14: 用户手动暂停标志，防止页面可见性控制自动恢复
+  // 用户手动暂停标志，防止页面可见性控制自动恢复
   const userPausedRef = useRef(false);
 
   // 日志级别过滤
@@ -98,7 +98,7 @@ export function useWailsLogs(options = {}) {
       return;
     }
     isStartingRef.current = true;
-    // v6.2.14: 用户主动启动时清除暂停标志
+    // 用户主动启动时清除暂停标志
     if (userInitiated) {
       userPausedRef.current = false;
       writeUserPaused(false);
@@ -155,7 +155,7 @@ export function useWailsLogs(options = {}) {
   // 停止日志流
   const stopStreaming = useCallback(async (options = {}) => {
     const { userInitiated = true } = options;
-    // v6.2.14: 标记为用户主动暂停，防止页面可见性控制自动恢复
+    // 标记为用户主动暂停，防止页面可见性控制自动恢复
     if (userInitiated) {
       userPausedRef.current = true;
       writeUserPaused(true);
@@ -237,7 +237,7 @@ export function useWailsLogs(options = {}) {
       // 恢复之前的用户暂停状态（页面不可见导致的暂停不算用户主动暂停）
       userPausedRef.current = wasUserPaused;
     } else if (isActive && !isStreaming && autoStart && !isStartingRef.current && !userPausedRef.current) {
-      // v6.2.14: 页面重新可见，且用户没有主动暂停时才重新启动
+      // 页面重新可见，且用户没有主动暂停时才重新启动
       console.log('📡 日志页面可见，重新启动日志流');
       startStreaming({ userInitiated: false });
     }

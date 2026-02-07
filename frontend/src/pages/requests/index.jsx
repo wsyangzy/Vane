@@ -1,7 +1,7 @@
 // ============================================
 // Requests 页面 - 请求追踪（重构版）
-// 2025-12-06 10:40:38 v4.0: 简化端点切换（移除 Token 级联）
-// v6.2: 获取渠道间故障转移状态，控制渠道切换器显示
+// 简化端点切换（移除 Token 级联）
+// 获取渠道间故障转移状态，控制渠道切换器显示
 // ============================================
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -27,9 +27,9 @@ const RequestsPage = () => {
   const [stats, setStats] = useState(null);
   const [models, setModels] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
-  const [groups, setGroups] = useState([]); // v6.0: 渠道列表（一个渠道=一个组）
-  const [activeGroup, setActiveGroup] = useState(''); // v6.0: 当前活跃渠道名称（沿用字段名兼容历史）
-  const [interChannelFailoverEnabled, setInterChannelFailoverEnabled] = useState(false); // v6.2: 渠道间故障转移是否启用
+  const [groups, setGroups] = useState([]); // 渠道列表（一个渠道=一个组）
+  const [activeGroup, setActiveGroup] = useState(''); // 当前活跃渠道名称（沿用字段名兼容历史）
+  const [interChannelFailoverEnabled, setInterChannelFailoverEnabled] = useState(false); // 渠道间故障转移是否启用
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -100,8 +100,8 @@ const RequestsPage = () => {
         period: '30d'
       };
 
-      // v4.0: 简化数据获取，移除 keysData
-      // v6.2: 添加渠道间故障转移状态获取
+      // 简化数据获取，移除 keysData
+      // 添加渠道间故障转移状态获取
       const [requestsData, statsData, modelsData, endpointsData, groupsData, failoverEnabled] = await Promise.all([
         fetchRequests({
           ...queryParams,
@@ -131,7 +131,7 @@ const RequestsPage = () => {
       const endpointsList = endpointsData.endpoints || endpointsData || [];
       setEndpoints(Array.isArray(endpointsList) ? endpointsList : []);
 
-      // v6.0: 渠道列表（一个渠道=一个组）
+      // 渠道列表（一个渠道=一个组）
       const groupsList = groupsData?.groups || [];
       setGroups(Array.isArray(groupsList) ? groupsList : []);
 
@@ -141,7 +141,7 @@ const RequestsPage = () => {
         setActiveGroup(activeGroupObj.name);
       }
 
-      // v6.2: 设置渠道间故障转移状态
+      // 设置渠道间故障转移状态
       setInterChannelFailoverEnabled(failoverEnabled);
     } catch (err) {
       setError(err.message);
@@ -197,7 +197,7 @@ const RequestsPage = () => {
   };
 
   // 快捷时间选择（筛选面板内）
-  const handleQuickTimeSelect = (range) => {
+  const handleQuickTimeSelect = () => {
     // 这里可以实现快捷时间选择的逻辑
     // 简化实现：直接更新到"今天"
     const todayRange = {

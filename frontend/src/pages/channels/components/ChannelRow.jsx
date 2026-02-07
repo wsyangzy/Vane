@@ -2,7 +2,6 @@
 // ChannelRow - 渠道分组行组件
 // ============================================
 
-import React from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 const ChannelRow = ({ channel, endpoints, expanded, onToggle, storageMode }) => {

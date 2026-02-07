@@ -15,7 +15,7 @@ import (
 )
 
 // TestEmergencyActivationScenarios 测试应急激活功能的各种场景
-// v4.0: 适配一端点一组架构
+// 适配一端点一组架构
 func TestEmergencyActivationScenarios(t *testing.T) {
 	// 禁用Gin的调试输出
 	gin.SetMode(gin.TestMode)
@@ -35,7 +35,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 	// 创建组管理器
 	gm := NewGroupManager(cfg)
 
-	// v4.0: 创建测试端点，每个端点自动成为一个独立的组
+	// 创建测试端点，每个端点自动成为一个独立的组
 	endpoints := []*Endpoint{
 		{
 			Config: config.EndpointConfig{
@@ -68,7 +68,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 		endpoints[0].Status.Healthy = false
 		gm.UpdateGroups(endpoints)
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		groupName := "unhealthy-endpoint"
 
 		// 验证组状态
@@ -139,7 +139,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 			group.ManuallyPaused = false
 		}
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		groupName := "healthy-endpoint"
 
 		// 让端点保持健康
@@ -205,7 +205,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 			group.ForcedActivationTime = time.Time{}
 		}
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		groupName := "unhealthy-endpoint"
 
 		// 确保端点不健康
@@ -266,7 +266,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 		// 测试can_force_activate逻辑（非活跃组+无健康端点）
 		t.Log("测试can_force_activate逻辑...")
 
-		// v6.0: 关闭“渠道间故障转移”时不允许暂停当前活跃组；
+		// 关闭“渠道间故障转移”时不允许暂停当前活跃组；
 		// 这里使用 DeactivateGroup 让其变为非活跃，以验证 can_force_activate 的判定逻辑。
 		_ = gm.DeactivateGroup(groupName)
 
@@ -297,7 +297,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 			group.ManuallyPaused = false
 		}
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		groupName := "unhealthy-endpoint"
 
 		// 确保端点不健康
@@ -371,7 +371,7 @@ func TestEmergencyActivationScenarios(t *testing.T) {
 	t.Run("场景5: HTTP API端点测试", func(t *testing.T) {
 		t.Log("=== 测试场景5: HTTP API端点测试 ===")
 
-		// v4.0: 组名就是端点名
+		// 组名就是端点名
 		groupName := "unhealthy-endpoint"
 
 		// 创建虚拟的Web服务器组件用于测试

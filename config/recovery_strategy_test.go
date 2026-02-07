@@ -2,11 +2,11 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
-// TestRecoveryStrategyIsValid 测试恢复策略验证
 func TestRecoveryStrategyIsValid(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -16,29 +16,27 @@ func TestRecoveryStrategyIsValid(t *testing.T) {
 		{"auto_wait is valid", RecoveryStrategyAutoWait, true},
 		{"loop_retry is valid", RecoveryStrategyLoopRetry, true},
 		{"fail_fast is valid", RecoveryStrategyFailFast, true},
-		{"empty string is invalid", RecoveryStrategy(""), false},
+		{"empty string is valid for migration", RecoveryStrategy(""), true},
 		{"random string is invalid", RecoveryStrategy("random"), false},
 		{"AUTO_WAIT uppercase is invalid", RecoveryStrategy("AUTO_WAIT"), false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.strategy.IsValid()
-			if result != tt.expected {
-				t.Errorf("Expected IsValid()=%v, got %v", tt.expected, result)
+			if got := tt.strategy.IsValid(); got != tt.expected {
+				t.Errorf("IsValid()=%v, expected=%v", got, tt.expected)
 			}
 		})
 	}
 }
 
-// TestRecoveryStrategyString 测试恢复策略可读名称
 func TestRecoveryStrategyString(t *testing.T) {
 	tests := []struct {
 		name     string
 		strategy RecoveryStrategy
 		expected string
 	}{
-		{"auto_wait", RecoveryStrategyAutoWait, "智能等待恢复"},
+		{"auto_wait", RecoveryStrategyAutoWait, "智能等待恢复（已废弃）"},
 		{"loop_retry", RecoveryStrategyLoopRetry, "循环重试"},
 		{"fail_fast", RecoveryStrategyFailFast, "快速失败"},
 		{"unknown", RecoveryStrategy("unknown"), "未知策略"},
@@ -46,304 +44,216 @@ func TestRecoveryStrategyString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.strategy.String()
-			if result != tt.expected {
-				t.Errorf("Expected String()=%s, got %s", tt.expected, result)
+			if got := tt.strategy.String(); got != tt.expected {
+				t.Errorf("String()=%q, expected=%q", got, tt.expected)
 			}
 		})
 	}
 }
 
-// TestRecoveryStrategyShouldWaitForRecovery 测试是否应等待恢复判断
 func TestRecoveryStrategyShouldWaitForRecovery(t *testing.T) {
-	tests := []struct {
-		name     string
-		strategy RecoveryStrategy
-		expected bool
-	}{
-		{"auto_wait should wait", RecoveryStrategyAutoWait, true},
-		{"loop_retry should not wait", RecoveryStrategyLoopRetry, false},
-		{"fail_fast should not wait", RecoveryStrategyFailFast, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.strategy.ShouldWaitForRecovery()
-			if result != tt.expected {
-				t.Errorf("Expected ShouldWaitForRecovery()=%v, got %v", tt.expected, result)
-			}
-		})
+	tests := []RecoveryStrategy{RecoveryStrategyAutoWait, RecoveryStrategyLoopRetry, RecoveryStrategyFailFast}
+	for _, strategy := range tests {
+		if strategy.ShouldWaitForRecovery() {
+			t.Errorf("ShouldWaitForRecovery() for %q should be false", strategy)
+		}
 	}
 }
 
-// TestRecoveryStrategyShouldLoopRetry 测试是否应循环重试判断
 func TestRecoveryStrategyShouldLoopRetry(t *testing.T) {
 	tests := []struct {
-		name     string
 		strategy RecoveryStrategy
 		expected bool
 	}{
-		{"loop_retry should loop", RecoveryStrategyLoopRetry, true},
-		{"auto_wait should not loop", RecoveryStrategyAutoWait, false},
-		{"fail_fast should not loop", RecoveryStrategyFailFast, false},
+		{RecoveryStrategyLoopRetry, true},
+		{RecoveryStrategyAutoWait, false},
+		{RecoveryStrategyFailFast, false},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := tt.strategy.ShouldLoopRetry()
-			if result != tt.expected {
-				t.Errorf("Expected ShouldLoopRetry()=%v, got %v", tt.expected, result)
-			}
-		})
+		if got := tt.strategy.ShouldLoopRetry(); got != tt.expected {
+			t.Errorf("ShouldLoopRetry(%q)=%v, expected=%v", tt.strategy, got, tt.expected)
+		}
 	}
 }
 
-// TestFailoverConfigV2Validate 测试 FailoverConfigV2 验证
 func TestFailoverConfigV2Validate(t *testing.T) {
 	tests := []struct {
 		name        string
-		config      *FailoverConfigV2
+		cfg         FailoverConfigV2
 		expectError bool
 		errorMsg    string
 	}{
 		{
-			name: "valid auto_wait config",
-			config: &FailoverConfigV2{
-				RecoveryStrategy:    RecoveryStrategyAutoWait,
-				AutoWaitTimeout:     300 * time.Second,
-				AutoWaitMaxRequests: 100,
+			name: "valid default config",
+			cfg: FailoverConfigV2{
+				LoopRetry:               false,
+				MaxLoops:                3,
+				SuspendTimeout:          120 * time.Second,
+				LoopRetrySuspendTimeout: 120 * time.Second,
 			},
 			expectError: false,
 		},
 		{
-			name: "valid loop_retry config",
-			config: &FailoverConfigV2{
-				RecoveryStrategy: RecoveryStrategyLoopRetry,
-			},
-			expectError: false,
-		},
-		{
-			name: "valid fail_fast config",
-			config: &FailoverConfigV2{
-				RecoveryStrategy: RecoveryStrategyFailFast,
-			},
-			expectError: false,
-		},
-		{
-			name: "invalid strategy",
-			config: &FailoverConfigV2{
-				RecoveryStrategy: RecoveryStrategy("invalid"),
+			name: "invalid negative max_loops when loop_retry enabled",
+			cfg: FailoverConfigV2{
+				LoopRetry: true,
+				MaxLoops:  -1,
 			},
 			expectError: true,
-			errorMsg:    "invalid recovery_strategy",
+			errorMsg:    "max_loops cannot be negative",
 		},
 		{
-			name: "auto_wait with zero timeout",
-			config: &FailoverConfigV2{
-				RecoveryStrategy:    RecoveryStrategyAutoWait,
-				AutoWaitTimeout:     0,
-				AutoWaitMaxRequests: 100,
+			name: "invalid too large max_loops",
+			cfg: FailoverConfigV2{
+				MaxLoops: 101,
 			},
 			expectError: true,
-			errorMsg:    "auto_wait_timeout must be greater than 0",
+			errorMsg:    "max_loops cannot exceed 100",
 		},
 		{
-			name: "auto_wait with zero max requests",
-			config: &FailoverConfigV2{
-				RecoveryStrategy:    RecoveryStrategyAutoWait,
-				AutoWaitTimeout:     300 * time.Second,
-				AutoWaitMaxRequests: 0,
+			name: "invalid negative suspend_timeout",
+			cfg: FailoverConfigV2{
+				SuspendTimeout: -1 * time.Second,
 			},
 			expectError: true,
-			errorMsg:    "auto_wait_max_requests must be greater than 0",
+			errorMsg:    "suspend_timeout cannot be negative",
 		},
 		{
-			name: "auto_wait with excessive max requests",
-			config: &FailoverConfigV2{
-				RecoveryStrategy:    RecoveryStrategyAutoWait,
-				AutoWaitTimeout:     300 * time.Second,
-				AutoWaitMaxRequests: 20000,
+			name: "invalid negative loop_retry_suspend_timeout",
+			cfg: FailoverConfigV2{
+				LoopRetrySuspendTimeout: -1 * time.Second,
 			},
 			expectError: true,
-			errorMsg:    "auto_wait_max_requests cannot exceed 10000",
+			errorMsg:    "loop_retry_suspend_timeout cannot be negative",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
+			err := tt.cfg.Validate()
 			if tt.expectError {
 				if err == nil {
-					t.Errorf("Expected error containing '%s', got nil", tt.errorMsg)
-				} else if tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
-					t.Errorf("Expected error containing '%s', got '%s'", tt.errorMsg, err.Error())
+					t.Fatalf("expected error containing %q, got nil", tt.errorMsg)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("Expected no error, got '%v'", err)
+				if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Fatalf("expected error containing %q, got %q", tt.errorMsg, err.Error())
 				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
 			}
 		})
 	}
 }
 
-// TestFailoverConfigV2SetDefaults 测试默认值设置
 func TestFailoverConfigV2SetDefaults(t *testing.T) {
 	tests := []struct {
-		name     string
-		config   *FailoverConfigV2
-		expected *FailoverConfigV2
+		name                     string
+		cfg                      FailoverConfigV2
+		expectedMaxLoops         int
+		expectedSuspendTimeout   time.Duration
+		expectedLoopRetryTimeout time.Duration
+		expectedRecoveryStrategy RecoveryStrategy
 	}{
 		{
-			name:   "empty config sets all defaults",
-			config: &FailoverConfigV2{},
-			expected: &FailoverConfigV2{
-				DefaultCooldown:     10 * time.Minute,
-				RecoveryStrategy:    RecoveryStrategyAutoWait,
-				AutoWaitTimeout:     300 * time.Second,
-				AutoWaitMaxRequests: 100,
-			},
+			name:                     "empty config sets defaults",
+			cfg:                      FailoverConfigV2{},
+			expectedMaxLoops:         3,
+			expectedSuspendTimeout:   120 * time.Second,
+			expectedLoopRetryTimeout: 120 * time.Second,
+			expectedRecoveryStrategy: "",
 		},
 		{
-			name: "partial config sets missing defaults",
-			config: &FailoverConfigV2{
-				RecoveryStrategy: RecoveryStrategyLoopRetry,
+			name: "auto_wait_timeout migrates to suspend timeouts",
+			cfg: FailoverConfigV2{
+				AutoWaitTimeout: 45 * time.Second,
 			},
-			expected: &FailoverConfigV2{
-				DefaultCooldown:     10 * time.Minute,
-				RecoveryStrategy:    RecoveryStrategyLoopRetry,
-				AutoWaitTimeout:     300 * time.Second,
-				AutoWaitMaxRequests: 100,
-			},
+			expectedMaxLoops:         3,
+			expectedSuspendTimeout:   45 * time.Second,
+			expectedLoopRetryTimeout: 45 * time.Second,
+			expectedRecoveryStrategy: "",
 		},
 		{
-			name: "full config preserves all values",
-			config: &FailoverConfigV2{
-				DefaultCooldown:     5 * time.Minute,
-				RecoveryStrategy:    RecoveryStrategyFailFast,
-				AutoWaitTimeout:     600 * time.Second,
-				AutoWaitMaxRequests: 200,
+			name: "suspend_timeout populates loop_retry_suspend_timeout",
+			cfg: FailoverConfigV2{
+				MaxLoops:       8,
+				SuspendTimeout: 30 * time.Second,
 			},
-			expected: &FailoverConfigV2{
-				DefaultCooldown:     5 * time.Minute,
-				RecoveryStrategy:    RecoveryStrategyFailFast,
-				AutoWaitTimeout:     600 * time.Second,
-				AutoWaitMaxRequests: 200,
-			},
+			expectedMaxLoops:         8,
+			expectedSuspendTimeout:   30 * time.Second,
+			expectedLoopRetryTimeout: 30 * time.Second,
+			expectedRecoveryStrategy: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.config.SetDefaults()
-			if tt.config.DefaultCooldown != tt.expected.DefaultCooldown {
-				t.Errorf("DefaultCooldown: expected %v, got %v", tt.expected.DefaultCooldown, tt.config.DefaultCooldown)
+			cfg := tt.cfg
+			cfg.SetDefaults()
+
+			if cfg.MaxLoops != tt.expectedMaxLoops {
+				t.Fatalf("MaxLoops=%d, expected=%d", cfg.MaxLoops, tt.expectedMaxLoops)
 			}
-			if tt.config.RecoveryStrategy != tt.expected.RecoveryStrategy {
-				t.Errorf("RecoveryStrategy: expected %v, got %v", tt.expected.RecoveryStrategy, tt.config.RecoveryStrategy)
+			if cfg.SuspendTimeout != tt.expectedSuspendTimeout {
+				t.Fatalf("SuspendTimeout=%v, expected=%v", cfg.SuspendTimeout, tt.expectedSuspendTimeout)
 			}
-			if tt.config.AutoWaitTimeout != tt.expected.AutoWaitTimeout {
-				t.Errorf("AutoWaitTimeout: expected %v, got %v", tt.expected.AutoWaitTimeout, tt.config.AutoWaitTimeout)
+			if cfg.LoopRetrySuspendTimeout != tt.expectedLoopRetryTimeout {
+				t.Fatalf("LoopRetrySuspendTimeout=%v, expected=%v", cfg.LoopRetrySuspendTimeout, tt.expectedLoopRetryTimeout)
 			}
-			if tt.config.AutoWaitMaxRequests != tt.expected.AutoWaitMaxRequests {
-				t.Errorf("AutoWaitMaxRequests: expected %v, got %v", tt.expected.AutoWaitMaxRequests, tt.config.AutoWaitMaxRequests)
+			if cfg.RecoveryStrategy != tt.expectedRecoveryStrategy {
+				t.Fatalf("RecoveryStrategy=%q, expected=%q", cfg.RecoveryStrategy, tt.expectedRecoveryStrategy)
 			}
 		})
 	}
 }
 
-// TestFailoverConfigV2MigrateFromLegacy 测试旧配置迁移
 func TestFailoverConfigV2MigrateFromLegacy(t *testing.T) {
 	tests := []struct {
-		name                string
-		oldFailover         *FailoverConfig
-		oldSuspend          *RequestSuspendConfig
-		expectedStrategy    RecoveryStrategy
-		expectedTimeout     time.Duration
-		expectedMaxRequests int
+		name                     string
+		oldFailover              *FailoverConfig
+		oldSuspend               *RequestSuspendConfig
+		expectedLoopRetry        bool
+		expectedSuspendTimeout   time.Duration
+		expectedLoopRetryTimeout time.Duration
 	}{
 		{
-			name: "suspend enabled → auto_wait",
+			name: "allow_revisit true migrates to loop_retry true",
 			oldFailover: &FailoverConfig{
 				Enabled:                    true,
-				DefaultCooldown:            10 * time.Minute,
-				AllowRevisitAfterExhausted: false,
-			},
-			oldSuspend: &RequestSuspendConfig{
-				Enabled:              true,
-				Timeout:              600 * time.Second,
-				MaxSuspendedRequests: 200,
-			},
-			expectedStrategy:    RecoveryStrategyAutoWait,
-			expectedTimeout:     600 * time.Second,
-			expectedMaxRequests: 200,
-		},
-		{
-			name: "suspend disabled + revisit enabled → loop_retry",
-			oldFailover: &FailoverConfig{
-				Enabled:                    true,
-				DefaultCooldown:            10 * time.Minute,
 				AllowRevisitAfterExhausted: true,
 			},
-			oldSuspend: &RequestSuspendConfig{
-				Enabled: false,
-			},
-			expectedStrategy:    RecoveryStrategyLoopRetry,
-			expectedTimeout:     0,
-			expectedMaxRequests: 0,
+			oldSuspend:               nil,
+			expectedLoopRetry:        true,
+			expectedSuspendTimeout:   0,
+			expectedLoopRetryTimeout: 0,
 		},
 		{
-			name: "both disabled → fail_fast",
+			name: "allow_revisit false migrates to loop_retry false",
 			oldFailover: &FailoverConfig{
 				Enabled:                    true,
-				DefaultCooldown:            10 * time.Minute,
+				AllowRevisitAfterExhausted: false,
+			},
+			oldSuspend:               nil,
+			expectedLoopRetry:        false,
+			expectedSuspendTimeout:   0,
+			expectedLoopRetryTimeout: 0,
+		},
+		{
+			name: "legacy suspend timeout migrates to new timeout fields",
+			oldFailover: &FailoverConfig{
+				Enabled:                    true,
 				AllowRevisitAfterExhausted: false,
 			},
 			oldSuspend: &RequestSuspendConfig{
-				Enabled: false,
+				Enabled: true,
+				Timeout: 75 * time.Second,
 			},
-			expectedStrategy:    RecoveryStrategyFailFast,
-			expectedTimeout:     0,
-			expectedMaxRequests: 0,
-		},
-		{
-			name: "suspend nil + revisit true → loop_retry",
-			oldFailover: &FailoverConfig{
-				Enabled:                    true,
-				DefaultCooldown:            10 * time.Minute,
-				AllowRevisitAfterExhausted: true,
-			},
-			oldSuspend:          nil,
-			expectedStrategy:    RecoveryStrategyLoopRetry,
-			expectedTimeout:     0,
-			expectedMaxRequests: 0,
-		},
-		{
-			name: "suspend nil + revisit false → fail_fast",
-			oldFailover: &FailoverConfig{
-				Enabled:                    true,
-				DefaultCooldown:            10 * time.Minute,
-				AllowRevisitAfterExhausted: false,
-			},
-			oldSuspend:          nil,
-			expectedStrategy:    RecoveryStrategyFailFast,
-			expectedTimeout:     0,
-			expectedMaxRequests: 0,
-		},
-		{
-			name: "suspend enabled with custom values → auto_wait with values",
-			oldFailover: &FailoverConfig{
-				Enabled:         true,
-				DefaultCooldown: 5 * time.Minute,
-			},
-			oldSuspend: &RequestSuspendConfig{
-				Enabled:              true,
-				Timeout:              120 * time.Second,
-				MaxSuspendedRequests: 50,
-			},
-			expectedStrategy:    RecoveryStrategyAutoWait,
-			expectedTimeout:     120 * time.Second,
-			expectedMaxRequests: 50,
+			expectedLoopRetry:        false,
+			expectedSuspendTimeout:   75 * time.Second,
+			expectedLoopRetryTimeout: 75 * time.Second,
 		},
 	}
 
@@ -352,26 +262,22 @@ func TestFailoverConfigV2MigrateFromLegacy(t *testing.T) {
 			fc := &FailoverConfigV2{}
 			fc.MigrateFromLegacy(tt.oldFailover, tt.oldSuspend)
 
-			if fc.RecoveryStrategy != tt.expectedStrategy {
-				t.Errorf("RecoveryStrategy: expected %v, got %v", tt.expectedStrategy, fc.RecoveryStrategy)
+			if fc.LoopRetry != tt.expectedLoopRetry {
+				t.Fatalf("LoopRetry=%v, expected=%v", fc.LoopRetry, tt.expectedLoopRetry)
 			}
-			if fc.AutoWaitTimeout != tt.expectedTimeout {
-				t.Errorf("AutoWaitTimeout: expected %v, got %v", tt.expectedTimeout, fc.AutoWaitTimeout)
+			if fc.SuspendTimeout != tt.expectedSuspendTimeout {
+				t.Fatalf("SuspendTimeout=%v, expected=%v", fc.SuspendTimeout, tt.expectedSuspendTimeout)
 			}
-			if fc.AutoWaitMaxRequests != tt.expectedMaxRequests {
-				t.Errorf("AutoWaitMaxRequests: expected %v, got %v", tt.expectedMaxRequests, fc.AutoWaitMaxRequests)
+			if fc.LoopRetrySuspendTimeout != tt.expectedLoopRetryTimeout {
+				t.Fatalf("LoopRetrySuspendTimeout=%v, expected=%v", fc.LoopRetrySuspendTimeout, tt.expectedLoopRetryTimeout)
 			}
 			if fc.Enabled != tt.oldFailover.Enabled {
-				t.Errorf("Enabled: expected %v, got %v", tt.oldFailover.Enabled, fc.Enabled)
-			}
-			if fc.DefaultCooldown != tt.oldFailover.DefaultCooldown {
-				t.Errorf("DefaultCooldown: expected %v, got %v", tt.oldFailover.DefaultCooldown, fc.DefaultCooldown)
+				t.Fatalf("Enabled=%v, expected=%v", fc.Enabled, tt.oldFailover.Enabled)
 			}
 		})
 	}
 }
 
-// TestLoadConfigWithV60Format 测试加载 v6.0 格式配置（旧格式）
 func TestLoadConfigWithV60Format(t *testing.T) {
 	configContent := `
 proxy:
@@ -397,36 +303,37 @@ request_suspend:
 
 	tmpFile, err := os.CreateTemp("", "test-v60-config-*.yaml")
 	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
+		t.Fatalf("create temp file: %v", err)
 	}
 	defer os.Remove(tmpFile.Name())
 
 	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 	tmpFile.Close()
 
-	config, err := LoadConfig(tmpFile.Name())
+	cfg, err := LoadConfig(tmpFile.Name())
 	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
+		t.Fatalf("load config: %v", err)
 	}
 
-	// 验证自动迁移到 v6.1 格式
-	if config.FailoverV2.RecoveryStrategy != RecoveryStrategyAutoWait {
-		t.Errorf("Expected RecoveryStrategy=auto_wait after migration, got %v", config.FailoverV2.RecoveryStrategy)
+	if !cfg.FailoverV2.Enabled {
+		t.Fatalf("expected FailoverV2.Enabled=true")
 	}
-	if config.FailoverV2.AutoWaitTimeout != 300*time.Second {
-		t.Errorf("Expected AutoWaitTimeout=300s after migration, got %v", config.FailoverV2.AutoWaitTimeout)
+	if cfg.FailoverV2.LoopRetry {
+		t.Fatalf("expected LoopRetry=false after migration")
 	}
-	if config.FailoverV2.AutoWaitMaxRequests != 100 {
-		t.Errorf("Expected AutoWaitMaxRequests=100 after migration, got %v", config.FailoverV2.AutoWaitMaxRequests)
+	if cfg.FailoverV2.SuspendTimeout != 300*time.Second {
+		t.Fatalf("expected SuspendTimeout=300s, got %v", cfg.FailoverV2.SuspendTimeout)
 	}
-	if config.FailoverV2.DefaultCooldown != 10*time.Minute {
-		t.Errorf("Expected DefaultCooldown=10m after migration, got %v", config.FailoverV2.DefaultCooldown)
+	if cfg.FailoverV2.LoopRetrySuspendTimeout != 300*time.Second {
+		t.Fatalf("expected LoopRetrySuspendTimeout=300s, got %v", cfg.FailoverV2.LoopRetrySuspendTimeout)
+	}
+	if cfg.FailoverV2.MaxLoops != 3 {
+		t.Fatalf("expected MaxLoops=3, got %d", cfg.FailoverV2.MaxLoops)
 	}
 }
 
-// TestLoadConfigWithV61Format 测试加载 v6.1 格式配置（新格式）
 func TestLoadConfigWithV61Format(t *testing.T) {
 	configContent := `
 proxy:
@@ -447,37 +354,34 @@ failover_v2:
 
 	tmpFile, err := os.CreateTemp("", "test-v61-config-*.yaml")
 	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
+		t.Fatalf("create temp file: %v", err)
 	}
 	defer os.Remove(tmpFile.Name())
 
 	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 	tmpFile.Close()
 
-	config, err := LoadConfig(tmpFile.Name())
+	cfg, err := LoadConfig(tmpFile.Name())
 	if err != nil {
-		t.Fatalf("Failed to load config: %v", err)
+		t.Fatalf("load config: %v", err)
 	}
 
-	// 验证直接加载 v6.1 格式
-	if config.FailoverV2.RecoveryStrategy != RecoveryStrategyLoopRetry {
-		t.Errorf("Expected RecoveryStrategy=loop_retry, got %v", config.FailoverV2.RecoveryStrategy)
+	if !cfg.FailoverV2.LoopRetry {
+		t.Fatalf("expected LoopRetry=true")
 	}
-	if config.FailoverV2.DefaultCooldown != 10*time.Minute {
-		t.Errorf("Expected DefaultCooldown=10m, got %v", config.FailoverV2.DefaultCooldown)
+	if cfg.FailoverV2.RecoveryStrategy != "" {
+		t.Fatalf("expected RecoveryStrategy to be cleared after migration, got %q", cfg.FailoverV2.RecoveryStrategy)
 	}
-	// 默认值应被设置
-	if config.FailoverV2.AutoWaitTimeout != 300*time.Second {
-		t.Errorf("Expected AutoWaitTimeout=300s (default), got %v", config.FailoverV2.AutoWaitTimeout)
+	if cfg.FailoverV2.SuspendTimeout != 120*time.Second {
+		t.Fatalf("expected default SuspendTimeout=120s, got %v", cfg.FailoverV2.SuspendTimeout)
 	}
-	if config.FailoverV2.AutoWaitMaxRequests != 100 {
-		t.Errorf("Expected AutoWaitMaxRequests=100 (default), got %v", config.FailoverV2.AutoWaitMaxRequests)
+	if cfg.FailoverV2.LoopRetrySuspendTimeout != 120*time.Second {
+		t.Fatalf("expected default LoopRetrySuspendTimeout=120s, got %v", cfg.FailoverV2.LoopRetrySuspendTimeout)
 	}
 }
 
-// TestLoadConfigWithInvalidStrategy 测试加载无效策略的配置
 func TestLoadConfigWithInvalidStrategy(t *testing.T) {
 	configContent := `
 proxy:
@@ -497,34 +401,24 @@ failover_v2:
 
 	tmpFile, err := os.CreateTemp("", "test-invalid-config-*.yaml")
 	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
+		t.Fatalf("create temp file: %v", err)
 	}
 	defer os.Remove(tmpFile.Name())
 
 	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write config: %v", err)
+		t.Fatalf("write config: %v", err)
 	}
 	tmpFile.Close()
 
-	_, err = LoadConfig(tmpFile.Name())
-	if err == nil {
-		t.Errorf("Expected error when loading config with invalid strategy, got nil")
+	cfg, err := LoadConfig(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("expected invalid legacy strategy to be tolerated, got error: %v", err)
 	}
-	if !contains(err.Error(), "invalid recovery_strategy") {
-		t.Errorf("Expected error message to contain 'invalid recovery_strategy', got: %v", err)
-	}
-}
 
-// 辅助函数：检查字符串是否包含子串
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+	if cfg.FailoverV2.RecoveryStrategy != "" {
+		t.Fatalf("expected RecoveryStrategy cleared after migration, got %q", cfg.FailoverV2.RecoveryStrategy)
 	}
-	return false
+	if cfg.FailoverV2.LoopRetry {
+		t.Fatalf("expected LoopRetry=false for unknown legacy strategy")
+	}
 }

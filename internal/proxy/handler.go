@@ -260,7 +260,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var err error
 			bodyBytes, err = io.ReadAll(r.Body)
 			if err != nil {
-				// v6.2.13: 使用 422 状态码，避免 Claude Code 自动重试
+				// 使用 422 状态码，避免 Claude Code 自动重试
 				http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
 				return
 			}
@@ -292,7 +292,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, err = io.ReadAll(r.Body)
 		if err != nil {
 			lifecycleManager.HandleError(err)
-			// v6.2.13: 使用 422 状态码，避免 Claude Code 自动重试
+			// 使用 422 状态码，避免 Claude Code 自动重试
 			http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
 			return
 		}
@@ -394,7 +394,7 @@ func (h *Handler) UpdateConfig(cfg *config.Config) {
 		h.sharedSuspensionManager.UpdateConfig(cfg)
 	}
 
-	// v6.2.14: 更新子处理器配置，确保设置变更能传播到流式和常规处理器
+	// 更新子处理器配置，确保设置变更能传播到流式和常规处理器
 	if h.streamingHandler != nil {
 		h.streamingHandler.UpdateConfig(cfg)
 	}

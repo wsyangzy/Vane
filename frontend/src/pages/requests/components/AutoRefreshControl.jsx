@@ -3,7 +3,7 @@
 // 2025-12-01 12:56:37
 // ============================================
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { Timer, ChevronDown, Check, RotateCcw } from 'lucide-react';
 
 /**
@@ -22,7 +22,6 @@ import { Timer, ChevronDown, Check, RotateCcw } from 'lucide-react';
  * @param {Function} props.onManualRefresh - 手动刷新回调
  */
 const AutoRefreshControl = ({
-  isEnabled = false,
   interval = 5,
   onIntervalChange,
   onManualRefresh

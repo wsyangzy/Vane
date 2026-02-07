@@ -32,18 +32,18 @@ export const API_ENDPOINTS = {
   CONFIG: '/api/v1/config'
 };
 
-// 请求状态配置 (v3.5.0 状态机, v6.0.7+ 新增 awaiting_endpoint, v6.2.2+ 新增 partial_recovery)
+// 请求状态配置 (状态机, 新增 awaiting_endpoint, 新增 partial_recovery)
 export const REQUEST_STATUS = {
   PENDING: 'pending',
   FORWARDING: 'forwarding',
   PROCESSING: 'processing',
   RETRY: 'retry',
   SUSPENDED: 'suspended',
-  AWAITING_ENDPOINT: 'awaiting_endpoint',  // v6.0.7+ 等待端点激活
+  AWAITING_ENDPOINT: 'awaiting_endpoint',  // 等待端点激活
   COMPLETED: 'completed',
   FAILED: 'failed',
   PARTIAL_FAILED: 'partial_failed',
-  PARTIAL_RECOVERY: 'partial_recovery',    // v6.2.2+ 部分数据恢复（流中断）
+  PARTIAL_RECOVERY: 'partial_recovery',    // 部分数据恢复（流中断）
   ERROR: 'error',
   CANCELLED: 'cancelled',
   TIMEOUT: 'timeout'

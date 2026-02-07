@@ -1,5 +1,5 @@
 // endpoint_crud.go - 动态端点管理功能
-// 包含端点的增删改查操作（v5.0+ 新增）
+// 包含端点的增删改查操作（新增）
 
 package endpoint
 
@@ -13,7 +13,7 @@ import (
 	"claude-request-forwarder/internal/events"
 )
 
-// SyncEndpoints 从数据库同步端点（v5.0 Desktop 专用）
+// SyncEndpoints 从数据库同步端点（Desktop 专用）
 // 用于启动时从数据库加载端点，替换现有端点列表
 func (m *Manager) SyncEndpoints(configs []config.EndpointConfig) {
 	// 创建新端点列表
@@ -51,7 +51,7 @@ func (m *Manager) SyncEndpoints(configs []config.EndpointConfig) {
 	slog.Info(fmt.Sprintf("🔄 [端点同步] 已同步 %d 个端点到管理器", len(configs)))
 }
 
-// AddEndpoint 动态添加端点（v5.0+ 新增）
+// AddEndpoint 动态添加端点（新增）
 // 线程安全地将新端点添加到管理器中
 func (m *Manager) AddEndpoint(cfg config.EndpointConfig) error {
 	// 验证端点标识唯一性（SQLite/channel 模式下允许不同渠道同名端点）
@@ -121,7 +121,7 @@ func (m *Manager) AddEndpoint(cfg config.EndpointConfig) error {
 	return nil
 }
 
-// RemoveEndpoint 动态移除端点（v5.0+ 新增）
+// RemoveEndpoint 动态移除端点（新增）
 // 线程安全地从管理器中移除端点
 func (m *Manager) RemoveEndpoint(endpointKey string) error {
 	m.endpointsMu.Lock()
@@ -191,7 +191,7 @@ func (m *Manager) RemoveEndpoint(endpointKey string) error {
 	return nil
 }
 
-// UpdateEndpointConfig 更新端点配置（v5.0+ 新增）
+// UpdateEndpointConfig 更新端点配置（新增）
 // 参数 oldEndpointKey 用于定位要更新的端点；cfg 可包含新的 name/channel（支持端点改名/移动渠道）。
 func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.EndpointConfig) error {
 	m.endpointsMu.RLock()
@@ -293,7 +293,7 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 }
 
 // UpdateEndpointPriority updates the priority of an endpoint by name
-// 注意: v5.0 SQLite 模式下，优先级应通过 UpdateEndpointConfig 更新
+// 注意: SQLite 模式下，优先级应通过 UpdateEndpointConfig 更新
 // 此函数保留用于 YAML 配置模式的向后兼容
 func (m *Manager) UpdateEndpointPriority(name string, newPriority int) error {
 	if newPriority < 1 {

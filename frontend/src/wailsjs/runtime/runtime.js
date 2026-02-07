@@ -253,7 +253,7 @@ export function ClipboardSetText(text) {
 // File Drop (v3 uses different API - stubs)
 // ============================================================
 
-export function OnFileDrop(callback, useDropTarget) {
+export function OnFileDrop(_callback, _useDropTarget) {
   console.warn('[Wails Shim] OnFileDrop is not yet implemented for v3');
 }
 

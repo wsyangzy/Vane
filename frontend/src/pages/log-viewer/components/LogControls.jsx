@@ -1,6 +1,5 @@
 // LogControls.jsx - 日志控制按钮组件
-// v6.2.16: 添加批量复制按钮
-import React from 'react';
+// 添加批量复制按钮
 import {
   Pause,
   Play,
@@ -46,7 +45,7 @@ function LogControls({
         {isStreaming ? '实时' : '已暂停'}
       </div>
 
-      {/* v6.2.16: 复制选中按钮 - 放在暂停按钮左边 */}
+      {/* 复制选中按钮 - 放在暂停按钮左边 */}
       {selectedCount > 0 && (
         <button
           onClick={onCopySelected}
@@ -57,7 +56,7 @@ function LogControls({
         </button>
       )}
 
-      {/* v6.2.16: 复制成功提示 */}
+      {/* 复制成功提示 */}
       {copySuccess && (
         <div className="flex items-center gap-1 p-2 rounded-lg bg-green-100 text-green-700">
           <Check size={16} />

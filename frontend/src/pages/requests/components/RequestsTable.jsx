@@ -117,7 +117,6 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
               const endpoint = parseEndpointName(item);
               const isLast = idx === chainItems.length - 1;
               const isFirst = idx === 0;
-              const isMiddle = !isFirst && !isLast;
               return (
                 <div key={idx}>
                   <div className="flex items-center gap-2">
@@ -160,10 +159,9 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
  * 渲染单元格内容
  * @param {string} columnId - 列 ID
  * @param {Object} request - 请求数据
- * @param {Array} visibleColumns - 可见列配置
  * @param {number} rowIndex - 行索引
  */
-const renderCell = (columnId, request, visibleColumns = [], rowIndex = 0) => {
+const renderCell = (columnId, request, rowIndex = 0) => {
   switch (columnId) {
     case 'requestId':
       const StreamIcon = request.isStreaming ? Waves : RefreshCw;

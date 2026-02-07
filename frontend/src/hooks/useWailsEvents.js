@@ -27,6 +27,19 @@ export const WAILS_STATUS = {
   NOT_AVAILABLE: 'not_available'
 };
 
+// 事件映射：前端事件名 -> Wails 事件名
+const EVENT_MAPPING = {
+  'status': WAILS_EVENTS.SYSTEM_STATUS,
+  'endpoint': WAILS_EVENTS.ENDPOINT_UPDATE,
+  'group': WAILS_EVENTS.GROUP_UPDATE,
+  // Wails 侧没有独立的 connection 事件，复用 usage:update 作为连接统计推送源
+  'connection': WAILS_EVENTS.USAGE_UPDATE,
+  'usage': WAILS_EVENTS.USAGE_UPDATE,
+  'config': WAILS_EVENTS.CONFIG_RELOADED,
+  'error': WAILS_EVENTS.ERROR,
+  'notification': WAILS_EVENTS.NOTIFICATION
+};
+
 /**
  * Wails Events Hook
  * 替代 useSSE，使用 Wails 事件系统
@@ -47,19 +60,6 @@ const useWailsEvents = (onDataUpdate, options = {}) => {
   useEffect(() => {
     onDataUpdateRef.current = onDataUpdate;
   }, [onDataUpdate]);
-
-  // 事件映射：前端事件名 -> Wails 事件名
-  const eventMapping = {
-    'status': WAILS_EVENTS.SYSTEM_STATUS,
-    'endpoint': WAILS_EVENTS.ENDPOINT_UPDATE,
-    'group': WAILS_EVENTS.GROUP_UPDATE,
-    // Wails 侧没有独立的 connection 事件，复用 usage:update 作为连接统计推送源
-    'connection': WAILS_EVENTS.USAGE_UPDATE,
-    'usage': WAILS_EVENTS.USAGE_UPDATE,
-    'config': WAILS_EVENTS.CONFIG_RELOADED,
-    'error': WAILS_EVENTS.ERROR,
-    'notification': WAILS_EVENTS.NOTIFICATION
-  };
 
   // 订阅事件
   const subscribe = useCallback(async () => {
@@ -89,7 +89,7 @@ const useWailsEvents = (onDataUpdate, options = {}) => {
       const eventTypes = events.split(',').map(e => e.trim());
 
       eventTypes.forEach(eventType => {
-        const wailsEventName = eventMapping[eventType];
+        const wailsEventName = EVENT_MAPPING[eventType];
         if (!wailsEventName) {
           console.warn(`⚠️ [Wails Events] 未知事件类型: ${eventType}`);
           return;

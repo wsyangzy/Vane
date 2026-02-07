@@ -1,5 +1,5 @@
 // Package service 提供业务逻辑层实现
-// 渠道服务 - v6.1.0 新增，v6.2.1 优先级自动递增与冲突交换
+// 渠道服务 - 新增，优先级自动递增与冲突交换
 package service
 
 import (
@@ -26,7 +26,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, record *store.Channe
 		return nil, fmt.Errorf("渠道名称不能为空")
 	}
 
-	// v6.2.1: 优先级自动递增（仅当 Priority <= 0 时触发）
+	// 优先级自动递增（仅当 Priority <= 0 时触发）
 	if record.Priority <= 0 {
 		maxPriority, err := s.store.GetMaxPriority(ctx)
 		if err != nil {
@@ -87,7 +87,7 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, record *store.Channe
 		return fmt.Errorf("渠道不存在: %s", record.Name)
 	}
 
-	// v6.2.1: 优先级冲突交换
+	// 优先级冲突交换
 	if record.Priority != existing.Priority {
 		conflicting, err := s.store.GetByPriority(ctx, record.Priority)
 		if err != nil {
@@ -140,7 +140,7 @@ func (s *ChannelService) SetFailoverEnabled(ctx context.Context, name string, en
 
 // ResetAllFailoverEnabled 重置所有渠道的 failover_enabled 为 true
 // 用于开启渠道间故障转移时，确保所有渠道都可参与故障转移。
-// v6.2.14: 修复开启渠道间转移后，暂停状态从数据库重新加载导致状态不一致的问题。
+// 修复开启渠道间转移后，暂停状态从数据库重新加载导致状态不一致的问题。
 func (s *ChannelService) ResetAllFailoverEnabled(ctx context.Context) (int, error) {
 	if s == nil || s.store == nil {
 		return 0, nil

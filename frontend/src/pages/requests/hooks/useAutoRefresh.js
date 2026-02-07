@@ -1,6 +1,6 @@
 // ============================================
 // useAutoRefresh Hook - 自动刷新状态管理
-// 2025-12-06 20:26:59 v5.0: 添加页面可见性检测
+// 添加页面可见性检测
 // ============================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -13,14 +13,14 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * 2. 使用 useRef 存储定时器引用,避免闭包陷阱
  * 3. 使用 useRef 存储回调函数,避免依赖项变化导致定时器重建
  * 4. 通过设置 interval=0 来停止自动刷新
- * 5. v5.0: 页面隐藏时自动暂停刷新，可见时恢复，节省后端资源
+ * 5. 页面隐藏时自动暂停刷新，可见时恢复，节省后端资源
  *
  * @param {Function} onRefresh - 刷新回调函数
  * @returns {Object}
  */
 export const useAutoRefresh = (onRefresh) => {
   // 自动刷新间隔状态 (0 = 关闭)
-  // v5.0: 默认开启5秒自动刷新
+  // 默认开启5秒自动刷新
   const [refreshInterval, setRefreshInterval] = useState(5);
 
   // 页面可见性状态

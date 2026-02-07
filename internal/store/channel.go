@@ -1,5 +1,5 @@
 // Package store 提供数据存储层实现
-// 渠道存储 - v6.1.0 新增
+// 渠道存储 - 新增
 package store
 
 import (
@@ -28,8 +28,8 @@ type ChannelRecord struct {
 type ChannelStore interface {
 	Create(ctx context.Context, record *ChannelRecord) (*ChannelRecord, error)
 	Get(ctx context.Context, name string) (*ChannelRecord, error)
-	GetByPriority(ctx context.Context, priority int) (*ChannelRecord, error) // v6.2.1: 用于优先级冲突交换
-	GetMaxPriority(ctx context.Context) (int, error)                         // v6.2.1: 用于自动递增
+	GetByPriority(ctx context.Context, priority int) (*ChannelRecord, error) // 用于优先级冲突交换
+	GetMaxPriority(ctx context.Context) (int, error)                         // 用于自动递增
 	List(ctx context.Context) ([]*ChannelRecord, error)
 	Update(ctx context.Context, record *ChannelRecord) error
 	Delete(ctx context.Context, name string) error
@@ -142,7 +142,7 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 	return &record, nil
 }
 
-// GetByPriority v6.2.1: 根据优先级获取渠道（用于优先级冲突交换）
+// GetByPriority 根据优先级获取渠道（用于优先级冲突交换）
 func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*ChannelRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -181,7 +181,7 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 	return &record, nil
 }
 
-// GetMaxPriority v6.2.1: 获取所有渠道的最大优先级（用于自动递增）
+// GetMaxPriority 获取所有渠道的最大优先级（用于自动递增）
 func (s *SQLiteChannelStore) GetMaxPriority(ctx context.Context) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

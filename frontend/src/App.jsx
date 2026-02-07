@@ -13,15 +13,15 @@ import { getSuspendedRequestsCount, getManualRetryRequestsCount } from '@utils/w
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
 const ChannelsPage = lazy(() => import('@pages/channels/index.jsx'));
-// v4.0: 组管理页面已移除，配置简化后不再需要独立的组管理功能
+// 组管理页面已移除，配置简化后不再需要独立的组管理功能
 // const GroupsPage = lazy(() => import('@pages/groups/index.jsx'));
 const RequestsPage = lazy(() => import('@pages/requests/index.jsx'));
 const PricingPage = lazy(() => import('@pages/pricing/index.jsx'));
-// v5.1: 配置页面改为设置页面（可编辑）
+// 配置页面改为设置页面（可编辑）
 const SettingsPage = lazy(() => import('@pages/settings/index.jsx'));
 // 保留只读配置页面用于调试
 const ConfigPage = lazy(() => import('@pages/config/index.jsx'));
-// v5.1: 系统日志页面
+// 系统日志页面
 const LogsPage = lazy(() => import('@pages/log-viewer/index.jsx'));
 
 // ============================================
@@ -118,7 +118,7 @@ const GlobalAlerts = () => {
 
       if (latestFailureId && latestFailureId !== lastFailureIdRef.current) {
         if (shouldNotifyFailoverFailure(failureReason)) {
-          // v6.2.19: 根据失败类型选择不同的提示级别
+          // 根据失败类型选择不同的提示级别
           // max_loops_exceeded 和 max_restarts_exceeded 需要用户手动处理，使用 warning 级别
           // 避免与真正的错误混淆（如并发场景下其他请求还在正常运行）
           const isManualInterventionNeeded =
@@ -157,7 +157,7 @@ const GlobalAlerts = () => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('overview');
-  // v5.1+: 代理网关真实状态（来自后端 system:status 事件）
+  // 代理网关真实状态（来自后端 system:status 事件）
   const [proxyStatus, setProxyStatus] = useState({
     running: false,
     port: 0,
@@ -183,15 +183,15 @@ function App() {
     const pages = {
       overview: <OverviewPage />,
       channels: <ChannelsPage />,
-      // v4.0: 组管理页面已移除
+      // 组管理页面已移除
       // groups: <GroupsPage />,
       requests: <RequestsPage />,
       pricing: <PricingPage />,
-      // v5.1: 设置页面（可编辑）
+      // 设置页面（可编辑）
       settings: <SettingsPage />,
       // 保留只读配置页面
       config: <ConfigPage />,
-      // v5.1: 系统日志页面
+      // 系统日志页面
       logs: <LogsPage />
     };
 

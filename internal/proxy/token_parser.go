@@ -52,7 +52,7 @@ type UsageData struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"` // 总数（向后兼容）
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	// v5.0+: 分开的缓存创建详情
+	// 分开的缓存创建详情
 	CacheCreation *CacheCreationDetail `json:"cache_creation,omitempty"`
 }
 
@@ -327,7 +327,7 @@ func (tp *TokenParser) parseMessageStart() *monitor.TokenUsage {
 	if messageStart.Message != nil && messageStart.Message.Usage != nil {
 		usage := messageStart.Message.Usage
 
-		// v5.0+: 提取分开的 5m/1h 缓存 tokens
+		// 提取分开的 5m/1h 缓存 tokens
 		var cache5m, cache1h int64
 		if usage.CacheCreation != nil {
 			cache5m = usage.CacheCreation.Ephemeral5mInputTokens
@@ -423,7 +423,7 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 	cacheCreationTokens := usage.CacheCreationInputTokens
 	cacheReadTokens := usage.CacheReadInputTokens
 
-	// v5.0+: 提取分开的 5m/1h 缓存 tokens
+	// 提取分开的 5m/1h 缓存 tokens
 	var cache5m, cache1h int64
 	if usage.CacheCreation != nil {
 		cache5m = usage.CacheCreation.Ephemeral5mInputTokens
@@ -437,7 +437,7 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 			tp.requestID, cacheCreationTokens))
 	}
 
-	// v5.0+: 智能合并 5m/1h 缓存
+	// 智能合并 5m/1h 缓存
 	if cache5m == 0 && tp.partialUsage != nil && tp.partialUsage.CacheCreation5mTokens > 0 {
 		cache5m = tp.partialUsage.CacheCreation5mTokens
 		slog.Info(fmt.Sprintf("🔄 [缓存合并] [%s] 保留message_start中的cache_5m_tokens: %d",
@@ -531,7 +531,7 @@ func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 	// 转换为我们的TokenUsage格式
 	usage := messageDelta.Usage
 
-	// v5.0+: 提取分开的 5m/1h 缓存 tokens
+	// 提取分开的 5m/1h 缓存 tokens
 	var cache5m, cache1h int64
 	if usage.CacheCreation != nil {
 		cache5m = usage.CacheCreation.Ephemeral5mInputTokens

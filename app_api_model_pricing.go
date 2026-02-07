@@ -1,4 +1,4 @@
-// app_api_model_pricing.go - v5.0+ 模型定价管理 API (Wails Bindings)
+// app_api_model_pricing.go - 模型定价管理 API (Wails Bindings)
 // 提供 SQLite 模型定价存储的增删改查功能
 // 创建时间: 2025-12-06
 
@@ -13,7 +13,7 @@ import (
 )
 
 // ============================================================
-// v5.0+ 模型定价管理 API (SQLite)
+// 模型定价管理 API (SQLite)
 // ============================================================
 
 // ModelPricingInfo 模型定价信息（给前端用的结构体）

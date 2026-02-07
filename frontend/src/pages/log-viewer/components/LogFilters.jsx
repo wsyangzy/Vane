@@ -1,5 +1,4 @@
 // LogFilters.jsx - 日志过滤器组件
-import React from 'react';
 import { Search, X } from 'lucide-react';
 import { LOG_LEVELS, LOG_LEVEL_LIST } from '../constants';
 

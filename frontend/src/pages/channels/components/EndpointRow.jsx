@@ -13,7 +13,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
-  // Timer, // v6.2: 已移除，冷却机制不再使用
+  // Timer, // 已移除，冷却机制不再使用
   ShieldOff,
   ShieldBan,
   Loader2
@@ -24,9 +24,9 @@ import { SetEndpointSkipHealthCheckByID } from '@wailsjs/go/main/App';
 
 // ============================================
 // 健康状态徽章
-// v6.1: 支持四种状态 - skipped/unchecked/healthy/unhealthy
-// v6.1.0: 新增 request_failed 状态，区分健康检查失败和请求转发失败
-// v6.2.10: 异常状态支持显示失败原因 tooltip
+// 支持四种状态 - skipped/unchecked/healthy/unhealthy
+// 新增 request_failed 状态，区分健康检查失败和请求转发失败
+// 异常状态支持显示失败原因 tooltip
 // ============================================
 
 const HealthBadge = ({ healthState, failCode, failReason }) => {
@@ -61,7 +61,7 @@ const HealthBadge = ({ healthState, failCode, failReason }) => {
           健康
         </div>
       );
-    // v6.1.0: 请求失败状态（与健康检查失败区分）
+    // 请求失败状态（与健康检查失败区分）
     case 'request_failed':
       return (
         <div
@@ -100,7 +100,7 @@ const HealthBadge = ({ healthState, failCode, failReason }) => {
 };
 
 // ============================================
-// v6.2: CooldownBadge 已移除，冷却机制不再使用
+// CooldownBadge 已移除，冷却机制不再使用
 // ============================================
 
 // ============================================
@@ -136,9 +136,9 @@ const EndpointRow = ({
   onDelete,
   onToggle,
   isGrouped = false,
-  onRefresh // v6.2.11: 刷新列表回调
+  onRefresh // 刷新列表回调
 }) => {
-  // v6.2.11: 跳过健康检测切换状态
+  // 跳过健康检测切换状态
   const [skipToggling, setSkipToggling] = useState(false);
 
   if (!endpoint) return null;
@@ -162,12 +162,12 @@ const EndpointRow = ({
   const isSqliteMode = storageMode === 'sqlite';
   const isActive = isSqliteMode ? endpoint.enabled : endpoint.group_is_active;
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
-  // v6.1: 使用 health_state 字段
+  // 使用 health_state 字段
   const healthState = endpoint.health_state || endpoint.healthState;
-  // v6.2.10: 获取失败信息
+  // 获取失败信息
   const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
   const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
-  // v6.2.11: 跳过健康检测状态
+  // 跳过健康检测状态
   const skipHealthCheck = endpoint.skip_health_check || endpoint.skipHealthCheck || false;
   const healthBadges = [];
   if (skipHealthCheck) {
@@ -183,7 +183,7 @@ const EndpointRow = ({
     );
   }
 
-  // v6.2.11: 切换跳过健康检测
+  // 切换跳过健康检测
   const handleToggleSkipHealthCheck = async () => {
     if (!endpoint.id || skipToggling) return;
 
@@ -246,7 +246,7 @@ const EndpointRow = ({
               {endpoint.channel || endpoint.group || '-'}
             </span>
             {healthBadges}
-            {/* v6.2: CooldownBadge 已移除 */}
+            {/* CooldownBadge 已移除 */}
           </div>
         </div>
       </td>
@@ -318,7 +318,7 @@ const EndpointRow = ({
         <div className="flex items-center justify-end space-x-1">
           {isSqliteMode && (
             <>
-              {/* v6.2.11: 跳过健康检测快捷开关 */}
+              {/* 跳过健康检测快捷开关 */}
               <button
                 onClick={handleToggleSkipHealthCheck}
                 disabled={skipToggling}

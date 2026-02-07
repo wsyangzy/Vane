@@ -1,4 +1,4 @@
-// app_api_settings.go - v5.1+ 系统设置管理 API (Wails Bindings)
+// app_api_settings.go - 系统设置管理 API (Wails Bindings)
 // 提供 SQLite 设置存储的增删改查功能
 // 创建时间: 2025-12-08
 
@@ -15,7 +15,7 @@ import (
 )
 
 // ============================================================
-// v5.1+ 系统设置管理 API (SQLite)
+// 系统设置管理 API (SQLite)
 // ============================================================
 
 // SettingInfo 设置信息（给前端用的结构体）
@@ -28,7 +28,7 @@ type SettingInfo struct {
 	Label           string             `json:"label"`
 	Description     string             `json:"description"`
 	DisplayOrder    int                `json:"display_order"`
-	EnumOptions     []store.EnumOption `json:"enum_options,omitempty"` // v6.1: 枚举选项
+	EnumOptions     []store.EnumOption `json:"enum_options,omitempty"` // 枚举选项
 	RequiresRestart bool               `json:"requires_restart"`
 	CreatedAt       string             `json:"created_at"`
 	UpdatedAt       string             `json:"updated_at"`
@@ -384,7 +384,7 @@ func (a *App) settingRecordToInfo(r *store.SettingRecord) SettingInfo {
 		Label:           r.Label,
 		Description:     r.Description,
 		DisplayOrder:    r.DisplayOrder,
-		EnumOptions:     r.EnumOptions, // v6.1: 传递枚举选项
+		EnumOptions:     r.EnumOptions, // 传递枚举选项
 		RequiresRestart: r.RequiresRestart,
 	}
 

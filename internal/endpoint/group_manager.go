@@ -11,7 +11,7 @@ import (
 )
 
 // GroupInfo represents information about an endpoint group
-// v6.2: CooldownUntil 已移除，失败渠道通过手动"重试"按钮重新激活
+// CooldownUntil 已移除，失败渠道通过手动"重试"按钮重新激活
 type GroupInfo struct {
 	Name      string
 	Priority  int
@@ -26,7 +26,7 @@ type GroupInfo struct {
 }
 
 // GroupManager manages endpoint groups
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 type GroupManager struct {
 	groups                 map[string]*GroupInfo
 	config                 *config.Config
@@ -39,7 +39,7 @@ type GroupManager struct {
 }
 
 // NewGroupManager creates a new group manager
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func NewGroupManager(cfg *config.Config) *GroupManager {
 	return &GroupManager{
 		groups:                 make(map[string]*GroupInfo),
@@ -51,7 +51,7 @@ func NewGroupManager(cfg *config.Config) *GroupManager {
 }
 
 // UpdateConfig updates the group manager configuration
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (gm *GroupManager) UpdateConfig(cfg *config.Config) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
@@ -59,7 +59,7 @@ func (gm *GroupManager) UpdateConfig(cfg *config.Config) {
 }
 
 // UpdateChannelPriorities 更新“渠道(channel)”的优先级映射。
-// v6.1.0: 渠道优先级仅用于“渠道间”故障转移顺序；渠道内端点故障转移仍由端点 priority 决定。
+// 渠道优先级仅用于“渠道间”故障转移顺序；渠道内端点故障转移仍由端点 priority 决定。
 func (gm *GroupManager) UpdateChannelPriorities(priorities map[string]int) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
@@ -134,7 +134,7 @@ func (gm *GroupManager) IsChannelFailoverEnabled(channel string) bool {
 
 // SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
 // 仅更新指定渠道，不影响其他渠道的状态。
-// v6.2.5: 解决恢复一个渠道时影响其他渠道的问题。
+// 解决恢复一个渠道时影响其他渠道的问题。
 func (gm *GroupManager) SetSingleChannelFailoverEnabled(channel string, enabled bool) {
 	if channel == "" {
 		return
@@ -154,12 +154,12 @@ func (gm *GroupManager) SetSingleChannelFailoverEnabled(channel string, enabled 
 }
 
 // UpdateGroups rebuilds group information from endpoints
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
-	// v5.0: SQLite 模式下需要保留 IsActive 状态
+	// SQLite 模式下需要保留 IsActive 状态
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
 
 	// 保留 IsActive 状态 (SQLite 模式)
@@ -176,7 +176,7 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	}
 
 	// Rebuild groups from current endpoints
-	// v6.0: 以"渠道(channel)"作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
+	// 以"渠道(channel)"作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
 	newGroups := make(map[string]*GroupInfo)
 
 	for _, ep := range endpoints {
@@ -206,7 +206,7 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 		}
 	}
 
-	// v6.1.0: 渠道优先级优先于端点优先级（仅用于渠道间选择顺序）
+	// 渠道优先级优先于端点优先级（仅用于渠道间选择顺序）
 	for name, group := range newGroups {
 		if group == nil {
 			continue
@@ -260,11 +260,11 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 }
 
 // updateActiveGroups updates which groups are currently active
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (gm *GroupManager) updateActiveGroups() {
-	// v5.0: SQLite 模式下，禁用自动激活逻辑（由 enabled 字段控制）
+	// SQLite 模式下，禁用自动激活逻辑（由 enabled 字段控制）
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
-	// v6.0: Failover.Enabled 仅控制"渠道间"故障转移/自动切换行为
+	// Failover.Enabled 仅控制"渠道间"故障转移/自动切换行为
 	autoSwitchEnabled := gm.config.Failover.Enabled
 
 	var newlyActivatedGroup string
@@ -275,7 +275,7 @@ func (gm *GroupManager) updateActiveGroups() {
 		previousActiveGroups[group.Name] = group.IsActive
 	}
 
-	// v5.0: SQLite 模式下跳过自动激活逻辑（手动控制）
+	// SQLite 模式下跳过自动激活逻辑（手动控制）
 	if isSQLiteMode {
 		return
 	}
@@ -466,7 +466,7 @@ func (gm *GroupManager) GetAllGroups() []*GroupInfo {
 }
 
 // SetGroupCooldown 将组标记为暂停并停用
-// v6.2: 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
+// 冷却机制已移除，失败渠道通过手动"重试"按钮重新激活
 func (gm *GroupManager) SetGroupCooldown(groupName string) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
@@ -491,12 +491,12 @@ func (gm *GroupManager) SetGroupCooldown(groupName string) {
 	}
 }
 
-// IsGroupInCooldown v6.2: 冷却机制已移除，返回 false（向后兼容）
+// IsGroupInCooldown 冷却机制已移除，返回 false（向后兼容）
 func (gm *GroupManager) IsGroupInCooldown(groupName string) bool {
 	return false
 }
 
-// GetGroupCooldownRemaining v6.2: 冷却机制已移除，返回 0（向后兼容）
+// GetGroupCooldownRemaining 冷却机制已移除，返回 0（向后兼容）
 func (gm *GroupManager) GetGroupCooldownRemaining(groupName string) time.Duration {
 	return 0
 }
@@ -508,14 +508,14 @@ func (gm *GroupManager) ManualActivateGroup(groupName string) error {
 
 // ActivateGroupForFailover 渠道间故障转移激活组（不记录手动激活时间）
 // force: 当为true时，即使组内没有健康端点也强制激活
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (gm *GroupManager) ActivateGroupForFailover(groupName string, force bool) error {
 	return gm.activateGroupInternal(groupName, force, false)
 }
 
 // ManualActivateGroupWithForce manually activates a specific group and deactivates others
 // force: 当为true时，即使组内没有健康端点也强制激活
-// v6.2: 冷却机制已移除
+// 冷却机制已移除
 func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force bool) error {
 	return gm.activateGroupInternal(groupName, force, true)
 }
@@ -529,7 +529,7 @@ func (gm *GroupManager) activateGroupInternal(groupName string, force bool, reco
 		return fmt.Errorf("组不存在: %s", groupName)
 	}
 
-	// v5.0: SQLite 模式下跳过健康检查（因为启动时健康检查还没开始）
+	// SQLite 模式下跳过健康检查（因为启动时健康检查还没开始）
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
 	activationLabel := "手动"
 	if !recordManual {
@@ -545,7 +545,7 @@ func (gm *GroupManager) activateGroupInternal(groupName string, force bool, reco
 		}
 	}
 
-	// v5.0: SQLite 模式下，允许激活没有健康端点的组（用户手动控制）
+	// SQLite 模式下，允许激活没有健康端点的组（用户手动控制）
 	if isSQLiteMode {
 		// SQLite 模式：直接激活，不检查健康状态
 		if healthyCount == 0 {
@@ -594,10 +594,10 @@ func (gm *GroupManager) activateGroupInternal(groupName string, force bool, reco
 	if recordManual {
 		targetGroup.ManualActivationTime = time.Now()
 	}
-	// v6.2: CooldownUntil 已移除
+	// CooldownUntil 已移除
 
 	if recordManual {
-		// v6.2.18: 重置目标组所有端点的 RequestFailed 状态
+		// 重置目标组所有端点的 RequestFailed 状态
 		// 用户手动激活（重试）时，需要重置端点状态让它们重新参与请求路由
 		resetCount := 0
 		for _, ep := range targetGroup.Endpoints {
@@ -822,7 +822,7 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 			statusColor = "secondary"
 		}
 
-		// v6.2: 冷却机制已移除，简化状态字段
+		// 冷却机制已移除，简化状态字段
 		groupData := map[string]interface{}{
 			"name":                   group.Name,
 			"priority":               group.Priority,
@@ -833,8 +833,8 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 			"healthy_endpoints":      healthyCount,
 			"unhealthy_endpoints":    unhealthyCount,
 			"manually_paused":        group.ManuallyPaused,
-			"in_cooldown":            false, // v6.2: 冷却机制已移除，始终为 false
-			"cooldown_remaining":     "0s",  // v6.2: 向后兼容
+			"in_cooldown":            false, // 冷却机制已移除，始终为 false
+			"cooldown_remaining":     "0s",  // 向后兼容
 			"can_activate":           healthyCount > 0 && !group.IsActive,
 			"can_pause":              !group.ManuallyPaused,
 			"can_resume":             group.ManuallyPaused,
@@ -880,7 +880,7 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 }
 
 // FilterEndpointsByActiveGroups filters endpoints to only include those in active groups
-// v4.0: 一端点一组架构，组名 = 端点名
+// 一端点一组架构，组名 = 端点名
 func (gm *GroupManager) FilterEndpointsByActiveGroups(endpoints []*Endpoint) []*Endpoint {
 	activeGroups := gm.GetActiveGroups()
 	if len(activeGroups) == 0 {
@@ -894,7 +894,7 @@ func (gm *GroupManager) FilterEndpointsByActiveGroups(endpoints []*Endpoint) []*
 	}
 
 	// Filter endpoints
-	// v6.0: 组名 = 渠道(channel)，未配置 channel 则回退为端点名
+	// 组名 = 渠道(channel)，未配置 channel 则回退为端点名
 	var filtered []*Endpoint
 	for _, ep := range endpoints {
 		groupName := ChannelKey(ep)

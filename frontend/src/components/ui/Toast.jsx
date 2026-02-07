@@ -1,9 +1,9 @@
 // ============================================
 // Toast - 应用内消息提示组件
-// v6.2 (2026-01-13) - 替代浏览器原生 alert
+// (2026-01-13) - 替代浏览器原生 alert
 // ============================================
 
-import { useState, useCallback, createContext, useContext, useRef, useEffect } from 'react';
+import { useState, useCallback, createContext, useContext, useRef, useMemo } from 'react';
 import { CheckCircle2, XCircle, AlertCircle, Info, X } from 'lucide-react';
 
 // Toast 上下文
@@ -123,25 +123,13 @@ export const ToastProvider = ({ children }) => {
   }, [removeToast]);
 
   // 便捷方法
-  const toast = useCallback((message, options = {}) => {
-    return addToast({ message, ...options });
-  }, [addToast]);
-
-  toast.success = useCallback((message, title) => {
-    return addToast({ type: 'success', message, title: title || '成功' });
-  }, [addToast]);
-
-  toast.error = useCallback((message, title) => {
-    return addToast({ type: 'error', message, title: title || '错误' });
-  }, [addToast]);
-
-  toast.warning = useCallback((message, title) => {
-    return addToast({ type: 'warning', message, title: title || '警告' });
-  }, [addToast]);
-
-  toast.info = useCallback((message, title) => {
-    return addToast({ type: 'info', message, title: title || '提示' });
-  }, [addToast]);
+  const toast = useMemo(() => ({
+    show: (message, options = {}) => addToast({ message, ...options }),
+    success: (message, title) => addToast({ type: 'success', message, title: title || '成功' }),
+    error: (message, title) => addToast({ type: 'error', message, title: title || '错误' }),
+    warning: (message, title) => addToast({ type: 'warning', message, title: title || '警告' }),
+    info: (message, title) => addToast({ type: 'info', message, title: title || '提示' })
+  }), [addToast]);
 
   return (
     <ToastContext.Provider value={toast}>
@@ -152,6 +140,7 @@ export const ToastProvider = ({ children }) => {
 };
 
 // Hook
+// eslint-disable-next-line react-refresh/only-export-components
 export const useToast = () => {
   const context = useContext(ToastContext);
   if (!context) {

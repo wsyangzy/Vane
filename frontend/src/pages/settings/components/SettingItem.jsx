@@ -1,11 +1,11 @@
 // ============================================
 // SettingItem - 可编辑的设置项组件
-// v6.2.1 (2026-01-10) - 循环重试使用双选弹窗
-// v6.2.11 (2026-01-11) - 支持跳过健康检测开关
+// (2026-01-10) - 循环重试使用双选弹窗
+// (2026-01-11) - 支持跳过健康检测开关
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Eye, EyeOff, RotateCcw, Lock, RefreshCw, XCircle, ChevronRight, Timer } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, RotateCcw, RefreshCw, XCircle, ChevronRight, Timer } from 'lucide-react';
 import { CustomSelect } from '../../../components/ui';
 import LoopRetrySelector from './LoopRetrySelector';
 import DurationInput from './DurationInput';
@@ -31,10 +31,9 @@ const SettingItem = ({
   value,
   onChange,
   disabled = false,
-  disabledReason = null,
   hasChange = false,
   onRevert = null,
-  // v6.2.11: 跳过健康检测相关 props（仅 loop_retry 设置项使用）
+  // 跳过健康检测相关 props（仅 loop_retry 设置项使用）
   skipHealthCheck = false,
   onSkipHealthCheckChange = null
 }) => {
@@ -76,7 +75,7 @@ const SettingItem = ({
     const currentLabel = isLoopRetry ? '循环重试' : '快速失败';
     const CurrentIcon = isLoopRetry ? RefreshCw : XCircle;
 
-    // v6.2.11: 处理弹窗选择，同时更新 loop_retry 和 skip_health_check
+    // 处理弹窗选择，同时更新 loop_retry 和 skip_health_check
     const handleLoopRetrySelect = (newValue, newSkipHealthCheck) => {
       setLocalValue(newValue);
       onChange(setting.category, setting.key, newValue);
@@ -108,7 +107,7 @@ const SettingItem = ({
             )}
           </div>
           <div className="flex items-center gap-2">
-            {/* v6.2.11: 显示跳过健康检测状态标签 */}
+            {/* 显示跳过健康检测状态标签 */}
             {isLoopRetry && skipHealthCheck && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700">
                 <Timer size={10} />
@@ -260,7 +259,7 @@ const SettingItem = ({
     );
   }
 
-  // 枚举类型使用下拉选择 (v6.2: 通用枚举类型支持)
+  // 枚举类型使用下拉选择 (通用枚举类型支持)
   const shouldRenderAsEnum = valueType === 'enum' && setting.enum_options && setting.enum_options.length > 0;
 
   if (shouldRenderAsEnum) {

@@ -1,5 +1,5 @@
 // Package store 提供数据存储层实现
-// 端点存储 - v5.0.0 新增 (2025-12-05)
+// 端点存储 - 新增 (2025-12-05)
 package store
 
 import (
@@ -33,7 +33,7 @@ type EndpointRecord struct {
 	TimeoutSeconds  int  `json:"timeout_seconds"`  // 请求超时（秒）
 
 	// 健康检查配置
-	SkipHealthCheck bool `json:"skip_health_check"` // v6.1: 跳过健康检查（部分中转商不支持健康检查端点）
+	SkipHealthCheck bool `json:"skip_health_check"` // 跳过健康检查（部分中转商不支持健康检查端点）
 
 	// 功能支持
 	SupportsCountTokens bool `json:"supports_count_tokens"` // 是否支持 count_tokens
@@ -75,7 +75,7 @@ type EndpointStore interface {
 	ListByChannel(ctx context.Context, channel string) ([]*EndpointRecord, error)
 	ListEnabled(ctx context.Context) ([]*EndpointRecord, error)
 
-	// v6.1+: 优先级管理
+	// 优先级管理
 	GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error)                     // 获取渠道内最大优先级
 	GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) // 根据渠道和优先级获取端点
 
@@ -275,7 +275,7 @@ func (s *SQLiteEndpointStore) Delete(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// v6.2+: name 允许在不同渠道重复，Delete(name) 仅作为兼容入口。
+	// name 允许在不同渠道重复，Delete(name) 仅作为兼容入口。
 	// 若存在重复，将返回错误提示调用方使用 DeleteByID。
 	rows, err := s.getQuerier().QueryContext(ctx, "SELECT id FROM endpoints WHERE name = ? LIMIT 2", name)
 	if err != nil {
@@ -712,7 +712,7 @@ func boolToInt(b bool) int {
 }
 
 // GetMaxPriorityByChannel 获取指定渠道内的最大优先级
-// v6.1+: 用于添加端点时自动递增优先级
+// 用于添加端点时自动递增优先级
 func (s *SQLiteEndpointStore) GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -732,7 +732,7 @@ func (s *SQLiteEndpointStore) GetMaxPriorityByChannel(ctx context.Context, chann
 }
 
 // GetByChannelAndPriority 根据渠道和优先级获取端点
-// v6.1+: 用于修改优先级时检测冲突并实现对调
+// 用于修改优先级时检测冲突并实现对调
 func (s *SQLiteEndpointStore) GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -3,6 +3,8 @@
 // 2025-11-28
 // ============================================
 
+/* eslint-disable react-refresh/only-export-components */
+
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   CheckCircle2,

@@ -101,7 +101,7 @@ const FiltersPanel = ({
           </div>
         </div>
 
-        {/* 筛选条件（v5.0: 添加渠道筛选，调整为4列布局）*/}
+        {/* 筛选条件（添加渠道筛选，调整为4列布局）*/}
         <div className="grid grid-cols-4 gap-3 items-center">
           <div className="flex items-center gap-2">
             <label className="text-sm font-medium text-gray-700 min-w-[40px]">状态:</label>

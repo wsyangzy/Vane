@@ -1,7 +1,7 @@
 // ============================================
 // Toolbar - 页面工具栏
-// 2025-12-06 10:40:38 v4.0: 简化端点切换（移除 Token 级联）
-// v6.2: 渠道切换器条件显示（仅在未开启渠道间故障转移时显示）
+// 简化端点切换（移除 Token 级联）
+// 渠道切换器条件显示（仅在未开启渠道间故障转移时显示）
 // ============================================
 
 import { Filter, Settings2, ChevronDown } from 'lucide-react';
@@ -28,7 +28,7 @@ import ActiveGroupSwitcher from './ActiveGroupSwitcher.jsx';
  * @param {Array} props.groups - 所有渠道列表（一个渠道=一个组）
  * @param {string} props.activeGroup - 当前活跃渠道名称
  * @param {Function} props.onGroupSwitch - 渠道切换回调 (channelName) => void
- * @param {boolean} props.interChannelFailoverEnabled - v6.2: 渠道间故障转移是否启用
+ * @param {boolean} props.interChannelFailoverEnabled - 渠道间故障转移是否启用
  */
 const Toolbar = ({
   activeTimeRange = 'today',
@@ -50,7 +50,7 @@ const Toolbar = ({
 }) => {
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* 端点快捷切换器 - v6.2: 仅在未开启渠道间故障转移时显示 */}
+      {/* 端点快捷切换器 - 仅在未开启渠道间故障转移时显示 */}
       {!interChannelFailoverEnabled && (
         <ActiveGroupSwitcher
           groups={groups}

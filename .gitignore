@@ -90,3 +90,6 @@ docs/TODO.md
 .ace-tool/
 AGENTS.md
 .trellis
+
+# Local research snapshots
+tmp_research/
