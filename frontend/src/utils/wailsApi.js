@@ -1505,3 +1505,30 @@ export const getManualRetryChannelCounts = async () => {
 
   return await WailsApp.GetManualRetryChannelCounts();
 };
+
+// ============================================
+// 端口冲突处理 API
+// ============================================
+
+/**
+ * 获取端口冲突状态
+ * @returns {Promise<Object>} - {has_conflict, conflict_port, error_message, proxy_address, proxy_running}
+ */
+export const getPortConflictStatus = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetPortConflictStatus();
+};
+
+/**
+ * 解决端口冲突
+ * @param {string} action - 处理动作: "retry" (重试首选端口) | "switch" (切换到可用端口)
+ * @returns {Promise<Object>} - {success, proxy_address, error_message}
+ */
+export const resolvePortConflict = async (action) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.ResolvePortConflict(action);
+};

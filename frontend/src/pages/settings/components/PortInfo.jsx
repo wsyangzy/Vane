@@ -16,6 +16,8 @@ const PortInfo = ({ portInfo, loading = false }) => {
   }
 
   const { preferred_port, actual_port, was_occupied } = portInfo;
+  const normalizedPort = Number(actual_port);
+  const hasValidPort = Number.isInteger(normalizedPort) && normalizedPort > 0;
 
   return (
     <div className="bg-gradient-to-r from-slate-50 to-indigo-50/30 rounded-xl p-4 border border-slate-200/60">
@@ -27,8 +29,13 @@ const PortInfo = ({ portInfo, loading = false }) => {
           <div>
             <div className="text-xs text-slate-400 font-medium">当前服务端口</div>
             <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-2xl font-bold text-slate-900">{actual_port}</span>
-              {was_occupied ? (
+              <span className="text-2xl font-bold text-slate-900">{hasValidPort ? normalizedPort : '--'}</span>
+              {!hasValidPort ? (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-100 text-rose-700">
+                  <AlertTriangle size={10} className="mr-1" />
+                  异常
+                </span>
+              ) : was_occupied ? (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700">
                   <AlertTriangle size={10} className="mr-1" />
                   端口 {preferred_port} 被占用
@@ -49,10 +56,18 @@ const PortInfo = ({ portInfo, loading = false }) => {
         </div>
       </div>
 
-      {was_occupied && (
+      {!hasValidPort && (
+        <div className="mt-3 pt-3 border-t border-slate-200/60">
+          <p className="text-xs text-rose-600">
+            代理服务端口无效（当前值：{String(actual_port)}），服务可能未成功启动。请检查端口占用后重启应用。
+          </p>
+        </div>
+      )}
+
+      {hasValidPort && was_occupied && (
         <div className="mt-3 pt-3 border-t border-slate-200/60">
           <p className="text-xs text-slate-500">
-            首选端口 {preferred_port} 已被其他程序占用，系统自动切换到端口 {actual_port}。
+            首选端口 {preferred_port} 已被其他程序占用，系统自动切换到端口 {normalizedPort}。
             如需使用端口 {preferred_port}，请关闭占用该端口的程序后重启应用。
           </p>
         </div>

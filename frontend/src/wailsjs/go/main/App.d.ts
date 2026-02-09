@@ -65,6 +65,8 @@ export function GetModelPricings():Promise<Array<main.ModelPricingInfo>>;
 
 export function GetNextAvailableChannel(arg1:string):Promise<string>;
 
+export function GetPortConflictStatus():Promise<main.PortConflictStatus>;
+
 export function GetPortInfo():Promise<main.PortInfo>;
 
 export function GetProxyURL():Promise<string>;
@@ -103,6 +105,8 @@ export function IsInterChannelFailoverEnabled():Promise<boolean>;
 
 export function IsProxyRunning():Promise<boolean>;
 
+export function OpenClaudeConfigDir():Promise<void>;
+
 export function OpenLogDir():Promise<void>;
 
 export function PauseGroup(arg1:string):Promise<void>;
@@ -110,6 +114,8 @@ export function PauseGroup(arg1:string):Promise<void>;
 export function RequestQuit():Promise<void>;
 
 export function ResetCategorySettings(arg1:string):Promise<void>;
+
+export function ResolvePortConflict(arg1:string):Promise<main.PortConflictResult>;
 
 export function ResumeGroup(arg1:string):Promise<void>;
 

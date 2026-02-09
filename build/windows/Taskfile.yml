@@ -39,8 +39,16 @@ tasks:
 
   run:
     summary: Runs the built Windows application
+    vars:
+      # 与 build 任务保持一致：dev 模式运行 -dev 后缀的二进制
+      OUTPUT_NAME: '{{if eq .DEV "true"}}{{.APP_NAME}}-dev{{else}}{{.APP_NAME}}{{end}}'
     cmds:
-      - '"{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+      - '"{{.BIN_DIR}}/{{.OUTPUT_NAME}}.exe"'
+
+  run-dev:
+    summary: Runs the dev build of Windows application
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}-dev.exe"'
 
   package:
     summary: Packages the Windows application (placeholder)

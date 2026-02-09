@@ -17,7 +17,6 @@ endpoint_forwarder
 # Go workspace file
 go.work
 
-.claude/
 # IDE files
 .vscode/
 .idea/
@@ -85,11 +84,14 @@ build.log
 internal/tracking/deprecated/
 .gocache
 .gomodcache
-CLAUDE.md
 docs/TODO.md
-.ace-tool/
+
+# AI
 AGENTS.md
+CLAUDE.md
+.claude
 .trellis
+.opencode
 
 # Local research snapshots
-tmp_research/
+tmp_research

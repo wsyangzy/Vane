@@ -381,6 +381,8 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		{CategoryRequest, "block_retry_on_exhausted"},
 		// allow_retry_on_exhausted 已废弃，始终保持连接挂起
 		{CategoryRequest, "allow_retry_on_exhausted"},
+		// 移除端口自动切换设置（已改为弹窗让用户选择）
+		{CategoryServer, "allow_port_fallback"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -441,7 +443,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 	switch category {
 	case CategoryServer:
 		return []*store.SettingRecord{
-			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "API 服务首选端口，被占用时自动递增", DisplayOrder: 1, RequiresRestart: true},
+			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
 		}
 
 	case CategoryStrategy:
