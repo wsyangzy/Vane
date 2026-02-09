@@ -332,14 +332,21 @@ func (a *App) HideMainWindow() {
 }
 
 // RequestQuit 请求退出应用（托盘菜单"退出"使用）
+// 优雅退出：先让 Wails 处理关闭，超时后强制退出
 func (a *App) RequestQuit() {
 	a.markQuitting()
-	if a.wailsApp != nil {
-		a.wailsApp.Quit()
-	}
-	// 确保进程完全退出（dev 模式下 Quit() 可能不会终止 watcher）
+
+	// 在 goroutine 中执行退出，避免阻塞 UI
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		// 调用 Wails Quit
+		if a.wailsApp != nil {
+			a.wailsApp.Quit()
+		}
+
+		// 等待 500ms 让 Wails 完成清理
+		time.Sleep(500 * time.Millisecond)
+
+		// 保底退出
 		os.Exit(0)
 	}()
 }

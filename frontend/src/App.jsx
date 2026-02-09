@@ -196,9 +196,11 @@ function App() {
   }, []);
 
   // 初始化时检查端口冲突
+  /* eslint-disable react-hooks/set-state-in-effect -- 初始化数据加载是标准模式 */
   useEffect(() => {
     checkPortConflict();
   }, [checkPortConflict]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 处理端口冲突解决
   const handlePortConflictRetry = useCallback(async () => {

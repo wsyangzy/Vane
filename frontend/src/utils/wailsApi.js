@@ -163,6 +163,16 @@ export const getSystemStatus = async () => {
   };
 };
 
+/**
+ * 获取 Claude Code CLI 版本
+ * @returns {Promise<string>} 版本号，如 "1.0.17" 或 "未安装"
+ */
+export const getClaudeCodeVersion = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.GetClaudeCodeVersion();
+};
+
 export const getConfig = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -594,6 +604,56 @@ export const isProxyRunning = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   return await WailsApp.IsProxyRunning();
+};
+
+// ============================================
+// 系统操作 API
+// ============================================
+
+/**
+ * 打开 Claude 配置目录
+ */
+export const openClaudeConfigDir = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.OpenClaudeConfigDir();
+};
+
+/**
+ * 打开日志目录
+ */
+export const openLogDir = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.OpenLogDir();
+};
+
+/**
+ * 请求退出应用
+ */
+export const requestQuit = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.RequestQuit();
+};
+
+/**
+ * 复制文本到剪贴板
+ */
+export const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for older browsers
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return true;
+  }
 };
 
 // ============================================

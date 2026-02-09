@@ -12,11 +12,16 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"claude-request-forwarder/internal/utils"
@@ -91,6 +96,88 @@ func (a *App) GetSystemStatus() SystemStatus {
 	}
 
 	return status
+}
+
+// ClaudeCodeVersion 缓存 Claude Code 版本信息
+var (
+	claudeCodeVersionCache     string
+	claudeCodeVersionCacheTime time.Time
+	claudeCodeVersionCacheTTL  = 5 * time.Minute // 缓存 5 分钟
+	claudeCodeVersionMu        sync.RWMutex
+)
+
+// GetClaudeCodeVersion 获取 Claude Code CLI 版本
+// 执行 `claude -v` 命令获取版本信息
+func (a *App) GetClaudeCodeVersion() string {
+	// 先检查缓存
+	claudeCodeVersionMu.RLock()
+	if claudeCodeVersionCache != "" && time.Since(claudeCodeVersionCacheTime) < claudeCodeVersionCacheTTL {
+		cached := claudeCodeVersionCache
+		claudeCodeVersionMu.RUnlock()
+		return cached
+	}
+	claudeCodeVersionMu.RUnlock()
+
+	// 创建命令并配置 Windows 隐藏窗口
+	runClaudeCommand := func(args ...string) (string, error) {
+		cmd := exec.Command("claude", args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		// Windows 下隐藏命令行窗口（CREATE_NO_WINDOW = 0x08000000）
+		if runtime.GOOS == "windows" {
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				HideWindow: true,
+			}
+		}
+
+		err := cmd.Run()
+		if err != nil {
+			return "", err
+		}
+
+		output := strings.TrimSpace(stdout.String())
+		if output == "" {
+			output = strings.TrimSpace(stderr.String())
+		}
+		return output, nil
+	}
+
+	// 尝试 claude -v
+	output, err := runClaudeCommand("-v")
+	if err != nil {
+		// 尝试 claude --version
+		output, err = runClaudeCommand("--version")
+		if err != nil {
+			return "未安装"
+		}
+	}
+
+	if output == "" {
+		return "未安装"
+	}
+
+	// 提取版本号（格式可能是 "claude 1.0.0" 或直接 "1.0.0"）
+	version := output
+	if strings.Contains(output, " ") {
+		parts := strings.Fields(output)
+		for _, part := range parts {
+			// 查找看起来像版本号的部分（包含数字和点）
+			if strings.Contains(part, ".") && len(part) > 0 && (part[0] >= '0' && part[0] <= '9') {
+				version = part
+				break
+			}
+		}
+	}
+
+	// 更新缓存
+	claudeCodeVersionMu.Lock()
+	claudeCodeVersionCache = version
+	claudeCodeVersionCacheTime = time.Now()
+	claudeCodeVersionMu.Unlock()
+
+	return version
 }
 
 // checkPortListening 检测端口是否在监听（带缓存，避免频繁 TCP 连接）

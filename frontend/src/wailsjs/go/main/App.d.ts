@@ -29,6 +29,8 @@ export function GetAllSettings():Promise<Array<main.SettingInfo>>;
 
 export function GetChannels():Promise<Array<main.ChannelInfo>>;
 
+export function GetClaudeCodeVersion():Promise<string>;
+
 export function GetConfig():Promise<main.ConfigInfo>;
 
 export function GetConnectionActivityChart(arg1:number):Promise<Array<main.ChartDataPoint>>;

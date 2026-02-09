@@ -56,6 +56,10 @@ export function GetChannels() {
   return Call.ByName("main.App.GetChannels");
 }
 
+export function GetClaudeCodeVersion() {
+  return Call.ByName("main.App.GetClaudeCodeVersion");
+}
+
 export function GetConfig() {
   return Call.ByName("main.App.GetConfig");
 }
