@@ -4,7 +4,8 @@
 // 更新：添加双击查看详情功能
 // ============================================
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Waves, RefreshCw, GitBranch, ChevronRight } from 'lucide-react';
 import { LoadingSpinner } from '@components/ui';
 import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
@@ -31,18 +32,40 @@ const parseChannelName = (fullKey) => {
 };
 
 /**
- * EndpointChainCell - 端点链路单元格组件（折叠显示 + 悬浮 Tooltip）
+ * EndpointChainCell - 端点链路单元格组件（折叠显示 + Portal Tooltip）
+ * 使用 createPortal 渲染到 document.body，避免被父容器 overflow 裁剪
  * @param {Object} request - 请求数据
- * @param {number} rowIndex - 行索引，用于决定悬浮框方向（前2行向下弹出）
  */
-const EndpointChainCell = ({ request, rowIndex = 0 }) => {
+const EndpointChainCell = ({ request }) => {
   const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState(null);
+  const triggerRef = useRef(null);
 
-  // 前两行向下弹出，其他向上弹出（避免被容器裁剪）
-  const tooltipPosition = rowIndex < 2 ? 'top-full mt-2' : 'bottom-full mb-2';
-  const arrowPosition = rowIndex < 2
-    ? 'absolute -top-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[6px] border-b-slate-800'
-    : 'absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800';
+  // 鼠标进入时计算 Tooltip 视口定位
+  const handleMouseEnter = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    // 上方空间不足 160px 时向下弹出
+    const showAbove = rect.top > 160;
+    setTooltipPos({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - 380)),
+      showAbove,
+      ...(showAbove
+        ? { bottom: window.innerHeight - rect.top + 8 }
+        : { top: rect.bottom + 8 }),
+    });
+    setShowTooltip(true);
+  }, []);
+
+  const handleMouseLeave = useCallback(() => setShowTooltip(false), []);
+
+  // 滚动时关闭 Tooltip（捕获阶段，监听所有祖先的滚动事件）
+  useEffect(() => {
+    if (!showTooltip) return;
+    const hide = () => setShowTooltip(false);
+    window.addEventListener('scroll', hide, true);
+    return () => window.removeEventListener('scroll', hide, true);
+  }, [showTooltip]);
 
   // 获取链路长度（api.js 已转换为 camelCase）
   const chainLength = Number.isFinite(request.endpointChainLength)
@@ -54,6 +77,30 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
   // 解析端点名称（去除 channel:: 前缀以简化显示）
   const tailEndpoint = parseEndpointName(chainTail);
 
+  // Portal Tooltip 渲染器
+  const renderTooltip = (content) => {
+    if (!showTooltip || !tooltipPos) return null;
+    const style = {
+      position: 'fixed',
+      left: `${tooltipPos.left}px`,
+      zIndex: 9999,
+      pointerEvents: 'none',
+      ...(tooltipPos.showAbove
+        ? { bottom: `${tooltipPos.bottom}px` }
+        : { top: `${tooltipPos.top}px` }),
+    };
+    const arrowClass = tooltipPos.showAbove
+      ? 'absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800'
+      : 'absolute -top-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[6px] border-b-slate-800';
+    return createPortal(
+      <div style={style} className="bg-slate-800 text-white text-xs rounded-lg shadow-xl">
+        {content}
+        <div className={arrowClass} />
+      </div>,
+      document.body
+    );
+  };
+
   // 单端点情况
   if (chainLength <= 1) {
     const singleEndpoint = parseEndpointName(chainHead);
@@ -61,23 +108,22 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
     if (!singleEndpoint) return <span className="text-gray-400 text-xs">-</span>;
     return (
       <div
-        className="relative inline-flex items-center"
-        onMouseEnter={() => setShowTooltip(true)}
-        onMouseLeave={() => setShowTooltip(false)}
+        ref={triggerRef}
+        className="inline-flex items-center"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
         <span className="text-gray-600 text-xs truncate max-w-[140px]">
           {singleEndpoint}
         </span>
-        {showTooltip && singleChannel && (
-          <div className={`absolute left-0 ${tooltipPosition} z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-2.5 whitespace-nowrap`}>
+        {singleChannel && renderTooltip(
+          <div className="p-2.5 whitespace-nowrap">
             <div className="flex items-center gap-1.5">
               <span className="px-1.5 py-0.5 bg-slate-700/80 text-slate-300 text-[9px] rounded font-medium">
                 {singleChannel}
               </span>
               <span className="text-slate-100">{singleEndpoint}</span>
             </div>
-            {/* 箭头 */}
-            <div className={arrowPosition} />
           </div>
         )}
       </div>
@@ -85,7 +131,6 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
   }
 
   // 多端点情况：折叠显示，悬浮查看完整路径
-  // endpointChain 在 api.js 中已被转换为数组
   const chainItems = Array.isArray(request.endpointChain)
     ? request.endpointChain
     : (typeof request.endpoint_chain === 'string'
@@ -94,9 +139,10 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
 
   return (
     <div
-      className="relative inline-flex items-center gap-1.5"
-      onMouseEnter={() => setShowTooltip(true)}
-      onMouseLeave={() => setShowTooltip(false)}
+      ref={triggerRef}
+      className="inline-flex items-center gap-1.5"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       {/* 主显示：最终端点 + 跳数徽章 */}
       <span className="text-gray-700 text-xs font-medium truncate max-w-[100px]">
@@ -108,8 +154,8 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
       </span>
 
       {/* 悬浮 Tooltip：显示完整链路 */}
-      {showTooltip && chainItems.length > 0 && (
-        <div className={`absolute left-0 ${tooltipPosition} z-50 bg-slate-800 text-white text-xs rounded-lg shadow-xl p-3 min-w-[220px] max-w-[360px]`}>
+      {chainItems.length > 0 && renderTooltip(
+        <div className="p-3 min-w-[220px] max-w-[360px]">
           <div className="text-[10px] text-slate-400 mb-2 font-medium uppercase tracking-wide">转移路径</div>
           <div className="space-y-1">
             {chainItems.map((item, idx) => {
@@ -147,8 +193,6 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
               );
             })}
           </div>
-          {/* 箭头 */}
-          <div className={arrowPosition} />
         </div>
       )}
     </div>
@@ -159,9 +203,8 @@ const EndpointChainCell = ({ request, rowIndex = 0 }) => {
  * 渲染单元格内容
  * @param {string} columnId - 列 ID
  * @param {Object} request - 请求数据
- * @param {number} rowIndex - 行索引
  */
-const renderCell = (columnId, request, rowIndex = 0) => {
+const renderCell = (columnId, request) => {
   switch (columnId) {
     case 'requestId':
       const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -182,7 +225,7 @@ const renderCell = (columnId, request, rowIndex = 0) => {
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':
-      return <EndpointChainCell request={request} rowIndex={rowIndex} />;
+      return <EndpointChainCell request={request} />;
     case 'duration':
       return <span className="text-gray-700 font-mono text-xs">{formatDuration(request.duration)}</span>;
     case 'inputTokens':
@@ -203,7 +246,7 @@ const renderCell = (columnId, request, rowIndex = 0) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, visibleColumns, rowIndex, onCopyId, onDoubleClick }) => {
+const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
   const [clickCount, setClickCount] = React.useState(0);
   const [clickTimer, setClickTimer] = React.useState(null);
 
@@ -243,7 +286,7 @@ const RequestRow = ({ request, visibleColumns, rowIndex, onCopyId, onDoubleClick
           key={colId}
           className={`px-3 py-3 ${colId === 'cost' || colId.includes('Tokens') ? 'text-right' : ''}`}
         >
-          {renderCell(colId, request, visibleColumns, rowIndex)}
+          {renderCell(colId, request)}
         </td>
       ))}
     </tr>
@@ -324,12 +367,11 @@ const RequestsTable = ({
                 </td>
               </tr>
             ) : (
-              requests.map((req, index) => (
+              requests.map((req) => (
                 <RequestRow
                   key={req.rawRequestId || req.requestId}
                   request={req}
                   visibleColumns={visibleColumns}
-                  rowIndex={index}
                   onCopyId={handleCopyId}
                   onDoubleClick={onRowDoubleClick}
                 />
