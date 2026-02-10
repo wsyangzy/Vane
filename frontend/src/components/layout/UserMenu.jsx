@@ -27,7 +27,7 @@ import {
 } from '@utils/wailsApi.js';
 
 // 信息卡片项目组件（移到外部避免 lint 警告）
-const InfoItem = ({ icon: Icon, iconBg, iconColor, label, value, delay, isLoaded, extra }) => (
+const InfoItem = ({ icon: Icon, iconBg, iconColor, label, value, delay, isLoaded, extra, valueClass }) => (
   <div
     className="flex items-center justify-between transition-all duration-300 ease-out"
     style={{
@@ -43,7 +43,7 @@ const InfoItem = ({ icon: Icon, iconBg, iconColor, label, value, delay, isLoaded
       <span className="text-xs font-medium text-slate-500">{label}</span>
     </div>
     <div className="flex items-center gap-2">
-      <span className="text-sm font-semibold text-slate-800">{value}</span>
+      <span className={`text-sm font-semibold ${valueClass || 'text-slate-800'}`}>{value}</span>
       {extra}
     </div>
   </div>
@@ -242,6 +242,7 @@ const UserMenu = () => {
               iconColor="text-indigo-600"
               label="程序版本"
               value={`v${systemInfo?.version || '—'}`}
+              valueClass="text-indigo-600 font-mono"
               delay={0}
               isLoaded={isLoaded}
             />
@@ -268,35 +269,33 @@ const UserMenu = () => {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-0.5">
-                {/* 刷新按钮（有版本号时显示） */}
-                {claudeVersion && (
-                  <button
-                    onClick={checkClaudeVersion}
-                    disabled={isCheckingVersion}
-                    className={`p-1 rounded-md transition-all duration-200 ${
-                      isCheckingVersion
-                        ? 'text-slate-300 cursor-not-allowed'
-                        : 'text-slate-400 hover:text-purple-600 hover:bg-purple-100'
-                    }`}
-                    title="重新检测版本"
-                  >
-                    <RefreshCw size={13} className={isCheckingVersion ? 'animate-spin' : ''} />
-                  </button>
-                )}
-                {/* 版本号或点击检测（无版本号时可点击） */}
+              <div className="flex items-center gap-1.5">
                 {claudeVersion ? (
-                  <span className="text-sm font-semibold text-slate-800 min-w-[60px] text-right">
-                    {isCheckingVersion ? '检测中...' : claudeVersion}
-                  </span>
+                  <>
+                    <button
+                      onClick={checkClaudeVersion}
+                      disabled={isCheckingVersion}
+                      className={`p-1 rounded-md transition-all duration-200 ${
+                        isCheckingVersion
+                          ? 'text-slate-300 cursor-not-allowed'
+                          : 'text-slate-400 hover:text-purple-600 hover:bg-purple-100'
+                      }`}
+                      title="重新检测版本"
+                    >
+                      <RefreshCw size={13} className={isCheckingVersion ? 'animate-spin' : ''} />
+                    </button>
+                    <span className="text-sm font-semibold text-purple-600 font-mono">
+                      {isCheckingVersion ? '检测中...' : claudeVersion}
+                    </span>
+                  </>
                 ) : (
                   <button
                     onClick={checkClaudeVersion}
                     disabled={isCheckingVersion}
-                    className={`text-sm font-medium px-2 py-0.5 rounded transition-all duration-200 ${
+                    className={`text-sm font-medium transition-colors duration-200 ${
                       isCheckingVersion
                         ? 'text-slate-400 cursor-not-allowed'
-                        : 'text-purple-500 hover:text-purple-700 hover:bg-purple-50'
+                        : 'text-purple-500 hover:text-purple-600 cursor-pointer'
                     }`}
                   >
                     {isCheckingVersion ? (
@@ -318,6 +317,7 @@ const UserMenu = () => {
               iconColor="text-emerald-600"
               label="运行时长"
               value={formatUptime(systemInfo?.uptime)}
+              valueClass="text-emerald-600 font-mono tabular-nums"
               delay={100}
               isLoaded={isLoaded}
             />

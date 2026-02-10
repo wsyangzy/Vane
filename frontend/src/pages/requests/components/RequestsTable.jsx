@@ -40,16 +40,24 @@ const EndpointChainCell = ({ request }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPos, setTooltipPos] = useState(null);
   const triggerRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const hideTimerRef = useRef(null);
 
-  // 鼠标进入时计算 Tooltip 视口定位
+  // 显示 Tooltip：计算视口定位和可用空间
   const handleMouseEnter = useCallback(() => {
+    clearTimeout(hideTimerRef.current);
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    // 上方空间不足 160px 时向下弹出
-    const showAbove = rect.top > 160;
+    const spaceAbove = rect.top;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    // 选择空间更大的方向弹出
+    const showAbove = spaceAbove > spaceBelow;
+    // 可用最大高度（减去 gap 8px + viewport 边距 16px）
+    const maxHeight = Math.max(120, (showAbove ? spaceAbove : spaceBelow) - 24);
     setTooltipPos({
       left: Math.max(8, Math.min(rect.left, window.innerWidth - 380)),
       showAbove,
+      maxHeight,
       ...(showAbove
         ? { bottom: window.innerHeight - rect.top + 8 }
         : { top: rect.bottom + 8 }),
@@ -57,12 +65,25 @@ const EndpointChainCell = ({ request }) => {
     setShowTooltip(true);
   }, []);
 
-  const handleMouseLeave = useCallback(() => setShowTooltip(false), []);
+  // 延迟隐藏（允许鼠标移入可交互 Tooltip 时取消关闭）
+  const handleMouseLeave = useCallback(() => {
+    hideTimerRef.current = setTimeout(() => setShowTooltip(false), 100);
+  }, []);
 
-  // 滚动时关闭 Tooltip（捕获阶段，监听所有祖先的滚动事件）
+  // Tooltip 鼠标事件（可交互模式：支持内部滚动）
+  const handleTooltipEnter = useCallback(() => clearTimeout(hideTimerRef.current), []);
+  const handleTooltipLeave = useCallback(() => setShowTooltip(false), []);
+
+  // 清理定时器
+  useEffect(() => () => clearTimeout(hideTimerRef.current), []);
+
+  // 滚动时关闭 Tooltip（排除 Tooltip 内部滚动）
   useEffect(() => {
     if (!showTooltip) return;
-    const hide = () => setShowTooltip(false);
+    const hide = (e) => {
+      if (tooltipRef.current?.contains(e.target)) return;
+      setShowTooltip(false);
+    };
     window.addEventListener('scroll', hide, true);
     return () => window.removeEventListener('scroll', hide, true);
   }, [showTooltip]);
@@ -78,13 +99,17 @@ const EndpointChainCell = ({ request }) => {
   const tailEndpoint = parseEndpointName(chainTail);
 
   // Portal Tooltip 渲染器
-  const renderTooltip = (content) => {
+  // @param content - Tooltip 内容
+  // @param interactive - 是否可交互（启用内部滚动，鼠标可移入）
+  const renderTooltip = (content, interactive = false) => {
     if (!showTooltip || !tooltipPos) return null;
     const style = {
       position: 'fixed',
       left: `${tooltipPos.left}px`,
       zIndex: 9999,
-      pointerEvents: 'none',
+      ...(interactive
+        ? { maxHeight: `${tooltipPos.maxHeight}px`, display: 'flex', flexDirection: 'column' }
+        : { pointerEvents: 'none' }),
       ...(tooltipPos.showAbove
         ? { bottom: `${tooltipPos.bottom}px` }
         : { top: `${tooltipPos.top}px` }),
@@ -93,8 +118,15 @@ const EndpointChainCell = ({ request }) => {
       ? 'absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800'
       : 'absolute -top-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[6px] border-b-slate-800';
     return createPortal(
-      <div style={style} className="bg-slate-800 text-white text-xs rounded-lg shadow-xl">
-        {content}
+      <div
+        ref={tooltipRef}
+        style={style}
+        className="bg-slate-800 text-white text-xs rounded-lg shadow-xl"
+        {...(interactive ? { onMouseEnter: handleTooltipEnter, onMouseLeave: handleTooltipLeave } : {})}
+      >
+        {interactive
+          ? <div className="flex-1 min-h-0 flex flex-col">{content}</div>
+          : content}
         <div className={arrowClass} />
       </div>,
       document.body
@@ -153,11 +185,11 @@ const EndpointChainCell = ({ request }) => {
         <span>{chainLength}</span>
       </span>
 
-      {/* 悬浮 Tooltip：显示完整链路 */}
+      {/* 悬浮 Tooltip：显示完整链路（可滚动） */}
       {chainItems.length > 0 && renderTooltip(
-        <div className="p-3 min-w-[220px] max-w-[360px]">
-          <div className="text-[10px] text-slate-400 mb-2 font-medium uppercase tracking-wide">转移路径</div>
-          <div className="space-y-1">
+        <div className="min-w-[220px] max-w-[360px] flex flex-col min-h-0">
+          <div className="shrink-0 px-3 pt-3 pb-1 text-[10px] text-slate-400 font-medium uppercase tracking-wide">转移路径</div>
+          <div className="overflow-y-auto min-h-0 px-3 pb-3 space-y-1" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(100,116,139,0.5) transparent' }}>
             {chainItems.map((item, idx) => {
               const channel = parseChannelName(item);
               const endpoint = parseEndpointName(item);
@@ -193,7 +225,8 @@ const EndpointChainCell = ({ request }) => {
               );
             })}
           </div>
-        </div>
+        </div>,
+        true
       )}
     </div>
   );
