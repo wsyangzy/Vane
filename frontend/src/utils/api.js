@@ -292,22 +292,33 @@ export const fetchRequests = async (params = {}) => {
     const markerIdx = rawRequestIdStr.indexOf(partialMarker);
     const baseRequestId = markerIdx > 0 ? rawRequestIdStr.slice(0, markerIdx) : rawRequestIdStr;
 
+    // Normalize endpoint chain: handle object array, string array, or legacy string
     const rawChain = request.endpoint_chain || request.endpointChain || '';
-    const endpointChain = Array.isArray(rawChain)
-      ? rawChain
-      : (typeof rawChain === 'string' ? rawChain.split(' -> ').filter(Boolean) : []);
+    let endpointChain;
+    if (Array.isArray(rawChain)) {
+      endpointChain = rawChain;
+    } else if (typeof rawChain === 'string' && rawChain) {
+      try {
+        const parsed = JSON.parse(rawChain);
+        endpointChain = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        endpointChain = rawChain.split(' -> ').filter(Boolean);
+      }
+    } else {
+      endpointChain = [];
+    }
     const endpoint = request.endpoint_name || request.endpoint || 'unknown';
 
-    const rawChainHead = request.endpoint_chain_head || request.endpointChainHead || '';
-    const rawChainTail = request.endpoint_chain_tail || request.endpointChainTail || '';
-    const rawChainLength = request.endpoint_chain_length ?? request.endpointChainLength;
-    const parsedChainLength = rawChainLength === '' || rawChainLength === undefined || rawChainLength === null
-      ? Number.NaN
-      : Number(rawChainLength);
-    const fallbackChainLength = endpointChain.length > 0 ? endpointChain.length : (endpoint ? 1 : 0);
-    const endpointChainLength = Number.isFinite(parsedChainLength) ? parsedChainLength : fallbackChainLength;
-    const endpointChainHead = rawChainHead || endpointChain[0] || endpoint || '';
-    const endpointChainTail = rawChainTail || endpointChain[endpointChain.length - 1] || endpoint || '';
+    // Convert chain item (object or string) to "channel::endpoint" key string
+    const chainItemToKey = (item) => {
+      if (typeof item === 'object' && item !== null) {
+        return item.channel ? `${item.channel}::${item.endpoint || ''}` : (item.endpoint || '');
+      }
+      return String(item || '');
+    };
+    const endpointChainLength = endpointChain.length > 0 ? endpointChain.length : (endpoint ? 1 : 0);
+    const endpointChainHead = endpointChain.length > 0 ? chainItemToKey(endpointChain[0]) : (endpoint || '');
+    const endpointChainTail = endpointChain.length > 0 ? chainItemToKey(endpointChain[endpointChain.length - 1]) : (endpoint || '');
 
     return ({
       ...request,

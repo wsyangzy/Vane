@@ -471,8 +471,7 @@ func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel
 	}
 
 	// 更新 stateManager
-	endpointKey := endpoint.EndpointKey(channel, endpointName)
-	chain := rlm.stateManager.AppendEndpointChain(endpointKey)
+	chain := rlm.stateManager.AppendEndpointChain(channel, endpointName)
 	rlm.stateManager.SetEndpoint(endpointName, groupName, channel)
 
 	// 立即更新热池中的端点和渠道信息

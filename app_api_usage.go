@@ -5,12 +5,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
-	"claude-request-forwarder/internal/endpoint"
 	"claude-request-forwarder/internal/tracking"
 	"claude-request-forwarder/internal/utils"
 )
@@ -251,10 +251,7 @@ type RequestRecord struct {
 	Timestamp             string  `json:"timestamp"`
 	Channel               string  `json:"channel"` // 渠道标签
 	Endpoint              string  `json:"endpoint"`
-	EndpointChain         string  `json:"endpoint_chain"` // 端点尝试链路（简略）
-	EndpointChainHead     string  `json:"endpoint_chain_head"`
-	EndpointChainTail     string  `json:"endpoint_chain_tail"`
-	EndpointChainLength   int     `json:"endpoint_chain_length"`
+	EndpointChain         []chainNode `json:"endpoint_chain"` // 端点尝试链路（结构化 JSON 数组）
 	Group                 string  `json:"group"`
 	Model                 string  `json:"model"`
 	Status                string  `json:"status"`
@@ -381,17 +378,14 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	for _, r := range requests {
 		// 使用统一的时间格式（2025-12-04 17:18:48）
 		// 数据库存储的就是配置时区的时间，直接格式化，不做时区转换
-		chainHead, chainTail, chainLength := buildEndpointChainSummary(r.EndpointChain, r.Channel, r.EndpointName)
+		chainItems := parseEndpointChain(r.EndpointChain)
 
 		record := RequestRecord{
 			RequestID:             r.RequestID,
 			Timestamp:             r.StartTime.Format("2006-01-02 15:04:05"),
 			Channel:               r.Channel, // 渠道标签
 			Endpoint:              r.EndpointName,
-			EndpointChain:         r.EndpointChain,
-			EndpointChainHead:     chainHead,
-			EndpointChainTail:     chainTail,
-			EndpointChainLength:   chainLength,
+			EndpointChain:         chainItems,
 			Group:                 r.GroupName,
 			Model:                 r.ModelName,
 			Status:                r.Status,
@@ -422,27 +416,64 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	return result, nil
 }
 
-func buildEndpointChainSummary(chain, channel, endpointName string) (string, string, int) {
-	if chain != "" {
-		items := strings.Split(chain, " -> ")
-		filtered := make([]string, 0, len(items))
-		for _, item := range items {
-			trimmed := strings.TrimSpace(item)
-			if trimmed == "" {
-				continue
-			}
-			filtered = append(filtered, trimmed)
-		}
-		if len(filtered) > 0 {
-			return filtered[0], filtered[len(filtered)-1], len(filtered)
-		}
-	}
+// chainNode 链路节点（API 响应用）
+type chainNode struct {
+	Hop      int    `json:"hop"`
+	Channel  string `json:"channel"`
+	Endpoint string `json:"endpoint"`
+}
 
-	fallback := endpoint.EndpointKey(channel, endpointName)
-	if fallback == "" {
-		return "", "", 0
+// parseEndpointChain 解析端点链路字符串（兼容三种历史格式）
+//   - 新格式: [{"channel":"A","endpoint":"B"},...]
+//   - 中间格式: ["A::B","C::D"]
+//   - 旧格式: "A::B -> C::D -> ..."
+func parseEndpointChain(chain string) []chainNode {
+	if chain == "" {
+		return nil
 	}
-	return fallback, fallback, 1
+	var nodes []chainNode
+	// JSON 格式
+	if strings.HasPrefix(chain, "[") {
+		// 尝试结构化对象数组
+		if json.Unmarshal([]byte(chain), &nodes) == nil && len(nodes) > 0 {
+			fillHopNumbers(nodes)
+			return nodes
+		}
+		// 尝试字符串数组（中间格式）
+		var items []string
+		if json.Unmarshal([]byte(chain), &items) == nil {
+			return keyStringsToNodes(items)
+		}
+	}
+	// 旧格式 " -> " 分隔
+	return keyStringsToNodes(strings.Split(chain, " -> "))
+}
+
+// fillHopNumbers 为缺失 hop 的历史数据回填跳数（1-based）
+func fillHopNumbers(nodes []chainNode) {
+	for i := range nodes {
+		if nodes[i].Hop == 0 {
+			nodes[i].Hop = i + 1
+		}
+	}
+}
+
+// keyStringsToNodes 将 "channel::endpoint" 格式字符串转为结构化节点
+func keyStringsToNodes(items []string) []chainNode {
+	nodes := make([]chainNode, 0, len(items))
+	for _, item := range items {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		hop := len(nodes) + 1
+		if idx := strings.Index(trimmed, "::"); idx > 0 {
+			nodes = append(nodes, chainNode{Hop: hop, Channel: trimmed[:idx], Endpoint: trimmed[idx+2:]})
+		} else {
+			nodes = append(nodes, chainNode{Hop: hop, Endpoint: trimmed})
+		}
+	}
+	return nodes
 }
 
 // ============================================================

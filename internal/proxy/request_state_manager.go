@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"strings"
+	"encoding/json"
 	"sync"
 	"time"
 )
@@ -19,7 +19,7 @@ type RequestStateManager struct {
 	groupName    string
 	channel      string
 	endpointChainMu sync.RWMutex
-	endpointChain   []string
+	endpointChain   []ChainNode
 
 	// 状态信息
 	stateMu         sync.RWMutex
@@ -121,11 +121,17 @@ func (rsm *RequestStateManager) SetEndpoint(endpointName, groupName, channel str
 	rsm.channel = channel
 }
 
+// ChainNode 链路节点（结构化存储）
+type ChainNode struct {
+	Hop      int    `json:"hop"`
+	Channel  string `json:"channel"`
+	Endpoint string `json:"endpoint"`
+}
+
 // AppendEndpointChain 追加端点到链路（按切换去重）
-// endpointKey 建议使用 channel::name，便于前端展示渠道来源
-// 返回最新链路字符串（形如 "channelA::A -> channelB::B"）
-func (rsm *RequestStateManager) AppendEndpointChain(endpointKey string) string {
-	if endpointKey == "" {
+// 返回最新链路 JSON 数组（形如 [{"channel":"A","endpoint":"B"}]）
+func (rsm *RequestStateManager) AppendEndpointChain(channel, endpointName string) string {
+	if channel == "" && endpointName == "" {
 		return rsm.GetEndpointChain()
 	}
 
@@ -133,21 +139,23 @@ func (rsm *RequestStateManager) AppendEndpointChain(endpointKey string) string {
 	defer rsm.endpointChainMu.Unlock()
 
 	chainLen := len(rsm.endpointChain)
-	if chainLen == 0 || rsm.endpointChain[chainLen-1] != endpointKey {
-		rsm.endpointChain = append(rsm.endpointChain, endpointKey)
+	if chainLen == 0 || rsm.endpointChain[chainLen-1].Channel != channel || rsm.endpointChain[chainLen-1].Endpoint != endpointName {
+		rsm.endpointChain = append(rsm.endpointChain, ChainNode{Hop: chainLen + 1, Channel: channel, Endpoint: endpointName})
 	}
 
-	return strings.Join(rsm.endpointChain, " -> ")
+	data, _ := json.Marshal(rsm.endpointChain)
+	return string(data)
 }
 
-// GetEndpointChain 获取端点链路字符串
+// GetEndpointChain 获取端点链路 JSON 数组字符串
 func (rsm *RequestStateManager) GetEndpointChain() string {
 	rsm.endpointChainMu.RLock()
 	defer rsm.endpointChainMu.RUnlock()
 	if len(rsm.endpointChain) == 0 {
 		return ""
 	}
-	return strings.Join(rsm.endpointChain, " -> ")
+	data, _ := json.Marshal(rsm.endpointChain)
+	return string(data)
 }
 
 // GetRequestID 获取请求ID

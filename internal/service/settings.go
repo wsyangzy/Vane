@@ -386,9 +386,13 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 	}
 
 	for _, dep := range deprecatedKeys {
+		// 先检查是否存在，避免每次启动都输出无意义的日志
+		existing, _ := s.store.Get(ctx, dep.category, dep.key)
+		if existing == nil {
+			continue
+		}
 		if err := s.store.Delete(ctx, dep.category, dep.key); err != nil {
-			// 配置不存在时会返回错误，忽略
-			slog.Debug("删除废弃配置", "category", dep.category, "key", dep.key, "error", err)
+			slog.Debug("删除废弃配置失败", "category", dep.category, "key", dep.key, "error", err)
 		} else {
 			slog.Info("✅ [SettingsService] 已删除废弃配置", "category", dep.category, "key", dep.key)
 		}

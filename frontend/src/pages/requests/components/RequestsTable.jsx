@@ -14,20 +14,24 @@ import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
 
 /**
- * 解析链路端点，提取端点名称（去除 channel:: 前缀）
+ * 解析链路端点，提取端点名称
+ * 兼容对象格式 {channel, endpoint} 和旧字符串格式 "channel::endpoint"
  */
-const parseEndpointName = (fullKey) => {
-  if (!fullKey) return '';
-  const parts = fullKey.split('::');
+const parseEndpointName = (item) => {
+  if (!item) return '';
+  if (typeof item === 'object' && item !== null) return item.endpoint || '';
+  const parts = String(item).split('::');
   return parts.length > 1 ? parts[1] : parts[0];
 };
 
 /**
  * 解析链路端点，提取渠道名称
+ * 兼容对象格式 {channel, endpoint} 和旧字符串格式 "channel::endpoint"
  */
-const parseChannelName = (fullKey) => {
-  if (!fullKey) return '';
-  const parts = fullKey.split('::');
+const parseChannelName = (item) => {
+  if (!item) return '';
+  if (typeof item === 'object' && item !== null) return item.channel || '';
+  const parts = String(item).split('::');
   return parts.length > 1 ? parts[0] : '';
 };
 
