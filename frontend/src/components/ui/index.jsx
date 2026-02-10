@@ -20,10 +20,11 @@ import {
 // 导入独立组件
 import ConfirmDialog from './ConfirmDialog';
 import SaveResultDialog from './SaveResultDialog';
+import PortConflictDialog from './PortConflictDialog';
 import { ToastProvider, useToast } from './Toast';
 
 // 导出独立组件
-export { ConfirmDialog, SaveResultDialog, ToastProvider, useToast };
+export { ConfirmDialog, SaveResultDialog, PortConflictDialog, ToastProvider, useToast };
 
 // ============================================
 // KPI 卡片组件

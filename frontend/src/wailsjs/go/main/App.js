@@ -56,6 +56,10 @@ export function GetChannels() {
   return Call.ByName("main.App.GetChannels");
 }
 
+export function GetClaudeCodeVersion() {
+  return Call.ByName("main.App.GetClaudeCodeVersion");
+}
+
 export function GetConfig() {
   return Call.ByName("main.App.GetConfig");
 }
@@ -126,6 +130,10 @@ export function GetModelPricings() {
 
 export function GetNextAvailableChannel(arg1) {
   return Call.ByName("main.App.GetNextAvailableChannel", arg1);
+}
+
+export function GetPortConflictStatus() {
+  return Call.ByName("main.App.GetPortConflictStatus");
 }
 
 export function GetPortInfo() {
@@ -204,6 +212,10 @@ export function IsProxyRunning() {
   return Call.ByName("main.App.IsProxyRunning");
 }
 
+export function OpenClaudeConfigDir() {
+  return Call.ByName("main.App.OpenClaudeConfigDir");
+}
+
 export function OpenLogDir() {
   return Call.ByName("main.App.OpenLogDir");
 }
@@ -218,6 +230,10 @@ export function RequestQuit() {
 
 export function ResetCategorySettings(arg1) {
   return Call.ByName("main.App.ResetCategorySettings", arg1);
+}
+
+export function ResolvePortConflict(arg1) {
+  return Call.ByName("main.App.ResolvePortConflict", arg1);
 }
 
 export function ResumeGroup(arg1) {

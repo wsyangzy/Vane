@@ -163,6 +163,16 @@ export const getSystemStatus = async () => {
   };
 };
 
+/**
+ * 获取 Claude Code CLI 版本
+ * @returns {Promise<string>} 版本号，如 "1.0.17" 或 "未安装"
+ */
+export const getClaudeCodeVersion = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.GetClaudeCodeVersion();
+};
+
 export const getConfig = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -594,6 +604,56 @@ export const isProxyRunning = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   return await WailsApp.IsProxyRunning();
+};
+
+// ============================================
+// 系统操作 API
+// ============================================
+
+/**
+ * 打开 Claude 配置目录
+ */
+export const openClaudeConfigDir = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.OpenClaudeConfigDir();
+};
+
+/**
+ * 打开日志目录
+ */
+export const openLogDir = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.OpenLogDir();
+};
+
+/**
+ * 请求退出应用
+ */
+export const requestQuit = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.RequestQuit();
+};
+
+/**
+ * 复制文本到剪贴板
+ */
+export const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for older browsers
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+    return true;
+  }
 };
 
 // ============================================
@@ -1504,4 +1564,31 @@ export const getManualRetryChannelCounts = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   return await WailsApp.GetManualRetryChannelCounts();
+};
+
+// ============================================
+// 端口冲突处理 API
+// ============================================
+
+/**
+ * 获取端口冲突状态
+ * @returns {Promise<Object>} - {has_conflict, conflict_port, error_message, proxy_address, proxy_running}
+ */
+export const getPortConflictStatus = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.GetPortConflictStatus();
+};
+
+/**
+ * 解决端口冲突
+ * @param {string} action - 处理动作: "retry" (重试首选端口) | "switch" (切换到可用端口)
+ * @returns {Promise<Object>} - {success, proxy_address, error_message}
+ */
+export const resolvePortConflict = async (action) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  return await WailsApp.ResolvePortConflict(action);
 };

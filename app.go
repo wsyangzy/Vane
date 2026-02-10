@@ -79,6 +79,11 @@ type App struct {
 	startTime  time.Time
 	configPath string
 
+	// 端口冲突状态
+	portConflict     bool   // 是否存在端口冲突
+	portConflictPort int    // 冲突的端口号
+	portConflictErr  string // 冲突错误信息
+
 	// 并发控制
 	mu        sync.RWMutex
 	isRunning bool
@@ -174,7 +179,7 @@ func (a *App) startup() {
 	a.setupProxyHandler()
 
 	// 10. 启动 HTTP 代理服务器
-	a.startProxyServer()
+	proxyStarted := a.startProxyServer()
 
 	// 11. 设置配置热重载
 	a.setupConfigReload()
@@ -185,9 +190,14 @@ func (a *App) startup() {
 	// 13. 启动历史数据收集器
 	a.startHistoryCollector()
 
-	a.isRunning = true
-	a.logger.Info("✅ Claude Request Forwarder 启动完成",
-		"proxy_port", a.config.Server.Port)
+	a.isRunning = proxyStarted
+	if proxyStarted {
+		a.logger.Info("✅ Claude Request Forwarder 启动完成",
+			"proxy_port", a.config.Server.Port)
+	} else {
+		a.logger.Error("❌ Claude Request Forwarder 启动未完成：代理服务器未启动",
+			"configured_port", a.config.Server.Port)
+	}
 }
 
 // shutdown 在 Wails 应用关闭时调用
@@ -299,6 +309,11 @@ func (a *App) isQuitting() bool {
 	return atomic.LoadInt32(&a.quitting) == 1
 }
 
+// markQuitting 标记应用进入退出流程（用于放行窗口关闭钩子）
+func (a *App) markQuitting() {
+	atomic.StoreInt32(&a.quitting, 1)
+}
+
 // ShowMainWindow 显示主窗口（用于托盘菜单/单实例唤起）
 func (a *App) ShowMainWindow() {
 	if a.window == nil {
@@ -317,14 +332,21 @@ func (a *App) HideMainWindow() {
 }
 
 // RequestQuit 请求退出应用（托盘菜单"退出"使用）
+// 优雅退出：先让 Wails 处理关闭，超时后强制退出
 func (a *App) RequestQuit() {
-	atomic.StoreInt32(&a.quitting, 1)
-	if a.wailsApp != nil {
-		a.wailsApp.Quit()
-	}
-	// 确保进程完全退出（dev 模式下 Quit() 可能不会终止 watcher）
+	a.markQuitting()
+
+	// 在 goroutine 中执行退出，避免阻塞 UI
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		// 调用 Wails Quit
+		if a.wailsApp != nil {
+			a.wailsApp.Quit()
+		}
+
+		// 等待 500ms 让 Wails 完成清理
+		time.Sleep(500 * time.Millisecond)
+
+		// 保底退出
 		os.Exit(0)
 	}()
 }
@@ -362,6 +384,67 @@ func (a *App) OpenLogDir() {
 			a.logger.Warn("打开日志目录失败", "error", err, "path", logDir)
 		}
 	}
+}
+
+// OpenClaudeConfigDir 打开 Claude 配置目录（托盘菜单使用）
+// Claude 配置目录通常位于用户主目录下的 .claude 文件夹
+func (a *App) OpenClaudeConfigDir() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("获取用户主目录失败", "error", err)
+		}
+		return
+	}
+
+	claudeConfigDir := filepath.Join(homeDir, ".claude")
+
+	// 检查目录是否存在
+	if _, err := os.Stat(claudeConfigDir); os.IsNotExist(err) {
+		if a.logger != nil {
+			a.logger.Warn("Claude 配置目录不存在", "path", claudeConfigDir)
+		}
+		// 仍然尝试打开，让文件管理器显示错误
+	}
+
+	// 跨平台打开目录
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", claudeConfigDir)
+	case "darwin":
+		cmd = exec.Command("open", claudeConfigDir)
+	case "linux":
+		cmd = exec.Command("xdg-open", claudeConfigDir)
+	default:
+		if a.logger != nil {
+			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
+		}
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		if a.logger != nil {
+			a.logger.Warn("打开 Claude 配置目录失败", "error", err, "path", claudeConfigDir)
+		}
+	}
+}
+
+// GetProxyAddress 获取当前代理地址（托盘菜单"复制代理地址"使用）
+func (a *App) GetProxyAddress() string {
+	host := "127.0.0.1"
+	port := 8087 // 默认端口
+
+	if a.config != nil && a.config.Server.Host != "" && a.config.Server.Host != "localhost" {
+		host = a.config.Server.Host
+	}
+	if a.portManager != nil {
+		port = a.portManager.GetActualPort()
+	} else if a.config != nil {
+		port = a.config.Server.Port
+	}
+
+	return fmt.Sprintf("http://%s:%d", host, port)
 }
 
 // loadConfig 加载配置
@@ -404,9 +487,16 @@ func (a *App) loadConfig() {
 	cfg := configWatcher.GetConfig()
 
 	// ⚠️ 关键：立即覆盖所有路径为用户目录（在任何组件初始化之前）
-	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), "app.log")
+	// Dev 模式使用独立的数据库和日志文件，避免与 release 版本冲突
+	logFileName := "app.log"
+	dbFileName := "usage.db"
+	if BuildMode == "dev" {
+		logFileName = "app-dev.log"
+		dbFileName = "usage-dev.db"
+	}
+	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), logFileName)
 	// 为避免与旧版本共享同一 usage.db 产生锁冲突，默认切换到新文件名，并在启动时自动迁移旧数据。
-	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "usage.db")
+	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), dbFileName)
 
 	// 同时设置 Database 配置（如果存在）
 	if cfg.UsageTracking.Database != nil {
@@ -1247,7 +1337,8 @@ func (a *App) setupProxyHandler() {
 }
 
 // startProxyServer 启动 HTTP 代理服务器
-func (a *App) startProxyServer() {
+// 返回 true 表示启动成功，false 表示启动失败
+func (a *App) startProxyServer() bool {
 	mux := http.NewServeMux()
 
 	// 注册监控端点
@@ -1273,30 +1364,32 @@ func (a *App) startProxyServer() {
 	// 注册代理处理器
 	mux.Handle("/", a.loggingMiddleware.Wrap(a.authMiddleware.Wrap(a.proxyHandler)))
 
-	// 端口探测：自动寻找可用端口
+	// 端口绑定逻辑
 	var actualPort int
 	var listener net.Listener
 	var err error
 
+	preferredPort := a.config.Server.Port
 	if a.portManager != nil {
-		// 使用 PortManager 进行端口探测
-		listener, actualPort, err = utils.FindAndBind(a.portManager.GetPreferredPort(), 10)
-		if err != nil {
-			a.logger.Error("❌ 无法找到可用端口", "error", err)
-			a.emitError("代理服务器启动失败", "无法找到可用端口: "+err.Error())
-			return
-		}
+		preferredPort = a.portManager.GetPreferredPort()
+	}
+
+	// 首先尝试首选端口
+	addr := fmt.Sprintf("%s:%d", a.config.Server.Host, preferredPort)
+	listener, err = net.Listen("tcp", addr)
+	if err != nil {
+		// 端口冲突：记录状态，允许应用继续启动
+		a.portConflict = true
+		a.portConflictPort = preferredPort
+		a.portConflictErr = err.Error()
+		a.logger.Warn("⚠️ 首选端口被占用，等待用户决定", "port", preferredPort, "error", err)
+		// 不立即返回 false，让应用继续启动，前端会显示冲突对话框
+		return false
+	}
+	actualPort = preferredPort
+
+	if a.portManager != nil {
 		a.portManager.SetActualPort(actualPort)
-	} else {
-		// 回退到传统方式（首选端口）
-		actualPort = a.config.Server.Port
-		addr := fmt.Sprintf("%s:%d", a.config.Server.Host, actualPort)
-		listener, err = net.Listen("tcp", addr)
-		if err != nil {
-			a.logger.Error("❌ 端口绑定失败", "port", actualPort, "error", err)
-			a.emitError("代理服务器启动失败", fmt.Sprintf("端口 %d 被占用: %v", actualPort, err))
-			return
-		}
 	}
 
 	// 更新配置中的实际端口
@@ -1336,6 +1429,72 @@ func (a *App) startProxyServer() {
 				portInfo.PreferredPort, portInfo.ActualPort))
 		}
 	}
+
+	// 安全警告
+	if a.config.Server.Host != "127.0.0.1" && a.config.Server.Host != "localhost" && a.config.Server.Host != "::1" {
+		if !a.config.Auth.Enabled {
+			a.logger.Warn("⚠️  安全警告：服务器绑定到非本地地址但未启用鉴权！")
+		}
+	}
+
+	return true
+}
+
+// startProxyServerWithListener 使用已绑定的监听器启动代理服务器
+// 用于端口冲突解决后，使用 ResolvePortConflict API 返回的监听器启动服务器
+func (a *App) startProxyServerWithListener(listener net.Listener, actualPort int) {
+	mux := http.NewServeMux()
+
+	// 注册监控端点
+	a.monitoringMiddleware.RegisterHealthEndpoint(mux)
+
+	// 注册使用追踪健康检查端点
+	if a.usageTracker != nil {
+		mux.HandleFunc("/health/usage-tracker", func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+
+			if err := a.usageTracker.HealthCheck(ctx); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(fmt.Sprintf("Usage Tracker unhealthy: %v", err)))
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Usage Tracker healthy"))
+		})
+	}
+
+	// 注册代理处理器
+	mux.Handle("/", a.loggingMiddleware.Wrap(a.authMiddleware.Wrap(a.proxyHandler)))
+
+	a.proxyServer = &http.Server{
+		Handler:      mux,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 0, // 流式请求禁用写入超时
+		IdleTimeout:  120 * time.Second,
+	}
+
+	// 标记服务器运行状态
+	a.isRunning = true
+
+	// 在 goroutine 中启动服务器
+	go func() {
+		a.logger.Info("🌐 HTTP 代理服务器启动中...",
+			"address", listener.Addr().String())
+
+		if err := a.proxyServer.Serve(listener); err != nil && err != http.ErrServerClosed {
+			a.logger.Error("代理服务器启动失败", "error", err)
+			// 通知前端
+			a.emitError("代理服务器启动失败", err.Error())
+		}
+	}()
+
+	// 等待服务器启动
+	time.Sleep(100 * time.Millisecond)
+
+	baseURL := fmt.Sprintf("http://%s:%d", a.config.Server.Host, actualPort)
+	a.logger.Info("✅ 代理服务器启动成功", "url", baseURL)
 
 	// 安全警告
 	if a.config.Server.Host != "127.0.0.1" && a.config.Server.Host != "localhost" && a.config.Server.Host != "::1" {
@@ -1523,6 +1682,13 @@ func (a *App) setupSettingsStore() {
 
 	// 初始化端口管理器
 	preferredPort := a.settingsService.GetInt(ctx, service.CategoryServer, "preferred_port", a.config.Server.Port)
+
+	// Dev 模式：端口偏移 +10，允许与 release 版本同时运行
+	if BuildMode == "dev" {
+		preferredPort += 10
+		a.logger.Info("🔧 Dev 模式端口偏移", "original", preferredPort-10, "dev_port", preferredPort)
+	}
+
 	a.portManager = utils.NewPortManager(preferredPort)
 
 	a.logger.Info("✅ 系统设置存储已启用 (SQLite)")

@@ -12,12 +12,19 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"claude-request-forwarder/internal/utils"
 )
 
 // 端口检测缓存（避免频繁 TCP 连接）
@@ -91,6 +98,88 @@ func (a *App) GetSystemStatus() SystemStatus {
 	return status
 }
 
+// ClaudeCodeVersion 缓存 Claude Code 版本信息
+var (
+	claudeCodeVersionCache     string
+	claudeCodeVersionCacheTime time.Time
+	claudeCodeVersionCacheTTL  = 5 * time.Minute // 缓存 5 分钟
+	claudeCodeVersionMu        sync.RWMutex
+)
+
+// GetClaudeCodeVersion 获取 Claude Code CLI 版本
+// 执行 `claude -v` 命令获取版本信息
+func (a *App) GetClaudeCodeVersion() string {
+	// 先检查缓存
+	claudeCodeVersionMu.RLock()
+	if claudeCodeVersionCache != "" && time.Since(claudeCodeVersionCacheTime) < claudeCodeVersionCacheTTL {
+		cached := claudeCodeVersionCache
+		claudeCodeVersionMu.RUnlock()
+		return cached
+	}
+	claudeCodeVersionMu.RUnlock()
+
+	// 创建命令并配置 Windows 隐藏窗口
+	runClaudeCommand := func(args ...string) (string, error) {
+		cmd := exec.Command("claude", args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		// Windows 下隐藏命令行窗口（CREATE_NO_WINDOW = 0x08000000）
+		if runtime.GOOS == "windows" {
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				HideWindow: true,
+			}
+		}
+
+		err := cmd.Run()
+		if err != nil {
+			return "", err
+		}
+
+		output := strings.TrimSpace(stdout.String())
+		if output == "" {
+			output = strings.TrimSpace(stderr.String())
+		}
+		return output, nil
+	}
+
+	// 尝试 claude -v
+	output, err := runClaudeCommand("-v")
+	if err != nil {
+		// 尝试 claude --version
+		output, err = runClaudeCommand("--version")
+		if err != nil {
+			return "未安装"
+		}
+	}
+
+	if output == "" {
+		return "未安装"
+	}
+
+	// 提取版本号（格式可能是 "claude 1.0.0" 或直接 "1.0.0"）
+	version := output
+	if strings.Contains(output, " ") {
+		parts := strings.Fields(output)
+		for _, part := range parts {
+			// 查找看起来像版本号的部分（包含数字和点）
+			if strings.Contains(part, ".") && len(part) > 0 && (part[0] >= '0' && part[0] <= '9') {
+				version = part
+				break
+			}
+		}
+	}
+
+	// 更新缓存
+	claudeCodeVersionMu.Lock()
+	claudeCodeVersionCache = version
+	claudeCodeVersionCacheTime = time.Now()
+	claudeCodeVersionMu.Unlock()
+
+	return version
+}
+
 // checkPortListening 检测端口是否在监听（带缓存，避免频繁 TCP 连接）
 func (a *App) checkPortListening(host string, port int) bool {
 	// 使用 net.JoinHostPort 正确处理 IPv6 地址
@@ -123,6 +212,136 @@ func (a *App) checkPortListening(host string, port int) bool {
 	portCheckCacheMu.Unlock()
 
 	return result
+}
+
+// ============================================================
+// 端口冲突 API
+// ============================================================
+
+// PortConflictStatus 端口冲突状态
+type PortConflictStatus struct {
+	HasConflict   bool   `json:"has_conflict"`    // 是否存在冲突
+	ConflictPort  int    `json:"conflict_port"`   // 冲突的端口号
+	ErrorMessage  string `json:"error_message"`   // 错误信息
+	ProxyAddress  string `json:"proxy_address"`   // 当前代理地址（成功时）
+	ProxyRunning  bool   `json:"proxy_running"`   // 代理是否正在运行
+}
+
+// GetPortConflictStatus 获取端口冲突状态
+func (a *App) GetPortConflictStatus() PortConflictStatus {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	status := PortConflictStatus{
+		HasConflict:  a.portConflict,
+		ConflictPort: a.portConflictPort,
+		ErrorMessage: a.portConflictErr,
+		ProxyRunning: a.isRunning && a.proxyServer != nil,
+	}
+
+	if status.ProxyRunning {
+		status.ProxyAddress = a.GetProxyAddress()
+	}
+
+	return status
+}
+
+// PortConflictResult 端口冲突处理结果
+type PortConflictResult struct {
+	Success      bool   `json:"success"`
+	ProxyAddress string `json:"proxy_address"` // 成功时的代理地址
+	ErrorMessage string `json:"error_message"` // 失败时的错误信息
+}
+
+// ResolvePortConflict 处理端口冲突
+// action: "retry" - 重试首选端口, "switch" - 切换到其他可用端口
+func (a *App) ResolvePortConflict(action string) PortConflictResult {
+	a.mu.Lock()
+
+	if !a.portConflict {
+		addr := a.GetProxyAddress()
+		a.mu.Unlock()
+		return PortConflictResult{
+			Success:      true,
+			ProxyAddress: addr,
+		}
+	}
+
+	preferredPort := a.config.Server.Port
+	if a.portManager != nil {
+		preferredPort = a.portManager.GetPreferredPort()
+	}
+
+	var listener net.Listener
+	var actualPort int
+	var err error
+
+	switch action {
+	case "retry":
+		// 重试首选端口
+		addr := fmt.Sprintf("%s:%d", a.config.Server.Host, preferredPort)
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			a.mu.Unlock()
+			return PortConflictResult{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("端口 %d 仍被占用: %v", preferredPort, err),
+			}
+		}
+		actualPort = preferredPort
+
+	case "switch":
+		// 切换到其他可用端口（使用配置的 host 地址绑定）
+		host := a.config.Server.Host
+		if host == "" || host == "localhost" {
+			host = "127.0.0.1"
+		}
+		listener, actualPort, err = utils.FindAndBindWithHost(host, preferredPort, 10)
+		if err != nil {
+			a.mu.Unlock()
+			return PortConflictResult{
+				Success:      false,
+				ErrorMessage: fmt.Sprintf("无法找到可用端口: %v", err),
+			}
+		}
+
+	default:
+		a.mu.Unlock()
+		return PortConflictResult{
+			Success:      false,
+			ErrorMessage: "无效的操作: " + action,
+		}
+	}
+
+	// 成功绑定端口，启动代理服务器
+	a.portConflict = false
+	a.portConflictPort = 0
+	a.portConflictErr = ""
+
+	if a.portManager != nil {
+		a.portManager.SetActualPort(actualPort)
+	}
+	a.config.Server.Port = actualPort
+
+	// 创建并启动代理服务器
+	a.startProxyServerWithListener(listener, actualPort)
+
+	// 代理地址统一使用 127.0.0.1（避免 localhost 在某些环境下解析问题）
+	displayHost := a.config.Server.Host
+	if displayHost == "" || displayHost == "localhost" {
+		displayHost = "127.0.0.1"
+	}
+	proxyAddr := fmt.Sprintf("http://%s:%d", displayHost, actualPort)
+	a.logger.Info("✅ 代理服务器启动成功", "address", proxyAddr)
+
+	// 释放锁后发送系统状态更新事件，通知前端刷新端口信息
+	a.mu.Unlock()
+	a.emitSystemStatus()
+
+	return PortConflictResult{
+		Success:      true,
+		ProxyAddress: proxyAddr,
+	}
 }
 
 // ============================================================
@@ -177,7 +396,12 @@ func (a *App) GetProxyURL() string {
 		return ""
 	}
 
-	return fmt.Sprintf("http://%s:%d", a.config.Server.Host, a.config.Server.Port)
+	// 统一使用 127.0.0.1，避免 localhost 在某些环境下的解析问题
+	host := a.config.Server.Host
+	if host == "" || host == "localhost" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d", host, a.config.Server.Port)
 }
 
 // IsProxyRunning 检查代理是否运行中

@@ -29,6 +29,8 @@ export function GetAllSettings():Promise<Array<main.SettingInfo>>;
 
 export function GetChannels():Promise<Array<main.ChannelInfo>>;
 
+export function GetClaudeCodeVersion():Promise<string>;
+
 export function GetConfig():Promise<main.ConfigInfo>;
 
 export function GetConnectionActivityChart(arg1:number):Promise<Array<main.ChartDataPoint>>;
@@ -64,6 +66,8 @@ export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageS
 export function GetModelPricings():Promise<Array<main.ModelPricingInfo>>;
 
 export function GetNextAvailableChannel(arg1:string):Promise<string>;
+
+export function GetPortConflictStatus():Promise<main.PortConflictStatus>;
 
 export function GetPortInfo():Promise<main.PortInfo>;
 
@@ -103,6 +107,8 @@ export function IsInterChannelFailoverEnabled():Promise<boolean>;
 
 export function IsProxyRunning():Promise<boolean>;
 
+export function OpenClaudeConfigDir():Promise<void>;
+
 export function OpenLogDir():Promise<void>;
 
 export function PauseGroup(arg1:string):Promise<void>;
@@ -110,6 +116,8 @@ export function PauseGroup(arg1:string):Promise<void>;
 export function RequestQuit():Promise<void>;
 
 export function ResetCategorySettings(arg1:string):Promise<void>;
+
+export function ResolvePortConflict(arg1:string):Promise<main.PortConflictResult>;
 
 export function ResumeGroup(arg1:string):Promise<void>;
 

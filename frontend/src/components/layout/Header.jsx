@@ -1,10 +1,11 @@
 // ============================================
 // 布局组件 - Header 导航栏
-// 2025-11-28 (Updated 2025-12-12 for proxy status display)
+// 2025-11-28 (Updated 2026-02-09 for user menu)
 // ============================================
 
 import { Command } from 'lucide-react';
 import { isWailsEnvironment } from '@utils/wailsApi.js';
+import UserMenu from './UserMenu.jsx';
 
 // 导航标签项
 const NavItem = ({ label, active, onClick }) => (
@@ -115,8 +116,8 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
             {status.text}
           </div>
 
-          {/* 用户头像 */}
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 border-2 border-white shadow-md cursor-pointer hover:ring-2 ring-indigo-200 transition-all"></div>
+          {/* 用户菜单 */}
+          <UserMenu />
         </div>
       </div>
 

@@ -67,13 +67,19 @@ func IsPortAvailable(port int) bool {
 // FindAndBind 查找可用端口并绑定
 // 返回 listener 和实际端口号
 func FindAndBind(preferred int, maxAttempts int) (net.Listener, int, error) {
+	return FindAndBindWithHost("127.0.0.1", preferred, maxAttempts)
+}
+
+// FindAndBindWithHost 查找可用端口并绑定到指定 host
+// 返回 listener 和实际端口号
+func FindAndBindWithHost(host string, preferred int, maxAttempts int) (net.Listener, int, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = 10
 	}
 
 	for i := 0; i < maxAttempts; i++ {
 		port := preferred + i
-		addr := fmt.Sprintf(":%d", port)
+		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 		listener, err := net.Listen("tcp", addr)
 		if err == nil {
 			if i > 0 {
@@ -83,7 +89,20 @@ func FindAndBind(preferred int, maxAttempts int) (net.Listener, int, error) {
 		}
 	}
 
-	return nil, 0, fmt.Errorf("无法找到可用端口 (尝试范围: %d-%d)", preferred, preferred+maxAttempts-1)
+	// 首选区间全部被占用时，回退到系统分配的随机可用端口
+	fallbackAddr := net.JoinHostPort(host, "0")
+	fallbackListener, fallbackErr := net.Listen("tcp", fallbackAddr)
+	if fallbackErr == nil {
+		tcpAddr, ok := fallbackListener.Addr().(*net.TCPAddr)
+		if ok && tcpAddr.Port > 0 {
+			slog.Warn(fmt.Sprintf("⚠️ 端口 %d-%d 均不可用，自动回退到随机端口 %d", preferred, preferred+maxAttempts-1, tcpAddr.Port))
+			return fallbackListener, tcpAddr.Port, nil
+		}
+		_ = fallbackListener.Close()
+		fallbackErr = fmt.Errorf("无法解析随机端口地址: %v", fallbackListener.Addr())
+	}
+
+	return nil, 0, fmt.Errorf("无法找到可用端口 (尝试范围: %d-%d)，随机端口回退失败: %w", preferred, preferred+maxAttempts-1, fallbackErr)
 }
 
 // SetPreferredPort 设置首选端口

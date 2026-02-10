@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -43,6 +44,12 @@ func main() {
 	appInstance := NewApp()
 	appInstance.configPath = *configPath
 
+	// 单实例锁标识：dev 和 release 使用不同的 UniqueID，允许两个版本同时运行
+	singleInstanceID := "claude-request-forwarder-desktop"
+	if BuildMode == "dev" {
+		singleInstanceID = "claude-request-forwarder-desktop-dev"
+	}
+
 	// 创建 Wails v3 应用
 	wailsApp := application.New(application.Options{
 		Name:        "Claude Request Forwarder",
@@ -59,7 +66,7 @@ func main() {
 		},
 		// 单实例锁
 		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID: "claude-request-forwarder-desktop",
+			UniqueID: singleInstanceID,
 			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 				// 当第二个实例启动时，显示主窗口
 				if appInstance != nil && appInstance.window != nil {
@@ -68,18 +75,38 @@ func main() {
 				}
 			},
 		},
+		ShouldQuit: func() bool {
+			if appInstance != nil {
+				appInstance.markQuitting()
+			}
+			return true
+		},
 	})
 
 	// 保存 wailsApp 引用到 App 实例
 	appInstance.wailsApp = wailsApp
 
+	// 应用进入退出流程时，先标记 quitting，避免 WindowClosing 钩子误拦截关闭
+	wailsApp.OnShutdown(func() {
+		if appInstance != nil {
+			appInstance.markQuitting()
+			appInstance.shutdown()
+		}
+	})
+
+	// 窗口标题：dev 模式添加标识
+	windowTitle := "Claude Request Forwarder"
+	if BuildMode == "dev" {
+		windowTitle = "Claude Request Forwarder (Dev)"
+	}
+
 	// 创建主窗口
 	window := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "Claude Request Forwarder",
-		Width:     1440,
-		Height:    900,
-		MinWidth:  1200,
-		MinHeight: 700,
+		Title:            windowTitle,
+		Width:            1440,
+		Height:           900,
+		MinWidth:         1200,
+		MinHeight:        700,
 		BackgroundColour: application.RGBA{Red: 26, Green: 26, Blue: 46, Alpha: 255},
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
@@ -121,6 +148,9 @@ func main() {
 	// 运行应用
 	err := wailsApp.Run()
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "graceful exit requested") {
+			return
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -152,11 +182,31 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 
 	menu.AddSeparator()
 
+	// 复制代理地址
+	mCopyAddr := menu.Add("复制代理地址")
+	mCopyAddr.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			addr := appInstance.GetProxyAddress()
+			success := app.Clipboard.SetText(addr)
+			if success {
+				appInstance.logger.Info("📋 代理地址已复制到剪贴板", "address", addr)
+			}
+		}
+	})
+
 	// 打开日志目录
 	mOpenLogDir := menu.Add("打开日志目录")
 	mOpenLogDir.OnClick(func(ctx *application.Context) {
 		if appInstance != nil {
 			appInstance.OpenLogDir()
+		}
+	})
+
+	// 打开 Claude 配置目录
+	mOpenClaudeDir := menu.Add("打开 Claude 配置目录")
+	mOpenClaudeDir.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			appInstance.OpenClaudeConfigDir()
 		}
 	})
 

@@ -1,14 +1,14 @@
 // ============================================
 // 主 App 组件 - 概览入口
-// 2025-11-28 (Updated 2025-12-12)
+// 2025-11-28 (Updated 2026-02-09)
 // ============================================
 
 import { useState, Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import Header from '@components/layout/Header.jsx';
-import { LoadingSpinner, ToastProvider, useToast } from '@components/ui';
+import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
 import { fetchRequests, isWailsEnvironment } from '@utils/api.js';
-import { getSuspendedRequestsCount, getManualRetryRequestsCount } from '@utils/wailsApi.js';
+import { getSuspendedRequestsCount, getManualRetryRequestsCount, getPortConflictStatus, resolvePortConflict } from '@utils/wailsApi.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -164,6 +164,59 @@ function App() {
     host: '127.0.0.1'
   });
 
+  // 端口冲突状态
+  const [portConflict, setPortConflict] = useState({
+    hasConflict: false,
+    conflictPort: 0,
+    errorMessage: ''
+  });
+
+  // 独立的对话框显示状态（与冲突状态分离，避免切换成功后被自动关闭）
+  const [showPortConflictDialog, setShowPortConflictDialog] = useState(false);
+
+  // 检查端口冲突状态
+  const checkPortConflict = useCallback(async () => {
+    if (!isWailsEnvironment()) return;
+
+    try {
+      const status = await getPortConflictStatus();
+      const hasConflict = status.has_conflict || false;
+      setPortConflict({
+        hasConflict,
+        conflictPort: status.conflict_port || 0,
+        errorMessage: status.error_message || ''
+      });
+      // 只有存在冲突时才显示对话框
+      if (hasConflict) {
+        setShowPortConflictDialog(true);
+      }
+    } catch (error) {
+      console.warn('检查端口冲突状态失败:', error);
+    }
+  }, []);
+
+  // 初始化时检查端口冲突
+  /* eslint-disable react-hooks/set-state-in-effect -- 初始化数据加载是标准模式 */
+  useEffect(() => {
+    checkPortConflict();
+  }, [checkPortConflict]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // 处理端口冲突解决
+  const handlePortConflictRetry = useCallback(async () => {
+    return await resolvePortConflict('retry');
+  }, []);
+
+  const handlePortConflictSwitch = useCallback(async () => {
+    return await resolvePortConflict('switch');
+  }, []);
+
+  // 用户手动关闭对话框
+  const handlePortConflictDismiss = useCallback(() => {
+    setShowPortConflictDialog(false);
+    setPortConflict(prev => ({ ...prev, hasConflict: false }));
+  }, []);
+
   // 处理 system:status 事件
   const handleStatusUpdate = useCallback((data) => {
     if (data?.proxy_running !== undefined) {
@@ -172,6 +225,7 @@ function App() {
         port: data.proxy_port || 0,
         host: data.proxy_host || '127.0.0.1'
       });
+      // 注意：不再自动关闭对话框，让用户有时间复制地址
     }
   }, []);
 
@@ -215,6 +269,17 @@ function App() {
   return (
     <ToastProvider>
       <GlobalAlerts />
+
+      {/* 端口冲突对话框 - 使用独立的显示状态，避免成功后被自动关闭 */}
+      <PortConflictDialog
+        isOpen={showPortConflictDialog}
+        conflictPort={portConflict.conflictPort}
+        errorMessage={portConflict.errorMessage}
+        onRetry={handlePortConflictRetry}
+        onSwitch={handlePortConflictSwitch}
+        onDismiss={handlePortConflictDismiss}
+      />
+
       <div className={containerClass}>
         {/* 背景纹理 */}
         <div

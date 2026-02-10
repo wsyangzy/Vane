@@ -35,6 +35,11 @@ tasks:
     cmds:
       - '"{{.BIN_DIR}}/{{.APP_NAME}}"'
 
+  run-dev:
+    summary: Runs the dev build of Linux application
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}"'
+
   package:
     summary: Packages the Linux application (placeholder)
     deps:

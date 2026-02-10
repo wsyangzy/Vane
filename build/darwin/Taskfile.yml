@@ -35,6 +35,11 @@ tasks:
     cmds:
       - '"{{.BIN_DIR}}/{{.APP_NAME}}"'
 
+  run-dev:
+    summary: Runs the dev build of macOS application
+    cmds:
+      - '"{{.BIN_DIR}}/{{.APP_NAME}}"'
+
   package:
     summary: Creates a macOS .app bundle (placeholder)
     deps:

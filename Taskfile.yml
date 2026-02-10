@@ -44,6 +44,11 @@ tasks:
     cmds:
       - task: "{{OS}}:run"
 
+  run:dev:
+    summary: Runs the dev build of the application
+    cmds:
+      - task: "{{OS}}:run-dev"
+
   package:
     summary: Packages a production build
     cmds:
