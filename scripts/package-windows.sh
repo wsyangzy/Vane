@@ -1,7 +1,7 @@
 #!/bin/bash
 # 打包 Windows 发布版本（包含所有必需文件）
 
-VERSION="6.6"
+VERSION="6.7"
 DIST_DIR="build/dist/Claude-Request-Forwarder-Windows-v${VERSION}"
 
 echo "📦 打包 Windows 发布版本..."
@@ -29,7 +29,7 @@ echo "  ✅ 创建日志目录"
 
 # 6. 创建 README
 cat > "$DIST_DIR/README.txt" << 'EOT'
-Claude Request Forwarder v6.6 - Windows 版本
+Claude Request Forwarder v6.7 - Windows 版本
 ====================================
 
 ## 快速开始
