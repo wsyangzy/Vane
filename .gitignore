@@ -92,6 +92,7 @@ CLAUDE.md
 .claude
 .trellis
 .opencode
+.agents
 
 # Local research snapshots
 tmp_research
