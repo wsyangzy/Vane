@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "type-check": "node ./scripts/type-check.mjs",
+    "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {

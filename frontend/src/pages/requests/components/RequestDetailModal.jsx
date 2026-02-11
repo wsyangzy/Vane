@@ -28,6 +28,16 @@ import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
 
+const CHAIN_VIEW_STORAGE_KEY = 'request-detail.chain-view-mode';
+
+const getCompactColumns = () => {
+  if (typeof window === 'undefined') return 3;
+  const width = window.innerWidth;
+  if (width >= 1024) return 3;
+  if (width >= 640) return 2;
+  return 1;
+};
+
 /**
  * 信息行组件
  */
@@ -91,6 +101,16 @@ const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
 const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
+  const [compactColumns, setCompactColumns] = useState(() => getCompactColumns());
+  const [chainViewMode, setChainViewMode] = useState(() => {
+    if (typeof window === 'undefined') return 'timeline';
+    try {
+      const savedMode = window.localStorage.getItem(CHAIN_VIEW_STORAGE_KEY);
+      return savedMode === 'timeline' || savedMode === 'compact' ? savedMode : 'timeline';
+    } catch {
+      return 'timeline';
+    }
+  });
 
   // ESC 键关闭 & 阻止滚动
   useEffect(() => {
@@ -110,6 +130,27 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(CHAIN_VIEW_STORAGE_KEY, chainViewMode);
+    } catch {
+      // 忽略持久化异常（如隐私模式）
+    }
+  }, [chainViewMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleResize = () => {
+      setCompactColumns(getCompactColumns());
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   if (!isOpen || !request) return null;
 
@@ -147,6 +188,17 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     const fallbackChannel = endpointChain.length === 1 ? (request.channel || request.group || '') : '';
     return { raw, channel: fallbackChannel, endpoint: raw, hop };
   }).filter(Boolean);
+  const compactRows = [];
+  for (let i = 0; i < chainNodes.length; i += compactColumns) {
+    compactRows.push(chainNodes.slice(i, i + compactColumns));
+  }
+  const compactCardWidthClass = compactColumns === 1
+    ? 'w-full'
+    : compactColumns === 2
+      ? 'w-[calc((100%-0.625rem)/2)]'
+      : 'w-[calc((100%-1.25rem)/3)]';
+  const chainNodeIndexMap = new Map(chainNodes.map((node, idx) => [node, idx]));
+
   const hasUnknownChannel = chainNodes.some((node) => !node.channel);
   const channelTones = [
     { badge: 'bg-blue-50 text-blue-600 border-blue-100', border: 'border-blue-200/70' },
@@ -345,34 +397,138 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 const uniqueEndpoints = new Set(chainNodes.map(n => n.endpoint).filter(Boolean));
                 const channelSwitches = chainNodes.filter((n, i) => i > 0 && n.channel && chainNodes[i - 1].channel && n.channel !== chainNodes[i - 1].channel).length;
                 return (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-lg border border-indigo-100">
-                      <RefreshCw className="w-3 h-3" />
-                      {chainNodes.length} 跳
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
-                      <Layers className="w-3 h-3" />
-                      {uniqueChannels.size} 渠道
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
-                      <Server className="w-3 h-3" />
-                      {uniqueEndpoints.size} 端点
-                    </span>
-                    {channelSwitches > 0 && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-medium rounded-lg border border-amber-200">
-                        <Zap className="w-3 h-3" />
-                        {channelSwitches} 次渠道切换
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-lg border border-indigo-100">
+                        <RefreshCw className="w-3 h-3" />
+                        {chainNodes.length} 跳
                       </span>
-                    )}
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
+                        <Layers className="w-3 h-3" />
+                        {uniqueChannels.size} 渠道
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
+                        <Server className="w-3 h-3" />
+                        {uniqueEndpoints.size} 端点
+                      </span>
+                      {channelSwitches > 0 && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-medium rounded-lg border border-amber-200">
+                          <Zap className="w-3 h-3" />
+                          {channelSwitches} 次渠道切换
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="inline-flex p-0.5 bg-slate-100 border border-slate-200 rounded-lg">
+                      <button
+                        type="button"
+                        onClick={() => setChainViewMode('timeline')}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                          chainViewMode === 'timeline'
+                            ? 'bg-white text-slate-800 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                        aria-pressed={chainViewMode === 'timeline'}
+                      >
+                        时间线
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setChainViewMode('compact')}
+                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                          chainViewMode === 'compact'
+                            ? 'bg-white text-slate-800 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                        aria-pressed={chainViewMode === 'compact'}
+                      >
+                        紧凑
+                      </button>
+                    </div>
                   </div>
                 );
               })()}
 
-              {/* 纵向时间线 */}
+              {/* 端点链路内容 */}
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="p-4">
                   {chainNodes.length === 0 ? (
                     <div className="text-sm text-slate-400 text-center py-4">暂无端点链路记录</div>
+                  ) : chainViewMode === 'compact' ? (
+                    <div className="space-y-1.5">
+                      {compactRows.map((row, rowIdx) => {
+                        const isReverseRow = rowIdx % 2 === 1;
+                        const displayRow = isReverseRow ? [...row].reverse() : row;
+                        const isLastRow = rowIdx === compactRows.length - 1;
+
+                        return (
+                          <div key={`row-${rowIdx}`}>
+                            <div className="flex items-stretch gap-2.5">
+                              {displayRow.map((node, displayIdx) => {
+                                const originalIndex = chainNodeIndexMap.get(node) ?? 0;
+                                const channelLabel = node.channel || '未知渠道';
+                                const endpointLabel = node.endpoint || node.raw || '-';
+                                const tone = getChannelTone(node.channel);
+                                const isFirst = originalIndex === 0;
+                                const isLast = originalIndex === chainNodes.length - 1;
+                                const isSingle = chainNodes.length === 1;
+                                const prevNode = chainNodes[originalIndex - 1];
+                                const isChannelSwitch = originalIndex > 0 && node.channel && prevNode?.channel && node.channel !== prevNode.channel;
+                                const hasNextInRow = displayIdx < displayRow.length - 1;
+                                const rowArrow = isReverseRow ? '←' : '→';
+
+                                return (
+                                  <div key={`${node.raw}-${originalIndex}`} className={`${compactCardWidthClass} min-w-0 flex items-center gap-2`}>
+                                    <div
+                                      className={`border ${tone.border} rounded-lg px-3 py-2 bg-white min-w-0 flex-1 ${isLast && !isSingle ? 'ring-1 ring-emerald-200/60' : ''}`}
+                                    >
+                                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                                        <span className={`text-[10px] font-bold ${
+                                          isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-500' : isLast ? 'text-emerald-500' : 'text-slate-400'
+                                        }`}>
+                                          #{node.hop}
+                                        </span>
+
+                                        <div className="flex items-center gap-1">
+                                          {isChannelSwitch && (
+                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 font-medium">
+                                              <Zap className="w-2.5 h-2.5" />
+                                              切换
+                                            </span>
+                                          )}
+                                          {isSingle && <span className="text-[10px] text-slate-400">直达</span>}
+                                          {isFirst && !isSingle && <span className="text-[10px] text-blue-400">起始</span>}
+                                          {isLast && !isSingle && <span className="text-[10px] text-emerald-500">最终</span>}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-1.5 min-w-0" title={`${channelLabel} / ${endpointLabel}`}>
+                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border shrink-0 whitespace-nowrap ${tone.badge}`}>
+                                          {channelLabel}
+                                        </span>
+                                        <span className="text-xs font-semibold text-slate-800 truncate" title={endpointLabel}>
+                                          {endpointLabel}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {hasNextInRow && (
+                                      <span className="text-slate-300 text-sm shrink-0">{rowArrow}</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {!isLastRow && (
+                              <div className={`flex ${isReverseRow ? 'justify-start' : 'justify-end'} px-1 mt-1 mb-0.5`}>
+                                <span className="text-slate-300 text-sm leading-none">↓</span>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <div className="relative pl-8">
                       {/* 贯穿竖线（绝对定位，首尾圆点之间） */}

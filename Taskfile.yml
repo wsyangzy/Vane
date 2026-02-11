@@ -12,7 +12,7 @@ includes:
 vars:
   APP_NAME: "Claude Request Forwarder"
   BIN_DIR: "build/bin"
-  VITE_PORT: '{{.WAILS_VITE_PORT | default 5173}}'
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 7087}}'
 
 tasks:
   clean:
