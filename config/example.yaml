@@ -7,7 +7,7 @@ timezone: "Asia/Shanghai"      # 全局时区设置，默认: Asia/Shanghai
 
 # 服务器配置
 server:
-  host: "0.0.0.0"      # Docker环境中监听所有接口，默认: localhost
+  host: "0.0.0.0"      # 监听所有网络接口，默认: localhost
   port: 8087             # 监听端口，默认: 8080
 
 # 路由策略配置
@@ -87,13 +87,13 @@ auth:
 
 # TUI界面配置,如果部署在服务器上建议设置为 false
 tui:
-  enabled: false               # Docker环境中禁用TUI界面，默认: true
+  enabled: false               # 服务器部署建议禁用TUI界面，默认: true
   update_interval: "1s"       # TUI刷新间隔，默认: 1s
   save_priority_edits: false  # 是否在TUI中保存优先级编辑到配置文件，默认: false（当前情况下保存配置文件可能会自动格式化配置文件）
 
 # Web界面配置
 web:
-  enabled: true              # Docker环境中启用Web界面，默认: false
+  enabled: true              # 服务器部署建议启用Web界面，默认: false
   host: "0.0.0.0"          # Web界面监听所有接口，默认: localhost
   port: 8088                 # Web界面端口，默认: 8088
 
