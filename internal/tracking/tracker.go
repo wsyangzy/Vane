@@ -511,6 +511,7 @@ func (ut *UsageTracker) initHotPool() {
 		MaxRetry:      ut.config.MaxRetry,
 	}
 	ut.archiveManager = NewArchiveManager(ut.adapter, archiveConfig, ut.pricing, ut.location)
+	ut.archiveManager.SetWriteLocker(&ut.writeMu)
 
 	// 设置双向引用：ArchiveManager 需要访问 HotPool 来清理归档缓存
 	ut.archiveManager.SetHotPool(ut.hotPool)

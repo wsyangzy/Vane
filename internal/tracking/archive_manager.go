@@ -42,6 +42,7 @@ type ArchiveManager struct {
 	pricing     map[string]ModelPricing       // 模型定价缓存
 	endpointMu  map[string]EndpointMultiplier // 端点倍率缓存
 	location    *time.Location
+	writeLocker sync.Locker // 与 UsageTracker 写队列复用，避免同连接并发开启事务
 
 	// 热池引用（用于归档成功后清理）
 	hotPool *HotPool
@@ -111,6 +112,11 @@ func NewArchiveManager(adapter DatabaseAdapter, config ArchiveManagerConfig, pri
 // SetHotPool 设置热池引用（用于归档成功后清理）
 func (am *ArchiveManager) SetHotPool(hp *HotPool) {
 	am.hotPool = hp
+}
+
+// SetWriteLocker 设置写锁（用于与其他写路径串行化事务）
+func (am *ArchiveManager) SetWriteLocker(locker sync.Locker) {
+	am.writeLocker = locker
 }
 
 // UpdateEndpointMultipliers 更新端点成本倍率
@@ -296,6 +302,11 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	if am.adapter == nil {
 		return fmt.Errorf("database adapter not initialized")
+	}
+
+	if am.writeLocker != nil {
+		am.writeLocker.Lock()
+		defer am.writeLocker.Unlock()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
