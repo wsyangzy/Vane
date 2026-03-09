@@ -109,19 +109,19 @@ CREATE TABLE IF NOT EXISTS channels (
 
 	// 3) 验证关键列已存在（由 migrateSchema 补齐）
 	for _, c := range []string{"endpoint_chain", "cache_creation_5m_tokens", "cache_creation_1h_tokens", "cache_creation_5m_cost_usd", "cache_creation_1h_cost_usd"} {
-		if !sqliteColumnExists(t, adapter.db, "request_logs", c) {
+		if !sqliteColumnExists(t, adapter.GetReadDB(), "request_logs", c) {
 			t.Fatalf("expected request_logs.%s to exist after InitSchema", c)
 		}
 	}
 	for _, c := range []string{"timeout_seconds", "supports_count_tokens"} {
-		if !sqliteColumnExists(t, adapter.db, "endpoints", c) {
+		if !sqliteColumnExists(t, adapter.GetReadDB(), "endpoints", c) {
 			t.Fatalf("expected endpoints.%s to exist after InitSchema", c)
 		}
 	}
-	if !sqliteColumnExists(t, adapter.db, "channels", "priority") {
+	if !sqliteColumnExists(t, adapter.GetReadDB(), "channels", "priority") {
 		t.Fatalf("expected channels.priority to exist after InitSchema")
 	}
-	if !sqliteColumnExists(t, adapter.db, "channels", "failover_enabled") {
+	if !sqliteColumnExists(t, adapter.GetReadDB(), "channels", "failover_enabled") {
 		t.Fatalf("expected channels.failover_enabled to exist after InitSchema")
 	}
 }

@@ -21,7 +21,8 @@ var sqliteSchemaFS embed.FS
 // SQLiteAdapter SQLite数据库适配器实现（保持原有逻辑）
 type SQLiteAdapter struct {
 	config   DatabaseConfig
-	db       *sql.DB
+	readDB   *sql.DB
+	writeDB  *sql.DB
 	logger   *slog.Logger
 	location *time.Location // 配置的时区
 }
@@ -80,29 +81,45 @@ func (s *SQLiteAdapter) Open() error {
 		}
 	}
 
-	// 构建SQLite连接字符串
-	dsn := dbPath + "?_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_foreign_keys=1&_busy_timeout=60000"
+	writeDSN := s.buildSQLiteDSN(dbPath)
 
-	db, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("sqlite", writeDSN)
 	if err != nil {
 		return fmt.Errorf("failed to open SQLite database: %w", err)
 	}
 
-	// 设置连接池参数（SQLite建议少量连接）
-	db.SetMaxOpenConns(1) // SQLite写操作需要单一连接
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(0)
+	// 写句柄保持单连接，避免多事务并发写入带来的锁争用。
+	writeDB.SetMaxOpenConns(1)
+	writeDB.SetMaxIdleConns(1)
+	writeDB.SetConnMaxLifetime(0)
 
-	// 测试连接
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+	if err := writeDB.PingContext(ctx); err != nil {
+		writeDB.Close()
 		return fmt.Errorf("failed to ping SQLite database: %w", err)
 	}
 
-	s.db = db
+	readDB, err := sql.Open("sqlite", writeDSN)
+	if err != nil {
+		writeDB.Close()
+		return fmt.Errorf("failed to open SQLite read database: %w", err)
+	}
+
+	// 读句柄允许少量并发连接，让查询不要和写事务共用同一连接。
+	readDB.SetMaxOpenConns(4)
+	readDB.SetMaxIdleConns(4)
+	readDB.SetConnMaxLifetime(0)
+
+	if err := readDB.PingContext(ctx); err != nil {
+		readDB.Close()
+		writeDB.Close()
+		return fmt.Errorf("failed to ping SQLite read database: %w", err)
+	}
+
+	s.writeDB = writeDB
+	s.readDB = readDB
 
 	// 诊断时区设置
 	s.diagnoseTimezoneSettings()
@@ -114,42 +131,65 @@ func (s *SQLiteAdapter) Open() error {
 
 // Close 关闭数据库连接
 func (s *SQLiteAdapter) Close() error {
-	if s.db != nil {
-		s.logger.Info("正在关闭SQLite数据库连接")
-		return s.db.Close()
+	var firstErr error
+	if s.readDB != nil {
+		s.logger.Info("正在关闭SQLite读数据库连接")
+		if err := s.readDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		s.readDB = nil
 	}
-	return nil
+	if s.writeDB != nil {
+		s.logger.Info("正在关闭SQLite写数据库连接")
+		if err := s.writeDB.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		s.writeDB = nil
+	}
+	return firstErr
 }
 
 // Ping 测试数据库连接
 func (s *SQLiteAdapter) Ping(ctx context.Context) error {
-	if s.db == nil {
+	if s.writeDB == nil {
 		return fmt.Errorf("database not connected")
 	}
-	return s.db.PingContext(ctx)
+	if err := s.writeDB.PingContext(ctx); err != nil {
+		return err
+	}
+	if s.readDB != nil {
+		return s.readDB.PingContext(ctx)
+	}
+	return nil
 }
 
 // GetDB 获取数据库连接
 func (s *SQLiteAdapter) GetDB() *sql.DB {
-	return s.db
+	if s.readDB != nil {
+		return s.readDB
+	}
+	return s.writeDB
 }
 
 // GetReadDB 获取读数据库连接
 func (s *SQLiteAdapter) GetReadDB() *sql.DB {
-	return s.db
+	return s.GetDB()
 }
 
 // GetWriteDB 获取写数据库连接
 func (s *SQLiteAdapter) GetWriteDB() *sql.DB {
-	return s.db
+	if s.writeDB != nil {
+		return s.writeDB
+	}
+	return s.readDB
 }
 
 // BeginTx 开始事务
 func (s *SQLiteAdapter) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
-	if s.db == nil {
+	if s.GetWriteDB() == nil {
 		return nil, fmt.Errorf("database not connected")
 	}
-	return s.db.BeginTx(ctx, opts)
+	return s.GetWriteDB().BeginTx(ctx, opts)
 }
 
 // InitSchema 初始化SQLite数据库Schema
@@ -170,13 +210,13 @@ func (s *SQLiteAdapter) InitSchema() error {
 	// 导致 Exec 直接失败并中断启动。为保证向后兼容：
 	// - 先尝试执行 schema.sql
 	// - 若因“no such column”失败，则先跑 migrateSchema 补列，再重试执行 schema.sql
-	if _, err := s.db.ExecContext(ctx, string(schema)); err != nil {
+	if _, err := s.GetWriteDB().ExecContext(ctx, string(schema)); err != nil {
 		if strings.Contains(err.Error(), "no such column:") {
 			s.logger.Warn("schema.sql 执行失败（缺少列），将先执行迁移后重试", "error", err)
 			if err := s.migrateSchema(ctx); err != nil {
 				return fmt.Errorf("failed to migrate schema (pre-schema retry): %w", err)
 			}
-			if _, err := s.db.ExecContext(ctx, string(schema)); err != nil {
+			if _, err := s.GetWriteDB().ExecContext(ctx, string(schema)); err != nil {
 				return fmt.Errorf("failed to execute schema (after migrate): %w", err)
 			}
 		} else {
@@ -327,7 +367,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			}
 
 			s.logger.Info(fmt.Sprintf("🔧 [数据库迁移] %s：添加 %s", table, m.description))
-			if _, err := s.db.ExecContext(ctx, m.alterSQL); err != nil {
+			if _, err := s.GetWriteDB().ExecContext(ctx, m.alterSQL); err != nil {
 				return fmt.Errorf("failed to add column %s.%s: %w", table, m.checkColumn, err)
 			}
 			s.logger.Info(fmt.Sprintf("✅ [数据库迁移] %s：%s 添加成功", table, m.description))
@@ -377,7 +417,7 @@ func (s *SQLiteAdapter) ensureEndpointsUniqueByChannelAndName(ctx context.Contex
 	}
 
 	// 没有旧约束但也没有新约束：补一个唯一索引即可。
-	_, err = s.db.ExecContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_channel_name_unique ON endpoints(channel, name)")
+	_, err = s.GetWriteDB().ExecContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_channel_name_unique ON endpoints(channel, name)")
 	if err != nil {
 		return fmt.Errorf("failed to create unique index endpoints(channel,name): %w", err)
 	}
@@ -385,7 +425,7 @@ func (s *SQLiteAdapter) ensureEndpointsUniqueByChannelAndName(ctx context.Contex
 }
 
 func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLegacyUniqueOnName bool, hasDesiredUnique bool, _ error) {
-	rows, err := s.db.QueryContext(ctx, "PRAGMA index_list(endpoints)")
+	rows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_list(endpoints)")
 	if err != nil {
 		return false, false, fmt.Errorf("failed to query endpoints indexes: %w", err)
 	}
@@ -424,7 +464,7 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 	for _, it := range uniqueIndexes {
 		// index 名来自 sqlite_master/pragma 输出，但仍做简单转义避免拼接问题
 		escaped := strings.ReplaceAll(it.name, "'", "''")
-		colRows, err := s.db.QueryContext(ctx, "PRAGMA index_info('"+escaped+"')")
+		colRows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_info('"+escaped+"')")
 		if err != nil {
 			return false, false, fmt.Errorf("failed to query endpoints index_info(%s): %w", it.name, err)
 		}
@@ -454,7 +494,7 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 
 func (s *SQLiteAdapter) rebuildEndpointsTableForChannelScopedUniq(ctx context.Context) error {
 	// 注意：该迁移会锁表并重建 endpoints，但表体量通常较小（配置表），可接受。
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.GetWriteDB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin endpoints rebuild tx: %w", err)
 	}
@@ -569,7 +609,7 @@ END;`
 
 func (s *SQLiteAdapter) tableExists(ctx context.Context, table string) (bool, error) {
 	var count int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?", table).Scan(&count); err != nil {
+	if err := s.GetReadDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?", table).Scan(&count); err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -578,7 +618,7 @@ func (s *SQLiteAdapter) tableExists(ctx context.Context, table string) (bool, er
 // columnExists 检查表中是否存在指定列
 func (s *SQLiteAdapter) columnExists(ctx context.Context, table, column string) (bool, error) {
 	query := fmt.Sprintf("PRAGMA table_info(%s)", table)
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.GetReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return false, err
 	}
@@ -662,7 +702,7 @@ func (s *SQLiteAdapter) BuildLimitOffset(limit, offset int) string {
 func (s *SQLiteAdapter) VacuumDatabase(ctx context.Context) error {
 	s.logger.Info("正在执行SQLite VACUUM操作")
 
-	_, err := s.db.ExecContext(ctx, "VACUUM")
+	_, err := s.GetWriteDB().ExecContext(ctx, "VACUUM")
 	if err != nil {
 		return fmt.Errorf("failed to vacuum SQLite database: %w", err)
 	}
@@ -676,20 +716,20 @@ func (s *SQLiteAdapter) GetDatabaseStats(ctx context.Context) (*DatabaseStats, e
 	stats := &DatabaseStats{}
 
 	// 获取请求记录总数
-	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM request_logs").Scan(&stats.TotalRequests)
+	err := s.GetReadDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM request_logs").Scan(&stats.TotalRequests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total requests count: %w", err)
 	}
 
 	// 获取汇总记录总数
-	err = s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_summary").Scan(&stats.TotalSummaries)
+	err = s.GetReadDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_summary").Scan(&stats.TotalSummaries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total summaries count: %w", err)
 	}
 
 	// 获取最早和最新的记录时间
 	var earliestStr, latestStr sql.NullString
-	err = s.db.QueryRowContext(ctx, "SELECT MIN(start_time), MAX(start_time) FROM request_logs").Scan(&earliestStr, &latestStr)
+	err = s.GetReadDB().QueryRowContext(ctx, "SELECT MIN(start_time), MAX(start_time) FROM request_logs").Scan(&earliestStr, &latestStr)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get record time range: %w", err)
 	}
@@ -707,16 +747,16 @@ func (s *SQLiteAdapter) GetDatabaseStats(ctx context.Context) (*DatabaseStats, e
 
 	// 获取数据库文件大小（SQLite特有）
 	var pageCount, pageSize int64
-	err = s.db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
+	err = s.GetReadDB().QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
 	if err == nil {
-		err = s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
+		err = s.GetReadDB().QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
 		if err == nil {
 			stats.DatabaseSize = pageCount * pageSize
 		}
 	}
 
 	// 获取总成本
-	err = s.db.QueryRowContext(ctx, "SELECT COALESCE(SUM(total_cost_usd), 0) FROM request_logs WHERE total_cost_usd > 0").Scan(&stats.TotalCostUSD)
+	err = s.GetReadDB().QueryRowContext(ctx, "SELECT COALESCE(SUM(total_cost_usd), 0) FROM request_logs WHERE total_cost_usd > 0").Scan(&stats.TotalCostUSD)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get total cost: %w", err)
 	}
@@ -726,19 +766,40 @@ func (s *SQLiteAdapter) GetDatabaseStats(ctx context.Context) (*DatabaseStats, e
 
 // GetConnectionStats 获取连接池统计信息
 func (s *SQLiteAdapter) GetConnectionStats() ConnectionStats {
-	if s.db == nil {
+	if s.readDB == nil && s.writeDB == nil {
 		return ConnectionStats{}
 	}
 
-	dbStats := s.db.Stats()
-	return ConnectionStats{
-		OpenConnections:  dbStats.OpenConnections,
-		IdleConnections:  dbStats.Idle,
-		InUseConnections: dbStats.InUse,
-		WaitCount:        dbStats.WaitCount,
-		WaitDuration:     dbStats.WaitDuration,
-		MaxLifetime:      0, // SQLite不限制连接生命周期
+	merge := func(dst *ConnectionStats, stats sql.DBStats) {
+		dst.OpenConnections += stats.OpenConnections
+		dst.IdleConnections += stats.Idle
+		dst.InUseConnections += stats.InUse
+		dst.WaitCount += stats.WaitCount
+		dst.WaitDuration += stats.WaitDuration
 	}
+
+	var result ConnectionStats
+	if s.readDB != nil {
+		merge(&result, s.readDB.Stats())
+	}
+	if s.writeDB != nil {
+		merge(&result, s.writeDB.Stats())
+	}
+	return result
+}
+
+func (s *SQLiteAdapter) buildSQLiteDSN(dbPath string) string {
+	basePath := dbPath
+	if dbPath == ":memory:" {
+		basePath = fmt.Sprintf("file:tracking-%p?mode=memory&cache=shared", s)
+	}
+
+	separator := "?"
+	if strings.Contains(basePath, "?") {
+		separator = "&"
+	}
+
+	return basePath + separator + "_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_foreign_keys=1&_busy_timeout=60000"
 }
 
 // GetDatabaseType 返回数据库类型标识
