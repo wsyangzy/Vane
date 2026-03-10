@@ -219,6 +219,7 @@ CREATE TABLE IF NOT EXISTS codex_providers (
     base_url TEXT NOT NULL,
     api_key TEXT NOT NULL,
     model TEXT NOT NULL,
+    model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
     website TEXT,
     is_active INTEGER DEFAULT 0,
 
@@ -320,3 +321,5 @@ CREATE TRIGGER IF NOT EXISTS update_settings_timestamp
 BEGIN
     UPDATE settings SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 END;
+
+

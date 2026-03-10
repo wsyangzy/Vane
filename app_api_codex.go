@@ -8,42 +8,45 @@ import (
 	"claude-request-forwarder/internal/store"
 )
 
-// CodexProviderInfo 提供给前端展示的 Codex Provider 信息。
+// CodexProviderInfo 提供给前端展示的 Codex 提供商信息。
 type CodexProviderInfo struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	ProviderType string `json:"provider_type"`
-	BaseURL      string `json:"base_url"`
-	ApiKey       string `json:"api_key"`
-	ApiKeyMasked string `json:"api_key_masked"`
-	Model        string `json:"model"`
-	Website      string `json:"website"`
-	IsActive     bool   `json:"is_active"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID               int64  `json:"id"`
+	Name             string `json:"name"`
+	ProviderType     string `json:"provider_type"`
+	BaseURL          string `json:"base_url"`
+	ApiKey           string `json:"api_key"`
+	ApiKeyMasked     string `json:"api_key_masked"`
+	Model            string `json:"model"`
+	ReasoningEffort  string `json:"model_reasoning_effort"`
+	Website          string `json:"website"`
+	IsActive         bool   `json:"is_active"`
+	CreatedAt        string `json:"created_at"`
+	UpdatedAt        string `json:"updated_at"`
 }
 
-// CreateCodexProviderInput 创建 Codex Provider 的输入参数。
+// CreateCodexProviderInput 创建 Codex 提供商的输入参数。
 type CreateCodexProviderInput struct {
-	Name         string `json:"name"`
-	ProviderType string `json:"provider_type"`
-	BaseURL      string `json:"base_url"`
-	ApiKey       string `json:"api_key"`
-	Model        string `json:"model"`
-	Website      string `json:"website"`
+	Name             string `json:"name"`
+	ProviderType     string `json:"provider_type"`
+	BaseURL          string `json:"base_url"`
+	ApiKey           string `json:"api_key"`
+	Model            string `json:"model"`
+	ReasoningEffort  string `json:"model_reasoning_effort"`
+	Website          string `json:"website"`
 }
 
-// UpdateCodexProviderInput 更新 Codex Provider 的输入参数。
+// UpdateCodexProviderInput 更新 Codex 提供商的输入参数。
 type UpdateCodexProviderInput struct {
-	Name         string `json:"name"`
-	ProviderType string `json:"provider_type"`
-	BaseURL      string `json:"base_url"`
-	ApiKey       string `json:"api_key"`
-	Model        string `json:"model"`
-	Website      string `json:"website"`
+	Name             string `json:"name"`
+	ProviderType     string `json:"provider_type"`
+	BaseURL          string `json:"base_url"`
+	ApiKey           string `json:"api_key"`
+	Model            string `json:"model"`
+	ReasoningEffort  string `json:"model_reasoning_effort"`
+	Website          string `json:"website"`
 }
 
-// CodexProviderStorageStatus 表示 Codex Provider 存储状态。
+// CodexProviderStorageStatus 表示 Codex 提供商存储状态。
 type CodexProviderStorageStatus struct {
 	Enabled            bool   `json:"enabled"`
 	TotalCount         int    `json:"total_count"`
@@ -92,12 +95,12 @@ func (a *App) GetCodexProviders() ([]CodexProviderInfo, error) {
 	codexProviderService := a.codexProviderService
 	a.mu.RUnlock()
 	if codexProviderService == nil {
-		return nil, fmt.Errorf("Codex Provider 服务未就绪，请稍后重试")
+		return nil, fmt.Errorf("Codex 提供商服务未就绪，请稍后重试")
 	}
 
 	records, err := codexProviderService.ListProviders(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("获取 Codex Provider 列表失败: %w", err)
+		return nil, fmt.Errorf("获取 Codex 提供商列表失败: %w", err)
 	}
 
 	result := make([]CodexProviderInfo, 0, len(records))
@@ -115,16 +118,17 @@ func (a *App) CreateCodexProvider(input CreateCodexProviderInput) error {
 	logger := a.logger
 	a.mu.RUnlock()
 	if codexProviderService == nil {
-		return fmt.Errorf("Codex Provider 服务未就绪，请稍后重试")
+		return fmt.Errorf("Codex 提供商服务未就绪，请稍后重试")
 	}
 
 	record := &store.CodexProviderRecord{
-		Name:         input.Name,
-		ProviderType: input.ProviderType,
-		BaseURL:      input.BaseURL,
-		ApiKey:       input.ApiKey,
-		Model:        input.Model,
-		Website:      input.Website,
+		Name:            input.Name,
+		ProviderType:    input.ProviderType,
+		BaseURL:         input.BaseURL,
+		ApiKey:          input.ApiKey,
+		Model:           input.Model,
+		ReasoningEffort: input.ReasoningEffort,
+		Website:         input.Website,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -132,11 +136,20 @@ func (a *App) CreateCodexProvider(input CreateCodexProviderInput) error {
 
 	created, err := codexProviderService.CreateProvider(ctx, record)
 	if err != nil {
-		return fmt.Errorf("创建 Codex Provider 失败: %w", err)
+		return fmt.Errorf("创建 Codex 提供商失败: %w", err)
+	}
+
+	if created != nil && created.IsActive {
+		if err := a.syncActiveCodexProviderToConfig(created); err != nil {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rollbackCancel()
+			_ = codexProviderService.DeleteProviderByID(rollbackCtx, created.ID)
+			return fmt.Errorf("创建 Codex 提供商失败: 配置接管未生效: %w", err)
+		}
 	}
 
 	if logger != nil {
-		logger.Info("✅ Codex Provider 已创建", "name", created.Name, "provider_type", created.ProviderType)
+		logger.Info("✅ Codex 提供商已创建", "name", created.Name, "provider_type", created.ProviderType)
 	}
 	go a.emitCodexProviderUpdate()
 	return nil
@@ -150,27 +163,54 @@ func (a *App) UpdateCodexProviderByID(id int64, input UpdateCodexProviderInput) 
 	logger := a.logger
 	a.mu.RUnlock()
 	if codexProviderService == nil {
-		return fmt.Errorf("Codex Provider 服务未就绪，请稍后重试")
+		return fmt.Errorf("Codex 提供商服务未就绪，请稍后重试")
 	}
 
 	record := &store.CodexProviderRecord{
-		Name:         input.Name,
-		ProviderType: input.ProviderType,
-		BaseURL:      input.BaseURL,
-		ApiKey:       input.ApiKey,
-		Model:        input.Model,
-		Website:      input.Website,
+		Name:            input.Name,
+		ProviderType:    input.ProviderType,
+		BaseURL:         input.BaseURL,
+		ApiKey:          input.ApiKey,
+		Model:           input.Model,
+		ReasoningEffort: input.ReasoningEffort,
+		Website:         input.Website,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	previous, err := codexProviderService.GetProviderByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取 Codex 提供商失败: %w", err)
+	}
+	if previous == nil {
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
+	}
+
 	if err := codexProviderService.UpdateProviderByID(ctx, id, record); err != nil {
-		return fmt.Errorf("更新 Codex Provider 失败: %w", err)
+		return fmt.Errorf("更新 Codex 提供商失败: %w", err)
+	}
+
+	updated, err := codexProviderService.GetProviderByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取更新后的 Codex 提供商失败: %w", err)
+	}
+	if updated != nil && updated.IsActive {
+		if err := a.syncActiveCodexProviderToConfig(updated); err != nil {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rollbackCancel()
+			_ = codexProviderService.UpdateProviderByID(rollbackCtx, id, previous)
+			return fmt.Errorf("更新 Codex 提供商失败: 配置接管未生效: %w", err)
+		}
+	}
+
+	updatedName := record.Name
+	if updated != nil {
+		updatedName = updated.Name
 	}
 
 	if logger != nil {
-		logger.Info("✅ Codex Provider 已更新", "id", id, "name", record.Name)
+		logger.Info("✅ Codex 提供商已更新", "id", id, "name", updatedName)
 	}
 	go a.emitCodexProviderUpdate()
 	return nil
@@ -184,18 +224,26 @@ func (a *App) DeleteCodexProviderByID(id int64) error {
 	logger := a.logger
 	a.mu.RUnlock()
 	if codexProviderService == nil {
-		return fmt.Errorf("Codex Provider 服务未就绪，请稍后重试")
+		return fmt.Errorf("Codex 提供商服务未就绪，请稍后重试")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := codexProviderService.DeleteProviderByID(ctx, id); err != nil {
-		return fmt.Errorf("删除 Codex Provider 失败: %w", err)
+		return fmt.Errorf("删除 Codex 提供商失败: %w", err)
+	}
+
+	if active, err := codexProviderService.GetActiveProvider(ctx); err == nil && active != nil {
+		if syncErr := a.syncActiveCodexProviderToConfig(active); syncErr != nil {
+			if logger != nil {
+				logger.Warn("⚠️ 同步 Codex 配置失败", "error", syncErr, "provider", active.Name)
+			}
+		}
 	}
 
 	if logger != nil {
-		logger.Info("✅ Codex Provider 已删除", "id", id)
+		logger.Info("✅ Codex 提供商已删除", "id", id)
 	}
 	go a.emitCodexProviderUpdate()
 	return nil
@@ -209,18 +257,40 @@ func (a *App) ActivateCodexProvider(id int64) error {
 	logger := a.logger
 	a.mu.RUnlock()
 	if codexProviderService == nil {
-		return fmt.Errorf("Codex Provider 服务未就绪，请稍后重试")
+		return fmt.Errorf("Codex 提供商服务未就绪，请稍后重试")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	previousActive, err := codexProviderService.GetActiveProvider(ctx)
+	if err != nil {
+		return fmt.Errorf("读取当前激活的 Codex 提供商失败: %w", err)
+	}
+
 	if err := codexProviderService.ActivateProvider(ctx, id); err != nil {
-		return fmt.Errorf("切换 Codex Provider 失败: %w", err)
+		return fmt.Errorf("切换 Codex 提供商失败: %w", err)
+	}
+
+	activated, err := codexProviderService.GetProviderByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取激活后的 Codex 提供商失败: %w", err)
+	}
+	if activated == nil {
+		return fmt.Errorf("激活后的 Codex 提供商不存在: %d", id)
+	}
+
+	if err := a.syncActiveCodexProviderToConfig(activated); err != nil {
+		if previousActive != nil && previousActive.ID != id {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rollbackCancel()
+			_ = codexProviderService.ActivateProvider(rollbackCtx, previousActive.ID)
+		}
+		return fmt.Errorf("切换 Codex 提供商失败: 配置接管未生效: %w", err)
 	}
 
 	if logger != nil {
-		logger.Info("✅ Codex Provider 已激活", "id", id)
+		logger.Info("✅ Codex 提供商已激活", "id", id, "provider", activated.Name, "model", activated.Model, "reasoning_effort", activated.ReasoningEffort)
 	}
 	go a.emitCodexProviderUpdate()
 	return nil
@@ -228,15 +298,16 @@ func (a *App) ActivateCodexProvider(id int64) error {
 
 func (a *App) codexProviderRecordToInfo(record *store.CodexProviderRecord) CodexProviderInfo {
 	info := CodexProviderInfo{
-		ID:           record.ID,
-		Name:         record.Name,
-		ProviderType: record.ProviderType,
-		BaseURL:      record.BaseURL,
-		ApiKey:       record.ApiKey,
-		ApiKeyMasked: maskToken(record.ApiKey),
-		Model:        record.Model,
-		Website:      record.Website,
-		IsActive:     record.IsActive,
+		ID:              record.ID,
+		Name:            record.Name,
+		ProviderType:    record.ProviderType,
+		BaseURL:         record.BaseURL,
+		ApiKey:          record.ApiKey,
+		ApiKeyMasked:    maskToken(record.ApiKey),
+		Model:           record.Model,
+		ReasoningEffort: record.ReasoningEffort,
+		Website:         record.Website,
+		IsActive:        record.IsActive,
 	}
 
 	if !record.CreatedAt.IsZero() {
@@ -248,3 +319,4 @@ func (a *App) codexProviderRecordToInfo(record *store.CodexProviderRecord) Codex
 
 	return info
 }
+

@@ -8,7 +8,7 @@ import (
 	"claude-request-forwarder/internal/store"
 )
 
-// CodexProviderService 管理 Codex Provider 配置与当前激活项。
+// CodexProviderService 管理 Codex 提供商配置与当前激活项。
 type CodexProviderService struct {
 	store store.CodexProviderStore
 }
@@ -39,7 +39,7 @@ func (s *CodexProviderService) CreateProvider(ctx context.Context, record *store
 		return nil, err
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("Codex Provider '%s' 已存在", record.Name)
+		return nil, fmt.Errorf("Codex 提供商 '%s' 已存在", record.Name)
 	}
 
 	record.IsActive = false
@@ -72,7 +72,7 @@ func (s *CodexProviderService) UpdateProviderByID(ctx context.Context, id int64,
 		return err
 	}
 	if existing == nil {
-		return fmt.Errorf("Codex Provider 不存在: %d", id)
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
 	}
 
 	nameConflict, err := s.store.GetByName(ctx, record.Name)
@@ -80,7 +80,7 @@ func (s *CodexProviderService) UpdateProviderByID(ctx context.Context, id int64,
 		return err
 	}
 	if nameConflict != nil && nameConflict.ID != id {
-		return fmt.Errorf("Codex Provider '%s' 已存在", record.Name)
+		return fmt.Errorf("Codex 提供商 '%s' 已存在", record.Name)
 	}
 
 	return s.store.UpdateByID(ctx, id, record)
@@ -92,7 +92,7 @@ func (s *CodexProviderService) DeleteProviderByID(ctx context.Context, id int64)
 		return err
 	}
 	if existing == nil {
-		return fmt.Errorf("Codex Provider 不存在: %d", id)
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
 	}
 
 	if err := s.store.DeleteByID(ctx, id); err != nil {
@@ -119,7 +119,7 @@ func (s *CodexProviderService) ActivateProvider(ctx context.Context, id int64) e
 		return err
 	}
 	if existing == nil {
-		return fmt.Errorf("Codex Provider 不存在: %d", id)
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
 	}
 
 	return s.store.SetActive(ctx, id)
@@ -135,13 +135,14 @@ func normalizeAndValidateCodexProvider(record *store.CodexProviderRecord) error 
 	record.BaseURL = strings.TrimSpace(record.BaseURL)
 	record.ApiKey = strings.TrimSpace(record.ApiKey)
 	record.Model = strings.TrimSpace(record.Model)
+	record.ReasoningEffort = strings.TrimSpace(record.ReasoningEffort)
 	record.Website = strings.TrimSpace(record.Website)
 
 	if record.Name == "" {
-		return fmt.Errorf("Provider 名称不能为空")
+		return fmt.Errorf("提供商标识不能为空")
 	}
 	if record.ProviderType == "" {
-		return fmt.Errorf("Provider 类型不能为空")
+		return fmt.Errorf("接入类型不能为空")
 	}
 	if record.BaseURL == "" {
 		return fmt.Errorf("Base URL 不能为空")
@@ -150,9 +151,11 @@ func normalizeAndValidateCodexProvider(record *store.CodexProviderRecord) error 
 		return fmt.Errorf("API Key 不能为空")
 	}
 	if record.Model == "" {
-		return fmt.Errorf("默认模型不能为空")
+		return fmt.Errorf("模型不能为空")
+	}
+	if record.ReasoningEffort == "" {
+		record.ReasoningEffort = "xhigh"
 	}
 
 	return nil
 }
-

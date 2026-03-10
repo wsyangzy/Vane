@@ -1346,6 +1346,7 @@ export const getCodexProviders = async () => {
     apiKey: provider.api_key,
     apiKeyMasked: provider.api_key_masked,
     model: provider.model,
+    reasoningEffort: provider.model_reasoning_effort || '',
     website: provider.website || '',
     isActive: provider.is_active,
     createdAt: provider.created_at,
@@ -1368,6 +1369,7 @@ export const createCodexProvider = async (input) => {
     base_url: (input?.baseURL || '').trim(),
     api_key: (input?.apiKey || '').trim(),
     model: (input?.model || '').trim(),
+    model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
     website: (input?.website || '').trim()
   };
 
@@ -1391,6 +1393,7 @@ export const updateCodexProviderByID = async (id, input) => {
     base_url: (input?.baseURL || '').trim(),
     api_key: (input?.apiKey || '').trim(),
     model: (input?.model || '').trim(),
+    model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
     website: (input?.website || '').trim()
   };
 
@@ -1709,4 +1712,5 @@ export const resolvePortConflict = async (action) => {
 
   return await WailsApp.ResolvePortConflict(action);
 };
+
 

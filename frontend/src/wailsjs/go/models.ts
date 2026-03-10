@@ -207,6 +207,7 @@ export namespace main {
 	    api_key: string;
 	    api_key_masked: string;
 	    model: string;
+	    model_reasoning_effort: string;
 	    website: string;
 	    is_active: boolean;
 	    created_at: string;
@@ -225,6 +226,7 @@ export namespace main {
 	        this.api_key = source["api_key"];
 	        this.api_key_masked = source["api_key_masked"];
 	        this.model = source["model"];
+	        this.model_reasoning_effort = source["model_reasoning_effort"];
 	        this.website = source["website"];
 	        this.is_active = source["is_active"];
 	        this.created_at = source["created_at"];
@@ -257,6 +259,7 @@ export namespace main {
 	    base_url: string;
 	    api_key: string;
 	    model: string;
+	    model_reasoning_effort: string;
 	    website: string;
 
 	    static createFrom(source: any = {}) {
@@ -270,6 +273,7 @@ export namespace main {
 	        this.base_url = source["base_url"];
 	        this.api_key = source["api_key"];
 	        this.model = source["model"];
+	        this.model_reasoning_effort = source["model_reasoning_effort"];
 	        this.website = source["website"];
 	    }
 	}
@@ -353,6 +357,7 @@ export namespace main {
 	    base_url: string;
 	    api_key: string;
 	    model: string;
+	    model_reasoning_effort: string;
 	    website: string;
 
 	    static createFrom(source: any = {}) {
@@ -366,6 +371,7 @@ export namespace main {
 	        this.base_url = source["base_url"];
 	        this.api_key = source["api_key"];
 	        this.model = source["model"];
+	        this.model_reasoning_effort = source["model_reasoning_effort"];
 	        this.website = source["website"];
 	    }
 	}
@@ -1141,4 +1147,5 @@ export namespace store {
 	}
 
 }
+
 

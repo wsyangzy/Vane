@@ -16,7 +16,8 @@ import {
   Server,
   ShieldCheck,
   Trash2,
-  TriangleAlert
+  TriangleAlert,
+  XCircle
 } from 'lucide-react';
 import {
   Button,
@@ -39,9 +40,9 @@ import {
 } from '@utils/wailsApi.js';
 
 const PROVIDER_TYPE_OPTIONS = [
-  { value: 'openai-compatible', label: 'OpenAI Compatible' },
+  { value: 'openai-compatible', label: 'OpenAI 兼容' },
   { value: 'azure-openai', label: 'Azure OpenAI' },
-  { value: 'custom', label: 'Custom' }
+  { value: 'custom', label: '自定义' }
 ];
 
 const getErrorMessage = (error, fallback = '操作失败') => {
@@ -83,20 +84,34 @@ const buildInitialForm = (provider) => ({
   baseURL: provider?.baseURL || '',
   apiKey: provider?.apiKey || '',
   model: provider?.model || '',
+  reasoningEffort: provider?.reasoningEffort || 'xhigh',
   website: provider?.website || ''
 });
 
 const StatCard = ({ title, value, detail, icon: Icon, accentClass }) => (
-  <div className="bg-white rounded-2xl border border-slate-200/60 p-5 shadow-sm">
+  <div className="rounded-xl border border-slate-200/70 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
-      <div>
-        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{title}</div>
-        <div className="mt-2 text-3xl font-bold text-slate-900">{value}</div>
-        <div className="mt-2 text-sm text-slate-500">{detail}</div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{title}</div>
+        <div className="mt-2 break-all text-2xl font-bold text-slate-900">{value}</div>
+        <div className="mt-2 text-xs leading-5 text-slate-500">{detail}</div>
       </div>
-      <div className={`rounded-xl p-3 ${accentClass}`}>
-        <Icon size={20} />
+      <div className={`rounded-xl p-2.5 ${accentClass}`}>
+        <Icon size={18} />
       </div>
+    </div>
+  </div>
+);
+
+const InfoTile = ({ title, value, icon: Icon, mono = false, titleAttr = '' }) => (
+  <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{title}</div>
+    <div
+      className={`mt-2 flex items-center gap-2 text-sm text-slate-700 ${mono ? 'font-mono' : ''}`}
+      title={titleAttr || value}
+    >
+      {Icon && <Icon size={14} className="flex-shrink-0 text-slate-400" />}
+      <span className="truncate">{value || '-'}</span>
     </div>
   </div>
 );
@@ -126,48 +141,67 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
       baseURL: formData.baseURL.trim(),
       apiKey: formData.apiKey.trim(),
       model: formData.model.trim(),
+      reasoningEffort: formData.reasoningEffort.trim() || 'xhigh',
       website: formData.website.trim()
     };
 
-    if (!payload.name || !payload.providerType || !payload.baseURL || !payload.apiKey || !payload.model) {
-      setFieldError('请填写名称、Provider 类型、Base URL、API Key 和默认模型');
+    if (!payload.name || !payload.providerType || !payload.baseURL || !payload.apiKey || !payload.model || !payload.reasoningEffort) {
+      setFieldError('请填写提供商标识、接入类型、Base URL、API Key、默认模型和推理强度');
       return;
     }
 
     await onSave?.(payload);
   };
 
+  const isEdit = mode === 'edit';
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 pt-[10vh] animate-fade-in">
-      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
-        <div className="border-b border-slate-100 px-6 py-5">
-          <div className="flex items-center gap-3">
-            <div className="rounded-xl bg-slate-900 p-2 text-white shadow-lg">
-              {mode === 'create' ? <Plus size={18} /> : <Pencil size={18} />}
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
+      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
+              {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">
-                {mode === 'create' ? '添加 Codex Provider' : '编辑 Codex Provider'}
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                这里只维护接管配置与当前 Provider 切换，不参与故障转移。
+              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑提供商' : '添加提供商'}</h2>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                切换时仅接管 Codex 配置中的 model、model_reasoning_effort、model_provider。
               </p>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            disabled={loading}
+            title="关闭"
+          >
+            <XCircle size={18} />
+          </button>
         </div>
 
-        <form className="space-y-5 px-6 py-6" onSubmit={handleSubmit}>
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <Input
-              label="Provider 名称"
-              value={formData.name}
-              onChange={(event) => updateField('name', event.target.value)}
-              placeholder="例如：OpenAI 主通道"
-              autoFocus
-            />
+        <form className="space-y-4 overflow-y-auto px-6 py-6" onSubmit={handleSubmit} autoComplete="off">
+          {(fieldError || serverError) && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {fieldError || serverError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <Input
+                label="提供商标识"
+                value={formData.name}
+                onChange={(event) => updateField('name', event.target.value)}
+                placeholder="例如：custom"
+                autoFocus
+              />
+              <p className="mt-1 text-xs text-slate-400">会直接写入 Codex 配置中的 model_provider，且应对应已有的 [model_providers.<标识>] 段</p>
+            </div>
 
             <Select
-              label="Provider 类型"
+              label="接入类型"
               value={formData.providerType}
               onChange={(event) => updateField('providerType', event.target.value)}
               options={PROVIDER_TYPE_OPTIONS}
@@ -177,47 +211,47 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
               label="Base URL"
               value={formData.baseURL}
               onChange={(event) => updateField('baseURL', event.target.value)}
-              placeholder="https://api.example.com/v1"
+              placeholder="https://code.newcli.com/codex/v1"
             />
 
             <Input
               label="默认模型"
               value={formData.model}
               onChange={(event) => updateField('model', event.target.value)}
-              placeholder="gpt-4.1 / codex-mini-latest"
+              placeholder="例如：gpt-5.4"
             />
 
-            <div className="md:col-span-2">
+            <Input
+              label="推理强度"
+              value={formData.reasoningEffort}
+              onChange={(event) => updateField('reasoningEffort', event.target.value)}
+              placeholder="例如：xhigh"
+            />
+
+            <Input
+              label="官网地址（可选）"
+              value={formData.website}
+              onChange={(event) => updateField('website', event.target.value)}
+              placeholder="https://platform.openai.com"
+            />
+
+            <div className="sm:col-span-2">
               <Input
                 label="API Key"
                 value={formData.apiKey}
                 onChange={(event) => updateField('apiKey', event.target.value)}
                 placeholder="sk-..."
               />
-            </div>
-
-            <div className="md:col-span-2">
-              <Input
-                label="官网地址（可选）"
-                value={formData.website}
-                onChange={(event) => updateField('website', event.target.value)}
-                placeholder="https://platform.openai.com"
-              />
+              <p className="mt-1 text-xs text-slate-400">当前版本仅保存配置元数据，暂不处理请求追踪、计费或故障转移</p>
             </div>
           </div>
-
-          {(fieldError || serverError) && (
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {fieldError || serverError}
-            </div>
-          )}
 
           <div className="flex justify-end gap-3 border-t border-slate-100 pt-5">
             <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>
               取消
             </Button>
-            <Button type="submit" icon={mode === 'create' ? Plus : Pencil} loading={loading}>
-              {mode === 'create' ? '创建 Provider' : '保存修改'}
+            <Button type="submit" icon={isEdit ? Pencil : Plus} loading={loading}>
+              {isEdit ? '保存修改' : '添加提供商'}
             </Button>
           </div>
         </form>
@@ -230,21 +264,21 @@ const DeleteProviderConfirmDialog = ({ provider, loading, onCancel, onConfirm })
   if (!provider) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-4 pt-[18vh] animate-fade-in">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-        <div className="mb-4 flex items-center gap-3">
+        <div className="mb-4 flex items-start gap-3">
           <div className="rounded-full bg-rose-100 p-3">
-            <TriangleAlert className="text-rose-600" size={24} />
+            <TriangleAlert className="text-rose-600" size={22} />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-slate-900">确认删除 Provider</h3>
-            <p className="text-sm text-slate-500">此操作不会处理请求追踪或计费数据</p>
+            <h3 className="text-lg font-semibold text-slate-900">确认删除提供商</h3>
+            <p className="mt-1 text-sm text-slate-500">不会处理渠道、计费或请求追踪数据</p>
           </div>
         </div>
 
         <p className="mb-5 text-sm leading-6 text-slate-600">
           确定要删除 <span className="font-semibold text-slate-900">“{provider.name}”</span> 吗？
-          删除后需要重新选择接管配置。
+          如果它是当前接管项，系统会尝试切换到其他已保存的提供商。
         </p>
 
         <div className="flex justify-end gap-3">
@@ -252,7 +286,7 @@ const DeleteProviderConfirmDialog = ({ provider, loading, onCancel, onConfirm })
             取消
           </Button>
           <Button variant="danger" icon={Trash2} loading={loading} onClick={onConfirm}>
-            删除 Provider
+            删除提供商
           </Button>
         </div>
       </div>
@@ -266,14 +300,14 @@ const ProviderCard = ({ provider, actionLoading, onActivate, onEdit, onDelete })
 
   return (
     <div
-      className={`rounded-2xl border bg-white p-5 shadow-sm transition-shadow hover:shadow-md ${
-        provider.isActive ? 'border-emerald-200 shadow-emerald-100/40' : 'border-slate-200/60'
+      className={`rounded-xl border bg-white p-4 shadow-sm transition-shadow hover:shadow-md ${
+        provider.isActive ? 'border-emerald-200 shadow-emerald-100/40' : 'border-slate-200/70'
       }`}
     >
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-lg font-semibold text-slate-900">{provider.name}</h3>
+            <h3 className="text-base font-semibold text-slate-900">{provider.name}</h3>
             <span
               className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${
                 provider.isActive
@@ -281,17 +315,25 @@ const ProviderCard = ({ provider, actionLoading, onActivate, onEdit, onDelete })
                   : 'border-slate-200 bg-slate-50 text-slate-500'
               }`}
             >
-              {provider.isActive ? '当前接管中' : '待切换'}
+              {provider.isActive ? '当前接管' : '可切换'}
             </span>
           </div>
+
+          <div className="mt-2 text-xs text-slate-500">
+            写入 model_provider = <span className="font-mono text-slate-700">{provider.name}</span>
+          </div>
+
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
             <span className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 font-medium text-indigo-700">
               <Server size={12} className="mr-1.5" />
               {formatProviderType(provider.providerType)}
             </span>
-            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
+            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
               <ShieldCheck size={12} className="mr-1.5" />
               {provider.model}
+            </span>
+            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
+              推理强度 {provider.reasoningEffort || 'xhigh'}
             </span>
           </div>
         </div>
@@ -308,21 +350,11 @@ const ProviderCard = ({ provider, actionLoading, onActivate, onEdit, onDelete })
         )}
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Base URL</div>
-          <div className="mt-2 truncate font-mono text-sm text-slate-700" title={provider.baseURL}>
-            {provider.baseURL}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">API Key</div>
-          <div className="mt-2 flex items-center font-mono text-sm text-slate-700">
-            <KeyRound size={14} className="mr-2 text-slate-400" />
-            {provider.apiKeyMasked || '未显示'}
-          </div>
-        </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <InfoTile title="Base URL" value={provider.baseURL} icon={Globe} mono titleAttr={provider.baseURL} />
+        <InfoTile title="API Key" value={provider.apiKeyMasked || '未显示'} icon={KeyRound} mono />
+        <InfoTile title="默认模型" value={provider.model} icon={ShieldCheck} />
+        <InfoTile title="推理强度" value={provider.reasoningEffort || 'xhigh'} icon={ArrowRightLeft} />
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
@@ -339,7 +371,7 @@ const ProviderCard = ({ provider, actionLoading, onActivate, onEdit, onDelete })
             loading={isSwitching}
             disabled={provider.isActive || isDeleting}
           >
-            {provider.isActive ? '当前 Provider' : '设为当前'}
+            {provider.isActive ? '当前使用中' : '设为当前'}
           </Button>
           <Button
             variant="ghost"
@@ -399,7 +431,7 @@ const CodexPage = () => {
       setError('');
       setLastUpdate(formatDateTime(new Date().toISOString()));
     } catch (loadError) {
-      setError(getErrorMessage(loadError, '加载 Codex Provider 失败'));
+      setError(getErrorMessage(loadError, '加载 Codex 提供商失败'));
     } finally {
       if (!silent) {
         setLoading(false);
@@ -409,7 +441,7 @@ const CodexPage = () => {
 
   useEffect(() => {
     if (!isWailsEnvironment()) {
-      setError('当前环境未启用 Wails，无法管理 Codex Provider');
+      setError('当前环境未启用 Wails，无法管理 Codex 提供商');
       setLoading(false);
       return undefined;
     }
@@ -465,7 +497,7 @@ const CodexPage = () => {
       setEditingProvider(null);
       await loadData({ silent: true });
     } catch (saveError) {
-      setFormError(getErrorMessage(saveError, '保存 Codex Provider 失败'));
+      setFormError(getErrorMessage(saveError, '保存提供商失败'));
     } finally {
       setActionLoading('');
     }
@@ -477,7 +509,7 @@ const CodexPage = () => {
       await activateCodexProvider(provider.id);
       await loadData({ silent: true });
     } catch (activateError) {
-      setError(getErrorMessage(activateError, '切换 Codex Provider 失败'));
+      setError(getErrorMessage(activateError, '切换提供商失败'));
     } finally {
       setActionLoading('');
     }
@@ -492,20 +524,20 @@ const CodexPage = () => {
       setDeleteTarget(null);
       await loadData({ silent: true });
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError, '删除 Codex Provider 失败'));
+      setError(getErrorMessage(deleteError, '删除提供商失败'));
     } finally {
       setActionLoading('');
     }
   };
 
   if (loading && !storageStatus) {
-    return <LoadingSpinner text="加载 Codex Provider..." />;
+    return <LoadingSpinner text="加载 Codex 提供商..." />;
   }
 
   if (error && !storageStatus && providers.length === 0) {
     return (
       <ErrorMessage
-        title="Codex Provider 加载失败"
+        title="Codex 提供商加载失败"
         message={error}
         onRetry={handleRefresh}
       />
@@ -513,16 +545,16 @@ const CodexPage = () => {
   }
 
   return (
-    <div className="animate-fade-in">
-      <div className="mb-8 flex items-end justify-between gap-4">
+    <div className="mx-auto max-w-7xl space-y-5 animate-fade-in">
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className="rounded-xl bg-slate-900 p-2 text-white shadow-lg">
-            <Database className="h-6 w-6" />
+          <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
+            <Database className="h-5 w-5" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Codex 管理</h1>
             <p className="mt-1 text-sm text-slate-500">
-              独立维护 Codex Provider 配置，只做接管切换，不参与渠道间或渠道内故障转移
+              仅接管 model、model_reasoning_effort、model_provider，要求提供商标识与现有 [model_providers.<标识>] 配置段对应
               {lastUpdate && <span className="ml-2 text-slate-400">· 更新于 {lastUpdate}</span>}
             </p>
           </div>
@@ -538,15 +570,15 @@ const CodexPage = () => {
           >
             刷新
           </Button>
-          <Button icon={Plus} onClick={handleCreate}>
-            添加 Provider
+          <Button size="sm" icon={Plus} onClick={handleCreate}>
+            添加提供商
           </Button>
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title="Provider 总数"
+          title="提供商总数"
           value={storageStatus?.totalCount || providers.length}
           detail={storageStatus?.enabled ? '已启用独立 SQLite 存储' : '存储未就绪'}
           icon={Database}
@@ -555,19 +587,19 @@ const CodexPage = () => {
         <StatCard
           title="当前接管"
           value={activeProvider ? activeProvider.name : '未设置'}
-          detail={activeProvider ? activeProvider.model : '请选择一个 Provider 设为当前'}
+          detail={activeProvider ? `${activeProvider.model} · ${activeProvider.reasoningEffort || 'xhigh'}` : '请选择一个提供商设为当前'}
           icon={CheckCircle2}
           accentClass="bg-emerald-100 text-emerald-700"
         />
         <StatCard
-          title="Provider 类型"
+          title="接入类型"
           value={providerTypeCount}
-          detail={providerTypeCount > 0 ? '支持跨提供商切换' : '尚未配置提供商'}
+          detail={providerTypeCount > 0 ? '支持不同提供商之间切换' : '尚未配置提供商'}
           icon={Server}
           accentClass="bg-indigo-100 text-indigo-700"
         />
         <StatCard
-          title="待切换项"
+          title="可切换项"
           value={pendingSwitchCount}
           detail={pendingSwitchCount > 0 ? '可作为下一次接管目标' : '当前没有备选项'}
           icon={ArrowRightLeft}
@@ -576,28 +608,28 @@ const CodexPage = () => {
       </div>
 
       {error && (
-        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-4 text-sm text-rose-700">
+        <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <div>{error}</div>
         </div>
       )}
 
       {providers.length > 0 && !storageStatus?.hasActive && (
-        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-700">
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
           <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
-          <div>当前没有正在接管的 Provider，请从列表中选择一个设为当前。</div>
+          <div>当前没有正在接管的提供商，请从列表中选择一个设为当前。</div>
         </div>
       )}
 
       {providers.length === 0 ? (
-        <div className="rounded-2xl border border-slate-200/60 bg-white shadow-sm">
+        <div className="rounded-xl border border-slate-200/70 bg-white shadow-sm">
           <EmptyState
             icon={Database}
-            title="暂无 Codex Provider"
-            description="先添加一个 Provider 作为接管配置，后续即可在不同提供商之间切换。"
+            title="暂无提供商"
+            description="先添加一个提供商作为接管配置，后续即可在不同服务商之间切换。"
             action={
-              <Button icon={Plus} onClick={handleCreate}>
-                添加第一个 Provider
+              <Button size="sm" icon={Plus} onClick={handleCreate}>
+                添加提供商
               </Button>
             }
           />

@@ -670,6 +670,11 @@ func (a *App) setupCodexProviderStore() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if err := a.ensureCodexProviderSchema(ctx); err != nil {
+		a.logger.Warn("⚠️ 初始化 Codex Provider 数据表结构失败", "error", err)
+		return
+	}
+
 	providers, err := a.codexProviderService.ListProviders(ctx)
 	if err != nil {
 		a.logger.Warn("⚠️ 加载 Codex Provider 列表失败", "error", err)
@@ -1864,3 +1869,4 @@ func (a *App) getSettingString(ctx context.Context, category, key, defaultVal st
 	}
 	return val
 }
+

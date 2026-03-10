@@ -8,23 +8,24 @@ import (
 	"time"
 )
 
-// CodexProviderRecord 表示数据库中的 Codex Provider 配置。
+// CodexProviderRecord 表示数据库中的 Codex 提供商配置。
 type CodexProviderRecord struct {
 	ID int64 `json:"id"`
 
-	Name         string `json:"name"`
-	ProviderType string `json:"provider_type"`
-	BaseURL      string `json:"base_url"`
-	ApiKey       string `json:"api_key"`
-	Model        string `json:"model"`
-	Website      string `json:"website,omitempty"`
-	IsActive     bool   `json:"is_active"`
+	Name             string `json:"name"`
+	ProviderType     string `json:"provider_type"`
+	BaseURL          string `json:"base_url"`
+	ApiKey           string `json:"api_key"`
+	Model            string `json:"model"`
+	ReasoningEffort  string `json:"model_reasoning_effort"`
+	Website          string `json:"website,omitempty"`
+	IsActive         bool   `json:"is_active"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// CodexProviderStore 定义 Codex Provider 存储接口。
+// CodexProviderStore 定义 Codex 提供商存储接口。
 type CodexProviderStore interface {
 	Create(ctx context.Context, record *CodexProviderRecord) (*CodexProviderRecord, error)
 	GetByID(ctx context.Context, id int64) (*CodexProviderRecord, error)
@@ -72,13 +73,13 @@ func (s *SQLiteCodexProviderStore) Create(ctx context.Context, record *CodexProv
 		return nil, fmt.Errorf("record 不能为空")
 	}
 	if record.Name == "" {
-		return nil, fmt.Errorf("Provider 名称不能为空")
+		return nil, fmt.Errorf("提供商标识不能为空")
 	}
 
 	query := `
 		INSERT INTO codex_providers (
-			name, provider_type, base_url, api_key, model, website, is_active
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			name, provider_type, base_url, api_key, model, model_reasoning_effort, website, is_active
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := s.getQuerier().ExecContext(
@@ -89,11 +90,12 @@ func (s *SQLiteCodexProviderStore) Create(ctx context.Context, record *CodexProv
 		record.BaseURL,
 		record.ApiKey,
 		record.Model,
+		record.ReasoningEffort,
 		nullIfEmpty(record.Website),
 		boolToInt(record.IsActive),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("创建 Codex Provider 失败: %w", err)
+		return nil, fmt.Errorf("创建 Codex 提供商失败: %w", err)
 	}
 
 	id, err := result.LastInsertId()
@@ -102,7 +104,7 @@ func (s *SQLiteCodexProviderStore) Create(ctx context.Context, record *CodexProv
 	}
 
 	queryByID := `
-		SELECT id, name, provider_type, base_url, api_key, model, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE id = ?
 	`
@@ -115,7 +117,7 @@ func (s *SQLiteCodexProviderStore) GetByID(ctx context.Context, id int64) (*Code
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE id = ?
 	`
@@ -127,7 +129,7 @@ func (s *SQLiteCodexProviderStore) GetByName(ctx context.Context, name string) (
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE name = ?
 	`
@@ -139,7 +141,7 @@ func (s *SQLiteCodexProviderStore) GetActive(ctx context.Context) (*CodexProvide
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE is_active = 1
 		LIMIT 1
@@ -152,14 +154,14 @@ func (s *SQLiteCodexProviderStore) List(ctx context.Context) ([]*CodexProviderRe
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		ORDER BY is_active DESC, created_at DESC, name ASC
 	`
 
 	rows, err := s.getQuerier().QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("获取 Codex Provider 列表失败: %w", err)
+		return nil, fmt.Errorf("获取 Codex 提供商列表失败: %w", err)
 	}
 	defer rows.Close()
 
@@ -172,7 +174,7 @@ func (s *SQLiteCodexProviderStore) List(ctx context.Context) ([]*CodexProviderRe
 		result = append(result, record)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("读取 Codex Provider 列表失败: %w", err)
+		return nil, fmt.Errorf("读取 Codex 提供商列表失败: %w", err)
 	}
 
 	return result, nil
@@ -186,12 +188,12 @@ func (s *SQLiteCodexProviderStore) UpdateByID(ctx context.Context, id int64, rec
 		return fmt.Errorf("record 不能为空")
 	}
 	if record.Name == "" {
-		return fmt.Errorf("Provider 名称不能为空")
+		return fmt.Errorf("提供商标识不能为空")
 	}
 
 	query := `
 		UPDATE codex_providers
-		SET name = ?, provider_type = ?, base_url = ?, api_key = ?, model = ?, website = ?
+		SET name = ?, provider_type = ?, base_url = ?, api_key = ?, model = ?, model_reasoning_effort = ?, website = ?
 		WHERE id = ?
 	`
 	result, err := s.getQuerier().ExecContext(
@@ -202,16 +204,17 @@ func (s *SQLiteCodexProviderStore) UpdateByID(ctx context.Context, id int64, rec
 		record.BaseURL,
 		record.ApiKey,
 		record.Model,
+		record.ReasoningEffort,
 		nullIfEmpty(record.Website),
 		id,
 	)
 	if err != nil {
-		return fmt.Errorf("更新 Codex Provider 失败: %w", err)
+		return fmt.Errorf("更新 Codex 提供商失败: %w", err)
 	}
 
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		return fmt.Errorf("Codex Provider 不存在: %d", id)
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
 	}
 	return nil
 }
@@ -222,12 +225,12 @@ func (s *SQLiteCodexProviderStore) DeleteByID(ctx context.Context, id int64) err
 
 	result, err := s.getQuerier().ExecContext(ctx, `DELETE FROM codex_providers WHERE id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("删除 Codex Provider 失败: %w", err)
+		return fmt.Errorf("删除 Codex 提供商失败: %w", err)
 	}
 
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		return fmt.Errorf("Codex Provider 不存在: %d", id)
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
 	}
 	return nil
 }
@@ -237,17 +240,17 @@ func (s *SQLiteCodexProviderStore) SetActive(ctx context.Context, id int64) erro
 	defer s.mu.Unlock()
 
 	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_providers SET is_active = 0`); err != nil {
-		return fmt.Errorf("清空激活 Provider 失败: %w", err)
+		return fmt.Errorf("清空激活提供商失败: %w", err)
 	}
 
 	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_providers SET is_active = 1 WHERE id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("设置激活 Provider 失败: %w", err)
+		return fmt.Errorf("设置激活提供商失败: %w", err)
 	}
 
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		return fmt.Errorf("Codex Provider 不存在: %d", id)
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
 	}
 	return nil
 }
@@ -268,6 +271,7 @@ func (s *SQLiteCodexProviderStore) scanRecord(row *sql.Row) (*CodexProviderRecor
 		&record.BaseURL,
 		&record.ApiKey,
 		&record.Model,
+		&record.ReasoningEffort,
 		&website,
 		&isActive,
 		&createdAt,
@@ -277,7 +281,7 @@ func (s *SQLiteCodexProviderStore) scanRecord(row *sql.Row) (*CodexProviderRecor
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("读取 Codex Provider 失败: %w", err)
+		return nil, fmt.Errorf("读取 Codex 提供商失败: %w", err)
 	}
 
 	record.Website = website
@@ -305,12 +309,13 @@ func (s *SQLiteCodexProviderStore) scanRow(scanner interface {
 		&record.BaseURL,
 		&record.ApiKey,
 		&record.Model,
+		&record.ReasoningEffort,
 		&website,
 		&isActive,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
-		return nil, fmt.Errorf("读取 Codex Provider 失败: %w", err)
+		return nil, fmt.Errorf("读取 Codex 提供商失败: %w", err)
 	}
 
 	record.Website = website
@@ -319,4 +324,3 @@ func (s *SQLiteCodexProviderStore) scanRow(scanner interface {
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	return &record, nil
 }
-
