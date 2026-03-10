@@ -5,6 +5,8 @@ import {logging} from '../models';
 
 export function ActivateGroup(arg1:string):Promise<void>;
 
+export function ActivateCodexProvider(arg1:number):Promise<void>;
+
 export function BatchHealthCheckAll():Promise<main.BatchHealthCheckResult>;
 
 export function BatchUpdateSettings(arg1:main.BatchUpdateSettingsInput):Promise<void>;
@@ -13,11 +15,15 @@ export function CheckPortAvailable(arg1:number):Promise<boolean>;
 
 export function CreateChannel(arg1:main.CreateChannelInput):Promise<void>;
 
+export function CreateCodexProvider(arg1:main.CreateCodexProviderInput):Promise<void>;
+
 export function CreateEndpointRecord(arg1:main.CreateEndpointInput):Promise<void>;
 
 export function CreateModelPricing(arg1:main.CreateModelPricingInput):Promise<void>;
 
 export function DeleteChannel(arg1:string,arg2:boolean):Promise<void>;
+
+export function DeleteCodexProviderByID(arg1:number):Promise<void>;
 
 export function DeleteEndpointRecord(arg1:string):Promise<void>;
 
@@ -32,6 +38,10 @@ export function GetChannels():Promise<Array<main.ChannelInfo>>;
 export function GetClaudeCodeVersion():Promise<string>;
 
 export function GetConfig():Promise<main.ConfigInfo>;
+
+export function GetCodexProviders():Promise<Array<main.CodexProviderInfo>>;
+
+export function GetCodexProviderStorageStatus():Promise<main.CodexProviderStorageStatus>;
 
 export function GetConnectionActivityChart(arg1:number):Promise<Array<main.ChartDataPoint>>;
 
@@ -149,6 +159,8 @@ export function TriggerHealthCheck(arg1:string):Promise<void>;
 
 export function UpdateChannel(arg1:main.UpdateChannelInput):Promise<void>;
 
+export function UpdateCodexProviderByID(arg1:number,arg2:main.UpdateCodexProviderInput):Promise<void>;
+
 export function UpdateEndpointRecord(arg1:string,arg2:main.CreateEndpointInput):Promise<void>;
 
 export function UpdateEndpointRecordByID(arg1:number,arg2:main.CreateEndpointInput):Promise<void>;
@@ -158,3 +170,4 @@ export function UpdateModelPricing(arg1:string,arg2:main.CreateModelPricingInput
 export function UpdatePreferredPort(arg1:number):Promise<void>;
 
 export function UpdateSetting(arg1:main.UpdateSettingInput):Promise<void>;
+

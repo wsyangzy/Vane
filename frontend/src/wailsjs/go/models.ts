@@ -199,6 +199,80 @@ export namespace main {
 	        this.priority = source["priority"];
 	    }
 	}
+	export class CodexProviderInfo {
+	    id: number;
+	    name: string;
+	    provider_type: string;
+	    base_url: string;
+	    api_key: string;
+	    api_key_masked: string;
+	    model: string;
+	    website: string;
+	    is_active: boolean;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CodexProviderInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.provider_type = source["provider_type"];
+	        this.base_url = source["base_url"];
+	        this.api_key = source["api_key"];
+	        this.api_key_masked = source["api_key_masked"];
+	        this.model = source["model"];
+	        this.website = source["website"];
+	        this.is_active = source["is_active"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class CodexProviderStorageStatus {
+	    enabled: boolean;
+	    total_count: number;
+	    has_active: boolean;
+	    active_provider_id: number;
+	    active_provider_name: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CodexProviderStorageStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.total_count = source["total_count"];
+	        this.has_active = source["has_active"];
+	        this.active_provider_id = source["active_provider_id"];
+	        this.active_provider_name = source["active_provider_name"];
+	    }
+	}
+	export class CreateCodexProviderInput {
+	    name: string;
+	    provider_type: string;
+	    base_url: string;
+	    api_key: string;
+	    model: string;
+	    website: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CreateCodexProviderInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider_type = source["provider_type"];
+	        this.base_url = source["base_url"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.website = source["website"];
+	    }
+	}
 	export class CreateEndpointInput {
 	    channel: string;
 	    name: string;
@@ -271,6 +345,28 @@ export namespace main {
 	        this.cache_creation_price_1h = source["cache_creation_price_1h"];
 	        this.cache_read_price = source["cache_read_price"];
 	        this.is_default = source["is_default"];
+	    }
+	}
+	export class UpdateCodexProviderInput {
+	    name: string;
+	    provider_type: string;
+	    base_url: string;
+	    api_key: string;
+	    model: string;
+	    website: string;
+
+	    static createFrom(source: any = {}) {
+	        return new UpdateCodexProviderInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider_type = source["provider_type"];
+	        this.base_url = source["base_url"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.website = source["website"];
 	    }
 	}
 	export class EndpointCostItem {

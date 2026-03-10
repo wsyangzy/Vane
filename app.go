@@ -72,6 +72,10 @@ type App struct {
 	settingsService *service.SettingsService // 设置业务服务
 	portManager     *utils.PortManager       // 端口管理器
 
+	// Codex Provider 存储 (SQLite)
+	codexProviderStore   store.CodexProviderStore      // Codex Provider 数据持久化
+	codexProviderService *service.CodexProviderService // Codex Provider 业务服务
+
 	// HTTP 代理服务器 (保留，监听配置的端口)
 	proxyServer *http.Server
 
@@ -124,7 +128,7 @@ func (a *App) startup() {
 	// 5. 初始化使用追踪（SQLite 存储需要依赖数据库）
 	a.setupUsageTracker()
 
-	// 5.2 初始化管理/配置 DB（channels/endpoints/settings 等）
+	// 5.2 初始化管理/配置 DB（channels/endpoints/settings/codex_providers 等）
 	a.setupStoreDB()
 
 	// 5.5 初始化设置服务 (SQLite)
@@ -162,6 +166,9 @@ func (a *App) startup() {
 
 	// 7.5 初始化模型定价存储 (SQLite)
 	a.setupModelPricingStore()
+
+	// 7.55 初始化 Codex Provider 存储 (SQLite)
+	a.setupCodexProviderStore()
 
 	// 7.6 同步端点倍率到 UsageTracker（用于成本计算）
 	a.syncEndpointMultipliersToTracker(context.Background())
@@ -651,6 +658,54 @@ func (a *App) ensureModelPricingService() {
 	a.mu.Unlock()
 }
 
+func (a *App) setupCodexProviderStore() {
+	a.ensureCodexProviderService()
+	if a.codexProviderService == nil {
+		if a.logger != nil {
+			a.logger.Debug("Codex Provider 存储跳过初始化 (数据库未就绪)")
+		}
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	providers, err := a.codexProviderService.ListProviders(ctx)
+	if err != nil {
+		a.logger.Warn("⚠️ 加载 Codex Provider 列表失败", "error", err)
+		return
+	}
+
+	a.logger.Info("✅ Codex Provider 存储已启用 (SQLite)", "count", len(providers))
+}
+
+func (a *App) ensureCodexProviderService() {
+	a.mu.RLock()
+	if a.codexProviderService != nil {
+		a.mu.RUnlock()
+		return
+	}
+	db := a.storeDB
+	if db == nil && a.usageTracker != nil {
+		db = a.usageTracker.GetDB()
+	}
+	a.mu.RUnlock()
+
+	if db == nil {
+		return
+	}
+
+	codexProviderStore := store.NewSQLiteCodexProviderStore(db)
+	codexProviderService := service.NewCodexProviderService(codexProviderStore)
+
+	a.mu.Lock()
+	if a.codexProviderService == nil {
+		a.codexProviderStore = codexProviderStore
+		a.codexProviderService = codexProviderService
+	}
+	a.mu.Unlock()
+}
+
 // initDefaultModelPricing 初始化默认模型定价数据
 func (a *App) initDefaultModelPricing(ctx context.Context) {
 	// Claude 官方定价 (2025年最新)
@@ -844,7 +899,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 
 // getEffectiveUsageDBPath returns the single SQLite database path used by:
 // - usage tracker (request_logs / usage_summary / ...)
-// - management stores (channels/endpoints/settings/model_pricing)
+// - management stores (channels/endpoints/settings/model_pricing/codex_providers)
 //
 // 统一数据库路径：内部只使用 UsageTracking.DatabasePath（由 config.SetDefaults 将 database.path 归一到该字段）。
 func (a *App) getEffectiveUsageDBPath() string {
@@ -899,7 +954,7 @@ func (a *App) setupUsageTracker() {
 	a.logger.Info("📊 使用追踪已启用", "database", dbPath)
 }
 
-// setupStoreDB 初始化一个专用的 SQLite 连接用于管理写操作（channels/endpoints/settings）。
+// setupStoreDB 初始化一个专用的 SQLite 连接用于管理写操作（channels/endpoints/settings/codex_providers）。
 // 目的：避免 UsageTracker 的后台写入/归档在同一连接上阻塞 UI 管理操作，造成“前端超时但最终成功”的错觉。
 func (a *App) setupStoreDB() {
 	if a.config == nil {
@@ -952,7 +1007,7 @@ func (a *App) setupStoreDB() {
 		}
 	}
 
-	// 当 usageTracker 未启用/初始化失败时，仍需要确保管理表（settings/channels/endpoints/model_pricing 等）存在。
+	// 当 usageTracker 未启用/初始化失败时，仍需要确保管理表（settings/channels/endpoints/model_pricing/codex_providers 等）存在。
 	if a.usageTracker == nil && dbReady {
 		adapter, err := tracking.NewDatabaseAdapter(tracking.DatabaseConfig{
 			Type:         "sqlite",
@@ -1217,7 +1272,7 @@ func importLegacyTables(dstDBPath, legacyDBPath string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	// 导入历史数据（INSERT OR IGNORE），不覆盖新库中已存在的记录
-	for _, table := range []string{"request_logs", "usage_summary", "endpoints", "channels", "model_pricing", "settings"} {
+	for _, table := range []string{"request_logs", "usage_summary", "endpoints", "channels", "model_pricing", "settings", "codex_providers"} {
 		cols, err := commonTableColumns(ctx, tx, table)
 		if err != nil {
 			continue

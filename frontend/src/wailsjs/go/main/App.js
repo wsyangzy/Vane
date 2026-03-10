@@ -8,6 +8,10 @@ export function ActivateGroup(arg1) {
   return Call.ByName("main.App.ActivateGroup", arg1);
 }
 
+export function ActivateCodexProvider(arg1) {
+  return Call.ByName("main.App.ActivateCodexProvider", arg1);
+}
+
 export function BatchHealthCheckAll() {
   return Call.ByName("main.App.BatchHealthCheckAll");
 }
@@ -24,6 +28,10 @@ export function CreateChannel(arg1) {
   return Call.ByName("main.App.CreateChannel", arg1);
 }
 
+export function CreateCodexProvider(arg1) {
+  return Call.ByName("main.App.CreateCodexProvider", arg1);
+}
+
 export function CreateEndpointRecord(arg1) {
   return Call.ByName("main.App.CreateEndpointRecord", arg1);
 }
@@ -34,6 +42,10 @@ export function CreateModelPricing(arg1) {
 
 export function DeleteChannel(arg1, arg2) {
   return Call.ByName("main.App.DeleteChannel", arg1, arg2);
+}
+
+export function DeleteCodexProviderByID(arg1) {
+  return Call.ByName("main.App.DeleteCodexProviderByID", arg1);
 }
 
 export function DeleteEndpointRecord(arg1) {
@@ -62,6 +74,14 @@ export function GetClaudeCodeVersion() {
 
 export function GetConfig() {
   return Call.ByName("main.App.GetConfig");
+}
+
+export function GetCodexProviders() {
+  return Call.ByName("main.App.GetCodexProviders");
+}
+
+export function GetCodexProviderStorageStatus() {
+  return Call.ByName("main.App.GetCodexProviderStorageStatus");
 }
 
 export function GetConnectionActivityChart(arg1) {
@@ -296,6 +316,10 @@ export function UpdateChannel(arg1) {
   return Call.ByName("main.App.UpdateChannel", arg1);
 }
 
+export function UpdateCodexProviderByID(arg1, arg2) {
+  return Call.ByName("main.App.UpdateCodexProviderByID", arg1, arg2);
+}
+
 export function UpdateEndpointRecord(arg1, arg2) {
   return Call.ByName("main.App.UpdateEndpointRecord", arg1, arg2);
 }
@@ -315,3 +339,4 @@ export function UpdatePreferredPort(arg1) {
 export function UpdateSetting(arg1) {
   return Call.ByName("main.App.UpdateSetting", arg1);
 }
+
