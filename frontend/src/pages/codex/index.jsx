@@ -197,7 +197,7 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
                 placeholder="例如：custom"
                 autoFocus
               />
-              <p className="mt-1 text-xs text-slate-400">会直接写入 Codex 配置中的 model_provider，且应对应已有的 [model_providers.<标识>] 段</p>
+              <p className="mt-1 text-xs text-slate-400">会直接写入 Codex 配置中的 model_provider，且应对应已有的 [model_providers.&lt;标识&gt;] 段</p>
             </div>
 
             <Select
@@ -554,7 +554,7 @@ const CodexPage = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Codex 管理</h1>
             <p className="mt-1 text-sm text-slate-500">
-              仅接管 model、model_reasoning_effort、model_provider，要求提供商标识与现有 [model_providers.<标识>] 配置段对应
+              仅接管 model、model_reasoning_effort、model_provider，要求提供商标识与现有 [model_providers.&lt;标识&gt;] 配置段对应
               {lastUpdate && <span className="ml-2 text-slate-400">· 更新于 {lastUpdate}</span>}
             </p>
           </div>
@@ -677,4 +677,5 @@ const CodexPage = () => {
 };
 
 export default CodexPage;
+
 
