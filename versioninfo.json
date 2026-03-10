@@ -2,13 +2,13 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 6,
-      "Minor": 7,
+      "Minor": 8,
       "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 6,
-      "Minor": 7,
+      "Minor": 8,
       "Patch": 0,
       "Build": 0
     },
@@ -22,13 +22,13 @@
     "Comments": "Claude API Request Forwarding Service",
     "CompanyName": "Claude Request Forwarder",
     "FileDescription": "Claude Request Forwarder",
-    "FileVersion": "6.7.0.0",
+    "FileVersion": "6.8.0.0",
     "InternalName": "claude-request-forwarder",
     "LegalCopyright": "Copyright © 2024-2026",
     "OriginalFilename": "Claude Request Forwarder.exe",
     "PrivateBuild": "",
     "ProductName": "Claude Request Forwarder",
-    "ProductVersion": "6.7.0",
+    "ProductVersion": "6.8.0",
     "SpecialBuild": ""
   },
   "VarFileInfo": {
