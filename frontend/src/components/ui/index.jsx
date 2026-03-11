@@ -37,23 +37,31 @@ export const KPICard = ({
   icon: Icon,
   statusColor = 'bg-slate-100 text-slate-600',
   layout = 'stacked',
-  size = 'md'
+  size = 'md',
+  wrapTitle = false,
+  wrapValue = false,
+  titleClassName = '',
+  valueClassName = '',
+  iconSize,
+  iconContainerClassName = '',
+  iconClassName = ''
 }) => {
   if (layout === 'side') {
     const isLarge = size === 'lg';
+    const resolvedIconSize = iconSize ?? (isLarge ? 19 : 18);
     return (
-      <div className={`bg-white rounded-2xl border border-slate-200/60 shadow-sm hover:shadow-md transition-shadow ${isLarge ? 'p-5' : 'p-4'}`}>
+      <div className={`h-full bg-white rounded-2xl border border-slate-200/60 shadow-sm hover:shadow-md transition-shadow flex flex-col ${isLarge ? 'p-5' : 'p-4'}`}>
         <div className={`flex items-center justify-between ${isLarge ? 'gap-5' : 'gap-4'}`}>
           <div className={`flex min-w-0 items-center flex-1 ${isLarge ? 'gap-3.5' : 'gap-3'}`}>
-            <div className={`rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor}`}>
-              <Icon size={isLarge ? 19 : 18} />
+            <div className={`rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor} ${iconContainerClassName}`}>
+              <Icon size={resolvedIconSize} className={iconClassName} />
             </div>
             <div className="min-w-0 flex-1">
-              <h3 className={`truncate text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'}`}>{title}</h3>
+              <h3 className={`${wrapTitle ? 'whitespace-normal break-all leading-snug' : 'truncate'} text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'} ${titleClassName}`}>{title}</h3>
             </div>
           </div>
           <div
-            className={`flex-shrink-0 truncate text-right font-bold text-slate-900 cursor-default ${isLarge ? 'max-w-[10rem] text-[1.2rem]' : 'max-w-[9rem] text-lg'}`}
+            className={`text-right font-bold text-slate-900 cursor-default ${wrapValue ? 'min-w-0 max-w-[12rem] whitespace-normal break-all leading-snug' : `flex-shrink-0 truncate ${isLarge ? 'max-w-[10rem] text-[1.2rem]' : 'max-w-[9rem] text-lg'}`} ${isLarge && wrapValue ? 'text-[1.05rem]' : ''} ${!isLarge && wrapValue ? 'text-base' : ''} ${valueClassName}`}
             title={tooltip || value}
           >
             {value}
@@ -61,7 +69,7 @@ export const KPICard = ({
         </div>
         {subText && (
           <div
-            className={`truncate whitespace-nowrap text-slate-400 font-medium ${isLarge ? 'mt-2.5 text-[11px]' : 'mt-2 text-xs'}`}
+            className={`mt-auto truncate whitespace-nowrap pt-2 text-slate-400 font-medium ${isLarge ? 'text-[11px]' : 'text-xs'}`}
             title={subText}
           >
             {subText}

@@ -11,6 +11,7 @@ import {
   FileText,
   XCircle
 } from 'lucide-react';
+import { KPICard } from '@components/ui';
 
 /**
  * 格式化Token数量（转换为M单位）
@@ -63,29 +64,24 @@ const StatsOverview = ({ stats, total = 0, isBlurred = false }) => {
   const failedRequests = stats.failed_requests || 0;
 
   const kpis = [
-    { label: '总请求数', value: totalRequests, unit: '', icon: Zap, color: 'text-orange-500', bg: 'bg-orange-50' },
-    { label: '成功率', value: successRate, unit: '', icon: CheckCircle2, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-    { label: '平均耗时', value: avgDuration, unit: '', icon: Clock, color: 'text-amber-500', bg: 'bg-amber-50' },
-    { label: '总成本', value: totalCost, unit: '', icon: DollarSign, color: 'text-blue-500', bg: 'bg-blue-50' },
-    { label: '总Token数 (M)', value: totalTokens, unit: '', icon: FileText, color: 'text-indigo-500', bg: 'bg-indigo-50' },
-    { label: '失败请求', value: failedRequests, unit: '', icon: XCircle, color: 'text-rose-500', bg: 'bg-rose-50' }
+    { label: '总请求数', value: totalRequests, icon: Zap, statusColor: 'bg-orange-50 text-orange-500' },
+    { label: '成功率', value: successRate, icon: CheckCircle2, statusColor: 'bg-emerald-50 text-emerald-500' },
+    { label: '平均耗时', value: avgDuration, icon: Clock, statusColor: 'bg-amber-50 text-amber-500' },
+    { label: '总成本', value: totalCost, icon: DollarSign, statusColor: 'bg-blue-50 text-blue-500' },
+    { label: '总Token数 (M)', value: totalTokens, icon: FileText, statusColor: 'bg-indigo-50 text-indigo-500' },
+    { label: '失败请求', value: failedRequests, icon: XCircle, statusColor: 'bg-rose-50 text-rose-500' }
   ];
 
   return (
     <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 transition-all duration-300 ${isBlurred ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
       {kpis.map((kpi, idx) => (
-        <div key={idx} className="bg-white p-4 rounded-xl shadow-[0_2px_10px_-3px_rgba(6,81,237,0.1)] border border-gray-100/50 hover:border-indigo-100 transition-all group">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-medium text-gray-500">{kpi.label}</span>
-            <div className={`p-1.5 rounded-md ${kpi.bg} bg-opacity-50`}>
-              <kpi.icon className={`w-3.5 h-3.5 ${kpi.color}`} />
-            </div>
-          </div>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-bold text-gray-900 tracking-tight">{kpi.value}</span>
-            {kpi.unit && <span className="text-xs text-gray-400 font-medium">{kpi.unit}</span>}
-          </div>
-        </div>
+        <KPICard
+          key={idx}
+          title={kpi.label}
+          value={kpi.value}
+          icon={kpi.icon}
+          statusColor={kpi.statusColor}
+        />
       ))}
     </div>
   );

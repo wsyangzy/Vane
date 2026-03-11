@@ -1906,7 +1906,11 @@ const ChannelsPage = () => {
       tooltip: String(displayStats.unchecked),
       subText: '未纳入当前检测范围',
       icon: ShieldOff,
-      statusColor: 'bg-slate-100 text-slate-500'
+      statusColor: 'bg-slate-100 text-slate-500',
+      size: 'lg',
+      iconSize: 15,
+      iconContainerClassName: 'rounded-md p-1.5',
+      titleClassName: 'normal-case whitespace-nowrap tracking-[-0.02em] text-[10px]'
     }
   ];
 
@@ -2155,7 +2159,11 @@ const ChannelsPage = () => {
             icon={card.icon}
             statusColor={card.statusColor}
             layout="side"
-            size="lg"
+            size={card.size || 'lg'}
+            wrapTitle={card.wrapTitle}
+            titleClassName={card.titleClassName}
+            iconSize={card.iconSize}
+            iconContainerClassName={card.iconContainerClassName}
           />
         ))}
       </div>
