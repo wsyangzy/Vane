@@ -140,11 +140,11 @@ func (a *App) CreateCodexProvider(input CreateCodexProviderInput) error {
 	}
 
 	if created != nil && created.IsActive {
-		if err := a.syncActiveCodexProviderToConfig(created); err != nil {
+		if syncErr := a.syncActiveCodexProviderToConfig(created, ""); syncErr != nil {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer rollbackCancel()
 			_ = codexProviderService.DeleteProviderByID(rollbackCtx, created.ID)
-			return fmt.Errorf("创建 Codex 提供商失败: 配置接管未生效: %w", err)
+			return fmt.Errorf("创建 Codex 提供商失败: 配置接管未生效: %w", syncErr)
 		}
 	}
 
@@ -196,11 +196,11 @@ func (a *App) UpdateCodexProviderByID(id int64, input UpdateCodexProviderInput) 
 		return fmt.Errorf("读取更新后的 Codex 提供商失败: %w", err)
 	}
 	if updated != nil && updated.IsActive {
-		if err := a.syncActiveCodexProviderToConfig(updated); err != nil {
+		if syncErr := a.syncActiveCodexProviderToConfig(updated, previous.Name); syncErr != nil {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer rollbackCancel()
 			_ = codexProviderService.UpdateProviderByID(rollbackCtx, id, previous)
-			return fmt.Errorf("更新 Codex 提供商失败: 配置接管未生效: %w", err)
+			return fmt.Errorf("更新 Codex 提供商失败: 配置接管未生效: %w", syncErr)
 		}
 	}
 
@@ -230,14 +230,27 @@ func (a *App) DeleteCodexProviderByID(id int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	target, err := codexProviderService.GetProviderByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取待删除的 Codex 提供商失败: %w", err)
+	}
+	if target == nil {
+		return fmt.Errorf("Codex 提供商不存在: %d", id)
+	}
+
 	if err := codexProviderService.DeleteProviderByID(ctx, id); err != nil {
 		return fmt.Errorf("删除 Codex 提供商失败: %w", err)
 	}
 
-	if active, err := codexProviderService.GetActiveProvider(ctx); err == nil && active != nil {
-		if syncErr := a.syncActiveCodexProviderToConfig(active); syncErr != nil {
+	if target.IsActive {
+		active, activeErr := codexProviderService.GetActiveProvider(ctx)
+		if activeErr != nil {
 			if logger != nil {
-				logger.Warn("⚠️ 同步 Codex 配置失败", "error", syncErr, "provider", active.Name)
+				logger.Warn("⚠️ 读取当前激活的 Codex 提供商失败", "error", activeErr)
+			}
+		} else if syncErr := a.removeCodexProviderConfig(target.Name, active); syncErr != nil {
+			if logger != nil {
+				logger.Warn("⚠️ 同步 Codex 配置失败", "error", syncErr, "deleted_provider", target.Name)
 			}
 		}
 	}
@@ -280,7 +293,12 @@ func (a *App) ActivateCodexProvider(id int64) error {
 		return fmt.Errorf("激活后的 Codex 提供商不存在: %d", id)
 	}
 
-	if err := a.syncActiveCodexProviderToConfig(activated); err != nil {
+	previousName := ""
+	if previousActive != nil && previousActive.ID != id {
+		previousName = previousActive.Name
+	}
+
+	if err := a.syncActiveCodexProviderToConfig(activated, previousName); err != nil {
 		if previousActive != nil && previousActive.ID != id {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer rollbackCancel()

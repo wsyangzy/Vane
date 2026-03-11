@@ -7,7 +7,10 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ArrowRightLeft,
   CheckCircle2,
+  Copy,
   Database,
+  Eye,
+  EyeOff,
   Globe,
   KeyRound,
   Pencil,
@@ -21,11 +24,12 @@ import {
 } from 'lucide-react';
 import {
   Button,
+  CustomSelect,
   EmptyState,
   ErrorMessage,
   Input,
-  LoadingSpinner,
-  Select
+  KPICard,
+  LoadingSpinner
 } from '@components/ui';
 import {
   activateCodexProvider,
@@ -43,6 +47,13 @@ const PROVIDER_TYPE_OPTIONS = [
   { value: 'openai-compatible', label: 'OpenAI 兼容' },
   { value: 'azure-openai', label: 'Azure OpenAI' },
   { value: 'custom', label: '自定义' }
+];
+
+const REASONING_EFFORT_OPTIONS = [
+  { value: 'low', label: 'low', hint: 'Fastest' },
+  { value: 'medium', label: 'medium', hint: 'Balanced' },
+  { value: 'high', label: 'high', hint: 'Deeper' },
+  { value: 'xhigh', label: 'xhigh', hint: 'Max' }
 ];
 
 const getErrorMessage = (error, fallback = '操作失败') => {
@@ -88,21 +99,6 @@ const buildInitialForm = (provider) => ({
   website: provider?.website || ''
 });
 
-const StatCard = ({ title, value, detail, icon: Icon, accentClass }) => (
-  <div className="rounded-xl border border-slate-200/70 bg-white p-4 shadow-sm">
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">{title}</div>
-        <div className="mt-2 break-all text-2xl font-bold text-slate-900">{value}</div>
-        <div className="mt-2 text-xs leading-5 text-slate-500">{detail}</div>
-      </div>
-      <div className={`rounded-xl p-2.5 ${accentClass}`}>
-        <Icon size={18} />
-      </div>
-    </div>
-  </div>
-);
-
 const InfoTile = ({ title, value, icon: Icon, mono = false, titleAttr = '' }) => (
   <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
     <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{title}</div>
@@ -116,16 +112,75 @@ const InfoTile = ({ title, value, icon: Icon, mono = false, titleAttr = '' }) =>
   </div>
 );
 
+const FormSelectField = ({ label, value, options, onChange, help, placeholder = '请选择' }) => (
+  <div className="flex flex-col">
+    <label className="mb-1.5 text-sm font-medium text-slate-700">{label}</label>
+    <CustomSelect
+      options={options}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      size="md"
+      fullWidth
+      className="w-full"
+    />
+    {help && <p className="mt-1 text-xs text-slate-400">{help}</p>}
+  </div>
+);
+
+const ReasoningEffortSelector = ({ value, onChange }) => (
+  <div className="flex flex-col">
+    <label className="mb-1.5 text-sm font-medium text-slate-700">推理强度</label>
+    <div className="grid grid-cols-2 gap-2">
+      {REASONING_EFFORT_OPTIONS.map((option) => {
+        const isSelected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange?.(option.value)}
+            className={`rounded-xl border px-3 py-3 text-left transition-all ${
+              isSelected
+                ? 'border-amber-300 bg-amber-50 text-amber-900 shadow-sm'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-sm font-semibold">{option.label}</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                  isSelected ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'
+                }`}
+              >
+                {option.hint}
+              </span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  </div>
+);
+
 const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialForm(provider));
   const [fieldError, setFieldError] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [apiKeyDirty, setApiKeyDirty] = useState(false);
+  const [templateCopied, setTemplateCopied] = useState(false);
 
   useEffect(() => {
     setFormData(buildInitialForm(provider));
     setFieldError('');
+    setShowApiKey(false);
+    setApiKeyDirty(false);
+    setTemplateCopied(false);
   }, [provider, mode]);
 
   const updateField = (key, value) => {
+    if (key === 'apiKey') {
+      setApiKeyDirty(true);
+    }
     setFormData((prev) => ({ ...prev, [key]: value }));
     if (fieldError) {
       setFieldError('');
@@ -154,10 +209,48 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
   };
 
   const isEdit = mode === 'edit';
+  const isMaskedApiKeyPreview = isEdit && !showApiKey && !apiKeyDirty && !!provider?.apiKeyMasked;
+  const apiKeyInputType = isMaskedApiKeyPreview ? 'text' : (showApiKey ? 'text' : 'password');
+  const apiKeyInputValue = isMaskedApiKeyPreview ? provider?.apiKeyMasked || '' : formData.apiKey;
+  const templateProviderName = formData.name.trim() || 'xxx';
+  const templateModel = formData.model.trim() || 'gpt-5.4';
+  const templateReasoning = formData.reasoningEffort.trim() || 'xhigh';
+  const templateBaseURL = formData.baseURL.trim() || 'https://.....';
+  const templatePreview = [
+    `model_provider = "${templateProviderName}"`,
+    `model = "${templateModel}"`,
+    `model_reasoning_effort = "${templateReasoning}"`,
+    'network_access = "enabled"',
+    'disable_response_storage = true',
+    'windows_wsl_setup_acknowledged = true',
+    'model_verbosity = "high"',
+    '',
+    `[model_providers.${templateProviderName}]`,
+    `name = "${templateProviderName}"`,
+    `base_url = "${templateBaseURL}"`,
+    'wire_api = "responses"',
+    'requires_openai_auth = true'
+  ].join('\n');
+  const templateLines = templatePreview.split('\n');
+
+  const handleCopyTemplate = async () => {
+    if (!globalThis?.navigator?.clipboard?.writeText) {
+      setFieldError('当前环境不支持复制到剪贴板');
+      return;
+    }
+
+    try {
+      await globalThis.navigator.clipboard.writeText(templatePreview);
+      setTemplateCopied(true);
+      setTimeout(() => setTemplateCopied(false), 1600);
+    } catch (error) {
+      setFieldError(getErrorMessage(error, '复制模板失败'));
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
-      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
@@ -165,9 +258,6 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
             </div>
             <div>
               <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑提供商' : '添加提供商'}</h2>
-              <p className="mt-1 text-xs leading-5 text-slate-500">
-                切换时仅接管 Codex 配置中的 model、model_reasoning_effort、model_provider。
-              </p>
             </div>
           </div>
           <button
@@ -188,7 +278,8 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <Input
                 label="提供商标识"
@@ -197,35 +288,13 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
                 placeholder="例如：custom"
                 autoFocus
               />
-              <p className="mt-1 text-xs text-slate-400">会直接写入 Codex 配置中的 model_provider，且应对应已有的 [model_providers.&lt;标识&gt;] 段</p>
             </div>
 
-            <Select
+            <FormSelectField
               label="接入类型"
               value={formData.providerType}
-              onChange={(event) => updateField('providerType', event.target.value)}
+              onChange={(value) => updateField('providerType', value)}
               options={PROVIDER_TYPE_OPTIONS}
-            />
-
-            <Input
-              label="Base URL"
-              value={formData.baseURL}
-              onChange={(event) => updateField('baseURL', event.target.value)}
-              placeholder="https://code.newcli.com/codex/v1"
-            />
-
-            <Input
-              label="默认模型"
-              value={formData.model}
-              onChange={(event) => updateField('model', event.target.value)}
-              placeholder="例如：gpt-5.4"
-            />
-
-            <Input
-              label="推理强度"
-              value={formData.reasoningEffort}
-              onChange={(event) => updateField('reasoningEffort', event.target.value)}
-              placeholder="例如：xhigh"
             />
 
             <Input
@@ -235,14 +304,92 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
               placeholder="https://platform.openai.com"
             />
 
+            <Input
+              label="默认模型"
+              value={formData.model}
+              onChange={(event) => updateField('model', event.target.value)}
+              placeholder="例如：gpt-5.4"
+            />
+
+            <div className="sm:col-span-2">
+              <ReasoningEffortSelector
+                value={formData.reasoningEffort}
+                onChange={(value) => updateField('reasoningEffort', value)}
+              />
+            </div>
+
             <div className="sm:col-span-2">
               <Input
-                label="API Key"
-                value={formData.apiKey}
-                onChange={(event) => updateField('apiKey', event.target.value)}
-                placeholder="sk-..."
+                label="Base URL"
+                value={formData.baseURL}
+                onChange={(event) => updateField('baseURL', event.target.value)}
+                placeholder="https://code.newcli.com/codex/v1"
               />
-              <p className="mt-1 text-xs text-slate-400">当前版本仅保存配置元数据，暂不处理请求追踪、计费或故障转移</p>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
+              <div className="relative">
+                <input
+                  type={apiKeyInputType}
+                  value={apiKeyInputValue}
+                  onChange={(event) => updateField('apiKey', event.target.value)}
+                  placeholder="sk-..."
+                  autoComplete="new-password"
+                  data-form-type="other"
+                  readOnly={isMaskedApiKeyPreview}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((prev) => !prev)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
+                  title={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
+                >
+                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-950 text-slate-100 shadow-inner">
+              <div className="relative border-b border-white/10 px-4 py-3 pr-28">
+                <div>
+                  <div className="text-sm font-semibold">Service Config Template</div>
+                  <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">Live Preview</div>
+                </div>
+                <div className="absolute right-4 top-3 flex items-center gap-2">
+                  <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300">
+                    TOML
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyTemplate}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200 transition-colors hover:bg-white/10"
+                    title={templateCopied ? '已复制模板' : '复制完整模板'}
+                    aria-label={templateCopied ? '已复制模板' : '复制完整模板'}
+                  >
+                    {templateCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+              <div className="px-4 py-4">
+                <div className="space-y-0.5 font-mono text-[12px] leading-6 text-slate-200">
+                  {templateLines.map((line, index) => (
+                    line ? (
+                      <div
+                        key={`${index}-${line}`}
+                        className="truncate whitespace-nowrap"
+                        title={line}
+                      >
+                        {line}
+                      </div>
+                    ) : (
+                      <div key={`blank-${index}`} className="h-6" />
+                    )
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -320,7 +467,7 @@ const ProviderCard = ({ provider, actionLoading, onActivate, onEdit, onDelete })
           </div>
 
           <div className="mt-2 text-xs text-slate-500">
-            写入 model_provider = <span className="font-mono text-slate-700">{provider.name}</span>
+            写入 model_provider = <span className="font-mono text-slate-700">{provider.name}</span>，并同步对应 provider 的模型参数与 API Key
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
@@ -412,8 +559,40 @@ const CodexPage = () => {
   const [lastUpdate, setLastUpdate] = useState('');
 
   const activeProvider = providers.find((provider) => provider.isActive) || null;
-  const providerTypeCount = new Set(providers.map((provider) => provider.providerType).filter(Boolean)).size;
-  const pendingSwitchCount = activeProvider ? Math.max(providers.length - 1, 0) : providers.length;
+  const overviewCards = [
+    {
+      title: '当前接管',
+      value: activeProvider?.name || '未设置',
+      tooltip: activeProvider?.name || '未设置',
+      subText: activeProvider ? '已接管 config.toml / auth.json' : '请选择一个提供商设为当前',
+      icon: CheckCircle2,
+      statusColor: 'bg-emerald-50 text-emerald-600'
+    },
+    {
+      title: '当前模型',
+      value: activeProvider?.model || '等待接管',
+      tooltip: activeProvider?.model || '等待接管',
+      subText: activeProvider ? `推理强度 ${activeProvider.reasoningEffort || 'xhigh'}` : '接管后自动同步模型参数',
+      icon: ShieldCheck,
+      statusColor: 'bg-sky-50 text-sky-600'
+    },
+    {
+      title: '已保存提供商',
+      value: String(storageStatus?.totalCount || providers.length),
+      tooltip: String(storageStatus?.totalCount || providers.length),
+      subText: '数据库中维护全部 provider 配置',
+      icon: Database,
+      statusColor: 'bg-slate-100 text-slate-600'
+    },
+    {
+      title: '存储状态',
+      value: storageStatus?.enabled ? 'SQLite' : 'Pending',
+      tooltip: storageStatus?.enabled ? 'SQLite' : 'Pending',
+      subText: lastUpdate ? `更新于 ${lastUpdate}` : '等待首次同步',
+      icon: Server,
+      statusColor: 'bg-amber-50 text-amber-600'
+    }
+  ];
 
   const loadData = useCallback(async ({ silent = false } = {}) => {
     if (!silent) {
@@ -554,8 +733,7 @@ const CodexPage = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Codex 管理</h1>
             <p className="mt-1 text-sm text-slate-500">
-              仅接管 model、model_reasoning_effort、model_provider，要求提供商标识与现有 [model_providers.&lt;标识&gt;] 配置段对应
-              {lastUpdate && <span className="ml-2 text-slate-400">· 更新于 {lastUpdate}</span>}
+              所有 provider 先存数据库；只有当前激活项会同步到 config.toml 与 auth.json
             </p>
           </div>
         </div>
@@ -576,35 +754,19 @@ const CodexPage = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="提供商总数"
-          value={storageStatus?.totalCount || providers.length}
-          detail={storageStatus?.enabled ? '已启用独立 SQLite 存储' : '存储未就绪'}
-          icon={Database}
-          accentClass="bg-slate-100 text-slate-700"
-        />
-        <StatCard
-          title="当前接管"
-          value={activeProvider ? activeProvider.name : '未设置'}
-          detail={activeProvider ? `${activeProvider.model} · ${activeProvider.reasoningEffort || 'xhigh'}` : '请选择一个提供商设为当前'}
-          icon={CheckCircle2}
-          accentClass="bg-emerald-100 text-emerald-700"
-        />
-        <StatCard
-          title="接入类型"
-          value={providerTypeCount}
-          detail={providerTypeCount > 0 ? '支持不同提供商之间切换' : '尚未配置提供商'}
-          icon={Server}
-          accentClass="bg-indigo-100 text-indigo-700"
-        />
-        <StatCard
-          title="可切换项"
-          value={pendingSwitchCount}
-          detail={pendingSwitchCount > 0 ? '可作为下一次接管目标' : '当前没有备选项'}
-          icon={ArrowRightLeft}
-          accentClass="bg-amber-100 text-amber-700"
-        />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {overviewCards.map((card) => (
+          <KPICard
+            key={card.title}
+            title={card.title}
+            value={card.value}
+            tooltip={card.tooltip}
+            subText={card.subText}
+            icon={card.icon}
+            statusColor={card.statusColor}
+            layout="side"
+          />
+        ))}
       </div>
 
       {error && (
@@ -626,7 +788,7 @@ const CodexPage = () => {
           <EmptyState
             icon={Database}
             title="暂无提供商"
-            description="先添加一个提供商作为接管配置，后续即可在不同服务商之间切换。"
+            description="先添加一个提供商；系统会把所有 provider 存到数据库中，切换时只把当前项的完整配置同步到 Codex。"
             action={
               <Button size="sm" icon={Plus} onClick={handleCreate}>
                 添加提供商

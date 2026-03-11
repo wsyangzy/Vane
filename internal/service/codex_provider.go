@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"claude-request-forwarder/internal/store"
 )
+
+var codexProviderNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 // CodexProviderService 管理 Codex 提供商配置与当前激活项。
 type CodexProviderService struct {
@@ -140,6 +143,9 @@ func normalizeAndValidateCodexProvider(record *store.CodexProviderRecord) error 
 
 	if record.Name == "" {
 		return fmt.Errorf("提供商标识不能为空")
+	}
+	if !codexProviderNamePattern.MatchString(record.Name) {
+		return fmt.Errorf("提供商标识仅允许字母、数字、连字符和下划线，且必须以字母或数字开头")
 	}
 	if record.ProviderType == "" {
 		return fmt.Errorf("接入类型不能为空")

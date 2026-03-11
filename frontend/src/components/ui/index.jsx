@@ -29,25 +29,68 @@ export { ConfirmDialog, SaveResultDialog, PortConflictDialog, ToastProvider, use
 // ============================================
 // KPI 卡片组件
 // ============================================
-export const KPICard = ({ title, value, tooltip, subText, icon: Icon, statusColor = 'bg-slate-100 text-slate-600' }) => (
-  <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
-    <div className="flex justify-between items-start mb-2">
-      <div className={`p-2 rounded-lg ${statusColor}`}>
-        <Icon size={20} />
+export const KPICard = ({
+  title,
+  value,
+  tooltip,
+  subText,
+  icon: Icon,
+  statusColor = 'bg-slate-100 text-slate-600',
+  layout = 'stacked',
+  size = 'md'
+}) => {
+  if (layout === 'side') {
+    const isLarge = size === 'lg';
+    return (
+      <div className={`bg-white rounded-2xl border border-slate-200/60 shadow-sm hover:shadow-md transition-shadow ${isLarge ? 'p-5' : 'p-4'}`}>
+        <div className={`flex items-center justify-between ${isLarge ? 'gap-5' : 'gap-4'}`}>
+          <div className={`flex min-w-0 items-center flex-1 ${isLarge ? 'gap-3.5' : 'gap-3'}`}>
+            <div className={`rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor}`}>
+              <Icon size={isLarge ? 19 : 18} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className={`truncate text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'}`}>{title}</h3>
+            </div>
+          </div>
+          <div
+            className={`flex-shrink-0 truncate text-right font-bold text-slate-900 cursor-default ${isLarge ? 'max-w-[10rem] text-[1.2rem]' : 'max-w-[9rem] text-lg'}`}
+            title={tooltip || value}
+          >
+            {value}
+          </div>
+        </div>
+        {subText && (
+          <div
+            className={`truncate whitespace-nowrap text-slate-400 font-medium ${isLarge ? 'mt-2.5 text-[11px]' : 'mt-2 text-xs'}`}
+            title={subText}
+          >
+            {subText}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+      <div className="flex justify-between items-start mb-2">
+        <div className={`p-2 rounded-lg ${statusColor}`}>
+          <Icon size={20} />
+        </div>
+      </div>
+      <div>
+        <h3 className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">{title}</h3>
+        <div
+          className="text-xl font-bold text-slate-900 truncate cursor-default"
+          title={tooltip || value}
+        >
+          {value}
+        </div>
+        {subText && <div className="text-xs text-slate-400 mt-1 font-medium">{subText}</div>}
       </div>
     </div>
-    <div>
-      <h3 className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">{title}</h3>
-      <div
-        className="text-xl font-bold text-slate-900 truncate cursor-default"
-        title={tooltip || value}
-      >
-        {value}
-      </div>
-      {subText && <div className="text-xs text-slate-400 mt-1 font-medium">{subText}</div>}
-    </div>
-  </div>
-);
+  );
+};
 
 // ============================================
 // 统计详情项
@@ -428,6 +471,7 @@ export const CustomSelect = ({
   size = 'sm',
   placeholder = '请选择',
   disabled = false,
+  fullWidth = false,
   minWidth = null,
   className = ''
 }) => {
@@ -507,7 +551,7 @@ export const CustomSelect = ({
   };
 
   return (
-    <div className={`relative inline-block ${className}`} ref={containerRef}>
+    <div className={`relative ${fullWidth ? 'block' : 'inline-block'} ${className}`} ref={containerRef}>
       <button
         ref={buttonRef}
         type="button"
@@ -517,6 +561,7 @@ export const CustomSelect = ({
         className={`
           group inline-flex items-center justify-between bg-white border rounded-lg
           transition-all duration-200 font-medium
+          ${fullWidth ? 'w-full' : ''}
           ${sizeClasses[size]}
           ${disabled
             ? 'opacity-50 cursor-not-allowed border-slate-200 text-slate-400'
