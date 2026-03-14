@@ -55,6 +55,7 @@ const REASONING_EFFORT_OPTIONS = [
   { value: 'high', label: 'high', hint: 'Deeper' },
   { value: 'xhigh', label: 'xhigh', hint: 'Max' }
 ];
+const MODEL_CONTEXT_WINDOW_1M = 1000000;
 
 const getErrorMessage = (error, fallback = '操作失败') => {
   if (!error) return fallback;
@@ -96,6 +97,7 @@ const buildInitialForm = (provider) => ({
   apiKey: provider?.apiKey || '',
   model: provider?.model || '',
   reasoningEffort: provider?.reasoningEffort || 'xhigh',
+  enable1MContext: Boolean(provider?.enable1MContext),
   website: provider?.website || ''
 });
 
@@ -162,6 +164,41 @@ const ReasoningEffortSelector = ({ value, onChange }) => (
   </div>
 );
 
+const FormToggleField = ({ label, checked, onChange, help, badge = '1M' }) => (
+  <div className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 sm:col-span-2">
+    <div className="min-w-0">
+      <div className="flex items-center gap-2">
+        <label className="text-sm font-medium text-slate-700">{label}</label>
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+            checked ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'
+          }`}
+        >
+          {checked ? badge : '默认'}
+        </span>
+      </div>
+      {help && <p className="mt-1 text-xs leading-5 text-slate-500">{help}</p>}
+    </div>
+
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange?.(!checked)}
+      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
+        checked ? 'bg-emerald-500' : 'bg-slate-300 hover:bg-slate-400'
+      }`}
+      title={checked ? '关闭 1M 上下文窗口' : '开启 1M 上下文窗口'}
+    >
+      <span
+        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  </div>
+);
+
 const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialForm(provider));
   const [fieldError, setFieldError] = useState('');
@@ -197,6 +234,7 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
       apiKey: formData.apiKey.trim(),
       model: formData.model.trim(),
       reasoningEffort: formData.reasoningEffort.trim() || 'xhigh',
+      enable1MContext: Boolean(formData.enable1MContext),
       website: formData.website.trim()
     };
 
@@ -217,9 +255,10 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
   const templateReasoning = formData.reasoningEffort.trim() || 'xhigh';
   const templateBaseURL = formData.baseURL.trim() || 'https://.....';
   const templatePreview = [
-    `model_provider = "${templateProviderName}"`,
     `model = "${templateModel}"`,
+    ...(formData.enable1MContext ? [`model_context_window = ${MODEL_CONTEXT_WINDOW_1M}`] : []),
     `model_reasoning_effort = "${templateReasoning}"`,
+    `model_provider = "${templateProviderName}"`,
     'network_access = "enabled"',
     'disable_response_storage = true',
     'windows_wsl_setup_acknowledged = true',
@@ -317,6 +356,13 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
                 onChange={(value) => updateField('reasoningEffort', value)}
               />
             </div>
+
+            <FormToggleField
+              label="1M 上下文窗口"
+              checked={formData.enable1MContext}
+              onChange={(value) => updateField('enable1MContext', value)}
+              help="开启后，当前 provider 激活时会向 config.toml 额外写入 model_context_window = 1000000。"
+            />
 
             <div className="sm:col-span-2">
               <Input
@@ -482,6 +528,11 @@ const ProviderCard = ({ provider, actionLoading, onActivate, onEdit, onDelete })
             <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
               推理强度 {provider.reasoningEffort || 'xhigh'}
             </span>
+            {provider.enable1MContext && (
+              <span className="inline-flex items-center rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 font-medium text-sky-700">
+                1M 上下文
+              </span>
+            )}
           </div>
         </div>
 
@@ -572,7 +623,9 @@ const CodexPage = () => {
       title: '当前模型',
       value: activeProvider?.model || '等待接管',
       tooltip: activeProvider?.model || '等待接管',
-      subText: activeProvider ? `推理强度 ${activeProvider.reasoningEffort || 'xhigh'}` : '接管后自动同步模型参数',
+      subText: activeProvider
+        ? `推理强度 ${activeProvider.reasoningEffort || 'xhigh'}${activeProvider.enable1MContext ? ' · 1M 上下文' : ''}`
+        : '接管后自动同步模型参数',
       icon: ShieldCheck,
       statusColor: 'bg-sky-50 text-sky-600'
     },
@@ -839,5 +892,4 @@ const CodexPage = () => {
 };
 
 export default CodexPage;
-
 

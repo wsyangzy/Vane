@@ -1347,6 +1347,7 @@ export const getCodexProviders = async () => {
     apiKeyMasked: provider.api_key_masked,
     model: provider.model,
     reasoningEffort: provider.model_reasoning_effort || '',
+    enable1MContext: provider.enable_1m_context || false,
     website: provider.website || '',
     isActive: provider.is_active,
     createdAt: provider.created_at,
@@ -1370,6 +1371,7 @@ export const createCodexProvider = async (input) => {
     api_key: (input?.apiKey || '').trim(),
     model: (input?.model || '').trim(),
     model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
+    enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
     website: (input?.website || '').trim()
   };
 
@@ -1394,6 +1396,7 @@ export const updateCodexProviderByID = async (id, input) => {
     api_key: (input?.apiKey || '').trim(),
     model: (input?.model || '').trim(),
     model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
+    enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
     website: (input?.website || '').trim()
   };
 

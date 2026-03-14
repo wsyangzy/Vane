@@ -208,6 +208,7 @@ export namespace main {
 	    api_key_masked: string;
 	    model: string;
 	    model_reasoning_effort: string;
+	    enable_1m_context: boolean;
 	    website: string;
 	    is_active: boolean;
 	    created_at: string;
@@ -227,6 +228,7 @@ export namespace main {
 	        this.api_key_masked = source["api_key_masked"];
 	        this.model = source["model"];
 	        this.model_reasoning_effort = source["model_reasoning_effort"];
+	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
 	        this.is_active = source["is_active"];
 	        this.created_at = source["created_at"];
@@ -260,6 +262,7 @@ export namespace main {
 	    api_key: string;
 	    model: string;
 	    model_reasoning_effort: string;
+	    enable_1m_context: boolean;
 	    website: string;
 
 	    static createFrom(source: any = {}) {
@@ -274,6 +277,7 @@ export namespace main {
 	        this.api_key = source["api_key"];
 	        this.model = source["model"];
 	        this.model_reasoning_effort = source["model_reasoning_effort"];
+	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
 	    }
 	}
@@ -358,6 +362,7 @@ export namespace main {
 	    api_key: string;
 	    model: string;
 	    model_reasoning_effort: string;
+	    enable_1m_context: boolean;
 	    website: string;
 
 	    static createFrom(source: any = {}) {
@@ -372,6 +377,7 @@ export namespace main {
 	        this.api_key = source["api_key"];
 	        this.model = source["model"];
 	        this.model_reasoning_effort = source["model_reasoning_effort"];
+	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
 	    }
 	}

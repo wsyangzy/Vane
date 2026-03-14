@@ -14,6 +14,12 @@ import (
 )
 
 const codexProviderWireAPI = "responses"
+const codexProvider1MContextWindow = "1000000"
+
+type codexTopLevelValue struct {
+	Value  string
+	Quoted bool
+}
 
 func (a *App) ensureCodexProviderSchema(ctx context.Context) error {
 	a.mu.RLock()
@@ -42,6 +48,16 @@ func (a *App) ensureCodexProviderSchema(ctx context.Context) error {
 	if !hasReasoning {
 		if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh'"); err != nil {
 			return fmt.Errorf("为 codex_providers 添加 model_reasoning_effort 字段失败: %w", err)
+		}
+	}
+
+	hasEnable1MContext, err := sqliteColumnExists(ctx, db, "codex_providers", "enable_1m_context")
+	if err != nil {
+		return err
+	}
+	if !hasEnable1MContext {
+		if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN enable_1m_context INTEGER NOT NULL DEFAULT 0"); err != nil {
+			return fmt.Errorf("为 codex_providers 添加 enable_1m_context 字段失败: %w", err)
 		}
 	}
 
@@ -100,11 +116,10 @@ func (a *App) syncActiveCodexProviderToConfig(record *store.CodexProviderRecord,
 	if err != nil {
 		return err
 	}
-	updatedConfig, err = upsertCodexTopLevelConfig(updatedConfig, map[string]string{
-		"model":                  record.Model,
-		"model_reasoning_effort": record.ReasoningEffort,
-		"model_provider":         record.Name,
-	})
+	if !record.Enable1MContext {
+		updatedConfig = removeCodexTopLevelConfig(updatedConfig, []string{"model_context_window"})
+	}
+	updatedConfig, err = upsertCodexTopLevelConfig(updatedConfig, buildCodexTopLevelConfigValues(record))
 	if err != nil {
 		return err
 	}
@@ -134,6 +149,7 @@ func (a *App) syncActiveCodexProviderToConfig(record *store.CodexProviderRecord,
 			"auth_path", authPath,
 			"model_provider", record.Name,
 			"model", record.Model,
+			"enable_1m_context", record.Enable1MContext,
 			"reasoning_effort", record.ReasoningEffort,
 		)
 	}
@@ -153,7 +169,7 @@ func (a *App) removeCodexProviderConfig(name string, nextActive *store.CodexProv
 
 	updatedConfig := deleteCodexProviderSection(string(originalConfig), name)
 	if nextActive == nil {
-		updatedConfig = removeCodexTopLevelConfig(updatedConfig, []string{"model", "model_reasoning_effort", "model_provider"})
+		updatedConfig = removeCodexTopLevelConfig(updatedConfig, []string{"model", "model_context_window", "model_reasoning_effort", "model_provider"})
 		if err := writeCodexFile(configPath, []byte(updatedConfig)); err != nil {
 			if rollbackErr := restoreCodexFile(configPath, originalConfig, configExisted); rollbackErr != nil {
 				return fmt.Errorf("写入 Codex 配置文件失败 (%s): %w；回滚也失败: %v", configPath, err, rollbackErr)
@@ -172,11 +188,10 @@ func (a *App) removeCodexProviderConfig(name string, nextActive *store.CodexProv
 	if err != nil {
 		return err
 	}
-	updatedConfig, err = upsertCodexTopLevelConfig(updatedConfig, map[string]string{
-		"model":                  nextActive.Model,
-		"model_reasoning_effort": nextActive.ReasoningEffort,
-		"model_provider":         nextActive.Name,
-	})
+	if !nextActive.Enable1MContext {
+		updatedConfig = removeCodexTopLevelConfig(updatedConfig, []string{"model_context_window"})
+	}
+	updatedConfig, err = upsertCodexTopLevelConfig(updatedConfig, buildCodexTopLevelConfigValues(nextActive))
 	if err != nil {
 		return err
 	}
@@ -288,8 +303,34 @@ func upsertCodexAuthConfig(content string, apiKey string) ([]byte, error) {
 	return append(updated, '\n'), nil
 }
 
-func upsertCodexTopLevelConfig(content string, values map[string]string) (string, error) {
-	order := []string{"model", "model_reasoning_effort", "model_provider"}
+func buildCodexTopLevelConfigValues(record *store.CodexProviderRecord) map[string]codexTopLevelValue {
+	values := map[string]codexTopLevelValue{
+		"model": {
+			Value:  record.Model,
+			Quoted: true,
+		},
+		"model_reasoning_effort": {
+			Value:  record.ReasoningEffort,
+			Quoted: true,
+		},
+		"model_provider": {
+			Value:  record.Name,
+			Quoted: true,
+		},
+	}
+
+	if record.Enable1MContext {
+		values["model_context_window"] = codexTopLevelValue{
+			Value:  codexProvider1MContextWindow,
+			Quoted: false,
+		}
+	}
+
+	return values
+}
+
+func upsertCodexTopLevelConfig(content string, values map[string]codexTopLevelValue) (string, error) {
+	order := []string{"model", "model_context_window", "model_reasoning_effort", "model_provider"}
 	lines := splitCodexLines(content)
 	found := make(map[string]bool, len(values))
 	firstSectionIndex := -1
@@ -313,8 +354,12 @@ func upsertCodexTopLevelConfig(content string, values map[string]string) (string
 		}
 
 		for _, key := range order {
+			value, ok := values[key]
+			if !ok {
+				continue
+			}
 			if !found[key] && isTopLevelTomlAssignment(trimmed, key) {
-				lines[i] = fmt.Sprintf("%s = \"%s\"", key, escapeTomlString(values[key]))
+				lines[i] = fmt.Sprintf("%s = %s", key, renderCodexTopLevelValue(value))
 				found[key] = true
 			}
 		}
@@ -322,8 +367,12 @@ func upsertCodexTopLevelConfig(content string, values map[string]string) (string
 
 	missing := make([]string, 0, len(order))
 	for _, key := range order {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
 		if !found[key] {
-			missing = append(missing, fmt.Sprintf("%s = \"%s\"", key, escapeTomlString(values[key])))
+			missing = append(missing, fmt.Sprintf("%s = %s", key, renderCodexTopLevelValue(value)))
 		}
 	}
 
@@ -337,6 +386,13 @@ func upsertCodexTopLevelConfig(content string, values map[string]string) (string
 	}
 
 	return joinCodexLines(lines), nil
+}
+
+func renderCodexTopLevelValue(value codexTopLevelValue) string {
+	if value.Quoted {
+		return fmt.Sprintf("\"%s\"", escapeTomlString(value.Value))
+	}
+	return value.Value
 }
 
 func removeCodexTopLevelConfig(content string, keys []string) string {

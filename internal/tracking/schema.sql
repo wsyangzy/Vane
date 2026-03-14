@@ -220,6 +220,7 @@ CREATE TABLE IF NOT EXISTS codex_providers (
     api_key TEXT NOT NULL,
     model TEXT NOT NULL,
     model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
+    enable_1m_context INTEGER NOT NULL DEFAULT 0,
     website TEXT,
     is_active INTEGER DEFAULT 0,
 

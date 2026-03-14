@@ -12,14 +12,15 @@ import (
 type CodexProviderRecord struct {
 	ID int64 `json:"id"`
 
-	Name             string `json:"name"`
-	ProviderType     string `json:"provider_type"`
-	BaseURL          string `json:"base_url"`
-	ApiKey           string `json:"api_key"`
-	Model            string `json:"model"`
-	ReasoningEffort  string `json:"model_reasoning_effort"`
-	Website          string `json:"website,omitempty"`
-	IsActive         bool   `json:"is_active"`
+	Name            string `json:"name"`
+	ProviderType    string `json:"provider_type"`
+	BaseURL         string `json:"base_url"`
+	ApiKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"model_reasoning_effort"`
+	Enable1MContext bool   `json:"enable_1m_context"`
+	Website         string `json:"website,omitempty"`
+	IsActive        bool   `json:"is_active"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -78,8 +79,8 @@ func (s *SQLiteCodexProviderStore) Create(ctx context.Context, record *CodexProv
 
 	query := `
 		INSERT INTO codex_providers (
-			name, provider_type, base_url, api_key, model, model_reasoning_effort, website, is_active
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			name, provider_type, base_url, api_key, model, model_reasoning_effort, enable_1m_context, website, is_active
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := s.getQuerier().ExecContext(
@@ -91,6 +92,7 @@ func (s *SQLiteCodexProviderStore) Create(ctx context.Context, record *CodexProv
 		record.ApiKey,
 		record.Model,
 		record.ReasoningEffort,
+		boolToInt(record.Enable1MContext),
 		nullIfEmpty(record.Website),
 		boolToInt(record.IsActive),
 	)
@@ -104,7 +106,7 @@ func (s *SQLiteCodexProviderStore) Create(ctx context.Context, record *CodexProv
 	}
 
 	queryByID := `
-		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE id = ?
 	`
@@ -117,7 +119,7 @@ func (s *SQLiteCodexProviderStore) GetByID(ctx context.Context, id int64) (*Code
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE id = ?
 	`
@@ -129,7 +131,7 @@ func (s *SQLiteCodexProviderStore) GetByName(ctx context.Context, name string) (
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE name = ?
 	`
@@ -141,7 +143,7 @@ func (s *SQLiteCodexProviderStore) GetActive(ctx context.Context) (*CodexProvide
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		WHERE is_active = 1
 		LIMIT 1
@@ -154,7 +156,7 @@ func (s *SQLiteCodexProviderStore) List(ctx context.Context) ([]*CodexProviderRe
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key, model, model_reasoning_effort, COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at
 		FROM codex_providers
 		ORDER BY is_active DESC, created_at DESC, name ASC
 	`
@@ -193,7 +195,7 @@ func (s *SQLiteCodexProviderStore) UpdateByID(ctx context.Context, id int64, rec
 
 	query := `
 		UPDATE codex_providers
-		SET name = ?, provider_type = ?, base_url = ?, api_key = ?, model = ?, model_reasoning_effort = ?, website = ?
+		SET name = ?, provider_type = ?, base_url = ?, api_key = ?, model = ?, model_reasoning_effort = ?, enable_1m_context = ?, website = ?
 		WHERE id = ?
 	`
 	result, err := s.getQuerier().ExecContext(
@@ -205,6 +207,7 @@ func (s *SQLiteCodexProviderStore) UpdateByID(ctx context.Context, id int64, rec
 		record.ApiKey,
 		record.Model,
 		record.ReasoningEffort,
+		boolToInt(record.Enable1MContext),
 		nullIfEmpty(record.Website),
 		id,
 	)
@@ -258,6 +261,7 @@ func (s *SQLiteCodexProviderStore) SetActive(ctx context.Context, id int64) erro
 func (s *SQLiteCodexProviderStore) scanRecord(row *sql.Row) (*CodexProviderRecord, error) {
 	var (
 		record    CodexProviderRecord
+		enable1M  int
 		website   string
 		isActive  int
 		createdAt string
@@ -272,6 +276,7 @@ func (s *SQLiteCodexProviderStore) scanRecord(row *sql.Row) (*CodexProviderRecor
 		&record.ApiKey,
 		&record.Model,
 		&record.ReasoningEffort,
+		&enable1M,
 		&website,
 		&isActive,
 		&createdAt,
@@ -284,6 +289,7 @@ func (s *SQLiteCodexProviderStore) scanRecord(row *sql.Row) (*CodexProviderRecor
 		return nil, fmt.Errorf("读取 Codex 提供商失败: %w", err)
 	}
 
+	record.Enable1MContext = enable1M != 0
 	record.Website = website
 	record.IsActive = isActive != 0
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
@@ -296,6 +302,7 @@ func (s *SQLiteCodexProviderStore) scanRow(scanner interface {
 }) (*CodexProviderRecord, error) {
 	var (
 		record    CodexProviderRecord
+		enable1M  int
 		website   string
 		isActive  int
 		createdAt string
@@ -310,6 +317,7 @@ func (s *SQLiteCodexProviderStore) scanRow(scanner interface {
 		&record.ApiKey,
 		&record.Model,
 		&record.ReasoningEffort,
+		&enable1M,
 		&website,
 		&isActive,
 		&createdAt,
@@ -318,6 +326,7 @@ func (s *SQLiteCodexProviderStore) scanRow(scanner interface {
 		return nil, fmt.Errorf("读取 Codex 提供商失败: %w", err)
 	}
 
+	record.Enable1MContext = enable1M != 0
 	record.Website = website
 	record.IsActive = isActive != 0
 	record.CreatedAt = parseSQLiteDateTime(createdAt)

@@ -10,40 +10,43 @@ import (
 
 // CodexProviderInfo 提供给前端展示的 Codex 提供商信息。
 type CodexProviderInfo struct {
-	ID               int64  `json:"id"`
-	Name             string `json:"name"`
-	ProviderType     string `json:"provider_type"`
-	BaseURL          string `json:"base_url"`
-	ApiKey           string `json:"api_key"`
-	ApiKeyMasked     string `json:"api_key_masked"`
-	Model            string `json:"model"`
-	ReasoningEffort  string `json:"model_reasoning_effort"`
-	Website          string `json:"website"`
-	IsActive         bool   `json:"is_active"`
-	CreatedAt        string `json:"created_at"`
-	UpdatedAt        string `json:"updated_at"`
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	ProviderType    string `json:"provider_type"`
+	BaseURL         string `json:"base_url"`
+	ApiKey          string `json:"api_key"`
+	ApiKeyMasked    string `json:"api_key_masked"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"model_reasoning_effort"`
+	Enable1MContext bool   `json:"enable_1m_context"`
+	Website         string `json:"website"`
+	IsActive        bool   `json:"is_active"`
+	CreatedAt       string `json:"created_at"`
+	UpdatedAt       string `json:"updated_at"`
 }
 
 // CreateCodexProviderInput 创建 Codex 提供商的输入参数。
 type CreateCodexProviderInput struct {
-	Name             string `json:"name"`
-	ProviderType     string `json:"provider_type"`
-	BaseURL          string `json:"base_url"`
-	ApiKey           string `json:"api_key"`
-	Model            string `json:"model"`
-	ReasoningEffort  string `json:"model_reasoning_effort"`
-	Website          string `json:"website"`
+	Name            string `json:"name"`
+	ProviderType    string `json:"provider_type"`
+	BaseURL         string `json:"base_url"`
+	ApiKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"model_reasoning_effort"`
+	Enable1MContext bool   `json:"enable_1m_context"`
+	Website         string `json:"website"`
 }
 
 // UpdateCodexProviderInput 更新 Codex 提供商的输入参数。
 type UpdateCodexProviderInput struct {
-	Name             string `json:"name"`
-	ProviderType     string `json:"provider_type"`
-	BaseURL          string `json:"base_url"`
-	ApiKey           string `json:"api_key"`
-	Model            string `json:"model"`
-	ReasoningEffort  string `json:"model_reasoning_effort"`
-	Website          string `json:"website"`
+	Name            string `json:"name"`
+	ProviderType    string `json:"provider_type"`
+	BaseURL         string `json:"base_url"`
+	ApiKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"model_reasoning_effort"`
+	Enable1MContext bool   `json:"enable_1m_context"`
+	Website         string `json:"website"`
 }
 
 // CodexProviderStorageStatus 表示 Codex 提供商存储状态。
@@ -128,6 +131,7 @@ func (a *App) CreateCodexProvider(input CreateCodexProviderInput) error {
 		ApiKey:          input.ApiKey,
 		Model:           input.Model,
 		ReasoningEffort: input.ReasoningEffort,
+		Enable1MContext: input.Enable1MContext,
 		Website:         input.Website,
 	}
 
@@ -173,6 +177,7 @@ func (a *App) UpdateCodexProviderByID(id int64, input UpdateCodexProviderInput) 
 		ApiKey:          input.ApiKey,
 		Model:           input.Model,
 		ReasoningEffort: input.ReasoningEffort,
+		Enable1MContext: input.Enable1MContext,
 		Website:         input.Website,
 	}
 
@@ -324,6 +329,7 @@ func (a *App) codexProviderRecordToInfo(record *store.CodexProviderRecord) Codex
 		ApiKeyMasked:    maskToken(record.ApiKey),
 		Model:           record.Model,
 		ReasoningEffort: record.ReasoningEffort,
+		Enable1MContext: record.Enable1MContext,
 		Website:         record.Website,
 		IsActive:        record.IsActive,
 	}
@@ -337,4 +343,3 @@ func (a *App) codexProviderRecordToInfo(record *store.CodexProviderRecord) Codex
 
 	return info
 }
-
