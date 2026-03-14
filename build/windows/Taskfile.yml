@@ -6,7 +6,7 @@ version: '3'
 
 vars:
   # Version info for ldflags injection
-  VERSION: '{{default "6.8" .VERSION}}'
+  VERSION: '{{default "6.9" .VERSION}}'
   COMMIT: '{{default "unknown" .COMMIT}}'
   BUILD_TIME: '{{now | date "2006-01-02T15:04:05Z07:00"}}'
   DEV: '{{default "false" .DEV}}'
