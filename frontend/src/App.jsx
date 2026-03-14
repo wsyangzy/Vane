@@ -13,6 +13,7 @@ import { getSuspendedRequestsCount, getManualRetryRequestsCount, getPortConflict
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
 const ChannelsPage = lazy(() => import('@pages/channels/index.jsx'));
+const CodexPage = lazy(() => import('@pages/codex/index.jsx'));
 // 组管理页面已移除，配置简化后不再需要独立的组管理功能
 // const GroupsPage = lazy(() => import('@pages/groups/index.jsx'));
 const RequestsPage = lazy(() => import('@pages/requests/index.jsx'));
@@ -237,6 +238,7 @@ function App() {
     const pages = {
       overview: <OverviewPage />,
       channels: <ChannelsPage />,
+      codex: <CodexPage />,
       // 组管理页面已移除
       // groups: <GroupsPage />,
       requests: <RequestsPage />,
@@ -310,3 +312,4 @@ function App() {
 }
 
 export default App;
+

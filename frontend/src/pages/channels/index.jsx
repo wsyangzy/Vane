@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import {
   Button,
+  KPICard,
   LoadingSpinner,
   ErrorMessage
 } from '@components/ui';
@@ -1858,6 +1859,60 @@ const ChannelsPage = () => {
           : 0
       }
     : { ...stats, skipped: stats.skipped || 0 };
+  const channelOverviewCards = [
+    {
+      title: channelFailoverEnabled ? '参与渠道' : '活跃渠道',
+      value: String(scopedChannelCount),
+      tooltip: String(scopedChannelCount),
+      subText: `总渠道 ${channelSections.length} 个`,
+      icon: ArrowRightLeft,
+      statusColor: 'bg-slate-100 text-slate-700'
+    },
+    {
+      title: '参与端点',
+      value: String(scopedEndpointCount),
+      tooltip: String(scopedEndpointCount),
+      subText: `端点总数 ${scopedDisplayEndpoints.length} 个`,
+      icon: Server,
+      statusColor: 'bg-indigo-50 text-indigo-600'
+    },
+    {
+      title: '健康端点',
+      value: String(displayStats.healthy),
+      tooltip: String(displayStats.healthy),
+      subText: '当前通过健康检测',
+      icon: CheckCircle2,
+      statusColor: 'bg-emerald-50 text-emerald-600'
+    },
+    {
+      title: '跳过检测',
+      value: String(displayStats.skipped || 0),
+      tooltip: String(displayStats.skipped || 0),
+      subText: '已标记跳过健康检查',
+      icon: Pause,
+      statusColor: 'bg-violet-50 text-violet-600'
+    },
+    {
+      title: '异常端点',
+      value: String(displayStats.unhealthy),
+      tooltip: String(displayStats.unhealthy),
+      subText: '当前判定异常',
+      icon: XCircle,
+      statusColor: 'bg-rose-50 text-rose-600'
+    },
+    {
+      title: '未参与端点',
+      value: String(displayStats.unchecked),
+      tooltip: String(displayStats.unchecked),
+      subText: '未纳入当前检测范围',
+      icon: ShieldOff,
+      statusColor: 'bg-slate-100 text-slate-500',
+      size: 'lg',
+      iconSize: 15,
+      iconContainerClassName: 'rounded-md p-1.5',
+      titleClassName: 'normal-case whitespace-nowrap tracking-[-0.02em] text-[10px]'
+    }
+  ];
 
   // ============================================
   // CRUD 操作处理
@@ -2093,43 +2148,24 @@ const ChannelsPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-6 gap-4 mb-6">
-        {/* 检测范围统计 */}
-        <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-slate-900">
-            {scopedChannelCount}
-            <span className="text-sm font-normal text-slate-400 ml-1">/ {channelSections.length}</span>
-          </div>
-          <div className="text-sm text-slate-500">
-            {channelFailoverEnabled ? '参与渠道' : '活跃渠道'}
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-indigo-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-indigo-600">
-            {scopedEndpointCount}
-            <span className="text-sm font-normal text-slate-400 ml-1">/ {scopedDisplayEndpoints.length}</span>
-          </div>
-          <div className="text-sm text-slate-500">
-            参与端点
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-emerald-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-emerald-600">{displayStats.healthy}</div>
-          <div className="text-sm text-slate-500">健康端点</div>
-        </div>
-        <div className="bg-white rounded-xl border border-purple-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-purple-600">{displayStats.skipped || 0}</div>
-          <div className="text-sm text-slate-500">跳过检测</div>
-        </div>
-        <div className="bg-white rounded-xl border border-rose-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-rose-600">{displayStats.unhealthy}</div>
-          <div className="text-sm text-slate-500">异常端点</div>
-        </div>
-        {/* 未参与端点（failoverEnabled=false 或 不在检测范围内） */}
-        <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-slate-400">{displayStats.unchecked}</div>
-          <div className="text-sm text-slate-500">未参与端点</div>
-        </div>
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+        {channelOverviewCards.map((card) => (
+          <KPICard
+            key={card.title}
+            title={card.title}
+            value={card.value}
+            tooltip={card.tooltip}
+            subText={card.subText}
+            icon={card.icon}
+            statusColor={card.statusColor}
+            layout="side"
+            size={card.size || 'lg'}
+            wrapTitle={card.wrapTitle}
+            titleClassName={card.titleClassName}
+            iconSize={card.iconSize}
+            iconContainerClassName={card.iconContainerClassName}
+          />
+        ))}
       </div>
 
       {channelFailoverEnabled && manualRetryRequestsCount > 0 && (

@@ -5,13 +5,14 @@ package main
 
 // 事件名称常量
 const (
-	EventSystemStatus   = "system:status"
-	EventEndpointUpdate = "endpoint:update"
-	EventGroupUpdate    = "group:update"
-	EventUsageUpdate    = "usage:update"
-	EventConfigReloaded = "config:reloaded"
-	EventError          = "error"
-	EventNotification   = "notification"
+	EventSystemStatus        = "system:status"
+	EventEndpointUpdate      = "endpoint:update"
+	EventCodexProviderUpdate = "codex-provider:update"
+	EventGroupUpdate         = "group:update"
+	EventUsageUpdate         = "usage:update"
+	EventConfigReloaded      = "config:reloaded"
+	EventError               = "error"
+	EventNotification        = "notification"
 )
 
 // safeEmitEvent 安全地发射事件到前端
@@ -76,6 +77,33 @@ func (a *App) emitEndpointUpdate() {
 	a.safeEmitEvent(EventEndpointUpdate, data)
 }
 
+// emitCodexProviderUpdate 发送 Codex Provider 更新到前端
+func (a *App) emitCodexProviderUpdate() {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
+
+	if !running || window == nil {
+		return
+	}
+
+	status := a.GetCodexProviderStorageStatus()
+	data := map[string]interface{}{
+		"enabled":              status.Enabled,
+		"total_count":          status.TotalCount,
+		"has_active":           status.HasActive,
+		"active_provider_id":   status.ActiveProviderID,
+		"active_provider_name": status.ActiveProviderName,
+	}
+
+	if a.logger != nil {
+		a.logger.Debug("📡 [Wails Event] 推送 Codex Provider 更新", "count", status.TotalCount, "has_active", status.HasActive)
+	}
+
+	a.safeEmitEvent(EventCodexProviderUpdate, data)
+}
+
 // emitGroupUpdate 发送组状态更新到前端
 func (a *App) emitGroupUpdate() {
 	a.mu.RLock()
@@ -123,3 +151,4 @@ func (a *App) emitNotification(level, title, message string) {
 		"message": message,
 	})
 }
+

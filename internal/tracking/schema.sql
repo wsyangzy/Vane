@@ -208,6 +208,39 @@ BEGIN
 END;
 
 -- ============================================================================
+-- Codex Provider 表 (新增 - 2026-03-10)
+-- 独立维护 Codex Provider 配置，并通过单活 is_active 切换当前接管项
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS codex_providers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    name TEXT UNIQUE NOT NULL,
+    provider_type TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
+    enable_1m_context INTEGER NOT NULL DEFAULT 0,
+    website TEXT,
+    is_active INTEGER DEFAULT 0,
+
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+);
+
+CREATE INDEX IF NOT EXISTS idx_codex_providers_name ON codex_providers(name);
+CREATE INDEX IF NOT EXISTS idx_codex_providers_is_active ON codex_providers(is_active);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_providers_single_active ON codex_providers(is_active) WHERE is_active = 1;
+
+CREATE TRIGGER IF NOT EXISTS update_codex_providers_timestamp
+    AFTER UPDATE ON codex_providers
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE codex_providers SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
+-- ============================================================================
 -- 模型定价表 (新增 - 2025-12-06, 更新于 2025-12-06 支持 5m/1h 缓存)
 -- 将模型定价从 config.yaml 迁移到 SQLite，支持动态管理
 -- ============================================================================
@@ -289,3 +322,5 @@ CREATE TRIGGER IF NOT EXISTS update_settings_timestamp
 BEGIN
     UPDATE settings SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 END;
+
+

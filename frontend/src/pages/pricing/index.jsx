@@ -640,6 +640,35 @@ const PricingPage = () => {
   const avgOutputPrice = pricings.length > 0
     ? (pricings.reduce((sum, p) => sum + p.outputPrice, 0) / pricings.length).toFixed(2)
     : 0;
+  const pricingSummaryCards = [
+    {
+      title: '定价配置数',
+      value: pricings.length,
+      icon: Database,
+      statusColor: 'bg-slate-100 text-slate-700'
+    },
+    {
+      title: '默认定价模型',
+      value: defaultPricing?.displayName || defaultPricing?.modelName || '-',
+      tooltip: defaultPricing?.displayName || defaultPricing?.modelName || '-',
+      icon: Star,
+      statusColor: 'bg-amber-100 text-amber-700',
+      wrapValue: true,
+      valueClassName: 'text-left'
+    },
+    {
+      title: '平均输入价格',
+      value: `$${avgInputPrice}`,
+      icon: TrendingDown,
+      statusColor: 'bg-indigo-100 text-indigo-700'
+    },
+    {
+      title: '平均输出价格',
+      value: `$${avgOutputPrice}`,
+      icon: TrendingUp,
+      statusColor: 'bg-emerald-100 text-emerald-700'
+    }
+  ];
 
   return (
     <div className="animate-fade-in">
@@ -683,25 +712,26 @@ const PricingPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-slate-900">{pricings.length}</div>
-          <div className="text-sm text-slate-500">定价配置数</div>
-        </div>
-        <div className="bg-white rounded-xl border border-amber-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-amber-600 truncate">
-            {defaultPricing?.displayName || defaultPricing?.modelName || '-'}
+      <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-2 xl:grid-cols-4">
+        {pricingSummaryCards.map((card) => (
+          <div
+            key={card.title}
+            className="bg-white rounded-2xl border border-slate-200/60 p-4 shadow-sm transition-shadow hover:shadow-md"
+            title={card.tooltip || card.value}
+          >
+            <div className="mb-3 flex items-center gap-2.5">
+              <div className={`rounded-lg p-2 ${card.statusColor}`}>
+                <card.icon size={18} />
+              </div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {card.title}
+              </h3>
+            </div>
+            <div className={`font-bold text-slate-900 ${card.wrapValue ? 'break-all text-base leading-snug' : 'truncate text-2xl'} ${card.valueClassName || ''}`}>
+              {card.value}
+            </div>
           </div>
-          <div className="text-sm text-slate-500">默认定价模型</div>
-        </div>
-        <div className="bg-white rounded-xl border border-indigo-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-indigo-600">${avgInputPrice}</div>
-          <div className="text-sm text-slate-500">平均输入价格</div>
-        </div>
-        <div className="bg-white rounded-xl border border-emerald-200/60 p-4 shadow-sm">
-          <div className="text-2xl font-bold text-emerald-600">${avgOutputPrice}</div>
-          <div className="text-sm text-slate-500">平均输出价格</div>
-        </div>
+        ))}
       </div>
 
       {/* 定价卡片网格 */}

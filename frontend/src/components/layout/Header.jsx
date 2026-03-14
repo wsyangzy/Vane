@@ -25,6 +25,7 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
   const tabs = [
     { name: 'overview', label: '概览' },
     { name: 'channels', label: '渠道管理' },
+    { name: 'codex', label: 'Codex 管理' },
     // 组管理入口已移除，配置简化后不再需要独立的组管理页面
     // { name: 'groups', label: '组管理' },
     { name: 'requests', label: '请求追踪' },
@@ -137,3 +138,4 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
 };
 
 export default Header;
+

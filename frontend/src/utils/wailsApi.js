@@ -1308,6 +1308,129 @@ export const setDefaultModelPricing = async (modelName) => {
 };
 
 // ============================================
+// Codex Provider 管理 API
+// ============================================
+
+/**
+ * 获取 Codex Provider 存储状态
+ * @returns {Promise<Object>} - {enabled, totalCount, hasActive, activeProviderId, activeProviderName}
+ */
+export const getCodexProviderStorageStatus = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const status = await WailsApp.GetCodexProviderStorageStatus();
+  return {
+    enabled: status.enabled || false,
+    totalCount: status.total_count || 0,
+    hasActive: status.has_active || false,
+    activeProviderId: status.active_provider_id || 0,
+    activeProviderName: status.active_provider_name || ''
+  };
+};
+
+/**
+ * 获取所有 Codex Provider
+ * @returns {Promise<Array>} - Provider 列表
+ */
+export const getCodexProviders = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const providers = await WailsApp.GetCodexProviders();
+  return (providers || []).map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    providerType: provider.provider_type,
+    baseURL: provider.base_url,
+    apiKey: provider.api_key,
+    apiKeyMasked: provider.api_key_masked,
+    model: provider.model,
+    reasoningEffort: provider.model_reasoning_effort || '',
+    enable1MContext: provider.enable_1m_context || false,
+    website: provider.website || '',
+    isActive: provider.is_active,
+    createdAt: provider.created_at,
+    updatedAt: provider.updated_at
+  }));
+};
+
+/**
+ * 创建 Codex Provider
+ * @param {Object} input - Provider 配置
+ * @returns {Promise<Object>} - {success: true}
+ */
+export const createCodexProvider = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const payload = {
+    name: (input?.name || '').trim(),
+    provider_type: (input?.providerType || '').trim(),
+    base_url: (input?.baseURL || '').trim(),
+    api_key: (input?.apiKey || '').trim(),
+    model: (input?.model || '').trim(),
+    model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
+    enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
+    website: (input?.website || '').trim()
+  };
+
+  await WailsApp.CreateCodexProvider(payload);
+  return { success: true };
+};
+
+/**
+ * 更新 Codex Provider
+ * @param {number} id - Provider ID
+ * @param {Object} input - Provider 配置
+ * @returns {Promise<Object>} - {success: true}
+ */
+export const updateCodexProviderByID = async (id, input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const payload = {
+    name: (input?.name || '').trim(),
+    provider_type: (input?.providerType || '').trim(),
+    base_url: (input?.baseURL || '').trim(),
+    api_key: (input?.apiKey || '').trim(),
+    model: (input?.model || '').trim(),
+    model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
+    enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
+    website: (input?.website || '').trim()
+  };
+
+  await WailsApp.UpdateCodexProviderByID(id, payload);
+  return { success: true };
+};
+
+/**
+ * 删除 Codex Provider
+ * @param {number} id - Provider ID
+ * @returns {Promise<Object>} - {success: true}
+ */
+export const deleteCodexProviderByID = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  await WailsApp.DeleteCodexProviderByID(id);
+  return { success: true };
+};
+
+/**
+ * 切换当前 Codex Provider
+ * @param {number} id - Provider ID
+ * @returns {Promise<Object>} - {success: true}
+ */
+export const activateCodexProvider = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  await WailsApp.ActivateCodexProvider(id);
+  return { success: true };
+};
+
+// ============================================
 // 系统设置管理 API (SQLite)
 // ============================================
 
@@ -1592,3 +1715,5 @@ export const resolvePortConflict = async (action) => {
 
   return await WailsApp.ResolvePortConflict(action);
 };
+
+
