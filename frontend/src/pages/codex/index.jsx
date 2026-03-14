@@ -206,14 +206,6 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
 
-  useEffect(() => {
-    setFormData(buildInitialForm(provider));
-    setFieldError('');
-    setShowApiKey(false);
-    setApiKeyDirty(false);
-    setTemplateCopied(false);
-  }, [provider, mode]);
-
   const updateField = (key, value) => {
     if (key === 'apiKey') {
       setApiKeyDirty(true);
@@ -866,6 +858,7 @@ const CodexPage = () => {
 
       {showForm && (
         <ProviderFormModal
+          key={`${formMode}-${editingProvider?.id || 'create'}`}
           mode={formMode}
           provider={editingProvider}
           loading={actionLoading === 'create' || actionLoading === `save-${editingProvider?.id || 0}`}
@@ -892,4 +885,3 @@ const CodexPage = () => {
 };
 
 export default CodexPage;
-
