@@ -12,7 +12,7 @@ import (
 	"claude-request-forwarder/config"
 	"claude-request-forwarder/internal/store"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 	fmt.Printf("📋 从配置文件读取到 %d 个端点\n", len(cfg.Endpoints))
 
 	// 2. 连接数据库
-	db, err := sql.Open("sqlite3", cfg.UsageTracking.DatabasePath)
+	db, err := sql.Open("sqlite", cfg.UsageTracking.DatabasePath)
 	if err != nil {
 		log.Fatalf("❌ 连接数据库失败: %v", err)
 	}
@@ -80,23 +80,23 @@ func main() {
 		}
 
 		record := &store.EndpointRecord{
-			Channel:             channel,
-			Name:                ep.Name,
-			URL:                 ep.URL,
-			Token:               token,
-			ApiKey:              apiKey,
-			Headers:             ep.Headers,
-			Priority:            priority,
-			FailoverEnabled:     failoverEnabled,
-			CooldownSeconds:     cooldownSeconds,
-			TimeoutSeconds:      timeoutSeconds,
-			SupportsCountTokens: ep.SupportsCountTokens,
-			CostMultiplier:      1.0,
-			InputCostMultiplier: 1.0,
-			OutputCostMultiplier: 1.0,
+			Channel:                     channel,
+			Name:                        ep.Name,
+			URL:                         ep.URL,
+			Token:                       token,
+			ApiKey:                      apiKey,
+			Headers:                     ep.Headers,
+			Priority:                    priority,
+			FailoverEnabled:             failoverEnabled,
+			CooldownSeconds:             cooldownSeconds,
+			TimeoutSeconds:              timeoutSeconds,
+			SupportsCountTokens:         ep.SupportsCountTokens,
+			CostMultiplier:              1.0,
+			InputCostMultiplier:         1.0,
+			OutputCostMultiplier:        1.0,
 			CacheCreationCostMultiplier: 1.0,
-			CacheReadCostMultiplier: 1.0,
-			Enabled:             false, // 默认不激活
+			CacheReadCostMultiplier:     1.0,
+			Enabled:                     false, // 默认不激活
 		}
 
 		records = append(records, record)
