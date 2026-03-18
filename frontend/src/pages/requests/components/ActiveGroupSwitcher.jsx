@@ -91,10 +91,6 @@ const ActiveGroupSwitcher = ({
       setSwitchError(`渠道「${channel.name}」处于冷却中${remain ? `（剩余 ${remain}）` : ''}，暂不可切换。`);
       return;
     }
-    if (channel.paused) {
-      setSwitchError(`渠道「${channel.name}」已暂停，无法切换。`);
-      return;
-    }
 
     setSwitching(true);
     try {
@@ -197,7 +193,8 @@ const ActiveGroupSwitcher = ({
             {sortedGroups.map((channel) => {
               const isActive = channel.name === activeGroup;
               const health = getHealthStyle(channel);
-              const isBlocked = !isActive && (channel.in_cooldown || channel.paused);
+              // 渠道内转移模式下，暂停状态不影响选择（暂停仅对渠道间转移有意义）
+              const isBlocked = !isActive && channel.in_cooldown;
               const cooldownLabel = formatCooldownRemain(channel.cooldown_remain_ms);
 
               return (
@@ -208,7 +205,7 @@ const ActiveGroupSwitcher = ({
                   title={
                     channel.in_cooldown
                       ? `冷却中${cooldownLabel ? `（剩余 ${cooldownLabel}）` : ''}`
-                      : (channel.paused ? '已暂停' : undefined)
+                      : undefined
                   }
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm text-left transition-colors ${
                     isActive
@@ -237,11 +234,6 @@ const ActiveGroupSwitcher = ({
 
                   {/* 选中状态 */}
                   <div className="flex items-center gap-2">
-                    {channel.paused && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-600">
-                        已暂停
-                      </span>
-                    )}
                     {isActive && <Check className="w-4 h-4 text-indigo-600" />}
                   </div>
                 </button>

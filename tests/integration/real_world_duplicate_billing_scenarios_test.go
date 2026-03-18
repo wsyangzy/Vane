@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -34,7 +35,7 @@ func testStreamingInterruptionRetryScenario(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("eof-retry")
@@ -106,7 +107,7 @@ func testStreamingInterruptionRetryScenario(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("partial-success")
@@ -167,7 +168,7 @@ func testNetworkInstabilityScenario(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("network-timeout")
@@ -230,7 +231,7 @@ func testNetworkInstabilityScenario(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("connection-reconnect")
@@ -285,7 +286,7 @@ func testClientDuplicateSubmissionProtection(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("idempotency")
@@ -351,7 +352,7 @@ func testClientDuplicateSubmissionProtection(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("client-retry")
@@ -408,7 +409,7 @@ func testServiceRestartRecoveryScenario(t *testing.T) {
 
 		middleware1 := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("service-restart")
@@ -433,7 +434,7 @@ func testServiceRestartRecoveryScenario(t *testing.T) {
 
 		middleware2 := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		// 重启后，相同请求ID的处理
@@ -479,7 +480,7 @@ func testServiceRestartRecoveryScenario(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("crash-recovery")
@@ -537,49 +538,39 @@ func testLoadBalancerRetryScenario(t *testing.T) {
 
 		middleware := &RealWorldMockMiddleware{
 			billingEvents: make([]BillingEvent, 0),
-			mu:           sync.RWMutex{},
+			mu:            sync.RWMutex{},
 		}
 
 		requestID := generateRealWorldRequestID("lb-retry")
 
-		// 模拟负载均衡器将请求路由到不同端点
+		// 按真实重试顺序模拟：前两个端点失败，最后一个成功
 		endpoints := []string{"api-1", "api-2", "api-3"}
-		var wg sync.WaitGroup
-
-		for i, endpoint := range endpoints {
-			wg.Add(1)
-			go func(index int, ep string) {
-				defer wg.Done()
-
-				rlm := proxy.NewRequestLifecycleManager(tracker, middleware, requestID, nil)
-				rlm.SetEndpoint(ep, "main", "")
-				rlm.SetModel("claude-3-5-haiku-20241022")
-
-				if index == 0 {
-					// 只有第一个端点启动请求
-					rlm.StartRequest("192.168.1.1", "client-app/1.0", "POST", "/v1/messages", false)
-				}
-
-				tokens := &tracking.TokenUsage{
-					InputTokens:  300,
-					OutputTokens: 150,
-				}
-
-				if index < 2 {
-					// 前两个端点失败
-					rlm.UpdateStatus("error", index+1, 500)
-					rlm.RecordTokensForFailedRequest(tokens, fmt.Sprintf("lb_retry_%s", ep))
-				} else {
-					// 第三个端点成功
-					rlm.UpdateStatus("completed", index+1, 200)
-					rlm.CompleteRequest(tokens)
-				}
-
-				time.Sleep(time.Duration(index*50) * time.Millisecond)
-			}(i, endpoint)
+		tokens := &tracking.TokenUsage{
+			InputTokens:  300,
+			OutputTokens: 150,
 		}
 
-		wg.Wait()
+		for i, ep := range endpoints {
+			rlm := proxy.NewRequestLifecycleManager(tracker, middleware, requestID, nil)
+			rlm.SetEndpoint(ep, "main", "")
+			rlm.SetModel("claude-3-5-haiku-20241022")
+
+			if i == 0 {
+				// 第一次尝试负责创建请求记录
+				rlm.StartRequest("192.168.1.1", "client-app/1.0", "POST", "/v1/messages", false)
+			}
+
+			if i < 2 {
+				rlm.UpdateStatus("error", i+1, 500)
+				rlm.RecordTokensForFailedRequest(tokens, fmt.Sprintf("lb_retry_%s", ep))
+			} else {
+				rlm.UpdateStatus("completed", i+1, 200)
+				rlm.CompleteRequest(tokens)
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
+
 		time.Sleep(400 * time.Millisecond)
 
 		// 验证负载均衡器重试的计费结果
@@ -615,7 +606,7 @@ func testDistributedSystemConsistencyScenario(t *testing.T) {
 
 			middlewares[i] = &RealWorldMockMiddleware{
 				billingEvents: make([]BillingEvent, 0),
-				mu:           sync.RWMutex{},
+				mu:            sync.RWMutex{},
 			}
 		}
 
@@ -694,10 +685,10 @@ func setupRealWorldTestTracker(t *testing.T) (*tracking.UsageTracker, func()) {
 		MaxRetry:      3,
 		ModelPricing: map[string]tracking.ModelPricing{
 			"claude-3-5-haiku-20241022": {
-				Input:         3.00,   // $3.00 per million tokens
-				Output:        15.00,  // $15.00 per million tokens
-				CacheCreation: 3.75,   // $3.75 per million tokens
-				CacheRead:     0.30,   // $0.30 per million tokens
+				Input:         3.00,  // $3.00 per million tokens
+				Output:        15.00, // $15.00 per million tokens
+				CacheCreation: 3.75,  // $3.75 per million tokens
+				CacheRead:     0.30,  // $0.30 per million tokens
 			},
 		},
 	}
@@ -713,26 +704,48 @@ func generateRealWorldRequestID(scenario string) string {
 }
 
 func getRealWorldBillingRecords(t *testing.T, tracker *tracking.UsageTracker, requestID string) []RealWorldBillingRecord {
-	// 等待异步处理完成
-	time.Sleep(200 * time.Millisecond)
+	t.Helper()
+	queryOnce := func() []RealWorldBillingRecord {
+		details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{
+			Limit:  2000,
+			Offset: 0,
+		})
+		require.NoError(t, err)
 
-	// 实际实现中需要查询tracker的数据库
-	// 这里返回模拟的查询结果
-	return []RealWorldBillingRecord{
-		{
-			RequestID:     requestID,
-			Status:        "completed",
-			ModelName:     "claude-3-5-haiku-20241022",
-			InputTokens:   200,
-			OutputTokens:  100,
-			TotalCost:     0.0021, // (200*3.00 + 100*15.00) / 1,000,000
-			Endpoint:      "test-endpoint",
-			EndpointGroup: "main",
-			IsStreaming:   false,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
-		},
+		records := make([]RealWorldBillingRecord, 0)
+		for _, detail := range details {
+			if detail.RequestID != requestID {
+				continue
+			}
+			records = append(records, RealWorldBillingRecord{
+				RequestID:           detail.RequestID,
+				Status:              detail.Status,
+				ModelName:           detail.ModelName,
+				InputTokens:         detail.InputTokens,
+				OutputTokens:        detail.OutputTokens,
+				CacheCreationTokens: detail.CacheCreationTokens,
+				CacheReadTokens:     detail.CacheReadTokens,
+				TotalCost:           detail.TotalCostUSD,
+				Endpoint:            detail.EndpointName,
+				EndpointGroup:       detail.GroupName,
+				IsStreaming:         detail.IsStreaming,
+				CreatedAt:           detail.CreatedAt,
+				UpdatedAt:           detail.UpdatedAt,
+			})
+		}
+		return records
 	}
+
+	var records []RealWorldBillingRecord
+	for attempt := 0; attempt < 10; attempt++ {
+		records = queryOnce()
+		if len(records) > 0 {
+			return records
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return records
 }
 
 func filterBillingEvents(events []BillingEvent, eventType string) []BillingEvent {
@@ -771,7 +784,7 @@ type BillingEvent struct {
 
 type RealWorldMockMiddleware struct {
 	billingEvents []BillingEvent
-	mu           sync.RWMutex
+	mu            sync.RWMutex
 }
 
 func (m *RealWorldMockMiddleware) RecordTokenUsage(connID string, endpoint string, tokens *monitor.TokenUsage) {

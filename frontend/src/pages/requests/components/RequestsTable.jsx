@@ -266,15 +266,15 @@ const renderCell = (columnId, request) => {
     case 'duration':
       return <span className="text-gray-700 font-mono text-xs">{formatDuration(request.duration)}</span>;
     case 'inputTokens':
-      return <span className="text-gray-700 text-right font-mono text-xs">{request.inputTokens}</span>;
+      return <span className="text-gray-700 font-mono text-xs">{request.inputTokens}</span>;
     case 'outputTokens':
-      return <span className="text-gray-700 text-right font-mono text-xs">{request.outputTokens}</span>;
+      return <span className="text-gray-700 font-mono text-xs">{request.outputTokens}</span>;
     case 'cacheCreationTokens':
-      return <span className="text-gray-500 text-right font-mono text-xs">{request.cacheCreationTokens}</span>;
+      return <span className="text-gray-500 font-mono text-xs">{request.cacheCreationTokens}</span>;
     case 'cacheReadTokens':
-      return <span className="text-gray-500 text-right font-mono text-xs">{request.cacheReadTokens}</span>;
+      return <span className="text-gray-500 font-mono text-xs">{request.cacheReadTokens}</span>;
     case 'cost':
-      return <span className="text-right font-mono text-orange-500 font-medium text-xs">{formatCost(request.cost)}</span>;
+      return <span className="font-mono text-orange-500 font-medium text-xs">{formatCost(request.cost)}</span>;
     default:
       return null;
   }
@@ -321,7 +321,7 @@ const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
       {visibleColumns.map(colId => (
         <td
           key={colId}
-          className={`px-3 py-3 ${colId === 'cost' || colId.includes('Tokens') ? 'text-right' : ''}`}
+          className="px-3 py-3 text-center align-middle"
         >
           {renderCell(colId, request)}
         </td>
@@ -381,15 +381,13 @@ const RequestsTable = ({
           </div>
         )}
 
-        <table className={`w-full text-left text-sm whitespace-nowrap ${loading ? 'opacity-60' : ''}`}>
-          <thead className="bg-gray-50/50 text-gray-500 border-b border-gray-100">
+        <table className={`w-full text-sm whitespace-nowrap ${loading ? 'opacity-60' : ''}`}>
+          <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500 border-b border-gray-100">
             <tr>
               {visibleColumnConfigs.map(col => (
                 <th
                   key={col.id}
-                  className={`px-3 py-3 font-medium text-xs uppercase tracking-wider ${
-                    col.align === 'right' ? 'text-right' : ''
-                  }`}
+                  className="px-3 py-3 font-medium text-xs uppercase tracking-wider text-center align-middle"
                 >
                   {col.label}
                 </th>

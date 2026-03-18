@@ -81,6 +81,32 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
 };
 
 /**
+ * 耗时徽章 - 按阈值分色显示
+ * 失败请求 → 灰色 | < 40s 绿色 | 40-80s 橙色 | > 80s 红色
+ */
+const DurationBadge = ({ ms, failed }) => {
+  const seconds = (ms || 0) / 1000;
+  const text = formatDuration(ms);
+
+  let colorClass;
+  if (failed) {
+    colorClass = 'bg-slate-50 text-slate-400 border-slate-200';
+  } else if (seconds >= 80) {
+    colorClass = 'bg-rose-50 text-rose-700 border-rose-200';
+  } else if (seconds >= 40) {
+    colorClass = 'bg-amber-50 text-amber-700 border-amber-200';
+  } else {
+    colorClass = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  }
+
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-sm font-mono border ${colorClass}`}>
+      {text}
+    </span>
+  );
+};
+
+/**
  * Token 指标卡片
  */
 const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
@@ -323,7 +349,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     <InfoRow icon={FileText} label="记录 ID" value={request.rawRequestId} copyable />
                   )}
                   <InfoRow icon={Calendar} label="时间戳" value={formatTimestamp(request.timestamp)} />
-                  <InfoRow icon={Clock} label="持续时间" value={formatDuration(request.duration)} />
+                  <InfoRow icon={Clock} label="持续时间" value={<DurationBadge ms={request.duration} failed={['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status)} />} />
                   <InfoRow icon={Server} label="端点" value={request.endpoint} />
                   <InfoRow icon={Layers} label="渠道" value={request.channel || request.group} />
                 </div>

@@ -2,12 +2,19 @@ package handlers
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/andybalholm/brotli"
 
 	"claude-request-forwarder/config"
 	"claude-request-forwarder/internal/endpoint"
@@ -74,13 +81,102 @@ func (f *Forwarder) ForwardRequestToEndpoint(ctx context.Context, r *http.Reques
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 
-	// 检查响应状态
+	// 检查响应状态：保留原始响应体用于透传
 	if resp.StatusCode >= 400 {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024)) // 最多保留 64KB
+		contentType := resp.Header.Get("Content-Type")
 		resp.Body.Close()
-		return nil, fmt.Errorf("endpoint returned error: %d", resp.StatusCode)
+		return nil, &EndpointError{
+			StatusCode:  resp.StatusCode,
+			Body:        bodyBytes,
+			ContentType: contentType,
+			URL:         targetURL,
+		}
+	}
+
+	// 校验 Content-Type：拦截非 SSE 响应（CDN/网关拦截页、JSON 错误等）
+	contentType := resp.Header.Get("Content-Type")
+	if isNonStreamingContentType(contentType) {
+		bodySnippet := readResponseBodySnippet(resp, 512)
+		resp.Body.Close()
+		slog.Warn(fmt.Sprintf("⚠️ [非SSE响应] endpoint=%s content_type=%s url=%s body=%s",
+			ep.Config.Name, contentType, targetURL, bodySnippet))
+		return nil, fmt.Errorf("endpoint returned non-SSE response: content_type=%s, body: %s, url: %s", contentType, bodySnippet, targetURL)
 	}
 
 	return resp, nil
+}
+
+// isNonStreamingContentType 判断响应 Content-Type 是否明确不是 SSE 流。
+// 空 Content-Type 视为可接受（部分提供商不设置该头部）。
+func isNonStreamingContentType(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	// 取 media-type 部分，忽略 charset 等参数
+	if idx := strings.Index(ct, ";"); idx >= 0 {
+		ct = strings.TrimSpace(ct[:idx])
+	}
+	switch ct {
+	case "text/html",
+		"application/json",
+		"text/plain",
+		"text/xml",
+		"application/xml",
+		"application/problem+json":
+		return true
+	}
+	return false
+}
+
+// readResponseBodySnippet 从 HTTP 响应中读取可读的文本片段用于诊断日志。
+// 自动处理 Content-Encoding（gzip/br/deflate）解压，
+// 并过滤非 UTF-8 内容和控制字符，确保日志输出安全。
+func readResponseBodySnippet(resp *http.Response, maxBytes int64) string {
+	if resp == nil || resp.Body == nil {
+		return "(empty)"
+	}
+
+	body := resp.Body
+
+	// 根据 Content-Encoding 包装解压 reader
+	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))) {
+	case "gzip":
+		gr, err := gzip.NewReader(body)
+		if err != nil {
+			return fmt.Sprintf("(gzip decode error: %v)", err)
+		}
+		defer gr.Close()
+		body = io.NopCloser(gr)
+	case "br":
+		body = io.NopCloser(brotli.NewReader(body))
+	case "deflate":
+		body = io.NopCloser(flate.NewReader(body))
+	}
+
+	data, err := io.ReadAll(io.LimitReader(body, maxBytes+1))
+	if err != nil {
+		return fmt.Sprintf("(read error: %v)", err)
+	}
+	if len(data) == 0 {
+		return "(empty)"
+	}
+
+	// 非 UTF-8 内容视为二进制，不输出原始字节
+	if !utf8.Valid(data) {
+		return fmt.Sprintf("(binary content, %d bytes)", len(data))
+	}
+
+	snippet := string(data)
+	if int64(len(data)) > maxBytes {
+		snippet = snippet[:maxBytes] + "..."
+	}
+
+	// 将换行/回车替换为空格，保证日志单行输出
+	snippet = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ").Replace(snippet)
+
+	return snippet
 }
 
 // CopyHeaders 复制头部逻辑

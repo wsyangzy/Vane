@@ -13,19 +13,20 @@ import (
 )
 
 func TestForwarder_ForwardRequestToEndpoint(t *testing.T) {
-	// 创建测试服务器
+	// 创建测试服务器（返回 SSE Content-Type 以通过流式校验）
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 验证请求头
 		if r.Header.Get("Authorization") == "" {
 			t.Errorf("Expected Authorization header to be set")
 		}
-		
+
 		// 验证Host头
 		expectedHost := r.Host
 		if expectedHost == "" {
 			t.Errorf("Expected Host header to be set")
 		}
-		
+
+		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("test response"))
 	}))

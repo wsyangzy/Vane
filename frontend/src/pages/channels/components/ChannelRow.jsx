@@ -11,6 +11,11 @@ const ChannelRow = ({ channel, endpoints, expanded, onToggle, storageMode }) => 
   const totalCount = endpoints.length;
   const enabledCount = endpoints.filter(e => isSqliteMode ? e.enabled : e.group_is_active).length;
   const healthyCount = endpoints.filter(e => e.healthy).length;
+  // 参与故障转移：已启用 且 failoverEnabled 不为 false
+  const failoverCount = endpoints.filter(e => {
+    const isEnabled = isSqliteMode ? e.enabled : e.group_is_active;
+    return isEnabled && e.failoverEnabled !== false;
+  }).length;
 
   return (
     <tr
@@ -32,9 +37,9 @@ const ChannelRow = ({ channel, endpoints, expanded, onToggle, storageMode }) => 
               {channel}
             </span>
 
-            {/* 端点数量 */}
+            {/* 端点数量：故障转移参与数/总数 */}
             <span className="text-xs text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
-              {totalCount} 个端点
+              {failoverCount}/{totalCount} 故障转移
             </span>
           </div>
 

@@ -145,46 +145,21 @@ func TestStreamProcessor_CancellationWithTimeout(t *testing.T) {
 	t.Logf("Cancellation detected in %v with error: %v", duration, err)
 }
 
-// TestStreamProcessor_WaitForParsingWithTimeout 测试超时等待解析完成机制
-func TestStreamProcessor_WaitForParsingWithTimeout(t *testing.T) {
+// TestStreamProcessor_FinalizeParsing 测试同步解析下的剩余缓冲处理
+func TestStreamProcessor_FinalizeParsing(t *testing.T) {
 	tokenParser := NewTokenParser()
 	processor := NewStreamProcessor(tokenParser, nil, httptest.NewRecorder(), httptest.NewRecorder(), "test-req-003", "test-endpoint")
 
-	tests := []struct {
-		name     string
-		timeout  time.Duration
-		expected bool
-	}{
-		{
-			name:     "快速完成",
-			timeout:  1 * time.Second,
-			expected: true, // 应该在超时前完成
-		},
-		{
-			name:     "极短超时",
-			timeout:  1 * time.Nanosecond,
-			expected: true, // 当前实现在无待解析任务时会立即完成
-		},
+	// 同步模型下 finalizeParsing 应立即完成，不存在超时问题
+	start := time.Now()
+	processor.finalizeParsing()
+	duration := time.Since(start)
+
+	if duration > 100*time.Millisecond {
+		t.Errorf("finalizeParsing took too long: %v", duration)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			start := time.Now()
-			result := processor.waitForParsingWithTimeout(tt.timeout)
-			duration := time.Since(start)
-
-			if result != tt.expected {
-				t.Errorf("Expected %v, got %v", tt.expected, result)
-			}
-
-			// 验证超时机制工作正常
-			if !tt.expected && duration < tt.timeout {
-				t.Errorf("Function returned too quickly for timeout test: %v < %v", duration, tt.timeout)
-			}
-
-			t.Logf("Timeout test completed in %v, result: %v", duration, result)
-		})
-	}
+	t.Logf("finalizeParsing completed in %v", duration)
 }
 
 // TestStreamProcessor_CollectAvailableInfo 测试智能信息收集功能
@@ -200,42 +175,26 @@ func TestStreamProcessor_CollectAvailableInfo(t *testing.T) {
 
 	cancelErr := context.Canceled
 
-	// 测试不同的取消状态
-	tests := []struct {
-		name   string
-		status string
-	}{
-		{"取消带数据", "cancelled_with_data"},
-		{"取消超时", "cancelled_timeout"},
-	}
+	// 🔧 [竞态修复] 同步模型下不再区分 "cancelled_with_data" 和 "cancelled_timeout"
+	t.Run("取消收集", func(t *testing.T) {
+		// 重置完成标志
+		processor.completionRecorded = false
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// 重置完成标志
-			processor.completionRecorded = false
+		// collectAvailableInfoV2 签名已简化，移除 status 参数
+		tokenUsage, err := processor.collectAvailableInfoV2(cancelErr)
 
-			// 测试新版本的 collectAvailableInfoV2 方法
-			tokenUsage, err := processor.collectAvailableInfoV2(cancelErr, tt.status)
+		// 验证返回原始取消错误
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Expected context.Canceled, got: %v", err)
+		}
 
-			// 验证返回原始取消错误
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("Expected context.Canceled, got: %v", err)
-			}
+		// 验证Token使用信息被返回（新架构下的预期）
+		if tokenUsage == nil {
+			t.Error("Expected tokenUsage to be returned, got nil")
+		}
 
-			// 验证Token使用信息被返回（新架构下的预期）
-			if tokenUsage == nil {
-				t.Error("Expected tokenUsage to be returned, got nil")
-			}
-
-			// 注释掉旧的验证，因为新架构不再直接设置这个标志
-			// 验证完成状态被记录 (由于UsageTracker为模拟对象，这里验证逻辑执行即可)
-			// if !processor.completionRecorded {
-			//     t.Error("Expected completion to be recorded")
-			// }
-
-			t.Logf("Successfully collected info for status: %s", tt.status)
-		})
-	}
+		t.Logf("Successfully collected info for cancellation")
+	})
 }
 
 // TestErrorRecoveryManager_ClientCancelError 测试客户端取消错误分类

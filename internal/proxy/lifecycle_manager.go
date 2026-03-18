@@ -246,6 +246,12 @@ func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage)
 		rlm.recoverySignalManager.BroadcastEndpointSuccess(endpointName)
 	}
 
+	if hasInvalidTokenUsage(tokens) {
+		slog.Warn(fmt.Sprintf("⏭️ [跳过非法Token] [%s] 完成请求包含负数Token，忽略计费记录",
+			rlm.stateManager.GetRequestID()))
+		tokens = nil
+	}
+
 	// 委托给 tokenRecorder 记录完成
 	if rlm.usageTracker != nil && rlm.stateManager.GetRequestID() != "" {
 		// 使用线程安全的方式获取模型信息
@@ -830,6 +836,11 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 	endpointName := rlm.stateManager.GetEndpointName()
 
 	if requestID != "" && tokens != nil {
+		if hasInvalidTokenUsage(tokens) {
+			slog.Warn(fmt.Sprintf("⏭️ [跳过非法Token] [%s] 失败请求包含负数Token，忽略记录", requestID))
+			return
+		}
+
 		// ✅ 检查是否有真实的Token使用
 		hasRealTokens := tokens.InputTokens > 0 || tokens.OutputTokens > 0 ||
 			tokens.CacheCreationTokens > 0 || tokens.CacheReadTokens > 0
@@ -866,6 +877,19 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 		slog.Info(fmt.Sprintf("💾 [失败请求Token记录] [%s] 端点: %s, 原因: %s, 模型: %s, 输入: %d, 输出: %d",
 			requestID, endpointName, failureReason, modelName, tokens.InputTokens, tokens.OutputTokens))
 	}
+}
+
+func hasInvalidTokenUsage(tokens *tracking.TokenUsage) bool {
+	if tokens == nil {
+		return false
+	}
+
+	return tokens.InputTokens < 0 ||
+		tokens.OutputTokens < 0 ||
+		tokens.CacheCreationTokens < 0 ||
+		tokens.CacheReadTokens < 0 ||
+		tokens.CacheCreation5mTokens < 0 ||
+		tokens.CacheCreation1hTokens < 0
 }
 
 // IncrementAttempt 线程安全地增加尝试计数

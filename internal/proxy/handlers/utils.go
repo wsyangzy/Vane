@@ -1,10 +1,26 @@
 package handlers
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 )
+
+// EndpointError 携带提供商原始响应信息的错误类型。
+// 当端点返回 4xx/5xx 错误时，保留原始状态码、响应体和 Content-Type，
+// 以便在所有重试耗尽后将提供商的原始错误透传给客户端。
+type EndpointError struct {
+	StatusCode  int
+	Body        []byte
+	ContentType string
+	URL         string
+}
+
+func (e *EndpointError) Error() string {
+	return fmt.Sprintf("endpoint returned error: %d, url: %s", e.StatusCode, e.URL)
+}
 
 // IsSuccessStatus 判断是否为成功状态码
 // 成功状态码范围：200-399 (2xx-3xx)
@@ -37,6 +53,12 @@ func GetStatusCodeFromError(err error, resp *http.Response) int {
 	// 优先从响应对象获取状态码
 	if resp != nil {
 		return resp.StatusCode
+	}
+
+	// 从 EndpointError 提取状态码（携带提供商原始信息）
+	var epErr *EndpointError
+	if errors.As(err, &epErr) {
+		return epErr.StatusCode
 	}
 
 	// 如果没有响应对象，尝试从错误信息中提取状态码
@@ -82,4 +104,20 @@ func GetStatusCodeFromError(err error, resp *http.Response) int {
 
 	// 无法提取状态码，返回0表示网络错误或其他未知错误
 	return 0
+}
+
+// WriteErrorResponse 写入错误响应到客户端。
+// 如果 err 是 EndpointError 且携带原始响应体，则透传提供商原始响应（保留 Content-Type 和 Body）；
+// 否则回退到 http.Error 发送纯文本错误。
+func WriteErrorResponse(w http.ResponseWriter, err error, fallbackMsg string, statusCode int) {
+	var epErr *EndpointError
+	if errors.As(err, &epErr) && len(epErr.Body) > 0 {
+		if epErr.ContentType != "" {
+			w.Header().Set("Content-Type", epErr.ContentType)
+		}
+		w.WriteHeader(epErr.StatusCode)
+		w.Write(epErr.Body)
+		return
+	}
+	http.Error(w, fallbackMsg, statusCode)
 }

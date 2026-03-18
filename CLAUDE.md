@@ -324,6 +324,37 @@ go test -race ./internal/...
 - **工厂模式**: 请求处理器创建
 - **断路器模式**: 健康检查与故障转移
 
+## 请求透传约束（重要）
+
+### 流式/非流请求透传规范
+
+**核心原则：反代必须忠实透传客户端的原始请求意图，不得擅自修改请求体中的 `stream` 字段。**
+
+**禁止行为：**
+- ❌ 不得向请求体中添加 `"stream": true` 或 `"stream": false`
+- ❌ 不得将非流式请求强制转为流式请求
+- ❌ 不得将流式请求强制转为非流式请求
+
+**原因：** 部分提供商（如 Anthropic 官方）会检测请求来源，若检测到非 Claude Code CLI 发出的流式请求，会返回"不准在 Claude Code 以外的 CLI 中使用"的错误响应。擅自添加 `stream` 参数会触发此类检测。
+
+**正确处理方式：**
+- 客户端发送流式请求 → 路由到支持流式的端点，原样透传
+- 客户端发送非流式请求 → 路由到支持非流式的端点，原样透传
+- 若端点配置了 `stream_only: true` → 该端点不参与非流式请求的端点选择
+
+### `stream_only` 端点配置
+
+```yaml
+endpoints:
+  - name: "stream-only-provider"
+    url: "https://api.example.com"
+    stream_only: true   # 该端点仅接受流式请求，非流请求不会路由到此端点
+```
+
+**实现位置：**
+- `config/config.go` → `EndpointConfig.StreamOnly` 字段
+- `internal/proxy/handlers/regular.go` → `filterStreamOnlyEndpoints()` 过滤函数
+
 ## 调试技巧
 
 - **请求追踪**: 使用 `req-xxxxxxxx` 格式的请求 ID 过滤日志

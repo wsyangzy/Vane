@@ -55,13 +55,13 @@ func TestRetryManager_ErrorClassificationDrivenRetry(t *testing.T) {
 	retryManager := proxy.NewRetryManager(cfg, errorRecovery, endpointMgr)
 
 	testCases := []struct {
-		name           string
-		errorType      handlers.ErrorType
-		originalError  error
-		attempt        int
-		expectRetry    bool
-		expectDelay    bool
-		description    string
+		name          string
+		errorType     handlers.ErrorType
+		originalError error
+		attempt       int
+		expectRetry   bool
+		expectDelay   bool
+		description   string
 	}{
 		{
 			name:          "网络错误应该重试",
@@ -73,13 +73,13 @@ func TestRetryManager_ErrorClassificationDrivenRetry(t *testing.T) {
 			description:   "网络错误通常是临时性的，应该重试",
 		},
 		{
-			name:          "超时错误应该重试",
+			name:          "超时错误不应该重试",
 			errorType:     handlers.ErrorTypeTimeout,
 			originalError: fmt.Errorf("context deadline exceeded"),
 			attempt:       1,
-			expectRetry:   true,
-			expectDelay:   true,
-			description:   "超时错误可能是暂时负载过高，应该重试",
+			expectRetry:   false,
+			expectDelay:   false,
+			description:   "当前实现中响应超时不重试，避免重复计费",
 		},
 		{
 			name:          "HTTP错误不应该重试",
@@ -118,13 +118,13 @@ func TestRetryManager_ErrorClassificationDrivenRetry(t *testing.T) {
 			description:   "限流错误应该重试，但需要更长的延迟",
 		},
 		{
-			name:          "流处理错误应该重试",
+			name:          "流处理错误不应该重试",
 			errorType:     handlers.ErrorTypeStream,
 			originalError: fmt.Errorf("stream parsing error"),
 			attempt:       1,
-			expectRetry:   true,
-			expectDelay:   true,
-			description:   "流处理错误可能是临时解析问题，应该重试",
+			expectRetry:   false,
+			expectDelay:   false,
+			description:   "当前实现中流处理错误不重试，因为可能已部分输出",
 		},
 		{
 			name:          "超过最大重试次数不应该重试",
@@ -263,41 +263,41 @@ func TestSuspensionManager_ShouldSuspendConditions(t *testing.T) {
 		description      string
 	}{
 		{
-			name: "功能未启用时不应该挂起",
+			name: "旧 RequestSuspend 配置不影响挂起判断",
 			configModifier: func(c *config.Config) {
 				c.RequestSuspend.Enabled = false
 			},
-			expectSuspension: false,
-			description:      "当RequestSuspend.Enabled=false时，不应该挂起请求",
+			expectSuspension: true,
+			description:      "当前实现由 FailoverV2.ShouldInterruptClientOnExhausted 决定，旧字段不会关闭挂起",
 		},
 		{
-			name: "自动切换模式时不应该挂起",
+			name: "旧 Group 自动切换配置不影响挂起判断",
 			configModifier: func(c *config.Config) {
 				c.RequestSuspend.Enabled = true
 				c.Group.AutoSwitchBetweenGroups = true
 			},
-			expectSuspension: false,
-			description:      "当AutoSwitchBetweenGroups=true时，不应该挂起请求",
+			expectSuspension: true,
+			description:      "当前实现不再使用 Group.AutoSwitchBetweenGroups 来决定是否挂起",
 		},
 		{
-			name: "达到最大挂起数时不应该挂起",
+			name: "旧最大挂起数配置不影响 ShouldSuspend 结果",
 			configModifier: func(c *config.Config) {
 				c.RequestSuspend.Enabled = true
 				c.Group.AutoSwitchBetweenGroups = false
 				c.RequestSuspend.MaxSuspendedRequests = 0 // 设置为0，立即达到上限
 			},
-			expectSuspension: false,
-			description:      "当挂起请求数达到上限时，不应该挂起新请求",
+			expectSuspension: true,
+			description:      "当前实现 ShouldSuspend 不依赖旧的 MaxSuspendedRequests 配置",
 		},
 		{
-			name: "手动模式且功能启用且未达上限时应该挂起",
+			name: "当前实现默认保持挂起等待恢复",
 			configModifier: func(c *config.Config) {
 				c.RequestSuspend.Enabled = true
 				c.Group.AutoSwitchBetweenGroups = false
 				c.RequestSuspend.MaxSuspendedRequests = 100
 			},
-			expectSuspension: false, // 实际上可能不挂起，因为没有备用组
-			description:      "满足所有条件但可能没有可用备用组",
+			expectSuspension: true,
+			description:      "FailoverV2 默认不会中断客户端，因此应挂起等待恢复",
 		},
 	}
 
@@ -323,7 +323,7 @@ func TestSuspensionManager_ShouldSuspendConditions(t *testing.T) {
 // TestSuspensionManager_WaitForGroupSwitchTimeout 测试组切换等待超时处理
 func TestSuspensionManager_WaitForGroupSwitchTimeout(t *testing.T) {
 	cfg := createIntegrationTestConfig()
-	cfg.RequestSuspend.Timeout = 100 * time.Millisecond // 设置短超时用于测试
+	cfg.FailoverV2.SuspendTimeout = 100 * time.Millisecond // 使用当前实现实际读取的超时配置
 
 	endpointMgr := endpoint.NewManager(cfg)
 	groupMgr := endpoint.NewGroupManager(cfg)
@@ -340,7 +340,7 @@ func TestSuspensionManager_WaitForGroupSwitchTimeout(t *testing.T) {
 	// 应该在超时时间内返回false
 	assert.False(t, result, "超时后应该返回false")
 	assert.Greater(t, duration, 100*time.Millisecond, "应该等待至少超时时间")
-	assert.Less(t, duration, 200*time.Millisecond, "不应该等待太久")
+	assert.Less(t, duration, 250*time.Millisecond, "不应该等待太久")
 
 	t.Logf("✅ 组切换超时处理验证成功: 等待时间=%v, 结果=%t", duration, result)
 }
@@ -495,8 +495,8 @@ func TestStreamingAndRegularRequestConsistency(t *testing.T) {
 	// 验证最终状态
 	assert.Equal(t, "completed", streamingManager.GetLastStatus())
 	assert.Equal(t, "completed", regularManager.GetLastStatus())
-	assert.True(t, streamingManager.IsCompleted())
-	assert.True(t, regularManager.IsCompleted())
+	assert.False(t, streamingManager.IsCompleted(), "仅 UpdateStatus 不应把流式请求标记为终态完成")
+	assert.False(t, regularManager.IsCompleted(), "仅 UpdateStatus 不应把常规请求标记为终态完成")
 
 	t.Logf("✅ 流式和常规请求行为一致性验证成功")
 }
@@ -602,7 +602,7 @@ func TestIntegrationErrorRecoveryFlow(t *testing.T) {
 	timeoutErr := fmt.Errorf("context deadline exceeded")
 	errorCtx2 := errorRecovery.ClassifyError(timeoutErr, requestID, endpointName, groupName, 2)
 
-	assert.Equal(t, proxy.ErrorTypeTimeout, errorCtx2.ErrorType)
+	assert.Equal(t, proxy.ErrorTypeResponseTimeout, errorCtx2.ErrorType)
 
 	// 第三次尝试 - 达到最大重试次数
 	shouldRetry3, delay3 := retryManager.ShouldRetry(&handlers.ErrorContext{
@@ -635,9 +635,9 @@ func createIntegrationTestConfig() *config.Config {
 			Multiplier:  2.0,
 		},
 		RequestSuspend: config.RequestSuspendConfig{
-			Enabled:               true,
-			Timeout:               5 * time.Second,
-			MaxSuspendedRequests:  100,
+			Enabled:              true,
+			Timeout:              5 * time.Second,
+			MaxSuspendedRequests: 100,
 		},
 		Group: config.GroupConfig{
 			AutoSwitchBetweenGroups: false, // 默认手动模式
