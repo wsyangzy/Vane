@@ -96,6 +96,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
 
+	// 追踪最后一次端点错误，用于最终失败时输出提供商原始响应
+	var lastErr error
+
 	// 创建管理器 - 修复依赖注入
 	retryMgr := rh.retryManagerFactory.NewRetryManager()
 	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
@@ -115,14 +118,14 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		var endpoints []*endpoint.Endpoint
 		if len(triedEndpoints) == 0 {
 			// 首次获取，不排除任何端点
-			endpoints = retryMgr.GetHealthyEndpoints(ctx)
+			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpoints(ctx))
 		} else {
 			// 后续获取，排除已尝试的端点
 			excludeKeys := make([]string, 0, len(triedEndpoints))
 			for key := range triedEndpoints {
 				excludeKeys = append(excludeKeys, key)
 			}
-			endpoints = retryMgr.GetHealthyEndpointsExcluding(ctx, excludeKeys)
+			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpointsExcluding(ctx, excludeKeys))
 		}
 		if len(endpoints) == 0 {
 			// 创建特殊错误，交给错误分类和重试系统处理
@@ -137,7 +140,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				if len(allActiveEndpoints) > 0 {
 					slog.InfoContext(ctx, fmt.Sprintf("🔄 [健康检查回退] [%s] 忽略健康状态，尝试 %d 个活跃端点",
 						connID, len(allActiveEndpoints)))
-					endpoints = allActiveEndpoints
+					endpoints = filterStreamOnlyEndpoints(allActiveEndpoints)
 					// 继续正常处理流程
 				} else {
 					// 真的没有端点，直接失败（不挂起）
@@ -221,17 +224,24 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					return
 				}
 
-				// 构造HTTP状态码错误（保持现有逻辑）
+				// 构造HTTP状态码错误：保留提供商原始响应体用于透传
 				if err == nil && resp != nil && !IsSuccessStatus(resp.StatusCode) {
-					// 先尝试从HTTP错误中提取Token信息（如果可能）
+					// 读取原始响应体（最多 64KB），用于 token 提取和最终透传
+					respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+					contentType := resp.Header.Get("Content-Type")
+					resp.Body.Close()
+
+					// 用已读取的字节替换 Body，让 tryExtractTokensFromHttpError 仍能解析
+					resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
 					rh.tryExtractTokensFromHttpError(resp, lifecycleManager, ep.Config.Name)
 
-					closeErr := resp.Body.Close()
-					if closeErr != nil {
-						slog.Warn(fmt.Sprintf("⚠️ [响应体关闭失败] [%s] 端点: %s, Close错误: %v",
-							connID, ep.Config.Name, closeErr))
+					targetURL := ep.Config.URL + r.URL.Path
+					err = &EndpointError{
+						StatusCode:  resp.StatusCode,
+						Body:        respBodyBytes,
+						ContentType: contentType,
+						URL:         targetURL,
 					}
-					err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, http.StatusText(resp.StatusCode))
 				} else if err != nil && resp != nil {
 					closeErr := resp.Body.Close()
 					if closeErr != nil {
@@ -242,6 +252,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 🔧 使用增强的RetryManager进行统一决策
 				errorCtx := errorRecovery.ClassifyError(err, connID, ep.Config.Name, routeGroup, attempt-1)
+
+				// 追踪最后的端点错误，用于最终失败时透传提供商原始响应
+				lastErr = err
 
 				// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 				// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
@@ -276,7 +289,6 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新获取端点列表",
 								connID, ep.Config.Name))
 							groupSwitchNeeded = true
-							break
 						case SuspensionCancelled:
 							// 🎯 [挂起取消区分] 用户在挂起期间取消请求，应该记录为取消而非失败
 							slog.Info(fmt.Sprintf("🚫 [挂起期间取消] [%s] 用户在挂起期间取消请求", connID))
@@ -334,7 +346,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 						// 使用新的FailRequest方法标记最终失败（修复：添加HTTP状态码）
 						lifecycleManager.FailRequest(failureReason, err.Error(), failStatusCode)
-						http.Error(w, decision.Reason, failStatusCode)
+						WriteUpstreamErrorResponse(w, err, decision.Reason, failStatusCode)
 						return
 					}
 				}
@@ -533,7 +545,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 					lifecycleManager.FailRequest(failureReason, errStr, statusCode)
 					slog.Warn(fmt.Sprintf("🛑 [故障转移终止] [%s] %s (立即返回错误)", connID, errStr))
-					http.Error(w, errStr, statusCode)
+					WriteUpstreamErrorResponse(w, lastErr, errStr, statusCode)
 					return
 				}
 			}
@@ -544,13 +556,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
-	errMsg := "服务暂时不可用: 当前渠道所有端点均不可用"
-	statusCode := http.StatusUnprocessableEntity
+	errMsg := ExtractUpstreamErrorMessage(lastErr)
+	statusCode := GetStatusCodeFromError(lastErr, nil)
+	if statusCode == 0 {
+		statusCode = http.StatusBadGateway
+	}
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
 	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (立即返回错误)", connID, errMsg))
-	http.Error(w, errMsg, statusCode)
-	return
+	WriteUpstreamErrorResponse(w, lastErr, errMsg, statusCode)
 }
 
 // executeRequest 执行单个请求
@@ -579,7 +593,7 @@ func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, b
 }
 
 // processSuccessResponse 处理成功响应
-func (rh *RegularHandler) processSuccessResponse(ctx context.Context, w http.ResponseWriter, resp *http.Response, lifecycleManager RequestLifecycleManager, endpointName string, r *http.Request) {
+func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.ResponseWriter, resp *http.Response, lifecycleManager RequestLifecycleManager, endpointName string, r *http.Request) {
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			slog.Warn("Failed to close response body", "request_id", lifecycleManager.GetRequestID(), "error", err)
@@ -807,4 +821,17 @@ func (rh *RegularHandler) tryExtractTokensFromHttpError(resp *http.Response, lif
 // 支持运行时配置热更新，确保设置变更能立即生效
 func (rh *RegularHandler) UpdateConfig(cfg *config.Config) {
 	rh.config = cfg
+}
+
+// filterStreamOnlyEndpoints 从端点列表中移除仅支持流式的端点。
+// 常规（非流式）请求不应路由到 stream_only=true 的端点，
+// 以避免提供商因请求类型不匹配而拒绝服务。
+func filterStreamOnlyEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
+	filtered := endpoints[:0:0] // 复用底层数组，避免额外分配
+	for _, ep := range endpoints {
+		if !ep.Config.StreamOnly {
+			filtered = append(filtered, ep)
+		}
+	}
+	return filtered
 }

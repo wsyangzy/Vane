@@ -47,8 +47,7 @@ type StreamProcessor struct {
 	partialData    []byte    // 部分数据缓冲区，用于错误恢复
 
 	// 并发控制
-	parseWg    sync.WaitGroup // 等待组，确保后台解析完成
-	parseMutex sync.Mutex     // 解析互斥锁，保护共享状态
+	parseMutex sync.Mutex // 保护 partialData、tokenParser 等共享状态
 
 	// 错误处理
 	parseErrors    []error // 解析过程中的错误集合
@@ -91,7 +90,7 @@ func NewStreamProcessor(tokenParser *TokenParser, usageTracker *tracking.UsageTr
 // 这是核心方法，实现真正的流式处理机制
 func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Response) (*tracking.TokenUsage, error) {
 	defer resp.Body.Close()
-	defer sp.waitForBackgroundParsing() // 确保所有后台解析完成
+	defer sp.finalizeParsing() // 确保剩余缓冲数据被处理
 
 	// 🔧 [解压缩修复] 创建响应处理器并获取解压缩的流式读取器
 	processor := response.NewProcessor()
@@ -143,8 +142,8 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 				return nil, fmt.Errorf("failed to forward to client: %w", writeErr)
 			}
 
-			// 3. 并行解析Token信息 - 不影响转发性能
-			sp.parseTokensInBackground(chunk)
+			// 3. 同步解析Token信息 - 保证chunk顺序，避免goroutine竞态
+			sp.parseTokensInline(chunk)
 
 			// 4. 更新处理状态
 			sp.bytesProcessed += int64(n)
@@ -152,8 +151,8 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 
 		// 处理读取结束和错误
 		if err == io.EOF {
-			// 等待所有后台解析完成
-			sp.waitForBackgroundParsing()
+			// 处理剩余缓冲数据
+			sp.finalizeParsing()
 
 			// 获取最终的 Token 使用信息
 			finalTokenUsage := sp.getFinalTokenUsage()
@@ -183,39 +182,29 @@ func (sp *StreamProcessor) forwardToClient(data []byte) error {
 	return nil
 }
 
-// parseTokensInBackground 并发Token解析，不阻塞主流
-// 这个方法在后台goroutine中解析SSE事件，提取模型信息和Token使用统计
-func (sp *StreamProcessor) parseTokensInBackground(data []byte) {
-	// 为每个数据块启动一个后台goroutine
-	sp.parseWg.Add(1)
+// parseTokensInline 同步Token解析，在主循环中内联执行
+// 🔧 [竞态修复] 2026-03-14: 原 parseTokensInBackground 为每个 8KB 数据块启动独立
+// goroutine，但这些 goroutine 共享 lineBuffer 且 Go 不保证执行顺序。当 goroutine
+// 乱序执行时，SSE 行拼接被破坏，导致 message_delta(usage) 事件丢失，最终触发
+// "使用了 message_start fallback" 误报和不必要的重试（向提供商发送重复请求）。
+// 修复：改为同步执行。SSE 行解析极轻量（逐字节扫描+偶尔 JSON），不影响转发性能。
+func (sp *StreamProcessor) parseTokensInline(data []byte) {
+	// 逐字节处理，构建SSE行（同步执行，保证chunk顺序）
+	for _, b := range data {
+		// 构建行缓冲区
+		sp.lineBuffer = append(sp.lineBuffer, b)
 
-	go func() {
-		defer sp.parseWg.Done()
+		// 检测换行符，处理完整的SSE行
+		if b == '\n' {
+			line := strings.TrimSpace(string(sp.lineBuffer))
 
-		// 创建后台处理缓冲区
-		parseBuffer := make([]byte, len(data))
-		copy(parseBuffer, data)
+			// 处理所有行，包括空行（空行触发SSE事件解析）
+			sp.processSSELine(line)
 
-		// 逐字节处理，构建SSE行
-		sp.parseMutex.Lock()
-		defer sp.parseMutex.Unlock()
-
-		for _, b := range parseBuffer {
-			// 构建行缓冲区
-			sp.lineBuffer = append(sp.lineBuffer, b)
-
-			// 检测换行符，处理完整的SSE行
-			if b == '\n' {
-				line := strings.TrimSpace(string(sp.lineBuffer))
-
-				// ✅ 修复：处理所有行，包括空行（空行触发SSE事件解析）
-				sp.processSSELine(line)
-
-				// 重置行缓冲区，准备下一行
-				sp.lineBuffer = sp.lineBuffer[:0]
-			}
+			// 重置行缓冲区，准备下一行
+			sp.lineBuffer = sp.lineBuffer[:0]
 		}
-	}()
+	}
 }
 
 // processSSELine 处理单个SSE行
@@ -355,8 +344,8 @@ func (sp *StreamProcessor) handlePartialStream(err error) error {
 	slog.Warn(fmt.Sprintf("⚠️ [流式中断] [%s] 流处理中断: %v, 已处理 %d 字节. 错误将由上层统一处理.",
 		sp.requestID, err, sp.bytesProcessed))
 
-	// 等待所有后台解析完成
-	sp.waitForBackgroundParsing()
+	// 处理剩余缓冲数据
+	sp.finalizeParsing()
 
 	// 尝试从部分数据中恢复有用信息
 	if len(sp.partialData) > 0 {
@@ -457,13 +446,10 @@ func (sp *StreamProcessor) ProcessStreamWithRetry(ctx context.Context, resp *htt
 	return tokenUsage, modelName, wrappedErr
 }
 
-// waitForBackgroundParsing 等待所有后台解析完成
-func (sp *StreamProcessor) waitForBackgroundParsing() {
-	// 等待所有后台goroutine完成
-	sp.parseWg.Wait()
-
+// finalizeParsing 处理剩余缓冲数据并刷新待处理事件
+// 🔧 [竞态修复] 2026-03-14: 原 waitForBackgroundParsing，改为同步解析后不再需要等待 goroutine
+func (sp *StreamProcessor) finalizeParsing() {
 	// 处理剩余的行缓冲区数据
-	sp.parseMutex.Lock()
 	if len(sp.lineBuffer) > 0 {
 		line := strings.TrimSpace(string(sp.lineBuffer))
 		if len(line) > 0 {
@@ -472,7 +458,7 @@ func (sp *StreamProcessor) waitForBackgroundParsing() {
 		sp.lineBuffer = sp.lineBuffer[:0]
 	}
 
-	// ✅ 强制刷新缓存的待处理事件
+	// 强制刷新缓存的待处理事件
 	// 确保即使上游没有发送终止空行，也能解析完整的 usage 信息
 	if result := sp.tokenParser.FlushPendingEvent(); result != nil {
 		// 处理刷新后的解析结果
@@ -484,8 +470,6 @@ func (sp *StreamProcessor) waitForBackgroundParsing() {
 			slog.Debug(fmt.Sprintf("🔄 [Flush成功] [%s] 成功解析待处理事件的Token信息", sp.requestID))
 		}
 	}
-
-	sp.parseMutex.Unlock()
 }
 
 // savePartialData 保存部分数据用于错误恢复
@@ -551,37 +535,10 @@ func (sp *StreamProcessor) handleCancellation(ctx context.Context, cancelErr err
 
 	slog.Info(fmt.Sprintf("🚫 [客户端取消] [%s] 检测到客户端取消: %v", sp.requestID, cancelErr))
 
-	// 等待后台解析完成，但不超过超时时间
-	if finished := sp.waitForParsingWithTimeout(2 * time.Second); finished {
-		// 成功等待解析完成，调用新版本方法获取Token信息
-		tokenUsage, err := sp.collectAvailableInfoV2(cancelErr, "cancelled_with_data")
-		_ = tokenUsage // 忽略Token信息，保持原接口兼容
-		return err
-	} else {
-		// 超时未完成，调用新版本方法获取Token信息
-		tokenUsage, err := sp.collectAvailableInfoV2(cancelErr, "cancelled_timeout")
-		_ = tokenUsage // 忽略Token信息，保持原接口兼容
-		return err
-	}
-}
-
-// waitForParsingWithTimeout 带超时的等待解析完成 - Phase 2 超时等待机制
-func (sp *StreamProcessor) waitForParsingWithTimeout(timeout time.Duration) bool {
-	done := make(chan struct{})
-
-	go func() {
-		sp.parseWg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		slog.Info(fmt.Sprintf("✅ [解析完成] [%s] 后台解析在取消前完成", sp.requestID))
-		return true
-	case <-time.After(timeout):
-		slog.Warn(fmt.Sprintf("⏰ [解析超时] [%s] 后台解析在 %v 内未完成", sp.requestID, timeout))
-		return false
-	}
+	// 同步解析模型下无需等待后台 goroutine，直接收集已解析信息。
+	tokenUsage, err := sp.collectAvailableInfoV2(cancelErr)
+	_ = tokenUsage // 忽略Token信息，保持原接口兼容
+	return err
 }
 
 // collectAvailableInfo 智能信息收集 - Phase 2 分阶段保存逻辑
@@ -665,8 +622,8 @@ func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {
 // handlePartialStreamV2 处理部分数据流中断情况（返回Token信息版本）
 // 当网络中断或其他错误发生时，收集已解析的Token信息并返回
 func (sp *StreamProcessor) handlePartialStreamV2(err error) (*tracking.TokenUsage, error) {
-	// ✅ 等待所有后台解析完成（包含flush逻辑）
-	sp.waitForBackgroundParsing()
+	// ✅ 处理剩余缓冲数据（包含flush逻辑）
+	sp.finalizeParsing()
 
 	// 获取Token信息和模型名称
 	finalUsage := sp.tokenParser.GetFinalUsage()
@@ -716,21 +673,15 @@ func (sp *StreamProcessor) handlePartialStreamV2(err error) (*tracking.TokenUsag
 }
 
 // handleCancellationV2 处理客户端取消请求（返回Token信息版本）
+// 🔧 [竞态修复] 2026-03-14: token 解析已改为同步执行，无需再等待后台解析完成。
 func (sp *StreamProcessor) handleCancellationV2(ctx context.Context, cancelErr error) (*tracking.TokenUsage, error) {
 	slog.Info(fmt.Sprintf("🚫 [客户端取消] [%s] 检测到客户端取消: %v", sp.requestID, cancelErr))
 
-	// 等待后台解析完成，但不超过超时时间
-	if finished := sp.waitForParsingWithTimeout(2 * time.Second); finished {
-		// 成功等待解析完成，收集可用信息
-		return sp.collectAvailableInfoV2(cancelErr, "cancelled_with_data")
-	} else {
-		// 超时未完成，收集部分信息
-		return sp.collectAvailableInfoV2(cancelErr, "cancelled_timeout")
-	}
+	return sp.collectAvailableInfoV2(cancelErr)
 }
 
 // collectAvailableInfoV2 智能信息收集（返回Token信息版本）
-func (sp *StreamProcessor) collectAvailableInfoV2(cancelErr error, status string) (*tracking.TokenUsage, error) {
+func (sp *StreamProcessor) collectAvailableInfoV2(cancelErr error) (*tracking.TokenUsage, error) {
 	sp.parseMutex.Lock()
 	defer sp.parseMutex.Unlock()
 

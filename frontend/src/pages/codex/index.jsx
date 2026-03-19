@@ -31,6 +31,7 @@ import {
   KPICard,
   LoadingSpinner
 } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 import {
   activateCodexProvider,
   createCodexProvider,
@@ -205,6 +206,10 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
+  const isWails = isWailsEnvironment();
+  const modalTopPadding = isWails ? 48 : 16;
+  const modalBottomPadding = 16;
+  const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
 
   const updateField = (key, value) => {
     if (key === 'apiKey') {
@@ -279,9 +284,15 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
-      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+  return renderModalPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 backdrop-blur-sm animate-fade-in"
+      style={{ paddingTop: `${modalTopPadding}px` }}
+    >
+      <div
+        className="flex w-full max-w-3xl origin-top scale-[0.97] flex-col overflow-hidden rounded-2xl bg-white shadow-xl sm:scale-100"
+        style={{ maxHeight: modalMaxHeight }}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
@@ -302,136 +313,138 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
           </button>
         </div>
 
-        <form className="space-y-4 overflow-y-auto px-6 py-6" onSubmit={handleSubmit} autoComplete="off">
-          {(fieldError || serverError) && (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {fieldError || serverError}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <Input
-                label="提供商标识"
-                value={formData.name}
-                onChange={(event) => updateField('name', event.target.value)}
-                placeholder="例如：custom"
-                autoFocus
-              />
-            </div>
-
-            <FormSelectField
-              label="接入类型"
-              value={formData.providerType}
-              onChange={(value) => updateField('providerType', value)}
-              options={PROVIDER_TYPE_OPTIONS}
-            />
-
-            <Input
-              label="官网地址（可选）"
-              value={formData.website}
-              onChange={(event) => updateField('website', event.target.value)}
-              placeholder="https://platform.openai.com"
-            />
-
-            <Input
-              label="默认模型"
-              value={formData.model}
-              onChange={(event) => updateField('model', event.target.value)}
-              placeholder="例如：gpt-5.4"
-            />
-
-            <div className="sm:col-span-2">
-              <ReasoningEffortSelector
-                value={formData.reasoningEffort}
-                onChange={(value) => updateField('reasoningEffort', value)}
-              />
-            </div>
-
-            <FormToggleField
-              label="1M 上下文窗口"
-              checked={formData.enable1MContext}
-              onChange={(value) => updateField('enable1MContext', value)}
-              help="开启后，当前 provider 激活时会向 config.toml 额外写入 model_context_window = 1000000。"
-            />
-
-            <div className="sm:col-span-2">
-              <Input
-                label="Base URL"
-                value={formData.baseURL}
-                onChange={(event) => updateField('baseURL', event.target.value)}
-                placeholder="https://code.newcli.com/codex/v1"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
-              <div className="relative">
-                <input
-                  type={apiKeyInputType}
-                  value={apiKeyInputValue}
-                  onChange={(event) => updateField('apiKey', event.target.value)}
-                  placeholder="sk-..."
-                  autoComplete="new-password"
-                  data-form-type="other"
-                  readOnly={isMaskedApiKeyPreview}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey((prev) => !prev)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
-                  title={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
-                >
-                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
+        <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
+          <div className="space-y-4 overflow-y-auto px-6 py-6">
+            {(fieldError || serverError) && (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {fieldError || serverError}
               </div>
-            </div>
-            </div>
+            )}
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-950 text-slate-100 shadow-inner">
-              <div className="relative border-b border-white/10 px-4 py-3 pr-28">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <div className="text-sm font-semibold">Service Config Template</div>
-                  <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">Live Preview</div>
+                  <Input
+                    label="提供商标识"
+                    value={formData.name}
+                    onChange={(event) => updateField('name', event.target.value)}
+                    placeholder="例如：custom"
+                    autoFocus
+                  />
                 </div>
-                <div className="absolute right-4 top-3 flex items-center gap-2">
-                  <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300">
-                    TOML
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleCopyTemplate}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200 transition-colors hover:bg-white/10"
-                    title={templateCopied ? '已复制模板' : '复制完整模板'}
-                    aria-label={templateCopied ? '已复制模板' : '复制完整模板'}
-                  >
-                    {templateCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                  </button>
+
+                <FormSelectField
+                  label="接入类型"
+                  value={formData.providerType}
+                  onChange={(value) => updateField('providerType', value)}
+                  options={PROVIDER_TYPE_OPTIONS}
+                />
+
+                <Input
+                  label="官网地址（可选）"
+                  value={formData.website}
+                  onChange={(event) => updateField('website', event.target.value)}
+                  placeholder="https://platform.openai.com"
+                />
+
+                <Input
+                  label="默认模型"
+                  value={formData.model}
+                  onChange={(event) => updateField('model', event.target.value)}
+                  placeholder="例如：gpt-5.4"
+                />
+
+                <div className="sm:col-span-2">
+                  <ReasoningEffortSelector
+                    value={formData.reasoningEffort}
+                    onChange={(value) => updateField('reasoningEffort', value)}
+                  />
+                </div>
+
+                <FormToggleField
+                  label="1M 上下文窗口"
+                  checked={formData.enable1MContext}
+                  onChange={(value) => updateField('enable1MContext', value)}
+                  help="开启后，当前 provider 激活时会向 config.toml 额外写入 model_context_window = 1000000。"
+                />
+
+                <div className="sm:col-span-2">
+                  <Input
+                    label="Base URL"
+                    value={formData.baseURL}
+                    onChange={(event) => updateField('baseURL', event.target.value)}
+                    placeholder="https://code.newcli.com/codex/v1"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
+                  <div className="relative">
+                    <input
+                      type={apiKeyInputType}
+                      value={apiKeyInputValue}
+                      onChange={(event) => updateField('apiKey', event.target.value)}
+                      placeholder="sk-..."
+                      autoComplete="new-password"
+                      data-form-type="other"
+                      readOnly={isMaskedApiKeyPreview}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((prev) => !prev)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
+                      title={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
+                    >
+                      {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div className="px-4 py-4">
-                <div className="space-y-0.5 font-mono text-[12px] leading-6 text-slate-200">
-                  {templateLines.map((line, index) => (
-                    line ? (
-                      <div
-                        key={`${index}-${line}`}
-                        className="truncate whitespace-nowrap"
-                        title={line}
-                      >
-                        {line}
-                      </div>
-                    ) : (
-                      <div key={`blank-${index}`} className="h-6" />
-                    )
-                  ))}
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-950 text-slate-100 shadow-inner">
+                <div className="relative border-b border-white/10 px-4 py-3 pr-28">
+                  <div>
+                    <div className="text-sm font-semibold">Service Config Template</div>
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">Live Preview</div>
+                  </div>
+                  <div className="absolute right-4 top-3 flex items-center gap-2">
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300">
+                      TOML
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyTemplate}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200 transition-colors hover:bg-white/10"
+                      title={templateCopied ? '已复制模板' : '复制完整模板'}
+                      aria-label={templateCopied ? '已复制模板' : '复制完整模板'}
+                    >
+                      {templateCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+                    </button>
+                  </div>
+                </div>
+                <div className="px-4 py-4">
+                  <div className="space-y-0.5 font-mono text-[12px] leading-6 text-slate-200">
+                    {templateLines.map((line, index) => (
+                      line ? (
+                        <div
+                          key={`${index}-${line}`}
+                          className="truncate whitespace-nowrap"
+                          title={line}
+                        >
+                          {line}
+                        </div>
+                      ) : (
+                        <div key={`blank-${index}`} className="h-6" />
+                      )
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 border-t border-slate-100 pt-5">
+          <div className="flex justify-end gap-3 border-t border-slate-100 px-6 py-5">
             <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>
               取消
             </Button>
@@ -448,8 +461,8 @@ const ProviderFormModal = ({ mode, provider, loading, serverError, onCancel, onS
 const DeleteProviderConfirmDialog = ({ provider, loading, onCancel, onConfirm }) => {
   if (!provider) return null;
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
+  return renderModalPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-start gap-3">
           <div className="rounded-full bg-rose-100 p-3">

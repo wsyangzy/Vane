@@ -80,17 +80,13 @@ func sendAnthropicRetryableError(w http.ResponseWriter, flusher http.Flusher, me
 // terminateSSEStreamWithError 正确终止 SSE 流，确保客户端不会自动重连
 // 修复客户端无限重连问题 - 发送完整的 SSE 结束序列
 func terminateSSEStreamWithError(w http.ResponseWriter, flusher http.Flusher, errorMsg string) {
-	// 1. 发送错误数据
-	fmt.Fprintf(w, "data: error: %s\n\n", errorMsg)
-	flusher.Flush()
-
-	// 2. 发送 Anthropic 格式的 error 事件（让客户端识别为 API 错误而非连接中断）
+	// 1. 发送 Anthropic 格式的 error 事件（让客户端识别为 API 错误而非连接中断）
 	fmt.Fprintf(w, "event: error\n")
 	fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"%s\"}}\n\n",
 		escapeJSONString(errorMsg))
 	flusher.Flush()
 
-	// 3. 发送 message_stop 事件（关键！明确告知客户端流已正常结束）
+	// 2. 发送 message_stop 事件（关键！明确告知客户端流已正常结束）
 	fmt.Fprintf(w, "event: message_stop\n")
 	fmt.Fprintf(w, "data: {\"type\":\"message_stop\"}\n\n")
 	flusher.Flush()
@@ -447,9 +443,10 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 					// 🚀 [HTTP状态码修复] 流式API错误应该映射为207 Multi-Status
 					statusCode := GetStatusCodeFromError(err, resp)
-					if status == "error" || status == "stream_error" {
+					switch status {
+					case "error", "stream_error":
 						statusCode = http.StatusMultiStatus // 207: HTTP连接成功，但API业务层面有错误
-					} else if status == "cancelled" {
+					case "cancelled":
 						statusCode = 499 // 客户端取消
 					}
 
@@ -734,10 +731,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		// 🔧 当前端点所有重试都失败了
 		if !endpointSuccess {
 			// 修复计数逻辑：处理提前break和自然跑满两种情况
-			actualAttempts := attempt
-			if actualAttempts > sh.config.Retry.MaxAttempts {
-				actualAttempts = sh.config.Retry.MaxAttempts
-			}
+			actualAttempts := min(attempt, sh.config.Retry.MaxAttempts)
 
 			// 🚀 [改进版方案1] 使用已保存的重试决策，避免重复错误分类
 			var willSwitchEndpoint bool = true
@@ -759,7 +753,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					statusCode := GetStatusCodeFromError(lastErr, lastResp)
 					if statusCode == 0 {
 						// 根据决策状态设置合适的默认状态码
-						if lastDecision != nil && lastDecision.FinalStatus != "" {
+						if lastDecision.FinalStatus != "" {
 							switch lastDecision.FinalStatus {
 							case "cancelled":
 								statusCode = 499 // nginx风格的客户端取消码
@@ -1074,19 +1068,22 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
-	errMsg := fmt.Sprintf("服务暂时不可用: 当前渠道所有端点均不可用, 最后错误: %v", lastErr)
-	statusCode := http.StatusUnprocessableEntity
+	// 使用 sendStreamInterruptedMessage 发送 overloaded_error SSE 事件，
+	// 触发 Claude Code 客户端自动重试，避免直接透传提供商 403 等非重试错误。
+	// 消息内容使用提供商原始错误（EndpointError.Body）或网络错误描述。
+	errMsg := ExtractUpstreamErrorMessage(lastErr)
+	statusCode := GetStatusCodeFromError(lastErr, lastResp)
+	if statusCode == 0 {
+		statusCode = http.StatusBadGateway
+	}
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
-	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (立即返回错误)", connID, errMsg))
-	// 使用 sendStreamInterruptedMessage 发送完整消息结构，触发客户端自动重试
-	// 原 terminateSSEStreamWithError 发送的格式会导致 Claude Code 报错 "null is not an object"
+	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] status=%d err=%s", connID, statusCode, errMsg))
 	modelName := lifecycleManager.GetModelName()
 	if modelName == "" {
 		modelName = "unknown"
 	}
 	sendStreamInterruptedMessage(w, flusher, errMsg, modelName)
-	return
 }
 
 // UpdateConfig 更新流式处理器配置

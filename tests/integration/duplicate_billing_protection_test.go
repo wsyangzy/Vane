@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -750,7 +751,7 @@ func testTimeWindowDuplicationProtection(t *testing.T) {
 			// 应该是最新的tokens2值或者tokens1值
 			assert.True(t,
 				(record.InputTokens == 100 && record.OutputTokens == 50) ||
-				(record.InputTokens == 200 && record.OutputTokens == 100),
+					(record.InputTokens == 200 && record.OutputTokens == 100),
 				"保留的Token值应该是有效的")
 		}
 	})
@@ -794,25 +795,40 @@ func generateTestRequestID(suffix string) string {
 
 // getBillingRecordsFromDB 从数据库获取计费记录
 func getBillingRecordsFromDB(t *testing.T, tracker *tracking.UsageTracker, requestID string) []BillingRecord {
-	// 等待异步操作完成
-	time.Sleep(150 * time.Millisecond)
+	t.Helper()
+	queryOnce := func() []BillingRecord {
+		details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{
+			Limit:  2000,
+			Offset: 0,
+		})
+		require.NoError(t, err)
 
-	// 实际实现中需要直接查询tracker的数据库
-	// 这里返回模拟的查询结果
-
-	// 等待一下确保数据已写入
-	time.Sleep(100 * time.Millisecond)
-
-	// 这里返回模拟数据，实际实现需要真实查询数据库
-	return []BillingRecord{
-		{
-			RequestID:    requestID,
-			Status:       "error",
-			InputTokens:  100,
-			OutputTokens: 50,
-			TotalCost:    0.001,
-		},
+		records := make([]BillingRecord, 0)
+		for _, detail := range details {
+			if detail.RequestID != requestID {
+				continue
+			}
+			records = append(records, BillingRecord{
+				RequestID:    detail.RequestID,
+				Status:       detail.Status,
+				InputTokens:  detail.InputTokens,
+				OutputTokens: detail.OutputTokens,
+				TotalCost:    detail.TotalCostUSD,
+			})
+		}
+		return records
 	}
+
+	var records []BillingRecord
+	for attempt := 0; attempt < 10; attempt++ {
+		records = queryOnce()
+		if len(records) > 0 {
+			return records
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return records
 }
 
 // BillingRecord 计费记录结构

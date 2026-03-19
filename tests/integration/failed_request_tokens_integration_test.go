@@ -85,8 +85,8 @@ func TestFailedRequestTokensIntegration(t *testing.T) {
 	if stats["request_id"] != "req-integration-test" {
 		t.Errorf("请求ID不匹配：期望 'req-integration-test'，实际 '%v'", stats["request_id"])
 	}
-	if stats["endpoint"] != "integration-endpoint" {
-		t.Errorf("端点不匹配：期望 'integration-endpoint'，实际 '%v'", stats["endpoint"])
+	if stats["endpoint_name"] != "integration-endpoint" {
+		t.Errorf("端点不匹配：期望 'integration-endpoint'，实际 '%v'", stats["endpoint_name"])
 	}
 
 	t.Log("集成测试成功：所有组件正常协作，失败Token记录功能工作正常")
@@ -95,12 +95,12 @@ func TestFailedRequestTokensIntegration(t *testing.T) {
 // TestFailedRequestTokensEdgeCases 边界情况集成测试
 func TestFailedRequestTokensEdgeCases(t *testing.T) {
 	trackerConfig := &tracking.Config{
-		Enabled:       true,
-		DatabasePath:  ":memory:",
-		BufferSize:    20,
-		BatchSize:     3,
-		FlushInterval: 50 * time.Millisecond,
-		MaxRetry:      2,
+		Enabled:        true,
+		DatabasePath:   ":memory:",
+		BufferSize:     20,
+		BatchSize:      3,
+		FlushInterval:  50 * time.Millisecond,
+		MaxRetry:       2,
 		DefaultPricing: tracking.ModelPricing{Input: 1.0, Output: 5.0},
 	}
 
@@ -159,12 +159,12 @@ func TestFailedRequestTokensEdgeCases(t *testing.T) {
 // TestFailedRequestTokensConcurrency 并发集成测试
 func TestFailedRequestTokensConcurrency(t *testing.T) {
 	trackerConfig := &tracking.Config{
-		Enabled:       true,
-		DatabasePath:  ":memory:",
-		BufferSize:    100,
-		BatchSize:     10,
-		FlushInterval: 200 * time.Millisecond,
-		MaxRetry:      3,
+		Enabled:        true,
+		DatabasePath:   ":memory:",
+		BufferSize:     100,
+		BatchSize:      10,
+		FlushInterval:  200 * time.Millisecond,
+		MaxRetry:       3,
 		DefaultPricing: tracking.ModelPricing{Input: 1.0, Output: 2.0},
 	}
 

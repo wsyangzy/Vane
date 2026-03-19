@@ -87,7 +87,7 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
   return (
     <div
       onClick={handleRowClick}
-      className={`group flex items-start gap-3 px-4 py-2 border-b border-slate-100 font-mono text-xs relative cursor-pointer transition-colors ${
+      className={`group flex items-center gap-3 px-4 py-2 border-b border-slate-100 font-mono text-xs relative cursor-pointer transition-colors ${
         isSelected
           ? 'bg-blue-50 hover:bg-blue-100'
           : 'hover:bg-slate-50'
@@ -110,8 +110,8 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
         <span className="font-semibold">{log.level}</span>
       </div>
 
-      {/* 日志消息 */}
-      <div className="flex-1 text-slate-700 break-all">
+      {/* 日志消息 - 单行截断显示，完整内容通过悬浮提示和复制获取 */}
+      <div className="flex-1 min-w-0 text-slate-700 truncate" title={log.message}>
         {highlightText(log.message)}
       </div>
 

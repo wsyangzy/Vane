@@ -26,7 +26,8 @@ import {
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
-import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
+import DurationBadge from './DurationBadge.jsx';
+import { formatCost, formatTimestamp } from '@utils/api.js';
 
 const CHAIN_VIEW_STORAGE_KEY = 'request-detail.chain-view-mode';
 
@@ -323,7 +324,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     <InfoRow icon={FileText} label="记录 ID" value={request.rawRequestId} copyable />
                   )}
                   <InfoRow icon={Calendar} label="时间戳" value={formatTimestamp(request.timestamp)} />
-                  <InfoRow icon={Clock} label="持续时间" value={formatDuration(request.duration)} />
+                  <InfoRow icon={Clock} label="持续时间" value={<DurationBadge ms={request.duration} status={request.status} />} />
                   <InfoRow icon={Server} label="端点" value={request.endpoint} />
                   <InfoRow icon={Layers} label="渠道" value={request.channel || request.group} />
                 </div>

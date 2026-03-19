@@ -10,7 +10,22 @@ const ChannelRow = ({ channel, endpoints, expanded, onToggle, storageMode }) => 
   // 统计数据
   const totalCount = endpoints.length;
   const enabledCount = endpoints.filter(e => isSqliteMode ? e.enabled : e.group_is_active).length;
-  const healthyCount = endpoints.filter(e => e.healthy).length;
+
+  // 参与故障转移：已启用 且 failoverEnabled 不为 false
+  const failoverCount = endpoints.filter(e => {
+    const isEnabled = isSqliteMode ? e.enabled : e.group_is_active;
+    return isEnabled && e.failoverEnabled !== false;
+  }).length;
+
+  // 健康统计：healthy 或 skipHealthCheck 均视为健康
+  const healthyOrSkippedCount = endpoints.filter(e =>
+    e.healthy || e.skipHealthCheck || e.skip_health_check
+  ).length;
+
+  // 全部启用故障转移
+  const allFailover = failoverCount === totalCount && totalCount > 0;
+  // 全部健康（含跳过检测）
+  const allHealthy = healthyOrSkippedCount === totalCount && totalCount > 0;
 
   return (
     <tr
@@ -33,24 +48,38 @@ const ChannelRow = ({ channel, endpoints, expanded, onToggle, storageMode }) => 
             </span>
 
             {/* 端点数量 */}
-            <span className="text-xs text-slate-500 bg-slate-200 px-2 py-0.5 rounded-full">
-              {totalCount} 个端点
+            <span className={`text-xs px-2 py-0.5 rounded-full border ${
+              allFailover
+                ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+                : 'text-slate-500 bg-slate-200 border-slate-300'
+            }`}>
+              {allFailover
+                ? `${totalCount} 端点`
+                : `${failoverCount}/${totalCount} 故障转移`
+              }
             </span>
           </div>
 
           {/* 状态汇总 */}
           <div className="flex items-center space-x-3 text-xs">
-            <span className="text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-              {enabledCount} 启用
-            </span>
+            {/* 启用标签 */}
             <span className={`px-2 py-0.5 rounded border ${
-              healthyCount === totalCount
+              enabledCount === totalCount
                 ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
-                : healthyCount > 0
+                : 'text-amber-600 bg-amber-50 border-amber-100'
+            }`}>
+              {enabledCount === totalCount ? '全部启用' : `${enabledCount} 启用`}
+            </span>
+
+            {/* 健康标签 */}
+            <span className={`px-2 py-0.5 rounded border ${
+              allHealthy
+                ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
+                : healthyOrSkippedCount > 0
                   ? 'text-amber-600 bg-amber-50 border-amber-100'
                   : 'text-slate-400 bg-slate-50 border-slate-200'
             }`}>
-              {healthyCount}/{totalCount} 健康
+              {allHealthy ? '全部健康' : `${healthyOrSkippedCount}/${totalCount} 健康`}
             </span>
           </div>
         </div>

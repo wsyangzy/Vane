@@ -6,6 +6,7 @@
 import { useState } from 'react';
 import { X, Save, AlertCircle, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 
 const getErrorMessage = (error, fallback = '保存失败') => {
   if (!error) return fallback;
@@ -303,8 +304,8 @@ const EndpointForm = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[15vh]">
+  return renderModalPortal(
+    <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-start justify-center z-50 animate-fade-in pt-[15vh]">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[75vh] flex flex-col overflow-hidden">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">

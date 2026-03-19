@@ -198,8 +198,8 @@ func (tp *TokenParser) ParseSSELineV2(line string) *ParseResult {
 			tp.hasMessageStop = true
 		}
 
-		// 为message_start（模型信息）、message_delta（使用量）和error事件收集数据
-		tp.collectingData = eventType == "message_delta" || eventType == "message_start" || eventType == "error"
+		// 为message_start（模型信息）、增量usage事件和error事件收集数据
+		tp.collectingData = eventType == "message_delta" || eventType == "content_block_delta" || eventType == "message_start" || eventType == "error"
 		tp.eventBuffer.Reset()
 		return nil
 	}
@@ -223,8 +223,8 @@ func (tp *TokenParser) ParseSSELineV2(line string) *ParseResult {
 			// 仅解析message_start以获取模型信息（不需要ParseResult）
 			tp.parseMessageStart()
 			return nil
-		case "message_delta":
-			// 使用新的V2方法解析message_delta
+		case "message_delta", "content_block_delta":
+			// 使用新的V2方法解析带 usage 的增量事件
 			return tp.parseMessageDeltaV2()
 		case "error":
 			// 使用新的V2方法解析error事件
@@ -252,8 +252,8 @@ func (tp *TokenParser) ParseSSELine(line string) *monitor.TokenUsage {
 		eventType = tp.fixMalformedEventType(eventType)
 
 		tp.currentEvent = eventType
-		// 为message_start（模型信息）、message_delta（使用量）和error事件收集数据
-		tp.collectingData = eventType == "message_delta" || eventType == "message_start" || eventType == "error"
+		// 为message_start（模型信息）、增量usage事件和error事件收集数据
+		tp.collectingData = eventType == "message_delta" || eventType == "content_block_delta" || eventType == "message_start" || eventType == "error"
 		tp.eventBuffer.Reset()
 		return nil
 	}
@@ -276,8 +276,8 @@ func (tp *TokenParser) ParseSSELine(line string) *monitor.TokenUsage {
 		case "message_start":
 			// 解析message_start以获取模型信息和token使用量
 			return tp.parseMessageStart()
-		case "message_delta":
-			// 解析message_delta以获取使用信息
+		case "message_delta", "content_block_delta":
+			// 解析带 usage 的增量事件以获取使用信息
 			return tp.parseMessageDelta()
 		case "error":
 			// 解析error事件并记录为API错误
@@ -357,7 +357,7 @@ func (tp *TokenParser) parseMessageStart() *monitor.TokenUsage {
 	return nil
 }
 
-// parseMessageDeltaV2 新版本的message_delta解析方法
+// parseMessageDeltaV2 新版本的增量 usage 解析方法
 // 返回 ParseResult 而不是直接调用 usageTracker
 func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 	defer func() {
@@ -377,9 +377,9 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 		return nil
 	}
 
-	// 检查此message_delta是否包含使用信息
+	// 检查此增量事件是否包含使用信息
 	if messageDelta.Usage == nil {
-		// ⚠️ 兼容性处理：对于非Claude端点，message_delta可能不包含usage信息
+		// ⚠️ 兼容性处理：对于非Claude端点，增量事件可能不包含usage信息
 		// 这种情况下需要fallback机制来标记请求完成
 		if tp.requestID != "" {
 			// 如果未从message_start提取模型，则使用"default"作为模型名称
@@ -388,7 +388,7 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 				modelName = "default"
 			}
 
-			slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] message_delta事件不包含token信息，标记为完成 - 模型: %s",
+			slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] 增量事件不包含token信息，标记为完成 - 模型: %s",
 				tp.requestID, modelName))
 
 			// 返回空Token的完成结果
@@ -407,17 +407,17 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 		return nil
 	}
 
-	// 🆕 [流完整性追踪] 标记收到带 usage 的 message_delta 事件
+	// 🆕 [流完整性追踪] 标记收到带 usage 的增量事件
 	tp.hasMessageDeltaUsage = true
 
-	// 🚀 [智能合并] 实现message_start和message_delta的token信息智能合并
+	// 🚀 [智能合并] 实现message_start和增量事件的token信息智能合并
 	// 策略：
-	// 1. input/output tokens: 优先使用message_delta的值（更准确的最终统计）
-	// 2. cache tokens: 如果message_delta为0，保留message_start的值（防止缓存信息丢失）
+	// 1. input/output tokens: 优先使用增量事件的值（更准确的最终统计）
+	// 2. cache tokens: 如果增量事件为0，保留message_start的值（防止缓存信息丢失）
 
 	usage := messageDelta.Usage
 
-	// 获取message_delta中的基础值
+	// 获取增量事件中的基础值
 	inputTokens := usage.InputTokens
 	outputTokens := usage.OutputTokens
 	cacheCreationTokens := usage.CacheCreationInputTokens
@@ -430,7 +430,7 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 		cache1h = usage.CacheCreation.Ephemeral1hInputTokens
 	}
 
-	// 智能合并缓存token：如果message_delta中为0，但message_start中有值，则保留message_start的值
+	// 智能合并缓存token：如果增量事件中为0，但message_start中有值，则保留message_start的值
 	if cacheCreationTokens == 0 && tp.partialUsage != nil && tp.partialUsage.CacheCreationTokens > 0 {
 		cacheCreationTokens = tp.partialUsage.CacheCreationTokens
 		slog.Info(fmt.Sprintf("🔄 [缓存合并] [%s] 保留message_start中的cache_creation_tokens: %d",
@@ -492,7 +492,7 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 	}
 }
 
-// parseMessageDelta 解析收集的message_delta JSON数据以获取完整的token使用信息
+// parseMessageDelta 解析收集的增量 usage 事件以获取完整的token使用信息
 func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 	defer func() {
 		tp.eventBuffer.Reset()
@@ -511,9 +511,9 @@ func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 		return nil
 	}
 
-	// 检查此message_delta是否包含使用信息
+	// 检查此增量事件是否包含使用信息
 	if messageDelta.Usage == nil {
-		// ⚠️ 兼容性处理：对于非Claude端点，message_delta可能不包含usage信息
+		// ⚠️ 兼容性处理：对于非Claude端点，增量事件可能不包含usage信息
 		// 这种情况下需要fallback机制来标记请求完成
 		if tp.requestID != "" {
 			// 如果未从message_start提取模型，则使用"default"作为模型名称
@@ -522,7 +522,7 @@ func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 				modelName = "default"
 			}
 
-			slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] message_delta事件不包含token信息，标记为完成 - 模型: %s",
+			slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] 增量事件不包含token信息，标记为完成 - 模型: %s",
 				tp.requestID, modelName))
 		}
 		return nil
@@ -956,9 +956,9 @@ func (tp *TokenParser) FlushPendingEvent() *ParseResult {
 
 	// 根据当前事件类型调用相应的解析方法
 	switch tp.currentEvent {
-	case "message_delta":
+	case "message_delta", "content_block_delta":
 		if tp.requestID != "" {
-			slog.Info(fmt.Sprintf("🔄 [事件Flush] [%s] 强制解析缓存的message_delta事件", tp.requestID))
+			slog.Info(fmt.Sprintf("🔄 [事件Flush] [%s] 强制解析缓存的增量usage事件(%s)", tp.requestID, tp.currentEvent))
 		}
 		return tp.parseMessageDeltaV2()
 	case "message_start":

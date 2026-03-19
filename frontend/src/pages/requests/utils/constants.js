@@ -59,7 +59,7 @@ export const TABLE_COLUMNS = [
 
 // 默认可见的列（添加缓存创建/读取列）
 export const DEFAULT_VISIBLE_COLUMNS = [
-  'requestId', 'timestamp', 'status', 'model', 'endpoint',
+  'requestId', 'timestamp', 'status', 'model', 'channel', 'endpoint',
   'duration', 'inputTokens', 'outputTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cost'
 ];
 
