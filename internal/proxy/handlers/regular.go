@@ -96,6 +96,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
 
+	// 追踪最后一次端点错误，用于最终失败时输出提供商原始响应
+	var lastErr error
+
 	// 创建管理器 - 修复依赖注入
 	retryMgr := rh.retryManagerFactory.NewRetryManager()
 	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
@@ -250,6 +253,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// 🔧 使用增强的RetryManager进行统一决策
 				errorCtx := errorRecovery.ClassifyError(err, connID, ep.Config.Name, routeGroup, attempt-1)
 
+				// 追踪最后的端点错误，用于最终失败时透传提供商原始响应
+				lastErr = err
+
 				// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 				// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
 				lifecycleManager.PrepareErrorContext(&errorCtx)
@@ -340,7 +346,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 						// 使用新的FailRequest方法标记最终失败（修复：添加HTTP状态码）
 						lifecycleManager.FailRequest(failureReason, err.Error(), failStatusCode)
-						WriteErrorResponse(w, err, decision.Reason, failStatusCode)
+						WriteUpstreamErrorResponse(w, err, decision.Reason, failStatusCode)
 						return
 					}
 				}
@@ -539,7 +545,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 					lifecycleManager.FailRequest(failureReason, errStr, statusCode)
 					slog.Warn(fmt.Sprintf("🛑 [故障转移终止] [%s] %s (立即返回错误)", connID, errStr))
-					http.Error(w, errStr, statusCode)
+					WriteUpstreamErrorResponse(w, lastErr, errStr, statusCode)
 					return
 				}
 			}
@@ -550,12 +556,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
-	errMsg := "服务暂时不可用: 当前渠道所有端点均不可用"
-	statusCode := http.StatusUnprocessableEntity
+	errMsg := ExtractUpstreamErrorMessage(lastErr)
+	statusCode := GetStatusCodeFromError(lastErr, nil)
+	if statusCode == 0 {
+		statusCode = http.StatusBadGateway
+	}
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
 	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (立即返回错误)", connID, errMsg))
-	http.Error(w, errMsg, statusCode)
+	WriteUpstreamErrorResponse(w, lastErr, errMsg, statusCode)
 }
 
 // executeRequest 执行单个请求

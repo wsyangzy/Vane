@@ -37,9 +37,10 @@ const shouldNotifyFailoverFailure = (failureReason) => {
   if (!raw) return false;
 
   const lower = raw.toLowerCase();
-  // 仅匹配真正的终态失败，endpoint_exhausted 是中间状态（可能还会渠道间转移）
+  // 匹配终态失败：渠道耗尽、端点耗尽、循环/重启上限
   const keywords = [
     'all_channels_unavailable',
+    'endpoint_exhausted',
     'max_loops_exceeded',
     'max_restarts_exceeded'
   ];
@@ -60,6 +61,15 @@ const buildFailoverFailureMessage = (failureReason) => {
 
   if (failureReason.includes('all_channels_unavailable') || failureReason.includes('所有渠道均已尝试')) {
     return '所有渠道均已尝试，服务暂时不可用';
+  }
+  if (failureReason.includes('endpoint_exhausted')) {
+    // failure_reason 格式: "endpoint_exhausted: <原始错误详情>"
+    const detail = failureReason.replace(/^endpoint_exhausted:\s*/, '');
+    if (detail && detail !== failureReason) {
+      // 截断过长的提供商错误信息
+      return detail.length > 200 ? `${detail.slice(0, 200)}...` : detail;
+    }
+    return '当前渠道所有端点均不可用';
   }
   if (failureReason.includes('max_loops_exceeded') || failureReason.includes('最大循环轮数')) {
     return '已达到最大循环轮数，等待手动处理';

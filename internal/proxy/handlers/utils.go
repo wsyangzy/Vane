@@ -106,10 +106,13 @@ func GetStatusCodeFromError(err error, resp *http.Response) int {
 	return 0
 }
 
-// WriteErrorResponse 写入错误响应到客户端。
-// 如果 err 是 EndpointError 且携带原始响应体，则透传提供商原始响应（保留 Content-Type 和 Body）；
-// 否则回退到 http.Error 发送纯文本错误。
-func WriteErrorResponse(w http.ResponseWriter, err error, fallbackMsg string, statusCode int) {
+// WriteUpstreamErrorResponse 写入上游错误响应到客户端。
+// 如果 err 携带提供商原始响应（EndpointError），则完整透传：原始状态码、Content-Type 和响应体。
+// 对于非 EndpointError（网络超时等），回退到 http.Error 输出纯文本，使用 fallbackStatusCode。
+//
+// 注意：流式请求的 403 等问题已通过 sendStreamInterruptedMessage（SSE 包裹）解决，
+// 此函数仅用于非流式请求的最终错误响应，直接透传提供商原始信息便于调试。
+func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg string, fallbackStatusCode int) {
 	var epErr *EndpointError
 	if errors.As(err, &epErr) && len(epErr.Body) > 0 {
 		if epErr.ContentType != "" {
@@ -119,5 +122,19 @@ func WriteErrorResponse(w http.ResponseWriter, err error, fallbackMsg string, st
 		w.Write(epErr.Body)
 		return
 	}
-	http.Error(w, fallbackMsg, statusCode)
+	http.Error(w, fallbackMsg, fallbackStatusCode)
+}
+
+// ExtractUpstreamErrorMessage 从错误中提取上游提供商的原始错误信息。
+// 如果是 EndpointError 且携带原始响应体，返回响应体文本；
+// 否则返回 error.Error() 原始错误描述（如网络超时信息）。
+func ExtractUpstreamErrorMessage(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	var epErr *EndpointError
+	if errors.As(err, &epErr) && len(epErr.Body) > 0 {
+		return string(epErr.Body)
+	}
+	return err.Error()
 }

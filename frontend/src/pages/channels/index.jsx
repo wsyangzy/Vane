@@ -1019,6 +1019,14 @@ const ChannelCard = ({
 
   const totalCount = endpoints.length;
   const hasEndpoints = totalCount > 0;
+  // 参与故障转移的端点数
+  const failoverEnabledCount = endpoints.filter(e => {
+    const isEnabled = isSqliteMode ? e.enabled : true;
+    return isEnabled && normalizeBool(e.failoverEnabled, true);
+  }).length;
+
+  // 全部健康（含跳过检测视为健康）
+  const allHealthy = hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === scopedTotalCount;
   const hasGroupInfo = !!groupInfo;
   const suspendedEndpointCount = endpoints.filter((endpoint) => {
     const count = endpoint?.suspendedCount || endpoint?.suspended_count || 0;
@@ -1033,6 +1041,19 @@ const ChannelCard = ({
     ?? (isSqliteMode ? endpoints.some(e => e.enabled) : (activeChannelName === channelName));
 
   const isPaused = !!groupInfo?.paused;
+
+  // 渠道是否参与路由：
+  // - 仅渠道内转移时 → 只有活跃渠道参与
+  // - 渠道间转移时 → 未暂停的渠道参与
+  const channelParticipating = channelFailoverEnabled ? !isPaused : isActive;
+
+  // 端点标签显示逻辑：
+  // - 渠道不参与路由 → 仅显示总数（灰色）
+  // - 渠道参与路由且全部端点开启转移 → 仅显示总数（绿色）
+  // - 渠道参与路由但部分端点关闭转移 → 显示 N/M（灰色）
+  const showEndpointRatio = channelParticipating && failoverEnabledCount !== totalCount;
+  const endpointBadgeActive = channelParticipating && failoverEnabledCount === totalCount;
+
   const computedPriority = Math.min(...endpoints.map(e => e.priority || 999));
   const priority = Number.isFinite(channelPriority) && channelPriority > 0
     ? channelPriority
@@ -1262,8 +1283,15 @@ const ChannelCard = ({
             </span>
           )}
 
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-50 text-slate-600 border border-slate-200 whitespace-nowrap">
-            端点 <span className="font-semibold text-slate-800">{totalCount}</span>
+          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border whitespace-nowrap ${
+            endpointBadgeActive
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-slate-50 text-slate-600 border-slate-200'
+          }`}>
+            端点{' '}
+            <span className="font-semibold">
+              {showEndpointRatio ? `${failoverEnabledCount}/${totalCount}` : totalCount}
+            </span>
           </span>
           <span
             className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border ${healthTone} whitespace-nowrap`}
@@ -1271,7 +1299,14 @@ const ChannelCard = ({
           >
             {hasEndpoints && scopedTotalCount === 0 ? '检测' : '健康'}{' '}
             <span className="font-semibold">
-              {hasEndpoints ? (scopedTotalCount > 0 ? `${scopedHealthyCount}/${scopedTotalCount}` : '关闭') : '-'}
+              {!hasEndpoints
+                ? '-'
+                : scopedTotalCount === 0
+                  ? '关闭'
+                  : allHealthy
+                    ? ''
+                    : `${scopedHealthyCount}/${scopedTotalCount}`
+              }
             </span>
           </span>
         </div>

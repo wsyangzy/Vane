@@ -1067,11 +1067,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		}
 	}
 
-	// 🚀 [错误透传] Phase 4: 最终失败处理 — 透传提供商原始错误
-	errMsg := "all endpoints failed"
-	if lastErr != nil {
-		errMsg = lastErr.Error()
-	}
+	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
+	// 使用 sendStreamInterruptedMessage 发送 overloaded_error SSE 事件，
+	// 触发 Claude Code 客户端自动重试，避免直接透传提供商 403 等非重试错误。
+	// 消息内容使用提供商原始错误（EndpointError.Body）或网络错误描述。
+	errMsg := ExtractUpstreamErrorMessage(lastErr)
 	statusCode := GetStatusCodeFromError(lastErr, lastResp)
 	if statusCode == 0 {
 		statusCode = http.StatusBadGateway
@@ -1079,9 +1079,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
 	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
 	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] status=%d err=%s", connID, statusCode, errMsg))
-
-	// 透传提供商原始响应（保留 Content-Type 和 Body）
-	WriteErrorResponse(w, lastErr, errMsg, statusCode)
+	modelName := lifecycleManager.GetModelName()
+	if modelName == "" {
+		modelName = "unknown"
+	}
+	sendStreamInterruptedMessage(w, flusher, errMsg, modelName)
 }
 
 // UpdateConfig 更新流式处理器配置
