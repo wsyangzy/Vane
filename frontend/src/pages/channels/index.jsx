@@ -34,6 +34,7 @@ import {
   LoadingSpinner,
   ErrorMessage
 } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 import useEndpointsData from '@hooks/useEndpointsData.js';
 import {
   EndpointForm,
@@ -83,7 +84,7 @@ const getErrorMessage = (error, fallback = '操作失败') => {
 const DeleteChannelConfirmDialog = ({ channelName, endpointCount = 0, onConfirm, onCancel, loading }) => {
   const confirmDisabled = loading;
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center gap-3 mb-4">
@@ -129,7 +130,7 @@ const DeleteChannelConfirmDialog = ({ channelName, endpointCount = 0, onConfirm,
 const DeactivateChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loading }) => {
   const confirmDisabled = loading;
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center gap-3 mb-4">
@@ -169,7 +170,7 @@ const DeactivateChannelConfirmDialog = ({ channelName, onConfirm, onCancel, load
 const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loading }) => {
   const confirmDisabled = loading;
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center gap-3 mb-4">
@@ -575,7 +576,7 @@ const EndpointDetailModal = ({
   const hasToken = !!(tokenRaw || tokenMasked);
   const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
 
-  return (
+  return renderModalPortal(
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-fade-in"
       onMouseDown={(e) => {
@@ -869,7 +870,7 @@ const CreateChannelModal = ({
 
   if (!open) return null;
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
         <div className="flex items-start justify-between px-6 py-4 border-b border-slate-100">
@@ -2519,7 +2520,7 @@ const ChannelsPage = () => {
         />
       )}
 
-      {actionError && (
+      {actionError && renderModalPortal(
         <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
             <div className="flex items-center gap-3 mb-4">

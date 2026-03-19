@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Key, Check, Search, Settings2, Gauge } from 'lucide-react';
 import { useToast } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 
 /**
  * 根据 Token 名称推断类型
@@ -92,7 +93,7 @@ const TokenSelectionModal = ({ isOpen, onClose, keys, activeKey, onSelect, switc
            masked.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
       {/* 背景遮罩 - 模糊效果 */}
       <div

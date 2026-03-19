@@ -4,8 +4,9 @@
 
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Button } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 
-const DeleteConfirmDialog = ({ endpoint, onConfirm, onCancel, loading }) => (
+const DeleteConfirmDialog = ({ endpoint, onConfirm, onCancel, loading }) => renderModalPortal(
   <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
     <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
       <div className="flex items-center gap-3 mb-4">

@@ -8,7 +8,8 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Waves, RefreshCw, GitBranch, ChevronRight } from 'lucide-react';
 import { LoadingSpinner } from '@components/ui';
-import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
+import { formatCost, formatTimestamp } from '@utils/api.js';
+import DurationBadge from './DurationBadge.jsx';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
@@ -248,7 +249,7 @@ const renderCell = (columnId, request) => {
       const streamTitle = request.isStreaming ? '流式请求' : '常规请求';
       const iconColor = request.isStreaming ? 'text-blue-500' : 'text-slate-400';
       return (
-        <div className="flex items-center gap-1.5 text-blue-600 font-mono text-xs group-hover:text-indigo-600 transition-colors">
+        <div className="flex w-full items-center justify-center gap-1.5 text-blue-600 font-mono text-xs group-hover:text-indigo-600 transition-colors">
           <StreamIcon className={`w-3 h-3 ${iconColor} flex-shrink-0`} title={streamTitle} />
           <span className="truncate">{request.requestId}</span>
         </div>
@@ -264,7 +265,7 @@ const renderCell = (columnId, request) => {
     case 'endpoint':
       return <EndpointChainCell request={request} />;
     case 'duration':
-      return <span className="text-gray-700 font-mono text-xs">{formatDuration(request.duration)}</span>;
+      return <DurationBadge ms={request.duration} status={request.status} size="xs" />;
     case 'inputTokens':
       return <span className="text-gray-700 font-mono text-xs">{request.inputTokens}</span>;
     case 'outputTokens':
