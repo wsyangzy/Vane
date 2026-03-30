@@ -256,6 +256,16 @@ const renderCell = (columnId, request) => {
       );
     case 'timestamp':
       return <span className="text-xs text-gray-400">{formatTimestamp(request.timestamp)}</span>;
+    case 'requestType':
+      return (
+        <span className={`inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${
+          request.isStreaming
+            ? 'border-blue-200 bg-blue-50 text-blue-700'
+            : 'border-slate-200 bg-slate-50 text-slate-600'
+        }`}>
+          {request.isStreaming ? '流式' : '非流'}
+        </span>
+      );
     case 'status':
       return <RequestStatusBadge status={request.status} />;
     case 'model':
