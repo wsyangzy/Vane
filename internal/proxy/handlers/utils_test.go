@@ -1,9 +1,15 @@
 package handlers
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/andybalholm/brotli"
 )
 
 func TestIsSuccessStatus(t *testing.T) {
@@ -284,6 +290,96 @@ func TestGetStatusCodeFromError(t *testing.T) {
 				t.Errorf("GetStatusCodeFromError(%v, %v) = %d, expected %d", tc.err, tc.resp, result, tc.expected)
 			}
 		})
+	}
+}
+
+func TestNewEndpointErrorFromResponse_DecompressesCompressedBody(t *testing.T) {
+	testCases := []struct {
+		name            string
+		contentEncoding string
+		buildBody       func(t *testing.T, payload string) []byte
+	}{
+		{
+			name:            "gzip",
+			contentEncoding: "gzip",
+			buildBody: func(t *testing.T, payload string) []byte {
+				t.Helper()
+
+				var compressed bytes.Buffer
+				writer := gzip.NewWriter(&compressed)
+				if _, err := writer.Write([]byte(payload)); err != nil {
+					t.Fatalf("gzip write failed: %v", err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatalf("gzip close failed: %v", err)
+				}
+				return compressed.Bytes()
+			},
+		},
+		{
+			name:            "brotli",
+			contentEncoding: "br",
+			buildBody: func(t *testing.T, payload string) []byte {
+				t.Helper()
+
+				var compressed bytes.Buffer
+				writer := brotli.NewWriter(&compressed)
+				if _, err := writer.Write([]byte(payload)); err != nil {
+					t.Fatalf("brotli write failed: %v", err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatalf("brotli close failed: %v", err)
+				}
+				return compressed.Bytes()
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			expectedBody := `{"error":{"message":"请在CC客户端中使用"}}`
+			resp := &http.Response{
+				StatusCode: http.StatusForbidden,
+				Header: http.Header{
+					"Content-Type":     []string{"application/json"},
+					"Content-Encoding": []string{tc.contentEncoding},
+				},
+				Body: io.NopCloser(bytes.NewReader(tc.buildBody(t, expectedBody))),
+			}
+
+			err := newEndpointErrorFromResponse(resp, "https://example.com/v1/messages")
+
+			if err.StatusCode != http.StatusForbidden {
+				t.Fatalf("expected status 403, got %d", err.StatusCode)
+			}
+			if string(err.Body) != expectedBody {
+				t.Fatalf("expected decoded body %q, got %q", expectedBody, string(err.Body))
+			}
+			if got := ExtractUpstreamErrorMessage(err); got != expectedBody {
+				t.Fatalf("expected extracted message %q, got %q", expectedBody, got)
+			}
+		})
+	}
+}
+
+func TestNewEndpointErrorFromResponse_FallsBackToRawBodyWhenDecompressFails(t *testing.T) {
+	rawBody := []byte("not-a-valid-gzip-stream")
+	resp := &http.Response{
+		StatusCode: http.StatusForbidden,
+		Header: http.Header{
+			"Content-Type":     []string{"application/json"},
+			"Content-Encoding": []string{"gzip"},
+		},
+		Body: io.NopCloser(bytes.NewReader(rawBody)),
+	}
+
+	err := newEndpointErrorFromResponse(resp, "https://example.com/v1/messages")
+
+	if !bytes.Equal(err.Body, rawBody) {
+		t.Fatalf("expected raw body fallback, got %q", string(err.Body))
+	}
+	if !strings.Contains(ExtractUpstreamErrorMessage(err), "not-a-valid-gzip-stream") {
+		t.Fatalf("expected raw body to remain readable, got %q", ExtractUpstreamErrorMessage(err))
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -77,15 +76,7 @@ func (f *Forwarder) ForwardRequestToEndpoint(ctx context.Context, r *http.Reques
 
 	// 检查响应状态：保留原始响应体用于透传
 	if resp.StatusCode >= 400 {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024)) // 最多保留 64KB
-		contentType := resp.Header.Get("Content-Type")
-		resp.Body.Close()
-		return nil, &EndpointError{
-			StatusCode:  resp.StatusCode,
-			Body:        bodyBytes,
-			ContentType: contentType,
-			URL:         targetURL,
-		}
+		return nil, newEndpointErrorFromResponse(resp, targetURL)
 	}
 
 	return resp, nil

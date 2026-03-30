@@ -226,22 +226,20 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 构造HTTP状态码错误：保留提供商原始响应体用于透传
 				if err == nil && resp != nil && !IsSuccessStatus(resp.StatusCode) {
-					// 读取原始响应体（最多 64KB），用于 token 提取和最终透传
-					respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-					contentType := resp.Header.Get("Content-Type")
+					// 先读取原始错误体一份给 Token 解析器，再统一构造可读的 EndpointError。
+					respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrorBodyBytes))
 					resp.Body.Close()
 
-					// 用已读取的字节替换 Body，让 tryExtractTokensFromHttpError 仍能解析
+					// 用已读取的字节替换 Body，让 tryExtractTokensFromHttpError 仍能解析。
 					resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
 					rh.tryExtractTokensFromHttpError(resp, lifecycleManager, ep.Config.Name)
 
 					targetURL := ep.Config.URL + r.URL.Path
-					err = &EndpointError{
-						StatusCode:  resp.StatusCode,
-						Body:        respBodyBytes,
-						ContentType: contentType,
-						URL:         targetURL,
-					}
+					err = newEndpointErrorFromResponse(&http.Response{
+						StatusCode: resp.StatusCode,
+						Header:     resp.Header.Clone(),
+						Body:       io.NopCloser(bytes.NewReader(respBodyBytes)),
+					}, targetURL)
 				} else if err != nil && resp != nil {
 					closeErr := resp.Body.Close()
 					if closeErr != nil {

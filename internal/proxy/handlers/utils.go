@@ -1,12 +1,19 @@
 package handlers
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+
+	proxyresponse "claude-request-forwarder/internal/proxy/response"
 )
+
+const maxUpstreamErrorBodyBytes = 64 * 1024
 
 // EndpointError 携带提供商原始响应信息的错误类型。
 // 当端点返回 4xx/5xx 错误时，保留原始状态码、响应体和 Content-Type，
@@ -20,6 +27,72 @@ type EndpointError struct {
 
 func (e *EndpointError) Error() string {
 	return fmt.Sprintf("endpoint returned error: %d, url: %s", e.StatusCode, e.URL)
+}
+
+func newEndpointErrorFromResponse(resp *http.Response, targetURL string) *EndpointError {
+	if resp == nil {
+		return &EndpointError{URL: targetURL}
+	}
+
+	bodyBytes, contentType := readUpstreamErrorBody(resp)
+	return &EndpointError{
+		StatusCode:  resp.StatusCode,
+		Body:        bodyBytes,
+		ContentType: contentType,
+		URL:         targetURL,
+	}
+}
+
+func readUpstreamErrorBody(resp *http.Response) ([]byte, string) {
+	if resp == nil {
+		return nil, ""
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if resp.Body == nil {
+		return nil, contentType
+	}
+	defer resp.Body.Close()
+
+	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrorBodyBytes))
+	if err != nil {
+		slog.Warn("Failed to read upstream error response body", "status_code", resp.StatusCode, "error", err)
+		return nil, contentType
+	}
+
+	return decodeUpstreamErrorBody(rawBody, resp.Header), contentType
+}
+
+func decodeUpstreamErrorBody(body []byte, headers http.Header) []byte {
+	if len(body) == 0 {
+		return body
+	}
+
+	encoding := strings.ToLower(strings.TrimSpace(headers.Get("Content-Encoding")))
+	if encoding == "" || encoding == "identity" {
+		return body
+	}
+
+	processor := proxyresponse.NewProcessor()
+	clonedResp := &http.Response{
+		Header: headers.Clone(),
+		Body:   io.NopCloser(bytes.NewReader(body)),
+	}
+
+	decompressedReader, err := processor.DecompressStreamReader(clonedResp)
+	if err != nil {
+		slog.Warn("Failed to create upstream error decompressor", "content_encoding", encoding, "error", err)
+		return body
+	}
+	defer decompressedReader.Close()
+
+	decompressedBody, err := io.ReadAll(io.LimitReader(decompressedReader, maxUpstreamErrorBodyBytes))
+	if err != nil {
+		slog.Warn("Failed to decompress upstream error body", "content_encoding", encoding, "error", err)
+		return body
+	}
+
+	return decompressedBody
 }
 
 // IsSuccessStatus 判断是否为成功状态码

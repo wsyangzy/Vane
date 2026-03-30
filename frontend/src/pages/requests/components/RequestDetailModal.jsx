@@ -4,7 +4,7 @@
 // 2025-12-01
 // ============================================
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   X,
   Copy,
@@ -102,6 +102,7 @@ const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
 const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
+  const [copiedRequestId, setCopiedRequestId] = useState(false);
   const [compactColumns, setCompactColumns] = useState(() => getCompactColumns());
   const [chainViewMode, setChainViewMode] = useState(() => {
     if (typeof window === 'undefined') return 'timeline';
@@ -112,6 +113,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
       return 'timeline';
     }
   });
+  const requestIdCopyTimerRef = useRef(null);
 
   // ESC 键关闭 & 阻止滚动
   useEffect(() => {
@@ -153,7 +155,25 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => () => {
+    if (requestIdCopyTimerRef.current) {
+      clearTimeout(requestIdCopyTimerRef.current);
+    }
+  }, []);
+
   if (!isOpen || !request) return null;
+
+  const handleCopyRequestId = async () => {
+    await navigator.clipboard.writeText(request.requestId);
+    setCopiedRequestId(true);
+    if (requestIdCopyTimerRef.current) {
+      clearTimeout(requestIdCopyTimerRef.current);
+    }
+    requestIdCopyTimerRef.current = setTimeout(() => {
+      setCopiedRequestId(false);
+      requestIdCopyTimerRef.current = null;
+    }, 2000);
+  };
 
   // 计算 Token 总数
   const totalTokens = (request.inputTokens || 0) + (request.outputTokens || 0);
@@ -704,10 +724,22 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => navigator.clipboard.writeText(request.requestId)}
-              className="h-8 px-3 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors inline-flex items-center justify-center gap-1.5"
+              onClick={handleCopyRequestId}
+              className={`h-8 px-3 text-xs font-medium rounded-lg transition-colors inline-flex items-center justify-center gap-1.5 ${
+                copiedRequestId
+                  ? 'text-emerald-700 bg-emerald-50 border border-emerald-200'
+                  : 'text-slate-600 bg-white border border-slate-200 hover:bg-slate-50'
+              }`}
             >
-              <Copy className="w-3.5 h-3.5" /> 复制 ID
+              {copiedRequestId ? (
+                <>
+                  <Check className="w-3.5 h-3.5" /> 已复制
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" /> 复制 ID
+                </>
+              )}
             </button>
             <button
               onClick={onClose}
