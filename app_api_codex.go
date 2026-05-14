@@ -472,22 +472,43 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
 
-	// 若是激活渠道的激活端点，同步 config.toml 的 base_url
-	if previous.IsActive {
-		channel, _ := channelService.GetChannelByID(ctx, previous.ChannelID)
-		if channel != nil && channel.IsActive {
-			updated, _ := endpointService.GetEndpointByID(ctx, id)
-			if updated != nil {
-				if syncErr := a.syncActiveCodexChannelToConfig(channel, updated, ""); syncErr != nil {
-					return fmt.Errorf("更新 Codex 端点失败: 配置同步未生效: %w", syncErr)
-				}
-			}
+	// 配置同步策略（2026-05-14 扩大同步范围）：
+	// 只要被编辑的端点所属渠道是「当前激活渠道」，就重新同步 config.toml。
+	// - 编辑激活端点的 base_url → toml 中的 base_url 行被改写
+	// - 编辑非激活端点 → 用当前激活端点的 base_url 重写（toml 内容通常不变，但保证 DB↔toml 一致）
+	// - 编辑端点 name → 不影响 toml（name 不出现在 toml 中），但同步动作幂等无害
+	channel, err := channelService.GetChannelByID(ctx, previous.ChannelID)
+	if err != nil {
+		// 读取渠道失败不应阻塞写入成功，仅记录告警；DB 已更新
+		if logger != nil {
+			logger.Warn("⚠️ 读取所属 Codex 渠道失败，跳过 config.toml 同步", "endpoint_id", id, "error", err)
 		}
+		go a.emitCodexProviderUpdate()
+		return nil
+	}
+	if channel != nil && channel.IsActive {
+		// 取该渠道下的当前激活端点（可能就是刚编辑的，也可能是另一个）
+		activeEndpoint, epErr := endpointService.GetActiveByChannelID(ctx, channel.ID)
+		if epErr != nil {
+			return fmt.Errorf("更新 Codex 端点失败: 读取激活端点失败: %w", epErr)
+		}
+		if activeEndpoint != nil {
+			if syncErr := a.syncActiveCodexChannelToConfig(channel, activeEndpoint, ""); syncErr != nil {
+				return fmt.Errorf("更新 Codex 端点失败: 配置同步未生效: %w", syncErr)
+			}
+			if logger != nil {
+				logger.Info("✅ Codex 端点已更新并同步 config.toml",
+					"id", id, "name", input.Name, "base_url", input.BaseURL,
+					"channel", channel.Name, "active_endpoint_url", activeEndpoint.BaseURL)
+			}
+		} else if logger != nil {
+			logger.Warn("⚠️ Codex 渠道无激活端点，config.toml 未更新", "channel", channel.Name)
+		}
+	} else if logger != nil {
+		logger.Info("ℹ️ Codex 端点已更新（所属渠道未激活，config.toml 未变化）",
+			"id", id, "name", input.Name, "base_url", input.BaseURL)
 	}
 
-	if logger != nil {
-		logger.Info("✅ Codex 端点已更新", "id", id, "name", input.Name, "base_url", input.BaseURL)
-	}
 	go a.emitCodexProviderUpdate()
 	return nil
 }

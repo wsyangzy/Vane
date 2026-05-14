@@ -12,11 +12,32 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"claude-request-forwarder/config"
 	_ "modernc.org/sqlite"
 )
+
+// 日志去抖：相同 key 的日志在 throttleWindow 内只打一次
+// 用于前端轮询触发的可预期 transient 错误（database is locked 等），
+// 避免日志被刷屏掩盖真正的问题
+var (
+	logThrottle       sync.Map // key=string -> *int64 (unix nano)
+	logThrottleWindow = int64(30 * time.Second)
+)
+
+// shouldLogThrottled 在 30s 内同 key 只返回 true 一次
+func shouldLogThrottled(key string) bool {
+	now := time.Now().UnixNano()
+	val, _ := logThrottle.LoadOrStore(key, new(int64))
+	last := val.(*int64)
+	prev := atomic.LoadInt64(last)
+	if now-prev < logThrottleWindow {
+		return false
+	}
+	return atomic.CompareAndSwapInt64(last, prev, now)
+}
 
 //go:embed schema.sql
 var schemaFS embed.FS
@@ -2031,7 +2052,10 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 	// 2. 获取数据库总数（用于分页计算）
 	dbCount, err := ut.CountRequestDetails(ctx, opts)
 	if err != nil {
-		slog.Warn("Failed to count database requests", "error", err)
+		// 去抖：前端 1-3s 轮询，database is locked 等 transient 错误每次都打会刷屏
+		if shouldLogThrottled("count_request_details_failed") {
+			slog.Warn("Failed to count database requests", "error", err)
+		}
 		dbCount = 0
 	}
 
@@ -2070,7 +2094,9 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 			dbOpts.Limit = remaining + hotPoolCount // 多取一些用于去重
 			dbRequests, err := ut.QueryRequestDetails(ctx, &dbOpts)
 			if err != nil {
-				slog.Warn("Failed to query database requests", "error", err)
+				if shouldLogThrottled("query_request_details_failed") {
+					slog.Warn("Failed to query database requests", "error", err)
+				}
 			} else {
 				// 添加数据库请求（排除已在热池中的）
 				for _, req := range dbRequests {

@@ -127,6 +127,9 @@ type TokenParser struct {
 	hasMessageStart      bool // 是否收到 message_start 事件
 	hasMessageDeltaUsage bool // 是否收到带 usage 的 message_delta 事件
 	hasMessageStop       bool // 是否收到 message_stop 事件
+
+	// 🔇 [日志去重] 增量事件无 token 的提示只打一次（一个流可能有几十~几百个增量事件）
+	noTokenLogged bool
 }
 
 // fixMalformedEventType 修复格式错误的事件类型
@@ -388,8 +391,11 @@ func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
 				modelName = "default"
 			}
 
-			slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] 增量事件不包含token信息，标记为完成 - 模型: %s",
-				tp.requestID, modelName))
+			if !tp.noTokenLogged {
+				slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] 增量事件不包含token信息，标记为完成 - 模型: %s",
+					tp.requestID, modelName))
+				tp.noTokenLogged = true
+			}
 
 			// 返回空Token的完成结果
 			return &ParseResult{
@@ -515,7 +521,7 @@ func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 	if messageDelta.Usage == nil {
 		// ⚠️ 兼容性处理：对于非Claude端点，增量事件可能不包含usage信息
 		// 这种情况下需要fallback机制来标记请求完成
-		if tp.requestID != "" {
+		if tp.requestID != "" && !tp.noTokenLogged {
 			// 如果未从message_start提取模型，则使用"default"作为模型名称
 			modelName := tp.modelName
 			if modelName == "" {
@@ -524,6 +530,7 @@ func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 
 			slog.Info(fmt.Sprintf("🎯 [无Token响应] [%s] 增量事件不包含token信息，标记为完成 - 模型: %s",
 				tp.requestID, modelName))
+			tp.noTokenLogged = true
 		}
 		return nil
 	}

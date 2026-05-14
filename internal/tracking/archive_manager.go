@@ -3,7 +3,10 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -299,6 +302,16 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 }
 
 // batchInsert 执行批量插入
+//
+// 错误处理重点（2026-05-14）：
+// SQLite 单连接写入池（MaxOpenConns=1）+ modernc.org/sqlite 驱动场景下，
+// 当 tx.Commit() 因 SQLITE_BUSY 失败时，连接虽被归还到 Go pool，
+// 但底层 SQLite C handle 仍处于 BEGIN 事务状态。
+// 下次 BeginTx 命中同一污染连接，会立即报 "cannot start a transaction within a transaction (1)"，
+// 导致写入彻底瘫痪、所有读请求也被锁阻塞。
+//
+// 修复：用 sql.Conn 显式管理连接生命周期，commit/写入出错时调用 evictConn 强制驱逐该连接，
+// 让 sql.DB 在下次取连接时重建一个干净的 SQLite handle。
 func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	if am.adapter == nil {
 		return fmt.Errorf("database adapter not initialized")
@@ -312,11 +325,38 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tx, err := am.adapter.BeginTx(ctx, nil)
+	writeDB := am.adapter.GetWriteDB()
+	if writeDB == nil {
+		return fmt.Errorf("write DB not available")
+	}
+
+	// 关键：用 *sql.Conn 显式持有连接，便于在事务出错时驱逐它
+	conn, err := writeDB.Conn(ctx)
 	if err != nil {
+		return fmt.Errorf("failed to get write conn: %w", err)
+	}
+	connEvicted := false
+	defer func() {
+		if connEvicted {
+			// 已通过 evictConn 销毁，conn.Close() 会返回错误也无所谓
+			_ = conn.Close()
+			return
+		}
+		_ = conn.Close()
+	}()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		// BeginTx 失败极可能是连接已被污染，强制驱逐
+		connEvicted = true
+		_ = evictConn(conn)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	// defer 中的 rollback 是兜底，正常路径走 commit
+	defer func() {
+		// 只有未 commit 时才需要 rollback
+		_ = tx.Rollback()
+	}()
 
 	// 添加分开的 5m/1h 缓存字段和成本
 	stmt, err := tx.PrepareContext(ctx, `
@@ -395,6 +435,9 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	}
 
 	if err := tx.Commit(); err != nil {
+		// Commit 失败（通常是 SQLITE_BUSY），驱逐这条连接避免后续 BeginTx 在污染连接上嵌套报错
+		connEvicted = true
+		_ = evictConn(conn)
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -498,4 +541,30 @@ func (am *ArchiveManager) Flush() {
 	// 发送一个空事件触发刷新
 	// 实际刷新由 ticker 处理，这里只是等待
 	time.Sleep(100 * time.Millisecond)
+}
+
+// evictConn 强制驱逐一个 *sql.Conn，让 sql.DB 在下次 Get 时重建。
+// 通过 conn.Raw 内部回调返回 driver.ErrBadConn，标准库会将此 conn 标记为坏，
+// 关闭底层 driver.Conn 并不再放回 pool。
+//
+// 用途：modernc.org/sqlite 在 tx.Commit() 失败时，连接对应的 SQLite handle
+// 仍处于 BEGIN 事务状态。若不驱逐，下次 BeginTx 拿到该污染连接会立即报
+// "cannot start a transaction within a transaction (1)"，导致写入彻底瘫痪。
+func evictConn(conn *sql.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	rawErr := conn.Raw(func(driverConn interface{}) error {
+		// 主动 Close 底层连接以释放 SQLite C 资源
+		if c, ok := driverConn.(io.Closer); ok {
+			_ = c.Close()
+		}
+		// 关键：返回 ErrBadConn 让 sql.DB 标记此 conn 为坏，不再放回 pool
+		return driver.ErrBadConn
+	})
+	// Raw 在我们故意返回 ErrBadConn 时会回传该错误，过滤掉它即可
+	if rawErr != nil && !errors.Is(rawErr, driver.ErrBadConn) {
+		return rawErr
+	}
+	return nil
 }
