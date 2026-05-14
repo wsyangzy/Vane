@@ -37,9 +37,9 @@ func TestSensitiveHeaderRemoval(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Host", "localhost:8080")
 	req.Header.Set("User-Agent", "Test-Client/1.0")
-	req.Header.Set("X-API-Key", "client-api-key-12345")        // Should be removed
-	req.Header.Set("Authorization", "Bearer client-token")     // Should be removed
-	req.Header.Set("X-Custom-Header", "should-be-preserved")   // Should be kept
+	req.Header.Set("X-API-Key", "client-api-key-12345")      // Should be removed
+	req.Header.Set("Authorization", "Bearer client-token")   // Should be removed
+	req.Header.Set("X-Custom-Header", "should-be-preserved") // Should be kept
 
 	// Test the copyHeaders function
 	targetURL := "https://api.example.com/v1/messages"
@@ -109,7 +109,7 @@ func TestHostHeaderOverride(t *testing.T) {
 	originalBody := `{"test": "data"}`
 	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(originalBody))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Host", "localhost:8080")  // Original host
+	req.Header.Set("Host", "localhost:8080") // Original host
 	req.Header.Set("User-Agent", "Test-Client/1.0")
 	req.Header.Set("X-Original", "original-value")
 
@@ -204,5 +204,16 @@ func TestHostHeaderWithDifferentPorts(t *testing.T) {
 				t.Errorf("Expected Host field '%s', got '%s'", tc.expectedHost, targetReq.Host)
 			}
 		})
+	}
+}
+
+func TestDetectSSERequest_FromFormattedJSONBody(t *testing.T) {
+	handler := &Handler{}
+
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString("{\n  \"stream\": true,\n  \"message\": \"hello\"\n}"))
+	req.Header.Set("Content-Type", "application/json")
+
+	if !handler.detectSSERequest(req, []byte("{\n  \"stream\": true,\n  \"message\": \"hello\"\n}")) {
+		t.Fatal("expected detectSSERequest to parse formatted JSON body with stream=true")
 	}
 }

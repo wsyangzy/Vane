@@ -73,8 +73,14 @@ type App struct {
 	portManager     *utils.PortManager       // 端口管理器
 
 	// Codex Provider 存储 (SQLite)
-	codexProviderStore   store.CodexProviderStore      // Codex Provider 数据持久化
-	codexProviderService *service.CodexProviderService // Codex Provider 业务服务
+	codexProviderStore   store.CodexProviderStore      // Codex Provider 数据持久化（旧接口转调用）
+	codexProviderService *service.CodexProviderService // Codex Provider 业务服务（旧接口转调用）
+
+	// Codex 渠道-端点 两层存储 (SQLite, 2026-05-13 引入)
+	codexChannelStore    store.CodexChannelStore       // 渠道存储（共用配置）
+	codexEndpointStore   store.CodexEndpointStore      // 端点存储（仅 base_url）
+	codexChannelService  *service.CodexChannelService  // 渠道业务
+	codexEndpointService *service.CodexEndpointService // 端点业务
 
 	// HTTP 代理服务器 (保留，监听配置的端口)
 	proxyServer *http.Server
@@ -702,11 +708,21 @@ func (a *App) ensureCodexProviderService() {
 
 	codexProviderStore := store.NewSQLiteCodexProviderStore(db)
 	codexProviderService := service.NewCodexProviderService(codexProviderStore)
+	codexChannelStore := store.NewSQLiteCodexChannelStore(db)
+	codexEndpointStore := store.NewSQLiteCodexEndpointStore(db)
+	codexChannelService := service.NewCodexChannelService(codexChannelStore, codexEndpointStore)
+	codexEndpointService := service.NewCodexEndpointService(codexEndpointStore, codexChannelStore)
 
 	a.mu.Lock()
 	if a.codexProviderService == nil {
 		a.codexProviderStore = codexProviderStore
 		a.codexProviderService = codexProviderService
+	}
+	if a.codexChannelService == nil {
+		a.codexChannelStore = codexChannelStore
+		a.codexEndpointStore = codexEndpointStore
+		a.codexChannelService = codexChannelService
+		a.codexEndpointService = codexEndpointService
 	}
 	a.mu.Unlock()
 }

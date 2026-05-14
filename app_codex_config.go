@@ -37,31 +37,256 @@ func (a *App) ensureCodexProviderSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !tableExists {
-		return nil
-	}
 
-	hasReasoning, err := sqliteColumnExists(ctx, db, "codex_providers", "model_reasoning_effort")
-	if err != nil {
-		return err
-	}
-	if !hasReasoning {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh'"); err != nil {
-			return fmt.Errorf("为 codex_providers 添加 model_reasoning_effort 字段失败: %w", err)
+	if tableExists {
+		hasReasoning, err := sqliteColumnExists(ctx, db, "codex_providers", "model_reasoning_effort")
+		if err != nil {
+			return err
+		}
+		if !hasReasoning {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh'"); err != nil {
+				return fmt.Errorf("为 codex_providers 添加 model_reasoning_effort 字段失败: %w", err)
+			}
+		}
+
+		hasEnable1MContext, err := sqliteColumnExists(ctx, db, "codex_providers", "enable_1m_context")
+		if err != nil {
+			return err
+		}
+		if !hasEnable1MContext {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN enable_1m_context INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("为 codex_providers 添加 enable_1m_context 字段失败: %w", err)
+			}
 		}
 	}
 
-	hasEnable1MContext, err := sqliteColumnExists(ctx, db, "codex_providers", "enable_1m_context")
-	if err != nil {
+	if err := a.ensureCodexChannelsSchema(ctx, db); err != nil {
 		return err
 	}
-	if !hasEnable1MContext {
-		if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN enable_1m_context INTEGER NOT NULL DEFAULT 0"); err != nil {
-			return fmt.Errorf("为 codex_providers 添加 enable_1m_context 字段失败: %w", err)
+
+	return a.migrateCodexProvidersToChannels(ctx, db, tableExists)
+}
+
+// ensureCodexChannelsSchema 创建 codex_channels / codex_endpoints 两张表及索引/触发器（幂等）。
+func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS codex_channels (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL,
+			provider_type TEXT NOT NULL DEFAULT 'openai-compatible',
+			api_key TEXT NOT NULL,
+			model TEXT NOT NULL,
+			model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
+			enable_1m_context INTEGER NOT NULL DEFAULT 0,
+			website TEXT,
+			is_active INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_channels_name ON codex_channels(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_channels_is_active ON codex_channels(is_active)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_channels_single_active ON codex_channels(is_active) WHERE is_active = 1`,
+		`CREATE TRIGGER IF NOT EXISTS update_codex_channels_timestamp
+			AFTER UPDATE ON codex_channels
+			FOR EACH ROW
+			WHEN NEW.updated_at = OLD.updated_at
+		BEGIN
+			UPDATE codex_channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+		END`,
+		`CREATE TABLE IF NOT EXISTS codex_endpoints (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			base_url TEXT NOT NULL,
+			is_active INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			UNIQUE(channel_id, base_url),
+			UNIQUE(channel_id, name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_endpoints_channel ON codex_endpoints(channel_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_single_active_per_channel
+			ON codex_endpoints(channel_id, is_active) WHERE is_active = 1`,
+		`CREATE TRIGGER IF NOT EXISTS update_codex_endpoints_timestamp
+			AFTER UPDATE ON codex_endpoints
+			FOR EACH ROW
+			WHEN NEW.updated_at = OLD.updated_at
+		BEGIN
+			UPDATE codex_endpoints SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+		END`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("创建 Codex 渠道-端点 schema 失败: %w", err)
 		}
+	}
+
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		return fmt.Errorf("启用 SQLite foreign_keys 失败: %w", err)
+	}
+
+	// 为已升级到 v7.0 但尚未含 name 列的 codex_endpoints 表补字段（向后兼容）。
+	// 默认值用 base_url 自身（同渠道唯一约束保证不冲突）；用户可在 UI 中重命名。
+	if err := a.ensureCodexEndpointNameColumn(ctx, db); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+func (a *App) ensureCodexEndpointNameColumn(ctx context.Context, db *sql.DB) error {
+	hasName, err := sqliteColumnExists(ctx, db, "codex_endpoints", "name")
+	if err != nil {
+		return err
+	}
+	if hasName {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("为 codex_endpoints 添加 name 字段失败: %w", err)
+	}
+	// 把空 name 兜底成 base_url（保留 UNIQUE 约束语义）
+	if _, err := db.ExecContext(ctx, `UPDATE codex_endpoints SET name = base_url WHERE name = '' OR name IS NULL`); err != nil {
+		return fmt.Errorf("回填 codex_endpoints.name 失败: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_name ON codex_endpoints(channel_id, name)`); err != nil {
+		return fmt.Errorf("创建 codex_endpoints name 唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+// migrateCodexProvidersToChannels 在首次启动时把旧 codex_providers 数据迁移到新表。
+// 幂等：仅当旧表存在 && 新 codex_channels 表为空时执行；迁移完成后把旧表重命名为 codex_providers_legacy_v7。
+func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, oldTableExists bool) error {
+	if !oldTableExists {
+		return nil
+	}
+
+	var channelCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM codex_channels").Scan(&channelCount); err != nil {
+		return fmt.Errorf("读取 codex_channels 计数失败: %w", err)
+	}
+	if channelCount > 0 {
+		// 已迁移过，幂等返回
+		return nil
+	}
+
+	var oldCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM codex_providers").Scan(&oldCount); err != nil {
+		return fmt.Errorf("读取 codex_providers 计数失败: %w", err)
+	}
+	if oldCount == 0 {
+		// 旧表无数据，直接重命名作为归档
+		return a.archiveLegacyCodexProvidersTable(ctx, db)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启迁移事务失败: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT name, provider_type, base_url, api_key, model, model_reasoning_effort,
+			COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0)
+		FROM codex_providers
+	`)
+	if err != nil {
+		return fmt.Errorf("读取旧 codex_providers 数据失败: %w", err)
+	}
+
+	type legacyRow struct {
+		name, providerType, baseURL, apiKey, model, reasoningEffort, website string
+		enable1M, isActive                                                   int
+	}
+	var rowsBuf []legacyRow
+
+	for rows.Next() {
+		var r legacyRow
+		if err := rows.Scan(&r.name, &r.providerType, &r.baseURL, &r.apiKey, &r.model,
+			&r.reasoningEffort, &r.enable1M, &r.website, &r.isActive); err != nil {
+			rows.Close()
+			return fmt.Errorf("扫描旧 codex_providers 数据失败: %w", err)
+		}
+		rowsBuf = append(rowsBuf, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("迭代旧 codex_providers 数据失败: %w", err)
+	}
+
+	for _, r := range rowsBuf {
+		websiteArg := nullableTomlString(r.website)
+		channelResult, err := tx.ExecContext(ctx, `
+			INSERT INTO codex_channels (name, provider_type, api_key, model, model_reasoning_effort,
+				enable_1m_context, website, is_active)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, r.name, r.providerType, r.apiKey, r.model, r.reasoningEffort, r.enable1M, websiteArg, r.isActive)
+		if err != nil {
+			return fmt.Errorf("迁移渠道 %s 失败: %w", r.name, err)
+		}
+		channelID, err := channelResult.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("获取迁移渠道 ID 失败: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO codex_endpoints (channel_id, name, base_url, is_active) VALUES (?, ?, ?, 1)
+		`, channelID, "默认端点", r.baseURL); err != nil {
+			return fmt.Errorf("迁移端点 %s 失败: %w", r.baseURL, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交迁移事务失败: %w", err)
+	}
+
+	if a.logger != nil {
+		a.logger.Info("✅ Codex 旧数据已迁移到渠道-端点模型",
+			"migrated_channels", len(rowsBuf),
+		)
+	}
+
+	return a.archiveLegacyCodexProvidersTable(ctx, db)
+}
+
+// archiveLegacyCodexProvidersTable 把旧表重命名为 *_legacy_v7 作为安全归档（非破坏性）。
+// 幂等：若旧表已不存在或归档表已存在则跳过。
+func (a *App) archiveLegacyCodexProvidersTable(ctx context.Context, db *sql.DB) error {
+	stillExists, err := sqliteTableExists(ctx, db, "codex_providers")
+	if err != nil {
+		return err
+	}
+	if !stillExists {
+		return nil
+	}
+	legacyExists, err := sqliteTableExists(ctx, db, "codex_providers_legacy_v7")
+	if err != nil {
+		return err
+	}
+	if legacyExists {
+		// 历史归档已存在，删除旧表（避免重复触发）
+		if _, err := db.ExecContext(ctx, "DROP TABLE codex_providers"); err != nil {
+			return fmt.Errorf("删除已归档的旧 codex_providers 失败: %w", err)
+		}
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers RENAME TO codex_providers_legacy_v7"); err != nil {
+		return fmt.Errorf("归档旧 codex_providers 失败: %w", err)
+	}
+	if a.logger != nil {
+		a.logger.Info("📦 旧 codex_providers 已归档为 codex_providers_legacy_v7")
+	}
+	return nil
+}
+
+func nullableTomlString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (a *App) getCodexHomeDir() (string, error) {
@@ -553,4 +778,45 @@ func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (
 	}
 
 	return false, rows.Err()
+}
+
+// codexChannelEndpointAsProviderRecord 把渠道+端点适配为旧 CodexProviderRecord 形态，
+// 以便复用 upsertCodexProviderSection / buildCodexTopLevelConfigValues / upsertCodexAuthConfig 等已有工具。
+// 这是一个纯本地适配器（DRY），不会被外部使用。
+func codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRecord, endpoint *store.CodexEndpointRecord) *store.CodexProviderRecord {
+	if channel == nil || endpoint == nil {
+		return nil
+	}
+	return &store.CodexProviderRecord{
+		Name:            channel.Name,
+		ProviderType:    channel.ProviderType,
+		BaseURL:         endpoint.BaseURL,
+		ApiKey:          channel.ApiKey,
+		Model:           channel.Model,
+		ReasoningEffort: channel.ReasoningEffort,
+		Enable1MContext: channel.Enable1MContext,
+		Website:         channel.Website,
+	}
+}
+
+// syncActiveCodexChannelToConfig 将渠道+激活端点同步到 ~/.codex/config.toml 与 auth.json。
+// previousChannelName 不为空且与当前不同时，先移除旧 section（用于渠道改名）。
+func (a *App) syncActiveCodexChannelToConfig(channel *store.CodexChannelRecord, endpoint *store.CodexEndpointRecord, previousChannelName string) error {
+	if channel == nil {
+		return fmt.Errorf("Codex 渠道为空")
+	}
+	if endpoint == nil {
+		return fmt.Errorf("Codex 渠道 '%s' 没有可用端点", channel.Name)
+	}
+	record := codexChannelEndpointAsProviderRecord(channel, endpoint)
+	return a.syncActiveCodexProviderToConfig(record, previousChannelName)
+}
+
+// removeCodexChannelConfig 删除指定渠道的 config.toml section；若 nextChannel/nextEndpoint 不为空，则切换到下一个渠道。
+func (a *App) removeCodexChannelConfig(name string, nextChannel *store.CodexChannelRecord, nextEndpoint *store.CodexEndpointRecord) error {
+	var nextRecord *store.CodexProviderRecord
+	if nextChannel != nil && nextEndpoint != nil {
+		nextRecord = codexChannelEndpointAsProviderRecord(nextChannel, nextEndpoint)
+	}
+	return a.removeCodexProviderConfig(name, nextRecord)
 }

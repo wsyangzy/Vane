@@ -148,7 +148,7 @@ func normalizeAndValidateCodexProvider(record *store.CodexProviderRecord) error 
 		return fmt.Errorf("提供商标识仅允许字母、数字、连字符和下划线，且必须以字母或数字开头")
 	}
 	if record.ProviderType == "" {
-		return fmt.Errorf("接入类型不能为空")
+		record.ProviderType = "openai-compatible"
 	}
 	if record.BaseURL == "" {
 		return fmt.Errorf("Base URL 不能为空")

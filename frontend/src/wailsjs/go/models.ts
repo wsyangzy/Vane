@@ -281,6 +281,145 @@ export namespace main {
 	        this.website = source["website"];
 	    }
 	}
+	// ============ Codex Channel-Endpoint 类型（2026-05-13 新增） ============
+	export class CodexEndpointInfo {
+	    id: number;
+	    channel_id: number;
+	    name: string;
+	    base_url: string;
+	    is_active: boolean;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CodexEndpointInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.channel_id = source["channel_id"];
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	        this.is_active = source["is_active"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class CodexChannelInfo {
+	    id: number;
+	    name: string;
+	    provider_type: string;
+	    api_key: string;
+	    api_key_masked: string;
+	    model: string;
+	    model_reasoning_effort: string;
+	    enable_1m_context: boolean;
+	    website: string;
+	    is_active: boolean;
+	    endpoints: CodexEndpointInfo[];
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CodexChannelInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.provider_type = source["provider_type"];
+	        this.api_key = source["api_key"];
+	        this.api_key_masked = source["api_key_masked"];
+	        this.model = source["model"];
+	        this.model_reasoning_effort = source["model_reasoning_effort"];
+	        this.enable_1m_context = source["enable_1m_context"];
+	        this.website = source["website"];
+	        this.is_active = source["is_active"];
+	        this.endpoints = (source["endpoints"] || []).map((e: any) => new CodexEndpointInfo(e));
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class CreateCodexChannelInput {
+	    name: string;
+	    provider_type: string;
+	    api_key: string;
+	    model: string;
+	    model_reasoning_effort: string;
+	    enable_1m_context: boolean;
+	    website: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CreateCodexChannelInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider_type = source["provider_type"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.model_reasoning_effort = source["model_reasoning_effort"];
+	        this.enable_1m_context = source["enable_1m_context"];
+	        this.website = source["website"];
+	    }
+	}
+	export class UpdateCodexChannelInput {
+	    name: string;
+	    provider_type: string;
+	    api_key: string;
+	    model: string;
+	    model_reasoning_effort: string;
+	    enable_1m_context: boolean;
+	    website: string;
+
+	    static createFrom(source: any = {}) {
+	        return new UpdateCodexChannelInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.provider_type = source["provider_type"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	        this.model_reasoning_effort = source["model_reasoning_effort"];
+	        this.enable_1m_context = source["enable_1m_context"];
+	        this.website = source["website"];
+	    }
+	}
+	export class CreateCodexEndpointInput {
+	    channel_id: number;
+	    name: string;
+	    base_url: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CreateCodexEndpointInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channel_id = source["channel_id"];
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	    }
+	}
+	export class UpdateCodexEndpointInput {
+	    name: string;
+	    base_url: string;
+
+	    static createFrom(source: any = {}) {
+	        return new UpdateCodexEndpointInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.base_url = source["base_url"];
+	    }
+	}
 	export class CreateEndpointInput {
 	    channel: string;
 	    name: string;

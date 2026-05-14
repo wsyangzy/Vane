@@ -340,3 +340,41 @@ export function UpdateSetting(arg1) {
   return Call.ByName("main.App.UpdateSetting", arg1);
 }
 
+// ============ Codex Channel-Endpoint API（2026-05-13 新增） ============
+
+export function GetCodexChannels() {
+  return Call.ByName("main.App.GetCodexChannels");
+}
+
+export function CreateCodexChannel(arg1) {
+  return Call.ByName("main.App.CreateCodexChannel", arg1);
+}
+
+export function UpdateCodexChannelByID(arg1, arg2) {
+  return Call.ByName("main.App.UpdateCodexChannelByID", arg1, arg2);
+}
+
+export function DeleteCodexChannelByID(arg1) {
+  return Call.ByName("main.App.DeleteCodexChannelByID", arg1);
+}
+
+export function ActivateCodexChannel(arg1) {
+  return Call.ByName("main.App.ActivateCodexChannel", arg1);
+}
+
+export function CreateCodexEndpoint(arg1) {
+  return Call.ByName("main.App.CreateCodexEndpoint", arg1);
+}
+
+export function UpdateCodexEndpointByID(arg1, arg2) {
+  return Call.ByName("main.App.UpdateCodexEndpointByID", arg1, arg2);
+}
+
+export function DeleteCodexEndpointByID(arg1) {
+  return Call.ByName("main.App.DeleteCodexEndpointByID", arg1);
+}
+
+export function ActivateCodexEndpoint(arg1) {
+  return Call.ByName("main.App.ActivateCodexEndpoint", arg1);
+}
+

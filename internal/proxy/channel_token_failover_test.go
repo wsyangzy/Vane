@@ -258,3 +258,89 @@ func TestChannelFailover_FastestStrategy_SwitchesAuthorizationToken(t *testing.T
 		}
 	}
 }
+
+func TestChannelFailover_RequestFailureDoesNotPoisonFutureRequests(t *testing.T) {
+	// 两个端点都只在首次请求时失败。
+	// 第一个请求会完全失败，但第二个请求应该仍然能重新尝试这两个端点并成功，
+	// 而不是因为上一次请求的失败把端点池永久毒化。
+	s1 := newAuthCapturingServer(1)
+	defer s1.Close()
+	s2 := newAuthCapturingServer(1)
+	defer s2.Close()
+
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{
+			Type: "priority",
+		},
+		Retry: config.RetryConfig{
+			MaxAttempts: 1,
+			BaseDelay:   10 * time.Millisecond,
+			MaxDelay:    10 * time.Millisecond,
+			Multiplier:  1.0,
+		},
+		Failover: config.FailoverConfig{
+			Enabled: false,
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:            "ep-1",
+				URL:             s1.server.URL,
+				Channel:         "A",
+				Priority:        1,
+				Timeout:         3 * time.Second,
+				Token:           "token-A",
+				FailoverEnabled: boolPtr(true),
+			},
+			{
+				Name:            "ep-2",
+				URL:             s2.server.URL,
+				Channel:         "A",
+				Priority:        2,
+				Timeout:         3 * time.Second,
+				Token:           "token-B",
+				FailoverEnabled: boolPtr(true),
+			},
+		},
+	}
+
+	endpointManager := endpoint.NewManager(cfg)
+	handler := NewHandler(endpointManager, cfg)
+
+	for _, ep := range endpointManager.GetAllEndpoints() {
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		ep.Status.LastCheck = time.Now()
+	}
+	if err := endpointManager.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+
+	makeRequest := func() *httptest.ResponseRecorder {
+		body := `{"message":"test streaming request","stream":true}`
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+		rec := httptest.NewRecorder()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		handler.ServeHTTP(rec, req.WithContext(ctx))
+		return rec
+	}
+
+	first := makeRequest()
+	if strings.Contains(first.Body.String(), "message_start") {
+		t.Fatalf("expected first request to fail across both endpoints, got body=%s", first.Body.String())
+	}
+
+	second := makeRequest()
+	if !strings.Contains(second.Body.String(), "message_start") {
+		t.Fatalf("expected second request to succeed after transient failures, got code=%d body=%s", second.Code, second.Body.String())
+	}
+
+	if s1.RequestCount() < 2 {
+		t.Fatalf("expected the highest-priority endpoint to be retried on the second request, got s1=%d", s1.RequestCount())
+	}
+	if strings.Contains(second.Body.String(), "no healthy endpoints") {
+		t.Fatalf("expected endpoint pool to recover for the second request, got body=%s", second.Body.String())
+	}
+}

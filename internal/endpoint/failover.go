@@ -67,12 +67,10 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 			ep.mutex.RLock()
 			isHealthy := ep.Status.Healthy
 			neverChecked := ep.Status.NeverChecked
-			isRequestFailed := ep.Status.RequestFailed // 请求失败标记
 			rt := ep.Status.ResponseTime
 			ep.mutex.RUnlock()
 
-			// 端点可用条件 = (健康 || 未检查) && 未被请求失败标记
-			if !(isHealthy || neverChecked) || isRequestFailed {
+			if !(isHealthy || neverChecked) {
 				continue
 			}
 
@@ -353,10 +351,8 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		}
 	}
 
-	// 2) 冷却机制已移除，标记失败端点为不健康
-	// 同时设置 NeverChecked = false，防止 neverChecked 端点被误认为"可用"而导致无限循环
-	// 合并日志输出，避免循环重试时日志膨胀
-	// 设置 RequestFailed = true，与 Healthy（健康检查状态）分离
+	// 2) 记录本次失败供 UI 诊断，但不修改健康检查健康度。
+	// 当前请求内的去重由 triedEndpoints/excludeChannels 负责，不能把一次请求失败扩散成后续请求的全局下线。
 	var markedEndpoints []string
 	for _, name := range uniqueNames {
 		ep := m.GetEndpointByNameAny(name)
@@ -364,9 +360,8 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 			continue
 		}
 		ep.mutex.Lock()
-		ep.Status.Healthy = false
-		ep.Status.RequestFailed = true  // 标记为请求失败，健康检查不会覆盖此状态
-		ep.Status.NeverChecked = false // 关键修复：防止 neverChecked 端点在故障转移候选中被误判为可用
+		ep.Status.RequestFailed = true
+		ep.Status.NeverChecked = false
 		ep.mutex.Unlock()
 		markedEndpoints = append(markedEndpoints, name)
 	}
@@ -450,7 +445,7 @@ func (m *Manager) resetAllEndpointsHealthForLoopRetry() {
 			if !ep.Status.Healthy || ep.Status.RequestFailed {
 				ep.Status.Healthy = true
 				ep.Status.RequestFailed = false // 重置请求失败标记
-				ep.Status.NeverChecked = true // 标记为"未检查"，让选择逻辑认为它是可用的
+				ep.Status.NeverChecked = true   // 标记为"未检查"，让选择逻辑认为它是可用的
 				// 注意：不清除 LastRequestFailCode 和 LastRequestFailReason，保留给 UI 显示
 				resetCount++
 			}

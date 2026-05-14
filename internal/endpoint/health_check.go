@@ -316,6 +316,7 @@ func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, respons
 	if healthy {
 		// Endpoint is healthy
 		endpoint.Status.Healthy = true
+		endpoint.Status.RequestFailed = false
 		endpoint.Status.ConsecutiveFails = 0
 		// 健康时清除错误信息
 		endpoint.Status.LastRequestFailCode = 0
@@ -416,13 +417,12 @@ func (e *Endpoint) GetHealthState() string {
 
 // MarkRequestFailed 标记端点为请求失败状态
 // 新增方法，用于渠道内端点切换时立即标记失败端点，防止端点循环
-// 同时设置 Healthy = false，确保前端状态显示正确
+// 仅作为诊断标记使用，不应覆盖健康检查结果
 // err: 失败的原因错误（可为 nil）
 func (e *Endpoint) MarkRequestFailed(err error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	e.Status.Healthy = false       // 前端依赖此字段显示状态
 	e.Status.RequestFailed = true
 	e.Status.NeverChecked = false // 防止 neverChecked 端点被误判为可用
 
@@ -455,7 +455,6 @@ func (m *Manager) MarkEndpointsRequestFailed(endpointKeys []string, lastError er
 			continue
 		}
 		ep.mutex.Lock()
-		ep.Status.Healthy = false
 		ep.Status.RequestFailed = true
 		ep.Status.NeverChecked = false
 		if lastError != nil {

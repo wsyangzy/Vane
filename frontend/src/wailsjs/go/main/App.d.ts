@@ -161,6 +161,17 @@ export function UpdateChannel(arg1:main.UpdateChannelInput):Promise<void>;
 
 export function UpdateCodexProviderByID(arg1:number,arg2:main.UpdateCodexProviderInput):Promise<void>;
 
+// ============ Codex Channel-Endpoint API（2026-05-13 新增） ============
+export function GetCodexChannels():Promise<Array<main.CodexChannelInfo>>;
+export function CreateCodexChannel(arg1:main.CreateCodexChannelInput):Promise<void>;
+export function UpdateCodexChannelByID(arg1:number,arg2:main.UpdateCodexChannelInput):Promise<void>;
+export function DeleteCodexChannelByID(arg1:number):Promise<void>;
+export function ActivateCodexChannel(arg1:number):Promise<void>;
+export function CreateCodexEndpoint(arg1:main.CreateCodexEndpointInput):Promise<void>;
+export function UpdateCodexEndpointByID(arg1:number,arg2:main.UpdateCodexEndpointInput):Promise<void>;
+export function DeleteCodexEndpointByID(arg1:number):Promise<void>;
+export function ActivateCodexEndpoint(arg1:number):Promise<void>;
+
 export function UpdateEndpointRecord(arg1:string,arg2:main.CreateEndpointInput):Promise<void>;
 
 export function UpdateEndpointRecordByID(arg1:number,arg2:main.CreateEndpointInput):Promise<void>;

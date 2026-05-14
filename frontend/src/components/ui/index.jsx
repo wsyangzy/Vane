@@ -51,17 +51,15 @@ export const KPICard = ({
     const resolvedIconSize = iconSize ?? (isLarge ? 19 : 18);
     return (
       <div className={`h-full bg-white rounded-2xl border border-slate-200/60 shadow-sm hover:shadow-md transition-shadow flex flex-col ${isLarge ? 'p-5' : 'p-4'}`}>
-        <div className={`flex items-center justify-between ${isLarge ? 'gap-5' : 'gap-4'}`}>
-          <div className={`flex min-w-0 items-center flex-1 ${isLarge ? 'gap-3.5' : 'gap-3'}`}>
+        <div className={`flex items-center justify-between ${isLarge ? 'gap-3' : 'gap-2.5'}`}>
+          <div className={`flex flex-shrink-0 items-center ${isLarge ? 'gap-3.5' : 'gap-3'}`}>
             <div className={`rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor} ${iconContainerClassName}`}>
               <Icon size={resolvedIconSize} className={iconClassName} />
             </div>
-            <div className="min-w-0 flex-1">
-              <h3 className={`${wrapTitle ? 'whitespace-normal break-all leading-snug' : 'truncate'} text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'} ${titleClassName}`}>{title}</h3>
-            </div>
+            <h3 className={`whitespace-nowrap text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'} ${titleClassName}`}>{title}</h3>
           </div>
           <div
-            className={`text-right font-bold text-slate-900 cursor-default ${wrapValue ? 'min-w-0 max-w-[12rem] whitespace-normal break-all leading-snug' : `flex-shrink-0 truncate ${isLarge ? 'max-w-[10rem] text-[1.2rem]' : 'max-w-[9rem] text-lg'}`} ${isLarge && wrapValue ? 'text-[1.05rem]' : ''} ${!isLarge && wrapValue ? 'text-base' : ''} ${valueClassName}`}
+            className={`min-w-0 flex-1 text-right font-bold text-slate-900 cursor-default ${wrapValue ? 'whitespace-normal break-all leading-snug' : 'truncate'} ${isLarge ? 'text-[1.2rem]' : 'text-lg'} ${isLarge && wrapValue ? 'text-[1.05rem]' : ''} ${!isLarge && wrapValue ? 'text-base' : ''} ${valueClassName}`}
             title={tooltip || value}
           >
             {value}

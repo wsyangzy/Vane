@@ -373,10 +373,14 @@ func (h *Handler) detectSSERequest(r *http.Request, bodyBytes []byte) bool {
 		return true
 	}
 
-	// 4. 请求体包含stream参数为true
-	bodyStr := string(bodyBytes)
-	if strings.Contains(bodyStr, `"stream":true`) || strings.Contains(bodyStr, `"stream": true`) {
-		return true
+	// 4. 请求体 JSON 中显式包含 stream=true
+	if len(bodyBytes) > 0 {
+		var requestBody struct {
+			Stream *bool `json:"stream"`
+		}
+		if err := json.Unmarshal(bodyBytes, &requestBody); err == nil && requestBody.Stream != nil {
+			return *requestBody.Stream
+		}
 	}
 
 	return false

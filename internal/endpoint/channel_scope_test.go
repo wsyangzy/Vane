@@ -95,3 +95,39 @@ func TestGetHealthyEndpoints_FailoverEnabledScopedToActiveChannel(t *testing.T) 
 	}
 }
 
+func TestGetHealthyEndpoints_IgnoresRequestFailedForNewRequests(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "priority"},
+		Health:   config.HealthConfig{Timeout: 5 * time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "a1", URL: "http://example.invalid", Channel: "A", Priority: 1, Timeout: 1 * time.Second},
+			{Name: "a2", URL: "http://example.invalid", Channel: "A", Priority: 2, Timeout: 1 * time.Second},
+		},
+	}
+
+	m := NewManager(cfg)
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		ep.mutex.Unlock()
+	}
+
+	if err := m.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+
+	// 模拟上一条请求中 a1 失败过，但这不应污染新的请求候选池。
+	m.GetAllEndpoints()[0].mutex.Lock()
+	m.GetAllEndpoints()[0].Status.RequestFailed = true
+	m.GetAllEndpoints()[0].mutex.Unlock()
+
+	healthy := m.GetHealthyEndpoints()
+	if len(healthy) != 2 {
+		t.Fatalf("expected both endpoints to remain routable for new requests, got %d", len(healthy))
+	}
+	if healthy[0].Config.Name != "a1" || healthy[1].Config.Name != "a2" {
+		t.Fatalf("unexpected order: got [%s, %s], want [a1, a2]",
+			healthy[0].Config.Name, healthy[1].Config.Name)
+	}
+}

@@ -1431,6 +1431,155 @@ export const activateCodexProvider = async (id) => {
 };
 
 // ============================================
+// Codex 渠道-端点 管理 API（2026-05-13 新增）
+// ============================================
+
+const mapCodexEndpoint = (endpoint) => ({
+  id: endpoint.id,
+  channelId: endpoint.channel_id,
+  name: endpoint.name || '',
+  baseURL: endpoint.base_url,
+  isActive: Boolean(endpoint.is_active),
+  createdAt: endpoint.created_at,
+  updatedAt: endpoint.updated_at
+});
+
+const mapCodexChannel = (channel) => {
+  // 显式按 createdAt + id 排序，确保激活操作不改变端点显示顺序
+  // （即便后端因缓存或旧二进制返回了 is_active 优先排序）
+  const sortedEndpoints = (channel.endpoints || [])
+    .map(mapCodexEndpoint)
+    .sort((a, b) => {
+      const ta = a.createdAt || '';
+      const tb = b.createdAt || '';
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      return (a.id || 0) - (b.id || 0);
+    });
+  return {
+    id: channel.id,
+    name: channel.name,
+    providerType: channel.provider_type,
+    apiKey: channel.api_key,
+    apiKeyMasked: channel.api_key_masked,
+    model: channel.model,
+    reasoningEffort: channel.model_reasoning_effort || '',
+    enable1MContext: Boolean(channel.enable_1m_context),
+    website: channel.website || '',
+    isActive: Boolean(channel.is_active),
+    endpoints: sortedEndpoints,
+    createdAt: channel.created_at,
+    updatedAt: channel.updated_at
+  };
+};
+
+const buildCodexChannelPayload = (input) => ({
+  name: (input?.name || '').trim(),
+  provider_type: (input?.providerType || 'openai-compatible').trim(),
+  api_key: (input?.apiKey || '').trim(),
+  model: (input?.model || '').trim(),
+  model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
+  enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
+  website: (input?.website || '').trim()
+});
+
+/**
+ * 获取所有 Codex 渠道（含端点列表）
+ */
+export const getCodexChannels = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const channels = await WailsApp.GetCodexChannels();
+  return (channels || []).map(mapCodexChannel);
+};
+
+/**
+ * 创建 Codex 渠道（不含端点；端点单独添加）
+ */
+export const createCodexChannel = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.CreateCodexChannel(buildCodexChannelPayload(input));
+  return { success: true };
+};
+
+/**
+ * 更新 Codex 渠道
+ */
+export const updateCodexChannelByID = async (id, input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.UpdateCodexChannelByID(id, buildCodexChannelPayload(input));
+  return { success: true };
+};
+
+/**
+ * 删除 Codex 渠道（级联删除其端点）
+ */
+export const deleteCodexChannelByID = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeleteCodexChannelByID(id);
+  return { success: true };
+};
+
+/**
+ * 激活渠道（自动激活该渠道下的某个端点并写入 config.toml）
+ */
+export const activateCodexChannel = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.ActivateCodexChannel(id);
+  return { success: true };
+};
+
+/**
+ * 在指定渠道下新增端点（name + base_url）
+ */
+export const createCodexEndpoint = async ({ channelId, name, baseURL }) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.CreateCodexEndpoint({
+    channel_id: channelId,
+    name: (name || '').trim(),
+    base_url: (baseURL || '').trim()
+  });
+  return { success: true };
+};
+
+/**
+ * 更新端点 name + base_url
+ */
+export const updateCodexEndpointByID = async (id, { name, baseURL }) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.UpdateCodexEndpointByID(id, {
+    name: (name || '').trim(),
+    base_url: (baseURL || '').trim()
+  });
+  return { success: true };
+};
+
+/**
+ * 删除端点
+ */
+export const deleteCodexEndpointByID = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeleteCodexEndpointByID(id);
+  return { success: true };
+};
+
+/**
+ * 激活端点（仅当所属渠道为当前激活渠道时才同步 config.toml 的 base_url 行）
+ */
+export const activateCodexEndpoint = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.ActivateCodexEndpoint(id);
+  return { success: true };
+};
+
+// ============================================
 // 系统设置管理 API (SQLite)
 // ============================================
 

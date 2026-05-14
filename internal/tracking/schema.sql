@@ -241,6 +241,68 @@ BEGIN
 END;
 
 -- ============================================================================
+-- Codex 渠道-端点 两层模型 (新增 - 2026-05-13)
+-- 一个渠道承载共用配置（API Key/模型/推理强度/1M 上下文/官网/provider_type）
+-- 一个渠道下可挂多个端点，端点仅含 base_url；切换激活端点时只改写 config.toml 的 base_url 行
+-- 单活语义：全局唯一一个 codex_channels.is_active=1，每个渠道下唯一一个 codex_endpoints.is_active=1
+-- 旧 codex_providers 数据通过运行时 ensureCodexChannelsSchema 自动迁移到新表，旧表保留为 codex_providers_legacy_v7
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS codex_channels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    name TEXT UNIQUE NOT NULL,                                  -- 渠道名（同时作为 config.toml 中 model_provider 与 [model_providers.<name>] section）
+    provider_type TEXT NOT NULL DEFAULT 'openai-compatible',    -- 接入类型元数据（当前不参与分流，保留扩展位）
+    api_key TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
+    enable_1m_context INTEGER NOT NULL DEFAULT 0,
+    website TEXT,
+    is_active INTEGER NOT NULL DEFAULT 0,
+
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+);
+
+CREATE INDEX IF NOT EXISTS idx_codex_channels_name ON codex_channels(name);
+CREATE INDEX IF NOT EXISTS idx_codex_channels_is_active ON codex_channels(is_active);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_channels_single_active ON codex_channels(is_active) WHERE is_active = 1;
+
+CREATE TRIGGER IF NOT EXISTS update_codex_channels_timestamp
+    AFTER UPDATE ON codex_channels
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE codex_channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
+CREATE TABLE IF NOT EXISTS codex_endpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,                                         -- 端点名（同渠道内唯一，仅作为 UI 标识）
+    base_url TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 0,
+
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+
+    UNIQUE(channel_id, base_url),
+    UNIQUE(channel_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_codex_endpoints_channel ON codex_endpoints(channel_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_single_active_per_channel
+    ON codex_endpoints(channel_id, is_active) WHERE is_active = 1;
+
+CREATE TRIGGER IF NOT EXISTS update_codex_endpoints_timestamp
+    AFTER UPDATE ON codex_endpoints
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE codex_endpoints SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
+-- ============================================================================
 -- 模型定价表 (新增 - 2025-12-06, 更新于 2025-12-06 支持 5m/1h 缓存)
 -- 将模型定价从 config.yaml 迁移到 SQLite，支持动态管理
 -- ============================================================================
