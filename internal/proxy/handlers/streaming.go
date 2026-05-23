@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -60,6 +61,10 @@ func NewStreamingHandler(
 }
 
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
+//
+// ⚠️ [Deprecated for production] 此类型仅保留供既有单元测试使用。
+// 生产代码（handleStreamingV2）已改为：检测到 ResponseWriter 不支持 Flusher 时
+// 直接返回 503，避免静默降级导致客户端长时间等不到流式数据。
 type noOpFlusher struct{}
 
 func (f *noOpFlusher) Flush() {
@@ -68,28 +73,24 @@ func (f *noOpFlusher) Flush() {
 
 // sendAnthropicRetryableError 发送 Anthropic API 标准格式的可重试错误事件
 // 使用 overloaded_error 类型，Claude Code 等客户端会识别并自动重试
+//
+// 🔧 [P0-S2 修复] 改用 json.Marshal 序列化 payload，避免手写转义遗漏控制字符 / 无效 UTF-8，
+// 杜绝因消息中含特殊字符导致客户端 "JSON Parse error: Unterminated string / Expected '}'"。
 func sendAnthropicRetryableError(w http.ResponseWriter, flusher http.Flusher, message string) {
-	// 发送 SSE 格式的 error 事件
-	// 格式: event: error\ndata: {"type":"error","error":{"type":"xxx","message":"xxx"}}\n\n
-	fmt.Fprintf(w, "event: error\n")
-	fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"%s\"}}\n\n",
-		escapeJSONString(message))
-	flusher.Flush()
+	writeSSEErrorEvent(w, flusher, "overloaded_error", message)
 }
 
 // terminateSSEStreamWithError 正确终止 SSE 流，确保客户端不会自动重连
 // 修复客户端无限重连问题 - 发送完整的 SSE 结束序列
+//
+// 🔧 [P0-S2 修复] 改用 json.Marshal 构造 JSON payload，
+// 同时确保 message_stop 也走结构化构造路径。
 func terminateSSEStreamWithError(w http.ResponseWriter, flusher http.Flusher, errorMsg string) {
 	// 1. 发送 Anthropic 格式的 error 事件（让客户端识别为 API 错误而非连接中断）
-	fmt.Fprintf(w, "event: error\n")
-	fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"%s\"}}\n\n",
-		escapeJSONString(errorMsg))
-	flusher.Flush()
+	writeSSEErrorEvent(w, flusher, "api_error", errorMsg)
 
 	// 2. 发送 message_stop 事件（关键！明确告知客户端流已正常结束）
-	fmt.Fprintf(w, "event: message_stop\n")
-	fmt.Fprintf(w, "data: {\"type\":\"message_stop\"}\n\n")
-	flusher.Flush()
+	writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 }
 
 // sendStreamInterruptedMessage 发送流中断错误，触发客户端自动重试
@@ -97,17 +98,51 @@ func terminateSSEStreamWithError(w http.ResponseWriter, flusher http.Flusher, er
 // 之前的实现发送"假装完整"的消息，Claude Code 不会识别为需要重试
 // 现在发送 overloaded_error，这是 Anthropic 定义的可重试错误类型
 // 参考: https://docs.anthropic.com/en/api/errors
+//
+// 🔧 [P0-S2 修复] 改用 json.Marshal 构造 payload，
+// 与 sendAnthropicRetryableError 共用 writeSSEErrorEvent 实现 DRY。
 func sendStreamInterruptedMessage(w http.ResponseWriter, flusher http.Flusher, message string, modelName string) {
 	// modelName 参数保留以保持向后兼容，但不再使用
 	_ = modelName
 
 	slog.Debug("📡 发送可重试错误信号", "message", message, "error_type", "overloaded_error")
 
-	// 发送 Anthropic 标准格式的可重试错误事件
-	// overloaded_error 类型表示服务暂时过载，客户端应该重试
-	fmt.Fprintf(w, "event: error\n")
-	fmt.Fprintf(w, "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"%s\"}}\n\n",
-		escapeJSONString(message))
+	writeSSEErrorEvent(w, flusher, "overloaded_error", message)
+}
+
+// writeSSEErrorEvent 构造并发送一个 Anthropic 标准格式的 SSE error 事件
+// 格式: event: error\ndata: {"type":"error","error":{"type":"<errorType>","message":"<message>"}}\n\n
+//
+// 🔧 [P0-S2 修复] 使用 json.Marshal 而非手写字符串转义，标准库保证：
+//   - 正确转义所有控制字符（\x00-\x1F）
+//   - 正确处理无效 UTF-8 序列（替换为 U+FFFD）
+//   - 正确转义反斜杠、引号、Unicode
+//
+// 这是修复 "JSON Parse error" 类问题的核心防线。
+func writeSSEErrorEvent(w http.ResponseWriter, flusher http.Flusher, errorType, message string) {
+	payload := map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    errorType,
+			"message": message,
+		},
+	}
+	writeSSEEvent(w, flusher, "error", payload)
+}
+
+// writeSSEEvent 通用 SSE 事件写入：序列化 payload 为 JSON 并按 SSE 协议输出
+// 写入失败仅记录日志（连接可能已断开），上层通过 ctx.Err() 感知客户端取消
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventName string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		// 兜底：json.Marshal 几乎不会失败，但万一失败时退化为静态错误消息
+		slog.Error("Failed to marshal SSE payload", "event", eventName, "error", err)
+		data = []byte(`{"type":"error","error":{"type":"api_error","message":"internal marshal error"}}`)
+	}
+	if _, werr := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, data); werr != nil {
+		slog.Debug("Failed to write SSE event to client (connection likely closed)", "event", eventName, "error", werr)
+		return
+	}
 	flusher.Flush()
 }
 
@@ -123,6 +158,10 @@ func isStreamingEOFError(err error) bool {
 }
 
 // escapeJSONString 对字符串进行 JSON 转义
+//
+// ⚠️ [Deprecated] 此函数仅保留供既有测试兼容，新代码请使用 json.Marshal。
+// 该函数仅覆盖最常见 5 个转义场景，不处理控制字符与无效 UTF-8，
+// 详见 writeSSEErrorEvent 中的修复说明。
 func escapeJSONString(s string) string {
 	s = strings.ReplaceAll(s, "\\", "\\\\")
 	s = strings.ReplaceAll(s, "\"", "\\\"")
@@ -146,16 +185,21 @@ func (sh *StreamingHandler) HandleStreamingRequest(ctx context.Context, w http.R
 func (sh *StreamingHandler) handleStreamingV2(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
 	connID := lifecycleManager.GetRequestID()
 
-	// 设置流式响应头
-	sh.setStreamingHeaders(w)
-
-	// 获取Flusher - 如果不支持，使用无flush模式继续流式处理
+	// 🔧 [P2-S2 修复] 获取 Flusher - 不支持时直接 503，拒绝伪装
+	// 旧逻辑用 noOpFlusher 静默退化，会导致客户端长时间等不到流式数据，
+	// 直至 handler 返回时一次性发送（甚至 socket 已断开）。
+	// 直接 503 让上层（中间件 / 客户端）感知到环境不支持流式，按需降级或重试。
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		slog.Warn(fmt.Sprintf("🌊 [Flusher不支持] [%s] 将使用无flush模式的流式处理", connID))
-		// 创建一个mock flusher，不执行实际flush操作
-		flusher = &noOpFlusher{}
+		slog.Error(fmt.Sprintf("🚨 [Flusher不支持] [%s] 当前 ResponseWriter 未实现 http.Flusher，拒绝流式请求", connID))
+		lifecycleManager.FailRequest("flusher_unsupported",
+			"ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
+		http.Error(w, "Streaming not supported by this proxy chain", http.StatusServiceUnavailable)
+		return
 	}
+
+	// 设置流式响应头
+	sh.setStreamingHeaders(w)
 
 	// 继续执行流式请求处理
 	triedChannels := make(map[string]struct{}, 4)
@@ -311,8 +355,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
 				*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-				fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 				return
 			default:
 			}
@@ -327,8 +370,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
 				*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-				fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 				return
 			}
 			if err == nil && IsSuccessStatus(resp.StatusCode) {
@@ -362,8 +404,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 流式处理期间检测到客户端取消，立即停止重试", connID))
 					lifecycleManager.CancelRequest("client disconnected during stream processing", nil)
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-					fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-					flusher.Flush()
+					// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 					return
 				}
 
@@ -477,8 +518,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 					// 根据状态决定是否发送错误信息
 					if status == "cancelled" {
-						fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-						flusher.Flush()
+						// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 					} else {
 						// 使用 sendStreamInterruptedMessage 触发客户端重试
 						// 流式处理阶段已向客户端发送了部分数据，需要正确终止
@@ -566,8 +606,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
 				*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-				fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 				return
 			}
 
@@ -577,8 +616,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 🚀 [状态机重构] Phase 4: 挂起时更新状态
 					lifecycleManager.UpdateStatus("suspended", -1, 0)
 					slog.Info(fmt.Sprintf("⏸️ [流式挂起] [%s] 原因: %s，失败端点: %s", connID, decision.Reason, ep.Config.Name))
-					fmt.Fprintf(w, "data: suspend: 请求已挂起，等待端点 %s 恢复或组切换...\n\n", ep.Config.Name)
-					flusher.Flush()
+					// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: suspend:" 数据行
 
 					// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
 					failedEndpointKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
@@ -604,8 +642,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							restartCount := lifecycleManager.IncrementRestart()
 							slog.Info(fmt.Sprintf("🔄 [端点恢复重启] [%s] 端点 %s 已恢复，重启次数: %d/%d",
 								connID, ep.Config.Name, restartCount, lifecycleManager.GetMaxRestarts()))
-							fmt.Fprintf(w, "data: resume: 端点已恢复，重新开始处理...\n\n")
-							flusher.Flush()
+							// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: resume:" 数据行
 							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount)
 							return
 						} else {
@@ -628,8 +665,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						// 🔧 [状态码修复] 设置取消状态码到上下文用于日志记录
 						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
 						lifecycleManager.CancelRequest("suspended then cancelled", nil)
-						fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-						flusher.Flush()
+						// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 						return
 					case SuspensionTimeout:
 						// 🔧 [修复] 添加生命周期状态更新
@@ -706,10 +742,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				slog.Info(fmt.Sprintf("⏳ [等待重试] [%s] 端点: %s, 延迟: %v, 原因: %s",
 					connID, ep.Config.Name, decision.Delay, decision.Reason))
 
-				// 向客户端发送重试信息
-				fmt.Fprintf(w, "data: retry: 重试端点 %s (尝试 %d/%d)，等待 %v...\n\n",
-					ep.Config.Name, attempt+1, sh.config.Retry.MaxAttempts, decision.Delay)
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: retry:" 数据行
 
 				// 等待延迟，同时检查取消
 				select {
@@ -719,8 +752,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 					// 🔧 [日志状态码] 设置真实错误码到上下文用于日志记录
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-					fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-					flusher.Flush()
+					// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 					return
 				case <-time.After(decision.Delay):
 					// 继续下一次重试
@@ -801,8 +833,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			// 如果不是最后一个端点，尝试下一个端点
 			if i < len(endpoints)-1 {
-				fmt.Fprintf(w, "data: retry: 切换到备用端点: %s\n\n", endpoints[i+1].Config.Name)
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: retry:" 数据行
+				slog.Info(fmt.Sprintf("🔀 [切换备用端点] [%s] %s -> %s",
+					connID, ep.Config.Name, endpoints[i+1].Config.Name))
 				continue
 			}
 		}
@@ -824,8 +857,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级重试一次",
 					connID, len(recoveredEndpoints)))
-				fmt.Fprintf(w, "data: retry: 检测到 %d 个端点已恢复，尝试重试...\n\n", len(recoveredEndpoints))
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: retry:" 数据行
 
 				// 对每个已恢复的端点尝试一次（按优先级顺序）
 				for _, ep := range recoveredEndpoints {
@@ -835,8 +867,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复重试期间检测到客户端取消", connID))
 						lifecycleManager.CancelRequest("client disconnected during recovery retry", nil)
 						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-						fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-						flusher.Flush()
+						// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 						return
 					default:
 					}
@@ -852,8 +883,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 					slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 尝试已恢复端点: %s (优先级: %d)",
 						connID, ep.Config.Name, ep.Config.Priority))
-					fmt.Fprintf(w, "data: retry: 尝试已恢复端点: %s\n\n", ep.Config.Name)
-					flusher.Flush()
+					// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: retry:" 数据行
+					// 内部重试状态已通过上方 slog 记录
 
 					// 尝试转发请求
 					resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, bodyBytes, ep)
@@ -861,8 +892,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复重试期间检测到客户端取消，立即停止重试", connID))
 						lifecycleManager.CancelRequest("client disconnected during recovery retry", nil)
 						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-						fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-						flusher.Flush()
+						// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 						return
 					}
 					if err == nil && IsSuccessStatus(resp.StatusCode) {
@@ -885,8 +915,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复流处理期间检测到客户端取消，立即停止重试", connID))
 							lifecycleManager.CancelRequest("client disconnected during recovery stream", nil)
 							*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
-							fmt.Fprintf(w, "data: cancelled: 客户端取消请求\n\n")
-							flusher.Flush()
+							// 🔧 [P0-S1 修复] 客户端已断开，不再写非协议数据行
 							return
 						}
 						if processor.HasSentContent() {
@@ -1012,8 +1041,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				restartCount := lifecycleManager.IncrementRestart()
 				slog.Info(fmt.Sprintf("🔄 [故障转移重启] [%s] 渠道切换完成，重启次数: %d/%d",
 					connID, restartCount, lifecycleManager.GetMaxRestarts()))
-				fmt.Fprintf(w, "data: failover: 渠道切换完成，恢复处理 (新渠道: %s)\n\n", newChannel)
-				flusher.Flush()
+				// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: failover:" 数据行，
+				// 避免严格 JSON 解析器（如 Claude Code CLI）误将其当 JSON 解析。
+				// 内部状态变更已通过上方 slog 记录。
 				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, newLoopCount)
 				return
 			} else {

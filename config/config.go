@@ -89,7 +89,7 @@ type StreamingConfig struct {
 	HeartbeatInterval     time.Duration `yaml:"heartbeat_interval"`
 	ReadTimeout           time.Duration `yaml:"read_timeout"`
 	MaxIdleTime           time.Duration `yaml:"max_idle_time"`
-	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"` // 响应头超时时间，默认: 60s
+	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"` // 响应头超时时间，默认: 120s（覆盖 Claude Opus thinking 模式首字节延迟）
 }
 
 // GroupConfig (DEPRECATED in use FailoverConfig instead)
@@ -394,7 +394,9 @@ func (c *Config) setDefaults() {
 		c.Streaming.MaxIdleTime = 120 * time.Second
 	}
 	if c.Streaming.ResponseHeaderTimeout == 0 {
-		c.Streaming.ResponseHeaderTimeout = 60 * time.Second // 默认60秒，适合AI服务
+		// 🔧 [P2-S1 修复] 默认从 60s 提升到 120s，
+		// 覆盖 Claude Opus thinking 模式首字节延迟可能超过 60s 的场景
+		c.Streaming.ResponseHeaderTimeout = 120 * time.Second
 	}
 
 	// Set global timeout default

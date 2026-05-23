@@ -9,11 +9,20 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	proxyresponse "claude-request-forwarder/internal/proxy/response"
 )
 
-const maxUpstreamErrorBodyBytes = 64 * 1024
+const (
+	// 上游错误响应体最大读取长度
+	maxUpstreamErrorBodyBytes = 64 * 1024
+	// SSE 错误消息字段最大长度（注入到 message 字段前截断）
+	// 避免大段 HTML/JSON 错误体导致单条 SSE 事件过大，部分客户端有事件大小限制
+	maxErrorMessageBytes = 2 * 1024
+	// 错误消息截断后的省略提示
+	errorMessageTruncationSuffix = "...(truncated)"
+)
 
 // EndpointError 携带提供商原始响应信息的错误类型。
 // 当端点返回 4xx/5xx 错误时，保留原始状态码、响应体和 Content-Type，
@@ -82,14 +91,19 @@ func decodeUpstreamErrorBody(body []byte, headers http.Header) []byte {
 	decompressedReader, err := processor.DecompressStreamReader(clonedResp)
 	if err != nil {
 		slog.Warn("Failed to create upstream error decompressor", "content_encoding", encoding, "error", err)
-		return body
+		// 🔧 [P1-S1 修复] 解压失败时返回明确的占位符，
+		// 禁止把损坏的压缩字节注入后续 SSE/JSON 文本字段，避免客户端解析失败。
+		return fmt.Appendf(nil, "[upstream error body unreadable: encoding=%s, raw_bytes=%d, decode_error=%v]",
+			encoding, len(body), err)
 	}
 	defer decompressedReader.Close()
 
 	decompressedBody, err := io.ReadAll(io.LimitReader(decompressedReader, maxUpstreamErrorBodyBytes))
 	if err != nil {
 		slog.Warn("Failed to decompress upstream error body", "content_encoding", encoding, "error", err)
-		return body
+		// 🔧 [P1-S1 修复] 同上：解压过程中读取失败时也返回占位符。
+		return fmt.Appendf(nil, "[upstream error body decode failed: encoding=%s, raw_bytes=%d, read_error=%v]",
+			encoding, len(body), err)
 	}
 
 	return decompressedBody
@@ -201,13 +215,42 @@ func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg st
 // ExtractUpstreamErrorMessage 从错误中提取上游提供商的原始错误信息。
 // 如果是 EndpointError 且携带原始响应体，返回响应体文本；
 // 否则返回 error.Error() 原始错误描述（如网络超时信息）。
+//
+// 🔧 [P1-S2 修复] 截断超长消息并清洗无效 UTF-8，避免：
+//   - 大段错误体导致单条 SSE 事件过大，部分客户端有事件大小限制
+//   - 无效 UTF-8 字节序列（如截断的多字节字符）导致客户端 JSON 解析失败
 func ExtractUpstreamErrorMessage(err error) string {
 	if err == nil {
 		return "unknown error"
 	}
 	var epErr *EndpointError
 	if errors.As(err, &epErr) && len(epErr.Body) > 0 {
-		return string(epErr.Body)
+		return sanitizeErrorMessage(string(epErr.Body))
 	}
-	return err.Error()
+	return sanitizeErrorMessage(err.Error())
+}
+
+// sanitizeErrorMessage 清洗错误消息以确保安全注入 JSON 字符串字段：
+//  1. 替换无效 UTF-8 序列为 Unicode 替换字符 U+FFFD
+//  2. 超过 maxErrorMessageBytes 时按 UTF-8 边界截断并追加省略提示
+//
+// 设计原则：保持调试可读性的前提下，避免污染下游 JSON/SSE 协议。
+func sanitizeErrorMessage(s string) string {
+	if s == "" {
+		return s
+	}
+	// 修正无效 UTF-8：strings.ToValidUTF8 会用替换字符替换无效字节序列
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "�")
+	}
+	// 限长：超出阈值时按 rune 边界截断，避免再次破坏 UTF-8
+	if len(s) > maxErrorMessageBytes {
+		truncated := s[:maxErrorMessageBytes]
+		// 回退到最近的 rune 边界，避免半截多字节字符
+		for !utf8.ValidString(truncated) && len(truncated) > 0 {
+			truncated = truncated[:len(truncated)-1]
+		}
+		s = truncated + errorMessageTruncationSuffix
+	}
+	return s
 }

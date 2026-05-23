@@ -46,6 +46,12 @@ func (p *Provider) Default() (*http.Transport, error) {
 		return nil, err
 	}
 
+	// 🔧 [P1-R2 修复] Default Transport 增加合理的响应头超时，
+	// 避免非流式请求在上游迟迟不返响应头时只受 Client.Timeout（默认 300s）保护，
+	// 中间无任何故障检测信号，期间客户端 keep-alive socket 可能已失效。
+	// 默认 60s 适合常规 HTTP API；如需更长（如非流式长 thinking），可在配置层覆盖。
+	tr.ResponseHeaderTimeout = 60 * time.Second
+
 	p.defaultTransport = tr
 	p.defaultKey = key
 	return tr, nil
@@ -71,13 +77,15 @@ func (p *Provider) Streaming() (*http.Transport, error) {
 	tr.WriteBufferSize = 4096
 	tr.ReadBufferSize = 4096
 
-	// 从配置中读取响应头超时时间，默认60秒
+	// 从配置中读取响应头超时时间，默认 120 秒
+	// 🔧 [P2-S1 修复] 默认从 60s 提升到 120s，覆盖 Claude Opus thinking 模式典型首字节延迟
+	// （部分长 prompt + 复杂工具调用场景的首字节可在 60s-100s 之间）
 	responseHeaderTimeout := time.Duration(0)
 	if p.cfg != nil {
 		responseHeaderTimeout = p.cfg.Streaming.ResponseHeaderTimeout
 	}
 	if responseHeaderTimeout == 0 {
-		responseHeaderTimeout = 60 * time.Second
+		responseHeaderTimeout = 120 * time.Second
 	}
 	tr.ResponseHeaderTimeout = responseHeaderTimeout
 

@@ -591,6 +591,14 @@ func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, b
 }
 
 // processSuccessResponse 处理成功响应
+//
+// 🔧 [P0-R1 修复] 改为"先读 body 后写 header"流程：
+//   - 旧流程：CopyResponseHeaders → WriteHeader(200) → ReadAll(body) → 失败时已无法回退
+//     上游 body 中途断开 → 客户端收到 200 + 半截 JSON → "Unterminated string" / "Expected '}'"
+//   - 新流程：ProcessResponseBody → 完整 body 校验通过后再 WriteHeader + Write
+//     失败时通过 WriteUpstreamErrorResponse 透传上游错误信息，状态码可控
+//
+// 性能权衡：丧失 first-byte 优势，但非流式场景本就要等完整 body，影响可忽略
 func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.ResponseWriter, resp *http.Response, lifecycleManager RequestLifecycleManager, endpointName string, r *http.Request) {
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -598,26 +606,26 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		}
 	}()
 
-	// 复制响应头（排除Content-Encoding用于gzip处理）
-	rh.responseProcessor.CopyResponseHeaders(resp, w)
+	connID := lifecycleManager.GetRequestID()
 
-	// 写入状态码
-	w.WriteHeader(resp.StatusCode)
-
-	// 读取并处理响应体
+	// 🔧 [P0-R1 修复] 第一步：先完整读取并解压上游响应体
+	// 在写任何响应头给客户端之前完成读取，确保上游中断时不会污染客户端
 	responseBytes, err := rh.responseProcessor.ProcessResponseBody(resp)
 	if err != nil {
-		connID := lifecycleManager.GetRequestID()
 		lifecycleManager.HandleError(fmt.Errorf("failed to process response: %w", err))
 		slog.Error("Failed to process response body", "request_id", connID, "error", err)
-		// 🔧 [修复] 2025-12-11: 响应体读取失败时必须终结请求，否则会滞留在内存热池
-		lifecycleManager.FailRequest("response_read_error", err.Error(), resp.StatusCode)
+		// 此时尚未 WriteHeader，可以安全返回错误状态码
+		lifecycleManager.FailRequest("response_read_error", err.Error(), http.StatusBadGateway)
+		http.Error(w, "Failed to read upstream response: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 
+	// 🔧 [P0-R1 修复] 第二步：body 完整读取成功后再复制响应头并写状态码
+	rh.responseProcessor.CopyResponseHeaders(resp, w)
+	w.WriteHeader(resp.StatusCode)
+
 	// 写入响应体到客户端
 	if _, err := w.Write(responseBytes); err != nil {
-		connID := lifecycleManager.GetRequestID()
 		lifecycleManager.HandleError(fmt.Errorf("failed to write response: %w", err))
 		slog.Error("Failed to write response to client", "request_id", connID, "error", err)
 		// 🔧 [修复] 2025-12-11: 写入失败时必须终结请求，否则会滞留在内存热池
@@ -626,7 +634,6 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 	}
 
 	// ✅ 同步Token解析：简化逻辑，避免协程控制问题
-	connID := lifecycleManager.GetRequestID()
 	slog.Debug(fmt.Sprintf("🔄 [Token解析] [%s] 开始Token解析", connID))
 
 	// 🔍 [路径过滤] 跳过count_tokens端点的Token解析
@@ -730,7 +737,23 @@ func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.Respo
 
 	defer finalResp.Body.Close()
 
-	// Copy response headers (except Content-Encoding for gzip handling)
+	// 🔧 [P0-R1 修复] 先完整读取上游响应体，再写响应头与状态码
+	// 旧顺序（WriteHeader → ReadAll）在上游中断时会导致客户端收到
+	// "200 OK + 半截 body"，触发 "JSON Parse error: Unterminated string"
+	slog.DebugContext(ctx, fmt.Sprintf("🔄 [开始读取响应] [%s] 端点: %s, Content-Encoding: %s",
+		connID, selectedEndpointName, finalResp.Header.Get("Content-Encoding")))
+
+	bodyBytes, err := io.ReadAll(finalResp.Body)
+	if err != nil {
+		slog.ErrorContext(ctx, fmt.Sprintf("❌ [响应读取失败] [%s] 端点: %s, 错误: %v", connID, selectedEndpointName, err))
+		http.Error(w, "Failed to read response: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	slog.DebugContext(ctx, fmt.Sprintf("✅ [响应读取成功] [%s] 端点: %s, 长度: %d字节",
+		connID, selectedEndpointName, len(bodyBytes)))
+
+	// Body 读取成功后再复制响应头
 	for key, values := range finalResp.Header {
 		// Skip Content-Encoding header as we handle gzip decompression ourselves
 		if strings.ToLower(key) == "content-encoding" {
@@ -743,21 +766,6 @@ func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.Respo
 
 	// Set status code
 	w.WriteHeader(finalResp.StatusCode)
-
-	// Read and decompress response body if needed
-	slog.DebugContext(ctx, fmt.Sprintf("🔄 [开始读取响应] [%s] 端点: %s, Content-Encoding: %s",
-		connID, selectedEndpointName, finalResp.Header.Get("Content-Encoding")))
-
-	// 使用响应处理器读取响应
-	bodyBytes, err := io.ReadAll(finalResp.Body)
-	if err != nil {
-		slog.ErrorContext(ctx, fmt.Sprintf("❌ [响应读取失败] [%s] 端点: %s, 错误: %v", connID, selectedEndpointName, err))
-		http.Error(w, "Failed to read response: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	slog.DebugContext(ctx, fmt.Sprintf("✅ [响应读取成功] [%s] 端点: %s, 长度: %d字节",
-		connID, selectedEndpointName, len(bodyBytes)))
 
 	bodyContent := string(bodyBytes)
 	slog.DebugContext(ctx, fmt.Sprintf("🐛 [调试响应头] 端点: %s, 响应头: %v", selectedEndpointName, finalResp.Header))

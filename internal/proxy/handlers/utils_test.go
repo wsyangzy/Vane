@@ -375,11 +375,21 @@ func TestNewEndpointErrorFromResponse_FallsBackToRawBodyWhenDecompressFails(t *t
 
 	err := newEndpointErrorFromResponse(resp, "https://example.com/v1/messages")
 
-	if !bytes.Equal(err.Body, rawBody) {
-		t.Fatalf("expected raw body fallback, got %q", string(err.Body))
+	// 🔧 [P1-S1 修复] 解压失败时不再回退到原始二进制字节，
+	// 改为返回明确的占位符消息，避免二进制污染下游 SSE/JSON 文本字段
+	bodyStr := string(err.Body)
+	if !strings.HasPrefix(bodyStr, "[upstream error body unreadable:") {
+		t.Fatalf("expected placeholder prefix, got %q", bodyStr)
 	}
-	if !strings.Contains(ExtractUpstreamErrorMessage(err), "not-a-valid-gzip-stream") {
-		t.Fatalf("expected raw body to remain readable, got %q", ExtractUpstreamErrorMessage(err))
+	if !strings.Contains(bodyStr, "encoding=gzip") {
+		t.Fatalf("expected placeholder to contain encoding info, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "raw_bytes=23") {
+		t.Fatalf("expected placeholder to contain raw byte length, got %q", bodyStr)
+	}
+	// 占位符应通过 ExtractUpstreamErrorMessage 完整可读（不被 sanitize 破坏）
+	if !strings.Contains(ExtractUpstreamErrorMessage(err), "[upstream error body unreadable:") {
+		t.Fatalf("expected placeholder to remain readable via ExtractUpstreamErrorMessage, got %q", ExtractUpstreamErrorMessage(err))
 	}
 }
 
