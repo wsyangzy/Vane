@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-7.1-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-7.2-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg" alt="Go">
@@ -38,10 +38,9 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 
 - **优先级路由** - 按优先级自动选择最优端点
 - **故障转移** - 端点异常时自动切换，支持配置冷却时间
-- **智能错误恢复** - 三种恢复策略可选
-  - **智能等待** (`auto_wait`) - 所有端点耗尽后挂起请求，等待端点自愈（推荐生产环境）
-  - **循环重试** (`loop_retry`) - 回到最高优先级端点继续尝试（仅测试环境）
-  - **快速失败** (`fail_fast`) - 立即返回错误，不等待恢复（调试用）
+- **故障转移策略 v2** - `loop_retry` 开关 + `max_loops` 循环重试上限
+- **全局重试预算**（新增）- 总尝试次数与总时长双重上限，避免三层重试导致客户端 socket 失效
+- **健康检查节流**（新增）- 5s 窗口防止多触发源并发探活风暴
 - **端点自愈** - 持续监测故障端点，恢复后自动重新启用
 - **流式传输** - 完整支持 SSE 流式响应，零延迟透传
 - **计费感知重试** - 基于 Token 计费智能判断错误是否可重试，避免重复计费
@@ -52,6 +51,7 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 - **成本追踪** - 自动计算费用，支持按端点设置成本倍率
 - **历史记录** - 完整的请求日志，支持筛选和导出
 - **可视化图表** - 请求趋势图，直观展示使用情况
+- **系统指标 API**（新增）- `GetSystemMetrics()` 暴露 HotPool 状态、内存使用、健康端点数等运行指标
 
 ### 🎛️ 端点管理
 
@@ -63,10 +63,17 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 ### 🔧 其他特性
 
 - **请求生命周期追踪** - 从接收到完成的全程状态管理
+- **请求状态枚举**（新增）- 状态转移合法性校验，避免非法状态变更
 - **热池架构** - 内存缓存 + 异步写入，高性能低延迟
+- **热池满告警**（新增）- 数据写入压力大时主动 Toast 提示
+- **持久化失败队列**（新增）- HotPool 失败时自动降级到本地 JSONL，杜绝静默丢数据
 - **本地存储** - SQLite 数据库，无需额外依赖
+- **数据库自维护**（新增）- WAL checkpoint 调优、增量 VACUUM、分批清理过期记录
 - **跨平台** - macOS、Windows、Linux 全平台支持
 - **可视化设置** - 设置页面支持枚举类型下拉选择、变更追踪、实时生效
+- **配置统一管理**（新增）- Proxy / Logging / Timezone 配置从 YAML 迁移到设置 UI
+- **启动状态机**（新增）- 明确 Starting / Running / Degraded / Failed 状态，降级时停止无用后台任务
+- **崩溃恢复**（新增）- 启动时自动扫描僵尸请求并标记为 `crashed_during_processing`
 - **日志复制** - 日志查看器支持一键复制，便于问题排查
 
 ## 截图
@@ -140,10 +147,12 @@ claude config set --global apiBaseUrl http://127.0.0.1:9090
 
 ### 全局配置
 
-编辑 `config/config.yaml` 配置全局选项：
+> **近期更新**：常用配置（Proxy / Logging / Timezone 等）已迁移到应用内「设置」页面，无需编辑 YAML 文件。YAML 配置仍兼容，作为首次启动的默认值。
+
+编辑 `config/config.yaml` 配置全局选项（或在「设置」页面直接修改）：
 
 ```yaml
-# 时区设置
+# 时区设置（可在「设置」→ 时区设置 中通过下拉选择）
 timezone: "Asia/Shanghai"
 
 # 服务器配置
@@ -151,52 +160,62 @@ server:
   host: "127.0.0.1"
   port: 9090
 
-# 故障转移配置
-failover:
+# 故障转移配置 v2
+failover_v2:
   enabled: true
-  default_cooldown: "10m"
+  loop_retry: true              # 所有渠道耗尽后是否循环重试
+  max_loops: 3                  # 循环上限（防止无限重试）
+  suspend_timeout: "120s"       # 普通挂起等待端点恢复超时
+
+# 重试配置（含全局预算）
+retry:
+  max_attempts: 3               # 单端点重试次数
+  base_delay: "1s"
+  max_delay: "30s"
+  max_total_attempts: 10        # [新增] 全局总尝试次数上限
+  max_total_duration: "60s"     # [新增] 全局总重试时长上限
 
 # 请求控制
 request:
-  # 恢复策略：所有渠道耗尽后的处理方式
-  recovery_strategy: "auto_wait"  # auto_wait (推荐) | loop_retry | fail_fast
+  global_timeout: "300s"        # 非流式请求全局超时
 
-  # 智能等待参数（仅 auto_wait 策略生效）
-  auto_wait_timeout: "300s"        # 最大等待时间（默认5分钟）
-  auto_wait_max_requests: 100      # 最大挂起请求数（默认100）
-
-# 日志配置
+# 日志配置（可在「设置」→ 日志设置 中切换）
 logging:
-  level: "info"              # debug, info, warn, error
+  level: "info"                 # debug, info, warn, error
   file_enabled: true
   file_path: "logs/app.log"
   max_file_size: "50MB"
   max_files: 10
 
+# 出站代理（可在「设置」→ 出站代理 中配置）
+proxy:
+  enabled: false                # 本应用→上游服务商的代理（与服务端口无关）
+  type: "http"                  # http / https / socks5
+  url: "http://127.0.0.1:7890"
+
 # 流式传输
 streaming:
   heartbeat_interval: "30s"
   read_timeout: "10s"
-  response_header_timeout: "90s"  # Claude API 可能需要较长等待
+  response_header_timeout: "120s"  # [新增] 默认从 60s 提升到 120s，覆盖 Opus thinking 首字节延迟
 
 # 使用统计
 usage_tracking:
   enabled: true
   hot_pool:
-    enabled: true             # 内存热池，提升写入性能
+    enabled: true               # 内存热池，提升写入性能
     max_age: "30m"
     max_size: 10000
 ```
 
-#### 恢复策略详解
+#### 故障转移策略
 
-当所有端点都不可用时，系统提供三种恢复策略：
+> 旧版本的"三种恢复策略"（auto_wait / loop_retry / fail_fast）已合并简化为更简洁的 `loop_retry` 开关 + `max_loops` 上限。
 
-| 策略                               | 行为                       | 适用场景                   | 优缺点                                                   |
-| ---------------------------------- | -------------------------- | -------------------------- | -------------------------------------------------------- |
-| **auto_wait**``（智能等待）  | 挂起请求，等待端点自动恢复 | **生产环境（推荐）** | ✅ 避免循环重试 ``✅ 减少无效请求``⚠️ 可能等待较长时间 |
-| **loop_retry**``（循环重试） | 回到最高优先级端点继续尝试 | 测试环境或端点极少场景     | ✅ 持续尝试，不会超时``❌ 可能循环重试浪费资源           |
-| **fail_fast**``（快速失败）  | 立即返回错误               | 调试环境                   | ✅ 快速反馈错误``❌ 可能错过即将恢复的端点               |
+| 配置                       | 行为                                                       | 适用场景             |
+| -------------------------- | ---------------------------------------------------------- | -------------------- |
+| `loop_retry: false`        | 所有渠道耗尽后立即返回错误                                 | 调试环境             |
+| `loop_retry: true`         | 回到最高优先级渠道继续尝试，最多 `max_loops` 轮            | **生产环境（推荐）** |
 
 #### 错误状态码与重试机制
 
@@ -231,8 +250,8 @@ usage_tracking:
 │  │  ├─ 概览仪表板        │◄────►│  ├─ HTTP 代理服务         │    │
 │  │  ├─ 端点管理         │ Wails │  ├─ 端点管理器            │    │
 │  │  ├─ 请求追踪         │ IPC   │  ├─ 请求生命周期管理       │    │
-│  │  ├─ 系统日志         │       │  ├─ 使用量追踪            │    │
-│  │  └─ 设置页面         │       │  └─ 事件推送系统          │    │
+│  │  ├─ 系统日志         │       │  ├─ HotPool 使用追踪      │    │
+│  │  └─ 设置页面         │       │  └─ Wails 事件桥          │    │
 │  └─────────────────────┘      └─────────────────────────┘    │
 │                                          │                   │
 │                                          ▼                   │
@@ -241,7 +260,9 @@ usage_tracking:
 │                               │   ├─ 端点配置         │        │
 │                               │   ├─ 请求日志         │        │
 │                               │   ├─ 使用统计         │        │
-│                               │   └─ 模型定价         │        │
+│                               │   ├─ 模型定价         │        │
+│                               │   ├─ 系统设置         │        │
+│                               │   └─ Schema 版本     │        │
 │                               └─────────────────────┘        │
 └──────────────────────────────────────────────────────────────┘
 
@@ -253,8 +274,9 @@ usage_tracking:
                   │              │                           │
                   ▼              ▼                           ▼
              ┌────────┐    ┌────────┐                  ┌────────┐
-             │Tracking│    │Failover│                  │ Token  │
-             │ Record │    │ Logic  │                  │ Parse  │
+             │HotPool │    │Failover│                  │ Token  │
+             │+ Retry │    │ + 节流  │                  │ Parse  │
+             │ Budget │    │ Logic  │                  │+计费防护│
              └────────┘    └────────┘                  └────────┘
 ```
 
@@ -262,11 +284,14 @@ usage_tracking:
 
 | 模块     | 路径                   | 职责                           |
 | -------- | ---------------------- | ------------------------------ |
-| 代理引擎 | `internal/proxy/`    | 请求转发、流式处理、错误恢复   |
-| 端点管理 | `internal/endpoint/` | 端点调度、健康检查、故障转移   |
-| 使用追踪 | `internal/tracking/` | 热池缓存、数据库写入、统计查询 |
-| 事件系统 | `internal/events/`   | SSE 推送、状态同步             |
+| 代理引擎 | `internal/proxy/`    | 请求转发、流式处理、错误恢复、重试预算 |
+| 端点管理 | `internal/endpoint/` | 端点调度、健康检查（含节流）、故障转移 |
+| 使用追踪 | `internal/tracking/` | 热池缓存、数据库写入、统计查询、归档失败降级 |
+| 业务服务 | `internal/service/`  | 设置管理、渠道服务、定价服务 |
+| 数据存储 | `internal/store/`    | SQLite 抽象、Settings 持久化 |
 | 前端应用 | `frontend/`          | React + Vite + TailwindCSS     |
+
+> 详细的模块架构图、数据流图和状态机请参考 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## 故障转移机制
 
@@ -429,15 +454,29 @@ usage_tracking:
 </details>
 
 <details>
-<summary><b>Q: 如何选择合适的恢复策略？</b></summary>
+<summary><b>Q: 如何配置故障转移行为？</b></summary>
 
-**推荐配置**：
+在「设置」→「故障转移」中配置：
 
-- **生产环境**: `auto_wait`（智能等待）- 避免无效重试，减少资源浪费
-- **测试环境**: `loop_retry`（循环重试）- 适合端点数量少且需要持续尝试的场景
-- **调试环境**: `fail_fast`（快速失败）- 快速反馈错误，便于问题定位
+- **生产环境**：开启 `loop_retry`，设置 `max_loops=3`（默认）
+- **调试环境**：关闭 `loop_retry`，所有渠道耗尽后立即返回错误
 
-在应用内「设置」页面可以实时切换策略，提供详细的对比说明。
+**关键概念**：
+- **渠道内重试**：单个端点失败后，自动切换到同渠道的下一个端点
+- **渠道间转移**：渠道内所有端点耗尽后，切换到下一个渠道（按优先级）
+- **循环重试**：所有渠道都耗尽后，是否回到最高优先级渠道继续尝试
+
+> 旧版本的三种恢复策略（auto_wait / loop_retry / fail_fast）已合并简化。
+
+</details>
+
+<details>
+<summary><b>Q: 出站代理是什么？跟服务端口有何区别？</b></summary>
+
+- **服务端口**（默认 9090）：客户端（Claude Code 等）连接本应用的端口
+- **出站代理**：本应用连接上游服务商（Claude API / Codex 等）使用的代理
+
+如服务商被墙、公司网络要求走代理时启用。在「设置」→「出站代理」中配置。
 
 </details>
 
