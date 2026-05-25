@@ -11,9 +11,10 @@ const SettingsSection = ({
   description,
   children,
   onReset,
-  resetDisabled = false
+  resetDisabled = false,
+  className = ''
 }) => (
-  <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+  <div className={`bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden ${className}`.trim()}>
     <div className="px-6 py-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between">
       <div className="flex items-center">
         {Icon && (

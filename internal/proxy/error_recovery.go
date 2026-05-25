@@ -68,6 +68,180 @@ func NewErrorRecoveryManager(usageTracker *tracking.UsageTracker) *ErrorRecovery
 	}
 }
 
+// errorClassRule 声明式错误分类规则
+type errorClassRule struct {
+	// check 判断错误是否匹配此规则；errMsg 为小写化的错误消息，err 为原始错误
+	check func(errMsg string, err error, erm *ErrorRecoveryManager) bool
+	// classify 返回匹配后的错误类型和 RetryableAfter；attempt 用于计算退避延迟
+	classify func(errMsg string, err error, erm *ErrorRecoveryManager, attempt int) (ErrorType, time.Duration)
+	// logLabel 日志标签（含 emoji 前缀）
+	logLabel string
+	// logLevel 日志级别: "info", "warn", "error"
+	logLevel string
+}
+
+// errorClassRules 按优先级排列的错误分类规则表，第一个匹配的规则生效。
+var errorClassRules = []errorClassRule{
+	// 1. 客户端取消错误（最高优先级）
+	{
+		check: func(_ string, err error, erm *ErrorRecoveryManager) bool {
+			return erm.isClientCancelError(err)
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeClientCancel, 0
+		},
+		logLabel: "🚫 [客户端取消分类]",
+		logLevel: "info",
+	},
+	// 2. EOF 错误（优先级高于网络错误，不可重试，避免重复计费）
+	{
+		check: func(_ string, err error, erm *ErrorRecoveryManager) bool {
+			return erm.isEOFError(err)
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeEOF, 0
+		},
+		logLabel: "📛 [EOF错误分类]",
+		logLevel: "warn",
+	},
+	// 3. 连接超时（可重试，因为还没开始处理）
+	{
+		check: func(_ string, err error, erm *ErrorRecoveryManager) bool {
+			return erm.isConnectionTimeoutError(err)
+		},
+		classify: func(_ string, _ error, erm *ErrorRecoveryManager, attempt int) (ErrorType, time.Duration) {
+			return ErrorTypeConnectionTimeout, erm.calculateBackoffDelay(attempt)
+		},
+		logLabel: "🔌 [连接超时分类]",
+		logLevel: "warn",
+	},
+	// 4. 响应/读取超时（不可重试，可能已计费）
+	{
+		check: func(_ string, err error, erm *ErrorRecoveryManager) bool {
+			return erm.isTimeoutError(err)
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeResponseTimeout, 0
+		},
+		logLabel: "⏰ [响应超时分类]",
+		logLevel: "warn",
+	},
+	// 5. 网络错误（连接失败等，可重试）
+	{
+		check: func(_ string, err error, erm *ErrorRecoveryManager) bool {
+			return erm.isNetworkError(err)
+		},
+		classify: func(_ string, _ error, erm *ErrorRecoveryManager, attempt int) (ErrorType, time.Duration) {
+			return ErrorTypeNetwork, erm.calculateBackoffDelay(attempt)
+		},
+		logLabel: "🌐 [网络错误分类]",
+		logLevel: "warn",
+	},
+	// 6. 限流错误 - 高优先级，必须在服务器错误和HTTP通用检查之前
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return strings.Contains(errMsg, "rate") || strings.Contains(errMsg, "429") ||
+				strings.Contains(errMsg, "quota") || strings.Contains(errMsg, "limit") ||
+				strings.Contains(errMsg, "endpoint returned error: 429") ||
+				strings.Contains(errMsg, "too many requests") || strings.Contains(errMsg, "rate_limit") ||
+				strings.Contains(errMsg, "throttle") || strings.Contains(errMsg, "quota exceeded")
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeRateLimit, time.Minute
+		},
+		logLabel: "🚦 [限流错误分类]",
+		logLevel: "warn",
+	},
+	// 7. 服务器错误（5xx）- 优先级高于通用HTTP错误
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return strings.Contains(errMsg, "endpoint returned error: 5") ||
+				strings.Contains(errMsg, "500") || strings.Contains(errMsg, "501") ||
+				strings.Contains(errMsg, "502") || strings.Contains(errMsg, "503") ||
+				strings.Contains(errMsg, "504") || strings.Contains(errMsg, "505") ||
+				strings.Contains(errMsg, "520") || strings.Contains(errMsg, "521") ||
+				strings.Contains(errMsg, "522") || strings.Contains(errMsg, "523") ||
+				strings.Contains(errMsg, "524") || strings.Contains(errMsg, "525")
+		},
+		classify: func(_ string, _ error, erm *ErrorRecoveryManager, attempt int) (ErrorType, time.Duration) {
+			return ErrorTypeServerError, erm.calculateBackoffDelay(attempt)
+		},
+		logLabel: "🚨 [服务器错误分类]",
+		logLevel: "warn",
+	},
+	// 8. 认证/权限错误
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return strings.Contains(errMsg, "auth") || strings.Contains(errMsg, "unauthorized") ||
+				strings.Contains(errMsg, "401") || strings.Contains(errMsg, "forbidden") ||
+				strings.Contains(errMsg, "403")
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeAuth, 0
+		},
+		logLabel: "🔐 [认证/权限错误分类]",
+		logLevel: "error",
+	},
+	// 9. 流处理错误 - 复杂子逻辑：含"streaming not supported"特殊处理和流内网络错误检测
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return strings.HasPrefix(errMsg, "stream_status:") ||
+				strings.Contains(errMsg, "streaming not supported") ||
+				strings.Contains(errMsg, "stream_error") ||
+				strings.Contains(errMsg, "sse") ||
+				strings.Contains(errMsg, "event-stream") ||
+				strings.Contains(errMsg, "stream parsing")
+		},
+		classify: func(errMsg string, _ error, erm *ErrorRecoveryManager, attempt int) (ErrorType, time.Duration) {
+			// 特殊处理：环境不支持流式
+			if strings.Contains(errMsg, "streaming not supported") {
+				return ErrorTypeUnknown, 0
+			}
+			// 优先识别流错误中的网络子错误
+			streamNetworkKeywords := []string{
+				"wsarecv", "wsasend", "connection reset", "connection aborted",
+				"connection refused", "broken pipe", "use of closed", "timeout",
+				"deadline exceeded", "eof", "network is unreachable", "no route to host",
+			}
+			for _, keyword := range streamNetworkKeywords {
+				if strings.Contains(errMsg, keyword) {
+					return ErrorTypeNetwork, erm.calculateBackoffDelay(attempt)
+				}
+			}
+			// 普通流处理错误
+			return ErrorTypeStream, erm.calculateBackoffDelay(attempt)
+		},
+		logLabel: "🌊 [流处理错误分类]",
+		logLevel: "warn",
+	},
+	// 10. HTTP错误（非5xx，非429）
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return (strings.Contains(errMsg, "http ") || strings.Contains(errMsg, "http:") ||
+				strings.Contains(errMsg, "http/") || strings.Contains(errMsg, "status") ||
+				strings.Contains(errMsg, "endpoint returned error")) &&
+				!strings.Contains(errMsg, "endpoint returned error: 5") &&
+				!strings.Contains(errMsg, "429") && !strings.Contains(errMsg, "rate")
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeHTTP, 0
+		},
+		logLabel: "🔗 [HTTP错误分类]",
+		logLevel: "error",
+	},
+	// 11. 没有健康端点可用
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return strings.Contains(errMsg, "no healthy endpoints available")
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeNoHealthyEndpoints, 0
+		},
+		logLabel: "🏥 [健康检查限制]",
+		logLevel: "warn",
+	},
+}
+
 // ClassifyError 分类错误类型并创建错误上下文
 func (erm *ErrorRecoveryManager) ClassifyError(err error, requestID, endpoint, group string, attempt int) *ErrorContext {
 	errorCtx := &ErrorContext{
@@ -84,170 +258,26 @@ func (erm *ErrorRecoveryManager) ClassifyError(err error, requestID, endpoint, g
 		return errorCtx
 	}
 
-	errStr := strings.ToLower(err.Error())
+	errMsg := strings.ToLower(err.Error())
 
-	// 首先检查客户端取消错误（最高优先级）
-	if erm.isClientCancelError(err) {
-		errorCtx.ErrorType = ErrorTypeClientCancel
-		errorCtx.RetryableAfter = 0 // 客户端取消不可重试
-		slog.Info(fmt.Sprintf("🚫 [客户端取消分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
+	for _, rule := range errorClassRules {
+		if rule.check(errMsg, err, erm) {
+			errorType, retryAfter := rule.classify(errMsg, err, erm, attempt)
+			errorCtx.ErrorType = errorType
+			errorCtx.RetryableAfter = retryAfter
 
-	// 检查 EOF 错误（优先级高于网络错误，不可重试，避免重复计费）
-	if erm.isEOFError(err) {
-		errorCtx.ErrorType = ErrorTypeEOF
-		errorCtx.RetryableAfter = 0 // EOF 不可重试，可能已计费
-		slog.Warn(fmt.Sprintf("📛 [EOF错误分类] [%s] 端点: %s, 尝试: %d, 连接中断不重试避免重复计费, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 检查连接超时（可重试，因为还没开始处理）
-	if erm.isConnectionTimeoutError(err) {
-		errorCtx.ErrorType = ErrorTypeConnectionTimeout
-		errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
-		slog.Warn(fmt.Sprintf("🔌 [连接超时分类] [%s] 端点: %s, 尝试: %d, 连接超时可重试, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 检查响应/读取超时（不可重试，可能已计费）
-	if erm.isTimeoutError(err) {
-		errorCtx.ErrorType = ErrorTypeResponseTimeout
-		errorCtx.RetryableAfter = 0 // 响应超时不可重试，可能已计费
-		slog.Warn(fmt.Sprintf("⏰ [响应超时分类] [%s] 端点: %s, 尝试: %d, 响应超时不重试避免重复计费, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 网络错误分类（连接失败等，可重试）
-	if erm.isNetworkError(err) {
-		errorCtx.ErrorType = ErrorTypeNetwork
-		errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
-		slog.Warn(fmt.Sprintf("🌐 [网络错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 限流错误分类 - 高优先级，必须在服务器错误和HTTP通用检查之前
-	// 2025-12-10: 移除 400 错误码，400 通常是请求格式错误而非限流
-	if strings.Contains(errStr, "rate") || strings.Contains(errStr, "429") ||
-		strings.Contains(errStr, "quota") || strings.Contains(errStr, "limit") ||
-		strings.Contains(errStr, "endpoint returned error: 429") ||
-		strings.Contains(errStr, "too many requests") || strings.Contains(errStr, "rate_limit") ||
-		strings.Contains(errStr, "throttle") || strings.Contains(errStr, "quota exceeded") {
-		errorCtx.ErrorType = ErrorTypeRateLimit
-		errorCtx.RetryableAfter = time.Minute // 限流错误建议等待1分钟
-		slog.Warn(fmt.Sprintf("🚦 [限流错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 服务器错误分类（5xx）- 优先级高于通用HTTP错误
-	if strings.Contains(errStr, "endpoint returned error: 5") ||
-		strings.Contains(errStr, "500") || strings.Contains(errStr, "501") ||
-		strings.Contains(errStr, "502") || strings.Contains(errStr, "503") ||
-		strings.Contains(errStr, "504") || strings.Contains(errStr, "505") ||
-		strings.Contains(errStr, "520") || strings.Contains(errStr, "521") ||
-		strings.Contains(errStr, "522") || strings.Contains(errStr, "523") ||
-		strings.Contains(errStr, "524") || strings.Contains(errStr, "525") {
-		errorCtx.ErrorType = ErrorTypeServerError
-		errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
-		slog.Warn(fmt.Sprintf("🚨 [服务器错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 认证/权限错误分类
-	// 2025-12-10: 包含 401 和 403，支持故障转移到其他端点（不同 token 可能有不同权限）
-	if strings.Contains(errStr, "auth") || strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "401") ||
-		strings.Contains(errStr, "forbidden") || strings.Contains(errStr, "403") {
-		errorCtx.ErrorType = ErrorTypeAuth
-		// 认证/权限错误不在同一端点重试，但允许切换端点
-		errorCtx.RetryableAfter = 0
-		slog.Error(fmt.Sprintf("🔐 [认证/权限错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 流处理错误分类 - 高优先级，必须在HTTP错误检查之前
-	// 使用精确匹配，避免误判普通网络错误（如"upstream connect error"）
-	if strings.HasPrefix(errStr, "stream_status:") ||
-		strings.Contains(errStr, "streaming not supported") ||
-		strings.Contains(errStr, "stream_error") ||
-		strings.Contains(errStr, "sse") ||
-		strings.Contains(errStr, "event-stream") ||
-		strings.Contains(errStr, "stream parsing") {
-
-		if strings.Contains(errStr, "streaming not supported") {
-			// 特殊处理：这不是流处理本身的错误，而是环境不支持
-			errorCtx.ErrorType = ErrorTypeUnknown
-			errorCtx.RetryableAfter = 0 // 不可重试
-			slog.Warn(fmt.Sprintf("🌊 [环境不支持] [%s] 端点: %s, 尝试: %d, 错误: %v",
-				requestID, endpoint, attempt, err))
+			logMsg := fmt.Sprintf("%s [%s] 端点: %s, 尝试: %d, 错误: %v",
+				rule.logLabel, requestID, endpoint, attempt, err)
+			switch rule.logLevel {
+			case "info":
+				slog.Info(logMsg)
+			case "error":
+				slog.Error(logMsg)
+			default:
+				slog.Warn(logMsg)
+			}
 			return errorCtx
 		}
-
-		// 优先识别流错误中的网络子错误
-		// 场景：流传输过程中发生网络中断，错误信息可能包含 stream_status:error 但根本原因是网络问题
-		// 这些错误应当允许切换端点重试，而非视为纯流处理错误
-		streamNetworkKeywords := []string{
-			"wsarecv",             // Windows socket receive error
-			"wsasend",             // Windows socket send error
-			"connection reset",    // TCP 连接被重置
-			"connection aborted",  // TCP 连接被中止
-			"connection refused",  // TCP 连接被拒绝
-			"broken pipe",         // 管道断开
-			"use of closed",       // 使用已关闭的连接
-			"timeout",             // 超时
-			"deadline exceeded",   // 截止时间超过
-			"eof",                 // 意外 EOF (小写匹配)
-			"network is unreachable", // 网络不可达
-			"no route to host",    // 无路由
-		}
-		for _, keyword := range streamNetworkKeywords {
-			if strings.Contains(errStr, keyword) {
-				errorCtx.ErrorType = ErrorTypeNetwork
-				errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
-				slog.Warn(fmt.Sprintf("🌐 [流内网络错误] [%s] 端点: %s, 尝试: %d, 关键词: %s, 错误: %v",
-					requestID, endpoint, attempt, keyword, err))
-				return errorCtx
-			}
-		}
-
-		// 普通流处理错误
-		errorCtx.ErrorType = ErrorTypeStream
-		errorCtx.RetryableAfter = erm.calculateBackoffDelay(attempt)
-		slog.Warn(fmt.Sprintf("🌊 [流处理错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// HTTP错误分类（非5xx，非429）- 现在在限流和服务器错误检查之后，避免过早捕获特殊错误
-	// 2025-12-10: 移除对 400 的排除，400 作为普通 HTTP 错误处理（不重试）
-	// 注意：401/403 已被上方的认证/权限错误分类捕获，不会进入这里
-	// 2026-01-08: 避免误将 "https://..." 视为HTTP错误（如TLS证书错误）
-	if ((strings.Contains(errStr, "http ") || strings.Contains(errStr, "http:") ||
-		strings.Contains(errStr, "http/") || strings.Contains(errStr, "status") ||
-		strings.Contains(errStr, "endpoint returned error")) &&
-		!strings.Contains(errStr, "endpoint returned error: 5") && // 排除5xx
-		!strings.Contains(errStr, "429") && !strings.Contains(errStr, "rate")) { // 排除429/限流
-		errorCtx.ErrorType = ErrorTypeHTTP
-		// 非5xx HTTP错误通常不可重试
-		slog.Error(fmt.Sprintf("🔗 [HTTP错误分类] [%s] 端点: %s, 尝试: %d, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
-	}
-
-	// 没有健康端点可用错误分类 - 在未知错误之前检查
-	if strings.Contains(errStr, "no healthy endpoints available") {
-		errorCtx.ErrorType = ErrorTypeNoHealthyEndpoints
-		errorCtx.RetryableAfter = 0 // 立即重试，不需要退避
-		slog.Warn(fmt.Sprintf("🏥 [健康检查限制] [%s] 端点: %s, 尝试: %d, 建议尝试实际转发, 错误: %v",
-			requestID, endpoint, attempt, err))
-		return errorCtx
 	}
 
 	// 默认为未知错误

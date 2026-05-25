@@ -99,16 +99,6 @@ func (rs RecoveryStrategy) ShouldLoopRetry() bool {
 	return rs == RecoveryStrategyLoopRetry
 }
 
-// RequestSuspendConfigV2 (DEPRECATED)
-// 请求挂起配置已废弃
-// 完全移除，保留此结构体仅为向后兼容解析
-type RequestSuspendConfigV2 struct {
-	Enabled              *bool         `yaml:"enabled,omitempty"`                // DEPRECATED
-	Timeout              time.Duration `yaml:"timeout,omitempty"`                // DEPRECATED
-	MaxSuspendedRequests int           `yaml:"max_suspended_requests,omitempty"` // DEPRECATED
-	EOFRetryHint         bool          `yaml:"eof_retry_hint,omitempty"`         // DEPRECATED
-}
-
 // MigrateFromLegacy 从旧配置迁移到新配置
 // 处理 及之前版本的配置文件向后兼容
 func (fc *FailoverConfigV2) MigrateFromLegacy(oldFailover *FailoverConfig, oldSuspend *RequestSuspendConfig) {

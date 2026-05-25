@@ -57,6 +57,9 @@ type RequestLifecycleManager interface {
 	// 🔢 [语义修复] 新增尝试计数管理方法
 	IncrementAttempt() int      // 线程安全地增加尝试计数，返回当前计数
 	GetAttemptCount() int       // 线程安全地获取当前尝试次数
+	// 🔧 [P5.3 新增] 全局重试预算管理
+	InitRetryBudget(maxAttempts int, maxDuration time.Duration)
+	CheckRetryBudget() (exhausted bool, reason string)
 	// 🚀 [状态机重构] Phase 4: 新增状态管理方法
 	MapErrorTypeToFailureReason(errorType ErrorType) string // 映射ErrorType到failure_reason
 	FailRequest(failureReason, errorDetail string, httpStatus int) // 标记请求为最终失败

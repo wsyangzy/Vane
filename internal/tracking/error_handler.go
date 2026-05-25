@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -272,61 +273,20 @@ func (eh *ErrorHandler) CreateBackup() error {
 }
 
 // performSimpleBackup performs a simple backup by recreating schema and copying data
+//
+// 🔧 [P1.1 修复] 复用嵌入的 schema.sql 创建表，避免硬编码 schema 与主表漂移
+//   - 旧实现：硬编码 CREATE TABLE 语句，缺少 10+ 新增字段（cache_creation_5m/1h, failure_reason, last_failure_reason, cancel_reason, is_streaming 等）
+//   - 风险：从备份恢复时这些字段全部丢失数据
+//   - 新实现：直接 ExecContext(schemaFS) 创建所有表，schema 变更自动同步
+//
+// 同时使用 PRAGMA table_info 动态获取列列表，避免 SELECT/INSERT 硬编码列名
 func (eh *ErrorHandler) performSimpleBackup(ctx context.Context, backupDB *sql.DB) error {
-	// 首先在备份数据库中创建表结构
-	schemaSQL := `
-	CREATE TABLE IF NOT EXISTS request_logs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		request_id TEXT UNIQUE NOT NULL,
-		client_ip TEXT,
-		user_agent TEXT,
-		method TEXT DEFAULT 'POST',
-		path TEXT DEFAULT '/v1/messages',
-		start_time DATETIME NOT NULL,
-		end_time DATETIME,
-		duration_ms INTEGER,
-		channel TEXT DEFAULT '',
-		endpoint_name TEXT,
-		endpoint_chain TEXT,
-		group_name TEXT,
-		model_name TEXT,
-		status TEXT NOT NULL DEFAULT 'pending',
-		http_status_code INTEGER,
-		retry_count INTEGER DEFAULT 0,
-		input_tokens INTEGER DEFAULT 0,
-		output_tokens INTEGER DEFAULT 0,
-		cache_creation_tokens INTEGER DEFAULT 0,
-		cache_read_tokens INTEGER DEFAULT 0,
-		input_cost_usd REAL DEFAULT 0,
-		output_cost_usd REAL DEFAULT 0,
-		cache_creation_cost_usd REAL DEFAULT 0,
-		cache_read_cost_usd REAL DEFAULT 0,
-		total_cost_usd REAL DEFAULT 0,
-		created_at DATETIME DEFAULT (datetime('now', 'localtime')),
-		updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
-	);
-	
-	CREATE TABLE IF NOT EXISTS usage_summary (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		date TEXT NOT NULL,
-		model_name TEXT NOT NULL,
-		endpoint_name TEXT NOT NULL,
-		group_name TEXT,
-		request_count INTEGER DEFAULT 0,
-		success_count INTEGER DEFAULT 0,
-		error_count INTEGER DEFAULT 0,
-		total_input_tokens INTEGER DEFAULT 0,
-		total_output_tokens INTEGER DEFAULT 0,
-		total_cache_creation_tokens INTEGER DEFAULT 0,
-		total_cache_read_tokens INTEGER DEFAULT 0,
-		total_cost_usd REAL DEFAULT 0,
-		avg_duration_ms REAL DEFAULT 0,
-		created_at DATETIME DEFAULT (datetime('now', 'localtime')),
-		updated_at DATETIME DEFAULT (datetime('now', 'localtime')),
-		UNIQUE(date, model_name, endpoint_name, group_name)
-	);`
-
-	if _, err := backupDB.ExecContext(ctx, schemaSQL); err != nil {
+	// 🔧 [P1.1] 使用嵌入的 schema.sql 创建完整 schema（包含所有表与索引）
+	schemaData, err := schemaFS.ReadFile("schema.sql")
+	if err != nil {
+		return fmt.Errorf("failed to read embedded schema: %w", err)
+	}
+	if _, err := backupDB.ExecContext(ctx, string(schemaData)); err != nil {
 		return fmt.Errorf("failed to create backup schema: %w", err)
 	}
 
@@ -340,38 +300,40 @@ func (eh *ErrorHandler) performSimpleBackup(ctx context.Context, backupDB *sql.D
 	srcDB.SetConnMaxLifetime(0)
 	defer srcDB.Close()
 
-	rows, err := srcDB.QueryContext(ctx, `
-		SELECT request_id, 
-		       COALESCE(client_ip, '') as client_ip, 
-		       COALESCE(user_agent, '') as user_agent, 
-		       COALESCE(method, 'POST') as method, 
-		       COALESCE(path, '/v1/messages') as path, 
-		       start_time, end_time, duration_ms,
-			   COALESCE(channel, '') as channel,
-			   COALESCE(endpoint_name, '') as endpoint_name,
-			   COALESCE(endpoint_chain, '') as endpoint_chain,
-			   COALESCE(group_name, '') as group_name, 
-			   COALESCE(model_name, '') as model_name, 
-			   status, http_status_code, retry_count,
-			   input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-			   input_cost_usd, output_cost_usd, cache_creation_cost_usd, cache_read_cost_usd, 
-			   total_cost_usd, created_at, updated_at
-		FROM request_logs ORDER BY id
-	`)
+	// 🔧 [P1.1] 动态获取 request_logs 列列表，避免硬编码与 schema 漂移
+	columns, err := getTableColumns(ctx, srcDB, "request_logs")
+	if err != nil {
+		return fmt.Errorf("failed to get request_logs columns: %w", err)
+	}
+	if len(columns) == 0 {
+		eh.logger.Warn("source request_logs has no columns, skipping backup")
+		return nil
+	}
+
+	// 排除 id（自增），让备份表自己生成
+	dataColumns := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col != "id" {
+			dataColumns = append(dataColumns, col)
+		}
+	}
+
+	selectSQL := fmt.Sprintf("SELECT %s FROM request_logs ORDER BY id",
+		joinIdentifiers(dataColumns))
+	rows, err := srcDB.QueryContext(ctx, selectSQL)
 	if err != nil {
 		return fmt.Errorf("failed to read request logs: %w", err)
 	}
 	defer rows.Close()
 
-	stmt, err := backupDB.PrepareContext(ctx, `
-		INSERT INTO request_logs (
-			request_id, client_ip, user_agent, method, path, start_time, end_time, duration_ms,
-			channel, endpoint_name, endpoint_chain, group_name, model_name, status, http_status_code, retry_count,
-			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-			input_cost_usd, output_cost_usd, cache_creation_cost_usd, cache_read_cost_usd,
-			total_cost_usd, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`)
+	placeholders := make([]string, len(dataColumns))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	insertSQL := fmt.Sprintf("INSERT INTO request_logs (%s) VALUES (%s)",
+		joinIdentifiers(dataColumns), strings.Join(placeholders, ", "))
+
+	stmt, err := backupDB.PrepareContext(ctx, insertSQL)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement: %w", err)
 	}
@@ -379,38 +341,59 @@ func (eh *ErrorHandler) performSimpleBackup(ctx context.Context, backupDB *sql.D
 
 	recordCount := 0
 	for rows.Next() {
-		var r RequestDetail
-		err := rows.Scan(
-			&r.RequestID, &r.ClientIP, &r.UserAgent, &r.Method, &r.Path,
-			&r.StartTime, &r.EndTime, &r.DurationMs, &r.Channel,
-			&r.EndpointName, &r.EndpointChain, &r.GroupName, &r.ModelName,
-			&r.Status, &r.HTTPStatusCode, &r.RetryCount,
-			&r.InputTokens, &r.OutputTokens, &r.CacheCreationTokens, &r.CacheReadTokens,
-			&r.InputCostUSD, &r.OutputCostUSD, &r.CacheCreationCostUSD, &r.CacheReadCostUSD,
-			&r.TotalCostUSD, &r.CreatedAt, &r.UpdatedAt,
-		)
-		if err != nil {
+		// 通用扫描：用 []any 接所有列，避免依赖 RequestDetail 结构
+		values := make([]any, len(dataColumns))
+		scanArgs := make([]any, len(dataColumns))
+		for i := range values {
+			scanArgs[i] = &values[i]
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			return fmt.Errorf("failed to scan record: %w", err)
 		}
-
-		_, err = stmt.ExecContext(ctx,
-			r.RequestID, r.ClientIP, r.UserAgent, r.Method, r.Path,
-			r.StartTime, r.EndTime, r.DurationMs, r.Channel,
-			r.EndpointName, r.EndpointChain, r.GroupName, r.ModelName,
-			r.Status, r.HTTPStatusCode, r.RetryCount,
-			r.InputTokens, r.OutputTokens, r.CacheCreationTokens, r.CacheReadTokens,
-			r.InputCostUSD, r.OutputCostUSD, r.CacheCreationCostUSD, r.CacheReadCostUSD,
-			r.TotalCostUSD, r.CreatedAt, r.UpdatedAt,
-		)
-		if err != nil {
+		if _, err := stmt.ExecContext(ctx, values...); err != nil {
 			return fmt.Errorf("failed to insert record: %w", err)
 		}
-
 		recordCount++
 	}
 
-	eh.logger.Info("Backup completed", "records_copied", recordCount)
+	eh.logger.Info("Backup completed", "records_copied", recordCount, "columns", len(dataColumns))
 	return nil
+}
+
+// getTableColumns 通过 PRAGMA table_info 获取表的列名列表（按 cid 升序）
+// 🔧 [P1.1 新增] 用于动态获取表 schema，避免硬编码列列表与 schema 漂移
+func getTableColumns(ctx context.Context, db *sql.DB, tableName string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return nil, err
+		}
+		columns = append(columns, name)
+	}
+	return columns, rows.Err()
+}
+
+// joinIdentifiers 将列名用反引号包裹后用逗号拼接，避免与 SQL 关键字冲突
+// 🔧 [P1.1 新增] SQLite 支持双引号或反引号，这里统一用双引号以兼容
+func joinIdentifiers(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = `"` + n + `"`
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // Error type detection helper functions

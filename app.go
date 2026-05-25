@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -94,6 +95,15 @@ type App struct {
 	portConflictPort int    // 冲突的端口号
 	portConflictErr  string // 冲突错误信息
 
+	// 🔧 [P5.7 新增] 启动状态机
+	// 旧实现：端口冲突时代理未启动但后台任务都在跑（空耗资源）
+	//        数据库失败时部分组件 nil 但应用看起来正常运行
+	// 新实现：明确的状态机区分 Starting/Running/Degraded/Failed，
+	//        Failed 状态下停止所有不必要的后台任务，前端展示诊断信息
+	appState        atomic.Int32 // AppState 枚举值
+	appStateReason  string       // 进入当前状态的原因（如失败时的具体错误）
+	appStateMu      sync.RWMutex // 保护 appStateReason
+
 	// 并发控制
 	mu        sync.RWMutex
 	isRunning bool
@@ -107,9 +117,70 @@ type App struct {
 
 // NewApp 创建新的应用实例
 func NewApp() *App {
-	return &App{
+	a := &App{
 		startTime: time.Now(),
 		stopChan:  make(chan struct{}),
+	}
+	a.appState.Store(int32(AppStateStarting))
+	return a
+}
+
+// AppState 启动状态枚举
+//
+// 🔧 [P5.7 新增] 明确启动过程的状态
+type AppState int32
+
+const (
+	// AppStateStarting 启动中
+	AppStateStarting AppState = iota
+	// AppStateRunning 正常运行（所有核心组件就绪）
+	AppStateRunning
+	// AppStateDegraded 降级运行（部分组件失败，但仍能提供主要功能）
+	AppStateDegraded
+	// AppStateFailed 启动失败（核心组件失败，应用无法正常服务）
+	AppStateFailed
+)
+
+// String 返回 AppState 的字符串表示
+func (s AppState) String() string {
+	switch s {
+	case AppStateStarting:
+		return "starting"
+	case AppStateRunning:
+		return "running"
+	case AppStateDegraded:
+		return "degraded"
+	case AppStateFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
+// setAppState 设置应用状态（线程安全）
+// 🔧 [P5.7 新增]
+func (a *App) setAppState(state AppState, reason string) {
+	a.appState.Store(int32(state))
+	a.appStateMu.Lock()
+	a.appStateReason = reason
+	a.appStateMu.Unlock()
+	if a.logger != nil {
+		a.logger.Info("📍 应用状态变更",
+			"state", state.String(),
+			"reason", reason)
+	}
+}
+
+// GetAppState 返回当前应用状态（线程安全，可被前端调用）
+// 🔧 [P5.7 新增 - 暴露给前端]
+func (a *App) GetAppState() map[string]string {
+	state := AppState(a.appState.Load())
+	a.appStateMu.RLock()
+	reason := a.appStateReason
+	a.appStateMu.RUnlock()
+	return map[string]string{
+		"state":  state.String(),
+		"reason": reason,
 	}
 }
 
@@ -194,7 +265,28 @@ func (a *App) startup() {
 	// 10. 启动 HTTP 代理服务器
 	proxyStarted := a.startProxyServer()
 
-	// 11. 设置配置热重载
+	// 🔧 [P5.7] 启动状态决策：根据核心组件状态确定 AppState
+	// 必须在后台任务启动前决定状态，以便 Failed 状态下跳过不必要的后台任务
+	if !proxyStarted {
+		// 核心组件失败：代理服务器未启动 = 应用无法提供服务
+		a.setAppState(AppStateFailed, "代理服务器未启动（端口冲突或绑定失败）")
+		// Failed 状态：不启动后台空耗任务，仅保留 UI 让用户重试
+		a.isRunning = false
+		a.logger.Error("❌ Claude Request Forwarder 启动未完成：代理服务器未启动",
+			"configured_port", a.config.Server.Port,
+			"hint", "请在前端检查端口冲突诊断信息，修改端口后重启")
+		return
+	}
+
+	// 核心组件就绪：检查降级条件
+	if a.storeDB == nil || a.settingsStore == nil {
+		// 数据库不可用：可以转发请求，但无法保存配置/查看历史
+		a.setAppState(AppStateDegraded, "配置存储不可用（数据库初始化失败），无法保存设置变更")
+	} else {
+		a.setAppState(AppStateRunning, "")
+	}
+
+	// 11. 设置配置热重载（仅 Running/Degraded 状态启动）
 	a.setupConfigReload()
 
 	// 12. 设置事件桥接
@@ -204,13 +296,9 @@ func (a *App) startup() {
 	a.startHistoryCollector()
 
 	a.isRunning = proxyStarted
-	if proxyStarted {
-		a.logger.Info("✅ Claude Request Forwarder 启动完成",
-			"proxy_port", a.config.Server.Port)
-	} else {
-		a.logger.Error("❌ Claude Request Forwarder 启动未完成：代理服务器未启动",
-			"configured_port", a.config.Server.Port)
-	}
+	a.logger.Info("✅ Claude Request Forwarder 启动完成",
+		"proxy_port", a.config.Server.Port,
+		"app_state", AppState(a.appState.Load()).String())
 }
 
 // shutdown 在 Wails 应用关闭时调用
@@ -1621,19 +1709,14 @@ func (a *App) setupConfigReload() {
 
 // setupEventBridges 设置事件桥接
 // 将内部 EventBus 事件转发到 Wails 前端
+//
+// 🔧 [P0.3 修复] 通过 runResilientGoroutine 启动，panic 后自动重启
+// 旧实现：panic recover 后 goroutine 直接退出，事件桥接永久失效，前端状态不再更新
+// 新实现：panic 后自动重启（带 backoff + 重启次数上限），保持服务可恢复
 func (a *App) setupEventBridges() {
 	// 注意：当前 EventBus 实现不支持订阅回调
 	// 我们使用定时轮询来更新前端状态
-	go func() {
-		// 添加 panic recovery 防止后台 goroutine 崩溃导致程序闪退
-		defer func() {
-			if r := recover(); r != nil {
-				if a.logger != nil {
-					a.logger.Error("📡 事件桥接 goroutine 发生 panic", "recover", r)
-				}
-			}
-		}()
-
+	a.runResilientGoroutine("event-bridge", func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 
@@ -1654,7 +1737,7 @@ func (a *App) setupEventBridges() {
 				}
 			}
 		}
-	}()
+	})
 
 	a.logger.Info("📡 事件桥接已启用")
 }
@@ -1676,16 +1759,8 @@ func (a *App) startHistoryCollector() {
 		a.logger.Info("📊 初始历史数据点已收集")
 	}
 
-	go func() {
-		// 添加 panic recovery 防止后台 goroutine 崩溃导致程序闪退
-		defer func() {
-			if r := recover(); r != nil {
-				if a.logger != nil {
-					a.logger.Error("📊 历史数据收集器 goroutine 发生 panic", "recover", r)
-				}
-			}
-		}()
-
+	// 🔧 [P0.3 修复] 改用 runResilientGoroutine，panic 后自动重启
+	a.runResilientGoroutine("history-collector", func() {
 		ticker := time.NewTicker(30 * time.Second) // 每30秒收集一次
 		defer ticker.Stop()
 
@@ -1703,6 +1778,92 @@ func (a *App) startHistoryCollector() {
 				if metrics != nil {
 					metrics.AddHistoryDataPoints()
 				}
+			}
+		}
+	})
+}
+
+// runResilientGoroutine 启动一个具备自重启能力的后台 goroutine
+//
+// 🔧 [P0.3 新增] 解决后台关键 goroutine（事件桥接、历史收集器等）
+// panic 后永久退出导致前端状态停滞的问题。
+//
+// 行为：
+//  1. panic 发生时记录详细日志（含 stack trace）
+//  2. 按指数退避策略重启（1s → 2s → 4s → 8s → 16s 上限）
+//  3. 短时间内连续 panic 超过 5 次时停止重启，避免无限崩溃
+//  4. a.stopChan 关闭时正常退出，不重启
+//
+// 参数：
+//   - name: goroutine 名称，用于日志
+//   - work: 实际工作函数，正常 return 表示退出（不重启）
+func (a *App) runResilientGoroutine(name string, work func()) {
+	go func() {
+		const maxRestarts = 5
+		const restartWindow = 60 * time.Second // 60s 内累计超过 maxRestarts 则放弃
+
+		var restartCount int
+		var restartWindowStart time.Time
+
+		for {
+			// 检查 stopChan，正常退出不重启
+			select {
+			case <-a.stopChan:
+				if a.logger != nil {
+					a.logger.Info(fmt.Sprintf("🛑 %s goroutine 收到停止信号，退出", name))
+				}
+				return
+			default:
+			}
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						if a.logger != nil {
+							a.logger.Error(fmt.Sprintf("💥 %s goroutine panic", name),
+								"recover", r,
+								"stack", string(debug.Stack()))
+						}
+					}
+				}()
+
+				work()
+			}()
+
+			// work() 正常 return 不重启
+			// 只有 panic 才会到这里继续循环
+
+			// 滑动窗口计数
+			now := time.Now()
+			if now.Sub(restartWindowStart) > restartWindow {
+				restartWindowStart = now
+				restartCount = 0
+			}
+			restartCount++
+
+			if restartCount > maxRestarts {
+				if a.logger != nil {
+					a.logger.Error(fmt.Sprintf("❌ %s goroutine 在 %v 内累计 panic %d 次，停止重启",
+						name, restartWindow, restartCount))
+				}
+				return
+			}
+
+			// 指数退避（最长 16s）
+			backoff := time.Duration(1<<uint(restartCount-1)) * time.Second
+			if backoff > 16*time.Second {
+				backoff = 16 * time.Second
+			}
+
+			if a.logger != nil {
+				a.logger.Warn(fmt.Sprintf("🔄 %s goroutine 将在 %v 后重启 (第 %d 次)",
+					name, backoff, restartCount))
+			}
+
+			select {
+			case <-a.stopChan:
+				return
+			case <-time.After(backoff):
 			}
 		}
 	}()
@@ -1862,6 +2023,25 @@ func (a *App) applySettingsToConfig() {
 	// 数据保留配置
 	a.config.UsageTracking.RetentionDays = a.settingsService.GetInt(ctx, service.CategoryRetention, "retention_days", a.config.UsageTracking.RetentionDays)
 	a.config.UsageTracking.CleanupInterval = a.settingsService.GetDuration(ctx, service.CategoryRetention, "cleanup_interval", a.config.UsageTracking.CleanupInterval)
+
+	// 🔧 [P5.5.4 新增] Proxy 代理配置（从 SQLite 同步）
+	// 旧实现：只能改 config.yaml 重启生效
+	// 新实现：前端「设置」→「出站代理」修改后立即生效（Transport Provider 检测 key 变化自动重建）
+	a.config.Proxy.Enabled = a.settingsService.GetBool(ctx, service.CategoryProxy, "enabled", a.config.Proxy.Enabled)
+	a.config.Proxy.Type = a.getSettingString(ctx, service.CategoryProxy, "type", a.config.Proxy.Type)
+	a.config.Proxy.URL = a.getSettingString(ctx, service.CategoryProxy, "url", a.config.Proxy.URL)
+	a.config.Proxy.Host = a.getSettingString(ctx, service.CategoryProxy, "host", a.config.Proxy.Host)
+	a.config.Proxy.Port = a.settingsService.GetInt(ctx, service.CategoryProxy, "port", a.config.Proxy.Port)
+	a.config.Proxy.Username = a.getSettingString(ctx, service.CategoryProxy, "username", a.config.Proxy.Username)
+	a.config.Proxy.Password = a.getSettingString(ctx, service.CategoryProxy, "password", a.config.Proxy.Password)
+
+	// 🔧 [P5.5.4 新增] Logging 日志配置（从 SQLite 同步）
+	a.config.Logging.Level = a.getSettingString(ctx, service.CategoryLogging, "level", a.config.Logging.Level)
+	a.config.Logging.Format = a.getSettingString(ctx, service.CategoryLogging, "format", a.config.Logging.Format)
+
+	// 🔧 [P5.5.4 新增] Timezone 时区配置（从 SQLite 同步）
+	// 注意：时区变更标记为 RequiresRestart=true，运行时变更只影响后续新生成的时间戳
+	a.config.Timezone = a.getSettingString(ctx, service.CategoryTimezone, "global", a.config.Timezone)
 
 	a.logger.Debug("已从数据库加载设置")
 

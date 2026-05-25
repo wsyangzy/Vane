@@ -30,7 +30,6 @@ type Config struct {
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration
 	Proxy            ProxyConfig            `yaml:"proxy"`
 	Auth             AuthConfig             `yaml:"auth"`
-	TUI              TUIConfig              `yaml:"tui"`            // TUI configuration (DEPRECATED: TUI has been removed)
 	GlobalTimeout    time.Duration          `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Timezone         string                 `yaml:"timezone"`       // Global timezone setting for all components
 	Endpoints        []EndpointConfig       `yaml:"endpoints"`
@@ -57,6 +56,12 @@ type RetryConfig struct {
 	BaseDelay   time.Duration `yaml:"base_delay"`
 	MaxDelay    time.Duration `yaml:"max_delay"`
 	Multiplier  float64       `yaml:"multiplier"`
+
+	// 🔧 [P5.3 新增] 全局重试预算：避免三层重试结构（渠道间×渠道内×单端点）导致最坏 50+ 次重试
+	// 设计目标：客户端 keep-alive socket 在 60-120s 后会失效，必须在此之前给出最终响应
+	// 任何一个预算耗尽都会终止重试，返回客户端
+	MaxTotalAttempts int           `yaml:"max_total_attempts"` // 全局最大总尝试次数（含所有端点+渠道，默认 10）
+	MaxTotalDuration time.Duration `yaml:"max_total_duration"` // 全局最大重试总时长（默认 60s）
 }
 
 type HealthConfig struct {
@@ -89,7 +94,10 @@ type StreamingConfig struct {
 	HeartbeatInterval     time.Duration `yaml:"heartbeat_interval"`
 	ReadTimeout           time.Duration `yaml:"read_timeout"`
 	MaxIdleTime           time.Duration `yaml:"max_idle_time"`
-	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"` // 响应头超时时间，默认: 120s（覆盖 Claude Opus thinking 模式首字节延迟）
+	ResponseHeaderTimeout time.Duration `yaml:"response_header_timeout"` // 流式响应头超时时间，默认: 120s（覆盖 Claude Opus thinking 模式首字节延迟）
+	// 🔧 [P0.8 新增] 非流式响应头超时（Default Transport 使用），默认: 60s
+	// 与 ResponseHeaderTimeout 分开，因为非流式典型场景更短（如 count_tokens）
+	DefaultResponseHeaderTimeout time.Duration `yaml:"default_response_header_timeout"`
 }
 
 // GroupConfig (DEPRECATED in use FailoverConfig instead)
@@ -186,14 +194,6 @@ type ProxyConfig struct {
 type AuthConfig struct {
 	Enabled bool   `yaml:"enabled"`         // Enable authentication, default: false
 	Token   string `yaml:"token,omitempty"` // Bearer token for authentication
-}
-
-// TUIConfig is DEPRECATED - TUI has been removed in
-// Kept for backward compatibility with old configuration files
-type TUIConfig struct {
-	Enabled           bool          `yaml:"enabled"`             // DEPRECATED: TUI has been removed
-	UpdateInterval    time.Duration `yaml:"update_interval"`     // DEPRECATED: TUI has been removed
-	SavePriorityEdits bool          `yaml:"save_priority_edits"` // DEPRECATED: TUI has been removed
 }
 
 // TokenCountingConfig Token计数配置
@@ -346,6 +346,13 @@ func (c *Config) setDefaults() {
 	if c.Retry.Multiplier == 0 {
 		c.Retry.Multiplier = 2.0
 	}
+	// 🔧 [P5.3 新增] 全局重试预算默认值
+	if c.Retry.MaxTotalAttempts == 0 {
+		c.Retry.MaxTotalAttempts = 10 // 默认 10 次总尝试上限
+	}
+	if c.Retry.MaxTotalDuration == 0 {
+		c.Retry.MaxTotalDuration = 60 * time.Second // 默认 60s 总重试时长
+	}
 	if c.Health.CheckInterval == 0 {
 		c.Health.CheckInterval = 30 * time.Second
 	}
@@ -397,6 +404,11 @@ func (c *Config) setDefaults() {
 		// 🔧 [P2-S1 修复] 默认从 60s 提升到 120s，
 		// 覆盖 Claude Opus thinking 模式首字节延迟可能超过 60s 的场景
 		c.Streaming.ResponseHeaderTimeout = 120 * time.Second
+	}
+	if c.Streaming.DefaultResponseHeaderTimeout == 0 {
+		// 🔧 [P0.8 新增] 非流式响应头超时默认 60s（与历史 Default Transport 硬编码值一致）
+		// 非流式典型场景（如 count_tokens）更短，不需要 thinking 容忍度
+		c.Streaming.DefaultResponseHeaderTimeout = 60 * time.Second
 	}
 
 	// Set global timeout default

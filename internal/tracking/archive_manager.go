@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -42,13 +45,24 @@ type ArchiveManager struct {
 	archiveChan chan *ArchiveEvent
 	adapter     DatabaseAdapter
 	config      ArchiveManagerConfig
-	pricing     map[string]ModelPricing       // 模型定价缓存
-	endpointMu  map[string]EndpointMultiplier // 端点倍率缓存
+
+	// 🔧 [P3.3 新增] pricingMu 保护 pricing 和 endpointMu 两个 map 的引用替换
+	// 旧实现：UpdatePricing / UpdateEndpointMultipliers 直接替换引用，
+	// 与 calculateCostV2 读这两个 map 形成 race（极端情况下可触发 map 并发读写 panic）
+	pricingMu  sync.RWMutex
+	pricing    map[string]ModelPricing       // 模型定价缓存
+	endpointMu map[string]EndpointMultiplier // 端点倍率缓存
+
 	location    *time.Location
 	writeLocker sync.Locker // 与 UsageTracker 写队列复用，避免同连接并发开启事务
 
 	// 热池引用（用于归档成功后清理）
 	hotPool *HotPool
+
+	// 🔧 [P1.7 新增] 同步刷新请求通道
+	// Flush() 调用时向此 channel 发送一个回复 channel，
+	// archiver 收到后立即刷新当前批次并通过回复 channel 报告完成
+	flushReqChan chan chan error
 
 	// 统计信息
 	stats ArchiveStats
@@ -91,13 +105,14 @@ func NewArchiveManager(adapter DatabaseAdapter, config ArchiveManagerConfig, pri
 	ctx, cancel := context.WithCancel(context.Background())
 
 	am := &ArchiveManager{
-		archiveChan: make(chan *ArchiveEvent, config.ChannelSize),
-		adapter:     adapter,
-		config:      config,
-		pricing:     pricing,
-		location:    location,
-		ctx:         ctx,
-		cancel:      cancel,
+		archiveChan:  make(chan *ArchiveEvent, config.ChannelSize),
+		adapter:      adapter,
+		config:       config,
+		pricing:      pricing,
+		location:     location,
+		flushReqChan: make(chan chan error, 4), // 🔧 [P1.7] 同步刷新请求通道（小缓冲避免阻塞）
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	// 启动归档协程
@@ -123,13 +138,31 @@ func (am *ArchiveManager) SetWriteLocker(locker sync.Locker) {
 }
 
 // UpdateEndpointMultipliers 更新端点成本倍率
+//
+// 🔧 [P3.3 修复] 加锁保护 map 引用替换，避免与读路径形成 race
 func (am *ArchiveManager) UpdateEndpointMultipliers(multipliers map[string]EndpointMultiplier) {
+	am.pricingMu.Lock()
 	am.endpointMu = multipliers
+	am.pricingMu.Unlock()
 }
 
 // UpdatePricing 更新模型定价（运行时动态更新）
+//
+// 🔧 [P3.3 修复] 加锁保护 map 引用替换
 func (am *ArchiveManager) UpdatePricing(pricing map[string]ModelPricing) {
+	am.pricingMu.Lock()
 	am.pricing = pricing
+	am.pricingMu.Unlock()
+}
+
+// getPricingSnapshot 读取定价快照（受 pricingMu 保护）
+// 🔧 [P3.3 新增] 供 calculateCostV2 等读路径调用，保证读取的 map 引用在使用期间不变
+func (am *ArchiveManager) getPricingSnapshot() (map[string]ModelPricing, map[string]EndpointMultiplier) {
+	am.pricingMu.RLock()
+	pricing := am.pricing
+	endpointMu := am.endpointMu
+	am.pricingMu.RUnlock()
+	return pricing, endpointMu
 }
 
 // Archive 发送请求到归档通道
@@ -239,6 +272,45 @@ func (am *ArchiveManager) startArchiver() {
 			// 定时刷新（即使未满批次）
 			flush()
 
+		// 🔧 [P1.7 新增] 同步刷新请求：先排空 channel 再 flush，确保所有"已 Archive 但未持久化"事件都被刷掉
+		case respChan := <-am.flushReqChan:
+			// 先把 archiveChan 当前所有待处理事件吸收到 batch
+			drainArchiveChan := true
+			for drainArchiveChan {
+				select {
+				case event := <-am.archiveChan:
+					batch = append(batch, event)
+					if len(batch) >= am.config.BatchSize {
+						flush()
+					}
+				default:
+					drainArchiveChan = false
+				}
+			}
+			// 刷新当前批次
+			start := time.Now()
+			var flushErr error
+			if len(batch) > 0 {
+				flushErr = am.flushBatch(batch)
+				am.stats.mu.Lock()
+				am.stats.LastFlushTime = time.Now()
+				am.stats.LastFlushLatency = time.Since(start)
+				am.stats.TotalBatches++
+				if flushErr == nil {
+					am.stats.TotalArchived += int64(len(batch))
+					am.stats.AvgBatchSize = float64(am.stats.TotalArchived) / float64(am.stats.TotalBatches)
+				} else {
+					am.stats.TotalFailed += int64(len(batch))
+				}
+				am.stats.mu.Unlock()
+				batch = batch[:0]
+			}
+			// 通知调用方
+			select {
+			case respChan <- flushErr:
+			default:
+			}
+
 		case <-am.ctx.Done():
 			// 优雅关闭，处理剩余事件
 			slog.Info("📦 ArchiveManager 正在关闭，处理剩余事件...")
@@ -298,7 +370,115 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 		time.Sleep(time.Duration(retry+1) * time.Second)
 	}
 
+	// 🔧 [P1.3 新增] 所有重试失败后，降级写入本地 JSONL 文件以防数据丢失
+	// 旧实现：仅记录错误后丢弃整个 batch，请求 Token 已被上游消费但本地无任何记录
+	// 新实现：序列化为 JSONL 写入本地"事故文件"，运维可后续手动恢复
+	if dumpErr := am.dumpFailedBatchToFile(events, lastErr); dumpErr != nil {
+		slog.Error("📦 批量归档完全失败：连本地降级文件都写不进去",
+			"batch_size", len(events),
+			"original_error", lastErr,
+			"dump_error", dumpErr)
+	} else {
+		// 降级文件写入成功后，仍要从热池清理（避免热池堆积已转储数据）
+		if am.hotPool != nil {
+			requestIDs := make([]string, len(events))
+			for i, event := range events {
+				requestIDs[i] = event.Request.RequestID
+			}
+			am.hotPool.ConfirmArchived(requestIDs)
+		}
+	}
+
 	return fmt.Errorf("batch insert failed after %d retries: %w", am.config.MaxRetry, lastErr)
+}
+
+// dumpFailedBatchToFile 将归档失败的事件序列化为 JSONL 写入本地降级文件
+//
+// 🔧 [P1.3 新增] 防止归档失败导致已完成请求数据丢失
+//   - 文件位置：与数据库同目录下的 archive_failures.jsonl
+//   - 格式：每行一个 JSON 对象（含完整 ArchiveEvent.Request）
+//   - 滚动策略：单文件超过 10 MB 时自动重命名为 .{timestamp} 备份并新建
+//   - 运维方式：用户/管理员可后续用脚本读取并通过 SQL 导入到数据库
+func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr error) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	// 推断降级文件路径：用 adapter 的数据库路径同目录
+	dumpPath := am.getDumpFilePath()
+	if dumpPath == "" {
+		return fmt.Errorf("cannot determine dump file path")
+	}
+
+	// 滚动策略：单文件超过 10 MB 时备份
+	const maxFileSize = 10 * 1024 * 1024
+	if info, err := os.Stat(dumpPath); err == nil && info.Size() > maxFileSize {
+		backupPath := dumpPath + "." + time.Now().Format("20060102-150405")
+		if renameErr := os.Rename(dumpPath, backupPath); renameErr != nil {
+			slog.Warn("📦 降级文件备份失败（继续追加到原文件）",
+				"path", dumpPath, "error", renameErr)
+		}
+	}
+
+	f, err := os.OpenFile(dumpPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open dump file: %w", err)
+	}
+	defer f.Close()
+
+	dumpedCount := 0
+	for _, event := range events {
+		if event == nil || event.Request == nil {
+			continue
+		}
+		// 构造降级记录：包含失败原因和原始事件，便于排查
+		record := map[string]any{
+			"dumped_at":  time.Now().Format(time.RFC3339Nano),
+			"reason":     "archive_failed_after_retries",
+			"last_error": lastErr.Error(),
+			"request":    event.Request,
+		}
+		data, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			slog.Warn("📦 降级记录序列化失败", "request_id", event.Request.RequestID, "error", marshalErr)
+			continue
+		}
+		if _, writeErr := f.Write(append(data, '\n')); writeErr != nil {
+			return fmt.Errorf("write dump record: %w", writeErr)
+		}
+		dumpedCount++
+	}
+
+	if dumpedCount > 0 {
+		slog.Warn("📦 批量归档失败：已降级到本地文件，等待手动恢复",
+			"dump_file", dumpPath,
+			"dumped_count", dumpedCount,
+			"original_error", lastErr)
+	}
+	return nil
+}
+
+// getDumpFilePath 推断降级文件路径（与数据库同目录）
+func (am *ArchiveManager) getDumpFilePath() string {
+	if am.adapter == nil {
+		return ""
+	}
+	dbType := am.adapter.GetDatabaseType()
+	if dbType != "sqlite" {
+		// 非 SQLite 情况下不主动决定路径，避免写入意外位置
+		return ""
+	}
+	// 从 SQLite adapter 拿到 DB 文件路径
+	// 简化做法：直接放在用户 home 下的子目录（与 tracker DatabasePath 同源）
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(homeDir, ".claude-request-forwarder")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "archive_failures.jsonl")
 }
 
 // batchInsert 执行批量插入
@@ -358,7 +538,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 		_ = tx.Rollback()
 	}()
 
-	// 添加分开的 5m/1h 缓存字段和成本
+	// 🔧 [P1.6 修复] 使用 INSERT ... ON CONFLICT(request_id) DO UPDATE，
+	// 避免单条 request_id 唯一约束冲突导致整批回滚。
+	// 冲突来源：HotPool 满时降级到 traditional eventChan 路径，可能先写入；
+	//          然后 HotPool 归档时再次写入相同 request_id → 旧实现整批失败。
+	// 新实现：冲突时用归档数据（含完整 token 与成本）覆盖，因为归档总是后到达的"权威"版本。
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO request_logs (
 			request_id, client_ip, user_agent, method, path,
@@ -374,6 +558,31 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cache_creation_cost_usd, cache_creation_5m_cost_usd, cache_creation_1h_cost_usd,
 			cache_read_cost_usd, total_cost_usd
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(request_id) DO UPDATE SET
+			end_time = excluded.end_time,
+			duration_ms = excluded.duration_ms,
+			endpoint_name = excluded.endpoint_name,
+			endpoint_chain = excluded.endpoint_chain,
+			model_name = excluded.model_name,
+			status = excluded.status,
+			http_status_code = excluded.http_status_code,
+			retry_count = excluded.retry_count,
+			failure_reason = excluded.failure_reason,
+			cancel_reason = excluded.cancel_reason,
+			is_streaming = excluded.is_streaming,
+			input_tokens = excluded.input_tokens,
+			output_tokens = excluded.output_tokens,
+			cache_creation_tokens = excluded.cache_creation_tokens,
+			cache_creation_5m_tokens = excluded.cache_creation_5m_tokens,
+			cache_creation_1h_tokens = excluded.cache_creation_1h_tokens,
+			cache_read_tokens = excluded.cache_read_tokens,
+			input_cost_usd = excluded.input_cost_usd,
+			output_cost_usd = excluded.output_cost_usd,
+			cache_creation_cost_usd = excluded.cache_creation_cost_usd,
+			cache_creation_5m_cost_usd = excluded.cache_creation_5m_cost_usd,
+			cache_creation_1h_cost_usd = excluded.cache_creation_1h_cost_usd,
+			cache_read_cost_usd = excluded.cache_read_cost_usd,
+			total_cost_usd = excluded.total_cost_usd
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -446,14 +655,17 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 
 // calculateCostV2 计算请求成本（支持分开的 5m/1h 缓存）
 func (am *ArchiveManager) calculateCostV2(req *ActiveRequest) CostBreakdown {
-	if am.pricing == nil {
+	// 🔧 [P3.3 修复] 通过 snapshot 取得 map 引用，保证使用期间引用稳定
+	// 旧实现：直接读 am.pricing/am.endpointMu，与 UpdatePricing/UpdateEndpointMultipliers 写操作 race
+	pricingMap, endpointMuMap := am.getPricingSnapshot()
+	if pricingMap == nil {
 		return CostBreakdown{}
 	}
 
 	// 查找模型定价，不存在则回退到 _default 定价
-	pricing, exists := am.pricing[req.ModelName]
+	pricing, exists := pricingMap[req.ModelName]
 	if !exists {
-		pricing, exists = am.pricing["_default"]
+		pricing, exists = pricingMap["_default"]
 		if !exists {
 			return CostBreakdown{}
 		}
@@ -461,12 +673,12 @@ func (am *ArchiveManager) calculateCostV2(req *ActiveRequest) CostBreakdown {
 
 	// 获取端点倍率
 	var multiplier *EndpointMultiplier
-	if am.endpointMu != nil {
+	if endpointMuMap != nil {
 		if key := endpointMultiplierKey(req.Channel, req.GroupName, req.EndpointName); key != "" {
-			if m, ok := am.endpointMu[key]; ok {
+			if m, ok := endpointMuMap[key]; ok {
 				multiplier = &m
 			}
-		} else if m, ok := am.endpointMu[req.EndpointName]; ok {
+		} else if m, ok := endpointMuMap[req.EndpointName]; ok {
 			// 兼容旧 key：endpointName 作为唯一键
 			multiplier = &m
 		}
@@ -537,10 +749,43 @@ func (am *ArchiveManager) Close() error {
 }
 
 // Flush 强制刷新（用于测试或优雅关闭）
-func (am *ArchiveManager) Flush() {
-	// 发送一个空事件触发刷新
-	// 实际刷新由 ticker 处理，这里只是等待
-	time.Sleep(100 * time.Millisecond)
+// Flush 触发立即刷新当前批次并等待落盘完成
+//
+// 🔧 [P1.7 修复] 旧实现是 time.Sleep(100ms)，纯猜测性等待，不可靠：
+//   - 测试场景下时序不确定
+//   - 优雅关闭场景下可能未刷完就退出
+//   - 实际落盘时间可能远超 100ms（大批次 + SQLITE_BUSY 时）
+//
+// 新实现：通过 flushReqChan 与 archiver 同步通信，真正等待数据写入数据库
+func (am *ArchiveManager) Flush() error {
+	// 检查 ctx 是否已取消（关闭后 Flush 无意义）
+	select {
+	case <-am.ctx.Done():
+		return nil
+	default:
+	}
+
+	respChan := make(chan error, 1)
+	flushTimeout := 30 * time.Second
+
+	// 提交刷新请求
+	select {
+	case am.flushReqChan <- respChan:
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("flush request timeout: archiver too busy to accept flush request")
+	case <-am.ctx.Done():
+		return nil
+	}
+
+	// 等待刷新完成
+	select {
+	case err := <-respChan:
+		return err
+	case <-time.After(flushTimeout):
+		return fmt.Errorf("flush timeout after %v: batch may still be processing", flushTimeout)
+	case <-am.ctx.Done():
+		return nil
+	}
 }
 
 // evictConn 强制驱逐一个 *sql.Conn，让 sql.DB 在下次 Get 时重建。

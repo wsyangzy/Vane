@@ -265,20 +265,8 @@ func (sp *StreamProcessor) processSSELine(line string) {
 	}
 }
 
-// ensureRequestCompletion 确保请求完成状态被记录（fallback机制）
-// 🚫 DEPRECATED: 已被 getFinalTokenUsage() 替代，此方法已完全移除违规调用
-// 此方法不再执行任何操作，仅保留方法签名以维持兼容性
-func (sp *StreamProcessor) ensureRequestCompletion() {
-	// ⚠️ 此方法已完全弃用，所有功能已迁移到 getFinalTokenUsage() 方法
-	// 原因：违反单一责任原则，直接调用 usageTracker 而非通过生命周期管理器
-	//
-	// 新的架构要求：
-	// 1. StreamProcessor 只负责解析和返回Token信息
-	// 2. Handler 调用生命周期管理器记录完成状态
-	// 3. 不再有任何组件直接调用 usageTracker
-
-	slog.Debug(fmt.Sprintf("⚠️ [已弃用] [%s] ensureRequestCompletion已弃用，请使用getFinalTokenUsage", sp.requestID))
-}
+// 🔧 [P4.3 清理] 已删除 ensureRequestCompletion DEPRECATED 死方法
+// 此方法已被 getFinalTokenUsage() 完全替代，无外部调用者
 
 // attemptUsageRecovery 异步尝试从debug文件恢复完整的usage信息
 // 🔧 [Fallback修复] 等待debug文件写入完成后，尝试提取完整的token使用统计并更新数据库
@@ -333,28 +321,8 @@ func (sp *StreamProcessor) classifyStreamError(err error, tokenUsage *tracking.T
 	return "error"
 }
 
-// handlePartialStream 处理部分数据流中断情况（修复版本）
-// 🚫 DEPRECATED: 已被 handlePartialStreamV2() 替代，此方法已完全移除违规调用
-// 当网络中断或其他错误发生时，不再进行错误分类，让上层统一处理
-func (sp *StreamProcessor) handlePartialStream(err error) error {
-	// ⚠️ 此方法已弃用，请使用 handlePartialStreamV2() 方法
-	// 原因：违反生命周期管理器架构，直接调用 usageTracker 而非返回Token信息
-
-	// 记录流处理中断但不做任何usageTracker调用
-	slog.Warn(fmt.Sprintf("⚠️ [流式中断] [%s] 流处理中断: %v, 已处理 %d 字节. 错误将由上层统一处理.",
-		sp.requestID, err, sp.bytesProcessed))
-
-	// 处理剩余缓冲数据
-	sp.finalizeParsing()
-
-	// 尝试从部分数据中恢复有用信息
-	if len(sp.partialData) > 0 {
-		sp.errorRecovery.RecoverFromPartialData(sp.requestID, sp.partialData, time.Since(sp.startTime))
-	}
-
-	// 直接返回错误，让调用者(handler)通过生命周期管理器来分类和处理最终失败
-	return err
-}
+// 🔧 [P4.3 清理] 已删除 handlePartialStream DEPRECATED 死方法
+// 此方法已被 handlePartialStreamV2() 完全替代，无外部调用者
 
 // ProcessStreamWithRetry 流式处理入口（无重试版本）
 // 2025-12-11: 移除无效的重试循环，流式传输阶段不重试以避免重复计费
@@ -527,34 +495,8 @@ func (sp *StreamProcessor) Reset() {
 	slog.Info(fmt.Sprintf("🔄 [处理器重置] [%s] 流处理器已重置", sp.requestID))
 }
 
-// handleCancellation 处理客户端取消请求 - Phase 2 优雅取消处理器
-// 🚫 DEPRECATED: 已被 handleCancellationV2() 替代，不再直接调用 usageTracker
-func (sp *StreamProcessor) handleCancellation(ctx context.Context, cancelErr error) error {
-	// ⚠️ 此方法已弃用，请使用 handleCancellationV2() 方法
-	// 原因：违反生命周期管理器架构，通过 collectAvailableInfo 间接调用 usageTracker
-
-	slog.Info(fmt.Sprintf("🚫 [客户端取消] [%s] 检测到客户端取消: %v", sp.requestID, cancelErr))
-
-	// 同步解析模型下无需等待后台 goroutine，直接收集已解析信息。
-	tokenUsage, err := sp.collectAvailableInfoV2(cancelErr)
-	_ = tokenUsage // 忽略Token信息，保持原接口兼容
-	return err
-}
-
-// collectAvailableInfo 智能信息收集 - Phase 2 分阶段保存逻辑
-// 🚫 DEPRECATED: 已被 collectAvailableInfoV2() 替代，此方法已完全移除违规调用
-func (sp *StreamProcessor) collectAvailableInfo(cancelErr error, status string) error {
-	// ⚠️ 此方法已完全弃用，请使用 collectAvailableInfoV2() 方法
-	// 原因：违反生命周期管理器架构，直接调用 usageTracker 而非返回Token信息
-	//
-	// 新的架构要求：
-	// 1. StreamProcessor 只负责收集Token信息
-	// 2. Handler 调用生命周期管理器记录状态
-	// 3. 不再有任何组件直接调用 usageTracker
-
-	slog.Debug(fmt.Sprintf("⚠️ [已弃用] [%s] collectAvailableInfo已弃用，请使用collectAvailableInfoV2", sp.requestID))
-	return cancelErr
-}
+// 🔧 [P4.3 清理] 已删除 handleCancellation 和 collectAvailableInfo 两个 DEPRECATED 死方法
+// 它们已被 handleCancellationV2() 和 collectAvailableInfoV2() 完全替代，无外部调用者
 
 // getFinalTokenUsage 获取最终的Token使用信息（修复版）
 func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {

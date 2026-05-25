@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -60,9 +61,14 @@ type eventBus struct {
 	stats   BusStats
 	statsMu sync.RWMutex
 
-	// 内部状态
-	running bool
-	wg      sync.WaitGroup
+	// 🔧 [P0.2 修复] running 改为 atomic.Bool，避免 Publish/Stop 之间的 race
+	// 旧实现：Publish 读 running 无锁，Stop 写 running + close(eventChan) 也无锁
+	// 风险：(1) Publish 读到 running=true; (2) Stop 关闭 eventChan;
+	//       (3) Publish 向已关闭 channel 发送 → panic: send on closed channel
+	// 新实现：用 atomic.Bool + closeOnce 保证关闭幂等，Publish 用 select 双重保护
+	running   atomic.Bool
+	closeOnce sync.Once
+	wg        sync.WaitGroup
 }
 
 // 统计信息
@@ -217,8 +223,13 @@ func (eb *eventBus) setupDefaultFilters() {
 }
 
 // Publish 发布事件
+//
+// 🔧 [P0.2 修复] 并发安全的事件发布：
+//   - 用 atomic.Bool 读取 running 状态（无锁）
+//   - 用 select + ctx.Done() 双重保护，避免向已关闭 channel 发送
+//   - Stop() 通过 cancel ctx 触发 ctx.Done()，与 close(eventChan) 形成屏障
 func (eb *eventBus) Publish(event Event) {
-	if !eb.running {
+	if !eb.running.Load() {
 		eb.logger.Debug("EventBus not running, dropping event", "type", event.Type)
 		return
 	}
@@ -229,7 +240,14 @@ func (eb *eventBus) Publish(event Event) {
 	// 更新统计信息
 	eb.updateStats(event, "total")
 
+	// 关键：用 select + ctx.Done() 双重保护
+	// 即使 Publish 检查 running=true 后另一 goroutine 调用了 Stop，
+	// ctx.Done() 会优先被 select 选中，避免向已关闭 channel 发送
 	select {
+	case <-eb.ctx.Done():
+		// EventBus 正在/已经停止，安全丢弃
+		eb.updateStats(event, "dropped")
+		return
 	case eb.eventChan <- event:
 		// 事件发送成功
 	default:
@@ -246,11 +264,10 @@ func (eb *eventBus) SetSSEBroadcaster(broadcaster SSEBroadcaster) {
 
 // Start 启动EventBus
 func (eb *eventBus) Start() error {
-	if eb.running {
+	// 🔧 [P0.2 修复] 用 CompareAndSwap 保证幂等启动
+	if !eb.running.CompareAndSwap(false, true) {
 		return nil
 	}
-
-	eb.running = true
 	eb.wg.Add(1)
 
 	go eb.eventProcessor()
@@ -260,15 +277,26 @@ func (eb *eventBus) Start() error {
 }
 
 // Stop 停止EventBus
+//
+// 🔧 [P0.2 修复] 正确的关闭顺序：
+//  1. 用 CompareAndSwap 保证幂等关闭，避免重复 close(eventChan) 导致 panic
+//  2. 先 cancel ctx，让正在 Publish 的 goroutine 看到 ctx.Done() 并放弃发送
+//  3. 用 sync.Once 保证 close(eventChan) 只执行一次
+//  4. 最后 wg.Wait() 等待 processor 退出
 func (eb *eventBus) Stop() error {
-	if !eb.running {
+	if !eb.running.CompareAndSwap(true, false) {
 		return nil
 	}
 
-	eb.running = false
+	// 第 1 步：cancel ctx，触发 Publish 中的 ctx.Done() 屏障
 	eb.cancel()
-	close(eb.eventChan)
 
+	// 第 2 步：sync.Once 保证 close 只执行一次
+	eb.closeOnce.Do(func() {
+		close(eb.eventChan)
+	})
+
+	// 第 3 步：等待 processor 退出
 	eb.wg.Wait()
 
 	eb.logger.Info("EventBus stopped")

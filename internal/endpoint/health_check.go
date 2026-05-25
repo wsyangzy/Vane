@@ -216,7 +216,54 @@ func (m *Manager) performHealthChecks() {
 }
 
 // checkEndpointHealth checks the health of a single endpoint
+//
+// 🔧 [P5.4 新增] 经过 healthThrottleAllow 节流（外部调用方应通过 checkEndpointHealthForced 绕过节流）
+// 注意：本函数自身不再做节流，由各触发源在调用前显式判断
 func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
+	// 🔧 [P5.4] 节流检查：避免多触发源重复检查同一端点
+	if !m.healthThrottleAllow(endpoint) {
+		slog.Debug("⏸️ [健康检查节流] 跳过短时间内重复检查",
+			"endpoint", endpoint.Config.Name)
+		return
+	}
+	m.checkEndpointHealthInternal(endpoint)
+}
+
+// checkEndpointHealthForced 强制健康检查（绕过节流），用于手动触发场景
+// 🔧 [P5.4 新增]
+func (m *Manager) checkEndpointHealthForced(endpoint *Endpoint) {
+	// 标记 lastCheck 时间，让后续节流窗口正确计算
+	key := endpoint.Config.Channel + "/" + endpoint.Config.Name
+	m.healthThrottleMu.Lock()
+	m.healthThrottleLastTime[key] = time.Now()
+	m.healthThrottleMu.Unlock()
+
+	m.checkEndpointHealthInternal(endpoint)
+}
+
+// healthThrottleAllow 检查指定端点是否允许执行健康检查
+// 🔧 [P5.4 新增]
+//   - 返回 true：允许检查（并自动更新 lastCheck 时间）
+//   - 返回 false：在节流窗口内，跳过本次检查
+func (m *Manager) healthThrottleAllow(endpoint *Endpoint) bool {
+	key := endpoint.Config.Channel + "/" + endpoint.Config.Name
+
+	m.healthThrottleMu.Lock()
+	defer m.healthThrottleMu.Unlock()
+
+	now := time.Now()
+	if last, ok := m.healthThrottleLastTime[key]; ok {
+		if now.Sub(last) < m.healthThrottleInterval {
+			return false
+		}
+	}
+	m.healthThrottleLastTime[key] = now
+	return true
+}
+
+// checkEndpointHealthInternal 实际的健康检查逻辑（无节流）
+// 🔧 [P5.4 重命名] 原 checkEndpointHealth 的实现，由节流入口调用
+func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
 	// 跳过健康检查（部分中转商不支持健康检查端点）
 	if endpoint.Config.SkipHealthCheck {
 		// 仅进行“可达性/延迟探测”，不根据 HTTP 状态码判定健康与否，避免误判为不健康；
@@ -242,7 +289,14 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 				_ = resp.Body.Close()
 			}
-			_ = doErr
+			// 🔧 [P0.7 修复] 跳过健康检查路径下，仍然要记录探测错误（便于排查端点不可达问题）
+			// 旧实现：_ = doErr 直接丢弃，端点真正不可达时无任何日志线索
+			if doErr != nil {
+				slog.Debug("📡 [跳过健康检查] 探测请求错误（仅记录，不影响健康判定）",
+					"endpoint", endpoint.Config.Name,
+					"url", probeURL,
+					"error", doErr)
+			}
 		}
 
 		endpoint.mutex.Lock()
@@ -283,6 +337,10 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 		return
 	}
 
+	// 🔧 [P0.6 修复] drain 响应体后再 Close，让底层 TCP 连接可被复用
+	// 旧实现：直接 resp.Body.Close() 会丢弃未读字节，HTTP Transport 不能复用连接
+	// 新实现：先 io.Copy(io.Discard, body) 排空，连接可回到 idle 池供下次健康检查复用
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	resp.Body.Close()
 
 	// Only consider 2xx as healthy for API endpoints
@@ -491,7 +549,8 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 
 	// Perform health check on the endpoint
 	slog.Info(fmt.Sprintf("🔍 [手动检查] 开始检查端点: %s", endpointName))
-	m.checkEndpointHealth(targetEndpoint)
+	// 🔧 [P5.4] 手动检查走 Forced 版本，绕过节流
+	m.checkEndpointHealthForced(targetEndpoint)
 
 	// Get status and log completion with response time
 	status := targetEndpoint.Status
@@ -606,8 +665,8 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 			defer wg.Done()
 			defer func() { <-semaphore }() // 释放信号量
 
-			// 执行健康检测（复用现有方法）
-			m.checkEndpointHealth(ep)
+			// 🔧 [P5.4] 批量检查走 Forced 版本，整批已是统一调度，无需节流
+			m.checkEndpointHealthForced(ep)
 
 			// 获取检测结果（需要加锁读取）
 			ep.mutex.RLock()

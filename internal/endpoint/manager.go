@@ -75,6 +75,14 @@ type Manager struct {
 	// 🛑 [手动重试] 故障转移排序起点（由用户选择的渠道）
 	failoverStartMu      sync.RWMutex
 	failoverStartChannel string
+
+	// 🔧 [P5.4 新增] 健康检查节流器：避免多触发源短时间内重复检查同一端点
+	// 6 个触发源（HealthCheckLoop / 端点失败 / 渠道切换 / 防抖回调 / 故障转移 / 配置热重载）
+	// 之前会在 500ms 内对同一端点触发 3-4 次健康检查，造成"探活风暴"
+	// 节流器全局保证：同一端点最多 healthThrottleInterval（默认 5s）一次健康检查
+	healthThrottleMu       sync.Mutex
+	healthThrottleLastTime map[string]time.Time // endpoint key -> 上次检查时间
+	healthThrottleInterval time.Duration        // 节流窗口
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
@@ -145,6 +153,12 @@ func NewManager(cfg *config.Config) *Manager {
 		fastTester:   NewFastTester(cfg),
 		groupManager: NewGroupManager(cfg),
 		keyManager:   NewKeyManager(), // 初始化 Key 管理器
+
+		// 🔧 [P5.4 新增] 健康检查节流器：5s 节流窗口
+		// 默认 5s 足够覆盖 500ms 防抖窗口内的多触发源风暴，
+		// 同时不会过度延迟健康状态更新
+		healthThrottleLastTime: make(map[string]time.Time),
+		healthThrottleInterval: 5 * time.Second,
 	}
 
 	// Initialize endpoints
@@ -194,24 +208,34 @@ func (m *Manager) Stop() {
 
 // UpdateConfig updates the manager configuration (hot-reload)
 // Desktop: 只更新配置参数，不重建端点（端点完全由数据库管理）
+//
+// 🔧 [P3.2 修复] 加写锁保护 m.config 和 m.client 的并发写入
+// 旧实现：无锁直接写，与健康检查 goroutine 读 m.config/m.client 形成 race
+// 新实现：使用 endpointsMu 写锁（既有锁），保护配置字段的更新
 func (m *Manager) UpdateConfig(cfg *config.Config) {
+	m.endpointsMu.Lock()
 	m.config = cfg
+	// Recreate transport with new proxy configuration
+	if tr, err := transport.CreateTransport(cfg); err == nil {
+		oldTransport, _ := m.client.Transport.(*http.Transport)
+		m.client = &http.Client{
+			Transport: tr,
+			Timeout:   cfg.Health.Timeout,
+		}
+		// 🔧 [P3.2 增强] 关闭旧 transport 的 idle connections，避免连接泄漏
+		if oldTransport != nil {
+			oldTransport.CloseIdleConnections()
+		}
+	}
+	m.endpointsMu.Unlock()
 
-	// 只更新 GroupManager 配置
+	// 只更新 GroupManager 配置（GroupManager 自己有锁，不需要外部保护）
 	m.groupManager.UpdateConfig(cfg)
 	slog.Debug("🔄 [热更新] 更新配置参数完成，端点保持不变")
 
-	// Update fast tester with new config
+	// Update fast tester with new config（fastTester 内部自己处理并发）
 	if m.fastTester != nil {
 		m.fastTester.UpdateConfig(cfg)
-	}
-
-	// Recreate transport with new proxy configuration
-	if transport, err := transport.CreateTransport(cfg); err == nil {
-		m.client = &http.Client{
-			Transport: transport,
-			Timeout:   cfg.Health.Timeout,
-		}
 	}
 }
 

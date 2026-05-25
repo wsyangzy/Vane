@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS request_logs (
 
     -- 取消信息 (状态机重构新增字段 2025-09-28)
     cancel_reason TEXT,                     -- 取消原因 (取消时间使用end_time字段)
+
+    -- 🔧 [P5.9 新增] 已发送内容时间戳
+    -- 流式响应首次向客户端发送 token 时设置，用于崩溃恢复时区分"已计费但本地缺失"场景
+    -- NULL 表示尚未发送任何内容；非 NULL 表示客户端已收到部分响应
+    output_sent_at DATETIME,
     
     -- Token统计
     input_tokens INTEGER DEFAULT 0,        -- 输入token数

@@ -19,7 +19,10 @@ import {
   Lock,
   Hash,
   Archive,
-  X
+  X,
+  Globe,
+  FileText,
+  Map
 } from 'lucide-react';
 import { Button, ErrorMessage, ConfirmDialog } from '@components/ui';
 import { SettingItem, SettingsSection, PortInfo } from './components';
@@ -49,7 +52,11 @@ const CATEGORY_ICONS = {
   request: Clock,
   auth: Lock,
   token_counting: Hash,
-  retention: Archive
+  retention: Archive,
+  // 🔧 [P5.5.5 新增] Proxy / Logging / Timezone 分类图标
+  proxy: Globe,
+  logging: FileText,
+  timezone: Map
 };
 
 // ============================================
@@ -628,11 +635,15 @@ const SettingsPage = () => {
         </SettingsSection>
       )}
 
-      {/* 其他设置分类 (两列布局) */}
+      {/* 其他设置分类 (两列布局)
+          🔧 [P5.5 调整] 字段数量 > 4 的分类（如 Proxy）自动跨 2 列，避免与小分类同行产生大片空白 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {categories
           .filter(c => c.name !== 'server')
-          .map(category => (
+          .map(category => {
+            const categorySettings = settingsByCategory[category.name]?.filter(shouldShowSetting) || [];
+            const isWideCategory = categorySettings.length > 4;
+            return (
             <SettingsSection
               key={category.name}
               title={category.label}
@@ -640,6 +651,7 @@ const SettingsPage = () => {
               description={category.description}
               onReset={() => handleResetCategory(category.name, category.label)}
               resetDisabled={saving}
+              className={isWideCategory ? 'lg:col-span-2' : ''}
             >
               {settingsByCategory[category.name]?.filter(shouldShowSetting).map(setting => {
                 const changeKey = `${setting.category}.${setting.key}`;
@@ -670,7 +682,8 @@ const SettingsPage = () => {
                 </div>
               )}
             </SettingsSection>
-          ))}
+            );
+          })}
       </div>
 
       {/* 重置确认弹窗 */}

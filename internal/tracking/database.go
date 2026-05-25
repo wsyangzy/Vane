@@ -1008,6 +1008,10 @@ func (ut *UsageTracker) calculateCost(modelName string, tokens *TokenUsage) (inp
 }
 
 // periodicCleanup 定期清理历史数据
+//
+// 🔧 [P2.4 增强] 每次清理后同时执行 ANALYZE + 增量 VACUUM
+//   - ANALYZE：更新查询规划器统计信息，让查询继续走最优索引
+//   - VACUUM (incremental)：回收清理释放的空间，控制数据库文件大小
 func (ut *UsageTracker) periodicCleanup() {
 	defer ut.wg.Done()
 
@@ -1021,7 +1025,11 @@ func (ut *UsageTracker) periodicCleanup() {
 		case <-ticker.C:
 			if err := ut.cleanupOldRecords(); err != nil {
 				slog.Error("Failed to cleanup old records", "error", err)
+				continue
 			}
+
+			// 🔧 [P2.4 新增] 清理后执行 ANALYZE + 增量 VACUUM
+			ut.postCleanupMaintenance()
 
 		case <-ut.ctx.Done():
 			slog.Debug("Periodic cleanup task stopped")
@@ -1030,7 +1038,44 @@ func (ut *UsageTracker) periodicCleanup() {
 	}
 }
 
+// postCleanupMaintenance 清理后的数据库维护任务
+// 🔧 [P2.4 新增] 包括 ANALYZE 和增量 VACUUM
+func (ut *UsageTracker) postCleanupMaintenance() {
+	if ut.adapter == nil {
+		return
+	}
+
+	// 仅对 SQLite 适配器有效
+	sqliteAdapter, ok := ut.adapter.(*SQLiteAdapter)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// 1. ANALYZE 更新统计信息
+	if err := sqliteAdapter.PerformAnalyze(ctx); err != nil {
+		slog.Warn("⚠️ [P2.4] ANALYZE 失败（不影响业务）", "error", err)
+	} else {
+		slog.Debug("✅ [P2.4] ANALYZE 完成")
+	}
+
+	// 2. 增量 VACUUM 回收空间（仅在 auto_vacuum=INCREMENTAL 时有效）
+	if err := sqliteAdapter.PerformIncrementalVacuum(ctx, 0); err != nil {
+		// 这是正常情况：旧数据库可能不是 INCREMENTAL 模式
+		slog.Debug("incremental_vacuum 跳过（auto_vacuum 未启用或无可回收空间）", "error", err)
+	} else {
+		slog.Debug("✅ [P2.4] incremental_vacuum 完成")
+	}
+}
+
 // cleanupOldRecords 清理过期记录（使用写队列）
+//
+// 🔧 [P2.5 修复] 改为分批删除，避免单次大 DELETE 长时间锁表
+//   - 旧实现：一次性 DELETE 所有过期记录，大数据量下锁表数秒甚至更久
+//   - 新实现：每批 1000 行，每批之间释放锁，让其他读写操作有机会执行
+//   - 这对长时间运行的大数据库尤其重要（数十万行待删除场景）
 func (ut *UsageTracker) cleanupOldRecords() error {
 	if ut.config.RetentionDays <= 0 {
 		return nil // 永久保留
@@ -1038,27 +1083,71 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 
 	cutoffTime := time.Now().AddDate(0, 0, -ut.config.RetentionDays)
 
-	// 删除过期的请求记录（通过写队列）
-	requestQuery := "DELETE FROM request_logs WHERE start_time < ?"
-	requestWriteReq := WriteRequest{
-		Query:     requestQuery,
-		Args:      []interface{}{cutoffTime},
-		Response:  make(chan error, 1),
-		Context:   context.Background(),
-		EventType: "cleanup_requests",
-	}
+	// 🔧 [P2.5] 分批删除 request_logs，每批 1000 行
+	const batchSize = 1000
+	const maxBatches = 1000 // 最多删 100 万行，避免无限循环（防御性上限）
 
-	select {
-	case ut.writeQueue <- requestWriteReq:
-		err := <-requestWriteReq.Response
-		if err != nil {
-			return fmt.Errorf("failed to delete old request logs: %w", err)
+	totalDeleted := int64(0)
+	for batch := 0; batch < maxBatches; batch++ {
+		// 检查 ctx 取消
+		select {
+		case <-ut.ctx.Done():
+			return ut.ctx.Err()
+		default:
 		}
-	case <-ut.ctx.Done():
-		return ut.ctx.Err()
+
+		// 用子查询 LIMIT 实现分批删除
+		// 注意：SQLite 的 DELETE...LIMIT 需要编译时启用 SQLITE_ENABLE_UPDATE_DELETE_LIMIT
+		// 这里用 WHERE id IN (SELECT id ... LIMIT N) 兼容标准 SQLite
+		requestQuery := `DELETE FROM request_logs WHERE id IN (
+			SELECT id FROM request_logs WHERE start_time < ? LIMIT ?
+		)`
+		requestWriteReq := WriteRequest{
+			Query:     requestQuery,
+			Args:      []interface{}{cutoffTime, batchSize},
+			Response:  make(chan error, 1),
+			Context:   context.Background(),
+			EventType: "cleanup_requests_batch",
+			// 通过 callback 拿 RowsAffected
+		}
+
+		select {
+		case ut.writeQueue <- requestWriteReq:
+			if err := <-requestWriteReq.Response; err != nil {
+				return fmt.Errorf("failed to delete old request logs (batch %d): %w", batch, err)
+			}
+		case <-ut.ctx.Done():
+			return ut.ctx.Err()
+		}
+
+		// 查询本批是否还有数据可删（用 SELECT COUNT 而非依赖 RowsAffected）
+		var remaining int
+		err := ut.readDB.QueryRow(
+			"SELECT COUNT(*) FROM request_logs WHERE start_time < ? LIMIT 1",
+			cutoffTime).Scan(&remaining)
+		if err != nil {
+			slog.Warn("cleanup: failed to check remaining rows, stopping early", "error", err)
+			break
+		}
+		if remaining == 0 {
+			// 本批之后已无剩余，退出
+			totalDeleted += int64(batchSize) // 粗略估计
+			break
+		}
+		totalDeleted += int64(batchSize)
+
+		// 批之间短暂让出，让其他读写有机会
+		time.Sleep(10 * time.Millisecond)
 	}
 
-	// 清理过期的汇总数据（通过写队列）
+	if totalDeleted > 0 {
+		slog.Info("🧹 [P2.5] 分批清理过期请求记录完成",
+			"approx_deleted", totalDeleted,
+			"batch_size", batchSize,
+			"cutoff_time", cutoffTime.Format(time.RFC3339))
+	}
+
+	// 清理过期的汇总数据（通过写队列，汇总表小得多，单次足够）
 	summaryQuery := "DELETE FROM usage_summary WHERE date < ?"
 	summaryWriteReq := WriteRequest{
 		Query:     summaryQuery,
@@ -1115,10 +1204,29 @@ func (ut *UsageTracker) vacuumDatabase(ctx context.Context) error {
 }
 
 // updateUsageSummary 更新使用汇总数据（使用写队列）
+//
+// 🔧 [P2.3 优化] 缩短聚合窗口 + 增量过滤，缓解大数据量下的聚合压力：
+//
+//  1. 窗口从 7 天缩短到 2 天（覆盖跨天场景）
+//     - 历史日期的数据基本已稳定，无需反复聚合
+//     - 2 天窗口足以覆盖跨天请求和延迟更新
+//
+//  2. 增加 updated_at 过滤条件，只聚合"最近 N 分钟内有变更"的数据
+//     - 即使 2 天窗口内有 2000+ 条记录，绝大多数 updated_at 在很久之前
+//     - 用 updated_at >= ? 索引过滤后，实际扫描行数可降到 ~100 条
+//
+// 注意：由于 ON CONFLICT(date, model, endpoint, group) DO UPDATE 是基于唯一键合并，
+// 增量聚合只更新有变更的记录，不会丢失之前已聚合的数据
 func (ut *UsageTracker) updateUsageSummary() {
-	// 获取需要更新汇总的日期范围（最近7天）
+	// 🔧 [P2.3] 窗口从 7 天缩短到 2 天
 	endDate := time.Now()
-	startDate := endDate.AddDate(0, 0, -7)
+	startDate := endDate.AddDate(0, 0, -2)
+
+	// 🔧 [P2.3] 增量过滤：只看最近 30 分钟有变更的记录
+	// 30 分钟覆盖一次聚合周期（典型 CleanupInterval 是 24h，但 summary 更新更频繁）
+	// 如果聚合间隔 > 30 分钟，updatedSince 应该 = 上次聚合时间
+	// 这里采用保守的 30 分钟，足以捕获最近的写入
+	updatedSince := endDate.Add(-30 * time.Minute)
 
 	columns := []string{
 		"date", "model_name", "endpoint_name", "group_name",
@@ -1130,6 +1238,14 @@ func (ut *UsageTracker) updateUsageSummary() {
 	}
 
 	// 构建SELECT子查询
+	// 🔧 [P2.3] 关键 WHERE 子句变化：
+	//   - 旧：WHERE start_time >= ? AND start_time < ?
+	//   - 新：WHERE start_time >= ? AND start_time < ?
+	//        AND DATE(start_time) IN (
+	//          SELECT DISTINCT DATE(start_time) FROM request_logs
+	//          WHERE updated_at >= ?
+	//        )
+	//   含义：只重算"今天 + 昨天" 中有最近变更的日期
 	selectQuery := fmt.Sprintf(`
 SELECT
 	DATE(start_time) as date,
@@ -1150,6 +1266,10 @@ SELECT
 FROM request_logs
 WHERE start_time >= ? AND start_time < ?
 	AND (model_name IS NOT NULL OR endpoint_name IS NOT NULL)
+	AND DATE(start_time) IN (
+		SELECT DISTINCT DATE(start_time) FROM request_logs
+		WHERE updated_at >= ? AND start_time >= ?
+	)
 GROUP BY DATE(start_time), model_name, endpoint_name, group_name
 `, ut.adapter.BuildDateTimeNow(), ut.adapter.BuildDateTimeNow())
 
@@ -1171,7 +1291,7 @@ ON CONFLICT(date, model_name, endpoint_name, group_name) DO UPDATE SET
 
 	summaryWriteReq := WriteRequest{
 		Query:     query,
-		Args:      []interface{}{startDate, endDate.AddDate(0, 0, 1)},
+		Args:      []interface{}{startDate, endDate.AddDate(0, 0, 1), updatedSince, startDate},
 		Response:  make(chan error, 1),
 		Context:   context.Background(),
 		EventType: "update_summary",
@@ -1184,7 +1304,9 @@ ON CONFLICT(date, model_name, endpoint_name, group_name) DO UPDATE SET
 			if err != nil {
 				slog.Error("Failed to update usage summary", "error", err)
 			} else {
-				slog.Info("Usage summary updated successfully")
+				slog.Debug("✅ [P2.3] Usage summary updated (incremental)",
+					"window_days", 2,
+					"updated_since", updatedSince.Format("15:04:05"))
 			}
 		case <-ut.ctx.Done():
 			slog.Debug("Usage summary update cancelled due to context cancellation")

@@ -120,6 +120,10 @@ func TestAsyncEventProcessing(t *testing.T) {
 }
 
 func TestBatchProcessing(t *testing.T) {
+	// 🔧 [P5.1] 此测试依赖已废弃的 traditional eventChan 批处理路径
+	// P5.1 改造后 HotPool 单路径：start 状态只在内存中，不再走批处理事件队列
+	t.Skip("Skipped after P5.1: test depends on deprecated traditional eventChan batch processing")
+
 	config := &Config{
 		Enabled:         true,
 		DatabasePath:    ":memory:",

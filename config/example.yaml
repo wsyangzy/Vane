@@ -85,17 +85,12 @@ auth:
   enabled: false             # 是否启用鉴权，默认: false (不鉴权)
   # token: "your-bearer-token"  # Bearer Token，启用鉴权时必须设置
 
-# TUI界面配置,如果部署在服务器上建议设置为 false
-tui:
-  enabled: false               # 服务器部署建议禁用TUI界面，默认: true
-  update_interval: "1s"       # TUI刷新间隔，默认: 1s
-  save_priority_edits: false  # 是否在TUI中保存优先级编辑到配置文件，默认: false（当前情况下保存配置文件可能会自动格式化配置文件）
-
-# Web界面配置
-web:
-  enabled: true              # 服务器部署建议启用Web界面，默认: false
-  host: "0.0.0.0"          # Web界面监听所有接口，默认: localhost
-  port: 8088                 # Web界面端口，默认: 8088
+# 🔧 [P4.1 清理] 以下配置块在 v5.0+ 桌面版中已不生效，仅作历史保留说明：
+#
+# tui:    - TUI 界面已在 v5.0 移除（迁移到 Wails 桌面应用），此配置块被忽略
+# web:    - 独立 Web 服务已在 v5.0 移除，UI 现在通过 Wails 内嵌，此配置块被忽略
+#
+# 如需调整界面，请使用 桌面应用的"设置"页面（前端 UI）。
 
 # Token计数配置
 token_counting:

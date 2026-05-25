@@ -397,3 +397,106 @@ func (a *App) settingRecordToInfo(r *store.SettingRecord) SettingInfo {
 
 	return info
 }
+
+// ConfigSourceInfo 配置项来源信息（用于前端配置溯源诊断）
+// 🔧 [P5.5 新增]
+type ConfigSourceInfo struct {
+	Category     string `json:"category"`
+	Key          string `json:"key"`
+	CurrentValue string `json:"current_value"`
+	Source       string `json:"source"`        // default / yaml / database / environment
+	DefaultValue string `json:"default_value"` // 代码常量默认值
+	Notes        string `json:"notes,omitempty"`
+}
+
+// GetConfigSourceInfo 返回所有配置项的来源诊断信息
+//
+// 🔧 [P5.5 新增] 用户可以通过此 API 查看：
+//   - 每个配置项的"当前值"
+//   - 来源是什么（默认/YAML/数据库）
+//   - 与默认值的差异
+//
+// 用途：解决"我现在用的是哪个值？"的困惑
+// 这是 P5.5 配置单一来源的第一阶段，让用户先有可观察性
+func (a *App) GetConfigSourceInfo() ([]ConfigSourceInfo, error) {
+	a.mu.RLock()
+	settingsService := a.settingsService
+	cfg := a.config
+	a.mu.RUnlock()
+
+	if cfg == nil {
+		return nil, fmt.Errorf("配置未加载")
+	}
+
+	infos := make([]ConfigSourceInfo, 0, 32)
+
+	// 已纳入 SettingsService 管理的配置（来源：database 或 default）
+	if settingsService != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		dbSettings, err := settingsService.GetAll(ctx)
+		if err == nil {
+			for _, s := range dbSettings {
+				source := string(service.ConfigSourceDatabase)
+				notes := ""
+				if s.UpdatedAt.Equal(s.CreatedAt) {
+					// 创建后未修改 → 视为默认值（来自首次初始化）
+					source = string(service.ConfigSourceDefault)
+					notes = "首次初始化默认值"
+				}
+				infos = append(infos, ConfigSourceInfo{
+					Category:     s.Category,
+					Key:          s.Key,
+					CurrentValue: s.Value,
+					Source:       source,
+					DefaultValue: "", // SettingsService 已合并默认值，此处不再单独显示
+					Notes:        notes,
+				})
+			}
+		}
+	}
+
+	// 未纳入 SettingsService 管理的配置（来源：YAML 或代码常量）
+	// 这些是 5.5 后续要迁移的目标
+	yamlOnlyConfigs := []ConfigSourceInfo{
+		{
+			Category: service.CategoryProxy, Key: "enabled",
+			CurrentValue: fmt.Sprintf("%v", cfg.Proxy.Enabled),
+			Source:       string(service.ConfigSourceYAML),
+			Notes:        "P5.5 待迁移：当前仅通过 config.yaml 配置",
+		},
+		{
+			Category: service.CategoryProxy, Key: "type",
+			CurrentValue: cfg.Proxy.Type,
+			Source:       string(service.ConfigSourceYAML),
+			Notes:        "P5.5 待迁移",
+		},
+		{
+			Category: service.CategoryLogging, Key: "level",
+			CurrentValue: cfg.Logging.Level,
+			Source:       string(service.ConfigSourceYAML),
+			Notes:        "P5.5 待迁移",
+		},
+		{
+			Category: service.CategoryLogging, Key: "format",
+			CurrentValue: cfg.Logging.Format,
+			Source:       string(service.ConfigSourceYAML),
+			Notes:        "P5.5 待迁移",
+		},
+		{
+			Category: service.CategoryTimezone, Key: "global",
+			CurrentValue: cfg.Timezone,
+			Source:       string(service.ConfigSourceYAML),
+			Notes:        "P5.5 待迁移",
+		},
+		{
+			Category: service.CategoryEndpointsStore, Key: "type",
+			CurrentValue: cfg.EndpointsStorage.Type,
+			Source:       string(service.ConfigSourceYAML),
+			Notes:        "P5.5 待迁移",
+		},
+	}
+	infos = append(infos, yamlOnlyConfigs...)
+
+	return infos, nil
+}

@@ -25,6 +25,24 @@ const (
 	CategoryRetention     = "retention"
 	CategoryHotPool       = "hot_pool"
 	CategoryServer        = "server"
+
+	// 🔧 [P5.5 新增] 为未来扩展预留的分类
+	// 这些分类目前 YAML/代码常量管理，后续可逐步迁移到 SettingsService
+	CategoryProxy           = "proxy"            // HTTP/SOCKS5 代理配置
+	CategoryLogging         = "logging"          // 日志级别/格式
+	CategoryEndpointsStore  = "endpoints_store"  // 端点存储类型（yaml/sqlite）
+	CategoryTimezone        = "timezone"         // 全局时区
+)
+
+// ConfigSource 表示配置项的来源
+// 🔧 [P5.5 新增] 用于前端配置溯源诊断
+type ConfigSource string
+
+const (
+	ConfigSourceDefault    ConfigSource = "default"    // 代码常量默认值
+	ConfigSourceYAML       ConfigSource = "yaml"       // YAML 文件
+	ConfigSourceDatabase   ConfigSource = "database"   // SQLite settings 表（用户修改）
+	ConfigSourceEnvironment ConfigSource = "environment" // 环境变量（暂未启用）
 )
 
 // SettingValueType 设置值类型常量
@@ -124,6 +142,28 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 				Description: "配置 API 服务端口",
 				Icon:        "📡",
 				Order:       0, // 最前（特殊处理，单独显示）
+			},
+			// 🔧 [P5.5 新增] Proxy / Logging / Timezone 分类
+			CategoryProxy: {
+				Name:        CategoryProxy,
+				Label:       "出站代理",
+				Description: "本应用连接 Claude / Codex 等上游服务商时使用的代理（与「服务端口」无关，那是客户端连接本应用的端口）",
+				Icon:        "🌐",
+				Order:       9,
+			},
+			CategoryLogging: {
+				Name:        CategoryLogging,
+				Label:       "日志设置",
+				Description: "配置日志级别和输出格式",
+				Icon:        "📝",
+				Order:       10,
+			},
+			CategoryTimezone: {
+				Name:        CategoryTimezone,
+				Label:       "时区设置",
+				Description: "配置全局时区（影响所有时间显示）",
+				Icon:        "🕐",
+				Order:       11,
 			},
 		},
 	}
@@ -251,23 +291,33 @@ func (s *SettingsService) GetAll(ctx context.Context) ([]*store.SettingRecord, e
 }
 
 // enrichEnumOptions 为枚举类型的设置动态填充选项
+//
+// 🔧 [修复] 不再依赖数据库中的 value_type，而是以 getDefaultsForCategory 为权威源：
+//   - 旧实现：if record.ValueType != ValueTypeEnum { continue }
+//     导致用户已有数据库（value_type='string'）即使 SyncMetadata 失败也不会修正
+//   - 新实现：以代码 defaults 为准，强制修正 value_type + 填充 enum_options
+//     这样即使数据库元数据没及时更新（如 schema 迁移竞争），前端也能正确渲染下拉
 func (s *SettingsService) enrichEnumOptions(records []*store.SettingRecord) {
 	for _, record := range records {
-		if record.ValueType != ValueTypeEnum {
-			continue
-		}
-
-		// 根据 category + key 匹配默认配置中的枚举选项
+		// 总是从 defaults 中查找：如果 defaults 里定义为 enum，则强制修正记录
 		defaults := s.getDefaultsForCategory(record.Category)
 		for _, def := range defaults {
-			if def.Key == record.Key && len(def.EnumOptions) > 0 {
-				record.EnumOptions = def.EnumOptions
-				slog.Debug("[enrichEnumOptions] 填充枚举选项",
-					"category", record.Category,
-					"key", record.Key,
-					"optionsCount", len(def.EnumOptions))
-				break
+			if def.Key != record.Key {
+				continue
 			}
+			// 如果 defaults 定义为 enum 且有选项，强制覆盖
+			if def.ValueType == ValueTypeEnum && len(def.EnumOptions) > 0 {
+				if record.ValueType != ValueTypeEnum {
+					slog.Info("[enrichEnumOptions] 修正记录的 ValueType（数据库未同步元数据）",
+						"category", record.Category,
+						"key", record.Key,
+						"db_value_type", record.ValueType,
+						"correct_value_type", ValueTypeEnum)
+				}
+				record.ValueType = ValueTypeEnum
+				record.EnumOptions = def.EnumOptions
+			}
+			break
 		}
 	}
 }
@@ -439,6 +489,11 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	// Retention 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryRetention)...)
 
+	// 🔧 [P5.5 新增] Proxy / Logging / Timezone 设置（从 YAML 迁移到 SQLite）
+	defaults = append(defaults, s.getDefaultsForCategory(CategoryProxy)...)
+	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
+	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
+
 	return defaults
 }
 
@@ -527,6 +582,62 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 			{Category: CategoryHotPool, Key: "max_size", Value: "10000", ValueType: ValueTypeInt, Label: "最大容量", Description: "热池最大请求数量", DisplayOrder: 3},
 			{Category: CategoryHotPool, Key: "cleanup_interval", Value: "1m", ValueType: ValueTypeDuration, Label: "清理间隔", Description: "僵尸请求清理间隔", DisplayOrder: 4},
 			{Category: CategoryHotPool, Key: "archive_on_cleanup", Value: "true", ValueType: ValueTypeBool, Label: "清理时归档", Description: "清理时是否将请求归档到数据库", DisplayOrder: 5},
+		}
+
+	// 🔧 [P5.5.1 新增] Proxy 代理配置
+	case CategoryProxy:
+		return []*store.SettingRecord{
+			{Category: CategoryProxy, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用代理", Description: "本应用连接上游服务商时是否走代理。如服务商被墙、或公司网络要求走代理时启用。注意：这跟「服务端口」不同——服务端口是客户端连接本应用的入口端口", DisplayOrder: 1},
+			{Category: CategoryProxy, Key: "type", Value: "http", ValueType: ValueTypeEnum, Label: "代理类型", Description: "代理协议类型，常用 HTTP（如 Clash/Surge 默认）或 SOCKS5", EnumOptions: []store.EnumOption{
+				{Value: "http", Label: "HTTP"},
+				{Value: "https", Label: "HTTPS"},
+				{Value: "socks5", Label: "SOCKS5"},
+			}, DisplayOrder: 2},
+			{Category: CategoryProxy, Key: "url", Value: "", ValueType: ValueTypeString, Label: "代理 URL（完整）", Description: "完整代理 URL（如 http://127.0.0.1:7890），优先于下方主机+端口", DisplayOrder: 3},
+			{Category: CategoryProxy, Key: "host", Value: "", ValueType: ValueTypeString, Label: "代理主机", Description: "代理服务器主机（URL 为空时生效）", DisplayOrder: 4},
+			{Category: CategoryProxy, Key: "port", Value: "0", ValueType: ValueTypeInt, Label: "代理端口", Description: "代理服务器端口（1-65535）", DisplayOrder: 5},
+			{Category: CategoryProxy, Key: "username", Value: "", ValueType: ValueTypeString, Label: "用户名", Description: "代理认证用户名（可选）", DisplayOrder: 6},
+			{Category: CategoryProxy, Key: "password", Value: "", ValueType: ValueTypePassword, Label: "密码", Description: "代理认证密码（可选）", DisplayOrder: 7},
+		}
+
+	// 🔧 [P5.5.2 新增] Logging 日志配置
+	case CategoryLogging:
+		return []*store.SettingRecord{
+			{Category: CategoryLogging, Key: "level", Value: "info", ValueType: ValueTypeEnum, Label: "日志级别", Description: "日志详细程度，debug 用于排查问题", EnumOptions: []store.EnumOption{
+				{Value: "debug", Label: "调试 (Debug)"},
+				{Value: "info", Label: "信息 (Info)"},
+				{Value: "warn", Label: "警告 (Warn)"},
+				{Value: "error", Label: "错误 (Error)"},
+			}, DisplayOrder: 1},
+			{Category: CategoryLogging, Key: "format", Value: "text", ValueType: ValueTypeEnum, Label: "日志格式", Description: "文本格式适合阅读，JSON 格式适合日志采集系统", EnumOptions: []store.EnumOption{
+				{Value: "text", Label: "文本格式"},
+				{Value: "json", Label: "JSON 格式"},
+			}, DisplayOrder: 2},
+		}
+
+	// 🔧 [P5.5.3 新增] Timezone 全局时区
+	case CategoryTimezone:
+		return []*store.SettingRecord{
+			{Category: CategoryTimezone, Key: "global", Value: "Asia/Shanghai", ValueType: ValueTypeEnum, Label: "全局时区", Description: "影响所有时间戳显示（数据库、日志、UI）。修改后需重启应用生效。", EnumOptions: []store.EnumOption{
+				{Value: "Asia/Shanghai", Label: "中国（北京时间 UTC+8）"},
+				{Value: "Asia/Hong_Kong", Label: "香港（UTC+8）"},
+				{Value: "Asia/Taipei", Label: "台北（UTC+8）"},
+				{Value: "Asia/Tokyo", Label: "东京（UTC+9）"},
+				{Value: "Asia/Singapore", Label: "新加坡（UTC+8）"},
+				{Value: "Asia/Seoul", Label: "首尔（UTC+9）"},
+				{Value: "UTC", Label: "UTC（协调世界时）"},
+				{Value: "Europe/London", Label: "伦敦（UTC+0/+1）"},
+				{Value: "Europe/Paris", Label: "巴黎（UTC+1/+2）"},
+				{Value: "Europe/Berlin", Label: "柏林（UTC+1/+2）"},
+				{Value: "Europe/Moscow", Label: "莫斯科（UTC+3）"},
+				{Value: "America/New_York", Label: "纽约（UTC-5/-4）"},
+				{Value: "America/Chicago", Label: "芝加哥（UTC-6/-5）"},
+				{Value: "America/Denver", Label: "丹佛（UTC-7/-6）"},
+				{Value: "America/Los_Angeles", Label: "洛杉矶（UTC-8/-7）"},
+				{Value: "America/Sao_Paulo", Label: "圣保罗（UTC-3）"},
+				{Value: "Australia/Sydney", Label: "悉尼（UTC+10/+11）"},
+				{Value: "Pacific/Auckland", Label: "奥克兰（UTC+12/+13）"},
+			}, DisplayOrder: 1, RequiresRestart: true},
 		}
 
 	default:

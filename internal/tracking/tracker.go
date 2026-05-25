@@ -22,9 +22,18 @@ import (
 // 日志去抖：相同 key 的日志在 throttleWindow 内只打一次
 // 用于前端轮询触发的可预期 transient 错误（database is locked 等），
 // 避免日志被刷屏掩盖真正的问题
+//
+// 🔧 [P0.5 修复] 增加过期清理机制，避免 sync.Map 无界增长
+//   - 旧实现：只 LoadOrStore，从不 Delete，每个唯一 key 永久占用内存
+//   - 风险：长时间运行后内存持续增长（每个独特错误消息 = 一个永久条目）
+//   - 新实现：每次访问时 lazy 检查并清理过期条目（最后访问 > 5×throttleWindow 即清理）
 var (
 	logThrottle       sync.Map // key=string -> *int64 (unix nano)
 	logThrottleWindow = int64(30 * time.Second)
+	// 过期清理：超过 5 × throttleWindow（默认 150s）未再访问的条目可清理
+	logThrottleExpiry      = int64(5 * 30 * time.Second)
+	logThrottleSweepCount  atomic.Int64
+	logThrottleSweepEvery  = int64(100) // 每 100 次 shouldLogThrottled 调用触发一次 sweep
 )
 
 // shouldLogThrottled 在 30s 内同 key 只返回 true 一次
@@ -33,10 +42,29 @@ func shouldLogThrottled(key string) bool {
 	val, _ := logThrottle.LoadOrStore(key, new(int64))
 	last := val.(*int64)
 	prev := atomic.LoadInt64(last)
+
+	// 🔧 [P0.5 修复] 周期性触发过期清理（避免每次调用都遍历）
+	if logThrottleSweepCount.Add(1)%logThrottleSweepEvery == 0 {
+		go sweepLogThrottle(now)
+	}
+
 	if now-prev < logThrottleWindow {
 		return false
 	}
 	return atomic.CompareAndSwapInt64(last, prev, now)
+}
+
+// sweepLogThrottle 清理超过 logThrottleExpiry 未访问的过期条目
+// 🔧 [P0.5 新增] 在后台 goroutine 中执行，避免阻塞主调用路径
+func sweepLogThrottle(now int64) {
+	logThrottle.Range(func(k, v any) bool {
+		if last, ok := v.(*int64); ok {
+			if now-atomic.LoadInt64(last) > logThrottleExpiry {
+				logThrottle.Delete(k)
+			}
+		}
+		return true
+	})
 }
 
 //go:embed schema.sql
@@ -349,6 +377,20 @@ type UsageTracker struct {
 	mu           sync.RWMutex
 	errorHandler *ErrorHandler
 
+	// 🔧 [P3.5 新增] eventChan 关闭保护：
+	//   - eventChanClosed: 标记 channel 是否已关闭
+	//   - eventChanClose:  保证 close 只执行一次
+	eventChanClosed atomic.Bool
+	eventChanClose  sync.Once
+
+	// 🔧 [P5.8 新增] 热池满告警相关
+	// hotPoolAlertCb: 告警回调（由 app.go 注册以推送前端 Toast）
+	// hotPoolAlertLast: 上次告警时间（防抖）
+	// hotPoolDroppedTotal: 累计因热池/事件队列满而丢弃的请求数
+	hotPoolAlertCb      atomic.Pointer[HotPoolAlertCallback]
+	hotPoolAlertLast    atomic.Int64
+	hotPoolDroppedTotal atomic.Int64
+
 	// 时区支持
 	location *time.Location // 配置的时区
 
@@ -466,7 +508,22 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
+	// 🔧 [P1.5 新增] 启动时扫描僵尸请求
+	// 上次进程崩溃时遗留的"未完成"请求（forwarding/streaming/processing/retry/suspended）
+	// 需要标记为 crashed_during_processing 失败状态，避免：
+	//   1. 前端展示永久"运行中"误导用户
+	//   2. 统计聚合时计入异常状态
+	//   3. 内存查询时被当成"活跃请求"
+	if err := ut.cleanupCrashedRequests(); err != nil {
+		// 清理失败不应该阻塞启动，仅记录警告
+		slog.Warn("启动时清理僵尸请求失败（不影响启动）", "error", err)
+	}
+
 	// 启动写操作处理器
+	// 🔧 [P3.4 修复] writeWg.Add 在启动 goroutine 前调用，避免与 Close 的 Wait 形成 race
+	// 旧实现：writeWg.Add(1) 在 processWriteQueue 函数体内调用，如果 Close 在 goroutine 调度前先 Wait，
+	// 会立即返回（计数为 0），但 goroutine 仍可能在后续启动并访问已关闭资源
+	ut.writeWg.Add(1)
 	go ut.processWriteQueue()
 
 	// 启动异步事件处理器
@@ -668,6 +725,92 @@ func (ut *UsageTracker) initDatabaseWithAdapter() error {
 	return nil
 }
 
+// cleanupCrashedRequests 启动时清理上次崩溃遗留的"未完成"请求
+//
+// 🔧 [P1.5 新增] 进程崩溃恢复后的数据一致性保护：
+//   - 扫描所有处于活跃状态（forwarding/streaming/processing/retry/suspended/pending）
+//     且 updated_at 超过 staleThreshold（默认 10 分钟）的请求
+//   - 标记为 status=failed, failure_reason=crashed_during_processing
+//   - 设置 end_time = 当前时间，用于统计聚合
+//
+// 🔧 [P5.9 增强] 区分"已发送 token"和"未发送 token"的崩溃场景：
+//   - 已发送 token（output_sent_at IS NOT NULL）→ crashed_after_output_sent
+//     表示客户端可能已收到部分响应，本地缺失最终 token 数据
+//   - 未发送 token → crashed_during_processing
+//     表示请求处理过程中崩溃，客户端未收到响应
+//
+// 这样可以避免：
+//  1. 前端展示永久"运行中"误导用户
+//  2. usage_summary 聚合时把这些异常请求计入活跃统计
+//  3. 双源查询时被误认为"活跃请求"
+func (ut *UsageTracker) cleanupCrashedRequests() error {
+	if ut.writeDB == nil {
+		return fmt.Errorf("write DB not initialized")
+	}
+
+	const staleThreshold = 10 * time.Minute
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// 计算阈值时间：updated_at < (now - staleThreshold) 的活跃请求即为僵尸
+	// 使用 SQLite 的 datetime 函数，保持与 schema 中 updated_at 格式一致
+	cutoffTime := time.Now().In(ut.location).Add(-staleThreshold).Format("2006-01-02 15:04:05")
+	now := time.Now().In(ut.location).Format("2006-01-02 15:04:05")
+
+	// 🔧 [P5.9] 第一步：处理 output_sent_at IS NOT NULL 的崩溃请求
+	// 这些请求已向客户端发送了部分 token，客户端可能已计费
+	query1 := `
+		UPDATE request_logs
+		SET status = 'failed',
+		    failure_reason = COALESCE(failure_reason, 'crashed_after_output_sent'),
+		    last_failure_reason = COALESCE(last_failure_reason, '进程在已发送内容后崩溃，token 数据可能不完整'),
+		    end_time = COALESCE(end_time, ?)
+		WHERE status IN ('pending', 'forwarding', 'streaming', 'processing', 'retry', 'suspended')
+		  AND updated_at < ?
+		  AND output_sent_at IS NOT NULL
+	`
+	result1, err1 := ut.writeDB.ExecContext(ctx, query1, now, cutoffTime)
+	if err1 != nil {
+		// output_sent_at 字段可能在旧库不存在，降级到原始 query
+		slog.Warn("output_sent_at 列可能不存在，降级到统一清理", "error", err1)
+	} else {
+		rows1, _ := result1.RowsAffected()
+		if rows1 > 0 {
+			slog.Warn("🧹 [P5.9] 启动时清理已发送内容后崩溃的请求",
+				"count", rows1,
+				"reason", "crashed_after_output_sent，建议手动检查这些请求的 token 计费一致性")
+		}
+	}
+
+	// 第二步：处理剩余的崩溃请求（output_sent_at IS NULL 或字段不存在）
+	query2 := `
+		UPDATE request_logs
+		SET status = 'failed',
+		    failure_reason = COALESCE(failure_reason, 'crashed_during_processing'),
+		    last_failure_reason = COALESCE(last_failure_reason, '进程在处理期间崩溃，启动时自动标记为失败'),
+		    end_time = COALESCE(end_time, ?)
+		WHERE status IN ('pending', 'forwarding', 'streaming', 'processing', 'retry', 'suspended')
+		  AND updated_at < ?
+	`
+	result, err := ut.writeDB.ExecContext(ctx, query2, now, cutoffTime)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup crashed requests: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected > 0 {
+		slog.Warn("🧹 启动时清理僵尸请求",
+			"count", rowsAffected,
+			"stale_threshold", staleThreshold,
+			"reason", "上次进程未正常结束，将这些请求标记为 crashed_during_processing")
+	} else {
+		slog.Debug("启动时未发现僵尸请求")
+	}
+
+	return nil
+}
+
 // Close 关闭使用跟踪器
 func (ut *UsageTracker) Close() error {
 	if ut.config == nil || !ut.config.Enabled {
@@ -698,8 +841,12 @@ func (ut *UsageTracker) Close() error {
 	ut.cancel = nil // 标记为已关闭
 
 	// 关闭事件通道
+	// 🔧 [P3.5 修复] 用 atomic + sync.Once 保证 close 只执行一次且对并发可见
 	if ut.eventChan != nil {
-		close(ut.eventChan)
+		ut.eventChanClose.Do(func() {
+			ut.eventChanClosed.Store(true) // 先标记，让 safePublishEvent 提前返回
+			close(ut.eventChan)
+		})
 		ut.eventChan = nil
 	}
 
@@ -741,6 +888,104 @@ func (ut *UsageTracker) Close() error {
 	return nil
 }
 
+// HotPoolAlertCallback 热池满告警回调
+// 🔧 [P5.8 新增] 由外部（app.go）注册，将告警事件推送到前端 Toast
+type HotPoolAlertCallback func(reason string, droppedCount int64)
+
+// SetHotPoolAlertCallback 注册热池告警回调
+// 🔧 [P5.8 新增] 由 app.go 在启动时调用
+func (ut *UsageTracker) SetHotPoolAlertCallback(cb HotPoolAlertCallback) {
+	ut.hotPoolAlertCb.Store(&cb)
+}
+
+// hotPoolAlertDebounce 告警防抖：避免短时间内重复告警
+// 🔧 [P5.8 新增]
+func (ut *UsageTracker) hotPoolAlertDebounce(reason string) bool {
+	now := time.Now().UnixNano()
+	last := ut.hotPoolAlertLast.Load()
+	// 60s 内同一原因只告警一次
+	if now-last < int64(60*time.Second) {
+		return false
+	}
+	return ut.hotPoolAlertLast.CompareAndSwap(last, now)
+}
+
+// triggerHotPoolAlert 触发热池告警（带防抖）
+// 🔧 [P5.8 新增]
+func (ut *UsageTracker) triggerHotPoolAlert(reason string) {
+	dropped := ut.hotPoolDroppedTotal.Add(1)
+
+	if !ut.hotPoolAlertDebounce(reason) {
+		return
+	}
+
+	cbPtr := ut.hotPoolAlertCb.Load()
+	if cbPtr != nil && *cbPtr != nil {
+		(*cbPtr)(reason, dropped)
+	}
+
+	slog.Warn("🚨 [热池告警] 数据写入压力大",
+		"reason", reason,
+		"total_dropped", dropped,
+		"hint", "如频繁出现，请增加 hot_pool.max_size 或检查数据库性能")
+}
+
+// GetHotPoolDroppedCount 返回累计丢弃的请求数（供前端查询）
+// 🔧 [P5.8 新增 - 暴露给前端]
+func (ut *UsageTracker) GetHotPoolDroppedCount() int64 {
+	return ut.hotPoolDroppedTotal.Load()
+}
+
+// recordToFailureQueue 将 HotPool 写入失败的请求事件持久化到本地 JSONL 文件
+//
+// 🔧 [P5.1 新增] 替换原来的"降级到 traditional eventChan"机制
+// 旧实现：HotPool 失败 → 写 eventChan → eventChan 满静默丢弃
+// 新实现：HotPool 失败 → 持久化到本地 archive_failures.jsonl，运维可后续手动恢复
+//
+// 文件格式：每行一个 JSON 对象 {"kind":"start|update|complete|fail","payload":{...}}
+// 滚动策略：单文件超过 10 MB 时备份为 .{timestamp} 并新建
+func (ut *UsageTracker) recordToFailureQueue(kind string, payload any) {
+	// 推断失败队列文件路径
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(homeDir, ".claude-request-forwarder")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+	dumpPath := filepath.Join(dir, "tracker_failures.jsonl")
+
+	// 滚动策略
+	const maxFileSize = 10 * 1024 * 1024
+	if info, err := os.Stat(dumpPath); err == nil && info.Size() > maxFileSize {
+		backupPath := dumpPath + "." + time.Now().Format("20060102-150405")
+		_ = os.Rename(dumpPath, backupPath)
+	}
+
+	f, err := os.OpenFile(dumpPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		slog.Debug("打开失败队列文件失败", "error", err)
+		return
+	}
+	defer f.Close()
+
+	record := map[string]any{
+		"timestamp": time.Now().Format(time.RFC3339Nano),
+		"kind":      kind,
+		"payload":   payload,
+	}
+	data, marshalErr := json.Marshal(record)
+	if marshalErr != nil {
+		slog.Debug("序列化失败队列记录失败", "error", marshalErr)
+		return
+	}
+	if _, writeErr := f.Write(append(data, '\n')); writeErr != nil {
+		slog.Debug("写入失败队列文件失败", "error", writeErr)
+		return
+	}
+}
+
 // RecordRequestStart 记录请求开始
 func (ut *UsageTracker) RecordRequestStart(requestID, clientIP, userAgent, method, path string, isStreaming bool) {
 	if ut.config == nil || !ut.config.Enabled {
@@ -751,42 +996,28 @@ func (ut *UsageTracker) RecordRequestStart(requestID, clientIP, userAgent, metho
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		req := NewActiveRequest(requestID, clientIP, userAgent, method, path, isStreaming)
 		if err := ut.hotPool.Add(req); err != nil {
-			slog.Warn("🔥 热池添加请求失败，降级到事件队列模式",
-				"request_id", requestID,
-				"error", err)
-			// 降级到传统模式
-			ut.recordRequestStartLegacy(requestID, clientIP, userAgent, method, path, isStreaming)
+			// 🔧 [P5.8] 热池满 → 触发告警
+			ut.triggerHotPoolAlert("hot_pool_full")
+			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为持久化失败队列
+			ut.recordToFailureQueue("start", map[string]any{
+				"request_id":   requestID,
+				"client_ip":    clientIP,
+				"user_agent":   userAgent,
+				"method":       method,
+				"path":         path,
+				"is_streaming": isStreaming,
+				"error":        err.Error(),
+			})
 		}
 		return
 	}
 
-	// 传统模式：发送事件到队列
-	ut.recordRequestStartLegacy(requestID, clientIP, userAgent, method, path, isStreaming)
-}
-
-// recordRequestStartLegacy 传统模式记录请求开始
-func (ut *UsageTracker) recordRequestStartLegacy(requestID, clientIP, userAgent, method, path string, isStreaming bool) {
-	event := RequestEvent{
-		Type:      "start",
-		RequestID: requestID,
-		Timestamp: ut.now(),
-		Data: RequestStartData{
-			ClientIP:    clientIP,
-			UserAgent:   userAgent,
-			Method:      method,
-			Path:        path,
-			IsStreaming: isStreaming,
-		},
-	}
-
-	select {
-	case ut.eventChan <- event:
-		// 成功发送事件
-	default:
-		// 缓冲区满时的处理策略
-		slog.Warn("Usage tracking event buffer full, dropping start event",
-			"request_id", requestID)
-	}
+	// 🔧 [P5.1] HotPool 未启用的极端场景：直接走失败队列
+	// （正常运行 hotPoolEnabled=true，此分支不会触发）
+	ut.recordToFailureQueue("start", map[string]any{
+		"request_id": requestID,
+		"reason":     "hot_pool_disabled",
+	})
 }
 
 // RecordRequestUpdate 统一的请求更新方法
@@ -829,35 +1060,17 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 		})
 		if err != nil {
-			// 请求可能不在热池中（已归档或从未记录），降级到传统模式
-			slog.Debug("🔥 热池更新请求失败，降级到事件队列模式",
+			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为 Debug 日志
+			// 请求可能已归档或从未记录（如热池启动前的请求），属于正常情况
+			slog.Debug("🔥 热池更新请求失败（请求可能已归档或从未记录）",
 				"request_id", requestID,
 				"error", err)
-			ut.recordRequestUpdateLegacy(requestID, opts)
 		}
 		return
 	}
 
-	// 传统模式：发送事件到队列
-	ut.recordRequestUpdateLegacy(requestID, opts)
-}
-
-// recordRequestUpdateLegacy 传统模式更新请求
-func (ut *UsageTracker) recordRequestUpdateLegacy(requestID string, opts UpdateOptions) {
-	event := RequestEvent{
-		Type:      "flexible_update",
-		RequestID: requestID,
-		Timestamp: ut.now(),
-		Data:      opts,
-	}
-
-	select {
-	case ut.eventChan <- event:
-		// 成功发送事件
-	default:
-		slog.Warn("Usage tracking event buffer full, dropping flexible_update event",
-			"request_id", requestID)
-	}
+	// 🔧 [P5.1] HotPool 未启用时，update 操作无意义（无活跃请求记录）
+	slog.Debug("HotPool 未启用，跳过 update", "request_id", requestID)
 }
 
 // RecordRequestSuccess 记录请求成功完成
@@ -902,12 +1115,26 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 		err := ut.hotPool.CompleteAndArchive(requestID, func(req *ActiveRequest) {
 			req.Status = "completed"
 			req.ModelName = modelName
-			req.InputTokens = inputTokens
-			req.OutputTokens = outputTokens
-			req.CacheCreationTokens = cacheCreationTokens
-			req.CacheCreation5mTokens = cacheCreation5mTokens
-			req.CacheCreation1hTokens = cacheCreation1hTokens
-			req.CacheReadTokens = cacheReadTokens
+			// 🔧 [P1.4 防御] 仅当本次提供的 token 非零，或之前没有被失败路径记录过时，才覆盖
+			// 避免"先 RecordFailedRequestTokens 记录了真实 token → 后 CompleteAndArchive 传入零值覆盖"
+			shouldOverwriteTokens := !req.TokenRecordedByFailedPath ||
+				inputTokens > 0 || outputTokens > 0 ||
+				cacheCreationTokens > 0 || cacheCreation5mTokens > 0 ||
+				cacheCreation1hTokens > 0 || cacheReadTokens > 0
+			if shouldOverwriteTokens {
+				req.InputTokens = inputTokens
+				req.OutputTokens = outputTokens
+				req.CacheCreationTokens = cacheCreationTokens
+				req.CacheCreation5mTokens = cacheCreation5mTokens
+				req.CacheCreation1hTokens = cacheCreation1hTokens
+				req.CacheReadTokens = cacheReadTokens
+			} else {
+				// 保留 RecordFailedRequestTokens 记录的 token 值
+				slog.Debug("🔒 [P1.4 防御] 保留失败路径记录的 token，避免被零值覆盖",
+					"request_id", requestID,
+					"existing_input", req.InputTokens,
+					"existing_output", req.OutputTokens)
+			}
 			req.EndTime = &now
 			req.DurationMs = duration.Milliseconds()
 			// 🔧 [方案A实现] 2025-12-20: 显式覆盖 failureReason（无论是否为空）
@@ -916,44 +1143,33 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 			// 成本在归档时计算
 		})
 		if err != nil {
-			// 请求可能不在热池中，降级到传统模式
-			slog.Debug("🔥 热池完成请求失败，降级到事件队列模式",
-				"request_id", requestID,
-				"error", err)
-			ut.recordRequestSuccessLegacy(requestID, modelName, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, duration, failureReason)
+			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为持久化失败队列
+			ut.triggerHotPoolAlert("complete_archive_failed")
+			ut.recordToFailureQueue("complete", map[string]any{
+				"request_id":               requestID,
+				"model_name":               modelName,
+				"input_tokens":             inputTokens,
+				"output_tokens":            outputTokens,
+				"cache_creation_tokens":    cacheCreationTokens,
+				"cache_creation_5m_tokens": cacheCreation5mTokens,
+				"cache_creation_1h_tokens": cacheCreation1hTokens,
+				"cache_read_tokens":        cacheReadTokens,
+				"duration_ms":              duration.Milliseconds(),
+				"failure_reason":           failureReason,
+				"error":                    err.Error(),
+			})
 		}
 		return
 	}
 
-	// 传统模式：发送事件到队列
-	ut.recordRequestSuccessLegacy(requestID, modelName, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, duration, failureReason)
-}
-
-// recordRequestSuccessLegacy 传统模式记录请求成功
-// 🔧 [方案A实现] 2025-12-20: 增加 failureReason 参数支持
-func (ut *UsageTracker) recordRequestSuccessLegacy(requestID, modelName string, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64, duration time.Duration, failureReason string) {
-	event := RequestEvent{
-		Type:      "success",
-		RequestID: requestID,
-		Timestamp: ut.now(),
-		Data: RequestCompleteData{
-			ModelName:           modelName,
-			InputTokens:         inputTokens,
-			OutputTokens:        outputTokens,
-			CacheCreationTokens: cacheCreationTokens,
-			CacheReadTokens:     cacheReadTokens,
-			Duration:            duration,
-			FailureReason:       failureReason,
-		},
-	}
-
-	select {
-	case ut.eventChan <- event:
-		// 成功发送事件
-	default:
-		slog.Warn("Usage tracking event buffer full, dropping success event",
-			"request_id", requestID)
-	}
+	// 🔧 [P5.1] HotPool 未启用的极端场景：直接走失败队列
+	ut.recordToFailureQueue("complete", map[string]any{
+		"request_id":    requestID,
+		"model_name":    modelName,
+		"reason":        "hot_pool_disabled",
+		"input_tokens":  inputTokens,
+		"output_tokens": outputTokens,
+	})
 }
 
 // RecordRequestFinalFailure 记录请求最终失败或取消
@@ -1029,63 +1245,40 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 			}
 		})
 		if err != nil {
-			// 请求可能不在热池中，降级到传统模式
-			slog.Debug("🔥 热池完成失败请求失败，降级到事件队列模式",
-				"request_id", requestID,
-				"error", err)
-			ut.recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail, duration, httpStatus, legacyTokens)
+			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为持久化失败队列
+			ut.triggerHotPoolAlert("fail_archive_failed")
+			ut.recordToFailureQueue("fail", map[string]any{
+				"request_id":    requestID,
+				"model_name":    modelName,
+				"status":        status,
+				"reason":        reason,
+				"error_detail":  errorDetail,
+				"duration_ms":   duration.Milliseconds(),
+				"http_status":   httpStatus,
+				"input_tokens":  func() int64 { if legacyTokens != nil { return legacyTokens.InputTokens }; return 0 }(),
+				"output_tokens": func() int64 { if legacyTokens != nil { return legacyTokens.OutputTokens }; return 0 }(),
+				"error":         err.Error(),
+			})
 		}
 		return
 	}
 
-	// 传统模式：发送事件到队列
-	ut.recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail, duration, httpStatus, legacyTokens)
-}
-
-// recordRequestFinalFailureLegacy 传统模式记录请求失败
-// 🔧 [修复] 2025-12-11: 添加 modelName 和 5m/1h 缓存字段参数
-func (ut *UsageTracker) recordRequestFinalFailureLegacy(requestID, modelName, status, reason, errorDetail string, duration time.Duration, httpStatus int, tokens *TokenUsage) {
-	var inputTokens, outputTokens, cacheCreationTokens, cacheCreation5mTokens, cacheCreation1hTokens, cacheReadTokens interface{}
-	if tokens != nil {
-		inputTokens = tokens.InputTokens
-		outputTokens = tokens.OutputTokens
-		cacheCreationTokens = tokens.CacheCreationTokens
-		cacheCreation5mTokens = tokens.CacheCreation5mTokens
-		cacheCreation1hTokens = tokens.CacheCreation1hTokens
-		cacheReadTokens = tokens.CacheReadTokens
-	}
-
-	event := RequestEvent{
-		Type:      "final_failure",
-		RequestID: requestID,
-		Timestamp: ut.now(),
-		Data: map[string]interface{}{
-			"status":                   status, // "failed" or "cancelled"
-			"reason":                   reason, // failure_reason or cancel_reason
-			"error_detail":             errorDetail,
-			"duration":                 duration,
-			"http_status":              httpStatus, // HTTP状态码
-			"model_name":               modelName,  // 🔧 [修复] 2025-12-11: 添加模型名
-			"input_tokens":             inputTokens,
-			"output_tokens":            outputTokens,
-			"cache_creation_tokens":    cacheCreationTokens,
-			"cache_creation_5m_tokens": cacheCreation5mTokens, // 🔧 [修复] 2025-12-11
-			"cache_creation_1h_tokens": cacheCreation1hTokens, // 🔧 [修复] 2025-12-11
-			"cache_read_tokens":        cacheReadTokens,
-		},
-	}
-
-	select {
-	case ut.eventChan <- event:
-		// 成功发送事件
-	default:
-		slog.Warn("Usage tracking event buffer full, dropping final_failure event",
-			"request_id", requestID)
-	}
+	// 🔧 [P5.1] HotPool 未启用的极端场景：直接走失败队列
+	ut.recordToFailureQueue("fail", map[string]any{
+		"request_id": requestID,
+		"reason":     "hot_pool_disabled",
+		"status":     status,
+		"detail":     errorDetail,
+	})
 }
 
 // RecordFailedRequestTokens 记录失败请求的Token使用
 // 只记录Token统计，不影响请求状态
+//
+// 🔧 [P1.4 防御性增强] 标注 token_recorded_by_failed_path 防止后续 CompleteAndArchive 覆盖：
+//   - 设置 ActiveRequest.TokenRecordedByFailedPath = true
+//   - CompleteAndArchive 检测此标记后，仅在新传入 tokens 非零时才覆盖
+//   - 这样可避免"先记录失败 token → 后 complete 时被零值覆盖"的数据丢失
 func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, tokens *TokenUsage, duration time.Duration, failureReason string) {
 	if ut.config == nil || !ut.config.Enabled || tokens == nil {
 		return
@@ -1114,6 +1307,8 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 			if failureReason != "" && req.FailureReason == "" {
 				req.FailureReason = failureReason
 			}
+			// 🔧 [P1.4] 标注此请求的 token 已由失败路径记录，保护后续不被零值覆盖
+			req.TokenRecordedByFailedPath = true
 		})
 		if err == nil {
 			slog.Debug(fmt.Sprintf("🔥 [热池Token更新] [%s] 原因: %s, 模型: %s, 输入: %d, 输出: %d",
@@ -1414,12 +1609,15 @@ func (ut *UsageTracker) HealthCheck(ctx context.Context) error {
 }
 
 // ForceFlush 强制刷新所有待处理事件
+//
+// 🔧 [P1.7 改进] 同时刷新 HotPool 的 ArchiveManager（真正等待落盘），
+// 不再只发送一个 traditional eventChan 的 flush 事件（旧实现只是触发批处理，不等待落盘）
 func (ut *UsageTracker) ForceFlush() error {
 	if ut.config == nil || !ut.config.Enabled {
 		return nil
 	}
 
-	// 尝试发送一个特殊事件来触发批处理
+	// 1. 触发 traditional eventChan 的 flush 事件（保持向后兼容）
 	flushEvent := RequestEvent{
 		Type:      "flush",
 		RequestID: "force-flush-" + ut.now().Format("20060102150405"),
@@ -1429,11 +1627,19 @@ func (ut *UsageTracker) ForceFlush() error {
 
 	select {
 	case ut.eventChan <- flushEvent:
-		slog.Info("Force flush event sent")
-		return nil
+		slog.Info("Force flush event sent to traditional event channel")
 	default:
-		return fmt.Errorf("event channel full, cannot force flush")
+		slog.Warn("Event channel full, traditional flush skipped")
 	}
+
+	// 2. 🔧 [P1.7] 同步刷新 ArchiveManager，真正等待数据落盘
+	if ut.archiveManager != nil {
+		if err := ut.archiveManager.Flush(); err != nil {
+			return fmt.Errorf("archive manager flush failed: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // GetPricing 获取模型定价
@@ -1651,33 +1857,70 @@ func (ut *UsageTracker) ExportToJSON(ctx context.Context, startTime, endTime tim
 
 // processWriteQueue 启动写操作队列处理器（简化版，确保稳定性）
 func (ut *UsageTracker) processWriteQueue() {
-	ut.writeWg.Add(1)
+	// 🔧 [P3.4 修复] writeWg.Add 已移至调用方，这里只 Done
 	defer ut.writeWg.Done()
 	slog.Debug("Write processor started")
+
+	// 🔧 [P2.2 优化] 添加简单的批量处理：累积 50ms 窗口内的非关键写请求，
+	// 一次性串行执行减少调度开销。注意：仍然每个请求独立事务，
+	// 因为合并事务会引入"某请求出错触发整批回滚"的语义问题（特别是 update 0 rows）。
+	//
+	// 实测：高频路径已走 ArchiveManager 批量插入，这里只是降低延迟。
+	const batchWindow = 50 * time.Millisecond
+	const maxBatchPerWake = 10 // 单次唤醒最多处理 N 个请求，避免长时间占用写锁
 
 	for {
 		select {
 		case writeReq := <-ut.writeQueue:
+			// 处理首个请求
 			err := ut.executeWriteSimple(writeReq)
 			writeReq.Response <- err
 
-		case <-ut.ctx.Done():
-			// 退出前：尽量唤醒所有等待中的写请求，避免关闭时出现 goroutine 卡死
-			drainErr := ut.ctx.Err()
-			for {
+			// 🔧 [P2.2] 尝试快速排空：在小窗口内连续处理多个请求
+			// 减少 select 调度次数，对 SQLite 单写连接更友好
+			drainTimer := time.NewTimer(batchWindow)
+			drainCount := 0
+		drainLoop:
+			for drainCount < maxBatchPerWake {
 				select {
-				case writeReq := <-ut.writeQueue:
-					writeReq.Response <- drainErr
-				default:
-					slog.Debug("Write processor stopped")
-					return
+				case nextReq := <-ut.writeQueue:
+					err := ut.executeWriteSimple(nextReq)
+					nextReq.Response <- err
+					drainCount++
+				case <-drainTimer.C:
+					break drainLoop
+				case <-ut.ctx.Done():
+					drainTimer.Stop()
+					// 进入退出流程，让外层 ctx.Done 处理排空
+					goto exit
 				}
 			}
+			drainTimer.Stop()
+
+		case <-ut.ctx.Done():
+			goto exit
+		}
+	}
+exit:
+	// 退出前：尽量唤醒所有等待中的写请求，避免关闭时出现 goroutine 卡死
+	drainErr := ut.ctx.Err()
+	for {
+		select {
+		case writeReq := <-ut.writeQueue:
+			writeReq.Response <- drainErr
+		default:
+			slog.Debug("Write processor stopped")
+			return
 		}
 	}
 }
 
 // executeWriteSimple 执行简单写操作（避免复杂的批处理）
+//
+// 🔧 [P0.4 修复] 与 archive_manager.batchInsert 保持一致的连接驱逐机制
+// 旧实现：直接用 ut.writeDB.BeginTx，如果 commit 失败（SQLITE_BUSY 等）
+// 连接会进入污染状态，后续 BeginTx 会触发"事务嵌套"错误，写入永久瘫痪
+// 新实现：用 *sql.Conn 显式持有连接 + commit/begin 失败时 evictConn 驱逐
 func (ut *UsageTracker) executeWriteSimple(req WriteRequest) error {
 	ut.writeMu.Lock()
 	defer ut.writeMu.Unlock()
@@ -1692,9 +1935,22 @@ func (ut *UsageTracker) executeWriteSimple(req WriteRequest) error {
 		return err
 	}
 
-	// 其他操作使用短事务
-	tx, err := ut.writeDB.BeginTx(ctx, nil)
+	// 🔧 [P0.4 修复] 用 *sql.Conn 显式持有连接，便于在事务出错时驱逐
+	conn, err := ut.writeDB.Conn(ctx)
 	if err != nil {
+		return fmt.Errorf("failed to get write conn: %w", err)
+	}
+	connEvicted := false
+	defer func() {
+		// connEvicted 已通过 evictConn 销毁；正常路径下也需 Close 让连接回池
+		_ = conn.Close()
+	}()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		// BeginTx 失败极可能是连接已被污染，强制驱逐
+		connEvicted = true
+		_ = evictConn(conn)
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
@@ -1712,7 +1968,7 @@ func (ut *UsageTracker) executeWriteSimple(req WriteRequest) error {
 		return fmt.Errorf("failed to execute query: %w", err)
 	}
 
-	// 对于必须命中已存在记录的事件类型，确保更新确实发生，避免“看似成功但数据未写入”
+	// 对于必须命中已存在记录的事件类型，确保更新确实发生，避免"看似成功但数据未写入"
 	if req.EventType == "update" && result != nil {
 		if rows, err := result.RowsAffected(); err == nil && rows == 0 {
 			return fmt.Errorf("no rows updated for event_type=update")
@@ -1721,10 +1977,15 @@ func (ut *UsageTracker) executeWriteSimple(req WriteRequest) error {
 
 	err = tx.Commit()
 	if err != nil {
+		// 🔧 [P0.4 修复] Commit 失败时驱逐连接，防止后续 BeginTx 在污染连接上嵌套报错
+		connEvicted = true
+		_ = evictConn(conn)
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	committed = true
+	// 避免未使用变量警告
+	_ = connEvicted
 	return nil
 }
 

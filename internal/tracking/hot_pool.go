@@ -44,6 +44,11 @@ type ActiveRequest struct {
 	DurationMs   int64      `json:"duration_ms"`
 	TotalCostUSD float64    `json:"total_cost_usd"`
 
+	// 🔧 [P1.4 新增] 防御性标记：token 已由 RecordFailedRequestTokens 路径记录
+	// 防止后续 CompleteAndArchive 用零值 token 覆盖已记录的真实 token
+	// 这是一个内存标记，仅在热池存活期间有效，不持久化到数据库
+	TokenRecordedByFailedPath bool `json:"-"`
+
 	// 内部字段
 	mu sync.RWMutex `json:"-"` // 保护单个请求的并发访问
 }

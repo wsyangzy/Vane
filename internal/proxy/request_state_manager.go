@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -55,9 +56,30 @@ func NewRequestStateManager(requestID string) *RequestStateManager {
 // ========== 状态管理方法 ==========
 
 // UpdateStatus 更新请求状态
+//
+// 🔧 [P5.2 增强] 添加状态转移合法性日志告警：
+//   - 不合法的状态值（拼写错误等）会告警但仍允许设置（向后兼容）
+//   - 非法转移（如 completed → forwarding）会告警但仍允许设置
+//   - 这样既能渐进发现状态使用问题，又不破坏现有行为
 func (rsm *RequestStateManager) UpdateStatus(status string, httpStatus int) {
 	rsm.stateMu.Lock()
 	defer rsm.stateMu.Unlock()
+
+	// 🔧 [P5.2] 状态合法性校验（仅告警，不阻断）
+	if !isValidReqStatus(status) {
+		slog.Warn("⚠️ [P5.2] 检测到非标准 status 值",
+			"request_id", rsm.requestID,
+			"from", rsm.status,
+			"to", status,
+			"valid_values", validReqStatusValues())
+	} else if rsm.status != "" && !isValidReqStatusTransition(rsm.status, status) {
+		slog.Warn("⚠️ [P5.2] 检测到非法状态转移",
+			"request_id", rsm.requestID,
+			"from", rsm.status,
+			"to", status,
+			"reason", "终态不应再变更（除 cancelled↔failed 例外）")
+	}
+
 	rsm.status = status
 	if httpStatus > 0 {
 		rsm.finalStatusCode = httpStatus

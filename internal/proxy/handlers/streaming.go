@@ -201,6 +201,13 @@ func (sh *StreamingHandler) handleStreamingV2(ctx context.Context, w http.Respon
 	// 设置流式响应头
 	sh.setStreamingHeaders(w)
 
+	// 🔧 [P5.3] 初始化全局重试预算
+	// 避免三层重试结构（渠道间×渠道内×单端点）导致最坏 50+ 次重试 + 客户端 socket 失效
+	lifecycleManager.InitRetryBudget(
+		sh.config.Retry.MaxTotalAttempts,
+		sh.config.Retry.MaxTotalDuration,
+	)
+
 	// 继续执行流式请求处理
 	triedChannels := make(map[string]struct{}, 4)
 	// 追踪本次请求链路内已尝试的端点（渠道内严格优先级转移）
@@ -226,6 +233,20 @@ func (sh *StreamingHandler) setStreamingHeaders(w http.ResponseWriter) {
 // loopCount: 当前循环轮数（用于 MaxLoops 限制）
 func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int) {
 	connID := lifecycleManager.GetRequestID()
+
+	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
+	// 由于 executeStreamingWithRetry 可能被递归调用（端点恢复/故障转移重启），
+	// 这个检查能在递归层级累计超过预算时及时终止
+	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
+		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
+		lifecycleManager.FailRequest("retry_budget_exhausted", reason, http.StatusGatewayTimeout)
+		modelName := lifecycleManager.GetModelName()
+		if modelName == "" {
+			modelName = "unknown"
+		}
+		sendStreamInterruptedMessage(w, flusher, fmt.Sprintf("重试预算耗尽: %s", reason), modelName)
+		return
+	}
 
 	// 在函数开头检查 context 是否已取消（客户端断开连接）
 	select {

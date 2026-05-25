@@ -26,6 +26,46 @@ const STRATEGY_OPTIONS = [
   { value: 'fastest', label: 'fastest (最快响应)' }
 ];
 
+// 强制渲染为下拉框的字段映射（不依赖后端 value_type 是否正确传递）
+// key 格式: "category.key"
+const FORCED_ENUM_MAP = {
+  'logging.level': [
+    { value: 'debug', label: '调试 (Debug)' },
+    { value: 'info', label: '信息 (Info)' },
+    { value: 'warn', label: '警告 (Warn)' },
+    { value: 'error', label: '错误 (Error)' }
+  ],
+  'logging.format': [
+    { value: 'text', label: '文本格式' },
+    { value: 'json', label: 'JSON 格式' }
+  ],
+  'timezone.global': [
+    { value: 'Asia/Shanghai', label: '中国（北京时间 UTC+8）' },
+    { value: 'Asia/Hong_Kong', label: '香港（UTC+8）' },
+    { value: 'Asia/Taipei', label: '台北（UTC+8）' },
+    { value: 'Asia/Tokyo', label: '东京（UTC+9）' },
+    { value: 'Asia/Singapore', label: '新加坡（UTC+8）' },
+    { value: 'Asia/Seoul', label: '首尔（UTC+9）' },
+    { value: 'UTC', label: 'UTC（协调世界时）' },
+    { value: 'Europe/London', label: '伦敦（UTC+0/+1）' },
+    { value: 'Europe/Paris', label: '巴黎（UTC+1/+2）' },
+    { value: 'Europe/Berlin', label: '柏林（UTC+1/+2）' },
+    { value: 'Europe/Moscow', label: '莫斯科（UTC+3）' },
+    { value: 'America/New_York', label: '纽约（UTC-5/-4）' },
+    { value: 'America/Chicago', label: '芝加哥（UTC-6/-5）' },
+    { value: 'America/Denver', label: '丹佛（UTC-7/-6）' },
+    { value: 'America/Los_Angeles', label: '洛杉矶（UTC-8/-7）' },
+    { value: 'America/Sao_Paulo', label: '圣保罗（UTC-3）' },
+    { value: 'Australia/Sydney', label: '悉尼（UTC+10/+11）' },
+    { value: 'Pacific/Auckland', label: '奥克兰（UTC+12/+13）' }
+  ],
+  'proxy.type': [
+    { value: 'http', label: 'HTTP' },
+    { value: 'https', label: 'HTTPS' },
+    { value: 'socks5', label: 'SOCKS5' }
+  ]
+}
+
 const SettingItem = ({
   setting,
   value,
@@ -260,7 +300,10 @@ const SettingItem = ({
   }
 
   // 枚举类型使用下拉选择 (通用枚举类型支持)
-  const shouldRenderAsEnum = valueType === 'enum' && setting.enum_options && setting.enum_options.length > 0;
+  // 优先使用前端强制映射（解决后端 value_type 未及时同步的问题）
+  const forcedEnumKey = `${setting.category}.${setting.key}`
+  const forcedOptions = FORCED_ENUM_MAP[forcedEnumKey]
+  const shouldRenderAsEnum = forcedOptions || (valueType === 'enum' && setting.enum_options && setting.enum_options.length > 0);
 
   if (shouldRenderAsEnum) {
     const handleEnumChange = (newValue) => {
@@ -268,14 +311,14 @@ const SettingItem = ({
       onChange(setting.category, setting.key, newValue);
     };
 
-    // 使用后端提供的枚举选项
-    const enumOptions = setting.enum_options.map(option => ({
+    // 优先使用前端强制映射，其次使用后端提供的枚举选项
+    const enumOptions = forcedOptions || (setting.enum_options || []).map(option => ({
       value: option.value,
       label: option.label
     }));
 
     // 获取当前选中选项的描述
-    const currentOption = setting.enum_options?.find(opt => opt.value === localValue);
+    const currentOption = (forcedOptions || setting.enum_options)?.find(opt => opt.value === localValue);
 
     // 通用枚举类型使用下拉选择
     return (

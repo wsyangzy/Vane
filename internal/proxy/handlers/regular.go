@@ -96,6 +96,21 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
 
+	// 🔧 [P5.3] 初始化全局重试预算
+	// 避免三层重试结构导致的最坏 50+ 次重试 + 客户端 socket 失效
+	lifecycleManager.InitRetryBudget(
+		rh.config.Retry.MaxTotalAttempts,
+		rh.config.Retry.MaxTotalDuration,
+	)
+
+	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
+	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
+		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
+		lifecycleManager.FailRequest("retry_budget_exhausted", reason, http.StatusGatewayTimeout)
+		http.Error(w, fmt.Sprintf("retry budget exhausted: %s", reason), http.StatusGatewayTimeout)
+		return
+	}
+
 	// 追踪最后一次端点错误，用于最终失败时输出提供商原始响应
 	var lastErr error
 

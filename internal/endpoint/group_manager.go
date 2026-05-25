@@ -418,10 +418,18 @@ func (gm *GroupManager) getSortedGroups() []*GroupInfo {
 }
 
 // GetActiveGroups returns currently active groups
+//
+// 🔧 [P3.1 修复] 改用写锁，因为 updateActiveGroups 会修改 group.IsActive
+// 旧实现：用 RLock 但内部调用 updateActiveGroups（写操作），多个并发调用同时写 group.IsActive 触发 race
 func (gm *GroupManager) GetActiveGroups() []*GroupInfo {
-	gm.mutex.RLock()
-	defer gm.mutex.RUnlock()
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+	return gm.getActiveGroupsLocked()
+}
 
+// getActiveGroupsLocked 内部方法：调用方必须已持有 gm.mutex.Lock()
+// 🔧 [P3.1 新增] 抽取无锁版本，供已持锁的调用方使用，避免重入死锁
+func (gm *GroupManager) getActiveGroupsLocked() []*GroupInfo {
 	gm.updateActiveGroups()
 
 	var active []*GroupInfo
@@ -443,9 +451,11 @@ func (gm *GroupManager) GetActiveGroups() []*GroupInfo {
 }
 
 // GetAllGroups returns all groups
+//
+// 🔧 [P3.1 修复] 改用写锁，原因同 GetActiveGroups
 func (gm *GroupManager) GetAllGroups() []*GroupInfo {
-	gm.mutex.RLock()
-	defer gm.mutex.RUnlock()
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
 
 	gm.updateActiveGroups()
 
@@ -783,9 +793,12 @@ func (gm *GroupManager) ManualResumeGroup(groupName string) error {
 }
 
 // GetGroupDetails returns detailed information about all groups
+//
+// 🔧 [P3.1 修复] 改用写锁，因为 updateActiveGroups 会修改 group.IsActive
+// 同时内部调用 getActiveGroupsLocked 避免重入死锁
 func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
-	gm.mutex.RLock()
-	defer gm.mutex.RUnlock()
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
 
 	gm.updateActiveGroups()
 
@@ -874,7 +887,8 @@ func (gm *GroupManager) GetGroupDetails() map[string]interface{} {
 
 	result["groups"] = groupsData
 	result["total_groups"] = len(groupsData)
-	result["active_groups"] = len(gm.GetActiveGroups())
+	// 🔧 [P3.1 修复] 用 getActiveGroupsLocked 避免重入死锁
+	result["active_groups"] = len(gm.getActiveGroupsLocked())
 
 	return result
 }

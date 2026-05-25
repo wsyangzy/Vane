@@ -46,11 +46,18 @@ func (p *Provider) Default() (*http.Transport, error) {
 		return nil, err
 	}
 
-	// 🔧 [P1-R2 修复] Default Transport 增加合理的响应头超时，
-	// 避免非流式请求在上游迟迟不返响应头时只受 Client.Timeout（默认 300s）保护，
-	// 中间无任何故障检测信号，期间客户端 keep-alive socket 可能已失效。
-	// 默认 60s 适合常规 HTTP API；如需更长（如非流式长 thinking），可在配置层覆盖。
-	tr.ResponseHeaderTimeout = 60 * time.Second
+	// 🔧 [P0.8 修复] Default Transport 也从配置读取 ResponseHeaderTimeout，
+	// 不再硬编码 60s，统一配置源（避免与 Streaming 行为分裂、与 settings.go 默认值漂移）。
+	// 默认 60s 适合非流式 API 请求；如需更长（如非流式长 thinking），可在配置层调整。
+	// 与 Streaming 一致的回退顺序：config > 60s 兜底
+	responseHeaderTimeout := time.Duration(0)
+	if p.cfg != nil {
+		responseHeaderTimeout = p.cfg.Streaming.DefaultResponseHeaderTimeout
+	}
+	if responseHeaderTimeout == 0 {
+		responseHeaderTimeout = 60 * time.Second
+	}
+	tr.ResponseHeaderTimeout = responseHeaderTimeout
 
 	p.defaultTransport = tr
 	p.defaultKey = key
@@ -119,6 +126,11 @@ func buildTransportKey(cfg *config.Config, kind string) string {
 		proxy.Username,
 		proxy.Password,
 	)))
+
+	// 🔧 [P0.8] Default Transport 的 DefaultResponseHeaderTimeout 变化也需重建对应 Transport
+	if kind == "default" {
+		_, _ = h.Write([]byte(fmt.Sprintf(":drht:%d", cfg.Streaming.DefaultResponseHeaderTimeout)))
+	}
 
 	// Streaming 的 ResponseHeaderTimeout 变化也需重建对应 Transport。
 	if kind == "streaming" {

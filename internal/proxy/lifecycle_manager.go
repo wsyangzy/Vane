@@ -62,6 +62,14 @@ type RequestLifecycleManager struct {
 
 	// 计数器保护（保留，用于 PrepareErrorContext）
 	counterMu sync.Mutex
+
+	// 🔧 [P5.3 新增] 全局重试预算追踪
+	// budgetStartTime: 重试预算开始计时的时间点（首次进入重试循环）
+	// budgetMaxAttempts/budgetMaxDuration: 从 config.Retry 加载的预算上限
+	budgetStartTime   time.Time
+	budgetMaxAttempts int
+	budgetMaxDuration time.Duration
+	budgetInitOnce    sync.Once
 }
 
 // NewRequestLifecycleManager 创建新的请求生命周期管理器
@@ -905,6 +913,55 @@ func (rlm *RequestLifecycleManager) IncrementAttempt() int {
 // 返回真实的尝试次数，用于数据库记录和监控
 func (rlm *RequestLifecycleManager) GetAttemptCount() int {
 	return rlm.stateManager.GetAttemptCount()
+}
+
+// InitRetryBudget 初始化全局重试预算追踪
+//
+// 🔧 [P5.3 新增] 由 handlers 在重试循环开始前调用
+// 参数：
+//   - maxAttempts: 全局最大总尝试次数（含所有端点+渠道）
+//   - maxDuration: 全局最大重试总时长
+//
+// 多次调用只生效一次（用 sync.Once 保证）
+func (rlm *RequestLifecycleManager) InitRetryBudget(maxAttempts int, maxDuration time.Duration) {
+	rlm.budgetInitOnce.Do(func() {
+		rlm.budgetStartTime = time.Now()
+		rlm.budgetMaxAttempts = maxAttempts
+		rlm.budgetMaxDuration = maxDuration
+	})
+}
+
+// CheckRetryBudget 检查全局重试预算是否耗尽
+//
+// 🔧 [P5.3 新增] 在每次重试决策前调用
+// 返回值：
+//   - exhausted: true 表示预算耗尽，应该立即停止重试
+//   - reason: 耗尽原因，用于日志和错误信息
+func (rlm *RequestLifecycleManager) CheckRetryBudget() (exhausted bool, reason string) {
+	// 预算未初始化（默认值），允许无限重试（向后兼容）
+	if rlm.budgetMaxAttempts <= 0 && rlm.budgetMaxDuration <= 0 {
+		return false, ""
+	}
+
+	// 检查总尝试次数预算
+	if rlm.budgetMaxAttempts > 0 {
+		current := rlm.GetAttemptCount()
+		if current >= rlm.budgetMaxAttempts {
+			return true, fmt.Sprintf("retry budget exhausted: %d attempts (limit=%d)",
+				current, rlm.budgetMaxAttempts)
+		}
+	}
+
+	// 检查总时长预算
+	if rlm.budgetMaxDuration > 0 && !rlm.budgetStartTime.IsZero() {
+		elapsed := time.Since(rlm.budgetStartTime)
+		if elapsed >= rlm.budgetMaxDuration {
+			return true, fmt.Sprintf("retry budget exhausted: %v elapsed (limit=%v)",
+				elapsed.Round(time.Millisecond), rlm.budgetMaxDuration)
+		}
+	}
+
+	return false, ""
 }
 
 // OnRetryDecision 处理重试决策结果
