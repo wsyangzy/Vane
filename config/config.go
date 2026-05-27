@@ -30,6 +30,7 @@ type Config struct {
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration
 	Proxy            ProxyConfig            `yaml:"proxy"`
 	Auth             AuthConfig             `yaml:"auth"`
+	CodexServer      CodexServerConfig      `yaml:"codex_server"`      // Codex 代理服务器配置
 	GlobalTimeout    time.Duration          `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Timezone         string                 `yaml:"timezone"`       // Global timezone setting for all components
 	Endpoints        []EndpointConfig       `yaml:"endpoints"`
@@ -194,6 +195,14 @@ type ProxyConfig struct {
 type AuthConfig struct {
 	Enabled bool   `yaml:"enabled"`         // Enable authentication, default: false
 	Token   string `yaml:"token,omitempty"` // Bearer token for authentication
+}
+
+// CodexServerConfig Codex 代理服务器配置
+// 注意：v7.2+ 起 Codex 代理合并到 Claude 代理同一端口，通过路径路由区分。
+// Host/Port 已移除，复用主代理的监听地址。
+type CodexServerConfig struct {
+	Enabled bool          `yaml:"enabled"` // 是否启用 Codex 代理路由，默认: false
+	Timeout time.Duration `yaml:"timeout"` // 请求超时，默认: 300s
 }
 
 // TokenCountingConfig Token计数配置
@@ -437,6 +446,11 @@ func (c *Config) setDefaults() {
 	// Set endpoints storage defaults
 	if c.EndpointsStorage.Type == "" {
 		c.EndpointsStorage.Type = "yaml" // Default to YAML for backward compatibility
+	}
+
+	// Set Codex server defaults
+	if c.CodexServer.Timeout == 0 {
+		c.CodexServer.Timeout = 300 * time.Second
 	}
 
 	// Set request suspension defaults

@@ -29,6 +29,7 @@ const TIME_RANGE_OPTIONS = [
 ];
 
 const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
+  const provider = ''
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState(30);
@@ -64,8 +65,8 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
       setIsRefreshing(true);
     }
     try {
-      console.log('📊 [RequestTrendChart] 开始加载数据, timeRange:', timeRange);
-      const data = await fetchRequestTrendData(timeRange);
+      console.log('📊 [RequestTrendChart] 开始加载数据, timeRange:', timeRange, 'provider:', provider);
+      const data = await fetchRequestTrendData(timeRange, provider);
       console.log('📊 [RequestTrendChart] 获取到原始数据:', data);
       const processedData = toCumulative(padTimeSeries(data, {
         minutes: timeRange,
@@ -80,9 +81,9 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [timeRange]);
+  }, [timeRange, provider]);
 
-  // 初始加载和时间范围变化时重新加载
+  // 初始加载和时间范围/provider 变化时重新加载
   useEffect(() => {
     setLoading(true);
     loadData();

@@ -901,7 +901,13 @@ export namespace main {
 	    response_time: number;
 	    is_streaming: boolean;
 	    cost: number;
-	
+	    input_cost_usd: number;
+	    output_cost_usd: number;
+	    cache_creation_cost_usd: number;
+	    cache_creation_5m_cost_usd: number;
+	    cache_creation_1h_cost_usd: number;
+	    cache_read_cost_usd: number;
+
 	    static createFrom(source: any = {}) {
 	        return new RequestRecord(source);
 	    }
@@ -933,6 +939,12 @@ export namespace main {
 	        this.response_time = source["response_time"];
 	        this.is_streaming = source["is_streaming"];
 	        this.cost = source["cost"];
+	        this.input_cost_usd = source["input_cost_usd"];
+	        this.output_cost_usd = source["output_cost_usd"];
+	        this.cache_creation_cost_usd = source["cache_creation_cost_usd"];
+	        this.cache_creation_5m_cost_usd = source["cache_creation_5m_cost_usd"];
+	        this.cache_creation_1h_cost_usd = source["cache_creation_1h_cost_usd"];
+	        this.cache_read_cost_usd = source["cache_read_cost_usd"];
 	    }
 	}
 	export class RequestListResult {

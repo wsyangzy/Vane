@@ -83,7 +83,7 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	return created, nil
 }
 
-func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string) error {
+func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)
 	if err := validateCodexEndpointName(name); err != nil {
@@ -101,7 +101,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
-	if existing.Name == name && existing.BaseURL == baseURL {
+	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier {
 		return nil
 	}
 
@@ -125,7 +125,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
-	return s.endpointStore.Update(ctx, id, name, baseURL)
+	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier)
 }
 
 // DeleteEndpoint 删除端点。若被删除的是当前激活端点：

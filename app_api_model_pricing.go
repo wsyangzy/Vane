@@ -20,6 +20,7 @@ import (
 type ModelPricingInfo struct {
 	ID                   int64   `json:"id"`
 	ModelName            string  `json:"model_name"`
+	Provider             string  `json:"provider"`                // 提供商: claude/codex
 	DisplayName          string  `json:"display_name"`
 	Description          string  `json:"description"`
 	InputPrice           float64 `json:"input_price"`             // USD per 1M tokens
@@ -35,6 +36,7 @@ type ModelPricingInfo struct {
 // CreateModelPricingInput 创建模型定价的输入参数
 type CreateModelPricingInput struct {
 	ModelName            string  `json:"model_name"`
+	Provider             string  `json:"provider"`
 	DisplayName          string  `json:"display_name"`
 	Description          string  `json:"description"`
 	InputPrice           float64 `json:"input_price"`
@@ -109,6 +111,37 @@ func (a *App) GetModelPricings() ([]ModelPricingInfo, error) {
 	return result, nil
 }
 
+// GetModelPricingsByProvider 按 provider 获取模型定价列表
+func (a *App) GetModelPricingsByProvider(provider string) ([]ModelPricingInfo, error) {
+	a.ensureModelPricingService()
+	a.mu.RLock()
+	modelPricingService := a.modelPricingService
+	a.mu.RUnlock()
+
+	if modelPricingService == nil {
+		return nil, fmt.Errorf("模型定价服务未就绪，请稍后重试")
+	}
+
+	if provider == "" {
+		provider = "claude"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	records, err := modelPricingService.ListPricingsByProvider(ctx, provider)
+	if err != nil {
+		return nil, fmt.Errorf("获取模型定价列表失败: %w", err)
+	}
+
+	result := make([]ModelPricingInfo, 0, len(records))
+	for _, r := range records {
+		result = append(result, a.pricingRecordToInfo(r))
+	}
+
+	return result, nil
+}
+
 // GetModelPricing 获取单个模型定价
 func (a *App) GetModelPricing(modelName string) (ModelPricingInfo, error) {
 	a.ensureModelPricingService()
@@ -146,6 +179,12 @@ func (a *App) CreateModelPricing(input CreateModelPricingInput) error {
 		return fmt.Errorf("模型定价服务未就绪，请稍后重试")
 	}
 
+	// 设置默认 provider
+	provider := input.Provider
+	if provider == "" {
+		provider = "claude"
+	}
+
 	// 设置默认值
 	if input.InputPrice == 0 {
 		input.InputPrice = 3.0
@@ -153,18 +192,19 @@ func (a *App) CreateModelPricing(input CreateModelPricingInput) error {
 	if input.OutputPrice == 0 {
 		input.OutputPrice = 15.0
 	}
-	if input.CacheCreationPrice5m == 0 {
+	if input.CacheCreationPrice5m == 0 && provider == "claude" {
 		input.CacheCreationPrice5m = input.InputPrice * 1.25
 	}
-	if input.CacheCreationPrice1h == 0 {
+	if input.CacheCreationPrice1h == 0 && provider == "claude" {
 		input.CacheCreationPrice1h = input.InputPrice * 2.0
 	}
-	if input.CacheReadPrice == 0 {
+	if input.CacheReadPrice == 0 && provider == "claude" {
 		input.CacheReadPrice = input.InputPrice * 0.1
 	}
 
 	record := &store.ModelPricingRecord{
 		ModelName:            input.ModelName,
+		Provider:             provider,
 		DisplayName:          input.DisplayName,
 		Description:          input.Description,
 		InputPrice:           input.InputPrice,
@@ -184,7 +224,7 @@ func (a *App) CreateModelPricing(input CreateModelPricingInput) error {
 	}
 
 	if logger != nil {
-		logger.Info("✅ 模型定价已创建", "model", input.ModelName)
+		logger.Info("✅ 模型定价已创建", "model", input.ModelName, "provider", provider)
 	}
 
 	return nil
@@ -202,8 +242,14 @@ func (a *App) UpdateModelPricing(modelName string, input CreateModelPricingInput
 		return fmt.Errorf("模型定价服务未就绪，请稍后重试")
 	}
 
+	provider := input.Provider
+	if provider == "" {
+		provider = "claude"
+	}
+
 	record := &store.ModelPricingRecord{
 		ModelName:            modelName, // 使用参数中的 modelName
+		Provider:             provider,
 		DisplayName:          input.DisplayName,
 		Description:          input.Description,
 		InputPrice:           input.InputPrice,
@@ -222,7 +268,7 @@ func (a *App) UpdateModelPricing(modelName string, input CreateModelPricingInput
 	}
 
 	if logger != nil {
-		logger.Info("✅ 模型定价已更新", "model", modelName)
+		logger.Info("✅ 模型定价已更新", "model", modelName, "provider", provider)
 	}
 
 	return nil
@@ -282,9 +328,15 @@ func (a *App) SetDefaultModelPricing(modelName string) error {
 
 // pricingRecordToInfo 将数据库记录转换为前端 Info 结构
 func (a *App) pricingRecordToInfo(r *store.ModelPricingRecord) ModelPricingInfo {
+	provider := r.Provider
+	if provider == "" {
+		provider = "claude"
+	}
+
 	info := ModelPricingInfo{
 		ID:                   r.ID,
 		ModelName:            r.ModelName,
+		Provider:             provider,
 		DisplayName:          r.DisplayName,
 		Description:          r.Description,
 		InputPrice:           r.InputPrice,

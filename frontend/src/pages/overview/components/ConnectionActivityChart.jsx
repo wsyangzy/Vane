@@ -45,6 +45,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
+  const provider = ''
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -75,7 +76,7 @@ const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
       setIsRefreshing(true);
     }
     try {
-      const data = await fetchConnectionActivityData(timeRange);
+      const data = await fetchConnectionActivityData(timeRange, provider);
       setChartData(
         toCumulative(padTimeSeries(data, {
           minutes: timeRange,
@@ -89,7 +90,7 @@ const ConnectionActivityChart = ({ uptimeSeconds = 0 }) => {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [timeRange]);
+  }, [timeRange, provider]);
 
   // 初始加载
   useEffect(() => {

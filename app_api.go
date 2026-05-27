@@ -56,6 +56,9 @@ type SystemStatus struct {
 	ActiveGroup   string `json:"active_group"`
 	ConfigPath    string `json:"config_path"`
 	AuthEnabled   bool   `json:"auth_enabled"`
+
+	// Codex 代理状态（v7.2+ 合并到主端口，仅保留 enabled 标识）
+	CodexProxyEnabled bool `json:"codex_proxy_enabled"`
 }
 
 // GetSystemStatus 获取系统状态
@@ -83,6 +86,9 @@ func (a *App) GetSystemStatus() SystemStatus {
 		if status.ProxyRunning {
 			status.ProxyRunning = a.checkPortListening(status.ProxyHost, status.ProxyPort)
 		}
+
+		// Codex 代理状态（v7.2+ 合并到主端口，仅标识是否启用）
+		status.CodexProxyEnabled = a.config.CodexServer.Enabled
 	}
 
 	if a.endpointManager != nil {
@@ -176,6 +182,88 @@ func (a *App) GetClaudeCodeVersion() string {
 	claudeCodeVersionCache = version
 	claudeCodeVersionCacheTime = time.Now()
 	claudeCodeVersionMu.Unlock()
+
+	return version
+}
+
+// CodexVersion 缓存 Codex CLI 版本信息
+var (
+	codexVersionCache     string
+	codexVersionCacheTime time.Time
+	codexVersionCacheTTL  = 5 * time.Minute // 缓存 5 分钟
+	codexVersionMu        sync.RWMutex
+)
+
+// GetCodexVersion 获取 Codex CLI 版本
+// 执行 `codex --version` 命令获取版本信息
+func (a *App) GetCodexVersion() string {
+	// 先检查缓存
+	codexVersionMu.RLock()
+	if codexVersionCache != "" && time.Since(codexVersionCacheTime) < codexVersionCacheTTL {
+		cached := codexVersionCache
+		codexVersionMu.RUnlock()
+		return cached
+	}
+	codexVersionMu.RUnlock()
+
+	// 创建命令并配置 Windows 隐藏窗口
+	runCodexCommand := func(args ...string) (string, error) {
+		cmd := exec.Command("codex", args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		// Windows 下隐藏命令行窗口（CREATE_NO_WINDOW = 0x08000000）
+		if runtime.GOOS == "windows" {
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				HideWindow: true,
+			}
+		}
+
+		err := cmd.Run()
+		if err != nil {
+			return "", err
+		}
+
+		output := strings.TrimSpace(stdout.String())
+		if output == "" {
+			output = strings.TrimSpace(stderr.String())
+		}
+		return output, nil
+	}
+
+	// 尝试 codex --version
+	output, err := runCodexCommand("--version")
+	if err != nil {
+		// 尝试 codex -v
+		output, err = runCodexCommand("-v")
+		if err != nil {
+			return "未安装"
+		}
+	}
+
+	if output == "" {
+		return "未安装"
+	}
+
+	// 提取版本号（格式可能是 "codex 1.0.0" 或直接 "1.0.0"）
+	version := output
+	if strings.Contains(output, " ") {
+		parts := strings.Fields(output)
+		for _, part := range parts {
+			// 查找看起来像版本号的部分（包含数字和点）
+			if strings.Contains(part, ".") && len(part) > 0 && (part[0] >= '0' && part[0] <= '9') {
+				version = part
+				break
+			}
+		}
+	}
+
+	// 更新缓存
+	codexVersionMu.Lock()
+	codexVersionCache = version
+	codexVersionCacheTime = time.Now()
+	codexVersionMu.Unlock()
 
 	return version
 }

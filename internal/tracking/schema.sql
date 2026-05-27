@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
     group_name TEXT,                        -- 所属组名
     model_name TEXT,                        -- Claude模型名称
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
-    
+    provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
+
     -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled
     http_status_code INTEGER,               -- HTTP状态码
@@ -59,7 +60,16 @@ CREATE TABLE IF NOT EXISTS request_logs (
     cache_creation_1h_cost_usd REAL DEFAULT 0, -- 1小时缓存创建成本
     cache_read_cost_usd REAL DEFAULT 0,    -- 缓存读取成本
     total_cost_usd REAL DEFAULT 0,         -- 总成本
-    
+
+    -- 端点倍率快照（请求处理时端点的倍率配置，用于详情页计费过程展示）
+    -- 默认 1.0 = 不影响成本
+    cost_multiplier REAL DEFAULT 1.0,                       -- 总成本倍率
+    input_cost_multiplier REAL DEFAULT 1.0,                 -- 输入成本倍率
+    output_cost_multiplier REAL DEFAULT 1.0,                -- 输出成本倍率
+    cache_creation_cost_multiplier REAL DEFAULT 1.0,        -- 5分钟缓存创建倍率
+    cache_creation_cost_multiplier_1h REAL DEFAULT 1.0,     -- 1小时缓存创建倍率
+    cache_read_cost_multiplier REAL DEFAULT 1.0,            -- 缓存读取倍率
+
     -- 审计字段（统一使用带时区格式，微秒精度）
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
@@ -82,7 +92,8 @@ CREATE TABLE IF NOT EXISTS usage_summary (
     model_name TEXT NOT NULL,
     endpoint_name TEXT NOT NULL,
     group_name TEXT,
-    
+    provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
+
     request_count INTEGER DEFAULT 0,       -- 请求总数
     success_count INTEGER DEFAULT 0,       -- 成功请求数
     error_count INTEGER DEFAULT 0,         -- 失败请求数
@@ -98,7 +109,7 @@ CREATE TABLE IF NOT EXISTS usage_summary (
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     
-    UNIQUE(date, model_name, endpoint_name, group_name)
+    UNIQUE(date, model_name, endpoint_name, group_name, provider)
 );
 
 -- 汇总表索引
@@ -106,6 +117,8 @@ CREATE INDEX IF NOT EXISTS idx_usage_summary_date ON usage_summary(date);
 CREATE INDEX IF NOT EXISTS idx_usage_summary_model ON usage_summary(model_name);
 CREATE INDEX IF NOT EXISTS idx_usage_summary_endpoint ON usage_summary(endpoint_name);
 CREATE INDEX IF NOT EXISTS idx_usage_summary_group ON usage_summary(group_name);
+CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON request_logs(provider);
+CREATE INDEX IF NOT EXISTS idx_usage_summary_provider ON usage_summary(provider);
 
 
 -- 触发器：自动更新 updated_at 时间戳（统一使用带时区格式，微秒精度）
@@ -287,6 +300,12 @@ CREATE TABLE IF NOT EXISTS codex_endpoints (
     name TEXT NOT NULL,                                         -- 端点名（同渠道内唯一，仅作为 UI 标识）
     base_url TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 0,
+    failover_enabled INTEGER NOT NULL DEFAULT 1,   -- 是否参与故障转移（1=参与）
+    priority INTEGER NOT NULL DEFAULT 0,           -- 转移优先级（越小越优先）
+    cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 成本倍率（默认 1.0，无调整）
+    input_cost_multiplier REAL NOT NULL DEFAULT 1.0,      -- 输入 token 成本倍率
+    output_cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 输出 token 成本倍率
+    cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0, -- 缓存读取成本倍率
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -316,6 +335,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 
     -- ========== 模型信息 ==========
     model_name TEXT UNIQUE NOT NULL,                -- 模型名称（如 claude-sonnet-4-20250514）
+    provider TEXT NOT NULL DEFAULT 'claude',        -- 提供商标识: claude/codex
 
     -- ========== 定价信息 (USD per 1M tokens) ==========
     input_price REAL NOT NULL DEFAULT 3.0,          -- 输入价格
@@ -337,6 +357,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 -- 模型定价表索引
 CREATE INDEX IF NOT EXISTS idx_model_pricing_model_name ON model_pricing(model_name);
 CREATE INDEX IF NOT EXISTS idx_model_pricing_is_default ON model_pricing(is_default);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_provider ON model_pricing(provider);
 
 -- 模型定价表触发器：自动更新 updated_at
 CREATE TRIGGER IF NOT EXISTS update_model_pricing_timestamp

@@ -58,7 +58,8 @@ var globalUsageDBStatsCache usageDBStatsCache
 // GetUsageSummary 获取使用统计摘要
 // 当没有传递时间参数时，返回运行时统计（从内存）+ 全部历史请求总数（从数据库）
 // 当传递时间参数时，返回历史数据（从数据库）
-func (a *App) GetUsageSummary(startTimeStr, endTimeStr string) (UsageSummary, error) {
+// provider 参数预留，当前运行时内存数据无 provider 维度
+func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageSummary, error) {
 	a.mu.RLock()
 	monitoringMiddleware := a.monitoringMiddleware
 	usageTracker := a.usageTracker
@@ -96,21 +97,54 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr string) (UsageSummary, er
 
 		if usageTracker != nil {
 			// DB 统计做缓存，避免前端轮询/事件推送时频繁查询导致阻塞
-			cache := &globalUsageDBStatsCache
-			cache.mu.Lock()
-			cacheFresh := !cache.updatedAt.IsZero() && time.Since(cache.updatedAt) < usageDBStatsCacheTTL
-			if cacheFresh {
-				allTimeTotalCost = cache.allTimeTotalCost
-				allTimeTotalTokens = cache.allTimeTotalTokens
-				allTimeTotal = cache.allTimeTotal
-				todayCost = cache.todayCost
-				todayTokens = cache.todayTokens
-				todayRequests = cache.todayRequests
-			}
-			cache.mu.Unlock()
+			// 仅对无 provider 过滤的全量查询使用缓存；按 provider 过滤时直接查询
+			useCache := provider == ""
+			if useCache {
+				cache := &globalUsageDBStatsCache
+				cache.mu.Lock()
+				cacheFresh := !cache.updatedAt.IsZero() && time.Since(cache.updatedAt) < usageDBStatsCacheTTL
+				if cacheFresh {
+					allTimeTotalCost = cache.allTimeTotalCost
+					allTimeTotalTokens = cache.allTimeTotalTokens
+					allTimeTotal = cache.allTimeTotal
+					todayCost = cache.todayCost
+					todayTokens = cache.todayTokens
+					todayRequests = cache.todayRequests
+				}
+				cache.mu.Unlock()
 
-			if !cacheFresh {
-				// 获取配置的时区
+				if !cacheFresh {
+					loc := time.Local
+					if cfg != nil && cfg.Timezone != "" {
+						if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
+							loc = parsedLoc
+						}
+					}
+
+					ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+					allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now(), "")
+					cancel()
+
+					now := time.Now().In(loc)
+					todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+					todayEnd := todayStart.Add(24 * time.Hour)
+					ctx, cancel = context.WithTimeout(context.Background(), usageDBQueryTimeout)
+					todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd, "")
+					cancel()
+
+					cache := &globalUsageDBStatsCache
+					cache.mu.Lock()
+					cache.updatedAt = time.Now()
+					cache.allTimeTotalCost = allTimeTotalCost
+					cache.allTimeTotalTokens = allTimeTotalTokens
+					cache.allTimeTotal = allTimeTotal
+					cache.todayCost = todayCost
+					cache.todayTokens = todayTokens
+					cache.todayRequests = todayRequests
+					cache.mu.Unlock()
+				}
+			} else {
+				// 按 provider 过滤，不使用缓存
 				loc := time.Local
 				if cfg != nil && cfg.Timezone != "" {
 					if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
@@ -118,28 +152,16 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr string) (UsageSummary, er
 					}
 				}
 
-				// 直接从 request_logs 表查询全部历史统计
 				ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
-				allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now())
+				allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now(), provider)
 				cancel()
 
-				// 查询今日统计（使用配置的时区）
 				now := time.Now().In(loc)
 				todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 				todayEnd := todayStart.Add(24 * time.Hour)
 				ctx, cancel = context.WithTimeout(context.Background(), usageDBQueryTimeout)
-				todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd)
+				todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd, provider)
 				cancel()
-
-				cache.mu.Lock()
-				cache.updatedAt = time.Now()
-				cache.allTimeTotalCost = allTimeTotalCost
-				cache.allTimeTotalTokens = allTimeTotalTokens
-				cache.allTimeTotal = allTimeTotal
-				cache.todayCost = todayCost
-				cache.todayTokens = todayTokens
-				cache.todayRequests = todayRequests
-				cache.mu.Unlock()
 			}
 		}
 
@@ -211,7 +233,7 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr string) (UsageSummary, er
 }
 
 // queryStatsFromDB 直接从 request_logs 表查询成本、tokens 和请求数
-func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tracking.UsageTracker, startTime, endTime time.Time) (cost float64, tokens int64, requests int64) {
+func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tracking.UsageTracker, startTime, endTime time.Time, provider string) (cost float64, tokens int64, requests int64) {
 	if usageTracker == nil {
 		return 0, 0, 0
 	}
@@ -222,15 +244,21 @@ func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tr
 	}
 
 	var query string
-	var args []interface{}
+	var args []any
 
 	if startTime.IsZero() {
-		// 查询全部历史（包含所有 token 类型：输入、输出、缓存创建、缓存读取）
 		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0), COUNT(*) FROM request_logs"
+		if provider != "" {
+			query += " WHERE provider = ?"
+			args = append(args, provider)
+		}
 	} else {
-		// 查询指定时间范围（包含所有 token 类型）
 		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0), COUNT(*) FROM request_logs WHERE start_time >= ? AND start_time < ?"
 		args = append(args, startTime, endTime)
+		if provider != "" {
+			query += " AND provider = ?"
+			args = append(args, provider)
+		}
 	}
 
 	err := db.QueryRowContext(ctx, query, args...).Scan(&cost, &tokens, &requests)
@@ -246,28 +274,43 @@ func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tr
 
 // RequestRecord 请求记录
 type RequestRecord struct {
-	ID                    string  `json:"id"`
-	RequestID             string  `json:"request_id"`
-	Timestamp             string  `json:"timestamp"`
-	Channel               string  `json:"channel"` // 渠道标签
-	Endpoint              string  `json:"endpoint"`
-	EndpointChain         []chainNode `json:"endpoint_chain"` // 端点尝试链路（结构化 JSON 数组）
-	Group                 string  `json:"group"`
-	Model                 string  `json:"model"`
-	Status                string  `json:"status"`
-	HTTPStatus            int     `json:"http_status"`
-	RetryCount            int     `json:"retry_count"`              // 重试次数
-	FailureReason         string  `json:"failure_reason,omitempty"` // 失败原因
-	CancelReason          string  `json:"cancel_reason,omitempty"`  // 取消原因
-	InputTokens           int64   `json:"input_tokens"`
-	OutputTokens          int64   `json:"output_tokens"`
-	CacheCreationTokens   int64   `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens int64   `json:"cache_creation_5m_tokens"` // 5分钟缓存
-	CacheCreation1hTokens int64   `json:"cache_creation_1h_tokens"` // 1小时缓存
-	CacheReadTokens       int64   `json:"cache_read_tokens"`
-	ResponseTime          int64   `json:"response_time"`
-	IsStreaming           bool    `json:"is_streaming"`
-	Cost                  float64 `json:"cost"`
+	ID                     string      `json:"id"`
+	RequestID              string      `json:"request_id"`
+	Timestamp              string      `json:"timestamp"`
+	Channel                string      `json:"channel"` // 渠道标签
+	Endpoint               string      `json:"endpoint"`
+	EndpointChain          []chainNode `json:"endpoint_chain"` // 端点尝试链路（结构化 JSON 数组）
+	Group                  string      `json:"group"`
+	Model                  string      `json:"model"`
+	Provider               string      `json:"provider"` // 提供商标识: claude/codex
+	Status                 string      `json:"status"`
+	HTTPStatus             int         `json:"http_status"`
+	RetryCount             int         `json:"retry_count"`              // 重试次数
+	FailureReason          string      `json:"failure_reason,omitempty"` // 失败原因
+	CancelReason           string      `json:"cancel_reason,omitempty"`  // 取消原因
+	InputTokens            int64       `json:"input_tokens"`
+	OutputTokens           int64       `json:"output_tokens"`
+	CacheCreationTokens    int64       `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
+	CacheCreation5mTokens  int64       `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens  int64       `json:"cache_creation_1h_tokens"` // 1小时缓存
+	CacheReadTokens        int64       `json:"cache_read_tokens"`
+	ResponseTime           int64       `json:"response_time"`
+	IsStreaming            bool        `json:"is_streaming"`
+	Cost                   float64     `json:"cost"`
+	InputCostUSD           float64     `json:"input_cost_usd"`             // 输入成本（计费明细）
+	OutputCostUSD          float64     `json:"output_cost_usd"`            // 输出成本（计费明细）
+	CacheCreationCostUSD   float64     `json:"cache_creation_cost_usd"`    // 总缓存创建成本（向后兼容）
+	CacheCreation5mCostUSD float64     `json:"cache_creation_5m_cost_usd"` // 5分钟缓存创建成本
+	CacheCreation1hCostUSD float64     `json:"cache_creation_1h_cost_usd"` // 1小时缓存创建成本
+	CacheReadCostUSD       float64     `json:"cache_read_cost_usd"`        // 缓存读取成本
+
+	// 端点倍率快照（用于详情页计费过程展示）
+	CostMultiplier                float64 `json:"cost_multiplier"`
+	InputCostMultiplier           float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64 `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
 }
 
 // RequestListResult 请求列表结果
@@ -289,6 +332,7 @@ type RequestQueryParams struct {
 	Channel   string `json:"channel"`    // 可选：渠道名称
 	Endpoint  string `json:"endpoint"`   // 可选：端点名称
 	Group     string `json:"group"`      // 可选：组名称
+	Provider  string `json:"provider"`   // 可选：提供商标识 claude/codex
 }
 
 // GetRequests 获取请求记录列表（热池+数据库双源查询）
@@ -359,6 +403,7 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		EndpointName: params.Endpoint,
 		GroupName:    params.Group,
 		Status:       params.Status,
+		Provider:     params.Provider, // 提供商筛选
 		Limit:        pageSize,
 		Offset:       offset,
 	}
@@ -381,25 +426,38 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		chainItems := parseEndpointChain(r.EndpointChain)
 
 		record := RequestRecord{
-			RequestID:             r.RequestID,
-			Timestamp:             r.StartTime.Format("2006-01-02 15:04:05"),
-			Channel:               r.Channel, // 渠道标签
-			Endpoint:              r.EndpointName,
-			EndpointChain:         chainItems,
-			Group:                 r.GroupName,
-			Model:                 r.ModelName,
-			Status:                r.Status,
-			RetryCount:            r.RetryCount,
-			FailureReason:         r.FailureReason,
-			CancelReason:          r.CancelReason,
-			InputTokens:           r.InputTokens,
-			OutputTokens:          r.OutputTokens,
-			CacheCreationTokens:   r.CacheCreationTokens,
-			CacheCreation5mTokens: r.CacheCreation5mTokens,
-			CacheCreation1hTokens: r.CacheCreation1hTokens,
-			CacheReadTokens:       r.CacheReadTokens,
-			IsStreaming:           r.IsStreaming,
-			Cost:                  r.TotalCostUSD,
+			RequestID:                     r.RequestID,
+			Timestamp:                     r.StartTime.Format("2006-01-02 15:04:05"),
+			Channel:                       r.Channel, // 渠道标签
+			Endpoint:                      r.EndpointName,
+			EndpointChain:                 chainItems,
+			Group:                         r.GroupName,
+			Model:                         r.ModelName,
+			Provider:                      r.Provider, // 提供商标识
+			Status:                        r.Status,
+			RetryCount:                    r.RetryCount,
+			FailureReason:                 r.FailureReason,
+			CancelReason:                  r.CancelReason,
+			InputTokens:                   r.InputTokens,
+			OutputTokens:                  r.OutputTokens,
+			CacheCreationTokens:           r.CacheCreationTokens,
+			CacheCreation5mTokens:         r.CacheCreation5mTokens,
+			CacheCreation1hTokens:         r.CacheCreation1hTokens,
+			CacheReadTokens:               r.CacheReadTokens,
+			IsStreaming:                   r.IsStreaming,
+			Cost:                          r.TotalCostUSD,
+			InputCostUSD:                  r.InputCostUSD,
+			OutputCostUSD:                 r.OutputCostUSD,
+			CacheCreationCostUSD:          r.CacheCreationCostUSD,
+			CacheCreation5mCostUSD:        r.CacheCreation5mCostUSD,
+			CacheCreation1hCostUSD:        r.CacheCreation1hCostUSD,
+			CacheReadCostUSD:              r.CacheReadCostUSD,
+			CostMultiplier:                r.CostMultiplier,
+			InputCostMultiplier:           r.InputCostMultiplier,
+			OutputCostMultiplier:          r.OutputCostMultiplier,
+			CacheCreationCostMultiplier:   r.CacheCreationCostMultiplier,
+			CacheCreationCostMultiplier1h: r.CacheCreationCostMultiplier1h,
+			CacheReadCostMultiplier:       r.CacheReadCostMultiplier,
 		}
 
 		// 处理指针字段
@@ -501,6 +559,7 @@ type UsageStatsQueryParams struct {
 	Channel   string `json:"channel"`    // 可选：渠道筛选
 	Endpoint  string `json:"endpoint"`   // 可选：端点筛选
 	Group     string `json:"group"`      // 可选：组筛选
+	Provider  string `json:"provider"`   // 可选：提供商标识 claude/codex
 }
 
 // GetUsageStats 获取使用统计（与 HTTP API 格式一致）
@@ -579,6 +638,7 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 			EndpointName: params.Endpoint,
 			GroupName:    params.Group,
 			Status:       params.Status,
+			Provider:     params.Provider, // 提供商筛选
 			Limit:        0,
 			Offset:       0,
 		}
@@ -657,28 +717,48 @@ type TokenUsageData struct {
 	TotalTokens         int64 `json:"total_tokens"`
 }
 
-// GetTokenUsage 获取当前 Token 使用统计（运行时内存数据）
-func (a *App) GetTokenUsage() TokenUsageData {
+// GetTokenUsage 获取 Token 使用统计（从数据库查询，覆盖 Claude 和 Codex 全部历史）
+// provider 参数过滤：空字符串 = 全部，"claude" / "codex" = 按 provider 过滤
+func (a *App) GetTokenUsage(provider string) TokenUsageData {
 	a.mu.RLock()
-	monitoringMiddleware := a.monitoringMiddleware
+	usageTracker := a.usageTracker
 	a.mu.RUnlock()
 
-	if monitoringMiddleware == nil {
+	if usageTracker == nil {
 		return TokenUsageData{}
 	}
 
-	metrics := monitoringMiddleware.GetMetrics()
-	if metrics == nil {
+	db := usageTracker.GetDB()
+	if db == nil {
 		return TokenUsageData{}
 	}
 
-	tokenStats := metrics.GetTotalTokenStats()
+	query := `SELECT
+		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_creation_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0)
+		FROM request_logs`
+	var args []any
+	if provider != "" {
+		query += " WHERE provider = ?"
+		args = append(args, provider)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+	defer cancel()
+
+	var input, output, cacheCreation, cacheRead int64
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&input, &output, &cacheCreation, &cacheRead); err != nil {
+		// 失败时返回零值（前端会显示"暂无数据"，但不阻塞）
+		return TokenUsageData{}
+	}
 
 	return TokenUsageData{
-		InputTokens:         tokenStats.InputTokens,
-		OutputTokens:        tokenStats.OutputTokens,
-		CacheCreationTokens: tokenStats.CacheCreationTokens,
-		CacheReadTokens:     tokenStats.CacheReadTokens,
-		TotalTokens:         tokenStats.InputTokens + tokenStats.OutputTokens + tokenStats.CacheCreationTokens + tokenStats.CacheReadTokens,
+		InputTokens:         input,
+		OutputTokens:        output,
+		CacheCreationTokens: cacheCreation,
+		CacheReadTokens:     cacheRead,
+		TotalTokens:         input + output + cacheCreation + cacheRead,
 	}
 }

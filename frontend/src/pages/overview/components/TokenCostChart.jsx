@@ -44,6 +44,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 const TokenCostChart = () => {
+  const provider = ''
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -55,7 +56,7 @@ const TokenCostChart = () => {
       setIsRefreshing(true);
     }
     try {
-      const data = await fetchEndpointCostsData();
+      const data = await fetchEndpointCostsData(provider);
       setChartData(data);
     } catch (error) {
       console.error('加载端点成本数据失败:', error);
@@ -63,9 +64,9 @@ const TokenCostChart = () => {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [provider]);
 
-  // 初始加载
+  // 初始加载和 provider 变化时重新加载
   useEffect(() => {
     loadData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

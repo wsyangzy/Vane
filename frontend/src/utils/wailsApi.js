@@ -159,7 +159,8 @@ export const getSystemStatus = async () => {
     proxy_host: status.proxy_host,
     active_group: status.active_group,
     config_path: status.config_path,
-    auth_enabled: status.auth_enabled
+    auth_enabled: status.auth_enabled,
+    codex_enabled: status.codex_proxy_enabled
   };
 };
 
@@ -172,6 +173,16 @@ export const getClaudeCodeVersion = async () => {
   if (!WailsApp) throw new Error('Wails not available');
   return await WailsApp.GetClaudeCodeVersion();
 };
+
+/**
+ * 获取 Codex CLI 版本
+ * @returns {Promise<string>} 版本号，如 "0.1.0" 或 "未安装"
+ */
+export const getCodexVersion = async () => {
+  await initWails()
+  if (!WailsApp) throw new Error('Wails not available')
+  return await WailsApp.GetCodexVersion()
+}
 
 export const getConfig = async () => {
   await initWails();
@@ -482,7 +493,8 @@ export const getUsageStats = async (params = {}) => {
     model: params.model || '',
     channel: params.channel || '',
     endpoint: params.endpoint || '',
-    group: params.group || ''
+    group: params.group || '',
+    provider: params.provider || ''
   };
 
   console.log('📊 [Wails] GetUsageStats 参数:', queryParams);
@@ -500,11 +512,11 @@ export const getUsageStats = async (params = {}) => {
   };
 };
 
-export const getUsageSummary = async (startTime = '', endTime = '') => {
+export const getUsageSummary = async (startTime = '', endTime = '', provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  const summary = await WailsApp.GetUsageSummary(startTime, endTime);
+  const summary = await WailsApp.GetUsageSummary(startTime, endTime, provider);
 
   return {
     total_requests: summary.total_requests || 0,
@@ -538,7 +550,8 @@ export const getRequests = async (params = {}) => {
     model: params.model || '',
     channel: params.channel || '',
     endpoint: params.endpoint || '',
-    group: params.group || ''
+    group: params.group || '',
+    provider: params.provider || ''
   };
 
   console.log('🔍 [Wails] GetRequests 参数:', queryParams);
@@ -559,6 +572,7 @@ export const getRequests = async (params = {}) => {
     group: r.group,
     model_name: r.model,
     model: r.model,
+    provider: r.provider || '',
     status: r.status,
     status_code: r.http_status,
     http_status_code: r.http_status,  // 添加 http_status_code 映射
@@ -574,6 +588,20 @@ export const getRequests = async (params = {}) => {
     is_streaming: r.is_streaming,
     total_cost_usd: r.cost,
     cost: r.cost,
+    // 成本明细字段（计费详情展示用）
+    input_cost_usd: r.input_cost_usd || 0,
+    output_cost_usd: r.output_cost_usd || 0,
+    cache_creation_cost_usd: r.cache_creation_cost_usd || 0,
+    cache_creation_5m_cost_usd: r.cache_creation_5m_cost_usd || 0,
+    cache_creation_1h_cost_usd: r.cache_creation_1h_cost_usd || 0,
+    cache_read_cost_usd: r.cache_read_cost_usd || 0,
+    // 端点倍率快照（计费详情展示用）
+    cost_multiplier: r.cost_multiplier ?? 1.0,
+    input_cost_multiplier: r.input_cost_multiplier ?? 1.0,
+    output_cost_multiplier: r.output_cost_multiplier ?? 1.0,
+    cache_creation_cost_multiplier: r.cache_creation_cost_multiplier ?? 1.0,
+    cache_creation_cost_multiplier_1h: r.cache_creation_cost_multiplier_1h ?? 1.0,
+    cache_read_cost_multiplier: r.cache_read_cost_multiplier ?? 1.0,
     // 错误信息字段
     failure_reason: r.failure_reason || '',
     cancel_reason: r.cancel_reason || ''
@@ -620,6 +648,15 @@ export const openClaudeConfigDir = async () => {
 };
 
 /**
+ * 打开 Codex 配置目录
+ */
+export const openCodexConfigDir = async () => {
+  await initWails()
+  if (!WailsApp) throw new Error('Wails not available')
+  return await WailsApp.OpenCodexConfigDir()
+}
+
+/**
  * 打开日志目录
  */
 export const openLogDir = async () => {
@@ -663,14 +700,15 @@ export const copyToClipboard = async (text) => {
 /**
  * 获取请求趋势图表数据
  * @param {number} minutes - 时间范围（分钟）
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  * @returns {Promise<Array>} - 图表数据点数组 [{time, total, success, fail}]
  */
-export const getRequestTrendChart = async (minutes = 30) => {
+export const getRequestTrendChart = async (minutes = 30, provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  console.log('📊 [Wails] 调用 GetRequestTrendChart, minutes:', minutes);
-  const data = await WailsApp.GetRequestTrendChart(minutes);
+  console.log('📊 [Wails] 调用 GetRequestTrendChart, minutes:', minutes, 'provider:', provider);
+  const data = await WailsApp.GetRequestTrendChart(minutes, provider);
   console.log('📊 [Wails] GetRequestTrendChart 返回:', data ? `${data.length} 个数据点` : '无数据', data);
   return data || [];
 };
@@ -678,26 +716,28 @@ export const getRequestTrendChart = async (minutes = 30) => {
 /**
  * 获取响应时间图表数据
  * @param {number} minutes - 时间范围（分钟）
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  * @returns {Promise<Array>} - 图表数据点数组 [{time, avg, min, max}]
  */
-export const getResponseTimeChart = async (minutes = 30) => {
+export const getResponseTimeChart = async (minutes = 30, provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  const data = await WailsApp.GetResponseTimeChart(minutes);
+  const data = await WailsApp.GetResponseTimeChart(minutes, provider);
   return data || [];
 };
 
 /**
  * 获取连接活动图表数据
  * @param {number} minutes - 时间范围（分钟）
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  * @returns {Promise<Array>} - 图表数据点数组 [{time, value}]
  */
-export const getConnectionActivityChart = async (minutes = 60) => {
+export const getConnectionActivityChart = async (minutes = 60, provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  const data = await WailsApp.GetConnectionActivityChart(minutes);
+  const data = await WailsApp.GetConnectionActivityChart(minutes, provider);
   // 转换为前端期望的格式 (connections 字段)
   return (data || []).map(point => ({
     time: point.time,
@@ -712,13 +752,14 @@ export const getConnectionActivityChart = async (minutes = 60) => {
 
 /**
  * 获取 Token 使用统计（运行时内存数据）
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  * @returns {Promise<Object>} - Token 使用数据 {input, output, cacheCreation, cacheRead}
  */
-export const getTokenUsage = async () => {
+export const getTokenUsage = async (provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  const data = await WailsApp.GetTokenUsage();
+  const data = await WailsApp.GetTokenUsage(provider);
   return {
     input: data.input_tokens || 0,
     output: data.output_tokens || 0,
@@ -750,19 +791,38 @@ export const getEndpointHealthChart = async () => {
   };
 };
 
+/**
+ * 获取 Codex 端点健康状态数据（仅当前激活渠道下的端点）
+ * @returns {Promise<Object>} - 健康状态数据 {healthy, unhealthy, skipped, excluded, total}
+ */
+export const getCodexEndpointHealthChart = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const data = await WailsApp.GetCodexEndpointHealthChart();
+  return {
+    healthy: data.healthy || 0,
+    unhealthy: data.unhealthy || 0,
+    skipped: data.skipped || 0,
+    excluded: data.excluded || 0,
+    total: data.total || 0
+  };
+};
+
 // ============================================
 // 端点成本图表 API
 // ============================================
 
 /**
  * 获取当日端点成本数据
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  * @returns {Promise<Array>} - 端点成本数据 [{name, tokens, cost}]
  */
-export const getEndpointCosts = async () => {
+export const getEndpointCosts = async (provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  const data = await WailsApp.GetEndpointCosts();
+  const data = await WailsApp.GetEndpointCosts(provider);
   // 数据已经是 [{name, tokens, cost}] 格式
   return data || [];
 };
@@ -1189,6 +1249,34 @@ export const getModelPricings = async () => {
   return (records || []).map(r => ({
     id: r.id,
     modelName: r.model_name,
+    provider: r.provider || 'claude',
+    displayName: r.display_name,
+    description: r.description,
+    inputPrice: r.input_price,
+    outputPrice: r.output_price,
+    cacheCreationPrice5m: r.cache_creation_price_5m,
+    cacheCreationPrice1h: r.cache_creation_price_1h,
+    cacheReadPrice: r.cache_read_price,
+    isDefault: r.is_default,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }));
+};
+
+/**
+ * 按 provider 获取模型定价列表
+ * @param {string} provider - 提供商标识 (claude/codex)
+ * @returns {Promise<Array>} - 模型定价数组
+ */
+export const getModelPricingsByProvider = async (provider) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const records = await WailsApp.GetModelPricingsByProvider(provider || 'claude');
+  return (records || []).map(r => ({
+    id: r.id,
+    modelName: r.model_name,
+    provider: r.provider || 'claude',
     displayName: r.display_name,
     description: r.description,
     inputPrice: r.input_price,
@@ -1215,6 +1303,7 @@ export const getModelPricing = async (modelName) => {
   return {
     id: r.id,
     modelName: r.model_name,
+    provider: r.provider || 'claude',
     displayName: r.display_name,
     description: r.description,
     inputPrice: r.input_price,
@@ -1240,6 +1329,7 @@ export const createModelPricing = async (input) => {
   // 转换为后端期望的格式
   const record = {
     model_name: input.modelName || '',
+    provider: input.provider || 'claude',
     display_name: input.displayName || '',
     description: input.description || '',
     input_price: parseFloat(input.inputPrice) || 3.0,
@@ -1267,6 +1357,7 @@ export const updateModelPricing = async (modelName, input) => {
   // 转换为后端期望的格式
   const record = {
     model_name: input.modelName || modelName,
+    provider: input.provider || 'claude',
     display_name: input.displayName || '',
     description: input.description || '',
     input_price: parseFloat(input.inputPrice) || 3.0,
@@ -1440,6 +1531,12 @@ const mapCodexEndpoint = (endpoint) => ({
   name: endpoint.name || '',
   baseURL: endpoint.base_url,
   isActive: Boolean(endpoint.is_active),
+  failoverEnabled: endpoint.failover_enabled !== false,
+  priority: endpoint.priority || 0,
+  costMultiplier: endpoint.costMultiplier ?? 1.0,
+  inputCostMultiplier: endpoint.inputCostMultiplier ?? 1.0,
+  outputCostMultiplier: endpoint.outputCostMultiplier ?? 1.0,
+  cacheReadCostMultiplier: endpoint.cacheReadCostMultiplier ?? 1.0,
   createdAt: endpoint.created_at,
   updatedAt: endpoint.updated_at
 });
@@ -1533,29 +1630,43 @@ export const activateCodexChannel = async (id) => {
 };
 
 /**
- * 在指定渠道下新增端点（name + base_url）
+ * 在指定渠道下新增端点（name + base_url + 故障转移配置 + 成本倍率）
  */
-export const createCodexEndpoint = async ({ channelId, name, baseURL }) => {
+export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  await WailsApp.CreateCodexEndpoint({
+  const payload = {
     channel_id: channelId,
     name: (name || '').trim(),
     base_url: (baseURL || '').trim()
-  });
+  };
+  if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
+  if (priority !== undefined) payload.priority = priority;
+  if (costMultiplier !== undefined) payload.costMultiplier = costMultiplier;
+  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = inputCostMultiplier;
+  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = outputCostMultiplier;
+  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = cacheReadCostMultiplier;
+  await WailsApp.CreateCodexEndpoint(payload);
   return { success: true };
 };
 
 /**
- * 更新端点 name + base_url
+ * 更新端点 name + base_url + failover_enabled + priority + 成本倍率
  */
-export const updateCodexEndpointByID = async (id, { name, baseURL }) => {
+export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  await WailsApp.UpdateCodexEndpointByID(id, {
+  const payload = {
     name: (name || '').trim(),
     base_url: (baseURL || '').trim()
-  });
+  };
+  if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
+  if (priority !== undefined) payload.priority = priority;
+  if (costMultiplier !== undefined) payload.costMultiplier = costMultiplier;
+  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = inputCostMultiplier;
+  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = outputCostMultiplier;
+  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = cacheReadCostMultiplier;
+  await WailsApp.UpdateCodexEndpointByID(id, payload);
   return { success: true };
 };
 

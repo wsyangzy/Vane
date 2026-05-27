@@ -16,6 +16,7 @@ type ModelPricingRecord struct {
 
 	// 模型信息
 	ModelName string `json:"model_name"` // 模型名称（如 claude-sonnet-4-20250514）
+	Provider  string `json:"provider"`   // 提供商标识: claude/codex
 
 	// 定价信息 (USD per 1M tokens)
 	InputPrice            float64 `json:"input_price"`              // 输入价格
@@ -41,6 +42,7 @@ type ModelPricingStore interface {
 	Get(ctx context.Context, modelName string) (*ModelPricingRecord, error)
 	GetByID(ctx context.Context, id int64) (*ModelPricingRecord, error)
 	List(ctx context.Context) ([]*ModelPricingRecord, error)
+	ListByProvider(ctx context.Context, provider string) ([]*ModelPricingRecord, error)
 	Update(ctx context.Context, record *ModelPricingRecord) error
 	Delete(ctx context.Context, modelName string) error
 
@@ -50,6 +52,7 @@ type ModelPricingStore interface {
 
 	// 查询
 	GetDefault(ctx context.Context) (*ModelPricingRecord, error)
+	GetDefaultByProvider(ctx context.Context, provider string) (*ModelPricingRecord, error)
 	SetDefault(ctx context.Context, modelName string) error
 
 	// 统计
@@ -89,32 +92,35 @@ func (s *SQLiteModelPricingStore) Create(ctx context.Context, record *ModelPrici
 	defer s.mu.Unlock()
 
 	// 设置默认值
+	if record.Provider == "" {
+		record.Provider = "claude"
+	}
 	if record.InputPrice == 0 {
 		record.InputPrice = 3.0
 	}
 	if record.OutputPrice == 0 {
 		record.OutputPrice = 15.0
 	}
-	if record.CacheCreationPrice5m == 0 {
+	if record.CacheCreationPrice5m == 0 && record.Provider == "claude" {
 		record.CacheCreationPrice5m = record.InputPrice * 1.25
 	}
-	if record.CacheCreationPrice1h == 0 {
+	if record.CacheCreationPrice1h == 0 && record.Provider == "claude" {
 		record.CacheCreationPrice1h = record.InputPrice * 2.0
 	}
-	if record.CacheReadPrice == 0 {
+	if record.CacheReadPrice == 0 && record.Provider == "claude" {
 		record.CacheReadPrice = record.InputPrice * 0.1
 	}
 
 	query := `
 		INSERT INTO model_pricing (
-			model_name, input_price, output_price,
+			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
-		record.ModelName, record.InputPrice, record.OutputPrice,
+		record.ModelName, record.Provider, record.InputPrice, record.OutputPrice,
 		record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
 		record.DisplayName, record.Description, boolToInt(record.IsDefault),
 	)
@@ -140,7 +146,7 @@ func (s *SQLiteModelPricingStore) Get(ctx context.Context, modelName string) (*M
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, model_name, input_price, output_price,
+		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
 			created_at, updated_at
@@ -156,7 +162,7 @@ func (s *SQLiteModelPricingStore) GetByID(ctx context.Context, id int64) (*Model
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, model_name, input_price, output_price,
+		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
 			created_at, updated_at
@@ -172,7 +178,7 @@ func (s *SQLiteModelPricingStore) List(ctx context.Context) ([]*ModelPricingReco
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, model_name, input_price, output_price,
+		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
 			created_at, updated_at
@@ -183,6 +189,24 @@ func (s *SQLiteModelPricingStore) List(ctx context.Context) ([]*ModelPricingReco
 	return s.scanModelPricings(ctx, query)
 }
 
+// ListByProvider 按 provider 过滤获取模型定价
+func (s *SQLiteModelPricingStore) ListByProvider(ctx context.Context, provider string) ([]*ModelPricingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
+			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			display_name, description, is_default,
+			created_at, updated_at
+		FROM model_pricing
+		WHERE COALESCE(provider, 'claude') = ?
+		ORDER BY is_default DESC, model_name ASC
+	`
+
+	return s.scanModelPricings(ctx, query, provider)
+}
+
 // Update 更新模型定价
 func (s *SQLiteModelPricingStore) Update(ctx context.Context, record *ModelPricingRecord) error {
 	s.mu.Lock()
@@ -190,14 +214,19 @@ func (s *SQLiteModelPricingStore) Update(ctx context.Context, record *ModelPrici
 
 	query := `
 		UPDATE model_pricing SET
-			input_price = ?, output_price = ?,
+			provider = ?, input_price = ?, output_price = ?,
 			cache_creation_price_5m = ?, cache_creation_price_1h = ?, cache_read_price = ?,
 			display_name = ?, description = ?, is_default = ?
 		WHERE model_name = ?
 	`
 
+	provider := record.Provider
+	if provider == "" {
+		provider = "claude"
+	}
+
 	result, err := s.getQuerier().ExecContext(ctx, query,
-		record.InputPrice, record.OutputPrice,
+		provider, record.InputPrice, record.OutputPrice,
 		record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
 		record.DisplayName, record.Description, boolToInt(record.IsDefault),
 		record.ModelName,
@@ -260,10 +289,10 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 
 	query := `
 		INSERT INTO model_pricing (
-			model_name, input_price, output_price,
+			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	stmt, err := tx.PrepareContext(ctx, query)
@@ -274,24 +303,27 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 
 	for _, record := range records {
 		// 设置默认值
+		if record.Provider == "" {
+			record.Provider = "claude"
+		}
 		if record.InputPrice == 0 {
 			record.InputPrice = 3.0
 		}
 		if record.OutputPrice == 0 {
 			record.OutputPrice = 15.0
 		}
-		if record.CacheCreationPrice5m == 0 {
+		if record.CacheCreationPrice5m == 0 && record.Provider == "claude" {
 			record.CacheCreationPrice5m = record.InputPrice * 1.25
 		}
-		if record.CacheCreationPrice1h == 0 {
+		if record.CacheCreationPrice1h == 0 && record.Provider == "claude" {
 			record.CacheCreationPrice1h = record.InputPrice * 2.0
 		}
-		if record.CacheReadPrice == 0 {
+		if record.CacheReadPrice == 0 && record.Provider == "claude" {
 			record.CacheReadPrice = record.InputPrice * 0.1
 		}
 
 		_, err = stmt.ExecContext(ctx,
-			record.ModelName, record.InputPrice, record.OutputPrice,
+			record.ModelName, record.Provider, record.InputPrice, record.OutputPrice,
 			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
 			record.DisplayName, record.Description, boolToInt(record.IsDefault),
 		)
@@ -325,11 +357,12 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 
 	query := `
 		INSERT INTO model_pricing (
-			model_name, input_price, output_price,
+			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(model_name) DO UPDATE SET
+			provider = excluded.provider,
 			input_price = excluded.input_price,
 			output_price = excluded.output_price,
 			cache_creation_price_5m = excluded.cache_creation_price_5m,
@@ -348,24 +381,27 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 
 	for _, record := range records {
 		// 设置默认值
+		if record.Provider == "" {
+			record.Provider = "claude"
+		}
 		if record.InputPrice == 0 {
 			record.InputPrice = 3.0
 		}
 		if record.OutputPrice == 0 {
 			record.OutputPrice = 15.0
 		}
-		if record.CacheCreationPrice5m == 0 {
+		if record.CacheCreationPrice5m == 0 && record.Provider == "claude" {
 			record.CacheCreationPrice5m = record.InputPrice * 1.25
 		}
-		if record.CacheCreationPrice1h == 0 {
+		if record.CacheCreationPrice1h == 0 && record.Provider == "claude" {
 			record.CacheCreationPrice1h = record.InputPrice * 2.0
 		}
-		if record.CacheReadPrice == 0 {
+		if record.CacheReadPrice == 0 && record.Provider == "claude" {
 			record.CacheReadPrice = record.InputPrice * 0.1
 		}
 
 		_, err = stmt.ExecContext(ctx,
-			record.ModelName, record.InputPrice, record.OutputPrice,
+			record.ModelName, record.Provider, record.InputPrice, record.OutputPrice,
 			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
 			record.DisplayName, record.Description, boolToInt(record.IsDefault),
 		)
@@ -387,7 +423,7 @@ func (s *SQLiteModelPricingStore) GetDefault(ctx context.Context) (*ModelPricing
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, model_name, input_price, output_price,
+		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
 			created_at, updated_at
@@ -397,7 +433,23 @@ func (s *SQLiteModelPricingStore) GetDefault(ctx context.Context) (*ModelPricing
 	return s.scanModelPricing(s.getQuerier().QueryRowContext(ctx, query))
 }
 
-// SetDefault 设置默认定价（取消其他默认）
+// GetDefaultByProvider 获取指定 provider 的默认定价
+func (s *SQLiteModelPricingStore) GetDefaultByProvider(ctx context.Context, provider string) (*ModelPricingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
+			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			display_name, description, is_default,
+			created_at, updated_at
+		FROM model_pricing WHERE is_default = 1 AND COALESCE(provider, 'claude') = ? LIMIT 1
+	`
+
+	return s.scanModelPricing(s.getQuerier().QueryRowContext(ctx, query, provider))
+}
+
+// SetDefault 设置默认定价（仅取消同一 provider 内的其他默认）
 func (s *SQLiteModelPricingStore) SetDefault(ctx context.Context, modelName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -409,8 +461,18 @@ func (s *SQLiteModelPricingStore) SetDefault(ctx context.Context, modelName stri
 	}
 	defer tx.Rollback()
 
-	// 先清除所有默认标记
-	_, err = tx.ExecContext(ctx, "UPDATE model_pricing SET is_default = 0")
+	// 先查出该模型的 provider，按 provider 隔离默认标记
+	var provider string
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(provider, 'claude') FROM model_pricing WHERE model_name = ?", modelName).Scan(&provider)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("模型定价不存在: %s", modelName)
+		}
+		return fmt.Errorf("查询模型 provider 失败: %w", err)
+	}
+
+	// 只清除同一 provider 的默认标记
+	_, err = tx.ExecContext(ctx, "UPDATE model_pricing SET is_default = 0 WHERE COALESCE(provider, 'claude') = ?", provider)
 	if err != nil {
 		return fmt.Errorf("清除默认标记失败: %w", err)
 	}
@@ -462,12 +524,13 @@ func (s *SQLiteModelPricingStore) WithTx(tx *sql.Tx) ModelPricingStore {
 // scanModelPricing 从单行扫描模型定价记录
 func (s *SQLiteModelPricingStore) scanModelPricing(row *sql.Row) (*ModelPricingRecord, error) {
 	var record ModelPricingRecord
+	var provider string
 	var displayName, description sql.NullString
 	var isDefault int
 	var createdAt, updatedAt string
 
 	err := row.Scan(
-		&record.ID, &record.ModelName,
+		&record.ID, &record.ModelName, &provider,
 		&record.InputPrice, &record.OutputPrice,
 		&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice,
 		&displayName, &description, &isDefault,
@@ -478,6 +541,12 @@ func (s *SQLiteModelPricingStore) scanModelPricing(row *sql.Row) (*ModelPricingR
 			return nil, nil
 		}
 		return nil, fmt.Errorf("扫描模型定价记录失败: %w", err)
+	}
+
+	// 解析 provider
+	record.Provider = provider
+	if record.Provider == "" {
+		record.Provider = "claude"
 	}
 
 	// 解析可空字段
@@ -519,12 +588,13 @@ func (s *SQLiteModelPricingStore) scanModelPricings(ctx context.Context, query s
 	var records []*ModelPricingRecord
 	for rows.Next() {
 		var record ModelPricingRecord
+		var provider string
 		var displayName, description sql.NullString
 		var isDefault int
 		var createdAt, updatedAt string
 
 		err := rows.Scan(
-			&record.ID, &record.ModelName,
+			&record.ID, &record.ModelName, &provider,
 			&record.InputPrice, &record.OutputPrice,
 			&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice,
 			&displayName, &description, &isDefault,
@@ -532,6 +602,12 @@ func (s *SQLiteModelPricingStore) scanModelPricings(ctx context.Context, query s
 		)
 		if err != nil {
 			return nil, fmt.Errorf("扫描模型定价记录失败: %w", err)
+		}
+
+		// 解析 provider
+		record.Provider = provider
+		if record.Provider == "" {
+			record.Provider = "claude"
 		}
 
 		// 解析可空字段

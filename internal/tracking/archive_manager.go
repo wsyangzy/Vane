@@ -59,6 +59,10 @@ type ArchiveManager struct {
 	// 热池引用（用于归档成功后清理）
 	hotPool *HotPool
 
+	// 🔧 [P6 新增] 数据库请求计数器：归档成功后更新内存计数
+	// 用于避免高频 COUNT 查询触发 SQLITE_BUSY，可选注入（nil 时退化为无计数）。
+	dbCounter *DBRequestCounter
+
 	// 🔧 [P1.7 新增] 同步刷新请求通道
 	// Flush() 调用时向此 channel 发送一个回复 channel，
 	// archiver 收到后立即刷新当前批次并通过回复 channel 报告完成
@@ -135,6 +139,12 @@ func (am *ArchiveManager) SetHotPool(hp *HotPool) {
 // SetWriteLocker 设置写锁（用于与其他写路径串行化事务）
 func (am *ArchiveManager) SetWriteLocker(locker sync.Locker) {
 	am.writeLocker = locker
+}
+
+// SetDBCounter 注入数据库请求计数器（用于归档成功后增量维护）
+// 🔧 [P6 新增] 与 SetHotPool 同源，避免在构造函数添加新参数破坏调用方
+func (am *ArchiveManager) SetDBCounter(counter *DBRequestCounter) {
+	am.dbCounter = counter
 }
 
 // UpdateEndpointMultipliers 更新端点成本倍率
@@ -550,14 +560,16 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
 			status, http_status_code, retry_count,
 			failure_reason, cancel_reason,
-			is_streaming,
+			is_streaming, provider,
 			input_tokens, output_tokens,
 			cache_creation_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens,
 			cache_read_tokens,
 			input_cost_usd, output_cost_usd,
 			cache_creation_cost_usd, cache_creation_5m_cost_usd, cache_creation_1h_cost_usd,
-			cache_read_cost_usd, total_cost_usd
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			cache_read_cost_usd, total_cost_usd,
+			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
+			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(request_id) DO UPDATE SET
 			end_time = excluded.end_time,
 			duration_ms = excluded.duration_ms,
@@ -570,6 +582,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			failure_reason = excluded.failure_reason,
 			cancel_reason = excluded.cancel_reason,
 			is_streaming = excluded.is_streaming,
+			provider = excluded.provider,
 			input_tokens = excluded.input_tokens,
 			output_tokens = excluded.output_tokens,
 			cache_creation_tokens = excluded.cache_creation_tokens,
@@ -582,7 +595,13 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cache_creation_5m_cost_usd = excluded.cache_creation_5m_cost_usd,
 			cache_creation_1h_cost_usd = excluded.cache_creation_1h_cost_usd,
 			cache_read_cost_usd = excluded.cache_read_cost_usd,
-			total_cost_usd = excluded.total_cost_usd
+			total_cost_usd = excluded.total_cost_usd,
+			cost_multiplier = excluded.cost_multiplier,
+			input_cost_multiplier = excluded.input_cost_multiplier,
+			output_cost_multiplier = excluded.output_cost_multiplier,
+			cache_creation_cost_multiplier = excluded.cache_creation_cost_multiplier,
+			cache_creation_cost_multiplier_1h = excluded.cache_creation_cost_multiplier_1h,
+			cache_read_cost_multiplier = excluded.cache_read_cost_multiplier
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -624,6 +643,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			nullString(req.FailureReason),
 			nullString(req.CancelReason),
 			req.IsStreaming,
+			defaultProvider(req.Provider),
 			req.InputTokens,
 			req.OutputTokens,
 			req.CacheCreationTokens,
@@ -637,6 +657,13 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			costBreakdown.CacheCreation1hCost, // 1小时缓存成本
 			costBreakdown.CacheReadCost,
 			costBreakdown.TotalCost,
+			// 倍率快照（默认 1.0）
+			defaultMultiplier(req.CostMultiplier),
+			defaultMultiplier(req.InputCostMultiplier),
+			defaultMultiplier(req.OutputCostMultiplier),
+			defaultMultiplier(req.CacheCreationCostMultiplier),
+			defaultMultiplier(req.CacheCreationCostMultiplier1h),
+			defaultMultiplier(req.CacheReadCostMultiplier),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert request %s: %w", req.RequestID, err)
@@ -648,6 +675,20 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 		connEvicted = true
 		_ = evictConn(conn)
 		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// 🔧 [P6 新增] 归档成功后更新内存计数器
+	// 注意：ON CONFLICT DO UPDATE 路径属于罕见场景（HotPool 溢出后又重新归档同 ID），
+	// 这里按"全部为新插入"处理以保持 KISS；少量漂移可在应用重启时自然修复。
+	if am.dbCounter != nil {
+		providers := make([]string, 0, len(events))
+		for _, event := range events {
+			if event == nil || event.Request == nil {
+				continue
+			}
+			providers = append(providers, defaultProvider(event.Request.Provider))
+		}
+		am.dbCounter.IncBatch(providers)
 	}
 
 	return nil
@@ -713,6 +754,22 @@ func nullString(s string) interface{} {
 		return sql.NullString{}
 	}
 	return s
+}
+
+// defaultProvider 返回提供商标识，为空时默认 "claude"。
+func defaultProvider(p string) string {
+	if p == "" {
+		return "claude"
+	}
+	return p
+}
+
+// defaultMultiplier 返回倍率值，<= 0 时回退到 1.0（不影响成本）。
+func defaultMultiplier(v float64) float64 {
+	if v <= 0 {
+		return 1.0
+	}
+	return v
 }
 
 // GetStats 获取统计信息（返回快照，不含锁）

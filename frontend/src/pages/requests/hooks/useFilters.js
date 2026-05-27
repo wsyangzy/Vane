@@ -122,6 +122,9 @@ export const useFilters = (initialFilters = {}) => {
     if (filters.group && filters.group !== 'all') {
       queryParams.group = filters.group;
     }
+    if (filters.provider) {
+      queryParams.provider = filters.provider;
+    }
 
     return queryParams;
   }, [filters]);

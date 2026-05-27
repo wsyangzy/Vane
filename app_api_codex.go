@@ -83,13 +83,19 @@ type CodexChannelInfo struct {
 
 // CodexEndpointInfo 提供给前端展示的端点信息（name + base_url）。
 type CodexEndpointInfo struct {
-	ID        int64  `json:"id"`
-	ChannelID int64  `json:"channel_id"`
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
-	IsActive  bool   `json:"is_active"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID                      int64   `json:"id"`
+	ChannelID               int64   `json:"channel_id"`
+	Name                    string  `json:"name"`
+	BaseURL                 string  `json:"base_url"`
+	IsActive                bool    `json:"is_active"`
+	FailoverEnabled         bool    `json:"failover_enabled"`
+	Priority                int     `json:"priority"`
+	CostMultiplier          float64 `json:"costMultiplier"`
+	InputCostMultiplier     float64 `json:"inputCostMultiplier"`
+	OutputCostMultiplier    float64 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier float64 `json:"cacheReadCostMultiplier"`
+	CreatedAt               string  `json:"created_at"`
+	UpdatedAt               string  `json:"updated_at"`
 }
 
 // CreateCodexChannelInput 创建渠道（不含端点）。
@@ -114,14 +120,26 @@ type UpdateCodexChannelInput struct {
 }
 
 type CreateCodexEndpointInput struct {
-	ChannelID int64  `json:"channel_id"`
-	Name      string `json:"name"`
-	BaseURL   string `json:"base_url"`
+	ChannelID               int64   `json:"channel_id"`
+	Name                    string  `json:"name"`
+	BaseURL                 string  `json:"base_url"`
+	FailoverEnabled         *bool   `json:"failover_enabled"` // nil 时默认 true
+	Priority                int     `json:"priority"`
+	CostMultiplier          float64 `json:"costMultiplier"`          // 默认 1.0
+	InputCostMultiplier     float64 `json:"inputCostMultiplier"`     // 默认 1.0
+	OutputCostMultiplier    float64 `json:"outputCostMultiplier"`    // 默认 1.0
+	CacheReadCostMultiplier float64 `json:"cacheReadCostMultiplier"` // 默认 1.0
 }
 
 type UpdateCodexEndpointInput struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
+	Name                    string   `json:"name"`
+	BaseURL                 string   `json:"base_url"`
+	FailoverEnabled         *bool    `json:"failover_enabled"`
+	Priority                *int     `json:"priority"`
+	CostMultiplier          *float64 `json:"costMultiplier"`
+	InputCostMultiplier     *float64 `json:"inputCostMultiplier"`
+	OutputCostMultiplier    *float64 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier *float64 `json:"cacheReadCostMultiplier"`
 }
 
 // ============================================================================
@@ -418,9 +436,29 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 	defer cancel()
 
 	record := &store.CodexEndpointRecord{
-		ChannelID: input.ChannelID,
-		Name:      input.Name,
-		BaseURL:   input.BaseURL,
+		ChannelID:               input.ChannelID,
+		Name:                    input.Name,
+		BaseURL:                 input.BaseURL,
+		FailoverEnabled:         input.FailoverEnabled == nil || *input.FailoverEnabled,
+		Priority:                input.Priority,
+		CostMultiplier:          input.CostMultiplier,
+		InputCostMultiplier:     input.InputCostMultiplier,
+		OutputCostMultiplier:    input.OutputCostMultiplier,
+		CacheReadCostMultiplier: input.CacheReadCostMultiplier,
+	}
+
+	// 默认值：costMultiplier 为 0 时视为 1.0
+	if record.CostMultiplier == 0 {
+		record.CostMultiplier = 1.0
+	}
+	if record.InputCostMultiplier == 0 {
+		record.InputCostMultiplier = 1.0
+	}
+	if record.OutputCostMultiplier == 0 {
+		record.OutputCostMultiplier = 1.0
+	}
+	if record.CacheReadCostMultiplier == 0 {
+		record.CacheReadCostMultiplier = 1.0
 	}
 
 	created, err := endpointService.CreateEndpoint(ctx, record)
@@ -442,6 +480,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		logger.Info("✅ Codex 端点已创建", "channel_id", input.ChannelID, "base_url", input.BaseURL)
 	}
 	go a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
 }
 
@@ -468,7 +507,32 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
-	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL); err != nil {
+	failoverEnabled := previous.FailoverEnabled
+	if input.FailoverEnabled != nil {
+		failoverEnabled = *input.FailoverEnabled
+	}
+	priority := previous.Priority
+	if input.Priority != nil {
+		priority = *input.Priority
+	}
+	costMultiplier := previous.CostMultiplier
+	if input.CostMultiplier != nil {
+		costMultiplier = *input.CostMultiplier
+	}
+	inputCostMultiplier := previous.InputCostMultiplier
+	if input.InputCostMultiplier != nil {
+		inputCostMultiplier = *input.InputCostMultiplier
+	}
+	outputCostMultiplier := previous.OutputCostMultiplier
+	if input.OutputCostMultiplier != nil {
+		outputCostMultiplier = *input.OutputCostMultiplier
+	}
+	cacheReadCostMultiplier := previous.CacheReadCostMultiplier
+	if input.CacheReadCostMultiplier != nil {
+		cacheReadCostMultiplier = *input.CacheReadCostMultiplier
+	}
+
+	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier); err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
 
@@ -510,6 +574,7 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	}
 
 	go a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
 }
 
@@ -562,6 +627,7 @@ func (a *App) DeleteCodexEndpointByID(id int64) error {
 		logger.Info("✅ Codex 端点已删除", "id", id)
 	}
 	go a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
 }
 
@@ -762,13 +828,19 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 
 	for _, ep := range endpoints {
 		info.Endpoints = append(info.Endpoints, CodexEndpointInfo{
-			ID:        ep.ID,
-			ChannelID: ep.ChannelID,
-			Name:      ep.Name,
-			BaseURL:   ep.BaseURL,
-			IsActive:  ep.IsActive,
-			CreatedAt: formatCodexTime(ep.CreatedAt),
-			UpdatedAt: formatCodexTime(ep.UpdatedAt),
+			ID:                      ep.ID,
+			ChannelID:               ep.ChannelID,
+			Name:                    ep.Name,
+			BaseURL:                 ep.BaseURL,
+			IsActive:                ep.IsActive,
+			FailoverEnabled:         ep.FailoverEnabled,
+			Priority:                ep.Priority,
+			CostMultiplier:          ep.CostMultiplier,
+			InputCostMultiplier:     ep.InputCostMultiplier,
+			OutputCostMultiplier:    ep.OutputCostMultiplier,
+			CacheReadCostMultiplier: ep.CacheReadCostMultiplier,
+			CreatedAt:               formatCodexTime(ep.CreatedAt),
+			UpdatedAt:               formatCodexTime(ep.UpdatedAt),
 		})
 	}
 

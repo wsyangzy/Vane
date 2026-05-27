@@ -72,6 +72,10 @@ export function GetClaudeCodeVersion() {
   return Call.ByName("main.App.GetClaudeCodeVersion");
 }
 
+export function GetCodexVersion() {
+  return Call.ByName("main.App.GetCodexVersion");
+}
+
 export function GetConfig() {
   return Call.ByName("main.App.GetConfig");
 }
@@ -84,16 +88,20 @@ export function GetCodexProviderStorageStatus() {
   return Call.ByName("main.App.GetCodexProviderStorageStatus");
 }
 
-export function GetConnectionActivityChart(arg1) {
-  return Call.ByName("main.App.GetConnectionActivityChart", arg1);
+export function GetConnectionActivityChart(arg1, arg2) {
+  return Call.ByName("main.App.GetConnectionActivityChart", arg1, arg2);
 }
 
-export function GetEndpointCosts() {
-  return Call.ByName("main.App.GetEndpointCosts");
+export function GetEndpointCosts(arg1) {
+  return Call.ByName("main.App.GetEndpointCosts", arg1);
 }
 
 export function GetEndpointHealthChart() {
   return Call.ByName("main.App.GetEndpointHealthChart");
+}
+
+export function GetCodexEndpointHealthChart() {
+  return Call.ByName("main.App.GetCodexEndpointHealthChart");
 }
 
 export function GetEndpointRecord(arg1) {
@@ -148,6 +156,10 @@ export function GetModelPricings() {
   return Call.ByName("main.App.GetModelPricings");
 }
 
+export function GetModelPricingsByProvider(arg1) {
+  return Call.ByName("main.App.GetModelPricingsByProvider", arg1);
+}
+
 export function GetNextAvailableChannel(arg1) {
   return Call.ByName("main.App.GetNextAvailableChannel", arg1);
 }
@@ -168,16 +180,16 @@ export function GetRecentLogs(arg1) {
   return Call.ByName("main.App.GetRecentLogs", arg1);
 }
 
-export function GetRequestTrendChart(arg1) {
-  return Call.ByName("main.App.GetRequestTrendChart", arg1);
+export function GetRequestTrendChart(arg1, arg2) {
+  return Call.ByName("main.App.GetRequestTrendChart", arg1, arg2);
 }
 
 export function GetRequests(arg1) {
   return Call.ByName("main.App.GetRequests", arg1);
 }
 
-export function GetResponseTimeChart(arg1) {
-  return Call.ByName("main.App.GetResponseTimeChart", arg1);
+export function GetResponseTimeChart(arg1, arg2) {
+  return Call.ByName("main.App.GetResponseTimeChart", arg1, arg2);
 }
 
 export function GetSetting(arg1, arg2) {
@@ -208,16 +220,16 @@ export function GetSystemStatus() {
   return Call.ByName("main.App.GetSystemStatus");
 }
 
-export function GetTokenUsage() {
-  return Call.ByName("main.App.GetTokenUsage");
+export function GetTokenUsage(arg1) {
+  return Call.ByName("main.App.GetTokenUsage", arg1);
 }
 
 export function GetUsageStats(arg1) {
   return Call.ByName("main.App.GetUsageStats", arg1);
 }
 
-export function GetUsageSummary(arg1, arg2) {
-  return Call.ByName("main.App.GetUsageSummary", arg1, arg2);
+export function GetUsageSummary(arg1, arg2, arg3) {
+  return Call.ByName("main.App.GetUsageSummary", arg1, arg2, arg3);
 }
 
 export function HideMainWindow() {
@@ -234,6 +246,10 @@ export function IsProxyRunning() {
 
 export function OpenClaudeConfigDir() {
   return Call.ByName("main.App.OpenClaudeConfigDir");
+}
+
+export function OpenCodexConfigDir() {
+  return Call.ByName("main.App.OpenCodexConfigDir");
 }
 
 export function OpenLogDir() {

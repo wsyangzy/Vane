@@ -16,11 +16,14 @@ type LogEntry struct {
 }
 
 // BroadcastHandler 是一个slog.Handler，它会拦截所有日志并广播
-// 1. 写入文件（保持原有逻辑）
-// 2. 写入环形缓冲区（供查询历史）
-// 3. 广播给订阅者（实时推送）
+// 1. 所有日志始终写入主文件（app.log）
+// 2. 按 provider 属性额外写入对应文件（claude.log / codex.log）
+// 3. 写入环形缓冲区（供查询历史）
+// 4. 广播给订阅者（实时推送）
 type BroadcastHandler struct {
-	fileHandler slog.Handler    // 原有的文件Handler
+	fileHandler  slog.Handler   // 默认文件Handler（app.log）
+	claudeHandler slog.Handler  // Claude 代理日志Handler（claude.log）
+	codexHandler  slog.Handler  // Codex 代理日志Handler（codex.log）
 	buffer      *RingBuffer     // 环形缓冲区（最近N条日志）
 	Emitter     *EventEmitter   // 事件发射器（Wails Events）- 导出用于设置
 	minLevel    slog.Level      // 最低日志级别
@@ -28,12 +31,15 @@ type BroadcastHandler struct {
 }
 
 // NewBroadcastHandler 创建一个新的广播Handler
-func NewBroadcastHandler(fileHandler slog.Handler, bufferSize int) *BroadcastHandler {
+// fileHandler 为默认日志文件（app.log），claudeHandler/codexHandler 可为 nil（此时回退到 fileHandler）
+func NewBroadcastHandler(fileHandler slog.Handler, bufferSize int, claudeHandler slog.Handler, codexHandler slog.Handler) *BroadcastHandler {
 	return &BroadcastHandler{
-		fileHandler: fileHandler,
-		buffer:      NewRingBuffer(bufferSize),
-		Emitter:     NewEventEmitter(),
-		minLevel:    slog.LevelDebug, // 默认记录所有级别
+		fileHandler:   fileHandler,
+		claudeHandler: claudeHandler,
+		codexHandler:  codexHandler,
+		buffer:        NewRingBuffer(bufferSize),
+		Emitter:       NewEventEmitter(),
+		minLevel:      slog.LevelDebug, // 默认记录所有级别
 	}
 }
 
@@ -46,23 +52,46 @@ func (h *BroadcastHandler) SetEventEmitter(emitter *EventEmitter) {
 
 // Handle 实现 slog.Handler 接口
 func (h *BroadcastHandler) Handle(ctx context.Context, r slog.Record) error {
-	// 1. 先写入文件（保持原有逻辑）
-	if err := h.fileHandler.Handle(ctx, r); err != nil {
-		return err
+	// 1. 根据 provider 属性路由到对应文件
+	routed := false
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "provider" {
+			switch a.Value.String() {
+			case "claude":
+				if h.claudeHandler != nil {
+					_ = h.claudeHandler.Handle(ctx, r)
+					routed = true
+				}
+			case "codex":
+				if h.codexHandler != nil {
+					_ = h.codexHandler.Handle(ctx, r)
+					routed = true
+				}
+			}
+			return false
+		}
+		return true
+	})
+
+	// 2. 无 provider 属性的系统日志写入主文件（app.log）
+	if !routed {
+		if err := h.fileHandler.Handle(ctx, r); err != nil {
+			return err
+		}
 	}
 
-	// 2. 检查日志级别过滤
+	// 3. 检查日志级别过滤
 	if r.Level < h.minLevel {
 		return nil
 	}
 
-	// 3. 构建 LogEntry
+	// 4. 构建 LogEntry
 	entry := h.buildLogEntry(r)
 
-	// 4. 写入环形缓冲区
+	// 5. 写入环形缓冲区
 	h.buffer.Add(entry)
 
-	// 5. 广播给订阅者（Wails Events）
+	// 6. 广播给订阅者（Wails Events）
 	h.mu.RLock()
 	emitter := h.Emitter
 	h.mu.RUnlock()
@@ -81,22 +110,36 @@ func (h *BroadcastHandler) Enabled(ctx context.Context, level slog.Level) bool {
 
 // WithAttrs 实现 slog.Handler 接口
 func (h *BroadcastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &BroadcastHandler{
+	newHandler := &BroadcastHandler{
 		fileHandler: h.fileHandler.WithAttrs(attrs),
 		buffer:      h.buffer,
 		Emitter:     h.Emitter,
 		minLevel:    h.minLevel,
 	}
+	if h.claudeHandler != nil {
+		newHandler.claudeHandler = h.claudeHandler.WithAttrs(attrs)
+	}
+	if h.codexHandler != nil {
+		newHandler.codexHandler = h.codexHandler.WithAttrs(attrs)
+	}
+	return newHandler
 }
 
 // WithGroup 实现 slog.Handler 接口
 func (h *BroadcastHandler) WithGroup(name string) slog.Handler {
-	return &BroadcastHandler{
+	newHandler := &BroadcastHandler{
 		fileHandler: h.fileHandler.WithGroup(name),
 		buffer:      h.buffer,
 		Emitter:     h.Emitter,
 		minLevel:    h.minLevel,
 	}
+	if h.claudeHandler != nil {
+		newHandler.claudeHandler = h.claudeHandler.WithGroup(name)
+	}
+	if h.codexHandler != nil {
+		newHandler.codexHandler = h.codexHandler.WithGroup(name)
+	}
+	return newHandler
 }
 
 // GetRecentLogs 获取最近的N条日志

@@ -1145,6 +1145,17 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 			"approx_deleted", totalDeleted,
 			"batch_size", batchSize,
 			"cutoff_time", cutoffTime.Format(time.RFC3339))
+
+		// 🔧 [P6 新增] 清理后从 DB 重新同步内存计数器（避免漂移）
+		// 删除批次涉及多 provider 难以精确扣减，且清理频率低（默认每日一次），
+		// 直接重新 Init 是 KISS 的合理选择。
+		if ut.dbCounter != nil && ut.readDB != nil {
+			resyncCtx, resyncCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := ut.dbCounter.Init(resyncCtx, ut.readDB); err != nil {
+				slog.Warn("清理后重新同步内存计数器失败（计数可能存在漂移）", "error", err)
+			}
+			resyncCancel()
+		}
 	}
 
 	// 清理过期的汇总数据（通过写队列，汇总表小得多，单次足够）
@@ -1229,7 +1240,7 @@ func (ut *UsageTracker) updateUsageSummary() {
 	updatedSince := endDate.Add(-30 * time.Minute)
 
 	columns := []string{
-		"date", "model_name", "endpoint_name", "group_name",
+		"date", "model_name", "endpoint_name", "group_name", "provider",
 		"request_count", "success_count", "error_count",
 		"total_input_tokens", "total_output_tokens",
 		"total_cache_creation_tokens", "total_cache_read_tokens",
@@ -1252,6 +1263,7 @@ SELECT
 	COALESCE(model_name, '') as model_name,
 	COALESCE(endpoint_name, '') as endpoint_name,
 	COALESCE(group_name, '') as group_name,
+	COALESCE(provider, 'claude') as provider,
 	COUNT(*) as request_count,
 	SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END) as success_count,
 	SUM(CASE WHEN status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END) as error_count,
@@ -1270,13 +1282,13 @@ WHERE start_time >= ? AND start_time < ?
 		SELECT DISTINCT DATE(start_time) FROM request_logs
 		WHERE updated_at >= ? AND start_time >= ?
 	)
-GROUP BY DATE(start_time), model_name, endpoint_name, group_name
+GROUP BY DATE(start_time), model_name, endpoint_name, group_name, provider
 `, ut.adapter.BuildDateTimeNow(), ut.adapter.BuildDateTimeNow())
 
-	// usage_summary 的唯一约束是 (date, model_name, endpoint_name, group_name)，不能复用 request_id 的 upsert 模板。
+	// usage_summary 的唯一约束是 (date, model_name, endpoint_name, group_name, provider)，不能复用 request_id 的 upsert 模板。
 	query := fmt.Sprintf(`INSERT INTO usage_summary (%s)
 %s
-ON CONFLICT(date, model_name, endpoint_name, group_name) DO UPDATE SET
+ON CONFLICT(date, model_name, endpoint_name, group_name, provider) DO UPDATE SET
 	request_count = EXCLUDED.request_count,
 	success_count = EXCLUDED.success_count,
 	error_count = EXCLUDED.error_count,

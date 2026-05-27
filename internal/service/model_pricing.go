@@ -143,6 +143,18 @@ func (s *ModelPricingService) ListPricings(ctx context.Context) ([]*store.ModelP
 	return records, nil
 }
 
+// ListPricingsByProvider 按 provider 列出模型定价
+func (s *ModelPricingService) ListPricingsByProvider(ctx context.Context, provider string) ([]*store.ModelPricingRecord, error) {
+	if provider == "" {
+		provider = "claude"
+	}
+	records, err := s.store.ListByProvider(ctx, provider)
+	if err != nil {
+		return nil, fmt.Errorf("列出模型定价失败 (provider=%s): %w", provider, err)
+	}
+	return records, nil
+}
+
 // UpdatePricing 更新模型定价
 func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *store.ModelPricingRecord) error {
 	// 验证必填字段

@@ -256,6 +256,18 @@ const renderCell = (columnId, request) => {
       );
     case 'timestamp':
       return <span className="text-xs text-gray-400">{formatTimestamp(request.timestamp)}</span>;
+    case 'provider':
+      const providerValue = request.provider || 'claude';
+      const isCodex = providerValue === 'codex';
+      return (
+        <span className={`inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${
+          isCodex
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+            : 'border-indigo-200 bg-indigo-50 text-indigo-700'
+        }`}>
+          {isCodex ? 'Codex' : 'Claude'}
+        </span>
+      );
     case 'requestType':
       return (
         <span className={`inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${

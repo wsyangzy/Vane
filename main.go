@@ -210,6 +210,14 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 		}
 	})
 
+	// 打开 Codex 配置目录
+	mOpenCodexDir := menu.Add("打开 Codex 配置目录")
+	mOpenCodexDir.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			appInstance.OpenCodexConfigDir()
+		}
+	})
+
 	menu.AddSeparator()
 
 	// 退出
