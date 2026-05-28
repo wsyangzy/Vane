@@ -115,8 +115,11 @@ func (s *SQLiteModelPricingStore) Create(ctx context.Context, record *ModelPrici
 		INSERT INTO model_pricing (
 			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
-			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			display_name, description, is_default,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'),
+			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 	`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
@@ -149,7 +152,8 @@ func (s *SQLiteModelPricingStore) Get(ctx context.Context, modelName string) (*M
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
-			created_at, updated_at
+			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 		FROM model_pricing WHERE model_name = ?
 	`
 
@@ -165,7 +169,8 @@ func (s *SQLiteModelPricingStore) GetByID(ctx context.Context, id int64) (*Model
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
-			created_at, updated_at
+			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 		FROM model_pricing WHERE id = ?
 	`
 
@@ -181,7 +186,8 @@ func (s *SQLiteModelPricingStore) List(ctx context.Context) ([]*ModelPricingReco
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
-			created_at, updated_at
+			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 		FROM model_pricing
 		ORDER BY is_default DESC, model_name ASC
 	`
@@ -198,7 +204,8 @@ func (s *SQLiteModelPricingStore) ListByProvider(ctx context.Context, provider s
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
 			display_name, description, is_default,
-			created_at, updated_at
+			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
+			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 		FROM model_pricing
 		WHERE COALESCE(provider, 'claude') = ?
 		ORDER BY is_default DESC, model_name ASC
@@ -216,7 +223,8 @@ func (s *SQLiteModelPricingStore) Update(ctx context.Context, record *ModelPrici
 		UPDATE model_pricing SET
 			provider = ?, input_price = ?, output_price = ?,
 			cache_creation_price_5m = ?, cache_creation_price_1h = ?, cache_read_price = ?,
-			display_name = ?, description = ?, is_default = ?
+			display_name = ?, description = ?, is_default = ?,
+			updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')
 		WHERE model_name = ?
 	`
 
@@ -291,8 +299,11 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 		INSERT INTO model_pricing (
 			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
-			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			display_name, description, is_default,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'),
+			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 	`
 
 	stmt, err := tx.PrepareContext(ctx, query)

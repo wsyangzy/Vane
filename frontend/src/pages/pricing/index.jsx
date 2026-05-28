@@ -449,7 +449,7 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
 
   return (
     <div className={`
-      bg-white rounded-xl border shadow-sm hover:shadow-md transition-all
+      bg-white rounded-xl border shadow-sm hover:shadow-md transition-all flex flex-col
       ${isDefault
         ? pricing.provider === 'codex'
           ? 'border-blue-300 ring-2 ring-blue-100'
@@ -544,37 +544,41 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
             </div>
           </div>
 
-          {/* 缓存价格 */}
-          <>
-            {/* 缓存创建 5m */}
-            <div className="bg-indigo-50/50 rounded-lg p-3">
-              <div className="text-xs text-slate-500 mb-1">缓存创建 (5m)</div>
-              <div className="text-sm font-semibold text-indigo-600">
-                ${pricing.cacheCreationPrice5m}
-              </div>
-            </div>
-
-            {/* 缓存创建 1h */}
-            <div className="bg-violet-50/50 rounded-lg p-3">
-              <div className="text-xs text-slate-500 mb-1">缓存创建 (1h)</div>
-              <div className="text-sm font-semibold text-violet-600">
-                ${pricing.cacheCreationPrice1h}
-              </div>
-            </div>
-
-            {/* 缓存读取 */}
+          {/* 缓存价格 - 根据 provider 显示不同字段 */}
+          {pricing.provider === 'codex' ? (
             <div className="col-span-2 bg-emerald-50/50 rounded-lg p-3">
-              <div className="text-xs text-slate-500 mb-1">缓存读取</div>
+              <div className="text-xs text-slate-500 mb-1">缓存输入</div>
               <div className="text-sm font-semibold text-emerald-600">
                 ${pricing.cacheReadPrice}
               </div>
             </div>
-          </>
+          ) : (
+            <>
+              <div className="bg-indigo-50/50 rounded-lg p-3">
+                <div className="text-xs text-slate-500 mb-1">缓存创建 (5m)</div>
+                <div className="text-sm font-semibold text-indigo-600">
+                  ${pricing.cacheCreationPrice5m}
+                </div>
+              </div>
+              <div className="bg-violet-50/50 rounded-lg p-3">
+                <div className="text-xs text-slate-500 mb-1">缓存创建 (1h)</div>
+                <div className="text-sm font-semibold text-violet-600">
+                  ${pricing.cacheCreationPrice1h}
+                </div>
+              </div>
+              <div className="col-span-2 bg-emerald-50/50 rounded-lg p-3">
+                <div className="text-xs text-slate-500 mb-1">缓存读取</div>
+                <div className="text-sm font-semibold text-emerald-600">
+                  ${pricing.cacheReadPrice}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
       {/* 底部信息 */}
-      <div className="px-4 py-2 border-t border-slate-50 text-xs text-slate-400">
+      <div className="px-4 py-2 border-t border-slate-50 text-xs text-slate-400 mt-auto">
         更新于 {pricing.updatedAt || '-'}
       </div>
     </div>
