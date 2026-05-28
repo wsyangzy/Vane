@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TestRequestIDLogging 测试完整的requestId日志追踪链路  

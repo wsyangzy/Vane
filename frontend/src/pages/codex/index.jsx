@@ -441,6 +441,12 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
 const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCancel, onSave }) => {
   const [name, setName] = useState(endpoint?.name || '');
   const [baseURL, setBaseURL] = useState(endpoint?.baseURL || '');
+  const [priority, setPriority] = useState(endpoint?.priority ?? 0);
+  const [costMultiplier, setCostMultiplier] = useState(endpoint?.costMultiplier ?? 1.0);
+  const [inputCostMultiplier, setInputCostMultiplier] = useState(endpoint?.inputCostMultiplier ?? 1.0);
+  const [outputCostMultiplier, setOutputCostMultiplier] = useState(endpoint?.outputCostMultiplier ?? 1.0);
+  const [cacheReadCostMultiplier, setCacheReadCostMultiplier] = useState(endpoint?.cacheReadCostMultiplier ?? 1.0);
+  const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
@@ -461,7 +467,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
       setFieldError('base_url 必须以 http:// 或 https:// 开头');
       return;
     }
-    await onSave?.({ name: trimmedName, baseURL: trimmed });
+    await onSave?.({ name: trimmedName, baseURL: trimmed, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier });
   };
 
   const isEdit = mode === 'edit';
@@ -532,6 +538,96 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
               <p className="mt-1 text-xs text-slate-400">
                 切换激活端点时仅 config.toml 中该渠道 section 的 base_url 行会变化。
               </p>
+            </div>
+
+            {/* 故障转移与成本设置 */}
+            <div className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={priority}
+                  onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="0 = 最高优先级"
+                />
+                <p className="mt-1 text-xs text-slate-400">数字越小越优先</p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">总成本倍率</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={costMultiplier}
+                  onChange={(event) => setCostMultiplier(parseFloat(event.target.value) || 0)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="1.0"
+                />
+                <p className="mt-1 text-xs text-slate-400">所有成本完成计算后整体乘数，默认 1.0</p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">细分成本倍率（可选）</label>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">输入</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={inputCostMultiplier}
+                      onChange={(e) => setInputCostMultiplier(parseFloat(e.target.value) || 0)}
+                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">输出</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={outputCostMultiplier}
+                      onChange={(e) => setOutputCostMultiplier(parseFloat(e.target.value) || 0)}
+                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">缓存</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={cacheReadCostMultiplier}
+                      onChange={(e) => setCacheReadCostMultiplier(parseFloat(e.target.value) || 0)}
+                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+                <p className="mt-1 text-xs text-slate-400">应用于各类型 token 成本计算，默认 1.0</p>
+              </div>
+
+              <div
+                onClick={() => setFailoverEnabled(!failoverEnabled)}
+                className={`flex items-center justify-between rounded-xl border p-3 cursor-pointer transition-all duration-200 ${
+                  failoverEnabled
+                    ? 'bg-indigo-50 border-indigo-200'
+                    : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <span className={`text-sm font-medium ${failoverEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
+                  参与故障转移
+                </span>
+                <div className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
+                  failoverEnabled ? 'bg-indigo-500' : 'bg-slate-300'
+                }`}>
+                  <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                    failoverEnabled ? 'translate-x-5' : 'translate-x-0'
+                  }`} />
+                </div>
+              </div>
             </div>
           </div>
 
@@ -610,12 +706,15 @@ const EndpointRow = ({
   onActivate,
   onEdit,
   onDelete,
+  onToggleFailover,
   actionLoading
 }) => {
   const isActivating = actionLoading === `activate-endpoint-${endpoint.id}`;
   const isDeleting = actionLoading === `delete-endpoint-${endpoint.id}`;
   const summary = summarizeEndpoint(endpoint.baseURL);
   const displayName = endpoint.name || '未命名端点';
+  const failoverEnabled = endpoint.failoverEnabled !== false;
+  const priority = endpoint.priority || 0;
 
   const handleToggleActivate = (event) => {
     event.stopPropagation();
@@ -632,6 +731,11 @@ const EndpointRow = ({
     event.stopPropagation();
     if (isDeleting) return;
     onDelete?.(endpoint);
+  };
+
+  const handleFailoverToggle = (event) => {
+    event.stopPropagation();
+    onToggleFailover?.(endpoint, !failoverEnabled);
   };
 
   return (
@@ -664,6 +768,14 @@ const EndpointRow = ({
           </div>
         </div>
 
+        {/* 优先级标签 */}
+        <span
+          className="flex-shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"
+          title={`优先级 ${priority}（越小越优先）`}
+        >
+          P{priority}
+        </span>
+
         {/* 端点摘要：name 在前，URL 在后 */}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -689,8 +801,20 @@ const EndpointRow = ({
           </div>
         </div>
 
-        {/* 操作按钮（hover 浮现） */}
-        <div className="flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-within:opacity-100">
+        {/* 操作按钮（常驻显示） */}
+        <div className="flex flex-shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={handleFailoverToggle}
+            className={`rounded-md p-1 transition-colors duration-150 ${
+              failoverEnabled
+                ? 'text-indigo-600 hover:bg-indigo-50'
+                : 'text-slate-400 hover:bg-slate-100'
+            }`}
+            title={failoverEnabled ? '点击：不参与故障转移' : '点击：参与故障转移'}
+          >
+            <ArrowRightLeft size={12} />
+          </button>
           <button
             type="button"
             onClick={handleEdit}
@@ -725,6 +849,7 @@ const ChannelCard = ({
   onDeleteChannel,
   onAddEndpoint,
   onActivateEndpoint,
+  onToggleEndpointFailover,
   onEditEndpoint,
   onDeleteEndpoint
 }) => {
@@ -887,6 +1012,7 @@ const ChannelCard = ({
                 key={endpoint.id}
                 endpoint={endpoint}
                 onActivate={onActivateEndpoint}
+                onToggleFailover={onToggleEndpointFailover}
                 onEdit={onEditEndpoint}
                 onDelete={(ep) => onDeleteEndpoint?.(ep, channel)}
                 actionLoading={actionLoading}
@@ -1094,13 +1220,22 @@ const CodexPage = () => {
     setEndpointFormError('');
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier }) => {
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
       setEndpointFormError('');
       try {
-        await updateCodexEndpointByID(editingEndpoint.id, { name, baseURL });
+        await updateCodexEndpointByID(editingEndpoint.id, {
+          name,
+          baseURL,
+          failoverEnabled,
+          priority,
+          costMultiplier,
+          inputCostMultiplier,
+          outputCostMultiplier,
+          cacheReadCostMultiplier
+        });
         await fetchData({ silent: true });
         closeEndpointForm();
       } catch (err) {
@@ -1118,7 +1253,13 @@ const CodexPage = () => {
       await createCodexEndpoint({
         channelId: endpointFormChannel.id,
         name,
-        baseURL
+        baseURL,
+        failoverEnabled,
+        priority,
+        costMultiplier,
+        inputCostMultiplier,
+        outputCostMultiplier,
+        cacheReadCostMultiplier
       });
       await fetchData({ silent: true });
       closeEndpointForm();
@@ -1139,6 +1280,20 @@ const CodexPage = () => {
       setError(getErrorMessage(err, '激活端点失败'));
     } finally {
       setActionLoading('');
+    }
+  };
+
+  const handleToggleEndpointFailover = async (endpoint, enabled) => {
+    try {
+      await updateCodexEndpointByID(endpoint.id, {
+        name: endpoint.name,
+        baseURL: endpoint.baseURL,
+        failoverEnabled: enabled,
+        priority: endpoint.priority
+      });
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(getErrorMessage(err, '切换故障转移失败'));
     }
   };
 
@@ -1241,6 +1396,7 @@ const CodexPage = () => {
               onDeleteChannel={(c) => setDeleteChannelTarget(c)}
               onAddEndpoint={openCreateEndpointForm}
               onActivateEndpoint={handleActivateEndpoint}
+              onToggleEndpointFailover={handleToggleEndpointFailover}
               onEditEndpoint={openEditEndpointForm}
               onDeleteEndpoint={(endpoint, channelOwner) =>
                 setDeleteEndpointTarget({ endpoint, channelOwner })

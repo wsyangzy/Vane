@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // 冷却机制已移除，TestEmergencyActivationCooldownScenarios 测试已删除

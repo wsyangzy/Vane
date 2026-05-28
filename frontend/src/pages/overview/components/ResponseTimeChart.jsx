@@ -50,6 +50,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
+  const provider = ''
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -72,7 +73,7 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
       setIsRefreshing(true);
     }
     try {
-      const data = await fetchResponseTimeData(timeRange);
+      const data = await fetchResponseTimeData(timeRange, provider);
       setChartData(
         padTimeSeries(data, {
           minutes: timeRange,
@@ -86,7 +87,7 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [timeRange]);
+  }, [timeRange, provider]);
 
   // 初始加载
   useEffect(() => {

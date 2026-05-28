@@ -1,6 +1,6 @@
 //go:build desktop
 
-// main.go - Claude Request Forwarder Wails v3 应用入口
+// main.go - AI Relay Forwarder Wails v3 应用入口
 // 使用 Wails v3 原生系统托盘支持
 //
 // 注意：全局变量（Version, assets, setupLogger 等）定义在 globals.go 中
@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"ai-relay-forwarder/internal/utils"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -31,9 +33,13 @@ var startTime = time.Now()
 func main() {
 	flag.Parse()
 
+	// 数据目录迁移（v7.3 品牌升级）
+	migrated, migrateErr := utils.MigrateLegacyAppDir()
+	utils.LogMigrationResult(migrated, migrateErr)
+
 	// 处理版本标志
 	if *showVersion {
-		fmt.Printf("Claude Request Forwarder\n")
+		fmt.Printf("AI Relay Forwarder\n")
 		fmt.Printf("Version: %s\n", Version)
 		fmt.Printf("Commit: %s\n", Commit)
 		fmt.Printf("Built: %s\n", BuildTime)
@@ -45,15 +51,15 @@ func main() {
 	appInstance.configPath = *configPath
 
 	// 单实例锁标识：dev 和 release 使用不同的 UniqueID，允许两个版本同时运行
-	singleInstanceID := "claude-request-forwarder-desktop"
+	singleInstanceID := "ai-relay-forwarder-desktop"
 	if BuildMode == "dev" {
-		singleInstanceID = "claude-request-forwarder-desktop-dev"
+		singleInstanceID = "ai-relay-forwarder-desktop-dev"
 	}
 
 	// 创建 Wails v3 应用
 	wailsApp := application.New(application.Options{
-		Name:        "Claude Request Forwarder",
-		Description: "Claude API 请求转发服务",
+		Name:        "AI Relay Forwarder",
+		Description: "AI 多模型中继转发服务",
 		Icon:        icon, // 设置应用图标
 		Services: []application.Service{
 			application.NewService(appInstance),
@@ -95,9 +101,9 @@ func main() {
 	})
 
 	// 窗口标题：dev 模式添加标识
-	windowTitle := "Claude Request Forwarder"
+	windowTitle := "AI Relay Forwarder"
 	if BuildMode == "dev" {
-		windowTitle = "Claude Request Forwarder (Dev)"
+		windowTitle = "AI Relay Forwarder (Dev)"
 	}
 
 	// 创建主窗口
@@ -168,7 +174,7 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 	if BuildMode == "dev" {
 		versionDisplay = Version + "-dev"
 	}
-	systray.SetTooltip(fmt.Sprintf("Claude Request Forwarder %s", versionDisplay))
+	systray.SetTooltip(fmt.Sprintf("AI Relay Forwarder %s", versionDisplay))
 
 	// 创建托盘菜单
 	menu := app.Menu.New()
@@ -207,6 +213,14 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 	mOpenClaudeDir.OnClick(func(ctx *application.Context) {
 		if appInstance != nil {
 			appInstance.OpenClaudeConfigDir()
+		}
+	})
+
+	// 打开 Codex 配置目录
+	mOpenCodexDir := menu.Add("打开 Codex 配置目录")
+	mOpenCodexDir.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			appInstance.OpenCodexConfigDir()
 		}
 	})
 

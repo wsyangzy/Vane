@@ -21,17 +21,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/events"
-	"claude-request-forwarder/internal/logging"
-	"claude-request-forwarder/internal/middleware"
-	"claude-request-forwarder/internal/proxy"
-	"claude-request-forwarder/internal/service"
-	"claude-request-forwarder/internal/store"
-	"claude-request-forwarder/internal/tracking"
-	"claude-request-forwarder/internal/transport"
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/codexproxy"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/logging"
+	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/service"
+	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/transport"
+	"ai-relay-forwarder/internal/utils"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -85,6 +86,10 @@ type App struct {
 
 	// HTTP 代理服务器 (保留，监听配置的端口)
 	proxyServer *http.Server
+
+	// Codex 代理组件（合并到主代理端口，通过路径路由）
+	codexEndpointMgr *codexproxy.EndpointManager
+	codexHealthCheck *codexproxy.HealthChecker
 
 	// 应用状态
 	startTime  time.Time
@@ -195,7 +200,7 @@ func (a *App) startup() {
 	a.setupLogger()
 
 	// 3. 显示启动信息
-	a.logger.Info("🚀 Claude Request Forwarder 桌面版启动中...",
+	a.logger.Info("🚀 AI Relay Forwarder 桌面版启动中...",
 		"version", Version,
 		"config_file", a.configPath)
 
@@ -262,6 +267,9 @@ func (a *App) startup() {
 	// 9. 初始化代理处理器
 	a.setupProxyHandler()
 
+	// 9.5 初始化 Codex 代理组件（如果配置启用）— 须在 startProxyServer 前完成，以便注册路由
+	a.initCodexProxy()
+
 	// 10. 启动 HTTP 代理服务器
 	proxyStarted := a.startProxyServer()
 
@@ -272,7 +280,7 @@ func (a *App) startup() {
 		a.setAppState(AppStateFailed, "代理服务器未启动（端口冲突或绑定失败）")
 		// Failed 状态：不启动后台空耗任务，仅保留 UI 让用户重试
 		a.isRunning = false
-		a.logger.Error("❌ Claude Request Forwarder 启动未完成：代理服务器未启动",
+		a.logger.Error("❌ AI Relay Forwarder 启动未完成：代理服务器未启动",
 			"configured_port", a.config.Server.Port,
 			"hint", "请在前端检查端口冲突诊断信息，修改端口后重启")
 		return
@@ -296,7 +304,7 @@ func (a *App) startup() {
 	a.startHistoryCollector()
 
 	a.isRunning = proxyStarted
-	a.logger.Info("✅ Claude Request Forwarder 启动完成",
+	a.logger.Info("✅ AI Relay Forwarder 启动完成",
 		"proxy_port", a.config.Server.Port,
 		"app_state", AppState(a.appState.Load()).String())
 }
@@ -319,7 +327,7 @@ func (a *App) shutdown() {
 	close(a.stopChan)
 
 	if logger != nil {
-		logger.Info("🛑 正在关闭 Claude Request Forwarder...")
+		logger.Info("🛑 正在关闭 AI Relay Forwarder...")
 	}
 
 	// 1. 停止接收新请求
@@ -333,6 +341,9 @@ func (a *App) shutdown() {
 			}
 		}
 	}
+
+	// 1.1 停止 Codex 健康检查
+	a.stopCodexProxy()
 
 	// 2. 关闭使用追踪 (flush 数据库)
 	if usageTracker != nil {
@@ -395,7 +406,7 @@ func (a *App) shutdown() {
 	a.mu.Unlock()
 
 	if logger != nil {
-		logger.Info("✅ Claude Request Forwarder 已关闭")
+		logger.Info("✅ AI Relay Forwarder 已关闭")
 	}
 }
 
@@ -531,6 +542,48 @@ func (a *App) OpenClaudeConfigDir() {
 	}
 }
 
+// OpenCodexConfigDir 打开 Codex 配置目录
+// Codex 配置目录通常位于用户主目录下的 .codex 文件夹（或 CODEX_HOME 环境变量指定）
+func (a *App) OpenCodexConfigDir() {
+	codexHome, err := a.getCodexHomeDir()
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("获取 Codex 配置目录失败", "error", err)
+		}
+		return
+	}
+
+	// 检查目录是否存在
+	if _, err := os.Stat(codexHome); os.IsNotExist(err) {
+		if a.logger != nil {
+			a.logger.Warn("Codex 配置目录不存在", "path", codexHome)
+		}
+		// 仍然尝试打开，让文件管理器显示错误
+	}
+
+	// 跨平台打开目录
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", codexHome)
+	case "darwin":
+		cmd = exec.Command("open", codexHome)
+	case "linux":
+		cmd = exec.Command("xdg-open", codexHome)
+	default:
+		if a.logger != nil {
+			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
+		}
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		if a.logger != nil {
+			a.logger.Warn("打开 Codex 配置目录失败", "error", err, "path", codexHome)
+		}
+	}
+}
+
 // GetProxyAddress 获取当前代理地址（托盘菜单"复制代理地址"使用）
 func (a *App) GetProxyAddress() string {
 	host := "127.0.0.1"
@@ -567,7 +620,7 @@ func (a *App) loadConfig() {
 	tempLogger.Info("📝 从嵌入配置加载")
 
 	// 将嵌入的配置写入临时文件进行解析
-	tmpConfigPath := filepath.Join(os.TempDir(), "claude-request-forwarder-config.yaml")
+	tmpConfigPath := filepath.Join(os.TempDir(), "ai-relay-forwarder-config.yaml")
 
 	// 先修改配置内容，替换路径为用户目录
 	configContent := string(defaultConfigContent)
@@ -941,6 +994,40 @@ func (a *App) initDefaultModelPricing(ctx context.Context) {
 			CacheCreationPrice1h: 0.50,  // 0.25 * 2.0
 			CacheReadPrice:       0.025, // 0.25 * 0.1
 		},
+		// ========== Codex 模型定价（OpenAI 格式，无 cache 概念）==========
+		{
+			ModelName:   "o3",
+			DisplayName: "O3",
+			Provider:    "codex",
+			InputPrice:  2.0,
+			OutputPrice: 8.0,
+			Description: "O3 标准模型",
+		},
+		{
+			ModelName:   "o4-mini",
+			DisplayName: "O4 Mini",
+			Provider:    "codex",
+			InputPrice:  1.10,
+			OutputPrice: 4.40,
+			Description: "O4 Mini 轻量模型",
+		},
+		{
+			ModelName:   "codex-mini-latest",
+			DisplayName: "Codex Mini Latest",
+			Provider:    "codex",
+			InputPrice:  1.50,
+			OutputPrice: 6.0,
+			Description: "Codex Mini 最新版本",
+		},
+		{
+			ModelName:   "_codex_default",
+			DisplayName: "Codex 默认定价",
+			Provider:    "codex",
+			InputPrice:  2.0,
+			OutputPrice: 8.0,
+			IsDefault:   true,
+			Description: "Codex 默认定价方案",
+		},
 	}
 
 	if err := a.modelPricingStore.BatchUpsert(ctx, defaultPricings); err != nil {
@@ -975,29 +1062,61 @@ func (a *App) syncPricingToTracker(ctx context.Context) {
 }
 
 // syncEndpointMultipliersToTracker 同步端点倍率到 UsageTracker
-// 成本计算公式：模型基础定价 * 端点倍率
+// 成本计算公式：模型基础定价 * 细分倍率 * 总倍率
+// 同时同步 Claude 端点（endpoints 表）与 Codex 端点（codex_endpoints + codex_channels）
 func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
-	if a.usageTracker == nil || a.endpointStore == nil {
+	if a.usageTracker == nil {
 		return
 	}
 
-	endpoints, err := a.endpointStore.List(ctx)
-	if err != nil {
-		a.logger.Warn("⚠️ 获取端点列表失败", "error", err)
-		return
-	}
-
-	// 转换为 tracking.EndpointMultiplier 格式
 	multipliers := make(map[string]tracking.EndpointMultiplier)
-	for _, ep := range endpoints {
-		key := tracking.EndpointMultiplierKey(ep.Channel, ep.Name)
-		multipliers[key] = tracking.EndpointMultiplier{
-			CostMultiplier:                ep.CostMultiplier,
-			InputCostMultiplier:           ep.InputCostMultiplier,
-			OutputCostMultiplier:          ep.OutputCostMultiplier,
-			CacheCreationCostMultiplier:   ep.CacheCreationCostMultiplier,
-			CacheCreationCostMultiplier1h: ep.CacheCreationCostMultiplier1h,
-			CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
+
+	// 1. Claude 端点倍率
+	if a.endpointStore != nil {
+		endpoints, err := a.endpointStore.List(ctx)
+		if err != nil {
+			a.logger.Warn("⚠️ 获取端点列表失败", "error", err)
+		} else {
+			for _, ep := range endpoints {
+				key := tracking.EndpointMultiplierKey(ep.Channel, ep.Name)
+				multipliers[key] = tracking.EndpointMultiplier{
+					CostMultiplier:                ep.CostMultiplier,
+					InputCostMultiplier:           ep.InputCostMultiplier,
+					OutputCostMultiplier:          ep.OutputCostMultiplier,
+					CacheCreationCostMultiplier:   ep.CacheCreationCostMultiplier,
+					CacheCreationCostMultiplier1h: ep.CacheCreationCostMultiplier1h,
+					CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
+				}
+			}
+		}
+	}
+
+	// 2. Codex 端点倍率（每个端点的 key = channel.name::endpoint.name）
+	if a.codexChannelStore != nil && a.codexEndpointStore != nil {
+		channels, err := a.codexChannelStore.List(ctx)
+		if err != nil {
+			a.logger.Warn("⚠️ 获取 Codex 渠道列表失败", "error", err)
+		} else {
+			for _, ch := range channels {
+				codexEndpoints, err := a.codexEndpointStore.ListByChannelID(ctx, ch.ID)
+				if err != nil {
+					a.logger.Warn("⚠️ 获取 Codex 端点列表失败", "channel", ch.Name, "error", err)
+					continue
+				}
+				for _, ep := range codexEndpoints {
+					key := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
+					// Codex 端点目前没有 5m/1h 拆分倍率，统一应用 CacheReadCostMultiplier；
+					// 缓存创建倍率默认 1.0（不影响计算）
+					multipliers[key] = tracking.EndpointMultiplier{
+						CostMultiplier:                ep.CostMultiplier,
+						InputCostMultiplier:           ep.InputCostMultiplier,
+						OutputCostMultiplier:          ep.OutputCostMultiplier,
+						CacheCreationCostMultiplier:   1.0,
+						CacheCreationCostMultiplier1h: 1.0,
+						CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
+					}
+				}
+			}
 		}
 	}
 
@@ -1108,7 +1227,7 @@ func (a *App) setupStoreDB() {
 		if isLikelySQLiteBusyOrLocked(err) || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded") {
 			dbReady = false
 			a.logger.Warn("⚠️ 管理数据库连接暂不可用（可能被占用/初始化耗时较长），将继续启动并允许稍后重试", "error", err)
-			a.emitNotification("warning", "数据库暂不可用", "检测到数据库可能被占用或初始化耗时较长；管理功能（设置/渠道/定价）可能暂不可用。请确保只运行一个 Claude Request Forwarder 实例，稍等后点击刷新，必要时重启。")
+			a.emitNotification("warning", "数据库暂不可用", "检测到数据库可能被占用或初始化耗时较长；管理功能（设置/渠道/定价）可能暂不可用。请确保只运行一个 AI Relay Forwarder 实例，稍等后点击刷新，必要时重启。")
 		} else {
 			_ = db.Close()
 			a.logger.Warn("⚠️ 管理数据库连接不可用", "error", err)
@@ -1481,8 +1600,8 @@ func (a *App) setupProxyHandler() {
 	a.proxyHandler = proxy.NewHandler(a.endpointManager, a.config)
 	a.proxyHandler.SetEventBus(a.eventBus)
 
-	// 创建中间件
-	a.loggingMiddleware = middleware.NewLoggingMiddleware(a.logger)
+	// 创建中间件（Claude 代理日志附加 provider=claude，用于文件分流）
+	a.loggingMiddleware = middleware.NewLoggingMiddleware(a.logger.With("provider", "claude"))
 	a.monitoringMiddleware = middleware.NewMonitoringMiddleware(a.endpointManager)
 	a.authMiddleware = middleware.NewAuthMiddleware(a.config.Auth)
 
@@ -1525,7 +1644,10 @@ func (a *App) startProxyServer() bool {
 		})
 	}
 
-	// 注册代理处理器
+	// 注册 Codex 代理路由（路径精确匹配，优先于 Claude catch-all）
+	a.registerCodexRoutes(mux)
+
+	// 注册代理处理器（Claude catch-all）
 	mux.Handle("/", a.loggingMiddleware.Wrap(a.authMiddleware.Wrap(a.proxyHandler)))
 
 	// 端口绑定逻辑
@@ -1629,7 +1751,10 @@ func (a *App) startProxyServerWithListener(listener net.Listener, actualPort int
 		})
 	}
 
-	// 注册代理处理器
+	// 注册 Codex 代理路由（路径精确匹配，优先于 Claude catch-all）
+	a.registerCodexRoutes(mux)
+
+	// 注册代理处理器（Claude catch-all）
 	mux.Handle("/", a.loggingMiddleware.Wrap(a.authMiddleware.Wrap(a.proxyHandler)))
 
 	a.proxyServer = &http.Server{
@@ -1666,6 +1791,116 @@ func (a *App) startProxyServerWithListener(listener net.Listener, actualPort int
 			a.logger.Warn("⚠️  安全警告：服务器绑定到非本地地址但未启用鉴权！")
 		}
 	}
+}
+
+// initCodexProxy 初始化 Codex 代理组件（EndpointManager + HealthChecker）。
+// 不再启动独立 HTTP server，路由注册由 startProxyServer 中的 registerCodexRoutes 完成。
+func (a *App) initCodexProxy() {
+	if !a.config.CodexServer.Enabled {
+		// 即使 codex_enabled 未显式开启，如果存在活跃 Codex 渠道也自动启用代理路由
+		// 这避免了用户配置了 Codex 渠道但忘记开启 codex_enabled 导致路由不生效的问题
+		if a.codexChannelStore != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			active, err := a.codexChannelStore.GetActive(ctx)
+			cancel()
+			if err == nil && active != nil {
+				a.config.CodexServer.Enabled = true
+				a.logger.Info("检测到活跃 Codex 渠道，自动启用 Codex 代理路由", "channel", active.Name)
+			} else {
+				a.logger.Debug("Codex 代理未启用，跳过")
+				return
+			}
+		} else {
+			a.logger.Debug("Codex 代理未启用，跳过")
+			return
+		}
+	}
+
+	// 检查依赖
+	if a.codexChannelStore == nil || a.codexEndpointStore == nil {
+		a.logger.Warn("Codex 代理初始化跳过：渠道/端点存储未就绪")
+		return
+	}
+
+	// 创建 EndpointManager
+	mgr := codexproxy.NewEndpointManager(a.codexChannelStore, a.codexEndpointStore, a.logger)
+	if err := mgr.Reload(); err != nil {
+		a.logger.Error("Codex 端点管理器加载失败", "error", err)
+		return
+	}
+	// 注册活跃端点变更回调：故障转移成功提升端点后，刷新前端 UI
+	mgr.SetOnActiveChanged(func() {
+		a.emitCodexProviderUpdate()
+	})
+	a.codexEndpointMgr = mgr
+
+	// 创建 HealthChecker
+	hc := codexproxy.NewHealthChecker(mgr, 30*time.Second, 5*time.Second, a.logger)
+	hc.Start()
+	a.codexHealthCheck = hc
+
+	a.logger.Info("✅ Codex 代理组件初始化完成（路由将注册到主代理端口）")
+}
+
+// registerCodexRoutes 将 Codex handler 注册到主 mux 的特定路径上。
+// 路由规则：/v1/chat/completions, /v1/completions, /v1/models, /v1/embeddings → Codex handler
+// 其他路径 → Claude handler（catch-all）
+func (a *App) registerCodexRoutes(mux *http.ServeMux) {
+	if !a.config.CodexServer.Enabled || a.codexEndpointMgr == nil {
+		return
+	}
+
+	cfg := codexproxy.ServerConfig{
+		Timeout: a.config.CodexServer.Timeout,
+	}
+	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker)
+
+	// 公用 Claude 代理的鉴权中间件 + 日志中间件
+	var handler http.Handler = baseHandler
+	if a.authMiddleware != nil {
+		handler = a.authMiddleware.Wrap(baseHandler)
+	}
+	if a.loggingMiddleware != nil {
+		handler = a.loggingMiddleware.Wrap(handler)
+	}
+
+	// 注册 Codex 路径
+	// 同时注册精确路径和子树路径（带尾斜杠），以匹配子路径请求（如 /v1/responses/{id}）。
+	// 同时注册不带 /v1 前缀的路径，因为 Codex CLI 的 base_url 可能不含 /v1。
+	codexBasePaths := []string{
+		"/v1/chat/completions",
+		"/v1/completions",
+		"/v1/models",
+		"/v1/embeddings",
+		"/v1/responses",
+		"/responses",
+		"/chat/completions",
+		"/completions",
+		"/models",
+		"/embeddings",
+	}
+	var registeredPaths []string
+	for _, path := range codexBasePaths {
+		mux.Handle(path, handler)
+		registeredPaths = append(registeredPaths, path)
+		// 注册子树路径（带尾斜杠）以匹配子路径请求
+		subtree := path + "/"
+		mux.Handle(subtree, handler)
+		registeredPaths = append(registeredPaths, subtree)
+	}
+
+	a.logger.Info("✅ Codex 代理路由已注册到主端口",
+		"paths", registeredPaths,
+	)
+}
+
+// stopCodexProxy 停止 Codex 代理组件（HealthChecker）
+func (a *App) stopCodexProxy() {
+	if a.codexHealthCheck != nil {
+		a.codexHealthCheck.Stop()
+		a.codexHealthCheck = nil
+	}
+	a.codexEndpointMgr = nil
 }
 
 // setupConfigReload 设置配置热重载
@@ -2042,6 +2277,12 @@ func (a *App) applySettingsToConfig() {
 	// 🔧 [P5.5.4 新增] Timezone 时区配置（从 SQLite 同步）
 	// 注意：时区变更标记为 RequiresRestart=true，运行时变更只影响后续新生成的时间戳
 	a.config.Timezone = a.getSettingString(ctx, service.CategoryTimezone, "global", a.config.Timezone)
+
+	// Codex 代理配置（从 SQLite 同步，统一在 server 分类下）
+	// 注意：enabled 标记为 RequiresRestart=true，运行时变更需重启生效
+	// v7.2+ Codex 合并到主代理端口，不再有独立 host/port
+	a.config.CodexServer.Enabled = a.settingsService.GetBool(ctx, service.CategoryServer, "codex_enabled", a.config.CodexServer.Enabled)
+	a.config.CodexServer.Timeout = a.config.GlobalTimeout
 
 	a.logger.Debug("已从数据库加载设置")
 

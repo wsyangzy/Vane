@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 	"golang.org/x/net/proxy"
 )
 

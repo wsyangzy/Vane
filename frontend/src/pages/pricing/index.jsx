@@ -43,6 +43,7 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
     modelName: pricing?.modelName || '',
     displayName: pricing?.displayName || '',
     description: pricing?.description || '',
+    provider: pricing?.provider || 'claude',
     inputPrice: pricing?.inputPrice || 3.0,
     outputPrice: pricing?.outputPrice || 15.0,
     cacheCreationPrice5m: pricing?.cacheCreationPrice5m || 3.75,
@@ -92,9 +93,9 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
     const input = parseFloat(formData.inputPrice) || 0;
     setFormData(prev => ({
       ...prev,
-      cacheCreationPrice5m: parseFloat((input * 1.25).toFixed(2)),
-      cacheCreationPrice1h: parseFloat((input * 2.0).toFixed(2)),
-      cacheReadPrice: parseFloat((input * 0.1).toFixed(2))
+      cacheCreationPrice5m: parseFloat((input * 1.25).toFixed(3)),
+      cacheCreationPrice1h: parseFloat((input * 2.0).toFixed(3)),
+      cacheReadPrice: parseFloat((input * 0.1).toFixed(3))
     }));
   };
 
@@ -104,16 +105,53 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
         <form onSubmit={handleSubmit}>
           {/* 头部 */}
           <div className="px-6 py-4 border-b border-slate-100">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-indigo-100 rounded-lg">
-                <DollarSign className="text-indigo-600" size={20} />
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-100 rounded-lg">
+                  <DollarSign className="text-indigo-600" size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900">
+                    {isEdit ? '编辑模型定价' : '添加模型定价'}
+                  </h3>
+                  <p className="text-sm text-slate-500">USD per 1M tokens</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-lg font-semibold text-slate-900">
-                  {isEdit ? '编辑模型定价' : '添加模型定价'}
-                </h3>
-                <p className="text-sm text-slate-500">USD per 1M tokens</p>
-              </div>
+              {/* 提供商切换 */}
+              {isEdit ? (
+                <span className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium ${
+                  formData.provider === 'codex'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                }`}>
+                  {formData.provider === 'codex' ? 'Codex' : 'Claude'}
+                </span>
+              ) : (
+                <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handleChange('provider', 'claude')}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      formData.provider === 'claude'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    Claude
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleChange('provider', 'codex')}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      formData.provider === 'codex'
+                        ? 'bg-white text-emerald-700 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    Codex
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -171,14 +209,16 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
             <div className="bg-slate-50 rounded-xl p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <h4 className="text-sm font-semibold text-slate-700">价格设置</h4>
-                <button
-                  type="button"
-                  onClick={suggestCachePrices}
-                  className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
-                >
-                  <Sparkles size={12} />
-                  自动计算缓存价格
-                </button>
+                {formData.provider === 'claude' && (
+                  <button
+                    type="button"
+                    onClick={suggestCachePrices}
+                    className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+                  >
+                    <Sparkles size={12} />
+                    自动计算缓存价格
+                  </button>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -191,7 +231,7 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
                     <input
                       type="number"
-                      step="0.01"
+                      step="0.001"
                       min="0"
                       value={formData.inputPrice}
                       onChange={(e) => handleChange('inputPrice', parseFloat(e.target.value) || 0)}
@@ -211,7 +251,7 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
                     <input
                       type="number"
-                      step="0.01"
+                      step="0.001"
                       min="0"
                       value={formData.outputPrice}
                       onChange={(e) => handleChange('outputPrice', parseFloat(e.target.value) || 0)}
@@ -222,79 +262,114 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
                   </div>
                 </div>
 
-                {/* 5分钟缓存创建价格 */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    缓存创建 (5m)
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={formData.cacheCreationPrice5m}
-                      onChange={(e) => handleChange('cacheCreationPrice5m', parseFloat(e.target.value) || 0)}
-                      className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
+                {/* 缓存价格 - 根据 provider 显示不同字段 */}
+                {formData.provider === 'codex' ? (
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-slate-600 mb-1">
+                      缓存输入价格
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                      <input
+                        type="number"
+                        step="0.001"
+                        min="0"
+                        value={formData.cacheReadPrice}
+                        onChange={(e) => handleChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
+                        className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-400">OpenAI cached input pricing</span>
                   </div>
-                  <span className="text-[10px] text-slate-400">input × 1.25</span>
-                </div>
+                ) : (
+                  <>
+                    {/* 5分钟缓存创建价格 */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        缓存创建 (5m)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          value={formData.cacheCreationPrice5m}
+                          onChange={(e) => handleChange('cacheCreationPrice5m', parseFloat(e.target.value) || 0)}
+                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-400">input x 1.25</span>
+                    </div>
 
-                {/* 1小时缓存创建价格 */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    缓存创建 (1h)
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={formData.cacheCreationPrice1h}
-                      onChange={(e) => handleChange('cacheCreationPrice1h', parseFloat(e.target.value) || 0)}
-                      className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <span className="text-[10px] text-slate-400">input × 2.0</span>
-                </div>
+                    {/* 1小时缓存创建价格 */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        缓存创建 (1h)
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          value={formData.cacheCreationPrice1h}
+                          onChange={(e) => handleChange('cacheCreationPrice1h', parseFloat(e.target.value) || 0)}
+                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-400">input x 2.0</span>
+                    </div>
 
-                {/* 缓存读取价格 */}
-                <div className="col-span-2">
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    缓存读取价格
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={formData.cacheReadPrice}
-                      onChange={(e) => handleChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
-                      className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <span className="text-[10px] text-slate-400">input × 0.1</span>
-                </div>
+                    {/* 缓存读取价格 */}
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        缓存读取价格
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          value={formData.cacheReadPrice}
+                          onChange={(e) => handleChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
+                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                      </div>
+                      <span className="text-[10px] text-slate-400">input x 0.1</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
             {/* 设为默认 */}
-            <label className="flex items-center gap-3 p-3 bg-amber-50 rounded-lg border border-amber-100 cursor-pointer hover:bg-amber-100/50 transition-colors">
-              <input
-                type="checkbox"
-                checked={formData.isDefault}
-                onChange={(e) => handleChange('isDefault', e.target.checked)}
-                className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500"
-              />
-              <div className="flex items-center gap-2">
-                <Star size={16} className="text-amber-500" />
-                <span className="text-sm text-amber-700 font-medium">设为默认定价</span>
+            <div
+              onClick={() => handleChange('isDefault', !formData.isDefault)}
+              className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition-all duration-200 ${
+                formData.isDefault
+                  ? 'bg-amber-50 border-amber-200 shadow-sm'
+                  : 'bg-slate-50 border-slate-200 hover:border-slate-300'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <Star size={16} className={formData.isDefault ? 'text-amber-500 fill-amber-500' : 'text-slate-400'} />
+                <div>
+                  <span className={`text-sm font-medium ${formData.isDefault ? 'text-amber-700' : 'text-slate-600'}`}>
+                    默认定价
+                  </span>
+                  <p className="text-[11px] text-slate-400">同类型未知模型将使用此定价</p>
+                </div>
               </div>
-              <span className="text-xs text-amber-600 ml-auto">未知模型将使用此定价</span>
-            </label>
+              <div className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${
+                formData.isDefault ? 'bg-amber-500' : 'bg-slate-300'
+              }`}>
+                <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                  formData.isDefault ? 'translate-x-4' : 'translate-x-0.5'
+                }`} />
+              </div>
+            </div>
 
             {/* 错误提示 */}
             {errors.submit && (
@@ -375,7 +450,11 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
   return (
     <div className={`
       bg-white rounded-xl border shadow-sm hover:shadow-md transition-all
-      ${isDefault ? 'border-amber-300 ring-2 ring-amber-100' : 'border-slate-200/60'}
+      ${isDefault
+        ? pricing.provider === 'codex'
+          ? 'border-blue-300 ring-2 ring-blue-100'
+          : 'border-orange-300 ring-2 ring-orange-100'
+        : 'border-slate-200/60'}
     `}>
       {/* 头部 */}
       <div className="px-5 py-4 border-b border-slate-100">
@@ -386,11 +465,22 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
                 {pricing.displayName || pricing.modelName}
               </h3>
               {isDefault && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                  pricing.provider === 'codex'
+                    ? 'bg-blue-100 text-blue-700 border-blue-200'
+                    : 'bg-orange-100 text-orange-700 border-orange-200'
+                }`}>
                   <Star size={10} className="mr-1" />
                   默认
                 </span>
               )}
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                pricing.provider === 'codex'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+              }`}>
+                {pricing.provider === 'codex' ? 'Codex' : 'Claude'}
+              </span>
             </div>
             <p className="text-xs text-slate-400 font-mono mt-1 truncate">
               {pricing.modelName}
@@ -454,29 +544,32 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
             </div>
           </div>
 
-          {/* 缓存创建 5m */}
-          <div className="bg-indigo-50/50 rounded-lg p-3">
-            <div className="text-xs text-slate-500 mb-1">缓存创建 (5m)</div>
-            <div className="text-sm font-semibold text-indigo-600">
-              ${pricing.cacheCreationPrice5m}
+          {/* 缓存价格 */}
+          <>
+            {/* 缓存创建 5m */}
+            <div className="bg-indigo-50/50 rounded-lg p-3">
+              <div className="text-xs text-slate-500 mb-1">缓存创建 (5m)</div>
+              <div className="text-sm font-semibold text-indigo-600">
+                ${pricing.cacheCreationPrice5m}
+              </div>
             </div>
-          </div>
 
-          {/* 缓存创建 1h */}
-          <div className="bg-violet-50/50 rounded-lg p-3">
-            <div className="text-xs text-slate-500 mb-1">缓存创建 (1h)</div>
-            <div className="text-sm font-semibold text-violet-600">
-              ${pricing.cacheCreationPrice1h}
+            {/* 缓存创建 1h */}
+            <div className="bg-violet-50/50 rounded-lg p-3">
+              <div className="text-xs text-slate-500 mb-1">缓存创建 (1h)</div>
+              <div className="text-sm font-semibold text-violet-600">
+                ${pricing.cacheCreationPrice1h}
+              </div>
             </div>
-          </div>
 
-          {/* 缓存读取 */}
-          <div className="col-span-2 bg-emerald-50/50 rounded-lg p-3">
-            <div className="text-xs text-slate-500 mb-1">缓存读取</div>
-            <div className="text-sm font-semibold text-emerald-600">
-              ${pricing.cacheReadPrice}
+            {/* 缓存读取 */}
+            <div className="col-span-2 bg-emerald-50/50 rounded-lg p-3">
+              <div className="text-xs text-slate-500 mb-1">缓存读取</div>
+              <div className="text-sm font-semibold text-emerald-600">
+                ${pricing.cacheReadPrice}
+              </div>
             </div>
-          </div>
+          </>
         </div>
       </div>
 
@@ -633,7 +726,8 @@ const PricingPage = () => {
   }
 
   // 统计数据
-  const defaultPricing = pricings.find(p => p.isDefault);
+  const claudeDefault = pricings.find(p => p.isDefault && p.provider === 'claude');
+  const codexDefault = pricings.find(p => p.isDefault && p.provider === 'codex');
   const avgInputPrice = pricings.length > 0
     ? (pricings.reduce((sum, p) => sum + p.inputPrice, 0) / pricings.length).toFixed(2)
     : 0;
@@ -648,11 +742,20 @@ const PricingPage = () => {
       statusColor: 'bg-slate-100 text-slate-700'
     },
     {
-      title: '默认定价模型',
-      value: defaultPricing?.displayName || defaultPricing?.modelName || '-',
-      tooltip: defaultPricing?.displayName || defaultPricing?.modelName || '-',
+      title: 'Claude 默认',
+      value: claudeDefault?.displayName || claudeDefault?.modelName || '未设置',
+      tooltip: claudeDefault?.displayName || claudeDefault?.modelName || '未设置',
       icon: Star,
-      statusColor: 'bg-amber-100 text-amber-700',
+      statusColor: 'bg-orange-100 text-orange-700',
+      wrapValue: true,
+      valueClassName: 'text-left'
+    },
+    {
+      title: 'Codex 默认',
+      value: codexDefault?.displayName || codexDefault?.modelName || '未设置',
+      tooltip: codexDefault?.displayName || codexDefault?.modelName || '未设置',
+      icon: Star,
+      statusColor: 'bg-blue-100 text-blue-700',
       wrapValue: true,
       valueClassName: 'text-left'
     },
@@ -660,13 +763,13 @@ const PricingPage = () => {
       title: '平均输入价格',
       value: `$${avgInputPrice}`,
       icon: TrendingDown,
-      statusColor: 'bg-indigo-100 text-indigo-700'
+      statusColor: 'bg-slate-100 text-slate-700'
     },
     {
       title: '平均输出价格',
       value: `$${avgOutputPrice}`,
       icon: TrendingUp,
-      statusColor: 'bg-emerald-100 text-emerald-700'
+      statusColor: 'bg-slate-100 text-slate-700'
     }
   ];
 
@@ -681,18 +784,11 @@ const PricingPage = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">基础定价</h1>
             <p className="text-slate-500 text-sm mt-1">
-              管理 Claude 模型的基础定价配置 (USD per 1M tokens)
+              管理模型的基础定价配置 (USD per 1M tokens)
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* 存储状态 - 已隐藏 */}
-          {/* <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
-            <Database size={14} />
-            SQLite 存储
-            <span className="text-indigo-500">({storageStatus?.totalCount || 0} 条)</span>
-          </div> */}
-
           {/* 刷新按钮 */}
           <Button
             variant="ghost"
@@ -712,7 +808,7 @@ const PricingPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-3 xl:grid-cols-5">
         {pricingSummaryCards.map((card) => (
           <div
             key={card.title}

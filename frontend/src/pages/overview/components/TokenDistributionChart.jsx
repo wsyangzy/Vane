@@ -29,42 +29,70 @@ const formatTokens = (value) => {
   return value.toString();
 };
 
-// 自定义 Tooltip
-const CustomTooltip = ({ active, payload }) => {
+// 自定义 Tooltip - 显示 Claude/Codex 分项
+const CustomTooltip = ({ active, payload, breakdown }) => {
   if (!active || !payload || !payload.length) return null;
 
   const data = payload[0].payload;
+  const claudeValue = breakdown?.claude?.[data.key] || 0;
+  const codexValue = breakdown?.codex?.[data.key] || 0;
+  const hasBreakdown = claudeValue > 0 || codexValue > 0;
+
   return (
-    <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
-      <div className="flex items-center gap-2 mb-1">
+    <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm min-w-[180px]">
+      <div className="flex items-center gap-2 mb-1.5">
         <span
           className="w-3 h-3 rounded-full"
           style={{ backgroundColor: data.color }}
         />
         <span className="font-medium text-slate-900">{data.name}</span>
       </div>
-      <div className="text-slate-600">
-        <span className="font-mono">{formatTokens(data.value)}</span>
+      <div className="text-slate-600 mb-2">
+        <span className="font-mono font-bold">{formatTokens(data.value)}</span>
         <span className="text-slate-400 ml-2">({data.percent.toFixed(1)}%)</span>
       </div>
+      {hasBreakdown && (
+        <div className="border-t border-slate-100 pt-1.5 space-y-1">
+          <div className="flex items-center justify-between text-xs">
+            <span className="inline-flex items-center gap-1 text-orange-600">
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+              Claude
+            </span>
+            <span className="font-mono text-slate-700">{formatTokens(claudeValue)}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="inline-flex items-center gap-1 text-blue-600">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+              Codex
+            </span>
+            <span className="font-mono text-slate-700">{formatTokens(codexValue)}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 const TokenDistributionChart = () => {
   const [tokenData, setTokenData] = useState({ input: 0, output: 0, cacheCreation: 0, cacheRead: 0 });
+  const [breakdown, setBreakdown] = useState({ claude: null, codex: null });
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshIntervalRef = useRef(null);
 
-  // 加载数据
+  // 加载数据 - 同时拉取全量、Claude、Codex 三组数据
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) {
       setIsRefreshing(true);
     }
     try {
-      const data = await fetchTokenUsageData();
-      setTokenData(data);
+      const [all, claude, codex] = await Promise.all([
+        fetchTokenUsageData(''),
+        fetchTokenUsageData('claude').catch(() => null),
+        fetchTokenUsageData('codex').catch(() => null)
+      ]);
+      setTokenData(all);
+      setBreakdown({ claude, codex });
     } catch (error) {
       console.error('加载 Token 分布数据失败:', error);
     } finally {
@@ -91,29 +119,6 @@ const TokenDistributionChart = () => {
     };
   }, [loadData]);
 
-  // 监听 SSE 图表更新事件
-  useEffect(() => {
-    const handleChartUpdate = (event) => {
-      const { chart_type, data } = event.detail || {};
-      if (chart_type === 'token_distribution' || chart_type === 'tokenDistribution' || chart_type === 'token_usage') {
-        if (data) {
-          setTokenData({
-            input: data.input || data.input_tokens || 0,
-            output: data.output || data.output_tokens || 0,
-            cacheCreation: data.cacheCreation || data.cache_creation_tokens || 0,
-            cacheRead: data.cacheRead || data.cache_read_tokens || 0
-          });
-          console.log('📊 [SSE] Token 分布图已更新');
-        }
-      }
-    };
-
-    document.addEventListener('chartUpdate', handleChartUpdate);
-    return () => {
-      document.removeEventListener('chartUpdate', handleChartUpdate);
-    };
-  }, []);
-
   // 手动刷新
   const handleRefresh = () => {
     loadData(true);
@@ -127,9 +132,8 @@ const TokenDistributionChart = () => {
     ...config,
     value: tokenData[config.key] || 0,
     percent: total > 0 ? ((tokenData[config.key] || 0) / total) * 100 : 0
-  })).filter(item => item.value > 0); // 过滤掉零值
+  })).filter(item => item.value > 0);
 
-  // 如果没有数据，显示占位
   const hasData = total > 0;
 
   return (
@@ -150,7 +154,7 @@ const TokenDistributionChart = () => {
           <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
         </button>
       </div>
-      <p className="text-xs text-slate-500 mb-4">各类 Token 消耗占比</p>
+      <p className="text-xs text-slate-500 mb-4">各类 Token 消耗占比 · 悬浮查看 Claude/Codex 分项</p>
 
       <div className="flex-1 min-h-[180px] flex items-center justify-center relative overflow-visible">
         {loading ? (
@@ -166,8 +170,8 @@ const TokenDistributionChart = () => {
               <PieChart>
                 <Pie
                   data={chartData}
-                  innerRadius={50}
-                  outerRadius={75}
+                  innerRadius={55}
+                  outerRadius={80}
                   paddingAngle={3}
                   dataKey="value"
                   animationBegin={0}
@@ -183,14 +187,14 @@ const TokenDistributionChart = () => {
                   ))}
                 </Pie>
                 <Tooltip
-                  content={<CustomTooltip />}
+                  content={<CustomTooltip breakdown={breakdown} />}
                   wrapperStyle={{ zIndex: 1000, pointerEvents: 'none' }}
                 />
               </PieChart>
             </ResponsiveContainer>
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <span className="text-2xl font-bold text-slate-700">{formatTokens(total)}</span>
-              <span className="text-xs text-slate-400">总计</span>
+              <span className="text-lg font-bold text-slate-700 leading-tight">{formatTokens(total)}</span>
+              <span className="text-[10px] text-slate-400 mt-0.5">总计</span>
             </div>
           </>
         )}

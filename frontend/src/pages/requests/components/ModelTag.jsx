@@ -33,6 +33,34 @@ const getModelColorClasses = (modelName) => {
     return 'bg-purple-50 text-purple-700 border-purple-200';
   }
 
+  // GPT-5 系列
+  if (lowerName.includes('gpt-5.5')) {
+    return 'bg-rose-50 text-rose-700 border-rose-200';
+  }
+  if (lowerName.includes('gpt-5.4')) {
+    return 'bg-pink-50 text-pink-700 border-pink-200';
+  }
+  if (lowerName.includes('gpt-5.3') || lowerName.includes('codex')) {
+    return 'bg-cyan-50 text-cyan-700 border-cyan-200';
+  }
+  if (lowerName.includes('gpt-5')) {
+    return 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200';
+  }
+  // GPT-4 系列
+  if (lowerName.includes('gpt-4o')) {
+    return 'bg-teal-50 text-teal-700 border-teal-200';
+  }
+  if (lowerName.includes('gpt-4.1')) {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  }
+  if (lowerName.includes('gpt-4')) {
+    return 'bg-sky-50 text-sky-700 border-sky-200';
+  }
+  // o 系列推理模型
+  if (lowerName.includes('o3') || lowerName.includes('o4')) {
+    return 'bg-violet-50 text-violet-700 border-violet-200';
+  }
+
   // 其他未知模型 - 中性灰色
   return 'bg-slate-50 text-slate-600 border-slate-200';
 };

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/events"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/events"
 )
 
 // SyncEndpoints 从数据库同步端点（Desktop 专用）

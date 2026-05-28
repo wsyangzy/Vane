@@ -37,6 +37,7 @@ export const DEFAULT_FILTERS = {
   model: '',
   channel: 'all',
   endpoint: 'all',
+  provider: '',
   startDate: '',
   endDate: ''
 };
@@ -45,6 +46,7 @@ export const DEFAULT_FILTERS = {
 export const TABLE_COLUMNS = [
   { id: 'requestId', label: '请求ID', alwaysVisible: true, width: 'auto' },
   { id: 'timestamp', label: '时间', alwaysVisible: true, width: 'auto' },
+  { id: 'provider', label: '提供商', alwaysVisible: false, width: 'auto' },
   { id: 'requestType', label: '请求类型', alwaysVisible: false, width: 'auto' },
   { id: 'status', label: '状态', alwaysVisible: false, width: 'auto' },
   { id: 'model', label: '模型', alwaysVisible: false, width: 'auto' },
@@ -60,7 +62,7 @@ export const TABLE_COLUMNS = [
 
 // 默认可见的列（添加缓存创建/读取列）
 export const DEFAULT_VISIBLE_COLUMNS = [
-  'requestId', 'timestamp', 'status', 'model', 'channel', 'endpoint',
+  'requestId', 'timestamp', 'provider', 'status', 'model', 'channel', 'endpoint',
   'duration', 'inputTokens', 'outputTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cost'
 ];
 

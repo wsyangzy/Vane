@@ -174,7 +174,8 @@ func TestCalculateCostV2_Mixed5mAnd1hCache(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_WithEndpointMultiplier 测试端点倍率
+// TestCalculateCostV2_WithEndpointMultiplier 测试端点倍率（叠加模式）
+// 验证：细分倍率应用于各类型成本，与总倍率叠加
 func TestCalculateCostV2_WithEndpointMultiplier(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,
@@ -192,14 +193,14 @@ func TestCalculateCostV2_WithEndpointMultiplier(t *testing.T) {
 		CacheReadTokens:       20000,
 	}
 
-	// 分项倍率模式
+	// 叠加模式：细分倍率应用，总倍率保持 1.0（不叠加）
 	multiplier := &EndpointMultiplier{
-		CostMultiplier:                0,    // 不使用总体倍率
-		InputCostMultiplier:           1.5,  // 输入 1.5x
-		OutputCostMultiplier:          1.2,  // 输出 1.2x
-		CacheCreationCostMultiplier:   1.0,  // 5m 缓存 1.0x
-		CacheCreationCostMultiplier1h: 2.0,  // 1h 缓存 2.0x
-		CacheReadCostMultiplier:       1.0,  // 读取 1.0x
+		CostMultiplier:                1.0, // 总倍率 1.0（不影响）
+		InputCostMultiplier:           1.5, // 输入 1.5x
+		OutputCostMultiplier:          1.2, // 输出 1.2x
+		CacheCreationCostMultiplier:   1.0, // 5m 缓存 1.0x
+		CacheCreationCostMultiplier1h: 2.0, // 1h 缓存 2.0x
+		CacheReadCostMultiplier:       1.0, // 读取 1.0x
 	}
 
 	result := CalculateCostV2(usage, pricing, multiplier)
@@ -217,7 +218,7 @@ func TestCalculateCostV2_WithEndpointMultiplier(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_TotalMultiplier 测试总体倍率模式
+// TestCalculateCostV2_TotalMultiplier 测试总倍率模式（叠加在所有细分倍率之上）
 func TestCalculateCostV2_TotalMultiplier(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,
@@ -235,9 +236,14 @@ func TestCalculateCostV2_TotalMultiplier(t *testing.T) {
 		CacheReadTokens:       20000,
 	}
 
-	// 总体倍率模式
+	// 总倍率叠加模式：所有细分倍率 1.0，仅总倍率 1.5
 	multiplier := &EndpointMultiplier{
-		CostMultiplier: 1.5, // 所有成本 1.5x
+		CostMultiplier:                1.5,
+		InputCostMultiplier:           1.0,
+		OutputCostMultiplier:          1.0,
+		CacheCreationCostMultiplier:   1.0,
+		CacheCreationCostMultiplier1h: 1.0,
+		CacheReadCostMultiplier:       1.0,
 	}
 
 	result := CalculateCostV2(usage, pricing, multiplier)
@@ -260,6 +266,44 @@ func TestCalculateCostV2_TotalMultiplier(t *testing.T) {
 	}
 	if math.Abs(result.TotalCost-baseResult.TotalCost*1.5) > 0.0001 {
 		t.Errorf("Total multiplier: TotalCost mismatch, expected $%f, got $%f", baseResult.TotalCost*1.5, result.TotalCost)
+	}
+}
+
+// TestCalculateCostV2_StackedMultiplier 测试叠加倍率：细分 * 总倍率
+// 这是新逻辑的关键场景：用户期望细分倍率与总倍率"叠加"而不是"二选一"
+func TestCalculateCostV2_StackedMultiplier(t *testing.T) {
+	pricing := &ModelPricing{
+		Input:  3.0,
+		Output: 15.0,
+	}
+
+	usage := &TokenUsage{
+		InputTokens:  100000,
+		OutputTokens: 50000,
+	}
+
+	// 输入 2.0x + 总倍率 1.5x → 输入实际倍率 3.0x
+	multiplier := &EndpointMultiplier{
+		CostMultiplier:                1.5,
+		InputCostMultiplier:           2.0,
+		OutputCostMultiplier:          1.0,
+		CacheCreationCostMultiplier:   1.0,
+		CacheCreationCostMultiplier1h: 1.0,
+		CacheReadCostMultiplier:       1.0,
+	}
+
+	result := CalculateCostV2(usage, pricing, multiplier)
+
+	// Input: 100000 * $3/1M * 2.0 * 1.5 = $0.90
+	expectedInput := 100000.0 * 3.0 / 1_000_000 * 2.0 * 1.5
+	if math.Abs(result.InputCost-expectedInput) > 0.0001 {
+		t.Errorf("Stacked multiplier: Expected InputCost $%f, got $%f", expectedInput, result.InputCost)
+	}
+
+	// Output: 50000 * $15/1M * 1.0 * 1.5 = $1.125
+	expectedOutput := 50000.0 * 15.0 / 1_000_000 * 1.0 * 1.5
+	if math.Abs(result.OutputCost-expectedOutput) > 0.0001 {
+		t.Errorf("Stacked multiplier: Expected OutputCost $%f, got $%f", expectedOutput, result.OutputCost)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 // SettingCategory 设置分类常量
@@ -139,7 +139,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 			CategoryServer: {
 				Name:        CategoryServer,
 				Label:       "服务端口",
-				Description: "配置 API 服务端口",
+				Description: "配置 Claude 与 Codex 代理服务端口",
 				Icon:        "📡",
 				Order:       0, // 最前（特殊处理，单独显示）
 			},
@@ -433,6 +433,15 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		{CategoryRequest, "allow_retry_on_exhausted"},
 		// 移除端口自动切换设置（已改为弹窗让用户选择）
 		{CategoryServer, "allow_port_fallback"},
+		// 移除旧的 codex_server 分类（已合并到 server 分类的 codex_* 前缀 key）
+		{"codex_server", "enabled"},
+		{"codex_server", "host"},
+		{"codex_server", "port"},
+		{"codex_server", "timeout"},
+		// 移除已废弃的 server 分类下的 codex 设置项（已合并为单端口，仅保留 codex_enabled）
+		{CategoryServer, "codex_host"},
+		{CategoryServer, "codex_port"},
+		{CategoryServer, "codex_timeout"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -503,6 +512,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 	case CategoryServer:
 		return []*store.SettingRecord{
 			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
+			{Category: CategoryServer, Key: "codex_enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用 Codex 代理", Description: "启用 Codex 代理路由（与 Claude 代理共用端口，通过路径自动区分）", DisplayOrder: 10, RequiresRestart: true},
 		}
 
 	case CategoryStrategy:

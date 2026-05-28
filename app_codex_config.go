@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 const codexProviderWireAPI = "responses"
@@ -132,6 +132,21 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// 为 codex_endpoints 补充故障转移字段（v7.2+）
+	if err := a.ensureCodexEndpointFailoverColumns(ctx, db); err != nil {
+		return err
+	}
+
+	// 为 codex_endpoints 补充成本倍率字段（v7.2+）
+	if err := a.ensureCodexEndpointCostMultiplierColumn(ctx, db); err != nil {
+		return err
+	}
+
+	// 为 codex_endpoints 补充细分成本倍率字段（v7.2+）
+	if err := a.ensureCodexEndpointDetailedCostColumns(ctx, db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -152,6 +167,67 @@ func (a *App) ensureCodexEndpointNameColumn(ctx context.Context, db *sql.DB) err
 	}
 	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_name ON codex_endpoints(channel_id, name)`); err != nil {
 		return fmt.Errorf("创建 codex_endpoints name 唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+// ensureCodexEndpointFailoverColumns 为 codex_endpoints 补充 failover_enabled 和 priority 字段（幂等）。
+func (a *App) ensureCodexEndpointFailoverColumns(ctx context.Context, db *sql.DB) error {
+	hasFailover, err := sqliteColumnExists(ctx, db, "codex_endpoints", "failover_enabled")
+	if err != nil {
+		return err
+	}
+	if !hasFailover {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return fmt.Errorf("为 codex_endpoints 添加 failover_enabled 字段失败: %w", err)
+		}
+	}
+	hasPriority, err := sqliteColumnExists(ctx, db, "codex_endpoints", "priority")
+	if err != nil {
+		return err
+	}
+	if !hasPriority {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("为 codex_endpoints 添加 priority 字段失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// ensureCodexEndpointCostMultiplierColumn 为 codex_endpoints 补充 cost_multiplier 字段（幂等）。
+func (a *App) ensureCodexEndpointCostMultiplierColumn(ctx context.Context, db *sql.DB) error {
+	hasCostMultiplier, err := sqliteColumnExists(ctx, db, "codex_endpoints", "cost_multiplier")
+	if err != nil {
+		return err
+	}
+	if !hasCostMultiplier {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN cost_multiplier REAL NOT NULL DEFAULT 1.0`); err != nil {
+			return fmt.Errorf("为 codex_endpoints 添加 cost_multiplier 字段失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// ensureCodexEndpointDetailedCostColumns 为 codex_endpoints 补充细分成本倍率字段（幂等）。
+func (a *App) ensureCodexEndpointDetailedCostColumns(ctx context.Context, db *sql.DB) error {
+	columns := []struct {
+		name string
+		ddl  string
+	}{
+		{"input_cost_multiplier", `ALTER TABLE codex_endpoints ADD COLUMN input_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"output_cost_multiplier", `ALTER TABLE codex_endpoints ADD COLUMN output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"cache_read_cost_multiplier", `ALTER TABLE codex_endpoints ADD COLUMN cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+	}
+	for _, col := range columns {
+		exists, err := sqliteColumnExists(ctx, db, "codex_endpoints", col.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.ExecContext(ctx, col.ddl); err != nil {
+				return fmt.Errorf("为 codex_endpoints 添加 %s 字段失败: %w", col.name, err)
+			}
+		}
 	}
 	return nil
 }
@@ -808,12 +884,46 @@ func (a *App) syncActiveCodexChannelToConfig(channel *store.CodexChannelRecord, 
 	if endpoint == nil {
 		return fmt.Errorf("Codex 渠道 '%s' 没有可用端点", channel.Name)
 	}
+	// 当 Codex 代理启用时，不再修改 ~/.codex/config.toml
+	// 用户手动管理 model_providers，代理通过内部路由根据数据库中的活跃渠道转发请求
+	if a.isCodexProxyEnabled() {
+		if a.logger != nil {
+			a.logger.Info("Codex 代理已启用，跳过 config.toml 写入（仅切换内部路由）",
+				"channel", channel.Name,
+				"endpoint", endpoint.Name,
+			)
+		}
+		return nil
+	}
 	record := codexChannelEndpointAsProviderRecord(channel, endpoint)
 	return a.syncActiveCodexProviderToConfig(record, previousChannelName)
 }
 
+// isCodexProxyEnabled 判断 Codex 代理是否启用
+func (a *App) isCodexProxyEnabled() bool {
+	a.mu.RLock()
+	cfg := a.config
+	a.mu.RUnlock()
+	return cfg != nil && cfg.CodexServer.Enabled
+}
+
+// applyCodexProxyOverride 已废弃 - 代理启用时不再修改 config.toml
+// 保留函数以避免影响其他可能的调用者，但实际是 no-op
+func (a *App) applyCodexProxyOverride(_ *store.CodexProviderRecord) {
+	// no-op: Codex 代理启用时跳过 config.toml 写入
+}
+
 // removeCodexChannelConfig 删除指定渠道的 config.toml section；若 nextChannel/nextEndpoint 不为空，则切换到下一个渠道。
 func (a *App) removeCodexChannelConfig(name string, nextChannel *store.CodexChannelRecord, nextEndpoint *store.CodexEndpointRecord) error {
+	// 当 Codex 代理启用时，不再修改 config.toml
+	if a.isCodexProxyEnabled() {
+		if a.logger != nil {
+			a.logger.Info("Codex 代理已启用，跳过 config.toml 删除（仅清理数据库记录）",
+				"channel", name,
+			)
+		}
+		return nil
+	}
 	var nextRecord *store.CodexProviderRecord
 	if nextChannel != nil && nextEndpoint != nil {
 		nextRecord = codexChannelEndpointAsProviderRecord(nextChannel, nextEndpoint)

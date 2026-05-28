@@ -1,6 +1,6 @@
 package endpoint
 
-import "claude-request-forwarder/config"
+import "ai-relay-forwarder/config"
 
 const endpointKeySeparator = "::"
 

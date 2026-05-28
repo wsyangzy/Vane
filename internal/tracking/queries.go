@@ -36,6 +36,7 @@ type QueryOptions struct {
 	EndpointName string
 	GroupName    string
 	Status       string
+	Provider     string // 提供商过滤: claude/codex，空字符串表示不过滤
 	Limit        int
 	Offset       int
 }
@@ -80,6 +81,7 @@ type RequestDetail struct {
 	GroupName    string `json:"group_name"`
 	ModelName    string `json:"model_name"`
 	IsStreaming  bool   `json:"is_streaming"` // 是否为流式请求
+	Provider     string `json:"provider"`     // 提供商标识: claude/codex
 
 	Status         string `json:"status"`
 	HTTPStatusCode *int   `json:"http_status_code"`
@@ -97,11 +99,21 @@ type RequestDetail struct {
 	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens       int64 `json:"cache_read_tokens"`
 
-	InputCostUSD         float64 `json:"input_cost_usd"`
-	OutputCostUSD        float64 `json:"output_cost_usd"`
-	CacheCreationCostUSD float64 `json:"cache_creation_cost_usd"`
-	CacheReadCostUSD     float64 `json:"cache_read_cost_usd"`
-	TotalCostUSD         float64 `json:"total_cost_usd"`
+	InputCostUSD           float64 `json:"input_cost_usd"`
+	OutputCostUSD          float64 `json:"output_cost_usd"`
+	CacheCreationCostUSD   float64 `json:"cache_creation_cost_usd"`    // 总缓存创建成本（向后兼容）
+	CacheCreation5mCostUSD float64 `json:"cache_creation_5m_cost_usd"` // 5分钟缓存创建成本
+	CacheCreation1hCostUSD float64 `json:"cache_creation_1h_cost_usd"` // 1小时缓存创建成本
+	CacheReadCostUSD       float64 `json:"cache_read_cost_usd"`
+	TotalCostUSD           float64 `json:"total_cost_usd"`
+
+	// 端点倍率快照（用于详情页计费过程展示）
+	CostMultiplier                float64 `json:"cost_multiplier"`
+	InputCostMultiplier           float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64 `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -149,6 +161,7 @@ func (t UsageStatsTotals) AvgDurationMs() float64 {
 type EndpointCostSummary struct {
 	EndpointName string  `json:"endpoint_name"`
 	GroupName    string  `json:"group_name"`
+	Provider     string  `json:"provider"`
 	TotalTokens  int64   `json:"total_tokens"`
 	TotalCostUSD float64 `json:"total_cost_usd"`
 	RequestCount int     `json:"request_count"`
@@ -274,6 +287,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		COALESCE(group_name, '') as group_name,
 		COALESCE(model_name, '') as model_name,
 		COALESCE(is_streaming, false) as is_streaming,
+		COALESCE(provider, 'claude') as provider,
 		status, http_status_code, retry_count,
 		COALESCE(failure_reason, '') as failure_reason,
 		COALESCE(last_failure_reason, '') as last_failure_reason,
@@ -282,7 +296,15 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		cache_creation_tokens, COALESCE(cache_creation_5m_tokens, 0) as cache_creation_5m_tokens, COALESCE(cache_creation_1h_tokens, 0) as cache_creation_1h_tokens,
 		cache_read_tokens,
 		input_cost_usd, output_cost_usd, cache_creation_cost_usd,
+		COALESCE(cache_creation_5m_cost_usd, 0) as cache_creation_5m_cost_usd,
+		COALESCE(cache_creation_1h_cost_usd, 0) as cache_creation_1h_cost_usd,
 		cache_read_cost_usd, total_cost_usd,
+		COALESCE(cost_multiplier, 1.0) as cost_multiplier,
+		COALESCE(input_cost_multiplier, 1.0) as input_cost_multiplier,
+		COALESCE(output_cost_multiplier, 1.0) as output_cost_multiplier,
+		COALESCE(cache_creation_cost_multiplier, 1.0) as cache_creation_cost_multiplier,
+		COALESCE(cache_creation_cost_multiplier_1h, 1.0) as cache_creation_cost_multiplier_1h,
+		COALESCE(cache_read_cost_multiplier, 1.0) as cache_read_cost_multiplier,
 		created_at, updated_at
 		FROM request_logs WHERE 1=1`
 
@@ -352,6 +374,10 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			args = append(args, opts.Status)
 		}
 	}
+	if opts.Provider != "" {
+		query += " AND provider = ?"
+		args = append(args, opts.Provider)
+	}
 
 	query += " ORDER BY start_time DESC"
 
@@ -379,12 +405,21 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			&detail.StartTime, &detail.EndTime, &detail.DurationMs,
 			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
 			&detail.IsStreaming,
+			&detail.Provider,
 			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,
 			&detail.FailureReason, &detail.LastFailureReason, &detail.CancelReason,
 			&detail.InputTokens, &detail.OutputTokens,
 			&detail.CacheCreationTokens, &detail.CacheCreation5mTokens, &detail.CacheCreation1hTokens, &detail.CacheReadTokens,
 			&detail.InputCostUSD, &detail.OutputCostUSD,
-			&detail.CacheCreationCostUSD, &detail.CacheReadCostUSD, &detail.TotalCostUSD,
+			&detail.CacheCreationCostUSD,
+			&detail.CacheCreation5mCostUSD, &detail.CacheCreation1hCostUSD,
+			&detail.CacheReadCostUSD, &detail.TotalCostUSD,
+			&detail.CostMultiplier,
+			&detail.InputCostMultiplier,
+			&detail.OutputCostMultiplier,
+			&detail.CacheCreationCostMultiplier,
+			&detail.CacheCreationCostMultiplier1h,
+			&detail.CacheReadCostMultiplier,
 			&detail.CreatedAt, &detail.UpdatedAt,
 		)
 		if err != nil {
@@ -509,6 +544,10 @@ func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOp
 				args = append(args, opts.Status)
 			}
 		}
+		if opts.Provider != "" {
+			query += " AND provider = ?"
+			args = append(args, opts.Provider)
+		}
 	}
 
 	var totals UsageStatsTotals
@@ -607,6 +646,10 @@ func (ut *UsageTracker) CountRequestDetails(ctx context.Context, opts *QueryOpti
 			args = append(args, opts.Status)
 		}
 	}
+	if opts.Provider != "" {
+		query += " AND provider = ?"
+		args = append(args, opts.Provider)
+	}
 
 	var count int
 	err := ut.readDB.QueryRowContext(ctx, query, args...).Scan(&count)
@@ -648,6 +691,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 	query := `SELECT
 		COALESCE(endpoint_name, '') as endpoint_name,
 		COALESCE(group_name, '') as group_name,
+		COALESCE(provider, 'claude') as provider,
 		COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
 		COUNT(*) as request_count,
@@ -662,7 +706,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		COALESCE(SUM(cache_read_cost_usd), 0.0) as cache_read_cost_usd
 		FROM request_logs
 		WHERE start_time >= ? AND start_time <= ?
-		GROUP BY endpoint_name, group_name
+		GROUP BY endpoint_name, group_name, provider
 		ORDER BY total_cost_usd DESC`
 
 	rows, err := ut.readDB.QueryContext(ctx, query, ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay))
@@ -676,7 +720,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 	for rows.Next() {
 		var cost EndpointCostSummary
 		err := rows.Scan(
-			&cost.EndpointName, &cost.GroupName, &cost.TotalTokens, &cost.TotalCostUSD,
+			&cost.EndpointName, &cost.GroupName, &cost.Provider, &cost.TotalTokens, &cost.TotalCostUSD,
 			&cost.RequestCount, &cost.SuccessCount,
 			&cost.InputTokens, &cost.OutputTokens,
 			&cost.CacheCreationTokens, &cost.CacheReadTokens,

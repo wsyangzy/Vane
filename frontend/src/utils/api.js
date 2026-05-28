@@ -328,6 +328,7 @@ export const fetchRequests = async (params = {}) => {
       id: rawRequestIdStr,
       timestamp: request.start_time || request.timestamp,
       model: request.model_name || request.model || 'unknown',
+      provider: request.provider || '',
       channel: request.channel || '',
       endpoint,
       endpointChain,
@@ -343,6 +344,19 @@ export const fetchRequests = async (params = {}) => {
       cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0,
       cacheReadTokens: request.cache_read_tokens || request.cacheReadTokens || 0,
       cost: request.total_cost_usd || request.cost || 0,
+      inputCost: request.input_cost_usd || request.inputCost || 0,
+      outputCost: request.output_cost_usd || request.outputCost || 0,
+      cacheCreationCost: request.cache_creation_cost_usd || request.cacheCreationCost || 0,
+      cacheCreation5mCost: request.cache_creation_5m_cost_usd || request.cacheCreation5mCost || 0,
+      cacheCreation1hCost: request.cache_creation_1h_cost_usd || request.cacheCreation1hCost || 0,
+      cacheReadCost: request.cache_read_cost_usd || request.cacheReadCost || 0,
+      // 端点倍率快照（计费详情展示用）
+      costMultiplier: request.cost_multiplier ?? request.costMultiplier ?? 1.0,
+      inputCostMultiplier: request.input_cost_multiplier ?? request.inputCostMultiplier ?? 1.0,
+      outputCostMultiplier: request.output_cost_multiplier ?? request.outputCostMultiplier ?? 1.0,
+      cacheCreationCostMultiplier: request.cache_creation_cost_multiplier ?? request.cacheCreationCostMultiplier ?? 1.0,
+      cacheCreationCostMultiplier1h: request.cache_creation_cost_multiplier_1h ?? request.cacheCreationCostMultiplier1h ?? 1.0,
+      cacheReadCostMultiplier: request.cache_read_cost_multiplier ?? request.cacheReadCostMultiplier ?? 1.0,
       isStreaming: request.is_streaming || request.isStreaming || false,
       statusCode: request.status_code || request.statusCode
     });
@@ -467,12 +481,13 @@ const transformChartJsToRecharts = (chartJsData, keyMapping) => {
 /**
  * 获取请求趋势数据
  * @param {number} minutes - 时间范围（分钟），默认 30
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  */
-export const fetchRequestTrendData = async (minutes = 30) => {
+export const fetchRequestTrendData = async (minutes = 30, provider = '') => {
   try {
     // Wails 环境使用绑定
     if (isWailsEnvironment()) {
-      return await WailsApi.getRequestTrendChart(minutes);
+      return await WailsApi.getRequestTrendChart(minutes, provider);
     }
 
     const data = await fetchWithTimeout(`/api/v1/chart/request-trends?minutes=${minutes}`);
@@ -487,12 +502,13 @@ export const fetchRequestTrendData = async (minutes = 30) => {
 /**
  * 获取响应时间数据
  * @param {number} minutes - 时间范围（分钟），默认 30
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  */
-export const fetchResponseTimeData = async (minutes = 30) => {
+export const fetchResponseTimeData = async (minutes = 30, provider = '') => {
   try {
     // Wails 环境使用绑定
     if (isWailsEnvironment()) {
-      return await WailsApi.getResponseTimeChart(minutes);
+      return await WailsApi.getResponseTimeChart(minutes, provider);
     }
 
     const data = await fetchWithTimeout(`/api/v1/chart/response-times?minutes=${minutes}`);
@@ -506,12 +522,13 @@ export const fetchResponseTimeData = async (minutes = 30) => {
 
 /**
  * 获取 Token 使用数据
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  */
-export const fetchTokenUsageData = async () => {
+export const fetchTokenUsageData = async (provider = '') => {
   try {
     // Wails 环境使用绑定
     if (isWailsEnvironment()) {
-      return await WailsApi.getTokenUsage();
+      return await WailsApi.getTokenUsage(provider);
     }
 
     const data = await fetchWithTimeout('/api/v1/tokens/usage');
@@ -558,12 +575,13 @@ export const fetchEndpointHealthData = async () => {
 
 /**
  * 获取端点成本数据
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  */
-export const fetchEndpointCostsData = async () => {
+export const fetchEndpointCostsData = async (provider = '') => {
   try {
     // Wails 环境使用绑定
     if (isWailsEnvironment()) {
-      return await WailsApi.getEndpointCosts();
+      return await WailsApi.getEndpointCosts(provider);
     }
 
     const data = await fetchWithTimeout('/api/v1/chart/endpoint-costs');
@@ -597,12 +615,13 @@ export const fetchEndpointCostsData = async () => {
 /**
  * 获取连接活动数据
  * @param {number} minutes - 时间范围（分钟），默认 60
+ * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  */
-export const fetchConnectionActivityData = async (minutes = 60) => {
+export const fetchConnectionActivityData = async (minutes = 60, provider = '') => {
   try {
     // Wails 环境使用绑定
     if (isWailsEnvironment()) {
-      return await WailsApi.getConnectionActivityChart(minutes);
+      return await WailsApi.getConnectionActivityChart(minutes, provider);
     }
 
     const data = await fetchWithTimeout(`/api/v1/chart/connection-activity?minutes=${minutes}`);

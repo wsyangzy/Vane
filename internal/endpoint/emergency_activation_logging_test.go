@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // LogEntry 用于解析结构化日志

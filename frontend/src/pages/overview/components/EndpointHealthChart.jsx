@@ -1,6 +1,7 @@
 // ============================================
 // 端点健康状态图组件
 // 简化分类，跳过检测视为健康
+// 支持 Claude / Codex 分 Provider 切换查看
 // ============================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -12,6 +13,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { fetchEndpointHealthData } from '@utils/api.js';
+import { getCodexEndpointHealthChart } from '@utils/wailsApi.js';
 
 // 健康状态配置
 const HEALTH_CONFIG = {
@@ -22,6 +24,7 @@ const HEALTH_CONFIG = {
 };
 
 const EndpointHealthChart = () => {
+  const [provider, setProvider] = useState('claude');
   const [healthData, setHealthData] = useState({ healthy: 0, unhealthy: 0, skipped: 0, excluded: 0 });
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -33,7 +36,9 @@ const EndpointHealthChart = () => {
       setIsRefreshing(true);
     }
     try {
-      const data = await fetchEndpointHealthData();
+      const data = provider === 'codex'
+        ? await getCodexEndpointHealthChart()
+        : await fetchEndpointHealthData();
       setHealthData({
         healthy: data.healthy || 0,
         unhealthy: data.unhealthy || 0,
@@ -42,16 +47,18 @@ const EndpointHealthChart = () => {
       });
     } catch (error) {
       console.error('加载端点健康数据失败:', error);
+      setHealthData({ healthy: 0, unhealthy: 0, skipped: 0, excluded: 0 });
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [provider]);
 
-  // 初始加载
+  // 切换 Provider 或初始加载时重新加载
   useEffect(() => {
+    setLoading(true);
     loadData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 定时刷新（每 30 秒）
   useEffect(() => {
@@ -66,9 +73,10 @@ const EndpointHealthChart = () => {
     };
   }, [loadData]);
 
-  // 监听 SSE 图表更新事件
+  // 监听 SSE 图表更新事件（仅 Claude 端有 SSE 广播）
   useEffect(() => {
     const handleChartUpdate = (event) => {
+      if (provider !== 'claude') return;
       const { chart_type, data } = event.detail || {};
         if (chart_type === 'endpoint_health' || chart_type === 'endpointHealth') {
           if (data) {
@@ -93,7 +101,7 @@ const EndpointHealthChart = () => {
     return () => {
       document.removeEventListener('chartUpdate', handleChartUpdate);
     };
-  }, []);
+  }, [provider]);
 
   // 手动刷新
   const handleRefresh = () => {
@@ -136,6 +144,29 @@ const EndpointHealthChart = () => {
           <h3 className="font-semibold text-slate-900">端点健康状态</h3>
         </div>
         <div className="flex items-center space-x-2">
+          {/* Provider Tab 切换 */}
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+            <button
+              onClick={() => setProvider('claude')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                provider === 'claude'
+                  ? 'bg-white text-orange-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Claude
+            </button>
+            <button
+              onClick={() => setProvider('codex')}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                provider === 'codex'
+                  ? 'bg-white text-blue-700 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Codex
+            </button>
+          </div>
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.bg} ${status.color}`}>
             {inScopeTotal > 0 ? `${healthPercent}%` : '-'} {status.text}
           </span>

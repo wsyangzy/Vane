@@ -78,13 +78,13 @@ export const KPICard = ({
   }
 
   return (
-    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow">
+    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow h-full group relative">
       <div className="flex justify-between items-start mb-2">
         <div className={`p-2 rounded-lg ${statusColor}`}>
           <Icon size={20} />
         </div>
       </div>
-      <div>
+      <div className="mt-auto">
         <h3 className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">{title}</h3>
         <div
           className="text-xl font-bold text-slate-900 truncate cursor-default"
@@ -92,8 +92,14 @@ export const KPICard = ({
         >
           {value}
         </div>
-        {subText && <div className="text-xs text-slate-400 mt-1 font-medium">{subText}</div>}
       </div>
+      {subText && (
+        <div className="absolute left-1/2 -translate-x-1/2 -bottom-1 translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10 pointer-events-none">
+          <div className="px-3 py-1.5 bg-slate-800 text-white text-xs font-medium rounded-lg shadow-lg text-center w-max max-w-[280px]">
+            {subText}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -557,7 +563,7 @@ export const CustomSelect = ({
   };
 
   return (
-    <div className={`relative ${fullWidth ? 'block' : 'inline-block'} ${className}`} ref={containerRef}>
+    <div className={`relative ${fullWidth || className ? 'block' : 'inline-block'} ${className}`} ref={containerRef}>
       <button
         ref={buttonRef}
         type="button"

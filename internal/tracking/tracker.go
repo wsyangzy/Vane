@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -163,14 +163,17 @@ type ModelPricing struct {
 }
 
 // EndpointMultiplier 端点成本倍率（支持端点级别的成本调整）
-// 成本计算公式：模型基础定价 * 端点倍率
+// 成本计算公式：模型基础定价 * 细分倍率 * 总倍率
+// 倍率叠加模式（不再是 either-or）：
+//  1. 细分倍率：在每个分项成本计算时相乘（默认 1.0 = 不影响）
+//  2. 总倍率：所有分项成本计算完成后，作为整体乘数应用（默认 1.0 = 不影响）
 type EndpointMultiplier struct {
-	CostMultiplier                float64 // 总体倍率（如果 > 0，会覆盖分项倍率）
-	InputCostMultiplier           float64 // 输入成本倍率
-	OutputCostMultiplier          float64 // 输出成本倍率
-	CacheCreationCostMultiplier   float64 // 5分钟缓存创建成本倍率
-	CacheCreationCostMultiplier1h float64 // 1小时缓存创建成本倍率
-	CacheReadCostMultiplier       float64 // 缓存读取成本倍率
+	CostMultiplier                float64 // 总体倍率（默认 1.0，叠加在所有分项后）
+	InputCostMultiplier           float64 // 输入成本倍率（默认 1.0）
+	OutputCostMultiplier          float64 // 输出成本倍率（默认 1.0）
+	CacheCreationCostMultiplier   float64 // 5分钟缓存创建成本倍率（默认 1.0）
+	CacheCreationCostMultiplier1h float64 // 1小时缓存创建成本倍率（默认 1.0）
+	CacheReadCostMultiplier       float64 // 缓存读取成本倍率（默认 1.0）
 }
 
 // DefaultEndpointMultiplier 返回默认端点倍率（全部为 1.0）
@@ -248,24 +251,24 @@ func CalculateCostV2(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpo
 	}
 	cacheCreationCost := cache5mCost + cache1hCost
 
-	// 应用端点倍率
-	if m.CostMultiplier > 0 {
-		// 总体倍率模式：所有成本统一乘以总体倍率
-		totalMultiplier := ensureMultiplier(m.CostMultiplier)
-		inputCost *= totalMultiplier
-		outputCost *= totalMultiplier
-		cache5mCost *= totalMultiplier
-		cache1hCost *= totalMultiplier
-		cacheCreationCost *= totalMultiplier
-		cacheReadCost *= totalMultiplier
-	} else {
-		// 分项倍率模式：各项成本分别乘以对应倍率
-		inputCost *= ensureMultiplier(m.InputCostMultiplier)
-		outputCost *= ensureMultiplier(m.OutputCostMultiplier)
-		cacheReadCost *= ensureMultiplier(m.CacheReadCostMultiplier)
-		cache5mCost *= ensureMultiplier(m.CacheCreationCostMultiplier)
-		cache1hCost *= ensureMultiplier(m.CacheCreationCostMultiplier1h)
-		cacheCreationCost = cache5mCost + cache1hCost
+	// 应用端点倍率（叠加模式）
+	// 1. 细分倍率：在每个分项成本计算时相乘（默认 1.0 = 不影响）
+	inputCost *= ensureMultiplier(m.InputCostMultiplier)
+	outputCost *= ensureMultiplier(m.OutputCostMultiplier)
+	cacheReadCost *= ensureMultiplier(m.CacheReadCostMultiplier)
+	cache5mCost *= ensureMultiplier(m.CacheCreationCostMultiplier)
+	cache1hCost *= ensureMultiplier(m.CacheCreationCostMultiplier1h)
+	cacheCreationCost = cache5mCost + cache1hCost
+
+	// 2. 总倍率：在所有分项计算后，作为整体乘数应用（默认 1.0 = 不影响）
+	totalMult := ensureMultiplier(m.CostMultiplier)
+	if totalMult != 1.0 {
+		inputCost *= totalMult
+		outputCost *= totalMult
+		cache5mCost *= totalMult
+		cache1hCost *= totalMult
+		cacheCreationCost *= totalMult
+		cacheReadCost *= totalMult
 	}
 
 	return CostBreakdown{
@@ -361,6 +364,7 @@ type UpdateOptions struct {
 	EndTime       *time.Time     // 结束时间
 	Duration      *time.Duration // 持续时间
 	FailureReason *string        // 失败原因（用于中间过程记录）
+	Provider      *string        // 提供商标识: claude/codex
 }
 
 // UsageTracker 使用跟踪器
@@ -408,6 +412,10 @@ type UsageTracker struct {
 	hotPool        *HotPool        // 内存热池（活跃请求）
 	archiveManager *ArchiveManager // 归档管理器（批量写入）
 	hotPoolEnabled bool            // 是否启用热池模式
+
+	// 🔧 [P6] 内存计数器：替代高频 count 查询，避免 SQLITE_BUSY
+	// 仅支持 total / by-provider 维度的过滤；其他过滤条件回退到 DB 查询
+	dbCounter *DBRequestCounter
 }
 
 // NewUsageTracker 创建新的使用跟踪器
@@ -519,6 +527,18 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 		slog.Warn("启动时清理僵尸请求失败（不影响启动）", "error", err)
 	}
 
+	// 🔧 [P6 新增] 初始化内存请求计数器：替代 QueryRequestDetailsWithHotPool 中的高频 COUNT 查询
+	// 初始化失败不阻塞启动，未初始化时 Get 会返回 (0, false)，
+	// 调用方会自动回退到原有 DB count 路径 + 缓存降级，行为兼容。
+	ut.dbCounter = NewDBRequestCounter()
+	{
+		initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := ut.dbCounter.Init(initCtx, ut.readDB); err != nil {
+			slog.Warn("初始化数据库请求计数器失败（将降级到 DB count 查询）", "error", err)
+		}
+		initCancel()
+	}
+
 	// 启动写操作处理器
 	// 🔧 [P3.4 修复] writeWg.Add 在启动 goroutine 前调用，避免与 Close 的 Wait 形成 race
 	// 旧实现：writeWg.Add(1) 在 processWriteQueue 函数体内调用，如果 Close 在 goroutine 调度前先 Wait，
@@ -591,6 +611,11 @@ func (ut *UsageTracker) initHotPool() {
 	ut.archiveManager = NewArchiveManager(ut.adapter, archiveConfig, ut.pricing, ut.location)
 	ut.archiveManager.SetWriteLocker(&ut.writeMu)
 
+	// 🔧 [P6 新增] 把内存计数器注入 ArchiveManager，归档成功后增量维护 total / by-provider
+	if ut.dbCounter != nil {
+		ut.archiveManager.SetDBCounter(ut.dbCounter)
+	}
+
 	// 设置双向引用：ArchiveManager 需要访问 HotPool 来清理归档缓存
 	ut.archiveManager.SetHotPool(ut.hotPool)
 
@@ -659,7 +684,7 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 		// 使用 internal/utils 提供的跨平台目录
 		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
 		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
-		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		// Linux: ~/.local/share/ai-relay-forwarder/data/usage.db
 		dbConfig.DatabasePath = filepath.Join(getAppDataDir(), "data", "usage.db")
 	}
 
@@ -678,7 +703,7 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 // 复制自 internal/utils/appdir.go，避免循环依赖
 // Windows: %APPDATA%\Claude-Request-Forwarder
 // macOS: ~/Library/Application Support/Claude-Request-Forwarder
-// Linux: ~/.local/share/claude-request-forwarder
+// Linux: ~/.local/share/ai-relay-forwarder
 func getAppDataDir() string {
 	var baseDir string
 
@@ -698,13 +723,13 @@ func getAppDataDir() string {
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "claude-request-forwarder")
+			return filepath.Join(xdgDataHome, "ai-relay-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "ai-relay-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".claude-request-forwarder")
+		return filepath.Join(homeDir, ".ai-relay-forwarder")
 	}
 }
 
@@ -950,7 +975,7 @@ func (ut *UsageTracker) recordToFailureQueue(kind string, payload any) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(homeDir, ".claude-request-forwarder")
+	dir := filepath.Join(homeDir, ".ai-relay-forwarder")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return
 	}
@@ -1057,6 +1082,9 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 			if opts.FailureReason != nil {
 				req.FailureReason = *opts.FailureReason
+			}
+			if opts.Provider != nil {
+				req.Provider = *opts.Provider
 			}
 		})
 		if err != nil {
@@ -2122,6 +2150,36 @@ func (ut *UsageTracker) UpdateActiveRequestTokens(requestID string, inputTokens,
 	})
 }
 
+// UpdateActiveRequestMultiplier 将端点倍率快照写入热池中的活跃请求
+// 由生命周期管理器在 SetEndpoint 时调用，确保归档/查询时能展示请求实际使用的倍率
+// 倍率值为 0 或负数时回退到 1.0（不影响成本）
+func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult EndpointMultiplier) error {
+	if ut.hotPool == nil {
+		// 热池未启用时静默返回，不视为错误（向后兼容传统模式）
+		return nil
+	}
+	if requestID == "" {
+		return nil
+	}
+
+	return ut.hotPool.Update(requestID, func(req *ActiveRequest) {
+		req.CostMultiplier = ensurePositiveMultiplier(mult.CostMultiplier)
+		req.InputCostMultiplier = ensurePositiveMultiplier(mult.InputCostMultiplier)
+		req.OutputCostMultiplier = ensurePositiveMultiplier(mult.OutputCostMultiplier)
+		req.CacheCreationCostMultiplier = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier)
+		req.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier1h)
+		req.CacheReadCostMultiplier = ensurePositiveMultiplier(mult.CacheReadCostMultiplier)
+	})
+}
+
+// ensurePositiveMultiplier 倍率值 <= 0 时回退到 1.0（不影响成本）
+func ensurePositiveMultiplier(v float64) float64 {
+	if v <= 0 {
+		return 1.0
+	}
+	return v
+}
+
 // GetHotPoolAndArchiveOverview 获取热池和归档概览（用于监控）
 func (ut *UsageTracker) GetHotPoolAndArchiveOverview() map[string]interface{} {
 	overview := map[string]interface{}{
@@ -2181,6 +2239,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	groupName := req.GroupName
 	modelName := req.ModelName
 	isStreaming := req.IsStreaming
+	provider := req.Provider
 	status := req.Status
 	httpStatusSnapshot := req.HTTPStatus
 	retryCount := req.RetryCount
@@ -2192,6 +2251,13 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	cacheCreation5mTokens := req.CacheCreation5mTokens
 	cacheCreation1hTokens := req.CacheCreation1hTokens
 	cacheReadTokens := req.CacheReadTokens
+	// 倍率快照（用于详情页计费过程展示）
+	costMultSnap := req.CostMultiplier
+	inputCostMultSnap := req.InputCostMultiplier
+	outputCostMultSnap := req.OutputCostMultiplier
+	cacheCreationCostMultSnap := req.CacheCreationCostMultiplier
+	cacheCreationCostMult1hSnap := req.CacheCreationCostMultiplier1h
+	cacheReadCostMultSnap := req.CacheReadCostMultiplier
 	req.mu.RUnlock()
 
 	var endTime *time.Time
@@ -2256,41 +2322,64 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	}
 
 	return RequestDetail{
-		ID:                    0, // 热池中的请求还没有数据库ID
-		RequestID:             requestID,
-		ClientIP:              clientIP,
-		UserAgent:             userAgent,
-		Method:                method,
-		Path:                  path,
-		StartTime:             startTime,
-		EndTime:               endTime,
-		DurationMs:            durationMs,
-		EndpointName:          endpointName,
-		EndpointChain:         endpointChain,
-		Channel:               channel, // 渠道标签
-		GroupName:             groupName,
-		ModelName:             modelName,
-		IsStreaming:           isStreaming,
-		Status:                status,
-		HTTPStatusCode:        httpStatus,
-		RetryCount:            retryCount,
-		FailureReason:         failureReason,
-		LastFailureReason:     "",
-		CancelReason:          cancelReason,
-		InputTokens:           inputTokens,
-		OutputTokens:          outputTokens,
-		CacheCreationTokens:   cacheCreationTokens,
-		CacheCreation5mTokens: cacheCreation5mTokens,
-		CacheCreation1hTokens: cacheCreation1hTokens,
-		CacheReadTokens:       cacheReadTokens,
-		InputCostUSD:          cost.InputCost,
-		OutputCostUSD:         cost.OutputCost,
-		CacheCreationCostUSD:  cost.CacheCreationCost,
-		CacheReadCostUSD:      cost.CacheReadCost,
-		TotalCostUSD:          cost.TotalCost,
-		CreatedAt:             startTime,
-		UpdatedAt:             ut.now(),
+		ID:                            0, // 热池中的请求还没有数据库ID
+		RequestID:                     requestID,
+		ClientIP:                      clientIP,
+		UserAgent:                     userAgent,
+		Method:                        method,
+		Path:                          path,
+		StartTime:                     startTime,
+		EndTime:                       endTime,
+		DurationMs:                    durationMs,
+		EndpointName:                  endpointName,
+		EndpointChain:                 endpointChain,
+		Channel:                       channel, // 渠道标签
+		GroupName:                     groupName,
+		ModelName:                     modelName,
+		IsStreaming:                   isStreaming,
+		Provider:                      provider, // 提供商标识
+		Status:                        status,
+		HTTPStatusCode:                httpStatus,
+		RetryCount:                    retryCount,
+		FailureReason:                 failureReason,
+		LastFailureReason:             "",
+		CancelReason:                  cancelReason,
+		InputTokens:                   inputTokens,
+		OutputTokens:                  outputTokens,
+		CacheCreationTokens:           cacheCreationTokens,
+		CacheCreation5mTokens:         cacheCreation5mTokens,
+		CacheCreation1hTokens:         cacheCreation1hTokens,
+		CacheReadTokens:               cacheReadTokens,
+		InputCostUSD:                  cost.InputCost,
+		OutputCostUSD:                 cost.OutputCost,
+		CacheCreationCostUSD:          cost.CacheCreationCost,
+		CacheCreation5mCostUSD:        cost.CacheCreation5mCost,
+		CacheCreation1hCostUSD:        cost.CacheCreation1hCost,
+		CacheReadCostUSD:              cost.CacheReadCost,
+		TotalCostUSD:                  cost.TotalCost,
+		CostMultiplier:                normalizeMultiplierSnapshot(costMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CostMultiplier }),
+		InputCostMultiplier:           normalizeMultiplierSnapshot(inputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.InputCostMultiplier }),
+		OutputCostMultiplier:          normalizeMultiplierSnapshot(outputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.OutputCostMultiplier }),
+		CacheCreationCostMultiplier:   normalizeMultiplierSnapshot(cacheCreationCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier }),
+		CacheCreationCostMultiplier1h: normalizeMultiplierSnapshot(cacheCreationCostMult1hSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier1h }),
+		CacheReadCostMultiplier:       normalizeMultiplierSnapshot(cacheReadCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheReadCostMultiplier }),
+		CreatedAt:                     startTime,
+		UpdatedAt:                     ut.now(),
 	}
+}
+
+// normalizeMultiplierSnapshot 优先使用 ActiveRequest 上的快照值；
+// 若快照为 0/未设置，则回退到当前端点倍率配置；都没有时返回 1.0。
+func normalizeMultiplierSnapshot(snapshot float64, current *EndpointMultiplier, accessor func(*EndpointMultiplier) float64) float64 {
+	if snapshot > 0 {
+		return snapshot
+	}
+	if current != nil {
+		if v := accessor(current); v > 0 {
+			return v
+		}
+	}
+	return 1.0
 }
 
 // QueryRequestDetailsWithHotPool 双源查询：热池 + 数据库
@@ -2311,13 +2400,40 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 	hotPoolCount := len(allHotPoolRequests)
 
 	// 2. 获取数据库总数（用于分页计算）
-	dbCount, err := ut.CountRequestDetails(ctx, opts)
-	if err != nil {
-		// 去抖：前端 1-3s 轮询，database is locked 等 transient 错误每次都打会刷屏
-		if shouldLogThrottled("count_request_details_failed") {
-			slog.Warn("Failed to count database requests", "error", err)
+	// 🔧 [P6] 优先尝试内存计数器（仅支持 total / by-provider 维度）：
+	//   - 命中：完全避免 DB 查询，杜绝 SQLITE_BUSY 触发的跳变
+	//   - 未命中（带复杂过滤或未初始化）：回退到原有 DB 查询 + 缓存降级
+	var dbCount int
+	if ut.dbCounter != nil {
+		if v, ok := ut.dbCounter.Get(opts); ok {
+			dbCount = int(v)
+			// 同步更新缓存，方便后续即便回退到 DB 路径时也有最新数值兜底
+			ut.setCachedDBCount(opts, dbCount)
+		} else {
+			cnt, err := ut.CountRequestDetails(ctx, opts)
+			if err != nil {
+				// 数据库锁定等瞬时错误，使用上次缓存值避免显示跳变
+				if shouldLogThrottled("count_request_details_failed") {
+					slog.Error("数据库查询失败（已使用上次缓存值降级）", "error", err)
+				}
+				dbCount = ut.getCachedDBCount(opts)
+			} else {
+				dbCount = cnt
+				ut.setCachedDBCount(opts, dbCount)
+			}
 		}
-		dbCount = 0
+	} else {
+		// 计数器未注入（防御性路径），保持原有行为
+		cnt, err := ut.CountRequestDetails(ctx, opts)
+		if err != nil {
+			if shouldLogThrottled("count_request_details_failed") {
+				slog.Error("数据库查询失败（已使用上次缓存值降级）", "error", err)
+			}
+			dbCount = ut.getCachedDBCount(opts)
+		} else {
+			dbCount = cnt
+			ut.setCachedDBCount(opts, dbCount)
+		}
 	}
 
 	// 3. 计算总数：热池 + 数据库
@@ -2390,6 +2506,38 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 	return results, totalCount, nil
 }
 
+// dbCountCache 缓存上次成功的数据库总数（按 query options 签名分组）
+// 用于在 SQLITE_BUSY 等瞬时错误时降级，避免前端记录数突然跳变
+var (
+	dbCountCacheMu sync.RWMutex
+	dbCountCache   = map[string]int{}
+)
+
+// queryOptsCacheKey 为 QueryOptions 生成稳定的缓存 key
+func queryOptsCacheKey(opts *QueryOptions) string {
+	if opts == nil {
+		return ""
+	}
+	// 仅使用影响 count 结果的过滤字段（不包含 limit/offset/sort）
+	return fmt.Sprintf("p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|sd=%v|ed=%v",
+		opts.Provider, opts.Channel, opts.ModelName, opts.EndpointName,
+		opts.GroupName, opts.Status, opts.StartDate, opts.EndDate)
+}
+
+// getCachedDBCount 获取上次成功的 count（无缓存时返回 0）
+func (ut *UsageTracker) getCachedDBCount(opts *QueryOptions) int {
+	dbCountCacheMu.RLock()
+	defer dbCountCacheMu.RUnlock()
+	return dbCountCache[queryOptsCacheKey(opts)]
+}
+
+// setCachedDBCount 缓存成功查询的 count
+func (ut *UsageTracker) setCachedDBCount(opts *QueryOptions, count int) {
+	dbCountCacheMu.Lock()
+	defer dbCountCacheMu.Unlock()
+	dbCountCache[queryOptsCacheKey(opts)] = count
+}
+
 // getFilteredHotPoolRequests 获取过滤后的热池请求
 func (ut *UsageTracker) getFilteredHotPoolRequests(opts *QueryOptions) []RequestDetail {
 	if ut.hotPool == nil {
@@ -2425,6 +2573,7 @@ func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
 	endpointName := req.EndpointName
 	groupName := req.GroupName
 	startTime := req.StartTime
+	provider := req.Provider
 	req.mu.RUnlock()
 
 	// 状态过滤
@@ -2457,6 +2606,10 @@ func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
 	}
 	// 组过滤
 	if opts.GroupName != "" && groupName != opts.GroupName {
+		return false
+	}
+	// 提供商过滤
+	if opts.Provider != "" && provider != opts.Provider {
 		return false
 	}
 	// 时间范围过滤

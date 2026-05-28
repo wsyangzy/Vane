@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // GroupInfo represents information about an endpoint group

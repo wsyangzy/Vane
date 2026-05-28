@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"claude-request-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/endpoint"
 )
 
 // ============================================================
@@ -28,7 +28,9 @@ type ChartDataPoint struct {
 }
 
 // GetRequestTrendChart 获取请求趋势图表数据
-func (a *App) GetRequestTrendChart(minutes int) []ChartDataPoint {
+// provider 参数用于按提供商过滤（"claude"/"codex"），为空时返回全部
+// 注意：当前请求趋势使用运行时内存数据，provider 参数预留但暂不过滤（内存指标无 provider 维度）
+func (a *App) GetRequestTrendChart(minutes int, provider string) []ChartDataPoint {
 	a.mu.RLock()
 	monitoringMiddleware := a.monitoringMiddleware
 	logger := a.logger
@@ -108,7 +110,8 @@ func (a *App) GetRequestTrendChart(minutes int) []ChartDataPoint {
 }
 
 // GetResponseTimeChart 获取响应时间图表数据
-func (a *App) GetResponseTimeChart(minutes int) []ChartDataPoint {
+// provider 参数预留，当前运行时内存数据无 provider 维度
+func (a *App) GetResponseTimeChart(minutes int, provider string) []ChartDataPoint {
 	a.mu.RLock()
 	monitoringMiddleware := a.monitoringMiddleware
 	a.mu.RUnlock()
@@ -135,7 +138,8 @@ func (a *App) GetResponseTimeChart(minutes int) []ChartDataPoint {
 }
 
 // GetConnectionActivityChart 获取连接活动图表数据
-func (a *App) GetConnectionActivityChart(minutes int) []ChartDataPoint {
+// provider 参数预留，当前运行时内存数据无 provider 维度
+func (a *App) GetConnectionActivityChart(minutes int, provider string) []ChartDataPoint {
 	a.mu.RLock()
 	monitoringMiddleware := a.monitoringMiddleware
 	a.mu.RUnlock()
@@ -304,19 +308,57 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 	}
 }
 
+// GetCodexEndpointHealthChart 获取 Codex 端点健康状态图表数据
+// 仅统计当前激活渠道下的端点（Codex 当前模型一次仅一个活跃渠道）
+//   - failover_enabled = false → 不参与（Excluded）
+//   - failover_enabled = true 且 IsHealthy → 健康（Healthy）
+//   - failover_enabled = true 且 不健康 → 异常（Unhealthy）
+//
+// Codex 无"跳过检测"概念，因此 Skipped 始终为 0
+func (a *App) GetCodexEndpointHealthChart() EndpointHealthData {
+	a.mu.RLock()
+	codexEndpointMgr := a.codexEndpointMgr
+	a.mu.RUnlock()
+
+	result := EndpointHealthData{}
+	if codexEndpointMgr == nil {
+		return result
+	}
+
+	endpoints := codexEndpointMgr.GetAllEndpoints()
+	for _, ep := range endpoints {
+		if ep == nil {
+			continue
+		}
+		result.Total++
+		if !ep.FailoverEnabled {
+			result.Excluded++
+			continue
+		}
+		if codexEndpointMgr.IsHealthy(ep.Name) {
+			result.Healthy++
+		} else {
+			result.Unhealthy++
+		}
+	}
+	return result
+}
+
 // ============================================================
 // 端点成本图表 API
 // ============================================================
 
 // EndpointCostItem 端点成本数据项（用于前端图表）
 type EndpointCostItem struct {
-	Name   string  `json:"name"`
-	Tokens int64   `json:"tokens"`
-	Cost   float64 `json:"cost"`
+	Name     string  `json:"name"`
+	Tokens   int64   `json:"tokens"`
+	Cost     float64 `json:"cost"`
+	Provider string  `json:"provider"`
 }
 
 // GetEndpointCosts 获取当日端点成本数据
-func (a *App) GetEndpointCosts() []EndpointCostItem {
+// provider 参数用于按提供商过滤（"claude"/"codex"），为空时返回全部
+func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 	a.mu.RLock()
 	usageTracker := a.usageTracker
 	logger := a.logger
@@ -341,10 +383,23 @@ func (a *App) GetEndpointCosts() []EndpointCostItem {
 		return []EndpointCostItem{}
 	}
 
-	// 转换为前端期望的格式
-	result := make([]EndpointCostItem, len(costs))
-	for i, cost := range costs {
-		// 创建标签，格式：端点名称 (组名) 或 端点名称
+	// 转换为前端期望的格式，按 provider 过滤
+	result := make([]EndpointCostItem, 0, len(costs))
+	for _, cost := range costs {
+		// 如果指定了 provider，过滤不匹配的记录
+		if provider != "" && cost.Provider != "" && cost.Provider != provider {
+			continue
+		}
+		// 如果指定了 provider 但记录无 provider 字段，默认视为 "claude"
+		if provider != "" && cost.Provider == "" && provider != "claude" {
+			continue
+		}
+
+		// 端点标签：仅端点名称 (渠道名)，不含来源前缀
+		prov := cost.Provider
+		if prov == "" {
+			prov = "claude"
+		}
 		name := cost.EndpointName
 		if cost.GroupName != "" {
 			name = cost.EndpointName + " (" + cost.GroupName + ")"
@@ -353,11 +408,12 @@ func (a *App) GetEndpointCosts() []EndpointCostItem {
 		// 计算总 Token
 		totalTokens := cost.InputTokens + cost.OutputTokens + cost.CacheCreationTokens + cost.CacheReadTokens
 
-		result[i] = EndpointCostItem{
-			Name:   name,
-			Tokens: totalTokens,
-			Cost:   cost.TotalCostUSD,
-		}
+		result = append(result, EndpointCostItem{
+			Name:     name,
+			Tokens:   totalTokens,
+			Cost:     cost.TotalCostUSD,
+			Provider: prov,
+		})
 	}
 
 	return result

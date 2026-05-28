@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/transport"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/transport"
 )
 
 // Forwarder 负责HTTP请求转发和头部处理

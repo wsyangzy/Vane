@@ -30,6 +30,7 @@ type Config struct {
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration
 	Proxy            ProxyConfig            `yaml:"proxy"`
 	Auth             AuthConfig             `yaml:"auth"`
+	CodexServer      CodexServerConfig      `yaml:"codex_server"`      // Codex 代理服务器配置
 	GlobalTimeout    time.Duration          `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Timezone         string                 `yaml:"timezone"`       // Global timezone setting for all components
 	Endpoints        []EndpointConfig       `yaml:"endpoints"`
@@ -194,6 +195,14 @@ type ProxyConfig struct {
 type AuthConfig struct {
 	Enabled bool   `yaml:"enabled"`         // Enable authentication, default: false
 	Token   string `yaml:"token,omitempty"` // Bearer token for authentication
+}
+
+// CodexServerConfig Codex 代理服务器配置
+// 注意：v7.2+ 起 Codex 代理合并到 Claude 代理同一端口，通过路径路由区分。
+// Host/Port 已移除，复用主代理的监听地址。
+type CodexServerConfig struct {
+	Enabled bool          `yaml:"enabled"` // 是否启用 Codex 代理路由，默认: false
+	Timeout time.Duration `yaml:"timeout"` // 请求超时，默认: 300s
 }
 
 // TokenCountingConfig Token计数配置
@@ -439,6 +448,11 @@ func (c *Config) setDefaults() {
 		c.EndpointsStorage.Type = "yaml" // Default to YAML for backward compatibility
 	}
 
+	// Set Codex server defaults
+	if c.CodexServer.Timeout == 0 {
+		c.CodexServer.Timeout = 300 * time.Second
+	}
+
 	// Set request suspension defaults
 	if c.RequestSuspend.Timeout == 0 {
 		c.RequestSuspend.Timeout = 300 * time.Second // Default 5 minutes timeout for suspended requests
@@ -457,7 +471,7 @@ func (c *Config) setDefaults() {
 		// 使用跨平台用户目录作为默认路径
 		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
 		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
-		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		// Linux: ~/.local/share/ai-relay-forwarder/data/usage.db
 		c.UsageTracking.DatabasePath = filepath.Join(getConfigAppDataDir(), "data", "usage.db")
 	}
 	if c.UsageTracking.BufferSize == 0 {
@@ -1093,7 +1107,7 @@ func SavePriorityConfigWithComments(config *Config, path string) error {
 // 复制自 internal/utils/appdir.go，避免循环依赖
 // Windows: %APPDATA%\Claude-Request-Forwarder
 // macOS: ~/Library/Application Support/Claude-Request-Forwarder
-// Linux: ~/.local/share/claude-request-forwarder
+// Linux: ~/.local/share/ai-relay-forwarder
 func getConfigAppDataDir() string {
 	var baseDir string
 
@@ -1113,12 +1127,12 @@ func getConfigAppDataDir() string {
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "claude-request-forwarder")
+			return filepath.Join(xdgDataHome, "ai-relay-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "ai-relay-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".claude-request-forwarder")
+		return filepath.Join(homeDir, ".ai-relay-forwarder")
 	}
 }

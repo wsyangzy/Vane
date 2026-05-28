@@ -67,6 +67,28 @@ html {
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 禁用 SVG 元素的焦点轮廓（图表点击时的黑框）
+ * Recharts 等图表库会让 svg/path 元素获得焦点，WebView2 会显示默认焦点框 */
+svg,
+svg *,
+.recharts-wrapper,
+.recharts-wrapper * {
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+svg:focus,
+svg *:focus,
+.recharts-wrapper:focus,
+.recharts-wrapper *:focus,
+.recharts-surface:focus,
+.recharts-pie-sector:focus,
+path:focus {
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 /* 允许以下元素选中文本 */

@@ -1,6 +1,6 @@
 package endpoint
 
-import "claude-request-forwarder/config"
+import "ai-relay-forwarder/config"
 
 // ChannelKeyFromConfig returns the routing channel key for an endpoint.
 //

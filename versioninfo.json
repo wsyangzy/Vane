@@ -2,13 +2,13 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 7,
-      "Minor": 2,
+      "Minor": 3,
       "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 7,
-      "Minor": 2,
+      "Minor": 3,
       "Patch": 0,
       "Build": 0
     },
@@ -19,16 +19,16 @@
     "FileSubType": "00"
   },
   "StringFileInfo": {
-    "Comments": "Claude API Request Forwarding Service",
-    "CompanyName": "Claude Request Forwarder",
-    "FileDescription": "Claude Request Forwarder",
-    "FileVersion": "7.2.0.0",
-    "InternalName": "claude-request-forwarder",
+    "Comments": "AI Relay Forwarding Service",
+    "CompanyName": "AI Relay Forwarder",
+    "FileDescription": "AI Relay Forwarder",
+    "FileVersion": "7.3.0.0",
+    "InternalName": "ai-relay-forwarder",
     "LegalCopyright": "Copyright © 2024-2026",
-    "OriginalFilename": "Claude Request Forwarder.exe",
+    "OriginalFilename": "AI Relay Forwarder.exe",
     "PrivateBuild": "",
-    "ProductName": "Claude Request Forwarder",
-    "ProductVersion": "7.2.0",
+    "ProductName": "AI Relay Forwarder",
+    "ProductVersion": "7.3.0",
     "SpecialBuild": ""
   },
   "VarFileInfo": {

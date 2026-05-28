@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## v7.3 (2026-05-27)
+
+### 品牌升级
+
+- **更名**：Claude Request Forwarder → AI Relay Forwarder
+- **新 Logo**：拱桥意象 + 青紫渐变（#5B5BD6→#A78BFA），全套图标资产替换
+- **数据目录自动迁移**：首次启动自动将旧目录 `Claude-Request-Forwarder` 重命名为 `AI-Relay-Forwarder`，迁移失败时兜底使用旧目录
+- **仓库重命名**：远端仓库已更名为 AI-Relay-Forwarder
+- **Go module 重命名**：`claude-request-forwarder` → `ai-relay-forwarder`
+
 ## [6.0.7] - 2026-01-07
 
 ### 🔧 改进 (Improvements)

@@ -18,6 +18,7 @@ type ActiveRequest struct {
 	Method      string    `json:"method"`
 	Path        string    `json:"path"`
 	IsStreaming bool      `json:"is_streaming"`
+	Provider   string    `json:"provider"`     // 提供商标识: claude/codex
 
 	// 可变状态（频繁更新）
 	Status        string `json:"status"`         // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
@@ -38,6 +39,15 @@ type ActiveRequest struct {
 	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
 	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens       int64 `json:"cache_read_tokens"`
+
+	// 端点倍率快照（请求开始时由生命周期管理器写入，归档时持久化）
+	// 默认 1.0 = 不影响成本；用于详情页面展示计费过程
+	CostMultiplier                float64 `json:"cost_multiplier"`
+	InputCostMultiplier           float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64 `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
 
 	// 完成信息（只在结束时填充）
 	EndTime      *time.Time `json:"end_time,omitempty"`
@@ -569,5 +579,12 @@ func NewActiveRequest(requestID, clientIP, userAgent, method, path string, isStr
 		Path:        path,
 		IsStreaming: isStreaming,
 		Status:      "pending",
+		// 倍率默认 1.0（不影响成本计算）
+		CostMultiplier:                1.0,
+		InputCostMultiplier:           1.0,
+		OutputCostMultiplier:          1.0,
+		CacheCreationCostMultiplier:   1.0,
+		CacheCreationCostMultiplier1h: 1.0,
+		CacheReadCostMultiplier:       1.0,
 	}
 }

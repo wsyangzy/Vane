@@ -1,4 +1,4 @@
-module claude-request-forwarder
+module ai-relay-forwarder
 
 go 1.25
 

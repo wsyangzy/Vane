@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // TestEmergencyActivationScenarios 测试应急激活功能的各种场景

@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"unicode/utf8"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
 )
 
 // CountTokensHandler 处理 /v1/messages/count_tokens 请求

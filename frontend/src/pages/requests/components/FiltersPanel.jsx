@@ -4,7 +4,7 @@
 // ============================================
 
 import { useMemo } from 'react';
-import { Filter, X, Check } from 'lucide-react';
+import { Filter, X, Check, ChevronDown } from 'lucide-react';
 import { CustomSelect } from '@components/ui';
 import { STATUS_SELECT_OPTIONS } from '../utils/constants.js';
 import DateTimePicker from './DateTimePicker.jsx';
@@ -19,7 +19,7 @@ import DateTimePicker from './DateTimePicker.jsx';
  * @param {Function} props.onApply - 应用筛选回调
  * @param {Function} props.onReset - 重置回调
  * @param {Array} props.models - 模型列表
- * @param {Array} props.channels - 渠道列表
+ * @param {Array} props.channels - 渠道列表（支持扁平数组或分组结构 [{provider, label, channels}]）
  * @param {Array} props.endpoints - 端点列表
  * @param {Function} props.onQuickTimeSelect - 快捷时间选择回调
  */
@@ -44,28 +44,50 @@ const FiltersPanel = ({
     return [{ value: '', label: '所有模型' }, ...options];
   }, [models]);
 
-  // 渠道选项
+  // 渠道选项 - 统一扁平化为 CustomSelect 格式，带 provider 前缀
   const channelOptions = useMemo(() => {
-    const options = channels.map(channel => {
-      const channelName = typeof channel === 'string' ? channel : (channel.name || channel.channel || '');
-      return { value: channelName, label: channelName };
-    }).filter(opt => opt.value);
-    return [{ value: '', label: '所有渠道' }, ...options];
+    const options = [{ value: '', label: '所有渠道' }];
+    if (Array.isArray(channels) && channels.length > 0 && channels[0]?.provider) {
+      // 分组结构: [{provider, label, channels: [name, ...]}, ...]
+      channels.forEach(group => {
+        const providerLabel = group.label || group.provider;
+        (group.channels || []).filter(Boolean).forEach(name => {
+          options.push({ value: name, label: `${providerLabel} / ${name}` });
+        });
+      });
+    } else {
+      // 扁平结构（向后兼容）
+      (channels || []).forEach(channel => {
+        const channelName = typeof channel === 'string' ? channel : (channel.name || channel.channel || '');
+        if (channelName) options.push({ value: channelName, label: channelName });
+      });
+    }
+    return options;
   }, [channels]);
 
-  // 端点选项
+  // 端点选项 - 根据当前选中渠道过滤，未选渠道或选"全部"时显示所有端点
   const endpointOptions = useMemo(() => {
-    const options = endpoints.map(endpoint => {
+    const selectedChannel = filters.channel === 'all' ? '' : (filters.channel || '');
+    const filtered = endpoints.filter(endpoint => {
+      if (!selectedChannel) return true; // 未选渠道，显示全部端点
+      if (typeof endpoint === 'string') return true;
+      const epChannel = endpoint.channel || endpoint.Channel || endpoint.group || endpoint.group_name;
+      return epChannel === selectedChannel;
+    });
+    const options = filtered.map(endpoint => {
       const endpointName = typeof endpoint === 'string' ? endpoint : (endpoint.name || endpoint.endpoint_name || '');
       return { value: endpointName, label: endpointName };
     }).filter(opt => opt.value);
     return [{ value: '', label: '所有端点' }, ...options];
-  }, [endpoints]);
+  }, [endpoints, filters.channel]);
 
   if (!isOpen) return null;
 
   // 快捷时间范围按钮（暂时移除，太占空间）
   // const quickTimeRanges = ['今天', '昨天', '近1小时', '近24小时', '本周'];
+
+  // 渠道筛选当前值（空字符串视为"全部"）
+  const currentChannelValue = filters.channel === 'all' ? '' : (filters.channel || '');
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-xl mt-3 p-5 animate-in fade-in slide-in-from-top-2 duration-200 absolute left-0 right-0 z-20 ring-1 ring-black/5">
@@ -101,10 +123,10 @@ const FiltersPanel = ({
           </div>
         </div>
 
-        {/* 筛选条件（添加渠道筛选，调整为4列布局）*/}
-        <div className="grid grid-cols-4 gap-3 items-center">
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-700 min-w-[40px]">状态:</label>
+        {/* 筛选条件 */}
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2 flex-1 basis-[140px]">
+            <label className="text-sm font-medium text-gray-700 shrink-0">状态:</label>
             <CustomSelect
               options={STATUS_SELECT_OPTIONS}
               value={filters.status}
@@ -114,8 +136,23 @@ const FiltersPanel = ({
               className="flex-1"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-700 min-w-[40px]">模型:</label>
+          <div className="flex items-center gap-2 flex-1 basis-[140px]">
+            <label className="text-sm font-medium text-gray-700 shrink-0">提供商:</label>
+            <CustomSelect
+              options={[
+                { value: '', label: '全部' },
+                { value: 'claude', label: 'Claude' },
+                { value: 'codex', label: 'Codex' }
+              ]}
+              value={filters.provider || ''}
+              onChange={(value) => updateFilter('provider', value)}
+              size="sm"
+              placeholder="全部"
+              className="flex-1"
+            />
+          </div>
+          <div className="flex items-center gap-2 flex-1 basis-[140px]">
+            <label className="text-sm font-medium text-gray-700 shrink-0">模型:</label>
             <CustomSelect
               options={modelOptions}
               value={filters.model}
@@ -125,19 +162,19 @@ const FiltersPanel = ({
               className="flex-1"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-700 min-w-[40px]">渠道:</label>
+          <div className="flex items-center gap-2 flex-1 basis-[140px]">
+            <label className="text-sm font-medium text-gray-700 shrink-0">渠道:</label>
             <CustomSelect
               options={channelOptions}
-              value={filters.channel === 'all' ? '' : filters.channel}
+              value={currentChannelValue}
               onChange={(value) => updateFilter('channel', value || 'all')}
               size="sm"
               placeholder="全部"
               className="flex-1"
             />
           </div>
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium text-gray-700 min-w-[40px]">端点:</label>
+          <div className="flex items-center gap-2 flex-1 basis-[140px]">
+            <label className="text-sm font-medium text-gray-700 shrink-0">端点:</label>
             <CustomSelect
               options={endpointOptions}
               value={filters.endpoint === 'all' ? '' : filters.endpoint}

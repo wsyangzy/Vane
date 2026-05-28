@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 func TestDynamicTokenResolution(t *testing.T) {

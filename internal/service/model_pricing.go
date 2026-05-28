@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"claude-request-forwarder/internal/store"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // ModelPricingService 模型定价管理业务服务
@@ -139,6 +139,18 @@ func (s *ModelPricingService) ListPricings(ctx context.Context) ([]*store.ModelP
 	records, err := s.store.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("列出模型定价失败: %w", err)
+	}
+	return records, nil
+}
+
+// ListPricingsByProvider 按 provider 列出模型定价
+func (s *ModelPricingService) ListPricingsByProvider(ctx context.Context, provider string) ([]*store.ModelPricingRecord, error) {
+	if provider == "" {
+		provider = "claude"
+	}
+	records, err := s.store.ListByProvider(ctx, provider)
+	if err != nil {
+		return nil, fmt.Errorf("列出模型定价失败 (provider=%s): %w", provider, err)
 	}
 	return records, nil
 }

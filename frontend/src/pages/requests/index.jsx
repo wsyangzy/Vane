@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { ErrorMessage } from '@components/ui';
 import { fetchRequests, fetchModels, fetchUsageStats, fetchEndpoints, fetchGroups, activateGroup, fetchInterChannelFailoverEnabled } from '@utils/api.js';
+import { getCodexChannels, activateCodexChannel } from '@utils/wailsApi.js';
 import { useFilters } from './hooks/useFilters.js';
 import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
@@ -25,8 +26,11 @@ const RequestsPage = () => {
   // 数据状态
   const [requests, setRequests] = useState([]);
   const [stats, setStats] = useState(null);
+  const [claudeStats, setClaudeStats] = useState(null); // Claude 提供商统计
+  const [codexStats, setCodexStats] = useState(null);   // Codex 提供商统计
   const [models, setModels] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
+  const [codexChannels, setCodexChannels] = useState([]); // Codex 渠道列表
   const [groups, setGroups] = useState([]); // 渠道列表（一个渠道=一个组）
   const [activeGroup, setActiveGroup] = useState(''); // 当前活跃渠道名称（沿用字段名兼容历史）
   const [interChannelFailoverEnabled, setInterChannelFailoverEnabled] = useState(false); // 渠道间故障转移是否启用
@@ -72,15 +76,53 @@ const RequestsPage = () => {
     totalPages: 1
   });
 
-  // 从端点列表提取唯一渠道
+  // 合并 Claude 端点 + Codex 渠道下的端点（每个端点附带渠道名，用于按渠道过滤）
+  const allEndpoints = useMemo(() => {
+    const claudeEndpoints = (endpoints || []).map(ep => ({ ...ep, provider: 'claude' }))
+    const codexEndpoints = (codexChannels || []).flatMap(channel =>
+      (channel.endpoints || []).map(ep => ({
+        name: ep.name,
+        channel: channel.name,
+        provider: 'codex'
+      }))
+    )
+    return [...claudeEndpoints, ...codexEndpoints]
+  }, [endpoints, codexChannels])
+
+  // 合并 Claude groups + Codex channels 为统一格式（用于 Toolbar 渠道切换器）
+  const allGroups = useMemo(() => {
+    const claudeGroups = (groups || []).map(g => ({ ...g, provider: 'claude' }))
+    const codexGroups = (codexChannels || []).map(ch => ({
+      name: ch.name,
+      provider: 'codex',
+      is_active: ch.isActive,
+      priority: ch.priority ?? 999
+    }))
+    return [...claudeGroups, ...codexGroups]
+  }, [groups, codexChannels])
+
+  // 从端点列表 + 渠道组 + Codex 渠道构造分组结构（按 Provider 分两级）
   const channels = useMemo(() => {
-    const channelSet = new Set();
+    const claudeSet = new Set();
+    // 从端点数据中提取渠道名
     endpoints.forEach(ep => {
-      const channel = ep.channel || ep.Channel;
-      if (channel) channelSet.add(channel);
+      const channel = ep.channel || ep.Channel || ep.group || ep.group_name;
+      if (channel) claudeSet.add(channel);
     });
-    return Array.from(channelSet).sort();
-  }, [endpoints]);
+    // 从渠道组数据中补充（确保即使端点未加载也能显示渠道）
+    groups.forEach(g => {
+      const name = g.name || g.Name;
+      if (name) claudeSet.add(name);
+    });
+    const codexNames = (codexChannels || [])
+      .map(ch => ch?.name)
+      .filter(Boolean);
+
+    return [
+      { provider: 'claude', label: 'Claude', channels: Array.from(claudeSet).sort() },
+      { provider: 'codex', label: 'Codex', channels: codexNames.sort() }
+    ];
+  }, [endpoints, codexChannels, groups]);
 
   // ==================== 数据加载 ====================
 
@@ -101,18 +143,21 @@ const RequestsPage = () => {
       };
 
       // 简化数据获取，移除 keysData
-      // 添加渠道间故障转移状态获取
-      const [requestsData, statsData, modelsData, endpointsData, groupsData, failoverEnabled] = await Promise.all([
+      // 添加渠道间故障转移状态获取 + Codex 渠道列表 + 按 Provider 分组统计
+      const [requestsData, statsData, claudeStatsData, codexStatsData, modelsData, endpointsData, groupsData, failoverEnabled, codexChannelsData] = await Promise.all([
         fetchRequests({
           ...queryParams,
           page: pagination.page,
           pageSize: pagination.pageSize
         }),
         fetchUsageStats(statsParams),
+        fetchUsageStats({ ...statsParams, provider: 'claude' }).catch(() => null),
+        fetchUsageStats({ ...statsParams, provider: 'codex' }).catch(() => null),
         fetchModels(),
         fetchEndpoints(),
         fetchGroups(),
-        fetchInterChannelFailoverEnabled()
+        fetchInterChannelFailoverEnabled(),
+        getCodexChannels().catch(() => []) // Codex 渠道获取失败不影响主流程
       ]);
 
       setRequests(requestsData.requests);
@@ -126,10 +171,19 @@ const RequestsPage = () => {
       const statsDataUnpacked = statsData?.data || statsData;
       setStats(statsDataUnpacked);
 
+      // 按 Provider 分组统计
+      const claudeUnpacked = claudeStatsData?.data || claudeStatsData;
+      setClaudeStats(claudeUnpacked || null);
+      const codexUnpacked = codexStatsData?.data || codexStatsData;
+      setCodexStats(codexUnpacked || null);
+
       setModels(Array.isArray(modelsData) ? modelsData : []);
 
       const endpointsList = endpointsData.endpoints || endpointsData || [];
       setEndpoints(Array.isArray(endpointsList) ? endpointsList : []);
+
+      // Codex 渠道列表（用于在渠道筛选下拉框中合并展示）
+      setCodexChannels(Array.isArray(codexChannelsData) ? codexChannelsData : []);
 
       // 渠道列表（一个渠道=一个组）
       const groupsList = groupsData?.groups || [];
@@ -220,22 +274,27 @@ const RequestsPage = () => {
   };
 
   // 渠道切换回调
-  const handleGroupSwitch = async (channelName) => {
+  const handleGroupSwitch = async (channelName, _endpoint, provider) => {
     try {
       // 只有渠道变化时才调用 API 激活
       if (channelName !== activeGroup) {
-        console.log('🔄 切换渠道:', channelName);
-        await activateGroup(channelName);
-        setActiveGroup(channelName);
+        console.log('🔄 切换渠道:', channelName, 'provider:', provider)
+        if (provider === 'codex') {
+          const ch = codexChannels.find(c => c.name === channelName)
+          if (ch?.id) await activateCodexChannel(ch.id)
+        } else {
+          await activateGroup(channelName)
+        }
+        setActiveGroup(channelName)
       }
 
       // 切换后刷新数据
-      await loadData(true);
+      await loadData(true)
     } catch (err) {
-      console.error('❌ 切换失败:', err);
-      throw err; // 让 ActiveGroupSwitcher 组件知道切换失败
+      console.error('❌ 切换失败:', err)
+      throw err // 让 ActiveGroupSwitcher 组件知道切换失败
     }
-  };
+  }
 
   // ==================== 生命周期 ====================
 
@@ -284,7 +343,7 @@ const RequestsPage = () => {
           onToggleColumn={toggleColumn}
           onResetColumns={resetColumns}
           autoRefresh={autoRefresh}
-          groups={groups}
+          groups={allGroups}
           activeGroup={activeGroup}
           onGroupSwitch={handleGroupSwitch}
           interChannelFailoverEnabled={interChannelFailoverEnabled}
@@ -301,7 +360,7 @@ const RequestsPage = () => {
             onReset={handleResetFilters}
             models={models}
             channels={channels}
-            endpoints={endpoints}
+            endpoints={allEndpoints}
             onQuickTimeSelect={handleQuickTimeSelect}
           />
         </div>
@@ -311,6 +370,8 @@ const RequestsPage = () => {
       <div className="flex-none">
         <StatsOverview
           stats={stats}
+          claudeStats={claudeStats}
+          codexStats={codexStats}
           total={pagination.total}
           isBlurred={isFilterOpen || isViewConfigOpen}
         />

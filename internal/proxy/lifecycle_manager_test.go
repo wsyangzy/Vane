@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 func TestRequestLifecycleManager_NewRequestLifecycleManager(t *testing.T) {

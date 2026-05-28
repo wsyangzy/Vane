@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 	
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TestStreamProcessorTokenIntegration 测试流式处理器与Token解析的集成

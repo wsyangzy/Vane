@@ -82,7 +82,18 @@ func (a *App) emitCodexProviderUpdate() {
 	a.mu.RLock()
 	window := a.window
 	running := a.isRunning
+	codexMgr := a.codexEndpointMgr
 	a.mu.RUnlock()
+
+	// 触发端点管理器重新加载（覆盖渠道/端点 CRUD + 激活切换场景）
+	// 否则 EndpointManager 内部缓存的端点列表会陈旧，导致健康检查/路由失效
+	if codexMgr != nil {
+		if err := codexMgr.Reload(); err != nil {
+			if a.logger != nil {
+				a.logger.Warn("Codex 端点管理器重新加载失败", "error", err)
+			}
+		}
+	}
 
 	if !running || window == nil {
 		return
@@ -130,7 +141,7 @@ func (a *App) emitUsageUpdate() {
 		return
 	}
 
-	summary, _ := a.GetUsageSummary("", "")
+	summary, _ := a.GetUsageSummary("", "", "")
 	a.safeEmitEvent(EventUsageUpdate, summary)
 }
 

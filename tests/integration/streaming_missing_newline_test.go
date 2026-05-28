@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/internal/middleware"
-	"claude-request-forwarder/internal/proxy"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // MissingNewlineReader 模拟在 message_delta 后直接 EOF，不发送终止空行的场景

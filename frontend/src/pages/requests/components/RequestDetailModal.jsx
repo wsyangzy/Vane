@@ -22,7 +22,8 @@ import {
   AlertCircle,
   TrendingUp,
   TrendingDown,
-  Zap
+  Zap,
+  Calculator
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -362,6 +363,223 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   </div>
                 </div>
               </div>
+
+              {/* 计费详情 */}
+              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0) && (() => {
+                const calcUnitPrice = (cost, tokens) => {
+                  if (!tokens || tokens <= 0) return 0
+                  return (cost / tokens) * 1_000_000
+                }
+
+                const inputTokens = request.inputTokens || 0
+                const outputTokens = request.outputTokens || 0
+                const cacheReadTokens = request.cacheReadTokens || 0
+                const cache5mTokens = request.cacheCreation5mTokens || 0
+                const cache1hTokens = request.cacheCreation1hTokens || 0
+                const cacheCreationTokens = request.cacheCreationTokens || 0
+
+                const inputCost = request.inputCost || 0
+                const outputCost = request.outputCost || 0
+                const cacheReadCost = request.cacheReadCost || 0
+                const cache5mCost = request.cacheCreation5mCost || 0
+                const cache1hCost = request.cacheCreation1hCost || 0
+                const cacheCreationCost = request.cacheCreationCost || 0
+
+                // 端点倍率（默认 1.0）
+                const totalMultiplier = request.costMultiplier || 1.0
+                const inputMultiplier = request.inputCostMultiplier || 1.0
+                const outputMultiplier = request.outputCostMultiplier || 1.0
+                const cacheReadMultiplier = request.cacheReadCostMultiplier || 1.0
+                const cache5mMultiplier = request.cacheCreationCostMultiplier || 1.0
+                const cache1hMultiplier = request.cacheCreationCostMultiplier1h || 1.0
+
+                // 反推原始单价（cost / tokens * 1M = 已应用倍率后的有效单价，需除以倍率得到原始单价）
+                const calcRawPrice = (cost, tokens, subMult) => {
+                  if (!tokens || tokens <= 0) return 0
+                  const effectivePrice = (cost / tokens) * 1_000_000
+                  const totalEffectiveMult = subMult * totalMultiplier
+                  if (totalEffectiveMult <= 0) return effectivePrice
+                  return effectivePrice / totalEffectiveMult
+                }
+
+                const inputPrice = calcRawPrice(inputCost, inputTokens, inputMultiplier)
+                const outputPrice = calcRawPrice(outputCost, outputTokens, outputMultiplier)
+                const cacheReadPrice = calcRawPrice(cacheReadCost, cacheReadTokens, cacheReadMultiplier)
+                const cache5mPrice = calcRawPrice(cache5mCost, cache5mTokens, cache5mMultiplier)
+                const cache1hPrice = calcRawPrice(cache1hCost, cache1hTokens, cache1hMultiplier)
+
+                // 兼容旧数据：无分项 5m/1h 时，展示合并的缓存创建价格（旧数据无倍率字段，默认 1.0）
+                const hasSplitCache = cache5mTokens > 0 || cache1hTokens > 0
+                const aggregateCacheCreationPrice = !hasSplitCache
+                  ? calcUnitPrice(cacheCreationCost, cacheCreationTokens)
+                  : 0
+
+                const formatPrice = (n) => `$${(n || 0).toFixed(6)}`
+                const formatMultiplier = (n) => `${Number(n).toFixed(2).replace(/\.?0+$/, '')}x`
+                const hasAnySubMultiplier = inputMultiplier !== 1.0 || outputMultiplier !== 1.0 ||
+                  cacheReadMultiplier !== 1.0 || cache5mMultiplier !== 1.0 || cache1hMultiplier !== 1.0
+                const hasAnyMultiplier = hasAnySubMultiplier || totalMultiplier !== 1.0
+
+                const priceBadges = [
+                  inputPrice > 0 && { key: 'input', label: '输入', value: inputPrice, color: 'blue' },
+                  outputPrice > 0 && { key: 'output', label: '输出', value: outputPrice, color: 'emerald' },
+                  cacheReadPrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadPrice, color: 'amber' },
+                  cache5mPrice > 0 && { key: 'cache5m', label: '5m 缓存创建', value: cache5mPrice, color: 'purple' },
+                  cache1hPrice > 0 && { key: 'cache1h', label: '1h 缓存创建', value: cache1hPrice, color: 'violet' },
+                  aggregateCacheCreationPrice > 0 && { key: 'cacheCreation', label: '缓存创建', value: aggregateCacheCreationPrice, color: 'slate' }
+                ].filter(Boolean)
+
+                const badgeColorMap = {
+                  blue: 'bg-blue-50 border-blue-100 text-blue-700',
+                  emerald: 'bg-emerald-50 border-emerald-100 text-emerald-700',
+                  amber: 'bg-amber-50 border-amber-100 text-amber-700',
+                  purple: 'bg-purple-50 border-purple-100 text-purple-700',
+                  violet: 'bg-violet-50 border-violet-100 text-violet-700',
+                  slate: 'bg-slate-50 border-slate-200 text-slate-700'
+                }
+                const valueColorMap = {
+                  blue: 'text-blue-600',
+                  emerald: 'text-emerald-600',
+                  amber: 'text-amber-600',
+                  purple: 'text-purple-600',
+                  violet: 'text-violet-600',
+                  slate: 'text-slate-600'
+                }
+
+                const formulaRows = [
+                  inputTokens > 0 && {
+                    key: 'input', label: '输入', tokens: inputTokens, price: inputPrice, cost: inputCost, multiplier: inputMultiplier
+                  },
+                  outputTokens > 0 && {
+                    key: 'output', label: '输出', tokens: outputTokens, price: outputPrice, cost: outputCost, multiplier: outputMultiplier
+                  },
+                  cacheReadTokens > 0 && {
+                    key: 'cacheRead', label: '缓存读取', tokens: cacheReadTokens, price: cacheReadPrice, cost: cacheReadCost, multiplier: cacheReadMultiplier
+                  },
+                  cache5mTokens > 0 && {
+                    key: 'cache5m', label: '5m 缓存创建', tokens: cache5mTokens, price: cache5mPrice, cost: cache5mCost, multiplier: cache5mMultiplier
+                  },
+                  cache1hTokens > 0 && {
+                    key: 'cache1h', label: '1h 缓存创建', tokens: cache1hTokens, price: cache1hPrice, cost: cache1hCost, multiplier: cache1hMultiplier
+                  },
+                  !hasSplitCache && cacheCreationTokens > 0 && {
+                    key: 'cacheCreation', label: '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, cost: cacheCreationCost, multiplier: 1.0
+                  }
+                ].filter(Boolean)
+
+                const totalCost = request.cost || 0
+                // 是否缺少分项明细（总成本有值但无法展示公式）
+                const hasNoBreakdown = formulaRows.length === 0 && priceBadges.length === 0 && totalCost > 0
+
+                return (
+                  <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                    <div className="px-4 py-3 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-emerald-100 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                        <Calculator className="w-4 h-4 text-emerald-600" />
+                        计费详情
+                      </h3>
+                      <span className="text-xs text-slate-500">仅供参考，以实际扣费为准</span>
+                    </div>
+
+                    <div className="p-4 space-y-4">
+                      {/* 单价摘要 - 横向徽章 */}
+                      {priceBadges.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {priceBadges.map((badge) => (
+                            <div
+                              key={badge.key}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${badgeColorMap[badge.color]}`}
+                            >
+                              <span className="text-xs font-medium">{badge.label}</span>
+                              <span className={`text-xs font-mono ${valueColorMap[badge.color]}`}>
+                                {formatPrice(badge.value)} / 1M
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 端点倍率徽章 - 始终显示 */}
+                      <div className="flex flex-wrap gap-2">
+                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
+                          totalMultiplier !== 1.0
+                            ? 'bg-indigo-50 border-indigo-200'
+                            : 'bg-slate-50 border-slate-200'
+                        }`}>
+                          <span className={`text-xs font-medium ${totalMultiplier !== 1.0 ? 'text-indigo-700' : 'text-slate-500'}`}>总倍率</span>
+                          <span className={`text-xs font-mono ${totalMultiplier !== 1.0 ? 'text-indigo-700' : 'text-slate-400'}`}>{formatMultiplier(totalMultiplier)}</span>
+                        </div>
+                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
+                          inputMultiplier !== 1.0 ? 'bg-slate-50 border-slate-200' : 'bg-slate-50/60 border-slate-100'
+                        }`}>
+                          <span className={`text-xs font-medium ${inputMultiplier !== 1.0 ? 'text-slate-600' : 'text-slate-400'}`}>输入</span>
+                          <span className={`text-xs font-mono ${inputMultiplier !== 1.0 ? 'text-indigo-600' : 'text-slate-400'}`}>{formatMultiplier(inputMultiplier)}</span>
+                        </div>
+                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
+                          outputMultiplier !== 1.0 ? 'bg-slate-50 border-slate-200' : 'bg-slate-50/60 border-slate-100'
+                        }`}>
+                          <span className={`text-xs font-medium ${outputMultiplier !== 1.0 ? 'text-slate-600' : 'text-slate-400'}`}>输出</span>
+                          <span className={`text-xs font-mono ${outputMultiplier !== 1.0 ? 'text-indigo-600' : 'text-slate-400'}`}>{formatMultiplier(outputMultiplier)}</span>
+                        </div>
+                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
+                          cacheReadMultiplier !== 1.0 ? 'bg-slate-50 border-slate-200' : 'bg-slate-50/60 border-slate-100'
+                        }`}>
+                          <span className={`text-xs font-medium ${cacheReadMultiplier !== 1.0 ? 'text-slate-600' : 'text-slate-400'}`}>缓存读取</span>
+                          <span className={`text-xs font-mono ${cacheReadMultiplier !== 1.0 ? 'text-indigo-600' : 'text-slate-400'}`}>{formatMultiplier(cacheReadMultiplier)}</span>
+                        </div>
+                      </div>
+
+                      {/* 详细计算过程 */}
+                      <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+                        <div className="text-xs text-slate-500 mb-2 font-medium">计算公式</div>
+                        <div className="space-y-1.5 text-xs text-slate-700">
+                          {hasNoBreakdown ? (
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-500">总成本（无分项明细）</span>
+                              <span className="text-emerald-600 font-bold text-base font-mono">
+                                {formatPrice(totalCost)}
+                              </span>
+                            </div>
+                          ) : formulaRows.length === 0 ? (
+                            <div className="text-slate-400">无可计算的 Token 明细</div>
+                          ) : (
+                            formulaRows.map((row) => (
+                              <div key={row.key} className="flex items-center justify-between gap-3 font-mono">
+                                <span className="truncate">
+                                  <span className="text-slate-500">{row.label}:</span>{' '}
+                                  {row.tokens.toLocaleString()} × {formatPrice(row.price)} / 1M
+                                  {row.multiplier !== 1.0 && (
+                                    <span className="text-indigo-600"> × {formatMultiplier(row.multiplier)}</span>
+                                  )}
+                                </span>
+                                <span className="text-slate-600 shrink-0">
+                                  = {formatPrice(row.cost / (totalMultiplier || 1.0))}
+                                </span>
+                              </div>
+                            ))
+                          )}
+
+                          {!hasNoBreakdown && totalMultiplier !== 1.0 && (
+                            <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-200 font-mono">
+                              <span className="text-slate-500">应用总倍率:</span>{' '}
+                              <span className="text-indigo-600">× {formatMultiplier(totalMultiplier)}</span>
+                            </div>
+                          )}
+
+                          {!hasNoBreakdown && (
+                            <div className="pt-2 mt-2 border-t border-slate-200 flex items-center justify-between">
+                              <span className="text-slate-600 font-medium text-sm">合计</span>
+                              <span className="text-emerald-600 font-bold text-base font-mono">
+                                {formatPrice(totalCost)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* 错误信息（如果有） */}
               {(['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status) ||

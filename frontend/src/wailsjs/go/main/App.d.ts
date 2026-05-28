@@ -37,17 +37,21 @@ export function GetChannels():Promise<Array<main.ChannelInfo>>;
 
 export function GetClaudeCodeVersion():Promise<string>;
 
+export function GetCodexVersion():Promise<string>;
+
 export function GetConfig():Promise<main.ConfigInfo>;
 
 export function GetCodexProviders():Promise<Array<main.CodexProviderInfo>>;
 
 export function GetCodexProviderStorageStatus():Promise<main.CodexProviderStorageStatus>;
 
-export function GetConnectionActivityChart(arg1:number):Promise<Array<main.ChartDataPoint>>;
+export function GetConnectionActivityChart(arg1:number,arg2:string):Promise<Array<main.ChartDataPoint>>;
 
-export function GetEndpointCosts():Promise<Array<main.EndpointCostItem>>;
+export function GetEndpointCosts(arg1:string):Promise<Array<main.EndpointCostItem>>;
 
 export function GetEndpointHealthChart():Promise<main.EndpointHealthData>;
+
+export function GetCodexEndpointHealthChart():Promise<main.EndpointHealthData>;
 
 export function GetEndpointRecord(arg1:string):Promise<main.EndpointRecordInfo>;
 
@@ -75,6 +79,8 @@ export function GetModelPricingStorageStatus():Promise<main.ModelPricingStorageS
 
 export function GetModelPricings():Promise<Array<main.ModelPricingInfo>>;
 
+export function GetModelPricingsByProvider(arg1:string):Promise<Array<main.ModelPricingInfo>>;
+
 export function GetNextAvailableChannel(arg1:string):Promise<string>;
 
 export function GetPortConflictStatus():Promise<main.PortConflictStatus>;
@@ -85,11 +91,11 @@ export function GetProxyURL():Promise<string>;
 
 export function GetRecentLogs(arg1:number):Promise<Array<logging.LogEntry>>;
 
-export function GetRequestTrendChart(arg1:number):Promise<Array<main.ChartDataPoint>>;
+export function GetRequestTrendChart(arg1:number,arg2:string):Promise<Array<main.ChartDataPoint>>;
 
 export function GetRequests(arg1:main.RequestQueryParams):Promise<main.RequestListResult>;
 
-export function GetResponseTimeChart(arg1:number):Promise<Array<main.ChartDataPoint>>;
+export function GetResponseTimeChart(arg1:number,arg2:string):Promise<Array<main.ChartDataPoint>>;
 
 export function GetSetting(arg1:string,arg2:string):Promise<main.SettingInfo>;
 
@@ -105,11 +111,11 @@ export function GetSuspendedRequestsCount():Promise<number>;
 
 export function GetSystemStatus():Promise<main.SystemStatus>;
 
-export function GetTokenUsage():Promise<main.TokenUsageData>;
+export function GetTokenUsage(arg1:string):Promise<main.TokenUsageData>;
 
 export function GetUsageStats(arg1:main.UsageStatsQueryParams):Promise<main.UsageStatsData>;
 
-export function GetUsageSummary(arg1:string,arg2:string):Promise<main.UsageSummary>;
+export function GetUsageSummary(arg1:string,arg2:string,arg3:string):Promise<main.UsageSummary>;
 
 export function HideMainWindow():Promise<void>;
 
@@ -118,6 +124,8 @@ export function IsInterChannelFailoverEnabled():Promise<boolean>;
 export function IsProxyRunning():Promise<boolean>;
 
 export function OpenClaudeConfigDir():Promise<void>;
+
+export function OpenCodexConfigDir():Promise<void>;
 
 export function OpenLogDir():Promise<void>;
 

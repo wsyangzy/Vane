@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	proxyresponse "claude-request-forwarder/internal/proxy/response"
+	proxyresponse "ai-relay-forwarder/internal/proxy/response"
 )
 
 const (

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // Provider 复用 http.Transport，避免在高频路径反复创建 Transport 导致连接复用失效与资源抖动。

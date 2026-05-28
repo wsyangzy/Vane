@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 type ChannelService struct {

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/monitor"
 )
 
 // TestMetrics_RecordRequestSuspended tests recording suspended requests

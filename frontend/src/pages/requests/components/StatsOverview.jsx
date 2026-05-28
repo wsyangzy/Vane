@@ -49,26 +49,60 @@ const formatDuration = (duration) => {
 /**
  * StatsOverview - 统计概览组件
  * @param {Object} props
- * @param {Object} props.stats - 统计数据
+ * @param {Object} props.stats - 统计数据（全量）
+ * @param {Object} props.claudeStats - Claude 提供商统计
+ * @param {Object} props.codexStats - Codex 提供商统计
  * @param {number} props.total - 总记录数（来自分页）
  */
-const StatsOverview = ({ stats, total = 0, isBlurred = false }) => {
+const StatsOverview = ({ stats, claudeStats, codexStats, total = 0, isBlurred = false }) => {
   if (!stats) return null;
 
   // 格式化后端返回的原始数据
   const totalRequests = stats.total_requests || total || 0;
   const successRate = stats.success_rate ? `${stats.success_rate.toFixed(1)}%` : '-%';
-  const avgDuration = formatDuration(stats.avg_duration_ms);  // 注意：字段是 avg_duration_ms
+  const avgDuration = formatDuration(stats.avg_duration_ms);
   const totalCost = formatCost(stats.total_cost_usd);
   const totalTokens = formatTokens(stats.total_tokens);
   const failedRequests = stats.failed_requests || 0;
 
+  // 按 Provider 分组的成本
+  const claudeCost = claudeStats?.total_cost_usd || 0;
+  const codexCost = codexStats?.total_cost_usd || 0;
+
+  // 构建成本卡片的子文本（显示 Claude/Codex 分项）
+  const costSubParts = [];
+  if (claudeCost > 0) costSubParts.push(`Claude ${formatCost(claudeCost)}`);
+  if (codexCost > 0) costSubParts.push(`Codex ${formatCost(codexCost)}`);
+  const costSubText = costSubParts.length > 0
+    ? costSubParts.join(' / ')
+    : undefined;
+
+  // 按 Provider 分组的请求数
+  const claudeRequests = claudeStats?.total_requests || 0;
+  const codexRequests = codexStats?.total_requests || 0;
+  const requestSubParts = [];
+  if (claudeRequests > 0) requestSubParts.push(`Claude ${claudeRequests}`);
+  if (codexRequests > 0) requestSubParts.push(`Codex ${codexRequests}`);
+  const requestSubText = requestSubParts.length > 0
+    ? requestSubParts.join(' / ')
+    : undefined;
+
+  // 按 Provider 分组的 Token 数
+  const claudeTokens = claudeStats?.total_tokens || 0;
+  const codexTokens = codexStats?.total_tokens || 0;
+  const tokenSubParts = [];
+  if (claudeTokens > 0) tokenSubParts.push(`Claude ${formatTokens(claudeTokens)}`);
+  if (codexTokens > 0) tokenSubParts.push(`Codex ${formatTokens(codexTokens)}`);
+  const tokenSubText = tokenSubParts.length > 0
+    ? tokenSubParts.join(' / ')
+    : undefined;
+
   const kpis = [
-    { label: '总请求数', value: totalRequests, icon: Zap, statusColor: 'bg-orange-50 text-orange-500' },
+    { label: '总请求数', value: totalRequests, subText: requestSubText, icon: Zap, statusColor: 'bg-orange-50 text-orange-500' },
     { label: '成功率', value: successRate, icon: CheckCircle2, statusColor: 'bg-emerald-50 text-emerald-500' },
     { label: '平均耗时', value: avgDuration, icon: Clock, statusColor: 'bg-amber-50 text-amber-500' },
-    { label: '总成本', value: totalCost, icon: DollarSign, statusColor: 'bg-blue-50 text-blue-500' },
-    { label: '总Token数 (M)', value: totalTokens, icon: FileText, statusColor: 'bg-indigo-50 text-indigo-500' },
+    { label: '总成本', value: totalCost, subText: costSubText, icon: DollarSign, statusColor: 'bg-blue-50 text-blue-500' },
+    { label: '总Token数 (M)', value: totalTokens, subText: tokenSubText, icon: FileText, statusColor: 'bg-indigo-50 text-indigo-500' },
     { label: '失败请求', value: failedRequests, icon: XCircle, statusColor: 'bg-rose-50 text-rose-500' }
   ];
 
@@ -79,6 +113,7 @@ const StatsOverview = ({ stats, total = 0, isBlurred = false }) => {
           key={idx}
           title={kpi.label}
           value={kpi.value}
+          subText={kpi.subText}
           icon={kpi.icon}
           statusColor={kpi.statusColor}
         />

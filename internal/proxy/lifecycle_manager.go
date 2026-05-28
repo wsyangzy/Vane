@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/events"
-	"claude-request-forwarder/internal/monitor"
-	"claude-request-forwarder/internal/proxy/handlers"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/proxy/handlers"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // MonitoringMiddlewareInterface 定义监控中间件接口（扩展版）
@@ -50,6 +50,7 @@ type RequestLifecycleManager struct {
 	errorRecovery         *ErrorRecoveryManager
 	eventBus              events.EventBus
 	recoverySignalManager *EndpointRecoverySignalManager
+	logger                *slog.Logger // provider 分流日志（provider=claude）
 
 	// 错误上下文（保留）
 	pendingErrorContext  *ErrorContext
@@ -83,6 +84,7 @@ func NewRequestLifecycleManager(usageTracker *tracking.UsageTracker, monitoringM
 		monitoringMiddleware: monitoringMiddleware,
 		errorRecovery:        NewErrorRecoveryManager(usageTracker),
 		eventBus:             eventBus,
+		logger:               slog.Default().With("provider", "claude"),
 	}
 }
 
@@ -98,6 +100,7 @@ func NewRequestLifecycleManagerWithRecoverySignal(usageTracker *tracking.UsageTr
 		errorRecovery:         NewErrorRecoveryManager(usageTracker),
 		eventBus:              eventBus,
 		recoverySignalManager: recoverySignalManager,
+		logger:                slog.Default().With("provider", "claude"),
 	}
 }
 
@@ -111,7 +114,7 @@ func (rlm *RequestLifecycleManager) StartRequest(clientIP, userAgent, method, pa
 	// 原有的数据记录逻辑
 	if rlm.usageTracker != nil && requestID != "" {
 		rlm.usageTracker.RecordRequestStart(requestID, clientIP, userAgent, method, path, isStreaming)
-		slog.Info(fmt.Sprintf("🚀 Request started [%s]", requestID))
+		rlm.logger.Info(fmt.Sprintf("🚀 Request started [%s]", requestID))
 	}
 
 	// 🆕 [事件简化] 使用辅助方法发布请求开始事件
@@ -131,7 +134,7 @@ func (rlm *RequestLifecycleManager) StartRequest(clientIP, userAgent, method, pa
 // 如果retryCount为-1，则使用内部attemptCounter
 func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, httpStatus int) {
 	if rlm.stateManager.IsCompleted() {
-		slog.Debug(fmt.Sprintf("⏭️ [状态忽略] [%s] 请求已终态，忽略状态更新: %s",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [状态忽略] [%s] 请求已终态，忽略状态更新: %s",
 			rlm.stateManager.GetRequestID(), status))
 		return
 	}
@@ -209,27 +212,27 @@ func (rlm *RequestLifecycleManager) notifyStatusChange(status string, retryCount
 
 	switch status {
 	case "forwarding":
-		slog.Info(fmt.Sprintf("🎯 [请求转发] [%s] 选择端点: %s",
+		rlm.logger.Info(fmt.Sprintf("🎯 [请求转发] [%s] 选择端点: %s",
 			requestID, endpointName))
 	case "retry":
-		slog.Info(fmt.Sprintf("🔄 [需要重试] [%s] 端点: %s (重试次数: %d)",
+		rlm.logger.Info(fmt.Sprintf("🔄 [需要重试] [%s] 端点: %s (重试次数: %d)",
 			requestID, endpointName, retryCount))
 	case "processing":
-		slog.Info(fmt.Sprintf("⚙️ [请求处理] [%s] 端点: %s, 状态码: %d",
+		rlm.logger.Info(fmt.Sprintf("⚙️ [请求处理] [%s] 端点: %s, 状态码: %d",
 			requestID, endpointName, httpStatus))
 	case "suspended":
-		slog.Warn(fmt.Sprintf("⏸️ [请求挂起] [%s] 端点: %s",
+		rlm.logger.Warn(fmt.Sprintf("⏸️ [请求挂起] [%s] 端点: %s",
 			requestID, endpointName))
 	case "cancelled":
 		// 取消日志已在 CancelRequest 方法中记录完整信息，此处跳过避免重复
 	case "error":
-		slog.Error(fmt.Sprintf("❌ [请求错误] [%s] 端点: %s, 状态码: %d",
+		rlm.logger.Error(fmt.Sprintf("❌ [请求错误] [%s] 端点: %s, 状态码: %d",
 			requestID, endpointName, httpStatus))
 	case "timeout":
-		slog.Error(fmt.Sprintf("⏰ [请求超时] [%s] 端点: %s",
+		rlm.logger.Error(fmt.Sprintf("⏰ [请求超时] [%s] 端点: %s",
 			requestID, endpointName))
 	case "completed":
-		slog.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s",
+		rlm.logger.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s",
 			requestID, endpointName))
 	case "failed":
 		// 失败日志已在 FailRequest 方法中记录完整信息，此处跳过避免重复
@@ -243,7 +246,7 @@ func (rlm *RequestLifecycleManager) notifyStatusChange(status string, retryCount
 func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage) {
 	endpointName := rlm.stateManager.GetEndpointName()
 	if !rlm.stateManager.MarkCompletedOnce() {
-		slog.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
 			rlm.stateManager.GetRequestID()))
 		return
 	}
@@ -255,7 +258,7 @@ func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage)
 	}
 
 	if hasInvalidTokenUsage(tokens) {
-		slog.Warn(fmt.Sprintf("⏭️ [跳过非法Token] [%s] 完成请求包含负数Token，忽略计费记录",
+		rlm.logger.Warn(fmt.Sprintf("⏭️ [跳过非法Token] [%s] 完成请求包含负数Token，忽略计费记录",
 			rlm.stateManager.GetRequestID()))
 		tokens = nil
 	}
@@ -289,19 +292,19 @@ func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage)
 			totalTokens := tokens.InputTokens + tokens.OutputTokens
 			cacheTokens := tokens.CacheCreationTokens + tokens.CacheReadTokens
 
-			slog.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s (总尝试 %d 个端点)",
+			rlm.logger.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s (总尝试 %d 个端点)",
 				requestID, endpointName, retryCount+1))
-			slog.Info(fmt.Sprintf("📊 [Token统计] [%s] 模型: %s, 输入[%d] 输出[%d] 总计[%d] 缓存[%d], 耗时: %dms",
+			rlm.logger.Info(fmt.Sprintf("📊 [Token统计] [%s] 模型: %s, 输入[%d] 输出[%d] 总计[%d] 缓存[%d], 耗时: %dms",
 				requestID, modelName, tokens.InputTokens, tokens.OutputTokens,
 				totalTokens, cacheTokens, duration.Milliseconds()))
 		} else {
-			slog.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s, 组: %s, 模型: %s, 耗时: %dms (无Token统计)",
+			rlm.logger.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s, 组: %s, 模型: %s, 耗时: %dms (无Token统计)",
 				requestID, endpointName, groupName, modelName, duration.Milliseconds()))
 		}
 
 		// 记录请求成功完成到使用跟踪器（包括状态、耗时、Token、成本）
 		rlm.usageTracker.RecordRequestSuccess(requestID, modelName, tokens, duration)
-		slog.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
+		rlm.logger.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
 	}
 
 	// 调用统一的状态通知方法
@@ -320,7 +323,7 @@ func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.
 	duration := rlm.stateManager.GetDuration()
 	endpointName := rlm.stateManager.GetEndpointName()
 	if !rlm.stateManager.MarkCompletedOnce() {
-		slog.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
 			rlm.stateManager.GetRequestID()))
 		return
 	}
@@ -353,9 +356,9 @@ func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.
 		if tokens != nil {
 			totalTokens := tokens.InputTokens + tokens.OutputTokens
 			cacheTokens := tokens.CacheCreationTokens + tokens.CacheReadTokens
-			slog.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s (总尝试 %d 个端点)",
+			rlm.logger.Info(fmt.Sprintf("✅ [请求完成] [%s] 端点: %s (总尝试 %d 个端点)",
 				requestID, endpointName, retryCount+1))
-			slog.Info(fmt.Sprintf("📊 [Token统计] [%s] 模型: %s, 输入[%d] 输出[%d] 总计[%d] 缓存[%d], 耗时: %dms",
+			rlm.logger.Info(fmt.Sprintf("📊 [Token统计] [%s] 模型: %s, 输入[%d] 输出[%d] 总计[%d] 缓存[%d], 耗时: %dms",
 				requestID, modelName, tokens.InputTokens, tokens.OutputTokens,
 				totalTokens, cacheTokens, duration.Milliseconds()))
 		}
@@ -365,9 +368,9 @@ func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.
 		rlm.usageTracker.RecordRequestSuccessWithQuality(requestID, modelName, tokens, duration, failureReason)
 
 		if failureReason != "" {
-			slog.Warn(fmt.Sprintf("⚠️ [数据质量标记] [%s] failure_reason=%s", requestID, failureReason))
+			rlm.logger.Warn(fmt.Sprintf("⚠️ [数据质量标记] [%s] failure_reason=%s", requestID, failureReason))
 		}
-		slog.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
+		rlm.logger.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
 	}
 
 	// 调用统一的状态通知方法
@@ -409,9 +412,9 @@ func (rlm *RequestLifecycleManager) RecordPartialTokens(tokens *tracking.TokenUs
 		if tokens != nil {
 			totalTokens := tokens.InputTokens + tokens.OutputTokens
 			cacheTokens := tokens.CacheCreationTokens + tokens.CacheReadTokens
-			slog.Warn(fmt.Sprintf("⚠️ [部分失败记录] [%s] 端点: %s, failure_reason: %s",
+			rlm.logger.Warn(fmt.Sprintf("⚠️ [部分失败记录] [%s] 端点: %s, failure_reason: %s",
 				requestID, endpointName, failureReason))
-			slog.Info(fmt.Sprintf("📊 [部分Token] [%s] 模型: %s, 输入[%d] 输出[%d] 总计[%d] 缓存[%d], 耗时: %dms",
+			rlm.logger.Info(fmt.Sprintf("📊 [部分Token] [%s] 模型: %s, 输入[%d] 输出[%d] 总计[%d] 缓存[%d], 耗时: %dms",
 				requestID, modelName, tokens.InputTokens, tokens.OutputTokens,
 				totalTokens, cacheTokens, duration.Milliseconds()))
 
@@ -443,7 +446,7 @@ func (rlm *RequestLifecycleManager) HandleNonTokenResponse(responseContent strin
 	rlm.CompleteRequest(emptyTokens)
 
 	requestID := rlm.stateManager.GetRequestID()
-	slog.Info(fmt.Sprintf("🎯 [非Token响应] [%s] 模型: %s, 内容长度: %d字节",
+	rlm.logger.Info(fmt.Sprintf("🎯 [非Token响应] [%s] 模型: %s, 内容长度: %d字节",
 		requestID, modelName, len(responseContent)))
 }
 
@@ -479,7 +482,7 @@ func (rlm *RequestLifecycleManager) analyzeResponseType(responseContent string) 
 // 立即更新热池中的端点和渠道信息，确保前端实时显示
 func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel string) {
 	if rlm.stateManager.IsCompleted() {
-		slog.Debug(fmt.Sprintf("⏭️ [端点忽略] [%s] 请求已终态，忽略端点更新: %s",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [端点忽略] [%s] 请求已终态，忽略端点更新: %s",
 			rlm.stateManager.GetRequestID(), endpointName))
 		return
 	}
@@ -499,7 +502,24 @@ func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel
 			updateOpts.EndpointChain = &chain
 		}
 		rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), updateOpts)
+
+		// 把端点倍率快照写入热池，供详情页展示计费过程
+		rlm.snapshotEndpointMultiplier(endpointName, channel)
 	}
+}
+
+// snapshotEndpointMultiplier 从 UsageTracker 端点倍率缓存中读取当前端点的倍率
+// 并写入到 ActiveRequest 的快照字段。这样在归档/查询时可以展示该请求实际使用的倍率。
+func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, channel string) {
+	if rlm.usageTracker == nil || endpointName == "" {
+		return
+	}
+
+	// 用 channel + endpointName 构造与 tracker 缓存一致的 key
+	key := tracking.EndpointMultiplierKey(channel, endpointName)
+	mult := rlm.usageTracker.GetEndpointMultiplier(key)
+
+	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
 
 // SetModel 设置模型名称（线程安全）
@@ -511,7 +531,7 @@ func (rlm *RequestLifecycleManager) SetModel(modelName string) {
 	// 只在当前模型为空或unknown时设置，避免覆盖更准确的模型信息
 	if rlm.modelName == "" || rlm.modelName == "unknown" {
 		rlm.modelName = modelName
-		slog.Debug(fmt.Sprintf("🏷️ [模型提取] [%s] 从请求中获取模型名称: %s", rlm.stateManager.GetRequestID(), modelName))
+		rlm.logger.Debug(fmt.Sprintf("🏷️ [模型提取] [%s] 从请求中获取模型名称: %s", rlm.stateManager.GetRequestID(), modelName))
 	}
 }
 
@@ -529,19 +549,19 @@ func (rlm *RequestLifecycleManager) SetModelWithComparison(newModelName, source 
 	// 如果当前没有模型或为unknown，直接设置
 	if rlm.modelName == "" || rlm.modelName == "unknown" {
 		rlm.modelName = newModelName
-		slog.Debug(fmt.Sprintf("🏷️ [模型提取] [%s] 从%s设置模型名称: %s", rlm.stateManager.GetRequestID(), source, newModelName))
+		rlm.logger.Debug(fmt.Sprintf("🏷️ [模型提取] [%s] 从%s设置模型名称: %s", rlm.stateManager.GetRequestID(), source, newModelName))
 		return
 	}
 
 	// 如果两个模型都有值，进行对比
 	if rlm.modelName != newModelName {
-		slog.Warn(fmt.Sprintf("⚠️ [模型不一致] [%s] 请求体模型: %s, %s模型: %s - 以%s为准",
+		rlm.logger.Warn(fmt.Sprintf("⚠️ [模型不一致] [%s] 请求体模型: %s, %s模型: %s - 以%s为准",
 			rlm.stateManager.GetRequestID(), rlm.modelName, source, newModelName, source))
 
 		// 以新模型（通常是message_start解析的）为准
 		rlm.modelName = newModelName
 	} else {
-		slog.Debug(fmt.Sprintf("✅ [模型一致] [%s] 请求体与%s模型一致: %s", rlm.stateManager.GetRequestID(), source, newModelName))
+		rlm.logger.Debug(fmt.Sprintf("✅ [模型一致] [%s] 请求体与%s模型一致: %s", rlm.stateManager.GetRequestID(), source, newModelName))
 	}
 }
 
@@ -697,7 +717,7 @@ func (rlm *RequestLifecycleManager) HandleError(err error) {
 		return
 	}
 	if rlm.stateManager.IsCompleted() {
-		slog.Debug(fmt.Sprintf("⏭️ [错误忽略] [%s] 请求已终态，忽略错误: %v",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [错误忽略] [%s] 请求已终态，忽略错误: %v",
 			rlm.stateManager.GetRequestID(), err))
 		return
 	}
@@ -728,7 +748,7 @@ func (rlm *RequestLifecycleManager) HandleError(err error) {
 			}
 			rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), opts)
 		}
-		slog.Error(fmt.Sprintf("⚠️ [错误记录] [%s] 错误类型: %s, 错误: %v (状态由重试逻辑控制)",
+		rlm.logger.Error(fmt.Sprintf("⚠️ [错误记录] [%s] 错误类型: %s, 错误: %v (状态由重试逻辑控制)",
 			rlm.stateManager.GetRequestID(), rlm.errorRecovery.getErrorTypeName(errorCtx.ErrorType), err))
 	}
 }
@@ -753,7 +773,7 @@ func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail strin
 	requestID := rlm.stateManager.GetRequestID()
 	endpointName := rlm.stateManager.GetEndpointName()
 	if !rlm.stateManager.MarkCompletedOnce() {
-		slog.Debug(fmt.Sprintf("⏭️ [失败忽略] [%s] 请求已终态，忽略失败更新: %s",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [失败忽略] [%s] 请求已终态，忽略失败更新: %s",
 			requestID, failureReason))
 		return
 	}
@@ -763,7 +783,7 @@ func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail strin
 		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", failureReason, errorDetail, duration, httpStatus, nil)
 	}
 
-	slog.Error(fmt.Sprintf("❌ [请求最终失败] [%s] 端点: %s, 原因: %s, 状态码: %d, 耗时: %dms",
+	rlm.logger.Error(fmt.Sprintf("❌ [请求最终失败] [%s] 端点: %s, 原因: %s, 状态码: %d, 耗时: %dms",
 		requestID, endpointName, failureReason, httpStatus, duration.Milliseconds()))
 
 	// 调用统一的状态通知方法
@@ -781,7 +801,7 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 	endpointName := rlm.stateManager.GetEndpointName()
 	groupName := rlm.stateManager.GetGroupName()
 	if !rlm.stateManager.MarkCompletedOnce() {
-		slog.Debug(fmt.Sprintf("⏭️ [取消忽略] [%s] 请求已终态，忽略取消更新: %s",
+		rlm.logger.Debug(fmt.Sprintf("⏭️ [取消忽略] [%s] 请求已终态，忽略取消更新: %s",
 			requestID, cancelReason))
 		return
 	}
@@ -793,10 +813,10 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 
 	if tokens != nil {
 		totalTokens := tokens.InputTokens + tokens.OutputTokens
-		slog.Info(fmt.Sprintf("🚫 [请求被取消] [%s] 端点: %s, 组: %s, 耗时: %dms, 原因: %s, Token: %d",
+		rlm.logger.Info(fmt.Sprintf("🚫 [请求被取消] [%s] 端点: %s, 组: %s, 耗时: %dms, 原因: %s, Token: %d",
 			requestID, endpointName, groupName, duration.Milliseconds(), cancelReason, totalTokens))
 	} else {
-		slog.Info(fmt.Sprintf("🚫 [请求被取消] [%s] 端点: %s, 组: %s, 耗时: %dms, 原因: %s",
+		rlm.logger.Info(fmt.Sprintf("🚫 [请求被取消] [%s] 端点: %s, 组: %s, 耗时: %dms, 原因: %s",
 			requestID, endpointName, groupName, duration.Milliseconds(), cancelReason))
 	}
 
@@ -845,7 +865,7 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 
 	if requestID != "" && tokens != nil {
 		if hasInvalidTokenUsage(tokens) {
-			slog.Warn(fmt.Sprintf("⏭️ [跳过非法Token] [%s] 失败请求包含负数Token，忽略记录", requestID))
+			rlm.logger.Warn(fmt.Sprintf("⏭️ [跳过非法Token] [%s] 失败请求包含负数Token，忽略记录", requestID))
 			return
 		}
 
@@ -855,7 +875,7 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 
 		if !hasRealTokens {
 			// 空Token信息不记录
-			slog.Debug(fmt.Sprintf("⏭️ [跳过空Token] [%s] 失败请求无实际Token消耗", requestID))
+			rlm.logger.Debug(fmt.Sprintf("⏭️ [跳过空Token] [%s] 失败请求无实际Token消耗", requestID))
 			return
 		}
 
@@ -882,7 +902,7 @@ func (rlm *RequestLifecycleManager) RecordTokensForFailedRequest(tokens *trackin
 			rlm.monitoringMiddleware.RecordFailedRequestTokens(requestID, endpointName, monitorTokens, failureReason)
 		}
 
-		slog.Info(fmt.Sprintf("💾 [失败请求Token记录] [%s] 端点: %s, 原因: %s, 模型: %s, 输入: %d, 输出: %d",
+		rlm.logger.Info(fmt.Sprintf("💾 [失败请求Token记录] [%s] 端点: %s, 原因: %s, 模型: %s, 输入: %d, 输出: %d",
 			requestID, endpointName, failureReason, modelName, tokens.InputTokens, tokens.OutputTokens))
 	}
 }
@@ -977,7 +997,7 @@ func (rlm *RequestLifecycleManager) OnRetryDecision(decision RetryDecision, http
 	}
 
 	// 记录决策原因
-	slog.Debug(fmt.Sprintf("📋 [重试决策记录] [%s] 状态: %s, 原因: %s",
+	rlm.logger.Debug(fmt.Sprintf("📋 [重试决策记录] [%s] 状态: %s, 原因: %s",
 		requestID, decision.FinalStatus, decision.Reason))
 }
 

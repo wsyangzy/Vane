@@ -10,18 +10,19 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/logging"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/logging"
 )
 
 // 版本信息（通过 ldflags 注入）
 var (
-	Version   = "7.2"
+	Version   = "7.3"
 	Commit    = "unknown"
 	BuildTime = "unknown"
 	BuildMode = "dev" // 构建模式: "dev" 或 "release"（生产构建通过 ldflags 注入 "release"）
@@ -48,13 +49,14 @@ var icon []byte
 var trayIcon []byte
 
 // currentLogHandler 当前日志处理器引用（用于关闭）
-var currentLogHandler *SimpleHandler
+var currentLogHandlers []*SimpleHandler
 
 // ============================================================
 // 日志相关
 // ============================================================
 
 // setupLogger 配置结构化日志
+// 按 provider 分文件存储：app.log（默认）、claude.log、codex.log
 func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
 	logLevel := cfg.Level
 
@@ -78,7 +80,15 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 		level = slog.LevelInfo
 	}
 
-	var fileRotator *logging.FileRotator
+	// 关闭旧的 handler（如果存在）
+	for _, h := range currentLogHandlers {
+		if h != nil {
+			h.Close()
+		}
+	}
+	currentLogHandlers = nil
+
+	var appRotator, claudeRotator, codexRotator *logging.FileRotator
 	// 设置文件日志
 	if cfg.FileEnabled {
 		maxSize, err := logging.ParseSize(cfg.MaxFileSize)
@@ -87,26 +97,56 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 			maxSize = 100 * 1024 * 1024
 		}
 
-		fileRotator, err = logging.NewFileRotator(cfg.FilePath, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		// 主日志文件（app.log / app-dev.log）
+		appRotator, err = logging.NewFileRotator(cfg.FilePath, maxSize, cfg.MaxFiles, cfg.CompressRotated)
 		if err != nil {
 			fmt.Printf("警告：无法创建日志文件轮转器: %v\n", err)
-			fileRotator = nil
+			appRotator = nil
+		}
+
+		// Claude 代理日志文件（与主日志同目录）
+		logDir := filepath.Dir(cfg.FilePath)
+		claudeLogFile := filepath.Join(logDir, "claude.log")
+		claudeRotator, err = logging.NewFileRotator(claudeLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		if err != nil {
+			fmt.Printf("警告：无法创建 Claude 日志文件轮转器: %v\n", err)
+			claudeRotator = nil
+		}
+
+		// Codex 代理日志文件
+		codexLogFile := filepath.Join(logDir, "codex.log")
+		codexRotator, err = logging.NewFileRotator(codexLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		if err != nil {
+			fmt.Printf("警告：无法创建 Codex 日志文件轮转器: %v\n", err)
+			codexRotator = nil
 		}
 	}
 
-	// 创建 SimpleHandler（文件和控制台输出）
-	simpleHandler := &SimpleHandler{
-		level:                    level,
-		fileRotator:              fileRotator,
-		disableFileResponseLimit: cfg.FileEnabled && cfg.DisableResponseLimit,
-	}
-	currentLogHandler = simpleHandler
+	disableLimit := cfg.FileEnabled && cfg.DisableResponseLimit
 
-	// 用 BroadcastHandler 包装（添加日志查看功能）
-	broadcastHandler := logging.NewBroadcastHandler(simpleHandler, 1000)
+	// 创建三个 SimpleHandler
+	appHandler := &SimpleHandler{
+		level:                    level,
+		fileRotator:              appRotator,
+		disableFileResponseLimit: disableLimit,
+	}
+	claudeHandler := &SimpleHandler{
+		level:                    level,
+		fileRotator:              claudeRotator,
+		disableFileResponseLimit: disableLimit,
+	}
+	codexHandler := &SimpleHandler{
+		level:                    level,
+		fileRotator:              codexRotator,
+		disableFileResponseLimit: disableLimit,
+	}
+	currentLogHandlers = []*SimpleHandler{appHandler, claudeHandler, codexHandler}
+
+	// 用 BroadcastHandler 包装（添加日志查看功能 + provider 路由）
+	broadcastHandler := logging.NewBroadcastHandler(appHandler, 1000, claudeHandler, codexHandler)
 
 	if cfg.FileEnabled {
-		fmt.Printf("🔧 文件日志已启用: 路径=%s\n", cfg.FilePath)
+		fmt.Printf("🔧 文件日志已启用: 路径=%s (分文件: claude.log, codex.log)\n", cfg.FilePath)
 	}
 
 	return slog.New(broadcastHandler), broadcastHandler

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/internal/utils"
 )
 
 // SetOnHealthCheckComplete 设置健康检查完成回调

@@ -66,7 +66,7 @@ func (s *SQLiteAdapter) Open() error {
 		// 使用跨平台用户目录作为默认路径
 		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
 		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
-		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		// Linux: ~/.local/share/ai-relay-forwarder/data/usage.db
 		dbPath = filepath.Join(getSQLiteAppDataDir(), "data", "usage.db")
 		s.logger.Info("使用默认数据库路径", "path", dbPath)
 	}
@@ -515,6 +515,42 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN output_sent_at DATETIME",
 			description: "已发送内容时间戳（P5.9）",
 		},
+		{
+			checkColumn: "provider",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
+			description: "提供商标识字段（claude/codex）",
+		},
+		// 端点倍率快照字段（用于详情页计费过程展示）
+		{
+			checkColumn: "cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时端点总成本倍率快照",
+		},
+		{
+			checkColumn: "input_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN input_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时端点输入成本倍率快照",
+		},
+		{
+			checkColumn: "output_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN output_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时端点输出成本倍率快照",
+		},
+		{
+			checkColumn: "cache_creation_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN cache_creation_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时端点 5m 缓存创建成本倍率快照",
+		},
+		{
+			checkColumn: "cache_creation_cost_multiplier_1h",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN cache_creation_cost_multiplier_1h REAL DEFAULT 1.0",
+			description: "请求时端点 1h 缓存创建成本倍率快照",
+		},
+		{
+			checkColumn: "cache_read_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN cache_read_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时端点缓存读取成本倍率快照",
+		},
 	}
 
 	// endpoints 迁移：端点存储表迭代新增字段时，需要兼容旧 db（CREATE TABLE IF NOT EXISTS 不会补列）
@@ -636,6 +672,38 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := runMigrations("channels", channelMigrations); err != nil {
+		return err
+	}
+
+	// usage_summary 迁移
+	usageSummaryMigrations := []struct {
+		checkColumn string
+		alterSQL    string
+		description string
+	}{
+		{
+			checkColumn: "provider",
+			alterSQL:    "ALTER TABLE usage_summary ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
+			description: "使用统计提供商标识字段（claude/codex）",
+		},
+	}
+	if err := runMigrations("usage_summary", usageSummaryMigrations); err != nil {
+		return err
+	}
+
+	// model_pricing 迁移
+	modelPricingMigrations := []struct {
+		checkColumn string
+		alterSQL    string
+		description string
+	}{
+		{
+			checkColumn: "provider",
+			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
+			description: "模型定价提供商标识字段（claude/codex）",
+		},
+	}
+	if err := runMigrations("model_pricing", modelPricingMigrations); err != nil {
 		return err
 	}
 
@@ -1086,7 +1154,7 @@ func (s *SQLiteAdapter) diagnoseTimezoneSettings() {
 // 复制自 internal/utils/appdir.go，避免循环依赖
 // Windows: %APPDATA%\Claude-Request-Forwarder
 // macOS: ~/Library/Application Support/Claude-Request-Forwarder
-// Linux: ~/.local/share/claude-request-forwarder
+// Linux: ~/.local/share/ai-relay-forwarder
 func getSQLiteAppDataDir() string {
 	var baseDir string
 
@@ -1106,12 +1174,12 @@ func getSQLiteAppDataDir() string {
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "claude-request-forwarder")
+			return filepath.Join(xdgDataHome, "ai-relay-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "ai-relay-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".claude-request-forwarder")
+		return filepath.Join(homeDir, ".ai-relay-forwarder")
 	}
 }
