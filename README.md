@@ -1,16 +1,18 @@
-# Claude Request Forwarder Desktop
+# AI Relay Forwarder
+
+> 原名 Claude Request Forwarder，v7.3 起更名为 AI Relay Forwarder 以反映多 AI 提供商支持。
 
 <p align="center">
-  <img src="build/appicon.png" width="128" height="128" alt="Claude Request Forwarder Desktop">
+  <img src="build/appicon.png" width="128" height="128" alt="AI Relay Forwarder">
 </p>
 
 <p align="center">
-  <strong>Claude API 智能转发代理</strong><br>
+  <strong>AI API 智能中继转发代理</strong><br>
   多端点负载均衡 · 自动故障转移 · 实时使用统计
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-7.2-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-7.3-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg" alt="Go">
@@ -21,7 +23,7 @@
 
 ## 概述
 
-Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构建的跨平台桌面应用，专为 Claude API 用户设计。它作为本地代理运行，提供智能请求转发、多端点管理、自动故障恢复等企业级功能，同时记录完整的使用统计和成本数据。
+AI Relay Forwarder 是一款基于 [Wails](https://wails.io) 构建的跨平台桌面应用，专为多 AI 提供商 API 用户设计。它作为本地代理运行，提供智能请求转发、多端点管理、自动故障恢复等企业级功能，同时记录完整的使用统计和成本数据。
 
 ### 为什么需要它？
 
@@ -90,14 +92,14 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 
 ### 方式一：下载安装包
 
-从 [Releases](https://github.com/xiaozhaodong/claude-request-forwarder-desktop/releases) 页面下载：
+从 [Releases](https://github.com/xiaozhaodong/AI-Relay-Forwarder/releases) 页面下载：
 
 | 平台                  | 文件                                            |
 | --------------------- | ----------------------------------------------- |
-| macOS (Intel)         | `Claude-Request-Forwarder-darwin-amd64.zip`   |
-| macOS (Apple Silicon) | `Claude-Request-Forwarder-darwin-arm64.zip`   |
-| Windows               | `Claude-Request-Forwarder-windows-amd64.zip`  |
-| Linux                 | `Claude-Request-Forwarder-linux-amd64.tar.gz` |
+| macOS (Intel)         | `AI-Relay-Forwarder-darwin-amd64.zip`   |
+| macOS (Apple Silicon) | `AI-Relay-Forwarder-darwin-arm64.zip`   |
+| Windows               | `AI-Relay-Forwarder-windows-amd64.zip`  |
+| Linux                 | `AI-Relay-Forwarder-linux-amd64.tar.gz` |
 
 ### 方式二：从源码构建
 
@@ -106,8 +108,8 @@ Claude Request Forwarder Desktop 是一款基于 [Wails](https://wails.io) 构�
 go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 
 # 2. 克隆项目
-git clone https://github.com/xiaozhaodong/claude-request-forwarder-desktop.git
-cd claude-request-forwarder-desktop
+git clone https://github.com/xiaozhaodong/AI-Relay-Forwarder.git
+cd AI-Relay-Forwarder
 
 # 3. 安装前端依赖
 cd frontend && npm install && cd ..
@@ -241,7 +243,7 @@ usage_tracking:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                 Claude Request Forwarder Desktop             │
+│                    AI Relay Forwarder                        │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  ┌─────────────────────┐      ┌─────────────────────────┐    │
