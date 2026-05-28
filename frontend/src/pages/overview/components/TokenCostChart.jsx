@@ -25,12 +25,24 @@ const formatTokens = (value) => {
 };
 
 // 自定义 Tooltip
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload }) => {
   if (!active || !payload || !payload.length) return null;
+
+  const item = payload[0]?.payload
+  const providerLabel = item?.provider === 'codex' ? 'Codex' : 'Claude'
 
   return (
     <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
-      <p className="font-medium text-slate-900 mb-2">{label}</p>
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+          item?.provider === 'codex'
+            ? 'bg-blue-50 text-blue-600'
+            : 'bg-orange-50 text-orange-600'
+        }`}>
+          {providerLabel}
+        </span>
+        <span className="font-medium text-slate-900">{item?.name}</span>
+      </div>
       {payload.map((entry, index) => (
         <div key={index} className="flex items-center justify-between gap-4">
           <span className="text-slate-500">{entry.name}:</span>
@@ -40,7 +52,7 @@ const CustomTooltip = ({ active, payload, label }) => {
         </div>
       ))}
     </div>
-  );
+  )
 };
 
 const TokenCostChart = () => {
@@ -155,7 +167,18 @@ const TokenCostChart = () => {
                 dataKey="name"
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#64748b', fontSize: 12 }}
+                tick={({ x, y, payload }) => {
+                  const maxLen = chartData.length > 5 ? 8 : 14
+                  const text = payload.value.length > maxLen
+                    ? payload.value.slice(0, maxLen) + '…'
+                    : payload.value
+                  return (
+                    <text x={x} y={y + 12} textAnchor="middle" fill="#64748b" fontSize={11}>
+                      <title>{payload.value}</title>
+                      {text}
+                    </text>
+                  )
+                }}
                 interval={0}
               />
               <YAxis

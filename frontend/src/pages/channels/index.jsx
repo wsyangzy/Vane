@@ -2122,7 +2122,7 @@ const ChannelsPage = () => {
             <ArrowRightLeft className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">渠道管理</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Claude 管理</h1>
             <p className="text-slate-500 text-sm mt-1">
               以渠道为单位进行路由与故障转移，渠道内优先在端点之间切换，渠道耗尽后跨渠道切换
               {lastUpdate && (

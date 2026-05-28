@@ -350,9 +350,10 @@ func (a *App) GetCodexEndpointHealthChart() EndpointHealthData {
 
 // EndpointCostItem 端点成本数据项（用于前端图表）
 type EndpointCostItem struct {
-	Name   string  `json:"name"`
-	Tokens int64   `json:"tokens"`
-	Cost   float64 `json:"cost"`
+	Name     string  `json:"name"`
+	Tokens   int64   `json:"tokens"`
+	Cost     float64 `json:"cost"`
+	Provider string  `json:"provider"`
 }
 
 // GetEndpointCosts 获取当日端点成本数据
@@ -394,7 +395,11 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 			continue
 		}
 
-		// 创建标签，格式：端点名称 (组名) 或 端点名称
+		// 端点标签：仅端点名称 (渠道名)，不含来源前缀
+		prov := cost.Provider
+		if prov == "" {
+			prov = "claude"
+		}
 		name := cost.EndpointName
 		if cost.GroupName != "" {
 			name = cost.EndpointName + " (" + cost.GroupName + ")"
@@ -404,9 +409,10 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 		totalTokens := cost.InputTokens + cost.OutputTokens + cost.CacheCreationTokens + cost.CacheReadTokens
 
 		result = append(result, EndpointCostItem{
-			Name:   name,
-			Tokens: totalTokens,
-			Cost:   cost.TotalCostUSD,
+			Name:     name,
+			Tokens:   totalTokens,
+			Cost:     cost.TotalCostUSD,
+			Provider: prov,
 		})
 	}
 
