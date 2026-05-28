@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/internal/monitor"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TestDetectResponseFormat 测试智能响应格式检测

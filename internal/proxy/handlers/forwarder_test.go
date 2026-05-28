@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
 )
 
 func TestForwarder_ForwardRequestToEndpoint(t *testing.T) {

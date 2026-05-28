@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"claude-request-forwarder/internal/store"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // ModelPricingService 模型定价管理业务服务

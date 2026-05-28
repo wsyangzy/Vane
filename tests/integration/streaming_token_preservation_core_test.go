@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/internal/middleware"
-	"claude-request-forwarder/internal/proxy"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TestStreamingTokenPreservationCore 核心流式Token保存测试

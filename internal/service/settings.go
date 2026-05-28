@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 // SettingCategory 设置分类常量

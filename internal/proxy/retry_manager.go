@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/proxy/handlers"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/proxy/handlers"
 )
 
 // RetryManager 重试管理器

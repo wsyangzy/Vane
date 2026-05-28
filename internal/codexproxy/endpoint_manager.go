@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 // CodexEndpoint 运行时端点信息（合并渠道与端点数据）

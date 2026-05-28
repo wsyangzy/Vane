@@ -484,7 +484,7 @@ func (am *ArchiveManager) getDumpFilePath() string {
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(homeDir, ".claude-request-forwarder")
+	dir := filepath.Join(homeDir, ".ai-relay-forwarder")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return ""
 	}

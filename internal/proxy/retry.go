@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // RetryHandler handles retry logic with exponential backoff

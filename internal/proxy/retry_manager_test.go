@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/proxy/handlers"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/proxy/handlers"
+	"ai-relay-forwarder/internal/tracking"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

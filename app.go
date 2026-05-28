@@ -21,18 +21,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/codexproxy"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/events"
-	"claude-request-forwarder/internal/logging"
-	"claude-request-forwarder/internal/middleware"
-	"claude-request-forwarder/internal/proxy"
-	"claude-request-forwarder/internal/service"
-	"claude-request-forwarder/internal/store"
-	"claude-request-forwarder/internal/tracking"
-	"claude-request-forwarder/internal/transport"
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/codexproxy"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/logging"
+	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/service"
+	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/transport"
+	"ai-relay-forwarder/internal/utils"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -200,7 +200,7 @@ func (a *App) startup() {
 	a.setupLogger()
 
 	// 3. 显示启动信息
-	a.logger.Info("🚀 Claude Request Forwarder 桌面版启动中...",
+	a.logger.Info("🚀 AI Relay Forwarder 桌面版启动中...",
 		"version", Version,
 		"config_file", a.configPath)
 
@@ -280,7 +280,7 @@ func (a *App) startup() {
 		a.setAppState(AppStateFailed, "代理服务器未启动（端口冲突或绑定失败）")
 		// Failed 状态：不启动后台空耗任务，仅保留 UI 让用户重试
 		a.isRunning = false
-		a.logger.Error("❌ Claude Request Forwarder 启动未完成：代理服务器未启动",
+		a.logger.Error("❌ AI Relay Forwarder 启动未完成：代理服务器未启动",
 			"configured_port", a.config.Server.Port,
 			"hint", "请在前端检查端口冲突诊断信息，修改端口后重启")
 		return
@@ -304,7 +304,7 @@ func (a *App) startup() {
 	a.startHistoryCollector()
 
 	a.isRunning = proxyStarted
-	a.logger.Info("✅ Claude Request Forwarder 启动完成",
+	a.logger.Info("✅ AI Relay Forwarder 启动完成",
 		"proxy_port", a.config.Server.Port,
 		"app_state", AppState(a.appState.Load()).String())
 }
@@ -327,7 +327,7 @@ func (a *App) shutdown() {
 	close(a.stopChan)
 
 	if logger != nil {
-		logger.Info("🛑 正在关闭 Claude Request Forwarder...")
+		logger.Info("🛑 正在关闭 AI Relay Forwarder...")
 	}
 
 	// 1. 停止接收新请求
@@ -406,7 +406,7 @@ func (a *App) shutdown() {
 	a.mu.Unlock()
 
 	if logger != nil {
-		logger.Info("✅ Claude Request Forwarder 已关闭")
+		logger.Info("✅ AI Relay Forwarder 已关闭")
 	}
 }
 
@@ -620,7 +620,7 @@ func (a *App) loadConfig() {
 	tempLogger.Info("📝 从嵌入配置加载")
 
 	// 将嵌入的配置写入临时文件进行解析
-	tmpConfigPath := filepath.Join(os.TempDir(), "claude-request-forwarder-config.yaml")
+	tmpConfigPath := filepath.Join(os.TempDir(), "ai-relay-forwarder-config.yaml")
 
 	// 先修改配置内容，替换路径为用户目录
 	configContent := string(defaultConfigContent)
@@ -1227,7 +1227,7 @@ func (a *App) setupStoreDB() {
 		if isLikelySQLiteBusyOrLocked(err) || strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded") {
 			dbReady = false
 			a.logger.Warn("⚠️ 管理数据库连接暂不可用（可能被占用/初始化耗时较长），将继续启动并允许稍后重试", "error", err)
-			a.emitNotification("warning", "数据库暂不可用", "检测到数据库可能被占用或初始化耗时较长；管理功能（设置/渠道/定价）可能暂不可用。请确保只运行一个 Claude Request Forwarder 实例，稍等后点击刷新，必要时重启。")
+			a.emitNotification("warning", "数据库暂不可用", "检测到数据库可能被占用或初始化耗时较长；管理功能（设置/渠道/定价）可能暂不可用。请确保只运行一个 AI Relay Forwarder 实例，稍等后点击刷新，必要时重启。")
 		} else {
 			_ = db.Close()
 			a.logger.Warn("⚠️ 管理数据库连接不可用", "error", err)

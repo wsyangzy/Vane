@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"claude-request-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/endpoint"
 )
 
 // ============================================================

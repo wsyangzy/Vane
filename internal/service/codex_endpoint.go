@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 var codexEndpointNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s_\-]{0,63}$`)

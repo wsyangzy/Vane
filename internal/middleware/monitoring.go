@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/events"
-	"claude-request-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/monitor"
 )
 
 // MonitoringMiddleware provides health and metrics endpoints

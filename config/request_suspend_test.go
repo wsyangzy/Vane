@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // TestRequestSuspendConfig_Defaults tests default values for RequestSuspendConfig

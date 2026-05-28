@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(t *testing.T) {

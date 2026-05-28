@@ -1,7 +1,7 @@
 package main
 
 import (
-	"claude-request-forwarder/internal/logging"
+	"ai-relay-forwarder/internal/logging"
 )
 
 // ============================================

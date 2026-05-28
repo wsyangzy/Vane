@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/monitor"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // SuspensionResult 挂起等待结果类型

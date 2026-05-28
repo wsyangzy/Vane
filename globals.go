@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/logging"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/logging"
 )
 
 // 版本信息（通过 ldflags 注入）

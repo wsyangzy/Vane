@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"time"
 
-	"claude-request-forwarder/internal/service"
-	"claude-request-forwarder/internal/store"
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/internal/service"
+	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/utils"
 )
 
 // ============================================================
@@ -74,9 +74,9 @@ type PortInfo struct {
 func (a *App) errSettingsServiceDisabled() error {
 	dbPath := a.getEffectiveUsageDBPath()
 	if dbPath != "" {
-		return fmt.Errorf("设置服务未启用（管理数据库未就绪，db=%s）。请稍等重试；若一直失败，请检查是否有另一个 Claude Request Forwarder 实例占用数据库或重启应用。", dbPath)
+		return fmt.Errorf("设置服务未启用（管理数据库未就绪，db=%s）。请稍等重试；若一直失败，请检查是否有另一个 AI Relay Forwarder 实例占用数据库或重启应用。", dbPath)
 	}
-	return fmt.Errorf("设置服务未启用（管理数据库未就绪）。请稍等重试；若一直失败，请检查是否有另一个 Claude Request Forwarder 实例占用数据库或重启应用。")
+	return fmt.Errorf("设置服务未启用（管理数据库未就绪）。请稍等重试；若一直失败，请检查是否有另一个 AI Relay Forwarder 实例占用数据库或重启应用。")
 }
 
 // GetSettingsStorageStatus 获取设置存储状态

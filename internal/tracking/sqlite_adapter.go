@@ -66,7 +66,7 @@ func (s *SQLiteAdapter) Open() error {
 		// 使用跨平台用户目录作为默认路径
 		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
 		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
-		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		// Linux: ~/.local/share/ai-relay-forwarder/data/usage.db
 		dbPath = filepath.Join(getSQLiteAppDataDir(), "data", "usage.db")
 		s.logger.Info("使用默认数据库路径", "path", dbPath)
 	}
@@ -1154,7 +1154,7 @@ func (s *SQLiteAdapter) diagnoseTimezoneSettings() {
 // 复制自 internal/utils/appdir.go，避免循环依赖
 // Windows: %APPDATA%\Claude-Request-Forwarder
 // macOS: ~/Library/Application Support/Claude-Request-Forwarder
-// Linux: ~/.local/share/claude-request-forwarder
+// Linux: ~/.local/share/ai-relay-forwarder
 func getSQLiteAppDataDir() string {
 	var baseDir string
 
@@ -1174,12 +1174,12 @@ func getSQLiteAppDataDir() string {
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "claude-request-forwarder")
+			return filepath.Join(xdgDataHome, "ai-relay-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "ai-relay-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".claude-request-forwarder")
+		return filepath.Join(homeDir, ".ai-relay-forwarder")
 	}
 }

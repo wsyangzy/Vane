@@ -2,7 +2,7 @@ package endpoint
 
 import (
 	"context"
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 	"testing"
 	"time"
 )

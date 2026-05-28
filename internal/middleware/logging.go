@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // LoggingMiddleware provides request/response logging

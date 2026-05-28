@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // CalculateRetryDelay 计算重试延迟（指数退避算法）

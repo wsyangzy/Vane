@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TestClientCancelDetection 测试客户端取消检测功能

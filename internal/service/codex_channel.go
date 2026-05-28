@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/internal/store"
 )
 
 // CodexChannelService 管理 Codex 渠道（共用配置层）。

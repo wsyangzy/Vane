@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 	"crypto/subtle"
 	"net/http"
 	"strings"

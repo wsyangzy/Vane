@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 	_ "modernc.org/sqlite"
 )
 
@@ -684,7 +684,7 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 		// 使用 internal/utils 提供的跨平台目录
 		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
 		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
-		// Linux: ~/.local/share/claude-request-forwarder/data/usage.db
+		// Linux: ~/.local/share/ai-relay-forwarder/data/usage.db
 		dbConfig.DatabasePath = filepath.Join(getAppDataDir(), "data", "usage.db")
 	}
 
@@ -703,7 +703,7 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 // 复制自 internal/utils/appdir.go，避免循环依赖
 // Windows: %APPDATA%\Claude-Request-Forwarder
 // macOS: ~/Library/Application Support/Claude-Request-Forwarder
-// Linux: ~/.local/share/claude-request-forwarder
+// Linux: ~/.local/share/ai-relay-forwarder
 func getAppDataDir() string {
 	var baseDir string
 
@@ -723,13 +723,13 @@ func getAppDataDir() string {
 		homeDir, _ := os.UserHomeDir()
 		xdgDataHome := os.Getenv("XDG_DATA_HOME")
 		if xdgDataHome != "" {
-			return filepath.Join(xdgDataHome, "claude-request-forwarder")
+			return filepath.Join(xdgDataHome, "ai-relay-forwarder")
 		}
-		return filepath.Join(homeDir, ".local", "share", "claude-request-forwarder")
+		return filepath.Join(homeDir, ".local", "share", "ai-relay-forwarder")
 
 	default:
 		homeDir, _ := os.UserHomeDir()
-		return filepath.Join(homeDir, ".claude-request-forwarder")
+		return filepath.Join(homeDir, ".ai-relay-forwarder")
 	}
 }
 
@@ -975,7 +975,7 @@ func (ut *UsageTracker) recordToFailureQueue(kind string, payload any) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(homeDir, ".claude-request-forwarder")
+	dir := filepath.Join(homeDir, ".ai-relay-forwarder")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return
 	}

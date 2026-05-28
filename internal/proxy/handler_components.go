@@ -4,12 +4,12 @@ import (
 	"context"
 	"net/http"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/monitor"
-	"claude-request-forwarder/internal/proxy/handlers"
-	"claude-request-forwarder/internal/proxy/response"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/proxy/handlers"
+	"ai-relay-forwarder/internal/proxy/response"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TokenParserProviderImpl 实现 TokenAnalyzer 所需的 TokenParserProvider 接口

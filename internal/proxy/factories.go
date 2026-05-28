@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
 )
 
 // RetryManagerFactory 重试管理器工厂接口

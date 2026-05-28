@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/events"
-	"claude-request-forwarder/internal/middleware"
-	"claude-request-forwarder/internal/proxy/handlers"
-	"claude-request-forwarder/internal/proxy/response"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/proxy/handlers"
+	"ai-relay-forwarder/internal/proxy/response"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // Context key for endpoint information

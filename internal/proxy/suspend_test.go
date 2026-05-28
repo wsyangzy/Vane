@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/proxy"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/proxy"
 )
 
 // TestRetryHandler_GetSuspendedRequestsCount tests suspended requests count management

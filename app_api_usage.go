@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-request-forwarder/internal/tracking"
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/utils"
 )
 
 const usageDBQueryTimeout = 8 * time.Second

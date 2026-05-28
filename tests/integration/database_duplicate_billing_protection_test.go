@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/internal/proxy"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/tracking"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

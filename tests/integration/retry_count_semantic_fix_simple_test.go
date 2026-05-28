@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/endpoint"
-	"claude-request-forwarder/internal/middleware"
-	"claude-request-forwarder/internal/proxy"
-	"claude-request-forwarder/internal/tracking"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // TestRetryCountSemanticFix_StreamingSuspendedStatus 测试流式请求挂起时的语义修复

@@ -24,7 +24,7 @@ import (
 	"syscall"
 	"time"
 
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/internal/utils"
 )
 
 // 端口检测缓存（避免频繁 TCP 连接）

@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	"claude-request-forwarder/internal/events"
-	"claude-request-forwarder/internal/utils"
+	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/utils"
 )
 
 // SetEventBus 设置EventBus事件总线

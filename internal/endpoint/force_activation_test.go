@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-request-forwarder/config"
+	"ai-relay-forwarder/config"
 )
 
 // TestForceActivation tests the force activation feature

@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"log"
 
-	"claude-request-forwarder/config"
-	"claude-request-forwarder/internal/store"
+	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/store"
 
 	_ "modernc.org/sqlite"
 )
