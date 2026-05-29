@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -39,23 +40,48 @@ type Handler struct {
 	classifier   *ErrorClassifier
 	logger       *slog.Logger
 	usageTracker *tracking.UsageTracker
+
+	// retryCfg 同端点重试配置（来自设置页 retry.*）
+	retryCfg config.RetryConfig
+	// failoverCfg 故障转移与挂起配置（来自设置页 failover.*）
+	failoverCfg config.FailoverConfig
+	// suspensionMgr 请求挂起队列（loop_retry 全部耗尽后等待运维干预）
+	// 为 nil 时不启用挂起，直接返回失败
+	suspensionMgr *SuspensionManager
 }
 
 // NewHandler 创建请求处理器
-func NewHandler(manager *EndpointManager, timeout time.Duration, logger *slog.Logger, usageTracker *tracking.UsageTracker) *Handler {
+// 参数：
+//   - manager:       端点管理器
+//   - timeout:       单次请求总超时
+//   - retryCfg:      同端点重试配置（max_attempts/base_delay/max_delay/multiplier）
+//   - failoverCfg:   故障转移配置（loop_retry/max_loops 等）
+//   - suspensionMgr: 请求挂起队列（nil 时不启用挂起）
+func NewHandler(
+	manager *EndpointManager,
+	timeout time.Duration,
+	retryCfg config.RetryConfig,
+	failoverCfg config.FailoverConfig,
+	suspensionMgr *SuspensionManager,
+	logger *slog.Logger,
+	usageTracker *tracking.UsageTracker,
+) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	// 所有 Codex 代理日志附加 provider=codex，用于文件分流
 	logger = logger.With("provider", "codex")
 	return &Handler{
-		manager:      manager,
-		forwarder:    NewForwarder(timeout, logger),
-		streamFwd:    NewStreamingForwarder(logger),
-		tokenParser:  NewTokenParser(),
-		classifier:   NewErrorClassifier(),
-		logger:       logger,
-		usageTracker: usageTracker,
+		manager:       manager,
+		forwarder:     NewForwarder(timeout, logger),
+		streamFwd:     NewStreamingForwarder(logger),
+		tokenParser:   NewTokenParser(),
+		classifier:    NewErrorClassifier(),
+		logger:        logger,
+		usageTracker:  usageTracker,
+		retryCfg:      retryCfg,
+		failoverCfg:   failoverCfg,
+		suspensionMgr: suspensionMgr,
 	}
 }
 
@@ -70,6 +96,10 @@ func generateRequestID() string {
 func strPtr(s string) *string { return &s }
 
 // ServeHTTP 实现 http.Handler
+// 三层重试结构：
+//  1. 外层 loop_retry: 端点列表耗尽后是否回到首位再来一轮（受 failover.loop_retry/max_loops 控制）
+//  2. 中层 endpoint cycle: 按优先级遍历当前轮可用端点
+//  3. 内层 same-endpoint retry: 单端点的瞬时错误指数退避重试（受 retry.* 控制）
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestID := generateRequestID()
@@ -107,46 +137,189 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel)
 
-	// 6. 获取主端点
-	endpoint, err := h.manager.GetPrimaryEndpoint()
-	if err != nil {
-		h.logger.Error("无可用端点", "error", err)
-		// 🆕 [Codex 生命周期] 请求最终失败日志
-		h.logger.Error("[Codex 请求失败]",
-			"provider", "codex",
-			"request_id", requestID,
-			"failure_reason", "network_error",
-			"detail", "无可用 Codex 端点",
-			"duration_ms", time.Since(startTime).Milliseconds(),
-			"endpoints_tried", 0,
-			"channel", channelName,
-		)
-		h.recordFailure(requestID, startTime, "network_error", "无可用 Codex 端点", http.StatusServiceUnavailable, nil, requestModel)
-		h.writeError(w, http.StatusServiceUnavailable, "无可用 Codex 端点")
-		return
+	// 6. 决定外层循环轮数（loop_retry）
+	maxLoops := 1
+	if h.failoverCfg.LoopRetry {
+		maxLoops = h.failoverCfg.GetMaxLoops()
+		if maxLoops <= 0 {
+			maxLoops = 1
+		}
 	}
 
-	// 7. 转发请求（含故障转移循环）
+	// 7. 渠道内循环重试 + 挂起等待运维干预（最多挂起一次）
 	var failedNames []string
 	var endpointChain []chainNode
+	var lastErr error
+	var lastStatus int
+	var lastSummary string
+	suspendedOnce := false
+
+outerLoop:
 	for {
-		// 追加链路节点（按 channel+endpoint 切换去重，与 Claude 端 AppendEndpointChain 行为对齐）
-		n := len(endpointChain)
-		if n == 0 || endpointChain[n-1].Channel != channelName || endpointChain[n-1].Endpoint != endpoint.Name {
-			endpointChain = append(endpointChain, chainNode{
+		for loopRound := 0; loopRound < maxLoops; loopRound++ {
+			if loopRound > 0 {
+				// 新一轮：重置端点不健康状态 + 清空已失败名单，让所有端点重新可选
+				h.manager.ResetUnhealthy()
+				failedNames = failedNames[:0]
+				h.logger.Info("[Codex 循环重试]",
+					"provider", "codex",
+					"request_id", requestID,
+					"round", loopRound+1,
+					"max_loops", maxLoops,
+				)
+			}
+
+			result := h.tryEndpointCycle(
+				w, r, body, requestID, startTime,
+				isStreaming, channelName, requestModel,
+				&failedNames, &endpointChain,
+			)
+			if result.completed {
+				// 响应已写给客户端（成功 / 客户端取消 / FailFast）
+				return
+			}
+
+			// 端点列表耗尽，保存最后一次失败信息，决定是否再来一轮
+			lastErr = result.lastErr
+			lastStatus = result.lastStatus
+			lastSummary = result.lastSummary
+		}
+
+		// loop_retry 全部耗尽 → 尝试挂起等待运维干预（最多挂起一次）
+		canSuspend := !suspendedOnce && h.suspensionMgr != nil &&
+			h.failoverCfg.LoopRetrySuspendTimeout > 0
+		if !canSuspend {
+			break outerLoop
+		}
+		suspendedOnce = true
+
+		suspendRes := h.suspensionMgr.Suspend(r.Context(), requestID, h.failoverCfg.LoopRetrySuspendTimeout)
+		switch suspendRes {
+		case SuspendRecovered:
+			// 重置状态再来一轮 loop_retry
+			failedNames = failedNames[:0]
+			h.manager.ResetUnhealthy()
+			h.logger.Info("[Codex 挂起恢复] 运维干预后重新进入端点循环",
+				"provider", "codex",
+				"request_id", requestID,
+				"endpoints_tried", len(endpointChain),
+			)
+			continue outerLoop
+
+		case SuspendCanceled:
+			// 客户端在挂起期间取消
+			h.logger.Info("[Codex 请求取消]",
+				"provider", "codex",
+				"request_id", requestID,
+				"duration_ms", time.Since(startTime).Milliseconds(),
+				"reason", "client_canceled_during_suspend",
+			)
+			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_suspend", 499, nil, requestModel)
+			return
+
+		case SuspendTimedOut:
+			// 超时未被唤醒，落入失败逻辑
+			h.logger.Warn("[Codex 挂起超时] 运维未在超时前激活渠道/端点",
+				"provider", "codex",
+				"request_id", requestID,
+				"timeout", h.failoverCfg.LoopRetrySuspendTimeout.String(),
+			)
+			break outerLoop
+
+		case SuspendRejected:
+			// 挂起队列已满，落入失败逻辑
+			h.logger.Warn("[Codex 挂起拒绝] 已达最大挂起请求数",
+				"provider", "codex",
+				"request_id", requestID,
+			)
+			break outerLoop
+		}
+	}
+
+	// 8. 所有循环耗尽 + 挂起也失败
+	statusCode := http.StatusServiceUnavailable
+	if lastStatus >= 400 {
+		statusCode = lastStatus
+	}
+	detail := h.buildExhaustedDetail(maxLoops, endpointChain, lastErr, lastStatus, lastSummary)
+	h.logger.Error("[Codex 请求失败]",
+		"provider", "codex",
+		"request_id", requestID,
+		"failure_reason", "endpoint_exhausted",
+		"detail", detail,
+		"duration_ms", time.Since(startTime).Milliseconds(),
+		"endpoints_tried", len(endpointChain),
+		"loops_tried", maxLoops,
+		"channel", channelName,
+	)
+	h.recordFailure(requestID, startTime, "endpoint_exhausted", detail, statusCode, nil, requestModel)
+	h.writeError(w, statusCode, detail)
+}
+
+// cycleResult 端点循环结果
+type cycleResult struct {
+	completed   bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
+	lastErr     error  // 最后一次端点失败的错误
+	lastStatus  int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
+	lastSummary string // 最后一次上游错误响应摘要
+}
+
+// tryEndpointCycle 单轮端点列表遍历（含每个端点的同端点重试）
+// 返回 completed=true 表示已写响应给客户端；false 表示需要外层 loop 判断
+func (h *Handler) tryEndpointCycle(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID string,
+	startTime time.Time,
+	isStreaming bool,
+	channelName string,
+	requestModel string,
+	failedNames *[]string,
+	endpointChain *[]chainNode,
+) cycleResult {
+	// 选择起始端点
+	endpoint, err := h.manager.GetPrimaryEndpoint()
+	if err != nil {
+		// 首次就无端点：写错误并完成
+		if len(*endpointChain) == 0 {
+			h.logger.Error("无可用端点", "error", err)
+			h.logger.Error("[Codex 请求失败]",
+				"provider", "codex",
+				"request_id", requestID,
+				"failure_reason", "network_error",
+				"detail", "无可用 Codex 端点",
+				"duration_ms", time.Since(startTime).Milliseconds(),
+				"endpoints_tried", 0,
+				"channel", channelName,
+			)
+			h.recordFailure(requestID, startTime, "network_error", "无可用 Codex 端点", http.StatusServiceUnavailable, nil, requestModel)
+			h.writeError(w, http.StatusServiceUnavailable, "无可用 Codex 端点")
+			return cycleResult{completed: true}
+		}
+		// 非首轮：返回让外层决定
+		return cycleResult{completed: false, lastErr: err}
+	}
+
+	// 遍历当前轮可用端点
+	for {
+		// 追加链路节点（按 channel+endpoint 切换去重）
+		n := len(*endpointChain)
+		if n == 0 || (*endpointChain)[n-1].Channel != channelName || (*endpointChain)[n-1].Endpoint != endpoint.Name {
+			*endpointChain = append(*endpointChain, chainNode{
 				Hop:      n + 1,
 				Channel:  channelName,
 				Endpoint: endpoint.Name,
 			})
 		}
-		h.recordForwarding(requestID, endpoint.Name, channelName, endpointChain)
+		h.recordForwarding(requestID, endpoint.Name, channelName, *endpointChain)
 
 		// 🆕 [Codex 生命周期] 端点选择日志
 		h.logger.Info("[Codex 端点选择]",
 			"provider", "codex",
 			"request_id", requestID,
 			"endpoint", endpoint.Name,
-			"hop", len(endpointChain),
+			"hop", len(*endpointChain),
 			"channel", channelName,
 		)
 
@@ -157,201 +330,221 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"streaming", isStreaming,
 		)
 
-		fwd := h.forwarder
-		if isStreaming {
-			fwd = h.streamFwd
-		}
+		// 同端点重试转发
+		resp, fwdErr := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID)
 
-		resp, fwdErr := fwd.Forward(r, body, endpoint)
-		if fwdErr != nil {
-			// 🆕 [Codex 生命周期] 客户端取消检测（context.Canceled 不应进入故障转移流程）
-			if errors.Is(fwdErr, context.Canceled) {
-				h.logger.Info("[Codex 请求取消]",
-					"provider", "codex",
-					"request_id", requestID,
-					"endpoint", endpoint.Name,
-					"duration_ms", time.Since(startTime).Milliseconds(),
-					"reason", "client_canceled",
-				)
-				h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", 499, nil, requestModel)
-				return
-			}
-
-			// 网络错误，尝试故障转移
-			action := h.classifier.Classify(nil, fwdErr)
-			if action == ActionFailFast {
-				h.logger.Error("转发失败且不可重试",
-					"request_id", requestID,
-					"endpoint", endpoint.Name,
-					"error", fwdErr,
-				)
-				// 🆕 [Codex 生命周期] 请求最终失败日志
-				h.logger.Error("[Codex 请求失败]",
-					"provider", "codex",
-					"request_id", requestID,
-					"failure_reason", "network_error",
-					"detail", fwdErr.Error(),
-					"duration_ms", time.Since(startTime).Milliseconds(),
-					"endpoints_tried", len(endpointChain),
-					"channel", channelName,
-				)
-				h.recordFailure(requestID, startTime, "network_error", fwdErr.Error(), http.StatusBadGateway, nil, requestModel)
-				h.writeError(w, http.StatusBadGateway, "转发请求失败")
-				return
-			}
-
-			h.logger.Warn("转发失败，尝试故障转移",
-				"request_id", requestID,
-				"endpoint", endpoint.Name,
-				"error", fwdErr,
-			)
-			h.manager.MarkUnhealthy(endpoint.Name, 0)
-			failedNames = append(failedNames, endpoint.Name)
-
-			failedEndpointName := endpoint.Name
-			next, nextErr := h.manager.GetNextEndpoint(failedNames)
-			if nextErr != nil {
-				h.logger.Error("所有端点均不可用",
-					"request_id", requestID,
-					"error", nextErr,
-				)
-				detail := fmt.Sprintf("endpoint_exhausted: 所有端点均不可用 (尝试 %d 个端点, 最后错误: %v)", len(endpointChain), fwdErr)
-				h.logger.Error("[Codex 请求失败]",
-					"provider", "codex",
-					"request_id", requestID,
-					"failure_reason", "endpoint_exhausted",
-					"detail", detail,
-					"duration_ms", time.Since(startTime).Milliseconds(),
-					"endpoints_tried", len(endpointChain),
-					"channel", channelName,
-				)
-				h.recordFailure(requestID, startTime, "endpoint_exhausted", detail, http.StatusServiceUnavailable, nil, requestModel)
-				h.writeError(w, http.StatusServiceUnavailable, detail)
-				return
-			}
-
-			// 🆕 [Codex 生命周期] 故障转移日志
-			h.logger.Warn("[Codex 故障转移]",
+		// 客户端取消（context.Canceled）：直接结束
+		if errors.Is(fwdErr, context.Canceled) {
+			h.logger.Info("[Codex 请求取消]",
 				"provider", "codex",
 				"request_id", requestID,
-				"failed_endpoint", failedEndpointName,
-				"retry_count", len(endpointChain),
-				"next_endpoint", next.Name,
-				"reason", fwdErr.Error(),
+				"endpoint", endpoint.Name,
+				"duration_ms", time.Since(startTime).Milliseconds(),
+				"reason", "client_canceled",
 			)
-			// 🆕 [详细日志] 故障转移（emoji 风格，对齐 Claude 日志详细度）
-			h.logger.Warn(fmt.Sprintf("⚠️ [Codex故障转移] [%s] 失败端点: %s → 切换到: %s, 已尝试: %d 端点, 原因: %v",
-				requestID, failedEndpointName, next.Name, len(endpointChain), fwdErr),
-				"provider", "codex", "request_id", requestID)
-			endpoint = next
-			continue
+			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", 499, nil, requestModel)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			return cycleResult{completed: true}
 		}
 
-		// 检查 HTTP 状态码
-		if resp.StatusCode >= 400 {
-			action := h.classifier.Classify(resp, nil)
-			if action == ActionRetry {
-				// 读取上游错误响应体用于日志和追踪
-				_, errSummary := h.readErrorBody(resp)
-				resp.Body.Close()
-				h.logger.Warn("上游返回可重试错误",
-					"request_id", requestID,
-					"endpoint", endpoint.Name,
-					"status", resp.StatusCode,
-					"upstream_response", errSummary,
-				)
-				h.logger.Warn(fmt.Sprintf("🔁 [Codex重试] [%s] 端点: %s, HTTP状态: %d, 上游响应: %s",
-					requestID, endpoint.Name, resp.StatusCode, errSummary),
-					"provider", "codex", "request_id", requestID)
-				h.manager.MarkUnhealthy(endpoint.Name, 0)
-				failedNames = append(failedNames, endpoint.Name)
-
-				failedEndpointName := endpoint.Name
-				failedStatus := resp.StatusCode
-				next, nextErr := h.manager.GetNextEndpoint(failedNames)
-				if nextErr != nil {
-					// 无更多端点，透传最后一个错误响应
-					resp2, err2 := fwd.Forward(r, body, endpoint)
-					if err2 != nil {
-						detail := fmt.Sprintf("endpoint_exhausted: 所有端点均不可用 (最后端点 %s HTTP %d: %s)", failedEndpointName, failedStatus, errSummary)
-						h.logger.Error("[Codex 请求失败]",
-							"provider", "codex",
-							"request_id", requestID,
-							"failure_reason", "endpoint_exhausted",
-							"detail", detail,
-							"duration_ms", time.Since(startTime).Milliseconds(),
-							"endpoints_tried", len(endpointChain),
-							"channel", channelName,
-						)
-						h.recordFailure(requestID, startTime, "endpoint_exhausted", detail, http.StatusBadGateway, nil, requestModel)
-						h.writeError(w, http.StatusBadGateway, detail)
-						return
-					}
-					body2, errSummary2 := h.readErrorBody(resp2)
-					detail := fmt.Sprintf("endpoint_exhausted: 所有端点均失败，上游 HTTP %d: %s", resp2.StatusCode, errSummary2)
-					h.logger.Error("[Codex 请求失败]",
-						"provider", "codex",
+		// 成功路径：无错误且 status < 400
+		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
+			// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
+			if len(*failedNames) > 0 {
+				if err := h.manager.PromoteActive(endpoint.Name); err != nil {
+					h.logger.Warn("故障转移后提升活跃端点失败",
 						"request_id", requestID,
-						"failure_reason", "endpoint_exhausted",
-						"detail", detail,
-						"duration_ms", time.Since(startTime).Milliseconds(),
-						"endpoints_tried", len(endpointChain),
-						"channel", channelName,
+						"endpoint", endpoint.Name,
+						"error", err,
 					)
-					h.recordFailure(requestID, startTime, "endpoint_exhausted", detail, resp2.StatusCode, nil, requestModel)
-					h.passthroughWithBody(w, resp2, body2)
-					return
 				}
-				h.logger.Warn("[Codex 故障转移]",
+			}
+			if isStreaming {
+				h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain))
+			} else {
+				h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain))
+			}
+			return cycleResult{completed: true}
+		}
+
+		// 失败路径：先读取上游响应摘要（仅当 resp 非空）
+		var errSummary string
+		var errBody []byte
+		var status int
+		if resp != nil {
+			status = resp.StatusCode
+			errBody, errSummary = h.readErrorBody(resp)
+		}
+
+		// 三态分类
+		action := h.classifier.Classify(resp, fwdErr)
+
+		// FailFast：透传上游 4xx 错误响应，不再尝试任何重试或切换
+		if action == ActionFailFast {
+			if resp != nil {
+				detail := fmt.Sprintf("上游 HTTP %d: %s", status, errSummary)
+				h.logger.Error("[Codex 请求失败]",
 					"provider", "codex",
 					"request_id", requestID,
-					"failed_endpoint", failedEndpointName,
-					"retry_count", len(endpointChain),
-					"next_endpoint", next.Name,
-					"reason", fmt.Sprintf("HTTP %d: %s", failedStatus, errSummary),
+					"failure_reason", "server_error",
+					"detail", detail,
+					"duration_ms", time.Since(startTime).Milliseconds(),
+					"endpoints_tried", len(*endpointChain),
+					"channel", channelName,
 				)
-				h.logger.Warn(fmt.Sprintf("⚠️ [Codex故障转移] [%s] 失败端点: %s → 切换到: %s, 已尝试: %d 端点, HTTP状态: %d, 原因: %s",
-					requestID, failedEndpointName, next.Name, len(endpointChain), failedStatus, errSummary),
-					"provider", "codex", "request_id", requestID)
-				endpoint = next
-				continue
+				h.recordFailure(requestID, startTime, "server_error", detail, resp.StatusCode, nil, requestModel)
+				h.passthroughWithBody(w, resp, errBody)
+				return cycleResult{completed: true}
 			}
-			// 不可重试的错误（如 HTTP 400），读取响应体后透传
-			errBody, errSummary := h.readErrorBody(resp)
-			detail := fmt.Sprintf("上游 HTTP %d: %s", resp.StatusCode, errSummary)
+			// 兜底：网络错误归类为 ActionRetry，理论不应到这里
+			detail := "请求失败"
+			if fwdErr != nil {
+				detail = fwdErr.Error()
+			}
 			h.logger.Error("[Codex 请求失败]",
 				"provider", "codex",
 				"request_id", requestID,
-				"failure_reason", "server_error",
+				"failure_reason", "network_error",
 				"detail", detail,
 				"duration_ms", time.Since(startTime).Milliseconds(),
-				"endpoints_tried", len(endpointChain),
+				"endpoints_tried", len(*endpointChain),
 				"channel", channelName,
 			)
-			h.recordFailure(requestID, startTime, "server_error", detail, resp.StatusCode, nil, requestModel)
-			h.passthroughWithBody(w, resp, errBody)
-			return
+			h.recordFailure(requestID, startTime, "network_error", detail, http.StatusBadGateway, nil, requestModel)
+			h.writeError(w, http.StatusBadGateway, detail)
+			return cycleResult{completed: true}
 		}
 
-		// 8. 成功响应 — 处理流式/非流式
-		// 如果发生过故障转移（len(failedNames) > 0），将当前成功的端点提升为活跃端点
-		// 这样前端 UI 中的"当前激活"标记会随实际工作端点更新
-		if len(failedNames) > 0 {
-			if err := h.manager.PromoteActive(endpoint.Name); err != nil {
-				h.logger.Warn("故障转移后提升活跃端点失败",
-					"request_id", requestID,
-					"endpoint", endpoint.Name,
-					"error", err,
-				)
+		// ActionRetry / ActionFailover：标记当前端点不健康并切换下一个
+		if resp != nil {
+			resp.Body.Close()
+		}
+		failedEndpointName := endpoint.Name
+		h.manager.MarkUnhealthy(endpoint.Name)
+		*failedNames = append(*failedNames, endpoint.Name)
+
+		// 失败原因日志
+		var reason string
+		if fwdErr != nil {
+			reason = fwdErr.Error()
+			h.logger.Warn(fmt.Sprintf("⚠️ [Codex故障转移] [%s] 失败端点: %s, 已尝试: %d 端点, 原因: %v",
+				requestID, failedEndpointName, len(*endpointChain), fwdErr),
+				"provider", "codex", "request_id", requestID)
+		} else {
+			reason = fmt.Sprintf("HTTP %d: %s", status, errSummary)
+			h.logger.Warn(fmt.Sprintf("🔁 [Codex故障转移] [%s] 端点: %s, HTTP状态: %d, 上游响应: %s",
+				requestID, failedEndpointName, status, errSummary),
+				"provider", "codex", "request_id", requestID)
+		}
+
+		// 选下个端点
+		next, nextErr := h.manager.GetNextEndpoint(*failedNames)
+		if nextErr != nil {
+			// 当前轮端点列表耗尽，返回让外层 loop 决定是否再来一轮
+			return cycleResult{
+				completed:   false,
+				lastErr:     fwdErr,
+				lastStatus:  status,
+				lastSummary: errSummary,
 			}
 		}
-		if isStreaming {
-			h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(endpointChain))
-		} else {
-			h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(endpointChain))
-		}
-		return
+
+		h.logger.Warn("[Codex 故障转移]",
+			"provider", "codex",
+			"request_id", requestID,
+			"failed_endpoint", failedEndpointName,
+			"retry_count", len(*endpointChain),
+			"next_endpoint", next.Name,
+			"reason", reason,
+		)
+		endpoint = next
 	}
+}
+
+// forwardWithRetry 单端点同端点重试（指数退避）
+// 仅在 classifier 返回 ActionRetry 时重试（瞬时错误：网络错误、408、425）
+// 其他情况（成功、ActionFailover、ActionFailFast）立即返回，由外层 cycle 处理
+func (h *Handler) forwardWithRetry(
+	r *http.Request,
+	body []byte,
+	endpoint *CodexEndpoint,
+	isStreaming bool,
+	requestID string,
+) (*http.Response, error) {
+	fwd := h.forwarder
+	if isStreaming {
+		fwd = h.streamFwd
+	}
+
+	maxAttempts := h.retryCfg.MaxAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	var lastResp *http.Response
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// 关闭上一次的响应体（如果有）
+			if lastResp != nil {
+				lastResp.Body.Close()
+				lastResp = nil
+			}
+			delay := computeBackoff(attempt-1, h.retryCfg.BaseDelay, h.retryCfg.MaxDelay, h.retryCfg.Multiplier)
+			h.logger.Info("[Codex 同端点重试]",
+				"provider", "codex",
+				"request_id", requestID,
+				"endpoint", endpoint.Name,
+				"attempt", attempt+1,
+				"max_attempts", maxAttempts,
+				"delay_ms", delay.Milliseconds(),
+			)
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+		}
+
+		resp, err := fwd.Forward(r, body, endpoint)
+		lastResp = resp
+		lastErr = err
+
+		// 客户端取消直接返回
+		if errors.Is(err, context.Canceled) {
+			return resp, err
+		}
+
+		// 只有 ActionRetry 才继续重试；其他动作（含成功、ActionFailover、ActionFailFast）立即返回
+		action := h.classifier.Classify(resp, err)
+		if action != ActionRetry {
+			return resp, err
+		}
+		// ActionRetry 但已是最后一次：返回让外层 cycle 切换端点
+		if attempt+1 >= maxAttempts {
+			return resp, err
+		}
+	}
+
+	return lastResp, lastErr
+}
+
+// buildExhaustedDetail 构造端点耗尽时的错误描述
+func (h *Handler) buildExhaustedDetail(maxLoops int, chain []chainNode, lastErr error, lastStatus int, lastSummary string) string {
+	base := fmt.Sprintf("endpoint_exhausted: 已尝试 %d 个端点", len(chain))
+	if maxLoops > 1 {
+		base += fmt.Sprintf("（共 %d 轮循环）", maxLoops)
+	}
+	if lastErr != nil {
+		return base + fmt.Sprintf(", 最后错误: %v", lastErr)
+	}
+	if lastStatus >= 400 {
+		return base + fmt.Sprintf(", 最后 HTTP %d: %s", lastStatus, lastSummary)
+	}
+	return base
 }
 
 // handleNonStreaming 处理非流式响应：读取完整 body，解析 token，写回客户端

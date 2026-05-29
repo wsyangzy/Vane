@@ -1,59 +1,57 @@
 // health_checker.go - Codex 端点健康检查器
-// 定时对端点执行网络延迟探测（HTTP GET base_url/v1/models），
+// 定时对端点执行网络延迟探测（HTTP GET base_url + health_path），
 // 记录 RTT 并根据超时情况标记端点健康状态。
+//
+// 配置热生效：interval / timeout / health_path 每次 ticker / 探测时动态从 config 读取，
+// 与 Claude 端 internal/endpoint/health_check.go 的行为保持一致。
 
 package codexproxy
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"ai-relay-forwarder/config"
+)
+
+const (
+	defaultCodexHealthInterval = 30 * time.Second
+	defaultCodexHealthTimeout  = 5 * time.Second
+	defaultCodexHealthPath     = "/v1/models"
 )
 
 // HealthChecker 定时对端点执行网络延迟探测
 type HealthChecker struct {
-	manager  *EndpointManager
-	interval time.Duration // 探测间隔，默认 30s
-	timeout  time.Duration // 单次探测超时，默认 5s
+	manager *EndpointManager
+	cfg     *config.Config // 动态读取 Health.* 字段，配置热生效
 
 	mu        sync.RWMutex
 	latencies map[string]int64 // endpoint name -> latency ms (-1 表示超时/不可达)
 
-	client *http.Client
 	stopCh chan struct{}
 	wg     sync.WaitGroup
 	logger *slog.Logger
 }
 
 // NewHealthChecker 创建健康检查器实例
-func NewHealthChecker(
-	manager *EndpointManager,
-	interval, timeout time.Duration,
-	logger *slog.Logger,
-) *HealthChecker {
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
+// 参数 cfg 用于运行时动态读取 health.check_interval / timeout / health_path，
+// 设置页改动后下一次 ticker / 探测即生效，无需重启。
+func NewHealthChecker(manager *EndpointManager, cfg *config.Config, logger *slog.Logger) *HealthChecker {
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	return &HealthChecker{
 		manager:   manager,
-		interval:  interval,
-		timeout:   timeout,
+		cfg:       cfg,
 		latencies: make(map[string]int64),
-		client: &http.Client{
-			Timeout: timeout,
-		},
-		stopCh: make(chan struct{}),
-		logger: logger,
+		stopCh:    make(chan struct{}),
+		logger:    logger,
 	}
 }
 
@@ -61,9 +59,11 @@ func NewHealthChecker(
 func (h *HealthChecker) Start() {
 	h.wg.Add(1)
 	go h.loop()
+	interval, timeout, healthPath := h.readHealthConfig()
 	h.logger.Info("Codex 健康检查器已启动",
-		"interval", h.interval.String(),
-		"timeout", h.timeout.String(),
+		"interval", interval.String(),
+		"timeout", timeout.String(),
+		"health_path", healthPath,
 	)
 }
 
@@ -72,6 +72,12 @@ func (h *HealthChecker) Stop() {
 	close(h.stopCh)
 	h.wg.Wait()
 	h.logger.Info("Codex 健康检查器已停止")
+}
+
+// CheckNow 异步立即触发一次完整探测（不阻塞调用方）
+// 用于渠道/端点 CRUD 后立即刷新健康状态，避免用户等待下一个 ticker 周期（最多 30s）
+func (h *HealthChecker) CheckNow() {
+	go h.checkAll()
 }
 
 // GetLatencies 获取所有端点的延迟数据（供前端展示）
@@ -86,14 +92,36 @@ func (h *HealthChecker) GetLatencies() map[string]int64 {
 	return result
 }
 
-// loop 定时执行探测循环
+// readHealthConfig 动态读取健康检查配置（带默认值兜底）
+// 每次 ticker 调整、每次探测时都重新读取，确保设置页改动立即生效
+func (h *HealthChecker) readHealthConfig() (interval, timeout time.Duration, healthPath string) {
+	interval = defaultCodexHealthInterval
+	timeout = defaultCodexHealthTimeout
+	healthPath = defaultCodexHealthPath
+	if h.cfg == nil {
+		return
+	}
+	if h.cfg.Health.CheckInterval > 0 {
+		interval = h.cfg.Health.CheckInterval
+	}
+	if h.cfg.Health.Timeout > 0 {
+		timeout = h.cfg.Health.Timeout
+	}
+	if trimmed := strings.TrimSpace(h.cfg.Health.HealthPath); trimmed != "" {
+		healthPath = trimmed
+	}
+	return
+}
+
+// loop 定时执行探测循环（间隔动态调整，与 Claude 端 health_check.go 行为对齐）
 func (h *HealthChecker) loop() {
 	defer h.wg.Done()
 
 	// 启动后立即执行一次探测
 	h.checkAll()
 
-	ticker := time.NewTicker(h.interval)
+	currentInterval, _, _ := h.readHealthConfig()
+	ticker := time.NewTicker(currentInterval)
 	defer ticker.Stop()
 
 	for {
@@ -101,6 +129,17 @@ func (h *HealthChecker) loop() {
 		case <-h.stopCh:
 			return
 		case <-ticker.C:
+			// 动态调整间隔（设置页改了 check_interval 后下一轮即生效）
+			newInterval, _, _ := h.readHealthConfig()
+			if newInterval != currentInterval {
+				h.logger.Info("Codex 健康检查间隔已更新",
+					"old", currentInterval,
+					"new", newInterval,
+				)
+				currentInterval = newInterval
+				ticker.Stop()
+				ticker = time.NewTicker(currentInterval)
+			}
 			h.checkAll()
 		}
 	}
@@ -124,12 +163,16 @@ func (h *HealthChecker) checkAll() {
 	wg.Wait()
 }
 
-// checkEndpoint 对单个端点执行 HTTP GET base_url/v1/models 测量 RTT
-// 超时标记为 unhealthy（cooldown 30s），成功则标记 healthy 并记录延迟
+// checkEndpoint 对单个端点执行 HTTP GET base_url + healthPath 测量 RTT
+// timeout / healthPath 每次都动态读取，配置变更立即生效
 func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
-	url := buildProbeURL(ep.BaseURL)
+	_, timeout, healthPath := h.readHealthConfig()
+	url := buildProbeURL(ep.BaseURL, healthPath)
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		h.logger.Error("构建探测请求失败",
 			"endpoint", ep.Name,
@@ -137,7 +180,7 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"error", err,
 		)
 		h.recordLatency(ep.Name, -1)
-		h.manager.MarkUnhealthy(ep.Name, 0)
+		h.manager.MarkUnhealthy(ep.Name)
 		return
 	}
 
@@ -146,8 +189,11 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ep.APIKey))
 	}
 
+	// 每次探测用独立 client（开销小且确保 timeout 生效不依赖 client.Timeout）
+	client := &http.Client{Timeout: timeout}
+
 	start := time.Now()
-	resp, err := h.client.Do(req)
+	resp, err := client.Do(req)
 	elapsed := time.Since(start)
 	latencyMs := elapsed.Milliseconds()
 
@@ -159,7 +205,7 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"elapsed_ms", latencyMs,
 		)
 		h.recordLatency(ep.Name, -1)
-		h.manager.MarkUnhealthy(ep.Name, 0)
+		h.manager.MarkUnhealthy(ep.Name)
 		return
 	}
 	resp.Body.Close()
@@ -182,8 +228,35 @@ func (h *HealthChecker) recordLatency(name string, ms int64) {
 	h.mu.Unlock()
 }
 
-// buildProbeURL 构建探测 URL：base_url + /v1/models
-func buildProbeURL(baseURL string) string {
-	base := strings.TrimRight(baseURL, "/")
-	return base + "/v1/models"
+// buildProbeURL 构建探测 URL。
+// - 若 healthPath 以 / 开头：与 baseURL 拼接时兼容 baseURL 已包含 /v1 的情况（当 healthPath 也以 /v1/ 开头时，避免出现 /v1/v1/ 重复）。
+// - 若 healthPath 不以 / 开头：直接以 / 拼接到 baseURL 之后。
+func buildProbeURL(baseURL, healthPath string) string {
+	path := strings.TrimSpace(healthPath)
+	if path == "" {
+		path = defaultCodexHealthPath
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		return path
+	}
+
+	u, err := url.Parse(base)
+	if err != nil {
+		return base + path
+	}
+
+	urlPath := strings.TrimRight(u.Path, "/")
+	// 当 baseURL 路径已以 /v1 结尾、且 healthPath 也以 /v1/ 开头时，去掉重复的 /v1 前缀避免 /v1/v1/
+	if strings.HasSuffix(urlPath, "/v1") && strings.HasPrefix(path, "/v1/") {
+		u.Path = urlPath + strings.TrimPrefix(path, "/v1")
+		return u.String()
+	}
+
+	u.Path = urlPath + path
+	return u.String()
 }

@@ -345,7 +345,7 @@ func (gm *GroupManager) updateActiveGroups() {
 				slog.Debug("🚀 [组管理] 检测到系统启动 - 尝试激活最高优先级可用组")
 			} else {
 				autoSwitchEnabled := gm.config.Failover.Enabled
-				if !autoSwitchEnabled && gm.config.RequestSuspend.Enabled {
+				if !autoSwitchEnabled && gm.config.Failover.SuspendOnExhausted {
 					shouldAutoActivate = false
 					slog.Debug("⏸️ [组管理] 运行时故障且启用挂起 - 不激活其他组，等待挂起处理")
 				} else {

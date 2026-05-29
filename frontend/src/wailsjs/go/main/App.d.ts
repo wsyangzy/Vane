@@ -180,6 +180,12 @@ export function UpdateCodexEndpointByID(arg1:number,arg2:main.UpdateCodexEndpoin
 export function DeleteCodexEndpointByID(arg1:number):Promise<void>;
 export function ActivateCodexEndpoint(arg1:number):Promise<void>;
 
+export function GetCodexSuspendedCount():Promise<number>;
+
+export function GetCodexGlobalConfig():Promise<main.CodexGlobalConfigInfo>;
+
+export function UpdateCodexGlobalConfig(arg1:main.CodexGlobalConfigInput):Promise<void>;
+
 export function UpdateEndpointRecord(arg1:string,arg2:main.CreateEndpointInput):Promise<void>;
 
 export function UpdateEndpointRecordByID(arg1:number,arg2:main.CreateEndpointInput):Promise<void>;

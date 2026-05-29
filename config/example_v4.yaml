@@ -55,11 +55,10 @@ failover:
 #   cooldown: "10m"                      # 自动映射到 failover.default_cooldown
 #   auto_switch_between_groups: true     # 自动映射到 failover.enabled
 
-# 请求挂起配置
-request_suspend:
-  enabled: false
-  timeout: "300s"
-  max_suspended_requests: 100
+# 请求挂起配置已合并到 failover 配置块（v7.3+）
+# 旧 request_suspend.enabled              → failover.suspend_on_exhausted
+# 旧 request_suspend.timeout              → failover.suspend_timeout
+# 旧 request_suspend.max_suspended_requests → failover.max_suspended_requests
 
 # 全局超时配置
 global_timeout: "300s"

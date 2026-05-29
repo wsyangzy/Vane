@@ -10,13 +10,19 @@ import (
 	"runtime/debug"
 	"time"
 
+	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/tracking"
 )
 
 // ServerConfig 服务器配置
 // v7.2+ Codex 合并到主代理端口，仅保留 Timeout 用于转发超时控制。
+// v7.3+ 增加 Retry/Failover 接入设置页配置（同端点重试 + 渠道内循环）。
+// v7.3+ 增加 SuspensionMgr 接入请求挂起队列（loop_retry 全部耗尽后等待运维干预）。
 type ServerConfig struct {
-	Timeout time.Duration
+	Timeout       time.Duration
+	Retry         config.RetryConfig    // 同端点重试配置（来自设置页 retry.*）
+	Failover      config.FailoverConfig // 故障转移配置（来自设置页 failover.*）
+	SuspensionMgr *SuspensionManager    // 请求挂起队列（nil 时不启用挂起）
 }
 
 // NewHTTPHandler 创建完整的 HTTP handler（含中间件）
@@ -33,7 +39,7 @@ func NewHTTPHandler(manager *EndpointManager, cfg ServerConfig, logger *slog.Log
 		timeout = 300 * time.Second
 	}
 
-	handler := NewHandler(manager, timeout, logger, usageTracker)
+	handler := NewHandler(manager, timeout, cfg.Retry, cfg.Failover, cfg.SuspensionMgr, logger, usageTracker)
 
 	// 包装 logging 中间件
 	logged := loggingMiddleware(handler, logger)

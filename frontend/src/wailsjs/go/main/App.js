@@ -394,3 +394,15 @@ export function ActivateCodexEndpoint(arg1) {
   return Call.ByName("main.App.ActivateCodexEndpoint", arg1);
 }
 
+export function GetCodexSuspendedCount() {
+  return Call.ByName("main.App.GetCodexSuspendedCount");
+}
+
+export function GetCodexGlobalConfig() {
+  return Call.ByName("main.App.GetCodexGlobalConfig");
+}
+
+export function UpdateCodexGlobalConfig(arg1) {
+  return Call.ByName("main.App.UpdateCodexGlobalConfig", arg1);
+}
+

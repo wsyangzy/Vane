@@ -88,8 +88,9 @@ type App struct {
 	proxyServer *http.Server
 
 	// Codex 代理组件（合并到主代理端口，通过路径路由）
-	codexEndpointMgr *codexproxy.EndpointManager
-	codexHealthCheck *codexproxy.HealthChecker
+	codexEndpointMgr  *codexproxy.EndpointManager
+	codexHealthCheck  *codexproxy.HealthChecker
+	codexSuspensionMgr *codexproxy.SuspensionManager
 
 	// 应用状态
 	startTime  time.Time
@@ -1834,10 +1835,29 @@ func (a *App) initCodexProxy() {
 	})
 	a.codexEndpointMgr = mgr
 
-	// 创建 HealthChecker
-	hc := codexproxy.NewHealthChecker(mgr, 30*time.Second, 5*time.Second, a.logger)
-	hc.Start()
+	// 创建 HealthChecker（参数动态从 a.config.Health.* 读取，设置页改动下一轮即生效）
+	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger)
+	// 按设置项决定是否启动定时探测；保留实例以供 GetLatencies 等接口使用
+	// 与 Claude 端对齐：仅当 Enabled + LoopRetry + SkipHealthCheck 三者都为 true 时才跳过
+	if !a.config.Failover.ShouldSkipHealthCheck() {
+		hc.Start()
+	} else {
+		a.logger.Info("Codex 健康检查器已创建但未启动（ShouldSkipHealthCheck=true）")
+	}
 	a.codexHealthCheck = hc
+
+	// 创建 SuspensionManager（请求挂起队列）
+	// 当 loop_retry 全部耗尽后将请求挂起，等待运维通过 UI 重新激活渠道/端点
+	sm := codexproxy.NewSuspensionManager(
+		a.config.Failover.MaxSuspendedRequests,
+		a.config.Failover.LoopRetrySuspendTimeout,
+		a.logger,
+	)
+	// 注册挂起数变化回调，推送前端事件
+	sm.SetOnCountChange(func(count int) {
+		a.emitCodexSuspensionUpdate(count)
+	})
+	a.codexSuspensionMgr = sm
 
 	a.logger.Info("✅ Codex 代理组件初始化完成（路由将注册到主代理端口）")
 }
@@ -1851,7 +1871,10 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 	}
 
 	cfg := codexproxy.ServerConfig{
-		Timeout: a.config.CodexServer.Timeout,
+		Timeout:       a.config.CodexServer.Timeout,
+		Retry:         a.config.Retry,         // 同端点重试配置（设置页 retry.*）
+		Failover:      a.config.Failover,      // 故障转移配置（设置页 failover.*）
+		SuspensionMgr: a.codexSuspensionMgr,   // 请求挂起队列
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker)
 
@@ -2217,27 +2240,20 @@ func (a *App) applySettingsToConfig() {
 			a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置（仅内存）")
 		}
 	}
-	// default_cooldown 已移除（loop_retry 模式下冷却时间与循环重试逻辑冲突）
-	// allow_revisit_after_exhausted 已移除，使用 FailoverV2.LoopRetry 替代
-	// 从数据库加载 loop_retry 和 max_loops 到 FailoverV2
-	a.config.FailoverV2.LoopRetry = a.settingsService.GetBool(ctx, service.CategoryFailover, "loop_retry", a.config.FailoverV2.LoopRetry)
-	a.config.FailoverV2.MaxLoops = a.settingsService.GetInt(ctx, service.CategoryFailover, "max_loops", a.config.FailoverV2.MaxLoops)
-	// 从数据库加载 skip_health_check 到 FailoverV2
-	a.config.FailoverV2.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.FailoverV2.SkipHealthCheck)
+	// 从数据库加载 loop_retry、max_loops、skip_health_check 到 Failover
+	a.config.Failover.LoopRetry = a.settingsService.GetBool(ctx, service.CategoryFailover, "loop_retry", a.config.Failover.LoopRetry)
+	a.config.Failover.MaxLoops = a.settingsService.GetInt(ctx, service.CategoryFailover, "max_loops", a.config.Failover.MaxLoops)
+	a.config.Failover.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.Failover.SkipHealthCheck)
 	// 达到最大循环轮数后的手动等待超时
-	a.config.FailoverV2.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.FailoverV2.LoopRetrySuspendTimeout)
-	// 同步 Failover.Enabled 到 FailoverV2.Enabled
-	// 确保 ShouldSkipHealthCheck() 等方法能正确检测渠道间转移的启用状态
-	a.config.FailoverV2.Enabled = a.config.Failover.Enabled
+	a.config.Failover.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.Failover.LoopRetrySuspendTimeout)
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
 	// 普通挂起等待超时
-	a.config.FailoverV2.SuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_wait_timeout", a.config.FailoverV2.SuspendTimeout)
-	a.config.RequestSuspend.Enabled = a.settingsService.GetBool(ctx, service.CategoryRequest, "suspend_enabled", a.config.RequestSuspend.Enabled)
-	a.config.RequestSuspend.Timeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_timeout", a.config.RequestSuspend.Timeout)
-	a.config.RequestSuspend.MaxSuspendedRequests = a.settingsService.GetInt(ctx, service.CategoryRequest, "max_suspended", a.config.RequestSuspend.MaxSuspendedRequests)
-	a.config.RequestSuspend.EOFRetryHint = a.settingsService.GetBool(ctx, service.CategoryRequest, "eof_retry_hint", a.config.RequestSuspend.EOFRetryHint)
+	a.config.Failover.SuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "suspend_wait_timeout", a.config.Failover.SuspendTimeout)
+	a.config.Failover.SuspendOnExhausted = a.settingsService.GetBool(ctx, service.CategoryRequest, "suspend_enabled", a.config.Failover.SuspendOnExhausted)
+	a.config.Failover.MaxSuspendedRequests = a.settingsService.GetInt(ctx, service.CategoryRequest, "max_suspended", a.config.Failover.MaxSuspendedRequests)
+	a.config.Failover.EOFRetryHint = a.settingsService.GetBool(ctx, service.CategoryRequest, "eof_retry_hint", a.config.Failover.EOFRetryHint)
 	// allow_retry_on_exhausted 配置已废弃，始终保持连接挂起
 	// 注释保留用于向后兼容文档记录
 

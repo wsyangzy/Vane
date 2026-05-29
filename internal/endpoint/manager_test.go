@@ -216,7 +216,6 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: 10 * time.Minute,
 		},
 		Endpoints: []config.EndpointConfig{
 			{
@@ -377,7 +376,6 @@ func TestGroupEventBusPublish(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: 10 * time.Minute,
 		},
 		Endpoints: []config.EndpointConfig{
 			{
@@ -517,7 +515,6 @@ func TestGroupEventBusIntegration(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: 10 * time.Minute,
 		},
 		Endpoints: []config.EndpointConfig{
 			{

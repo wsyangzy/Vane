@@ -22,9 +22,7 @@ type Config struct {
 	Logging          LoggingConfig          `yaml:"logging"`
 	Streaming        StreamingConfig        `yaml:"streaming"`
 	Group            GroupConfig            `yaml:"group"`             // Group configuration (DEPRECATED: use Failover instead)
-	Failover         FailoverConfig         `yaml:"failover"`          // Failover configuration (, DEPRECATED in use FailoverV2)
-	FailoverV2       FailoverConfigV2       `yaml:"failover_v2"`       // Failover configuration v2 (, unified recovery strategy)
-	RequestSuspend   RequestSuspendConfig   `yaml:"request_suspend"`   // Request suspension configuration (DEPRECATED in merged into FailoverV2)
+	Failover         FailoverConfig         `yaml:"failover"`          // 故障转移与请求挂起配置（见 failover.go）
 	UsageTracking    UsageTrackingConfig    `yaml:"usage_tracking"`    // Usage tracking configuration
 	TokenCounting    TokenCountingConfig    `yaml:"token_counting"`    // Token counting configuration
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration
@@ -108,22 +106,8 @@ type GroupConfig struct {
 	AutoSwitchBetweenGroups bool          `yaml:"auto_switch_between_groups"` // Whether to automatically switch between groups, default: true
 }
 
-// FailoverConfig 故障转移配置
-type FailoverConfig struct {
-	Enabled         bool          `yaml:"enabled"`          // 启用故障转移，默认: true
-	DefaultCooldown time.Duration `yaml:"default_cooldown"` // 默认冷却时间，默认: 10m
-	// AllowRevisitAfterExhausted 控制“渠道都尝试过仍失败”时的行为：
-	// - false（默认）：进入挂起/等待恢复（若启用 RequestSuspend），避免在渠道间循环重试。
-	// - true：允许回到“最高优先级渠道”继续尝试（仍会跳过暂停/冷却渠道），可能导致循环重试。
-	AllowRevisitAfterExhausted bool `yaml:"allow_revisit_after_exhausted"`
-}
-
-type RequestSuspendConfig struct {
-	Enabled              bool          `yaml:"enabled"`                // Enable request suspension feature, default: false
-	Timeout              time.Duration `yaml:"timeout"`                // Timeout for suspended requests, default: 300s
-	MaxSuspendedRequests int           `yaml:"max_suspended_requests"` // Maximum number of suspended requests, default: 100
-	EOFRetryHint         bool          `yaml:"eof_retry_hint"`         // Send retryable error format on EOF, default: false
-}
+// FailoverConfig 定义已迁移到 config/failover.go
+// 新结构合并自历史的 FailoverConfig(v1) / FailoverConfigV2 / RequestSuspendConfig
 
 // ModelPricing 模型定价配置
 // Deprecated: 定价配置已迁移到 SQLite model_pricing 表，通过前端「定价」页面管理
@@ -276,43 +260,14 @@ func LoadConfig(path string) (*Config, error) {
 		config.Group.AutoSwitchBetweenGroups = true // Default to auto mode for backward compatibility
 	}
 
-	// → 配置映射（向后兼容）
+	// → 配置映射（向后兼容旧版 group 配置）
 	if !hasFailoverConfig {
-		// 没有v4.0配置，尝试从v3.x group配置映射
-		if config.Group.Cooldown > 0 {
-			config.Failover.DefaultCooldown = config.Group.Cooldown
-		}
+		// 没有 failover 配置块，回退到旧版 group 配置语义
 		config.Failover.Enabled = config.Group.AutoSwitchBetweenGroups
 	}
 
-	// → 配置迁移（向后兼容）
-	// 检查配置格式版本
-	hasFailoverV2Config := strings.Contains(string(data), "failover_v2:")
-	hasRecoveryStrategy := strings.Contains(string(data), "recovery_strategy:")
-	hasLoopRetry := strings.Contains(string(data), "loop_retry:")
-
-	if !hasFailoverV2Config && !hasLoopRetry {
-		// 没有新版配置，从 旧版配置自动迁移
-		slog.Info("📦 检测到旧版配置格式 (v6.0.x)，正在自动迁移到 v6.2 格式...")
-		config.FailoverV2.MigrateFromLegacy(&config.Failover, &config.RequestSuspend)
-		config.FailoverV2.SetDefaults()
-
-		// 记录迁移结果
-		slog.Info("✅ 配置迁移完成",
-			"loop_retry", config.FailoverV2.LoopRetry,
-			"max_loops", config.FailoverV2.MaxLoops)
-	} else if hasRecoveryStrategy && !hasLoopRetry {
-		// 配置迁移到
-		slog.Info("📦 检测到 v6.1.x 配置格式，正在迁移到 v6.2 格式...")
-		config.FailoverV2.SetDefaults() // SetDefaults 内部会调用 MigrateFromV61
-
-		slog.Info("✅ 配置迁移完成",
-			"loop_retry", config.FailoverV2.LoopRetry,
-			"max_loops", config.FailoverV2.MaxLoops)
-	} else {
-		// 使用了新版配置，确保设置了默认值
-		config.FailoverV2.SetDefaults()
-	}
+	// 应用 Failover 默认值
+	config.Failover.SetDefaults()
 
 	// Validate configuration
 	if err := config.validate(); err != nil {
@@ -435,13 +390,7 @@ func (c *Config) setDefaults() {
 		c.Group.Cooldown = 600 * time.Second // Default 10 minutes cooldown for groups
 	}
 
-	// Set failover defaults
-	// Failover.Enabled defaults to true if not explicitly set
-	// Note: We check for zero value and set default here
-	if c.Failover.DefaultCooldown == 0 {
-		c.Failover.DefaultCooldown = 600 * time.Second // Default 10 minutes cooldown
-	}
-	// Failover.Enabled has no explicit default here - will be set by LoadConfig compatibility logic
+	// Failover 默认值由 FailoverConfig.SetDefaults() 在 LoadConfig 中统一应用
 
 	// Set endpoints storage defaults
 	if c.EndpointsStorage.Type == "" {
@@ -453,14 +402,7 @@ func (c *Config) setDefaults() {
 		c.CodexServer.Timeout = 300 * time.Second
 	}
 
-	// Set request suspension defaults
-	if c.RequestSuspend.Timeout == 0 {
-		c.RequestSuspend.Timeout = 300 * time.Second // Default 5 minutes timeout for suspended requests
-	}
-	if c.RequestSuspend.MaxSuspendedRequests == 0 {
-		c.RequestSuspend.MaxSuspendedRequests = 100 // Default maximum 100 suspended requests
-	}
-	// RequestSuspend.Enabled defaults to false (zero value) for backward compatibility
+	// 注：请求挂起相关默认值已合并到 FailoverConfig.SetDefaults()
 
 	// Set usage tracking defaults
 	// 兼容：若使用新版配置 usage_tracking.database.path，则统一写入 database_path 供内部使用。
@@ -667,24 +609,9 @@ func (c *Config) validate() error {
 		}
 	}
 
-	// Validate request suspension configuration (DEPRECATED in )
-	if c.RequestSuspend.Enabled {
-		if c.RequestSuspend.Timeout <= 0 {
-			return fmt.Errorf("request suspend timeout must be greater than 0 when enabled")
-		}
-		if c.RequestSuspend.MaxSuspendedRequests <= 0 {
-			return fmt.Errorf("max suspended requests must be greater than 0 when request suspension is enabled")
-		}
-		if c.RequestSuspend.MaxSuspendedRequests > 10000 {
-			return fmt.Errorf("max suspended requests cannot exceed 10000 for performance reasons")
-		}
-	}
-
-	// Validate failover v2 configuration
-	if c.FailoverV2.Enabled || c.FailoverV2.RecoveryStrategy != "" {
-		if err := c.FailoverV2.Validate(); err != nil {
-			return fmt.Errorf("failover_v2 configuration error: %w", err)
-		}
+	// Validate failover configuration (含挂起、循环重试等所有字段)
+	if err := c.Failover.Validate(); err != nil {
+		return fmt.Errorf("failover configuration error: %w", err)
 	}
 
 	// Validate usage tracking configuration
@@ -935,35 +862,35 @@ func (cw *ConfigWatcher) logConfigChanges(oldConfig, newConfig *Config) {
 			"new_enabled", newConfig.Auth.Enabled)
 	}
 
-	if oldConfig.RequestSuspend.Enabled != newConfig.RequestSuspend.Enabled {
-		cw.logger.Info("⏸️ 请求挂起状态变更（已废弃）",
-			"old_enabled", oldConfig.RequestSuspend.Enabled,
-			"new_enabled", newConfig.RequestSuspend.Enabled)
+	if oldConfig.Failover.SuspendOnExhausted != newConfig.Failover.SuspendOnExhausted {
+		cw.logger.Info("⏸️ 请求挂起状态变更",
+			"old_enabled", oldConfig.Failover.SuspendOnExhausted,
+			"new_enabled", newConfig.Failover.SuspendOnExhausted)
 	}
 
-	// 记录新的故障转移配置变更
-	if oldConfig.FailoverV2.LoopRetry != newConfig.FailoverV2.LoopRetry {
+	// 记录故障转移配置变更
+	if oldConfig.Failover.LoopRetry != newConfig.Failover.LoopRetry {
 		cw.logger.Info("🔄 循环重试配置变更",
-			"old_loop_retry", oldConfig.FailoverV2.LoopRetry,
-			"new_loop_retry", newConfig.FailoverV2.LoopRetry)
+			"old_loop_retry", oldConfig.Failover.LoopRetry,
+			"new_loop_retry", newConfig.Failover.LoopRetry)
 	}
 
-	if oldConfig.FailoverV2.MaxLoops != newConfig.FailoverV2.MaxLoops {
+	if oldConfig.Failover.MaxLoops != newConfig.Failover.MaxLoops {
 		cw.logger.Info("🔄 最大循环轮数变更",
-			"old_max_loops", oldConfig.FailoverV2.MaxLoops,
-			"new_max_loops", newConfig.FailoverV2.MaxLoops)
+			"old_max_loops", oldConfig.Failover.MaxLoops,
+			"new_max_loops", newConfig.Failover.MaxLoops)
 	}
 
-	if oldConfig.RequestSuspend.MaxSuspendedRequests != newConfig.RequestSuspend.MaxSuspendedRequests {
+	if oldConfig.Failover.MaxSuspendedRequests != newConfig.Failover.MaxSuspendedRequests {
 		cw.logger.Info("⏸️ 最大挂起请求数变更",
-			"old_max", oldConfig.RequestSuspend.MaxSuspendedRequests,
-			"new_max", newConfig.RequestSuspend.MaxSuspendedRequests)
+			"old_max", oldConfig.Failover.MaxSuspendedRequests,
+			"new_max", newConfig.Failover.MaxSuspendedRequests)
 	}
 
-	if oldConfig.RequestSuspend.Timeout != newConfig.RequestSuspend.Timeout {
+	if oldConfig.Failover.SuspendTimeout != newConfig.Failover.SuspendTimeout {
 		cw.logger.Info("⏸️ 请求挂起超时时间变更",
-			"old_timeout", oldConfig.RequestSuspend.Timeout,
-			"new_timeout", newConfig.RequestSuspend.Timeout)
+			"old_timeout", oldConfig.Failover.SuspendTimeout,
+			"new_timeout", newConfig.Failover.SuspendTimeout)
 	}
 
 	if oldConfig.UsageTracking.Enabled != newConfig.UsageTracking.Enabled {

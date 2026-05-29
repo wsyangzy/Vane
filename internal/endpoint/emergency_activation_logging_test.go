@@ -49,7 +49,6 @@ func TestEmergencyActivationLogging(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         false,
-			DefaultCooldown: time.Minute,
 		},
 	}
 
@@ -333,7 +332,6 @@ func TestLogFormatCompliance(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         false,
-			DefaultCooldown: time.Minute,
 		},
 	}
 

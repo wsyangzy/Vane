@@ -39,9 +39,9 @@ func TestRetryCountSemanticFix_StreamingSuspendedStatus(t *testing.T) {
 			Host: "localhost",
 			Port: 0,
 		},
-		RequestSuspend: config.RequestSuspendConfig{
-			Enabled:              true,
-			Timeout:              1 * time.Second,
+		Failover: config.FailoverConfig{
+			SuspendOnExhausted:   true,
+			SuspendTimeout:       1 * time.Second,
 			MaxSuspendedRequests: 10,
 		},
 		Group: config.GroupConfig{

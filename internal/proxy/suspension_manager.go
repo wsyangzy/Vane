@@ -65,9 +65,9 @@ func (sm *SuspensionManager) ShouldSuspend(ctx context.Context) bool {
 	if sm.config == nil {
 		return false
 	}
-	// 当配置为"不中断客户端重试"时，应该挂起请求等待恢复
-	// 这样客户端不会收到错误响应，而是保持连接等待
-	return !sm.config.FailoverV2.ShouldInterruptClientOnExhausted()
+	// 当所有渠道耗尽时始终挂起请求等待恢复，不中断客户端连接
+	// 历史 ShouldInterruptClientOnExhausted 已废弃（始终返回 false），此处保持挂起语义
+	return true
 }
 
 // WaitForGroupSwitch 挂起请求并等待组切换通知
@@ -123,7 +123,7 @@ func (sm *SuspensionManager) WaitForGroupSwitch(ctx context.Context, connID stri
 	}()
 
 	// 创建超时context
-	timeout := sm.config.FailoverV2.GetSuspendTimeout()
+	timeout := sm.config.Failover.GetSuspendTimeout()
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
@@ -355,7 +355,7 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 		connID, failedEndpoint, currentCount))
 
 	// 创建超时context
-	timeout := sm.config.FailoverV2.GetSuspendTimeout()
+	timeout := sm.config.Failover.GetSuspendTimeout()
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
@@ -510,9 +510,9 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 	}
 
 	// 创建超时context
-	timeout := sm.config.FailoverV2.GetSuspendTimeout()
+	timeout := sm.config.Failover.GetSuspendTimeout()
 	if manualOnly {
-		timeout = sm.config.FailoverV2.GetLoopRetrySuspendTimeout()
+		timeout = sm.config.Failover.GetLoopRetrySuspendTimeout()
 	}
 	if timeout <= 0 {
 		timeout = 120 * time.Second

@@ -6,10 +6,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
   ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
-  Copy,
+  Clock,
   Database,
   Eye,
   EyeOff,
@@ -20,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   Server,
+  Settings,
   ShieldCheck,
   Trash2,
   TriangleAlert,
@@ -42,21 +44,25 @@ import {
   deleteCodexChannelByID,
   deleteCodexEndpointByID,
   getCodexChannels,
+  getCodexGlobalConfig,
   getCodexProviderStorageStatus,
+  getCodexSuspendedCount,
   isWailsEnvironment,
   openExternalURL,
   subscribeToEvent,
   updateCodexChannelByID,
-  updateCodexEndpointByID
+  updateCodexEndpointByID,
+  updateCodexGlobalConfig
 } from '@utils/wailsApi.js';
 
-const REASONING_EFFORT_OPTIONS = [
-  { value: 'low', label: 'low', hint: 'Fastest' },
-  { value: 'medium', label: 'medium', hint: 'Balanced' },
-  { value: 'high', label: 'high', hint: 'Deeper' },
-  { value: 'xhigh', label: 'xhigh', hint: 'Max' }
-];
-const MODEL_CONTEXT_WINDOW_1M = 1000000;
+const buildInitialChannelForm = (channel) => ({
+  name: channel?.name || '',
+  apiKey: channel?.apiKey || '',
+  website: channel?.website || ''
+});
+
+// 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
+// 在代理模式下，这些字段不再由渠道级管理，仅写入 ~/.codex/config.toml 由 Codex CLI 读取
 
 // Codex 官方品牌图标（来源：lobe-icons / OpenAI Codex）
 // 使用 currentColor 填充，可被父级 text-white 等颜色 token 控制
@@ -89,112 +95,14 @@ const getErrorMessage = (error, fallback = '操作失败') => {
   }
 };
 
-const formatDateTime = (value) => {
-  if (!value) return '-';
-  return value;
-};
-
-const buildInitialChannelForm = (channel) => ({
-  name: channel?.name || '',
-  providerType: channel?.providerType || 'openai-compatible',
-  apiKey: channel?.apiKey || '',
-  model: channel?.model || '',
-  reasoningEffort: channel?.reasoningEffort || 'xhigh',
-  enable1MContext: Boolean(channel?.enable1MContext),
-  website: channel?.website || ''
-});
-
-const InfoTile = ({ title, value, icon: Icon, mono = false, titleAttr = '' }) => (
-  <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{title}</div>
-    <div
-      className={`mt-2 flex items-center gap-2 text-sm text-slate-700 ${mono ? 'font-mono' : ''}`}
-      title={titleAttr || value}
-    >
-      {Icon && <Icon size={14} className="flex-shrink-0 text-slate-400" />}
-      <span className="truncate">{value || '-'}</span>
-    </div>
-  </div>
-);
-
-const ReasoningEffortSelector = ({ value, onChange }) => (
-  <div className="flex flex-col">
-    <label className="mb-1.5 text-sm font-medium text-slate-700">推理强度</label>
-    <div className="grid grid-cols-2 gap-2">
-      {REASONING_EFFORT_OPTIONS.map((option) => {
-        const isSelected = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange?.(option.value)}
-            className={`rounded-xl border px-3 py-3 text-left transition-all ${
-              isSelected
-                ? 'border-amber-300 bg-amber-50 text-amber-900 shadow-sm'
-                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-sm font-semibold">{option.label}</span>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-                  isSelected ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'
-                }`}
-              >
-                {option.hint}
-              </span>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  </div>
-);
-
-const FormToggleField = ({ label, checked, onChange, help, badge = '1M' }) => (
-  <div className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 sm:col-span-2">
-    <div className="min-w-0">
-      <div className="flex items-center gap-2">
-        <label className="text-sm font-medium text-slate-700">{label}</label>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${
-            checked ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-500'
-          }`}
-        >
-          {checked ? badge : '默认'}
-        </span>
-      </div>
-      {help && <p className="mt-1 text-xs leading-5 text-slate-500">{help}</p>}
-    </div>
-
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange?.(!checked)}
-      className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
-        checked ? 'bg-emerald-500' : 'bg-slate-300 hover:bg-slate-400'
-      }`}
-      title={checked ? '关闭 1M 上下文窗口' : '开启 1M 上下文窗口'}
-    >
-      <span
-        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-          checked ? 'translate-x-5' : 'translate-x-0.5'
-        }`}
-      />
-    </button>
-  </div>
-);
-
 // ============================================================================
-// 渠道编辑弹窗（不含 base_url；端点单独管理）
+// 渠道编辑弹窗（仅 渠道名 + API Key + 官网；model/reasoning/1M 已迁移到全局设置）
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
   const [fieldError, setFieldError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
-  const [templateCopied, setTemplateCopied] = useState(false);
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
@@ -215,16 +123,12 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
 
     const payload = {
       name: formData.name.trim(),
-      providerType: formData.providerType.trim() || 'openai-compatible',
       apiKey: formData.apiKey.trim(),
-      model: formData.model.trim(),
-      reasoningEffort: formData.reasoningEffort.trim() || 'xhigh',
-      enable1MContext: Boolean(formData.enable1MContext),
       website: formData.website.trim()
     };
 
-    if (!payload.name || !payload.apiKey || !payload.model || !payload.reasoningEffort) {
-      setFieldError('请填写渠道名、API Key、默认模型和推理强度');
+    if (!payload.name || !payload.apiKey) {
+      setFieldError('请填写渠道名和 API Key');
       return;
     }
 
@@ -235,41 +139,6 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
   const isMaskedApiKeyPreview = isEdit && !showApiKey && !apiKeyDirty && !!channel?.apiKeyMasked;
   const apiKeyInputType = isMaskedApiKeyPreview ? 'text' : (showApiKey ? 'text' : 'password');
   const apiKeyInputValue = isMaskedApiKeyPreview ? channel?.apiKeyMasked || '' : formData.apiKey;
-  const templateChannelName = formData.name.trim() || 'xxx';
-  const templateModel = formData.model.trim() || 'gpt-5.4';
-  const templateReasoning = formData.reasoningEffort.trim() || 'xhigh';
-  const templatePreview = [
-    `model = "${templateModel}"`,
-    ...(formData.enable1MContext ? [`model_context_window = ${MODEL_CONTEXT_WINDOW_1M}`] : []),
-    `model_reasoning_effort = "${templateReasoning}"`,
-    `model_provider = "${templateChannelName}"`,
-    'network_access = "enabled"',
-    'disable_response_storage = true',
-    'windows_wsl_setup_acknowledged = true',
-    'model_verbosity = "high"',
-    '',
-    `[model_providers.${templateChannelName}]`,
-    `name = "${templateChannelName}"`,
-    'base_url = "<由激活端点动态写入>"',
-    'wire_api = "responses"',
-    'requires_openai_auth = true'
-  ].join('\n');
-  const templateLines = templatePreview.split('\n');
-
-  const handleCopyTemplate = async () => {
-    if (!globalThis?.navigator?.clipboard?.writeText) {
-      setFieldError('当前环境不支持复制到剪贴板');
-      return;
-    }
-
-    try {
-      await globalThis.navigator.clipboard.writeText(templatePreview);
-      setTemplateCopied(true);
-      setTimeout(() => setTemplateCopied(false), 1600);
-    } catch (error) {
-      setFieldError(getErrorMessage(error, '复制模板失败'));
-    }
-  };
 
   return renderModalPortal(
     <div
@@ -277,7 +146,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
       style={{ paddingTop: `${modalTopPadding}px` }}
     >
       <div
-        className="flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        className="flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
         style={{ maxHeight: modalMaxHeight }}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
@@ -287,7 +156,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
             </div>
             <div>
               <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道'}</h2>
-              <p className="mt-0.5 text-xs text-slate-500">渠道承载共用配置；具体 base_url 在端点中单独管理</p>
+              <p className="mt-0.5 text-xs text-slate-500">渠道仅保存 API Key；模型/推理/1M 等在「Codex 配置」中全局调整</p>
             </div>
           </div>
           <button
@@ -309,115 +178,46 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
               </div>
             )}
 
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <Input
-                    label="渠道名"
-                    value={formData.name}
-                    onChange={(event) => updateField('name', event.target.value)}
-                    placeholder="例如：custom"
-                    autoFocus
-                  />
-                </div>
+            <Input
+              label="渠道名"
+              value={formData.name}
+              onChange={(event) => updateField('name', event.target.value)}
+              placeholder="例如：custom"
+              autoFocus
+            />
 
-                <Input
-                  label="默认模型"
-                  value={formData.model}
-                  onChange={(event) => updateField('model', event.target.value)}
-                  placeholder="例如：gpt-5.4"
+            <Input
+              label="官网地址（可选）"
+              value={formData.website}
+              onChange={(event) => updateField('website', event.target.value)}
+              placeholder="https://platform.openai.com"
+            />
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
+              <div className="relative">
+                <input
+                  type={apiKeyInputType}
+                  value={apiKeyInputValue}
+                  onChange={(event) => updateField('apiKey', event.target.value)}
+                  placeholder="sk-..."
+                  autoComplete="new-password"
+                  data-form-type="other"
+                  readOnly={isMaskedApiKeyPreview}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
                 />
-
-                <div className="sm:col-span-2">
-                  <Input
-                    label="官网地址（可选）"
-                    value={formData.website}
-                    onChange={(event) => updateField('website', event.target.value)}
-                    placeholder="https://platform.openai.com"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <ReasoningEffortSelector
-                    value={formData.reasoningEffort}
-                    onChange={(value) => updateField('reasoningEffort', value)}
-                  />
-                </div>
-
-                <FormToggleField
-                  label="1M 上下文窗口"
-                  checked={formData.enable1MContext}
-                  onChange={(value) => updateField('enable1MContext', value)}
-                  help="开启后，当前渠道激活时会向 config.toml 额外写入 model_context_window = 1000000。"
-                />
-
-                <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
-                  <div className="relative">
-                    <input
-                      type={apiKeyInputType}
-                      value={apiKeyInputValue}
-                      onChange={(event) => updateField('apiKey', event.target.value)}
-                      placeholder="sk-..."
-                      autoComplete="new-password"
-                      data-form-type="other"
-                      readOnly={isMaskedApiKeyPreview}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey((prev) => !prev)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
-                      title={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
-                    >
-                      {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                  {isMaskedApiKeyPreview && (
-                    <p className="mt-1 text-xs text-slate-400">点击图标查看真实值或直接输入新 Key 替换</p>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((prev) => !prev)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
+                  title={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
+                >
+                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-950 text-slate-100 shadow-inner">
-                <div className="relative border-b border-white/10 px-4 py-3 pr-28">
-                  <div>
-                    <div className="text-sm font-semibold">Service Config Template</div>
-                    <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">Live Preview</div>
-                  </div>
-                  <div className="absolute right-4 top-3 flex items-center gap-2">
-                    <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-300">
-                      TOML
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleCopyTemplate}
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200 transition-colors hover:bg-white/10"
-                      title={templateCopied ? '已复制模板' : '复制完整模板'}
-                      aria-label={templateCopied ? '已复制模板' : '复制完整模板'}
-                    >
-                      {templateCopied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-                    </button>
-                  </div>
-                </div>
-                <div className="px-4 py-4">
-                  <div className="space-y-0.5 font-mono text-[12px] leading-6 text-slate-200">
-                    {templateLines.map((line, index) => (
-                      line ? (
-                        <div
-                          key={`${index}-${line}`}
-                          className="truncate whitespace-nowrap"
-                          title={line}
-                        >
-                          {line}
-                        </div>
-                      ) : (
-                        <div key={`blank-${index}`} className="h-6" />
-                      )
-                    ))}
-                  </div>
-                </div>
-              </div>
+              {isMaskedApiKeyPreview && (
+                <p className="mt-1 text-xs text-slate-400">点击图标查看真实值或直接输入新 Key 替换</p>
+              )}
             </div>
           </div>
 
@@ -682,6 +482,236 @@ const DeleteConfirmDialog = ({ title, description, hint, loading, onCancel, onCo
 };
 
 // ============================================================================
+// Codex 全局配置弹窗（直接读写 ~/.codex/config.toml）
+// 字段：model / reasoning_effort / enable_1m_context（base_url 由后端自动同步）
+// 显式保存模式：点击「保存」才写入文件
+// ============================================================================
+const CODEX_REASONING_EFFORT_OPTIONS = [
+  { value: 'low', label: 'low', hint: 'Fastest' },
+  { value: 'medium', label: 'medium', hint: 'Balanced' },
+  { value: 'high', label: 'high', hint: 'Deeper' },
+  { value: 'xhigh', label: 'xhigh', hint: 'Max' }
+];
+
+const DEFAULT_CONFIG = {
+  model: '',
+  reasoning_effort: 'xhigh',
+  enable_1m_context: false
+};
+
+const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
+  const [config, setConfig] = useState(DEFAULT_CONFIG);
+  const [initialConfig, setInitialConfig] = useState(DEFAULT_CONFIG);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const isWails = isWailsEnvironment();
+  const modalTopPadding = isWails ? 48 : 16;
+  const modalBottomPadding = 16;
+  const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
+
+  useEffect(() => {
+    let canceled = false;
+    setLoading(true);
+    getCodexGlobalConfig()
+      .then((data) => {
+        if (canceled) return;
+        const loaded = {
+          model: data.model || '',
+          reasoning_effort: data.reasoning_effort || 'xhigh',
+          enable_1m_context: Boolean(data.enable_1m_context)
+        };
+        setConfig(loaded);
+        setInitialConfig(loaded);
+      })
+      .catch((err) => {
+        if (canceled) return;
+        setError(getErrorMessage(err, '加载 Codex 全局配置失败'));
+      })
+      .finally(() => {
+        if (!canceled) setLoading(false);
+      });
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  const updateField = useCallback((key, value) => {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+    setError('');
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await updateCodexGlobalConfig({
+        model: config.model,
+        reasoning_effort: config.reasoning_effort,
+        enable_1m_context: config.enable_1m_context
+      });
+      onSaved?.();
+      onClose?.();
+    } catch (err) {
+      setError(getErrorMessage(err, '保存失败'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasChanges =
+    config.model !== initialConfig.model ||
+    config.reasoning_effort !== initialConfig.reasoning_effort ||
+    config.enable_1m_context !== initialConfig.enable_1m_context;
+
+  return renderModalPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 backdrop-blur-sm animate-fade-in"
+      style={{ paddingTop: `${modalTopPadding}px` }}
+    >
+      <div
+        className="flex w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        style={{ maxHeight: modalMaxHeight }}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
+              <Settings size={18} />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">Codex 全局配置</h2>
+              <p className="mt-0.5 text-xs text-slate-500">直接读写 ~/.codex/config.toml；代理地址自动同步自服务端口</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+            title="关闭"
+          >
+            <XCircle size={18} />
+          </button>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-6">
+          {loading ? (
+            <div className="flex items-center gap-2 px-2 py-3 text-sm text-slate-500">
+              <Loader2 size={14} className="animate-spin" />
+              正在加载 config.toml...
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {error && (
+                <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                  <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">默认模型</label>
+                <input
+                  type="text"
+                  value={config.model}
+                  onChange={(e) => updateField('model', e.target.value)}
+                  placeholder="例如：gpt-5.4"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="mt-1 text-xs text-slate-400">写入 config.toml 顶层 model 字段</p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">推理强度</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {CODEX_REASONING_EFFORT_OPTIONS.map((option) => {
+                    const isSelected = option.value === config.reasoning_effort;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => updateField('reasoning_effort', option.value)}
+                        className={`rounded-xl border px-3 py-2 text-left transition-all ${
+                          isSelected
+                            ? 'border-amber-300 bg-amber-50 text-amber-900 shadow-sm'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-sm font-semibold">{option.label}</span>
+                          <span
+                            className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
+                              isSelected ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'
+                            }`}
+                          >
+                            {option.hint}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1 text-xs text-slate-400">写入顶层 model_reasoning_effort 字段</p>
+              </div>
+
+              <div className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-slate-700">1M 上下文窗口</label>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                        config.enable_1m_context
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      {config.enable_1m_context ? '1M' : '默认'}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    开启后写入 model_context_window = 1000000；关闭则移除该字段。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={config.enable_1m_context}
+                  onClick={() => updateField('enable_1m_context', !config.enable_1m_context)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
+                    config.enable_1m_context ? 'bg-emerald-500' : 'bg-slate-300 hover:bg-slate-400'
+                  }`}
+                  title={config.enable_1m_context ? '关闭 1M 上下文窗口' : '开启 1M 上下文窗口'}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                      config.enable_1m_context ? 'translate-x-5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            取消
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleSave}
+            disabled={loading || saving || !hasChanges}
+            loading={saving}
+          >
+            保存
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
 // 渠道卡片（卡片头 + 端点子列表）
 // ============================================================================
 // ============================================================================
@@ -697,12 +727,79 @@ const summarizeEndpoint = (baseURL) => {
   }
 };
 
+const CodexHealthBadge = ({ state }) => {
+  const configs = {
+    healthy: {
+      label: '健康',
+      icon: CheckCircle2,
+      className: 'border-emerald-100 bg-emerald-50 text-emerald-600',
+      title: '最近一次 Codex 健康探测通过'
+    },
+    unhealthy: {
+      label: '异常',
+      icon: XCircle,
+      className: 'border-rose-100 bg-rose-50 text-rose-600',
+      title: '最近一次 Codex 健康探测失败或端点处于冷却中'
+    },
+    unchecked: {
+      label: '检测中',
+      icon: Clock,
+      className: 'border-slate-200 bg-slate-50 text-slate-500',
+      title: '等待 Codex 健康探测结果'
+    },
+    inactive: {
+      label: '未接管',
+      icon: Clock,
+      className: 'border-slate-200 bg-slate-50 text-slate-400',
+      title: '仅当前接管渠道会参与 Codex 健康探测'
+    },
+    excluded: {
+      label: '不参与',
+      icon: ArrowRightLeft,
+      className: 'border-slate-200 bg-slate-50 text-slate-400',
+      title: '该端点未参与故障转移，不纳入健康探测范围'
+    }
+  };
+  const config = configs[state] || configs.unchecked;
+
+  const Icon = config.icon;
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${config.className}`}
+      title={config.title}
+    >
+      <Icon size={10} />
+      {config.label}
+    </span>
+  );
+};
+
+const CodexLatencyBadge = ({ ms }) => {
+  const msValue = Number(ms);
+  if (!Number.isFinite(msValue) || msValue <= 0) return null;
+
+  const rounded = Math.max(1, Math.round(msValue));
+  let className = 'border-emerald-100 bg-emerald-50 text-emerald-600';
+  if (rounded > 500) className = 'border-amber-100 bg-amber-50 text-amber-600';
+  if (rounded > 1000) className = 'border-rose-100 bg-rose-50 text-rose-600';
+
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-medium ${className}`}
+      title="最近一次 Codex 健康探测延迟"
+    >
+      {rounded}ms
+    </span>
+  );
+};
+
 // ============================================================================
 // 端点行（精简表格风）：
 //   左侧 toggle = 激活；右侧 hover 浮现编辑/删除按钮（编辑走弹窗，不再使用行内展开）
 // ============================================================================
 const EndpointRow = ({
   endpoint,
+  suspendedCount = 0,
   onActivate,
   onEdit,
   onDelete,
@@ -715,10 +812,19 @@ const EndpointRow = ({
   const displayName = endpoint.name || '未命名端点';
   const failoverEnabled = endpoint.failoverEnabled !== false;
   const priority = endpoint.priority || 0;
+  const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
+  const responseTimeMs = endpoint.responseTimeMs || endpoint.response_time_ms || 0;
+
+  // 挂起态：当请求挂起且当前端点已激活时，toggle 变 amber，允许重复点击触发恢复
+  const isSuspended = suspendedCount > 0;
+  const showAmber = endpoint.isActive && isSuspended;
+  const canRepeatActivate = endpoint.isActive && isSuspended;
 
   const handleToggleActivate = (event) => {
     event.stopPropagation();
-    if (endpoint.isActive || isActivating) return;
+    if (isActivating) return;
+    // 正常态：已激活端点不可重复激活；挂起态：允许重复点击作为运维干预信号
+    if (endpoint.isActive && !canRepeatActivate) return;
     onActivate?.(endpoint);
   };
 
@@ -748,16 +854,30 @@ const EndpointRow = ({
         {/* 激活 Toggle（Apple HIG 风格） */}
         <div
           onClick={handleToggleActivate}
-          className={`flex-shrink-0 ${endpoint.isActive ? 'cursor-default' : 'cursor-pointer'}`}
-          title={endpoint.isActive ? '当前激活端点' : '点击设为当前端点'}
+          className={`flex-shrink-0 ${
+            canRepeatActivate
+              ? 'cursor-pointer'
+              : endpoint.isActive
+                ? 'cursor-default'
+                : 'cursor-pointer'
+          }`}
+          title={
+            showAmber
+              ? `已挂起 ${suspendedCount} 个请求，点击重新激活以唤醒`
+              : endpoint.isActive
+                ? '当前激活端点'
+                : '点击设为当前端点'
+          }
         >
           <div
             className={`relative h-[18px] w-8 rounded-full transition-colors duration-200 ease-out ${
-              endpoint.isActive
-                ? 'bg-emerald-500'
-                : isActivating
-                  ? 'bg-emerald-300'
-                  : 'bg-slate-200 group-hover/row:bg-slate-300'
+              showAmber
+                ? 'bg-amber-500 hover:bg-amber-600'
+                : endpoint.isActive
+                  ? 'bg-emerald-500'
+                  : isActivating
+                    ? 'bg-emerald-300'
+                    : 'bg-slate-200 group-hover/row:bg-slate-300'
             }`}
           >
             <div
@@ -778,7 +898,7 @@ const EndpointRow = ({
 
         {/* 端点摘要：name 在前，URL 在后 */}
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span
               className={`truncate text-xs font-semibold ${
                 endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
@@ -790,6 +910,8 @@ const EndpointRow = ({
             {endpoint.isActive && (
               <span className="text-[10px] uppercase tracking-[0.16em] text-emerald-600">active</span>
             )}
+            <CodexHealthBadge state={healthState} />
+            <CodexLatencyBadge ms={responseTimeMs} />
           </div>
           <div
             className={`mt-0.5 truncate font-mono text-[11px] ${
@@ -844,6 +966,8 @@ const EndpointRow = ({
 const ChannelCard = ({
   channel,
   actionLoading,
+  suspendedCount = 0,
+  globalConfig = { model: '', reasoning_effort: 'xhigh', enable_1m_context: false },
   onActivateChannel,
   onEditChannel,
   onDeleteChannel,
@@ -896,10 +1020,20 @@ const ChannelCard = ({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <h3 className="truncate text-sm font-semibold tracking-tight text-slate-900">{channel.name}</h3>
           {channel.isActive && (
-            <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-emerald-700">
-              <span className="h-1 w-1 rounded-full bg-emerald-500" />
-              当前接管
-            </span>
+            channel.isActive && suspendedCount > 0 ? (
+              <span
+                className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-amber-700"
+                title={`已有 ${suspendedCount} 个请求挂起，请点击下方任意端点或其他渠道重新激活`}
+              >
+                <TriangleAlert size={10} className="text-amber-600" />
+                等待重新激活 · {suspendedCount}
+              </span>
+            ) : (
+              <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-emerald-700">
+                <span className="h-1 w-1 rounded-full bg-emerald-500" />
+                当前接管
+              </span>
+            )
           )}
         </div>
 
@@ -946,17 +1080,18 @@ const ChannelCard = ({
         </div>
       </div>
 
-      {/* 元数据条：模型 · 推理 · 1M · API Key（host 显示在端点行，避免重复+换行） */}
+      {/* 元数据条：模型 · 推理 · 1M · API Key
+          注意：model/reasoning/1M 来自全局配置（~/.codex/config.toml），所有渠道共用 */}
       <div className="flex flex-nowrap items-center gap-x-3 gap-y-1.5 overflow-hidden border-t border-slate-100 px-4 py-2 text-[11px]">
         <span className="inline-flex flex-shrink-0 items-center gap-1 text-slate-600">
           <ShieldCheck size={11} className="text-emerald-500" />
-          <span className="font-medium">{channel.model || '未设置'}</span>
+          <span className="font-medium">{globalConfig.model || '未设置'}</span>
         </span>
         <span className="flex-shrink-0 text-slate-300">·</span>
         <span className="flex-shrink-0 text-slate-500">
-          推理 <span className="font-medium text-amber-600">{channel.reasoningEffort || 'xhigh'}</span>
+          推理 <span className="font-medium text-amber-600">{globalConfig.reasoning_effort || 'xhigh'}</span>
         </span>
-        {channel.enable1MContext && (
+        {globalConfig.enable_1m_context && (
           <>
             <span className="flex-shrink-0 text-slate-300">·</span>
             <span className="flex-shrink-0 font-medium text-sky-600">1M</span>
@@ -1011,6 +1146,7 @@ const ChannelCard = ({
               <EndpointRow
                 key={endpoint.id}
                 endpoint={endpoint}
+                suspendedCount={suspendedCount}
                 onActivate={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
                 onEdit={onEditEndpoint}
@@ -1035,6 +1171,30 @@ const CodexPage = () => {
   const [actionLoading, setActionLoading] = useState('');
   const [error, setError] = useState('');
   const [lastUpdate, setLastUpdate] = useState('');
+  // Codex 挂起请求数（>0 时触发渠道卡片/端点 toggle 的 amber 警示色）
+  const [suspendedCount, setSuspendedCount] = useState(0);
+  // Codex 全局配置弹窗
+  const [showGlobalConfig, setShowGlobalConfig] = useState(false);
+  // Codex 全局配置（来自 ~/.codex/config.toml，所有渠道共用）
+  const [globalConfig, setGlobalConfig] = useState({
+    model: '',
+    reasoning_effort: 'xhigh',
+    enable_1m_context: false
+  });
+
+  // 刷新全局配置（在 page mount + 弹窗保存成功后调用）
+  const loadGlobalConfig = useCallback(async () => {
+    try {
+      const data = await getCodexGlobalConfig();
+      setGlobalConfig({
+        model: data.model || '',
+        reasoning_effort: data.reasoning_effort || 'xhigh',
+        enable_1m_context: Boolean(data.enable_1m_context)
+      });
+    } catch {
+      // 静默失败：全局配置加载失败仅影响展示，不影响渠道管理
+    }
+  }, []);
 
   // 渠道弹窗
   const [showChannelForm, setShowChannelForm] = useState(false);
@@ -1065,11 +1225,9 @@ const CodexPage = () => {
     },
     {
       title: '当前模型',
-      value: activeChannel?.model || '等待接管',
-      tooltip: activeChannel?.model || '等待接管',
-      subText: activeChannel
-        ? `推理强度 ${activeChannel.reasoningEffort || 'xhigh'}${activeChannel.enable1MContext ? ' · 1M 上下文' : ''}`
-        : '接管后自动同步模型参数',
+      value: globalConfig.model || '未设置',
+      tooltip: globalConfig.model || '未设置（请在「Codex 配置」中设置）',
+      subText: `推理强度 ${globalConfig.reasoning_effort || 'xhigh'}${globalConfig.enable_1m_context ? ' · 1M 上下文' : ''}`,
       icon: ShieldCheck,
       statusColor: 'bg-sky-50 text-sky-600'
     },
@@ -1121,13 +1279,28 @@ const CodexPage = () => {
 
   useEffect(() => {
     fetchData();
-    const unsubscribe = subscribeToEvent('codex_provider_updated', () => {
+    // 初始拉取一次挂起数
+    getCodexSuspendedCount().then(setSuspendedCount).catch(() => {});
+    // 初始拉取一次全局配置
+    loadGlobalConfig();
+
+    const unsubscribe = subscribeToEvent('codex-provider:update', () => {
       fetchData({ silent: true });
     });
+    // 订阅挂起数变化事件（后端 SuspensionManager 在挂起开始/结束时推送）
+    const unsubscribeSuspension = subscribeToEvent('codex-provider:suspension', (data) => {
+      const count = Number(data?.suspended_count) || 0;
+      setSuspendedCount(count);
+    });
+    const refreshTimer = window.setInterval(() => {
+      fetchData({ silent: true });
+    }, 30000);
     return () => {
+      window.clearInterval(refreshTimer);
       if (typeof unsubscribe === 'function') unsubscribe();
+      if (typeof unsubscribeSuspension === 'function') unsubscribeSuspension();
     };
-  }, [fetchData]);
+  }, [fetchData, loadGlobalConfig]);
 
   // ===== 渠道动作 =====
   const handleActivateChannel = async (channel) => {
@@ -1340,6 +1513,15 @@ const CodexPage = () => {
           >
             刷新
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={Settings}
+            onClick={() => setShowGlobalConfig(true)}
+            title="编辑 ~/.codex/config.toml 中的 model / 推理强度 / 1M 上下文"
+          >
+            Codex 配置
+          </Button>
           <Button icon={Plus} onClick={openCreateChannelForm}>
             添加渠道
           </Button>
@@ -1391,6 +1573,8 @@ const CodexPage = () => {
               key={channel.id}
               channel={channel}
               actionLoading={actionLoading}
+              suspendedCount={suspendedCount}
+              globalConfig={globalConfig}
               onActivateChannel={handleActivateChannel}
               onEditChannel={openEditChannelForm}
               onDeleteChannel={(c) => setDeleteChannelTarget(c)}
@@ -1460,6 +1644,13 @@ const CodexPage = () => {
           loading={actionLoading === `delete-endpoint-${deleteEndpointTarget.endpoint.id}`}
           onCancel={() => setDeleteEndpointTarget(null)}
           onConfirm={handleDeleteEndpoint}
+        />
+      )}
+
+      {showGlobalConfig && (
+        <CodexGlobalConfigModal
+          onClose={() => setShowGlobalConfig(false)}
+          onSaved={loadGlobalConfig}
         />
       )}
     </div>

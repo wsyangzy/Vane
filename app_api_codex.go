@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"ai-relay-forwarder/internal/codexproxy"
 	"ai-relay-forwarder/internal/store"
 )
 
@@ -89,6 +90,10 @@ type CodexEndpointInfo struct {
 	BaseURL                 string  `json:"base_url"`
 	IsActive                bool    `json:"is_active"`
 	FailoverEnabled         bool    `json:"failover_enabled"`
+	Healthy                 bool    `json:"healthy"`
+	HealthState             string  `json:"health_state"`
+	HealthInScope           bool    `json:"health_in_scope"`
+	ResponseTimeMS          int64   `json:"response_time_ms"`
 	Priority                int     `json:"priority"`
 	CostMultiplier          float64 `json:"costMultiplier"`
 	InputCostMultiplier     float64 `json:"inputCostMultiplier"`
@@ -413,6 +418,8 @@ func (a *App) ActivateCodexChannel(id int64) error {
 		logger.Info("✅ Codex 渠道已激活", "id", id, "channel", activated.Name, "base_url", endpoint.BaseURL)
 	}
 	go a.emitCodexProviderUpdate()
+	// 唤醒所有挂起请求（运维通过 UI 切换渠道 = 恢复信号）
+	a.broadcastCodexRecovery()
 	return nil
 }
 
@@ -672,6 +679,8 @@ func (a *App) ActivateCodexEndpoint(id int64) error {
 	}
 
 	go a.emitCodexProviderUpdate()
+	// 唤醒所有挂起请求（运维通过 UI 切换端点 = 恢复信号，已激活端点的重复点击同样有效）
+	a.broadcastCodexRecovery()
 	return nil
 }
 
@@ -812,6 +821,23 @@ func codexChannelInputToRecord(name, providerType, apiKey, model, reasoningEffor
 }
 
 func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints []*store.CodexEndpointRecord) CodexChannelInfo {
+	a.mu.RLock()
+	endpointMgr := a.codexEndpointMgr
+	healthCheck := a.codexHealthCheck
+	a.mu.RUnlock()
+
+	activeChannelID := int64(0)
+	if endpointMgr != nil {
+		if active := endpointMgr.GetActiveChannel(); active != nil {
+			activeChannelID = active.ID
+		}
+	}
+
+	var latencies map[string]int64
+	if healthCheck != nil {
+		latencies = healthCheck.GetLatencies()
+	}
+
 	info := CodexChannelInfo{
 		ID:              record.ID,
 		Name:            record.Name,
@@ -827,6 +853,7 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 	}
 
 	for _, ep := range endpoints {
+		healthy, healthState, healthInScope, responseTimeMS := codexEndpointRuntimeHealth(record, ep, endpointMgr, activeChannelID, latencies)
 		info.Endpoints = append(info.Endpoints, CodexEndpointInfo{
 			ID:                      ep.ID,
 			ChannelID:               ep.ChannelID,
@@ -834,6 +861,10 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 			BaseURL:                 ep.BaseURL,
 			IsActive:                ep.IsActive,
 			FailoverEnabled:         ep.FailoverEnabled,
+			Healthy:                 healthy,
+			HealthState:             healthState,
+			HealthInScope:           healthInScope,
+			ResponseTimeMS:          responseTimeMS,
 			Priority:                ep.Priority,
 			CostMultiplier:          ep.CostMultiplier,
 			InputCostMultiplier:     ep.InputCostMultiplier,
@@ -849,9 +880,71 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 	return info
 }
 
+func codexEndpointRuntimeHealth(
+	channel *store.CodexChannelRecord,
+	endpoint *store.CodexEndpointRecord,
+	manager *codexproxy.EndpointManager,
+	activeChannelID int64,
+	latencies map[string]int64,
+) (healthy bool, healthState string, healthInScope bool, responseTimeMS int64) {
+	if channel == nil || endpoint == nil {
+		return false, "unchecked", false, 0
+	}
+	if !channel.IsActive || (manager != nil && activeChannelID != channel.ID) {
+		return false, "inactive", false, 0
+	}
+	if !endpoint.FailoverEnabled {
+		return false, "excluded", false, 0
+	}
+
+	latency, hasLatency := latencies[endpoint.Name]
+	if latency > 0 {
+		responseTimeMS = latency
+	}
+	if hasLatency && latency < 0 {
+		return false, "unhealthy", true, responseTimeMS
+	}
+	if manager != nil && !manager.IsHealthy(endpoint.Name) {
+		return false, "unhealthy", true, responseTimeMS
+	}
+	if hasLatency {
+		return true, "healthy", true, responseTimeMS
+	}
+	return false, "unchecked", true, 0
+}
+
 func formatCodexTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
 	return t.Format("2006-01-02 15:04:05")
+}
+
+// ============================================================================
+// 挂起请求相关 API
+// ============================================================================
+
+// GetCodexSuspendedCount 获取当前 Codex 挂起请求数（供前端展示警示色用）
+// 当 loop_retry 全部耗尽且未被运维通过 UI 重新激活时，请求会进入挂起队列。
+func (a *App) GetCodexSuspendedCount() int {
+	a.mu.RLock()
+	sm := a.codexSuspensionMgr
+	a.mu.RUnlock()
+	if sm == nil {
+		return 0
+	}
+	return sm.GetSuspendedCount()
+}
+
+// broadcastCodexRecovery 唤醒所有挂起的 Codex 请求
+// 由 ActivateCodexEndpoint / ActivateCodexChannel 在运维成功激活后调用
+// 已激活端点/渠道的"重复点击"同样会触发此方法（运维干预语义）
+func (a *App) broadcastCodexRecovery() {
+	a.mu.RLock()
+	sm := a.codexSuspensionMgr
+	a.mu.RUnlock()
+	if sm == nil {
+		return
+	}
+	sm.BroadcastRecovery()
 }

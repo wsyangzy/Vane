@@ -14,6 +14,10 @@ import (
 	"ai-relay-forwarder/internal/store"
 )
 
+// 注意：冷却机制已完全移除（参考 Claude 端 internal/endpoint/cooldown.go 历史经验）
+// 原因：loop_retry 模式下冷却机制与循环重试逻辑冲突
+// 失败端点仅靠健康检查恢复或被运维通过 UI 重新激活
+
 // CodexEndpoint 运行时端点信息（合并渠道与端点数据）
 type CodexEndpoint struct {
 	ID              int64
@@ -36,8 +40,7 @@ type EndpointManager struct {
 	mu            sync.RWMutex
 	endpoints     []*CodexEndpoint          // 按 priority ASC 排序
 	activeChannel *store.CodexChannelRecord
-	unhealthyMap  map[string]time.Time // name -> unhealthy until
-	cooldown      time.Duration        // 默认冷却时间
+	unhealthyMap  map[string]bool // name -> 是否标记为不健康（仅靠健康检查恢复）
 
 	// 活跃端点变更回调（由 App 注入，用于发送 Wails 事件刷新前端 UI）
 	onActiveChanged func()
@@ -57,8 +60,7 @@ func NewEndpointManager(
 	return &EndpointManager{
 		channelStore:  channelStore,
 		endpointStore: endpointStore,
-		unhealthyMap:  make(map[string]time.Time),
-		cooldown:      30 * time.Second,
+		unhealthyMap:  make(map[string]bool),
 		logger:        logger,
 	}
 }
@@ -128,7 +130,7 @@ func (m *EndpointManager) Reload() error {
 // GetNextEndpoint 获取下一个可用端点（排除已失败的和不健康的）
 // 逻辑:
 // 1. 过滤 failover_enabled = true 的端点
-// 2. 排除 unhealthyMap 中未过期的端点
+// 2. 排除 unhealthyMap 中标记为不健康的端点（仅靠健康检查恢复）
 // 3. 排除 failedNames 中的端点（本次请求已尝试过的）
 // 4. 按 priority ASC 排序，返回第一个
 // 5. 全部耗尽返回 error
@@ -140,7 +142,6 @@ func (m *EndpointManager) GetNextEndpoint(failedNames []string) (*CodexEndpoint,
 		return nil, fmt.Errorf("无可用 Codex 端点")
 	}
 
-	now := time.Now()
 	failedSet := make(map[string]struct{}, len(failedNames))
 	for _, name := range failedNames {
 		failedSet[name] = struct{}{}
@@ -153,7 +154,7 @@ func (m *EndpointManager) GetNextEndpoint(failedNames []string) (*CodexEndpoint,
 		if _, failed := failedSet[ep.Name]; failed {
 			continue
 		}
-		if until, unhealthy := m.unhealthyMap[ep.Name]; unhealthy && now.Before(until) {
+		if m.unhealthyMap[ep.Name] {
 			continue
 		}
 		return ep, nil
@@ -188,26 +189,33 @@ func (m *EndpointManager) GetPrimaryEndpoint() (*CodexEndpoint, error) {
 	return nil, fmt.Errorf("无可用 Codex 端点")
 }
 
-// MarkUnhealthy 标记端点为不健康，在 cooldown 时间内不会被选中
-func (m *EndpointManager) MarkUnhealthy(name string, cooldown time.Duration) {
-	if cooldown <= 0 {
-		cooldown = m.cooldown
-	}
+// MarkUnhealthy 标记端点为不健康（仅靠健康检查恢复，不再使用冷却时间）
+func (m *EndpointManager) MarkUnhealthy(name string) {
 	m.mu.Lock()
-	m.unhealthyMap[name] = time.Now().Add(cooldown)
+	m.unhealthyMap[name] = true
 	m.mu.Unlock()
 
-	m.logger.Warn("Codex 端点标记为不健康",
-		"endpoint", name,
-		"cooldown", cooldown.String(),
-	)
+	m.logger.Warn("Codex 端点标记为不健康", "endpoint", name)
 }
 
-// MarkHealthy 标记端点恢复健康
+// MarkHealthy 标记端点恢复健康（通常由健康检查器在探测成功后调用）
 func (m *EndpointManager) MarkHealthy(name string) {
 	m.mu.Lock()
 	delete(m.unhealthyMap, name)
 	m.mu.Unlock()
+}
+
+// ResetUnhealthy 重置所有端点的不健康标记
+// 用于渠道内循环重试（loop_retry）启动新一轮时清空已失败端点状态，
+// 让所有端点重新可被选中
+func (m *EndpointManager) ResetUnhealthy() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.unhealthyMap) == 0 {
+		return
+	}
+	m.unhealthyMap = make(map[string]bool)
+	m.logger.Info("Codex 端点不健康标记已重置（loop_retry 新一轮）")
 }
 
 // PromoteActive 将指定端点提升为活跃端点（同步到数据库的 codex_endpoints.is_active 字段）
@@ -271,17 +279,13 @@ func (m *EndpointManager) SetOnActiveChanged(cb func()) {
 	m.mu.Unlock()
 }
 
-// IsHealthy 判断端点是否健康（不在 unhealthyMap 中或冷却已过期）
+// IsHealthy 判断端点是否健康（不在 unhealthyMap 中即视为健康）
 // 用于前端健康图表统计；与 GetNextEndpoint 的健康判断逻辑保持一致。
 func (m *EndpointManager) IsHealthy(name string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	until, exists := m.unhealthyMap[name]
-	if !exists {
-		return true
-	}
-	return !time.Now().Before(until)
+	return !m.unhealthyMap[name]
 }
 
 // GetActiveChannel 获取当前活跃渠道信息

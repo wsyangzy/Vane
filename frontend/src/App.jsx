@@ -8,7 +8,7 @@ import Header from '@components/layout/Header.jsx';
 import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
 import { fetchRequests, isWailsEnvironment } from '@utils/api.js';
-import { getSuspendedRequestsCount, getManualRetryRequestsCount, getPortConflictStatus, resolvePortConflict } from '@utils/wailsApi.js';
+import { getSuspendedRequestsCount, getManualRetryRequestsCount, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -89,6 +89,8 @@ const GlobalAlerts = () => {
   const lastFailureIdRef = useRef('');
   const lastSuspendedCountRef = useRef(0);
   const lastManualRetryCountRef = useRef(0);
+  // Codex 挂起数（独立于 Claude 挂起数，事件驱动）
+  const lastCodexSuspendedCountRef = useRef(0);
 
   const pollAlerts = useCallback(async () => {
     if (!isWailsEnvironment() || inFlightRef.current) {
@@ -156,8 +158,34 @@ const GlobalAlerts = () => {
     }
     pollAlerts();
     const timer = setInterval(pollAlerts, 4000);
-    return () => clearInterval(timer);
-  }, [pollAlerts]);
+
+    // Codex 挂起数：初始化 + 事件订阅（事件驱动比轮询更及时）
+    getCodexSuspendedCount()
+      .then((count) => {
+        lastCodexSuspendedCountRef.current = Number(count) || 0;
+      })
+      .catch(() => {});
+
+    const handleCodexSuspension = (data) => {
+      const count = Number(data?.suspended_count) || 0;
+      const prev = lastCodexSuspendedCountRef.current;
+      if (count > 0 && prev === 0) {
+        toast.warning(
+          `已有 ${count} 个 Codex 请求挂起，请在 Codex 渠道页重新激活渠道或端点`,
+          'Codex 请求等待激活'
+        );
+      } else if (count === 0 && prev > 0) {
+        toast.success('Codex 挂起请求已恢复', 'Codex 已恢复');
+      }
+      lastCodexSuspendedCountRef.current = count;
+    };
+    const unsubscribeCodexSuspension = subscribeToEvent('codex-provider:suspension', handleCodexSuspension);
+
+    return () => {
+      clearInterval(timer);
+      if (typeof unsubscribeCodexSuspension === 'function') unsubscribeCodexSuspension();
+    };
+  }, [pollAlerts, toast]);
 
   return null;
 };

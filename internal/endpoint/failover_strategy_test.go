@@ -14,7 +14,6 @@ func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: 5 * time.Second,
 		},
 		EndpointsStorage: config.EndpointsStorageConfig{
 			Type: "yaml",
@@ -63,7 +62,6 @@ func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: 5 * time.Second,
 		},
 		EndpointsStorage: config.EndpointsStorageConfig{
 			Type: "yaml",

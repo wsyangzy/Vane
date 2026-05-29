@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # scripts/release.sh - 一键发布新版本
 # 用法: ./scripts/release.sh <新版本号> [发布说明]
-# 示例: ./scripts/release.sh 7.2 "Phase 5/6 流程层重构与长期演进"
+# 示例: ./scripts/release.sh 7.3a "Codex 全局配置弹窗 + 健康检查对齐"
+#
+# 版本号格式:
+#   Major.Minor[Suffix]       例: 7.3, 7.3a, 7.3b
+#   Major.Minor.Patch[Suffix] 例: 7.3.1, 7.3.1a
+#
+# Suffix 为可选的英文字母后缀（a-z），用于标记小迭代。
+# Windows manifest 和 versioninfo.json 中仅使用纯数字部分（X.Y.Z.0）。
 
 set -euo pipefail
 
@@ -13,16 +20,17 @@ if [ $# -lt 1 ]; then
 用法: $0 <新版本号> [发布说明]
 
 参数:
-  新版本号    例: 7.2 (Major.Minor 形式)
+  新版本号    例: 7.3 / 7.3a / 7.3.1 / 7.3.1a
   发布说明    可选，写入版本历史表
 
 示例:
-  $0 7.2
-  $0 7.2 "Phase 5/6 流程层重构与长期演进"
+  $0 7.3a
+  $0 7.3a "Codex 全局配置弹窗 + 健康检查对齐"
 
 注意:
-  发布说明含括号或空格时必须用引号包裹
-  示例: $0 7.2 "chore(release): xxx"
+  - 支持字母后缀（a-z），用于标记小迭代
+  - Windows manifest 中仅使用纯数字部分
+  - 发布说明含括号或空格时必须用引号包裹
 EOF
     exit 1
 fi
@@ -30,17 +38,33 @@ fi
 NEW_VERSION="$1"
 RELEASE_NOTE="${2:-未提供发布说明}"
 
-# 校验版本号格式 (Major.Minor 或 Major.Minor.Patch)
-if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
-    echo "❌ 错误: 版本号格式无效，应为 X.Y 或 X.Y.Z (如 7.2 或 7.2.1)"
+# 校验版本号格式: Major.Minor[Suffix] 或 Major.Minor.Patch[Suffix]
+# Suffix 为可选的单个英文字母（a-z/A-Z）
+if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?[a-zA-Z]?$ ]]; then
+    echo "❌ 错误: 版本号格式无效"
+    echo "   支持格式: X.Y / X.Ya / X.Y.Z / X.Y.Za"
+    echo "   示例: 7.3, 7.3a, 7.3.1, 7.3.1b"
     exit 1
 fi
 
-# 解析 Major/Minor/Patch
-IFS='.' read -ra VERSION_PARTS <<< "$NEW_VERSION"
+# 解析版本号：分离数字部分和字母后缀
+# 例: "7.3a" → NUMERIC_VERSION="7.3", SUFFIX="a"
+# 例: "7.3.1" → NUMERIC_VERSION="7.3.1", SUFFIX=""
+SUFFIX=""
+NUMERIC_VERSION="$NEW_VERSION"
+if [[ "$NEW_VERSION" =~ [a-zA-Z]$ ]]; then
+    SUFFIX="${NEW_VERSION: -1}"
+    NUMERIC_VERSION="${NEW_VERSION%?}"
+fi
+
+# 解析 Major/Minor/Patch（纯数字）
+IFS='.' read -ra VERSION_PARTS <<< "$NUMERIC_VERSION"
 MAJOR="${VERSION_PARTS[0]}"
 MINOR="${VERSION_PARTS[1]}"
 PATCH="${VERSION_PARTS[2]:-0}"
+
+# Windows manifest 版本（恰好 4 段纯数字）
+WIN_VERSION="${MAJOR}.${MINOR}.${PATCH}.0"
 
 # 项目根目录（脚本位于 scripts/ 下）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,25 +75,37 @@ cd "$PROJECT_ROOT"
 TODAY="$(date +%Y-%m-%d)"
 
 echo "═══════════════════════════════════════════════════════"
-echo "  Claude Request Forwarder - 版本发布"
+echo "  AI Relay Forwarder - 版本发布"
 echo "═══════════════════════════════════════════════════════"
-echo "  新版本号: v${NEW_VERSION}"
-echo "  日期:    ${TODAY}"
-echo "  说明:    ${RELEASE_NOTE}"
+echo "  新版本号:      v${NEW_VERSION}"
+echo "  数字版本:      ${WIN_VERSION} (Windows manifest)"
+echo "  日期:          ${TODAY}"
+echo "  说明:          ${RELEASE_NOTE}"
 echo "═══════════════════════════════════════════════════════"
 echo ""
 
 # ============================================
-# 1. 获取当前版本号（从 README.md 提取）
+# 1. 获取当前版本号（从 README.md 提取，支持字母后缀）
 # ============================================
-# 使用 sed 替代 grep -P（Windows Git Bash 不支持 -P 选项）
-CURRENT_VERSION="$(sed -n 's/.*version-\([0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}\)-blue.*/\1/p' README.md | head -1)"
+CURRENT_VERSION="$(sed -n 's/.*version-\([0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}[a-zA-Z]\{0,1\}\)-blue.*/\1/p' README.md | head -1)"
 if [ -z "$CURRENT_VERSION" ]; then
     echo "❌ 错误: 无法从 README.md 提取当前版本号"
     exit 1
 fi
-echo "📋 当前版本: v${CURRENT_VERSION}"
-echo "📋 目标版本: v${NEW_VERSION}"
+
+# 解析当前版本的数字部分（用于 manifest 匹配）
+CURRENT_NUMERIC="$CURRENT_VERSION"
+if [[ "$CURRENT_VERSION" =~ [a-zA-Z]$ ]]; then
+    CURRENT_NUMERIC="${CURRENT_VERSION%?}"
+fi
+IFS='.' read -ra CUR_PARTS <<< "$CURRENT_NUMERIC"
+CUR_MAJOR="${CUR_PARTS[0]}"
+CUR_MINOR="${CUR_PARTS[1]}"
+CUR_PATCH="${CUR_PARTS[2]:-0}"
+CUR_WIN_VERSION="${CUR_MAJOR}.${CUR_MINOR}.${CUR_PATCH}.0"
+
+echo "📋 当前版本: v${CURRENT_VERSION} (manifest: ${CUR_WIN_VERSION})"
+echo "📋 目标版本: v${NEW_VERSION} (manifest: ${WIN_VERSION})"
 echo ""
 
 if [ "$CURRENT_VERSION" = "$NEW_VERSION" ]; then
@@ -91,9 +127,7 @@ echo "📝 [1/12] 更新 README.md ..."
 sed "${SED_INPLACE[@]}" "s/version-${CURRENT_VERSION}-blue/version-${NEW_VERSION}-blue/g" README.md
 
 echo "📝 [2/12] 更新 CLAUDE.md ..."
-# 更新顶部"架构版本"
 sed "${SED_INPLACE[@]}" "s/🏗️ \*\*架构版本\*\*: v${CURRENT_VERSION}/🏗️ **架构版本**: v${NEW_VERSION}/g" CLAUDE.md
-# 更新"项目概述"中的"当前版本"
 sed "${SED_INPLACE[@]}" "s/- \*\*当前版本\*\*: v${CURRENT_VERSION}/- **当前版本**: v${NEW_VERSION}/g" CLAUDE.md
 
 # 在版本历史表中插入新行
@@ -105,6 +139,7 @@ awk -v new_line="${NEW_HISTORY_LINE}" '
 
 # ============================================
 # 3. 更新 Windows 资源版本 (versioninfo.json)
+#    数字版本用 MAJOR/MINOR/PATCH，字符串版本用完整 NEW_VERSION
 # ============================================
 echo "📝 [3/12] 更新 versioninfo.json ..."
 python3 - <<PYEOF
@@ -112,19 +147,19 @@ import json
 with open('versioninfo.json', 'r', encoding='utf-8') as f:
     data = json.load(f)
 
-# FixedFileInfo 中的数字版本
+# FixedFileInfo 中的数字版本（纯数字，4 段）
 data['FixedFileInfo']['FileVersion']['Major'] = ${MAJOR}
 data['FixedFileInfo']['FileVersion']['Minor'] = ${MINOR}
 data['FixedFileInfo']['FileVersion']['Patch'] = ${PATCH}
+data['FixedFileInfo']['FileVersion']['Build'] = 0
 data['FixedFileInfo']['ProductVersion']['Major'] = ${MAJOR}
 data['FixedFileInfo']['ProductVersion']['Minor'] = ${MINOR}
 data['FixedFileInfo']['ProductVersion']['Patch'] = ${PATCH}
+data['FixedFileInfo']['ProductVersion']['Build'] = 0
 
-# StringFileInfo 中的字符串版本
-file_ver = '${NEW_VERSION}.${PATCH}.0' if '${PATCH}' != '0' else '${NEW_VERSION}.0.0'
-prod_ver = '${NEW_VERSION}.${PATCH}' if '${PATCH}' != '0' else '${NEW_VERSION}.0'
-data['StringFileInfo']['FileVersion'] = file_ver
-data['StringFileInfo']['ProductVersion'] = prod_ver
+# StringFileInfo 中的字符串版本（可含字母后缀，供 Windows 属性页展示）
+data['StringFileInfo']['FileVersion'] = '${WIN_VERSION}'
+data['StringFileInfo']['ProductVersion'] = '${NEW_VERSION}'
 
 with open('versioninfo.json', 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -140,7 +175,9 @@ import json
 with open('build/windows/info.json', 'r', encoding='utf-8') as f:
     data = json.load(f)
 
-data['fixed']['file_version'] = '${NEW_VERSION}.${PATCH}.0' if '${PATCH}' != '0' else '${NEW_VERSION}.0.0'
+# fixed.file_version 必须是 4 段纯数字
+data['fixed']['file_version'] = '${WIN_VERSION}'
+# ProductVersion 可以是展示用的完整版本号
 data['info']['0000']['ProductVersion'] = '${NEW_VERSION}'
 
 with open('build/windows/info.json', 'w', encoding='utf-8') as f:
@@ -173,10 +210,10 @@ echo "📝 [9/12] 更新 build/windows/Taskfile.yml ..."
 sed "${SED_INPLACE[@]}" "s/{{default \"${CURRENT_VERSION}\" .VERSION}}/{{default \"${NEW_VERSION}\" .VERSION}}/g" build/windows/Taskfile.yml
 
 # ============================================
-# 8. 更新 Windows app.manifest (X.Y.0.0 格式)
+# 8. 更新 Windows app.manifest（恰好 4 段纯数字）
 # ============================================
 echo "📝 [10/12] 更新 build/windows/app.manifest ..."
-sed "${SED_INPLACE[@]}" "s/version=\"${CURRENT_VERSION}\.0\.0\"/version=\"${NEW_VERSION}.0.0\"/g" build/windows/app.manifest
+sed "${SED_INPLACE[@]}" "s/version=\"${CUR_WIN_VERSION}\"/version=\"${WIN_VERSION}\"/g" build/windows/app.manifest
 
 # ============================================
 # 9. 更新 Go 全局变量 (globals.go)
@@ -189,7 +226,7 @@ sed "${SED_INPLACE[@]}" "s/Version   = \"${CURRENT_VERSION}\"/Version   = \"${NE
 # ============================================
 echo "📝 [12/12] 更新 scripts/package-windows.sh ..."
 sed "${SED_INPLACE[@]}" "s/VERSION=\"${CURRENT_VERSION}\"/VERSION=\"${NEW_VERSION}\"/g" scripts/package-windows.sh
-sed "${SED_INPLACE[@]}" "s/Claude Request Forwarder v${CURRENT_VERSION} - Windows 版本/Claude Request Forwarder v${NEW_VERSION} - Windows 版本/g" scripts/package-windows.sh
+sed "${SED_INPLACE[@]}" "s/AI Relay Forwarder v${CURRENT_VERSION}/AI Relay Forwarder v${NEW_VERSION}/g" scripts/package-windows.sh
 
 # 清理可能产生的 .bak 备份文件（部分 sed 实现会创建）
 find . -maxdepth 3 -name "*.bak" -type f -delete 2>/dev/null || true
@@ -203,21 +240,18 @@ echo ""
 echo "已修改的 12 个文件:"
 echo "  📄 README.md                       (badge: ${CURRENT_VERSION} → ${NEW_VERSION})"
 echo "  📄 CLAUDE.md                       (架构版本 + 当前版本 + 版本历史表)"
-echo "  📄 versioninfo.json                (Windows 资源版本)"
-echo "  📄 build/windows/info.json         (Wails 构建版本)"
-echo "  📄 wails.json                      (productVersion)"
+echo "  📄 versioninfo.json                (Windows 资源: ${WIN_VERSION})"
+echo "  📄 build/windows/info.json         (Wails 构建: ${WIN_VERSION})"
+echo "  📄 wails.json                      (productVersion: ${NEW_VERSION})"
 echo "  📄 build/config.yml                (Dev 模式版本)"
 echo "  📄 build/darwin/Taskfile.yml       (darwin VERSION 默认值)"
 echo "  📄 build/linux/Taskfile.yml        (linux VERSION 默认值)"
 echo "  📄 build/windows/Taskfile.yml      (windows VERSION 默认值)"
-echo "  📄 build/windows/app.manifest      (Windows manifest)"
-echo "  📄 globals.go                      (Go 全局变量 Version)"
-echo "  📄 scripts/package-windows.sh      (打包脚本 VERSION + README)"
+echo "  📄 build/windows/app.manifest      (manifest: ${WIN_VERSION})"
+echo "  📄 globals.go                      (Go 全局变量 Version: ${NEW_VERSION})"
+echo "  📄 scripts/package-windows.sh      (打包脚本 VERSION)"
 echo ""
 echo "💡 后续步骤:"
 echo "  1. git diff 检查改动是否正确"
-echo "  2. git add -A README.md CLAUDE.md versioninfo.json wails.json globals.go"
-echo "     git add -A scripts/package-windows.sh"
-echo "     git add -f build/  # build/ 目录可能在 gitignore 中"
-echo "  3. git commit -m \"chore(release): 发布 v${NEW_VERSION}\""
+echo "  2. git add -A && git commit -m \"chore(release): 发布 v${NEW_VERSION}\""
 echo ""

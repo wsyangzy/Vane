@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-7.3-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-7.3a-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg" alt="Go">
@@ -162,8 +162,8 @@ server:
   host: "127.0.0.1"
   port: 9090
 
-# 故障转移配置 v2
-failover_v2:
+# 故障转移配置（含挂起、循环重试等所有相关字段）
+failover:
   enabled: true
   loop_retry: true              # 所有渠道耗尽后是否循环重试
   max_loops: 3                  # 循环上限（防止无限重试）
@@ -302,8 +302,8 @@ usage_tracking:
 | 配置项                        | 位置   | 作用                               | 默认值    |
 | ----------------------------- | ------ | ---------------------------------- | --------- |
 | `failover.enabled`          | 全局   | **渠道间故障转移开关**       | `true`  |
-| `failover_v2.loop_retry`    | 全局   | 所有渠道耗尽后是否循环重试         | `false` |
-| `failover_v2.max_loops`     | 全局   | 最大循环轮数（仅 loop_retry=true） | `3`     |
+| `failover.loop_retry`       | 全局   | 所有渠道耗尽后是否循环重试         | `false` |
+| `failover.max_loops`        | 全局   | 最大循环轮数（仅 loop_retry=true） | `3`     |
 | `retry.max_attempts`        | 全局   | 单端点最大重试次数                 | `3`     |
 | `endpoint.failover_enabled` | 端点级 | 端点是否参与故障转移               | `true`  |
 

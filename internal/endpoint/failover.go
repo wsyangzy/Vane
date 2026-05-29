@@ -208,8 +208,8 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 
 	// 在函数开头检查 loopCount 限制，防止绕过
 	// 当启用循环重试且 loopCount > 0 时，说明已经进入循环重试模式
-	if m.config.FailoverV2.ShouldLoopRetryOnExhausted() && loopCount > 0 {
-		maxLoops := m.config.FailoverV2.GetMaxLoops()
+	if m.config.Failover.ShouldLoopRetryOnExhausted() && loopCount > 0 {
+		maxLoops := m.config.Failover.GetMaxLoops()
 		if maxLoops > 0 && loopCount >= maxLoops {
 			slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
 			return "", fmt.Errorf("服务暂时不可用: 所有渠道均已尝试 (共循环 %d 轮), 请稍后重试", maxLoops)
@@ -226,10 +226,10 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 
 	candidates := m.collectFailoverCandidatesExcluding(exclude)
 	if len(candidates) == 0 {
-		// 使用 LoopRetry 配置替代原有的 RecoveryStrategy 判断
-		if m.config.FailoverV2.ShouldLoopRetryOnExhausted() {
+		// 使用 LoopRetry 配置控制是否循环重试
+		if m.config.Failover.ShouldLoopRetryOnExhausted() {
 			// 检查循环次数限制
-			maxLoops := m.config.FailoverV2.GetMaxLoops()
+			maxLoops := m.config.Failover.GetMaxLoops()
 			if maxLoops > 0 && loopCount >= maxLoops {
 				slog.Warn(fmt.Sprintf("🔚 [循环限制] 已达到最大循环轮数 (%d/%d)，停止重试", loopCount, maxLoops))
 				return "", fmt.Errorf("服务暂时不可用: 所有渠道均已尝试 (共循环 %d 轮), 请稍后重试", maxLoops)

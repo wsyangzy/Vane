@@ -70,7 +70,6 @@ const ConfigPage = () => {
     'web',
     'group',
     'health',
-    'request_suspend',
     'usage_tracking',
     'token_counting',
     'endpoints',
@@ -173,18 +172,7 @@ const ConfigPage = () => {
           </ConfigSection>
         )}
 
-        {/* 请求挂起配置 */}
-        {config?.request_suspend && (
-          <ConfigSection title="请求挂起" icon={Clock}>
-            <ConfigItem label="启用状态" value={config.request_suspend.Enabled} type="boolean" />
-            <ConfigItem label="超时时间" value={config.request_suspend.Timeout} type="duration" />
-            <ConfigItem
-              label="最大挂起数"
-              value={config.request_suspend.MaxSuspendedRequests}
-              type="number"
-            />
-          </ConfigSection>
-        )}
+        {/* 请求挂起配置已合并到 failover 块下展示，独立模块移除 */}
 
         {/* 使用追踪配置 */}
         {config?.usage_tracking && (

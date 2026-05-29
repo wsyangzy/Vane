@@ -20,7 +20,6 @@ func TestGroupChangeNotifications(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Minute * 5,
 		},
 	}
 
@@ -141,7 +140,6 @@ func TestGroupCooldownNotifications(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 
@@ -213,7 +211,6 @@ func TestGroupPauseResumeNotifications(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Minute * 5,
 		},
 	}
 
@@ -317,7 +314,6 @@ func TestGroupNotificationConcurrency(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 
@@ -416,7 +412,6 @@ func TestGroupNotificationMemoryLeak(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 
@@ -486,7 +481,6 @@ func TestGroupNotificationBuffering(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 
@@ -562,7 +556,6 @@ func TestGroupNotificationErrorConditions(t *testing.T) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 
@@ -617,7 +610,6 @@ func BenchmarkGroupNotificationSubscribe(b *testing.B) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 
@@ -638,7 +630,6 @@ func BenchmarkGroupNotificationBroadcast(b *testing.B) {
 		},
 		Failover: config.FailoverConfig{
 			Enabled:         true,
-			DefaultCooldown: time.Second,
 		},
 	}
 

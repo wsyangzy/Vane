@@ -1532,6 +1532,13 @@ const mapCodexEndpoint = (endpoint) => ({
   baseURL: endpoint.base_url,
   isActive: Boolean(endpoint.is_active),
   failoverEnabled: endpoint.failover_enabled !== false,
+  healthy: Boolean(endpoint.healthy),
+  healthState: endpoint.health_state || 'unchecked',
+  health_state: endpoint.health_state || 'unchecked',
+  healthInScope: Boolean(endpoint.health_in_scope),
+  health_in_scope: Boolean(endpoint.health_in_scope),
+  responseTimeMs: endpoint.response_time_ms || 0,
+  response_time_ms: endpoint.response_time_ms || 0,
   priority: endpoint.priority || 0,
   costMultiplier: endpoint.costMultiplier ?? 1.0,
   inputCostMultiplier: endpoint.inputCostMultiplier ?? 1.0,
@@ -1976,4 +1983,52 @@ export const resolvePortConflict = async (action) => {
   return await WailsApp.ResolvePortConflict(action);
 };
 
+// ============================================================================
+// Codex 挂起请求相关
+// ============================================================================
+
+/**
+ * 获取当前 Codex 挂起请求数（用于前端展示警示色与 Toast 提示）
+ */
+export const getCodexSuspendedCount = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const count = await WailsApp.GetCodexSuspendedCount();
+  return Number(count) || 0;
+};
+
+// ============================================================================
+// Codex 全局配置（~/.codex/config.toml 中的 model / reasoning_effort / 1M）
+// base_url 由后端自动同步自「设置 → 服务端口」，前端不可编辑
+// ============================================================================
+
+/**
+ * 读取 Codex 全局配置
+ * @returns {Promise<{model:string, reasoning_effort:string, enable_1m_context:boolean}>}
+ */
+export const getCodexGlobalConfig = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const info = await WailsApp.GetCodexGlobalConfig();
+  return {
+    model: info?.model || '',
+    reasoning_effort: info?.reasoning_effort || '',
+    enable_1m_context: Boolean(info?.enable_1m_context)
+  };
+};
+
+/**
+ * 更新 Codex 全局配置（直接写 ~/.codex/config.toml）
+ * base_url 由后端自动取 server.host:port + /v1
+ * @param {{model:string, reasoning_effort:string, enable_1m_context:boolean}} input
+ */
+export const updateCodexGlobalConfig = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.UpdateCodexGlobalConfig({
+    model: input?.model || '',
+    reasoning_effort: input?.reasoning_effort || '',
+    enable_1m_context: Boolean(input?.enable_1m_context)
+  });
+};
 
