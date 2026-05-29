@@ -34,7 +34,7 @@ type StreamProcessor struct {
 
 	// 错误处理和恢复
 	errorRecovery *ErrorRecoveryManager // 错误恢复管理器
-	lastAPIError  error                 // V2架构：最后一次API错误信息
+	lastAPIError  error                 // 最后一次API错误信息
 
 	// 请求标识信息
 	requestID string // 请求唯一标识符
@@ -119,7 +119,7 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 		select {
 		case <-ctx.Done():
 			// 客户端取消，进入优雅取消处理
-			return sp.handleCancellationV2(ctx, ctx.Err())
+			return sp.handleCancellation(ctx, ctx.Err())
 		default:
 			// 继续正常处理
 		}
@@ -164,7 +164,7 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 
 		if err != nil {
 			// 网络中断或其他错误，尝试部分数据处理
-			return sp.handlePartialStreamV2(err)
+			return sp.handlePartialStream(err)
 		}
 	}
 }
@@ -228,14 +228,13 @@ func (sp *StreamProcessor) processSSELine(line string) {
 		sp.debugLines = append(sp.debugLines, line)
 	}
 
-	// ✅ 使用V2架构进行解析
-	result := sp.tokenParser.ParseSSELineV2(line)
+	// 解析 SSE 事件
+	result := sp.tokenParser.ParseSSEEvent(line)
 
 	if result != nil {
-		// ✅ 检查是否有错误信息
+		// 检查是否有错误信息
 		if result.ErrorInfo != nil {
-			// V2架构：处理API错误信息
-			slog.Error(fmt.Sprintf("❌ [API错误V2] [%s] 类型: %s, 消息: %s",
+			slog.Error(fmt.Sprintf("❌ [API错误] [%s] 类型: %s, 消息: %s",
 				sp.requestID, result.ErrorInfo.Type, result.ErrorInfo.Message))
 
 			// 将错误信息存储，供上层生命周期管理器处理
@@ -243,9 +242,9 @@ func (sp *StreamProcessor) processSSELine(line string) {
 			return
 		}
 
-		// ✅ 处理正常Token信息
+		// 处理正常Token信息
 		if result.TokenUsage != nil {
-			// V2架构：直接使用ParseResult，无需类型转换
+			// 直接使用ParseResult，无需类型转换
 			trackingTokens := result.TokenUsage
 			modelName := result.ModelName
 
@@ -322,7 +321,7 @@ func (sp *StreamProcessor) classifyStreamError(err error, tokenUsage *tracking.T
 }
 
 // 🔧 [P4.3 清理] 已删除 handlePartialStream DEPRECATED 死方法
-// 此方法已被 handlePartialStreamV2() 完全替代，无外部调用者
+// 此方法已被 handlePartialStream() 完全替代，无外部调用者
 
 // ProcessStreamWithRetry 流式处理入口（无重试版本）
 // 2025-12-11: 移除无效的重试循环，流式传输阶段不重试以避免重复计费
@@ -496,7 +495,7 @@ func (sp *StreamProcessor) Reset() {
 }
 
 // 🔧 [P4.3 清理] 已删除 handleCancellation 和 collectAvailableInfo 两个 DEPRECATED 死方法
-// 它们已被 handleCancellationV2() 和 collectAvailableInfoV2() 完全替代，无外部调用者
+// 它们已被 handleCancellation() 和 collectAvailableInfo() 完全替代，无外部调用者
 
 // getFinalTokenUsage 获取最终的Token使用信息（修复版）
 func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {
@@ -561,9 +560,9 @@ func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {
 	}
 }
 
-// handlePartialStreamV2 处理部分数据流中断情况（返回Token信息版本）
+// handlePartialStream 处理部分数据流中断情况（返回Token信息版本）
 // 当网络中断或其他错误发生时，收集已解析的Token信息并返回
-func (sp *StreamProcessor) handlePartialStreamV2(err error) (*tracking.TokenUsage, error) {
+func (sp *StreamProcessor) handlePartialStream(err error) (*tracking.TokenUsage, error) {
 	// ✅ 处理剩余缓冲数据（包含flush逻辑）
 	sp.finalizeParsing()
 
@@ -614,16 +613,16 @@ func (sp *StreamProcessor) handlePartialStreamV2(err error) (*tracking.TokenUsag
 	return partialTokenUsage, fmt.Errorf("stream_status:%s:model:%s: %w", status, modelName, err)
 }
 
-// handleCancellationV2 处理客户端取消请求（返回Token信息版本）
+// handleCancellation 处理客户端取消请求（返回Token信息版本）
 // 🔧 [竞态修复] 2026-03-14: token 解析已改为同步执行，无需再等待后台解析完成。
-func (sp *StreamProcessor) handleCancellationV2(ctx context.Context, cancelErr error) (*tracking.TokenUsage, error) {
+func (sp *StreamProcessor) handleCancellation(ctx context.Context, cancelErr error) (*tracking.TokenUsage, error) {
 	slog.Info(fmt.Sprintf("🚫 [客户端取消] [%s] 检测到客户端取消: %v", sp.requestID, cancelErr))
 
-	return sp.collectAvailableInfoV2(cancelErr)
+	return sp.collectAvailableInfo(cancelErr)
 }
 
-// collectAvailableInfoV2 智能信息收集（返回Token信息版本）
-func (sp *StreamProcessor) collectAvailableInfoV2(cancelErr error) (*tracking.TokenUsage, error) {
+// collectAvailableInfo 智能信息收集（返回Token信息版本）
+func (sp *StreamProcessor) collectAvailableInfo(cancelErr error) (*tracking.TokenUsage, error) {
 	sp.parseMutex.Lock()
 	defer sp.parseMutex.Unlock()
 

@@ -180,8 +180,8 @@ func TestStreamProcessor_CollectAvailableInfo(t *testing.T) {
 		// 重置完成标志
 		processor.completionRecorded = false
 
-		// collectAvailableInfoV2 签名已简化，移除 status 参数
-		tokenUsage, err := processor.collectAvailableInfoV2(cancelErr)
+		// collectAvailableInfo 签名已简化，移除 status 参数
+		tokenUsage, err := processor.collectAvailableInfo(cancelErr)
 
 		// 验证返回原始取消错误
 		if !errors.Is(err, context.Canceled) {

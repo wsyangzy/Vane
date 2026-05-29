@@ -183,13 +183,13 @@ func TestTokenParserFlushMethod(t *testing.T) {
 	t.Log("📝 场景1：模拟缺少终止空行的 message_delta 事件")
 
 	// 解析 event 行
-	result1 := tokenParser.ParseSSELineV2("event: message_delta")
+	result1 := tokenParser.ParseSSEEvent("event: message_delta")
 	if result1 != nil {
 		t.Error("❌ event 行不应返回结果")
 	}
 
 	// 解析 data 行（包含 usage）
-	result2 := tokenParser.ParseSSELineV2(`data: {"type":"message_delta","delta":{"type":"text","text":"Test"},"usage":{"input_tokens":200,"output_tokens":100,"cache_creation_input_tokens":30,"cache_read_input_tokens":15}}`)
+	result2 := tokenParser.ParseSSEEvent(`data: {"type":"message_delta","delta":{"type":"text","text":"Test"},"usage":{"input_tokens":200,"output_tokens":100,"cache_creation_input_tokens":30,"cache_read_input_tokens":15}}`)
 	if result2 != nil {
 		t.Error("❌ data 行不应返回结果（等待空行）")
 	}

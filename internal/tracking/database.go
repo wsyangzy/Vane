@@ -279,7 +279,7 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 		}
 
 		pricing := ut.GetPricing(data.ModelName)
-		costBreakdown := CalculateCostV2(tokens, &pricing, nil)
+		costBreakdown := CalculateCost(tokens, &pricing, nil)
 
 		// 只更新Token相关字段和成本，不更新状态
 		query := fmt.Sprintf(`UPDATE request_logs SET
@@ -339,7 +339,7 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 		}
 
 		pricing := ut.GetPricing(data.ModelName)
-		costBreakdown := CalculateCostV2(tokens, &pricing, nil)
+		costBreakdown := CalculateCost(tokens, &pricing, nil)
 
 		// 🔧 专用于恢复场景：更新任何状态的请求的Token字段，因为这是恢复不完整的数据
 		query := fmt.Sprintf(`UPDATE request_logs SET

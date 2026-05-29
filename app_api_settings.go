@@ -460,18 +460,6 @@ func (a *App) GetConfigSourceInfo() ([]ConfigSourceInfo, error) {
 	// 这些是 5.5 后续要迁移的目标
 	yamlOnlyConfigs := []ConfigSourceInfo{
 		{
-			Category: service.CategoryProxy, Key: "enabled",
-			CurrentValue: fmt.Sprintf("%v", cfg.Proxy.Enabled),
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "P5.5 待迁移：当前仅通过 config.yaml 配置",
-		},
-		{
-			Category: service.CategoryProxy, Key: "type",
-			CurrentValue: cfg.Proxy.Type,
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "P5.5 待迁移",
-		},
-		{
 			Category: service.CategoryLogging, Key: "level",
 			CurrentValue: cfg.Logging.Level,
 			Source:       string(service.ConfigSourceYAML),

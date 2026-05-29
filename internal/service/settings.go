@@ -28,7 +28,6 @@ const (
 
 	// 🔧 [P5.5 新增] 为未来扩展预留的分类
 	// 这些分类目前 YAML/代码常量管理，后续可逐步迁移到 SettingsService
-	CategoryProxy           = "proxy"            // HTTP/SOCKS5 代理配置
 	CategoryLogging         = "logging"          // 日志级别/格式
 	CategoryEndpointsStore  = "endpoints_store"  // 端点存储类型（yaml/sqlite）
 	CategoryTimezone        = "timezone"         // 全局时区
@@ -143,14 +142,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 				Icon:        "📡",
 				Order:       0, // 最前（特殊处理，单独显示）
 			},
-			// 🔧 [P5.5 新增] Proxy / Logging / Timezone 分类
-			CategoryProxy: {
-				Name:        CategoryProxy,
-				Label:       "出站代理",
-				Description: "本应用连接 Claude / Codex 等上游服务商时使用的代理（与「服务端口」无关，那是客户端连接本应用的端口）",
-				Icon:        "🌐",
-				Order:       9,
-			},
+			// 🔧 [P5.5 新增] Logging / Timezone 分类
 			CategoryLogging: {
 				Name:        CategoryLogging,
 				Label:       "日志设置",
@@ -498,8 +490,7 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	// Retention 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryRetention)...)
 
-	// 🔧 [P5.5 新增] Proxy / Logging / Timezone 设置（从 YAML 迁移到 SQLite）
-	defaults = append(defaults, s.getDefaultsForCategory(CategoryProxy)...)
+	// 🔧 [P5.5 新增] Logging / Timezone 设置（从 YAML 迁移到 SQLite）
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
 
@@ -592,22 +583,6 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 			{Category: CategoryHotPool, Key: "max_size", Value: "10000", ValueType: ValueTypeInt, Label: "最大容量", Description: "热池最大请求数量", DisplayOrder: 3},
 			{Category: CategoryHotPool, Key: "cleanup_interval", Value: "1m", ValueType: ValueTypeDuration, Label: "清理间隔", Description: "僵尸请求清理间隔", DisplayOrder: 4},
 			{Category: CategoryHotPool, Key: "archive_on_cleanup", Value: "true", ValueType: ValueTypeBool, Label: "清理时归档", Description: "清理时是否将请求归档到数据库", DisplayOrder: 5},
-		}
-
-	// 🔧 [P5.5.1 新增] Proxy 代理配置
-	case CategoryProxy:
-		return []*store.SettingRecord{
-			{Category: CategoryProxy, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用代理", Description: "本应用连接上游服务商时是否走代理。如服务商被墙、或公司网络要求走代理时启用。注意：这跟「服务端口」不同——服务端口是客户端连接本应用的入口端口", DisplayOrder: 1},
-			{Category: CategoryProxy, Key: "type", Value: "http", ValueType: ValueTypeEnum, Label: "代理类型", Description: "代理协议类型，常用 HTTP（如 Clash/Surge 默认）或 SOCKS5", EnumOptions: []store.EnumOption{
-				{Value: "http", Label: "HTTP"},
-				{Value: "https", Label: "HTTPS"},
-				{Value: "socks5", Label: "SOCKS5"},
-			}, DisplayOrder: 2},
-			{Category: CategoryProxy, Key: "url", Value: "", ValueType: ValueTypeString, Label: "代理 URL（完整）", Description: "完整代理 URL（如 http://127.0.0.1:7890），优先于下方主机+端口", DisplayOrder: 3},
-			{Category: CategoryProxy, Key: "host", Value: "", ValueType: ValueTypeString, Label: "代理主机", Description: "代理服务器主机（URL 为空时生效）", DisplayOrder: 4},
-			{Category: CategoryProxy, Key: "port", Value: "0", ValueType: ValueTypeInt, Label: "代理端口", Description: "代理服务器端口（1-65535）", DisplayOrder: 5},
-			{Category: CategoryProxy, Key: "username", Value: "", ValueType: ValueTypeString, Label: "用户名", Description: "代理认证用户名（可选）", DisplayOrder: 6},
-			{Category: CategoryProxy, Key: "password", Value: "", ValueType: ValueTypePassword, Label: "密码", Description: "代理认证密码（可选）", DisplayOrder: 7},
 		}
 
 	// 🔧 [P5.5.2 新增] Logging 日志配置

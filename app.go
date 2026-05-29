@@ -2275,17 +2275,6 @@ func (a *App) applySettingsToConfig() {
 	a.config.UsageTracking.RetentionDays = a.settingsService.GetInt(ctx, service.CategoryRetention, "retention_days", a.config.UsageTracking.RetentionDays)
 	a.config.UsageTracking.CleanupInterval = a.settingsService.GetDuration(ctx, service.CategoryRetention, "cleanup_interval", a.config.UsageTracking.CleanupInterval)
 
-	// 🔧 [P5.5.4 新增] Proxy 代理配置（从 SQLite 同步）
-	// 旧实现：只能改 config.yaml 重启生效
-	// 新实现：前端「设置」→「出站代理」修改后立即生效（Transport Provider 检测 key 变化自动重建）
-	a.config.Proxy.Enabled = a.settingsService.GetBool(ctx, service.CategoryProxy, "enabled", a.config.Proxy.Enabled)
-	a.config.Proxy.Type = a.getSettingString(ctx, service.CategoryProxy, "type", a.config.Proxy.Type)
-	a.config.Proxy.URL = a.getSettingString(ctx, service.CategoryProxy, "url", a.config.Proxy.URL)
-	a.config.Proxy.Host = a.getSettingString(ctx, service.CategoryProxy, "host", a.config.Proxy.Host)
-	a.config.Proxy.Port = a.settingsService.GetInt(ctx, service.CategoryProxy, "port", a.config.Proxy.Port)
-	a.config.Proxy.Username = a.getSettingString(ctx, service.CategoryProxy, "username", a.config.Proxy.Username)
-	a.config.Proxy.Password = a.getSettingString(ctx, service.CategoryProxy, "password", a.config.Proxy.Password)
-
 	// 🔧 [P5.5.4 新增] Logging 日志配置（从 SQLite 同步）
 	a.config.Logging.Level = a.getSettingString(ctx, service.CategoryLogging, "level", a.config.Logging.Level)
 	a.config.Logging.Format = a.getSettingString(ctx, service.CategoryLogging, "format", a.config.Logging.Format)

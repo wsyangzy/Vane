@@ -63,7 +63,7 @@ func NewStreamingHandler(
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
 //
 // ⚠️ [Deprecated for production] 此类型仅保留供既有单元测试使用。
-// 生产代码（handleStreamingV2）已改为：检测到 ResponseWriter 不支持 Flusher 时
+// 生产代码（handleStreaming）已改为：检测到 ResponseWriter 不支持 Flusher 时
 // 直接返回 503，避免静默降级导致客户端长时间等不到流式数据。
 type noOpFlusher struct{}
 
@@ -171,18 +171,16 @@ func escapeJSONString(s string) string {
 	return s
 }
 
-// HandleStreamingRequest 统一流式请求处理
-// 使用V2架构整合错误恢复机制和生命周期管理的流式处理
+// HandleStreamingRequest 统一流式请求处理（整合错误恢复与生命周期管理）
 func (sh *StreamingHandler) HandleStreamingRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
 	connID := lifecycleManager.GetRequestID()
 
-	slog.Info(fmt.Sprintf("🌊 [流式架构] [%s] 使用streaming v2架构", connID))
 	slog.Info(fmt.Sprintf("🌊 [流式处理] [%s] 开始流式请求处理", connID))
-	sh.handleStreamingV2(ctx, w, r, bodyBytes, lifecycleManager)
+	sh.handleStreaming(ctx, w, r, bodyBytes, lifecycleManager)
 }
 
-// handleStreamingV2 流式处理（带错误恢复）
-func (sh *StreamingHandler) handleStreamingV2(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
+// handleStreaming 流式处理（带错误恢复）
+func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
 	connID := lifecycleManager.GetRequestID()
 
 	// 🔧 [P2-S2 修复] 获取 Flusher - 不支持时直接 503，拒绝伪装

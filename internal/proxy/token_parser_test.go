@@ -85,12 +85,12 @@ func TestTokenParserOtherEvents(t *testing.T) {
 	}
 }
 
-// ===== V2 职责纯化测试 =====
+// ===== ParseSSEEvent 测试 =====
 
-func TestTokenParserV2_MessageDeltaWithUsage(t *testing.T) {
+func TestTokenParser_MessageDeltaWithUsage(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-123")
 	
-	// Test parsing Claude API message_delta event with usage using V2 method
+	// Test parsing Claude API message_delta event with usage using ParseSSEEvent method
 	lines := []string{
 		"event: message_delta",
 		"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":5,\"cache_creation_input_tokens\":494,\"cache_read_input_tokens\":110689,\"output_tokens\":582}}",
@@ -99,13 +99,13 @@ func TestTokenParserV2_MessageDeltaWithUsage(t *testing.T) {
 	
 	var result *ParseResult
 	for _, line := range lines {
-		if parseResult := parser.ParseSSELineV2(line); parseResult != nil {
+		if parseResult := parser.ParseSSEEvent(line); parseResult != nil {
 			result = parseResult
 		}
 	}
 	
 	if result == nil {
-		t.Fatal("Expected to parse token usage with V2 method, got nil")
+		t.Fatal("Expected to parse token usage with ParseSSEEvent method, got nil")
 	}
 	
 	// Check the ParseResult structure
@@ -135,10 +135,10 @@ func TestTokenParserV2_MessageDeltaWithUsage(t *testing.T) {
 	}
 }
 
-func TestTokenParserV2_MessageDeltaWithoutUsage(t *testing.T) {
+func TestTokenParser_MessageDeltaWithoutUsage(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-456")
 	
-	// Test parsing non-usage message_delta event using V2 method
+	// Test parsing non-usage message_delta event using ParseSSEEvent method
 	lines := []string{
 		"event: message_delta",
 		"data: {\"type\":\"message_delta\",\"delta\":{\"text\":\"Hello world\"}}",
@@ -147,7 +147,7 @@ func TestTokenParserV2_MessageDeltaWithoutUsage(t *testing.T) {
 	
 	var result *ParseResult
 	for _, line := range lines {
-		if parseResult := parser.ParseSSELineV2(line); parseResult != nil {
+		if parseResult := parser.ParseSSEEvent(line); parseResult != nil {
 			result = parseResult
 		}
 	}
@@ -179,10 +179,10 @@ func TestTokenParserV2_MessageDeltaWithoutUsage(t *testing.T) {
 	}
 }
 
-func TestTokenParserV2_ErrorEvent(t *testing.T) {
+func TestTokenParser_ErrorEvent(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-error")
 	
-	// Test parsing error event using V2 method
+	// Test parsing error event using ParseSSEEvent method
 	lines := []string{
 		"event: error",
 		"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Server is overloaded\"}}",
@@ -191,7 +191,7 @@ func TestTokenParserV2_ErrorEvent(t *testing.T) {
 	
 	var result *ParseResult
 	for _, line := range lines {
-		if parseResult := parser.ParseSSELineV2(line); parseResult != nil {
+		if parseResult := parser.ParseSSEEvent(line); parseResult != nil {
 			result = parseResult
 		}
 	}
@@ -228,8 +228,8 @@ func TestTokenParserV2_ErrorEvent(t *testing.T) {
 
 // ===== Cache Creation 5m/1h 分开解析测试 =====
 
-// TestTokenParserV2_CacheCreation1hTokens 测试 1 小时缓存 token 解析
-func TestTokenParserV2_CacheCreation1hTokens(t *testing.T) {
+// TestTokenParser_CacheCreation1hTokens 测试 1 小时缓存 token 解析
+func TestTokenParser_CacheCreation1hTokens(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-cache-1h")
 
 	// 模拟真实 Claude API 响应，包含 cache_creation 嵌套对象
@@ -241,7 +241,7 @@ func TestTokenParserV2_CacheCreation1hTokens(t *testing.T) {
 
 	var result *ParseResult
 	for _, line := range lines {
-		if parseResult := parser.ParseSSELineV2(line); parseResult != nil {
+		if parseResult := parser.ParseSSEEvent(line); parseResult != nil {
 			result = parseResult
 		}
 	}
@@ -284,8 +284,8 @@ func TestTokenParserV2_CacheCreation1hTokens(t *testing.T) {
 		result.TokenUsage.CacheCreationTokens)
 }
 
-// TestTokenParserV2_CacheCreationMixed 测试混合 5m 和 1h 缓存
-func TestTokenParserV2_CacheCreationMixed(t *testing.T) {
+// TestTokenParser_CacheCreationMixed 测试混合 5m 和 1h 缓存
+func TestTokenParser_CacheCreationMixed(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-cache-mixed")
 
 	// 模拟同时包含 5m 和 1h 缓存的响应
@@ -297,7 +297,7 @@ func TestTokenParserV2_CacheCreationMixed(t *testing.T) {
 
 	var result *ParseResult
 	for _, line := range lines {
-		if parseResult := parser.ParseSSELineV2(line); parseResult != nil {
+		if parseResult := parser.ParseSSEEvent(line); parseResult != nil {
 			result = parseResult
 		}
 	}
@@ -325,8 +325,8 @@ func TestTokenParserV2_CacheCreationMixed(t *testing.T) {
 		result.TokenUsage.CacheCreationTokens)
 }
 
-// TestTokenParserV2_BackwardCompatibleNoCacheCreationObject 测试向后兼容（无 cache_creation 对象）
-func TestTokenParserV2_BackwardCompatibleNoCacheCreationObject(t *testing.T) {
+// TestTokenParser_BackwardCompatibleNoCacheCreationObject 测试向后兼容（无 cache_creation 对象）
+func TestTokenParser_BackwardCompatibleNoCacheCreationObject(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-cache-compat")
 
 	// 模拟旧版 API 响应，没有 cache_creation 嵌套对象
@@ -338,7 +338,7 @@ func TestTokenParserV2_BackwardCompatibleNoCacheCreationObject(t *testing.T) {
 
 	var result *ParseResult
 	for _, line := range lines {
-		if parseResult := parser.ParseSSELineV2(line); parseResult != nil {
+		if parseResult := parser.ParseSSEEvent(line); parseResult != nil {
 			result = parseResult
 		}
 	}
@@ -363,8 +363,8 @@ func TestTokenParserV2_BackwardCompatibleNoCacheCreationObject(t *testing.T) {
 	t.Log("✅ Backward compatibility test passed: old API format still works")
 }
 
-// TestTokenParserV2_GetFinalUsageWithCacheCreation 测试 GetFinalUsage 包含 5m/1h 缓存
-func TestTokenParserV2_GetFinalUsageWithCacheCreation(t *testing.T) {
+// TestTokenParser_GetFinalUsageWithCacheCreation 测试 GetFinalUsage 包含 5m/1h 缓存
+func TestTokenParser_GetFinalUsageWithCacheCreation(t *testing.T) {
 	parser := NewTokenParserWithRequestID("test-req-final-usage")
 
 	// 先解析 message_start 获取初始 usage
@@ -375,7 +375,7 @@ func TestTokenParserV2_GetFinalUsageWithCacheCreation(t *testing.T) {
 	}
 
 	for _, line := range startLines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	// 再解析 message_delta 获取最终 usage
@@ -386,7 +386,7 @@ func TestTokenParserV2_GetFinalUsageWithCacheCreation(t *testing.T) {
 	}
 
 	for _, line := range deltaLines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	// 获取最终 usage

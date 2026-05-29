@@ -66,8 +66,8 @@ func (mes *mockEndpointServer) close() {
 	mes.server.Close()
 }
 
-// TestV2StreamingRetryLogic 测试V2流式处理的重试逻辑
-func TestV2StreamingRetryLogic(t *testing.T) {
+// TestStreamingRetryLogic 测试流式处理的重试逻辑
+func TestStreamingRetryLogic(t *testing.T) {
 	tests := []struct {
 		name               string
 		maxAttempts        int  // 配置的最大重试次数
@@ -218,8 +218,8 @@ func TestV2StreamingRetryLogic(t *testing.T) {
 	}
 }
 
-// TestV2StreamingRetryWithMultipleEndpoints 测试多端点情况下的重试逻辑
-func TestV2StreamingRetryWithMultipleEndpoints(t *testing.T) {
+// TestStreamingRetryWithMultipleEndpoints 测试多端点情况下的重试逻辑
+func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 	// 创建两个模拟服务器
 	// 第一个端点：前3次请求失败
 	// 第二个端点：第1次请求成功
@@ -329,9 +329,9 @@ func TestV2StreamingRetryWithMultipleEndpoints(t *testing.T) {
 	}
 }
 
-// TestV2StreamingRetryWithinChannel 测试“同渠道内多端点故障转移”
+// TestStreamingRetryWithinChannel 测试“同渠道内多端点故障转移”
 // 预期：渠道 A 内 endpoint-1 重试耗尽后切换到 endpoint-2 成功，不触发跨渠道切换
-func TestV2StreamingRetryWithinChannel(t *testing.T) {
+func TestStreamingRetryWithinChannel(t *testing.T) {
 	// 渠道A：endpoint-1 前3次失败；endpoint-2 立即成功
 	mockServer1 := newMockEndpointServer(3)
 	defer mockServer1.close()
@@ -425,9 +425,9 @@ func TestV2StreamingRetryWithinChannel(t *testing.T) {
 	}
 }
 
-// TestV2StreamingRetryCrossChannelAfterChannelExhausted 测试“同渠道耗尽后跨渠道切换”
+// TestStreamingRetryCrossChannelAfterChannelExhausted 测试“同渠道耗尽后跨渠道切换”
 // 预期：渠道 A 内两个端点都重试耗尽后，切换到渠道 B 的端点成功
-func TestV2StreamingRetryCrossChannelAfterChannelExhausted(t *testing.T) {
+func TestStreamingRetryCrossChannelAfterChannelExhausted(t *testing.T) {
 	// 渠道A：两个端点都前3次失败
 	mockServer1 := newMockEndpointServer(3)
 	defer mockServer1.close()

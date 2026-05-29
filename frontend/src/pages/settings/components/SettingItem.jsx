@@ -58,11 +58,6 @@ const FORCED_ENUM_MAP = {
     { value: 'America/Sao_Paulo', label: '圣保罗（UTC-3）' },
     { value: 'Australia/Sydney', label: '悉尼（UTC+10/+11）' },
     { value: 'Pacific/Auckland', label: '奥克兰（UTC+12/+13）' }
-  ],
-  'proxy.type': [
-    { value: 'http', label: 'HTTP' },
-    { value: 'https', label: 'HTTPS' },
-    { value: 'socks5', label: 'SOCKS5' }
   ]
 }
 

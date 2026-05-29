@@ -28,7 +28,7 @@ func TestStreamCompleteness_CompleteStream(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	// 验证完整性状态
@@ -61,7 +61,7 @@ func TestStreamCompleteness_MissingMessageStop(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	completeness := parser.GetStreamCompleteness()
@@ -93,7 +93,7 @@ func TestStreamCompleteness_StreamTruncated(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	completeness := parser.GetStreamCompleteness()
@@ -119,7 +119,7 @@ func TestStreamCompleteness_NoEvents(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	completeness := parser.GetStreamCompleteness()
@@ -154,7 +154,7 @@ func TestStreamCompleteness_FallbackUsed(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	// 验证 fallback 被使用
@@ -192,7 +192,7 @@ func TestStreamCompleteness_Reset(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	// 验证流是完整的
@@ -223,7 +223,7 @@ func TestStreamCompleteness_MessageStopOnly(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	completeness := parser.GetStreamCompleteness()
@@ -269,7 +269,7 @@ func TestStreamCompleteness_MultipleMessageDelta(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		parser.ParseSSELineV2(line)
+		parser.ParseSSEEvent(line)
 	}
 
 	completeness := parser.GetStreamCompleteness()

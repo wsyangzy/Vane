@@ -199,14 +199,14 @@ type CostBreakdown struct {
 	TotalCost           float64
 }
 
-// CalculateCostV2 统一的成本计算函数（支持分开的缓存定价）
+// CalculateCost 统一的成本计算函数（支持分开的缓存定价）
 // 消除 archive_manager.go 和 tracker.go 中的重复代码
 //
 // 参数:
 //   - usage: Token 使用量（包含分开的 5m/1h 缓存 tokens）
 //   - pricing: 模型定价，nil 时返回零成本
 //   - multiplier: 端点倍率，nil 时使用默认倍率 1.0
-func CalculateCostV2(usage *TokenUsage, pricing *ModelPricing, multiplier *EndpointMultiplier) CostBreakdown {
+func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *EndpointMultiplier) CostBreakdown {
 	if pricing == nil || usage == nil {
 		return CostBreakdown{}
 	}
@@ -282,15 +282,9 @@ func CalculateCostV2(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpo
 	}
 }
 
-// CalculateCost 统一的成本计算函数（向后兼容）
-// Deprecated: 使用 CalculateCostV2 以支持分开的缓存定价
-//
-// 参数:
-//   - inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens: Token 使用量
-//   - pricing: 模型定价，nil 时返回零成本
-//   - multiplier: 端点倍率，nil 时使用默认倍率 1.0
-//   - use1hCache: 是否使用 1 小时缓存倍率（用于长效缓存场景）
-func CalculateCost(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64,
+// CalculateCostFromTokens 从独立 token 计数计算成本（向后兼容便捷方法）
+// 新代码应直接构造 TokenUsage 并调用 CalculateCost
+func CalculateCostFromTokens(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64,
 	pricing *ModelPricing, multiplier *EndpointMultiplier, use1hCache bool) CostBreakdown {
 
 	// 构建 TokenUsage，根据 use1hCache 决定放入哪个字段
@@ -306,7 +300,7 @@ func CalculateCost(inputTokens, outputTokens, cacheCreationTokens, cacheReadToke
 	}
 	usage.CacheCreationTokens = cacheCreationTokens // 保持总数
 
-	return CalculateCostV2(usage, pricing, multiplier)
+	return CalculateCost(usage, pricing, multiplier)
 }
 
 // Config 使用跟踪配置
@@ -2318,7 +2312,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 			CacheCreation1hTokens: cacheCreation1hTokens,
 			CacheReadTokens:       cacheReadTokens,
 		}
-		cost = CalculateCostV2(usage, &pricing, multiplier)
+		cost = CalculateCost(usage, &pricing, multiplier)
 	}
 
 	return RequestDetail{

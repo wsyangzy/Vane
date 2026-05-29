@@ -85,11 +85,11 @@ func NewHandler(
 	}
 }
 
-// generateRequestID 生成 Codex 请求 ID
+// generateRequestID 生成请求 ID（统一 req- 前缀）
 func generateRequestID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
-	return "codex-" + hex.EncodeToString(b)
+	return "req-" + hex.EncodeToString(b)
 }
 
 // strPtr 返回字符串指针（用于 UpdateOptions）

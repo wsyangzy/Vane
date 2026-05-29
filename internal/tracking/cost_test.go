@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// TestCalculateCostV2_Basic 测试基础成本计算
-func TestCalculateCostV2_Basic(t *testing.T) {
+// TestCalculateCost_Basic 测试基础成本计算
+func TestCalculateCost_Basic(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,   // $3/1M tokens
 		Output:          15.0,  // $15/1M tokens
@@ -20,7 +20,7 @@ func TestCalculateCostV2_Basic(t *testing.T) {
 		OutputTokens: 100000,
 	}
 
-	result := CalculateCostV2(usage, pricing, nil)
+	result := CalculateCost(usage, pricing, nil)
 
 	// Input: 1M tokens * $3/1M = $3.00
 	if math.Abs(result.InputCost-3.0) > 0.001 {
@@ -38,8 +38,8 @@ func TestCalculateCostV2_Basic(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_Separate5mAnd1hCache 测试分开的 5m/1h 缓存定价
-func TestCalculateCostV2_Separate5mAnd1hCache(t *testing.T) {
+// TestCalculateCost_Separate5mAnd1hCache 测试分开的 5m/1h 缓存定价
+func TestCalculateCost_Separate5mAnd1hCache(t *testing.T) {
 	// Claude Opus 4.5 定价
 	pricing := &ModelPricing{
 		Input:           15.0,  // $15/1M tokens
@@ -58,7 +58,7 @@ func TestCalculateCostV2_Separate5mAnd1hCache(t *testing.T) {
 		CacheReadTokens:       50000, // 50000 个缓存读取 tokens
 	}
 
-	result := CalculateCostV2(usage, pricing, nil)
+	result := CalculateCost(usage, pricing, nil)
 
 	// Input: 10000 tokens * $15/1M = $0.15
 	expectedInput := 10000.0 * 15.0 / 1_000_000
@@ -101,8 +101,8 @@ func TestCalculateCostV2_Separate5mAnd1hCache(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_BackwardCompatibility 测试向后兼容（只有总缓存数）
-func TestCalculateCostV2_BackwardCompatibility(t *testing.T) {
+// TestCalculateCost_BackwardCompatibility 测试向后兼容（只有总缓存数）
+func TestCalculateCost_BackwardCompatibility(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,
 		Output:          15.0,
@@ -121,7 +121,7 @@ func TestCalculateCostV2_BackwardCompatibility(t *testing.T) {
 		CacheReadTokens:       20000,
 	}
 
-	result := CalculateCostV2(usage, pricing, nil)
+	result := CalculateCost(usage, pricing, nil)
 
 	// 向后兼容：使用 5m 定价
 	expectedCache5m := 10000.0 * 3.75 / 1_000_000
@@ -134,8 +134,8 @@ func TestCalculateCostV2_BackwardCompatibility(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_Mixed5mAnd1hCache 测试混合 5m 和 1h 缓存
-func TestCalculateCostV2_Mixed5mAnd1hCache(t *testing.T) {
+// TestCalculateCost_Mixed5mAnd1hCache 测试混合 5m 和 1h 缓存
+func TestCalculateCost_Mixed5mAnd1hCache(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,
 		Output:          15.0,
@@ -153,7 +153,7 @@ func TestCalculateCostV2_Mixed5mAnd1hCache(t *testing.T) {
 		CacheReadTokens:       20000,
 	}
 
-	result := CalculateCostV2(usage, pricing, nil)
+	result := CalculateCost(usage, pricing, nil)
 
 	// 5m Cache: 5000 * $3.75/1M = $0.01875
 	expectedCache5m := 5000.0 * 3.75 / 1_000_000
@@ -174,9 +174,9 @@ func TestCalculateCostV2_Mixed5mAnd1hCache(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_WithEndpointMultiplier 测试端点倍率（叠加模式）
+// TestCalculateCost_WithEndpointMultiplier 测试端点倍率（叠加模式）
 // 验证：细分倍率应用于各类型成本，与总倍率叠加
-func TestCalculateCostV2_WithEndpointMultiplier(t *testing.T) {
+func TestCalculateCost_WithEndpointMultiplier(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,
 		Output:          15.0,
@@ -203,7 +203,7 @@ func TestCalculateCostV2_WithEndpointMultiplier(t *testing.T) {
 		CacheReadCostMultiplier:       1.0, // 读取 1.0x
 	}
 
-	result := CalculateCostV2(usage, pricing, multiplier)
+	result := CalculateCost(usage, pricing, multiplier)
 
 	// Input: 100000 * $3/1M * 1.5 = $0.45
 	expectedInput := 100000.0 * 3.0 / 1_000_000 * 1.5
@@ -218,8 +218,8 @@ func TestCalculateCostV2_WithEndpointMultiplier(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_TotalMultiplier 测试总倍率模式（叠加在所有细分倍率之上）
-func TestCalculateCostV2_TotalMultiplier(t *testing.T) {
+// TestCalculateCost_TotalMultiplier 测试总倍率模式（叠加在所有细分倍率之上）
+func TestCalculateCost_TotalMultiplier(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:           3.0,
 		Output:          15.0,
@@ -246,10 +246,10 @@ func TestCalculateCostV2_TotalMultiplier(t *testing.T) {
 		CacheReadCostMultiplier:       1.0,
 	}
 
-	result := CalculateCostV2(usage, pricing, multiplier)
+	result := CalculateCost(usage, pricing, multiplier)
 
 	// 先计算无倍率的成本
-	baseResult := CalculateCostV2(usage, pricing, nil)
+	baseResult := CalculateCost(usage, pricing, nil)
 
 	// 验证所有成本都乘以 1.5
 	if math.Abs(result.InputCost-baseResult.InputCost*1.5) > 0.0001 {
@@ -269,9 +269,9 @@ func TestCalculateCostV2_TotalMultiplier(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_StackedMultiplier 测试叠加倍率：细分 * 总倍率
+// TestCalculateCost_StackedMultiplier 测试叠加倍率：细分 * 总倍率
 // 这是新逻辑的关键场景：用户期望细分倍率与总倍率"叠加"而不是"二选一"
-func TestCalculateCostV2_StackedMultiplier(t *testing.T) {
+func TestCalculateCost_StackedMultiplier(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:  3.0,
 		Output: 15.0,
@@ -292,7 +292,7 @@ func TestCalculateCostV2_StackedMultiplier(t *testing.T) {
 		CacheReadCostMultiplier:       1.0,
 	}
 
-	result := CalculateCostV2(usage, pricing, multiplier)
+	result := CalculateCost(usage, pricing, multiplier)
 
 	// Input: 100000 * $3/1M * 2.0 * 1.5 = $0.90
 	expectedInput := 100000.0 * 3.0 / 1_000_000 * 2.0 * 1.5
@@ -307,29 +307,29 @@ func TestCalculateCostV2_StackedMultiplier(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_NilInputs 测试空输入
-func TestCalculateCostV2_NilInputs(t *testing.T) {
+// TestCalculateCost_NilInputs 测试空输入
+func TestCalculateCost_NilInputs(t *testing.T) {
 	pricing := &ModelPricing{
 		Input:  3.0,
 		Output: 15.0,
 	}
 
 	// nil usage
-	result := CalculateCostV2(nil, pricing, nil)
+	result := CalculateCost(nil, pricing, nil)
 	if result.TotalCost != 0 {
 		t.Errorf("nil usage: Expected TotalCost $0, got $%f", result.TotalCost)
 	}
 
 	// nil pricing
 	usage := &TokenUsage{InputTokens: 1000}
-	result = CalculateCostV2(usage, nil, nil)
+	result = CalculateCost(usage, nil, nil)
 	if result.TotalCost != 0 {
 		t.Errorf("nil pricing: Expected TotalCost $0, got $%f", result.TotalCost)
 	}
 }
 
-// TestCalculateCostV2_Default1hPrice 测试 1h 定价默认值
-func TestCalculateCostV2_Default1hPrice(t *testing.T) {
+// TestCalculateCost_Default1hPrice 测试 1h 定价默认值
+func TestCalculateCost_Default1hPrice(t *testing.T) {
 	// 不设置 CacheCreation1h，应默认使用 2x input
 	pricing := &ModelPricing{
 		Input:           10.0,
@@ -343,7 +343,7 @@ func TestCalculateCostV2_Default1hPrice(t *testing.T) {
 		CacheCreation1hTokens: 10000,
 	}
 
-	result := CalculateCostV2(usage, pricing, nil)
+	result := CalculateCost(usage, pricing, nil)
 
 	// 1h Cache: 10000 * $20/1M = $0.20 (因为默认 2x input = 2 * 10 = 20)
 	expectedCache1h := 10000.0 * 20.0 / 1_000_000
@@ -352,9 +352,9 @@ func TestCalculateCostV2_Default1hPrice(t *testing.T) {
 	}
 }
 
-// TestCalculateCostV2_RealWorldScenario 测试真实场景
+// TestCalculateCost_RealWorldScenario 测试真实场景
 // 模拟请求 req-c2a06ef3: claude-opus-4-5-20251101
-func TestCalculateCostV2_RealWorldScenario(t *testing.T) {
+func TestCalculateCost_RealWorldScenario(t *testing.T) {
 	// Claude Opus 4.5 官方定价
 	pricing := &ModelPricing{
 		Input:           15.0,  // $15/1M tokens
@@ -374,7 +374,7 @@ func TestCalculateCostV2_RealWorldScenario(t *testing.T) {
 		CacheReadTokens:       10000, // 缓存读取
 	}
 
-	result := CalculateCostV2(usage, pricing, nil)
+	result := CalculateCost(usage, pricing, nil)
 
 	// 手动计算预期成本
 	// Input: 5000 * $15/1M = $0.075
@@ -411,8 +411,8 @@ func TestCalculateCost_BackwardCompatible(t *testing.T) {
 		CacheRead:       0.30,
 	}
 
-	// 使用旧版 CalculateCost，use1hCache = false
-	result5m := CalculateCost(100000, 50000, 10000, 20000, pricing, nil, false)
+	// 使用旧版 CalculateCostFromTokens，use1hCache = false
+	result5m := CalculateCostFromTokens(100000, 50000, 10000, 20000, pricing, nil, false)
 
 	// 缓存应该使用 5m 定价
 	expectedCache5m := 10000.0 * 3.75 / 1_000_000
@@ -423,8 +423,8 @@ func TestCalculateCost_BackwardCompatible(t *testing.T) {
 		t.Errorf("CalculateCost(use1hCache=false): Expected CacheCreation1hCost $0, got $%f", result5m.CacheCreation1hCost)
 	}
 
-	// 使用旧版 CalculateCost，use1hCache = true
-	result1h := CalculateCost(100000, 50000, 10000, 20000, pricing, nil, true)
+	// 使用旧版 CalculateCostFromTokens，use1hCache = true
+	result1h := CalculateCostFromTokens(100000, 50000, 10000, 20000, pricing, nil, true)
 
 	// 缓存应该使用 1h 定价
 	expectedCache1h := 10000.0 * 6.0 / 1_000_000

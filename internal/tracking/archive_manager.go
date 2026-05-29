@@ -48,7 +48,7 @@ type ArchiveManager struct {
 
 	// 🔧 [P3.3 新增] pricingMu 保护 pricing 和 endpointMu 两个 map 的引用替换
 	// 旧实现：UpdatePricing / UpdateEndpointMultipliers 直接替换引用，
-	// 与 calculateCostV2 读这两个 map 形成 race（极端情况下可触发 map 并发读写 panic）
+	// 与 calculateCost 读这两个 map 形成 race（极端情况下可触发 map 并发读写 panic）
 	pricingMu  sync.RWMutex
 	pricing    map[string]ModelPricing       // 模型定价缓存
 	endpointMu map[string]EndpointMultiplier // 端点倍率缓存
@@ -166,7 +166,7 @@ func (am *ArchiveManager) UpdatePricing(pricing map[string]ModelPricing) {
 }
 
 // getPricingSnapshot 读取定价快照（受 pricingMu 保护）
-// 🔧 [P3.3 新增] 供 calculateCostV2 等读路径调用，保证读取的 map 引用在使用期间不变
+// 🔧 [P3.3 新增] 供 calculateCost 等读路径调用，保证读取的 map 引用在使用期间不变
 func (am *ArchiveManager) getPricingSnapshot() (map[string]ModelPricing, map[string]EndpointMultiplier) {
 	am.pricingMu.RLock()
 	pricing := am.pricing
@@ -612,7 +612,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 		req := event.Request
 
 		// 计算分开的成本
-		costBreakdown := am.calculateCostV2(req)
+		costBreakdown := am.calculateCost(req)
 
 		// 格式化时间
 		startTime := am.formatTime(req.StartTime)
@@ -694,8 +694,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	return nil
 }
 
-// calculateCostV2 计算请求成本（支持分开的 5m/1h 缓存）
-func (am *ArchiveManager) calculateCostV2(req *ActiveRequest) CostBreakdown {
+// calculateCost 计算请求成本（支持分开的 5m/1h 缓存）
+func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 	// 🔧 [P3.3 修复] 通过 snapshot 取得 map 引用，保证使用期间引用稳定
 	// 旧实现：直接读 am.pricing/am.endpointMu，与 UpdatePricing/UpdateEndpointMultipliers 写操作 race
 	pricingMap, endpointMuMap := am.getPricingSnapshot()
@@ -736,7 +736,7 @@ func (am *ArchiveManager) calculateCostV2(req *ActiveRequest) CostBreakdown {
 	}
 
 	// 调用公共成本计算函数
-	return CalculateCostV2(usage, &pricing, multiplier)
+	return CalculateCost(usage, &pricing, multiplier)
 }
 
 // formatTime 格式化时间为易读格式（使用配置的时区）

@@ -37,8 +37,8 @@ type TokenParserInterface interface {
 	GetFinalUsage() *tracking.TokenUsage
 	Reset()
 
-	// V2 职责纯化方法
-	ParseSSELineV2(line string) *ParseResult
+	// ParseSSEEvent 解析 SSE 事件行并返回结构化结果
+	ParseSSEEvent(line string) *ParseResult
 }
 
 // ModelInfo 模型信息结构体
@@ -177,9 +177,9 @@ func NewTokenParserWithUsageTracker(requestID string, usageTracker *tracking.Usa
 	}
 }
 
-// ParseSSELineV2 新版本的SSE解析方法
+// ParseSSEEvent 新版本的SSE解析方法
 // 返回 ParseResult 而不是直接调用 usageTracker
-func (tp *TokenParser) ParseSSELineV2(line string) *ParseResult {
+func (tp *TokenParser) ParseSSEEvent(line string) *ParseResult {
 	line = strings.TrimSpace(line)
 
 	// 处理事件类型行 - 支持 "event: " 和 "event:" 两种格式
@@ -227,11 +227,11 @@ func (tp *TokenParser) ParseSSELineV2(line string) *ParseResult {
 			tp.parseMessageStart()
 			return nil
 		case "message_delta", "content_block_delta":
-			// 使用新的V2方法解析带 usage 的增量事件
-			return tp.parseMessageDeltaV2()
+			// 解析带 usage 的增量事件
+			return tp.extractMessageDelta()
 		case "error":
-			// 使用新的V2方法解析error事件
-			return tp.parseErrorEventV2()
+			// 解析 error 事件
+			return tp.extractErrorEvent()
 		}
 	}
 
@@ -360,9 +360,8 @@ func (tp *TokenParser) parseMessageStart() *monitor.TokenUsage {
 	return nil
 }
 
-// parseMessageDeltaV2 新版本的增量 usage 解析方法
-// 返回 ParseResult 而不是直接调用 usageTracker
-func (tp *TokenParser) parseMessageDeltaV2() *ParseResult {
+// extractMessageDelta 解析增量 usage 事件并返回结构化结果
+func (tp *TokenParser) extractMessageDelta() *ParseResult {
 	defer func() {
 		tp.eventBuffer.Reset()
 		tp.collectingData = false
@@ -612,9 +611,8 @@ func (tp *TokenParser) Reset() {
 	tp.hasMessageStop = false
 }
 
-// parseErrorEventV2 新版本的错误事件解析方法
-// 返回 ParseResult 而不是直接调用 usageTracker
-func (tp *TokenParser) parseErrorEventV2() *ParseResult {
+// extractErrorEvent 解析 SSE 错误事件并返回结构化结果
+func (tp *TokenParser) extractErrorEvent() *ParseResult {
 	defer func() {
 		tp.eventBuffer.Reset()
 		tp.collectingData = false
@@ -967,7 +965,7 @@ func (tp *TokenParser) FlushPendingEvent() *ParseResult {
 		if tp.requestID != "" {
 			slog.Info(fmt.Sprintf("🔄 [事件Flush] [%s] 强制解析缓存的增量usage事件(%s)", tp.requestID, tp.currentEvent))
 		}
-		return tp.parseMessageDeltaV2()
+		return tp.extractMessageDelta()
 	case "message_start":
 		if tp.requestID != "" {
 			slog.Info(fmt.Sprintf("🔄 [事件Flush] [%s] 强制解析缓存的message_start事件", tp.requestID))
@@ -978,7 +976,7 @@ func (tp *TokenParser) FlushPendingEvent() *ParseResult {
 		if tp.requestID != "" {
 			slog.Info(fmt.Sprintf("🔄 [事件Flush] [%s] 强制解析缓存的error事件", tp.requestID))
 		}
-		return tp.parseErrorEventV2()
+		return tp.extractErrorEvent()
 	default:
 		if tp.requestID != "" {
 			slog.Info(fmt.Sprintf("⚠️ [事件Flush] [%s] 未知事件类型: %s, 跳过解析", tp.requestID, tp.currentEvent))
