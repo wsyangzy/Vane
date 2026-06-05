@@ -8,11 +8,11 @@ import (
 // TestCalculateCost_Basic 测试基础成本计算
 func TestCalculateCost_Basic(t *testing.T) {
 	pricing := &ModelPricing{
-		Input:           3.0,   // $3/1M tokens
-		Output:          15.0,  // $15/1M tokens
-		CacheCreation:   3.75,  // $3.75/1M tokens (5m cache = 1.25x input)
-		CacheCreation1h: 6.0,   // $6/1M tokens (1h cache = 2x input)
-		CacheRead:       0.30,  // $0.30/1M tokens
+		Input:           3.0,  // $3/1M tokens
+		Output:          15.0, // $15/1M tokens
+		CacheCreation:   3.75, // $3.75/1M tokens (5m cache = 1.25x input)
+		CacheCreation1h: 6.0,  // $6/1M tokens (1h cache = 2x input)
+		CacheRead:       0.30, // $0.30/1M tokens
 	}
 
 	usage := &TokenUsage{
@@ -35,6 +35,49 @@ func TestCalculateCost_Basic(t *testing.T) {
 	// Total: $3.00 + $1.50 = $4.50
 	if math.Abs(result.TotalCost-4.5) > 0.001 {
 		t.Errorf("Expected TotalCost $4.50, got $%f", result.TotalCost)
+	}
+}
+
+func TestCalculateCost_InputIncludesCacheRead(t *testing.T) {
+	pricing := &ModelPricing{
+		Input:     5,
+		Output:    30,
+		CacheRead: 0.5,
+	}
+	multiplier := &EndpointMultiplier{
+		CostMultiplier:          0.4,
+		InputCostMultiplier:     1,
+		OutputCostMultiplier:    1,
+		CacheReadCostMultiplier: 1,
+	}
+	usage := &TokenUsage{
+		InputTokens:            146783,
+		OutputTokens:           544,
+		CacheReadTokens:        145280,
+		InputIncludesCacheRead: true,
+	}
+
+	result := CalculateCost(usage, pricing, multiplier)
+
+	if math.Abs(result.TotalCost-0.038590) > 0.000001 {
+		t.Fatalf("Expected TotalCost $0.038590, got $%.6f", result.TotalCost)
+	}
+}
+
+func TestDisplayTotalTokens_CodexRawAndLegacyInput(t *testing.T) {
+	rawTotal := DisplayTotalTokens("codex", 128742, 313, 0, 128384)
+	if rawTotal != 129055 {
+		t.Fatalf("Expected raw Codex total 129055, got %d", rawTotal)
+	}
+
+	legacyTotal := DisplayTotalTokens("codex", 358, 313, 0, 128384)
+	if legacyTotal != 129055 {
+		t.Fatalf("Expected legacy Codex total 129055, got %d", legacyTotal)
+	}
+
+	claudeTotal := DisplayTotalTokens("claude", 100, 20, 30, 40)
+	if claudeTotal != 190 {
+		t.Fatalf("Expected Claude total 190, got %d", claudeTotal)
 	}
 }
 
@@ -147,9 +190,9 @@ func TestCalculateCost_Mixed5mAnd1hCache(t *testing.T) {
 	usage := &TokenUsage{
 		InputTokens:           100000,
 		OutputTokens:          50000,
-		CacheCreation5mTokens: 5000,  // 5000 个 5 分钟缓存
-		CacheCreation1hTokens: 3000,  // 3000 个 1 小时缓存
-		CacheCreationTokens:   8000,  // 总数
+		CacheCreation5mTokens: 5000, // 5000 个 5 分钟缓存
+		CacheCreation1hTokens: 3000, // 3000 个 1 小时缓存
+		CacheCreationTokens:   8000, // 总数
 		CacheReadTokens:       20000,
 	}
 

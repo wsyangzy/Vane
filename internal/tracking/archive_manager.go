@@ -727,12 +727,13 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 
 	// 构建 TokenUsage 对象
 	usage := &TokenUsage{
-		InputTokens:           req.InputTokens,
-		OutputTokens:          req.OutputTokens,
-		CacheCreationTokens:   req.CacheCreationTokens,
-		CacheCreation5mTokens: req.CacheCreation5mTokens,
-		CacheCreation1hTokens: req.CacheCreation1hTokens,
-		CacheReadTokens:       req.CacheReadTokens,
+		InputTokens:            req.InputTokens,
+		OutputTokens:           req.OutputTokens,
+		CacheCreationTokens:    req.CacheCreationTokens,
+		CacheCreation5mTokens:  req.CacheCreation5mTokens,
+		CacheCreation1hTokens:  req.CacheCreation1hTokens,
+		CacheReadTokens:        req.CacheReadTokens,
+		InputIncludesCacheRead: req.InputIncludesCacheRead,
 	}
 
 	// 调用公共成本计算函数

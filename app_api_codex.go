@@ -240,7 +240,7 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 	if logger != nil {
 		logger.Info("✅ Codex 渠道已创建", "name", created.Name, "is_active", created.IsActive)
 	}
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	return nil
 }
 
@@ -298,7 +298,7 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 	if logger != nil {
 		logger.Info("✅ Codex 渠道已更新", "id", id, "name", record.Name)
 	}
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	return nil
 }
 
@@ -351,7 +351,7 @@ func (a *App) DeleteCodexChannelByID(id int64) error {
 	if logger != nil {
 		logger.Info("✅ Codex 渠道已删除", "id", id)
 	}
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	return nil
 }
 
@@ -396,7 +396,7 @@ func (a *App) ActivateCodexChannel(id int64) error {
 		if logger != nil {
 			logger.Warn("⚠️ 渠道已激活但无可用端点，config.toml 暂未更新", "channel", activated.Name)
 		}
-		go a.emitCodexProviderUpdate()
+		a.emitCodexProviderUpdate()
 		return nil
 	}
 
@@ -417,7 +417,7 @@ func (a *App) ActivateCodexChannel(id int64) error {
 	if logger != nil {
 		logger.Info("✅ Codex 渠道已激活", "id", id, "channel", activated.Name, "base_url", endpoint.BaseURL)
 	}
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	// 唤醒所有挂起请求（运维通过 UI 切换渠道 = 恢复信号）
 	a.broadcastCodexRecovery()
 	return nil
@@ -486,7 +486,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 	if logger != nil {
 		logger.Info("✅ Codex 端点已创建", "channel_id", input.ChannelID, "base_url", input.BaseURL)
 	}
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
 }
@@ -554,7 +554,7 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		if logger != nil {
 			logger.Warn("⚠️ 读取所属 Codex 渠道失败，跳过 config.toml 同步", "endpoint_id", id, "error", err)
 		}
-		go a.emitCodexProviderUpdate()
+		a.emitCodexProviderUpdate()
 		return nil
 	}
 	if channel != nil && channel.IsActive {
@@ -580,7 +580,7 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 			"id", id, "name", input.Name, "base_url", input.BaseURL)
 	}
 
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
 }
@@ -633,7 +633,7 @@ func (a *App) DeleteCodexEndpointByID(id int64) error {
 	if logger != nil {
 		logger.Info("✅ Codex 端点已删除", "id", id)
 	}
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
 }
@@ -678,7 +678,7 @@ func (a *App) ActivateCodexEndpoint(id int64) error {
 		logger.Info("ℹ️ Codex 端点已激活（渠道未激活，config.toml 暂未变化）", "id", id, "base_url", target.BaseURL)
 	}
 
-	go a.emitCodexProviderUpdate()
+	a.emitCodexProviderUpdate()
 	// 唤醒所有挂起请求（运维通过 UI 切换端点 = 恢复信号，已激活端点的重复点击同样有效）
 	a.broadcastCodexRecovery()
 	return nil

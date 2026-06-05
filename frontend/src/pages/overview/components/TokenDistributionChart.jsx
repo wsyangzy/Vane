@@ -80,7 +80,7 @@ const TokenDistributionChart = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshIntervalRef = useRef(null);
 
-  // 加载数据 - 同时拉取全量、Claude、Codex 三组数据
+  // 加载数据 - 同时拉取今日全量、Claude、Codex 三组数据
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) {
       setIsRefreshing(true);
@@ -125,7 +125,7 @@ const TokenDistributionChart = () => {
   };
 
   // 计算总量和百分比
-  const total = tokenData.input + tokenData.output + tokenData.cacheCreation + tokenData.cacheRead;
+  const total = tokenData.total || (tokenData.input + tokenData.output + tokenData.cacheCreation + tokenData.cacheRead);
 
   // 转换为图表数据
   const chartData = TOKEN_CONFIG.map(config => ({
@@ -154,7 +154,7 @@ const TokenDistributionChart = () => {
           <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
         </button>
       </div>
-      <p className="text-xs text-slate-500 mb-4">各类 Token 消耗占比 · 悬浮查看 Claude/Codex 分项</p>
+      <p className="text-xs text-slate-500 mb-4">来自 request_logs · 悬浮查看 Claude/Codex 分项</p>
 
       <div className="flex-1 min-h-[180px] flex items-center justify-center relative overflow-visible">
         {loading ? (

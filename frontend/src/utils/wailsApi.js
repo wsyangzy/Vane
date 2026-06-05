@@ -531,7 +531,7 @@ export const getUsageSummary = async (startTime = '', endTime = '', provider = '
     all_time_total_cost: summary.all_time_total_cost || 0,  // 全部历史成本
     today_tokens: summary.today_tokens || 0,                // 今日 tokens
     all_time_total_tokens: summary.all_time_total_tokens || 0,  // 全部历史 tokens
-    total_tokens: (summary.total_input_tokens || 0) + (summary.total_output_tokens || 0)
+    total_tokens: summary.total_tokens || ((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0))
   };
 };
 
@@ -751,7 +751,7 @@ export const getConnectionActivityChart = async (minutes = 60, provider = '') =>
 // ============================================
 
 /**
- * 获取 Token 使用统计（运行时内存数据）
+ * 获取 Token 使用统计（今日 request_logs 数据）
  * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
  * @returns {Promise<Object>} - Token 使用数据 {input, output, cacheCreation, cacheRead}
  */
@@ -2031,4 +2031,3 @@ export const updateCodexGlobalConfig = async (input) => {
     enable_1m_context: Boolean(input?.enable_1m_context)
   });
 };
-

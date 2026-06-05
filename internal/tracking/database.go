@@ -219,10 +219,11 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 
 		// 计算成本
 		tokens := &TokenUsage{
-			InputTokens:         data.InputTokens,
-			OutputTokens:        data.OutputTokens,
-			CacheCreationTokens: data.CacheCreationTokens,
-			CacheReadTokens:     data.CacheReadTokens,
+			InputTokens:            data.InputTokens,
+			OutputTokens:           data.OutputTokens,
+			CacheCreationTokens:    data.CacheCreationTokens,
+			CacheReadTokens:        data.CacheReadTokens,
+			InputIncludesCacheRead: data.InputIncludesCacheRead,
 		}
 
 		inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
@@ -270,12 +271,13 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 
 		// 计算成本（使用完整的 5m/1h 字段）
 		tokens := &TokenUsage{
-			InputTokens:           data.InputTokens,
-			OutputTokens:          data.OutputTokens,
-			CacheCreationTokens:   data.CacheCreationTokens,
-			CacheCreation5mTokens: data.CacheCreation5mTokens,
-			CacheCreation1hTokens: data.CacheCreation1hTokens,
-			CacheReadTokens:       data.CacheReadTokens,
+			InputTokens:            data.InputTokens,
+			OutputTokens:           data.OutputTokens,
+			CacheCreationTokens:    data.CacheCreationTokens,
+			CacheCreation5mTokens:  data.CacheCreation5mTokens,
+			CacheCreation1hTokens:  data.CacheCreation1hTokens,
+			CacheReadTokens:        data.CacheReadTokens,
+			InputIncludesCacheRead: data.InputIncludesCacheRead,
 		}
 
 		pricing := ut.GetPricing(data.ModelName)
@@ -330,12 +332,13 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 
 		// 计算成本（使用完整的 5m/1h 字段）
 		tokens := &TokenUsage{
-			InputTokens:           data.InputTokens,
-			OutputTokens:          data.OutputTokens,
-			CacheCreationTokens:   data.CacheCreationTokens,
-			CacheCreation5mTokens: data.CacheCreation5mTokens,
-			CacheCreation1hTokens: data.CacheCreation1hTokens,
-			CacheReadTokens:       data.CacheReadTokens,
+			InputTokens:            data.InputTokens,
+			OutputTokens:           data.OutputTokens,
+			CacheCreationTokens:    data.CacheCreationTokens,
+			CacheCreation5mTokens:  data.CacheCreation5mTokens,
+			CacheCreation1hTokens:  data.CacheCreation1hTokens,
+			CacheReadTokens:        data.CacheReadTokens,
+			InputIncludesCacheRead: data.InputIncludesCacheRead,
 		}
 
 		pricing := ut.GetPricing(data.ModelName)
@@ -545,10 +548,11 @@ func (ut *UsageTracker) buildSuccessQuery(event RequestEvent) (string, []interfa
 
 	// 计算成本
 	tokens := &TokenUsage{
-		InputTokens:         data.InputTokens,
-		OutputTokens:        data.OutputTokens,
-		CacheCreationTokens: data.CacheCreationTokens,
-		CacheReadTokens:     data.CacheReadTokens,
+		InputTokens:            data.InputTokens,
+		OutputTokens:           data.OutputTokens,
+		CacheCreationTokens:    data.CacheCreationTokens,
+		CacheReadTokens:        data.CacheReadTokens,
+		InputIncludesCacheRead: data.InputIncludesCacheRead,
 	}
 
 	inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
@@ -719,10 +723,11 @@ func (ut *UsageTracker) buildCompleteQueryWithTx(ctx context.Context, tx *sql.Tx
 
 	// 计算成本
 	tokens := &TokenUsage{
-		InputTokens:         data.InputTokens,
-		OutputTokens:        data.OutputTokens,
-		CacheCreationTokens: data.CacheCreationTokens,
-		CacheReadTokens:     data.CacheReadTokens,
+		InputTokens:            data.InputTokens,
+		OutputTokens:           data.OutputTokens,
+		CacheCreationTokens:    data.CacheCreationTokens,
+		CacheReadTokens:        data.CacheReadTokens,
+		InputIncludesCacheRead: data.InputIncludesCacheRead,
 	}
 
 	inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
@@ -914,10 +919,11 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 
 	// 计算成本
 	tokens := &TokenUsage{
-		InputTokens:         data.InputTokens,
-		OutputTokens:        data.OutputTokens,
-		CacheCreationTokens: data.CacheCreationTokens,
-		CacheReadTokens:     data.CacheReadTokens,
+		InputTokens:            data.InputTokens,
+		OutputTokens:           data.OutputTokens,
+		CacheCreationTokens:    data.CacheCreationTokens,
+		CacheReadTokens:        data.CacheReadTokens,
+		InputIncludesCacheRead: data.InputIncludesCacheRead,
 	}
 
 	inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
@@ -998,11 +1004,12 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 func (ut *UsageTracker) calculateCost(modelName string, tokens *TokenUsage) (inputCost, outputCost, cacheCost, readCost, totalCost float64) {
 	pricing := ut.GetPricing(modelName)
 
-	inputCost = float64(tokens.InputTokens) * pricing.Input / 1000000
-	outputCost = float64(tokens.OutputTokens) * pricing.Output / 1000000
-	cacheCost = float64(tokens.CacheCreationTokens) * pricing.CacheCreation / 1000000
-	readCost = float64(tokens.CacheReadTokens) * pricing.CacheRead / 1000000
-	totalCost = inputCost + outputCost + cacheCost + readCost
+	cost := CalculateCost(tokens, &pricing, nil)
+	inputCost = cost.InputCost
+	outputCost = cost.OutputCost
+	cacheCost = cost.CacheCreationCost
+	readCost = cost.CacheReadCost
+	totalCost = cost.TotalCost
 
 	return
 }

@@ -13,6 +13,7 @@ import DurationBadge from './DurationBadge.jsx';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
+import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
 
 /**
  * 解析链路端点，提取端点名称
@@ -289,7 +290,7 @@ const renderCell = (columnId, request) => {
     case 'duration':
       return <DurationBadge ms={request.duration} status={request.status} size="xs" />;
     case 'inputTokens':
-      return <span className="text-gray-700 font-mono text-xs">{request.inputTokens}</span>;
+      return <span className="text-gray-700 font-mono text-xs">{getDisplayInputTokens(request)}</span>;
     case 'outputTokens':
       return <span className="text-gray-700 font-mono text-xs">{request.outputTokens}</span>;
     case 'cacheCreationTokens':

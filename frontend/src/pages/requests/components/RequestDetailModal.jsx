@@ -29,6 +29,12 @@ import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import DurationBadge from './DurationBadge.jsx';
 import { formatCost, formatTimestamp } from '@utils/api.js';
+import {
+  getBillableInputTokens,
+  getDisplayInputTokens,
+  getDisplayTotalTokens,
+  isCacheInclusiveProvider
+} from '../utils/tokenDisplay.js';
 
 const CHAIN_VIEW_STORAGE_KEY = 'request-detail.chain-view-mode';
 
@@ -176,10 +182,16 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     }, 2000);
   };
 
-  // 计算 Token 总数
-  const totalTokens = (request.inputTokens || 0) + (request.outputTokens || 0);
-  const inputPercent = totalTokens > 0 ? Math.round((request.inputTokens / totalTokens) * 100) : 0;
-  const outputPercent = totalTokens > 0 ? Math.round((request.outputTokens / totalTokens) * 100) : 0;
+  const isCodexRequest = isCacheInclusiveProvider(request.provider);
+  const isClaudeRequest = !isCodexRequest;
+
+  // 计算 Token 总数：Codex/OpenAI input_tokens 已包含 cached_tokens；兼容旧 Codex 记录的非缓存 input。
+  const inputTokenCount = getDisplayInputTokens(request);
+  const outputTokenCount = request.outputTokens || 0;
+  const totalTokens = getDisplayTotalTokens(request);
+  const inputPercent = totalTokens > 0 ? Math.round((inputTokenCount / totalTokens) * 100) : 0;
+  const outputPercent = totalTokens > 0 ? Math.round((outputTokenCount / totalTokens) * 100) : 0;
+  const cachePercent = !isCodexRequest && totalTokens > 0 ? Math.max(0, 100 - inputPercent - outputPercent) : 0;
 
   // 请求类型
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -371,9 +383,11 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   return (cost / tokens) * 1_000_000
                 }
 
-                const inputTokens = request.inputTokens || 0
                 const outputTokens = request.outputTokens || 0
                 const cacheReadTokens = request.cacheReadTokens || 0
+                const billableInputTokens = getBillableInputTokens(request)
+                const displayInputTokens = getDisplayInputTokens(request)
+                const inputDeductionTokens = Math.max(0, displayInputTokens - billableInputTokens)
                 const cache5mTokens = request.cacheCreation5mTokens || 0
                 const cache1hTokens = request.cacheCreation1hTokens || 0
                 const cacheCreationTokens = request.cacheCreationTokens || 0
@@ -402,7 +416,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   return effectivePrice / totalEffectiveMult
                 }
 
-                const inputPrice = calcRawPrice(inputCost, inputTokens, inputMultiplier)
+                const inputPrice = calcRawPrice(inputCost, billableInputTokens, inputMultiplier)
                 const outputPrice = calcRawPrice(outputCost, outputTokens, outputMultiplier)
                 const cacheReadPrice = calcRawPrice(cacheReadCost, cacheReadTokens, cacheReadMultiplier)
                 const cache5mPrice = calcRawPrice(cache5mCost, cache5mTokens, cache5mMultiplier)
@@ -447,8 +461,16 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 }
 
                 const formulaRows = [
-                  inputTokens > 0 && {
-                    key: 'input', label: '输入', tokens: inputTokens, price: inputPrice, cost: inputCost, multiplier: inputMultiplier
+                  billableInputTokens > 0 && {
+                    key: 'input',
+                    label: isCodexRequest ? '输入(计费)' : '输入',
+                    tokens: billableInputTokens,
+                    tokenExpression: isCodexRequest && inputDeductionTokens > 0
+                      ? `${displayInputTokens.toLocaleString()} - ${inputDeductionTokens.toLocaleString()} = ${billableInputTokens.toLocaleString()}`
+                      : billableInputTokens.toLocaleString(),
+                    price: inputPrice,
+                    cost: inputCost,
+                    multiplier: inputMultiplier
                   },
                   outputTokens > 0 && {
                     key: 'output', label: '输出', tokens: outputTokens, price: outputPrice, cost: outputCost, multiplier: outputMultiplier
@@ -547,7 +569,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                               <div key={row.key} className="flex items-center justify-between gap-3 font-mono">
                                 <span className="truncate">
                                   <span className="text-slate-500">{row.label}:</span>{' '}
-                                  {row.tokens.toLocaleString()} × {formatPrice(row.price)} / 1M
+                                  {row.tokenExpression || row.tokens.toLocaleString()} × {formatPrice(row.price)} / 1M
                                   {row.multiplier !== 1.0 && (
                                     <span className="text-indigo-600"> × {formatMultiplier(row.multiplier)}</span>
                                   )}
@@ -608,17 +630,17 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       </button>
                     )}
                   </div>
-                  <div className="p-4 space-y-2">
+                  <div className="p-4 space-y-2 min-w-0 overflow-hidden">
                     {request.failure_reason && (
-                      <div className="text-sm">
-                        <span className="font-medium text-slate-600">失败原因：</span>
-                        <span className="text-rose-700">{request.failure_reason}</span>
+                      <div className="flex items-start gap-1.5 text-sm min-w-0">
+                        <span className="shrink-0 font-medium text-slate-600">失败原因：</span>
+                        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-rose-700 [overflow-wrap:anywhere]">{request.failure_reason}</span>
                       </div>
                     )}
                     {request.cancel_reason && (
-                      <div className="text-sm">
-                        <span className="font-medium text-slate-600">取消原因：</span>
-                        <span className="text-rose-700">{request.cancel_reason}</span>
+                      <div className="flex items-start gap-1.5 text-sm min-w-0">
+                        <span className="shrink-0 font-medium text-slate-600">取消原因：</span>
+                        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-rose-700 [overflow-wrap:anywhere]">{request.cancel_reason}</span>
                       </div>
                     )}
                   </div>
@@ -848,7 +870,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 <TokenCard
                   icon={TrendingUp}
                   label="输入 Token"
-                  value={request.inputTokens || 0}
+                  value={inputTokenCount}
                   colorClass={{ bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-600', icon: 'text-blue-600' }}
                 />
                 <TokenCard
@@ -861,30 +883,36 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
               {/* Token 卡片 - 缓存 */}
               <div className="grid grid-cols-2 gap-4">
-                <TokenCard
-                  icon={Database}
-                  label="缓存创建 (5分钟)"
-                  value={request.cacheCreation5mTokens || 0}
-                  colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }}
-                />
-                <TokenCard
-                  icon={Database}
-                  label="缓存创建 (1小时)"
-                  value={request.cacheCreation1hTokens || 0}
-                  colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }}
-                />
+                {isClaudeRequest && (
+                  <>
+                    <TokenCard
+                      icon={Database}
+                      label="缓存创建 (5分钟)"
+                      value={request.cacheCreation5mTokens || 0}
+                      colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }}
+                    />
+                    <TokenCard
+                      icon={Database}
+                      label="缓存创建 (1小时)"
+                      value={request.cacheCreation1hTokens || 0}
+                      colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }}
+                    />
+                  </>
+                )}
                 <TokenCard
                   icon={Zap}
                   label="缓存读取"
                   value={request.cacheReadTokens || 0}
                   colorClass={{ bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-600', icon: 'text-amber-600' }}
                 />
-                <TokenCard
-                  icon={Database}
-                  label="缓存创建 (总计)"
-                  value={request.cacheCreationTokens || 0}
-                  colorClass={{ bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-600', icon: 'text-slate-500' }}
-                />
+                {isClaudeRequest && (
+                  <TokenCard
+                    icon={Database}
+                    label="缓存创建 (总计)"
+                    value={request.cacheCreationTokens || 0}
+                    colorClass={{ bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-600', icon: 'text-slate-500' }}
+                  />
+                )}
               </div>
 
               {/* Token 总计 */}
@@ -896,7 +924,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     </div>
                     <div>
                       <div className="text-sm font-medium text-slate-600">总 Token 消耗</div>
-                      <div className="text-xs text-slate-400">Input + Output</div>
+                      <div className="text-xs text-slate-400">{isCodexRequest ? 'Input + Output' : 'Input + Output + Cache'}</div>
                     </div>
                   </div>
                   <div className="text-3xl font-bold text-indigo-600 font-mono">
@@ -909,10 +937,12 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   <div className="flex items-center justify-between text-xs text-slate-600">
                     <span>输入 {inputPercent}%</span>
                     <span>输出 {outputPercent}%</span>
+                    {!isCodexRequest && <span>缓存 {cachePercent}%</span>}
                   </div>
                   <div className="h-2 bg-slate-200 rounded-full overflow-hidden flex">
                     <div className="bg-blue-500" style={{ width: `${inputPercent}%` }} />
                     <div className="bg-emerald-500" style={{ width: `${outputPercent}%` }} />
+                    {!isCodexRequest && <div className="bg-amber-500" style={{ width: `${cachePercent}%` }} />}
                   </div>
                 </div>
               </div>

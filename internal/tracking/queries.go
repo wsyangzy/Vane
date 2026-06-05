@@ -5,8 +5,69 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
+
+const totalTokensSQLExpression = `CASE
+	WHEN LOWER(COALESCE(provider, 'claude')) IN ('codex', 'openai') THEN
+		COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) +
+		CASE
+			WHEN COALESCE(cache_read_tokens, 0) > COALESCE(input_tokens, 0) THEN COALESCE(cache_read_tokens, 0)
+			ELSE 0
+		END
+	ELSE
+		COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) +
+		COALESCE(cache_creation_tokens, 0) + COALESCE(cache_read_tokens, 0)
+END`
+
+const distributionInputTokensSQLExpression = `CASE
+	WHEN LOWER(COALESCE(provider, 'claude')) IN ('codex', 'openai') THEN
+		CASE
+			WHEN COALESCE(cache_read_tokens, 0) > COALESCE(input_tokens, 0) THEN COALESCE(input_tokens, 0)
+			ELSE COALESCE(input_tokens, 0) - COALESCE(cache_read_tokens, 0)
+		END
+	ELSE
+		COALESCE(input_tokens, 0)
+END`
+
+// TotalTokensSQLExpression returns the request_logs expression for display/usage total tokens.
+// Codex/OpenAI input_tokens already include cached_tokens. Very old Codex rows stored only
+// billable input, detected by cache_read_tokens > input_tokens and expanded for display totals.
+func TotalTokensSQLExpression() string {
+	return totalTokensSQLExpression
+}
+
+// DistributionInputTokensSQLExpression returns input-token buckets for token distribution charts.
+// Codex/OpenAI cache reads are rendered as a separate bucket, so cached input is removed here.
+func DistributionInputTokensSQLExpression() string {
+	return distributionInputTokensSQLExpression
+}
+
+// DisplayInputTokens returns provider-facing input tokens for UI/statistics display.
+func DisplayInputTokens(provider string, inputTokens, cacheReadTokens int64) int64 {
+	if isInputCacheInclusiveProvider(provider) && cacheReadTokens > inputTokens {
+		return inputTokens + cacheReadTokens
+	}
+	return inputTokens
+}
+
+// DisplayTotalTokens returns provider-facing total tokens for request display/statistics.
+func DisplayTotalTokens(provider string, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64) int64 {
+	if isInputCacheInclusiveProvider(provider) {
+		return DisplayInputTokens(provider, inputTokens, cacheReadTokens) + outputTokens
+	}
+	return inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens
+}
+
+func isInputCacheInclusiveProvider(provider string) bool {
+	switch strings.ToLower(provider) {
+	case "codex", "openai":
+		return true
+	default:
+		return false
+	}
+}
 
 func (ut *UsageTracker) formatStartTimeQueryBound(t time.Time) string {
 	if ut != nil && ut.location != nil {
@@ -75,13 +136,13 @@ type RequestDetail struct {
 	EndTime    *time.Time `json:"end_time"`
 	DurationMs *int64     `json:"duration_ms"`
 
-	Channel      string `json:"channel"` // 渠道标签
-	EndpointName string `json:"endpoint_name"`
+	Channel       string `json:"channel"` // 渠道标签
+	EndpointName  string `json:"endpoint_name"`
 	EndpointChain string `json:"endpoint_chain"`
-	GroupName    string `json:"group_name"`
-	ModelName    string `json:"model_name"`
-	IsStreaming  bool   `json:"is_streaming"` // 是否为流式请求
-	Provider     string `json:"provider"`     // 提供商标识: claude/codex
+	GroupName     string `json:"group_name"`
+	ModelName     string `json:"model_name"`
+	IsStreaming   bool   `json:"is_streaming"` // 是否为流式请求
+	Provider      string `json:"provider"`     // 提供商标识: claude/codex
 
 	Status         string `json:"status"`
 	HTTPStatusCode *int   `json:"http_status_code"`
@@ -501,7 +562,7 @@ func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOp
 		COUNT(*) as total_requests,
 		COALESCE(SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END), 0) as success_requests,
 		COALESCE(SUM(CASE WHEN status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END), 0) as failed_requests,
-		COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+		COALESCE(SUM(` + totalTokensSQLExpression + `), 0) as total_tokens,
 		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
 		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN duration_ms ELSE 0 END), 0) as duration_sum_ms,
 		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 ELSE 0 END), 0) as duration_count
@@ -590,7 +651,7 @@ func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, op
 			hotTotals.FailedRequests++
 		}
 
-		hotTotals.TotalTokens += req.InputTokens + req.OutputTokens + req.CacheCreationTokens + req.CacheReadTokens
+		hotTotals.TotalTokens += DisplayTotalTokens(req.Provider, req.InputTokens, req.OutputTokens, req.CacheCreationTokens, req.CacheReadTokens)
 		hotTotals.TotalCostUSD += req.TotalCostUSD
 
 		if req.DurationMs != nil && *req.DurationMs > 0 {
@@ -692,7 +753,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		COALESCE(endpoint_name, '') as endpoint_name,
 		COALESCE(group_name, '') as group_name,
 		COALESCE(provider, 'claude') as provider,
-		COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
+		COALESCE(SUM(` + totalTokensSQLExpression + `), 0) as total_tokens,
 		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
 		COUNT(*) as request_count,
 		SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as success_count,

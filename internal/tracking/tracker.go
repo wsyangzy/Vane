@@ -31,9 +31,9 @@ var (
 	logThrottle       sync.Map // key=string -> *int64 (unix nano)
 	logThrottleWindow = int64(30 * time.Second)
 	// 过期清理：超过 5 × throttleWindow（默认 150s）未再访问的条目可清理
-	logThrottleExpiry      = int64(5 * 30 * time.Second)
-	logThrottleSweepCount  atomic.Int64
-	logThrottleSweepEvery  = int64(100) // 每 100 次 shouldLogThrottled 调用触发一次 sweep
+	logThrottleExpiry     = int64(5 * 30 * time.Second)
+	logThrottleSweepCount atomic.Int64
+	logThrottleSweepEvery = int64(100) // 每 100 次 shouldLogThrottled 调用触发一次 sweep
 )
 
 // shouldLogThrottled 在 30s 内同 key 只返回 true 一次
@@ -132,25 +132,27 @@ type RequestUpdateData struct {
 
 // RequestCompleteData 请求完成事件数据
 type RequestCompleteData struct {
-	ModelName             string        `json:"model_name"`
-	InputTokens           int64         `json:"input_tokens"`
-	OutputTokens          int64         `json:"output_tokens"`
-	CacheCreationTokens   int64         `json:"cache_creation_tokens"`
-	CacheCreation5mTokens int64         `json:"cache_creation_5m_tokens"`
-	CacheCreation1hTokens int64         `json:"cache_creation_1h_tokens"`
-	CacheReadTokens       int64         `json:"cache_read_tokens"`
-	Duration              time.Duration `json:"duration"`
-	FailureReason         string        `json:"failure_reason,omitempty"` // 可选：失败原因
+	ModelName              string        `json:"model_name"`
+	InputTokens            int64         `json:"input_tokens"`
+	OutputTokens           int64         `json:"output_tokens"`
+	CacheCreationTokens    int64         `json:"cache_creation_tokens"`
+	CacheCreation5mTokens  int64         `json:"cache_creation_5m_tokens"`
+	CacheCreation1hTokens  int64         `json:"cache_creation_1h_tokens"`
+	CacheReadTokens        int64         `json:"cache_read_tokens"`
+	Duration               time.Duration `json:"duration"`
+	FailureReason          string        `json:"failure_reason,omitempty"` // 可选：失败原因
+	InputIncludesCacheRead bool          `json:"-"`                        // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
 }
 
 // TokenUsage token使用统计
 type TokenUsage struct {
-	InputTokens           int64
-	OutputTokens          int64
-	CacheCreationTokens   int64 // 总缓存创建 tokens（向后兼容，= 5m + 1h）
-	CacheReadTokens       int64
-	CacheCreation5mTokens int64 // 5分钟缓存创建 tokens (1.25x 定价)
-	CacheCreation1hTokens int64 // 1小时缓存创建 tokens (2x 定价)
+	InputTokens            int64
+	OutputTokens           int64
+	CacheCreationTokens    int64 // 总缓存创建 tokens（向后兼容，= 5m + 1h）
+	CacheReadTokens        int64
+	CacheCreation5mTokens  int64 // 5分钟缓存创建 tokens (1.25x 定价)
+	CacheCreation1hTokens  int64 // 1小时缓存创建 tokens (2x 定价)
+	InputIncludesCacheRead bool  // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
 }
 
 // ModelPricing 模型定价配置
@@ -233,8 +235,17 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 		cacheCreation1hPrice = pricing.Input * 2.0 // 默认 2x input
 	}
 
+	inputTokensForCost := usage.InputTokens
+	if usage.InputIncludesCacheRead && usage.CacheReadTokens > 0 {
+		if usage.CacheReadTokens >= inputTokensForCost {
+			inputTokensForCost = 0
+		} else {
+			inputTokensForCost -= usage.CacheReadTokens
+		}
+	}
+
 	// 基础成本计算（每百万 token）
-	inputCost := float64(usage.InputTokens) * pricing.Input / 1_000_000
+	inputCost := float64(inputTokensForCost) * pricing.Input / 1_000_000
 	outputCost := float64(usage.OutputTokens) * pricing.Output / 1_000_000
 	cacheReadCost := float64(usage.CacheReadTokens) * pricing.CacheRead / 1_000_000
 
@@ -1112,6 +1123,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 	// 🚀 [架构修复] 支持 nil tokens，确保耗时信息总是被记录
 	var inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64
 	var cacheCreation5mTokens, cacheCreation1hTokens int64
+	inputIncludesCacheRead := false
 	if tokens != nil {
 		inputTokens = tokens.InputTokens
 		outputTokens = tokens.OutputTokens
@@ -1119,6 +1131,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 		cacheCreation5mTokens = tokens.CacheCreation5mTokens
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
 		cacheReadTokens = tokens.CacheReadTokens
+		inputIncludesCacheRead = tokens.InputIncludesCacheRead
 
 		// 🔧 [向后兼容修复] 如果 5m/1h 都是 0 但总数不为 0，
 		// 将总数分配给 5m 字段，与成本计算逻辑保持一致（tracker.go:185-193）
@@ -1150,6 +1163,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 				req.CacheCreation5mTokens = cacheCreation5mTokens
 				req.CacheCreation1hTokens = cacheCreation1hTokens
 				req.CacheReadTokens = cacheReadTokens
+				req.InputIncludesCacheRead = inputIncludesCacheRead
 			} else {
 				// 保留 RecordFailedRequestTokens 记录的 token 值
 				slog.Debug("🔒 [P1.4 防御] 保留失败路径记录的 token，避免被零值覆盖",
@@ -1205,6 +1219,7 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 	// 处理Token信息（失败/取消时可能有也可能没有）
 	var inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64
 	var cacheCreation5mTokens, cacheCreation1hTokens int64 // 🔧 [修复] 2025-12-11: 添加 5m/1h 缓存字段
+	inputIncludesCacheRead := false
 	if tokens != nil {
 		inputTokens = tokens.InputTokens
 		outputTokens = tokens.OutputTokens
@@ -1212,6 +1227,7 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 		cacheCreation5mTokens = tokens.CacheCreation5mTokens
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
 		cacheReadTokens = tokens.CacheReadTokens
+		inputIncludesCacheRead = tokens.InputIncludesCacheRead
 
 		// 🔧 [向后兼容修复] 如果 5m/1h 都是 0 但总数不为 0，
 		// 将总数分配给 5m 字段，与成本计算逻辑保持一致
@@ -1223,12 +1239,13 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 	var legacyTokens *TokenUsage
 	if tokens != nil {
 		legacyTokens = &TokenUsage{
-			InputTokens:           inputTokens,
-			OutputTokens:          outputTokens,
-			CacheCreationTokens:   cacheCreationTokens,
-			CacheCreation5mTokens: cacheCreation5mTokens,
-			CacheCreation1hTokens: cacheCreation1hTokens,
-			CacheReadTokens:       cacheReadTokens,
+			InputTokens:            inputTokens,
+			OutputTokens:           outputTokens,
+			CacheCreationTokens:    cacheCreationTokens,
+			CacheCreation5mTokens:  cacheCreation5mTokens,
+			CacheCreation1hTokens:  cacheCreation1hTokens,
+			CacheReadTokens:        cacheReadTokens,
+			InputIncludesCacheRead: inputIncludesCacheRead,
 		}
 	}
 
@@ -1251,6 +1268,7 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 				req.CacheCreation5mTokens = cacheCreation5mTokens
 				req.CacheCreation1hTokens = cacheCreation1hTokens
 				req.CacheReadTokens = cacheReadTokens
+				req.InputIncludesCacheRead = inputIncludesCacheRead
 			}
 			req.EndTime = &now
 			req.DurationMs = duration.Milliseconds()
@@ -1270,16 +1288,26 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为持久化失败队列
 			ut.triggerHotPoolAlert("fail_archive_failed")
 			ut.recordToFailureQueue("fail", map[string]any{
-				"request_id":    requestID,
-				"model_name":    modelName,
-				"status":        status,
-				"reason":        reason,
-				"error_detail":  errorDetail,
-				"duration_ms":   duration.Milliseconds(),
-				"http_status":   httpStatus,
-				"input_tokens":  func() int64 { if legacyTokens != nil { return legacyTokens.InputTokens }; return 0 }(),
-				"output_tokens": func() int64 { if legacyTokens != nil { return legacyTokens.OutputTokens }; return 0 }(),
-				"error":         err.Error(),
+				"request_id":   requestID,
+				"model_name":   modelName,
+				"status":       status,
+				"reason":       reason,
+				"error_detail": errorDetail,
+				"duration_ms":  duration.Milliseconds(),
+				"http_status":  httpStatus,
+				"input_tokens": func() int64 {
+					if legacyTokens != nil {
+						return legacyTokens.InputTokens
+					}
+					return 0
+				}(),
+				"output_tokens": func() int64 {
+					if legacyTokens != nil {
+						return legacyTokens.OutputTokens
+					}
+					return 0
+				}(),
+				"error": err.Error(),
 			})
 		}
 		return
@@ -1317,6 +1345,7 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 			req.CacheCreation5mTokens = tokens.CacheCreation5mTokens
 			req.CacheCreation1hTokens = tokens.CacheCreation1hTokens
 			req.CacheReadTokens = tokens.CacheReadTokens
+			req.InputIncludesCacheRead = tokens.InputIncludesCacheRead
 			// 更新模型名（如果有）
 			if modelName != "" && modelName != "unknown" {
 				req.ModelName = modelName
@@ -1348,15 +1377,16 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 		RequestID: requestID,
 		Timestamp: ut.now(),
 		Data: RequestCompleteData{
-			ModelName:             modelName,
-			InputTokens:           tokens.InputTokens,
-			OutputTokens:          tokens.OutputTokens,
-			CacheCreationTokens:   tokens.CacheCreationTokens,
-			CacheCreation5mTokens: tokens.CacheCreation5mTokens,
-			CacheCreation1hTokens: tokens.CacheCreation1hTokens,
-			CacheReadTokens:       tokens.CacheReadTokens,
-			Duration:              duration,
-			FailureReason:         failureReason,
+			ModelName:              modelName,
+			InputTokens:            tokens.InputTokens,
+			OutputTokens:           tokens.OutputTokens,
+			CacheCreationTokens:    tokens.CacheCreationTokens,
+			CacheCreation5mTokens:  tokens.CacheCreation5mTokens,
+			CacheCreation1hTokens:  tokens.CacheCreation1hTokens,
+			CacheReadTokens:        tokens.CacheReadTokens,
+			Duration:               duration,
+			FailureReason:          failureReason,
+			InputIncludesCacheRead: tokens.InputIncludesCacheRead,
 		},
 	}
 
@@ -1383,28 +1413,29 @@ func (ut *UsageTracker) RecordPartialFailure(requestID, modelName string, tokens
 		if exists {
 			// 创建部分失败记录的副本（不影响热池中的原请求）
 			partialReq := &ActiveRequest{
-				RequestID:             requestID + "-partial-" + ut.now().Format("20060102150405.000"),
-				ClientIP:              activeReq.ClientIP,
-				UserAgent:             activeReq.UserAgent,
-				Method:                activeReq.Method,
-				Path:                  activeReq.Path,
-				StartTime:             activeReq.StartTime,
-				EndpointName:          endpointName,
-				Channel:               activeReq.Channel,
-				GroupName:             activeReq.GroupName,
-				ModelName:             modelName,
-				IsStreaming:           activeReq.IsStreaming,
-				Status:                "partial_failed", // 特殊状态标记
-				HTTPStatus:            activeReq.HTTPStatus,
-				RetryCount:            activeReq.RetryCount,
-				FailureReason:         failureReason,
-				InputTokens:           0,
-				OutputTokens:          0,
-				CacheCreationTokens:   0,
-				CacheCreation5mTokens: 0,
-				CacheCreation1hTokens: 0,
-				CacheReadTokens:       0,
-				DurationMs:            duration.Milliseconds(),
+				RequestID:              requestID + "-partial-" + ut.now().Format("20060102150405.000"),
+				ClientIP:               activeReq.ClientIP,
+				UserAgent:              activeReq.UserAgent,
+				Method:                 activeReq.Method,
+				Path:                   activeReq.Path,
+				StartTime:              activeReq.StartTime,
+				EndpointName:           endpointName,
+				Channel:                activeReq.Channel,
+				GroupName:              activeReq.GroupName,
+				ModelName:              modelName,
+				IsStreaming:            activeReq.IsStreaming,
+				Status:                 "partial_failed", // 特殊状态标记
+				HTTPStatus:             activeReq.HTTPStatus,
+				RetryCount:             activeReq.RetryCount,
+				FailureReason:          failureReason,
+				InputTokens:            0,
+				OutputTokens:           0,
+				CacheCreationTokens:    0,
+				CacheCreation5mTokens:  0,
+				CacheCreation1hTokens:  0,
+				CacheReadTokens:        0,
+				InputIncludesCacheRead: false,
+				DurationMs:             duration.Milliseconds(),
 			}
 
 			// 设置Token信息（如果提供）
@@ -1415,6 +1446,7 @@ func (ut *UsageTracker) RecordPartialFailure(requestID, modelName string, tokens
 				partialReq.CacheCreation5mTokens = tokens.CacheCreation5mTokens
 				partialReq.CacheCreation1hTokens = tokens.CacheCreation1hTokens
 				partialReq.CacheReadTokens = tokens.CacheReadTokens
+				partialReq.InputIncludesCacheRead = tokens.InputIncludesCacheRead
 			}
 
 			// 设置结束时间
@@ -1454,6 +1486,7 @@ func (ut *UsageTracker) RecoverRequestTokens(requestID, modelName string, tokens
 			req.CacheCreation5mTokens = tokens.CacheCreation5mTokens
 			req.CacheCreation1hTokens = tokens.CacheCreation1hTokens
 			req.CacheReadTokens = tokens.CacheReadTokens
+			req.InputIncludesCacheRead = tokens.InputIncludesCacheRead
 			// 更新模型名（如果有）
 			if modelName != "" && modelName != "unknown" {
 				req.ModelName = modelName
@@ -1475,14 +1508,15 @@ func (ut *UsageTracker) RecoverRequestTokens(requestID, modelName string, tokens
 		RequestID: requestID,
 		Timestamp: ut.now(),
 		Data: RequestCompleteData{
-			ModelName:             modelName,
-			InputTokens:           tokens.InputTokens,
-			OutputTokens:          tokens.OutputTokens,
-			CacheCreationTokens:   tokens.CacheCreationTokens,
-			CacheCreation5mTokens: tokens.CacheCreation5mTokens,
-			CacheCreation1hTokens: tokens.CacheCreation1hTokens,
-			CacheReadTokens:       tokens.CacheReadTokens,
-			Duration:              0, // 不更新时间相关字段
+			ModelName:              modelName,
+			InputTokens:            tokens.InputTokens,
+			OutputTokens:           tokens.OutputTokens,
+			CacheCreationTokens:    tokens.CacheCreationTokens,
+			CacheCreation5mTokens:  tokens.CacheCreation5mTokens,
+			CacheCreation1hTokens:  tokens.CacheCreation1hTokens,
+			CacheReadTokens:        tokens.CacheReadTokens,
+			Duration:               0, // 不更新时间相关字段
+			InputIncludesCacheRead: tokens.InputIncludesCacheRead,
 		},
 	}
 
@@ -1722,7 +1756,7 @@ func (ut *UsageTracker) GetUsageStats(ctx context.Context, startTime, endTime ti
 		COUNT(*) as total_requests,
 		SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END) as success_requests,
 		SUM(CASE WHEN status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END) as error_requests,
-		SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) as total_tokens,
+		SUM(` + totalTokensSQLExpression + `) as total_tokens,
 		SUM(total_cost_usd) as total_cost
 		FROM request_logs 
 		WHERE start_time >= ? AND start_time <= ?`
@@ -2245,6 +2279,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	cacheCreation5mTokens := req.CacheCreation5mTokens
 	cacheCreation1hTokens := req.CacheCreation1hTokens
 	cacheReadTokens := req.CacheReadTokens
+	inputIncludesCacheRead := req.InputIncludesCacheRead
 	// 倍率快照（用于详情页计费过程展示）
 	costMultSnap := req.CostMultiplier
 	inputCostMultSnap := req.InputCostMultiplier
@@ -2305,12 +2340,13 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 
 	if hasPricing {
 		usage := &TokenUsage{
-			InputTokens:           inputTokens,
-			OutputTokens:          outputTokens,
-			CacheCreationTokens:   cacheCreationTokens,
-			CacheCreation5mTokens: cacheCreation5mTokens,
-			CacheCreation1hTokens: cacheCreation1hTokens,
-			CacheReadTokens:       cacheReadTokens,
+			InputTokens:            inputTokens,
+			OutputTokens:           outputTokens,
+			CacheCreationTokens:    cacheCreationTokens,
+			CacheCreation5mTokens:  cacheCreation5mTokens,
+			CacheCreation1hTokens:  cacheCreation1hTokens,
+			CacheReadTokens:        cacheReadTokens,
+			InputIncludesCacheRead: inputIncludesCacheRead,
 		}
 		cost = CalculateCost(usage, &pricing, multiplier)
 	}

@@ -245,15 +245,16 @@ func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tr
 
 	var query string
 	var args []any
+	totalTokensExpr := tracking.TotalTokensSQLExpression()
 
 	if startTime.IsZero() {
-		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0), COUNT(*) FROM request_logs"
+		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(" + totalTokensExpr + "), 0), COUNT(*) FROM request_logs"
 		if provider != "" {
 			query += " WHERE provider = ?"
 			args = append(args, provider)
 		}
 	} else {
-		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0), COUNT(*) FROM request_logs WHERE start_time >= ? AND start_time < ?"
+		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(" + totalTokensExpr + "), 0), COUNT(*) FROM request_logs WHERE start_time >= ? AND start_time < ?"
 		args = append(args, startTime, endTime)
 		if provider != "" {
 			query += " AND provider = ?"
@@ -717,11 +718,12 @@ type TokenUsageData struct {
 	TotalTokens         int64 `json:"total_tokens"`
 }
 
-// GetTokenUsage 获取 Token 使用统计（从数据库查询，覆盖 Claude 和 Codex 全部历史）
+// GetTokenUsage 获取今日 Token 使用统计（从数据库查询，覆盖 Claude 和 Codex）
 // provider 参数过滤：空字符串 = 全部，"claude" / "codex" = 按 provider 过滤
 func (a *App) GetTokenUsage(provider string) TokenUsageData {
 	a.mu.RLock()
 	usageTracker := a.usageTracker
+	cfg := a.config
 	a.mu.RUnlock()
 
 	if usageTracker == nil {
@@ -733,23 +735,38 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 		return TokenUsageData{}
 	}
 
+	loc := time.Local
+	if cfg != nil && cfg.Timezone != "" {
+		if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			loc = parsedLoc
+		}
+	}
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	tomorrowStart := todayStart.Add(24 * time.Hour)
+
 	query := `SELECT
-		COALESCE(SUM(input_tokens), 0),
+		COALESCE(SUM(` + tracking.DistributionInputTokensSQLExpression() + `), 0),
 		COALESCE(SUM(output_tokens), 0),
 		COALESCE(SUM(cache_creation_tokens), 0),
-		COALESCE(SUM(cache_read_tokens), 0)
-		FROM request_logs`
-	var args []any
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(` + tracking.TotalTokensSQLExpression() + `), 0)
+		FROM request_logs
+		WHERE start_time >= ? AND start_time < ?`
+	args := []any{
+		todayStart.Format("2006-01-02 15:04:05"),
+		tomorrowStart.Format("2006-01-02 15:04:05"),
+	}
 	if provider != "" {
-		query += " WHERE provider = ?"
+		query += " AND provider = ?"
 		args = append(args, provider)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
 
-	var input, output, cacheCreation, cacheRead int64
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&input, &output, &cacheCreation, &cacheRead); err != nil {
+	var input, output, cacheCreation, cacheRead, total int64
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&input, &output, &cacheCreation, &cacheRead, &total); err != nil {
 		// 失败时返回零值（前端会显示"暂无数据"，但不阻塞）
 		return TokenUsageData{}
 	}
@@ -759,6 +776,6 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 		OutputTokens:        output,
 		CacheCreationTokens: cacheCreation,
 		CacheReadTokens:     cacheRead,
-		TotalTokens:         input + output + cacheCreation + cacheRead,
+		TotalTokens:         total,
 	}
 }

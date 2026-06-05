@@ -18,7 +18,7 @@ type ActiveRequest struct {
 	Method      string    `json:"method"`
 	Path        string    `json:"path"`
 	IsStreaming bool      `json:"is_streaming"`
-	Provider   string    `json:"provider"`     // 提供商标识: claude/codex
+	Provider    string    `json:"provider"` // 提供商标识: claude/codex
 
 	// 可变状态（频繁更新）
 	Status        string `json:"status"`         // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
@@ -33,12 +33,13 @@ type ActiveRequest struct {
 	CancelReason  string `json:"cancel_reason"`  // 取消原因
 
 	// Token 累积（流式请求实时更新）
-	InputTokens           int64 `json:"input_tokens"`
-	OutputTokens          int64 `json:"output_tokens"`
-	CacheCreationTokens   int64 `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
-	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
-	CacheReadTokens       int64 `json:"cache_read_tokens"`
+	InputTokens            int64 `json:"input_tokens"`
+	OutputTokens           int64 `json:"output_tokens"`
+	CacheCreationTokens    int64 `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
+	CacheCreation5mTokens  int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens  int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
+	CacheReadTokens        int64 `json:"cache_read_tokens"`
+	InputIncludesCacheRead bool  `json:"-"` // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
 
 	// 端点倍率快照（请求开始时由生命周期管理器写入，归档时持久化）
 	// 默认 1.0 = 不影响成本；用于详情页面展示计费过程

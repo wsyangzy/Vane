@@ -537,11 +537,12 @@ export const fetchTokenUsageData = async (provider = '') => {
       input: current.input_tokens || 0,
       output: current.output_tokens || 0,
       cacheCreation: current.cache_creation_tokens || 0,
-      cacheRead: current.cache_read_tokens || 0
+      cacheRead: current.cache_read_tokens || 0,
+      total: current.total_tokens || 0
     };
   } catch (error) {
     console.error('获取 Token 使用数据失败:', error);
-    return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
+    return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, total: 0 };
   }
 };
 

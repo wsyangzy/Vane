@@ -859,16 +859,32 @@ func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (
 // codexChannelEndpointAsProviderRecord 把渠道+端点适配为旧 CodexProviderRecord 形态，
 // 以便复用 upsertCodexProviderSection / buildCodexTopLevelConfigValues / upsertCodexAuthConfig 等已有工具。
 // 这是一个纯本地适配器（DRY），不会被外部使用。
-func codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRecord, endpoint *store.CodexEndpointRecord) *store.CodexProviderRecord {
+//
+// model 字段遵循「渠道级覆盖优先于全局默认」的规则：
+//   - channel.Model 非空 → 写入 toml 时使用该值
+//   - channel.Model 为空 → 读取 ~/.codex/config.toml 当前顶层 model 作为 fallback
+//   - 全局也为空 → 写入空字符串（保持现有行为，由 Codex CLI 自己报错）
+//
+// 改为方法以便访问 App 的 codex 配置读取能力。
+func (a *App) codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRecord, endpoint *store.CodexEndpointRecord) *store.CodexProviderRecord {
 	if channel == nil || endpoint == nil {
 		return nil
 	}
+
+	effectiveModel := channel.Model
+	if effectiveModel == "" {
+		// 读取 ~/.codex/config.toml 当前的全局 model 作为 fallback
+		if _, content, existed, err := a.readCodexFileAllowMissing(a.getCodexConfigPath); err == nil && existed {
+			effectiveModel = readCodexTopLevelString(string(content), "model")
+		}
+	}
+
 	return &store.CodexProviderRecord{
 		Name:            channel.Name,
 		ProviderType:    channel.ProviderType,
 		BaseURL:         endpoint.BaseURL,
 		ApiKey:          channel.ApiKey,
-		Model:           channel.Model,
+		Model:           effectiveModel,
 		ReasoningEffort: channel.ReasoningEffort,
 		Enable1MContext: channel.Enable1MContext,
 		Website:         channel.Website,
@@ -895,7 +911,7 @@ func (a *App) syncActiveCodexChannelToConfig(channel *store.CodexChannelRecord, 
 		}
 		return nil
 	}
-	record := codexChannelEndpointAsProviderRecord(channel, endpoint)
+	record := a.codexChannelEndpointAsProviderRecord(channel, endpoint)
 	return a.syncActiveCodexProviderToConfig(record, previousChannelName)
 }
 
@@ -926,7 +942,7 @@ func (a *App) removeCodexChannelConfig(name string, nextChannel *store.CodexChan
 	}
 	var nextRecord *store.CodexProviderRecord
 	if nextChannel != nil && nextEndpoint != nil {
-		nextRecord = codexChannelEndpointAsProviderRecord(nextChannel, nextEndpoint)
+		nextRecord = a.codexChannelEndpointAsProviderRecord(nextChannel, nextEndpoint)
 	}
 	return a.removeCodexProviderConfig(name, nextRecord)
 }

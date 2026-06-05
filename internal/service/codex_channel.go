@@ -184,12 +184,9 @@ func normalizeAndValidateCodexChannel(record *store.CodexChannelRecord) error {
 	if record.ApiKey == "" {
 		return fmt.Errorf("API Key 不能为空")
 	}
-	if record.Model == "" {
-		return fmt.Errorf("模型不能为空")
-	}
-	if record.ReasoningEffort == "" {
-		record.ReasoningEffort = "xhigh"
-	}
+	// 注：model / reasoning_effort / enable_1m_context 三个字段已迁移到 Codex 全局配置
+	// （~/.codex/config.toml），由「Codex 配置」弹窗独立管理；渠道层不再校验也不强制填充
+	// 默认值。数据库列允许为空，Codex 代理启用时同步逻辑会跳过 config.toml 写入。
 
 	return nil
 }

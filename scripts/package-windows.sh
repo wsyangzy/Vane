@@ -1,7 +1,7 @@
 #!/bin/bash
 # 打包 Windows 发布版本（包含所有必需文件）
 
-VERSION="7.3b"
+VERSION="7.3c"
 DIST_DIR="build/dist/Claude-Request-Forwarder-Windows-v${VERSION}"
 
 echo "📦 打包 Windows 发布版本..."

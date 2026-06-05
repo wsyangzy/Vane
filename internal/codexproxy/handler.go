@@ -112,15 +112,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
+	channelName := ""
+	channelModel := ""
+	if h.manager != nil {
+		if ch := h.manager.GetActiveChannel(); ch != nil {
+			channelName = ch.Name
+			channelModel = strings.TrimSpace(ch.Model)
+		}
+	}
+	body = rewriteModelIfNeeded(body, channelModel, h.logger, requestID)
+
 	// 2. 检测是否流式请求
 	isStreaming := bytes.Contains(body, []byte(`"stream":true`)) ||
 		bytes.Contains(body, []byte(`"stream": true`))
 
 	// 3. 从请求体提取模型名（用于在响应未携带 model 时填充）
 	requestModel := h.tokenParser.ParseModelFromBody(body)
-
-	// 4. 获取活跃渠道名（用于追踪展示）
-	channelName := h.activeChannelName()
 
 	// 🆕 [Codex 生命周期] 请求开始日志
 	h.logger.Info("[Codex 请求开始]",
@@ -866,9 +874,10 @@ func buildTokenUsage(tr *TokenResult) *tracking.TokenUsage {
 		return nil
 	}
 	return &tracking.TokenUsage{
-		InputTokens:     tr.InputTokens,
-		OutputTokens:    tr.OutputTokens,
-		CacheReadTokens: tr.CacheReadTokens,
+		InputTokens:            tr.InputTokens,
+		OutputTokens:           tr.OutputTokens,
+		CacheReadTokens:        tr.CacheReadTokens,
+		InputIncludesCacheRead: true,
 	}
 }
 

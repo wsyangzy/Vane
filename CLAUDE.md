@@ -10,7 +10,7 @@
 
 **AI Relay Forwarder** 是一款基于 Wails 构建的跨平台桌面应用，用于多 AI 提供商 API 请求的智能中继转发、负载均衡和故障恢复。
 
-- **当前版本**: v7.3b
+- **当前版本**: v7.3c
 - **技术栈**: Go + Wails v3 + React + Vite
 - **支持平台**: macOS / Windows / Linux
 
@@ -342,6 +342,18 @@ go test -race ./internal/...
 - 客户端发送非流式请求 → 路由到支持非流式的端点，原样透传
 - 若端点配置了 `stream_only: true` → 该端点不参与非流式请求的端点选择
 
+### Codex `model` 字段例外（v7.4+）
+
+**例外规则**：`model` 字段属于「路由控制」语义，反代会按当前激活渠道的 `channel.model` 配置覆盖请求体中的 `model` 值。
+
+**为什么算例外**：不同 Codex 服务商支持的模型名集合不同（如 `gpt-5-codex` vs `gpt-5` vs `codex-1`），全局 model 无法兼顾。通过反代按渠道改写，用户切换渠道时无需手动改全局配置。
+
+**不影响其他字段**：除 `model` 外的所有业务字段（`stream`、`input`、`reasoning`、`tools`、`max_tokens` 等）严禁修改，仍遵循「忠实透传客户端原始请求意图」原则。
+
+**实现位置**：
+- `internal/codexproxy/model_rewriter.go` → `rewriteModelIfNeeded` 纯函数
+- `internal/codexproxy/handler.go` → `ServeHTTP` 接入点
+
 ### `stream_only` 端点配置
 
 ```yaml
@@ -365,6 +377,7 @@ endpoints:
 
 | 版本 | 日期 | 主要更新 |
 |------|------|----------|
+| v7.3c | 2026-06-02 | 未提供发布说明 |
 | v7.3b | 2026-05-29 | 未提供发布说明 |
 | v7.3a | 2026-05-29 | 未提供发布说明 |
 | v7.3 | 2026-05-28 | 未提供发布说明 |

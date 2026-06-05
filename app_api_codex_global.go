@@ -9,19 +9,28 @@ package main
 //   - 路径固定为 ~/.codex/config.toml，UI 上不再展示
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // codexDefaultProviderName 当 config.toml 中 model_provider 字段为空时使用的约定名称
 const codexDefaultProviderName = "ai-relay-forwarder"
+const codexGlobalSettingsCategory = "codex_global"
+const codexGlobalDefaultModelKey = "default_model"
+const codexGlobalDefaultReasoningEffortKey = "default_reasoning_effort"
+const codexGlobalDefaultEnable1MContextKey = "default_enable_1m_context"
 
 // CodexGlobalConfigInfo 用于读取 ~/.codex/config.toml 中的全局配置（前端展示）
 // base_url 由系统自动同步自服务端口，不向前端暴露
 type CodexGlobalConfigInfo struct {
-	Model           string `json:"model"`             // 顶层 model
-	ReasoningEffort string `json:"reasoning_effort"`  // 顶层 model_reasoning_effort
-	Enable1MContext bool   `json:"enable_1m_context"` // 顶层 model_context_window == 1000000
+	Model                    string `json:"model"`                       // 用户默认 model
+	ReasoningEffort          string `json:"reasoning_effort"`            // 用户默认 model_reasoning_effort
+	Enable1MContext          bool   `json:"enable_1m_context"`           // 用户默认 1M 开关
+	EffectiveModel           string `json:"effective_model"`             // 当前写入 config.toml 的生效 model
+	EffectiveReasoningEffort string `json:"effective_reasoning_effort"`  // 当前生效 model_reasoning_effort
+	EffectiveEnable1MContext bool   `json:"effective_enable_1m_context"` // 当前生效 1M 开关
 }
 
 // CodexGlobalConfigInput 用于更新 Codex 全局配置（前端写入）
@@ -34,23 +43,104 @@ type CodexGlobalConfigInput struct {
 
 // GetCodexGlobalConfig 读取 Codex 全局配置（~/.codex/config.toml 中的关键字段）
 func (a *App) GetCodexGlobalConfig() (CodexGlobalConfigInfo, error) {
-	_, content, existed, err := a.readCodexFileAllowMissing(a.getCodexConfigPath)
+	effective, err := a.readCodexEffectiveConfig()
 	if err != nil {
 		return CodexGlobalConfigInfo{}, err
 	}
 
-	info := CodexGlobalConfigInfo{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	defaults := a.loadCodexDefaultConfig(ctx, effective)
+	return CodexGlobalConfigInfo{
+		Model:                    defaults.Model,
+		ReasoningEffort:          defaults.ReasoningEffort,
+		Enable1MContext:          defaults.Enable1MContext,
+		EffectiveModel:           effective.Model,
+		EffectiveReasoningEffort: effective.ReasoningEffort,
+		EffectiveEnable1MContext: effective.Enable1MContext,
+	}, nil
+}
+
+func (a *App) readCodexEffectiveConfig() (CodexGlobalConfigInput, error) {
+	_, content, existed, err := a.readCodexFileAllowMissing(a.getCodexConfigPath)
+	if err != nil {
+		return CodexGlobalConfigInput{}, err
+	}
 	if !existed {
-		return info, nil
+		return CodexGlobalConfigInput{}, nil
 	}
 
 	text := string(content)
-	info.Model = readCodexTopLevelString(text, "model")
-	info.ReasoningEffort = readCodexTopLevelString(text, "model_reasoning_effort")
+	info := CodexGlobalConfigInput{
+		Model:           readCodexTopLevelString(text, "model"),
+		ReasoningEffort: readCodexTopLevelString(text, "model_reasoning_effort"),
+	}
 	if window := readCodexTopLevelString(text, "model_context_window"); window != "" {
 		info.Enable1MContext = window == codexProvider1MContextWindow
 	}
 	return info, nil
+}
+
+func (a *App) loadCodexDefaultConfig(ctx context.Context, fallback CodexGlobalConfigInput) CodexGlobalConfigInput {
+	defaults := fallback
+	if defaults.ReasoningEffort == "" {
+		defaults.ReasoningEffort = "xhigh"
+	}
+
+	a.mu.RLock()
+	settingsService := a.settingsService
+	a.mu.RUnlock()
+	if settingsService == nil {
+		return defaults
+	}
+
+	if model, err := settingsService.GetValue(ctx, codexGlobalSettingsCategory, codexGlobalDefaultModelKey); err == nil && strings.TrimSpace(model) != "" {
+		defaults.Model = strings.TrimSpace(model)
+	}
+	if effort, err := settingsService.GetValue(ctx, codexGlobalSettingsCategory, codexGlobalDefaultReasoningEffortKey); err == nil && strings.TrimSpace(effort) != "" {
+		defaults.ReasoningEffort = strings.TrimSpace(effort)
+	}
+	if enabled, err := settingsService.GetValue(ctx, codexGlobalSettingsCategory, codexGlobalDefaultEnable1MContextKey); err == nil && strings.TrimSpace(enabled) != "" {
+		defaults.Enable1MContext = parseCodexBool(enabled)
+	}
+	return defaults
+}
+
+func (a *App) saveCodexDefaultConfig(ctx context.Context, input CodexGlobalConfigInput) error {
+	a.mu.RLock()
+	settingsService := a.settingsService
+	a.mu.RUnlock()
+	if settingsService == nil {
+		return nil
+	}
+
+	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultModelKey, strings.TrimSpace(input.Model)); err != nil {
+		return err
+	}
+	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultReasoningEffortKey, strings.TrimSpace(input.ReasoningEffort)); err != nil {
+		return err
+	}
+	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultEnable1MContextKey, renderCodexBool(input.Enable1MContext)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func parseCodexBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderCodexBool(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 // UpdateCodexGlobalConfig 更新 Codex 全局配置并写回 ~/.codex/config.toml

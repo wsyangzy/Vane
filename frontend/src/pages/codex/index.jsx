@@ -58,7 +58,8 @@ import {
 const buildInitialChannelForm = (channel) => ({
   name: channel?.name || '',
   apiKey: channel?.apiKey || '',
-  website: channel?.website || ''
+  website: channel?.website || '',
+  model: channel?.model || ''
 });
 
 // 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
@@ -124,7 +125,8 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
     const payload = {
       name: formData.name.trim(),
       apiKey: formData.apiKey.trim(),
-      website: formData.website.trim()
+      website: formData.website.trim(),
+      model: formData.model.trim()
     };
 
     if (!payload.name || !payload.apiKey) {
@@ -192,6 +194,20 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
               onChange={(event) => updateField('website', event.target.value)}
               placeholder="https://platform.openai.com"
             />
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">模型（可选）</label>
+              <input
+                type="text"
+                value={formData.model}
+                onChange={(event) => updateField('model', event.target.value)}
+                placeholder="留空 = 使用 Codex 全局配置中的默认模型"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                填入后该渠道将覆盖全局 model；不同渠道支持的模型可能不同
+              </p>
+            </div>
 
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
@@ -618,7 +634,7 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
                   placeholder="例如：gpt-5.4"
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
-                <p className="mt-1 text-xs text-slate-400">写入 config.toml 顶层 model 字段</p>
+                <p className="mt-1 text-xs text-slate-400">作为所有渠道的默认值；某个渠道可在其编辑弹窗里单独覆盖</p>
               </div>
 
               <div>
@@ -899,13 +915,20 @@ const EndpointRow = ({
         {/* 端点摘要：name 在前，URL 在后 */}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span
-              className={`truncate text-xs font-semibold ${
-                endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
-              }`}
-              title={displayName}
-            >
-              {displayName}
+            <span className="relative">
+              <span
+                className={`truncate text-xs font-semibold ${
+                  endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
+                }`}
+                title={displayName}
+              >
+                {displayName}
+              </span>
+              {endpoint.costMultiplier && endpoint.costMultiplier !== 1 && (
+                <span className="absolute -left-2 -top-2 rounded-full bg-amber-500 px-1 text-[8px] font-bold leading-tight text-white shadow-sm">
+                  ×{endpoint.costMultiplier}
+                </span>
+              )}
             </span>
             {endpoint.isActive && (
               <span className="text-[10px] uppercase tracking-[0.16em] text-emerald-600">active</span>
@@ -984,6 +1007,7 @@ const ChannelCard = ({
   const endpoints = channel.endpoints || [];
   const activeEndpoint = endpoints.find((ep) => ep.isActive) || null;
   const hasMultiple = endpoints.length > 1;
+  const activeSuspendedCount = channel.isActive ? suspendedCount : 0;
 
   // 折叠时展示哪些行：多端点 → 仅当前激活（无激活则取第一个作为占位）；单端点 → 直接显示
   const displayedEndpoints = isEndpointListExpanded || !hasMultiple
@@ -1020,13 +1044,13 @@ const ChannelCard = ({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <h3 className="truncate text-sm font-semibold tracking-tight text-slate-900">{channel.name}</h3>
           {channel.isActive && (
-            channel.isActive && suspendedCount > 0 ? (
+            activeSuspendedCount > 0 ? (
               <span
                 className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-amber-700"
-                title={`已有 ${suspendedCount} 个请求挂起，请点击下方任意端点或其他渠道重新激活`}
+                title={`已有 ${activeSuspendedCount} 个请求挂起，请点击下方当前端点或其他渠道重新激活`}
               >
                 <TriangleAlert size={10} className="text-amber-600" />
-                等待重新激活 · {suspendedCount}
+                等待重新激活 · {activeSuspendedCount}
               </span>
             ) : (
               <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-emerald-700">
@@ -1081,11 +1105,22 @@ const ChannelCard = ({
       </div>
 
       {/* 元数据条：模型 · 推理 · 1M · API Key
-          注意：model/reasoning/1M 来自全局配置（~/.codex/config.toml），所有渠道共用 */}
+          model 字段：渠道有自己的值则覆盖；否则用全局默认（来自 ~/.codex/config.toml）
+          推理 / 1M：所有渠道共用全局配置 */}
       <div className="flex flex-nowrap items-center gap-x-3 gap-y-1.5 overflow-hidden border-t border-slate-100 px-4 py-2 text-[11px]">
         <span className="inline-flex flex-shrink-0 items-center gap-1 text-slate-600">
           <ShieldCheck size={11} className="text-emerald-500" />
-          <span className="font-medium">{globalConfig.model || '未设置'}</span>
+          <span className="font-medium">{channel.model || globalConfig.model || '未设置'}</span>
+          <span
+            className={
+              channel.model
+                ? 'rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-600'
+                : 'rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-400'
+            }
+            title={channel.model ? '该渠道使用专属 model（覆盖全局）' : '该渠道使用全局默认 model'}
+          >
+            {channel.model ? '渠道' : '全局'}
+          </span>
         </span>
         <span className="flex-shrink-0 text-slate-300">·</span>
         <span className="flex-shrink-0 text-slate-500">
@@ -1146,7 +1181,7 @@ const ChannelCard = ({
               <EndpointRow
                 key={endpoint.id}
                 endpoint={endpoint}
-                suspendedCount={suspendedCount}
+                suspendedCount={activeSuspendedCount}
                 onActivate={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
                 onEdit={onEditEndpoint}
