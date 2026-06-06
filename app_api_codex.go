@@ -7,6 +7,7 @@ import (
 
 	"ai-relay-forwarder/internal/codexproxy"
 	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // ============================================================================
@@ -73,6 +74,7 @@ type CodexChannelInfo struct {
 	ApiKey          string              `json:"api_key"`
 	ApiKeyMasked    string              `json:"api_key_masked"`
 	Model           string              `json:"model"`
+	ModelMapping    map[string]string   `json:"model_mapping"`
 	ReasoningEffort string              `json:"model_reasoning_effort"`
 	Enable1MContext bool                `json:"enable_1m_context"`
 	Website         string              `json:"website"`
@@ -84,67 +86,72 @@ type CodexChannelInfo struct {
 
 // CodexEndpointInfo 提供给前端展示的端点信息（name + base_url）。
 type CodexEndpointInfo struct {
-	ID                      int64   `json:"id"`
-	ChannelID               int64   `json:"channel_id"`
-	Name                    string  `json:"name"`
-	BaseURL                 string  `json:"base_url"`
-	IsActive                bool    `json:"is_active"`
-	FailoverEnabled         bool    `json:"failover_enabled"`
-	Healthy                 bool    `json:"healthy"`
-	HealthState             string  `json:"health_state"`
-	HealthInScope           bool    `json:"health_in_scope"`
-	ResponseTimeMS          int64   `json:"response_time_ms"`
-	Priority                int     `json:"priority"`
-	CostMultiplier          float64 `json:"costMultiplier"`
-	InputCostMultiplier     float64 `json:"inputCostMultiplier"`
-	OutputCostMultiplier    float64 `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier float64 `json:"cacheReadCostMultiplier"`
-	CreatedAt               string  `json:"created_at"`
-	UpdatedAt               string  `json:"updated_at"`
+	ID                       int64   `json:"id"`
+	ChannelID                int64   `json:"channel_id"`
+	Name                     string  `json:"name"`
+	BaseURL                  string  `json:"base_url"`
+	IsActive                 bool    `json:"is_active"`
+	FailoverEnabled          bool    `json:"failover_enabled"`
+	Healthy                  bool    `json:"healthy"`
+	HealthState              string  `json:"health_state"`
+	HealthInScope            bool    `json:"health_in_scope"`
+	ResponseTimeMS           int64   `json:"response_time_ms"`
+	Priority                 int     `json:"priority"`
+	CostMultiplier           float64 `json:"costMultiplier"`
+	InputCostMultiplier      float64 `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64 `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string  `json:"billingOutputTokenSource"`
+	CreatedAt                string  `json:"created_at"`
+	UpdatedAt                string  `json:"updated_at"`
 }
 
 // CreateCodexChannelInput 创建渠道（不含端点）。
 type CreateCodexChannelInput struct {
-	Name            string `json:"name"`
-	ProviderType    string `json:"provider_type"`
-	ApiKey          string `json:"api_key"`
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"model_reasoning_effort"`
-	Enable1MContext bool   `json:"enable_1m_context"`
-	Website         string `json:"website"`
+	Name            string            `json:"name"`
+	ProviderType    string            `json:"provider_type"`
+	ApiKey          string            `json:"api_key"`
+	Model           string            `json:"model"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+	ReasoningEffort string            `json:"model_reasoning_effort"`
+	Enable1MContext bool              `json:"enable_1m_context"`
+	Website         string            `json:"website"`
 }
 
 type UpdateCodexChannelInput struct {
-	Name            string `json:"name"`
-	ProviderType    string `json:"provider_type"`
-	ApiKey          string `json:"api_key"`
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"model_reasoning_effort"`
-	Enable1MContext bool   `json:"enable_1m_context"`
-	Website         string `json:"website"`
+	Name            string            `json:"name"`
+	ProviderType    string            `json:"provider_type"`
+	ApiKey          string            `json:"api_key"`
+	Model           string            `json:"model"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+	ReasoningEffort string            `json:"model_reasoning_effort"`
+	Enable1MContext bool              `json:"enable_1m_context"`
+	Website         string            `json:"website"`
 }
 
 type CreateCodexEndpointInput struct {
-	ChannelID               int64   `json:"channel_id"`
-	Name                    string  `json:"name"`
-	BaseURL                 string  `json:"base_url"`
-	FailoverEnabled         *bool   `json:"failover_enabled"` // nil 时默认 true
-	Priority                int     `json:"priority"`
-	CostMultiplier          float64 `json:"costMultiplier"`          // 默认 1.0
-	InputCostMultiplier     float64 `json:"inputCostMultiplier"`     // 默认 1.0
-	OutputCostMultiplier    float64 `json:"outputCostMultiplier"`    // 默认 1.0
-	CacheReadCostMultiplier float64 `json:"cacheReadCostMultiplier"` // 默认 1.0
+	ChannelID                int64   `json:"channel_id"`
+	Name                     string  `json:"name"`
+	BaseURL                  string  `json:"base_url"`
+	FailoverEnabled          *bool   `json:"failover_enabled"` // nil 时默认 true
+	Priority                 int     `json:"priority"`
+	CostMultiplier           float64 `json:"costMultiplier"`          // 默认 1.0
+	InputCostMultiplier      float64 `json:"inputCostMultiplier"`     // 默认 1.0
+	OutputCostMultiplier     float64 `json:"outputCostMultiplier"`    // 默认 1.0
+	CacheReadCostMultiplier  float64 `json:"cacheReadCostMultiplier"` // 默认 1.0
+	BillingOutputTokenSource string  `json:"billingOutputTokenSource"`
 }
 
 type UpdateCodexEndpointInput struct {
-	Name                    string   `json:"name"`
-	BaseURL                 string   `json:"base_url"`
-	FailoverEnabled         *bool    `json:"failover_enabled"`
-	Priority                *int     `json:"priority"`
-	CostMultiplier          *float64 `json:"costMultiplier"`
-	InputCostMultiplier     *float64 `json:"inputCostMultiplier"`
-	OutputCostMultiplier    *float64 `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier *float64 `json:"cacheReadCostMultiplier"`
+	Name                     string   `json:"name"`
+	BaseURL                  string   `json:"base_url"`
+	FailoverEnabled          *bool    `json:"failover_enabled"`
+	Priority                 *int     `json:"priority"`
+	CostMultiplier           *float64 `json:"costMultiplier"`
+	InputCostMultiplier      *float64 `json:"inputCostMultiplier"`
+	OutputCostMultiplier     *float64 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  *float64 `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource *string  `json:"billingOutputTokenSource"`
 }
 
 // ============================================================================
@@ -226,7 +233,7 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
 	}
 
-	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model,
+	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model, input.ModelMapping,
 		input.ReasoningEffort, input.Website, input.Enable1MContext)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -256,7 +263,7 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
 	}
 
-	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model,
+	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model, input.ModelMapping,
 		input.ReasoningEffort, input.Website, input.Enable1MContext)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -367,6 +374,9 @@ func (a *App) ActivateCodexChannel(id int64) error {
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
 	}
 
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -375,13 +385,16 @@ func (a *App) ActivateCodexChannel(id int64) error {
 		return fmt.Errorf("读取当前激活渠道失败: %w", err)
 	}
 
-	if err := channelService.ActivateChannel(ctx, id); err != nil {
-		return fmt.Errorf("切换 Codex 渠道失败: %w", err)
-	}
+	activated := previousActive
+	if previousActive == nil || previousActive.ID != id {
+		if err := channelService.ActivateChannel(ctx, id); err != nil {
+			return fmt.Errorf("切换 Codex 渠道失败: %w", err)
+		}
 
-	activated, err := channelService.GetChannelByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("读取激活后的渠道失败: %w", err)
+		activated, err = channelService.GetChannelByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("读取激活后的渠道失败: %w", err)
+		}
 	}
 	if activated == nil {
 		return fmt.Errorf("激活后的渠道不存在: %d", id)
@@ -439,19 +452,23 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		return fmt.Errorf("Codex 端点服务未就绪，请稍后重试")
 	}
 
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	record := &store.CodexEndpointRecord{
-		ChannelID:               input.ChannelID,
-		Name:                    input.Name,
-		BaseURL:                 input.BaseURL,
-		FailoverEnabled:         input.FailoverEnabled == nil || *input.FailoverEnabled,
-		Priority:                input.Priority,
-		CostMultiplier:          input.CostMultiplier,
-		InputCostMultiplier:     input.InputCostMultiplier,
-		OutputCostMultiplier:    input.OutputCostMultiplier,
-		CacheReadCostMultiplier: input.CacheReadCostMultiplier,
+		ChannelID:                input.ChannelID,
+		Name:                     input.Name,
+		BaseURL:                  input.BaseURL,
+		FailoverEnabled:          input.FailoverEnabled == nil || *input.FailoverEnabled,
+		Priority:                 input.Priority,
+		CostMultiplier:           input.CostMultiplier,
+		InputCostMultiplier:      input.InputCostMultiplier,
+		OutputCostMultiplier:     input.OutputCostMultiplier,
+		CacheReadCostMultiplier:  input.CacheReadCostMultiplier,
+		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(input.BillingOutputTokenSource),
 	}
 
 	// 默认值：costMultiplier 为 0 时视为 1.0
@@ -538,8 +555,12 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if input.CacheReadCostMultiplier != nil {
 		cacheReadCostMultiplier = *input.CacheReadCostMultiplier
 	}
+	billingOutputTokenSource := previous.BillingOutputTokenSource
+	if input.BillingOutputTokenSource != nil {
+		billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(*input.BillingOutputTokenSource)
+	}
 
-	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier); err != nil {
+	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource); err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
 
@@ -650,6 +671,9 @@ func (a *App) ActivateCodexEndpoint(id int64) error {
 		return fmt.Errorf("Codex 端点服务未就绪，请稍后重试")
 	}
 
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -661,8 +685,10 @@ func (a *App) ActivateCodexEndpoint(id int64) error {
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
-	if err := endpointService.ActivateEndpoint(ctx, id); err != nil {
-		return fmt.Errorf("激活 Codex 端点失败: %w", err)
+	if !target.IsActive {
+		if err := endpointService.ActivateEndpoint(ctx, id); err != nil {
+			return fmt.Errorf("激活 Codex 端点失败: %w", err)
+		}
 	}
 
 	// 仅当端点所属渠道为当前激活渠道时才改写 config.toml（KISS：核心规则之一）
@@ -808,16 +834,28 @@ func (a *App) ActivateCodexProvider(id int64) error {
 // 内部转换辅助
 // ============================================================================
 
-func codexChannelInputToRecord(name, providerType, apiKey, model, reasoningEffort, website string, enable1M bool) *store.CodexChannelRecord {
+func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMapping map[string]string, reasoningEffort, website string, enable1M bool) *store.CodexChannelRecord {
 	return &store.CodexChannelRecord{
 		Name:            name,
 		ProviderType:    providerType,
 		ApiKey:          apiKey,
 		Model:           model,
+		ModelMapping:    modelMapping,
 		ReasoningEffort: reasoningEffort,
 		Enable1MContext: enable1M,
 		Website:         website,
 	}
+}
+
+func copyCodexModelMapping(modelMapping map[string]string) map[string]string {
+	if len(modelMapping) == 0 {
+		return map[string]string{}
+	}
+	copied := make(map[string]string, len(modelMapping))
+	for source, target := range modelMapping {
+		copied[source] = target
+	}
+	return copied
 }
 
 func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints []*store.CodexEndpointRecord) CodexChannelInfo {
@@ -845,6 +883,7 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 		ApiKey:          record.ApiKey,
 		ApiKeyMasked:    maskToken(record.ApiKey),
 		Model:           record.Model,
+		ModelMapping:    copyCodexModelMapping(record.ModelMapping),
 		ReasoningEffort: record.ReasoningEffort,
 		Enable1MContext: record.Enable1MContext,
 		Website:         record.Website,
@@ -855,23 +894,24 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 	for _, ep := range endpoints {
 		healthy, healthState, healthInScope, responseTimeMS := codexEndpointRuntimeHealth(record, ep, endpointMgr, activeChannelID, latencies)
 		info.Endpoints = append(info.Endpoints, CodexEndpointInfo{
-			ID:                      ep.ID,
-			ChannelID:               ep.ChannelID,
-			Name:                    ep.Name,
-			BaseURL:                 ep.BaseURL,
-			IsActive:                ep.IsActive,
-			FailoverEnabled:         ep.FailoverEnabled,
-			Healthy:                 healthy,
-			HealthState:             healthState,
-			HealthInScope:           healthInScope,
-			ResponseTimeMS:          responseTimeMS,
-			Priority:                ep.Priority,
-			CostMultiplier:          ep.CostMultiplier,
-			InputCostMultiplier:     ep.InputCostMultiplier,
-			OutputCostMultiplier:    ep.OutputCostMultiplier,
-			CacheReadCostMultiplier: ep.CacheReadCostMultiplier,
-			CreatedAt:               formatCodexTime(ep.CreatedAt),
-			UpdatedAt:               formatCodexTime(ep.UpdatedAt),
+			ID:                       ep.ID,
+			ChannelID:                ep.ChannelID,
+			Name:                     ep.Name,
+			BaseURL:                  ep.BaseURL,
+			IsActive:                 ep.IsActive,
+			FailoverEnabled:          ep.FailoverEnabled,
+			Healthy:                  healthy,
+			HealthState:              healthState,
+			HealthInScope:            healthInScope,
+			ResponseTimeMS:           responseTimeMS,
+			Priority:                 ep.Priority,
+			CostMultiplier:           ep.CostMultiplier,
+			InputCostMultiplier:      ep.InputCostMultiplier,
+			OutputCostMultiplier:     ep.OutputCostMultiplier,
+			CacheReadCostMultiplier:  ep.CacheReadCostMultiplier,
+			BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(ep.BillingOutputTokenSource),
+			CreatedAt:                formatCodexTime(ep.CreatedAt),
+			UpdatedAt:                formatCodexTime(ep.UpdatedAt),
 		})
 	}
 

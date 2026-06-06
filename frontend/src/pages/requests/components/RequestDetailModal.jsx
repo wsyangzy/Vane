@@ -23,7 +23,8 @@ import {
   TrendingUp,
   TrendingDown,
   Zap,
-  Calculator
+  Calculator,
+  ArrowRightLeft
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -188,10 +189,20 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   // 计算 Token 总数：Codex/OpenAI input_tokens 已包含 cached_tokens；兼容旧 Codex 记录的非缓存 input。
   const inputTokenCount = getDisplayInputTokens(request);
   const outputTokenCount = request.outputTokens || 0;
+  const reasoningTokenCount = request.reasoningTokens || 0;
+  const visibleOutputTokenCount = Math.max(0, outputTokenCount - reasoningTokenCount);
+  const billingOutputTokenSource = request.billingOutputTokenSource || 'output_tokens';
+  const billableOutputTokenCount = request.billableOutputTokens ?? outputTokenCount;
   const totalTokens = getDisplayTotalTokens(request);
   const inputPercent = totalTokens > 0 ? Math.round((inputTokenCount / totalTokens) * 100) : 0;
   const outputPercent = totalTokens > 0 ? Math.round((outputTokenCount / totalTokens) * 100) : 0;
   const cachePercent = !isCodexRequest && totalTokens > 0 ? Math.max(0, 100 - inputPercent - outputPercent) : 0;
+  const outputSourceLabelMap = {
+    output_tokens: '总输出',
+    reasoning_tokens: '推理',
+    visible_output_tokens: '可见补全'
+  };
+  const billingOutputSourceLabel = outputSourceLabelMap[billingOutputTokenSource] || outputSourceLabelMap.output_tokens;
 
   // 请求类型
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -258,6 +269,19 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
     request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
   ].filter(Boolean).join('\n');
+  const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
+  const originalModelName = request.originalModelName || request.original_model_name || '';
+  const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
+  const modelRewriteLabelMap = {
+    mapping: '模型映射',
+    channel_model: '渠道覆盖'
+  };
+  const modelRewriteIconClassMap = {
+    mapping: 'text-amber-500',
+    channel_model: 'text-violet-500'
+  };
+  const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
+  const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-start justify-center pt-[15vh] px-4">
@@ -373,6 +397,17 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     <span className="text-sm font-medium text-slate-500">模型名称</span>
                     <ModelTag model={request.model} />
                   </div>
+                  {hasModelRewrite && (
+                    <div className="flex items-center justify-between gap-4 py-3 border-t border-slate-100">
+                      <span className="text-sm font-medium text-slate-500">{modelRewriteLabel}</span>
+                      <div className="flex items-center justify-end gap-2 min-w-0">
+                        <ArrowRightLeft className={`h-3.5 w-3.5 shrink-0 ${modelRewriteIconClassMap[modelRewriteSource] || 'text-slate-400'}`} />
+                        <span className="text-sm font-mono text-slate-900 text-right break-all">
+                          {originalModelName || '-'} -&gt; {modelRewriteTarget}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -384,6 +419,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 }
 
                 const outputTokens = request.outputTokens || 0
+                const reasoningTokens = request.reasoningTokens || 0
+                const billableOutputTokens = request.billableOutputTokens ?? outputTokens
+                const billingSource = request.billingOutputTokenSource || 'output_tokens'
                 const cacheReadTokens = request.cacheReadTokens || 0
                 const billableInputTokens = getBillableInputTokens(request)
                 const displayInputTokens = getDisplayInputTokens(request)
@@ -417,7 +455,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 }
 
                 const inputPrice = calcRawPrice(inputCost, billableInputTokens, inputMultiplier)
-                const outputPrice = calcRawPrice(outputCost, outputTokens, outputMultiplier)
+                const outputPrice = calcRawPrice(outputCost, billableOutputTokens, outputMultiplier)
                 const cacheReadPrice = calcRawPrice(cacheReadCost, cacheReadTokens, cacheReadMultiplier)
                 const cache5mPrice = calcRawPrice(cache5mCost, cache5mTokens, cache5mMultiplier)
                 const cache1hPrice = calcRawPrice(cache1hCost, cache1hTokens, cache1hMultiplier)
@@ -430,9 +468,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
                 const formatPrice = (n) => `$${(n || 0).toFixed(6)}`
                 const formatMultiplier = (n) => `${Number(n).toFixed(2).replace(/\.?0+$/, '')}x`
-                const hasAnySubMultiplier = inputMultiplier !== 1.0 || outputMultiplier !== 1.0 ||
-                  cacheReadMultiplier !== 1.0 || cache5mMultiplier !== 1.0 || cache1hMultiplier !== 1.0
-                const hasAnyMultiplier = hasAnySubMultiplier || totalMultiplier !== 1.0
+                const outputTokenExpression = billingSource === 'visible_output_tokens'
+                  ? `${outputTokens.toLocaleString()} - ${reasoningTokens.toLocaleString()} = ${billableOutputTokens.toLocaleString()}`
+                  : billableOutputTokens.toLocaleString()
 
                 const priceBadges = [
                   inputPrice > 0 && { key: 'input', label: '输入', value: inputPrice, color: 'blue' },
@@ -472,8 +510,14 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     cost: inputCost,
                     multiplier: inputMultiplier
                   },
-                  outputTokens > 0 && {
-                    key: 'output', label: '输出', tokens: outputTokens, price: outputPrice, cost: outputCost, multiplier: outputMultiplier
+                  billableOutputTokens > 0 && {
+                    key: 'output',
+                    label: isCodexRequest ? `输出(计费:${billingOutputSourceLabel})` : '输出',
+                    tokens: billableOutputTokens,
+                    tokenExpression: outputTokenExpression,
+                    price: outputPrice,
+                    cost: outputCost,
+                    multiplier: outputMultiplier
                   },
                   cacheReadTokens > 0 && {
                     key: 'cacheRead', label: '缓存读取', tokens: cacheReadTokens, price: cacheReadPrice, cost: cacheReadCost, multiplier: cacheReadMultiplier
@@ -876,10 +920,34 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 <TokenCard
                   icon={TrendingDown}
                   label="输出 Token"
-                  value={request.outputTokens || 0}
+                  value={outputTokenCount}
                   colorClass={{ bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-600', icon: 'text-emerald-600' }}
                 />
               </div>
+
+              {isCodexRequest && (
+                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-slate-900">输出拆分</h3>
+                    <span className="text-xs text-slate-500">计费口径：{billingOutputSourceLabel}</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-y md:divide-y-0 divide-slate-100">
+                    {[
+                      { label: '原始输出', value: outputTokenCount, tone: 'text-emerald-600' },
+                      { label: '推理', value: reasoningTokenCount, tone: 'text-violet-600' },
+                      { label: '可见补全', value: visibleOutputTokenCount, tone: 'text-sky-600' },
+                      { label: '计费输出', value: billableOutputTokenCount, tone: 'text-orange-600' }
+                    ].map((item) => (
+                      <div key={item.label} className="p-4">
+                        <div className="text-xs font-medium text-slate-500">{item.label}</div>
+                        <div className={`mt-1 text-lg font-bold font-mono ${item.tone}`}>
+                          {item.value.toLocaleString()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Token 卡片 - 缓存 */}
               <div className="grid grid-cols-2 gap-4">

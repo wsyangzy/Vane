@@ -18,6 +18,17 @@ func endpointMultiplierKey(channel, groupName, endpointName string) string {
 	return channel + endpointMultiplierKeySeparator + endpointName
 }
 
+func endpointMultiplierLookupKeys(channel, groupName, endpointName string) []string {
+	key := endpointMultiplierKey(channel, groupName, endpointName)
+	if key == "" {
+		return nil
+	}
+	if key == endpointName {
+		return []string{key}
+	}
+	return []string{key, endpointName}
+}
+
 // EndpointMultiplierKey is the exported helper for building the multiplier key from channel + endpointName.
 func EndpointMultiplierKey(channel, endpointName string) string {
 	return endpointMultiplierKey(channel, "", endpointName)

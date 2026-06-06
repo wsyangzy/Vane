@@ -218,13 +218,7 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 		}
 
 		// 计算成本
-		tokens := &TokenUsage{
-			InputTokens:            data.InputTokens,
-			OutputTokens:           data.OutputTokens,
-			CacheCreationTokens:    data.CacheCreationTokens,
-			CacheReadTokens:        data.CacheReadTokens,
-			InputIncludesCacheRead: data.InputIncludesCacheRead,
-		}
+		tokens := tokenUsageFromCompleteData(data)
 
 		inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
 
@@ -234,6 +228,9 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 			model_name = ?,
 			input_tokens = ?,
 			output_tokens = ?,
+			reasoning_tokens = ?,
+			billable_output_tokens = ?,
+			billing_output_token_source = ?,
 			cache_creation_tokens = ?,
 			cache_read_tokens = ?,
 			input_cost_usd = ?,
@@ -251,6 +248,9 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 			data.ModelName,
 			data.InputTokens,
 			data.OutputTokens,
+			data.ReasoningTokens,
+			ResolveBillableOutputTokens(tokens),
+			NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 			data.CacheCreationTokens,
 			data.CacheReadTokens,
 			inputCost,
@@ -270,15 +270,7 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 		}
 
 		// 计算成本（使用完整的 5m/1h 字段）
-		tokens := &TokenUsage{
-			InputTokens:            data.InputTokens,
-			OutputTokens:           data.OutputTokens,
-			CacheCreationTokens:    data.CacheCreationTokens,
-			CacheCreation5mTokens:  data.CacheCreation5mTokens,
-			CacheCreation1hTokens:  data.CacheCreation1hTokens,
-			CacheReadTokens:        data.CacheReadTokens,
-			InputIncludesCacheRead: data.InputIncludesCacheRead,
-		}
+		tokens := tokenUsageFromCompleteData(data)
 
 		pricing := ut.GetPricing(data.ModelName)
 		costBreakdown := CalculateCost(tokens, &pricing, nil)
@@ -288,6 +280,9 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 			model_name = COALESCE(?, model_name),
 			input_tokens = ?,
 			output_tokens = ?,
+			reasoning_tokens = ?,
+			billable_output_tokens = ?,
+			billing_output_token_source = ?,
 			cache_creation_tokens = ?,
 			cache_creation_5m_tokens = ?,
 			cache_creation_1h_tokens = ?,
@@ -307,6 +302,9 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 			data.ModelName,
 			data.InputTokens,
 			data.OutputTokens,
+			data.ReasoningTokens,
+			ResolveBillableOutputTokens(tokens),
+			NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 			data.CacheCreationTokens,
 			data.CacheCreation5mTokens,
 			data.CacheCreation1hTokens,
@@ -331,15 +329,7 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 		}
 
 		// 计算成本（使用完整的 5m/1h 字段）
-		tokens := &TokenUsage{
-			InputTokens:            data.InputTokens,
-			OutputTokens:           data.OutputTokens,
-			CacheCreationTokens:    data.CacheCreationTokens,
-			CacheCreation5mTokens:  data.CacheCreation5mTokens,
-			CacheCreation1hTokens:  data.CacheCreation1hTokens,
-			CacheReadTokens:        data.CacheReadTokens,
-			InputIncludesCacheRead: data.InputIncludesCacheRead,
-		}
+		tokens := tokenUsageFromCompleteData(data)
 
 		pricing := ut.GetPricing(data.ModelName)
 		costBreakdown := CalculateCost(tokens, &pricing, nil)
@@ -349,6 +339,9 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 			model_name = COALESCE(?, model_name),
 			input_tokens = ?,
 			output_tokens = ?,
+			reasoning_tokens = ?,
+			billable_output_tokens = ?,
+			billing_output_token_source = ?,
 			cache_creation_tokens = ?,
 			cache_creation_5m_tokens = ?,
 			cache_creation_1h_tokens = ?,
@@ -367,6 +360,9 @@ func (ut *UsageTracker) buildWriteQuery(event RequestEvent) (string, []interface
 			data.ModelName,
 			data.InputTokens,
 			data.OutputTokens,
+			data.ReasoningTokens,
+			ResolveBillableOutputTokens(tokens),
+			NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 			data.CacheCreationTokens,
 			data.CacheCreation5mTokens,
 			data.CacheCreation1hTokens,
@@ -506,6 +502,18 @@ func (ut *UsageTracker) buildFlexibleUpdateQuery(event RequestEvent) (string, []
 		setParts = append(setParts, "model_name = ?")
 		args = append(args, *opts.ModelName)
 	}
+	if opts.OriginalModelName != nil {
+		setParts = append(setParts, "original_model_name = ?")
+		args = append(args, *opts.OriginalModelName)
+	}
+	if opts.ModelRewriteSource != nil {
+		setParts = append(setParts, "model_rewrite_source = ?")
+		args = append(args, *opts.ModelRewriteSource)
+	}
+	if opts.ModelRewriteTarget != nil {
+		setParts = append(setParts, "model_rewrite_target = ?")
+		args = append(args, *opts.ModelRewriteTarget)
+	}
 	if opts.EndTime != nil {
 		setParts = append(setParts, "end_time = ?")
 		args = append(args, *opts.EndTime)
@@ -547,13 +555,7 @@ func (ut *UsageTracker) buildSuccessQuery(event RequestEvent) (string, []interfa
 	}
 
 	// 计算成本
-	tokens := &TokenUsage{
-		InputTokens:            data.InputTokens,
-		OutputTokens:           data.OutputTokens,
-		CacheCreationTokens:    data.CacheCreationTokens,
-		CacheReadTokens:        data.CacheReadTokens,
-		InputIncludesCacheRead: data.InputIncludesCacheRead,
-	}
+	tokens := tokenUsageFromCompleteData(data)
 
 	inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
 
@@ -564,6 +566,9 @@ func (ut *UsageTracker) buildSuccessQuery(event RequestEvent) (string, []interfa
 		model_name = ?,
 		input_tokens = ?,
 		output_tokens = ?,
+		reasoning_tokens = ?,
+		billable_output_tokens = ?,
+		billing_output_token_source = ?,
 		cache_creation_tokens = ?,
 		cache_read_tokens = ?,
 		input_cost_usd = ?,
@@ -583,6 +588,9 @@ func (ut *UsageTracker) buildSuccessQuery(event RequestEvent) (string, []interfa
 		data.ModelName,
 		data.InputTokens,
 		data.OutputTokens,
+		data.ReasoningTokens,
+		ResolveBillableOutputTokens(tokens),
+		NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 		data.CacheCreationTokens,
 		data.CacheReadTokens,
 		inputCost,
@@ -614,6 +622,9 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 	modelName, _ := data["model_name"].(string) // 🔧 [修复] 2025-12-11: 读取模型名
 	inputTokens := data["input_tokens"]
 	outputTokens := data["output_tokens"]
+	reasoningTokens := data["reasoning_tokens"]
+	billableOutputTokens := data["billable_output_tokens"]
+	billingOutputTokenSource := data["billing_output_token_source"]
 	cacheCreationTokens := data["cache_creation_tokens"]
 	cacheCreation5mTokens := data["cache_creation_5m_tokens"] // 🔧 [修复] 2025-12-11
 	cacheCreation1hTokens := data["cache_creation_1h_tokens"] // 🔧 [修复] 2025-12-11
@@ -635,6 +646,9 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			model_name = COALESCE(NULLIF(NULLIF(?, ''), 'unknown'), model_name),
 			input_tokens = COALESCE(?, input_tokens),
 			output_tokens = COALESCE(?, output_tokens),
+			reasoning_tokens = COALESCE(?, reasoning_tokens),
+			billable_output_tokens = COALESCE(?, billable_output_tokens),
+			billing_output_token_source = COALESCE(?, billing_output_token_source),
 			cache_creation_tokens = COALESCE(?, cache_creation_tokens),
 			cache_creation_5m_tokens = COALESCE(?, cache_creation_5m_tokens),
 			cache_creation_1h_tokens = COALESCE(?, cache_creation_1h_tokens),
@@ -650,6 +664,9 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			modelName,  // 🔧 [修复] 2025-12-11: model_name (空字符串和 'unknown' 都会被忽略)
 			inputTokens,
 			outputTokens,
+			reasoningTokens,
+			billableOutputTokens,
+			billingOutputTokenSource,
 			cacheCreationTokens,
 			cacheCreation5mTokens, // 🔧 [修复] 2025-12-11
 			cacheCreation1hTokens, // 🔧 [修复] 2025-12-11
@@ -668,6 +685,9 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			model_name = COALESCE(NULLIF(NULLIF(?, ''), 'unknown'), model_name),
 			input_tokens = COALESCE(?, input_tokens),
 			output_tokens = COALESCE(?, output_tokens),
+			reasoning_tokens = COALESCE(?, reasoning_tokens),
+			billable_output_tokens = COALESCE(?, billable_output_tokens),
+			billing_output_token_source = COALESCE(?, billing_output_token_source),
 			cache_creation_tokens = COALESCE(?, cache_creation_tokens),
 			cache_creation_5m_tokens = COALESCE(?, cache_creation_5m_tokens),
 			cache_creation_1h_tokens = COALESCE(?, cache_creation_1h_tokens),
@@ -684,6 +704,9 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			modelName,   // 🔧 [修复] 2025-12-11: model_name (空字符串和 'unknown' 都会被忽略)
 			inputTokens,
 			outputTokens,
+			reasoningTokens,
+			billableOutputTokens,
+			billingOutputTokenSource,
 			cacheCreationTokens,
 			cacheCreation5mTokens, // 🔧 [修复] 2025-12-11
 			cacheCreation1hTokens, // 🔧 [修复] 2025-12-11
@@ -722,13 +745,7 @@ func (ut *UsageTracker) buildCompleteQueryWithTx(ctx context.Context, tx *sql.Tx
 	}
 
 	// 计算成本
-	tokens := &TokenUsage{
-		InputTokens:            data.InputTokens,
-		OutputTokens:           data.OutputTokens,
-		CacheCreationTokens:    data.CacheCreationTokens,
-		CacheReadTokens:        data.CacheReadTokens,
-		InputIncludesCacheRead: data.InputIncludesCacheRead,
-	}
+	tokens := tokenUsageFromCompleteData(data)
 
 	inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
 
@@ -739,6 +756,9 @@ func (ut *UsageTracker) buildCompleteQueryWithTx(ctx context.Context, tx *sql.Tx
 		model_name = ?,
 		input_tokens = ?,
 		output_tokens = ?,
+		reasoning_tokens = ?,
+		billable_output_tokens = ?,
+		billing_output_token_source = ?,
 		cache_creation_tokens = ?,
 		cache_read_tokens = ?,
 		input_cost_usd = ?,
@@ -756,6 +776,9 @@ func (ut *UsageTracker) buildCompleteQueryWithTx(ctx context.Context, tx *sql.Tx
 		data.ModelName,
 		data.InputTokens,
 		data.OutputTokens,
+		data.ReasoningTokens,
+		ResolveBillableOutputTokens(tokens),
+		NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 		data.CacheCreationTokens,
 		data.CacheReadTokens,
 		inputCost,
@@ -918,13 +941,7 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 	}
 
 	// 计算成本
-	tokens := &TokenUsage{
-		InputTokens:            data.InputTokens,
-		OutputTokens:           data.OutputTokens,
-		CacheCreationTokens:    data.CacheCreationTokens,
-		CacheReadTokens:        data.CacheReadTokens,
-		InputIncludesCacheRead: data.InputIncludesCacheRead,
-	}
+	tokens := tokenUsageFromCompleteData(data)
 
 	inputCost, outputCost, cacheCost, readCost, totalCost := ut.calculateCost(data.ModelName, tokens)
 
@@ -934,6 +951,9 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 		model_name = ?,
 		input_tokens = ?,
 		output_tokens = ?,
+		reasoning_tokens = ?,
+		billable_output_tokens = ?,
+		billing_output_token_source = ?,
 		cache_creation_tokens = ?,
 		cache_read_tokens = ?,
 		input_cost_usd = ?,
@@ -951,6 +971,9 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 		data.ModelName,
 		data.InputTokens,
 		data.OutputTokens,
+		data.ReasoningTokens,
+		ResolveBillableOutputTokens(tokens),
+		NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 		data.CacheCreationTokens,
 		data.CacheReadTokens,
 		inputCost,
@@ -974,10 +997,11 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 		// 记录不存在，创建完整记录
 		insertQuery := `INSERT INTO request_logs (
 			request_id, start_time, end_time, duration_ms, model_name,
-			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+			input_tokens, output_tokens, reasoning_tokens, billable_output_tokens, billing_output_token_source,
+			cache_creation_tokens, cache_read_tokens,
 			input_cost_usd, output_cost_usd, cache_creation_cost_usd, 
 			cache_read_cost_usd, total_cost_usd, status
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')`
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')`
 
 		// 使用已计算的 startTime 和 durationMs
 		_, err = tx.ExecContext(ctx, insertQuery,
@@ -988,6 +1012,9 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 			data.ModelName,
 			data.InputTokens,
 			data.OutputTokens,
+			data.ReasoningTokens,
+			ResolveBillableOutputTokens(tokens),
+			NormalizeBillingOutputTokenSource(data.BillingOutputTokenSource),
 			data.CacheCreationTokens,
 			data.CacheReadTokens,
 			inputCost,

@@ -275,35 +275,41 @@ func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tr
 
 // RequestRecord 请求记录
 type RequestRecord struct {
-	ID                     string      `json:"id"`
-	RequestID              string      `json:"request_id"`
-	Timestamp              string      `json:"timestamp"`
-	Channel                string      `json:"channel"` // 渠道标签
-	Endpoint               string      `json:"endpoint"`
-	EndpointChain          []chainNode `json:"endpoint_chain"` // 端点尝试链路（结构化 JSON 数组）
-	Group                  string      `json:"group"`
-	Model                  string      `json:"model"`
-	Provider               string      `json:"provider"` // 提供商标识: claude/codex
-	Status                 string      `json:"status"`
-	HTTPStatus             int         `json:"http_status"`
-	RetryCount             int         `json:"retry_count"`              // 重试次数
-	FailureReason          string      `json:"failure_reason,omitempty"` // 失败原因
-	CancelReason           string      `json:"cancel_reason,omitempty"`  // 取消原因
-	InputTokens            int64       `json:"input_tokens"`
-	OutputTokens           int64       `json:"output_tokens"`
-	CacheCreationTokens    int64       `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens  int64       `json:"cache_creation_5m_tokens"` // 5分钟缓存
-	CacheCreation1hTokens  int64       `json:"cache_creation_1h_tokens"` // 1小时缓存
-	CacheReadTokens        int64       `json:"cache_read_tokens"`
-	ResponseTime           int64       `json:"response_time"`
-	IsStreaming            bool        `json:"is_streaming"`
-	Cost                   float64     `json:"cost"`
-	InputCostUSD           float64     `json:"input_cost_usd"`             // 输入成本（计费明细）
-	OutputCostUSD          float64     `json:"output_cost_usd"`            // 输出成本（计费明细）
-	CacheCreationCostUSD   float64     `json:"cache_creation_cost_usd"`    // 总缓存创建成本（向后兼容）
-	CacheCreation5mCostUSD float64     `json:"cache_creation_5m_cost_usd"` // 5分钟缓存创建成本
-	CacheCreation1hCostUSD float64     `json:"cache_creation_1h_cost_usd"` // 1小时缓存创建成本
-	CacheReadCostUSD       float64     `json:"cache_read_cost_usd"`        // 缓存读取成本
+	ID                       string      `json:"id"`
+	RequestID                string      `json:"request_id"`
+	Timestamp                string      `json:"timestamp"`
+	Channel                  string      `json:"channel"` // 渠道标签
+	Endpoint                 string      `json:"endpoint"`
+	EndpointChain            []chainNode `json:"endpoint_chain"` // 端点尝试链路（结构化 JSON 数组）
+	Group                    string      `json:"group"`
+	Model                    string      `json:"model"`
+	OriginalModelName        string      `json:"original_model_name"`
+	ModelRewriteSource       string      `json:"model_rewrite_source"`
+	ModelRewriteTarget       string      `json:"model_rewrite_target"`
+	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
+	Status                   string      `json:"status"`
+	HTTPStatus               int         `json:"http_status"`
+	RetryCount               int         `json:"retry_count"`              // 重试次数
+	FailureReason            string      `json:"failure_reason,omitempty"` // 失败原因
+	CancelReason             string      `json:"cancel_reason,omitempty"`  // 取消原因
+	InputTokens              int64       `json:"input_tokens"`
+	OutputTokens             int64       `json:"output_tokens"`
+	ReasoningTokens          int64       `json:"reasoning_tokens"`
+	BillableOutputTokens     int64       `json:"billable_output_tokens"`
+	BillingOutputTokenSource string      `json:"billing_output_token_source"`
+	CacheCreationTokens      int64       `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
+	CacheCreation5mTokens    int64       `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens    int64       `json:"cache_creation_1h_tokens"` // 1小时缓存
+	CacheReadTokens          int64       `json:"cache_read_tokens"`
+	ResponseTime             int64       `json:"response_time"`
+	IsStreaming              bool        `json:"is_streaming"`
+	Cost                     float64     `json:"cost"`
+	InputCostUSD             float64     `json:"input_cost_usd"`             // 输入成本（计费明细）
+	OutputCostUSD            float64     `json:"output_cost_usd"`            // 输出成本（计费明细）
+	CacheCreationCostUSD     float64     `json:"cache_creation_cost_usd"`    // 总缓存创建成本（向后兼容）
+	CacheCreation5mCostUSD   float64     `json:"cache_creation_5m_cost_usd"` // 5分钟缓存创建成本
+	CacheCreation1hCostUSD   float64     `json:"cache_creation_1h_cost_usd"` // 1小时缓存创建成本
+	CacheReadCostUSD         float64     `json:"cache_read_cost_usd"`        // 缓存读取成本
 
 	// 端点倍率快照（用于详情页计费过程展示）
 	CostMultiplier                float64 `json:"cost_multiplier"`
@@ -434,6 +440,9 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 			EndpointChain:                 chainItems,
 			Group:                         r.GroupName,
 			Model:                         r.ModelName,
+			OriginalModelName:             r.OriginalModelName,
+			ModelRewriteSource:            r.ModelRewriteSource,
+			ModelRewriteTarget:            r.ModelRewriteTarget,
 			Provider:                      r.Provider, // 提供商标识
 			Status:                        r.Status,
 			RetryCount:                    r.RetryCount,
@@ -441,6 +450,9 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 			CancelReason:                  r.CancelReason,
 			InputTokens:                   r.InputTokens,
 			OutputTokens:                  r.OutputTokens,
+			ReasoningTokens:               r.ReasoningTokens,
+			BillableOutputTokens:          r.BillableOutputTokens,
+			BillingOutputTokenSource:      r.BillingOutputTokenSource,
 			CacheCreationTokens:           r.CacheCreationTokens,
 			CacheCreation5mTokens:         r.CacheCreation5mTokens,
 			CacheCreation1hTokens:         r.CacheCreation1hTokens,

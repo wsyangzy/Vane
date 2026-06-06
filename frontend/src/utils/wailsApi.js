@@ -572,6 +572,12 @@ export const getRequests = async (params = {}) => {
     group: r.group,
     model_name: r.model,
     model: r.model,
+    original_model_name: r.original_model_name || '',
+    model_rewrite_source: r.model_rewrite_source || '',
+    model_rewrite_target: r.model_rewrite_target || '',
+    originalModelName: r.original_model_name || '',
+    modelRewriteSource: r.model_rewrite_source || '',
+    modelRewriteTarget: r.model_rewrite_target || '',
     provider: r.provider || '',
     status: r.status,
     status_code: r.http_status,
@@ -579,6 +585,9 @@ export const getRequests = async (params = {}) => {
     retry_count: r.retry_count || 0,  // 添加重试次数
     input_tokens: r.input_tokens,
     output_tokens: r.output_tokens,
+    reasoning_tokens: r.reasoning_tokens ?? 0,
+    billable_output_tokens: r.billable_output_tokens ?? r.output_tokens ?? 0,
+    billing_output_token_source: r.billing_output_token_source || 'output_tokens',
     cache_creation_tokens: r.cache_creation_tokens,
     cache_creation_5m_tokens: r.cache_creation_5m_tokens,
     cache_creation_1h_tokens: r.cache_creation_1h_tokens,
@@ -1525,6 +1534,20 @@ export const activateCodexProvider = async (id) => {
 // Codex 渠道-端点 管理 API（2026-05-13 新增）
 // ============================================
 
+const normalizeCodexModelMapping = (mapping) => {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+    return {};
+  }
+  return Object.entries(mapping).reduce((result, [sourceModel, targetModel]) => {
+    const source = String(sourceModel || '').trim();
+    const target = String(targetModel || '').trim();
+    if (source && target) {
+      result[source] = target;
+    }
+    return result;
+  }, {});
+};
+
 const mapCodexEndpoint = (endpoint) => ({
   id: endpoint.id,
   channelId: endpoint.channel_id,
@@ -1544,6 +1567,7 @@ const mapCodexEndpoint = (endpoint) => ({
   inputCostMultiplier: endpoint.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: endpoint.outputCostMultiplier ?? 1.0,
   cacheReadCostMultiplier: endpoint.cacheReadCostMultiplier ?? 1.0,
+  billingOutputTokenSource: endpoint.billingOutputTokenSource || endpoint.billing_output_token_source || 'output_tokens',
   createdAt: endpoint.created_at,
   updatedAt: endpoint.updated_at
 });
@@ -1566,6 +1590,7 @@ const mapCodexChannel = (channel) => {
     apiKey: channel.api_key,
     apiKeyMasked: channel.api_key_masked,
     model: channel.model,
+    modelMapping: normalizeCodexModelMapping(channel.model_mapping || channel.modelMapping),
     reasoningEffort: channel.model_reasoning_effort || '',
     enable1MContext: Boolean(channel.enable_1m_context),
     website: channel.website || '',
@@ -1581,6 +1606,7 @@ const buildCodexChannelPayload = (input) => ({
   provider_type: (input?.providerType || 'openai-compatible').trim(),
   api_key: (input?.apiKey || '').trim(),
   model: (input?.model || '').trim(),
+  model_mapping: normalizeCodexModelMapping(input?.modelMapping || input?.model_mapping),
   model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
   enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
   website: (input?.website || '').trim()
@@ -1639,7 +1665,7 @@ export const activateCodexChannel = async (id) => {
 /**
  * 在指定渠道下新增端点（name + base_url + 故障转移配置 + 成本倍率）
  */
-export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier }) => {
+export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -1653,6 +1679,7 @@ export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEn
   if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = inputCostMultiplier;
   if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = outputCostMultiplier;
   if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = cacheReadCostMultiplier;
+  if (billingOutputTokenSource !== undefined) payload.billingOutputTokenSource = billingOutputTokenSource;
   await WailsApp.CreateCodexEndpoint(payload);
   return { success: true };
 };
@@ -1660,7 +1687,7 @@ export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEn
 /**
  * 更新端点 name + base_url + failover_enabled + priority + 成本倍率
  */
-export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier }) => {
+export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -1673,6 +1700,7 @@ export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabl
   if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = inputCostMultiplier;
   if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = outputCostMultiplier;
   if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = cacheReadCostMultiplier;
+  if (billingOutputTokenSource !== undefined) payload.billingOutputTokenSource = billingOutputTokenSource;
   await WailsApp.UpdateCodexEndpointByID(id, payload);
   return { success: true };
 };

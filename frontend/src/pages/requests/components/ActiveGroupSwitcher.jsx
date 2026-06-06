@@ -15,6 +15,7 @@ const ActiveGroupSwitcher = ({
   const [isOpen, setIsOpen] = useState(false)
   const [switching, setSwitching] = useState(null)
   const [switchError, setSwitchError] = useState('')
+  const switchingRef = useRef(false)
   const containerRef = useRef(null)
 
   const sortedGroups = useMemo(() => {
@@ -42,13 +43,15 @@ const ActiveGroupSwitcher = ({
   }, [])
 
   const handleSelect = async (channel) => {
-    if (switching || loading) return
+    if (switchingRef.current || switching || loading) return
     const isAlreadyActive = channel.provider === 'codex'
       ? channel.name === activeCodexChannel?.name
       : channel.name === activeClaudeChannel?.name
     if (isAlreadyActive) return
+    const switchingKey = `${channel.provider || 'claude'}:${channel.name}`
+    switchingRef.current = true
     setSwitchError('')
-    setSwitching(channel.name)
+    setSwitching(switchingKey)
     try {
       await onSwitch?.(channel.name, null, channel.provider)
     } catch (error) {
@@ -56,6 +59,7 @@ const ActiveGroupSwitcher = ({
       setSwitchError(msg)
     } finally {
       setSwitching(null)
+      switchingRef.current = false
     }
   }
 
@@ -77,15 +81,16 @@ const ActiveGroupSwitcher = ({
       const isActive = color === 'orange'
         ? channel.name === activeClaudeChannel?.name
         : channel.name === activeCodexChannel?.name
-      const isSwitching = switching === channel.name
+      const isSwitching = switching === `${channel.provider || 'claude'}:${channel.name}`
+      const isBusy = Boolean(switching) || loading
       return (
         <button
-          key={channel.name}
+          key={`${channel.provider || color}:${channel.name}`}
           onClick={() => handleSelect(channel)}
-          disabled={isSwitching || loading}
+          disabled={isBusy || isActive}
           className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-full border transition-all whitespace-nowrap ${
             isActive ? styles.active : styles.idle
-          } ${isSwitching ? 'opacity-60 cursor-wait' : ''}`}
+          } ${isBusy ? 'opacity-60 cursor-wait' : ''}`}
         >
           {isSwitching && <Loader2 className="w-3 h-3 animate-spin" />}
           {channel.name}
@@ -94,9 +99,6 @@ const ActiveGroupSwitcher = ({
       )
     })
   }
-
-  const activeChannel = sortedGroups.find(g => g.name === activeGroup)
-  const activeProvider = activeChannel?.provider === 'codex' ? 'Codex' : 'Claude'
 
   return (
     <div className="relative" ref={containerRef}>

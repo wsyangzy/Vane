@@ -10,12 +10,14 @@ package codexproxy
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 )
 
 // TokenResult 解析结果
 type TokenResult struct {
 	InputTokens     int64
 	OutputTokens    int64
+	ReasoningTokens int64
 	TotalTokens     int64
 	CacheReadTokens int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
 	Model           string
@@ -29,31 +31,85 @@ func NewTokenParser() *TokenParser {
 	return &TokenParser{}
 }
 
+// flexibleTokenCount accepts token counters returned either as JSON numbers or
+// numeric strings. Some OpenAI-compatible providers use strings in usage details.
+type flexibleTokenCount int64
+
+func (c *flexibleTokenCount) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*c = 0
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(data, &n); err == nil {
+		*c = flexibleTokenCount(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		*c = 0
+		return nil
+	}
+	parsed, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return err
+	}
+	*c = flexibleTokenCount(parsed)
+	return nil
+}
+
+func tokenCountValue(v flexibleTokenCount) int64 {
+	return int64(v)
+}
+
 // openAIInputTokensDetails Responses API 输入 token 详情
 type openAIInputTokensDetails struct {
-	CachedTokens int64 `json:"cached_tokens"`
+	CachedTokens flexibleTokenCount `json:"cached_tokens"`
 }
 
 // openAIPromptTokensDetails Chat Completions API 中的提示词 token 详情（部分实现提供）
 type openAIPromptTokensDetails struct {
-	CachedTokens int64 `json:"cached_tokens"`
+	CachedTokens flexibleTokenCount `json:"cached_tokens"`
+}
+
+// openAIOutputTokensDetails Responses API 输出 token 详情
+type openAIOutputTokensDetails struct {
+	ReasoningTokens flexibleTokenCount `json:"reasoning_tokens"`
+}
+
+// openAICompletionTokensDetails Chat Completions API 输出 token 详情
+type openAICompletionTokensDetails struct {
+	ReasoningTokens flexibleTokenCount `json:"reasoning_tokens"`
 }
 
 // openAIUsage 同时兼容 Chat Completions / Responses 两种格式
 // JSON 中不存在的字段会保持零值，因此可以安全地共存。
 type openAIUsage struct {
 	// Chat Completions API 字段
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
+	PromptTokens     flexibleTokenCount `json:"prompt_tokens"`
+	CompletionTokens flexibleTokenCount `json:"completion_tokens"`
 	// Responses API 字段
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
+	InputTokens  flexibleTokenCount `json:"input_tokens"`
+	OutputTokens flexibleTokenCount `json:"output_tokens"`
 	// 公共字段
-	TotalTokens int64 `json:"total_tokens"`
+	TotalTokens flexibleTokenCount `json:"total_tokens"`
+	// 部分兼容服务商会直接把 reasoning_tokens 放在 usage 顶层
+	ReasoningTokens flexibleTokenCount `json:"reasoning_tokens"`
 	// 缓存命中（Responses API）
 	InputTokensDetails *openAIInputTokensDetails `json:"input_tokens_details,omitempty"`
+	// 兼容少数服务商的单数拼写
+	InputTokenDetails *openAIInputTokensDetails `json:"input_token_details,omitempty"`
+	// 输出详情（Responses API）
+	OutputTokensDetails *openAIOutputTokensDetails `json:"output_tokens_details,omitempty"`
+	// 兼容少数服务商的单数拼写
+	OutputTokenDetails *openAIOutputTokensDetails `json:"output_token_details,omitempty"`
 	// 缓存命中（部分 Chat Completions API 实现，如 OpenAI 官方）
 	PromptTokensDetails *openAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// 输出详情（部分 Chat Completions API 实现）
+	CompletionTokensDetails *openAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
 // openAIResponseWrapper Responses API SSE 事件中嵌套的响应对象
@@ -72,23 +128,34 @@ type openAIResponse struct {
 
 // resolveUsage 从 usage 中提取统一的 token 字段
 // Responses API 字段优先；如果都为 0 则回退到 Chat Completions 字段
-func resolveUsage(u *openAIUsage) (input, output, cacheRead int64) {
+func resolveUsage(u *openAIUsage) (input, output, cacheRead, reasoning int64) {
 	if u == nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0
 	}
 	// 优先使用 Responses API 字段
 	if u.InputTokens > 0 || u.OutputTokens > 0 {
-		input = u.InputTokens
-		output = u.OutputTokens
+		input = tokenCountValue(u.InputTokens)
+		output = tokenCountValue(u.OutputTokens)
 	} else {
-		input = u.PromptTokens
-		output = u.CompletionTokens
+		input = tokenCountValue(u.PromptTokens)
+		output = tokenCountValue(u.CompletionTokens)
 	}
 	// 缓存命中：优先 Responses API 字段
 	if u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens > 0 {
-		cacheRead = u.InputTokensDetails.CachedTokens
+		cacheRead = tokenCountValue(u.InputTokensDetails.CachedTokens)
+	} else if u.InputTokenDetails != nil && u.InputTokenDetails.CachedTokens > 0 {
+		cacheRead = tokenCountValue(u.InputTokenDetails.CachedTokens)
 	} else if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
-		cacheRead = u.PromptTokensDetails.CachedTokens
+		cacheRead = tokenCountValue(u.PromptTokensDetails.CachedTokens)
+	}
+	if u.OutputTokensDetails != nil && u.OutputTokensDetails.ReasoningTokens > 0 {
+		reasoning = tokenCountValue(u.OutputTokensDetails.ReasoningTokens)
+	} else if u.OutputTokenDetails != nil && u.OutputTokenDetails.ReasoningTokens > 0 {
+		reasoning = tokenCountValue(u.OutputTokenDetails.ReasoningTokens)
+	} else if u.CompletionTokensDetails != nil && u.CompletionTokensDetails.ReasoningTokens > 0 {
+		reasoning = tokenCountValue(u.CompletionTokensDetails.ReasoningTokens)
+	} else if u.ReasoningTokens > 0 {
+		reasoning = tokenCountValue(u.ReasoningTokens)
 	}
 	return
 }
@@ -98,18 +165,19 @@ func buildResult(model string, usage *openAIUsage) *TokenResult {
 	if usage == nil {
 		return nil
 	}
-	input, output, cacheRead := resolveUsage(usage)
+	input, output, cacheRead, reasoning := resolveUsage(usage)
 	// 容错：如果两种字段都未提供任何 token，视为无效（避免污染数据）
-	if input == 0 && output == 0 && cacheRead == 0 && usage.TotalTokens == 0 {
+	if input == 0 && output == 0 && cacheRead == 0 && reasoning == 0 && usage.TotalTokens == 0 {
 		return nil
 	}
-	total := usage.TotalTokens
+	total := tokenCountValue(usage.TotalTokens)
 	if total == 0 {
 		total = input + output
 	}
 	return &TokenResult{
 		InputTokens:     input,
 		OutputTokens:    output,
+		ReasoningTokens: reasoning,
 		TotalTokens:     total,
 		CacheReadTokens: cacheRead,
 		Model:           model,
@@ -154,8 +222,8 @@ func (p *TokenParser) ParseModelFromBody(body []byte) string {
 }
 
 var (
-	sseDataPrefix = []byte("data: ")
-	sseDoneMarker = []byte("data: [DONE]")
+	sseDataPrefix = []byte("data:")
+	sseDoneMarker = []byte("[DONE]")
 	usageKeyHint  = []byte(`"usage"`)
 )
 
@@ -167,17 +235,15 @@ var (
 func (p *TokenParser) ParseStreamingLine(line []byte) (result *TokenResult, isDone bool) {
 	trimmed := bytes.TrimSpace(line)
 
-	// 检查流结束标记
-	if bytes.Equal(trimmed, sseDoneMarker) {
-		return nil, true
-	}
-
 	// 仅处理 data: 开头的行
 	if !bytes.HasPrefix(trimmed, sseDataPrefix) {
 		return nil, false
 	}
 
-	payload := trimmed[len(sseDataPrefix):]
+	payload := bytes.TrimSpace(trimmed[len(sseDataPrefix):])
+	if bytes.Equal(payload, sseDoneMarker) {
+		return nil, true
+	}
 	if len(payload) == 0 {
 		return nil, false
 	}

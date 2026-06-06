@@ -551,6 +551,36 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN cache_read_cost_multiplier REAL DEFAULT 1.0",
 			description: "请求时端点缓存读取成本倍率快照",
 		},
+		{
+			checkColumn: "reasoning_tokens",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER DEFAULT 0",
+			description: "输出推理 tokens 字段",
+		},
+		{
+			checkColumn: "billable_output_tokens",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN billable_output_tokens INTEGER DEFAULT 0",
+			description: "输出计费 tokens 字段",
+		},
+		{
+			checkColumn: "billing_output_token_source",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens'",
+			description: "输出计费口径字段",
+		},
+		{
+			checkColumn: "original_model_name",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN original_model_name TEXT",
+			description: "模型改写前原始模型字段",
+		},
+		{
+			checkColumn: "model_rewrite_source",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_rewrite_source TEXT",
+			description: "模型改写来源字段",
+		},
+		{
+			checkColumn: "model_rewrite_target",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_rewrite_target TEXT",
+			description: "模型改写目标模型字段",
+		},
 	}
 
 	// endpoints 迁移：端点存储表迭代新增字段时，需要兼容旧 db（CREATE TABLE IF NOT EXISTS 不会补列）

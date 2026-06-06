@@ -76,6 +76,7 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 			provider_type TEXT NOT NULL DEFAULT 'openai-compatible',
 			api_key TEXT NOT NULL,
 			model TEXT NOT NULL,
+			model_mapping TEXT NOT NULL DEFAULT '{}',
 			model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
 			enable_1m_context INTEGER NOT NULL DEFAULT 0,
 			website TEXT,
@@ -99,6 +100,7 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 			name TEXT NOT NULL,
 			base_url TEXT NOT NULL,
 			is_active INTEGER NOT NULL DEFAULT 0,
+			billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
 			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 			UNIQUE(channel_id, base_url),
@@ -132,6 +134,11 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// 为 codex_channels 补充模型映射字段
+	if err := a.ensureCodexChannelModelMappingColumn(ctx, db); err != nil {
+		return err
+	}
+
 	// 为 codex_endpoints 补充故障转移字段（v7.2+）
 	if err := a.ensureCodexEndpointFailoverColumns(ctx, db); err != nil {
 		return err
@@ -144,6 +151,11 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 
 	// 为 codex_endpoints 补充细分成本倍率字段（v7.2+）
 	if err := a.ensureCodexEndpointDetailedCostColumns(ctx, db); err != nil {
+		return err
+	}
+
+	// 为 codex_endpoints 补充输出计费口径字段
+	if err := a.ensureCodexEndpointBillingOutputTokenSourceColumn(ctx, db); err != nil {
 		return err
 	}
 
@@ -167,6 +179,20 @@ func (a *App) ensureCodexEndpointNameColumn(ctx context.Context, db *sql.DB) err
 	}
 	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_name ON codex_endpoints(channel_id, name)`); err != nil {
 		return fmt.Errorf("创建 codex_endpoints name 唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+func (a *App) ensureCodexChannelModelMappingColumn(ctx context.Context, db *sql.DB) error {
+	exists, err := sqliteColumnExists(ctx, db, "codex_channels", "model_mapping")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE codex_channels ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '{}'`); err != nil {
+		return fmt.Errorf("为 codex_channels 添加 model_mapping 字段失败: %w", err)
 	}
 	return nil
 }
@@ -228,6 +254,20 @@ func (a *App) ensureCodexEndpointDetailedCostColumns(ctx context.Context, db *sq
 				return fmt.Errorf("为 codex_endpoints 添加 %s 字段失败: %w", col.name, err)
 			}
 		}
+	}
+	return nil
+}
+
+func (a *App) ensureCodexEndpointBillingOutputTokenSourceColumn(ctx context.Context, db *sql.DB) error {
+	exists, err := sqliteColumnExists(ctx, db, "codex_endpoints", "billing_output_token_source")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens'`); err != nil {
+		return fmt.Errorf("为 codex_endpoints 添加 billing_output_token_source 字段失败: %w", err)
 	}
 	return nil
 }

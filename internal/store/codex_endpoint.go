@@ -21,9 +21,10 @@ type CodexEndpointRecord struct {
 	CostMultiplier  float64 `json:"cost_multiplier"` // 总成本倍率，默认 1.0
 
 	// 细分成本倍率（默认 1.0，与 Claude 端点对齐）
-	InputCostMultiplier     float64 `json:"input_cost_multiplier"`
-	OutputCostMultiplier    float64 `json:"output_cost_multiplier"`
-	CacheReadCostMultiplier float64 `json:"cache_read_cost_multiplier"`
+	InputCostMultiplier      float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier     float64 `json:"output_cost_multiplier"`
+	CacheReadCostMultiplier  float64 `json:"cache_read_cost_multiplier"`
+	BillingOutputTokenSource string  `json:"billing_output_token_source"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -37,7 +38,7 @@ type CodexEndpointStore interface {
 	GetByChannelAndName(ctx context.Context, channelID int64, name string) (*CodexEndpointRecord, error)
 	GetActiveByChannelID(ctx context.Context, channelID int64) (*CodexEndpointRecord, error)
 	ListByChannelID(ctx context.Context, channelID int64) ([]*CodexEndpointRecord, error)
-	Update(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64) error
+	Update(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string) error
 	DeleteByID(ctx context.Context, id int64) error
 	SetActive(ctx context.Context, id int64) error
 
@@ -70,7 +71,7 @@ func (s *SQLiteCodexEndpointStore) getQuerier() interface {
 	return s.db
 }
 
-const codexEndpointColumns = `id, channel_id, name, base_url, COALESCE(is_active, 0), COALESCE(failover_enabled, 1), COALESCE(priority, 0), COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0), COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_read_cost_multiplier, 1.0), created_at, updated_at`
+const codexEndpointColumns = `id, channel_id, name, base_url, COALESCE(is_active, 0), COALESCE(failover_enabled, 1), COALESCE(priority, 0), COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0), COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(billing_output_token_source, 'output_tokens'), created_at, updated_at`
 
 func (s *SQLiteCodexEndpointStore) Create(ctx context.Context, record *CodexEndpointRecord) (*CodexEndpointRecord, error) {
 	s.mu.Lock()
@@ -89,8 +90,8 @@ func (s *SQLiteCodexEndpointStore) Create(ctx context.Context, record *CodexEndp
 		return nil, fmt.Errorf("base_url 不能为空")
 	}
 
-	query := `INSERT INTO codex_endpoints (channel_id, name, base_url, is_active, failover_enabled, priority, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, err := s.getQuerier().ExecContext(ctx, query, record.ChannelID, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), record.Priority, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier)
+	query := `INSERT INTO codex_endpoints (channel_id, name, base_url, is_active, failover_enabled, priority, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier, billing_output_token_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, err := s.getQuerier().ExecContext(ctx, query, record.ChannelID, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), record.Priority, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, defaultBillingOutputTokenSource(record.BillingOutputTokenSource))
 	if err != nil {
 		return nil, fmt.Errorf("创建 Codex 端点失败: %w", err)
 	}
@@ -162,7 +163,7 @@ func (s *SQLiteCodexEndpointStore) ListByChannelID(ctx context.Context, channelI
 	return result, nil
 }
 
-func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64) error {
+func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -173,7 +174,7 @@ func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, b
 		return fmt.Errorf("base_url 不能为空")
 	}
 
-	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET name = ?, base_url = ?, failover_enabled = ?, priority = ?, cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?, cache_read_cost_multiplier = ? WHERE id = ?`, name, baseURL, boolToInt(failoverEnabled), priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, id)
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET name = ?, base_url = ?, failover_enabled = ?, priority = ?, cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?, cache_read_cost_multiplier = ?, billing_output_token_source = ? WHERE id = ?`, name, baseURL, boolToInt(failoverEnabled), priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, defaultBillingOutputTokenSource(billingOutputTokenSource), id)
 	if err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
@@ -239,16 +240,17 @@ func scanCodexEndpointRow(scanner interface {
 	Scan(dest ...interface{}) error
 }) (*CodexEndpointRecord, error) {
 	var (
-		record                  CodexEndpointRecord
-		isActive                int
-		failoverEnabled         int
-		priority                int
-		costMultiplier          float64
-		inputCostMultiplier     float64
-		outputCostMultiplier    float64
-		cacheReadCostMultiplier float64
-		createdAt               string
-		updatedAt               string
+		record                   CodexEndpointRecord
+		isActive                 int
+		failoverEnabled          int
+		priority                 int
+		costMultiplier           float64
+		inputCostMultiplier      float64
+		outputCostMultiplier     float64
+		cacheReadCostMultiplier  float64
+		billingOutputTokenSource string
+		createdAt                string
+		updatedAt                string
 	)
 
 	err := scanner.Scan(
@@ -263,6 +265,7 @@ func scanCodexEndpointRow(scanner interface {
 		&inputCostMultiplier,
 		&outputCostMultiplier,
 		&cacheReadCostMultiplier,
+		&billingOutputTokenSource,
 		&createdAt,
 		&updatedAt,
 	)
@@ -280,7 +283,17 @@ func scanCodexEndpointRow(scanner interface {
 	record.InputCostMultiplier = inputCostMultiplier
 	record.OutputCostMultiplier = outputCostMultiplier
 	record.CacheReadCostMultiplier = cacheReadCostMultiplier
+	record.BillingOutputTokenSource = defaultBillingOutputTokenSource(billingOutputTokenSource)
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	return &record, nil
+}
+
+func defaultBillingOutputTokenSource(source string) string {
+	switch source {
+	case "reasoning_tokens", "visible_output_tokens":
+		return source
+	default:
+		return "output_tokens"
+	}
 }

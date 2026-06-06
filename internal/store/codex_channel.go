@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,14 +15,15 @@ import (
 type CodexChannelRecord struct {
 	ID int64 `json:"id"`
 
-	Name            string `json:"name"`
-	ProviderType    string `json:"provider_type"`
-	ApiKey          string `json:"api_key"`
-	Model           string `json:"model"`
-	ReasoningEffort string `json:"model_reasoning_effort"`
-	Enable1MContext bool   `json:"enable_1m_context"`
-	Website         string `json:"website,omitempty"`
-	IsActive        bool   `json:"is_active"`
+	Name            string            `json:"name"`
+	ProviderType    string            `json:"provider_type"`
+	ApiKey          string            `json:"api_key"`
+	Model           string            `json:"model"`
+	ModelMapping    map[string]string `json:"model_mapping"`
+	ReasoningEffort string            `json:"model_reasoning_effort"`
+	Enable1MContext bool              `json:"enable_1m_context"`
+	Website         string            `json:"website,omitempty"`
+	IsActive        bool              `json:"is_active"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -67,7 +70,7 @@ func (s *SQLiteCodexChannelStore) getQuerier() interface {
 }
 
 const codexChannelColumns = `id, name, provider_type, api_key, model, model_reasoning_effort,
-		COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at`
+		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at`
 
 func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChannelRecord) (*CodexChannelRecord, error) {
 	s.mu.Lock()
@@ -79,12 +82,16 @@ func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChann
 	if record.Name == "" {
 		return nil, fmt.Errorf("渠道名不能为空")
 	}
+	modelMappingJSON, err := codexModelMappingToJSON(record.ModelMapping)
+	if err != nil {
+		return nil, err
+	}
 
 	query := `
 		INSERT INTO codex_channels (
-			name, provider_type, api_key, model, model_reasoning_effort,
+			name, provider_type, api_key, model, model_mapping, model_reasoning_effort,
 			enable_1m_context, website, is_active
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	result, err := s.getQuerier().ExecContext(
 		ctx,
@@ -93,6 +100,7 @@ func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChann
 		record.ProviderType,
 		record.ApiKey,
 		record.Model,
+		modelMappingJSON,
 		record.ReasoningEffort,
 		boolToInt(record.Enable1MContext),
 		nullIfEmpty(record.Website),
@@ -172,10 +180,14 @@ func (s *SQLiteCodexChannelStore) UpdateByID(ctx context.Context, id int64, reco
 	if record.Name == "" {
 		return fmt.Errorf("渠道名不能为空")
 	}
+	modelMappingJSON, err := codexModelMappingToJSON(record.ModelMapping)
+	if err != nil {
+		return err
+	}
 
 	query := `
 		UPDATE codex_channels
-		SET name = ?, provider_type = ?, api_key = ?, model = ?, model_reasoning_effort = ?,
+		SET name = ?, provider_type = ?, api_key = ?, model = ?, model_mapping = ?, model_reasoning_effort = ?,
 		    enable_1m_context = ?, website = ?
 		WHERE id = ?
 	`
@@ -186,6 +198,7 @@ func (s *SQLiteCodexChannelStore) UpdateByID(ctx context.Context, id int64, reco
 		record.ProviderType,
 		record.ApiKey,
 		record.Model,
+		modelMappingJSON,
 		record.ReasoningEffort,
 		boolToInt(record.Enable1MContext),
 		nullIfEmpty(record.Website),
@@ -254,12 +267,13 @@ func scanCodexChannelRow(scanner interface {
 	Scan(dest ...interface{}) error
 }) (*CodexChannelRecord, error) {
 	var (
-		record    CodexChannelRecord
-		enable1M  int
-		website   string
-		isActive  int
-		createdAt string
-		updatedAt string
+		record           CodexChannelRecord
+		enable1M         int
+		modelMappingJSON string
+		website          string
+		isActive         int
+		createdAt        string
+		updatedAt        string
 	)
 
 	err := scanner.Scan(
@@ -269,6 +283,7 @@ func scanCodexChannelRow(scanner interface {
 		&record.ApiKey,
 		&record.Model,
 		&record.ReasoningEffort,
+		&modelMappingJSON,
 		&enable1M,
 		&website,
 		&isActive,
@@ -282,10 +297,66 @@ func scanCodexChannelRow(scanner interface {
 		return nil, fmt.Errorf("读取 Codex 渠道失败: %w", err)
 	}
 
+	modelMapping, err := codexModelMappingFromJSON(modelMappingJSON)
+	if err != nil {
+		return nil, err
+	}
+	record.ModelMapping = modelMapping
 	record.Enable1MContext = enable1M != 0
 	record.Website = website
 	record.IsActive = isActive != 0
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	return &record, nil
+}
+
+func codexModelMappingToJSON(modelMapping map[string]string) (string, error) {
+	if len(modelMapping) == 0 {
+		return "{}", nil
+	}
+
+	normalized := make(map[string]string, len(modelMapping))
+	for source, target := range modelMapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+		normalized[source] = target
+	}
+	if len(normalized) == 0 {
+		return "{}", nil
+	}
+
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("序列化 Codex 模型映射失败: %w", err)
+	}
+	return string(data), nil
+}
+
+func codexModelMappingFromJSON(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]string{}, nil
+	}
+
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("解析 Codex 模型映射失败: %w", err)
+	}
+	if parsed == nil {
+		return map[string]string{}, nil
+	}
+
+	normalized := make(map[string]string, len(parsed))
+	for source, target := range parsed {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+		normalized[source] = target
+	}
+	return normalized, nil
 }

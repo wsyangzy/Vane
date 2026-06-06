@@ -136,13 +136,16 @@ type RequestDetail struct {
 	EndTime    *time.Time `json:"end_time"`
 	DurationMs *int64     `json:"duration_ms"`
 
-	Channel       string `json:"channel"` // 渠道标签
-	EndpointName  string `json:"endpoint_name"`
-	EndpointChain string `json:"endpoint_chain"`
-	GroupName     string `json:"group_name"`
-	ModelName     string `json:"model_name"`
-	IsStreaming   bool   `json:"is_streaming"` // 是否为流式请求
-	Provider      string `json:"provider"`     // 提供商标识: claude/codex
+	Channel            string `json:"channel"` // 渠道标签
+	EndpointName       string `json:"endpoint_name"`
+	EndpointChain      string `json:"endpoint_chain"`
+	GroupName          string `json:"group_name"`
+	ModelName          string `json:"model_name"`
+	OriginalModelName  string `json:"original_model_name"`
+	ModelRewriteSource string `json:"model_rewrite_source"`
+	ModelRewriteTarget string `json:"model_rewrite_target"`
+	IsStreaming        bool   `json:"is_streaming"` // 是否为流式请求
+	Provider           string `json:"provider"`     // 提供商标识: claude/codex
 
 	Status         string `json:"status"`
 	HTTPStatusCode *int   `json:"http_status_code"`
@@ -153,12 +156,15 @@ type RequestDetail struct {
 	LastFailureReason string `json:"last_failure_reason"` // 最后一次失败的详细信息
 	CancelReason      string `json:"cancel_reason"`       // 取消原因
 
-	InputTokens           int64 `json:"input_tokens"`
-	OutputTokens          int64 `json:"output_tokens"`
-	CacheCreationTokens   int64 `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
-	CacheCreation1hTokens int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
-	CacheReadTokens       int64 `json:"cache_read_tokens"`
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	ReasoningTokens          int64  `json:"reasoning_tokens"`
+	BillableOutputTokens     int64  `json:"billable_output_tokens"`
+	BillingOutputTokenSource string `json:"billing_output_token_source"`
+	CacheCreationTokens      int64  `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
+	CacheCreation5mTokens    int64  `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens    int64  `json:"cache_creation_1h_tokens"` // 1小时缓存
+	CacheReadTokens          int64  `json:"cache_read_tokens"`
 
 	InputCostUSD           float64 `json:"input_cost_usd"`
 	OutputCostUSD          float64 `json:"output_cost_usd"`
@@ -347,6 +353,9 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		COALESCE(endpoint_chain, '') as endpoint_chain,
 		COALESCE(group_name, '') as group_name,
 		COALESCE(model_name, '') as model_name,
+		COALESCE(original_model_name, '') as original_model_name,
+		COALESCE(model_rewrite_source, '') as model_rewrite_source,
+		COALESCE(model_rewrite_target, '') as model_rewrite_target,
 		COALESCE(is_streaming, false) as is_streaming,
 		COALESCE(provider, 'claude') as provider,
 		status, http_status_code, retry_count,
@@ -354,6 +363,14 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		COALESCE(last_failure_reason, '') as last_failure_reason,
 		COALESCE(cancel_reason, '') as cancel_reason,
 		input_tokens, output_tokens,
+		COALESCE(reasoning_tokens, 0) as reasoning_tokens,
+		CASE
+			WHEN COALESCE(billable_output_tokens, 0) > 0
+				OR COALESCE(billing_output_token_source, 'output_tokens') != 'output_tokens'
+			THEN COALESCE(billable_output_tokens, 0)
+			ELSE output_tokens
+		END as billable_output_tokens,
+		COALESCE(billing_output_token_source, 'output_tokens') as billing_output_token_source,
 		cache_creation_tokens, COALESCE(cache_creation_5m_tokens, 0) as cache_creation_5m_tokens, COALESCE(cache_creation_1h_tokens, 0) as cache_creation_1h_tokens,
 		cache_read_tokens,
 		input_cost_usd, output_cost_usd, cache_creation_cost_usd,
@@ -465,11 +482,13 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			&detail.ClientIP, &detail.UserAgent, &detail.Method, &detail.Path,
 			&detail.StartTime, &detail.EndTime, &detail.DurationMs,
 			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
+			&detail.OriginalModelName, &detail.ModelRewriteSource, &detail.ModelRewriteTarget,
 			&detail.IsStreaming,
 			&detail.Provider,
 			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,
 			&detail.FailureReason, &detail.LastFailureReason, &detail.CancelReason,
 			&detail.InputTokens, &detail.OutputTokens,
+			&detail.ReasoningTokens, &detail.BillableOutputTokens, &detail.BillingOutputTokenSource,
 			&detail.CacheCreationTokens, &detail.CacheCreation5mTokens, &detail.CacheCreation1hTokens, &detail.CacheReadTokens,
 			&detail.InputCostUSD, &detail.OutputCostUSD,
 			&detail.CacheCreationCostUSD,

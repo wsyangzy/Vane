@@ -88,9 +88,10 @@ type App struct {
 	proxyServer *http.Server
 
 	// Codex 代理组件（合并到主代理端口，通过路径路由）
-	codexEndpointMgr  *codexproxy.EndpointManager
-	codexHealthCheck  *codexproxy.HealthChecker
+	codexEndpointMgr   *codexproxy.EndpointManager
+	codexHealthCheck   *codexproxy.HealthChecker
 	codexSuspensionMgr *codexproxy.SuspensionManager
+	codexActivationMu  sync.Mutex // 串行化 Codex 激活写库/写配置，避免快捷切换并发
 
 	// 应用状态
 	startTime  time.Time
@@ -106,9 +107,9 @@ type App struct {
 	//        数据库失败时部分组件 nil 但应用看起来正常运行
 	// 新实现：明确的状态机区分 Starting/Running/Degraded/Failed，
 	//        Failed 状态下停止所有不必要的后台任务，前端展示诊断信息
-	appState        atomic.Int32 // AppState 枚举值
-	appStateReason  string       // 进入当前状态的原因（如失败时的具体错误）
-	appStateMu      sync.RWMutex // 保护 appStateReason
+	appState       atomic.Int32 // AppState 枚举值
+	appStateReason string       // 进入当前状态的原因（如失败时的具体错误）
+	appStateMu     sync.RWMutex // 保护 appStateReason
 
 	// 并发控制
 	mu        sync.RWMutex
@@ -1115,6 +1116,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						CacheCreationCostMultiplier:   1.0,
 						CacheCreationCostMultiplier1h: 1.0,
 						CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
+						BillingOutputTokenSource:      tracking.NormalizeBillingOutputTokenSource(ep.BillingOutputTokenSource),
 					}
 				}
 			}
@@ -1872,9 +1874,9 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 
 	cfg := codexproxy.ServerConfig{
 		Timeout:       a.config.CodexServer.Timeout,
-		Retry:         a.config.Retry,         // 同端点重试配置（设置页 retry.*）
-		Failover:      a.config.Failover,      // 故障转移配置（设置页 failover.*）
-		SuspensionMgr: a.codexSuspensionMgr,   // 请求挂起队列
+		Retry:         a.config.Retry,       // 同端点重试配置（设置页 retry.*）
+		Failover:      a.config.Failover,    // 故障转移配置（设置页 failover.*）
+		SuspensionMgr: a.codexSuspensionMgr, // 请求挂起队列
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker)
 
@@ -2311,4 +2313,3 @@ func (a *App) getSettingString(ctx context.Context, category, key, defaultVal st
 	}
 	return val
 }
-

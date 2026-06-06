@@ -49,6 +49,65 @@ func TestRewriteModelIfNeeded_NormalRewrite(t *testing.T) {
 	}
 }
 
+func TestRewriteModelWithMappingIfNeeded_MappingPriority(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4-mini","input":[]}`)
+	got := rewriteModelWithMappingIfNeeded(
+		body,
+		map[string]string{"gpt-5.4-mini": "gpt-5-mini"},
+		"gpt-5-codex",
+		newTestLogger(),
+		"req-test",
+	)
+	if !bytes.Contains(got, []byte(`"model":"gpt-5-mini"`)) {
+		t.Errorf("expected mapped model gpt-5-mini, got %s", string(got))
+	}
+	if bytes.Contains(got, []byte(`"model":"gpt-5-codex"`)) {
+		t.Errorf("expected mapping to take priority over channelModel, got %s", string(got))
+	}
+}
+
+func TestRewriteModelWithMappingIfNeeded_MappingMissWithoutFallback(t *testing.T) {
+	body := []byte(`{"model":"gpt-5","input":[]}`)
+	got := rewriteModelWithMappingIfNeeded(
+		body,
+		map[string]string{"gpt-5.4-mini": "gpt-5-mini"},
+		"",
+		newTestLogger(),
+		"req-test",
+	)
+	if !bytes.Equal(got, body) {
+		t.Errorf("expected body unchanged when mapping misses and channelModel is empty, got %s", string(got))
+	}
+}
+
+func TestRewriteModelWithMappingIfNeeded_MappingMissFallsBackToChannelModel(t *testing.T) {
+	body := []byte(`{"model":"gpt-5","input":[]}`)
+	got := rewriteModelWithMappingIfNeeded(
+		body,
+		map[string]string{"gpt-5.4-mini": "gpt-5-mini"},
+		"gpt-5-codex",
+		newTestLogger(),
+		"req-test",
+	)
+	if !bytes.Contains(got, []byte(`"model":"gpt-5-codex"`)) {
+		t.Errorf("expected fallback channel model, got %s", string(got))
+	}
+}
+
+func TestRewriteModelWithMappingIfNeeded_MappingTargetAlreadyEqual(t *testing.T) {
+	body := []byte(`{"model":"gpt-5-mini","input":[]}`)
+	got := rewriteModelWithMappingIfNeeded(
+		body,
+		map[string]string{"gpt-5-mini": "gpt-5-mini"},
+		"",
+		newTestLogger(),
+		"req-test",
+	)
+	if !bytes.Equal(got, body) {
+		t.Errorf("expected body unchanged when mapped target equals original model, got %s", string(got))
+	}
+}
+
 func TestRewriteModelIfNeeded_AlreadyEqual(t *testing.T) {
 	body := []byte(`{"model":"gpt-5-codex","input":[]}`)
 	got := rewriteModelIfNeeded(body, "gpt-5-codex", newTestLogger(), "req-test")

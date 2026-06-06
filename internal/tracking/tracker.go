@@ -132,27 +132,33 @@ type RequestUpdateData struct {
 
 // RequestCompleteData 请求完成事件数据
 type RequestCompleteData struct {
-	ModelName              string        `json:"model_name"`
-	InputTokens            int64         `json:"input_tokens"`
-	OutputTokens           int64         `json:"output_tokens"`
-	CacheCreationTokens    int64         `json:"cache_creation_tokens"`
-	CacheCreation5mTokens  int64         `json:"cache_creation_5m_tokens"`
-	CacheCreation1hTokens  int64         `json:"cache_creation_1h_tokens"`
-	CacheReadTokens        int64         `json:"cache_read_tokens"`
-	Duration               time.Duration `json:"duration"`
-	FailureReason          string        `json:"failure_reason,omitempty"` // 可选：失败原因
-	InputIncludesCacheRead bool          `json:"-"`                        // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	ModelName                string        `json:"model_name"`
+	InputTokens              int64         `json:"input_tokens"`
+	OutputTokens             int64         `json:"output_tokens"`
+	ReasoningTokens          int64         `json:"reasoning_tokens"`
+	BillableOutputTokens     int64         `json:"billable_output_tokens"`
+	BillingOutputTokenSource string        `json:"billing_output_token_source"`
+	CacheCreationTokens      int64         `json:"cache_creation_tokens"`
+	CacheCreation5mTokens    int64         `json:"cache_creation_5m_tokens"`
+	CacheCreation1hTokens    int64         `json:"cache_creation_1h_tokens"`
+	CacheReadTokens          int64         `json:"cache_read_tokens"`
+	Duration                 time.Duration `json:"duration"`
+	FailureReason            string        `json:"failure_reason,omitempty"` // 可选：失败原因
+	InputIncludesCacheRead   bool          `json:"-"`                        // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
 }
 
 // TokenUsage token使用统计
 type TokenUsage struct {
-	InputTokens            int64
-	OutputTokens           int64
-	CacheCreationTokens    int64 // 总缓存创建 tokens（向后兼容，= 5m + 1h）
-	CacheReadTokens        int64
-	CacheCreation5mTokens  int64 // 5分钟缓存创建 tokens (1.25x 定价)
-	CacheCreation1hTokens  int64 // 1小时缓存创建 tokens (2x 定价)
-	InputIncludesCacheRead bool  // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	InputTokens              int64
+	OutputTokens             int64
+	ReasoningTokens          int64
+	BillableOutputTokens     int64
+	BillingOutputTokenSource string
+	CacheCreationTokens      int64 // 总缓存创建 tokens（向后兼容，= 5m + 1h）
+	CacheReadTokens          int64
+	CacheCreation5mTokens    int64 // 5分钟缓存创建 tokens (1.25x 定价)
+	CacheCreation1hTokens    int64 // 1小时缓存创建 tokens (2x 定价)
+	InputIncludesCacheRead   bool  // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
 }
 
 // ModelPricing 模型定价配置
@@ -176,6 +182,7 @@ type EndpointMultiplier struct {
 	CacheCreationCostMultiplier   float64 // 5分钟缓存创建成本倍率（默认 1.0）
 	CacheCreationCostMultiplier1h float64 // 1小时缓存创建成本倍率（默认 1.0）
 	CacheReadCostMultiplier       float64 // 缓存读取成本倍率（默认 1.0）
+	BillingOutputTokenSource      string  // Codex 输出计费口径，默认 output_tokens
 }
 
 // DefaultEndpointMultiplier 返回默认端点倍率（全部为 1.0）
@@ -187,6 +194,7 @@ func DefaultEndpointMultiplier() EndpointMultiplier {
 		CacheCreationCostMultiplier:   1.0,
 		CacheCreationCostMultiplier1h: 1.0,
 		CacheReadCostMultiplier:       1.0,
+		BillingOutputTokenSource:      BillingOutputTokenSourceOutput,
 	}
 }
 
@@ -246,7 +254,8 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 
 	// 基础成本计算（每百万 token）
 	inputCost := float64(inputTokensForCost) * pricing.Input / 1_000_000
-	outputCost := float64(usage.OutputTokens) * pricing.Output / 1_000_000
+	outputTokensForCost := ResolveBillableOutputTokens(usage)
+	outputCost := float64(outputTokensForCost) * pricing.Output / 1_000_000
 	cacheReadCost := float64(usage.CacheReadTokens) * pricing.CacheRead / 1_000_000
 
 	// 分开计算 5m 和 1h 缓存成本
@@ -358,18 +367,21 @@ type WriteRequest struct {
 // UpdateOptions 统一的请求更新选项
 // 支持可选字段更新，只更新非nil的字段
 type UpdateOptions struct {
-	EndpointName  *string        // 端点名称
-	EndpointChain *string        // 端点链路（形如 "A -> B -> C"）
-	Channel       *string        // 渠道标签
-	GroupName     *string        // 组名称
-	Status        *string        // 状态
-	RetryCount    *int           // 重试次数
-	HttpStatus    *int           // HTTP状态码
-	ModelName     *string        // 模型名称
-	EndTime       *time.Time     // 结束时间
-	Duration      *time.Duration // 持续时间
-	FailureReason *string        // 失败原因（用于中间过程记录）
-	Provider      *string        // 提供商标识: claude/codex
+	EndpointName       *string        // 端点名称
+	EndpointChain      *string        // 端点链路（形如 "A -> B -> C"）
+	Channel            *string        // 渠道标签
+	GroupName          *string        // 组名称
+	Status             *string        // 状态
+	RetryCount         *int           // 重试次数
+	HttpStatus         *int           // HTTP状态码
+	ModelName          *string        // 模型名称
+	OriginalModelName  *string        // 改写前的原始请求模型
+	ModelRewriteSource *string        // 模型改写来源：mapping/channel_model
+	ModelRewriteTarget *string        // 改写后的目标模型
+	EndTime            *time.Time     // 结束时间
+	Duration           *time.Duration // 持续时间
+	FailureReason      *string        // 失败原因（用于中间过程记录）
+	Provider           *string        // 提供商标识: claude/codex
 }
 
 // UsageTracker 使用跟踪器
@@ -1085,6 +1097,15 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			if opts.ModelName != nil {
 				req.ModelName = *opts.ModelName
 			}
+			if opts.OriginalModelName != nil {
+				req.OriginalModelName = *opts.OriginalModelName
+			}
+			if opts.ModelRewriteSource != nil {
+				req.ModelRewriteSource = *opts.ModelRewriteSource
+			}
+			if opts.ModelRewriteTarget != nil {
+				req.ModelRewriteTarget = *opts.ModelRewriteTarget
+			}
 			if opts.FailureReason != nil {
 				req.FailureReason = *opts.FailureReason
 			}
@@ -1121,12 +1142,16 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 	}
 
 	// 🚀 [架构修复] 支持 nil tokens，确保耗时信息总是被记录
-	var inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64
+	var inputTokens, outputTokens, reasoningTokens, billableOutputTokens, cacheCreationTokens, cacheReadTokens int64
 	var cacheCreation5mTokens, cacheCreation1hTokens int64
+	var billingOutputTokenSource string
 	inputIncludesCacheRead := false
 	if tokens != nil {
 		inputTokens = tokens.InputTokens
 		outputTokens = tokens.OutputTokens
+		reasoningTokens = tokens.ReasoningTokens
+		billableOutputTokens = ResolveBillableOutputTokens(tokens)
+		billingOutputTokenSource = tokens.BillingOutputTokenSource
 		cacheCreationTokens = tokens.CacheCreationTokens
 		cacheCreation5mTokens = tokens.CacheCreation5mTokens
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
@@ -1154,16 +1179,22 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 			// 避免"先 RecordFailedRequestTokens 记录了真实 token → 后 CompleteAndArchive 传入零值覆盖"
 			shouldOverwriteTokens := !req.TokenRecordedByFailedPath ||
 				inputTokens > 0 || outputTokens > 0 ||
+				reasoningTokens > 0 || billableOutputTokens > 0 ||
 				cacheCreationTokens > 0 || cacheCreation5mTokens > 0 ||
 				cacheCreation1hTokens > 0 || cacheReadTokens > 0
 			if shouldOverwriteTokens {
-				req.InputTokens = inputTokens
-				req.OutputTokens = outputTokens
-				req.CacheCreationTokens = cacheCreationTokens
-				req.CacheCreation5mTokens = cacheCreation5mTokens
-				req.CacheCreation1hTokens = cacheCreation1hTokens
-				req.CacheReadTokens = cacheReadTokens
-				req.InputIncludesCacheRead = inputIncludesCacheRead
+				applyTokenUsageToActiveRequest(req, &TokenUsage{
+					InputTokens:              inputTokens,
+					OutputTokens:             outputTokens,
+					ReasoningTokens:          reasoningTokens,
+					BillableOutputTokens:     billableOutputTokens,
+					BillingOutputTokenSource: billingOutputTokenSource,
+					CacheCreationTokens:      cacheCreationTokens,
+					CacheCreation5mTokens:    cacheCreation5mTokens,
+					CacheCreation1hTokens:    cacheCreation1hTokens,
+					CacheReadTokens:          cacheReadTokens,
+					InputIncludesCacheRead:   inputIncludesCacheRead,
+				})
 			} else {
 				// 保留 RecordFailedRequestTokens 记录的 token 值
 				slog.Debug("🔒 [P1.4 防御] 保留失败路径记录的 token，避免被零值覆盖",
@@ -1182,17 +1213,20 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为持久化失败队列
 			ut.triggerHotPoolAlert("complete_archive_failed")
 			ut.recordToFailureQueue("complete", map[string]any{
-				"request_id":               requestID,
-				"model_name":               modelName,
-				"input_tokens":             inputTokens,
-				"output_tokens":            outputTokens,
-				"cache_creation_tokens":    cacheCreationTokens,
-				"cache_creation_5m_tokens": cacheCreation5mTokens,
-				"cache_creation_1h_tokens": cacheCreation1hTokens,
-				"cache_read_tokens":        cacheReadTokens,
-				"duration_ms":              duration.Milliseconds(),
-				"failure_reason":           failureReason,
-				"error":                    err.Error(),
+				"request_id":                  requestID,
+				"model_name":                  modelName,
+				"input_tokens":                inputTokens,
+				"output_tokens":               outputTokens,
+				"reasoning_tokens":            reasoningTokens,
+				"billable_output_tokens":      billableOutputTokens,
+				"billing_output_token_source": billingOutputTokenSource,
+				"cache_creation_tokens":       cacheCreationTokens,
+				"cache_creation_5m_tokens":    cacheCreation5mTokens,
+				"cache_creation_1h_tokens":    cacheCreation1hTokens,
+				"cache_read_tokens":           cacheReadTokens,
+				"duration_ms":                 duration.Milliseconds(),
+				"failure_reason":              failureReason,
+				"error":                       err.Error(),
 			})
 		}
 		return
@@ -1217,12 +1251,16 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 	}
 
 	// 处理Token信息（失败/取消时可能有也可能没有）
-	var inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens int64
+	var inputTokens, outputTokens, reasoningTokens, billableOutputTokens, cacheCreationTokens, cacheReadTokens int64
 	var cacheCreation5mTokens, cacheCreation1hTokens int64 // 🔧 [修复] 2025-12-11: 添加 5m/1h 缓存字段
+	var billingOutputTokenSource string
 	inputIncludesCacheRead := false
 	if tokens != nil {
 		inputTokens = tokens.InputTokens
 		outputTokens = tokens.OutputTokens
+		reasoningTokens = tokens.ReasoningTokens
+		billableOutputTokens = ResolveBillableOutputTokens(tokens)
+		billingOutputTokenSource = tokens.BillingOutputTokenSource
 		cacheCreationTokens = tokens.CacheCreationTokens
 		cacheCreation5mTokens = tokens.CacheCreation5mTokens
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
@@ -1239,13 +1277,16 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 	var legacyTokens *TokenUsage
 	if tokens != nil {
 		legacyTokens = &TokenUsage{
-			InputTokens:            inputTokens,
-			OutputTokens:           outputTokens,
-			CacheCreationTokens:    cacheCreationTokens,
-			CacheCreation5mTokens:  cacheCreation5mTokens,
-			CacheCreation1hTokens:  cacheCreation1hTokens,
-			CacheReadTokens:        cacheReadTokens,
-			InputIncludesCacheRead: inputIncludesCacheRead,
+			InputTokens:              inputTokens,
+			OutputTokens:             outputTokens,
+			ReasoningTokens:          reasoningTokens,
+			BillableOutputTokens:     billableOutputTokens,
+			BillingOutputTokenSource: billingOutputTokenSource,
+			CacheCreationTokens:      cacheCreationTokens,
+			CacheCreation5mTokens:    cacheCreation5mTokens,
+			CacheCreation1hTokens:    cacheCreation1hTokens,
+			CacheReadTokens:          cacheReadTokens,
+			InputIncludesCacheRead:   inputIncludesCacheRead,
 		}
 	}
 
@@ -1262,13 +1303,7 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 			// 🔧 [修复] 2025-12-15: 只有当 tokens 参数不为 nil 时才更新 token 字段
 			// 否则保留热池中已有的值（可能由 RecordFailedRequestTokens 设置）
 			if tokens != nil {
-				req.InputTokens = inputTokens
-				req.OutputTokens = outputTokens
-				req.CacheCreationTokens = cacheCreationTokens
-				req.CacheCreation5mTokens = cacheCreation5mTokens
-				req.CacheCreation1hTokens = cacheCreation1hTokens
-				req.CacheReadTokens = cacheReadTokens
-				req.InputIncludesCacheRead = inputIncludesCacheRead
+				applyTokenUsageToActiveRequest(req, legacyTokens)
 			}
 			req.EndTime = &now
 			req.DurationMs = duration.Milliseconds()
@@ -1307,6 +1342,18 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 					}
 					return 0
 				}(),
+				"reasoning_tokens": func() int64 {
+					if legacyTokens != nil {
+						return legacyTokens.ReasoningTokens
+					}
+					return 0
+				}(),
+				"billable_output_tokens": func() int64 {
+					if legacyTokens != nil {
+						return ResolveBillableOutputTokens(legacyTokens)
+					}
+					return 0
+				}(),
 				"error": err.Error(),
 			})
 		}
@@ -1339,13 +1386,7 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		err := ut.hotPool.Update(requestID, func(req *ActiveRequest) {
 			// 更新 Token 信息
-			req.InputTokens = tokens.InputTokens
-			req.OutputTokens = tokens.OutputTokens
-			req.CacheCreationTokens = tokens.CacheCreationTokens
-			req.CacheCreation5mTokens = tokens.CacheCreation5mTokens
-			req.CacheCreation1hTokens = tokens.CacheCreation1hTokens
-			req.CacheReadTokens = tokens.CacheReadTokens
-			req.InputIncludesCacheRead = tokens.InputIncludesCacheRead
+			applyTokenUsageToActiveRequest(req, tokens)
 			// 更新模型名（如果有）
 			if modelName != "" && modelName != "unknown" {
 				req.ModelName = modelName
@@ -1377,16 +1418,19 @@ func (ut *UsageTracker) RecordFailedRequestTokens(requestID, modelName string, t
 		RequestID: requestID,
 		Timestamp: ut.now(),
 		Data: RequestCompleteData{
-			ModelName:              modelName,
-			InputTokens:            tokens.InputTokens,
-			OutputTokens:           tokens.OutputTokens,
-			CacheCreationTokens:    tokens.CacheCreationTokens,
-			CacheCreation5mTokens:  tokens.CacheCreation5mTokens,
-			CacheCreation1hTokens:  tokens.CacheCreation1hTokens,
-			CacheReadTokens:        tokens.CacheReadTokens,
-			Duration:               duration,
-			FailureReason:          failureReason,
-			InputIncludesCacheRead: tokens.InputIncludesCacheRead,
+			ModelName:                modelName,
+			InputTokens:              tokens.InputTokens,
+			OutputTokens:             tokens.OutputTokens,
+			ReasoningTokens:          tokens.ReasoningTokens,
+			BillableOutputTokens:     ResolveBillableOutputTokens(tokens),
+			BillingOutputTokenSource: tokens.BillingOutputTokenSource,
+			CacheCreationTokens:      tokens.CacheCreationTokens,
+			CacheCreation5mTokens:    tokens.CacheCreation5mTokens,
+			CacheCreation1hTokens:    tokens.CacheCreation1hTokens,
+			CacheReadTokens:          tokens.CacheReadTokens,
+			Duration:                 duration,
+			FailureReason:            failureReason,
+			InputIncludesCacheRead:   tokens.InputIncludesCacheRead,
 		},
 	}
 
@@ -1413,40 +1457,37 @@ func (ut *UsageTracker) RecordPartialFailure(requestID, modelName string, tokens
 		if exists {
 			// 创建部分失败记录的副本（不影响热池中的原请求）
 			partialReq := &ActiveRequest{
-				RequestID:              requestID + "-partial-" + ut.now().Format("20060102150405.000"),
-				ClientIP:               activeReq.ClientIP,
-				UserAgent:              activeReq.UserAgent,
-				Method:                 activeReq.Method,
-				Path:                   activeReq.Path,
-				StartTime:              activeReq.StartTime,
-				EndpointName:           endpointName,
-				Channel:                activeReq.Channel,
-				GroupName:              activeReq.GroupName,
-				ModelName:              modelName,
-				IsStreaming:            activeReq.IsStreaming,
-				Status:                 "partial_failed", // 特殊状态标记
-				HTTPStatus:             activeReq.HTTPStatus,
-				RetryCount:             activeReq.RetryCount,
-				FailureReason:          failureReason,
-				InputTokens:            0,
-				OutputTokens:           0,
-				CacheCreationTokens:    0,
-				CacheCreation5mTokens:  0,
-				CacheCreation1hTokens:  0,
-				CacheReadTokens:        0,
-				InputIncludesCacheRead: false,
-				DurationMs:             duration.Milliseconds(),
+				RequestID:                requestID + "-partial-" + ut.now().Format("20060102150405.000"),
+				ClientIP:                 activeReq.ClientIP,
+				UserAgent:                activeReq.UserAgent,
+				Method:                   activeReq.Method,
+				Path:                     activeReq.Path,
+				StartTime:                activeReq.StartTime,
+				EndpointName:             endpointName,
+				Channel:                  activeReq.Channel,
+				GroupName:                activeReq.GroupName,
+				ModelName:                modelName,
+				IsStreaming:              activeReq.IsStreaming,
+				Status:                   "partial_failed", // 特殊状态标记
+				HTTPStatus:               activeReq.HTTPStatus,
+				RetryCount:               activeReq.RetryCount,
+				FailureReason:            failureReason,
+				InputTokens:              0,
+				OutputTokens:             0,
+				ReasoningTokens:          0,
+				BillableOutputTokens:     0,
+				BillingOutputTokenSource: activeReq.BillingOutputTokenSource,
+				CacheCreationTokens:      0,
+				CacheCreation5mTokens:    0,
+				CacheCreation1hTokens:    0,
+				CacheReadTokens:          0,
+				InputIncludesCacheRead:   false,
+				DurationMs:               duration.Milliseconds(),
 			}
 
 			// 设置Token信息（如果提供）
 			if tokens != nil {
-				partialReq.InputTokens = tokens.InputTokens
-				partialReq.OutputTokens = tokens.OutputTokens
-				partialReq.CacheCreationTokens = tokens.CacheCreationTokens
-				partialReq.CacheCreation5mTokens = tokens.CacheCreation5mTokens
-				partialReq.CacheCreation1hTokens = tokens.CacheCreation1hTokens
-				partialReq.CacheReadTokens = tokens.CacheReadTokens
-				partialReq.InputIncludesCacheRead = tokens.InputIncludesCacheRead
+				applyTokenUsageToActiveRequest(partialReq, tokens)
 			}
 
 			// 设置结束时间
@@ -1480,13 +1521,7 @@ func (ut *UsageTracker) RecoverRequestTokens(requestID, modelName string, tokens
 	if ut.hotPoolEnabled && ut.hotPool != nil {
 		err := ut.hotPool.Update(requestID, func(req *ActiveRequest) {
 			// 更新 Token 信息
-			req.InputTokens = tokens.InputTokens
-			req.OutputTokens = tokens.OutputTokens
-			req.CacheCreationTokens = tokens.CacheCreationTokens
-			req.CacheCreation5mTokens = tokens.CacheCreation5mTokens
-			req.CacheCreation1hTokens = tokens.CacheCreation1hTokens
-			req.CacheReadTokens = tokens.CacheReadTokens
-			req.InputIncludesCacheRead = tokens.InputIncludesCacheRead
+			applyTokenUsageToActiveRequest(req, tokens)
 			// 更新模型名（如果有）
 			if modelName != "" && modelName != "unknown" {
 				req.ModelName = modelName
@@ -1508,15 +1543,18 @@ func (ut *UsageTracker) RecoverRequestTokens(requestID, modelName string, tokens
 		RequestID: requestID,
 		Timestamp: ut.now(),
 		Data: RequestCompleteData{
-			ModelName:              modelName,
-			InputTokens:            tokens.InputTokens,
-			OutputTokens:           tokens.OutputTokens,
-			CacheCreationTokens:    tokens.CacheCreationTokens,
-			CacheCreation5mTokens:  tokens.CacheCreation5mTokens,
-			CacheCreation1hTokens:  tokens.CacheCreation1hTokens,
-			CacheReadTokens:        tokens.CacheReadTokens,
-			Duration:               0, // 不更新时间相关字段
-			InputIncludesCacheRead: tokens.InputIncludesCacheRead,
+			ModelName:                modelName,
+			InputTokens:              tokens.InputTokens,
+			OutputTokens:             tokens.OutputTokens,
+			ReasoningTokens:          tokens.ReasoningTokens,
+			BillableOutputTokens:     ResolveBillableOutputTokens(tokens),
+			BillingOutputTokenSource: tokens.BillingOutputTokenSource,
+			CacheCreationTokens:      tokens.CacheCreationTokens,
+			CacheCreation5mTokens:    tokens.CacheCreation5mTokens,
+			CacheCreation1hTokens:    tokens.CacheCreation1hTokens,
+			CacheReadTokens:          tokens.CacheReadTokens,
+			Duration:                 0, // 不更新时间相关字段
+			InputIncludesCacheRead:   tokens.InputIncludesCacheRead,
 		},
 	}
 
@@ -1567,14 +1605,7 @@ func (ut *UsageTracker) GetEndpointMultiplier(endpointName string) EndpointMulti
 	defer ut.mu.RUnlock()
 
 	if ut.endpointMu == nil {
-		return EndpointMultiplier{
-			CostMultiplier:                1.0,
-			InputCostMultiplier:           1.0,
-			OutputCostMultiplier:          1.0,
-			CacheCreationCostMultiplier:   1.0,
-			CacheCreationCostMultiplier1h: 1.0,
-			CacheReadCostMultiplier:       1.0,
-		}
+		return DefaultEndpointMultiplier()
 	}
 
 	if m, exists := ut.endpointMu[endpointName]; exists {
@@ -1582,14 +1613,22 @@ func (ut *UsageTracker) GetEndpointMultiplier(endpointName string) EndpointMulti
 	}
 
 	// 返回默认倍率 1.0
-	return EndpointMultiplier{
-		CostMultiplier:                1.0,
-		InputCostMultiplier:           1.0,
-		OutputCostMultiplier:          1.0,
-		CacheCreationCostMultiplier:   1.0,
-		CacheCreationCostMultiplier1h: 1.0,
-		CacheReadCostMultiplier:       1.0,
+	return DefaultEndpointMultiplier()
+}
+
+func (ut *UsageTracker) GetEndpointMultiplierForEndpoint(channelName, endpointName string) EndpointMultiplier {
+	ut.mu.RLock()
+	defer ut.mu.RUnlock()
+
+	if ut.endpointMu == nil {
+		return DefaultEndpointMultiplier()
 	}
+	for _, key := range endpointMultiplierLookupKeys(channelName, "", endpointName) {
+		if m, exists := ut.endpointMu[key]; exists {
+			return m
+		}
+	}
+	return DefaultEndpointMultiplier()
 }
 
 // GetDatabaseStats 获取数据库统计信息（包装方法）
@@ -2197,6 +2236,8 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 		req.CacheCreationCostMultiplier = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier)
 		req.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier1h)
 		req.CacheReadCostMultiplier = ensurePositiveMultiplier(mult.CacheReadCostMultiplier)
+		req.BillingOutputTokenSource = NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
+		req.BillableOutputTokens = BillableOutputTokens(req.OutputTokens, req.ReasoningTokens, req.BillingOutputTokenSource)
 	})
 }
 
@@ -2266,6 +2307,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	channel := req.Channel
 	groupName := req.GroupName
 	modelName := req.ModelName
+	originalModelName := req.OriginalModelName
+	modelRewriteSource := req.ModelRewriteSource
+	modelRewriteTarget := req.ModelRewriteTarget
 	isStreaming := req.IsStreaming
 	provider := req.Provider
 	status := req.Status
@@ -2275,6 +2319,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	cancelReason := req.CancelReason
 	inputTokens := req.InputTokens
 	outputTokens := req.OutputTokens
+	reasoningTokens := req.ReasoningTokens
+	billingOutputTokenSource := NormalizeBillingOutputTokenSource(req.BillingOutputTokenSource)
+	billableOutputTokens := BillableOutputTokens(outputTokens, reasoningTokens, billingOutputTokenSource)
 	cacheCreationTokens := req.CacheCreationTokens
 	cacheCreation5mTokens := req.CacheCreation5mTokens
 	cacheCreation1hTokens := req.CacheCreation1hTokens
@@ -2325,28 +2372,28 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		}
 	}
 	if hasPricing && ut.endpointMu != nil {
-		if key := endpointMultiplierKey(channel, groupName, endpointName); key != "" {
+		for _, key := range endpointMultiplierLookupKeys(channel, groupName, endpointName) {
 			if m, ok := ut.endpointMu[key]; ok {
 				multiplierValue = m
 				multiplier = &multiplierValue
+				break
 			}
-		} else if m, ok := ut.endpointMu[endpointName]; ok {
-			// 兼容旧 key：endpointName 作为唯一键
-			multiplierValue = m
-			multiplier = &multiplierValue
 		}
 	}
 	ut.mu.RUnlock()
 
 	if hasPricing {
 		usage := &TokenUsage{
-			InputTokens:            inputTokens,
-			OutputTokens:           outputTokens,
-			CacheCreationTokens:    cacheCreationTokens,
-			CacheCreation5mTokens:  cacheCreation5mTokens,
-			CacheCreation1hTokens:  cacheCreation1hTokens,
-			CacheReadTokens:        cacheReadTokens,
-			InputIncludesCacheRead: inputIncludesCacheRead,
+			InputTokens:              inputTokens,
+			OutputTokens:             outputTokens,
+			ReasoningTokens:          reasoningTokens,
+			BillableOutputTokens:     billableOutputTokens,
+			BillingOutputTokenSource: billingOutputTokenSource,
+			CacheCreationTokens:      cacheCreationTokens,
+			CacheCreation5mTokens:    cacheCreation5mTokens,
+			CacheCreation1hTokens:    cacheCreation1hTokens,
+			CacheReadTokens:          cacheReadTokens,
+			InputIncludesCacheRead:   inputIncludesCacheRead,
 		}
 		cost = CalculateCost(usage, &pricing, multiplier)
 	}
@@ -2366,6 +2413,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		Channel:                       channel, // 渠道标签
 		GroupName:                     groupName,
 		ModelName:                     modelName,
+		OriginalModelName:             originalModelName,
+		ModelRewriteSource:            modelRewriteSource,
+		ModelRewriteTarget:            modelRewriteTarget,
 		IsStreaming:                   isStreaming,
 		Provider:                      provider, // 提供商标识
 		Status:                        status,
@@ -2376,6 +2426,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		CancelReason:                  cancelReason,
 		InputTokens:                   inputTokens,
 		OutputTokens:                  outputTokens,
+		ReasoningTokens:               reasoningTokens,
+		BillableOutputTokens:          billableOutputTokens,
+		BillingOutputTokenSource:      billingOutputTokenSource,
 		CacheCreationTokens:           cacheCreationTokens,
 		CacheCreation5mTokens:         cacheCreation5mTokens,
 		CacheCreation1hTokens:         cacheCreation1hTokens,

@@ -59,8 +59,31 @@ const buildInitialChannelForm = (channel) => ({
   name: channel?.name || '',
   apiKey: channel?.apiKey || '',
   website: channel?.website || '',
-  model: channel?.model || ''
+  model: channel?.model || '',
+  modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
 });
+
+const buildInitialModelMappingRows = (modelMapping) => {
+  const entries = Object.entries(modelMapping || {})
+    .map(([sourceModel, targetModel]) => ({
+      sourceModel: String(sourceModel || ''),
+      targetModel: String(targetModel || '')
+    }))
+    .filter((row) => row.sourceModel.trim() || row.targetModel.trim());
+
+  return entries.length > 0 ? entries : [{ sourceModel: '', targetModel: '' }];
+};
+
+const buildModelMappingPayload = (rows) => {
+  return (rows || []).reduce((mapping, row) => {
+    const sourceModel = String(row?.sourceModel || '').trim();
+    const targetModel = String(row?.targetModel || '').trim();
+    if (sourceModel && targetModel) {
+      mapping[sourceModel] = targetModel;
+    }
+    return mapping;
+  }, {});
+};
 
 // 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
 // 在代理模式下，这些字段不再由渠道级管理，仅写入 ~/.codex/config.toml 由 Codex CLI 读取
@@ -101,6 +124,7 @@ const getErrorMessage = (error, fallback = '操作失败') => {
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
+  const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKeyDirty, setApiKeyDirty] = useState(false);
@@ -119,6 +143,38 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
     }
   };
 
+  const updateMappingRow = (index, key, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      modelMappingRows: (prev.modelMappingRows || []).map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [key]: value } : row
+      )
+    }));
+    if (fieldError) {
+      setFieldError('');
+    }
+  };
+
+  const addMappingRow = () => {
+    setFormData((prev) => ({
+      ...prev,
+      modelMappingRows: [
+        ...(prev.modelMappingRows || []),
+        { sourceModel: '', targetModel: '' }
+      ]
+    }));
+  };
+
+  const removeMappingRow = (index) => {
+    setFormData((prev) => {
+      const nextRows = (prev.modelMappingRows || []).filter((_, rowIndex) => rowIndex !== index);
+      return {
+        ...prev,
+        modelMappingRows: nextRows.length > 0 ? nextRows : [{ sourceModel: '', targetModel: '' }]
+      };
+    });
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
 
@@ -126,7 +182,8 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
       name: formData.name.trim(),
       apiKey: formData.apiKey.trim(),
       website: formData.website.trim(),
-      model: formData.model.trim()
+      model: formData.model.trim(),
+      modelMapping: buildModelMappingPayload(formData.modelMappingRows)
     };
 
     if (!payload.name || !payload.apiKey) {
@@ -148,7 +205,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
       style={{ paddingTop: `${modalTopPadding}px` }}
     >
       <div
-        className="flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
         style={{ maxHeight: modalMaxHeight }}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
@@ -173,6 +230,25 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
         </div>
 
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
+          <div className="flex flex-shrink-0 border-b border-slate-100 px-6">
+            {[
+              { key: 'basic', label: '基础信息' },
+              { key: 'mapping', label: '模型映射' }
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
+                  activeTab === tab.key
+                    ? 'border-slate-900 text-slate-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
           <div className="space-y-4 overflow-y-auto px-6 py-6">
             {(fieldError || serverError) && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -180,6 +256,8 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
               </div>
             )}
 
+            {activeTab === 'basic' ? (
+              <>
             <Input
               label="渠道名"
               value={formData.name}
@@ -235,6 +313,59 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                 <p className="mt-1 text-xs text-slate-400">点击图标查看真实值或直接输入新 Key 替换</p>
               )}
             </div>
+              </>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">模型映射</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">请求模型精确命中后替换为该渠道支持的模型。</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addMappingRow}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                  >
+                    <Plus size={14} />
+                    添加
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {(formData.modelMappingRows || []).map((row, index) => (
+                    <div
+                      key={`${index}-${row.sourceModel}-${row.targetModel}`}
+                      className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-center"
+                    >
+                      <input
+                        type="text"
+                        value={row.sourceModel}
+                        onChange={(event) => updateMappingRow(index, 'sourceModel', event.target.value)}
+                        placeholder="gpt-5.4-mini"
+                        className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <ArrowRightLeft size={16} className="text-slate-400" />
+                      <input
+                        type="text"
+                        value={row.targetModel}
+                        onChange={(event) => updateMappingRow(index, 'targetModel', event.target.value)}
+                        placeholder="gpt-5-mini"
+                        className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeMappingRow(index)}
+                        className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                        title="删除映射"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-400">未命中映射时，仍按基础信息中的渠道模型覆盖规则处理。</p>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
@@ -262,6 +393,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
   const [inputCostMultiplier, setInputCostMultiplier] = useState(endpoint?.inputCostMultiplier ?? 1.0);
   const [outputCostMultiplier, setOutputCostMultiplier] = useState(endpoint?.outputCostMultiplier ?? 1.0);
   const [cacheReadCostMultiplier, setCacheReadCostMultiplier] = useState(endpoint?.cacheReadCostMultiplier ?? 1.0);
+  const [billingOutputTokenSource, setBillingOutputTokenSource] = useState(endpoint?.billingOutputTokenSource || 'output_tokens');
   const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
@@ -283,7 +415,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
       setFieldError('base_url 必须以 http:// 或 https:// 开头');
       return;
     }
-    await onSave?.({ name: trimmedName, baseURL: trimmed, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier });
+    await onSave?.({ name: trimmedName, baseURL: trimmed, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource });
   };
 
   const isEdit = mode === 'edit';
@@ -423,6 +555,20 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
                   </div>
                 </div>
                 <p className="mt-1 text-xs text-slate-400">应用于各类型 token 成本计算，默认 1.0</p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">输出计费口径</label>
+                <select
+                  value={billingOutputTokenSource}
+                  onChange={(event) => setBillingOutputTokenSource(event.target.value)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="output_tokens">总输出 output_tokens</option>
+                  <option value="reasoning_tokens">推理 reasoning_tokens</option>
+                  <option value="visible_output_tokens">可见补全 output - reasoning</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-400">仅影响该 Codex 端点的输出成本计算。</p>
               </div>
 
               <div
@@ -1428,7 +1574,7 @@ const CodexPage = () => {
     setEndpointFormError('');
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource }) => {
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
@@ -1442,7 +1588,8 @@ const CodexPage = () => {
           costMultiplier,
           inputCostMultiplier,
           outputCostMultiplier,
-          cacheReadCostMultiplier
+          cacheReadCostMultiplier,
+          billingOutputTokenSource
         });
         await fetchData({ silent: true });
         closeEndpointForm();
@@ -1467,7 +1614,8 @@ const CodexPage = () => {
         costMultiplier,
         inputCostMultiplier,
         outputCostMultiplier,
-        cacheReadCostMultiplier
+        cacheReadCostMultiplier,
+        billingOutputTokenSource
       });
       await fetchData({ silent: true });
       closeEndpointForm();
@@ -1497,7 +1645,8 @@ const CodexPage = () => {
         name: endpoint.name,
         baseURL: endpoint.baseURL,
         failoverEnabled: enabled,
-        priority: endpoint.priority
+        priority: endpoint.priority,
+        billingOutputTokenSource: endpoint.billingOutputTokenSource || 'output_tokens'
       });
       await fetchData({ silent: true });
     } catch (err) {

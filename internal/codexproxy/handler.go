@@ -115,13 +115,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
 	channelName := ""
 	channelModel := ""
+	var channelModelMapping map[string]string
 	if h.manager != nil {
 		if ch := h.manager.GetActiveChannel(); ch != nil {
 			channelName = ch.Name
 			channelModel = strings.TrimSpace(ch.Model)
+			channelModelMapping = ch.ModelMapping
 		}
 	}
-	body = rewriteModelIfNeeded(body, channelModel, h.logger, requestID)
+	modelRewrite := rewriteModelWithMappingDetails(body, channelModelMapping, channelModel, h.logger, requestID)
+	body = modelRewrite.Body
 
 	// 2. 检测是否流式请求
 	isStreaming := bytes.Contains(body, []byte(`"stream":true`)) ||
@@ -140,10 +143,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"streaming", isStreaming,
 		"channel", channelName,
 		"model", requestModel,
+		"model_rewrite_source", modelRewrite.Source,
 	)
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
-	h.recordStart(requestID, r, isStreaming, channelName, requestModel)
+	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewrite)
 
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1
@@ -602,10 +606,12 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 	durationMs := time.Since(startTime).Milliseconds()
 	modelName := requestModel
 	var inputTokens, outputTokens, cacheReadTokens, totalTokens int64
+	var reasoningTokens int64
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
 		inputTokens = tokenResult.InputTokens
 		outputTokens = tokenResult.OutputTokens
+		reasoningTokens = tokenResult.ReasoningTokens
 		cacheReadTokens = tokenResult.CacheReadTokens
 		totalTokens = tokenResult.TotalTokens
 	}
@@ -619,6 +625,7 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		"hops_tried", hopsTried,
 		"input_tokens", inputTokens,
 		"output_tokens", outputTokens,
+		"reasoning_tokens", reasoningTokens,
 		"cache_read_tokens", cacheReadTokens,
 		"total_tokens", totalTokens,
 		"http_status", resp.StatusCode,
@@ -644,7 +651,7 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		requestID, modelName, inputTokens, outputTokens, inputTokens+outputTokens, cacheReadTokens, durationMs),
 		"provider", "codex", "request_id", requestID)
 
-	h.recordSuccess(requestID, startTime, resp.StatusCode, tokenResult, requestModel)
+	h.recordSuccess(requestID, startTime, resp.StatusCode, tokenResult, requestModel, endpointName, channelName)
 
 	// 复制响应头
 	for key, values := range resp.Header {
@@ -729,10 +736,12 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	durationMs := time.Since(startTime).Milliseconds()
 	modelName := requestModel
 	var inputTokens, outputTokens, cacheReadTokens, totalTokens int64
+	var reasoningTokens int64
 	if lastResult != nil {
 		modelName = pickModelName(lastResult.Model, requestModel)
 		inputTokens = lastResult.InputTokens
 		outputTokens = lastResult.OutputTokens
+		reasoningTokens = lastResult.ReasoningTokens
 		cacheReadTokens = lastResult.CacheReadTokens
 		totalTokens = lastResult.TotalTokens
 	}
@@ -746,6 +755,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		"hops_tried", hopsTried,
 		"input_tokens", inputTokens,
 		"output_tokens", outputTokens,
+		"reasoning_tokens", reasoningTokens,
 		"cache_read_tokens", cacheReadTokens,
 		"total_tokens", totalTokens,
 		"http_status", resp.StatusCode,
@@ -771,7 +781,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		requestID, modelName, inputTokens, outputTokens, inputTokens+outputTokens, cacheReadTokens, durationMs),
 		"provider", "codex", "request_id", requestID)
 
-	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel)
+	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, channelName)
 }
 
 // ============================================
@@ -792,7 +802,7 @@ func (h *Handler) activeChannelName() string {
 
 // recordStart 记录请求开始
 // 一次性写入 Provider/Channel/Model（来自请求体），减少与归档之间的字段缺失风险
-func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming bool, channelName, requestModel string) {
+func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming bool, channelName, requestModel string, modelRewrite modelRewriteResult) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -806,6 +816,11 @@ func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming boo
 	}
 	if requestModel != "" {
 		opts.ModelName = strPtr(requestModel)
+	}
+	if modelRewrite.Source != "" {
+		opts.OriginalModelName = strPtr(modelRewrite.OriginalModel)
+		opts.ModelRewriteSource = strPtr(modelRewrite.Source)
+		opts.ModelRewriteTarget = strPtr(modelRewrite.NewModel)
 	}
 	h.usageTracker.RecordRequestUpdate(requestID, opts)
 }
@@ -855,8 +870,7 @@ func (h *Handler) snapshotEndpointMultiplier(requestID, channelName, endpointNam
 	if h.usageTracker == nil || requestID == "" || endpointName == "" {
 		return
 	}
-	key := tracking.EndpointMultiplierKey(channelName, endpointName)
-	mult := h.usageTracker.GetEndpointMultiplier(key)
+	mult := h.usageTracker.GetEndpointMultiplierForEndpoint(channelName, endpointName)
 	_ = h.usageTracker.UpdateActiveRequestMultiplier(requestID, mult)
 }
 
@@ -868,21 +882,31 @@ func pickModelName(responseModel, requestModel string) string {
 	return requestModel
 }
 
+func (h *Handler) endpointBillingOutputTokenSource(channelName, endpointName string) string {
+	if h.usageTracker == nil || endpointName == "" {
+		return tracking.BillingOutputTokenSourceOutput
+	}
+	mult := h.usageTracker.GetEndpointMultiplierForEndpoint(channelName, endpointName)
+	return tracking.NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
+}
+
 // buildTokenUsage 从 TokenResult 构造 tracking.TokenUsage（包含缓存读取）
-func buildTokenUsage(tr *TokenResult) *tracking.TokenUsage {
+func buildTokenUsage(tr *TokenResult, billingOutputTokenSource string) *tracking.TokenUsage {
 	if tr == nil {
 		return nil
 	}
 	return &tracking.TokenUsage{
-		InputTokens:            tr.InputTokens,
-		OutputTokens:           tr.OutputTokens,
-		CacheReadTokens:        tr.CacheReadTokens,
-		InputIncludesCacheRead: true,
+		InputTokens:              tr.InputTokens,
+		OutputTokens:             tr.OutputTokens,
+		ReasoningTokens:          tr.ReasoningTokens,
+		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource),
+		CacheReadTokens:          tr.CacheReadTokens,
+		InputIncludesCacheRead:   true,
 	}
 }
 
 // recordSuccess 记录请求成功
-func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatus int, tokenResult *TokenResult, requestModel string) {
+func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, channelName string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -891,7 +915,7 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 	var modelName string
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
-		tokens = buildTokenUsage(tokenResult)
+		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, endpointName))
 	} else {
 		modelName = requestModel
 	}
@@ -908,7 +932,7 @@ func (h *Handler) recordFailure(requestID string, startTime time.Time, reason st
 	var modelName string
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
-		tokens = buildTokenUsage(tokenResult)
+		tokens = buildTokenUsage(tokenResult, tracking.BillingOutputTokenSourceOutput)
 	} else {
 		modelName = requestModel
 	}

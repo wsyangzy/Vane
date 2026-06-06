@@ -558,10 +558,12 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			request_id, client_ip, user_agent, method, path,
 			start_time, end_time, duration_ms,
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
+			original_model_name, model_rewrite_source, model_rewrite_target,
 			status, http_status_code, retry_count,
 			failure_reason, cancel_reason,
 			is_streaming, provider,
 			input_tokens, output_tokens,
+			reasoning_tokens, billable_output_tokens, billing_output_token_source,
 			cache_creation_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens,
 			cache_read_tokens,
 			input_cost_usd, output_cost_usd,
@@ -569,13 +571,16 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cache_read_cost_usd, total_cost_usd,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(request_id) DO UPDATE SET
 			end_time = excluded.end_time,
 			duration_ms = excluded.duration_ms,
 			endpoint_name = excluded.endpoint_name,
 			endpoint_chain = excluded.endpoint_chain,
 			model_name = excluded.model_name,
+			original_model_name = excluded.original_model_name,
+			model_rewrite_source = excluded.model_rewrite_source,
+			model_rewrite_target = excluded.model_rewrite_target,
 			status = excluded.status,
 			http_status_code = excluded.http_status_code,
 			retry_count = excluded.retry_count,
@@ -585,6 +590,9 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			provider = excluded.provider,
 			input_tokens = excluded.input_tokens,
 			output_tokens = excluded.output_tokens,
+			reasoning_tokens = excluded.reasoning_tokens,
+			billable_output_tokens = excluded.billable_output_tokens,
+			billing_output_token_source = excluded.billing_output_token_source,
 			cache_creation_tokens = excluded.cache_creation_tokens,
 			cache_creation_5m_tokens = excluded.cache_creation_5m_tokens,
 			cache_creation_1h_tokens = excluded.cache_creation_1h_tokens,
@@ -637,6 +645,9 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			req.EndpointChain,
 			req.GroupName,
 			req.ModelName,
+			nullString(req.OriginalModelName),
+			nullString(req.ModelRewriteSource),
+			nullString(req.ModelRewriteTarget),
 			req.Status,
 			req.HTTPStatus,
 			req.RetryCount,
@@ -646,6 +657,9 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			defaultProvider(req.Provider),
 			req.InputTokens,
 			req.OutputTokens,
+			req.ReasoningTokens,
+			req.BillableOutputTokens,
+			NormalizeBillingOutputTokenSource(req.BillingOutputTokenSource),
 			req.CacheCreationTokens,
 			req.CacheCreation5mTokens,
 			req.CacheCreation1hTokens,
@@ -715,25 +729,26 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 	// 获取端点倍率
 	var multiplier *EndpointMultiplier
 	if endpointMuMap != nil {
-		if key := endpointMultiplierKey(req.Channel, req.GroupName, req.EndpointName); key != "" {
+		for _, key := range endpointMultiplierLookupKeys(req.Channel, req.GroupName, req.EndpointName) {
 			if m, ok := endpointMuMap[key]; ok {
 				multiplier = &m
+				break
 			}
-		} else if m, ok := endpointMuMap[req.EndpointName]; ok {
-			// 兼容旧 key：endpointName 作为唯一键
-			multiplier = &m
 		}
 	}
 
 	// 构建 TokenUsage 对象
 	usage := &TokenUsage{
-		InputTokens:            req.InputTokens,
-		OutputTokens:           req.OutputTokens,
-		CacheCreationTokens:    req.CacheCreationTokens,
-		CacheCreation5mTokens:  req.CacheCreation5mTokens,
-		CacheCreation1hTokens:  req.CacheCreation1hTokens,
-		CacheReadTokens:        req.CacheReadTokens,
-		InputIncludesCacheRead: req.InputIncludesCacheRead,
+		InputTokens:              req.InputTokens,
+		OutputTokens:             req.OutputTokens,
+		ReasoningTokens:          req.ReasoningTokens,
+		BillableOutputTokens:     req.BillableOutputTokens,
+		BillingOutputTokenSource: req.BillingOutputTokenSource,
+		CacheCreationTokens:      req.CacheCreationTokens,
+		CacheCreation5mTokens:    req.CacheCreation5mTokens,
+		CacheCreation1hTokens:    req.CacheCreation1hTokens,
+		CacheReadTokens:          req.CacheReadTokens,
+		InputIncludesCacheRead:   req.InputIncludesCacheRead,
 	}
 
 	// 调用公共成本计算函数

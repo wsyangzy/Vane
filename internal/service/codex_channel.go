@@ -171,6 +171,7 @@ func normalizeAndValidateCodexChannel(record *store.CodexChannelRecord) error {
 	record.Model = strings.TrimSpace(record.Model)
 	record.ReasoningEffort = strings.TrimSpace(record.ReasoningEffort)
 	record.Website = strings.TrimSpace(record.Website)
+	record.ModelMapping = normalizeCodexModelMapping(record.ModelMapping)
 
 	if record.Name == "" {
 		return fmt.Errorf("渠道名不能为空")
@@ -189,4 +190,21 @@ func normalizeAndValidateCodexChannel(record *store.CodexChannelRecord) error {
 	// 默认值。数据库列允许为空，Codex 代理启用时同步逻辑会跳过 config.toml 写入。
 
 	return nil
+}
+
+func normalizeCodexModelMapping(modelMapping map[string]string) map[string]string {
+	if len(modelMapping) == 0 {
+		return map[string]string{}
+	}
+
+	normalized := make(map[string]string, len(modelMapping))
+	for source, target := range modelMapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+		normalized[source] = target
+	}
+	return normalized
 }

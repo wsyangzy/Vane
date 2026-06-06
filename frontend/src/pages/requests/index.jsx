@@ -95,7 +95,7 @@ const RequestsPage = () => {
     const codexGroups = (codexChannels || []).map(ch => ({
       name: ch.name,
       provider: 'codex',
-      is_active: ch.isActive,
+      is_active: Boolean(ch.isActive || ch.is_active),
       priority: ch.priority ?? 999
     }))
     return [...claudeGroups, ...codexGroups]
@@ -276,15 +276,32 @@ const RequestsPage = () => {
   // 渠道切换回调
   const handleGroupSwitch = async (channelName, _endpoint, provider) => {
     try {
-      // 只有渠道变化时才调用 API 激活
-      if (channelName !== activeGroup) {
-        console.log('🔄 切换渠道:', channelName, 'provider:', provider)
-        if (provider === 'codex') {
-          const ch = codexChannels.find(c => c.name === channelName)
-          if (ch?.id) await activateCodexChannel(ch.id)
-        } else {
-          await activateGroup(channelName)
+      if (provider === 'codex') {
+        const ch = codexChannels.find(c => c.name === channelName)
+        const channelId = ch?.id ?? ch?.ID
+        if (!channelId) {
+          throw new Error(`找不到 Codex 渠道: ${channelName}`)
         }
+
+        const isActive = Boolean(ch.isActive || ch.is_active)
+        if (!isActive) {
+          console.log('🔄 切换 Codex 渠道:', channelName)
+          await activateCodexChannel(channelId)
+          setCodexChannels(prev => prev.map(item => {
+            const itemId = item.id ?? item.ID
+            const itemActive = itemId === channelId
+            return { ...item, isActive: itemActive, is_active: itemActive }
+          }))
+        }
+
+        await loadData(true)
+        return
+      }
+
+      // Claude 渠道沿用 activeGroup；Codex 活跃状态独立来自 codexChannels
+      if (channelName !== activeGroup) {
+        console.log('🔄 切换 Claude 渠道:', channelName)
+        await activateGroup(channelName)
         setActiveGroup(channelName)
       }
 

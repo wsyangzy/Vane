@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS request_logs (
     endpoint_chain TEXT,                    -- 端点尝试链路（简略）
     group_name TEXT,                        -- 所属组名
     model_name TEXT,                        -- Claude模型名称
+    original_model_name TEXT,               -- 模型改写前的原始请求模型
+    model_rewrite_source TEXT,              -- 模型改写来源：mapping/channel_model
+    model_rewrite_target TEXT,              -- 模型改写后的目标模型
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
     provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
 
@@ -46,7 +49,10 @@ CREATE TABLE IF NOT EXISTS request_logs (
     
     -- Token统计
     input_tokens INTEGER DEFAULT 0,        -- 输入token数
-    output_tokens INTEGER DEFAULT 0,       -- 输出token数
+    output_tokens INTEGER DEFAULT 0,       -- 输出token数（上游原始 output_tokens）
+    reasoning_tokens INTEGER DEFAULT 0,    -- 输出中的推理 token（OpenAI/Codex output_tokens_details.reasoning_tokens）
+    billable_output_tokens INTEGER DEFAULT 0, -- 实际用于输出计费的 token 数
+    billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens', -- 输出计费口径
     cache_creation_tokens INTEGER DEFAULT 0, -- 缓存创建token数（总计，向后兼容）
     cache_creation_5m_tokens INTEGER DEFAULT 0, -- 5分钟缓存创建token数
     cache_creation_1h_tokens INTEGER DEFAULT 0, -- 1小时缓存创建token数
@@ -272,6 +278,7 @@ CREATE TABLE IF NOT EXISTS codex_channels (
     provider_type TEXT NOT NULL DEFAULT 'openai-compatible',    -- 接入类型元数据（当前不参与分流，保留扩展位）
     api_key TEXT NOT NULL,
     model TEXT NOT NULL,
+    model_mapping TEXT NOT NULL DEFAULT '{}',                    -- 渠道级请求模型映射 JSON object：source_model -> target_model
     model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh',
     enable_1m_context INTEGER NOT NULL DEFAULT 0,
     website TEXT,
@@ -306,6 +313,7 @@ CREATE TABLE IF NOT EXISTS codex_endpoints (
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,      -- 输入 token 成本倍率
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 输出 token 成本倍率
     cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0, -- 缓存读取成本倍率
+    billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens', -- 输出计费口径
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -410,5 +418,3 @@ CREATE TRIGGER IF NOT EXISTS update_settings_timestamp
 BEGIN
     UPDATE settings SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 END;
-
-

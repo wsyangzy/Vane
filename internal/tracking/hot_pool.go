@@ -21,25 +21,31 @@ type ActiveRequest struct {
 	Provider    string    `json:"provider"` // 提供商标识: claude/codex
 
 	// 可变状态（频繁更新）
-	Status        string `json:"status"`         // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
-	Channel       string `json:"channel"`        // 渠道标签（来自端点配置）
-	EndpointName  string `json:"endpoint_name"`  // 当前使用的端点
-	EndpointChain string `json:"endpoint_chain"` // 端点尝试链路（简略）
-	GroupName     string `json:"group_name"`     // 当前使用的组
-	RetryCount    int    `json:"retry_count"`    // 重试次数
-	HTTPStatus    int    `json:"http_status"`    // HTTP状态码
-	ModelName     string `json:"model_name"`     // 模型名称
-	FailureReason string `json:"failure_reason"` // 失败原因
-	CancelReason  string `json:"cancel_reason"`  // 取消原因
+	Status             string `json:"status"`               // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
+	Channel            string `json:"channel"`              // 渠道标签（来自端点配置）
+	EndpointName       string `json:"endpoint_name"`        // 当前使用的端点
+	EndpointChain      string `json:"endpoint_chain"`       // 端点尝试链路（简略）
+	GroupName          string `json:"group_name"`           // 当前使用的组
+	RetryCount         int    `json:"retry_count"`          // 重试次数
+	HTTPStatus         int    `json:"http_status"`          // HTTP状态码
+	ModelName          string `json:"model_name"`           // 模型名称
+	OriginalModelName  string `json:"original_model_name"`  // 改写前的原始请求模型
+	ModelRewriteSource string `json:"model_rewrite_source"` // 模型改写来源：mapping/channel_model
+	ModelRewriteTarget string `json:"model_rewrite_target"` // 改写后的目标模型
+	FailureReason      string `json:"failure_reason"`       // 失败原因
+	CancelReason       string `json:"cancel_reason"`        // 取消原因
 
 	// Token 累积（流式请求实时更新）
-	InputTokens            int64 `json:"input_tokens"`
-	OutputTokens           int64 `json:"output_tokens"`
-	CacheCreationTokens    int64 `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
-	CacheCreation5mTokens  int64 `json:"cache_creation_5m_tokens"` // 5分钟缓存
-	CacheCreation1hTokens  int64 `json:"cache_creation_1h_tokens"` // 1小时缓存
-	CacheReadTokens        int64 `json:"cache_read_tokens"`
-	InputIncludesCacheRead bool  `json:"-"` // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	InputTokens              int64  `json:"input_tokens"`
+	OutputTokens             int64  `json:"output_tokens"`
+	ReasoningTokens          int64  `json:"reasoning_tokens"`
+	BillableOutputTokens     int64  `json:"billable_output_tokens"`
+	CacheCreationTokens      int64  `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
+	CacheCreation5mTokens    int64  `json:"cache_creation_5m_tokens"` // 5分钟缓存
+	CacheCreation1hTokens    int64  `json:"cache_creation_1h_tokens"` // 1小时缓存
+	CacheReadTokens          int64  `json:"cache_read_tokens"`
+	InputIncludesCacheRead   bool   `json:"-"` // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	BillingOutputTokenSource string `json:"billing_output_token_source"`
 
 	// 端点倍率快照（请求开始时由生命周期管理器写入，归档时持久化）
 	// 默认 1.0 = 不影响成本；用于详情页面展示计费过程
@@ -587,5 +593,6 @@ func NewActiveRequest(requestID, clientIP, userAgent, method, path string, isStr
 		CacheCreationCostMultiplier:   1.0,
 		CacheCreationCostMultiplier1h: 1.0,
 		CacheReadCostMultiplier:       1.0,
+		BillingOutputTokenSource:      BillingOutputTokenSourceOutput,
 	}
 }

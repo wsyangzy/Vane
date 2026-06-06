@@ -3,6 +3,8 @@
 // 2025-12-01 09:30:08
 // ============================================
 
+import { Replace } from 'lucide-react';
+
 /**
  * 根据模型名称获取对应的颜色类名
  */
@@ -65,21 +67,66 @@ const getModelColorClasses = (modelName) => {
   return 'bg-slate-50 text-slate-600 border-slate-200';
 };
 
+const getRewriteIndicator = (source) => {
+  switch (source) {
+    case 'mapping':
+      return {
+        label: '模型映射',
+        classes: 'text-orange-500'
+      };
+    case 'channel_model':
+      return {
+        label: '渠道模型覆盖',
+        classes: 'text-violet-500'
+      };
+    default:
+      return null;
+  }
+};
+
 /**
  * ModelTag - 显示模型名称的标签组件
  * @param {Object} props
  * @param {string} props.model - 模型名称
  */
-const ModelTag = ({ model, className = '', title }) => {
+const ModelTag = ({
+  model,
+  className = '',
+  title,
+  rewriteSource = '',
+  originalModel = '',
+  rewriteTarget = ''
+}) => {
   const colorClasses = getModelColorClasses(model);
   const displayName = (!model || model === 'unknown') ? '-' : model;
+  const rewriteIndicator = getRewriteIndicator(rewriteSource);
+  const rewriteTitle = rewriteIndicator
+    ? `${rewriteIndicator.label}: ${originalModel || '-'} -> ${rewriteTarget || displayName}`
+    : '';
+
+  const tag = (
+    <span
+      className={`px-2 py-1 rounded text-xs font-mono border transition-all ${colorClasses} ${className}`}
+      title={rewriteIndicator ? undefined : (title || displayName)}
+    >
+      {displayName}
+    </span>
+  );
+
+  if (!rewriteIndicator) {
+    return tag;
+  }
 
   return (
     <span
-      className={`px-2 py-1 rounded text-xs font-mono border transition-all ${colorClasses} ${className}`}
-      title={title || displayName}
+      className="relative inline-flex align-middle"
+      title={title || rewriteTitle}
     >
-      {displayName}
+      {tag}
+      <Replace
+        className={`absolute left-full top-1/2 ml-1.5 h-3.5 w-3.5 -translate-y-1/2 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
+        aria-label={rewriteIndicator.label}
+      />
     </span>
   );
 };

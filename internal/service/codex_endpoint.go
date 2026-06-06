@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 var codexEndpointNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s_\-]{0,63}$`)
@@ -83,9 +84,10 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	return created, nil
 }
 
-func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64) error {
+func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)
+	billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource)
 	if err := validateCodexEndpointName(name); err != nil {
 		return err
 	}
@@ -101,7 +103,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
-	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier {
+	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource {
 		return nil
 	}
 
@@ -125,7 +127,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
-	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier)
+	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource)
 }
 
 // DeleteEndpoint 删除端点。若被删除的是当前激活端点：
@@ -177,6 +179,7 @@ func normalizeAndValidateCodexEndpoint(record *store.CodexEndpointRecord) error 
 	}
 	record.Name = strings.TrimSpace(record.Name)
 	record.BaseURL = strings.TrimSpace(record.BaseURL)
+	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
 	if err := validateCodexEndpointName(record.Name); err != nil {
 		return err
 	}

@@ -282,7 +282,14 @@ const renderCell = (columnId, request) => {
     case 'status':
       return <RequestStatusBadge status={request.status} />;
     case 'model':
-      return <ModelTag model={request.model} />;
+      return (
+        <ModelTag
+          model={request.model}
+          rewriteSource={request.modelRewriteSource || request.model_rewrite_source || ''}
+          originalModel={request.originalModelName || request.original_model_name || ''}
+          rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
+        />
+      );
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':

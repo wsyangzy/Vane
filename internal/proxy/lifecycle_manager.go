@@ -515,9 +515,7 @@ func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, cha
 		return
 	}
 
-	// 用 channel + endpointName 构造与 tracker 缓存一致的 key
-	key := tracking.EndpointMultiplierKey(channel, endpointName)
-	mult := rlm.usageTracker.GetEndpointMultiplier(key)
+	mult := rlm.usageTracker.GetEndpointMultiplierForEndpoint(channel, endpointName)
 
 	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
