@@ -4,6 +4,7 @@
 // 渠道切换器条件显示（仅在未开启渠道间故障转移时显示）
 // ============================================
 
+import { useEffect, useRef } from 'react';
 import { Filter, Settings2, ChevronDown } from 'lucide-react';
 import { TIME_RANGE_OPTIONS } from '../utils/constants.js';
 import ViewConfigPanel from './ViewConfigPanel.jsx';
@@ -29,6 +30,7 @@ import ActiveGroupSwitcher from './ActiveGroupSwitcher.jsx';
  * @param {string} props.activeGroup - 当前活跃渠道名称
  * @param {Function} props.onGroupSwitch - 渠道切换回调 (channelName) => void
  * @param {boolean} props.interChannelFailoverEnabled - 渠道间故障转移是否启用
+ * @param {React.ReactNode} props.filterPanel - 筛选面板
  */
 const Toolbar = ({
   activeTimeRange = 'today',
@@ -46,8 +48,23 @@ const Toolbar = ({
   groups = [],
   activeGroup = '',
   onGroupSwitch,
-  interChannelFailoverEnabled = false
+  interChannelFailoverEnabled = false,
+  filterPanel = null
 }) => {
+  const viewConfigRef = useRef(null);
+
+  useEffect(() => {
+    if (!isViewConfigOpen) return;
+
+    const handlePointerDown = (event) => {
+      if (viewConfigRef.current?.contains(event.target)) return;
+      onViewConfigToggle?.(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isViewConfigOpen, onViewConfigToggle]);
+
   return (
     <div className="flex flex-wrap items-center gap-3">
       {/* 端点快捷切换器 - 仅在未开启渠道间故障转移时显示 */}
@@ -84,24 +101,27 @@ const Toolbar = ({
       <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
 
       {/* 筛选按钮 */}
-      <button
-        onClick={onFilterToggle}
-        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all shadow-sm border ${
-          isFilterOpen
-            ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
-            : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
-        }`}
-      >
-        <Filter className="w-4 h-4" /> 筛选
-        <ChevronDown
-          className={`w-3.5 h-3.5 transition-transform ${isFilterOpen ? 'rotate-180' : ''}`}
-        />
-      </button>
+      <div className="relative">
+        <button
+          onClick={onFilterToggle}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all shadow-sm border ${
+            isFilterOpen
+              ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
+              : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+          }`}
+        >
+          <Filter className="w-4 h-4" /> 筛选
+          <ChevronDown
+            className={`w-3.5 h-3.5 transition-transform ${isFilterOpen ? 'rotate-180' : ''}`}
+          />
+        </button>
+        {filterPanel}
+      </div>
 
       <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
 
       {/* 列配置按钮 */}
-      <div className="relative">
+      <div ref={viewConfigRef} className="relative">
         <button
           onClick={onViewConfigToggle}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all shadow-sm border ${
@@ -109,7 +129,6 @@ const Toolbar = ({
               ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
               : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:text-indigo-600 hover:border-indigo-200'
           }`}
-          title="自定义显示列"
         >
           <Settings2 className="w-4 h-4" />
           <span className="hidden sm:inline font-medium">显示</span>

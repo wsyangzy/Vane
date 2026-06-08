@@ -4,6 +4,7 @@
 // ============================================
 
 import { useState } from 'react';
+import { Tooltip } from '@components/ui';
 
 /**
  * iOS 风格滑动开关
@@ -51,12 +52,11 @@ const ToggleSwitch = ({
 
   const s = sizes[size] || sizes.sm;
 
-  return (
+  const button = (
     <button
       type="button"
       onClick={handleClick}
       disabled={disabled || loading}
-      title={title}
       className={`
         relative inline-flex items-center shrink-0 rounded-full
         transition-colors duration-200 ease-in-out
@@ -71,6 +71,7 @@ const ToggleSwitch = ({
       `}
       role="switch"
       aria-checked={enabled}
+      aria-label={title}
     >
       {/* 滑块 */}
       <span
@@ -83,6 +84,14 @@ const ToggleSwitch = ({
         `}
       />
     </button>
+  );
+
+  if (!title) return button;
+
+  return (
+    <Tooltip content={title}>
+      {button}
+    </Tooltip>
   );
 };
 

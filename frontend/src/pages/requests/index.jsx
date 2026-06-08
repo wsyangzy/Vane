@@ -48,9 +48,7 @@ const RequestsPage = () => {
   // 筛选器 Hook
   const {
     filters,
-    updateFilter,
     updateFilters,
-    resetFilters,
     buildQueryParams
   } = useFilters();
 
@@ -219,20 +217,19 @@ const RequestsPage = () => {
   };
 
   // 列配置面板切换
-  const handleViewConfigToggle = () => {
-    setIsViewConfigOpen(!isViewConfigOpen);
-    setIsFilterOpen(false); // 关闭筛选面板
+  const handleViewConfigToggle = (nextOpen) => {
+    const resolvedOpen = typeof nextOpen === 'boolean' ? nextOpen : !isViewConfigOpen;
+    setIsViewConfigOpen(resolvedOpen);
+    if (resolvedOpen) {
+      setIsFilterOpen(false); // 关闭筛选面板
+    }
   };
 
   // 应用筛选
-  const handleApplyFilters = () => {
-    setPagination(prev => ({ ...prev, page: 1 }));
-    loadData();
-  };
-
-  // 重置筛选
-  const handleResetFilters = () => {
-    resetFilters();
+  const handleApplyFilters = (nextFilters) => {
+    if (nextFilters) {
+      updateFilters(nextFilters);
+    }
     setPagination(prev => ({ ...prev, page: 1 }));
   };
 
@@ -248,17 +245,6 @@ const RequestsPage = () => {
       pageSize: newPageSize,
       page: 1 // 重置到第一页
     }));
-  };
-
-  // 快捷时间选择（筛选面板内）
-  const handleQuickTimeSelect = () => {
-    // 这里可以实现快捷时间选择的逻辑
-    // 简化实现：直接更新到"今天"
-    const todayRange = {
-      startDate: filters.startDate,
-      endDate: filters.endDate
-    };
-    updateFilters(todayRange);
   };
 
   // 双击行打开详情
@@ -364,23 +350,18 @@ const RequestsPage = () => {
           activeGroup={activeGroup}
           onGroupSwitch={handleGroupSwitch}
           interChannelFailoverEnabled={interChannelFailoverEnabled}
+          filterPanel={
+            <FiltersPanel
+              isOpen={isFilterOpen}
+              onClose={() => setIsFilterOpen(false)}
+              filters={filters}
+              onApply={handleApplyFilters}
+              models={models}
+              channels={channels}
+              endpoints={allEndpoints}
+            />
+          }
         />
-
-        {/* 筛选面板（弹出式） */}
-        <div className="absolute top-full left-0 right-0 z-10">
-          <FiltersPanel
-            isOpen={isFilterOpen}
-            onClose={() => setIsFilterOpen(false)}
-            filters={filters}
-            updateFilter={updateFilter}
-            onApply={handleApplyFilters}
-            onReset={handleResetFilters}
-            models={models}
-            channels={channels}
-            endpoints={allEndpoints}
-            onQuickTimeSelect={handleQuickTimeSelect}
-          />
-        </div>
       </div>
 
       {/* 统计概览 - 面板打开时blur */}

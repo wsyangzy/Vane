@@ -239,7 +239,7 @@ const UserMenu = () => {
         className={`w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 border-2 border-white shadow-md cursor-pointer transition-all duration-200 ${
           isOpen ? 'ring-2 ring-indigo-300 scale-105' : 'hover:ring-2 ring-indigo-200 hover:scale-105'
         }`}
-        title="用户菜单"
+        aria-label="用户菜单"
       />
 
       {/* 下拉菜单 */}
@@ -311,7 +311,7 @@ const UserMenu = () => {
                           ? 'text-slate-300 cursor-not-allowed'
                           : 'text-slate-400 hover:text-purple-600 hover:bg-purple-100'
                       }`}
-                      title="重新检测版本"
+                      aria-label="重新检测版本"
                     >
                       <RefreshCw size={13} className={isCheckingVersion ? 'animate-spin' : ''} />
                     </button>
@@ -342,71 +342,69 @@ const UserMenu = () => {
               </div>
             </div>
 
-            {/* Codex 版本（仅在 Codex 启用时显示） */}
-            {systemInfo?.codex_enabled && (
-              <div
-                className="flex items-center justify-between transition-all duration-300 ease-out"
-                style={{
-                  opacity: isLoaded ? 1 : 0,
-                  transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-                  transitionDelay: '75ms'
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-green-100 rounded-lg transition-transform duration-300 hover:scale-110">
-                    <Terminal size={14} className="text-green-600" />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className="text-xs font-medium text-slate-500">Codex</span>
-                    {codexVersionCheckedAt && (
-                      <span className="text-[10px] text-slate-400">
-                        {formatCheckedAt(codexVersionCheckedAt)}检测
-                      </span>
-                    )}
-                  </div>
+            {/* Codex 版本 */}
+            <div
+              className="flex items-center justify-between transition-all duration-300 ease-out"
+              style={{
+                opacity: isLoaded ? 1 : 0,
+                transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
+                transitionDelay: '75ms'
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-green-100 rounded-lg transition-transform duration-300 hover:scale-110">
+                  <Terminal size={14} className="text-green-600" />
                 </div>
-                <div className="flex items-center gap-1.5">
-                  {codexVersion ? (
-                    <>
-                      <button
-                        onClick={checkCodexVersion}
-                        disabled={isCheckingCodexVersion}
-                        className={`p-1 rounded-md transition-all duration-200 ${
-                          isCheckingCodexVersion
-                            ? 'text-slate-300 cursor-not-allowed'
-                            : 'text-slate-400 hover:text-green-600 hover:bg-green-100'
-                        }`}
-                        title="重新检测版本"
-                      >
-                        <RefreshCw size={13} className={isCheckingCodexVersion ? 'animate-spin' : ''} />
-                      </button>
-                      <span className="text-sm font-semibold text-green-600 font-mono">
-                        {isCheckingCodexVersion ? '检测中...' : codexVersion}
-                      </span>
-                    </>
-                  ) : (
-                    <button
-                      onClick={checkCodexVersion}
-                      disabled={isCheckingCodexVersion}
-                      className={`text-sm font-medium transition-colors duration-200 ${
-                        isCheckingCodexVersion
-                          ? 'text-slate-400 cursor-not-allowed'
-                          : 'text-green-500 hover:text-green-600 cursor-pointer'
-                      }`}
-                    >
-                      {isCheckingCodexVersion ? (
-                        <span className="flex items-center gap-1.5">
-                          <RefreshCw size={12} className="animate-spin" />
-                          检测中
-                        </span>
-                      ) : (
-                        '点击检测'
-                      )}
-                    </button>
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium text-slate-500">Codex</span>
+                  {codexVersionCheckedAt && (
+                    <span className="text-[10px] text-slate-400">
+                      {formatCheckedAt(codexVersionCheckedAt)}检测
+                    </span>
                   )}
                 </div>
               </div>
-            )}
+              <div className="flex items-center gap-1.5">
+                {codexVersion ? (
+                  <>
+                    <button
+                      onClick={checkCodexVersion}
+                      disabled={isCheckingCodexVersion}
+                      className={`p-1 rounded-md transition-all duration-200 ${
+                        isCheckingCodexVersion
+                          ? 'text-slate-300 cursor-not-allowed'
+                          : 'text-slate-400 hover:text-green-600 hover:bg-green-100'
+                      }`}
+                      aria-label="重新检测版本"
+                    >
+                      <RefreshCw size={13} className={isCheckingCodexVersion ? 'animate-spin' : ''} />
+                    </button>
+                    <span className="text-sm font-semibold text-green-600 font-mono">
+                      {isCheckingCodexVersion ? '检测中...' : codexVersion}
+                    </span>
+                  </>
+                ) : (
+                  <button
+                    onClick={checkCodexVersion}
+                    disabled={isCheckingCodexVersion}
+                    className={`text-sm font-medium transition-colors duration-200 ${
+                      isCheckingCodexVersion
+                        ? 'text-slate-400 cursor-not-allowed'
+                        : 'text-green-500 hover:text-green-600 cursor-pointer'
+                    }`}
+                  >
+                    {isCheckingCodexVersion ? (
+                      <span className="flex items-center gap-1.5">
+                        <RefreshCw size={12} className="animate-spin" />
+                        检测中
+                      </span>
+                    ) : (
+                      '点击检测'
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
 
             <InfoItem
               icon={Clock}
@@ -442,16 +440,14 @@ const UserMenu = () => {
                     ? 'bg-emerald-100 text-emerald-600 scale-105'
                     : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 hover:scale-105'
                 }`}
-                title={copied ? '已复制' : '复制代理地址'}
+                aria-label={copied ? '已复制' : '复制代理地址'}
               >
                 {copied ? <Check size={16} /> : <Copy size={16} />}
               </button>
             </div>
             <div className="flex items-center gap-2 mt-2 px-1">
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600">Claude</span>
-              {systemInfo?.codex_enabled && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-600">Codex</span>
-              )}
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-600">Codex</span>
             </div>
           </div>
 
@@ -471,15 +467,13 @@ const UserMenu = () => {
               <FolderOpen size={16} className="text-slate-400" />
               <span>打开 Claude 配置目录</span>
             </button>
-            {systemInfo?.codex_enabled && (
-              <button
-                onClick={handleOpenCodexConfigDir}
-                className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-all duration-150 hover:translate-x-1"
-              >
-                <FolderOpen size={16} className="text-slate-400" />
-                <span>打开 Codex 配置目录</span>
-              </button>
-            )}
+            <button
+              onClick={handleOpenCodexConfigDir}
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-all duration-150 hover:translate-x-1"
+            >
+              <FolderOpen size={16} className="text-slate-400" />
+              <span>打开 Codex 配置目录</span>
+            </button>
             <button
               onClick={handleOpenLogDir}
               className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-all duration-150 hover:translate-x-1"

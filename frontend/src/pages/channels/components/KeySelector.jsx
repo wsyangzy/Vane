@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, Key, Check, Search, Settings2, Gauge } from 'lucide-react';
-import { useToast } from '@components/ui';
+import { Tooltip, useToast } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 
 /**
@@ -266,9 +266,11 @@ const KeySelector = ({
           {tokenType}
         </span>
         {/* Token 名称 */}
-        <span className="text-xs font-medium text-slate-700 truncate flex-1" title={activeKey.masked}>
-          {activeKey.name || 'default'}
-        </span>
+        <Tooltip content={activeKey.masked} className="min-w-0 flex-1">
+          <span className="block text-xs font-medium text-slate-700 truncate">
+            {activeKey.name || 'default'}
+          </span>
+        </Tooltip>
       </div>
     );
   }
@@ -299,33 +301,35 @@ const KeySelector = ({
   return (
     <>
       {/* 触发按钮 - Command Palette 风格 */}
-      <button
-        onClick={() => !disabled && !switching && setIsModalOpen(true)}
-        disabled={disabled || switching}
-        className={`
-          group relative inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border rounded-lg
-          transition-all duration-200 w-[160px]
-          ${disabled || switching
-            ? 'opacity-50 cursor-not-allowed border-slate-200'
-            : 'cursor-pointer border-slate-200 hover:border-indigo-300 hover:ring-2 hover:ring-indigo-100 hover:shadow-sm'}
-        `}
-        title={`点击更换 Token - ${displayName}`}
-      >
-        {/* 类型指示器 */}
-        <div className={`flex items-center justify-center h-6 px-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${tokenTypeColor} flex-shrink-0`}>
-          {tokenType}
-        </div>
+      <Tooltip content={`点击更换 Token - ${displayName}`}>
+        <button
+          onClick={() => !disabled && !switching && setIsModalOpen(true)}
+          disabled={disabled || switching}
+          className={`
+            group relative inline-flex items-center gap-2 px-2.5 py-1.5 bg-white border rounded-lg
+            transition-all duration-200 w-[160px]
+            ${disabled || switching
+              ? 'opacity-50 cursor-not-allowed border-slate-200'
+              : 'cursor-pointer border-slate-200 hover:border-indigo-300 hover:ring-2 hover:ring-indigo-100 hover:shadow-sm'}
+          `}
+          aria-label={`点击更换 Token - ${displayName}`}
+        >
+          {/* 类型指示器 */}
+          <div className={`flex items-center justify-center h-6 px-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${tokenTypeColor} flex-shrink-0`}>
+            {tokenType}
+          </div>
 
-        {/* Token 名称 */}
-        <span className="flex-1 text-xs font-medium text-slate-700 truncate text-left">
-          {switching ? '切换中...' : displayName}
-        </span>
+          {/* Token 名称 */}
+          <span className="flex-1 text-xs font-medium text-slate-700 truncate text-left">
+            {switching ? '切换中...' : displayName}
+          </span>
 
-        {/* 下拉图标 */}
-        <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-          <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
-        </div>
-      </button>
+          {/* 下拉图标 */}
+          <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <ChevronDown className="w-3.5 h-3.5 text-indigo-400" />
+          </div>
+        </button>
+      </Tooltip>
 
       {/* Command Palette 模态框 */}
       <TokenSelectionModal

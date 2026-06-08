@@ -483,12 +483,6 @@ func (a *App) GetConfigSourceInfo() ([]ConfigSourceInfo, error) {
 			Source:       string(service.ConfigSourceYAML),
 			Notes:        "P5.5 待迁移",
 		},
-		{
-			Category: service.CategoryServer, Key: "codex_enabled",
-			CurrentValue: fmt.Sprintf("%v", cfg.CodexServer.Enabled),
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "YAML 初始值（运行时由 SQLite 管理）",
-		},
 	}
 	infos = append(infos, yamlOnlyConfigs...)
 

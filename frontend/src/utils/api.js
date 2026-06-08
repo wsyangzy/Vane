@@ -285,6 +285,11 @@ export const fetchUsageStats = async (params = {}) => {
 export const fetchRequests = async (params = {}) => {
   // 标准化请求数据（提取到外部，Wails和HTTP环境共用）
   const normalizeRequest = (request) => {
+    const normalizeNumberOrNull = (value) => {
+      if (value === null || value === undefined || value === '') return null;
+      const num = Number(value);
+      return Number.isFinite(num) ? num : null;
+    };
     const rawRequestId = request.request_id || request.requestId || request.id;
     const rawRequestIdStr = typeof rawRequestId === 'string' ? rawRequestId : String(rawRequestId || '');
 
@@ -343,6 +348,7 @@ export const fetchRequests = async (params = {}) => {
       endpointChainLength,
       group: request.group_name || request.group || 'default',
       duration: request.duration_ms || request.duration || 0,
+      firstByteMs: normalizeNumberOrNull(request.first_byte_ms ?? request.firstByteMs ?? request.first_byte_time ?? request.firstByteTime),
       inputTokens: request.input_tokens || request.inputTokens || 0,
       outputTokens: request.output_tokens || request.outputTokens || 0,
       reasoningTokens: request.reasoning_tokens ?? request.reasoningTokens ?? 0,
@@ -366,6 +372,10 @@ export const fetchRequests = async (params = {}) => {
       cacheCreationCostMultiplier: request.cache_creation_cost_multiplier ?? request.cacheCreationCostMultiplier ?? 1.0,
       cacheCreationCostMultiplier1h: request.cache_creation_cost_multiplier_1h ?? request.cacheCreationCostMultiplier1h ?? 1.0,
       cacheReadCostMultiplier: request.cache_read_cost_multiplier ?? request.cacheReadCostMultiplier ?? 1.0,
+      modelCostMultiplier: request.model_cost_multiplier ?? request.modelCostMultiplier ?? 1.0,
+      modelInputCostMultiplier: request.model_input_cost_multiplier ?? request.modelInputCostMultiplier ?? 1.0,
+      modelOutputCostMultiplier: request.model_output_cost_multiplier ?? request.modelOutputCostMultiplier ?? 1.0,
+      modelCacheReadCostMultiplier: request.model_cache_read_cost_multiplier ?? request.modelCacheReadCostMultiplier ?? 1.0,
       isStreaming: request.is_streaming || request.isStreaming || false,
       statusCode: request.status_code || request.statusCode
     });

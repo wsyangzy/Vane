@@ -1078,6 +1078,9 @@ func (rlm *RequestLifecycleManager) GetMaxRestarts() int {
 // 🔥 [重复计费防护] 2025-12-26: 用于防止已输出内容的请求重试导致重复计费
 func (rlm *RequestLifecycleManager) MarkOutputSent() {
 	rlm.stateManager.MarkOutputSent()
+	if rlm.usageTracker != nil {
+		rlm.usageTracker.RecordOutputSent(rlm.stateManager.GetRequestID())
+	}
 	slog.Debug(fmt.Sprintf("🔒 [输出标记] [%s] 已标记为输出内容，禁止重试", rlm.stateManager.GetRequestID()))
 }
 

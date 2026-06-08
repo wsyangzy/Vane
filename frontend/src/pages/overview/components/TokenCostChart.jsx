@@ -16,6 +16,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { fetchEndpointCostsData } from '@utils/api.js';
+import { Tooltip as UiTooltip } from '@components/ui';
 
 // 格式化 Token 数量
 const formatTokens = (value) => {
@@ -138,14 +139,16 @@ const TokenCostChart = () => {
           </div>
           <h3 className="font-semibold text-slate-900">当日端点 Token 成本</h3>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-          className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
-          title="刷新数据"
-        >
-          <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-        </button>
+        <UiTooltip content="刷新数据">
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
+            aria-label="刷新数据"
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+          </button>
+        </UiTooltip>
       </div>
       <p className="text-xs text-slate-500 mb-4">Token 使用量与预估成本对照</p>
 

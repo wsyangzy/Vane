@@ -957,10 +957,7 @@ func (a *App) syncActiveCodexChannelToConfig(channel *store.CodexChannelRecord, 
 
 // isCodexProxyEnabled 判断 Codex 代理是否启用
 func (a *App) isCodexProxyEnabled() bool {
-	a.mu.RLock()
-	cfg := a.config
-	a.mu.RUnlock()
-	return cfg != nil && cfg.CodexServer.Enabled
+	return true
 }
 
 // applyCodexProxyOverride 已废弃 - 代理启用时不再修改 config.toml

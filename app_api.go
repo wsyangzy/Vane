@@ -57,7 +57,7 @@ type SystemStatus struct {
 	ConfigPath    string `json:"config_path"`
 	AuthEnabled   bool   `json:"auth_enabled"`
 
-	// Codex 代理状态（v7.2+ 合并到主端口，仅保留 enabled 标识）
+	// Codex 代理状态（v7.2+ 合并到主端口，运行时默认可用）
 	CodexProxyEnabled bool `json:"codex_proxy_enabled"`
 }
 
@@ -87,8 +87,8 @@ func (a *App) GetSystemStatus() SystemStatus {
 			status.ProxyRunning = a.checkPortListening(status.ProxyHost, status.ProxyPort)
 		}
 
-		// Codex 代理状态（v7.2+ 合并到主端口，仅标识是否启用）
-		status.CodexProxyEnabled = a.config.CodexServer.Enabled
+		// Codex 代理与 Claude 代理共用主端口，保留字段用于前端兼容。
+		status.CodexProxyEnabled = true
 	}
 
 	if a.endpointManager != nil {
@@ -308,11 +308,11 @@ func (a *App) checkPortListening(host string, port int) bool {
 
 // PortConflictStatus 端口冲突状态
 type PortConflictStatus struct {
-	HasConflict   bool   `json:"has_conflict"`    // 是否存在冲突
-	ConflictPort  int    `json:"conflict_port"`   // 冲突的端口号
-	ErrorMessage  string `json:"error_message"`   // 错误信息
-	ProxyAddress  string `json:"proxy_address"`   // 当前代理地址（成功时）
-	ProxyRunning  bool   `json:"proxy_running"`   // 代理是否正在运行
+	HasConflict  bool   `json:"has_conflict"`  // 是否存在冲突
+	ConflictPort int    `json:"conflict_port"` // 冲突的端口号
+	ErrorMessage string `json:"error_message"` // 错误信息
+	ProxyAddress string `json:"proxy_address"` // 当前代理地址（成功时）
+	ProxyRunning bool   `json:"proxy_running"` // 代理是否正在运行
 }
 
 // GetPortConflictStatus 获取端口冲突状态

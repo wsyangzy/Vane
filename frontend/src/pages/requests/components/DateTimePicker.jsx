@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, Clock, X } from 'lucide-react';
+import { CustomSelect } from '@components/ui';
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
@@ -164,6 +165,14 @@ const DateTimePicker = ({
   const hourValue = selectedDate ? selectedDate.getHours() : defaultTime.hour || 0;
   const minuteValue = selectedDate ? selectedDate.getMinutes() : defaultTime.minute || 0;
   const displayValue = selectedDate ? formatDisplayDateTime(selectedDate) : '';
+  const hourOptions = useMemo(
+    () => Array.from({ length: 24 }).map((_, i) => ({ value: String(i), label: pad2(i) })),
+    []
+  );
+  const minuteOptions = useMemo(
+    () => Array.from({ length: 60 }).map((_, i) => ({ value: String(i), label: pad2(i) })),
+    []
+  );
 
   return (
     <div className="relative" ref={containerRef}>
@@ -250,29 +259,21 @@ const DateTimePicker = ({
           <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Clock className="w-4 h-4 text-gray-400" />
-              <select
-                className="h-9 px-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                value={hourValue}
-                onChange={(e) => setTimePart(Number(e.target.value), minuteValue)}
-              >
-                {Array.from({ length: 24 }).map((_, i) => (
-                  <option key={i} value={i}>
-                    {pad2(i)}
-                  </option>
-                ))}
-              </select>
+              <CustomSelect
+                options={hourOptions}
+                value={String(hourValue)}
+                onChange={(nextValue) => setTimePart(Number(nextValue), minuteValue)}
+                size="xs"
+                minWidth={58}
+              />
               <span className="text-gray-400 text-sm">:</span>
-              <select
-                className="h-9 px-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                value={minuteValue}
-                onChange={(e) => setTimePart(hourValue, Number(e.target.value))}
-              >
-                {Array.from({ length: 60 }).map((_, i) => (
-                  <option key={i} value={i}>
-                    {pad2(i)}
-                  </option>
-                ))}
-              </select>
+              <CustomSelect
+                options={minuteOptions}
+                value={String(minuteValue)}
+                onChange={(nextValue) => setTimePart(hourValue, Number(nextValue))}
+                size="xs"
+                minWidth={58}
+              />
             </div>
 
             <div className="flex items-center gap-2">

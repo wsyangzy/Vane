@@ -86,24 +86,25 @@ type CodexChannelInfo struct {
 
 // CodexEndpointInfo 提供给前端展示的端点信息（name + base_url）。
 type CodexEndpointInfo struct {
-	ID                       int64   `json:"id"`
-	ChannelID                int64   `json:"channel_id"`
-	Name                     string  `json:"name"`
-	BaseURL                  string  `json:"base_url"`
-	IsActive                 bool    `json:"is_active"`
-	FailoverEnabled          bool    `json:"failover_enabled"`
-	Healthy                  bool    `json:"healthy"`
-	HealthState              string  `json:"health_state"`
-	HealthInScope            bool    `json:"health_in_scope"`
-	ResponseTimeMS           int64   `json:"response_time_ms"`
-	Priority                 int     `json:"priority"`
-	CostMultiplier           float64 `json:"costMultiplier"`
-	InputCostMultiplier      float64 `json:"inputCostMultiplier"`
-	OutputCostMultiplier     float64 `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  float64 `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource string  `json:"billingOutputTokenSource"`
-	CreatedAt                string  `json:"created_at"`
-	UpdatedAt                string  `json:"updated_at"`
+	ID                       int64                              `json:"id"`
+	ChannelID                int64                              `json:"channel_id"`
+	Name                     string                             `json:"name"`
+	BaseURL                  string                             `json:"base_url"`
+	IsActive                 bool                               `json:"is_active"`
+	FailoverEnabled          bool                               `json:"failover_enabled"`
+	Healthy                  bool                               `json:"healthy"`
+	HealthState              string                             `json:"health_state"`
+	HealthInScope            bool                               `json:"health_in_scope"`
+	ResponseTimeMS           int64                              `json:"response_time_ms"`
+	Priority                 int                                `json:"priority"`
+	CostMultiplier           float64                            `json:"costMultiplier"`
+	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
+	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	CreatedAt                string                             `json:"created_at"`
+	UpdatedAt                string                             `json:"updated_at"`
 }
 
 // CreateCodexChannelInput 创建渠道（不含端点）。
@@ -130,28 +131,30 @@ type UpdateCodexChannelInput struct {
 }
 
 type CreateCodexEndpointInput struct {
-	ChannelID                int64   `json:"channel_id"`
-	Name                     string  `json:"name"`
-	BaseURL                  string  `json:"base_url"`
-	FailoverEnabled          *bool   `json:"failover_enabled"` // nil 时默认 true
-	Priority                 int     `json:"priority"`
-	CostMultiplier           float64 `json:"costMultiplier"`          // 默认 1.0
-	InputCostMultiplier      float64 `json:"inputCostMultiplier"`     // 默认 1.0
-	OutputCostMultiplier     float64 `json:"outputCostMultiplier"`    // 默认 1.0
-	CacheReadCostMultiplier  float64 `json:"cacheReadCostMultiplier"` // 默认 1.0
-	BillingOutputTokenSource string  `json:"billingOutputTokenSource"`
+	ChannelID                int64                              `json:"channel_id"`
+	Name                     string                             `json:"name"`
+	BaseURL                  string                             `json:"base_url"`
+	FailoverEnabled          *bool                              `json:"failover_enabled"` // nil 时默认 true
+	Priority                 int                                `json:"priority"`
+	CostMultiplier           float64                            `json:"costMultiplier"`          // 默认 1.0
+	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`     // 默认 1.0
+	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`    // 默认 1.0
+	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"` // 默认 1.0
+	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
+	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
 }
 
 type UpdateCodexEndpointInput struct {
-	Name                     string   `json:"name"`
-	BaseURL                  string   `json:"base_url"`
-	FailoverEnabled          *bool    `json:"failover_enabled"`
-	Priority                 *int     `json:"priority"`
-	CostMultiplier           *float64 `json:"costMultiplier"`
-	InputCostMultiplier      *float64 `json:"inputCostMultiplier"`
-	OutputCostMultiplier     *float64 `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  *float64 `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource *string  `json:"billingOutputTokenSource"`
+	Name                     string                             `json:"name"`
+	BaseURL                  string                             `json:"base_url"`
+	FailoverEnabled          *bool                              `json:"failover_enabled"`
+	Priority                 *int                               `json:"priority"`
+	CostMultiplier           *float64                           `json:"costMultiplier"`
+	InputCostMultiplier      *float64                           `json:"inputCostMultiplier"`
+	OutputCostMultiplier     *float64                           `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  *float64                           `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource *string                            `json:"billingOutputTokenSource"`
+	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
 }
 
 // ============================================================================
@@ -469,6 +472,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		OutputCostMultiplier:     input.OutputCostMultiplier,
 		CacheReadCostMultiplier:  input.CacheReadCostMultiplier,
 		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(input.BillingOutputTokenSource),
+		ModelMultipliers:         input.ModelMultipliers,
 	}
 
 	// 默认值：costMultiplier 为 0 时视为 1.0
@@ -559,8 +563,12 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if input.BillingOutputTokenSource != nil {
 		billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(*input.BillingOutputTokenSource)
 	}
+	modelMultipliers := previous.ModelMultipliers
+	if input.ModelMultipliers != nil {
+		modelMultipliers = input.ModelMultipliers
+	}
 
-	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource); err != nil {
+	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
 
@@ -910,6 +918,7 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 			OutputCostMultiplier:     ep.OutputCostMultiplier,
 			CacheReadCostMultiplier:  ep.CacheReadCostMultiplier,
 			BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(ep.BillingOutputTokenSource),
+			ModelMultipliers:         ep.ModelMultipliers,
 			CreatedAt:                formatCodexTime(ep.CreatedAt),
 			UpdatedAt:                formatCodexTime(ep.UpdatedAt),
 		})

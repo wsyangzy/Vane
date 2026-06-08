@@ -19,6 +19,7 @@ import {
   Loader2
 } from 'lucide-react';
 import PriorityBadge from './PriorityBadge.jsx';
+import { Tooltip } from '@components/ui';
 
 import { SetEndpointSkipHealthCheckByID } from '@wailsjs/go/main/App';
 
@@ -64,29 +65,27 @@ const HealthBadge = ({ healthState, failCode, failReason }) => {
     // 请求失败状态（与健康检查失败区分）
     case 'request_failed':
       return (
-        <div
-          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 cursor-help"
-          title={buildFailTooltip()}
-        >
-          <XCircle size={10} className="mr-1" />
-          请求失败
-          {failCode > 0 && (
-            <span className="ml-1 font-mono">({failCode})</span>
-          )}
-        </div>
+        <Tooltip content={buildFailTooltip()}>
+          <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 cursor-help">
+            <XCircle size={10} className="mr-1" />
+            请求失败
+            {failCode > 0 && (
+              <span className="ml-1 font-mono">({failCode})</span>
+            )}
+          </div>
+        </Tooltip>
       );
     case 'unhealthy':
       return (
-        <div
-          className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100 cursor-help"
-          title={buildFailTooltip()}
-        >
-          <XCircle size={10} className="mr-1" />
-          异常
-          {failCode > 0 && (
-            <span className="ml-1 font-mono">({failCode})</span>
-          )}
-        </div>
+        <Tooltip content={buildFailTooltip()}>
+          <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-600 border border-rose-100 cursor-help">
+            <XCircle size={10} className="mr-1" />
+            异常
+            {failCode > 0 && (
+              <span className="ml-1 font-mono">({failCode})</span>
+            )}
+          </div>
+        </Tooltip>
       );
     default:
       // 兼容：未提供 health_state 时回退到旧逻辑
@@ -254,10 +253,12 @@ const EndpointRow = ({
       {/* URL / 认证 */}
       <td className="px-6 py-4">
         <div className="flex flex-col space-y-1.5">
-          <div className="flex items-center text-slate-500 max-w-[240px]" title={endpoint.url}>
-            <Globe size={12} className="mr-1.5 text-slate-400 flex-shrink-0" />
-            <span className="truncate text-xs font-mono">{endpoint.url}</span>
-          </div>
+          <Tooltip content={endpoint.url} className="block max-w-[240px]">
+            <div className="flex items-center text-slate-500">
+              <Globe size={12} className="mr-1.5 text-slate-400 flex-shrink-0" />
+              <span className="truncate text-xs font-mono">{endpoint.url}</span>
+            </div>
+          </Tooltip>
           {getAuthType() && (
             <div className="flex items-center">
               <div className="flex items-center text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
@@ -277,18 +278,16 @@ const EndpointRow = ({
       {/* 高级特性 */}
       <td className="px-6 py-4">
         <div className="flex items-center space-x-2">
-          <div
-            className={`p-1.5 rounded-md ${endpoint.failoverEnabled !== false ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-300'}`}
-            title="故障转移"
-          >
-            <ArrowRightLeft size={14} />
-          </div>
-          <div
-            className={`p-1.5 rounded-md ${endpoint.supportsCountTokens ? 'bg-purple-50 text-purple-600' : 'bg-slate-100 text-slate-300'}`}
-            title="支持 Token 计数"
-          >
-            <Calculator size={14} />
-          </div>
+          <Tooltip content="故障转移">
+            <div className={`p-1.5 rounded-md ${endpoint.failoverEnabled !== false ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-300'}`}>
+              <ArrowRightLeft size={14} />
+            </div>
+          </Tooltip>
+          <Tooltip content="支持 Token 计数">
+            <div className={`p-1.5 rounded-md ${endpoint.supportsCountTokens ? 'bg-purple-50 text-purple-600' : 'bg-slate-100 text-slate-300'}`}>
+              <Calculator size={14} />
+            </div>
+          </Tooltip>
         </div>
       </td>
 
@@ -319,40 +318,46 @@ const EndpointRow = ({
           {isSqliteMode && (
             <>
               {/* 跳过健康检测快捷开关 */}
-              <button
-                onClick={handleToggleSkipHealthCheck}
-                disabled={skipToggling}
-                className={`p-1.5 rounded-md transition-colors ${
-                  skipToggling
-                    ? 'opacity-50 cursor-wait'
-                    : skipHealthCheck
-                      ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
-                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
-                }`}
-                title={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
-              >
-                {skipToggling ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : skipHealthCheck ? (
-                  <ShieldOff size={14} />
-                ) : (
-                  <ShieldBan size={14} />
-                )}
-              </button>
-              <button
-                onClick={() => onEdit?.(endpoint)}
-                className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
-                title="编辑"
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                onClick={() => onDelete?.(endpoint)}
-                className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
-                title="删除"
-              >
-                <Trash2 size={14} />
-              </button>
+              <Tooltip content={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}>
+                <button
+                  onClick={handleToggleSkipHealthCheck}
+                  disabled={skipToggling}
+                  className={`p-1.5 rounded-md transition-colors ${
+                    skipToggling
+                      ? 'opacity-50 cursor-wait'
+                      : skipHealthCheck
+                        ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                        : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                  }`}
+                  aria-label={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+                >
+                  {skipToggling ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : skipHealthCheck ? (
+                    <ShieldOff size={14} />
+                  ) : (
+                    <ShieldBan size={14} />
+                  )}
+                </button>
+              </Tooltip>
+              <Tooltip content="编辑">
+                <button
+                  onClick={() => onEdit?.(endpoint)}
+                  className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
+                  aria-label="编辑"
+                >
+                  <Pencil size={14} />
+                </button>
+              </Tooltip>
+              <Tooltip content="删除">
+                <button
+                  onClick={() => onDelete?.(endpoint)}
+                  className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
+                  aria-label="删除"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </Tooltip>
             </>
           )}
         </div>

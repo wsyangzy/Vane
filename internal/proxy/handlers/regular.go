@@ -647,6 +647,7 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		lifecycleManager.FailRequest("response_write_error", err.Error(), resp.StatusCode)
 		return
 	}
+	lifecycleManager.MarkOutputSent()
 
 	// ✅ 同步Token解析：简化逻辑，避免协程控制问题
 	slog.Debug(fmt.Sprintf("🔄 [Token解析] [%s] 开始Token解析", connID))

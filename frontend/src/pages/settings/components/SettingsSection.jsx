@@ -4,6 +4,7 @@
 // ============================================
 
 import { RotateCcw } from 'lucide-react';
+import { Tooltip } from '@components/ui';
 
 const SettingsSection = ({
   title,
@@ -30,20 +31,22 @@ const SettingsSection = ({
         </div>
       </div>
       {onReset && (
-        <button
-          onClick={onReset}
-          disabled={resetDisabled}
-          className={`
-            inline-flex items-center px-2.5 py-1.5 text-xs font-medium
-            text-slate-500 hover:text-slate-700 hover:bg-slate-100
-            rounded-lg transition-colors
-            ${resetDisabled ? 'opacity-50 cursor-not-allowed' : ''}
-          `}
-          title="重置为默认值"
-        >
-          <RotateCcw size={14} className="mr-1" />
-          重置
-        </button>
+        <Tooltip content="重置为默认值">
+          <button
+            onClick={onReset}
+            disabled={resetDisabled}
+            className={`
+              inline-flex items-center px-2.5 py-1.5 text-xs font-medium
+              text-slate-500 hover:text-slate-700 hover:bg-slate-100
+              rounded-lg transition-colors
+              ${resetDisabled ? 'opacity-50 cursor-not-allowed' : ''}
+            `}
+            aria-label="重置为默认值"
+          >
+            <RotateCcw size={14} className="mr-1" />
+            重置
+          </button>
+        </Tooltip>
       )}
     </div>
     <div className="p-6">

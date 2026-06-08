@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -84,10 +85,14 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	return created, nil
 }
 
-func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string) error {
+func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)
 	billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource)
+	normalizedModelMultipliers, err := normalizeCodexModelMultipliers(modelMultipliers)
+	if err != nil {
+		return err
+	}
 	if err := validateCodexEndpointName(name); err != nil {
 		return err
 	}
@@ -103,7 +108,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
-	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource {
+	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
 		return nil
 	}
 
@@ -127,7 +132,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
-	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource)
+	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
 }
 
 // DeleteEndpoint 删除端点。若被删除的是当前激活端点：
@@ -180,10 +185,49 @@ func normalizeAndValidateCodexEndpoint(record *store.CodexEndpointRecord) error 
 	record.Name = strings.TrimSpace(record.Name)
 	record.BaseURL = strings.TrimSpace(record.BaseURL)
 	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
+	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)
+	if err != nil {
+		return err
+	}
+	record.ModelMultipliers = modelMultipliers
 	if err := validateCodexEndpointName(record.Name); err != nil {
 		return err
 	}
 	return validateBaseURL(record.BaseURL)
+}
+
+func normalizeCodexModelMultipliers(rules []store.CodexModelMultiplierRecord) ([]store.CodexModelMultiplierRecord, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(rules))
+	normalized := make([]store.CodexModelMultiplierRecord, 0, len(rules))
+	for _, rule := range rules {
+		model := strings.TrimSpace(rule.Model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			return nil, fmt.Errorf("模型附加倍率重复: %s", model)
+		}
+		seen[model] = struct{}{}
+		normalized = append(normalized, store.CodexModelMultiplierRecord{
+			Model:                   model,
+			CostMultiplier:          defaultCodexMultiplier(rule.CostMultiplier),
+			InputCostMultiplier:     defaultCodexMultiplier(rule.InputCostMultiplier),
+			OutputCostMultiplier:    defaultCodexMultiplier(rule.OutputCostMultiplier),
+			CacheReadCostMultiplier: defaultCodexMultiplier(rule.CacheReadCostMultiplier),
+		})
+	}
+	return normalized, nil
+}
+
+func defaultCodexMultiplier(value float64) float64 {
+	if value <= 0 {
+		return 1.0
+	}
+	return value
 }
 
 func validateCodexEndpointName(name string) error {

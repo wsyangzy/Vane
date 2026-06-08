@@ -7,7 +7,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Waves, RefreshCw, GitBranch, ChevronRight } from 'lucide-react';
-import { LoadingSpinner } from '@components/ui';
+import { LoadingSpinner, Tooltip } from '@components/ui';
 import { formatCost, formatTimestamp } from '@utils/api.js';
 import DurationBadge from './DurationBadge.jsx';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
@@ -238,6 +238,25 @@ const EndpointChainCell = ({ request }) => {
   );
 };
 
+const FirstByteBadge = ({ ms, status }) => {
+  if (ms === null || ms === undefined) {
+    return (
+      <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-400 whitespace-nowrap">
+        -
+      </span>
+    );
+  }
+
+  return <DurationBadge ms={ms} status={status} size="xs" />;
+};
+
+const LatencyCell = ({ request }) => (
+  <div className="inline-flex items-center justify-center gap-1.5">
+    <DurationBadge ms={request.duration} status={request.status} size="xs" />
+    <FirstByteBadge ms={request.firstByteMs} status={request.status} />
+  </div>
+);
+
 /**
  * 渲染单元格内容
  * @param {string} columnId - 列 ID
@@ -251,7 +270,9 @@ const renderCell = (columnId, request) => {
       const iconColor = request.isStreaming ? 'text-blue-500' : 'text-slate-400';
       return (
         <div className="flex w-full items-center justify-center gap-1.5 text-blue-600 font-mono text-xs group-hover:text-indigo-600 transition-colors">
-          <StreamIcon className={`w-3 h-3 ${iconColor} flex-shrink-0`} title={streamTitle} />
+          <Tooltip content={streamTitle}>
+            <StreamIcon className={`w-3 h-3 ${iconColor} flex-shrink-0`} />
+          </Tooltip>
           <span className="truncate">{request.requestId}</span>
         </div>
       );
@@ -295,7 +316,7 @@ const renderCell = (columnId, request) => {
     case 'endpoint':
       return <EndpointChainCell request={request} />;
     case 'duration':
-      return <DurationBadge ms={request.duration} status={request.status} size="xs" />;
+      return <LatencyCell request={request} />;
     case 'inputTokens':
       return <span className="text-gray-700 font-mono text-xs">{getDisplayInputTokens(request)}</span>;
     case 'outputTokens':

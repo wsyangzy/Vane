@@ -556,7 +556,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO request_logs (
 			request_id, client_ip, user_agent, method, path,
-			start_time, end_time, duration_ms,
+			start_time, end_time, duration_ms, output_sent_at,
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
 			original_model_name, model_rewrite_source, model_rewrite_target,
 			status, http_status_code, retry_count,
@@ -570,11 +570,13 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cache_creation_cost_usd, cache_creation_5m_cost_usd, cache_creation_1h_cost_usd,
 			cache_read_cost_usd, total_cost_usd,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			model_cost_multiplier, model_input_cost_multiplier, model_output_cost_multiplier, model_cache_read_cost_multiplier
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(request_id) DO UPDATE SET
 			end_time = excluded.end_time,
 			duration_ms = excluded.duration_ms,
+			output_sent_at = COALESCE(request_logs.output_sent_at, excluded.output_sent_at),
 			endpoint_name = excluded.endpoint_name,
 			endpoint_chain = excluded.endpoint_chain,
 			model_name = excluded.model_name,
@@ -609,7 +611,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			output_cost_multiplier = excluded.output_cost_multiplier,
 			cache_creation_cost_multiplier = excluded.cache_creation_cost_multiplier,
 			cache_creation_cost_multiplier_1h = excluded.cache_creation_cost_multiplier_1h,
-			cache_read_cost_multiplier = excluded.cache_read_cost_multiplier
+			cache_read_cost_multiplier = excluded.cache_read_cost_multiplier,
+			model_cost_multiplier = excluded.model_cost_multiplier,
+			model_input_cost_multiplier = excluded.model_input_cost_multiplier,
+			model_output_cost_multiplier = excluded.model_output_cost_multiplier,
+			model_cache_read_cost_multiplier = excluded.model_cache_read_cost_multiplier
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -630,6 +636,12 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 		} else {
 			endTime = nil
 		}
+		var outputSentAt interface{}
+		if req.OutputSentAt != nil {
+			outputSentAt = am.formatTime(*req.OutputSentAt)
+		} else {
+			outputSentAt = nil
+		}
 
 		_, err := stmt.ExecContext(ctx,
 			req.RequestID,
@@ -640,6 +652,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			startTime,
 			endTime,
 			req.DurationMs,
+			outputSentAt,
 			req.Channel,
 			req.EndpointName,
 			req.EndpointChain,
@@ -678,6 +691,10 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			defaultMultiplier(req.CacheCreationCostMultiplier),
 			defaultMultiplier(req.CacheCreationCostMultiplier1h),
 			defaultMultiplier(req.CacheReadCostMultiplier),
+			defaultMultiplier(req.ModelCostMultiplier),
+			defaultMultiplier(req.ModelInputCostMultiplier),
+			defaultMultiplier(req.ModelOutputCostMultiplier),
+			defaultMultiplier(req.ModelCacheReadCostMultiplier),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert request %s: %w", req.RequestID, err)
@@ -731,7 +748,8 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 	if endpointMuMap != nil {
 		for _, key := range endpointMultiplierLookupKeys(req.Channel, req.GroupName, req.EndpointName) {
 			if m, ok := endpointMuMap[key]; ok {
-				multiplier = &m
+				resolved := ResolveEndpointMultiplierForModel(m, req.ModelName)
+				multiplier = &resolved
 				break
 			}
 		}

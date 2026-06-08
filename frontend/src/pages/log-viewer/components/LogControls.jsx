@@ -9,6 +9,7 @@ import {
   Copy,
   Check,
 } from 'lucide-react';
+import { Tooltip } from '@components/ui';
 
 /**
  * 日志控制按钮组
@@ -47,13 +48,15 @@ function LogControls({
 
       {/* 复制选中按钮 - 放在暂停按钮左边 */}
       {selectedCount > 0 && (
-        <button
-          onClick={onCopySelected}
-          className="p-2 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all"
-          title={`复制选中 ${selectedCount} 条`}
-        >
-          <Copy size={16} />
-        </button>
+        <Tooltip content={`复制选中 ${selectedCount} 条`}>
+          <button
+            onClick={onCopySelected}
+            className="p-2 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 transition-all"
+            aria-label={`复制选中 ${selectedCount} 条`}
+          >
+            <Copy size={16} />
+          </button>
+        </Tooltip>
       )}
 
       {/* 复制成功提示 */}
@@ -64,46 +67,54 @@ function LogControls({
       )}
 
       {/* 暂停/开始按钮 */}
-      <button
-        onClick={onToggleStream}
-        className={`p-2 rounded-lg transition-all ${
-          isStreaming
-            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-            : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-        }`}
-        title={isStreaming ? '暂停' : '开始'}
-      >
-        {isStreaming ? <Pause size={16} /> : <Play size={16} />}
-      </button>
+      <Tooltip content={isStreaming ? '暂停' : '开始'}>
+        <button
+          onClick={onToggleStream}
+          className={`p-2 rounded-lg transition-all ${
+            isStreaming
+              ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+              : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+          }`}
+          aria-label={isStreaming ? '暂停' : '开始'}
+        >
+          {isStreaming ? <Pause size={16} /> : <Play size={16} />}
+        </button>
+      </Tooltip>
 
       {/* 刷新按钮 */}
-      <button
-        onClick={onRefresh}
-        disabled={loading}
-        className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all disabled:opacity-50"
-        title="刷新"
-      >
-        <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-      </button>
+      <Tooltip content="刷新">
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all disabled:opacity-50"
+          aria-label="刷新"
+        >
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </Tooltip>
 
       {/* 清空按钮 */}
-      <button
-        onClick={onClear}
-        className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all"
-        title="清空"
-      >
-        <Trash2 size={16} />
-      </button>
+      <Tooltip content="清空">
+        <button
+          onClick={onClear}
+          className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all"
+          aria-label="清空"
+        >
+          <Trash2 size={16} />
+        </button>
+      </Tooltip>
 
       {/* 导出按钮 */}
-      <button
-        onClick={onExport}
-        disabled={logsCount === 0}
-        className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all disabled:opacity-50"
-        title="导出"
-      >
-        <Download size={16} />
-      </button>
+      <Tooltip content="导出">
+        <button
+          onClick={onExport}
+          disabled={logsCount === 0}
+          className="p-2 rounded-lg bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all disabled:opacity-50"
+          aria-label="导出"
+        >
+          <Download size={16} />
+        </button>
+      </Tooltip>
     </div>
   );
 }

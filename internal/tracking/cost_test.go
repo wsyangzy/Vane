@@ -350,6 +350,58 @@ func TestCalculateCost_StackedMultiplier(t *testing.T) {
 	}
 }
 
+func TestCalculateCost_WithModelMultiplier(t *testing.T) {
+	pricing := &ModelPricing{
+		Input:     30.0,
+		Output:    60.0,
+		CacheRead: 3.0,
+	}
+
+	usage := &TokenUsage{
+		InputTokens:     1_000_000,
+		OutputTokens:    1_000_000,
+		CacheReadTokens: 1_000_000,
+	}
+
+	resolved := ResolveEndpointMultiplierForModel(EndpointMultiplier{
+		CostMultiplier:          0.4,
+		InputCostMultiplier:     1.0,
+		OutputCostMultiplier:    1.0,
+		CacheReadCostMultiplier: 1.0,
+		ModelMultipliers: []ModelMultiplier{
+			{
+				Model:                   "gpt-5.5",
+				CostMultiplier:          4.0 / 3.0,
+				InputCostMultiplier:     1.0,
+				OutputCostMultiplier:    2.0,
+				CacheReadCostMultiplier: 1.5,
+			},
+		},
+	}, "gpt-5.5")
+
+	if resolved.CostMultiplier != 0.4 {
+		t.Fatalf("endpoint total multiplier should stay separated, got %f", resolved.CostMultiplier)
+	}
+	if math.Abs(resolved.ModelCostMultiplier-4.0/3.0) > 0.0001 {
+		t.Fatalf("model total multiplier mismatch, got %f", resolved.ModelCostMultiplier)
+	}
+
+	result := CalculateCost(usage, pricing, &resolved)
+
+	expectedInput := 30.0 * 0.4 * (4.0 / 3.0)
+	expectedOutput := 60.0 * 2.0 * 0.4 * (4.0 / 3.0)
+	expectedCacheRead := 3.0 * 1.5 * 0.4 * (4.0 / 3.0)
+	if math.Abs(result.InputCost-expectedInput) > 0.0001 {
+		t.Errorf("Model multiplier: Expected InputCost $%f, got $%f", expectedInput, result.InputCost)
+	}
+	if math.Abs(result.OutputCost-expectedOutput) > 0.0001 {
+		t.Errorf("Model multiplier: Expected OutputCost $%f, got $%f", expectedOutput, result.OutputCost)
+	}
+	if math.Abs(result.CacheReadCost-expectedCacheRead) > 0.0001 {
+		t.Errorf("Model multiplier: Expected CacheReadCost $%f, got $%f", expectedCacheRead, result.CacheReadCost)
+	}
+}
+
 // TestCalculateCost_NilInputs 测试空输入
 func TestCalculateCost_NilInputs(t *testing.T) {
 	pricing := &ModelPricing{

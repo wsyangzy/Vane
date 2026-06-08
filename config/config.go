@@ -28,7 +28,7 @@ type Config struct {
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration
 	Proxy            ProxyConfig            `yaml:"proxy"`
 	Auth             AuthConfig             `yaml:"auth"`
-	CodexServer      CodexServerConfig      `yaml:"codex_server"`      // Codex 代理服务器配置
+	CodexServer      CodexServerConfig      `yaml:"codex_server"`   // Codex 代理服务器配置
 	GlobalTimeout    time.Duration          `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Timezone         string                 `yaml:"timezone"`       // Global timezone setting for all components
 	Endpoints        []EndpointConfig       `yaml:"endpoints"`
@@ -185,7 +185,7 @@ type AuthConfig struct {
 // 注意：v7.2+ 起 Codex 代理合并到 Claude 代理同一端口，通过路径路由区分。
 // Host/Port 已移除，复用主代理的监听地址。
 type CodexServerConfig struct {
-	Enabled bool          `yaml:"enabled"` // 是否启用 Codex 代理路由，默认: false
+	Enabled bool          `yaml:"enabled"` // 是否启用 Codex 代理路由，运行时默认开启
 	Timeout time.Duration `yaml:"timeout"` // 请求超时，默认: 300s
 }
 
@@ -398,6 +398,7 @@ func (c *Config) setDefaults() {
 	}
 
 	// Set Codex server defaults
+	c.CodexServer.Enabled = true
 	if c.CodexServer.Timeout == 0 {
 		c.CodexServer.Timeout = 300 * time.Second
 	}

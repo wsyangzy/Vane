@@ -29,11 +29,13 @@ import {
 } from 'lucide-react';
 import {
   Button,
+  CustomSelect,
   EmptyState,
   ErrorMessage,
   Input,
   KPICard,
-  LoadingSpinner
+  LoadingSpinner,
+  Tooltip
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import {
@@ -54,6 +56,7 @@ import {
   updateCodexEndpointByID,
   updateCodexGlobalConfig
 } from '@utils/wailsApi.js';
+import { formatMultiplierExpression, formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
 
 const buildInitialChannelForm = (channel) => ({
   name: channel?.name || '',
@@ -83,6 +86,100 @@ const buildModelMappingPayload = (rows) => {
     }
     return mapping;
   }, {});
+};
+
+const BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS = [
+  { value: 'output_tokens', label: '总输出 output_tokens' },
+  { value: 'reasoning_tokens', label: '推理 reasoning_tokens' },
+  { value: 'visible_output_tokens', label: '可见补全 output - reasoning' }
+];
+
+const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
+const ENDPOINT_MULTIPLIER_FIELDS = [
+  { label: '总成本倍率', key: 'costMultiplier' },
+  { label: '输入成本倍率', key: 'inputCostMultiplier' },
+  { label: '输出成本倍率', key: 'outputCostMultiplier' },
+  { label: '缓存读取倍率', key: 'cacheReadCostMultiplier' }
+];
+
+const parseEndpointMultiplierPayload = (values) => {
+  const payload = {};
+  for (const field of ENDPOINT_MULTIPLIER_FIELDS) {
+    const parsed = parseMultiplierExpression(values[field.key], 1.0);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return { error: `${field.label}必须是非负数字或分数，例如 1.25 或 40/30` };
+    }
+    payload[field.key] = parsed;
+  }
+  return { payload };
+};
+
+const isDefaultMultiplierValue = (value) => {
+  const parsed = Number(value ?? 1.0);
+  return Number.isFinite(parsed) && Math.abs(parsed - 1.0) <= 0.000001;
+};
+
+const hasFineGrainedModelMultiplier = (rule) => {
+  return !isDefaultMultiplierValue(rule?.inputCostMultiplier) ||
+    !isDefaultMultiplierValue(rule?.outputCostMultiplier) ||
+    !isDefaultMultiplierValue(rule?.cacheReadCostMultiplier);
+};
+
+const buildInitialModelMultiplierRows = (modelMultipliers) => {
+  return (modelMultipliers || [])
+    .map((rule) => ({
+      model: String(rule?.model || ''),
+      costMultiplier: formatMultiplierInputValue(rule?.costMultiplier ?? 1.0),
+      inputCostMultiplier: formatMultiplierInputValue(rule?.inputCostMultiplier ?? 1.0),
+      outputCostMultiplier: formatMultiplierInputValue(rule?.outputCostMultiplier ?? 1.0),
+      cacheReadCostMultiplier: formatMultiplierInputValue(rule?.cacheReadCostMultiplier ?? 1.0),
+      advancedOpen: hasFineGrainedModelMultiplier(rule)
+    }))
+    .filter((row) => row.model.trim());
+};
+
+const createEmptyModelMultiplierRow = () => ({
+  model: '',
+  costMultiplier: '1',
+  inputCostMultiplier: '1',
+  outputCostMultiplier: '1',
+  cacheReadCostMultiplier: '1',
+  advancedOpen: false
+});
+
+const parseModelMultiplierPayload = (rows) => {
+  const payload = [];
+  const seen = new Set();
+  for (const [index, row] of (rows || []).entries()) {
+    const model = String(row?.model || '').trim();
+    if (!model) continue;
+    if (seen.has(model)) {
+      return { error: `模型附加倍率重复：${model}` };
+    }
+    seen.add(model);
+
+    const multiplierResult = parseEndpointMultiplierPayload(row);
+    if (multiplierResult.error) {
+      return { error: `第 ${index + 1} 行模型附加倍率：${multiplierResult.error}` };
+    }
+    payload.push({
+      model,
+      ...multiplierResult.payload
+    });
+  }
+  return { payload };
+};
+
+const buildMultiplierBadge = (endpoint) => {
+  const totalMultiplier = Number(endpoint.costMultiplier ?? 1.0);
+  if (!Number.isFinite(totalMultiplier) || Math.abs(totalMultiplier - 1.0) <= 0.000001) {
+    return null;
+  }
+
+  return {
+    text: `×${formatMultiplierExpression(totalMultiplier, 3)}`,
+    title: `总成本倍率 × ${formatMultiplierExpression(totalMultiplier, 6)}`
+  };
 };
 
 // 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
@@ -218,15 +315,16 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
               <p className="mt-0.5 text-xs text-slate-500">渠道仅保存 API Key；模型/推理/1M 等在「Codex 配置」中全局调整</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-            disabled={loading}
-            title="关闭"
-          >
-            <XCircle size={18} />
-          </button>
+          <Tooltip content="关闭">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              disabled={loading}
+            >
+              <XCircle size={18} />
+            </button>
+          </Tooltip>
         </div>
 
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
@@ -300,14 +398,18 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                   readOnly={isMaskedApiKeyPreview}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowApiKey((prev) => !prev)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
-                  title={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
+                <Tooltip
+                  content={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2"
                 >
-                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey((prev) => !prev)}
+                    className="rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
+                  >
+                    {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </Tooltip>
               </div>
               {isMaskedApiKeyPreview && (
                 <p className="mt-1 text-xs text-slate-400">点击图标查看真实值或直接输入新 Key 替换</p>
@@ -352,14 +454,15 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                         placeholder="gpt-5-mini"
                         className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
-                      <button
-                        type="button"
-                        onClick={() => removeMappingRow(index)}
-                        className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                        title="删除映射"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <Tooltip content="删除映射">
+                        <button
+                          type="button"
+                          onClick={() => removeMappingRow(index)}
+                          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </Tooltip>
                     </div>
                   ))}
                 </div>
@@ -389,33 +492,94 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
   const [name, setName] = useState(endpoint?.name || '');
   const [baseURL, setBaseURL] = useState(endpoint?.baseURL || '');
   const [priority, setPriority] = useState(endpoint?.priority ?? 0);
-  const [costMultiplier, setCostMultiplier] = useState(endpoint?.costMultiplier ?? 1.0);
-  const [inputCostMultiplier, setInputCostMultiplier] = useState(endpoint?.inputCostMultiplier ?? 1.0);
-  const [outputCostMultiplier, setOutputCostMultiplier] = useState(endpoint?.outputCostMultiplier ?? 1.0);
-  const [cacheReadCostMultiplier, setCacheReadCostMultiplier] = useState(endpoint?.cacheReadCostMultiplier ?? 1.0);
+  const [costMultiplier, setCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.costMultiplier ?? 1.0));
+  const [inputCostMultiplier, setInputCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.inputCostMultiplier ?? 1.0));
+  const [outputCostMultiplier, setOutputCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.outputCostMultiplier ?? 1.0));
+  const [cacheReadCostMultiplier, setCacheReadCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.cacheReadCostMultiplier ?? 1.0));
   const [billingOutputTokenSource, setBillingOutputTokenSource] = useState(endpoint?.billingOutputTokenSource || 'output_tokens');
+  const [modelMultiplierRows, setModelMultiplierRows] = useState(buildInitialModelMultiplierRows(endpoint?.modelMultipliers));
   const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
+  const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
+  const modalBottomPadding = 16;
+  const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
+
+  const updateModelMultiplierRow = (index, key, value) => {
+    setModelMultiplierRows((prev) =>
+      (prev || []).map((row, rowIndex) =>
+        rowIndex === index
+          ? { ...row, [key]: value }
+          : row
+      )
+    );
+    if (fieldError) setFieldError('');
+  };
+
+  const addModelMultiplierRow = () => {
+    setModelMultiplierRows((prev) => [...(prev || []), createEmptyModelMultiplierRow()]);
+  };
+
+  const removeModelMultiplierRow = (index) => {
+    setModelMultiplierRows((prev) => (prev || []).filter((_, rowIndex) => rowIndex !== index));
+  };
+
+  const toggleModelMultiplierDetails = (index) => {
+    setModelMultiplierRows((prev) =>
+      (prev || []).map((row, rowIndex) =>
+        rowIndex === index
+          ? { ...row, advancedOpen: !row.advancedOpen }
+          : row
+      )
+    );
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     const trimmedName = name.trim();
     const trimmed = baseURL.trim();
     if (!trimmedName) {
+      setActiveTab('basic');
       setFieldError('端点名称不能为空');
       return;
     }
     if (!trimmed) {
+      setActiveTab('basic');
       setFieldError('base_url 不能为空');
       return;
     }
     if (!/^https?:\/\//i.test(trimmed)) {
+      setActiveTab('basic');
       setFieldError('base_url 必须以 http:// 或 https:// 开头');
       return;
     }
-    await onSave?.({ name: trimmedName, baseURL: trimmed, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource });
+    const multiplierResult = parseEndpointMultiplierPayload({
+      costMultiplier,
+      inputCostMultiplier,
+      outputCostMultiplier,
+      cacheReadCostMultiplier
+    });
+    if (multiplierResult.error) {
+      setActiveTab('billing');
+      setFieldError(multiplierResult.error);
+      return;
+    }
+    const modelMultiplierResult = parseModelMultiplierPayload(modelMultiplierRows);
+    if (modelMultiplierResult.error) {
+      setActiveTab('billing');
+      setFieldError(modelMultiplierResult.error);
+      return;
+    }
+    await onSave?.({
+      name: trimmedName,
+      baseURL: trimmed,
+      failoverEnabled,
+      priority,
+      ...multiplierResult.payload,
+      modelMultipliers: modelMultiplierResult.payload,
+      billingOutputTokenSource
+    });
   };
 
   const isEdit = mode === 'edit';
@@ -425,7 +589,10 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
       className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 backdrop-blur-sm animate-fade-in"
       style={{ paddingTop: `${modalTopPadding}px` }}
     >
-      <div className="flex w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+      <div
+        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        style={{ maxHeight: modalMaxHeight }}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
@@ -436,161 +603,301 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
               <p className="mt-0.5 text-xs text-slate-500">渠道：{channel?.name}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-            disabled={loading}
-            title="关闭"
-          >
-            <XCircle size={18} />
-          </button>
+          <Tooltip content="关闭">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              disabled={loading}
+            >
+              <XCircle size={18} />
+            </button>
+          </Tooltip>
         </div>
 
-        <form onSubmit={handleSubmit} autoComplete="off">
-          <div className="space-y-4 px-6 py-6">
+        <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
+          <div className="flex flex-shrink-0 border-b border-slate-100 px-6">
+            {[
+              { key: 'basic', label: '基础信息' },
+              { key: 'billing', label: '计费设置' }
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
+                  activeTab === tab.key
+                    ? 'border-slate-900 text-slate-900'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-4 overflow-y-auto px-6 py-6">
             {(fieldError || serverError) && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {fieldError || serverError}
               </div>
             )}
 
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">端点名称</label>
-              <input
-                type="text"
-                autoFocus
-                value={name}
-                onChange={(event) => {
-                  setName(event.target.value);
-                  if (fieldError) setFieldError('');
-                }}
-                placeholder="如：主线路 / 备用 / 上海节点"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <p className="mt-1 text-xs text-slate-400">同一渠道下端点名称唯一，仅作 UI 标识。</p>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">Base URL</label>
-              <input
-                type="text"
-                value={baseURL}
-                onChange={(event) => {
-                  setBaseURL(event.target.value);
-                  if (fieldError) setFieldError('');
-                }}
-                placeholder="https://code.newcli.com/codex/v1"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <p className="mt-1 text-xs text-slate-400">
-                切换激活端点时仅 config.toml 中该渠道 section 的 base_url 行会变化。
-              </p>
-            </div>
-
-            {/* 故障转移与成本设置 */}
-            <div className="space-y-4">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={priority}
-                  onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  placeholder="0 = 最高优先级"
-                />
-                <p className="mt-1 text-xs text-slate-400">数字越小越优先</p>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">总成本倍率</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={costMultiplier}
-                  onChange={(event) => setCostMultiplier(parseFloat(event.target.value) || 0)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  placeholder="1.0"
-                />
-                <p className="mt-1 text-xs text-slate-400">所有成本完成计算后整体乘数，默认 1.0</p>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">细分成本倍率（可选）</label>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-500">输入</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={inputCostMultiplier}
-                      onChange={(e) => setInputCostMultiplier(parseFloat(e.target.value) || 0)}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-500">输出</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={outputCostMultiplier}
-                      onChange={(e) => setOutputCostMultiplier(parseFloat(e.target.value) || 0)}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-slate-500">缓存</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={cacheReadCostMultiplier}
-                      onChange={(e) => setCacheReadCostMultiplier(parseFloat(e.target.value) || 0)}
-                      className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
+            {activeTab === 'basic' ? (
+              <>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">端点名称</label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={name}
+                    onChange={(event) => {
+                      setName(event.target.value);
+                      if (fieldError) setFieldError('');
+                    }}
+                    placeholder="如：主线路 / 备用 / 上海节点"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">同一渠道下端点名称唯一，仅作 UI 标识。</p>
                 </div>
-                <p className="mt-1 text-xs text-slate-400">应用于各类型 token 成本计算，默认 1.0</p>
-              </div>
 
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">输出计费口径</label>
-                <select
-                  value={billingOutputTokenSource}
-                  onChange={(event) => setBillingOutputTokenSource(event.target.value)}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Base URL</label>
+                  <input
+                    type="text"
+                    value={baseURL}
+                    onChange={(event) => {
+                      setBaseURL(event.target.value);
+                      if (fieldError) setFieldError('');
+                    }}
+                    placeholder="https://code.newcli.com/codex/v1"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">
+                    切换激活端点时仅 config.toml 中该渠道 section 的 base_url 行会变化。
+                  </p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={priority}
+                    onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="0 = 最高优先级"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">数字越小越优先</p>
+                </div>
+
+                <div
+                  onClick={() => setFailoverEnabled(!failoverEnabled)}
+                  className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
+                    failoverEnabled
+                      ? 'border-indigo-200 bg-indigo-50'
+                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                  }`}
                 >
-                  <option value="output_tokens">总输出 output_tokens</option>
-                  <option value="reasoning_tokens">推理 reasoning_tokens</option>
-                  <option value="visible_output_tokens">可见补全 output - reasoning</option>
-                </select>
-                <p className="mt-1 text-xs text-slate-400">仅影响该 Codex 端点的输出成本计算。</p>
-              </div>
+                  <span className={`text-sm font-medium ${failoverEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
+                    参与故障转移
+                  </span>
+                  <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
+                    failoverEnabled ? 'bg-indigo-500' : 'bg-slate-300'
+                  }`}>
+                    <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      failoverEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">总成本倍率</label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={costMultiplier}
+                    onChange={(event) => {
+                      setCostMultiplier(event.target.value);
+                      if (fieldError) setFieldError('');
+                    }}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="1.0"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">所有成本完成计算后整体乘数，{MULTIPLIER_EXPRESSION_HELP}</p>
+                </div>
 
-              <div
-                onClick={() => setFailoverEnabled(!failoverEnabled)}
-                className={`flex items-center justify-between rounded-xl border p-3 cursor-pointer transition-all duration-200 ${
-                  failoverEnabled
-                    ? 'bg-indigo-50 border-indigo-200'
-                    : 'bg-slate-50 border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                <span className={`text-sm font-medium ${failoverEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
-                  参与故障转移
-                </span>
-                <div className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${
-                  failoverEnabled ? 'bg-indigo-500' : 'bg-slate-300'
-                }`}>
-                  <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                    failoverEnabled ? 'translate-x-5' : 'translate-x-0'
-                  }`} />
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">细分成本倍率（可选）</label>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-500">输入</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={inputCostMultiplier}
+                        onChange={(event) => {
+                          setInputCostMultiplier(event.target.value);
+                          if (fieldError) setFieldError('');
+                        }}
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="1.0"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-500">输出</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={outputCostMultiplier}
+                        onChange={(event) => {
+                          setOutputCostMultiplier(event.target.value);
+                          if (fieldError) setFieldError('');
+                        }}
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="1"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-slate-500">缓存</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={cacheReadCostMultiplier}
+                        onChange={(event) => {
+                          setCacheReadCostMultiplier(event.target.value);
+                          if (fieldError) setFieldError('');
+                        }}
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="1.0"
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">应用于各类型 token 成本计算，{MULTIPLIER_EXPRESSION_HELP}</p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">输出计费口径</label>
+                  <CustomSelect
+                    options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
+                    value={billingOutputTokenSource}
+                    onChange={setBillingOutputTokenSource}
+                    size="md"
+                    fullWidth
+                  />
+                  <p className="mt-1 text-xs text-slate-400">仅影响该 Codex 端点的输出成本计算。</p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700">模型附加倍率</label>
+                      <p className="mt-0.5 text-xs text-slate-400">默认只设置总倍率；少数模型需要时再展开细分。</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addModelMultiplierRow}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <Plus size={14} />
+                      添加模型
+                    </button>
+                  </div>
+
+                  {modelMultiplierRows.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {modelMultiplierRows.map((row, index) => (
+                        <div key={`model-multiplier-${index}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto_auto] sm:items-end">
+                            <div className="min-w-0">
+                              <label className="mb-1 block text-xs text-slate-500">模型</label>
+                              <input
+                                type="text"
+                                value={row.model}
+                                onChange={(event) => updateModelMultiplierRow(index, 'model', event.target.value)}
+                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="gpt-5.5"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-500">总倍率</label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={row.costMultiplier}
+                                onChange={(event) => updateModelMultiplierRow(index, 'costMultiplier', event.target.value)}
+                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="1"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleModelMultiplierDetails(index)}
+                              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                            >
+                              细分
+                              <ChevronDown
+                                size={14}
+                                className={`transition-transform duration-200 ${row.advancedOpen ? 'rotate-180' : ''}`}
+                              />
+                            </button>
+                            <Tooltip content="删除">
+                              <button
+                                type="button"
+                                onClick={() => removeModelMultiplierRow(index)}
+                                className="inline-flex h-8 items-center justify-center rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </Tooltip>
+                          </div>
+
+                          {row.advancedOpen && (
+                            <div className="mt-2 grid grid-cols-1 gap-2 border-t border-slate-100 pt-2 sm:grid-cols-3">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">输入</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={row.inputCostMultiplier}
+                                  onChange={(event) => updateModelMultiplierRow(index, 'inputCostMultiplier', event.target.value)}
+                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="1"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">输出</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={row.outputCostMultiplier}
+                                  onChange={(event) => updateModelMultiplierRow(index, 'outputCostMultiplier', event.target.value)}
+                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="1"
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">缓存</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={row.cacheReadCostMultiplier}
+                                  onChange={(event) => updateModelMultiplierRow(index, 'cacheReadCostMultiplier', event.target.value)}
+                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="1"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
@@ -745,15 +1052,16 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
               <p className="mt-0.5 text-xs text-slate-500">直接读写 ~/.codex/config.toml；代理地址自动同步自服务端口</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
-            title="关闭"
-          >
-            <XCircle size={18} />
-          </button>
+          <Tooltip content="关闭">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+            >
+              <XCircle size={18} />
+            </button>
+          </Tooltip>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 py-6">
@@ -834,22 +1142,23 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
                     开启后写入 model_context_window = 1000000；关闭则移除该字段。
                   </p>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={config.enable_1m_context}
-                  onClick={() => updateField('enable_1m_context', !config.enable_1m_context)}
-                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
-                    config.enable_1m_context ? 'bg-emerald-500' : 'bg-slate-300 hover:bg-slate-400'
-                  }`}
-                  title={config.enable_1m_context ? '关闭 1M 上下文窗口' : '开启 1M 上下文窗口'}
-                >
-                  <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                      config.enable_1m_context ? 'translate-x-5' : 'translate-x-0.5'
+                <Tooltip content={config.enable_1m_context ? '关闭 1M 上下文窗口' : '开启 1M 上下文窗口'}>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={config.enable_1m_context}
+                    onClick={() => updateField('enable_1m_context', !config.enable_1m_context)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 ${
+                      config.enable_1m_context ? 'bg-emerald-500' : 'bg-slate-300 hover:bg-slate-400'
                     }`}
-                  />
-                </button>
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        config.enable_1m_context ? 'translate-x-5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </Tooltip>
               </div>
             </div>
           )}
@@ -926,13 +1235,14 @@ const CodexHealthBadge = ({ state }) => {
 
   const Icon = config.icon;
   return (
-    <span
-      className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${config.className}`}
-      title={config.title}
-    >
-      <Icon size={10} />
-      {config.label}
-    </span>
+    <Tooltip content={config.title} className="flex-shrink-0">
+      <span
+        className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${config.className}`}
+      >
+        <Icon size={10} />
+        {config.label}
+      </span>
+    </Tooltip>
   );
 };
 
@@ -946,12 +1256,13 @@ const CodexLatencyBadge = ({ ms }) => {
   if (rounded > 1000) className = 'border-rose-100 bg-rose-50 text-rose-600';
 
   return (
-    <span
-      className={`inline-flex flex-shrink-0 items-center rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-medium ${className}`}
-      title="最近一次 Codex 健康探测延迟"
-    >
-      {rounded}ms
-    </span>
+    <Tooltip content="最近一次 Codex 健康探测延迟" className="flex-shrink-0">
+      <span
+        className={`inline-flex items-center rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-medium ${className}`}
+      >
+        {rounded}ms
+      </span>
+    </Tooltip>
   );
 };
 
@@ -976,6 +1287,7 @@ const EndpointRow = ({
   const priority = endpoint.priority || 0;
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
   const responseTimeMs = endpoint.responseTimeMs || endpoint.response_time_ms || 0;
+  const multiplierBadge = buildMultiplierBadge(endpoint);
 
   // 挂起态：当请求挂起且当前端点已激活时，toggle 变 amber，允许重复点击触发恢复
   const isSuspended = suspendedCount > 0;
@@ -1014,115 +1326,124 @@ const EndpointRow = ({
         }`}
       >
         {/* 激活 Toggle（Apple HIG 风格） */}
-        <div
-          onClick={handleToggleActivate}
-          className={`flex-shrink-0 ${
-            canRepeatActivate
-              ? 'cursor-pointer'
-              : endpoint.isActive
-                ? 'cursor-default'
-                : 'cursor-pointer'
-          }`}
-          title={
+        <Tooltip
+          content={
             showAmber
               ? `已挂起 ${suspendedCount} 个请求，点击重新激活以唤醒`
               : endpoint.isActive
                 ? '当前激活端点'
                 : '点击设为当前端点'
           }
+          className="flex-shrink-0"
         >
           <div
-            className={`relative h-[18px] w-8 rounded-full transition-colors duration-200 ease-out ${
-              showAmber
-                ? 'bg-amber-500 hover:bg-amber-600'
+            onClick={handleToggleActivate}
+            className={`${
+              canRepeatActivate
+                ? 'cursor-pointer'
                 : endpoint.isActive
-                  ? 'bg-emerald-500'
-                  : isActivating
-                    ? 'bg-emerald-300'
-                    : 'bg-slate-200 group-hover/row:bg-slate-300'
+                  ? 'cursor-default'
+                  : 'cursor-pointer'
             }`}
           >
             <div
-              className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow-[0_1px_2px_rgba(15,23,42,0.15)] transition-all duration-200 ease-out ${
-                endpoint.isActive ? 'left-[16px]' : 'left-[2px]'
-              } ${isActivating ? 'animate-pulse' : ''}`}
-            />
+              className={`relative h-[18px] w-8 rounded-full transition-colors duration-200 ease-out ${
+                showAmber
+                  ? 'bg-amber-500 hover:bg-amber-600'
+                  : endpoint.isActive
+                    ? 'bg-emerald-500'
+                    : isActivating
+                      ? 'bg-emerald-300'
+                      : 'bg-slate-200 group-hover/row:bg-slate-300'
+              }`}
+            >
+              <div
+                className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow-[0_1px_2px_rgba(15,23,42,0.15)] transition-all duration-200 ease-out ${
+                  endpoint.isActive ? 'left-[16px]' : 'left-[2px]'
+                } ${isActivating ? 'animate-pulse' : ''}`}
+              />
+            </div>
           </div>
-        </div>
+        </Tooltip>
 
         {/* 优先级标签 */}
-        <span
-          className="flex-shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500"
-          title={`优先级 ${priority}（越小越优先）`}
-        >
-          P{priority}
-        </span>
+        <Tooltip content={`优先级 ${priority}（越小越优先）`} className="flex-shrink-0">
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+            P{priority}
+          </span>
+        </Tooltip>
 
         {/* 端点摘要：name 在前，URL 在后 */}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="relative">
-              <span
-                className={`truncate text-xs font-semibold ${
-                  endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
-                }`}
-                title={displayName}
-              >
-                {displayName}
-              </span>
-              {endpoint.costMultiplier && endpoint.costMultiplier !== 1 && (
-                <span className="absolute -left-2 -top-2 rounded-full bg-amber-500 px-1 text-[8px] font-bold leading-tight text-white shadow-sm">
-                  ×{endpoint.costMultiplier}
-                </span>
+            <span className="relative min-w-0 max-w-full">
+              {multiplierBadge && (
+                <Tooltip content={multiplierBadge.title} className="absolute -left-1 -top-3">
+                  <span
+                    className="inline-flex h-3 min-w-5 items-center justify-center whitespace-nowrap rounded-full bg-amber-500 px-1 text-[8px] font-bold leading-none text-white shadow-sm"
+                  >
+                    {multiplierBadge.text}
+                  </span>
+                </Tooltip>
               )}
+              <Tooltip content={displayName} className="min-w-0 max-w-full">
+                <span
+                  className={`min-w-0 truncate text-xs font-semibold ${
+                    endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
+                  }`}
+                >
+                  {displayName}
+                </span>
+              </Tooltip>
             </span>
-            {endpoint.isActive && (
-              <span className="text-[10px] uppercase tracking-[0.16em] text-emerald-600">active</span>
-            )}
             <CodexHealthBadge state={healthState} />
             <CodexLatencyBadge ms={responseTimeMs} />
           </div>
-          <div
-            className={`mt-0.5 truncate font-mono text-[11px] ${
-              endpoint.isActive ? 'text-slate-500' : 'text-slate-400'
-            }`}
-            title={endpoint.baseURL}
-          >
-            {summary || '<未设置 base_url>'}
-          </div>
+          <Tooltip content={endpoint.baseURL} className="mt-0.5 block min-w-0">
+            <div
+              className={`truncate font-mono text-[11px] ${
+                endpoint.isActive ? 'text-slate-500' : 'text-slate-400'
+              }`}
+            >
+              {summary || '<未设置 base_url>'}
+            </div>
+          </Tooltip>
         </div>
 
         {/* 操作按钮（常驻显示） */}
         <div className="flex flex-shrink-0 items-center gap-0.5">
-          <button
-            type="button"
-            onClick={handleFailoverToggle}
-            className={`rounded-md p-1 transition-colors duration-150 ${
-              failoverEnabled
-                ? 'text-indigo-600 hover:bg-indigo-50'
-                : 'text-slate-400 hover:bg-slate-100'
-            }`}
-            title={failoverEnabled ? '点击：不参与故障转移' : '点击：参与故障转移'}
-          >
-            <ArrowRightLeft size={12} />
-          </button>
-          <button
-            type="button"
-            onClick={handleEdit}
-            className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
-            title="编辑端点"
-          >
-            <Pencil size={12} />
-          </button>
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={isDeleting}
-            className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
-            title="删除端点"
-          >
-            {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-          </button>
+          <Tooltip content={failoverEnabled ? '点击：不参与故障转移' : '点击：参与故障转移'}>
+            <button
+              type="button"
+              onClick={handleFailoverToggle}
+              className={`rounded-md p-1 transition-colors duration-150 ${
+                failoverEnabled
+                  ? 'text-indigo-600 hover:bg-indigo-50'
+                  : 'text-slate-400 hover:bg-slate-100'
+              }`}
+            >
+              <ArrowRightLeft size={12} />
+            </button>
+          </Tooltip>
+          <Tooltip content="编辑端点">
+            <button
+              type="button"
+              onClick={handleEdit}
+              className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
+            >
+              <Pencil size={12} />
+            </button>
+          </Tooltip>
+          <Tooltip content="删除端点">
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+            >
+              {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+            </button>
+          </Tooltip>
         </div>
       </div>
     </div>
@@ -1191,13 +1512,14 @@ const ChannelCard = ({
           <h3 className="truncate text-sm font-semibold tracking-tight text-slate-900">{channel.name}</h3>
           {channel.isActive && (
             activeSuspendedCount > 0 ? (
-              <span
-                className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-amber-700"
-                title={`已有 ${activeSuspendedCount} 个请求挂起，请点击下方当前端点或其他渠道重新激活`}
-              >
-                <TriangleAlert size={10} className="text-amber-600" />
-                等待重新激活 · {activeSuspendedCount}
-              </span>
+              <Tooltip content={`已有 ${activeSuspendedCount} 个请求挂起，请点击下方当前端点或其他渠道重新激活`} className="flex-shrink-0">
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-amber-700"
+                >
+                  <TriangleAlert size={10} className="text-amber-600" />
+                  等待重新激活 · {activeSuspendedCount}
+                </span>
+              </Tooltip>
             ) : (
               <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-emerald-700">
                 <span className="h-1 w-1 rounded-full bg-emerald-500" />
@@ -1209,44 +1531,48 @@ const ChannelCard = ({
 
         <div className="flex flex-shrink-0 items-center gap-0.5">
           {!channel.isActive && (
-            <button
-              type="button"
-              onClick={() => onActivateChannel?.(channel)}
-              disabled={isSwitchingChannel}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors duration-150 hover:bg-indigo-50 disabled:opacity-50"
-              title="设为当前接管渠道"
-            >
-              {isSwitchingChannel ? <Loader2 size={12} className="animate-spin" /> : <ArrowRightLeft size={12} />}
-              设为当前
-            </button>
+            <Tooltip content="设为当前接管渠道">
+              <button
+                type="button"
+                onClick={() => onActivateChannel?.(channel)}
+                disabled={isSwitchingChannel}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors duration-150 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                {isSwitchingChannel ? <Loader2 size={12} className="animate-spin" /> : <ArrowRightLeft size={12} />}
+                设为当前
+              </button>
+            </Tooltip>
           )}
           {channel.website && (
+            <Tooltip content="打开官网">
+              <button
+                type="button"
+                onClick={() => openExternalURL(channel.website)}
+                className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <Globe size={14} />
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip content="编辑渠道">
             <button
               type="button"
-              onClick={() => openExternalURL(channel.website)}
-              className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
-              title="打开官网"
+              onClick={() => onEditChannel?.(channel)}
+              className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
             >
-              <Globe size={14} />
+              <Pencil size={14} />
             </button>
-          )}
-          <button
-            type="button"
-            onClick={() => onEditChannel?.(channel)}
-            className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
-            title="编辑渠道"
-          >
-            <Pencil size={14} />
-          </button>
-          <button
-            type="button"
-            onClick={() => onDeleteChannel?.(channel)}
-            disabled={isDeletingChannel}
-            className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
-            title="删除渠道"
-          >
-            {isDeletingChannel ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-          </button>
+          </Tooltip>
+          <Tooltip content="删除渠道">
+            <button
+              type="button"
+              onClick={() => onDeleteChannel?.(channel)}
+              disabled={isDeletingChannel}
+              className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+            >
+              {isDeletingChannel ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -1257,16 +1583,17 @@ const ChannelCard = ({
         <span className="inline-flex flex-shrink-0 items-center gap-1 text-slate-600">
           <ShieldCheck size={11} className="text-emerald-500" />
           <span className="font-medium">{channel.model || globalConfig.model || '未设置'}</span>
-          <span
-            className={
-              channel.model
-                ? 'rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-600'
-                : 'rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-400'
-            }
-            title={channel.model ? '该渠道使用专属 model（覆盖全局）' : '该渠道使用全局默认 model'}
-          >
-            {channel.model ? '渠道' : '全局'}
-          </span>
+          <Tooltip content={channel.model ? '该渠道使用专属 model（覆盖全局）' : '该渠道使用全局默认 model'}>
+            <span
+              className={
+                channel.model
+                  ? 'rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-indigo-600'
+                  : 'rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-400'
+              }
+            >
+              {channel.model ? '渠道' : '全局'}
+            </span>
+          </Tooltip>
         </span>
         <span className="flex-shrink-0 text-slate-300">·</span>
         <span className="flex-shrink-0 text-slate-500">
@@ -1291,20 +1618,21 @@ const ChannelCard = ({
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
             <span>Endpoints · {endpoints.length}</span>
             {hasMultiple && (
-              <button
-                type="button"
-                onClick={() => setIsEndpointListExpanded((prev) => !prev)}
-                className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
-                title={isEndpointListExpanded ? '收起端点列表' : '展开全部端点'}
-              >
-                {isEndpointListExpanded ? '收起' : `展开 ${hiddenCount} 个`}
-                <ChevronDown
-                  size={11}
-                  className={`transition-transform duration-200 ease-out ${
-                    isEndpointListExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
+              <Tooltip content={isEndpointListExpanded ? '收起端点列表' : '展开全部端点'}>
+                <button
+                  type="button"
+                  onClick={() => setIsEndpointListExpanded((prev) => !prev)}
+                  className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
+                >
+                  {isEndpointListExpanded ? '收起' : `展开 ${hiddenCount} 个`}
+                  <ChevronDown
+                    size={11}
+                    className={`transition-transform duration-200 ease-out ${
+                      isEndpointListExpanded ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+              </Tooltip>
             )}
           </div>
           <button
@@ -1399,7 +1727,6 @@ const CodexPage = () => {
     {
       title: '当前接管',
       value: activeChannel?.name || '未设置',
-      tooltip: activeChannel?.name || '未设置',
       subText: activeChannel ? '已接管 config.toml / auth.json' : '请选择一个渠道设为当前',
       icon: CheckCircle2,
       statusColor: 'bg-emerald-50 text-emerald-600'
@@ -1407,7 +1734,6 @@ const CodexPage = () => {
     {
       title: '当前模型',
       value: globalConfig.model || '未设置',
-      tooltip: globalConfig.model || '未设置（请在「Codex 配置」中设置）',
       subText: `推理强度 ${globalConfig.reasoning_effort || 'xhigh'}${globalConfig.enable_1m_context ? ' · 1M 上下文' : ''}`,
       icon: ShieldCheck,
       statusColor: 'bg-sky-50 text-sky-600'
@@ -1415,7 +1741,6 @@ const CodexPage = () => {
     {
       title: '当前端点',
       value: activeEndpoint ? (activeEndpoint.name || '未命名端点') : '未激活',
-      tooltip: activeEndpoint?.baseURL || '未激活端点',
       subText: activeEndpoint
         ? summarizeEndpoint(activeEndpoint.baseURL)
         : '请激活一个端点以接管 base_url',
@@ -1425,7 +1750,6 @@ const CodexPage = () => {
     {
       title: '已保存渠道',
       value: String(storageStatus?.totalCount ?? channels.length),
-      tooltip: String(storageStatus?.totalCount ?? channels.length),
       subText: '数据库中维护的渠道数量',
       icon: Database,
       statusColor: 'bg-slate-100 text-slate-600'
@@ -1433,7 +1757,6 @@ const CodexPage = () => {
     {
       title: '存储状态',
       value: storageStatus?.enabled ? 'SQLite' : 'Pending',
-      tooltip: storageStatus?.enabled ? 'SQLite' : 'Pending',
       subText: lastUpdate ? `更新于 ${lastUpdate}` : '等待首次同步',
       icon: Server,
       statusColor: 'bg-amber-50 text-amber-600'
@@ -1574,7 +1897,7 @@ const CodexPage = () => {
     setEndpointFormError('');
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
@@ -1589,7 +1912,8 @@ const CodexPage = () => {
           inputCostMultiplier,
           outputCostMultiplier,
           cacheReadCostMultiplier,
-          billingOutputTokenSource
+          billingOutputTokenSource,
+          modelMultipliers
         });
         await fetchData({ silent: true });
         closeEndpointForm();
@@ -1615,7 +1939,8 @@ const CodexPage = () => {
         inputCostMultiplier,
         outputCostMultiplier,
         cacheReadCostMultiplier,
-        billingOutputTokenSource
+        billingOutputTokenSource,
+        modelMultipliers
       });
       await fetchData({ silent: true });
       closeEndpointForm();
@@ -1680,7 +2005,7 @@ const CodexPage = () => {
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Codex 管理</h1>
             <p className="text-slate-500 text-sm mt-1">
-              渠道承载共用配置，端点承载 base_url；切换激活端点时仅 config.toml 中 base_url 一行改写
+              管理 Codex 渠道、端点与模型映射；请求通过主代理端口按当前接管渠道转发
               {lastUpdate && (
                 <span className="ml-2 text-slate-400">· 更新于 {lastUpdate}</span>
               )}
@@ -1702,7 +2027,6 @@ const CodexPage = () => {
             size="sm"
             icon={Settings}
             onClick={() => setShowGlobalConfig(true)}
-            title="编辑 ~/.codex/config.toml 中的 model / 推理强度 / 1M 上下文"
           >
             Codex 配置
           </Button>
@@ -1719,7 +2043,6 @@ const CodexPage = () => {
             key={card.title}
             title={card.title}
             value={card.value}
-            tooltip={card.tooltip}
             subText={card.subText}
             icon={card.icon}
             statusColor={card.statusColor}

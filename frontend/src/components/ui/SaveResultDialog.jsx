@@ -5,6 +5,7 @@
 
 import { CheckCircle, XCircle, FolderOpen, X, FileText, Copy, Check, Sparkles } from 'lucide-react';
 import { useState } from 'react';
+import Tooltip from './Tooltip';
 
 // 格式化文件大小
 const formatFileSize = (bytes) => {
@@ -95,9 +96,11 @@ const SaveResultDialog = ({ isOpen, result, onClose, onOpenFolder }) => {
                     <FileText size={20} className="text-indigo-500" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-slate-800 truncate text-sm" title={fileName}>
-                      {fileName}
-                    </h4>
+                    <Tooltip content={fileName} className="block min-w-0">
+                      <h4 className="font-medium text-slate-800 truncate text-sm">
+                        {fileName}
+                      </h4>
+                    </Tooltip>
                     <p className="text-xs text-slate-400 mt-0.5 font-medium">
                       {formatFileSize(fileSize)}
                     </p>
@@ -108,20 +111,24 @@ const SaveResultDialog = ({ isOpen, result, onClose, onOpenFolder }) => {
                 {filePath && (
                   <div className="mt-3 pt-3 border-t border-slate-200/60">
                     <div className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-slate-100">
-                      <p className="text-[11px] text-slate-400 truncate flex-1 font-mono" title={filePath}>
-                        {filePath}
-                      </p>
-                      <button
-                        onClick={handleCopyPath}
-                        className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
-                          copied
-                            ? 'bg-emerald-50 text-emerald-500'
-                            : 'text-slate-300 hover:text-indigo-500 hover:bg-indigo-50'
-                        }`}
-                        title={copied ? '已复制' : '复制路径'}
-                      >
-                        {copied ? <Check size={14} /> : <Copy size={14} />}
-                      </button>
+                      <Tooltip content={filePath} className="min-w-0 flex-1">
+                        <p className="text-[11px] text-slate-400 truncate font-mono">
+                          {filePath}
+                        </p>
+                      </Tooltip>
+                      <Tooltip content={copied ? '已复制' : '复制路径'}>
+                        <button
+                          onClick={handleCopyPath}
+                          className={`p-1.5 rounded-md transition-all flex-shrink-0 ${
+                            copied
+                              ? 'bg-emerald-50 text-emerald-500'
+                              : 'text-slate-300 hover:text-indigo-500 hover:bg-indigo-50'
+                          }`}
+                          aria-label={copied ? '已复制' : '复制路径'}
+                        >
+                          {copied ? <Check size={14} /> : <Copy size={14} />}
+                        </button>
+                      </Tooltip>
                     </div>
                   </div>
                 )}

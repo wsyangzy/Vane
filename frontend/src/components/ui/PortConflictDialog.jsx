@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { AlertTriangle, X, RefreshCw, Shuffle, Copy, Check } from 'lucide-react';
+import Tooltip from './Tooltip';
 
 const PortConflictDialog = ({
   isOpen,
@@ -130,17 +131,19 @@ const PortConflictDialog = ({
                 <code className="flex-1 text-sm font-mono text-slate-800 break-all">
                   {successAddress}
                 </code>
-                <button
-                  onClick={handleCopy}
-                  className={`shrink-0 p-2 rounded-lg transition-colors ${
-                    copied
-                      ? 'bg-emerald-100 text-emerald-600'
-                      : 'bg-white text-slate-500 hover:text-slate-700 hover:bg-slate-100 border border-slate-200'
-                  }`}
-                  title={copied ? '已复制' : '复制地址'}
-                >
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                </button>
+                <Tooltip content={copied ? '已复制' : '复制地址'}>
+                  <button
+                    onClick={handleCopy}
+                    className={`shrink-0 p-2 rounded-lg transition-colors ${
+                      copied
+                        ? 'bg-emerald-100 text-emerald-600'
+                        : 'bg-white text-slate-500 hover:text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                    aria-label={copied ? '已复制' : '复制地址'}
+                  >
+                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                </Tooltip>
               </div>
             </div>
           ) : (

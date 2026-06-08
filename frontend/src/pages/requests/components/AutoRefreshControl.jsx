@@ -48,7 +48,6 @@ const AutoRefreshControl = ({
             ? 'bg-indigo-50 border-indigo-200 text-indigo-700 z-10'
             : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 z-0'
         }`}
-        title="自动刷新设置"
       >
         {interval > 0 ? (
           <>
@@ -76,7 +75,6 @@ const AutoRefreshControl = ({
         className={`h-9 w-9 flex items-center justify-center border rounded-r-lg border-gray-200 bg-white text-gray-500 hover:text-indigo-600 hover:bg-gray-50 -ml-px transition-colors z-0 ${
           interval > 0 ? 'border-l-indigo-200' : ''
         }`}
-        title="立即刷新"
       >
         <RotateCcw className="w-4 h-4" />
       </button>

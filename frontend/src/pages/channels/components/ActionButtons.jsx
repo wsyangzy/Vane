@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { Zap, Save } from 'lucide-react';
-import { useToast } from '@components/ui';
+import { Tooltip, useToast } from '@components/ui';
 
 /**
  * 操作按钮组件
@@ -30,6 +30,11 @@ const ActionButtons = ({
   const groupIsActive = endpoint.group_is_active;
   // 按钮是否可用：有效组 且 组未激活
   const canActivate = hasValidGroup && !groupIsActive;
+  const activateTitle = !hasValidGroup
+    ? '端点未配置组信息'
+    : groupIsActive
+      ? `组 "${endpoint.group}" 已启用`
+      : `启用组: ${endpoint.group}`;
 
   // 激活组处理
   const handleActivateGroup = async () => {
@@ -60,42 +65,42 @@ const ActionButtons = ({
   return (
     <div className="flex items-center gap-1.5">
       {/* 激活组按钮 */}
-      <button
-        onClick={handleActivateGroup}
-        disabled={disabled || activateLoading || !canActivate}
-        className={`
-          inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-all
-          ${canActivate
-            ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200'
-            : groupIsActive
-              ? 'bg-emerald-500 text-white border border-emerald-500'
-              : 'bg-slate-50 text-slate-400 border border-slate-200 cursor-not-allowed'}
-          ${activateLoading ? 'opacity-50' : ''}
-        `}
-        title={
-          !hasValidGroup ? '端点未配置组信息' :
-          groupIsActive ? `组 "${endpoint.group}" 已启用` :
-          `启用组: ${endpoint.group}`
-        }
-      >
-        <Zap size={12} />
-        {activateLoading ? '启用中' : groupIsActive ? '活跃' : '启用'}
-      </button>
+      <Tooltip content={activateTitle}>
+        <button
+          onClick={handleActivateGroup}
+          disabled={disabled || activateLoading || !canActivate}
+          className={`
+            inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-all
+            ${canActivate
+              ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200'
+              : groupIsActive
+                ? 'bg-emerald-500 text-white border border-emerald-500'
+                : 'bg-slate-50 text-slate-400 border border-slate-200 cursor-not-allowed'}
+            ${activateLoading ? 'opacity-50' : ''}
+          `}
+          aria-label={activateTitle}
+        >
+          <Zap size={12} />
+          {activateLoading ? '启用中' : groupIsActive ? '活跃' : '启用'}
+        </button>
+      </Tooltip>
 
       {/* 更新优先级按钮 */}
-      <button
-        onClick={handleUpdatePriority}
-        disabled={disabled || (priorityEditorRef?.current?.isUpdating)}
-        className="
-          inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded
-          bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200
-          transition-all disabled:opacity-50 disabled:cursor-not-allowed
-        "
-        title="保存优先级更改"
-      >
-        <Save size={12} />
-        更新
-      </button>
+      <Tooltip content="保存优先级更改">
+        <button
+          onClick={handleUpdatePriority}
+          disabled={disabled || (priorityEditorRef?.current?.isUpdating)}
+          className="
+            inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded
+            bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200
+            transition-all disabled:opacity-50 disabled:cursor-not-allowed
+          "
+          aria-label="保存优先级更改"
+        >
+          <Save size={12} />
+          更新
+        </button>
+      </Tooltip>
     </div>
   );
 };

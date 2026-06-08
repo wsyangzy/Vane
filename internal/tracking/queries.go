@@ -132,9 +132,11 @@ type RequestDetail struct {
 	Method    string `json:"method"`
 	Path      string `json:"path"`
 
-	StartTime  time.Time  `json:"start_time"`
-	EndTime    *time.Time `json:"end_time"`
-	DurationMs *int64     `json:"duration_ms"`
+	StartTime    time.Time  `json:"start_time"`
+	EndTime      *time.Time `json:"end_time"`
+	DurationMs   *int64     `json:"duration_ms"`
+	OutputSentAt *time.Time `json:"output_sent_at"`
+	FirstByteMs  *int64     `json:"first_byte_ms"`
 
 	Channel            string `json:"channel"` // 渠道标签
 	EndpointName       string `json:"endpoint_name"`
@@ -181,9 +183,24 @@ type RequestDetail struct {
 	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
 	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
 	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
+	ModelCostMultiplier           float64 `json:"model_cost_multiplier"`
+	ModelInputCostMultiplier      float64 `json:"model_input_cost_multiplier"`
+	ModelOutputCostMultiplier     float64 `json:"model_output_cost_multiplier"`
+	ModelCacheReadCostMultiplier  float64 `json:"model_cache_read_cost_multiplier"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (d *RequestDetail) ComputeFirstByteMs() {
+	if d == nil || d.OutputSentAt == nil {
+		return
+	}
+	ms := d.OutputSentAt.Sub(d.StartTime).Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
+	d.FirstByteMs = &ms
 }
 
 // UsageStats represents aggregated usage statistics
@@ -347,7 +364,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 	query := `SELECT id, request_id,
 		COALESCE(client_ip, '') as client_ip,
 		COALESCE(user_agent, '') as user_agent,
-		method, path, start_time, end_time, duration_ms,
+		method, path, start_time, end_time, duration_ms, output_sent_at,
 		COALESCE(channel, '') as channel,
 		COALESCE(endpoint_name, '') as endpoint_name,
 		COALESCE(endpoint_chain, '') as endpoint_chain,
@@ -383,6 +400,10 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		COALESCE(cache_creation_cost_multiplier, 1.0) as cache_creation_cost_multiplier,
 		COALESCE(cache_creation_cost_multiplier_1h, 1.0) as cache_creation_cost_multiplier_1h,
 		COALESCE(cache_read_cost_multiplier, 1.0) as cache_read_cost_multiplier,
+		COALESCE(model_cost_multiplier, 1.0) as model_cost_multiplier,
+		COALESCE(model_input_cost_multiplier, 1.0) as model_input_cost_multiplier,
+		COALESCE(model_output_cost_multiplier, 1.0) as model_output_cost_multiplier,
+		COALESCE(model_cache_read_cost_multiplier, 1.0) as model_cache_read_cost_multiplier,
 		created_at, updated_at
 		FROM request_logs WHERE 1=1`
 
@@ -480,7 +501,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		err := rows.Scan(
 			&detail.ID, &detail.RequestID,
 			&detail.ClientIP, &detail.UserAgent, &detail.Method, &detail.Path,
-			&detail.StartTime, &detail.EndTime, &detail.DurationMs,
+			&detail.StartTime, &detail.EndTime, &detail.DurationMs, &detail.OutputSentAt,
 			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
 			&detail.OriginalModelName, &detail.ModelRewriteSource, &detail.ModelRewriteTarget,
 			&detail.IsStreaming,
@@ -500,11 +521,16 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			&detail.CacheCreationCostMultiplier,
 			&detail.CacheCreationCostMultiplier1h,
 			&detail.CacheReadCostMultiplier,
+			&detail.ModelCostMultiplier,
+			&detail.ModelInputCostMultiplier,
+			&detail.ModelOutputCostMultiplier,
+			&detail.ModelCacheReadCostMultiplier,
 			&detail.CreatedAt, &detail.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan request detail: %w", err)
 		}
+		detail.ComputeFirstByteMs()
 		details = append(details, detail)
 	}
 

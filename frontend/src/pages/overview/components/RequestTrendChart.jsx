@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { fetchRequestTrendData } from '@utils/api.js';
 import { formatHHMM, padTimeSeries } from '@utils/chartTime.js';
-import { CustomSelect } from '@components/ui';
+import { CustomSelect, Tooltip as UiTooltip } from '@components/ui';
 
 // 时间范围选项
 const TIME_RANGE_OPTIONS = [
@@ -147,14 +147,16 @@ const RequestTrendChart = ({ uptimeSeconds = 0 }) => {
           />
 
           {/* 刷新按钮 */}
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
-            title="刷新数据"
-          >
-            <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-          </button>
+          <UiTooltip content="刷新数据">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
+              aria-label="刷新数据"
+            >
+              <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+            </button>
+          </UiTooltip>
 
           {/* 图例 */}
           <div className="flex space-x-4 text-xs font-medium">

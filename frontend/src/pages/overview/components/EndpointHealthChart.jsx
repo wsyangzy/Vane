@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import { fetchEndpointHealthData } from '@utils/api.js';
 import { getCodexEndpointHealthChart } from '@utils/wailsApi.js';
+import { Tooltip as UiTooltip } from '@components/ui';
 
 // 健康状态配置
 const HEALTH_CONFIG = {
@@ -170,14 +171,16 @@ const EndpointHealthChart = () => {
           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.bg} ${status.color}`}>
             {inScopeTotal > 0 ? `${healthPercent}%` : '-'} {status.text}
           </span>
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
-            title="刷新数据"
-          >
-            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-          </button>
+          <UiTooltip content="刷新数据">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
+              aria-label="刷新数据"
+            >
+              <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+            </button>
+          </UiTooltip>
         </div>
       </div>
       <p className="text-xs text-slate-500 mb-4">实时端点连通性监控</p>

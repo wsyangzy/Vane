@@ -269,7 +269,7 @@ func (a *App) startup() {
 	// 9. 初始化代理处理器
 	a.setupProxyHandler()
 
-	// 9.5 初始化 Codex 代理组件（如果配置启用）— 须在 startProxyServer 前完成，以便注册路由
+	// 9.5 初始化 Codex 代理组件，须在 startProxyServer 前完成，以便注册路由
 	a.initCodexProxy()
 
 	// 10. 启动 HTTP 代理服务器
@@ -1117,6 +1117,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						CacheCreationCostMultiplier1h: 1.0,
 						CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
 						BillingOutputTokenSource:      tracking.NormalizeBillingOutputTokenSource(ep.BillingOutputTokenSource),
+						ModelMultipliers:              codexModelMultipliersToTracking(ep.ModelMultipliers),
 					}
 				}
 			}
@@ -1126,6 +1127,23 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 	// 更新 UsageTracker 的端点倍率缓存
 	a.usageTracker.UpdateEndpointMultipliers(multipliers)
 	a.logger.Debug("已同步端点倍率到 UsageTracker", "count", len(multipliers))
+}
+
+func codexModelMultipliersToTracking(rules []store.CodexModelMultiplierRecord) []tracking.ModelMultiplier {
+	if len(rules) == 0 {
+		return nil
+	}
+	result := make([]tracking.ModelMultiplier, 0, len(rules))
+	for _, rule := range rules {
+		result = append(result, tracking.ModelMultiplier{
+			Model:                   rule.Model,
+			CostMultiplier:          rule.CostMultiplier,
+			InputCostMultiplier:     rule.InputCostMultiplier,
+			OutputCostMultiplier:    rule.OutputCostMultiplier,
+			CacheReadCostMultiplier: rule.CacheReadCostMultiplier,
+		})
+	}
+	return result
 }
 
 // getEffectiveUsageDBPath returns the single SQLite database path used by:
@@ -1799,25 +1817,7 @@ func (a *App) startProxyServerWithListener(listener net.Listener, actualPort int
 // initCodexProxy 初始化 Codex 代理组件（EndpointManager + HealthChecker）。
 // 不再启动独立 HTTP server，路由注册由 startProxyServer 中的 registerCodexRoutes 完成。
 func (a *App) initCodexProxy() {
-	if !a.config.CodexServer.Enabled {
-		// 即使 codex_enabled 未显式开启，如果存在活跃 Codex 渠道也自动启用代理路由
-		// 这避免了用户配置了 Codex 渠道但忘记开启 codex_enabled 导致路由不生效的问题
-		if a.codexChannelStore != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			active, err := a.codexChannelStore.GetActive(ctx)
-			cancel()
-			if err == nil && active != nil {
-				a.config.CodexServer.Enabled = true
-				a.logger.Info("检测到活跃 Codex 渠道，自动启用 Codex 代理路由", "channel", active.Name)
-			} else {
-				a.logger.Debug("Codex 代理未启用，跳过")
-				return
-			}
-		} else {
-			a.logger.Debug("Codex 代理未启用，跳过")
-			return
-		}
-	}
+	a.config.CodexServer.Enabled = true
 
 	// 检查依赖
 	if a.codexChannelStore == nil || a.codexEndpointStore == nil {
@@ -1868,7 +1868,7 @@ func (a *App) initCodexProxy() {
 // 路由规则：/v1/chat/completions, /v1/completions, /v1/models, /v1/embeddings → Codex handler
 // 其他路径 → Claude handler（catch-all）
 func (a *App) registerCodexRoutes(mux *http.ServeMux) {
-	if !a.config.CodexServer.Enabled || a.codexEndpointMgr == nil {
+	if a.codexEndpointMgr == nil {
 		return
 	}
 
@@ -2285,10 +2285,8 @@ func (a *App) applySettingsToConfig() {
 	// 注意：时区变更标记为 RequiresRestart=true，运行时变更只影响后续新生成的时间戳
 	a.config.Timezone = a.getSettingString(ctx, service.CategoryTimezone, "global", a.config.Timezone)
 
-	// Codex 代理配置（从 SQLite 同步，统一在 server 分类下）
-	// 注意：enabled 标记为 RequiresRestart=true，运行时变更需重启生效
-	// v7.2+ Codex 合并到主代理端口，不再有独立 host/port
-	a.config.CodexServer.Enabled = a.settingsService.GetBool(ctx, service.CategoryServer, "codex_enabled", a.config.CodexServer.Enabled)
+	// Codex 代理与 Claude 代理共用主端口，始终启用路径路由。
+	a.config.CodexServer.Enabled = true
 	a.config.CodexServer.Timeout = a.config.GlobalTimeout
 
 	a.logger.Debug("已从数据库加载设置")

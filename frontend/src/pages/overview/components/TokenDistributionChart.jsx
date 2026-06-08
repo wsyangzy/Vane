@@ -13,6 +13,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { fetchTokenUsageData } from '@utils/api.js';
+import { Tooltip as UiTooltip } from '@components/ui';
 
 // Token 类型配置
 const TOKEN_CONFIG = [
@@ -145,14 +146,16 @@ const TokenDistributionChart = () => {
           </div>
           <h3 className="font-semibold text-slate-900">Token 使用分布</h3>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-          className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
-          title="刷新数据"
-        >
-          <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-        </button>
+        <UiTooltip content="刷新数据">
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
+            aria-label="刷新数据"
+          >
+            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+          </button>
+        </UiTooltip>
       </div>
       <p className="text-xs text-slate-500 mb-4">来自 request_logs · 悬浮查看 Claude/Codex 分项</p>
 

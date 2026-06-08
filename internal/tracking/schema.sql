@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS request_logs (
     cache_creation_cost_multiplier REAL DEFAULT 1.0,        -- 5分钟缓存创建倍率
     cache_creation_cost_multiplier_1h REAL DEFAULT 1.0,     -- 1小时缓存创建倍率
     cache_read_cost_multiplier REAL DEFAULT 1.0,            -- 缓存读取倍率
+    model_cost_multiplier REAL DEFAULT 1.0,                 -- 命中模型附加总倍率
+    model_input_cost_multiplier REAL DEFAULT 1.0,           -- 命中模型附加输入倍率
+    model_output_cost_multiplier REAL DEFAULT 1.0,          -- 命中模型附加输出倍率
+    model_cache_read_cost_multiplier REAL DEFAULT 1.0,      -- 命中模型附加缓存读取倍率
 
     -- 审计字段（统一使用带时区格式，微秒精度）
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -314,6 +318,7 @@ CREATE TABLE IF NOT EXISTS codex_endpoints (
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 输出 token 成本倍率
     cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0, -- 缓存读取成本倍率
     billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens', -- 输出计费口径
+    model_multipliers TEXT NOT NULL DEFAULT '[]', -- 按模型附加倍率 JSON
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),

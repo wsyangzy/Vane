@@ -22,9 +22,10 @@ import ConfirmDialog from './ConfirmDialog';
 import SaveResultDialog from './SaveResultDialog';
 import PortConflictDialog from './PortConflictDialog';
 import { ToastProvider, useToast } from './Toast';
+import Tooltip from './Tooltip';
 
 // 导出独立组件
-export { ConfirmDialog, SaveResultDialog, PortConflictDialog, ToastProvider, useToast };
+export { ConfirmDialog, SaveResultDialog, PortConflictDialog, ToastProvider, useToast, Tooltip };
 
 // ============================================
 // KPI 卡片组件
@@ -32,7 +33,6 @@ export { ConfirmDialog, SaveResultDialog, PortConflictDialog, ToastProvider, use
 export const KPICard = ({
   title,
   value,
-  tooltip,
   subText,
   icon: Icon,
   statusColor = 'bg-slate-100 text-slate-600',
@@ -60,7 +60,6 @@ export const KPICard = ({
           </div>
           <div
             className={`min-w-0 flex-1 text-right font-bold text-slate-900 cursor-default ${wrapValue ? 'whitespace-normal break-all leading-snug' : 'truncate'} ${isLarge ? 'text-[1.2rem]' : 'text-lg'} ${isLarge && wrapValue ? 'text-[1.05rem]' : ''} ${!isLarge && wrapValue ? 'text-base' : ''} ${valueClassName}`}
-            title={tooltip || value}
           >
             {value}
           </div>
@@ -68,7 +67,6 @@ export const KPICard = ({
         {subText && (
           <div
             className={`mt-auto truncate whitespace-nowrap pt-2 text-slate-400 font-medium ${isLarge ? 'text-[11px]' : 'text-xs'}`}
-            title={subText}
           >
             {subText}
           </div>
@@ -86,10 +84,7 @@ export const KPICard = ({
       </div>
       <div className="mt-auto">
         <h3 className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">{title}</h3>
-        <div
-          className="text-xl font-bold text-slate-900 truncate cursor-default"
-          title={tooltip || value}
-        >
+        <div className="text-xl font-bold text-slate-900 truncate cursor-default">
           {value}
         </div>
       </div>
@@ -377,6 +372,9 @@ export const Button = ({
   loading = false,
   disabled = false,
   className = '',
+  title,
+  tooltip,
+  'aria-label': ariaLabel,
   ...props
 }) => {
   const variants = {
@@ -394,15 +392,19 @@ export const Button = ({
     lg: 'px-6 py-3 text-base'
   };
 
-  return (
-    <button
-      disabled={disabled || loading}
-      className={`
+  const tooltipContent = tooltip ?? title;
+  const buttonClassName = `
         inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200
         ${variants[variant]} ${sizes[size]}
         ${disabled || loading ? 'opacity-50 cursor-not-allowed' : 'hover:-translate-y-0.5'}
         ${className}
-      `}
+      `;
+
+  const button = (
+    <button
+      disabled={disabled || loading}
+      className={buttonClassName}
+      aria-label={ariaLabel || (typeof tooltipContent === 'string' ? tooltipContent : undefined)}
       {...props}
     >
       {loading ? (
@@ -412,6 +414,14 @@ export const Button = ({
       )}
       {children}
     </button>
+  );
+
+  if (!tooltipContent) return button;
+
+  return (
+    <Tooltip content={tooltipContent} className={className.includes('w-full') ? 'w-full' : ''}>
+      {button}
+    </Tooltip>
   );
 };
 
@@ -444,34 +454,49 @@ export const Input = ({
 );
 
 // ============================================
-// 选择框（原生）
+// 选择框（兼容旧 API，内部使用统一样式）
 // ============================================
 export const Select = ({
   label,
   options = [],
   className = '',
+  value,
+  onChange,
+  disabled = false,
+  placeholder = '请选择',
+  size = 'md',
+  fullWidth = true,
+  minWidth,
   ...props
-}) => (
-  <div className="flex flex-col">
-    {label && (
-      <label className="text-sm font-medium text-slate-700 mb-1.5">{label}</label>
-    )}
-    <select
-      className={`
-        px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600
-        focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-        ${className}
-      `}
-      {...props}
-    >
-      {options.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label}
-        </option>
-      ))}
-    </select>
-  </div>
-);
+}) => {
+  const handleChange = (nextValue) => {
+    onChange?.({
+      target: {
+        value: nextValue,
+        name: props.name
+      }
+    });
+  };
+
+  return (
+    <div className="flex flex-col">
+      {label && (
+        <label className="text-sm font-medium text-slate-700 mb-1.5">{label}</label>
+      )}
+      <CustomSelect
+        options={options}
+        value={value}
+        onChange={handleChange}
+        disabled={disabled}
+        placeholder={placeholder}
+        size={size}
+        fullWidth={fullWidth}
+        minWidth={minWidth}
+        className={className}
+      />
+    </div>
+  );
+};
 
 // ============================================
 // 自定义下拉选择器（统一样式）

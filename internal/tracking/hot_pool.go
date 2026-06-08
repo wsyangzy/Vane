@@ -55,10 +55,15 @@ type ActiveRequest struct {
 	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
 	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
 	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
+	ModelCostMultiplier           float64 `json:"model_cost_multiplier"`
+	ModelInputCostMultiplier      float64 `json:"model_input_cost_multiplier"`
+	ModelOutputCostMultiplier     float64 `json:"model_output_cost_multiplier"`
+	ModelCacheReadCostMultiplier  float64 `json:"model_cache_read_cost_multiplier"`
 
 	// 完成信息（只在结束时填充）
 	EndTime      *time.Time `json:"end_time,omitempty"`
 	DurationMs   int64      `json:"duration_ms"`
+	OutputSentAt *time.Time `json:"output_sent_at,omitempty"`
 	TotalCostUSD float64    `json:"total_cost_usd"`
 
 	// 🔧 [P1.4 新增] 防御性标记：token 已由 RecordFailedRequestTokens 路径记录
@@ -593,6 +598,10 @@ func NewActiveRequest(requestID, clientIP, userAgent, method, path string, isStr
 		CacheCreationCostMultiplier:   1.0,
 		CacheCreationCostMultiplier1h: 1.0,
 		CacheReadCostMultiplier:       1.0,
+		ModelCostMultiplier:           1.0,
+		ModelInputCostMultiplier:      1.0,
+		ModelOutputCostMultiplier:     1.0,
+		ModelCacheReadCostMultiplier:  1.0,
 		BillingOutputTokenSource:      BillingOutputTokenSourceOutput,
 	}
 }

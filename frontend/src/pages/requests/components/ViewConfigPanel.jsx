@@ -3,7 +3,7 @@
 // 2025-12-01 09:30:08
 // ============================================
 
-import { X, Columns, Eye, EyeOff } from 'lucide-react';
+import { X, Columns, Eye, EyeOff, Check } from 'lucide-react';
 
 /**
  * ViewConfigPanel - 列显示配置弹出面板
@@ -48,7 +48,7 @@ const ViewConfigPanel = ({
           return (
             <label
               key={col.id}
-              className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-all ${
+              className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-all ${
                 col.alwaysVisible
                   ? 'opacity-50 cursor-not-allowed bg-gray-50'
                   : 'hover:bg-gray-50 active:scale-[0.98]'
@@ -60,10 +60,24 @@ const ViewConfigPanel = ({
                   checked={isVisible}
                   disabled={col.alwaysVisible}
                   onChange={() => !col.alwaysVisible && onToggleColumn?.(col.id)}
-                  className={`rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 ${
-                    col.alwaysVisible ? 'text-gray-400' : ''
-                  }`}
+                  className="peer sr-only"
                 />
+                <span
+                  aria-hidden="true"
+                  className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-md border transition-all ${
+                    isVisible
+                      ? col.alwaysVisible
+                        ? 'border-slate-200 bg-slate-100 text-slate-300'
+                        : 'border-indigo-500 bg-indigo-600 text-white shadow-sm shadow-indigo-500/20'
+                      : 'border-slate-300 bg-white text-transparent group-hover:border-indigo-300'
+                  } ${
+                    col.alwaysVisible
+                      ? ''
+                      : 'peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-200 peer-focus-visible:ring-offset-1'
+                  }`}
+                >
+                  {isVisible && <Check className="h-3 w-3" strokeWidth={3} />}
+                </span>
                 <span className={`text-sm ${isVisible ? 'text-gray-700 font-medium' : 'text-gray-400'}`}>
                   {col.label}
                 </span>

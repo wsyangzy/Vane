@@ -28,9 +28,9 @@ const (
 
 	// 🔧 [P5.5 新增] 为未来扩展预留的分类
 	// 这些分类目前 YAML/代码常量管理，后续可逐步迁移到 SettingsService
-	CategoryLogging         = "logging"          // 日志级别/格式
-	CategoryEndpointsStore  = "endpoints_store"  // 端点存储类型（yaml/sqlite）
-	CategoryTimezone        = "timezone"         // 全局时区
+	CategoryLogging        = "logging"         // 日志级别/格式
+	CategoryEndpointsStore = "endpoints_store" // 端点存储类型（yaml/sqlite）
+	CategoryTimezone       = "timezone"        // 全局时区
 )
 
 // ConfigSource 表示配置项的来源
@@ -38,9 +38,9 @@ const (
 type ConfigSource string
 
 const (
-	ConfigSourceDefault    ConfigSource = "default"    // 代码常量默认值
-	ConfigSourceYAML       ConfigSource = "yaml"       // YAML 文件
-	ConfigSourceDatabase   ConfigSource = "database"   // SQLite settings 表（用户修改）
+	ConfigSourceDefault     ConfigSource = "default"     // 代码常量默认值
+	ConfigSourceYAML        ConfigSource = "yaml"        // YAML 文件
+	ConfigSourceDatabase    ConfigSource = "database"    // SQLite settings 表（用户修改）
 	ConfigSourceEnvironment ConfigSource = "environment" // 环境变量（暂未启用）
 )
 
@@ -425,12 +425,13 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		{CategoryRequest, "allow_retry_on_exhausted"},
 		// 移除端口自动切换设置（已改为弹窗让用户选择）
 		{CategoryServer, "allow_port_fallback"},
-		// 移除旧的 codex_server 分类（已合并到 server 分类的 codex_* 前缀 key）
+		// 移除旧的 codex_server 分类（Codex 路由已合并到主代理端口）
 		{"codex_server", "enabled"},
 		{"codex_server", "host"},
 		{"codex_server", "port"},
 		{"codex_server", "timeout"},
-		// 移除已废弃的 server 分类下的 codex 设置项（已合并为单端口，仅保留 codex_enabled）
+		// 移除已废弃的 server 分类下的 codex 设置项（Codex 代理默认启用）
+		{CategoryServer, "codex_enabled"},
 		{CategoryServer, "codex_host"},
 		{CategoryServer, "codex_port"},
 		{CategoryServer, "codex_timeout"},
@@ -503,7 +504,6 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 	case CategoryServer:
 		return []*store.SettingRecord{
 			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
-			{Category: CategoryServer, Key: "codex_enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用 Codex 代理", Description: "启用 Codex 代理路由（与 Claude 代理共用端口，通过路径自动区分）", DisplayOrder: 10, RequiresRestart: true},
 		}
 
 	case CategoryStrategy:

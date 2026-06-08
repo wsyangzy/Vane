@@ -2,6 +2,7 @@
 // 支持多选复制
 import { useState, memo } from 'react';
 import { Copy, Check } from 'lucide-react';
+import { Tooltip } from '@components/ui';
 import { LOG_LEVELS } from '../constants';
 
 // 转义正则表达式特殊字符
@@ -111,9 +112,11 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
       </div>
 
       {/* 日志消息 - 单行截断显示，完整内容通过悬浮提示和复制获取 */}
-      <div className="flex-1 min-w-0 text-slate-700 truncate" title={log.message}>
-        {highlightText(log.message)}
-      </div>
+      <Tooltip content={log.message} className="min-w-0 flex-1">
+        <div className="text-slate-700 truncate">
+          {highlightText(log.message)}
+        </div>
+      </Tooltip>
 
       {/* 附加属性 - 显示前3个，超长值截断 */}
       {log.attrs && Object.keys(log.attrs).length > 0 && (
@@ -130,17 +133,19 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
       )}
 
       {/* 复制按钮 - 鼠标悬浮时显示 */}
-      <button
-        onClick={handleCopy}
-        className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"
-        title="复制日志"
-      >
-        {copied ? (
-          <Check size={14} className="text-green-500" />
-        ) : (
-          <Copy size={14} />
-        )}
-      </button>
+      <Tooltip content={copied ? '已复制' : '复制日志'}>
+        <button
+          onClick={handleCopy}
+          className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"
+          aria-label={copied ? '已复制' : '复制日志'}
+        >
+          {copied ? (
+            <Check size={14} className="text-green-500" />
+          ) : (
+            <Copy size={14} />
+          )}
+        </button>
+      </Tooltip>
     </div>
   );
 }

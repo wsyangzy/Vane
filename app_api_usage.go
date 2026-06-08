@@ -302,6 +302,7 @@ type RequestRecord struct {
 	CacheCreation1hTokens    int64       `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens          int64       `json:"cache_read_tokens"`
 	ResponseTime             int64       `json:"response_time"`
+	FirstByteMs              *int64      `json:"first_byte_ms,omitempty"`
 	IsStreaming              bool        `json:"is_streaming"`
 	Cost                     float64     `json:"cost"`
 	InputCostUSD             float64     `json:"input_cost_usd"`             // 输入成本（计费明细）
@@ -318,6 +319,10 @@ type RequestRecord struct {
 	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
 	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
 	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
+	ModelCostMultiplier           float64 `json:"model_cost_multiplier"`
+	ModelInputCostMultiplier      float64 `json:"model_input_cost_multiplier"`
+	ModelOutputCostMultiplier     float64 `json:"model_output_cost_multiplier"`
+	ModelCacheReadCostMultiplier  float64 `json:"model_cache_read_cost_multiplier"`
 }
 
 // RequestListResult 请求列表结果
@@ -471,6 +476,10 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 			CacheCreationCostMultiplier:   r.CacheCreationCostMultiplier,
 			CacheCreationCostMultiplier1h: r.CacheCreationCostMultiplier1h,
 			CacheReadCostMultiplier:       r.CacheReadCostMultiplier,
+			ModelCostMultiplier:           r.ModelCostMultiplier,
+			ModelInputCostMultiplier:      r.ModelInputCostMultiplier,
+			ModelOutputCostMultiplier:     r.ModelOutputCostMultiplier,
+			ModelCacheReadCostMultiplier:  r.ModelCacheReadCostMultiplier,
 		}
 
 		// 处理指针字段
@@ -479,6 +488,10 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		}
 		if r.DurationMs != nil {
 			record.ResponseTime = *r.DurationMs
+		}
+		if r.FirstByteMs != nil {
+			firstByteMs := *r.FirstByteMs
+			record.FirstByteMs = &firstByteMs
 		}
 
 		result.Requests = append(result.Requests, record)

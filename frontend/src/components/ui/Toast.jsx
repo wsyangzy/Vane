@@ -104,7 +104,7 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
       <button
         onClick={handleClose}
         className="relative flex-shrink-0 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
-        title="关闭"
+        aria-label="关闭"
       >
         {/* 倒计时 SVG 圈 */}
         {duration > 0 && (

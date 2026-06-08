@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { fetchResponseTimeData } from '@utils/api.js';
 import { formatHHMM, padTimeSeries } from '@utils/chartTime.js';
-import { CustomSelect } from '@components/ui';
+import { CustomSelect, Tooltip as UiTooltip } from '@components/ui';
 
 // 时间范围选项
 const TIME_RANGE_OPTIONS = [
@@ -152,14 +152,16 @@ const ResponseTimeChart = ({ uptimeSeconds = 0 }) => {
             onChange={setTimeRange}
             size="xs"
           />
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
-            title="刷新数据"
-          >
-            <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-          </button>
+          <UiTooltip content="刷新数据">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
+              aria-label="刷新数据"
+            >
+              <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+            </button>
+          </UiTooltip>
         </div>
       </div>
       <p className="text-xs text-slate-500 mb-4">

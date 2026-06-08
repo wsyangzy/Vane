@@ -1,5 +1,6 @@
 // LogFilters.jsx - 日志过滤器组件
 import { Search, X } from 'lucide-react';
+import { Tooltip } from '@components/ui';
 import { LOG_LEVELS, LOG_LEVEL_LIST } from '../constants';
 
 /**
@@ -54,7 +55,6 @@ function LogFilters({
           className={`ml-0.5 inline-flex items-center justify-center px-1.5 py-0.5 rounded-lg font-mono text-[10px] leading-none ${
             isActive ? `${config?.bg || 'bg-slate-50'} ${config?.color || 'text-slate-700'} ring-1 ${config?.ring || 'ring-slate-200'}` : 'bg-white text-slate-500 ring-1 ring-slate-200'
           }`}
-          title={`${label} 数量`}
         >
           {count}
         </span>
@@ -85,14 +85,16 @@ function LogFilters({
             className="w-full pl-10 pr-10 py-2 text-sm text-slate-900 bg-white border border-slate-200 rounded-xl placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 shadow-sm"
           />
           {searchQuery ? (
-            <button
-              type="button"
-              onClick={() => onSearchChange('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
-              title="清空搜索"
-            >
-              <X size={14} />
-            </button>
+            <Tooltip content="清空搜索" className="absolute right-2 top-1/2 -translate-y-1/2">
+              <button
+                type="button"
+                onClick={() => onSearchChange('')}
+                className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                aria-label="清空搜索"
+              >
+                <X size={14} />
+              </button>
+            </Tooltip>
           ) : null}
         </div>
       </div>
@@ -100,22 +102,24 @@ function LogFilters({
       {/* 自动滚动开关 */}
       <div className="flex items-center justify-between lg:justify-end gap-2">
         <span className="text-sm text-slate-600 select-none">自动滚动</span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={autoScroll}
-          onClick={() => onAutoScrollChange(!autoScroll)}
-          className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${
-            autoScroll ? 'bg-indigo-500 border-indigo-500' : 'bg-slate-200 border-slate-200'
-          }`}
-          title={autoScroll ? '已开启自动滚动' : '已关闭自动滚动'}
-        >
-          <span
-            className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${
-              autoScroll ? 'translate-x-5' : 'translate-x-0.5'
+        <Tooltip content={autoScroll ? '已开启自动滚动' : '已关闭自动滚动'}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoScroll}
+            onClick={() => onAutoScrollChange(!autoScroll)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${
+              autoScroll ? 'bg-indigo-500 border-indigo-500' : 'bg-slate-200 border-slate-200'
             }`}
-          />
-        </button>
+            aria-label={autoScroll ? '已开启自动滚动' : '已关闭自动滚动'}
+          >
+            <span
+              className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${
+                autoScroll ? 'translate-x-5' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+        </Tooltip>
       </div>
     </div>
   );

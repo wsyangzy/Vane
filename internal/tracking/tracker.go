@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,6 +171,14 @@ type ModelPricing struct {
 	CacheRead       float64 `yaml:"cache_read"`        // per 1M tokens (缓存读取)
 }
 
+type ModelMultiplier struct {
+	Model                   string
+	CostMultiplier          float64
+	InputCostMultiplier     float64
+	OutputCostMultiplier    float64
+	CacheReadCostMultiplier float64
+}
+
 // EndpointMultiplier 端点成本倍率（支持端点级别的成本调整）
 // 成本计算公式：模型基础定价 * 细分倍率 * 总倍率
 // 倍率叠加模式（不再是 either-or）：
@@ -183,6 +192,11 @@ type EndpointMultiplier struct {
 	CacheCreationCostMultiplier1h float64 // 1小时缓存创建成本倍率（默认 1.0）
 	CacheReadCostMultiplier       float64 // 缓存读取成本倍率（默认 1.0）
 	BillingOutputTokenSource      string  // Codex 输出计费口径，默认 output_tokens
+	ModelCostMultiplier           float64 // 命中模型附加总倍率（默认 1.0）
+	ModelInputCostMultiplier      float64 // 命中模型附加输入倍率（默认 1.0）
+	ModelOutputCostMultiplier     float64 // 命中模型附加输出倍率（默认 1.0）
+	ModelCacheReadCostMultiplier  float64 // 命中模型附加缓存读取倍率（默认 1.0）
+	ModelMultipliers              []ModelMultiplier
 }
 
 // DefaultEndpointMultiplier 返回默认端点倍率（全部为 1.0）
@@ -195,7 +209,37 @@ func DefaultEndpointMultiplier() EndpointMultiplier {
 		CacheCreationCostMultiplier1h: 1.0,
 		CacheReadCostMultiplier:       1.0,
 		BillingOutputTokenSource:      BillingOutputTokenSourceOutput,
+		ModelCostMultiplier:           1.0,
+		ModelInputCostMultiplier:      1.0,
+		ModelOutputCostMultiplier:     1.0,
+		ModelCacheReadCostMultiplier:  1.0,
 	}
+}
+
+func ResolveEndpointMultiplierForModel(mult EndpointMultiplier, modelName string) EndpointMultiplier {
+	mult.ModelCostMultiplier = 1.0
+	mult.ModelInputCostMultiplier = 1.0
+	mult.ModelOutputCostMultiplier = 1.0
+	mult.ModelCacheReadCostMultiplier = 1.0
+
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || len(mult.ModelMultipliers) == 0 {
+		mult.ModelMultipliers = nil
+		return mult
+	}
+
+	for _, rule := range mult.ModelMultipliers {
+		if strings.TrimSpace(rule.Model) != modelName {
+			continue
+		}
+		mult.ModelCostMultiplier = ensurePositiveMultiplier(rule.CostMultiplier)
+		mult.ModelInputCostMultiplier = ensurePositiveMultiplier(rule.InputCostMultiplier)
+		mult.ModelOutputCostMultiplier = ensurePositiveMultiplier(rule.OutputCostMultiplier)
+		mult.ModelCacheReadCostMultiplier = ensurePositiveMultiplier(rule.CacheReadCostMultiplier)
+		break
+	}
+	mult.ModelMultipliers = nil
+	return mult
 }
 
 // CostBreakdown 成本分解结构
@@ -272,16 +316,16 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 	cacheCreationCost := cache5mCost + cache1hCost
 
 	// 应用端点倍率（叠加模式）
-	// 1. 细分倍率：在每个分项成本计算时相乘（默认 1.0 = 不影响）
-	inputCost *= ensureMultiplier(m.InputCostMultiplier)
-	outputCost *= ensureMultiplier(m.OutputCostMultiplier)
-	cacheReadCost *= ensureMultiplier(m.CacheReadCostMultiplier)
+	// 1. 细分倍率：端点细分 * 模型细分，默认 1.0 = 不影响
+	inputCost *= ensureMultiplier(m.InputCostMultiplier) * ensureMultiplier(m.ModelInputCostMultiplier)
+	outputCost *= ensureMultiplier(m.OutputCostMultiplier) * ensureMultiplier(m.ModelOutputCostMultiplier)
+	cacheReadCost *= ensureMultiplier(m.CacheReadCostMultiplier) * ensureMultiplier(m.ModelCacheReadCostMultiplier)
 	cache5mCost *= ensureMultiplier(m.CacheCreationCostMultiplier)
 	cache1hCost *= ensureMultiplier(m.CacheCreationCostMultiplier1h)
 	cacheCreationCost = cache5mCost + cache1hCost
 
-	// 2. 总倍率：在所有分项计算后，作为整体乘数应用（默认 1.0 = 不影响）
-	totalMult := ensureMultiplier(m.CostMultiplier)
+	// 2. 总倍率：端点总倍率 * 模型总倍率，应用到所有分项
+	totalMult := ensureMultiplier(m.CostMultiplier) * ensureMultiplier(m.ModelCostMultiplier)
 	if totalMult != 1.0 {
 		inputCost *= totalMult
 		outputCost *= totalMult
@@ -1127,6 +1171,29 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 	slog.Debug("HotPool 未启用，跳过 update", "request_id", requestID)
 }
 
+// RecordOutputSent records when the first response bytes were sent to the client.
+func (ut *UsageTracker) RecordOutputSent(requestID string) {
+	if ut.config == nil || !ut.config.Enabled || requestID == "" {
+		return
+	}
+
+	if ut.hotPoolEnabled && ut.hotPool != nil {
+		now := ut.now()
+		if err := ut.hotPool.Update(requestID, func(req *ActiveRequest) {
+			if req.OutputSentAt == nil {
+				req.OutputSentAt = &now
+			}
+		}); err != nil {
+			slog.Debug("🔥 热池记录首次输出失败（请求可能已归档或从未记录）",
+				"request_id", requestID,
+				"error", err)
+		}
+		return
+	}
+
+	slog.Debug("HotPool 未启用，跳过首次输出记录", "request_id", requestID)
+}
+
 // RecordRequestSuccess 记录请求成功完成
 // 一次性更新所有成功相关字段：status='completed', end_time, duration_ms, Token和成本信息
 func (ut *UsageTracker) RecordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration) {
@@ -1626,6 +1693,21 @@ func (ut *UsageTracker) GetEndpointMultiplierForEndpoint(channelName, endpointNa
 	for _, key := range endpointMultiplierLookupKeys(channelName, "", endpointName) {
 		if m, exists := ut.endpointMu[key]; exists {
 			return m
+		}
+	}
+	return DefaultEndpointMultiplier()
+}
+
+func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModel(channelName, endpointName, modelName string) EndpointMultiplier {
+	ut.mu.RLock()
+	defer ut.mu.RUnlock()
+
+	if ut.endpointMu == nil {
+		return DefaultEndpointMultiplier()
+	}
+	for _, key := range endpointMultiplierLookupKeys(channelName, "", endpointName) {
+		if m, exists := ut.endpointMu[key]; exists {
+			return ResolveEndpointMultiplierForModel(m, modelName)
 		}
 	}
 	return DefaultEndpointMultiplier()
@@ -2236,6 +2318,10 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 		req.CacheCreationCostMultiplier = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier)
 		req.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier1h)
 		req.CacheReadCostMultiplier = ensurePositiveMultiplier(mult.CacheReadCostMultiplier)
+		req.ModelCostMultiplier = ensurePositiveMultiplier(mult.ModelCostMultiplier)
+		req.ModelInputCostMultiplier = ensurePositiveMultiplier(mult.ModelInputCostMultiplier)
+		req.ModelOutputCostMultiplier = ensurePositiveMultiplier(mult.ModelOutputCostMultiplier)
+		req.ModelCacheReadCostMultiplier = ensurePositiveMultiplier(mult.ModelCacheReadCostMultiplier)
 		req.BillingOutputTokenSource = NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
 		req.BillableOutputTokens = BillableOutputTokens(req.OutputTokens, req.ReasoningTokens, req.BillingOutputTokenSource)
 	})
@@ -2302,6 +2388,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	startTime := req.StartTime
 	endTimeSnapshot := req.EndTime
 	durationMsSnapshot := req.DurationMs
+	outputSentAtSnapshot := req.OutputSentAt
 	endpointName := req.EndpointName
 	endpointChain := req.EndpointChain
 	channel := req.Channel
@@ -2334,10 +2421,16 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	cacheCreationCostMultSnap := req.CacheCreationCostMultiplier
 	cacheCreationCostMult1hSnap := req.CacheCreationCostMultiplier1h
 	cacheReadCostMultSnap := req.CacheReadCostMultiplier
+	modelCostMultSnap := req.ModelCostMultiplier
+	modelInputCostMultSnap := req.ModelInputCostMultiplier
+	modelOutputCostMultSnap := req.ModelOutputCostMultiplier
+	modelCacheReadCostMultSnap := req.ModelCacheReadCostMultiplier
 	req.mu.RUnlock()
 
 	var endTime *time.Time
 	var durationMs *int64
+	var outputSentAt *time.Time
+	var firstByteMs *int64
 	var httpStatus *int
 
 	if endTimeSnapshot != nil {
@@ -2347,6 +2440,15 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	if durationMsSnapshot > 0 {
 		d := durationMsSnapshot
 		durationMs = &d
+	}
+	if outputSentAtSnapshot != nil {
+		t := *outputSentAtSnapshot
+		outputSentAt = &t
+		ms := t.Sub(startTime).Milliseconds()
+		if ms < 0 {
+			ms = 0
+		}
+		firstByteMs = &ms
 	}
 	if httpStatusSnapshot > 0 {
 		s := httpStatusSnapshot
@@ -2374,7 +2476,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	if hasPricing && ut.endpointMu != nil {
 		for _, key := range endpointMultiplierLookupKeys(channel, groupName, endpointName) {
 			if m, ok := ut.endpointMu[key]; ok {
-				multiplierValue = m
+				multiplierValue = ResolveEndpointMultiplierForModel(m, modelName)
 				multiplier = &multiplierValue
 				break
 			}
@@ -2408,6 +2510,8 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		StartTime:                     startTime,
 		EndTime:                       endTime,
 		DurationMs:                    durationMs,
+		OutputSentAt:                  outputSentAt,
+		FirstByteMs:                   firstByteMs,
 		EndpointName:                  endpointName,
 		EndpointChain:                 endpointChain,
 		Channel:                       channel, // 渠道标签
@@ -2446,6 +2550,10 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		CacheCreationCostMultiplier:   normalizeMultiplierSnapshot(cacheCreationCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier }),
 		CacheCreationCostMultiplier1h: normalizeMultiplierSnapshot(cacheCreationCostMult1hSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier1h }),
 		CacheReadCostMultiplier:       normalizeMultiplierSnapshot(cacheReadCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheReadCostMultiplier }),
+		ModelCostMultiplier:           normalizeMultiplierSnapshot(modelCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelCostMultiplier }),
+		ModelInputCostMultiplier:      normalizeMultiplierSnapshot(modelInputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelInputCostMultiplier }),
+		ModelOutputCostMultiplier:     normalizeMultiplierSnapshot(modelOutputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelOutputCostMultiplier }),
+		ModelCacheReadCostMultiplier:  normalizeMultiplierSnapshot(modelCacheReadCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelCacheReadCostMultiplier }),
 		CreatedAt:                     startTime,
 		UpdatedAt:                     ut.now(),
 	}

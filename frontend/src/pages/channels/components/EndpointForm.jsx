@@ -5,8 +5,19 @@
 
 import { useState } from 'react';
 import { X, Save, AlertCircle, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
-import { Button } from '@components/ui';
+import { Button, CustomSelect, Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
+import { formatMultiplierInputValue, isValidMultiplierExpression } from '@utils/multiplier.js';
+
+const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
+const MULTIPLIER_FIELDS = [
+  { name: 'costMultiplier', label: '总成本倍率' },
+  { name: 'inputCostMultiplier', label: '输入成本倍率' },
+  { name: 'outputCostMultiplier', label: '输出成本倍率' },
+  { name: 'cacheReadCostMultiplier', label: '缓存读取成本倍率' },
+  { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率' },
+  { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
+];
 
 const getErrorMessage = (error, fallback = '保存失败') => {
   if (!error) return fallback;
@@ -24,7 +35,7 @@ const getErrorMessage = (error, fallback = '保存失败') => {
 // 表单输入组件
 // ============================================
 
-const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, required, disabled, help }) => (
+const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, required, disabled, help, error, inputMode }) => (
   <div className="space-y-1">
     <label className="block text-sm font-medium text-slate-700">
       {label}
@@ -33,19 +44,22 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
     <input
       type={type}
       name={name}
-      value={value || ''}
+      value={value ?? ''}
       onChange={onChange}
       placeholder={placeholder}
       disabled={disabled}
+      inputMode={inputMode}
       autoComplete="off"
       data-form-type="other"
       className={`
-        w-full px-3 py-2 border border-slate-200 rounded-lg text-sm
-        focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500
+        w-full px-3 py-2 border rounded-lg text-sm
+        focus:outline-none focus:ring-2
         disabled:bg-slate-50 disabled:text-slate-400
+        ${error ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-500/20' : 'border-slate-200 focus:border-indigo-500 focus:ring-indigo-500/20'}
         ${disabled ? 'cursor-not-allowed' : ''}
       `}
     />
+    {error && <p className="text-xs text-rose-500">{error}</p>}
     {help && <p className="text-xs text-slate-400">{help}</p>}
   </div>
 );
@@ -72,14 +86,16 @@ const PasswordInput = ({ label, name, value, onChange, placeholder, required, he
           data-form-type="other"
           className="w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
         />
-        <button
-          type="button"
-          onClick={() => setShowPassword(!showPassword)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors"
-          title={showPassword ? '隐藏' : '显示'}
-        >
-          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-        </button>
+        <Tooltip content={showPassword ? '隐藏' : '显示'} className="absolute right-2 top-1/2 -translate-y-1/2">
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
+            aria-label={showPassword ? '隐藏' : '显示'}
+          >
+            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+          </button>
+        </Tooltip>
       </div>
       {help && <p className="text-xs text-slate-400">{help}</p>}
     </div>
@@ -111,7 +127,7 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, 
         knobTranslate: isChecked ? 'translate-x-5' : 'translate-x-0.5',
       };
 
-  return (
+  const field = (
     <div
       className={`
         flex justify-between gap-3 border transition-colors ${sizeClasses.wrapper}
@@ -121,7 +137,6 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, 
       onClick={toggle}
       role="button"
       tabIndex={disabled ? -1 : 0}
-      title={compact ? help : undefined}
       onKeyDown={(e) => {
         if (disabled) return;
         if (e.key === 'Enter' || e.key === ' ') {
@@ -161,6 +176,14 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, 
       </button>
     </div>
   );
+
+  if (!compact || !help) return field;
+
+  return (
+    <Tooltip content={help} className="block">
+      {field}
+    </Tooltip>
+  );
 };
 
 // ============================================
@@ -197,12 +220,12 @@ const EndpointForm = ({
         cooldownSeconds: endpoint.cooldownSeconds || '',
         timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
-        costMultiplier: endpoint.costMultiplier || 1.0,
-        inputCostMultiplier: endpoint.inputCostMultiplier || 1.0,
-        outputCostMultiplier: endpoint.outputCostMultiplier || 1.0,
-        cacheCreationCostMultiplier: endpoint.cacheCreationCostMultiplier || 1.0,
-        cacheCreationCostMultiplier1h: endpoint.cacheCreationCostMultiplier1h || 1.0,
-        cacheReadCostMultiplier: endpoint.cacheReadCostMultiplier || 1.0
+        costMultiplier: formatMultiplierInputValue(endpoint.costMultiplier || 1.0),
+        inputCostMultiplier: formatMultiplierInputValue(endpoint.inputCostMultiplier || 1.0),
+        outputCostMultiplier: formatMultiplierInputValue(endpoint.outputCostMultiplier || 1.0),
+        cacheCreationCostMultiplier: formatMultiplierInputValue(endpoint.cacheCreationCostMultiplier || 1.0),
+        cacheCreationCostMultiplier1h: formatMultiplierInputValue(endpoint.cacheCreationCostMultiplier1h || 1.0),
+        cacheReadCostMultiplier: formatMultiplierInputValue(endpoint.cacheReadCostMultiplier || 1.0)
       };
     }
     return {
@@ -217,12 +240,12 @@ const EndpointForm = ({
       cooldownSeconds: '',
       timeoutSeconds: 0, // 新建时传0，使用全局默认超时
       supportsCountTokens: false,
-      costMultiplier: 1.0,
-      inputCostMultiplier: 1.0,
-      outputCostMultiplier: 1.0,
-      cacheCreationCostMultiplier: 1.0,
-      cacheCreationCostMultiplier1h: 1.0,
-      cacheReadCostMultiplier: 1.0
+      costMultiplier: '1',
+      inputCostMultiplier: '1',
+      outputCostMultiplier: '1',
+      cacheCreationCostMultiplier: '1',
+      cacheCreationCostMultiplier1h: '1',
+      cacheReadCostMultiplier: '1'
     };
   };
 
@@ -234,6 +257,13 @@ const EndpointForm = ({
 
   // 表单错误
   const [errors, setErrors] = useState({});
+
+  const channelOptions = [
+    ...((!uniqueChannels.includes(formData.channel) && formData.channel)
+      ? [{ value: formData.channel, label: `${formData.channel} (当前)` }]
+      : []),
+    ...uniqueChannels.map((channel) => ({ value: channel, label: channel }))
+  ];
 
   // 处理输入变化
   const handleChange = (e) => {
@@ -265,6 +295,15 @@ const EndpointForm = ({
     }
     if (!isEditMode && !formData.token.trim()) {
       newErrors.token = '请输入 Token';
+    }
+    for (const field of MULTIPLIER_FIELDS) {
+      if (!isValidMultiplierExpression(formData[field.name])) {
+        const message = `${field.label}必须是非负数字或分数，例如 1.25 或 40/30`;
+        newErrors[field.name] = message;
+        if (!newErrors.submit) {
+          newErrors.submit = message;
+        }
+      }
     }
 
     const targetChannel = formData.channel.trim();
@@ -345,36 +384,20 @@ const EndpointForm = ({
                     <span className="text-rose-500 ml-1">*</span>
                   </label>
                   {uniqueChannels.length > 0 ? (
-                    <div className="relative">
-                      <select
-                        name="channel"
+                    <CustomSelect
+                        options={channelOptions}
                         value={formData.channel || ''}
-                        onChange={handleChange}
+                        onChange={(value) => {
+                          setFormData(prev => ({ ...prev, channel: value }));
+                          if (errors.channel) {
+                            setErrors(prev => ({ ...prev, channel: null }));
+                          }
+                        }}
                         disabled={channelDisabled}
-                        autoComplete="off"
-                        data-form-type="other"
-                        className={`
-                          w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm bg-white appearance-none
-                          focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500
-                          disabled:bg-slate-50 disabled:text-slate-400
-                          ${channelDisabled ? 'cursor-not-allowed' : ''}
-                        `}
-                      >
-                        <option value="" disabled>请选择渠道</option>
-                        {(!uniqueChannels.includes(formData.channel) && formData.channel) && (
-                          <option value={formData.channel}>{formData.channel} (当前)</option>
-                        )}
-                        {uniqueChannels.map((c) => (
-                          <option key={c} value={c}>{c}</option>
-                        ))}
-                      </select>
-                      <ChevronDown
-                        size={16}
-                        className={`absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none ${
-                          channelDisabled ? 'text-slate-300' : 'text-slate-400'
-                        }`}
+                        size="md"
+                        fullWidth
+                        placeholder="请选择渠道"
                       />
-                    </div>
                   ) : (
                     <input
                       type="text"
@@ -547,7 +570,7 @@ const EndpointForm = ({
             {showAdvanced && (
               <div className="mt-4 p-4 bg-slate-50 rounded-lg space-y-4">
                 <p className="text-xs text-slate-500 mb-3">
-                  成本倍率用于调整不同端点的计费比例，默认为 1.0
+                  成本倍率用于调整不同端点的计费比例，默认为 1.0，{MULTIPLIER_EXPRESSION_HELP}
                 </p>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -556,9 +579,10 @@ const EndpointForm = ({
                     name="costMultiplier"
                     value={formData.costMultiplier}
                     onChange={handleChange}
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="1.0"
+                    error={errors.costMultiplier}
                   />
 
                   <FormInput
@@ -566,9 +590,10 @@ const EndpointForm = ({
                     name="inputCostMultiplier"
                     value={formData.inputCostMultiplier}
                     onChange={handleChange}
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="1.0"
+                    error={errors.inputCostMultiplier}
                   />
 
                   <FormInput
@@ -576,9 +601,10 @@ const EndpointForm = ({
                     name="outputCostMultiplier"
                     value={formData.outputCostMultiplier}
                     onChange={handleChange}
-                    type="number"
-                    step="0.1"
-                    placeholder="1.0"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="40/30"
+                    error={errors.outputCostMultiplier}
                   />
 
                   <FormInput
@@ -586,9 +612,10 @@ const EndpointForm = ({
                     name="cacheReadCostMultiplier"
                     value={formData.cacheReadCostMultiplier}
                     onChange={handleChange}
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="1.0"
+                    error={errors.cacheReadCostMultiplier}
                   />
 
                   <FormInput
@@ -596,9 +623,10 @@ const EndpointForm = ({
                     name="cacheCreationCostMultiplier"
                     value={formData.cacheCreationCostMultiplier}
                     onChange={handleChange}
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="1.0"
+                    error={errors.cacheCreationCostMultiplier}
                     help="Claude 默认缓存类型"
                   />
 
@@ -607,9 +635,10 @@ const EndpointForm = ({
                     name="cacheCreationCostMultiplier1h"
                     value={formData.cacheCreationCostMultiplier1h}
                     onChange={handleChange}
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="1.0"
+                    error={errors.cacheCreationCostMultiplier1h}
                     help="长效缓存类型"
                   />
                 </div>

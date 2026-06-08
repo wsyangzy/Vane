@@ -4,6 +4,13 @@
 // 将 Wails Bindings 包装为与 HTTP API 兼容的接口
 // ============================================
 
+import { parseMultiplierExpression } from './multiplier.js';
+
+const parseEndpointMultiplier = (value, fallback = 1.0) => {
+  const parsed = parseMultiplierExpression(value, fallback);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 // 检测是否在 Wails 环境中运行
 // v3: 使用 window._wails 替代 v2 的 window.go
 export const isWailsEnvironment = () => {
@@ -594,6 +601,7 @@ export const getRequests = async (params = {}) => {
     cache_read_tokens: r.cache_read_tokens,
     duration_ms: r.response_time,
     duration: r.response_time,
+    first_byte_ms: r.first_byte_ms ?? r.firstByteMs ?? null,
     is_streaming: r.is_streaming,
     total_cost_usd: r.cost,
     cost: r.cost,
@@ -611,6 +619,10 @@ export const getRequests = async (params = {}) => {
     cache_creation_cost_multiplier: r.cache_creation_cost_multiplier ?? 1.0,
     cache_creation_cost_multiplier_1h: r.cache_creation_cost_multiplier_1h ?? 1.0,
     cache_read_cost_multiplier: r.cache_read_cost_multiplier ?? 1.0,
+    model_cost_multiplier: r.model_cost_multiplier ?? 1.0,
+    model_input_cost_multiplier: r.model_input_cost_multiplier ?? 1.0,
+    model_output_cost_multiplier: r.model_output_cost_multiplier ?? 1.0,
+    model_cache_read_cost_multiplier: r.model_cache_read_cost_multiplier ?? 1.0,
     // 错误信息字段
     failure_reason: r.failure_reason || '',
     cancel_reason: r.cancel_reason || ''
@@ -946,6 +958,11 @@ export const getEndpointRecord = async (name) => {
     timeoutSeconds: r.timeout_seconds,
     supportsCountTokens: r.supports_count_tokens,
     costMultiplier: r.cost_multiplier,
+    inputCostMultiplier: r.input_cost_multiplier,
+    outputCostMultiplier: r.output_cost_multiplier,
+    cacheCreationCostMultiplier: r.cache_creation_cost_multiplier,
+    cacheCreationCostMultiplier1h: r.cache_creation_cost_multiplier_1h,
+    cacheReadCostMultiplier: r.cache_read_cost_multiplier,
     enabled: r.enabled,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -984,12 +1001,12 @@ export const createEndpointRecord = async (input) => {
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
-    cost_multiplier: parseFloat(input.costMultiplier) || 1.0,
-    input_cost_multiplier: parseFloat(input.inputCostMultiplier) || 1.0,
-    output_cost_multiplier: parseFloat(input.outputCostMultiplier) || 1.0,
-    cache_creation_cost_multiplier: parseFloat(input.cacheCreationCostMultiplier) || 1.0,
-    cache_creation_cost_multiplier_1h: parseFloat(input.cacheCreationCostMultiplier1h) || 1.0,
-    cache_read_cost_multiplier: parseFloat(input.cacheReadCostMultiplier) || 1.0
+    cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
+    input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
+    output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
+    cache_creation_cost_multiplier: parseEndpointMultiplier(input.cacheCreationCostMultiplier),
+    cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
+    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
   };
 
   await WailsApp.CreateEndpointRecord(record);
@@ -1022,12 +1039,12 @@ export const updateEndpointRecord = async (name, input) => {
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
-    cost_multiplier: parseFloat(input.costMultiplier) || 1.0,
-    input_cost_multiplier: parseFloat(input.inputCostMultiplier) || 1.0,
-    output_cost_multiplier: parseFloat(input.outputCostMultiplier) || 1.0,
-    cache_creation_cost_multiplier: parseFloat(input.cacheCreationCostMultiplier) || 1.0,
-    cache_creation_cost_multiplier_1h: parseFloat(input.cacheCreationCostMultiplier1h) || 1.0,
-    cache_read_cost_multiplier: parseFloat(input.cacheReadCostMultiplier) || 1.0
+    cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
+    input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
+    output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
+    cache_creation_cost_multiplier: parseEndpointMultiplier(input.cacheCreationCostMultiplier),
+    cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
+    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
   };
 
   await WailsApp.UpdateEndpointRecord(name, record);
@@ -1059,12 +1076,12 @@ export const updateEndpointRecordByID = async (id, input) => {
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
-    cost_multiplier: parseFloat(input.costMultiplier) || 1.0,
-    input_cost_multiplier: parseFloat(input.inputCostMultiplier) || 1.0,
-    output_cost_multiplier: parseFloat(input.outputCostMultiplier) || 1.0,
-    cache_creation_cost_multiplier: parseFloat(input.cacheCreationCostMultiplier) || 1.0,
-    cache_creation_cost_multiplier_1h: parseFloat(input.cacheCreationCostMultiplier1h) || 1.0,
-    cache_read_cost_multiplier: parseFloat(input.cacheReadCostMultiplier) || 1.0
+    cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
+    input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
+    output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
+    cache_creation_cost_multiplier: parseEndpointMultiplier(input.cacheCreationCostMultiplier),
+    cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
+    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
   };
 
   await WailsApp.UpdateEndpointRecordByID(id, record);
@@ -1548,6 +1565,19 @@ const normalizeCodexModelMapping = (mapping) => {
   }, {});
 };
 
+const normalizeCodexModelMultipliers = (rules) => {
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .map((rule) => ({
+      model: String(rule?.model || '').trim(),
+      costMultiplier: parseEndpointMultiplier(rule?.costMultiplier),
+      inputCostMultiplier: parseEndpointMultiplier(rule?.inputCostMultiplier),
+      outputCostMultiplier: parseEndpointMultiplier(rule?.outputCostMultiplier),
+      cacheReadCostMultiplier: parseEndpointMultiplier(rule?.cacheReadCostMultiplier)
+    }))
+    .filter((rule) => rule.model);
+};
+
 const mapCodexEndpoint = (endpoint) => ({
   id: endpoint.id,
   channelId: endpoint.channel_id,
@@ -1568,6 +1598,7 @@ const mapCodexEndpoint = (endpoint) => ({
   outputCostMultiplier: endpoint.outputCostMultiplier ?? 1.0,
   cacheReadCostMultiplier: endpoint.cacheReadCostMultiplier ?? 1.0,
   billingOutputTokenSource: endpoint.billingOutputTokenSource || endpoint.billing_output_token_source || 'output_tokens',
+  modelMultipliers: normalizeCodexModelMultipliers(endpoint.modelMultipliers || endpoint.model_multipliers),
   createdAt: endpoint.created_at,
   updatedAt: endpoint.updated_at
 });
@@ -1665,7 +1696,7 @@ export const activateCodexChannel = async (id) => {
 /**
  * 在指定渠道下新增端点（name + base_url + 故障转移配置 + 成本倍率）
  */
-export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource }) => {
+export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -1675,11 +1706,12 @@ export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEn
   };
   if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
   if (priority !== undefined) payload.priority = priority;
-  if (costMultiplier !== undefined) payload.costMultiplier = costMultiplier;
-  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = inputCostMultiplier;
-  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = outputCostMultiplier;
-  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = cacheReadCostMultiplier;
+  if (costMultiplier !== undefined) payload.costMultiplier = parseEndpointMultiplier(costMultiplier);
+  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = parseEndpointMultiplier(inputCostMultiplier);
+  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = parseEndpointMultiplier(outputCostMultiplier);
+  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = parseEndpointMultiplier(cacheReadCostMultiplier);
   if (billingOutputTokenSource !== undefined) payload.billingOutputTokenSource = billingOutputTokenSource;
+  if (modelMultipliers !== undefined) payload.modelMultipliers = normalizeCodexModelMultipliers(modelMultipliers);
   await WailsApp.CreateCodexEndpoint(payload);
   return { success: true };
 };
@@ -1687,7 +1719,7 @@ export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEn
 /**
  * 更新端点 name + base_url + failover_enabled + priority + 成本倍率
  */
-export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource }) => {
+export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -1696,11 +1728,12 @@ export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabl
   };
   if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
   if (priority !== undefined) payload.priority = priority;
-  if (costMultiplier !== undefined) payload.costMultiplier = costMultiplier;
-  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = inputCostMultiplier;
-  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = outputCostMultiplier;
-  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = cacheReadCostMultiplier;
+  if (costMultiplier !== undefined) payload.costMultiplier = parseEndpointMultiplier(costMultiplier);
+  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = parseEndpointMultiplier(inputCostMultiplier);
+  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = parseEndpointMultiplier(outputCostMultiplier);
+  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = parseEndpointMultiplier(cacheReadCostMultiplier);
   if (billingOutputTokenSource !== undefined) payload.billingOutputTokenSource = billingOutputTokenSource;
+  if (modelMultipliers !== undefined) payload.modelMultipliers = normalizeCodexModelMultipliers(modelMultipliers);
   await WailsApp.UpdateCodexEndpointByID(id, payload);
   return { success: true };
 };

@@ -4,6 +4,7 @@
 // ============================================
 
 import { Play, Pause, Clock, Activity, Server, Settings2, Power } from 'lucide-react';
+import { Tooltip } from '@components/ui';
 
 const GroupTableRow = ({ group, onActivate, onPause, loading, channelFailoverEnabled = true }) => {
   const isActive = group.is_active;
@@ -11,6 +12,7 @@ const GroupTableRow = ({ group, onActivate, onPause, loading, channelFailoverEna
   const healthyPercent = group.total_endpoints > 0
     ? Math.round((group.healthy_endpoints / group.total_endpoints) * 100)
     : 0;
+  const pauseDisabledReason = !channelFailoverEnabled ? '已关闭渠道间故障转移：不可暂停渠道' : undefined;
 
   return (
     <tr
@@ -91,14 +93,16 @@ const GroupTableRow = ({ group, onActivate, onPause, loading, channelFailoverEna
             <Settings2 className="w-4 h-4" />
           </button>
           {isActive ? (
-            <button
-              onClick={() => onPause(group.name)}
-              disabled={loading || !channelFailoverEnabled}
-              title={!channelFailoverEnabled ? '已关闭渠道间故障转移：不可暂停渠道' : undefined}
-              className="px-3 py-1.5 text-xs font-medium bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors flex items-center gap-1 shadow-sm disabled:opacity-50"
-            >
-              <Pause className="w-3.5 h-3.5" /> 暂停
-            </button>
+            <Tooltip content={pauseDisabledReason} disabled={!pauseDisabledReason}>
+              <button
+                onClick={() => onPause(group.name)}
+                disabled={loading || !channelFailoverEnabled}
+                className="px-3 py-1.5 text-xs font-medium bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors flex items-center gap-1 shadow-sm disabled:opacity-50"
+                aria-label={pauseDisabledReason || '暂停'}
+              >
+                <Pause className="w-3.5 h-3.5" /> 暂停
+              </button>
+            </Tooltip>
           ) : (
             <button
               onClick={() => onActivate(group.name)}

@@ -22,6 +22,7 @@ import {
   Button,
   LoadingSpinner,
   ErrorMessage,
+  Tooltip,
   useToast
 } from '@components/ui';
 import {
@@ -488,29 +489,35 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
           </div>
           <div className="flex items-center gap-1 ml-2">
             {!isDefault && (
-              <button
-                onClick={() => onSetDefault(pricing.modelName)}
-                className="p-1.5 text-slate-400 hover:bg-amber-50 hover:text-amber-600 rounded-md transition-colors"
-                title="设为默认"
-              >
-                <Star size={14} />
-              </button>
+              <Tooltip content="设为默认">
+                <button
+                  onClick={() => onSetDefault(pricing.modelName)}
+                  className="p-1.5 text-slate-400 hover:bg-amber-50 hover:text-amber-600 rounded-md transition-colors"
+                  aria-label="设为默认"
+                >
+                  <Star size={14} />
+                </button>
+              </Tooltip>
             )}
-            <button
-              onClick={() => onEdit(pricing)}
-              className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
-              title="编辑"
-            >
-              <Pencil size={14} />
-            </button>
-            {!isDefault && (
+            <Tooltip content="编辑">
               <button
-                onClick={() => onDelete(pricing)}
-                className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
-                title="删除"
+                onClick={() => onEdit(pricing)}
+                className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
+                aria-label="编辑"
               >
-                <Trash2 size={14} />
+                <Pencil size={14} />
               </button>
+            </Tooltip>
+            {!isDefault && (
+              <Tooltip content="删除">
+                <button
+                  onClick={() => onDelete(pricing)}
+                  className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
+                  aria-label="删除"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>
@@ -814,23 +821,25 @@ const PricingPage = () => {
       {/* 统计卡片 */}
       <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-3 xl:grid-cols-5">
         {pricingSummaryCards.map((card) => (
-          <div
+          <Tooltip
             key={card.title}
-            className="bg-white rounded-2xl border border-slate-200/60 p-4 shadow-sm transition-shadow hover:shadow-md"
-            title={card.tooltip || card.value}
+            content={card.tooltip || card.value}
+            className="block"
           >
-            <div className="mb-3 flex items-center gap-2.5">
-              <div className={`rounded-lg p-2 ${card.statusColor}`}>
-                <card.icon size={18} />
+            <div className="bg-white rounded-2xl border border-slate-200/60 p-4 shadow-sm transition-shadow hover:shadow-md">
+              <div className="mb-3 flex items-center gap-2.5">
+                <div className={`rounded-lg p-2 ${card.statusColor}`}>
+                  <card.icon size={18} />
+                </div>
+                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {card.title}
+                </h3>
               </div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {card.title}
-              </h3>
+              <div className={`font-bold text-slate-900 ${card.wrapValue ? 'break-all text-base leading-snug' : 'truncate text-2xl'} ${card.valueClassName || ''}`}>
+                {card.value}
+              </div>
             </div>
-            <div className={`font-bold text-slate-900 ${card.wrapValue ? 'break-all text-base leading-snug' : 'truncate text-2xl'} ${card.valueClassName || ''}`}>
-              {card.value}
-            </div>
-          </div>
+          </Tooltip>
         ))}
       </div>
 

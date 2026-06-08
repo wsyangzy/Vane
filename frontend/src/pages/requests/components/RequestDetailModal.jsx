@@ -24,12 +24,14 @@ import {
   TrendingDown,
   Zap,
   Calculator,
-  ArrowRightLeft
+  Replace
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import DurationBadge from './DurationBadge.jsx';
 import { formatCost, formatTimestamp } from '@utils/api.js';
+import { formatMultiplierDisplayValue } from '@utils/multiplier.js';
+import { Tooltip } from '@components/ui';
 import {
   getBillableInputTokens,
   getDisplayInputTokens,
@@ -72,17 +74,18 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
           {value || '-'}
         </span>
         {copyable && (
-          <button
-            onClick={handleCopy}
-            className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 hover:scale-110 rounded transition-all"
-            title="复制"
-          >
-            {copied ? (
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-          </button>
+          <Tooltip content={copied ? '已复制' : '复制'}>
+            <button
+              onClick={handleCopy}
+              className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 hover:scale-110 rounded transition-all"
+            >
+              {copied ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </Tooltip>
         )}
       </div>
     </div>
@@ -401,7 +404,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     <div className="flex items-center justify-between gap-4 py-3 border-t border-slate-100">
                       <span className="text-sm font-medium text-slate-500">{modelRewriteLabel}</span>
                       <div className="flex items-center justify-end gap-2 min-w-0">
-                        <ArrowRightLeft className={`h-3.5 w-3.5 shrink-0 ${modelRewriteIconClassMap[modelRewriteSource] || 'text-slate-400'}`} />
+                        <Replace className={`h-3.5 w-3.5 shrink-0 -scale-x-100 stroke-[2.4] ${modelRewriteIconClassMap[modelRewriteSource] || 'text-slate-400'}`} />
                         <span className="text-sm font-mono text-slate-900 text-right break-all">
                           {originalModelName || '-'} -&gt; {modelRewriteTarget}
                         </span>
@@ -416,6 +419,10 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 const calcUnitPrice = (cost, tokens) => {
                   if (!tokens || tokens <= 0) return 0
                   return (cost / tokens) * 1_000_000
+                }
+                const safeMultiplier = (value) => {
+                  const parsed = Number(value)
+                  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.0
                 }
 
                 const outputTokens = request.outputTokens || 0
@@ -438,47 +445,72 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 const cacheCreationCost = request.cacheCreationCost || 0
 
                 // 端点倍率（默认 1.0）
-                const totalMultiplier = request.costMultiplier || 1.0
-                const inputMultiplier = request.inputCostMultiplier || 1.0
-                const outputMultiplier = request.outputCostMultiplier || 1.0
-                const cacheReadMultiplier = request.cacheReadCostMultiplier || 1.0
-                const cache5mMultiplier = request.cacheCreationCostMultiplier || 1.0
-                const cache1hMultiplier = request.cacheCreationCostMultiplier1h || 1.0
+                const totalMultiplier = safeMultiplier(request.costMultiplier)
+                const inputMultiplier = safeMultiplier(request.inputCostMultiplier)
+                const outputMultiplier = safeMultiplier(request.outputCostMultiplier)
+                const cacheReadMultiplier = safeMultiplier(request.cacheReadCostMultiplier)
+                const cache5mMultiplier = safeMultiplier(request.cacheCreationCostMultiplier)
+                const cache1hMultiplier = safeMultiplier(request.cacheCreationCostMultiplier1h)
+                const modelTotalMultiplier = safeMultiplier(request.modelCostMultiplier)
+                const modelInputMultiplier = safeMultiplier(request.modelInputCostMultiplier)
+                const modelOutputMultiplier = safeMultiplier(request.modelOutputCostMultiplier)
+                const modelCacheReadMultiplier = safeMultiplier(request.modelCacheReadCostMultiplier)
 
-                // 反推原始单价（cost / tokens * 1M = 已应用倍率后的有效单价，需除以倍率得到原始单价）
-                const calcRawPrice = (cost, tokens, subMult) => {
-                  if (!tokens || tokens <= 0) return 0
-                  const effectivePrice = (cost / tokens) * 1_000_000
-                  const totalEffectiveMult = subMult * totalMultiplier
-                  if (totalEffectiveMult <= 0) return effectivePrice
-                  return effectivePrice / totalEffectiveMult
+                const calcBasePrice = (effectivePrice, categoryMultiplier, modelCategoryMultiplier = 1.0) => {
+                  const combinedMultiplier = totalMultiplier * modelTotalMultiplier * categoryMultiplier * modelCategoryMultiplier
+                  return combinedMultiplier > 0 ? effectivePrice / combinedMultiplier : effectivePrice
                 }
 
-                const inputPrice = calcRawPrice(inputCost, billableInputTokens, inputMultiplier)
-                const outputPrice = calcRawPrice(outputCost, billableOutputTokens, outputMultiplier)
-                const cacheReadPrice = calcRawPrice(cacheReadCost, cacheReadTokens, cacheReadMultiplier)
-                const cache5mPrice = calcRawPrice(cache5mCost, cache5mTokens, cache5mMultiplier)
-                const cache1hPrice = calcRawPrice(cache1hCost, cache1hTokens, cache1hMultiplier)
-
+                const formatPrice = (n) => `$${(n || 0).toFixed(6)}`
+                const formatMultiplier = (n) => `× ${formatMultiplierDisplayValue(n, 3)}`
+                const isMultiplierAdjusted = (value) => Math.abs(safeMultiplier(value) - 1.0) > 0.000001
+                const combinedTotalMultiplier = totalMultiplier * modelTotalMultiplier
+                const removeTotalMultiplier = (cost) => combinedTotalMultiplier > 0 ? cost / combinedTotalMultiplier : cost
+                const inputEffectivePrice = calcUnitPrice(inputCost, billableInputTokens)
+                const outputEffectivePrice = calcUnitPrice(outputCost, billableOutputTokens)
+                const cacheReadEffectivePrice = calcUnitPrice(cacheReadCost, cacheReadTokens)
+                const cache5mEffectivePrice = calcUnitPrice(cache5mCost, cache5mTokens)
+                const cache1hEffectivePrice = calcUnitPrice(cache1hCost, cache1hTokens)
+                const inputBasePrice = calcBasePrice(inputEffectivePrice, inputMultiplier, modelInputMultiplier)
+                const outputBasePrice = calcBasePrice(outputEffectivePrice, outputMultiplier, modelOutputMultiplier)
+                const cacheReadBasePrice = calcBasePrice(cacheReadEffectivePrice, cacheReadMultiplier, modelCacheReadMultiplier)
+                const cache5mBasePrice = calcBasePrice(cache5mEffectivePrice, cache5mMultiplier)
+                const cache1hBasePrice = calcBasePrice(cache1hEffectivePrice, cache1hMultiplier)
                 // 兼容旧数据：无分项 5m/1h 时，展示合并的缓存创建价格（旧数据无倍率字段，默认 1.0）
                 const hasSplitCache = cache5mTokens > 0 || cache1hTokens > 0
                 const aggregateCacheCreationPrice = !hasSplitCache
-                  ? calcUnitPrice(cacheCreationCost, cacheCreationTokens)
+                  ? calcBasePrice(calcUnitPrice(cacheCreationCost, cacheCreationTokens), 1.0)
                   : 0
-
-                const formatPrice = (n) => `$${(n || 0).toFixed(6)}`
-                const formatMultiplier = (n) => `${Number(n).toFixed(2).replace(/\.?0+$/, '')}x`
                 const outputTokenExpression = billingSource === 'visible_output_tokens'
                   ? `${outputTokens.toLocaleString()} - ${reasoningTokens.toLocaleString()} = ${billableOutputTokens.toLocaleString()}`
                   : billableOutputTokens.toLocaleString()
+                const buildMultiplierText = (...multipliers) => {
+                  return multipliers
+                    .filter((value) => isMultiplierAdjusted(value))
+                    .map((value) => formatMultiplier(value))
+                    .join(' ')
+                }
 
                 const priceBadges = [
-                  inputPrice > 0 && { key: 'input', label: '输入', value: inputPrice, color: 'blue' },
-                  outputPrice > 0 && { key: 'output', label: '输出', value: outputPrice, color: 'emerald' },
-                  cacheReadPrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadPrice, color: 'amber' },
-                  cache5mPrice > 0 && { key: 'cache5m', label: '5m 缓存创建', value: cache5mPrice, color: 'purple' },
-                  cache1hPrice > 0 && { key: 'cache1h', label: '1h 缓存创建', value: cache1hPrice, color: 'violet' },
+                  inputBasePrice > 0 && { key: 'input', label: '输入', value: inputBasePrice, color: 'blue' },
+                  outputBasePrice > 0 && { key: 'output', label: '输出', value: outputBasePrice, color: 'emerald' },
+                  cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadBasePrice, color: 'amber' },
+                  cache5mBasePrice > 0 && { key: 'cache5m', label: '5m 缓存创建', value: cache5mBasePrice, color: 'purple' },
+                  cache1hBasePrice > 0 && { key: 'cache1h', label: '1h 缓存创建', value: cache1hBasePrice, color: 'violet' },
                   aggregateCacheCreationPrice > 0 && { key: 'cacheCreation', label: '缓存创建', value: aggregateCacheCreationPrice, color: 'slate' }
+                ].filter(Boolean)
+
+                const multiplierBadges = [
+                  { key: 'total', label: '总倍率', value: totalMultiplier, color: 'indigo' },
+                  inputBasePrice > 0 && { key: 'input', label: '输入', value: inputMultiplier, color: 'slate' },
+                  outputBasePrice > 0 && { key: 'output', label: '输出', value: outputMultiplier, color: 'indigo' },
+                  cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadMultiplier, color: 'slate' },
+                  cache5mBasePrice > 0 && { key: 'cache5m', label: '5m 缓存', value: cache5mMultiplier, color: 'slate' },
+                  cache1hBasePrice > 0 && { key: 'cache1h', label: '1h 缓存', value: cache1hMultiplier, color: 'slate' },
+                  isMultiplierAdjusted(modelTotalMultiplier) && { key: 'modelTotal', label: '模型总倍率', value: modelTotalMultiplier, color: 'sky' },
+                  inputBasePrice > 0 && isMultiplierAdjusted(modelInputMultiplier) && { key: 'modelInput', label: '模型输入', value: modelInputMultiplier, color: 'cyan' },
+                  outputBasePrice > 0 && isMultiplierAdjusted(modelOutputMultiplier) && { key: 'modelOutput', label: '模型输出', value: modelOutputMultiplier, color: 'sky' },
+                  cacheReadBasePrice > 0 && isMultiplierAdjusted(modelCacheReadMultiplier) && { key: 'modelCacheRead', label: '模型缓存读取', value: modelCacheReadMultiplier, color: 'cyan' }
                 ].filter(Boolean)
 
                 const badgeColorMap = {
@@ -487,6 +519,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   amber: 'bg-amber-50 border-amber-100 text-amber-700',
                   purple: 'bg-purple-50 border-purple-100 text-purple-700',
                   violet: 'bg-violet-50 border-violet-100 text-violet-700',
+                  indigo: 'bg-indigo-50 border-indigo-100 text-indigo-700',
+                  sky: 'bg-sky-50 border-sky-100 text-sky-700',
+                  cyan: 'bg-cyan-50 border-cyan-100 text-cyan-700',
                   slate: 'bg-slate-50 border-slate-200 text-slate-700'
                 }
                 const valueColorMap = {
@@ -495,6 +530,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   amber: 'text-amber-600',
                   purple: 'text-purple-600',
                   violet: 'text-violet-600',
+                  indigo: 'text-indigo-500',
+                  sky: 'text-sky-600',
+                  cyan: 'text-cyan-600',
                   slate: 'text-slate-600'
                 }
 
@@ -506,30 +544,30 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     tokenExpression: isCodexRequest && inputDeductionTokens > 0
                       ? `${displayInputTokens.toLocaleString()} - ${inputDeductionTokens.toLocaleString()} = ${billableInputTokens.toLocaleString()}`
                       : billableInputTokens.toLocaleString(),
-                    price: inputPrice,
-                    cost: inputCost,
-                    multiplier: inputMultiplier
+                    price: inputBasePrice,
+                    multiplierText: buildMultiplierText(inputMultiplier, modelInputMultiplier),
+                    cost: removeTotalMultiplier(inputCost)
                   },
                   billableOutputTokens > 0 && {
                     key: 'output',
                     label: isCodexRequest ? `输出(计费:${billingOutputSourceLabel})` : '输出',
                     tokens: billableOutputTokens,
                     tokenExpression: outputTokenExpression,
-                    price: outputPrice,
-                    cost: outputCost,
-                    multiplier: outputMultiplier
+                    price: outputBasePrice,
+                    multiplierText: buildMultiplierText(outputMultiplier, modelOutputMultiplier),
+                    cost: removeTotalMultiplier(outputCost)
                   },
                   cacheReadTokens > 0 && {
-                    key: 'cacheRead', label: '缓存读取', tokens: cacheReadTokens, price: cacheReadPrice, cost: cacheReadCost, multiplier: cacheReadMultiplier
+                    key: 'cacheRead', label: '缓存读取', tokens: cacheReadTokens, price: cacheReadBasePrice, multiplierText: buildMultiplierText(cacheReadMultiplier, modelCacheReadMultiplier), cost: removeTotalMultiplier(cacheReadCost)
                   },
                   cache5mTokens > 0 && {
-                    key: 'cache5m', label: '5m 缓存创建', tokens: cache5mTokens, price: cache5mPrice, cost: cache5mCost, multiplier: cache5mMultiplier
+                    key: 'cache5m', label: '5m 缓存创建', tokens: cache5mTokens, price: cache5mBasePrice, multiplierText: buildMultiplierText(cache5mMultiplier), cost: removeTotalMultiplier(cache5mCost)
                   },
                   cache1hTokens > 0 && {
-                    key: 'cache1h', label: '1h 缓存创建', tokens: cache1hTokens, price: cache1hPrice, cost: cache1hCost, multiplier: cache1hMultiplier
+                    key: 'cache1h', label: '1h 缓存创建', tokens: cache1hTokens, price: cache1hBasePrice, multiplierText: buildMultiplierText(cache1hMultiplier), cost: removeTotalMultiplier(cache1hCost)
                   },
                   !hasSplitCache && cacheCreationTokens > 0 && {
-                    key: 'cacheCreation', label: '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, cost: cacheCreationCost, multiplier: 1.0
+                    key: 'cacheCreation', label: '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, cost: removeTotalMultiplier(cacheCreationCost)
                   }
                 ].filter(Boolean)
 
@@ -549,51 +587,41 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
                     <div className="p-4 space-y-4">
                       {/* 单价摘要 - 横向徽章 */}
-                      {priceBadges.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {priceBadges.map((badge) => (
-                            <div
-                              key={badge.key}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${badgeColorMap[badge.color]}`}
-                            >
-                              <span className="text-xs font-medium">{badge.label}</span>
-                              <span className={`text-xs font-mono ${valueColorMap[badge.color]}`}>
-                                {formatPrice(badge.value)} / 1M
-                              </span>
+                      {(priceBadges.length > 0 || multiplierBadges.length > 0) && (
+                        <div className="space-y-2">
+                          {priceBadges.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {priceBadges.map((badge) => (
+                                <div
+                                  key={badge.key}
+                                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 ${badgeColorMap[badge.color]}`}
+                                >
+                                  <span className="text-xs font-medium">{badge.label}</span>
+                                  <span className={`text-xs font-mono ${valueColorMap[badge.color]}`}>
+                                    {formatPrice(badge.value)} / 1M
+                                  </span>
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          )}
+
+                          {multiplierBadges.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {multiplierBadges.map((badge) => (
+                                <div
+                                  key={badge.key}
+                                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 ${badgeColorMap[badge.color]}`}
+                                >
+                                  <span className="text-xs font-medium">{badge.label}</span>
+                                  <span className={`text-xs font-mono ${valueColorMap[badge.color]}`}>
+                                    {formatMultiplierDisplayValue(badge.value, 3)}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
-
-                      {/* 端点倍率徽章 - 始终显示 */}
-                      <div className="flex flex-wrap gap-2">
-                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                          totalMultiplier !== 1.0
-                            ? 'bg-indigo-50 border-indigo-200'
-                            : 'bg-slate-50 border-slate-200'
-                        }`}>
-                          <span className={`text-xs font-medium ${totalMultiplier !== 1.0 ? 'text-indigo-700' : 'text-slate-500'}`}>总倍率</span>
-                          <span className={`text-xs font-mono ${totalMultiplier !== 1.0 ? 'text-indigo-700' : 'text-slate-400'}`}>{formatMultiplier(totalMultiplier)}</span>
-                        </div>
-                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                          inputMultiplier !== 1.0 ? 'bg-slate-50 border-slate-200' : 'bg-slate-50/60 border-slate-100'
-                        }`}>
-                          <span className={`text-xs font-medium ${inputMultiplier !== 1.0 ? 'text-slate-600' : 'text-slate-400'}`}>输入</span>
-                          <span className={`text-xs font-mono ${inputMultiplier !== 1.0 ? 'text-indigo-600' : 'text-slate-400'}`}>{formatMultiplier(inputMultiplier)}</span>
-                        </div>
-                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                          outputMultiplier !== 1.0 ? 'bg-slate-50 border-slate-200' : 'bg-slate-50/60 border-slate-100'
-                        }`}>
-                          <span className={`text-xs font-medium ${outputMultiplier !== 1.0 ? 'text-slate-600' : 'text-slate-400'}`}>输出</span>
-                          <span className={`text-xs font-mono ${outputMultiplier !== 1.0 ? 'text-indigo-600' : 'text-slate-400'}`}>{formatMultiplier(outputMultiplier)}</span>
-                        </div>
-                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                          cacheReadMultiplier !== 1.0 ? 'bg-slate-50 border-slate-200' : 'bg-slate-50/60 border-slate-100'
-                        }`}>
-                          <span className={`text-xs font-medium ${cacheReadMultiplier !== 1.0 ? 'text-slate-600' : 'text-slate-400'}`}>缓存读取</span>
-                          <span className={`text-xs font-mono ${cacheReadMultiplier !== 1.0 ? 'text-indigo-600' : 'text-slate-400'}`}>{formatMultiplier(cacheReadMultiplier)}</span>
-                        </div>
-                      </div>
 
                       {/* 详细计算过程 */}
                       <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
@@ -613,32 +641,31 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                               <div key={row.key} className="flex items-center justify-between gap-3 font-mono">
                                 <span className="truncate">
                                   <span className="text-slate-500">{row.label}:</span>{' '}
-                                  {row.tokenExpression || row.tokens.toLocaleString()} × {formatPrice(row.price)} / 1M
-                                  {row.multiplier !== 1.0 && (
-                                    <span className="text-indigo-600"> × {formatMultiplier(row.multiplier)}</span>
-                                  )}
+                                  {row.tokenExpression || row.tokens.toLocaleString()} × {formatPrice(row.price)} / 1M{row.multiplierText ? ` ${row.multiplierText}` : ''}
                                 </span>
                                 <span className="text-slate-600 shrink-0">
-                                  = {formatPrice(row.cost / (totalMultiplier || 1.0))}
+                                  = {formatPrice(row.cost)}
                                 </span>
                               </div>
                             ))
                           )}
 
-                          {!hasNoBreakdown && totalMultiplier !== 1.0 && (
-                            <div className="text-xs text-slate-500 mt-2 pt-2 border-t border-slate-200 font-mono">
-                              <span className="text-slate-500">应用总倍率:</span>{' '}
-                              <span className="text-indigo-600">× {formatMultiplier(totalMultiplier)}</span>
-                            </div>
-                          )}
-
                           {!hasNoBreakdown && (
-                            <div className="pt-2 mt-2 border-t border-slate-200 flex items-center justify-between">
-                              <span className="text-slate-600 font-medium text-sm">合计</span>
-                              <span className="text-emerald-600 font-bold text-base font-mono">
-                                {formatPrice(totalCost)}
-                              </span>
-                            </div>
+                            <>
+                              <div className="pt-2 mt-2 border-t border-slate-200 flex items-center gap-2 font-mono">
+                                <span className="text-slate-500">应用总倍率:</span>
+                                <span className="font-bold text-indigo-500">{formatMultiplier(totalMultiplier)}</span>
+                                {isMultiplierAdjusted(modelTotalMultiplier) && (
+                                  <span className="font-bold text-sky-600">{formatMultiplier(modelTotalMultiplier)}</span>
+                                )}
+                              </div>
+                              <div className="pt-2 mt-2 border-t border-slate-200 flex items-center justify-between">
+                                <span className="text-slate-600 font-medium text-sm">合计</span>
+                                <span className="text-emerald-600 font-bold text-base font-mono">
+                                  {formatPrice(totalCost)}
+                                </span>
+                              </div>
+                            </>
                           )}
                         </div>
                       </div>
@@ -657,21 +684,22 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       错误信息
                     </h3>
                     {errorText && (
-                      <button
-                        onClick={() => {
-                          navigator.clipboard.writeText(errorText);
-                          setCopiedError(true);
-                          setTimeout(() => setCopiedError(false), 2000);
-                        }}
-                        className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-100/80 hover:scale-110 rounded transition-all"
-                        title="复制错误信息"
-                      >
-                        {copiedError ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
+                      <Tooltip content={copiedError ? '已复制' : '复制错误信息'}>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(errorText);
+                            setCopiedError(true);
+                            setTimeout(() => setCopiedError(false), 2000);
+                          }}
+                          className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-100/80 hover:scale-110 rounded transition-all"
+                        >
+                          {copiedError ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
                   <div className="p-4 space-y-2 min-w-0 overflow-hidden">
@@ -807,14 +835,16 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                                         </div>
                                       </div>
 
-                                      <div className="flex items-center gap-1.5 min-w-0" title={`${channelLabel} / ${endpointLabel}`}>
-                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border shrink-0 whitespace-nowrap ${tone.badge}`}>
-                                          {channelLabel}
-                                        </span>
-                                        <span className="text-xs font-semibold text-slate-800 truncate" title={endpointLabel}>
-                                          {endpointLabel}
-                                        </span>
-                                      </div>
+                                      <Tooltip content={`${channelLabel} / ${endpointLabel}`} className="min-w-0">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border shrink-0 whitespace-nowrap ${tone.badge}`}>
+                                            {channelLabel}
+                                          </span>
+                                          <span className="text-xs font-semibold text-slate-800 truncate">
+                                            {endpointLabel}
+                                          </span>
+                                        </div>
+                                      </Tooltip>
                                     </div>
 
                                     {hasNextInRow && (
@@ -875,9 +905,11 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                                   <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border whitespace-nowrap ${tone.badge}`}>
                                     {channelLabel}
                                   </span>
-                                  <span className="text-sm font-semibold text-slate-800 truncate" title={endpointLabel}>
-                                    {endpointLabel}
-                                  </span>
+                                  <Tooltip content={endpointLabel} className="min-w-0">
+                                    <span className="text-sm font-semibold text-slate-800 truncate">
+                                      {endpointLabel}
+                                    </span>
+                                  </Tooltip>
                                   {isSingle && (
                                     <span className="text-[10px] text-slate-400 ml-auto shrink-0">直达</span>
                                   )}

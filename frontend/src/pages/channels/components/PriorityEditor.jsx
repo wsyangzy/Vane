@@ -6,6 +6,7 @@
 
 import { useState, useRef, useImperativeHandle, forwardRef } from 'react';
 import { Minus, Plus } from 'lucide-react';
+import { Tooltip } from '@components/ui';
 
 /**
  * 优先级编辑器组件
@@ -79,61 +80,69 @@ const PriorityEditor = forwardRef(({ priority = 1, endpointName, onUpdate }, ref
   return (
     <div className="inline-flex items-center gap-0.5">
       {/* 减少按钮 */}
-      <button
-        onClick={handleDecrease}
-        disabled={value <= 1 || isUpdating}
-        className={`
-          p-1 rounded transition-colors
-          ${value <= 1 || isUpdating
-            ? 'text-slate-300 cursor-not-allowed'
-            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
-        `}
-        title="降低优先级"
-      >
-        <Minus size={12} />
-      </button>
+      <Tooltip content="降低优先级">
+        <button
+          onClick={handleDecrease}
+          disabled={value <= 1 || isUpdating}
+          className={`
+            p-1 rounded transition-colors
+            ${value <= 1 || isUpdating
+              ? 'text-slate-300 cursor-not-allowed'
+              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
+          `}
+          aria-label="降低优先级"
+        >
+          <Minus size={12} />
+        </button>
+      </Tooltip>
 
       {/* 输入框 */}
-      <input
-        ref={inputRef}
-        type="number"
-        min="1"
-        value={value}
-        onChange={handleInputChange}
-        onKeyDown={handleKeyDown}
-        onBlur={() => {
-          if (hasChanged) handleUpdate();
-        }}
-        disabled={isUpdating}
-        className={`
-          w-10 h-7 text-center text-xs font-semibold rounded border transition-all
-          ${hasChanged
-            ? 'border-amber-300 bg-amber-50 text-amber-700'
-            : 'border-slate-200 bg-slate-50 text-slate-600'}
-          ${isUpdating ? 'opacity-50' : ''}
-          focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400
-        `}
-        title={hasChanged ? '有未保存的更改' : '当前优先级'}
-      />
+      <Tooltip content={hasChanged ? '有未保存的更改' : '当前优先级'}>
+        <input
+          ref={inputRef}
+          type="number"
+          min="1"
+          value={value}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          onBlur={() => {
+            if (hasChanged) handleUpdate();
+          }}
+          disabled={isUpdating}
+          className={`
+            w-10 h-7 text-center text-xs font-semibold rounded border transition-all
+            ${hasChanged
+              ? 'border-amber-300 bg-amber-50 text-amber-700'
+              : 'border-slate-200 bg-slate-50 text-slate-600'}
+            ${isUpdating ? 'opacity-50' : ''}
+            focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400
+          `}
+          aria-label={hasChanged ? '有未保存的更改' : '当前优先级'}
+        />
+      </Tooltip>
 
       {/* 增加按钮 */}
-      <button
-        onClick={handleIncrease}
-        disabled={isUpdating}
-        className={`
-          p-1 rounded transition-colors
-          ${isUpdating
-            ? 'text-slate-300 cursor-not-allowed'
-            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
-        `}
-        title="提高优先级"
-      >
-        <Plus size={12} />
-      </button>
+      <Tooltip content="提高优先级">
+        <button
+          onClick={handleIncrease}
+          disabled={isUpdating}
+          className={`
+            p-1 rounded transition-colors
+            ${isUpdating
+              ? 'text-slate-300 cursor-not-allowed'
+              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
+          `}
+          aria-label="提高优先级"
+        >
+          <Plus size={12} />
+        </button>
+      </Tooltip>
 
       {/* 更新指示器 */}
       {hasChanged && !isUpdating && (
-        <span className="ml-1 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" title="有未保存的更改" />
+        <Tooltip content="有未保存的更改">
+          <span className="ml-1 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+        </Tooltip>
       )}
     </div>
   );

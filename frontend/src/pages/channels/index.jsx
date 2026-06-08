@@ -32,7 +32,8 @@ import {
   Button,
   KPICard,
   LoadingSpinner,
-  ErrorMessage
+  ErrorMessage,
+  Tooltip
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import useEndpointsData from '@hooks/useEndpointsData.js';
@@ -253,16 +254,15 @@ const RequestFailedBadge = ({ failCode, failReason }) => {
   const tooltip = tooltipParts.length > 0 ? tooltipParts.join('\n') : '请求失败';
 
   return (
-    <div
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 whitespace-nowrap flex-shrink-0"
-      title={tooltip}
-    >
-      <XCircle size={10} className="mr-1" />
-      请求失败
-      {hasFailCode && (
-        <span className="ml-1 font-mono">({failCode})</span>
-      )}
-    </div>
+    <Tooltip content={tooltip}>
+      <div className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-50 text-orange-600 border border-orange-200 whitespace-nowrap flex-shrink-0">
+        <XCircle size={10} className="mr-1" />
+        请求失败
+        {hasFailCode && (
+          <span className="ml-1 font-mono">({failCode})</span>
+        )}
+      </div>
+    </Tooltip>
   );
 };
 
@@ -408,76 +408,85 @@ const EndpointMiniCard = ({
               <PriorityBadge priority={endpoint.priority || 1} className="flex-shrink-0" />
               <LatencyBadge ms={responseTime} inScope={inScope} />
               {statusBadgeText && (
-                <span
-                  className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-500 border border-slate-200 whitespace-nowrap flex-shrink-0"
-                  title={statusBadgeTitle || undefined}
-                >
-                  {statusBadgeText}
-                </span>
+                <Tooltip content={statusBadgeTitle} disabled={!statusBadgeTitle}>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-50 text-slate-500 border border-slate-200 whitespace-nowrap flex-shrink-0">
+                    {statusBadgeText}
+                  </span>
+                </Tooltip>
               )}
             </div>
             <div className="flex items-center gap-2 mt-1 min-w-0">
               <Globe size={12} className="text-slate-400 flex-shrink-0" />
-              <span className="text-xs text-slate-500 font-mono truncate" title={endpoint.url}>
-                {endpoint.url}
-              </span>
+              <Tooltip content={endpoint.url} className="min-w-0">
+                <span className="block text-xs text-slate-500 font-mono truncate">
+                  {endpoint.url}
+                </span>
+              </Tooltip>
             </div>
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0">
             {isSqliteMode && (
               <>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleFailover?.(endpoint, !failoverEnabled);
-                  }}
-                  className={`p-1.5 rounded-md transition-colors ${
-                    failoverEnabled
-                      ? 'text-indigo-600 hover:bg-indigo-50'
-                      : 'text-slate-400 hover:bg-slate-100'
-                  }`}
-                  title={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}
-                  aria-pressed={failoverEnabled}
-                >
-                  <ArrowRightLeft size={14} />
-                </button>
+                <Tooltip content={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleFailover?.(endpoint, !failoverEnabled);
+                    }}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      failoverEnabled
+                        ? 'text-indigo-600 hover:bg-indigo-50'
+                        : 'text-slate-400 hover:bg-slate-100'
+                    }`}
+                    aria-label={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}
+                    aria-pressed={failoverEnabled}
+                  >
+                    <ArrowRightLeft size={14} />
+                  </button>
+                </Tooltip>
                 {/* 跳过健康检测快捷开关 */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
-                  }}
-                  className={`p-1.5 rounded-md transition-colors ${
-                    isSkipHealthCheck
-                      ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
-                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
-                  }`}
-                  title={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
-                  aria-pressed={isSkipHealthCheck}
-                >
-                  <ShieldOff size={14} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onEdit?.(endpoint);
-                  }}
-                  className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
-                  title="编辑"
-                >
-                  <Pencil size={14} />
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete?.(endpoint);
-                  }}
-                  className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
-                  title="删除"
-                >
-                  <Trash2 size={14} />
-                </button>
+                <Tooltip content={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
+                    }}
+                    className={`p-1.5 rounded-md transition-colors ${
+                      isSkipHealthCheck
+                        ? 'text-purple-600 bg-purple-50 hover:bg-purple-100'
+                        : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                    }`}
+                    aria-label={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+                    aria-pressed={isSkipHealthCheck}
+                  >
+                    <ShieldOff size={14} />
+                  </button>
+                </Tooltip>
+                <Tooltip content="编辑">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEdit?.(endpoint);
+                    }}
+                    className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
+                    aria-label="编辑"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </Tooltip>
+                <Tooltip content="删除">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete?.(endpoint);
+                    }}
+                    className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
+                    aria-label="删除"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </Tooltip>
               </>
             )}
           </div>
@@ -597,9 +606,11 @@ const EndpointDetailModal = ({
                 {channel}
               </span>
             </div>
-            <p className="text-xs text-slate-500 font-mono mt-1 truncate" title={endpoint.url}>
-              {endpoint.url}
-            </p>
+            <Tooltip content={endpoint.url} className="block min-w-0">
+              <p className="text-xs text-slate-500 font-mono mt-1 truncate">
+                {endpoint.url}
+              </p>
+            </Tooltip>
 
             <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
               {showHealthBadge && (
@@ -610,29 +621,31 @@ const EndpointDetailModal = ({
               )}
               <LatencyBadge ms={responseTime} inScope={inScope} />
 
-              <span
-                className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[160px] ${
-                  failoverEnabled
-                    ? 'bg-indigo-50 text-indigo-700 border-indigo-100'
-                    : 'bg-slate-50 text-slate-400 border-slate-200'
-                }`}
-                title={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}
-              >
-                <ArrowRightLeft size={10} className="mr-1" />
-                {failoverEnabled ? '渠道内故障转移' : '不参与转移'}
-              </span>
+              <Tooltip content={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}>
+                <span
+                  className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[160px] ${
+                    failoverEnabled
+                      ? 'bg-indigo-50 text-indigo-700 border-indigo-100'
+                      : 'bg-slate-50 text-slate-400 border-slate-200'
+                  }`}
+                >
+                  <ArrowRightLeft size={10} className="mr-1" />
+                  {failoverEnabled ? '渠道内故障转移' : '不参与转移'}
+                </span>
+              </Tooltip>
 
-              <span
-                className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[150px] ${
-                  supportsCountTokens
-                    ? 'bg-purple-50 text-purple-700 border-purple-100'
-                    : 'bg-slate-50 text-slate-400 border-slate-200'
-                }`}
-                title={supportsCountTokens ? '支持 count_tokens' : '不支持 count_tokens'}
-              >
-                <Calculator size={10} className="mr-1" />
-                {supportsCountTokens ? 'count_tokens' : '无 count_tokens'}
-              </span>
+              <Tooltip content={supportsCountTokens ? '支持 count_tokens' : '不支持 count_tokens'}>
+                <span
+                  className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[150px] ${
+                    supportsCountTokens
+                      ? 'bg-purple-50 text-purple-700 border-purple-100'
+                      : 'bg-slate-50 text-slate-400 border-slate-200'
+                  }`}
+                >
+                  <Calculator size={10} className="mr-1" />
+                  {supportsCountTokens ? 'count_tokens' : '无 count_tokens'}
+                </span>
+              </Tooltip>
 
               {multiplier !== 1.0 && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border bg-orange-50 text-orange-700 border-orange-100 whitespace-nowrap flex-shrink-0">
@@ -776,22 +789,24 @@ const EndpointDetailModal = ({
             <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-xs text-slate-500">Token（脱敏）</div>
-                <button
-                  onClick={() => {
-                    if (tokenRaw) {
-                      navigator.clipboard.writeText(tokenRaw);
-                    }
-                  }}
-                  disabled={!tokenRaw}
-                  className={`inline-flex items-center justify-center p-1 rounded-md transition-colors ${
-                    tokenRaw
-                      ? 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'
-                      : 'text-slate-300 cursor-not-allowed'
-                  }`}
-                  title={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}
-                >
-                  <Copy size={12} />
-                </button>
+                <Tooltip content={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}>
+                  <button
+                    onClick={() => {
+                      if (tokenRaw) {
+                        navigator.clipboard.writeText(tokenRaw);
+                      }
+                    }}
+                    disabled={!tokenRaw}
+                    className={`inline-flex items-center justify-center p-1 rounded-md transition-colors ${
+                      tokenRaw
+                        ? 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'
+                        : 'text-slate-300 cursor-not-allowed'
+                    }`}
+                    aria-label={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}
+                  >
+                    <Copy size={12} />
+                  </button>
+                </Tooltip>
               </div>
               <div className="text-sm font-mono text-slate-900 break-all">
                 {hasToken ? (tokenMasked || maskSecret(tokenRaw)) : '-'}
@@ -803,22 +818,24 @@ const EndpointDetailModal = ({
             <div className="mt-3 bg-slate-50 rounded-xl p-3 border border-slate-200/60">
               <div className="flex items-center justify-between mb-1">
                 <div className="text-xs text-slate-500">API Key（脱敏）</div>
-                <button
-                  onClick={() => {
-                    if (apiKeyRaw) {
-                      navigator.clipboard.writeText(apiKeyRaw);
-                    }
-                  }}
-                  disabled={!apiKeyRaw}
-                  className={`inline-flex items-center justify-center p-1 rounded-md transition-colors ${
-                    apiKeyRaw
-                      ? 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'
-                      : 'text-slate-300 cursor-not-allowed'
-                  }`}
-                  title={apiKeyRaw ? '复制原始 API Key' : '无原始 API Key（仅 SQLite 记录可复制）'}
-                >
-                  <Copy size={12} />
-                </button>
+                <Tooltip content={apiKeyRaw ? '复制原始 API Key' : '无原始 API Key（仅 SQLite 记录可复制）'}>
+                  <button
+                    onClick={() => {
+                      if (apiKeyRaw) {
+                        navigator.clipboard.writeText(apiKeyRaw);
+                      }
+                    }}
+                    disabled={!apiKeyRaw}
+                    className={`inline-flex items-center justify-center p-1 rounded-md transition-colors ${
+                      apiKeyRaw
+                        ? 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'
+                        : 'text-slate-300 cursor-not-allowed'
+                    }`}
+                    aria-label={apiKeyRaw ? '复制原始 API Key' : '无原始 API Key（仅 SQLite 记录可复制）'}
+                  >
+                    <Copy size={12} />
+                  </button>
+                </Tooltip>
               </div>
               <div className="text-sm font-mono text-slate-900 break-all">
                 {apiKeyMasked || maskSecret(apiKeyRaw)}
@@ -880,14 +897,16 @@ const CreateChannelModal = ({
               {isEdit ? '修改渠道官网与优先级' : '先创建渠道，再在渠道卡片里添加端点'}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 rounded-lg transition-colors"
-            title="关闭"
-            disabled={loading}
-          >
-            <XCircle size={18} />
-          </button>
+          <Tooltip content="关闭">
+            <button
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 rounded-lg transition-colors"
+              disabled={loading}
+              aria-label="关闭"
+            >
+              <XCircle size={18} />
+            </button>
+          </Tooltip>
         </div>
 
         <form
@@ -1123,15 +1142,16 @@ const ChannelCard = ({
           <div className="min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               {channelWebsite && (
-                <button
-                  type="button"
-                  className="inline-flex items-center justify-center w-6 h-6 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors flex-shrink-0"
-                  title={channelWebsite}
-                  aria-label="打开渠道官网"
-                  onClick={() => openExternalURL(channelWebsite)}
-                >
-                  <Globe size={14} />
-                </button>
+                <Tooltip content={channelWebsite}>
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center w-6 h-6 rounded-md text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors flex-shrink-0"
+                    aria-label="打开渠道官网"
+                    onClick={() => openExternalURL(channelWebsite)}
+                  >
+                    <Globe size={14} />
+                  </button>
+                </Tooltip>
               )}
               <h2 className="font-bold text-slate-900 truncate min-w-0">{channelName}</h2>
               <span className={`inline-flex items-center justify-center min-w-9 h-6 px-2 rounded-full text-[11px] font-semibold border whitespace-nowrap leading-none flex-shrink-0 ${priorityTone}`}>
@@ -1224,28 +1244,32 @@ const ChannelCard = ({
             </Button>
           )}
           {isSqliteMode && (
-            <button
-              onClick={() => onEditChannel?.(channelName)}
-              disabled={loading}
-              className={`p-2 rounded-lg transition-colors ${
-                loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
-              }`}
-              title="编辑渠道"
-            >
-              <Pencil size={16} />
-            </button>
+            <Tooltip content="编辑渠道">
+              <button
+                onClick={() => onEditChannel?.(channelName)}
+                disabled={loading}
+                className={`p-2 rounded-lg transition-colors ${
+                  loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                }`}
+                aria-label="编辑渠道"
+              >
+                <Pencil size={16} />
+              </button>
+            </Tooltip>
           )}
           {isSqliteMode && (
-            <button
-              onClick={() => onDeleteChannel?.(channelName)}
-              disabled={loading}
-              className={`p-2 rounded-lg transition-colors ${
-                loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
-              }`}
-              title="删除渠道"
-            >
-              <Trash2 size={16} />
-            </button>
+            <Tooltip content="删除渠道">
+              <button
+                onClick={() => onDeleteChannel?.(channelName)}
+                disabled={loading}
+                className={`p-2 rounded-lg transition-colors ${
+                  loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
+                }`}
+                aria-label="删除渠道"
+              >
+                <Trash2 size={16} />
+              </button>
+            </Tooltip>
           )}
           </div>
         </div>
@@ -1294,22 +1318,24 @@ const ChannelCard = ({
               {showEndpointRatio ? `${failoverEnabledCount}/${totalCount}` : totalCount}
             </span>
           </span>
-          <span
-            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border ${healthTone} whitespace-nowrap`}
-            title={hasEndpoints && scopedTotalCount === 0 ? '当前渠道不在健康检查范围（未参与故障转移/非活跃渠道）' : undefined}
+          <Tooltip
+            content={hasEndpoints && scopedTotalCount === 0 ? '当前渠道不在健康检查范围（未参与故障转移/非活跃渠道）' : undefined}
+            disabled={!(hasEndpoints && scopedTotalCount === 0)}
           >
-            {hasEndpoints && scopedTotalCount === 0 ? '检测' : '健康'}{' '}
-            <span className="font-semibold">
-              {!hasEndpoints
-                ? '-'
-                : scopedTotalCount === 0
-                  ? '关闭'
-                  : allHealthy
-                    ? ''
-                    : `${scopedHealthyCount}/${scopedTotalCount}`
-              }
+            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border ${healthTone} whitespace-nowrap`}>
+              {hasEndpoints && scopedTotalCount === 0 ? '检测' : '健康'}{' '}
+              <span className="font-semibold">
+                {!hasEndpoints
+                  ? '-'
+                  : scopedTotalCount === 0
+                    ? '关闭'
+                    : allHealthy
+                      ? ''
+                      : `${scopedHealthyCount}/${scopedTotalCount}`
+                }
+              </span>
             </span>
-          </span>
+          </Tooltip>
         </div>
 
         {/* 挂起等待提示（仅在活跃渠道显示） */}

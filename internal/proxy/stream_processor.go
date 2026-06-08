@@ -41,10 +41,11 @@ type StreamProcessor struct {
 	endpoint  string // 端点名称
 
 	// 流式处理状态
-	startTime      time.Time // 处理开始时间
-	bytesProcessed int64     // 已处理字节数
-	lineBuffer     []byte    // SSE行缓冲区
-	partialData    []byte    // 部分数据缓冲区，用于错误恢复
+	startTime          time.Time // 处理开始时间
+	bytesProcessed     int64     // 已处理字节数
+	lineBuffer         []byte    // SSE行缓冲区
+	partialData        []byte    // 部分数据缓冲区，用于错误恢复
+	outputSentRecorded bool      // 是否已记录首个写出 chunk
 
 	// 并发控制
 	parseMutex sync.Mutex // 保护 partialData、tokenParser 等共享状态
@@ -174,6 +175,10 @@ func (sp *StreamProcessor) forwardToClient(data []byte) error {
 	// 写入数据到响应
 	if _, err := sp.responseWriter.Write(data); err != nil {
 		return err
+	}
+	if !sp.outputSentRecorded && sp.usageTracker != nil {
+		sp.usageTracker.RecordOutputSent(sp.requestID)
+		sp.outputSentRecorded = true
 	}
 
 	// 立即刷新，确保数据立即发送到客户端

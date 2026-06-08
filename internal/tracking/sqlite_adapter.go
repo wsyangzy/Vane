@@ -552,6 +552,26 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			description: "请求时端点缓存读取成本倍率快照",
 		},
 		{
+			checkColumn: "model_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时命中模型附加总倍率快照",
+		},
+		{
+			checkColumn: "model_input_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_input_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时命中模型附加输入倍率快照",
+		},
+		{
+			checkColumn: "model_output_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_output_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时命中模型附加输出倍率快照",
+		},
+		{
+			checkColumn: "model_cache_read_cost_multiplier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_cache_read_cost_multiplier REAL DEFAULT 1.0",
+			description: "请求时命中模型附加缓存读取倍率快照",
+		},
+		{
 			checkColumn: "reasoning_tokens",
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER DEFAULT 0",
 			description: "输出推理 tokens 字段",
@@ -637,6 +657,18 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	}
 
 	// channels 迁移：早期可能只有 name，后续新增 website
+	codexEndpointMigrations := []struct {
+		checkColumn string
+		alterSQL    string
+		description string
+	}{
+		{
+			checkColumn: "model_multipliers",
+			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'",
+			description: "Codex 端点模型附加倍率字段",
+		},
+	}
+
 	channelMigrations := []struct {
 		checkColumn string
 		alterSQL    string
@@ -694,6 +726,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := runMigrations("endpoints", endpointsMigrations); err != nil {
+		return err
+	}
+	if err := runMigrations("codex_endpoints", codexEndpointMigrations); err != nil {
 		return err
 	}
 	// 允许不同渠道端点同名（约束从 name 全局唯一调整为 (channel,name) 渠道内唯一）。

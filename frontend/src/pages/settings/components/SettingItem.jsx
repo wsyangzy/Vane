@@ -6,7 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { AlertTriangle, Eye, EyeOff, RotateCcw, RefreshCw, XCircle, ChevronRight, Timer } from 'lucide-react';
-import { CustomSelect } from '../../../components/ui';
+import { CustomSelect, Tooltip } from '../../../components/ui';
 import LoopRetrySelector from './LoopRetrySelector';
 import DurationInput from './DurationInput';
 
@@ -60,6 +60,23 @@ const FORCED_ENUM_MAP = {
     { value: 'Pacific/Auckland', label: '奥克兰（UTC+12/+13）' }
   ]
 }
+
+const ChangeDot = () => (
+  <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+);
+
+const RevertButton = ({ onClick, disabled }) => (
+  <Tooltip content="撤销修改">
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+      aria-label="撤销修改"
+    >
+      <RotateCcw size={14} />
+    </button>
+  </Tooltip>
+);
 
 const SettingItem = ({
   setting,
@@ -127,7 +144,7 @@ const SettingItem = ({
           <div className="flex-1 min-w-0 pr-4">
             <div className="flex items-center gap-2">
               {hasChange && (
-                <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+                <ChangeDot />
               )}
               <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
               {setting.requires_restart && (
@@ -150,14 +167,10 @@ const SettingItem = ({
               </span>
             )}
             {hasChange && onRevert && (
-              <button
+              <RevertButton
                 onClick={() => onRevert(setting.category, setting.key)}
                 disabled={disabled}
-                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                title="撤销修改"
-              >
-                <RotateCcw size={14} />
-              </button>
+              />
             )}
             <button
               onClick={() => !disabled && setShowLoopRetrySelector(true)}
@@ -196,7 +209,7 @@ const SettingItem = ({
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
             {hasChange && (
-              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+              <ChangeDot />
             )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
@@ -212,14 +225,10 @@ const SettingItem = ({
         </div>
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
-            <button
+            <RevertButton
               onClick={() => onRevert(setting.category, setting.key)}
               disabled={disabled}
-              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-              title="撤销修改"
-            >
-              <RotateCcw size={14} />
-            </button>
+            />
           )}
           <label className="relative inline-flex items-center cursor-pointer">
             <input
@@ -257,7 +266,7 @@ const SettingItem = ({
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
             {hasChange && (
-              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+              <ChangeDot />
             )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
@@ -273,14 +282,10 @@ const SettingItem = ({
         </div>
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
-            <button
+            <RevertButton
               onClick={() => onRevert(setting.category, setting.key)}
               disabled={disabled}
-              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-              title="撤销修改"
-            >
-              <RotateCcw size={14} />
-            </button>
+            />
           )}
           <CustomSelect
             options={STRATEGY_OPTIONS}
@@ -322,7 +327,7 @@ const SettingItem = ({
           <div className="flex-1 min-w-0 pr-4">
             <div className="flex items-center gap-2">
               {hasChange && (
-                <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+                <ChangeDot />
               )}
               <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
               {setting.requires_restart && (
@@ -338,14 +343,10 @@ const SettingItem = ({
           </div>
           <div className="flex items-center gap-2">
             {hasChange && onRevert && (
-              <button
+              <RevertButton
                 onClick={() => onRevert(setting.category, setting.key)}
                 disabled={disabled}
-                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                title="撤销修改"
-              >
-                <RotateCcw size={14} />
-              </button>
+              />
             )}
             <CustomSelect
               options={enumOptions}
@@ -380,7 +381,7 @@ const SettingItem = ({
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
             {hasChange && (
-              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+              <ChangeDot />
             )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
@@ -396,14 +397,10 @@ const SettingItem = ({
         </div>
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
-            <button
+            <RevertButton
               onClick={() => onRevert(setting.category, setting.key)}
               disabled={disabled}
-              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-              title="撤销修改"
-            >
-              <RotateCcw size={14} />
-            </button>
+            />
           )}
           <DurationInput
             value={localValue}
@@ -422,7 +419,7 @@ const SettingItem = ({
         <div className="flex-1 min-w-0 pr-4">
           <div className="flex items-center gap-2">
             {hasChange && (
-              <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+              <ChangeDot />
             )}
             <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
@@ -439,14 +436,10 @@ const SettingItem = ({
 
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
-            <button
+            <RevertButton
               onClick={() => onRevert(setting.category, setting.key)}
               disabled={disabled}
-              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-              title="撤销修改"
-            >
-              <RotateCcw size={14} />
-            </button>
+            />
           )}
           <div className={`relative ${setting.key === 'token' ? 'w-80' : 'w-32'}`}>
             <input
@@ -462,19 +455,20 @@ const SettingItem = ({
                 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
               `}
             />
-            <button
-              type="button"
-              onClick={() => setShowSecret(v => !v)}
-              disabled={disabled}
-              className={`
-                absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md transition-colors
-                ${disabled ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'}
-              `}
-              title={showSecret ? '隐藏' : '显示'}
-              aria-label={showSecret ? '隐藏' : '显示'}
-            >
-              {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
+            <Tooltip content={showSecret ? '隐藏' : '显示'} className="absolute right-2 top-1/2 -translate-y-1/2">
+              <button
+                type="button"
+                onClick={() => setShowSecret(v => !v)}
+                disabled={disabled}
+                className={`
+                  p-1 rounded-md transition-colors
+                  ${disabled ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'}
+                `}
+                aria-label={showSecret ? '隐藏' : '显示'}
+              >
+                {showSecret ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </Tooltip>
           </div>
         </div>
       </div>
@@ -487,7 +481,7 @@ const SettingItem = ({
       <div className="flex-1 min-w-0 pr-4">
         <div className="flex items-center gap-2">
           {hasChange && (
-            <span className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" title="已修改" />
+            <ChangeDot />
           )}
           <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
           {setting.requires_restart && (
@@ -503,14 +497,10 @@ const SettingItem = ({
       </div>
       <div className="flex items-center gap-2">
         {hasChange && onRevert && (
-          <button
+          <RevertButton
             onClick={() => onRevert(setting.category, setting.key)}
             disabled={disabled}
-            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-            title="撤销修改"
-          >
-            <RotateCcw size={14} />
-          </button>
+          />
         )}
         <input
           type={config.type}

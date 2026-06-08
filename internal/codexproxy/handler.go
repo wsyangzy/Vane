@@ -324,7 +324,7 @@ func (h *Handler) tryEndpointCycle(
 				Endpoint: endpoint.Name,
 			})
 		}
-		h.recordForwarding(requestID, endpoint.Name, channelName, *endpointChain)
+		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 
 		// 🆕 [Codex 生命周期] 端点选择日志
 		h.logger.Info("[Codex 端点选择]",
@@ -651,6 +651,7 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		requestID, modelName, inputTokens, outputTokens, inputTokens+outputTokens, cacheReadTokens, durationMs),
 		"provider", "codex", "request_id", requestID)
 
+	h.recordOutputSent(requestID)
 	h.recordSuccess(requestID, startTime, resp.StatusCode, tokenResult, requestModel, endpointName, channelName)
 
 	// 复制响应头
@@ -690,6 +691,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	var lastResult *TokenResult
 	var bytesProcessed int64
 	var modelLogged, usageLogged bool
+	var outputSentRecorded bool
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		bytesProcessed += int64(len(line)) + 1 // +1 for trailing newline
@@ -714,6 +716,10 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		}
 
 		// 透传给客户端
+		if !outputSentRecorded && len(bytes.TrimSpace(line)) > 0 {
+			h.recordOutputSent(requestID)
+			outputSentRecorded = true
+		}
 		w.Write(line)
 		w.Write([]byte("\n"))
 		if canFlush {
@@ -788,6 +794,13 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 // 追踪辅助方法
 // ============================================
 
+func (h *Handler) recordOutputSent(requestID string) {
+	if h.usageTracker == nil {
+		return
+	}
+	h.usageTracker.RecordOutputSent(requestID)
+}
+
 // activeChannelName 获取当前活跃 Codex 渠道名（无则返回空串）
 func (h *Handler) activeChannelName() string {
 	if h.manager == nil {
@@ -828,7 +841,7 @@ func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming boo
 // recordForwarding 记录转发状态（含端点链路 + 渠道）
 // chain 以 JSON 数组形式写入（形如 [{"hop":1,"channel":"xxx","endpoint":"yyy"}]），
 // 与 Claude 端 internal/proxy 写入的结构化格式一致，供前端统一解析与展示。
-func (h *Handler) recordForwarding(requestID string, endpointName, channelName string, chain []chainNode) {
+func (h *Handler) recordForwarding(requestID string, endpointName, channelName, modelName string, chain []chainNode) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -847,7 +860,7 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName s
 			opts.Channel = strPtr(channelName)
 		}
 		h.usageTracker.RecordRequestUpdate(requestID, opts)
-		h.snapshotEndpointMultiplier(requestID, channelName, endpointName)
+		h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
 		return
 	}
 	chainStr := string(chainBytes)
@@ -861,16 +874,16 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName s
 		opts.Channel = strPtr(channelName)
 	}
 	h.usageTracker.RecordRequestUpdate(requestID, opts)
-	h.snapshotEndpointMultiplier(requestID, channelName, endpointName)
+	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
 }
 
 // snapshotEndpointMultiplier 将 Codex 端点的倍率快照写入热池中的活跃请求
 // 用于详情页计费过程展示
-func (h *Handler) snapshotEndpointMultiplier(requestID, channelName, endpointName string) {
+func (h *Handler) snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName string) {
 	if h.usageTracker == nil || requestID == "" || endpointName == "" {
 		return
 	}
-	mult := h.usageTracker.GetEndpointMultiplierForEndpoint(channelName, endpointName)
+	mult := h.usageTracker.GetEndpointMultiplierForEndpointAndModel(channelName, endpointName, modelName)
 	_ = h.usageTracker.UpdateActiveRequestMultiplier(requestID, mult)
 }
 
@@ -919,6 +932,7 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 	} else {
 		modelName = requestModel
 	}
+	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
 	h.usageTracker.RecordRequestSuccess(requestID, modelName, tokens, duration)
 }
 
