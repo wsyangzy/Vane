@@ -1475,6 +1475,24 @@ const ChannelCard = ({
   const activeEndpoint = endpoints.find((ep) => ep.isActive) || null;
   const hasMultiple = endpoints.length > 1;
   const activeSuspendedCount = channel.isActive ? suspendedCount : 0;
+  const routableEndpoints = endpoints.filter((ep) => ep.failoverEnabled !== false);
+  const hasCodexHealthVerdict = routableEndpoints.some((ep) => {
+    const state = ep.healthState || ep.health_state || 'unchecked';
+    return state === 'healthy' || state === 'unhealthy';
+  });
+  const isActiveChannelInterrupted = channel.isActive
+    && routableEndpoints.length > 0
+    && hasCodexHealthVerdict
+    && routableEndpoints.every((ep) => {
+      const state = ep.healthState || ep.health_state || 'unchecked';
+      return state === 'unhealthy';
+    });
+  const isActiveChannelSuspended = channel.isActive && activeSuspendedCount > 0 && !isActiveChannelInterrupted;
+  const activeCardClass = isActiveChannelInterrupted
+    ? 'border-rose-300 ring-1 ring-rose-100'
+    : isActiveChannelSuspended
+      ? 'border-amber-300 ring-1 ring-amber-100'
+      : 'border-emerald-200 ring-1 ring-emerald-100';
 
   // 折叠时展示哪些行：多端点 → 仅当前激活（无激活则取第一个作为占位）；单端点 → 直接显示
   const displayedEndpoints = isEndpointListExpanded || !hasMultiple
@@ -1502,7 +1520,7 @@ const ChannelCard = ({
     <div
       className={`group flex flex-col overflow-hidden rounded-xl border bg-white transition-all duration-150 ease-out shadow-[0_1px_2px_rgba(15,23,42,0.04)] hover:shadow-[0_4px_12px_-2px_rgba(15,23,42,0.08)] ${
         channel.isActive
-          ? 'border-emerald-200 ring-1 ring-emerald-100'
+          ? activeCardClass
           : 'border-slate-200/70 hover:border-slate-300'
       }`}
     >
@@ -1511,7 +1529,16 @@ const ChannelCard = ({
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <h3 className="truncate text-sm font-semibold tracking-tight text-slate-900">{channel.name}</h3>
           {channel.isActive && (
-            activeSuspendedCount > 0 ? (
+            isActiveChannelInterrupted ? (
+              <Tooltip content="当前 Codex 接管渠道的可用端点已全部异常，请检查端点或切换渠道" className="flex-shrink-0">
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-rose-700"
+                >
+                  <TriangleAlert size={10} className="text-rose-600" />
+                  已中断
+                </span>
+              </Tooltip>
+            ) : isActiveChannelSuspended ? (
               <Tooltip content={`已有 ${activeSuspendedCount} 个请求挂起，请点击下方当前端点或其他渠道重新激活`} className="flex-shrink-0">
                 <span
                   className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-amber-700"

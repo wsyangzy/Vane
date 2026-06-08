@@ -17,7 +17,9 @@ const PriorityBadge = ({ priority = 1, size = 'sm', className = '' }) => {
 
   const sizeClass = size === 'md'
     ? 'min-w-10 h-7 px-2.5 text-[11px]'
-    : 'min-w-9 h-6 px-2 text-[11px]';
+    : size === 'xs'
+      ? 'min-w-7 h-5 px-1.5 text-[10px]'
+      : 'min-w-9 h-6 px-2 text-[11px]';
 
   return (
     <Tooltip content={`优先级 P${value}（越小越优先）`} className="flex-shrink-0">
