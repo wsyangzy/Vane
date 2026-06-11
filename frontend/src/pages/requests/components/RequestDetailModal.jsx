@@ -107,6 +107,18 @@ const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
   </div>
 );
 
+const FirstByteDetailBadge = ({ ms, status }) => {
+  if (ms === null || ms === undefined) {
+    return (
+      <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 font-mono text-sm text-slate-400 whitespace-nowrap">
+        -
+      </span>
+    );
+  }
+
+  return <DurationBadge ms={ms} status={status} />;
+};
+
 /**
  * 请求详情模态框主组件
  */
@@ -384,7 +396,16 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     <InfoRow icon={FileText} label="记录 ID" value={request.rawRequestId} copyable />
                   )}
                   <InfoRow icon={Calendar} label="时间戳" value={formatTimestamp(request.timestamp)} />
-                  <InfoRow icon={Clock} label="持续时间" value={<DurationBadge ms={request.duration} status={request.status} />} />
+                  <InfoRow
+                    icon={Clock}
+                    label="用时/首字"
+                    value={(
+                      <span className="inline-flex items-center justify-end gap-1.5">
+                        <DurationBadge ms={request.duration} status={request.status} />
+                        <FirstByteDetailBadge ms={request.firstByteMs} status={request.status} />
+                      </span>
+                    )}
+                  />
                   <InfoRow icon={Server} label="端点" value={request.endpoint} />
                   <InfoRow icon={Layers} label="渠道" value={request.channel || request.group} />
                 </div>
