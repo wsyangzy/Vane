@@ -8,7 +8,7 @@ info:
   productName: "Claude Request Forwarder"
   productIdentifier: "com.claude-request-forwarder.desktop"
   description: "Claude API Request Forwarding Service"
-  version: "7.4a"
+  version: "7.4b"
 
 dev_mode:
   root_path: .

@@ -35,6 +35,7 @@ import {
   Input,
   KPICard,
   LoadingSpinner,
+  SegmentedTabs,
   Tooltip
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
@@ -87,6 +88,16 @@ const buildModelMappingPayload = (rows) => {
     return mapping;
   }, {});
 };
+
+const CODEX_CHANNEL_FORM_TABS = [
+  { key: 'basic', label: '基础信息' },
+  { key: 'mapping', label: '模型映射' }
+];
+
+const CODEX_ENDPOINT_FORM_TABS = [
+  { key: 'basic', label: '基础信息' },
+  { key: 'billing', label: '计费设置' }
+];
 
 const BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS = [
   { value: 'output_tokens', label: '总输出 output_tokens' },
@@ -328,24 +339,13 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
         </div>
 
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
-          <div className="flex flex-shrink-0 border-b border-slate-100 px-6">
-            {[
-              { key: 'basic', label: '基础信息' },
-              { key: 'mapping', label: '模型映射' }
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setActiveTab(tab.key)}
-                className={`border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
-                  activeTab === tab.key
-                    ? 'border-slate-900 text-slate-900'
-                    : 'border-transparent text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+            <SegmentedTabs
+              tabs={CODEX_CHANNEL_FORM_TABS}
+              activeTab={activeTab}
+              onChange={setActiveTab}
+              disabled={loading}
+            />
           </div>
           <div className="space-y-4 overflow-y-auto px-6 py-6">
             {(fieldError || serverError) && (
@@ -616,24 +616,13 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
         </div>
 
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
-          <div className="flex flex-shrink-0 border-b border-slate-100 px-6">
-            {[
-              { key: 'basic', label: '基础信息' },
-              { key: 'billing', label: '计费设置' }
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setActiveTab(tab.key)}
-                className={`border-b-2 px-3 py-3 text-sm font-medium transition-colors ${
-                  activeTab === tab.key
-                    ? 'border-slate-900 text-slate-900'
-                    : 'border-transparent text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+            <SegmentedTabs
+              tabs={CODEX_ENDPOINT_FORM_TABS}
+              activeTab={activeTab}
+              onChange={setActiveTab}
+              disabled={loading}
+            />
           </div>
 
           <div className="space-y-4 overflow-y-auto px-6 py-6">

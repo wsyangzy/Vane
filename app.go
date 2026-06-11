@@ -738,6 +738,8 @@ func (a *App) setupEndpointStore() {
 		a.syncChannelPrioritiesToEndpointManager(ctx)
 		// 同步渠道“参与故障转移”开关（暂停/恢复持久化）
 		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		// 同步渠道模型映射到运行时转发层
+		a.syncChannelModelMappingsToEndpointManager(ctx)
 		a.logger.Info("✅ 端点存储已启用 (SQLite)")
 	}
 }
@@ -1088,6 +1090,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					CacheCreationCostMultiplier:   ep.CacheCreationCostMultiplier,
 					CacheCreationCostMultiplier1h: ep.CacheCreationCostMultiplier1h,
 					CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
+					ModelMultipliers:              endpointModelMultipliersToTracking(ep.ModelMultipliers),
 				}
 			}
 		}
@@ -1127,6 +1130,23 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 	// 更新 UsageTracker 的端点倍率缓存
 	a.usageTracker.UpdateEndpointMultipliers(multipliers)
 	a.logger.Debug("已同步端点倍率到 UsageTracker", "count", len(multipliers))
+}
+
+func endpointModelMultipliersToTracking(rules []store.EndpointModelMultiplierRecord) []tracking.ModelMultiplier {
+	if len(rules) == 0 {
+		return nil
+	}
+	result := make([]tracking.ModelMultiplier, 0, len(rules))
+	for _, rule := range rules {
+		result = append(result, tracking.ModelMultiplier{
+			Model:                   rule.Model,
+			CostMultiplier:          rule.CostMultiplier,
+			InputCostMultiplier:     rule.InputCostMultiplier,
+			OutputCostMultiplier:    rule.OutputCostMultiplier,
+			CacheReadCostMultiplier: rule.CacheReadCostMultiplier,
+		})
+	}
+	return result
 }
 
 func codexModelMultipliersToTracking(rules []store.CodexModelMultiplierRecord) []tracking.ModelMultiplier {

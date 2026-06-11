@@ -56,7 +56,13 @@ const createModelStyle = (classes, icon = 'generic') => ({
   icon
 });
 
-const CLAUDE_TAG_CLASSES = 'bg-[#FFF8DD] text-[#806A00] border-[#F3DEAA]';
+const CLAUDE_TAG_CLASSES = {
+  default: 'bg-[#FFF8DD] text-[#806A00] border-[#F3DEAA]',
+  haiku: 'bg-[#DFF6F8] text-[#0F5F6A] border-[#BCEBF0]',
+  fable: 'bg-[#FEE2E2] text-[#B91C1C] border-[#FECACA]',
+  sonnet: 'bg-[#FFF3E6] text-[#9A4D00] border-[#FED7AA]',
+  opus: 'bg-[#F3E8FF] text-[#6D28D9] border-[#DDD6FE]'
+};
 
 const GPT5_MINOR_COLOR_MAP = {
   3: createModelStyle('bg-[#E8FAFF] text-cyan-900 border-[#A5F3FC]', 'openai'),
@@ -72,11 +78,11 @@ const GPT5_FALLBACK_COLORS = [
 ];
 
 const CLAUDE_OPUS4_COLOR_MAP = {
-  1: createModelStyle(CLAUDE_TAG_CLASSES, 'claude'),
-  5: createModelStyle(CLAUDE_TAG_CLASSES, 'claude'),
-  6: createModelStyle(CLAUDE_TAG_CLASSES, 'claude'),
-  7: createModelStyle(CLAUDE_TAG_CLASSES, 'claude'),
-  8: createModelStyle(CLAUDE_TAG_CLASSES, 'claude')
+  1: createModelStyle(CLAUDE_TAG_CLASSES.opus, 'claude'),
+  5: createModelStyle(CLAUDE_TAG_CLASSES.opus, 'claude'),
+  6: createModelStyle(CLAUDE_TAG_CLASSES.opus, 'claude'),
+  7: createModelStyle(CLAUDE_TAG_CLASSES.opus, 'claude'),
+  8: createModelStyle(CLAUDE_TAG_CLASSES.opus, 'claude')
 };
 
 const getGpt5ColorClasses = (lowerName) => {
@@ -107,6 +113,14 @@ const getClaudeColorClasses = (lowerName) => {
 
   if (!isClaude) return null;
 
+  if (lowerName.includes('fable')) {
+    return createModelStyle(CLAUDE_TAG_CLASSES.fable, 'claude');
+  }
+
+  if (lowerName.includes('haiku')) {
+    return createModelStyle(CLAUDE_TAG_CLASSES.haiku, 'claude');
+  }
+
   const opus4Match = lowerName.match(/opus[-.]4[-.](\d+)/);
   if (opus4Match) {
     const opusMinor = Number(opus4Match[1]);
@@ -117,25 +131,20 @@ const getClaudeColorClasses = (lowerName) => {
 
   // Claude Sonnet 4 系列 - 温暖橙色
   if (lowerName.includes('sonnet-4') || lowerName.includes('claude-sonnet-4')) {
-    return createModelStyle(CLAUDE_TAG_CLASSES, 'claude');
-  }
-
-  // Claude 3.5 Haiku 系列 - 清新青色
-  if (lowerName.includes('3-5-haiku') || lowerName.includes('haiku')) {
-    return createModelStyle(CLAUDE_TAG_CLASSES, 'claude');
+    return createModelStyle(CLAUDE_TAG_CLASSES.sonnet, 'claude');
   }
 
   // Claude 3.5 Sonnet 系列 - 优雅蓝色
   if (lowerName.includes('3-5-sonnet') || (lowerName.includes('sonnet') && lowerName.includes('3.5'))) {
-    return createModelStyle(CLAUDE_TAG_CLASSES, 'claude');
+    return createModelStyle(CLAUDE_TAG_CLASSES.sonnet, 'claude');
   }
 
   // Claude Opus 系列 - 高贵紫色
   if (lowerName.includes('opus')) {
-    return createModelStyle(CLAUDE_TAG_CLASSES, 'claude');
+    return createModelStyle(CLAUDE_TAG_CLASSES.opus, 'claude');
   }
 
-  return createModelStyle(CLAUDE_TAG_CLASSES, 'claude');
+  return createModelStyle(CLAUDE_TAG_CLASSES.default, 'claude');
 };
 
 /**

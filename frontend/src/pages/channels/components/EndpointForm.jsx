@@ -4,8 +4,8 @@
 // ============================================
 
 import { useState } from 'react';
-import { X, Save, AlertCircle, ChevronDown, ChevronUp, Eye, EyeOff } from 'lucide-react';
-import { Button, CustomSelect, Tooltip } from '@components/ui';
+import { X, Save, AlertCircle, ChevronDown, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
+import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import { formatMultiplierInputValue, isValidMultiplierExpression } from '@utils/multiplier.js';
 
@@ -18,6 +18,80 @@ const MULTIPLIER_FIELDS = [
   { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率' },
   { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
 ];
+
+const MODEL_MULTIPLIER_FIELDS = [
+  { name: 'costMultiplier', label: '总倍率' },
+  { name: 'inputCostMultiplier', label: '输入倍率' },
+  { name: 'outputCostMultiplier', label: '输出倍率' },
+  { name: 'cacheReadCostMultiplier', label: '缓存读取倍率' }
+];
+
+const ENDPOINT_FORM_TABS = [
+  { key: 'basic', label: '基础信息' },
+  { key: 'auth', label: '认证信息' },
+  { key: 'routing', label: '路由配置' },
+  { key: 'billing', label: '成本倍率' }
+];
+
+const hasFineGrainedModelMultiplier = (rule) => {
+  const isDefault = (value) => {
+    const parsed = Number(value ?? 1.0);
+    return Number.isFinite(parsed) && Math.abs(parsed - 1.0) <= 0.000001;
+  };
+  return !isDefault(rule?.inputCostMultiplier) ||
+    !isDefault(rule?.outputCostMultiplier) ||
+    !isDefault(rule?.cacheReadCostMultiplier);
+};
+
+const buildInitialModelMultiplierRows = (modelMultipliers) => {
+  return (modelMultipliers || [])
+    .map((rule) => ({
+      model: String(rule?.model || ''),
+      costMultiplier: formatMultiplierInputValue(rule?.costMultiplier ?? 1.0),
+      inputCostMultiplier: formatMultiplierInputValue(rule?.inputCostMultiplier ?? 1.0),
+      outputCostMultiplier: formatMultiplierInputValue(rule?.outputCostMultiplier ?? 1.0),
+      cacheReadCostMultiplier: formatMultiplierInputValue(rule?.cacheReadCostMultiplier ?? 1.0),
+      advancedOpen: hasFineGrainedModelMultiplier(rule)
+    }))
+    .filter((row) => row.model.trim());
+};
+
+const createEmptyModelMultiplierRow = () => ({
+  model: '',
+  costMultiplier: '1',
+  inputCostMultiplier: '1',
+  outputCostMultiplier: '1',
+  cacheReadCostMultiplier: '1',
+  advancedOpen: false
+});
+
+const parseModelMultiplierPayload = (rows) => {
+  const payload = [];
+  const seen = new Set();
+  for (const [index, row] of (rows || []).entries()) {
+    const model = String(row?.model || '').trim();
+    if (!model) continue;
+    if (seen.has(model)) {
+      return { error: `模型附加倍率重复：${model}` };
+    }
+    seen.add(model);
+
+    for (const field of MODEL_MULTIPLIER_FIELDS) {
+      if (!isValidMultiplierExpression(row?.[field.name])) {
+        return { error: `第 ${index + 1} 行模型附加倍率：${field.label}必须是非负数字或分数，例如 1.25 或 40/30` };
+      }
+    }
+
+    payload.push({
+      model,
+      costMultiplier: row.costMultiplier,
+      inputCostMultiplier: row.inputCostMultiplier,
+      outputCostMultiplier: row.outputCostMultiplier,
+      cacheReadCostMultiplier: row.cacheReadCostMultiplier
+    });
+  }
+  return { payload };
+};
 
 const getErrorMessage = (error, fallback = '保存失败') => {
   if (!error) return fallback;
@@ -251,9 +325,8 @@ const EndpointForm = ({
 
   // 表单状态
   const [formData, setFormData] = useState(getInitialFormData);
-
-  // 高级选项展开状态
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [modelMultiplierRows, setModelMultiplierRows] = useState(() => buildInitialModelMultiplierRows(endpoint?.modelMultipliers));
+  const [activeTab, setActiveTab] = useState('basic');
 
   // 表单错误
   const [errors, setErrors] = useState({});
@@ -276,6 +349,33 @@ const EndpointForm = ({
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: null }));
     }
+  };
+
+  const updateModelMultiplierRow = (index, key, value) => {
+    setModelMultiplierRows((prev) =>
+      (prev || []).map((row, rowIndex) =>
+        rowIndex === index ? { ...row, [key]: value } : row
+      )
+    );
+    if (errors.submit) {
+      setErrors((prev) => ({ ...prev, submit: null }));
+    }
+  };
+
+  const addModelMultiplierRow = () => {
+    setModelMultiplierRows((prev) => [...(prev || []), createEmptyModelMultiplierRow()]);
+  };
+
+  const removeModelMultiplierRow = (index) => {
+    setModelMultiplierRows((prev) => (prev || []).filter((_, rowIndex) => rowIndex !== index));
+  };
+
+  const toggleModelMultiplierDetails = (index) => {
+    setModelMultiplierRows((prev) =>
+      (prev || []).map((row, rowIndex) =>
+        rowIndex === index ? { ...row, advancedOpen: !row.advancedOpen } : row
+      )
+    );
   };
 
   // 表单验证
@@ -305,6 +405,11 @@ const EndpointForm = ({
         }
       }
     }
+    const modelMultiplierResult = parseModelMultiplierPayload(modelMultiplierRows);
+    if (modelMultiplierResult.error) {
+      newErrors.submit = modelMultiplierResult.error;
+      newErrors.modelMultipliers = modelMultiplierResult.error;
+    }
 
     const targetChannel = formData.channel.trim();
     const targetName = formData.name.trim();
@@ -320,7 +425,16 @@ const EndpointForm = ({
 
       if (conflict) {
         newErrors.submit = `同一渠道内端点名称必须唯一：渠道 '${targetChannel}' 已存在同名端点 '${targetName}'，请修改名称或选择其他渠道`;
+        newErrors.name = newErrors.submit;
       }
+    }
+
+    if (newErrors.channel || newErrors.name || newErrors.url) {
+      setActiveTab('basic');
+    } else if (newErrors.token) {
+      setActiveTab('auth');
+    } else if (MULTIPLIER_FIELDS.some((field) => newErrors[field.name]) || newErrors.modelMultipliers) {
+      setActiveTab('billing');
     }
 
     setErrors(newErrors);
@@ -336,7 +450,16 @@ const EndpointForm = ({
     }
 
     try {
-      await onSave(formData);
+      const modelMultiplierResult = parseModelMultiplierPayload(modelMultiplierRows);
+      if (modelMultiplierResult.error) {
+        setActiveTab('billing');
+        setErrors({ submit: modelMultiplierResult.error });
+        return;
+      }
+      await onSave({
+        ...formData,
+        modelMultipliers: modelMultiplierResult.payload
+      });
     } catch (error) {
       console.error('保存失败:', error);
       setErrors({ submit: getErrorMessage(error, '保存失败') });
@@ -361,6 +484,16 @@ const EndpointForm = ({
 
         {/* 表单内容 - 可滚动区域 */}
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 overflow-hidden" autoComplete="off">
+          <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+            <SegmentedTabs
+              tabs={ENDPOINT_FORM_TABS}
+              activeTab={activeTab}
+              onChange={setActiveTab}
+              className="grid-cols-4"
+              buttonPaddingClass="px-2 sm:px-3"
+            />
+          </div>
+
           <div className="p-6 overflow-y-auto flex-1">
           {/* 提交错误提示 */}
           {errors.submit && (
@@ -371,7 +504,8 @@ const EndpointForm = ({
           )}
 
           {/* 基本信息 */}
-          <div className="space-y-4 mb-6">
+          {activeTab === 'basic' && (
+          <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
               基本信息
             </h3>
@@ -456,9 +590,11 @@ const EndpointForm = ({
               )}
             </div>
           </div>
+          )}
 
           {/* 认证信息 */}
-          <div className="space-y-4 mb-6">
+          {activeTab === 'auth' && (
+          <div className="space-y-4">
             <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
               认证信息
             </h3>
@@ -489,9 +625,11 @@ const EndpointForm = ({
               />
             </div>
           </div>
+          )}
 
           {/* 路由配置（仅编辑模式显示标题和输入项） */}
-          <div className="space-y-4 mb-6">
+          {activeTab === 'routing' && (
+          <div className="space-y-4">
             {isEditMode && (
               <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
                 路由配置
@@ -555,20 +693,11 @@ const EndpointForm = ({
               />
             </div>
           </div>
+          )}
 
-          {/* 高级选项（可折叠） */}
-          <div className="mb-6">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-2 text-sm font-semibold text-slate-500 uppercase tracking-wide hover:text-slate-700 transition-colors"
-            >
-              成本倍率配置
-              {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-
-            {showAdvanced && (
-              <div className="mt-4 p-4 bg-slate-50 rounded-lg space-y-4">
+          {/* 成本倍率 */}
+          {activeTab === 'billing' && (
+              <div className="rounded-xl bg-slate-50 p-4 space-y-4">
                 <p className="text-xs text-slate-500 mb-3">
                   成本倍率用于调整不同端点的计费比例，默认为 1.0，{MULTIPLIER_EXPRESSION_HELP}
                 </p>
@@ -642,9 +771,120 @@ const EndpointForm = ({
                     help="长效缓存类型"
                   />
                 </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700">模型附加倍率</label>
+                      <p className="mt-0.5 text-xs text-slate-400">请求使用映射后的模型命中规则；默认只设置总倍率。</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addModelMultiplierRow}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <Plus size={14} />
+                      添加模型
+                    </button>
+                  </div>
+
+                  {modelMultiplierRows.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {modelMultiplierRows.map((row, index) => (
+                        <div key={`model-multiplier-${index}`} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto_auto] sm:items-end">
+                            <div className="min-w-0">
+                              <label className="mb-1 block text-xs text-slate-500">模型</label>
+                              <input
+                                type="text"
+                                value={row.model}
+                                onChange={(event) => updateModelMultiplierRow(index, 'model', event.target.value)}
+                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="claude-sonnet-4-20250514"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="mb-1 block text-xs text-slate-500">总倍率</label>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={row.costMultiplier}
+                                onChange={(event) => updateModelMultiplierRow(index, 'costMultiplier', event.target.value)}
+                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                placeholder="1"
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => toggleModelMultiplierDetails(index)}
+                              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                            >
+                              细分
+                              <ChevronDown
+                                size={14}
+                                className={`transition-transform duration-200 ${row.advancedOpen ? 'rotate-180' : ''}`}
+                              />
+                            </button>
+
+                            <Tooltip content="删除">
+                              <button
+                                type="button"
+                                onClick={() => removeModelMultiplierRow(index)}
+                                className="inline-flex h-8 items-center justify-center rounded-lg bg-white p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </Tooltip>
+                          </div>
+
+                          {row.advancedOpen && (
+                            <div className="mt-2 grid grid-cols-1 gap-2 border-t border-slate-200/70 pt-2 sm:grid-cols-3">
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">输入</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={row.inputCostMultiplier}
+                                  onChange={(event) => updateModelMultiplierRow(index, 'inputCostMultiplier', event.target.value)}
+                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="1"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">输出</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={row.outputCostMultiplier}
+                                  onChange={(event) => updateModelMultiplierRow(index, 'outputCostMultiplier', event.target.value)}
+                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="1"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="mb-1 block text-xs text-slate-500">缓存读取</label>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={row.cacheReadCostMultiplier}
+                                  onChange={(event) => updateModelMultiplierRow(index, 'cacheReadCostMultiplier', event.target.value)}
+                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                  placeholder="1"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
+          )}
           </div>
 
           {/* 按钮 - 固定在底部 */}

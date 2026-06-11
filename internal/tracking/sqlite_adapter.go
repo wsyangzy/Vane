@@ -654,6 +654,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE endpoints ADD COLUMN skip_health_check INTEGER DEFAULT 0",
 			description: "端点跳过健康检查字段 (v6.1)",
 		},
+		{
+			checkColumn: "model_multipliers",
+			alterSQL:    "ALTER TABLE endpoints ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'",
+			description: "端点模型附加倍率字段",
+		},
 	}
 
 	// channels 迁移：早期可能只有 name，后续新增 website
@@ -688,6 +693,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			checkColumn: "failover_enabled",
 			alterSQL:    "ALTER TABLE channels ADD COLUMN failover_enabled INTEGER DEFAULT 1",
 			description: "渠道故障转移开关字段",
+		},
+		{
+			checkColumn: "model_mapping",
+			alterSQL:    "ALTER TABLE channels ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '{}'",
+			description: "渠道模型映射字段",
 		},
 	}
 
@@ -909,6 +919,7 @@ CREATE TABLE endpoints (
     timeout_seconds INTEGER DEFAULT 300,
 
     supports_count_tokens INTEGER DEFAULT 0,
+    skip_health_check INTEGER DEFAULT 0,
 
     cost_multiplier REAL DEFAULT 1.0,
     input_cost_multiplier REAL DEFAULT 1.0,
@@ -916,6 +927,7 @@ CREATE TABLE endpoints (
     cache_creation_cost_multiplier REAL DEFAULT 1.0,
     cache_creation_cost_multiplier_1h REAL DEFAULT 1.0,
     cache_read_cost_multiplier REAL DEFAULT 1.0,
+    model_multipliers TEXT NOT NULL DEFAULT '[]',
 
     enabled INTEGER DEFAULT 1,
 
@@ -933,17 +945,19 @@ CREATE TABLE endpoints (
 INSERT INTO endpoints (
     id, channel, name, url, token, api_key, headers,
     priority, failover_enabled, cooldown_seconds, timeout_seconds,
-    supports_count_tokens,
+    supports_count_tokens, skip_health_check,
     cost_multiplier, input_cost_multiplier, output_cost_multiplier,
     cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+    model_multipliers,
     enabled, created_at, updated_at
 )
 SELECT
     id, channel, name, url, token, api_key, headers,
     priority, failover_enabled, cooldown_seconds, timeout_seconds,
-    supports_count_tokens,
+    supports_count_tokens, skip_health_check,
     cost_multiplier, input_cost_multiplier, output_cost_multiplier,
     cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+    COALESCE(model_multipliers, '[]'),
     enabled, created_at, updated_at
 FROM endpoints_old;`
 	if _, err := tx.ExecContext(ctx, copySQL); err != nil {

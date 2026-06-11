@@ -380,7 +380,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 
 			// 尝试连接端点
-			resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, bodyBytes, ep)
+			requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
+			resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 			// 🔧 [修复] 保存最后的响应，用于获取真实HTTP状态码
 			lastResp = resp
 			if err != nil && ctx.Err() != nil {
@@ -906,7 +907,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 内部重试状态已通过上方 slog 记录
 
 					// 尝试转发请求
-					resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, bodyBytes, ep)
+					requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
+					resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 					if err != nil && ctx.Err() != nil {
 						slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复重试期间检测到客户端取消，立即停止重试", connID))
 						lifecycleManager.CancelRequest("client disconnected during recovery retry", nil)

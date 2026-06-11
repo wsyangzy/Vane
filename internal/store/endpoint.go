@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+type EndpointModelMultiplierRecord struct {
+	Model                   string  `json:"model"`
+	CostMultiplier          float64 `json:"costMultiplier"`
+	InputCostMultiplier     float64 `json:"inputCostMultiplier"`
+	OutputCostMultiplier    float64 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier float64 `json:"cacheReadCostMultiplier"`
+}
+
 // EndpointRecord 表示数据库中的端点记录
 type EndpointRecord struct {
 	ID int64 `json:"id"`
@@ -22,9 +30,9 @@ type EndpointRecord struct {
 	URL     string `json:"url"`     // 端点 URL
 
 	// 认证配置
-	Token   string            `json:"token,omitempty"`    // Bearer Token
-	ApiKey  string            `json:"api_key,omitempty"`  // API Key
-	Headers map[string]string `json:"headers,omitempty"`  // 自定义请求头
+	Token   string            `json:"token,omitempty"`   // Bearer Token
+	ApiKey  string            `json:"api_key,omitempty"` // API Key
+	Headers map[string]string `json:"headers,omitempty"` // 自定义请求头
 
 	// 路由配置
 	Priority        int  `json:"priority"`         // 优先级（数字越小越高）
@@ -39,12 +47,13 @@ type EndpointRecord struct {
 	SupportsCountTokens bool `json:"supports_count_tokens"` // 是否支持 count_tokens
 
 	// 成本倍率
-	CostMultiplier                float64 `json:"cost_multiplier"`
-	InputCostMultiplier           float64 `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64 `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`      // 5分钟缓存创建倍率（默认）
-	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`   // 1小时缓存创建倍率
-	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
+	CostMultiplier                float64                         `json:"cost_multiplier"`
+	InputCostMultiplier           float64                         `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                         `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                         `json:"cache_creation_cost_multiplier"`    // 5分钟缓存创建倍率（默认）
+	CacheCreationCostMultiplier1h float64                         `json:"cache_creation_cost_multiplier_1h"` // 1小时缓存创建倍率
+	CacheReadCostMultiplier       float64                         `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []EndpointModelMultiplierRecord `json:"model_multipliers"`
 
 	// 状态
 	Enabled bool `json:"enabled"`
@@ -76,7 +85,7 @@ type EndpointStore interface {
 	ListEnabled(ctx context.Context) ([]*EndpointRecord, error)
 
 	// 优先级管理
-	GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error)                     // 获取渠道内最大优先级
+	GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error)                           // 获取渠道内最大优先级
 	GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) // 根据渠道和优先级获取端点
 
 	// 统计
@@ -143,6 +152,7 @@ func (s *SQLiteEndpointStore) Create(ctx context.Context, record *EndpointRecord
 	if record.TimeoutSeconds == 0 {
 		record.TimeoutSeconds = 300
 	}
+	modelMultipliersJSON := encodeEndpointModelMultipliers(record.ModelMultipliers)
 
 	query := `
 		INSERT INTO endpoints (
@@ -151,8 +161,9 @@ func (s *SQLiteEndpointStore) Create(ctx context.Context, record *EndpointRecord
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			model_multipliers,
 			enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
@@ -161,6 +172,7 @@ func (s *SQLiteEndpointStore) Create(ctx context.Context, record *EndpointRecord
 		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 		record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
+		modelMultipliersJSON,
 		boolToInt(record.Enabled),
 	)
 	if err != nil {
@@ -190,6 +202,7 @@ func (s *SQLiteEndpointStore) Get(ctx context.Context, name string) (*EndpointRe
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints WHERE name = ?
 	`
@@ -208,6 +221,7 @@ func (s *SQLiteEndpointStore) GetByChannelAndName(ctx context.Context, channel, 
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints WHERE channel = ? AND name = ?
 	`
@@ -226,6 +240,7 @@ func (s *SQLiteEndpointStore) GetByID(ctx context.Context, id int64) (*EndpointR
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints WHERE id = ?
 	`
@@ -244,6 +259,7 @@ func (s *SQLiteEndpointStore) List(ctx context.Context) ([]*EndpointRecord, erro
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints
 		ORDER BY priority ASC, channel ASC, name ASC
@@ -329,6 +345,7 @@ func (s *SQLiteEndpointStore) updateByIDLocked(ctx context.Context, record *Endp
 			skip_health_check = ?, supports_count_tokens = ?,
 			cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?, cache_read_cost_multiplier = ?,
+			model_multipliers = ?,
 			enabled = ?
 		WHERE id = ?
 	`
@@ -339,6 +356,7 @@ func (s *SQLiteEndpointStore) updateByIDLocked(ctx context.Context, record *Endp
 		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 		record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
+		encodeEndpointModelMultipliers(record.ModelMultipliers),
 		boolToInt(record.Enabled),
 		record.ID,
 	)
@@ -370,6 +388,7 @@ func (s *SQLiteEndpointStore) updateByChannelAndNameLocked(ctx context.Context, 
 			skip_health_check = ?, supports_count_tokens = ?,
 			cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?, cache_read_cost_multiplier = ?,
+			model_multipliers = ?,
 			enabled = ?
 		WHERE channel = ? AND name = ?
 	`
@@ -380,6 +399,7 @@ func (s *SQLiteEndpointStore) updateByChannelAndNameLocked(ctx context.Context, 
 		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 		record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
+		encodeEndpointModelMultipliers(record.ModelMultipliers),
 		boolToInt(record.Enabled),
 		record.Channel, record.Name,
 	)
@@ -439,8 +459,9 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			model_multipliers,
 			enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	stmt, err := tx.PrepareContext(ctx, query)
@@ -484,6 +505,7 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 			boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 			record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 			record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
+			encodeEndpointModelMultipliers(record.ModelMultipliers),
 			boolToInt(record.Enabled),
 		)
 		if err != nil {
@@ -535,6 +557,7 @@ func (s *SQLiteEndpointStore) ListByChannel(ctx context.Context, channel string)
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints
 		WHERE channel = ?
@@ -555,6 +578,7 @@ func (s *SQLiteEndpointStore) ListEnabled(ctx context.Context) ([]*EndpointRecor
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints
 		WHERE enabled = 1
@@ -590,6 +614,7 @@ func (s *SQLiteEndpointStore) WithTx(tx *sql.Tx) EndpointStore {
 func (s *SQLiteEndpointStore) scanEndpoint(row *sql.Row) (*EndpointRecord, error) {
 	var record EndpointRecord
 	var headersJSON string
+	var modelMultipliersJSON string
 	var cooldownSeconds sql.NullInt64
 	var failoverEnabled, skipHealthCheck, supportsCountTokens, enabled int
 	var createdAt, updatedAt string
@@ -601,6 +626,7 @@ func (s *SQLiteEndpointStore) scanEndpoint(row *sql.Row) (*EndpointRecord, error
 		&skipHealthCheck, &supportsCountTokens,
 		&record.CostMultiplier, &record.InputCostMultiplier, &record.OutputCostMultiplier,
 		&record.CacheCreationCostMultiplier, &record.CacheCreationCostMultiplier1h, &record.CacheReadCostMultiplier,
+		&modelMultipliersJSON,
 		&enabled, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -616,6 +642,7 @@ func (s *SQLiteEndpointStore) scanEndpoint(row *sql.Row) (*EndpointRecord, error
 			// 忽略解析错误，保持 Headers 为 nil
 		}
 	}
+	record.ModelMultipliers = decodeEndpointModelMultipliers(modelMultipliersJSON)
 
 	// 解析可空字段
 	if cooldownSeconds.Valid {
@@ -653,6 +680,7 @@ func (s *SQLiteEndpointStore) scanEndpointsWithArgs(ctx context.Context, query s
 	for rows.Next() {
 		var record EndpointRecord
 		var headersJSON string
+		var modelMultipliersJSON string
 		var cooldownSeconds sql.NullInt64
 		var failoverEnabled, skipHealthCheck, supportsCountTokens, enabled int
 		var createdAt, updatedAt string
@@ -664,6 +692,7 @@ func (s *SQLiteEndpointStore) scanEndpointsWithArgs(ctx context.Context, query s
 			&skipHealthCheck, &supportsCountTokens,
 			&record.CostMultiplier, &record.InputCostMultiplier, &record.OutputCostMultiplier,
 			&record.CacheCreationCostMultiplier, &record.CacheCreationCostMultiplier1h, &record.CacheReadCostMultiplier,
+			&modelMultipliersJSON,
 			&enabled, &createdAt, &updatedAt,
 		)
 		if err != nil {
@@ -676,6 +705,7 @@ func (s *SQLiteEndpointStore) scanEndpointsWithArgs(ctx context.Context, query s
 				// 忽略解析错误
 			}
 		}
+		record.ModelMultipliers = decodeEndpointModelMultipliers(modelMultipliersJSON)
 
 		// 解析可空字段
 		if cooldownSeconds.Valid {
@@ -711,6 +741,29 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+func encodeEndpointModelMultipliers(rules []EndpointModelMultiplierRecord) string {
+	if len(rules) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(rules)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeEndpointModelMultipliers(raw string) []EndpointModelMultiplierRecord {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var rules []EndpointModelMultiplierRecord
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return nil
+	}
+	return rules
+}
+
 // GetMaxPriorityByChannel 获取指定渠道内的最大优先级
 // 用于添加端点时自动递增优先级
 func (s *SQLiteEndpointStore) GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error) {
@@ -743,6 +796,7 @@ func (s *SQLiteEndpointStore) GetByChannelAndPriority(ctx context.Context, chann
 			skip_health_check, supports_count_tokens,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+			COALESCE(model_multipliers, '[]'),
 			enabled, created_at, updated_at
 		FROM endpoints WHERE channel = ? AND priority = ?
 	`

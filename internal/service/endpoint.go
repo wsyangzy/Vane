@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"ai-relay-forwarder/config"
@@ -539,18 +540,24 @@ func (s *EndpointService) GetEndpointWithHealth(ctx context.Context, name string
 	status := s.manager.GetEndpointStatus(endpoint.EndpointKey(record.Channel, record.Name))
 
 	return map[string]interface{}{
-		"id":               record.ID,
-		"channel":          record.Channel,
-		"name":             record.Name,
-		"url":              record.URL,
-		"token_masked":     maskToken(record.Token),
-		"priority":         record.Priority,
-		"failover_enabled": record.FailoverEnabled,
-		"timeout_seconds":  record.TimeoutSeconds,
-		"cost_multiplier":  record.CostMultiplier,
-		"enabled":          record.Enabled,
-		"created_at":       record.CreatedAt,
-		"updated_at":       record.UpdatedAt,
+		"id":                                record.ID,
+		"channel":                           record.Channel,
+		"name":                              record.Name,
+		"url":                               record.URL,
+		"token_masked":                      maskToken(record.Token),
+		"priority":                          record.Priority,
+		"failover_enabled":                  record.FailoverEnabled,
+		"timeout_seconds":                   record.TimeoutSeconds,
+		"cost_multiplier":                   record.CostMultiplier,
+		"input_cost_multiplier":             record.InputCostMultiplier,
+		"output_cost_multiplier":            record.OutputCostMultiplier,
+		"cache_creation_cost_multiplier":    record.CacheCreationCostMultiplier,
+		"cache_creation_cost_multiplier_1h": record.CacheCreationCostMultiplier1h,
+		"cache_read_cost_multiplier":        record.CacheReadCostMultiplier,
+		"model_multipliers":                 record.ModelMultipliers,
+		"enabled":                           record.Enabled,
+		"created_at":                        record.CreatedAt,
+		"updated_at":                        record.UpdatedAt,
 		"health": map[string]interface{}{
 			"healthy":          status.Healthy,
 			"never_checked":    status.NeverChecked,
@@ -571,7 +578,47 @@ func (s *EndpointService) validateRecord(record *store.EndpointRecord) error {
 	if record.Channel == "" {
 		return fmt.Errorf("端点渠道不能为空")
 	}
+	modelMultipliers, err := normalizeEndpointModelMultipliers(record.ModelMultipliers)
+	if err != nil {
+		return err
+	}
+	record.ModelMultipliers = modelMultipliers
 	return nil
+}
+
+func normalizeEndpointModelMultipliers(rules []store.EndpointModelMultiplierRecord) ([]store.EndpointModelMultiplierRecord, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+
+	normalized := make([]store.EndpointModelMultiplierRecord, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		model := strings.TrimSpace(rule.Model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			return nil, fmt.Errorf("模型附加倍率重复：%s", model)
+		}
+		seen[model] = struct{}{}
+
+		normalized = append(normalized, store.EndpointModelMultiplierRecord{
+			Model:                   model,
+			CostMultiplier:          normalizePositiveMultiplier(rule.CostMultiplier),
+			InputCostMultiplier:     normalizePositiveMultiplier(rule.InputCostMultiplier),
+			OutputCostMultiplier:    normalizePositiveMultiplier(rule.OutputCostMultiplier),
+			CacheReadCostMultiplier: normalizePositiveMultiplier(rule.CacheReadCostMultiplier),
+		})
+	}
+	return normalized, nil
+}
+
+func normalizePositiveMultiplier(value float64) float64 {
+	if value <= 0 {
+		return 1.0
+	}
+	return value
 }
 
 // recordToConfig 将数据库记录转换为配置对象

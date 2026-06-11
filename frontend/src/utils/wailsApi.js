@@ -11,6 +11,35 @@ const parseEndpointMultiplier = (value, fallback = 1.0) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+const normalizeModelMapping = (mapping) => {
+  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
+    return {};
+  }
+  return Object.entries(mapping).reduce((result, [sourceModel, targetModel]) => {
+    const source = String(sourceModel || '').trim();
+    const target = String(targetModel || '').trim();
+    if (source && target) {
+      result[source] = target;
+    }
+    return result;
+  }, {});
+};
+
+const normalizeModelMultipliers = (rules) => {
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .map((rule) => ({
+      model: String(rule?.model || '').trim(),
+      costMultiplier: parseEndpointMultiplier(rule?.costMultiplier),
+      inputCostMultiplier: parseEndpointMultiplier(rule?.inputCostMultiplier),
+      outputCostMultiplier: parseEndpointMultiplier(rule?.outputCostMultiplier),
+      cacheReadCostMultiplier: parseEndpointMultiplier(rule?.cacheReadCostMultiplier)
+    }))
+    .filter((rule) => rule.model);
+};
+
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
 // 检测是否在 Wails 环境中运行
 // v3: 使用 window._wails 替代 v2 的 window.go
 export const isWailsEnvironment = () => {
@@ -907,6 +936,7 @@ export const getEndpointRecords = async () => {
     cacheCreationCostMultiplier: r.cache_creation_cost_multiplier,
     cacheCreationCostMultiplier1h: r.cache_creation_cost_multiplier_1h,
     cacheReadCostMultiplier: r.cache_read_cost_multiplier,
+    modelMultipliers: normalizeModelMultipliers(r.model_multipliers),
     enabled: r.enabled,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -963,6 +993,7 @@ export const getEndpointRecord = async (name) => {
     cacheCreationCostMultiplier: r.cache_creation_cost_multiplier,
     cacheCreationCostMultiplier1h: r.cache_creation_cost_multiplier_1h,
     cacheReadCostMultiplier: r.cache_read_cost_multiplier,
+    modelMultipliers: normalizeModelMultipliers(r.model_multipliers),
     enabled: r.enabled,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -1006,7 +1037,8 @@ export const createEndpointRecord = async (input) => {
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
     cache_creation_cost_multiplier: parseEndpointMultiplier(input.cacheCreationCostMultiplier),
     cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
-    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
+    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier),
+    model_multipliers: normalizeModelMultipliers(input.modelMultipliers)
   };
 
   await WailsApp.CreateEndpointRecord(record);
@@ -1046,6 +1078,9 @@ export const updateEndpointRecord = async (name, input) => {
     cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
     cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
   };
+  if (hasOwn(input, 'modelMultipliers') || hasOwn(input, 'model_multipliers')) {
+    record.model_multipliers = normalizeModelMultipliers(input.modelMultipliers || input.model_multipliers);
+  }
 
   await WailsApp.UpdateEndpointRecord(name, record);
   return { success: true };
@@ -1083,6 +1118,9 @@ export const updateEndpointRecordByID = async (id, input) => {
     cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
     cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
   };
+  if (hasOwn(input, 'modelMultipliers') || hasOwn(input, 'model_multipliers')) {
+    record.model_multipliers = normalizeModelMultipliers(input.modelMultipliers || input.model_multipliers);
+  }
 
   await WailsApp.UpdateEndpointRecordByID(id, record);
   return { success: true };
@@ -1169,6 +1207,7 @@ export const getChannels = async () => {
     name: c.name,
     website: c.website || '',
     priority: c.priority || 1,
+    modelMapping: normalizeModelMapping(c.model_mapping || c.modelMapping),
     createdAt: c.created_at || '',
     endpointCount: c.endpoint_count
   }));
@@ -1183,7 +1222,8 @@ export const createChannel = async (input) => {
     name: (input?.name || '').trim(),
     website: (input?.website || '').trim(),
     // 传 0 时让后端自动递增
-    priority: Number.isInteger(priority) ? priority : 0
+    priority: Number.isInteger(priority) ? priority : 0,
+    model_mapping: normalizeModelMapping(input?.modelMapping || input?.model_mapping)
   };
 
   await WailsApp.CreateChannel(payload);
@@ -1203,6 +1243,9 @@ export const updateChannel = async (input) => {
     website: (input?.website || '').trim(),
     priority: Number.isFinite(priority) && priority > 0 ? priority : 1
   };
+  if (hasOwn(input, 'modelMapping') || hasOwn(input, 'model_mapping')) {
+    payload.model_mapping = normalizeModelMapping(input?.modelMapping || input?.model_mapping);
+  }
 
   await WailsApp.UpdateChannel(payload);
   return { success: true };
@@ -1551,32 +1594,8 @@ export const activateCodexProvider = async (id) => {
 // Codex 渠道-端点 管理 API（2026-05-13 新增）
 // ============================================
 
-const normalizeCodexModelMapping = (mapping) => {
-  if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
-    return {};
-  }
-  return Object.entries(mapping).reduce((result, [sourceModel, targetModel]) => {
-    const source = String(sourceModel || '').trim();
-    const target = String(targetModel || '').trim();
-    if (source && target) {
-      result[source] = target;
-    }
-    return result;
-  }, {});
-};
-
-const normalizeCodexModelMultipliers = (rules) => {
-  if (!Array.isArray(rules)) return [];
-  return rules
-    .map((rule) => ({
-      model: String(rule?.model || '').trim(),
-      costMultiplier: parseEndpointMultiplier(rule?.costMultiplier),
-      inputCostMultiplier: parseEndpointMultiplier(rule?.inputCostMultiplier),
-      outputCostMultiplier: parseEndpointMultiplier(rule?.outputCostMultiplier),
-      cacheReadCostMultiplier: parseEndpointMultiplier(rule?.cacheReadCostMultiplier)
-    }))
-    .filter((rule) => rule.model);
-};
+const normalizeCodexModelMapping = normalizeModelMapping;
+const normalizeCodexModelMultipliers = normalizeModelMultipliers;
 
 const mapCodexEndpoint = (endpoint) => ({
   id: endpoint.id,

@@ -40,10 +40,11 @@ func (sr SuspensionResult) String() string {
 type RequestLifecycleManager interface {
 	GetRequestID() string
 	SetEndpoint(name, group, channel string)
-	SetModel(modelName string)                               // 简单设置模型
+	SetModel(modelName string)                              // 简单设置模型
 	SetModelWithComparison(modelName, source string)        // 带对比的设置模型
-	HasModel() bool                                          // 检查是否已有模型
-	GetModelName() string                                    // 获取当前模型名称
+	SetModelRewrite(originalModel, newModel, source string) // 设置模型改写信息
+	HasModel() bool                                         // 检查是否已有模型
+	GetModelName() string                                   // 获取当前模型名称
 	UpdateStatus(status string, endpointIndex, statusCode int)
 	HandleError(err error)
 	PrepareErrorContext(errorCtx *ErrorContext)
@@ -55,22 +56,22 @@ type RequestLifecycleManager interface {
 	// 失败请求Token记录方法：只记录Token统计，不改变请求状态
 	RecordTokensForFailedRequest(tokens *tracking.TokenUsage, failureReason string)
 	// 🔢 [语义修复] 新增尝试计数管理方法
-	IncrementAttempt() int      // 线程安全地增加尝试计数，返回当前计数
-	GetAttemptCount() int       // 线程安全地获取当前尝试次数
+	IncrementAttempt() int // 线程安全地增加尝试计数，返回当前计数
+	GetAttemptCount() int  // 线程安全地获取当前尝试次数
 	// 🔧 [P5.3 新增] 全局重试预算管理
 	InitRetryBudget(maxAttempts int, maxDuration time.Duration)
 	CheckRetryBudget() (exhausted bool, reason string)
 	// 🚀 [状态机重构] Phase 4: 新增状态管理方法
-	MapErrorTypeToFailureReason(errorType ErrorType) string // 映射ErrorType到failure_reason
-	FailRequest(failureReason, errorDetail string, httpStatus int) // 标记请求为最终失败
+	MapErrorTypeToFailureReason(errorType ErrorType) string         // 映射ErrorType到failure_reason
+	FailRequest(failureReason, errorDetail string, httpStatus int)  // 标记请求为最终失败
 	CancelRequest(cancelReason string, tokens *tracking.TokenUsage) // 标记请求被取消
 	// 🔥 [重复计费防护] 2025-12-26: 重复计费防护相关方法
-	MarkOutputSent() // 标记已输出内容
+	MarkOutputSent()        // 标记已输出内容
 	HasOutputContent() bool // 检查是否已输出内容
 	// 🔄 [递归保护] 重启计数相关方法
-	CanRestart() bool // 检查是否可以重启
+	CanRestart() bool      // 检查是否可以重启
 	IncrementRestart() int // 增加重启次数并返回新值
-	GetMaxRestarts() int // 获取最大重启次数
+	GetMaxRestarts() int   // 获取最大重启次数
 	// 🚀 [Plan D实现] 2025-12-26: 部分Token记录
 	RecordPartialTokens(tokens *tracking.TokenUsage, failureReason, endpointName string)
 }
@@ -85,7 +86,7 @@ type ErrorRecoveryManager interface {
 // ErrorContext 错误上下文信息
 type ErrorContext struct {
 	RequestID      string
-	EndpointName   string 
+	EndpointName   string
 	GroupName      string
 	AttemptCount   int
 	ErrorType      ErrorType
@@ -99,20 +100,20 @@ type ErrorContext struct {
 type ErrorType int
 
 const (
-	ErrorTypeUnknown           ErrorType = iota // 0: 未知错误
-	ErrorTypeNetwork                            // 1: 网络错误（连接失败等，可重试）
-	ErrorTypeEOF                                // 2: EOF 错误（连接中断，不可重试，避免重复计费）
-	ErrorTypeConnectionTimeout                  // 3: 连接超时（可重试，未开始处理）
-	ErrorTypeResponseTimeout                    // 4: 响应超时（不可重试，可能已计费）
-	ErrorTypeTimeout                            // 5: 超时错误（兼容旧代码）
-	ErrorTypeHTTP                               // 6: HTTP错误
-	ErrorTypeServerError                        // 7: 服务器错误（5xx）
-	ErrorTypeStream                             // 8: 流式处理错误
-	ErrorTypeAuth                               // 9: 认证错误
-	ErrorTypeRateLimit                          // 10: 限流错误
-	ErrorTypeParsing                            // 11: 解析错误
-	ErrorTypeClientCancel                       // 12: 客户端取消错误
-	ErrorTypeNoHealthyEndpoints                 // 13: 没有健康端点可用
+	ErrorTypeUnknown            ErrorType = iota // 0: 未知错误
+	ErrorTypeNetwork                             // 1: 网络错误（连接失败等，可重试）
+	ErrorTypeEOF                                 // 2: EOF 错误（连接中断，不可重试，避免重复计费）
+	ErrorTypeConnectionTimeout                   // 3: 连接超时（可重试，未开始处理）
+	ErrorTypeResponseTimeout                     // 4: 响应超时（不可重试，可能已计费）
+	ErrorTypeTimeout                             // 5: 超时错误（兼容旧代码）
+	ErrorTypeHTTP                                // 6: HTTP错误
+	ErrorTypeServerError                         // 7: 服务器错误（5xx）
+	ErrorTypeStream                              // 8: 流式处理错误
+	ErrorTypeAuth                                // 9: 认证错误
+	ErrorTypeRateLimit                           // 10: 限流错误
+	ErrorTypeParsing                             // 11: 解析错误
+	ErrorTypeClientCancel                        // 12: 客户端取消错误
+	ErrorTypeNoHealthyEndpoints                  // 13: 没有健康端点可用
 )
 
 // StreamIncompleteErrorInterface 流不完整错误接口
@@ -138,7 +139,7 @@ type StreamProcessor interface {
 	HasSentContent() bool // 🔥 [重复计费防护] 2025-12-26: 检查是否已发送实际模型输出
 }
 
-// RetryHandler 重试处理器接口  
+// RetryHandler 重试处理器接口
 type RetryHandler interface {
 	ExecuteWithContext(ctx context.Context, operation func(*endpoint.Endpoint, string) (*http.Response, error), connID string) (*http.Response, error)
 	ShouldSuspendRequest(ctx context.Context) bool
@@ -154,7 +155,7 @@ type TokenParserFactory interface {
 
 // StreamProcessorFactory 流式处理器工厂接口
 type StreamProcessorFactory interface {
-	NewStreamProcessor(tokenParser TokenParser, usageTracker *tracking.UsageTracker, 
+	NewStreamProcessor(tokenParser TokenParser, usageTracker *tracking.UsageTracker,
 		w http.ResponseWriter, flusher http.Flusher, requestID, endpoint string) StreamProcessor
 }
 

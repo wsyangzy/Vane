@@ -218,7 +218,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				globalAttemptCount := lifecycleManager.IncrementAttempt()
 
 				// 执行请求
-				resp, err := rh.executeRequest(ctx, r, bodyBytes, ep)
+				resp, err := rh.executeRequest(ctx, r, bodyBytes, ep, lifecycleManager)
 				if err != nil && ctx.Err() != nil {
 					lifecycleManager.CancelRequest("client disconnected", nil)
 
@@ -436,7 +436,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						connID, ep.Config.Name, ep.Config.Priority))
 
 					// 执行请求
-					resp, err := rh.executeRequest(ctx, r, bodyBytes, ep)
+					resp, err := rh.executeRequest(ctx, r, bodyBytes, ep, lifecycleManager)
 					if err != nil && ctx.Err() != nil {
 						lifecycleManager.CancelRequest("client disconnected during recovery retry", nil)
 						statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
@@ -581,7 +581,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 }
 
 // executeRequest 执行单个请求
-func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, bodyBytes []byte, endpoint *endpoint.Endpoint) (*http.Response, error) {
+func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, bodyBytes []byte, endpoint *endpoint.Endpoint, lifecycleManager RequestLifecycleManager) (*http.Response, error) {
+	bodyBytes = rewriteBodyForEndpoint(rh.forwarder, lifecycleManager, bodyBytes, endpoint)
+
 	// 创建目标请求
 	targetURL := endpoint.Config.URL + r.URL.Path
 	if r.URL.RawQuery != "" {

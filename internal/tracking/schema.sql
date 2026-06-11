@@ -182,6 +182,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     cache_creation_cost_multiplier REAL DEFAULT 1.0,-- 5分钟缓存创建成本倍率（默认）
     cache_creation_cost_multiplier_1h REAL DEFAULT 1.0, -- 1小时缓存创建成本倍率
     cache_read_cost_multiplier REAL DEFAULT 1.0,    -- 缓存读取成本倍率
+    model_multipliers TEXT NOT NULL DEFAULT '[]',   -- 按模型附加倍率 JSON
 
     -- ========== 状态 ==========
     enabled INTEGER DEFAULT 1,                      -- 是否启用 (1=启用, 0=禁用)
@@ -220,6 +221,7 @@ CREATE TABLE IF NOT EXISTS channels (
     website TEXT,                                   -- 渠道官网（可选）
     priority INTEGER DEFAULT 1,                     -- 渠道优先级（数字越小越高，用于渠道间故障转移顺序）
     failover_enabled INTEGER DEFAULT 1,             -- 是否参与渠道间故障转移 (1=是, 0=否)
+    model_mapping TEXT NOT NULL DEFAULT '{}',       -- 渠道级请求模型映射 JSON object：source_model -> target_model
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')

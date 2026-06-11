@@ -113,6 +113,7 @@ export namespace main {
 	    name: string;
 	    website?: string;
 	    priority: number;
+	    model_mapping: Record<string, string>;
 	    created_at: string;
 	    endpoint_count: number;
 	
@@ -125,6 +126,7 @@ export namespace main {
 	        this.name = source["name"];
 	        this.website = source["website"];
 	        this.priority = source["priority"];
+	        this.model_mapping = source["model_mapping"];
 	        this.created_at = source["created_at"];
 	        this.endpoint_count = source["endpoint_count"];
 	    }
@@ -187,6 +189,7 @@ export namespace main {
 	    name: string;
 	    website?: string;
 	    priority: number;
+	    model_mapping: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateChannelInput(source);
@@ -197,6 +200,7 @@ export namespace main {
 	        this.name = source["name"];
 	        this.website = source["website"];
 	        this.priority = source["priority"];
+	        this.model_mapping = source["model_mapping"];
 	    }
 	}
 	export class CodexProviderInfo {
@@ -439,6 +443,7 @@ export namespace main {
 	    cache_creation_cost_multiplier: number;
 	    cache_creation_cost_multiplier_1h: number;
 	    cache_read_cost_multiplier: number;
+	    model_multipliers: any[];
 	
 	    static createFrom(source: any = {}) {
 	        return new CreateEndpointInput(source);
@@ -464,6 +469,7 @@ export namespace main {
 	        this.cache_creation_cost_multiplier = source["cache_creation_cost_multiplier"];
 	        this.cache_creation_cost_multiplier_1h = source["cache_creation_cost_multiplier_1h"];
 	        this.cache_read_cost_multiplier = source["cache_read_cost_multiplier"];
+	        this.model_multipliers = source["model_multipliers"];
 	    }
 	}
 	export class CreateModelPricingInput {
@@ -672,7 +678,9 @@ export namespace main {
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
 	    cache_creation_cost_multiplier: number;
+	    cache_creation_cost_multiplier_1h: number;
 	    cache_read_cost_multiplier: number;
+	    model_multipliers: any[];
 	    enabled: boolean;
 	    created_at: string;
 	    updated_at: string;
@@ -712,7 +720,9 @@ export namespace main {
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];
 	        this.cache_creation_cost_multiplier = source["cache_creation_cost_multiplier"];
+	        this.cache_creation_cost_multiplier_1h = source["cache_creation_cost_multiplier_1h"];
 	        this.cache_read_cost_multiplier = source["cache_read_cost_multiplier"];
+	        this.model_multipliers = source["model_multipliers"];
 	        this.enabled = source["enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -1178,6 +1188,7 @@ export namespace main {
 	    name: string;
 	    website?: string;
 	    priority: number;
+	    model_mapping: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new UpdateChannelInput(source);
@@ -1188,6 +1199,7 @@ export namespace main {
 	        this.name = source["name"];
 	        this.website = source["website"];
 	        this.priority = source["priority"];
+	        this.model_mapping = source["model_mapping"];
 	    }
 	}
 	
@@ -1304,5 +1316,3 @@ export namespace store {
 	}
 
 }
-
-

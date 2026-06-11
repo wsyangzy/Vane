@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"ai-relay-forwarder/internal/store"
 )
@@ -25,6 +26,7 @@ func (s *ChannelService) CreateChannel(ctx context.Context, record *store.Channe
 	if record.Name == "" {
 		return nil, fmt.Errorf("渠道名称不能为空")
 	}
+	record.ModelMapping = normalizeChannelModelMapping(record.ModelMapping)
 
 	// 优先级自动递增（仅当 Priority <= 0 时触发）
 	if record.Priority <= 0 {
@@ -86,6 +88,10 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, record *store.Channe
 	if existing == nil {
 		return fmt.Errorf("渠道不存在: %s", record.Name)
 	}
+	if record.ModelMapping == nil {
+		record.ModelMapping = existing.ModelMapping
+	}
+	record.ModelMapping = normalizeChannelModelMapping(record.ModelMapping)
 
 	// 优先级冲突交换
 	if record.Priority != existing.Priority {
@@ -109,6 +115,23 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, record *store.Channe
 		record.FailoverEnabled = existing.FailoverEnabled
 	}
 	return s.store.Update(ctx, record)
+}
+
+func normalizeChannelModelMapping(modelMapping map[string]string) map[string]string {
+	if len(modelMapping) == 0 {
+		return map[string]string{}
+	}
+
+	normalized := make(map[string]string, len(modelMapping))
+	for source, target := range modelMapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+		normalized[source] = target
+	}
+	return normalized
 }
 
 // SetFailoverEnabled 设置渠道是否参与“渠道间故障转移”（用于暂停/恢复）。

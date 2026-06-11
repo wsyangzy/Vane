@@ -22,34 +22,36 @@ import (
 
 // EndpointRecordInfo 端点记录信息（给前端用的结构体）
 type EndpointRecordInfo struct {
-	ID                          int64             `json:"id"`
-	Channel                     string            `json:"channel"`
-	Name                        string            `json:"name"`
-	URL                         string            `json:"url"`
-	Token                       string            `json:"token"`        // 本地桌面应用，直接返回原始 Token
-	ApiKey                      string            `json:"api_key"`      // 本地桌面应用，直接返回原始 ApiKey
-	TokenMasked                 string            `json:"token_masked"` // 脱敏后的 Token（列表展示用）
-	ApiKeyMasked                string            `json:"api_key_masked"`
-	Headers                     map[string]string `json:"headers"`
-	Priority                    int               `json:"priority"`
-	FailoverEnabled             bool              `json:"failover_enabled"`
-	SkipHealthCheck             bool              `json:"skip_health_check"` // 跳过健康检查
-	CooldownSeconds             *int              `json:"cooldown_seconds"`
-	TimeoutSeconds              int               `json:"timeout_seconds"`
-	SupportsCountTokens         bool              `json:"supports_count_tokens"`
-	CostMultiplier              float64           `json:"cost_multiplier"`
-	InputCostMultiplier         float64           `json:"input_cost_multiplier"`
-	OutputCostMultiplier        float64           `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier float64           `json:"cache_creation_cost_multiplier"`
-	CacheReadCostMultiplier     float64           `json:"cache_read_cost_multiplier"`
-	Enabled                     bool              `json:"enabled"`
-	CreatedAt                   string            `json:"created_at"`
-	UpdatedAt                   string            `json:"updated_at"`
+	ID                            int64                                 `json:"id"`
+	Channel                       string                                `json:"channel"`
+	Name                          string                                `json:"name"`
+	URL                           string                                `json:"url"`
+	Token                         string                                `json:"token"`        // 本地桌面应用，直接返回原始 Token
+	ApiKey                        string                                `json:"api_key"`      // 本地桌面应用，直接返回原始 ApiKey
+	TokenMasked                   string                                `json:"token_masked"` // 脱敏后的 Token（列表展示用）
+	ApiKeyMasked                  string                                `json:"api_key_masked"`
+	Headers                       map[string]string                     `json:"headers"`
+	Priority                      int                                   `json:"priority"`
+	FailoverEnabled               bool                                  `json:"failover_enabled"`
+	SkipHealthCheck               bool                                  `json:"skip_health_check"` // 跳过健康检查
+	CooldownSeconds               *int                                  `json:"cooldown_seconds"`
+	TimeoutSeconds                int                                   `json:"timeout_seconds"`
+	SupportsCountTokens           bool                                  `json:"supports_count_tokens"`
+	CostMultiplier                float64                               `json:"cost_multiplier"`
+	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	Enabled                       bool                                  `json:"enabled"`
+	CreatedAt                     string                                `json:"created_at"`
+	UpdatedAt                     string                                `json:"updated_at"`
 	// 运行时健康状态
 	Healthy        bool    `json:"healthy"`
-	HealthState    string  `json:"health_state"`   // 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
-	NeverChecked   bool    `json:"never_checked"`  // 是否从未检测过（跳过检测也保持为 true）
-	LastCheck      string  `json:"last_check"` // 最后健康检查时间
+	HealthState    string  `json:"health_state"`  // 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
+	NeverChecked   bool    `json:"never_checked"` // 是否从未检测过（跳过检测也保持为 true）
+	LastCheck      string  `json:"last_check"`    // 最后健康检查时间
 	ResponseTimeMs float64 `json:"response_time_ms"`
 	// 错误信息
 	LastFailCode   int    `json:"last_fail_code"`   // HTTP 状态码（0 表示无失败或未知）
@@ -62,24 +64,25 @@ type EndpointRecordInfo struct {
 
 // CreateEndpointInput 创建端点的输入参数
 type CreateEndpointInput struct {
-	Channel                       string            `json:"channel"`
-	Name                          string            `json:"name"`
-	URL                           string            `json:"url"`
-	Token                         string            `json:"token"`
-	ApiKey                        string            `json:"api_key"`
-	Headers                       map[string]string `json:"headers"`
-	Priority                      int               `json:"priority"`
-	FailoverEnabled               bool              `json:"failover_enabled"`
-	SkipHealthCheck               bool              `json:"skip_health_check"` // 跳过健康检查
-	CooldownSeconds               *int              `json:"cooldown_seconds"`
-	TimeoutSeconds                int               `json:"timeout_seconds"`
-	SupportsCountTokens           bool              `json:"supports_count_tokens"`
-	CostMultiplier                float64           `json:"cost_multiplier"`
-	InputCostMultiplier           float64           `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64           `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64           `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64           `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64           `json:"cache_read_cost_multiplier"`
+	Channel                       string                                `json:"channel"`
+	Name                          string                                `json:"name"`
+	URL                           string                                `json:"url"`
+	Token                         string                                `json:"token"`
+	ApiKey                        string                                `json:"api_key"`
+	Headers                       map[string]string                     `json:"headers"`
+	Priority                      int                                   `json:"priority"`
+	FailoverEnabled               bool                                  `json:"failover_enabled"`
+	SkipHealthCheck               bool                                  `json:"skip_health_check"` // 跳过健康检查
+	CooldownSeconds               *int                                  `json:"cooldown_seconds"`
+	TimeoutSeconds                int                                   `json:"timeout_seconds"`
+	SupportsCountTokens           bool                                  `json:"supports_count_tokens"`
+	CostMultiplier                float64                               `json:"cost_multiplier"`
+	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
 }
 
 // EndpointStorageStatus 端点存储状态
@@ -237,6 +240,24 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	if v, ok := detail["cost_multiplier"].(float64); ok {
 		info.CostMultiplier = v
 	}
+	if v, ok := detail["input_cost_multiplier"].(float64); ok {
+		info.InputCostMultiplier = v
+	}
+	if v, ok := detail["output_cost_multiplier"].(float64); ok {
+		info.OutputCostMultiplier = v
+	}
+	if v, ok := detail["cache_creation_cost_multiplier"].(float64); ok {
+		info.CacheCreationCostMultiplier = v
+	}
+	if v, ok := detail["cache_creation_cost_multiplier_1h"].(float64); ok {
+		info.CacheCreationCostMultiplier1h = v
+	}
+	if v, ok := detail["cache_read_cost_multiplier"].(float64); ok {
+		info.CacheReadCostMultiplier = v
+	}
+	if v, ok := detail["model_multipliers"].([]store.EndpointModelMultiplierRecord); ok {
+		info.ModelMultipliers = v
+	}
 	if v, ok := detail["enabled"].(bool); ok {
 		info.Enabled = v
 	}
@@ -277,6 +298,24 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		input.CacheCreationCostMultiplier1h = 1.0
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// SQLite 模式下 enabled 表示渠道当前是否活跃；向活跃渠道新增端点时应继承该状态。
+	shouldEnableNewEndpoint := false
+	if input.Channel != "" {
+		existingEndpoints, err := endpointService.ListEndpointsByChannel(ctx, input.Channel)
+		if err != nil {
+			return fmt.Errorf("获取渠道端点状态失败: %w", err)
+		}
+		for _, endpoint := range existingEndpoints {
+			if endpoint != nil && endpoint.Enabled {
+				shouldEnableNewEndpoint = true
+				break
+			}
+		}
+	}
+
 	record := &store.EndpointRecord{
 		Channel:                       input.Channel,
 		Name:                          input.Name,
@@ -296,11 +335,9 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		CacheCreationCostMultiplier:   input.CacheCreationCostMultiplier,
 		CacheCreationCostMultiplier1h: input.CacheCreationCostMultiplier1h,
 		CacheReadCostMultiplier:       input.CacheReadCostMultiplier,
-		Enabled:                       false, // 新建端点默认不激活，需手动激活
+		ModelMultipliers:              input.ModelMultipliers,
+		Enabled:                       shouldEnableNewEndpoint,
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	// 若渠道表已启用，确保渠道已存在（兼容旧数据：允许端点创建时补齐渠道记录）
 	if channelService != nil && input.Channel != "" {
@@ -401,6 +438,10 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 	if cacheCreationCostMultiplier1h == 0 {
 		cacheCreationCostMultiplier1h = existingRecord.CacheCreationCostMultiplier1h
 	}
+	modelMultipliers := input.ModelMultipliers
+	if modelMultipliers == nil {
+		modelMultipliers = existingRecord.ModelMultipliers
+	}
 
 	record := &store.EndpointRecord{
 		ID:                            existingRecord.ID,
@@ -422,6 +463,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		CacheCreationCostMultiplier:   input.CacheCreationCostMultiplier,
 		CacheCreationCostMultiplier1h: cacheCreationCostMultiplier1h,
 		CacheReadCostMultiplier:       input.CacheReadCostMultiplier,
+		ModelMultipliers:              modelMultipliers,
 		Enabled:                       existingRecord.Enabled, // 保持原有激活状态
 	}
 
@@ -533,6 +575,10 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 	if cacheCreationCostMultiplier1h == 0 {
 		cacheCreationCostMultiplier1h = existingRecord.CacheCreationCostMultiplier1h
 	}
+	modelMultipliers := input.ModelMultipliers
+	if modelMultipliers == nil {
+		modelMultipliers = existingRecord.ModelMultipliers
+	}
 
 	record := &store.EndpointRecord{
 		ID:                            existingRecord.ID,
@@ -554,6 +600,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 		CacheCreationCostMultiplier:   input.CacheCreationCostMultiplier,
 		CacheCreationCostMultiplier1h: cacheCreationCostMultiplier1h,
 		CacheReadCostMultiplier:       input.CacheReadCostMultiplier,
+		ModelMultipliers:              modelMultipliers,
 		Enabled:                       existingRecord.Enabled, // 保持原有激活状态
 	}
 
@@ -868,11 +915,12 @@ func (a *App) ToggleEndpointRecordByID(id int64, enabled bool) error {
 
 // ChannelInfo 渠道信息
 type ChannelInfo struct {
-	Name          string `json:"name"`
-	Website       string `json:"website,omitempty"`
-	Priority      int    `json:"priority"`
-	CreatedAt     string `json:"created_at"`
-	EndpointCount int    `json:"endpoint_count"`
+	Name          string            `json:"name"`
+	Website       string            `json:"website,omitempty"`
+	Priority      int               `json:"priority"`
+	ModelMapping  map[string]string `json:"model_mapping"`
+	CreatedAt     string            `json:"created_at"`
+	EndpointCount int               `json:"endpoint_count"`
 }
 
 // GetChannels 获取所有渠道
@@ -919,6 +967,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 
 	channelWebsite := make(map[string]string)
 	channelPriority := make(map[string]int)
+	channelModelMapping := make(map[string]map[string]string)
 	channelCreatedAt := make(map[string]string)
 	orderedChannels := make([]string, 0, 16)
 	if channelService != nil {
@@ -936,6 +985,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 			} else {
 				channelPriority[c.Name] = c.Priority
 			}
+			channelModelMapping[c.Name] = c.ModelMapping
 			if !c.CreatedAt.IsZero() {
 				channelCreatedAt[c.Name] = c.CreatedAt.Format("2006-01-02 15:04:05")
 			}
@@ -956,6 +1006,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 			Name:          name,
 			Website:       channelWebsite[name],
 			Priority:      channelPriority[name],
+			ModelMapping:  channelModelMapping[name],
 			CreatedAt:     channelCreatedAt[name],
 			EndpointCount: count,
 		})
@@ -971,6 +1022,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 			Name:          name,
 			Website:       channelWebsite[name],
 			Priority:      999,
+			ModelMapping:  channelModelMapping[name],
 			CreatedAt:     "",
 			EndpointCount: count,
 		})
@@ -998,9 +1050,10 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 }
 
 type CreateChannelInput struct {
-	Name     string `json:"name"`
-	Website  string `json:"website,omitempty"`
-	Priority int    `json:"priority"`
+	Name         string            `json:"name"`
+	Website      string            `json:"website,omitempty"`
+	Priority     int               `json:"priority"`
+	ModelMapping map[string]string `json:"model_mapping"`
 }
 
 func (a *App) CreateChannel(input CreateChannelInput) error {
@@ -1024,9 +1077,10 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	defer cancel()
 
 	_, err := channelService.CreateChannel(ctx, &store.ChannelRecord{
-		Name:     input.Name,
-		Website:  input.Website,
-		Priority: input.Priority,
+		Name:         input.Name,
+		Website:      input.Website,
+		Priority:     input.Priority,
+		ModelMapping: input.ModelMapping,
 	})
 	if err != nil {
 		return err
@@ -1039,14 +1093,16 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	if endpointManager != nil {
 		a.syncChannelPrioritiesToEndpointManager(ctx)
 		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		a.syncChannelModelMappingsToEndpointManager(ctx)
 	}
 	return nil
 }
 
 type UpdateChannelInput struct {
-	Name     string `json:"name"`
-	Website  string `json:"website,omitempty"`
-	Priority int    `json:"priority"`
+	Name         string            `json:"name"`
+	Website      string            `json:"website,omitempty"`
+	Priority     int               `json:"priority"`
+	ModelMapping map[string]string `json:"model_mapping"`
 }
 
 func (a *App) UpdateChannel(input UpdateChannelInput) error {
@@ -1071,9 +1127,10 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	defer cancel()
 
 	if err := channelService.UpdateChannel(ctx, &store.ChannelRecord{
-		Name:     input.Name,
-		Website:  input.Website,
-		Priority: input.Priority,
+		Name:         input.Name,
+		Website:      input.Website,
+		Priority:     input.Priority,
+		ModelMapping: input.ModelMapping,
 	}); err != nil {
 		return err
 	}
@@ -1081,6 +1138,7 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	if endpointManager != nil {
 		a.syncChannelPrioritiesToEndpointManager(ctx)
 		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		a.syncChannelModelMappingsToEndpointManager(ctx)
 	}
 
 	// 推送前端刷新（channelsMeta & groups）
@@ -1168,6 +1226,43 @@ func (a *App) syncChannelFailoverEnabledToEndpointManager(ctx context.Context) {
 		enabled[r.Name] = r.FailoverEnabled
 	}
 	endpointManager.UpdateChannelFailoverEnabled(enabled)
+}
+
+func (a *App) syncChannelModelMappingsToEndpointManager(ctx context.Context) {
+	a.mu.RLock()
+	channelStore := a.channelStore
+	endpointManager := a.endpointManager
+	logger := a.logger
+	a.mu.RUnlock()
+
+	if channelStore == nil || endpointManager == nil {
+		return
+	}
+
+	baseCtx := ctx
+	if baseCtx == nil || baseCtx.Err() != nil {
+		baseCtx = context.Background()
+	}
+
+	syncCtx, cancel := context.WithTimeout(baseCtx, 3*time.Second)
+	defer cancel()
+
+	records, err := channelStore.List(syncCtx)
+	if err != nil {
+		if logger != nil {
+			logger.Warn("⚠️ 同步渠道模型映射失败", "error", err)
+		}
+		return
+	}
+
+	mappings := make(map[string]map[string]string, len(records))
+	for _, r := range records {
+		if r == nil || r.Name == "" || len(r.ModelMapping) == 0 {
+			continue
+		}
+		mappings[r.Name] = r.ModelMapping
+	}
+	endpointManager.UpdateChannelModelMappings(mappings)
 }
 
 // DeleteChannel 删除渠道
@@ -1258,6 +1353,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 			logger.Warn("⚠️ 删除渠道后同步运行时配置失败", "error", err)
 		}
 	}
+	a.syncChannelModelMappingsToEndpointManager(ctx)
 
 	// 推送前端刷新
 	a.emitEndpointUpdate()
@@ -1316,29 +1412,31 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 // recordToInfo 将数据库记录转换为前端 Info 结构
 func (a *App) recordToInfo(r *store.EndpointRecord) EndpointRecordInfo {
 	info := EndpointRecordInfo{
-		ID:                          r.ID,
-		Channel:                     r.Channel,
-		Name:                        r.Name,
-		URL:                         r.URL,
-		Token:                       r.Token,  // 本地桌面应用，直接返回原始 Token
-		ApiKey:                      r.ApiKey, // 本地桌面应用，直接返回原始 ApiKey
-		TokenMasked:                 maskToken(r.Token),
-		ApiKeyMasked:                maskToken(r.ApiKey),
-		Headers:                     r.Headers,
-		Priority:                    r.Priority,
-		FailoverEnabled:             r.FailoverEnabled,
-		SkipHealthCheck:             r.SkipHealthCheck,
-		CooldownSeconds:             r.CooldownSeconds,
-		TimeoutSeconds:              r.TimeoutSeconds,
-		SupportsCountTokens:         r.SupportsCountTokens,
-		CostMultiplier:              r.CostMultiplier,
-		InputCostMultiplier:         r.InputCostMultiplier,
-		OutputCostMultiplier:        r.OutputCostMultiplier,
-		CacheCreationCostMultiplier: r.CacheCreationCostMultiplier,
-		CacheReadCostMultiplier:     r.CacheReadCostMultiplier,
-		Enabled:                     r.Enabled,
-		HealthState:                 "",
-		NeverChecked:                false,
+		ID:                            r.ID,
+		Channel:                       r.Channel,
+		Name:                          r.Name,
+		URL:                           r.URL,
+		Token:                         r.Token,  // 本地桌面应用，直接返回原始 Token
+		ApiKey:                        r.ApiKey, // 本地桌面应用，直接返回原始 ApiKey
+		TokenMasked:                   maskToken(r.Token),
+		ApiKeyMasked:                  maskToken(r.ApiKey),
+		Headers:                       r.Headers,
+		Priority:                      r.Priority,
+		FailoverEnabled:               r.FailoverEnabled,
+		SkipHealthCheck:               r.SkipHealthCheck,
+		CooldownSeconds:               r.CooldownSeconds,
+		TimeoutSeconds:                r.TimeoutSeconds,
+		SupportsCountTokens:           r.SupportsCountTokens,
+		CostMultiplier:                r.CostMultiplier,
+		InputCostMultiplier:           r.InputCostMultiplier,
+		OutputCostMultiplier:          r.OutputCostMultiplier,
+		CacheCreationCostMultiplier:   r.CacheCreationCostMultiplier,
+		CacheCreationCostMultiplier1h: r.CacheCreationCostMultiplier1h,
+		CacheReadCostMultiplier:       r.CacheReadCostMultiplier,
+		ModelMultipliers:              r.ModelMultipliers,
+		Enabled:                       r.Enabled,
+		HealthState:                   "",
+		NeverChecked:                  false,
 	}
 
 	if !r.CreatedAt.IsZero() {

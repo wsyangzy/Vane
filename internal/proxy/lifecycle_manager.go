@@ -520,16 +520,35 @@ func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, cha
 	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
 
+func (rlm *RequestLifecycleManager) snapshotEndpointMultiplierForModel(modelName string) {
+	if rlm.usageTracker == nil || modelName == "" {
+		return
+	}
+	endpointName := rlm.stateManager.GetEndpointName()
+	if endpointName == "" {
+		return
+	}
+	channel := rlm.stateManager.GetChannel()
+	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointAndModel(channel, endpointName, modelName)
+	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
+}
+
 // SetModel 设置模型名称（线程安全）
 // 简单版本，只在模型为空或unknown时设置
 func (rlm *RequestLifecycleManager) SetModel(modelName string) {
 	rlm.stateMu.Lock()
-	defer rlm.stateMu.Unlock()
+	updated := false
 
 	// 只在当前模型为空或unknown时设置，避免覆盖更准确的模型信息
 	if rlm.modelName == "" || rlm.modelName == "unknown" {
 		rlm.modelName = modelName
+		updated = true
 		rlm.logger.Debug(fmt.Sprintf("🏷️ [模型提取] [%s] 从请求中获取模型名称: %s", rlm.stateManager.GetRequestID(), modelName))
+	}
+	rlm.stateMu.Unlock()
+
+	if updated {
+		rlm.snapshotEndpointMultiplierForModel(modelName)
 	}
 }
 
@@ -537,30 +556,59 @@ func (rlm *RequestLifecycleManager) SetModel(modelName string) {
 // 如果已有模型，会进行对比并在不一致时输出警告，最终以新模型为准
 func (rlm *RequestLifecycleManager) SetModelWithComparison(newModelName, source string) {
 	rlm.stateMu.Lock()
-	defer rlm.stateMu.Unlock()
+	updated := false
 
 	// 如果新模型为空或unknown，不进行设置
 	if newModelName == "" || newModelName == "unknown" {
+		rlm.stateMu.Unlock()
 		return
 	}
 
 	// 如果当前没有模型或为unknown，直接设置
 	if rlm.modelName == "" || rlm.modelName == "unknown" {
 		rlm.modelName = newModelName
+		updated = true
 		rlm.logger.Debug(fmt.Sprintf("🏷️ [模型提取] [%s] 从%s设置模型名称: %s", rlm.stateManager.GetRequestID(), source, newModelName))
-		return
-	}
-
-	// 如果两个模型都有值，进行对比
-	if rlm.modelName != newModelName {
+	} else if rlm.modelName != newModelName {
 		rlm.logger.Warn(fmt.Sprintf("⚠️ [模型不一致] [%s] 请求体模型: %s, %s模型: %s - 以%s为准",
 			rlm.stateManager.GetRequestID(), rlm.modelName, source, newModelName, source))
 
 		// 以新模型（通常是message_start解析的）为准
 		rlm.modelName = newModelName
+		updated = true
 	} else {
 		rlm.logger.Debug(fmt.Sprintf("✅ [模型一致] [%s] 请求体与%s模型一致: %s", rlm.stateManager.GetRequestID(), source, newModelName))
 	}
+	rlm.stateMu.Unlock()
+
+	if updated {
+		rlm.snapshotEndpointMultiplierForModel(newModelName)
+	}
+}
+
+// SetModelRewrite 设置模型改写元信息，并将成本模型切换到改写后的目标模型。
+func (rlm *RequestLifecycleManager) SetModelRewrite(originalModel, newModel, source string) {
+	originalModel = strings.TrimSpace(originalModel)
+	newModel = strings.TrimSpace(newModel)
+	source = strings.TrimSpace(source)
+	if newModel == "" || source == "" {
+		return
+	}
+
+	rlm.SetModelWithComparison(newModel, source)
+	if rlm.usageTracker == nil || rlm.stateManager.GetRequestID() == "" {
+		return
+	}
+
+	opts := tracking.UpdateOptions{
+		ModelName:          &newModel,
+		ModelRewriteSource: &source,
+		ModelRewriteTarget: &newModel,
+	}
+	if originalModel != "" {
+		opts.OriginalModelName = &originalModel
+	}
+	rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), opts)
 }
 
 // SetModelName 设置模型名称（兼容性方法，内部调用SetModel）

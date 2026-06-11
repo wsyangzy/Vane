@@ -5,7 +5,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,7 +20,8 @@ type ChannelRecord struct {
 	Website  string `json:"website,omitempty"`
 	Priority int    `json:"priority"`
 	// FailoverEnabled 表示该渠道是否参与“渠道间故障转移”（暂停/恢复按钮持久化）。
-	FailoverEnabled bool `json:"failover_enabled"`
+	FailoverEnabled bool              `json:"failover_enabled"`
+	ModelMapping    map[string]string `json:"model_mapping"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -83,13 +86,17 @@ func (s *SQLiteChannelStore) Create(ctx context.Context, record *ChannelRecord) 
 	if record.Priority <= 0 {
 		record.Priority = 1
 	}
+	modelMappingJSON, err := channelModelMappingToJSON(record.ModelMapping)
+	if err != nil {
+		return nil, err
+	}
 
 	s.mu.Lock()
 	query := `
-		INSERT INTO channels (name, website, priority, failover_enabled)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO channels (name, website, priority, failover_enabled, model_mapping)
+		VALUES (?, ?, ?, ?, ?)
 	`
-	res, err := s.execContext(ctx, query, record.Name, nullIfEmpty(record.Website), record.Priority, boolToInt(record.FailoverEnabled))
+	res, err := s.execContext(ctx, query, record.Name, nullIfEmpty(record.Website), record.Priority, boolToInt(record.FailoverEnabled), modelMappingJSON)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("创建渠道失败: %w", err)
@@ -110,7 +117,7 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), created_at, updated_at
+		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), COALESCE(model_mapping, '{}'), created_at, updated_at
 		FROM channels
 		WHERE name = ?
 	`
@@ -118,6 +125,7 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 	var record ChannelRecord
 	var createdAt, updatedAt string
 	var failoverEnabled int
+	var modelMappingJSON string
 
 	err := s.queryRowContext(ctx, query, name).Scan(
 		&record.ID,
@@ -125,6 +133,7 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 		&record.Website,
 		&record.Priority,
 		&failoverEnabled,
+		&modelMappingJSON,
 		&createdAt,
 		&updatedAt,
 	)
@@ -138,6 +147,11 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	record.FailoverEnabled = failoverEnabled != 0
+	modelMapping, err := channelModelMappingFromJSON(modelMappingJSON)
+	if err != nil {
+		return nil, err
+	}
+	record.ModelMapping = modelMapping
 
 	return &record, nil
 }
@@ -148,7 +162,7 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), created_at, updated_at
+		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), COALESCE(model_mapping, '{}'), created_at, updated_at
 		FROM channels
 		WHERE priority = ?
 		LIMIT 1
@@ -157,6 +171,7 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 	var record ChannelRecord
 	var createdAt, updatedAt string
 	var failoverEnabled int
+	var modelMappingJSON string
 
 	err := s.queryRowContext(ctx, query, priority).Scan(
 		&record.ID,
@@ -164,6 +179,7 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 		&record.Website,
 		&record.Priority,
 		&failoverEnabled,
+		&modelMappingJSON,
 		&createdAt,
 		&updatedAt,
 	)
@@ -177,6 +193,11 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	record.FailoverEnabled = failoverEnabled != 0
+	modelMapping, err := channelModelMappingFromJSON(modelMappingJSON)
+	if err != nil {
+		return nil, err
+	}
+	record.ModelMapping = modelMapping
 
 	return &record, nil
 }
@@ -203,7 +224,7 @@ func (s *SQLiteChannelStore) List(ctx context.Context) ([]*ChannelRecord, error)
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), created_at, updated_at
+		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), COALESCE(model_mapping, '{}'), created_at, updated_at
 		FROM channels
 		ORDER BY COALESCE(priority, 1) ASC, created_at DESC, name ASC
 	`
@@ -218,12 +239,18 @@ func (s *SQLiteChannelStore) List(ctx context.Context) ([]*ChannelRecord, error)
 		var record ChannelRecord
 		var createdAt, updatedAt string
 		var failoverEnabled int
-		if err := rows.Scan(&record.ID, &record.Name, &record.Website, &record.Priority, &failoverEnabled, &createdAt, &updatedAt); err != nil {
+		var modelMappingJSON string
+		if err := rows.Scan(&record.ID, &record.Name, &record.Website, &record.Priority, &failoverEnabled, &modelMappingJSON, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("读取渠道失败: %w", err)
 		}
 		record.CreatedAt = parseSQLiteDateTime(createdAt)
 		record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 		record.FailoverEnabled = failoverEnabled != 0
+		modelMapping, err := channelModelMappingFromJSON(modelMappingJSON)
+		if err != nil {
+			return nil, err
+		}
+		record.ModelMapping = modelMapping
 		result = append(result, &record)
 	}
 	if err := rows.Err(); err != nil {
@@ -245,9 +272,13 @@ func (s *SQLiteChannelStore) Update(ctx context.Context, record *ChannelRecord) 
 	if record.Priority <= 0 {
 		record.Priority = 1
 	}
+	modelMappingJSON, err := channelModelMappingToJSON(record.ModelMapping)
+	if err != nil {
+		return err
+	}
 
-	query := `UPDATE channels SET website = ?, priority = ?, failover_enabled = ? WHERE name = ?`
-	res, err := s.execContext(ctx, query, nullIfEmpty(record.Website), record.Priority, boolToInt(record.FailoverEnabled), record.Name)
+	query := `UPDATE channels SET website = ?, priority = ?, failover_enabled = ?, model_mapping = ? WHERE name = ?`
+	res, err := s.execContext(ctx, query, nullIfEmpty(record.Website), record.Priority, boolToInt(record.FailoverEnabled), modelMappingJSON, record.Name)
 	if err != nil {
 		return fmt.Errorf("更新渠道失败: %w", err)
 	}
@@ -278,4 +309,55 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func channelModelMappingToJSON(modelMapping map[string]string) (string, error) {
+	if len(modelMapping) == 0 {
+		return "{}", nil
+	}
+
+	normalized := make(map[string]string, len(modelMapping))
+	for source, target := range modelMapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+		normalized[source] = target
+	}
+	if len(normalized) == 0 {
+		return "{}", nil
+	}
+
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("序列化渠道模型映射失败: %w", err)
+	}
+	return string(data), nil
+}
+
+func channelModelMappingFromJSON(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]string{}, nil
+	}
+
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("解析渠道模型映射失败: %w", err)
+	}
+	if parsed == nil {
+		return map[string]string{}, nil
+	}
+
+	normalized := make(map[string]string, len(parsed))
+	for source, target := range parsed {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source == "" || target == "" {
+			continue
+		}
+		normalized[source] = target
+	}
+	return normalized, nil
 }

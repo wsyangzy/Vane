@@ -76,6 +76,9 @@ type Manager struct {
 	failoverStartMu      sync.RWMutex
 	failoverStartChannel string
 
+	channelModelMappingMu sync.RWMutex
+	channelModelMappings  map[string]map[string]string
+
 	// 🔧 [P5.4 新增] 健康检查节流器：避免多触发源短时间内重复检查同一端点
 	// 6 个触发源（HealthCheckLoop / 端点失败 / 渠道切换 / 防抖回调 / 故障转移 / 配置热重载）
 	// 之前会在 500ms 内对同一端点触发 3-4 次健康检查，造成"探活风暴"
@@ -99,6 +102,61 @@ func (m *Manager) UpdateChannelFailoverEnabled(enabled map[string]bool) {
 		return
 	}
 	m.groupManager.UpdateChannelFailoverEnabled(enabled)
+}
+
+// UpdateChannelModelMappings 同步渠道级模型映射到运行时转发层。
+func (m *Manager) UpdateChannelModelMappings(mappings map[string]map[string]string) {
+	if m == nil {
+		return
+	}
+
+	next := make(map[string]map[string]string, len(mappings))
+	for channel, mapping := range mappings {
+		channel = strings.TrimSpace(channel)
+		if channel == "" || len(mapping) == 0 {
+			continue
+		}
+		copied := make(map[string]string, len(mapping))
+		for source, target := range mapping {
+			source = strings.TrimSpace(source)
+			target = strings.TrimSpace(target)
+			if source == "" || target == "" {
+				continue
+			}
+			copied[source] = target
+		}
+		if len(copied) > 0 {
+			next[channel] = copied
+		}
+	}
+
+	m.channelModelMappingMu.Lock()
+	m.channelModelMappings = next
+	m.channelModelMappingMu.Unlock()
+}
+
+// GetChannelModelMapping 返回指定渠道的模型映射副本。
+func (m *Manager) GetChannelModelMapping(channel string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return nil
+	}
+
+	m.channelModelMappingMu.RLock()
+	defer m.channelModelMappingMu.RUnlock()
+
+	mapping := m.channelModelMappings[channel]
+	if len(mapping) == 0 {
+		return nil
+	}
+	copied := make(map[string]string, len(mapping))
+	for source, target := range mapping {
+		copied[source] = target
+	}
+	return copied
 }
 
 // SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。

@@ -94,6 +94,7 @@ CLAUDE.md
 .opencode
 .agents
 .codex
+.codegraph
 
 # Local research snapshots
 tmp_research
