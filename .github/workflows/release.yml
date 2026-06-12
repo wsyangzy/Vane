@@ -9,72 +9,12 @@ on:
 env:
   GO_VERSION: '1.23'
   NODE_VERSION: '20'
+  ASSET_NAME: Claude-Request-Forwarder-windows-amd64.zip
 
 permissions:
   contents: write
 
 jobs:
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        platform:
-          - darwin/amd64
-          - darwin/arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install
-
-      - name: Get version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          else
-            echo "VERSION=dev-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          fi
-
-      - name: Build
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM#*/}"
-          wails build -platform ${{ matrix.platform }} -ldflags "-X main.version=${{ env.VERSION }}"
-
-      - name: Package
-        run: |
-          PLATFORM="${{ matrix.platform }}"
-          ARCH="${PLATFORM#*/}"
-          cd build/bin
-
-          # 创建 ZIP
-          if [ -d "Claude Request Forwarder.app" ]; then
-            zip -r "Claude-Request-Forwarder-darwin-${ARCH}.zip" "Claude Request Forwarder.app"
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: claude-request-forwarder-darwin-${{ matrix.platform == 'darwin/amd64' && 'amd64' || 'arm64' }}
-          path: build/bin/*.zip
-
   build-windows:
     name: Build Windows
     runs-on: windows-latest
@@ -101,138 +41,177 @@ jobs:
           npm install
 
       - name: Get version
-        shell: bash
+        shell: powershell
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          else
-            echo "VERSION=dev-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          fi
+          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
+            "VERSION=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          } else {
+            $shortSha = (git rev-parse --short HEAD).Trim()
+            "VERSION=dev-$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
 
-      - name: Build
+      - name: Build Windows
         run: wails build -platform windows/amd64 -ldflags "-X main.version=${{ env.VERSION }}"
 
-      - name: Package
-        shell: pwsh
+      - name: Package Windows
+        shell: powershell
         run: |
-          Compress-Archive -Path "build/bin/Claude Request Forwarder.exe" -DestinationPath "build/bin/Claude-Request-Forwarder-windows-amd64.zip"
+          $exePath = "build/bin/Claude Request Forwarder.exe"
+          $assetPath = "build/bin/${{ env.ASSET_NAME }}"
 
-      - name: Upload artifact
+          if (-not (Test-Path -LiteralPath $exePath)) {
+            throw "Windows executable not found: $exePath"
+          }
+
+          if (Test-Path -LiteralPath $assetPath) {
+            Remove-Item -LiteralPath $assetPath -Force
+          }
+
+          Compress-Archive -Path $exePath -DestinationPath $assetPath
+          Get-FileHash -Algorithm SHA256 -LiteralPath $assetPath |
+            ForEach-Object { "$($_.Hash.ToLower())  ${{ env.ASSET_NAME }}" } |
+            Set-Content -Path "build/bin/checksums.txt" -Encoding UTF8
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: claude-request-forwarder-windows-amd64
-          path: build/bin/*.zip
+          path: |
+            build/bin/${{ env.ASSET_NAME }}
+            build/bin/checksums.txt
 
-  build-linux:
-    name: Build Linux
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
-
-      - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install
-
-      - name: Get version
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          else
-            echo "VERSION=dev-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-          fi
-
-      - name: Build
-        run: wails build -platform linux/amd64 -ldflags "-X main.version=${{ env.VERSION }}"
-
-      - name: Package
-        run: |
-          cd build/bin
-          tar -czf "Claude-Request-Forwarder-linux-amd64.tar.gz" "CC-Forwarder"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: claude-request-forwarder-linux-amd64
-          path: build/bin/*.tar.gz
-
-  release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    needs: [build-macos, build-windows, build-linux]
-    if: startsWith(github.ref, 'refs/tags/')
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts/
-
-      - name: Prepare release files
-        run: |
-          mkdir -p release/
-          find artifacts/ -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} release/ \;
-
-          cd release/
-          sha256sum * > checksums.txt
-          ls -la
-
-      - name: Get version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: Claude Request Forwarder ${{ env.VERSION }}
-          body: |
-            ## Claude Request Forwarder ${{ env.VERSION }}
-
-            ### 下载
-
-            | 平台 | 文件 |
-            |------|------|
-            | macOS (Intel) | `Claude-Request-Forwarder-darwin-amd64.zip` |
-            | macOS (Apple Silicon) | `Claude-Request-Forwarder-darwin-arm64.zip` |
-            | Windows | `Claude-Request-Forwarder-windows-amd64.zip` |
-            | Linux | `Claude-Request-Forwarder-linux-amd64.tar.gz` |
-
-            ### 安装说明
-
-            **macOS**: 解压后将 `Claude Request Forwarder.app` 拖入应用程序文件夹
-            **Windows**: 解压后运行 `Claude Request Forwarder.exe`
-            **Linux**: 解压后运行 `Claude Request Forwarder`
-
-            ### 校验
-
-            ```bash
-            sha256sum -c checksums.txt
-            ```
-
-            详细更新内容请查看 [CHANGELOG.md](./CHANGELOG.md)
-          files: release/*
-          draft: false
-          prerelease: false
+      - name: Create Gitea release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName System.Net.Http
+
+          $token = $env:RELEASE_TOKEN
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            $token = $env:FALLBACK_TOKEN
+          }
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            throw "Missing release token. Set repository secret RELEASE_TOKEN with release write permission."
+          }
+
+          $repo = "${{ github.repository }}"
+          $tag = "${{ github.ref_name }}"
+          $serverUrl = "${{ github.server_url }}".TrimEnd("/")
+          $apiUrl = $env:GITHUB_API_URL
+          if ([string]::IsNullOrWhiteSpace($apiUrl)) {
+            $apiUrl = "$serverUrl/api/v1"
+          }
+          $apiUrl = $apiUrl.TrimEnd("/")
+
+          $headers = @{
+            Authorization = "token $token"
+            Accept = "application/json"
+          }
+
+          $releaseBody = @"
+## Claude Request Forwarder $tag
+
+### 下载
+
+- Windows x64: ${{ env.ASSET_NAME }}
+
+### 校验
+
+同目录提供 checksums.txt。
+"@
+
+          $releasePayload = @{
+            tag_name = $tag
+            name = "Claude Request Forwarder $tag"
+            body = $releaseBody
+            draft = $false
+            prerelease = $false
+          } | ConvertTo-Json
+
+          $releasesUrl = "$apiUrl/repos/$repo/releases"
+          try {
+            $release = Invoke-RestMethod `
+              -Method Post `
+              -Uri $releasesUrl `
+              -Headers $headers `
+              -ContentType "application/json; charset=utf-8" `
+              -Body ([System.Text.Encoding]::UTF8.GetBytes($releasePayload))
+          } catch {
+            $statusCode = $null
+            if ($_.Exception.Response) {
+              $statusCode = [int]$_.Exception.Response.StatusCode
+            }
+            if ($statusCode -ne 409 -and $statusCode -ne 422) {
+              throw
+            }
+            $release = Invoke-RestMethod `
+              -Method Get `
+              -Uri "$releasesUrl/tags/$tag" `
+              -Headers $headers
+          }
+
+          function Remove-ExistingAsset {
+            param(
+              [Parameter(Mandatory = $true)] $Release,
+              [Parameter(Mandatory = $true)] [string] $Name
+            )
+
+            if (-not $Release.assets) {
+              return
+            }
+
+            foreach ($asset in $Release.assets) {
+              if ($asset.name -eq $Name) {
+                Invoke-RestMethod `
+                  -Method Delete `
+                  -Uri "$releasesUrl/$($Release.id)/assets/$($asset.id)" `
+                  -Headers $headers | Out-Null
+              }
+            }
+          }
+
+          function Upload-ReleaseAsset {
+            param(
+              [Parameter(Mandatory = $true)] $Release,
+              [Parameter(Mandatory = $true)] [string] $Path
+            )
+
+            $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+            $fileName = Split-Path -Leaf $resolvedPath
+            Remove-ExistingAsset -Release $Release -Name $fileName
+
+            $uploadUrl = "$releasesUrl/$($Release.id)/assets?name=$([uri]::EscapeDataString($fileName))"
+            $client = [System.Net.Http.HttpClient]::new()
+            $fileStream = $null
+            $multipart = $null
+
+            try {
+              $client.DefaultRequestHeaders.Authorization =
+                [System.Net.Http.Headers.AuthenticationHeaderValue]::new("token", $token)
+              $client.DefaultRequestHeaders.Accept.ParseAdd("application/json")
+
+              $multipart = [System.Net.Http.MultipartFormDataContent]::new()
+              $fileStream = [System.IO.File]::OpenRead($resolvedPath)
+              $fileContent = [System.Net.Http.StreamContent]::new($fileStream)
+              $fileContent.Headers.ContentType =
+                [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
+              $multipart.Add($fileContent, "attachment", $fileName)
+
+              $response = $client.PostAsync($uploadUrl, $multipart).GetAwaiter().GetResult()
+              if (-not $response.IsSuccessStatusCode) {
+                $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                throw "Upload failed for $fileName. Status: $($response.StatusCode). Body: $body"
+              }
+            } finally {
+              if ($multipart) { $multipart.Dispose() }
+              if ($fileStream) { $fileStream.Dispose() }
+              $client.Dispose()
+            }
+          }
+
+          Upload-ReleaseAsset -Release $release -Path "build/bin/${{ env.ASSET_NAME }}"
+          Upload-ReleaseAsset -Release $release -Path "build/bin/checksums.txt"
