@@ -668,6 +668,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		description string
 	}{
 		{
+			checkColumn: "timeout_seconds",
+			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 0",
+			description: "Codex 端点请求超时字段",
+		},
+		{
 			checkColumn: "model_multipliers",
 			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'",
 			description: "Codex 端点模型附加倍率字段",

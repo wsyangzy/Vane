@@ -433,6 +433,49 @@ func (m *Manager) SetEndpointLastRequestFail(endpointName string, httpCode int, 
 	ep.mutex.Unlock()
 }
 
+// ClearEndpointsRequestFailure clears request-scoped failure diagnostics without
+// changing health-check status. It is used when a request reaches a terminal
+// failed/cancelled state, so stale endpoint details do not remain in the UI.
+func (m *Manager) ClearEndpointsRequestFailure(endpointKeys []string) {
+	if m == nil || len(endpointKeys) == 0 {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(endpointKeys))
+	cleared := 0
+	for _, key := range endpointKeys {
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		ep := m.GetEndpointByNameAny(key)
+		if ep == nil {
+			continue
+		}
+
+		ep.mutex.Lock()
+		hasRequestFailure := ep.Status.RequestFailed ||
+			ep.Status.LastRequestFailCode != 0 ||
+			ep.Status.LastRequestFailReason != ""
+		if hasRequestFailure {
+			ep.Status.RequestFailed = false
+			ep.Status.LastRequestFailCode = 0
+			ep.Status.LastRequestFailReason = ""
+			cleared++
+		}
+		ep.mutex.Unlock()
+	}
+
+	if cleared > 0 {
+		slog.Info(fmt.Sprintf("🧹 [端点状态清理] 已清理 %d 个端点的请求级失败详情", cleared))
+		m.triggerHealthCheckCompleteDebounced()
+	}
+}
+
 // SetEndpointSkipHealthCheck 设置端点是否跳过健康检测（运行时同步）
 // 用于前端快捷开关
 func (m *Manager) SetEndpointSkipHealthCheck(endpointKey string, skip bool) {

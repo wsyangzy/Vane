@@ -31,6 +31,7 @@ type CodexGlobalConfigInfo struct {
 	EffectiveModel           string `json:"effective_model"`             // 当前写入 config.toml 的生效 model
 	EffectiveReasoningEffort string `json:"effective_reasoning_effort"`  // 当前生效 model_reasoning_effort
 	EffectiveEnable1MContext bool   `json:"effective_enable_1m_context"` // 当前生效 1M 开关
+	GlobalTimeoutSeconds     int    `json:"global_timeout_seconds"`      // 全局非流式请求超时
 }
 
 // CodexGlobalConfigInput 用于更新 Codex 全局配置（前端写入）
@@ -59,7 +60,17 @@ func (a *App) GetCodexGlobalConfig() (CodexGlobalConfigInfo, error) {
 		EffectiveModel:           effective.Model,
 		EffectiveReasoningEffort: effective.ReasoningEffort,
 		EffectiveEnable1MContext: effective.Enable1MContext,
+		GlobalTimeoutSeconds:     a.getCodexGlobalTimeoutSeconds(),
 	}, nil
+}
+
+func (a *App) getCodexGlobalTimeoutSeconds() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.config != nil && a.config.GlobalTimeout > 0 {
+		return int(a.config.GlobalTimeout.Seconds())
+	}
+	return 300
 }
 
 func (a *App) readCodexEffectiveConfig() (CodexGlobalConfigInput, error) {

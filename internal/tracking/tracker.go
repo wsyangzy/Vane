@@ -540,9 +540,12 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
 		slog.Warn("加载时区失败，使用Asia/Shanghai", "timezone", timezone, "error", err)
-		location, _ = time.LoadLocation("Asia/Shanghai")
-		if location == nil {
+		fallbackLocation, fallbackErr := time.LoadLocation("Asia/Shanghai")
+		if fallbackErr != nil {
+			slog.Warn("加载默认时区失败，使用固定+8时区", "error", fallbackErr)
 			location = time.FixedZone("CST", 8*3600) // 后备方案：固定+8时区
+		} else {
+			location = fallbackLocation
 		}
 	}
 
@@ -573,7 +576,9 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 	// 初始化数据库Schema（使用适配器）
 	if err := ut.initDatabaseWithAdapter(); err != nil {
 		cancel()
-		adapter.Close()
+		if closeErr := adapter.Close(); closeErr != nil {
+			slog.Warn("初始化失败后关闭数据库适配器失败", "error", closeErr)
+		}
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
@@ -1046,7 +1051,9 @@ func (ut *UsageTracker) recordToFailureQueue(kind string, payload any) {
 	const maxFileSize = 10 * 1024 * 1024
 	if info, err := os.Stat(dumpPath); err == nil && info.Size() > maxFileSize {
 		backupPath := dumpPath + "." + time.Now().Format("20060102-150405")
-		_ = os.Rename(dumpPath, backupPath)
+		if renameErr := os.Rename(dumpPath, backupPath); renameErr != nil {
+			slog.Debug("备份失败队列文件失败", "path", dumpPath, "backup", backupPath, "error", renameErr)
+		}
 	}
 
 	f, err := os.OpenFile(dumpPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -1054,7 +1061,11 @@ func (ut *UsageTracker) recordToFailureQueue(kind string, payload any) {
 		slog.Debug("打开失败队列文件失败", "error", err)
 		return
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			slog.Debug("关闭失败队列文件失败", "error", closeErr)
+		}
+	}()
 
 	record := map[string]any{
 		"timestamp": time.Now().Format(time.RFC3339Nano),
@@ -2120,14 +2131,18 @@ func (ut *UsageTracker) executeWriteSimple(req WriteRequest) error {
 	connEvicted := false
 	defer func() {
 		// connEvicted 已通过 evictConn 销毁；正常路径下也需 Close 让连接回池
-		_ = conn.Close()
+		if closeErr := conn.Close(); closeErr != nil && !connEvicted {
+			slog.Warn("关闭追踪写入数据库连接失败", "error", closeErr)
+		}
 	}()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		// BeginTx 失败极可能是连接已被污染，强制驱逐
 		connEvicted = true
-		_ = evictConn(conn)
+		if evictErr := evictConn(conn); evictErr != nil {
+			slog.Warn("驱逐追踪写入数据库污染连接失败", "error", evictErr)
+		}
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
@@ -2156,13 +2171,13 @@ func (ut *UsageTracker) executeWriteSimple(req WriteRequest) error {
 	if err != nil {
 		// 🔧 [P0.4 修复] Commit 失败时驱逐连接，防止后续 BeginTx 在污染连接上嵌套报错
 		connEvicted = true
-		_ = evictConn(conn)
+		if evictErr := evictConn(conn); evictErr != nil {
+			slog.Warn("驱逐追踪写入数据库污染连接失败", "error", evictErr)
+		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	committed = true
-	// 避免未使用变量警告
-	_ = connEvicted
 	return nil
 }
 

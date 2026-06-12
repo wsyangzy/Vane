@@ -261,6 +261,8 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	if v, ok := detail["enabled"].(bool); ok {
 		info.Enabled = v
 	}
+	info.CreatedAt = formatEndpointTimeValue(detail["created_at"])
+	info.UpdatedAt = formatEndpointTimeValue(detail["updated_at"])
 
 	// 健康状态
 	if health, ok := detail["health"].(map[string]interface{}); ok {
@@ -273,6 +275,20 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	}
 
 	return info, nil
+}
+
+func formatEndpointTimeValue(value interface{}) string {
+	switch v := value.(type) {
+	case time.Time:
+		if v.IsZero() {
+			return ""
+		}
+		return v.Format("2006-01-02 15:04:05")
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return ""
+	}
 }
 
 // CreateEndpointRecord 创建新端点
@@ -1059,7 +1075,6 @@ type CreateChannelInput struct {
 func (a *App) CreateChannel(input CreateChannelInput) error {
 	a.mu.RLock()
 	channelService := a.channelService
-	endpointManager := a.endpointManager
 	logger := a.logger
 	a.mu.RUnlock()
 
@@ -1090,11 +1105,7 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	}
 
 	// 同步渠道优先级到运行时（用于渠道间故障转移顺序）
-	if endpointManager != nil {
-		a.syncChannelPrioritiesToEndpointManager(ctx)
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
-		a.syncChannelModelMappingsToEndpointManager(ctx)
-	}
+	a.syncChannelRuntimeState(ctx)
 	return nil
 }
 
@@ -1108,7 +1119,6 @@ type UpdateChannelInput struct {
 func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	a.mu.RLock()
 	channelService := a.channelService
-	endpointManager := a.endpointManager
 	logger := a.logger
 	a.mu.RUnlock()
 
@@ -1135,11 +1145,7 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 		return err
 	}
 
-	if endpointManager != nil {
-		a.syncChannelPrioritiesToEndpointManager(ctx)
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
-		a.syncChannelModelMappingsToEndpointManager(ctx)
-	}
+	a.syncChannelRuntimeState(ctx)
 
 	// 推送前端刷新（channelsMeta & groups）
 	a.emitEndpointUpdate()
@@ -1148,6 +1154,19 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 		logger.Info("✅ 渠道已更新", "name", input.Name, "priority", input.Priority)
 	}
 	return nil
+}
+
+func (a *App) syncChannelRuntimeState(ctx context.Context) {
+	a.mu.RLock()
+	endpointManager := a.endpointManager
+	a.mu.RUnlock()
+	if endpointManager == nil {
+		return
+	}
+
+	a.syncChannelPrioritiesToEndpointManager(ctx)
+	a.syncChannelFailoverEnabledToEndpointManager(ctx)
+	a.syncChannelModelMappingsToEndpointManager(ctx)
 }
 
 func (a *App) syncChannelPrioritiesToEndpointManager(ctx context.Context) {
@@ -1458,11 +1477,4 @@ func maskToken(token string) string {
 		return "****"
 	}
 	return token[:4] + "****" + token[len(token)-4:]
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

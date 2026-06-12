@@ -698,7 +698,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               {/* 错误信息（如果有） */}
               {(['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status) ||
                 request.failure_reason || request.cancel_reason) && (
-                <div className="bg-rose-50 rounded-xl border border-rose-200 overflow-hidden">
+                <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">
                   <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-rose-900 flex items-center gap-2">
                       <AlertCircle className="w-4 h-4" />
@@ -723,17 +723,17 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       </Tooltip>
                     )}
                   </div>
-                  <div className="p-4 space-y-2 min-w-0 overflow-hidden">
+                  <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
                     {request.failure_reason && (
-                      <div className="flex items-start gap-1.5 text-sm min-w-0">
+                      <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
                         <span className="shrink-0 font-medium text-slate-600">失败原因：</span>
-                        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-rose-700 [overflow-wrap:anywhere]">{request.failure_reason}</span>
+                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{request.failure_reason}</span>
                       </div>
                     )}
                     {request.cancel_reason && (
-                      <div className="flex items-start gap-1.5 text-sm min-w-0">
+                      <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
                         <span className="shrink-0 font-medium text-slate-600">取消原因：</span>
-                        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-rose-700 [overflow-wrap:anywhere]">{request.cancel_reason}</span>
+                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{request.cancel_reason}</span>
                       </div>
                     )}
                   </div>

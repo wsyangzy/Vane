@@ -100,6 +100,7 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 			name TEXT NOT NULL,
 			base_url TEXT NOT NULL,
 			is_active INTEGER NOT NULL DEFAULT 0,
+			timeout_seconds INTEGER NOT NULL DEFAULT 0,
 			billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
 			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -141,6 +142,11 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 
 	// 为 codex_endpoints 补充故障转移字段（v7.2+）
 	if err := a.ensureCodexEndpointFailoverColumns(ctx, db); err != nil {
+		return err
+	}
+
+	// 为 codex_endpoints 补充端点级请求超时字段（0 = 使用全局超时）
+	if err := a.ensureCodexEndpointTimeoutColumn(ctx, db); err != nil {
 		return err
 	}
 
@@ -216,6 +222,20 @@ func (a *App) ensureCodexEndpointFailoverColumns(ctx context.Context, db *sql.DB
 		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return fmt.Errorf("为 codex_endpoints 添加 priority 字段失败: %w", err)
 		}
+	}
+	return nil
+}
+
+func (a *App) ensureCodexEndpointTimeoutColumn(ctx context.Context, db *sql.DB) error {
+	exists, err := sqliteColumnExists(ctx, db, "codex_endpoints", "timeout_seconds")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("为 codex_endpoints 添加 timeout_seconds 字段失败: %w", err)
 	}
 	return nil
 }

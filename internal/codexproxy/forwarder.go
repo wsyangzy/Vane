@@ -15,8 +15,10 @@ import (
 
 // Forwarder 执行实际的 HTTP 转发
 type Forwarder struct {
-	client *http.Client
-	logger *slog.Logger
+	client             *http.Client
+	timeout            time.Duration
+	useEndpointTimeout bool
+	logger             *slog.Logger
 }
 
 // NewForwarder 创建转发器实例
@@ -31,7 +33,9 @@ func NewForwarder(timeout time.Duration, logger *slog.Logger) *Forwarder {
 		client: &http.Client{
 			Timeout: timeout,
 		},
-		logger: logger,
+		timeout:            timeout,
+		useEndpointTimeout: true,
+		logger:             logger,
 	}
 }
 
@@ -44,7 +48,9 @@ func NewStreamingForwarder(logger *slog.Logger) *Forwarder {
 		client: &http.Client{
 			Timeout: 0, // 流式请求不设超时
 		},
-		logger: logger,
+		timeout:            0,
+		useEndpointTimeout: false,
+		logger:             logger,
 	}
 }
 
@@ -76,12 +82,21 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	removeHopByHopHeaders(req)
 
 	// 执行转发
-	resp, err := f.client.Do(req)
+	resp, err := f.clientForEndpoint(endpoint).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("转发请求失败: %w", err)
 	}
 
 	return resp, nil
+}
+
+func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) *http.Client {
+	if !f.useEndpointTimeout || endpoint == nil || endpoint.Timeout <= 0 || endpoint.Timeout == f.timeout {
+		return f.client
+	}
+	client := *f.client
+	client.Timeout = endpoint.Timeout
+	return &client
 }
 
 // buildTargetURL 构建目标 URL: endpoint.BaseURL + request path + query

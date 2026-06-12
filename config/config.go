@@ -279,253 +279,19 @@ func LoadConfig(path string) (*Config, error) {
 
 // setDefaults sets default values for configuration
 func (c *Config) setDefaults() {
-	if c.Server.Host == "" {
-		c.Server.Host = "localhost"
-	}
-	if c.Server.Port == 0 {
-		c.Server.Port = 8080
-	}
-	if c.Strategy.Type == "" {
-		c.Strategy.Type = "priority"
-	}
-	// Set fast test defaults
-	if c.Strategy.FastTestCacheTTL == 0 {
-		c.Strategy.FastTestCacheTTL = 3 * time.Second // Default 3 seconds cache
-	}
-	if c.Strategy.FastTestTimeout == 0 {
-		c.Strategy.FastTestTimeout = 1 * time.Second // Default 1 second timeout for fast tests
-	}
-	if c.Strategy.FastTestPath == "" {
-		c.Strategy.FastTestPath = c.Health.HealthPath // Default to health path
-	}
-	if c.Retry.MaxAttempts == 0 {
-		c.Retry.MaxAttempts = 3
-	}
-	if c.Retry.BaseDelay == 0 {
-		c.Retry.BaseDelay = time.Second
-	}
-	if c.Retry.MaxDelay == 0 {
-		c.Retry.MaxDelay = 30 * time.Second
-	}
-	if c.Retry.Multiplier == 0 {
-		c.Retry.Multiplier = 2.0
-	}
-	// 🔧 [P5.3 新增] 全局重试预算默认值
-	if c.Retry.MaxTotalAttempts == 0 {
-		c.Retry.MaxTotalAttempts = 10 // 默认 10 次总尝试上限
-	}
-	if c.Retry.MaxTotalDuration == 0 {
-		c.Retry.MaxTotalDuration = 60 * time.Second // 默认 60s 总重试时长
-	}
-	if c.Health.CheckInterval == 0 {
-		c.Health.CheckInterval = 30 * time.Second
-	}
-	if c.Health.Timeout == 0 {
-		c.Health.Timeout = 5 * time.Second
-	}
-	if c.Health.HealthPath == "" {
-		c.Health.HealthPath = "/v1/models"
-	}
-	if c.Logging.Level == "" {
-		c.Logging.Level = "info"
-	}
-	if c.Logging.Format == "" {
-		c.Logging.Format = "text"
-	}
-	// Set file logging defaults
-	if c.Logging.FileEnabled && c.Logging.FilePath == "" {
-		c.Logging.FilePath = "logs/app.log"
-	}
-	if c.Logging.FileEnabled && c.Logging.MaxFileSize == "" {
-		c.Logging.MaxFileSize = "100MB"
-	}
-	if c.Logging.FileEnabled && c.Logging.MaxFiles == 0 {
-		c.Logging.MaxFiles = 10
-	}
-
-	// Set token debug defaults
-	// Default: enabled in development, consider disabling in production
-	if c.Logging.TokenDebug.SavePath == "" {
-		c.Logging.TokenDebug.SavePath = "logs"
-	}
-	if c.Logging.TokenDebug.MaxFiles == 0 {
-		c.Logging.TokenDebug.MaxFiles = 50
-	}
-	if c.Logging.TokenDebug.AutoCleanupDays == 0 {
-		c.Logging.TokenDebug.AutoCleanupDays = 7
-	}
-	// Note: TokenDebug.Enabled has no default - defaults to false (zero value)
-	if c.Streaming.HeartbeatInterval == 0 {
-		c.Streaming.HeartbeatInterval = 30 * time.Second
-	}
-	if c.Streaming.ReadTimeout == 0 {
-		c.Streaming.ReadTimeout = 10 * time.Second
-	}
-	if c.Streaming.MaxIdleTime == 0 {
-		c.Streaming.MaxIdleTime = 120 * time.Second
-	}
-	if c.Streaming.ResponseHeaderTimeout == 0 {
-		// 🔧 [P2-S1 修复] 默认从 60s 提升到 120s，
-		// 覆盖 Claude Opus thinking 模式首字节延迟可能超过 60s 的场景
-		c.Streaming.ResponseHeaderTimeout = 120 * time.Second
-	}
-	if c.Streaming.DefaultResponseHeaderTimeout == 0 {
-		// 🔧 [P0.8 新增] 非流式响应头超时默认 60s（与历史 Default Transport 硬编码值一致）
-		// 非流式典型场景（如 count_tokens）更短，不需要 thinking 容忍度
-		c.Streaming.DefaultResponseHeaderTimeout = 60 * time.Second
-	}
-
-	// Set global timeout default
-	if c.GlobalTimeout == 0 {
-		c.GlobalTimeout = 300 * time.Second // Default 5 minutes for non-streaming requests
-	}
-
-	// Set global timezone default
-	if c.Timezone == "" {
-		c.Timezone = "Asia/Shanghai" // Default timezone for all components
-	}
-
-	// Set group defaults (DEPRECATED: kept for compatibility)
-	if c.Group.Cooldown == 0 {
-		c.Group.Cooldown = 600 * time.Second // Default 10 minutes cooldown for groups
-	}
-
-	// Failover 默认值由 FailoverConfig.SetDefaults() 在 LoadConfig 中统一应用
-
-	// Set endpoints storage defaults
-	if c.EndpointsStorage.Type == "" {
-		c.EndpointsStorage.Type = "yaml" // Default to YAML for backward compatibility
-	}
-
-	// Set Codex server defaults
-	c.CodexServer.Enabled = true
-	if c.CodexServer.Timeout == 0 {
-		c.CodexServer.Timeout = 300 * time.Second
-	}
-
-	// 注：请求挂起相关默认值已合并到 FailoverConfig.SetDefaults()
-
-	// Set usage tracking defaults
-	// 兼容：若使用新版配置 usage_tracking.database.path，则统一写入 database_path 供内部使用。
-	if c.UsageTracking.Database != nil && strings.TrimSpace(c.UsageTracking.Database.Path) != "" {
-		c.UsageTracking.DatabasePath = strings.TrimSpace(c.UsageTracking.Database.Path)
-	}
-	if c.UsageTracking.DatabasePath == "" {
-		// 使用跨平台用户目录作为默认路径
-		// Windows: %APPDATA%\Claude-Request-Forwarder\data\usage.db
-		// macOS: ~/Library/Application Support/Claude-Request-Forwarder/data/usage.db
-		// Linux: ~/.local/share/ai-relay-forwarder/data/usage.db
-		c.UsageTracking.DatabasePath = filepath.Join(getConfigAppDataDir(), "data", "usage.db")
-	}
-	if c.UsageTracking.BufferSize == 0 {
-		c.UsageTracking.BufferSize = 1000 // Default buffer size
-	}
-	if c.UsageTracking.BatchSize == 0 {
-		c.UsageTracking.BatchSize = 100 // Default batch size
-	}
-	if c.UsageTracking.FlushInterval == 0 {
-		c.UsageTracking.FlushInterval = 30 * time.Second // Default flush interval
-	}
-	if c.UsageTracking.MaxRetry == 0 {
-		c.UsageTracking.MaxRetry = 3 // Default max retry count
-	}
-	if c.UsageTracking.RetentionDays == 0 {
-		c.UsageTracking.RetentionDays = 90 // Default retention 90 days
-	}
-	if c.UsageTracking.CleanupInterval == 0 {
-		c.UsageTracking.CleanupInterval = 24 * time.Hour // Default cleanup interval
-	}
-	// 注意：model_pricing 和 default_pricing 已废弃
-	// 定价配置现在从 SQLite model_pricing 表加载，通过前端「定价」页面管理
-	// 这里不再设置默认值，保留字段仅为向后兼容解析旧配置文件
-
-	// UsageTracking.Enabled defaults to false (zero value) for backward compatibility
-
-	// TUI has been removed in no defaults needed
-
-	// Set Token Counting defaults
-	if c.TokenCounting.EstimationRatio == 0 {
-		c.TokenCounting.EstimationRatio = 4.0 // Default: 1 token ≈ 4 characters
-	}
-	// TokenCounting.Enabled defaults to false (zero value) for backward compatibility
-
-	// Set default timeouts for endpoints and handle parameter inheritance (except tokens)
-	var defaultEndpoint *EndpointConfig
-	if len(c.Endpoints) > 0 {
-		defaultEndpoint = &c.Endpoints[0]
-	}
-
-	// Handle group inheritance - endpoints inherit group settings from previous endpoint
-	var currentGroup string = "Default" // Default group name
-	var currentGroupPriority int = 1    // Default group priority
-
-	for i := range c.Endpoints {
-		// → 兼容：group-priority 映射到 priority
-		if c.Endpoints[i].Priority == 0 && c.Endpoints[i].GroupPriority > 0 {
-			c.Endpoints[i].Priority = c.Endpoints[i].GroupPriority
-		}
-
-		// Handle group inheritance - check if this endpoint defines a new group
-		if c.Endpoints[i].Group != "" {
-			// Endpoint specifies a group, use it and update current group
-			currentGroup = c.Endpoints[i].Group
-			if c.Endpoints[i].GroupPriority != 0 {
-				currentGroupPriority = c.Endpoints[i].GroupPriority
-			}
-		} else {
-			// Endpoint doesn't specify group, inherit from previous
-			c.Endpoints[i].Group = currentGroup
-			c.Endpoints[i].GroupPriority = currentGroupPriority
-		}
-
-		// If GroupPriority is still 0 after inheritance, set default
-		if c.Endpoints[i].GroupPriority == 0 {
-			c.Endpoints[i].GroupPriority = currentGroupPriority
-		}
-
-		// Set default timeout if not specified
-		if c.Endpoints[i].Timeout == 0 {
-			if defaultEndpoint != nil && defaultEndpoint.Timeout != 0 {
-				// Inherit timeout from first endpoint
-				c.Endpoints[i].Timeout = defaultEndpoint.Timeout
-			} else {
-				// Use global timeout setting
-				c.Endpoints[i].Timeout = c.GlobalTimeout
-			}
-		}
-
-		// NOTE: We do NOT inherit tokens here - tokens will be resolved dynamically at runtime
-		// This allows for proper group-based token switching when groups fail
-
-		// Inherit api-key from first endpoint if not specified
-		if c.Endpoints[i].ApiKey == "" && defaultEndpoint != nil && defaultEndpoint.ApiKey != "" {
-			c.Endpoints[i].ApiKey = defaultEndpoint.ApiKey
-		}
-
-		// Inherit headers from first endpoint if not specified
-		if len(c.Endpoints[i].Headers) == 0 && defaultEndpoint != nil && len(defaultEndpoint.Headers) > 0 {
-			// Copy headers from first endpoint
-			c.Endpoints[i].Headers = make(map[string]string)
-			for key, value := range defaultEndpoint.Headers {
-				c.Endpoints[i].Headers[key] = value
-			}
-		} else if len(c.Endpoints[i].Headers) > 0 && defaultEndpoint != nil && len(defaultEndpoint.Headers) > 0 {
-			// Merge headers: inherit from first endpoint, but allow override
-			mergedHeaders := make(map[string]string)
-
-			// First, copy all headers from the first endpoint
-			for key, value := range defaultEndpoint.Headers {
-				mergedHeaders[key] = value
-			}
-
-			// Then, override with endpoint-specific headers
-			for key, value := range c.Endpoints[i].Headers {
-				mergedHeaders[key] = value
-			}
-
-			c.Endpoints[i].Headers = mergedHeaders
-		}
-	}
+	c.setServerDefaults()
+	c.setStrategyDefaults()
+	c.setRetryDefaults()
+	c.setHealthDefaults()
+	c.setLoggingDefaults()
+	c.setStreamingDefaults()
+	c.setGlobalDefaults()
+	c.setGroupDefaults()
+	c.setStorageDefaults()
+	c.setCodexServerDefaults()
+	c.setUsageTrackingDefaults()
+	c.setTokenCountingDefaults()
+	c.setEndpointDefaults()
 }
 
 // ApplyPrimaryEndpoint applies primary endpoint override from command line
@@ -587,94 +353,24 @@ func (c *Config) findEndpointIndex(name string) int {
 
 // validate validates the configuration
 func (c *Config) validate() error {
-	// 当使用 SQLite 存储端点时，允许 YAML 中 endpoints 为空
-	// 端点会从数据库加载，不再要求 YAML 必须配置
-	if len(c.Endpoints) == 0 && c.EndpointsStorage.Type != "sqlite" {
-		return fmt.Errorf("at least one endpoint must be configured (or set endpoints_storage.type: sqlite)")
+	if err := c.validateEndpointSource(); err != nil {
+		return err
 	}
-
-	if c.Strategy.Type != "priority" && c.Strategy.Type != "fastest" {
-		return fmt.Errorf("strategy type must be 'priority' or 'fastest'")
+	if err := c.validateStrategy(); err != nil {
+		return err
 	}
-
-	// Validate proxy configuration
-	if c.Proxy.Enabled {
-		if c.Proxy.Type == "" {
-			return fmt.Errorf("proxy type is required when proxy is enabled")
-		}
-		if c.Proxy.Type != "http" && c.Proxy.Type != "https" && c.Proxy.Type != "socks5" {
-			return fmt.Errorf("proxy type must be 'http', 'https', or 'socks5'")
-		}
-		if c.Proxy.URL == "" && (c.Proxy.Host == "" || c.Proxy.Port == 0) {
-			return fmt.Errorf("proxy URL or host:port must be specified when proxy is enabled")
-		}
+	if err := c.validateProxy(); err != nil {
+		return err
 	}
-
-	// Validate failover configuration (含挂起、循环重试等所有字段)
 	if err := c.Failover.Validate(); err != nil {
 		return fmt.Errorf("failover configuration error: %w", err)
 	}
-
-	// Validate usage tracking configuration
-	if c.UsageTracking.Enabled {
-		if c.UsageTracking.DatabasePath == "" {
-			return fmt.Errorf("database path is required when usage tracking is enabled")
-		}
-		if c.UsageTracking.BufferSize <= 0 {
-			return fmt.Errorf("buffer size must be greater than 0 when usage tracking is enabled")
-		}
-		if c.UsageTracking.BatchSize <= 0 {
-			return fmt.Errorf("batch size must be greater than 0 when usage tracking is enabled")
-		}
-		if c.UsageTracking.BatchSize > c.UsageTracking.BufferSize {
-			return fmt.Errorf("batch size cannot be larger than buffer size")
-		}
-		if c.UsageTracking.FlushInterval <= 0 {
-			return fmt.Errorf("flush interval must be greater than 0 when usage tracking is enabled")
-		}
-		if c.UsageTracking.MaxRetry <= 0 {
-			return fmt.Errorf("max retry count must be greater than 0 when usage tracking is enabled")
-		}
-		if c.UsageTracking.RetentionDays < 0 {
-			return fmt.Errorf("retention days cannot be negative")
-		}
-		if c.UsageTracking.CleanupInterval <= 0 && c.UsageTracking.RetentionDays > 0 {
-			return fmt.Errorf("cleanup interval must be greater than 0 when retention is enabled")
-		}
+	if err := c.validateUsageTracking(); err != nil {
+		return err
 	}
-
-	for i, endpoint := range c.Endpoints {
-		if endpoint.Name == "" {
-			return fmt.Errorf("endpoint %d: name is required", i)
-		}
-		if endpoint.URL == "" {
-			return fmt.Errorf("endpoint %s: URL is required", endpoint.Name)
-		}
-		if endpoint.Priority < 0 {
-			return fmt.Errorf("endpoint %s: priority must be non-negative", endpoint.Name)
-		}
-		// 验证 token 和 tokens 互斥
-		if endpoint.Token != "" && len(endpoint.Tokens) > 0 {
-			return fmt.Errorf("endpoint %s: 'token' 和 'tokens' 不能同时配置，请选择其一", endpoint.Name)
-		}
-		// 验证 api-key 和 api-keys 互斥
-		if endpoint.ApiKey != "" && len(endpoint.ApiKeys) > 0 {
-			return fmt.Errorf("endpoint %s: 'api-key' 和 'api-keys' 不能同时配置，请选择其一", endpoint.Name)
-		}
-		// 验证 tokens 配置中每个项必须有 value
-		for j, token := range endpoint.Tokens {
-			if token.Value == "" {
-				return fmt.Errorf("endpoint %s: tokens[%d] 必须设置 value", endpoint.Name, j)
-			}
-		}
-		// 验证 api-keys 配置中每个项必须有 value
-		for j, apiKey := range endpoint.ApiKeys {
-			if apiKey.Value == "" {
-				return fmt.Errorf("endpoint %s: api-keys[%d] 必须设置 value", endpoint.Name, j)
-			}
-		}
+	if err := c.validateEndpoints(); err != nil {
+		return err
 	}
-
 	return nil
 }
 

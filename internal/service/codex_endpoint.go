@@ -85,7 +85,7 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	return created, nil
 }
 
-func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
+func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)
 	billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource)
@@ -99,6 +99,9 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	if err := validateBaseURL(baseURL); err != nil {
 		return err
 	}
+	if err := validateCodexEndpointTimeoutSeconds(timeoutSeconds); err != nil {
+		return err
+	}
 
 	existing, err := s.endpointStore.GetByID(ctx, id)
 	if err != nil {
@@ -108,7 +111,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
-	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
+	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
 		return nil
 	}
 
@@ -132,7 +135,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
-	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
+	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
 }
 
 // DeleteEndpoint 删除端点。若被删除的是当前激活端点：
@@ -191,6 +194,9 @@ func normalizeAndValidateCodexEndpoint(record *store.CodexEndpointRecord) error 
 	}
 	record.ModelMultipliers = modelMultipliers
 	if err := validateCodexEndpointName(record.Name); err != nil {
+		return err
+	}
+	if err := validateCodexEndpointTimeoutSeconds(record.TimeoutSeconds); err != nil {
 		return err
 	}
 	return validateBaseURL(record.BaseURL)
@@ -253,6 +259,13 @@ func validateBaseURL(baseURL string) error {
 	}
 	if parsed.Host == "" {
 		return fmt.Errorf("base_url 缺少 host")
+	}
+	return nil
+}
+
+func validateCodexEndpointTimeoutSeconds(timeoutSeconds int) error {
+	if timeoutSeconds < 0 {
+		return fmt.Errorf("timeout_seconds 不能为负数")
 	}
 	return nil
 }

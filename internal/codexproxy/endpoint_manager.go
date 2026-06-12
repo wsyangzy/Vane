@@ -28,6 +28,12 @@ type CodexEndpoint struct {
 	IsActive        bool
 	FailoverEnabled bool
 	Priority        int
+	Timeout         time.Duration
+}
+
+type EndpointFailureDetail struct {
+	StatusCode int
+	Reason     string
 }
 
 // EndpointManager 管理活跃渠道的端点，提供故障转移选择
@@ -37,10 +43,11 @@ type EndpointManager struct {
 	endpointStore store.CodexEndpointStore
 
 	// 运行时状态
-	mu            sync.RWMutex
-	endpoints     []*CodexEndpoint          // 按 priority ASC 排序
-	activeChannel *store.CodexChannelRecord
-	unhealthyMap  map[string]bool // name -> 是否标记为不健康（仅靠健康检查恢复）
+	mu             sync.RWMutex
+	endpoints      []*CodexEndpoint // 按 priority ASC 排序
+	activeChannel  *store.CodexChannelRecord
+	unhealthyMap   map[string]bool // name -> 是否标记为不健康（仅靠健康检查恢复）
+	failureDetails map[string]EndpointFailureDetail
 
 	// 活跃端点变更回调（由 App 注入，用于发送 Wails 事件刷新前端 UI）
 	onActiveChanged func()
@@ -58,10 +65,11 @@ func NewEndpointManager(
 		logger = slog.Default()
 	}
 	return &EndpointManager{
-		channelStore:  channelStore,
-		endpointStore: endpointStore,
-		unhealthyMap:  make(map[string]bool),
-		logger:        logger,
+		channelStore:   channelStore,
+		endpointStore:  endpointStore,
+		unhealthyMap:   make(map[string]bool),
+		failureDetails: make(map[string]EndpointFailureDetail),
+		logger:         logger,
 	}
 }
 
@@ -98,7 +106,12 @@ func (m *EndpointManager) Reload() error {
 			IsActive:        r.IsActive,
 			FailoverEnabled: r.FailoverEnabled,
 			Priority:        r.Priority,
+			Timeout:         time.Duration(r.TimeoutSeconds) * time.Second,
 		})
+	}
+	validEndpoints := make(map[string]struct{}, len(endpoints))
+	for _, ep := range endpoints {
+		validEndpoints[ep.Name] = struct{}{}
 	}
 
 	// 排序：
@@ -118,6 +131,16 @@ func (m *EndpointManager) Reload() error {
 	m.mu.Lock()
 	m.activeChannel = channel
 	m.endpoints = endpoints
+	for name := range m.unhealthyMap {
+		if _, ok := validEndpoints[name]; !ok {
+			delete(m.unhealthyMap, name)
+		}
+	}
+	for name := range m.failureDetails {
+		if _, ok := validEndpoints[name]; !ok {
+			delete(m.failureDetails, name)
+		}
+	}
 	m.mu.Unlock()
 
 	m.logger.Info("Codex 端点已重新加载",
@@ -191,18 +214,69 @@ func (m *EndpointManager) GetPrimaryEndpoint() (*CodexEndpoint, error) {
 
 // MarkUnhealthy 标记端点为不健康（仅靠健康检查恢复，不再使用冷却时间）
 func (m *EndpointManager) MarkUnhealthy(name string) {
+	m.MarkUnhealthyWithDetail(name, 0, "")
+}
+
+// MarkUnhealthyWithDetail 标记端点为不健康，并记录本次请求/探测的失败详情。
+func (m *EndpointManager) MarkUnhealthyWithDetail(name string, statusCode int, reason string) {
+	if name == "" {
+		return
+	}
+
 	m.mu.Lock()
+	_, wasUnhealthy := m.unhealthyMap[name]
+	oldDetail, hadDetail := m.failureDetails[name]
 	m.unhealthyMap[name] = true
+	if statusCode > 0 || reason != "" {
+		m.failureDetails[name] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
+	}
+	newDetail := m.failureDetails[name]
+	changed := !wasUnhealthy
+	if statusCode > 0 || reason != "" {
+		changed = changed || !hadDetail || oldDetail != newDetail
+	}
 	m.mu.Unlock()
 
-	m.logger.Warn("Codex 端点标记为不健康", "endpoint", name)
+	m.logger.Warn("Codex 端点标记为不健康", "endpoint", name, "status_code", statusCode, "reason", reason)
+	if changed {
+		m.notifyStateChanged()
+	}
+}
+
+// SetFailureDetail records the last failure detail without changing routing health.
+func (m *EndpointManager) SetFailureDetail(name string, statusCode int, reason string) {
+	if name == "" {
+		return
+	}
+
+	m.mu.Lock()
+	oldDetail, hadDetail := m.failureDetails[name]
+	if statusCode > 0 || reason != "" {
+		m.failureDetails[name] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
+	} else {
+		delete(m.failureDetails, name)
+	}
+	newDetail, hasDetail := m.failureDetails[name]
+	changed := hadDetail != hasDetail || oldDetail != newDetail
+	m.mu.Unlock()
+
+	if changed {
+		m.notifyStateChanged()
+	}
 }
 
 // MarkHealthy 标记端点恢复健康（通常由健康检查器在探测成功后调用）
 func (m *EndpointManager) MarkHealthy(name string) {
 	m.mu.Lock()
+	_, wasUnhealthy := m.unhealthyMap[name]
+	_, hadDetail := m.failureDetails[name]
 	delete(m.unhealthyMap, name)
+	delete(m.failureDetails, name)
 	m.mu.Unlock()
+
+	if wasUnhealthy || hadDetail {
+		m.notifyStateChanged()
+	}
 }
 
 // ResetUnhealthy 重置所有端点的不健康标记
@@ -210,12 +284,16 @@ func (m *EndpointManager) MarkHealthy(name string) {
 // 让所有端点重新可被选中
 func (m *EndpointManager) ResetUnhealthy() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if len(m.unhealthyMap) == 0 {
+	if len(m.unhealthyMap) == 0 && len(m.failureDetails) == 0 {
+		m.mu.Unlock()
 		return
 	}
 	m.unhealthyMap = make(map[string]bool)
+	m.failureDetails = make(map[string]EndpointFailureDetail)
+	m.mu.Unlock()
+
 	m.logger.Info("Codex 端点不健康标记已重置（loop_retry 新一轮）")
+	m.notifyStateChanged()
 }
 
 // PromoteActive 将指定端点提升为活跃端点（同步到数据库的 codex_endpoints.is_active 字段）
@@ -279,6 +357,15 @@ func (m *EndpointManager) SetOnActiveChanged(cb func()) {
 	m.mu.Unlock()
 }
 
+func (m *EndpointManager) notifyStateChanged() {
+	m.mu.RLock()
+	cb := m.onActiveChanged
+	m.mu.RUnlock()
+	if cb != nil {
+		go cb()
+	}
+}
+
 // IsHealthy 判断端点是否健康（不在 unhealthyMap 中即视为健康）
 // 用于前端健康图表统计；与 GetNextEndpoint 的健康判断逻辑保持一致。
 func (m *EndpointManager) IsHealthy(name string) bool {
@@ -286,6 +373,17 @@ func (m *EndpointManager) IsHealthy(name string) bool {
 	defer m.mu.RUnlock()
 
 	return !m.unhealthyMap[name]
+}
+
+func (m *EndpointManager) GetFailureDetail(name string) (int, string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	detail, ok := m.failureDetails[name]
+	if !ok {
+		return 0, "", false
+	}
+	return detail.StatusCode, detail.Reason, true
 }
 
 // GetActiveChannel 获取当前活跃渠道信息

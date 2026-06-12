@@ -363,6 +363,7 @@ func (h *Handler) tryEndpointCycle(
 
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
+			h.manager.MarkHealthy(endpoint.Name)
 			// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
 			if len(*failedNames) > 0 {
 				if err := h.manager.PromoteActive(endpoint.Name); err != nil {
@@ -397,6 +398,7 @@ func (h *Handler) tryEndpointCycle(
 		if action == ActionFailFast {
 			if resp != nil {
 				detail := fmt.Sprintf("上游 HTTP %d: %s", status, errSummary)
+				h.manager.SetFailureDetail(endpoint.Name, status, detail)
 				h.logger.Error("[Codex 请求失败]",
 					"provider", "codex",
 					"request_id", requestID,
@@ -415,6 +417,7 @@ func (h *Handler) tryEndpointCycle(
 			if fwdErr != nil {
 				detail = fwdErr.Error()
 			}
+			h.manager.SetFailureDetail(endpoint.Name, 0, detail)
 			h.logger.Error("[Codex 请求失败]",
 				"provider", "codex",
 				"request_id", requestID,
@@ -434,7 +437,6 @@ func (h *Handler) tryEndpointCycle(
 			resp.Body.Close()
 		}
 		failedEndpointName := endpoint.Name
-		h.manager.MarkUnhealthy(endpoint.Name)
 		*failedNames = append(*failedNames, endpoint.Name)
 
 		// 失败原因日志
@@ -450,6 +452,7 @@ func (h *Handler) tryEndpointCycle(
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
 		}
+		h.manager.MarkUnhealthyWithDetail(endpoint.Name, status, reason)
 
 		// 选下个端点
 		next, nextErr := h.manager.GetNextEndpoint(*failedNames)

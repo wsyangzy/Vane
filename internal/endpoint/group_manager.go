@@ -161,38 +161,42 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 
 	// SQLite 模式下需要保留 IsActive 状态
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
+	oldActiveGroups := snapshotActiveGroups(gm.groups, isSQLiteMode)
+	newGroups := buildGroupsFromEndpoints(endpoints, oldActiveGroups)
+	applyGroupPriorities(newGroups, gm.channelPriorities)
+	applyGroupPauseState(newGroups, gm.channelFailoverEnabled)
 
-	// 保留 IsActive 状态 (SQLite 模式)
-	oldGroups := make(map[string]*GroupInfo)
-	for name, group := range gm.groups {
-		if isSQLiteMode {
-			oldGroups[name] = &GroupInfo{
-				Name:      group.Name,
-				Priority:  group.Priority,
-				IsActive:  group.IsActive,
-				Endpoints: nil,
-			}
+	gm.groups = newGroups
+
+	// Update active status
+	gm.updateActiveGroups()
+}
+
+func snapshotActiveGroups(groups map[string]*GroupInfo, preserve bool) map[string]bool {
+	activeGroups := make(map[string]bool)
+	if !preserve {
+		return activeGroups
+	}
+	for name, group := range groups {
+		if group != nil {
+			activeGroups[name] = group.IsActive
 		}
 	}
+	return activeGroups
+}
 
-	// Rebuild groups from current endpoints
-	// 以"渠道(channel)"作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
+func buildGroupsFromEndpoints(endpoints []*Endpoint, activeGroups map[string]bool) map[string]*GroupInfo {
 	newGroups := make(map[string]*GroupInfo)
-
+	// 以"渠道(channel)"作为路由与故障转移单位；未配置 channel 则回退为端点名（兼容旧逻辑）
 	for _, ep := range endpoints {
 		groupName := ChannelKey(ep)
 
 		group, exists := newGroups[groupName]
 		if !exists {
-			var wasActive bool
-			if oldGroup, existed := oldGroups[groupName]; existed {
-				wasActive = oldGroup.IsActive
-			}
-
 			group = &GroupInfo{
 				Name:      groupName,
 				Endpoints: make([]*Endpoint, 0, 2),
-				IsActive:  wasActive,
+				IsActive:  activeGroups[groupName],
 				Priority:  ep.Config.Priority,
 			}
 			newGroups[groupName] = group
@@ -205,13 +209,16 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 			group.Priority = ep.Config.Priority
 		}
 	}
+	return newGroups
+}
 
+func applyGroupPriorities(groups map[string]*GroupInfo, channelPriorities map[string]int) {
 	// 渠道优先级优先于端点优先级（仅用于渠道间选择顺序）
-	for name, group := range newGroups {
+	for name, group := range groups {
 		if group == nil {
 			continue
 		}
-		if p, ok := gm.channelPriorities[name]; ok && p > 0 {
+		if p, ok := channelPriorities[name]; ok && p > 0 {
 			group.Priority = p
 			continue
 		}
@@ -219,44 +226,39 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 			group.Priority = 1
 		}
 	}
+}
 
+func applyGroupPauseState(groups map[string]*GroupInfo, channelFailoverEnabled map[string]bool) {
 	// 渠道级暂停（持久化）：由 channels.failover_enabled 控制
-	for name, group := range newGroups {
+	for name, group := range groups {
 		if group == nil {
 			continue
 		}
-		if v, ok := gm.channelFailoverEnabled[name]; ok && !v {
+		group.ManuallyPaused = false
+		if v, ok := channelFailoverEnabled[name]; ok && !v {
 			group.ManuallyPaused = true
-		} else {
-			group.ManuallyPaused = false
 		}
-	}
 
-	// 端点级兜底：当且仅当组内所有端点都 failover_enabled=false 时，该组无法参与跨渠道故障转移。
-	for _, group := range newGroups {
-		if group == nil {
-			continue
-		}
-		allDisabled := true
-		for _, ep := range group.Endpoints {
-			failoverEnabled := true
-			if ep != nil && ep.Config.FailoverEnabled != nil {
-				failoverEnabled = *ep.Config.FailoverEnabled
-			}
-			if failoverEnabled {
-				allDisabled = false
-				break
-			}
-		}
-		if allDisabled {
+		// 端点级兜底：当且仅当组内所有端点都 failover_enabled=false 时，该组无法参与跨渠道故障转移。
+		if allEndpointsFailoverDisabled(group.Endpoints) {
 			group.ManuallyPaused = true
 		}
 	}
+}
 
-	gm.groups = newGroups
-
-	// Update active status
-	gm.updateActiveGroups()
+func allEndpointsFailoverDisabled(endpoints []*Endpoint) bool {
+	allDisabled := true
+	for _, ep := range endpoints {
+		failoverEnabled := true
+		if ep != nil && ep.Config.FailoverEnabled != nil {
+			failoverEnabled = *ep.Config.FailoverEnabled
+		}
+		if failoverEnabled {
+			allDisabled = false
+			break
+		}
+	}
+	return allDisabled
 }
 
 // updateActiveGroups updates which groups are currently active

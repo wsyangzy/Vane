@@ -231,6 +231,89 @@ endpoints:
 	}
 }
 
+func TestLoadConfigAppliesCoreDefaults(t *testing.T) {
+	configContent := `
+endpoints:
+  - name: "primary"
+    url: "https://api1.example.com"
+    priority: 1
+    headers:
+      X-Base: "base"
+  - name: "secondary"
+    url: "https://api2.example.com"
+    headers:
+      X-Base: "override"
+      X-Extra: "extra"
+`
+
+	tmpFile, err := os.CreateTemp("", "test-defaults-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		t.Fatalf("Failed to close temp config: %v", err)
+	}
+
+	config, err := LoadConfig(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	if config.Server.Host != "localhost" {
+		t.Fatalf("Server.Host = %q, want localhost", config.Server.Host)
+	}
+	if config.Server.Port != 8080 {
+		t.Fatalf("Server.Port = %d, want 8080", config.Server.Port)
+	}
+	if config.Strategy.Type != "priority" {
+		t.Fatalf("Strategy.Type = %q, want priority", config.Strategy.Type)
+	}
+	if config.Retry.MaxAttempts != 3 {
+		t.Fatalf("Retry.MaxAttempts = %d, want 3", config.Retry.MaxAttempts)
+	}
+	if config.Retry.BaseDelay != time.Second {
+		t.Fatalf("Retry.BaseDelay = %v, want 1s", config.Retry.BaseDelay)
+	}
+	if config.Health.HealthPath != "/v1/models" {
+		t.Fatalf("Health.HealthPath = %q, want /v1/models", config.Health.HealthPath)
+	}
+	if config.Streaming.ResponseHeaderTimeout != 120*time.Second {
+		t.Fatalf("Streaming.ResponseHeaderTimeout = %v, want 120s", config.Streaming.ResponseHeaderTimeout)
+	}
+	if config.Streaming.DefaultResponseHeaderTimeout != 60*time.Second {
+		t.Fatalf("Streaming.DefaultResponseHeaderTimeout = %v, want 60s", config.Streaming.DefaultResponseHeaderTimeout)
+	}
+	if config.GlobalTimeout != 300*time.Second {
+		t.Fatalf("GlobalTimeout = %v, want 300s", config.GlobalTimeout)
+	}
+	if config.Timezone != "Asia/Shanghai" {
+		t.Fatalf("Timezone = %q, want Asia/Shanghai", config.Timezone)
+	}
+	if config.EndpointsStorage.Type != "yaml" {
+		t.Fatalf("EndpointsStorage.Type = %q, want yaml", config.EndpointsStorage.Type)
+	}
+	if !config.CodexServer.Enabled {
+		t.Fatal("CodexServer.Enabled = false, want true")
+	}
+	if config.Endpoints[1].Group != "Default" {
+		t.Fatalf("secondary group = %q, want Default", config.Endpoints[1].Group)
+	}
+	if config.Endpoints[1].Timeout != config.GlobalTimeout {
+		t.Fatalf("secondary timeout = %v, want global timeout %v", config.Endpoints[1].Timeout, config.GlobalTimeout)
+	}
+	if got := config.Endpoints[1].Headers["X-Base"]; got != "override" {
+		t.Fatalf("secondary X-Base = %q, want override", got)
+	}
+	if got := config.Endpoints[1].Headers["X-Extra"]; got != "extra" {
+		t.Fatalf("secondary X-Extra = %q, want extra", got)
+	}
+}
+
 func TestNoTokenInheritance(t *testing.T) {
 	// Test case where first endpoint has no token
 	configContent := `

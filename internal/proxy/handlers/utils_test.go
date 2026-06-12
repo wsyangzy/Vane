@@ -3,9 +3,11 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -390,6 +392,77 @@ func TestNewEndpointErrorFromResponse_FallsBackToRawBodyWhenDecompressFails(t *t
 	// 占位符应通过 ExtractUpstreamErrorMessage 完整可读（不被 sanitize 破坏）
 	if !strings.Contains(ExtractUpstreamErrorMessage(err), "[upstream error body unreadable:") {
 		t.Fatalf("expected placeholder to remain readable via ExtractUpstreamErrorMessage, got %q", ExtractUpstreamErrorMessage(err))
+	}
+}
+
+func TestWriteUpstreamErrorResponsePassesThroughEndpointError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	upstreamBody := []byte(`{"error":{"type":"rate_limit_error","message":"quota exceeded"}}`)
+	err := &EndpointError{
+		StatusCode:  http.StatusTooManyRequests,
+		Body:        upstreamBody,
+		ContentType: "application/json",
+		URL:         "https://upstream.example/v1/messages",
+	}
+
+	WriteUpstreamErrorResponse(recorder, err, "fallback should not be used", http.StatusBadGateway)
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusTooManyRequests)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got := recorder.Body.String(); got != string(upstreamBody) {
+		t.Fatalf("body = %q, want %q", got, upstreamBody)
+	}
+}
+
+func TestWriteUpstreamErrorResponseFallsBackForNetworkError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	WriteUpstreamErrorResponse(recorder, errors.New("connection refused"), "all endpoints failed", http.StatusBadGateway)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadGateway)
+	}
+	if !strings.Contains(recorder.Body.String(), "all endpoints failed") {
+		t.Fatalf("body %q does not contain fallback message", recorder.Body.String())
+	}
+}
+
+func TestSendStreamInterruptedMessageUsesRetryableSSEError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+
+	sendStreamInterruptedMessage(recorder, recorder, "upstream 403 body", "ignored-model")
+
+	body := recorder.Body.String()
+	if !strings.HasPrefix(body, "event: error\n") {
+		t.Fatalf("body should start with SSE error event, got %q", body)
+	}
+	if !strings.Contains(body, "\ndata: ") {
+		t.Fatalf("body should contain data line, got %q", body)
+	}
+
+	payload := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(body, "data: ", 2)[1], ""))
+	var decoded struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("unmarshal SSE payload: %v, payload=%q", err, payload)
+	}
+	if decoded.Type != "error" {
+		t.Fatalf("payload type = %q, want error", decoded.Type)
+	}
+	if decoded.Error.Type != "overloaded_error" {
+		t.Fatalf("error type = %q, want overloaded_error", decoded.Error.Type)
+	}
+	if decoded.Error.Message != "upstream 403 body" {
+		t.Fatalf("message = %q, want upstream 403 body", decoded.Error.Message)
 	}
 }
 

@@ -96,7 +96,11 @@ type CodexEndpointInfo struct {
 	HealthState              string                             `json:"health_state"`
 	HealthInScope            bool                               `json:"health_in_scope"`
 	ResponseTimeMS           int64                              `json:"response_time_ms"`
+	LastCheck                string                             `json:"last_check"`
+	LastFailCode             int                                `json:"last_fail_code"`
+	LastFailReason           string                             `json:"last_fail_reason"`
 	Priority                 int                                `json:"priority"`
+	TimeoutSeconds           int                                `json:"timeout_seconds"`
 	CostMultiplier           float64                            `json:"costMultiplier"`
 	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
 	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
@@ -136,6 +140,7 @@ type CreateCodexEndpointInput struct {
 	BaseURL                  string                             `json:"base_url"`
 	FailoverEnabled          *bool                              `json:"failover_enabled"` // nil 时默认 true
 	Priority                 int                                `json:"priority"`
+	TimeoutSeconds           int                                `json:"timeout_seconds"`         // 0 = 使用全局超时
 	CostMultiplier           float64                            `json:"costMultiplier"`          // 默认 1.0
 	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`     // 默认 1.0
 	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`    // 默认 1.0
@@ -149,6 +154,7 @@ type UpdateCodexEndpointInput struct {
 	BaseURL                  string                             `json:"base_url"`
 	FailoverEnabled          *bool                              `json:"failover_enabled"`
 	Priority                 *int                               `json:"priority"`
+	TimeoutSeconds           *int                               `json:"timeout_seconds"`
 	CostMultiplier           *float64                           `json:"costMultiplier"`
 	InputCostMultiplier      *float64                           `json:"inputCostMultiplier"`
 	OutputCostMultiplier     *float64                           `json:"outputCostMultiplier"`
@@ -467,6 +473,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		BaseURL:                  input.BaseURL,
 		FailoverEnabled:          input.FailoverEnabled == nil || *input.FailoverEnabled,
 		Priority:                 input.Priority,
+		TimeoutSeconds:           input.TimeoutSeconds,
 		CostMultiplier:           input.CostMultiplier,
 		InputCostMultiplier:      input.InputCostMultiplier,
 		OutputCostMultiplier:     input.OutputCostMultiplier,
@@ -543,6 +550,10 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if input.Priority != nil {
 		priority = *input.Priority
 	}
+	timeoutSeconds := previous.TimeoutSeconds
+	if input.TimeoutSeconds != nil {
+		timeoutSeconds = *input.TimeoutSeconds
+	}
 	costMultiplier := previous.CostMultiplier
 	if input.CostMultiplier != nil {
 		costMultiplier = *input.CostMultiplier
@@ -568,7 +579,7 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		modelMultipliers = input.ModelMultipliers
 	}
 
-	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
+	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
 
@@ -880,8 +891,10 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 	}
 
 	var latencies map[string]int64
+	var lastChecks map[string]time.Time
 	if healthCheck != nil {
 		latencies = healthCheck.GetLatencies()
+		lastChecks = healthCheck.GetLastChecks()
 	}
 
 	info := CodexChannelInfo{
@@ -901,6 +914,11 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 
 	for _, ep := range endpoints {
 		healthy, healthState, healthInScope, responseTimeMS := codexEndpointRuntimeHealth(record, ep, endpointMgr, activeChannelID, latencies)
+		lastFailCode := 0
+		lastFailReason := ""
+		if endpointMgr != nil && healthInScope {
+			lastFailCode, lastFailReason, _ = endpointMgr.GetFailureDetail(ep.Name)
+		}
 		info.Endpoints = append(info.Endpoints, CodexEndpointInfo{
 			ID:                       ep.ID,
 			ChannelID:                ep.ChannelID,
@@ -912,7 +930,11 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 			HealthState:              healthState,
 			HealthInScope:            healthInScope,
 			ResponseTimeMS:           responseTimeMS,
+			LastCheck:                formatCodexTime(lastChecks[ep.Name]),
+			LastFailCode:             lastFailCode,
+			LastFailReason:           lastFailReason,
 			Priority:                 ep.Priority,
+			TimeoutSeconds:           ep.TimeoutSeconds,
 			CostMultiplier:           ep.CostMultiplier,
 			InputCostMultiplier:      ep.InputCostMultiplier,
 			OutputCostMultiplier:     ep.OutputCostMultiplier,

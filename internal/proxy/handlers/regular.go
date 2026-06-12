@@ -136,11 +136,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpoints(ctx))
 		} else {
 			// 后续获取，排除已尝试的端点
-			excludeKeys := make([]string, 0, len(triedEndpoints))
-			for key := range triedEndpoints {
-				excludeKeys = append(excludeKeys, key)
-			}
-			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpointsExcluding(ctx, excludeKeys))
+			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpointsExcluding(ctx, stringSetKeys(triedEndpoints)))
 		}
 		if len(endpoints) == 0 {
 			// 创建特殊错误，交给错误分类和重试系统处理
@@ -174,10 +170,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		}
 
 		// 记录当前尝试的渠道（用于方案B：后续跨渠道故障转移时不回访）
-		currentChannel := endpoints[0].Config.Channel
-		if currentChannel == "" {
-			currentChannel = endpoints[0].Config.Name
-		}
+		currentChannel := endpointRouteName(endpoints[0])
 		if currentChannel != "" {
 			triedChannels[currentChannel] = struct{}{}
 		}
@@ -189,10 +182,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			epKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
 			triedEndpoints[epKey] = struct{}{}
 
-			routeGroup := ep.Config.Channel
-			if routeGroup == "" {
-				routeGroup = ep.Config.Name
-			}
+			routeGroup := endpointRouteName(ep)
 			lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
 			lifecycleManager.UpdateStatus("forwarding", i, 0)
 
@@ -209,6 +199,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					// 🔧 [HTTP状态码修复] 设置最终状态码到请求上下文，而不是WriteHeader
 					statusCode := getDefaultStatusCodeForFinalStatus("cancelled") // 返回499
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 					http.Error(w, "Client closed request", statusCode)
 					return
 				default:
@@ -225,6 +216,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					// 🔧 [HTTP状态码修复] 设置最终状态码到请求上下文，而不是WriteHeader
 					statusCode := getDefaultStatusCodeForFinalStatus("cancelled") // 返回499
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 					http.Error(w, "Client closed request", statusCode)
 					return
 				}
@@ -242,8 +234,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// 构造HTTP状态码错误：保留提供商原始响应体用于透传
 				if err == nil && resp != nil && !IsSuccessStatus(resp.StatusCode) {
 					// 先读取原始错误体一份给 Token 解析器，再统一构造可读的 EndpointError。
-					respBodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrorBodyBytes))
-					resp.Body.Close()
+					respBodyBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrorBodyBytes))
+					if readErr != nil {
+						slog.Warn(fmt.Sprintf("⚠️ [错误响应体读取失败] [%s] 端点: %s, Read错误: %v",
+							connID, ep.Config.Name, readErr))
+					}
+					if closeErr := resp.Body.Close(); closeErr != nil {
+						slog.Warn(fmt.Sprintf("⚠️ [错误响应体关闭失败] [%s] 端点: %s, Close错误: %v",
+							connID, ep.Config.Name, closeErr))
+					}
 
 					// 用已读取的字节替换 Body，让 tryExtractTokensFromHttpError 仍能解析。
 					resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
@@ -282,6 +281,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					lifecycleManager.CancelRequest("client disconnected", nil)
 					statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
 					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+					rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 					http.Error(w, "Client closed request", statusCode)
 					return
 				}
@@ -308,6 +308,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							// 🔧 [状态码修复] 设置取消状态码到上下文用于日志记录
 							*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", 499))
 							lifecycleManager.CancelRequest("suspended then cancelled", nil)
+							rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 							http.Error(w, "Request cancelled during suspension", 499)
 							return
 						case SuspensionTimeout:
@@ -315,6 +316,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							// 挂起等待超时，记录为失败
 							slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
 							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusUnprocessableEntity)
+							rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 							http.Error(w, "Request suspended but recovery timeout", http.StatusUnprocessableEntity)
 							return
 						}
@@ -359,6 +361,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 						// 使用新的FailRequest方法标记最终失败（修复：添加HTTP状态码）
 						lifecycleManager.FailRequest(failureReason, err.Error(), failStatusCode)
+						rh.endpointManager.ClearEndpointsRequestFailure([]string{epKey})
 						WriteUpstreamErrorResponse(w, err, decision.Reason, failStatusCode)
 						return
 					}
@@ -376,6 +379,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
 							statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
 							*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+							rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 							http.Error(w, "Client closed request", statusCode)
 							return
 						case <-time.After(decision.Delay):
@@ -424,10 +428,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					}
 
 					epKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
-					routeGroup := ep.Config.Channel
-					if routeGroup == "" {
-						routeGroup = ep.Config.Name
-					}
+					routeGroup := endpointRouteName(ep)
 					lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
 					*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", ep.Config.Name))
 
@@ -441,6 +442,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						lifecycleManager.CancelRequest("client disconnected during recovery retry", nil)
 						statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
 						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
+						rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 						http.Error(w, "Client closed request", statusCode)
 						return
 					}
@@ -455,7 +457,10 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 					// 重试失败，记录日志并继续下一个
 					if resp != nil {
-						resp.Body.Close()
+						if closeErr := resp.Body.Close(); closeErr != nil {
+							slog.Warn(fmt.Sprintf("⚠️ [auto_wait响应体关闭失败] [%s] 端点: %s, Close错误: %v",
+								connID, ep.Config.Name, closeErr))
+						}
 					}
 					slog.Warn(fmt.Sprintf("⚠️ [auto_wait恢复重试失败] [%s] 端点 %s 重试失败: %v",
 						connID, epKey, err))
@@ -471,27 +476,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			lastEndpoint := endpoints[len(endpoints)-1]
 
 			// 跨渠道切换时，将本次请求中失败过的端点统一进入冷却，避免下一次请求立即重复撞同一批端点
-			failedEndpointNames := make([]string, 0, len(endpoints))
-			seen := make(map[string]struct{}, len(endpoints))
-			for _, ep := range endpoints {
-				key := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
-				if key == "" {
-					continue
-				}
-				if _, ok := seen[key]; ok {
-					continue
-				}
-				seen[key] = struct{}{}
-				failedEndpointNames = append(failedEndpointNames, key)
-			}
-
-			excludeChannels := make([]string, 0, len(triedChannels))
-			for name := range triedChannels {
-				if name == "" {
-					continue
-				}
-				excludeChannels = append(excludeChannels, name)
-			}
+			failedEndpointNames := endpointKeys(endpoints)
+			excludeChannels := stringSetKeys(triedChannels)
 
 			// 使用带循环计数的故障转移方法
 			newChannel, err := rh.endpointManager.TriggerRequestFailoverWithLoopCount(
@@ -507,21 +493,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// 检测是否开始了新一轮循环
 				// 修复: 增加 failedChannel == newChannel 备用检查，解决 triedChannels 检查失效的 bug
 				// 当只有一个渠道时，故障转移返回的 newChannel 会与 failedChannel 相同，表示进入循环重试
-				newLoopCount := loopCount
-				_, alreadyTried := triedChannels[newChannel]
-				isSameChannel := failedChannel != "" && failedChannel == newChannel
-				if alreadyTried || isSameChannel {
+				newLoopCount, alreadyTried, isSameChannel := nextFailoverLoopState(loopCount, failedChannel, newChannel, triedChannels, triedEndpoints)
+				if newLoopCount != loopCount {
 					// 开始新一轮：清空已尝试渠道和端点，增加循环计数
-					newLoopCount++
 					slog.Info(fmt.Sprintf("🔄 [循环轮次] [%s] 开始第 %d 轮循环，清空已尝试列表 (alreadyTried=%v, isSameChannel=%v)",
 						connID, newLoopCount, alreadyTried, isSameChannel))
-					// 清空已尝试的渠道和端点
-					for k := range triedChannels {
-						delete(triedChannels, k)
-					}
-					for k := range triedEndpoints {
-						delete(triedEndpoints, k)
-					}
 				}
 
 				slog.Warn(fmt.Sprintf("🔄 [渠道间故障转移] [%s] from_channel=%s to_channel=%s last_endpoint=%s failed_endpoints=%d reason=%s loop=%d",
@@ -540,25 +516,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 检查是否是"没有可用渠道"或"达到最大循环轮数"的错误
 				// 这些情况下不应该继续挂起等待，应该直接返回错误
-				errStr := err.Error()
-				isNoChannelsError := strings.Contains(errStr, "没有可用的故障转移渠道") ||
-					strings.Contains(errStr, "所有渠道均已尝试")
-				isLoopLimitError := strings.Contains(errStr, "共循环") ||
-					strings.Contains(errStr, "最大循环轮数")
-
-				if isNoChannelsError {
-					// 传递 nil 而不是 err，保留端点在 SetEndpointLastRequestFail 中设置的真实失败原因
-					// 避免用故障转移函数返回的错误（如"故障转移未启用"）覆盖端点实际失败原因
-					rh.endpointManager.MarkEndpointsRequestFailed(failedEndpointNames, nil)
-					statusCode := http.StatusUnprocessableEntity
-					failureReason := "all_channels_unavailable"
-					if isLoopLimitError {
-						failureReason = "max_loops_exceeded"
-					}
-					*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-					lifecycleManager.FailRequest(failureReason, errStr, statusCode)
-					slog.Warn(fmt.Sprintf("🛑 [故障转移终止] [%s] %s (立即返回错误)", connID, errStr))
-					WriteUpstreamErrorResponse(w, lastErr, errStr, statusCode)
+				shouldTerminate, isLoopLimitError, errStr := failoverTermination(err)
+				if shouldTerminate {
+					rh.writeFailoverTermination(w, r, lifecycleManager, failedEndpointNames, lastErr, errStr, isLoopLimitError, connID)
 					return
 				}
 			}
@@ -569,15 +529,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
-	errMsg := ExtractUpstreamErrorMessage(lastErr)
-	statusCode := GetStatusCodeFromError(lastErr, nil)
-	if statusCode == 0 {
-		statusCode = http.StatusBadGateway
-	}
-	*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", statusCode))
-	lifecycleManager.FailRequest("endpoint_exhausted", errMsg, statusCode)
-	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] %s (立即返回错误)", connID, errMsg))
-	WriteUpstreamErrorResponse(w, lastErr, errMsg, statusCode)
+	rh.writeRegularEndpointExhausted(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, connID)
 }
 
 // executeRequest 执行单个请求

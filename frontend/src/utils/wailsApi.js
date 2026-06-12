@@ -250,10 +250,12 @@ export const getEndpoints = async () => {
     health_state: ep.health_state,         // 健康状态枚举
     skip_health_check: ep.skip_health_check, // 跳过健康检查
     status: ep.healthy ? 'healthy' : 'unhealthy',
-    last_check: ep.last_check,
-    response_time: ep.response_time_ms,
+    last_check: ep.last_check || ep.lastCheck || ep.LastCheck || '',
+    response_time: ep.response_time_ms ?? ep.responseTimeMs ?? ep.ResponseTimeMs,
+    createdAt: ep.created_at || ep.createdAt || ep.CreatedAt || '',
+    updatedAt: ep.updated_at || ep.updatedAt || ep.UpdatedAt || '',
     consecutive_fail: ep.consecutive_fail,
-    never_checked: !ep.last_check,
+    never_checked: !(ep.last_check || ep.lastCheck || ep.LastCheck),
     // 错误信息字段
     last_fail_code: ep.last_fail_code || 0,
     last_fail_reason: ep.last_fail_reason || ''
@@ -938,11 +940,11 @@ export const getEndpointRecords = async () => {
     cacheReadCostMultiplier: r.cache_read_cost_multiplier,
     modelMultipliers: normalizeModelMultipliers(r.model_multipliers),
     enabled: r.enabled,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt: r.created_at || r.createdAt || r.CreatedAt || '',
+    updatedAt: r.updated_at || r.updatedAt || r.UpdatedAt || '',
     healthy: r.healthy,
-    lastCheck: r.last_check,
-    responseTimeMs: r.response_time_ms,
+    lastCheck: r.last_check || r.lastCheck || r.LastCheck || '',
+    responseTimeMs: r.response_time_ms ?? r.responseTimeMs ?? r.ResponseTimeMs,
     // 冷却状态（请求级故障转移）
     in_cooldown: r.in_cooldown,
     inCooldown: r.in_cooldown,
@@ -995,11 +997,11 @@ export const getEndpointRecord = async (name) => {
     cacheReadCostMultiplier: r.cache_read_cost_multiplier,
     modelMultipliers: normalizeModelMultipliers(r.model_multipliers),
     enabled: r.enabled,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    createdAt: r.created_at || r.createdAt || r.CreatedAt || '',
+    updatedAt: r.updated_at || r.updatedAt || r.UpdatedAt || '',
     healthy: r.healthy,
-    lastCheck: r.last_check,
-    responseTimeMs: r.response_time_ms,
+    lastCheck: r.last_check || r.lastCheck || r.LastCheck || '',
+    responseTimeMs: r.response_time_ms ?? r.responseTimeMs ?? r.ResponseTimeMs,
     // 错误信息
     last_fail_code: r.last_fail_code || 0,
     last_fail_reason: r.last_fail_reason || ''
@@ -1282,7 +1284,10 @@ export const getEndpointsByChannel = async (channel) => {
     failoverEnabled: r.failover_enabled,
     enabled: r.enabled,
     healthy: r.healthy,
-    responseTimeMs: r.response_time_ms
+    responseTimeMs: r.response_time_ms ?? r.responseTimeMs ?? r.ResponseTimeMs,
+    createdAt: r.created_at || r.createdAt || r.CreatedAt || '',
+    updatedAt: r.updated_at || r.updatedAt || r.UpdatedAt || '',
+    lastCheck: r.last_check || r.lastCheck || r.LastCheck || ''
   }));
 };
 
@@ -1611,15 +1616,23 @@ const mapCodexEndpoint = (endpoint) => ({
   health_in_scope: Boolean(endpoint.health_in_scope),
   responseTimeMs: endpoint.response_time_ms || 0,
   response_time_ms: endpoint.response_time_ms || 0,
+  lastFailCode: endpoint.last_fail_code || 0,
+  last_fail_code: endpoint.last_fail_code || 0,
+  lastFailReason: endpoint.last_fail_reason || '',
+  last_fail_reason: endpoint.last_fail_reason || '',
   priority: endpoint.priority || 0,
+  timeoutSeconds: endpoint.timeout_seconds ?? endpoint.timeoutSeconds ?? endpoint.TimeoutSeconds ?? 0,
+  timeout_seconds: endpoint.timeout_seconds ?? endpoint.timeoutSeconds ?? endpoint.TimeoutSeconds ?? 0,
   costMultiplier: endpoint.costMultiplier ?? 1.0,
   inputCostMultiplier: endpoint.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: endpoint.outputCostMultiplier ?? 1.0,
   cacheReadCostMultiplier: endpoint.cacheReadCostMultiplier ?? 1.0,
   billingOutputTokenSource: endpoint.billingOutputTokenSource || endpoint.billing_output_token_source || 'output_tokens',
   modelMultipliers: normalizeCodexModelMultipliers(endpoint.modelMultipliers || endpoint.model_multipliers),
-  createdAt: endpoint.created_at,
-  updatedAt: endpoint.updated_at
+  createdAt: endpoint.created_at || endpoint.createdAt || endpoint.CreatedAt || '',
+  updatedAt: endpoint.updated_at || endpoint.updatedAt || endpoint.UpdatedAt || '',
+  lastCheck: endpoint.last_check || endpoint.lastCheck || endpoint.LastCheck || '',
+  last_check: endpoint.last_check || endpoint.lastCheck || endpoint.LastCheck || ''
 });
 
 const mapCodexChannel = (channel) => {
@@ -1646,8 +1659,8 @@ const mapCodexChannel = (channel) => {
     website: channel.website || '',
     isActive: Boolean(channel.is_active),
     endpoints: sortedEndpoints,
-    createdAt: channel.created_at,
-    updatedAt: channel.updated_at
+    createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',
+    updatedAt: channel.updated_at || channel.updatedAt || channel.UpdatedAt || ''
   };
 };
 
@@ -1661,6 +1674,11 @@ const buildCodexChannelPayload = (input) => ({
   enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
   website: (input?.website || '').trim()
 });
+
+const parseEndpointTimeout = (value) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
 
 /**
  * 获取所有 Codex 渠道（含端点列表）
@@ -1715,7 +1733,7 @@ export const activateCodexChannel = async (id) => {
 /**
  * 在指定渠道下新增端点（name + base_url + 故障转移配置 + 成本倍率）
  */
-export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
+export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -1725,6 +1743,7 @@ export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEn
   };
   if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
   if (priority !== undefined) payload.priority = priority;
+  if (timeoutSeconds !== undefined) payload.timeout_seconds = parseEndpointTimeout(timeoutSeconds);
   if (costMultiplier !== undefined) payload.costMultiplier = parseEndpointMultiplier(costMultiplier);
   if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = parseEndpointMultiplier(inputCostMultiplier);
   if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = parseEndpointMultiplier(outputCostMultiplier);
@@ -1738,7 +1757,7 @@ export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEn
 /**
  * 更新端点 name + base_url + failover_enabled + priority + 成本倍率
  */
-export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
+export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
@@ -1747,6 +1766,7 @@ export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabl
   };
   if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
   if (priority !== undefined) payload.priority = priority;
+  if (timeoutSeconds !== undefined) payload.timeout_seconds = parseEndpointTimeout(timeoutSeconds);
   if (costMultiplier !== undefined) payload.costMultiplier = parseEndpointMultiplier(costMultiplier);
   if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = parseEndpointMultiplier(inputCostMultiplier);
   if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = parseEndpointMultiplier(outputCostMultiplier);
@@ -2093,7 +2113,8 @@ export const getCodexGlobalConfig = async () => {
   return {
     model: info?.model || '',
     reasoning_effort: info?.reasoning_effort || '',
-    enable_1m_context: Boolean(info?.enable_1m_context)
+    enable_1m_context: Boolean(info?.enable_1m_context),
+    global_timeout_seconds: info?.global_timeout_seconds || info?.globalTimeoutSeconds || info?.GlobalTimeoutSeconds || 300
   };
 };
 

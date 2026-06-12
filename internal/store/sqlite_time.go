@@ -11,6 +11,10 @@ func parseSQLiteDateTime(value string) time.Time {
 		return time.Time{}
 	}
 
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t
+	}
+
 	layouts := []string{
 		"2006-01-02 15:04:05.999999-07:00",
 		"2006-01-02 15:04:05.999-07:00",

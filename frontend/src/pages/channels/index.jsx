@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Server,
   Copy,
+  ArrowRight,
   ArrowRightLeft,
   Calculator,
   ShieldCheck,
@@ -25,7 +26,8 @@ import {
   Pause,
   Play,
   Power,
-  Globe
+  Globe,
+  Settings
 } from 'lucide-react';
 import {
   Button,
@@ -42,6 +44,7 @@ import {
   DeleteConfirmDialog,
   PriorityBadge
 } from './components';
+import ModelTag from '../requests/components/ModelTag.jsx';
 import {
   getEndpointStorageStatus,
   getEndpointRecords,
@@ -69,6 +72,7 @@ import {
   getManualRetryRequestsCount,
   getManualRetryChannelCounts
 } from '@utils/wailsApi.js';
+import { formatMultiplierExpression, parseMultiplierExpression } from '@utils/multiplier.js';
 
 const buildInitialModelMappingRows = (modelMapping) => {
   const entries = Object.entries(modelMapping || {})
@@ -240,8 +244,8 @@ const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loa
 // ============================================
 
 // 健康状态徽章（健康/异常/未检测/跳过检测）
-const HealthBadge = ({ healthy, neverChecked, skipped }) => {
-  const baseClass = 'inline-flex h-5 min-w-[64px] items-center justify-center rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap flex-shrink-0';
+const HealthBadge = ({ healthy, neverChecked, skipped, detail = false }) => {
+  const baseClass = `inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[64px] flex-shrink-0 items-center justify-center rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap`;
 
   if (skipped) {
     return (
@@ -274,7 +278,7 @@ const HealthBadge = ({ healthy, neverChecked, skipped }) => {
 };
 
 // 请求失败徽章（与健康异常区分）
-const RequestFailedBadge = ({ failCode, failReason }) => {
+const RequestFailedBadge = ({ failCode, failReason, detail = false }) => {
   const hasFailCode = Number.isFinite(Number(failCode)) && Number(failCode) > 0;
   const hasFailReason = !!failReason;
   const tooltipParts = [];
@@ -284,7 +288,7 @@ const RequestFailedBadge = ({ failCode, failReason }) => {
 
   return (
     <Tooltip content={tooltip}>
-      <div className="inline-flex h-5 min-w-[72px] items-center justify-center rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600 whitespace-nowrap flex-shrink-0">
+      <div className={`inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[72px] flex-shrink-0 items-center justify-center rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600 whitespace-nowrap`}>
         <XCircle size={10} className="mr-1" />
         请求失败
         {hasFailCode && (
@@ -296,12 +300,12 @@ const RequestFailedBadge = ({ failCode, failReason }) => {
 };
 
 // 延迟指示器
-const LatencyBadge = ({ ms, inScope = true }) => {
+const LatencyBadge = ({ ms, inScope = true, detail = false }) => {
   if (!inScope) {
     return null;
   }
 
-  const baseClass = 'inline-flex h-5 min-w-[54px] items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none whitespace-nowrap flex-shrink-0';
+  const baseClass = `inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[54px] flex-shrink-0 items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none whitespace-nowrap`;
 
   const msValue = Number(ms);
   if (!Number.isFinite(msValue) || msValue <= 0) {
@@ -389,7 +393,6 @@ const EndpointMiniCard = ({
   const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
   const isRequestFailed = healthState === 'request_failed';
   const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
-  const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
 
   const authType = getAuthType(endpoint);
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
@@ -436,11 +439,9 @@ const EndpointMiniCard = ({
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-            <Tooltip content={endpoint.name} className="min-w-0 max-w-[180px] flex-shrink">
-              <span className="block min-w-0 truncate text-xs font-semibold text-slate-900">
-                {endpoint.name}
-              </span>
-            </Tooltip>
+            <span className="block min-w-0 max-w-[180px] flex-shrink truncate text-xs font-semibold text-slate-900">
+              {endpoint.name}
+            </span>
             <LatencyBadge ms={responseTime} inScope={inScope} />
             {statusBadgeText && (
               <Tooltip content={statusBadgeTitle} disabled={!statusBadgeTitle}>
@@ -479,10 +480,6 @@ const EndpointMiniCard = ({
             )}
           </div>
         </div>
-
-        <span className="pointer-events-none absolute bottom-1.5 right-4 font-mono text-[9px] font-medium leading-none text-slate-400/70">
-          最后检查 {lastCheck}
-        </span>
 
         <div className="flex w-20 flex-shrink-0 items-center justify-end gap-0.5">
           {isSqliteMode && (
@@ -561,11 +558,95 @@ const EndpointMiniCard = ({
 // 端点详情弹窗（点击端点卡片弹出）
 // ============================================
 
+const DETAIL_CHIP_TONES = {
+  slate: 'border-slate-200 bg-slate-50 text-slate-500',
+  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  amber: 'border-amber-200 bg-amber-50 text-amber-700',
+  rose: 'border-rose-200 bg-rose-50 text-rose-700',
+  purple: 'border-purple-200 bg-purple-50 text-purple-700',
+  indigo: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+  sky: 'border-sky-200 bg-sky-50 text-sky-700'
+};
+
+const DetailMetricCard = ({ label, icon: Icon, wide = false, children }) => (
+  <div
+    className={`min-w-0 rounded-xl border border-slate-200/70 bg-slate-50 p-3.5 ${
+      wide ? 'md:col-span-2' : ''
+    }`}
+  >
+    <div className="mb-2 flex items-center gap-2">
+      {Icon && (
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+          <Icon size={13} />
+        </span>
+      )}
+      <span className="text-xs font-medium text-slate-500">{label}</span>
+    </div>
+    <div className="min-w-0">{children}</div>
+  </div>
+);
+
+const DetailChip = ({ children, tone = 'slate', mono = false }) => (
+  <span
+    className={`inline-flex min-h-7 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold leading-none ${
+      mono ? 'font-mono' : ''
+    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
+  >
+    {children}
+  </span>
+);
+
+const DetailPill = ({ children, icon: Icon, tone = 'slate', mono = false }) => (
+  <span
+    className={`inline-flex h-6 max-w-full items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap align-middle ${
+      mono ? 'font-mono' : ''
+    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
+  >
+    {Icon && <Icon size={10} className="shrink-0" />}
+    <span className="inline-flex min-w-0 items-center justify-center gap-1 leading-none">
+      {children}
+    </span>
+  </span>
+);
+
+const getDetailTimestamp = (...values) => {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text && text !== '-' && !text.startsWith('0001-01-01')) {
+      return text;
+    }
+  }
+  return '-';
+};
+
+const DetailTimeoutPill = ({ custom, value, tooltip }) => (
+  <Tooltip content={tooltip}>
+    <span className="inline-flex">
+      <DetailPill tone={custom ? 'amber' : 'sky'} icon={Clock}>
+        <span className="leading-none">{custom ? '超时' : '默认'}</span>
+        <span className="font-mono leading-none">{value}</span>
+      </DetailPill>
+    </span>
+  </Tooltip>
+);
+
+const MODEL_MAPPING_TAG_CLASS = 'max-w-full [&>span]:whitespace-normal [&>span]:break-all';
+
+const ModelMappingPair = ({ sourceModel, targetModel }) => (
+  <div className="flex min-h-7 min-w-0 flex-wrap items-center justify-start gap-2 py-0.5">
+    <ModelTag model={sourceModel} className={MODEL_MAPPING_TAG_CLASS} />
+    <ArrowRight size={14} className="shrink-0 text-slate-400" />
+    <ModelTag model={targetModel} className={MODEL_MAPPING_TAG_CLASS} />
+  </div>
+);
+
 const EndpointDetailModal = ({
   endpoint,
   isOpen,
   isSqliteMode,
   channelFailoverEnabled = true,
+  channelMeta = null,
+  globalTimeoutSeconds = 300,
   // failoverDefaultCooldownSeconds 已移除
   onClose,
   onEdit,
@@ -575,9 +656,12 @@ const EndpointDetailModal = ({
 
   const channel = endpoint.channel || endpoint.group || '-';
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
-  const lastCheck = formatLastCheck(endpoint.lastCheck || endpoint.last_check || endpoint.updatedAt);
+  const createdAt = getDetailTimestamp(endpoint.createdAt, endpoint.created_at, endpoint.CreatedAt);
+  const updatedAt = getDetailTimestamp(endpoint.updatedAt, endpoint.updated_at, endpoint.UpdatedAt);
+  const rawLastCheck = endpoint.lastCheck || endpoint.last_check || endpoint.LastCheck;
+  const lastCheck = formatLastCheck(rawLastCheck || updatedAt);
   const inScope = endpoint._health_scope !== false;
-  const neverChecked = endpoint.never_checked || endpoint.neverChecked || (!endpoint.lastCheck && !endpoint.last_check);
+  const neverChecked = endpoint.never_checked || endpoint.neverChecked || !rawLastCheck;
   const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
   const healthNeverChecked = !inScope || neverChecked;
   const healthState = endpoint.health_state || endpoint.healthState || '';
@@ -593,13 +677,54 @@ const EndpointDetailModal = ({
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
-  const multiplier = endpoint.costMultiplier || 1.0;
+  const priority = Number(endpoint.priority ?? 0);
+  const timeoutSeconds = Number(endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0);
+  const hasCustomTimeout = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 && timeoutSeconds !== 300;
+  const effectiveGlobalTimeoutSeconds = Number(globalTimeoutSeconds) || 300;
+  const timeoutLabel = hasCustomTimeout ? `${timeoutSeconds}s` : `${effectiveGlobalTimeoutSeconds}s`;
+  const timeoutScope = hasCustomTimeout ? '端点覆盖' : '使用全局超时';
+  const channelModelMapping = channelMeta?.modelMapping || channelMeta?.model_mapping || {};
+  const modelMappingEntries = Object.entries(channelModelMapping)
+    .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
+    .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
+  const modelMultiplierRules = endpoint.modelMultipliers || endpoint.model_multipliers || [];
+  const normalizeDetailMultiplier = (value) => {
+    const parsed = typeof value === 'string'
+      ? parseMultiplierExpression(value, Number.NaN)
+      : Number(value);
+    return Number.isFinite(parsed) ? parsed : 1;
+  };
+  const isDefaultDetailMultiplier = (value) => Math.abs(normalizeDetailMultiplier(value) - 1) <= 0.000001;
+  const formatDetailMultiplier = (value) => `${formatMultiplierExpression(normalizeDetailMultiplier(value), 3)}x`;
+  const multiplierItems = [
+    { label: '总', value: endpoint.costMultiplier ?? endpoint.cost_multiplier ?? 1, tone: 'indigo' },
+    { label: '输入', value: endpoint.inputCostMultiplier ?? endpoint.input_cost_multiplier ?? 1, tone: 'slate' },
+    { label: '输出', value: endpoint.outputCostMultiplier ?? endpoint.output_cost_multiplier ?? 1, tone: 'sky' },
+    { label: '缓存读取', value: endpoint.cacheReadCostMultiplier ?? endpoint.cache_read_cost_multiplier ?? 1, tone: 'amber' },
+    { label: '5分钟写入', value: endpoint.cacheCreationCostMultiplier ?? endpoint.cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
+    { label: '1小时写入', value: endpoint.cacheCreationCostMultiplier1h ?? endpoint.cache_creation_cost_multiplier_1h ?? 1, tone: 'emerald' }
+  ];
+  const modelMultiplierValueKeys = [
+    ['costMultiplier', 'cost_multiplier'],
+    ['inputCostMultiplier', 'input_cost_multiplier'],
+    ['outputCostMultiplier', 'output_cost_multiplier'],
+    ['cacheReadCostMultiplier', 'cache_read_cost_multiplier']
+  ];
+  const hasCustomEndpointMultiplier = multiplierItems.some((item) => !isDefaultDetailMultiplier(item.value));
+  const hasCustomModelMultiplier = modelMultiplierRules.some((rule) => (
+    modelMultiplierValueKeys.some(([camelKey, snakeKey]) => (
+      !isDefaultDetailMultiplier(rule?.[camelKey] ?? rule?.[snakeKey] ?? 1)
+    ))
+  ));
+  const hasCustomCostMultiplier = hasCustomEndpointMultiplier || hasCustomModelMultiplier;
+  const hasModelMapping = modelMappingEntries.length > 0;
 
   const tokenRaw = endpoint.token || '';
   const apiKeyRaw = endpoint.apiKey || endpoint.api_key || '';
   const tokenMasked = endpoint.tokenMasked || endpoint.token_masked || '';
   const apiKeyMasked = endpoint.apiKeyMasked || endpoint.api_key_masked || '';
-
+  const hasToken = !!(tokenRaw || tokenMasked);
+  const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
   const maskSecret = (secret) => {
     if (!secret) return '';
     const s = String(secret);
@@ -608,20 +733,43 @@ const EndpointDetailModal = ({
   };
 
   const rows = [
-    { label: '优先级', value: endpoint.priority ?? '-' },
     {
-      label: '超时',
-      value: (() => {
-        const timeout = endpoint.timeoutSeconds ?? endpoint.timeout_seconds;
-        if (!timeout || timeout === 300) return '默认 (300s)';
-        return `${timeout}s`;
-      })()
+      label: '渠道',
+      icon: Server,
+      content: <span className="text-sm font-semibold text-slate-900">{channel}</span>
     },
+    {
+      label: 'Token（脱敏）',
+      icon: ShieldCheck,
+      content: (
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <span className="min-w-0 break-all font-mono text-sm font-semibold text-slate-900">
+            {hasToken ? (tokenMasked || maskSecret(tokenRaw)) : '-'}
+          </span>
+          <Tooltip content={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}>
+            <button
+              onClick={() => {
+                if (tokenRaw) {
+                  navigator.clipboard.writeText(tokenRaw);
+                }
+              }}
+              disabled={!tokenRaw}
+              className={`inline-flex flex-shrink-0 items-center justify-center rounded-md p-1 transition-colors ${
+                tokenRaw
+                  ? 'text-slate-400 hover:bg-white/70 hover:text-indigo-600'
+                  : 'cursor-not-allowed text-slate-300'
+              }`}
+              aria-label={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}
+            >
+              <Copy size={12} />
+            </button>
+          </Tooltip>
+        </div>
+      )
+    }
   ];
 
   // cooldown 相关变量已移除
-  const hasToken = !!(tokenRaw || tokenMasked);
-  const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
 
   return renderModalPortal(
     <div
@@ -636,110 +784,179 @@ const EndpointDetailModal = ({
         className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between px-6 py-4 border-b border-slate-100">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-lg font-semibold text-slate-900 truncate">{endpoint.name}</h2>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
-                {channel}
-              </span>
+        <div className="border-b border-slate-100 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-lg font-semibold text-slate-900 truncate">{endpoint.name}</h2>
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
+                  {channel}
+                </span>
+              </div>
+              <Tooltip content={endpoint.url} className="block min-w-0">
+                <p className="text-xs text-slate-500 font-mono mt-1 truncate">
+                  {endpoint.url}
+                </p>
+              </Tooltip>
             </div>
-            <Tooltip content={endpoint.url} className="block min-w-0">
-              <p className="text-xs text-slate-500 font-mono mt-1 truncate">
-                {endpoint.url}
-              </p>
+
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {isSqliteMode && (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={Pencil}
+                    onClick={() => onEdit?.(endpoint)}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    icon={Trash2}
+                    onClick={() => onDelete?.(endpoint)}
+                  >
+                    删除
+                  </Button>
+                </>
+              )}
+              <Button variant="ghost" size="sm" onClick={onClose}>
+                关闭
+              </Button>
+            </div>
+        </div>
+
+          <div className="mt-2 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {showHealthBadge && (
+              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} detail />
+            )}
+            {isRequestFailed && (
+              <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} detail />
+            )}
+            <LatencyBadge ms={responseTime} inScope={inScope} detail />
+
+            <DetailPill tone="indigo" icon={Settings} mono>
+              P{priority}
+            </DetailPill>
+
+            <DetailTimeoutPill
+              custom={hasCustomTimeout}
+              value={timeoutLabel}
+              tooltip={`${timeoutScope}: ${timeoutLabel}`}
+            />
+
+            {!hasCustomCostMultiplier && (
+              <Tooltip content="未配置自定义倍率，使用默认 1x">
+                <span className="inline-flex">
+                  <DetailPill tone="slate" icon={Database}>
+                    <span className="leading-none">默认倍率</span>
+                    <span className="font-mono leading-none">1x</span>
+                  </DetailPill>
+                </span>
+              </Tooltip>
+            )}
+
+            <Tooltip content={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}>
+              <span className="inline-flex">
+                <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={ArrowRightLeft}>
+                  {failoverEnabled ? '渠道内故障转移' : '不参与转移'}
+                </DetailPill>
+              </span>
             </Tooltip>
 
-            <div className="flex items-center gap-1.5 mt-2 flex-nowrap overflow-hidden min-w-0">
-              {showHealthBadge && (
-                <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} />
-              )}
-              {isRequestFailed && (
-                <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
-              )}
-              <LatencyBadge ms={responseTime} inScope={inScope} />
-
-              <Tooltip content={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}>
-                <span
-                  className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[160px] ${
-                    failoverEnabled
-                      ? 'bg-indigo-50 text-indigo-700 border-indigo-100'
-                      : 'bg-slate-50 text-slate-400 border-slate-200'
-                  }`}
-                >
-                  <ArrowRightLeft size={10} className="mr-1" />
-                  {failoverEnabled ? '渠道内故障转移' : '不参与转移'}
-                </span>
-              </Tooltip>
-
-              <Tooltip content={supportsCountTokens ? '支持 count_tokens' : '不支持 count_tokens'}>
-                <span
-                  className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border whitespace-nowrap min-w-0 truncate max-w-[150px] ${
-                    supportsCountTokens
-                      ? 'bg-purple-50 text-purple-700 border-purple-100'
-                      : 'bg-slate-50 text-slate-400 border-slate-200'
-                  }`}
-                >
-                  <Calculator size={10} className="mr-1" />
+            <Tooltip content={supportsCountTokens ? '支持 count_tokens' : '不支持 count_tokens'}>
+              <span className="inline-flex">
+                <DetailPill tone={supportsCountTokens ? 'purple' : 'slate'} icon={Calculator}>
                   {supportsCountTokens ? 'count_tokens' : '无 count_tokens'}
-                </span>
-              </Tooltip>
-
-              {multiplier !== 1.0 && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium border bg-orange-50 text-orange-700 border-orange-100 whitespace-nowrap flex-shrink-0">
-                  {multiplier}x
-                </span>
-              )}
-
-              <span className="text-[10px] text-slate-400 font-mono whitespace-nowrap flex-shrink-0">
-                最后检查 {lastCheck}
+                </DetailPill>
               </span>
-            </div>
-          </div>
+            </Tooltip>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
-            {isSqliteMode && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={Pencil}
-                  onClick={() => onEdit?.(endpoint)}
-                >
-                  编辑
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  icon={Trash2}
-                  onClick={() => onDelete?.(endpoint)}
-                >
-                  删除
-                </Button>
-              </>
-            )}
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              关闭
-            </Button>
+            <span className="flex-shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
+              最后检查 {lastCheck}
+            </span>
           </div>
         </div>
 
-        <div className="p-6 overflow-y-auto">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {rows.map((r, idx) => (
-              <div
-                key={r.label}
-                className={`bg-slate-50 rounded-xl p-3 border border-slate-200/60 ${
-                  rows.length % 2 === 1 && idx === rows.length - 1 ? 'md:col-span-2' : ''
-                }`}
+        <div className="overflow-y-auto p-6">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {rows.map((row) => (
+              <DetailMetricCard
+                key={row.label}
+                label={row.label}
+                icon={row.icon}
+                wide={row.wide}
               >
-                <div className="text-xs text-slate-500 mb-1">{r.label}</div>
-                <div className="text-sm font-semibold text-slate-900 break-all">
-                  {String(r.value)}
-                </div>
-              </div>
+                {row.content}
+              </DetailMetricCard>
             ))}
           </div>
+
+          {(hasCustomCostMultiplier || hasModelMapping) && (
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              {hasCustomCostMultiplier && (
+                <DetailMetricCard label="成本倍率" icon={Database} wide>
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      {multiplierItems.map((item) => (
+                        <DetailChip key={item.label} tone={item.tone} mono>
+                          <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
+                          {formatDetailMultiplier(item.value)}
+                        </DetailChip>
+                      ))}
+                    </div>
+
+                    {modelMultiplierRules.length > 0 && (
+                      <div className="border-t border-slate-200/70 pt-3">
+                        <div className="mb-2 text-xs font-medium text-slate-500">模型附加倍率</div>
+                        <div className="space-y-2">
+                          {modelMultiplierRules.map((rule, index) => (
+                            <div
+                              key={`${rule.model || 'model'}-${index}`}
+                              className="flex flex-wrap items-center gap-2"
+                            >
+                              <ModelTag model={rule.model} />
+                              <DetailChip tone="indigo" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">总</span>
+                                {formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)}
+                              </DetailChip>
+                              <DetailChip tone="slate" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输入</span>
+                                {formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)}
+                              </DetailChip>
+                              <DetailChip tone="sky" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输出</span>
+                                {formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}
+                              </DetailChip>
+                              <DetailChip tone="amber" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">缓存</span>
+                                {formatDetailMultiplier(rule.cacheReadCostMultiplier ?? rule.cache_read_cost_multiplier ?? 1)}
+                              </DetailChip>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </DetailMetricCard>
+              )}
+
+              {hasModelMapping && (
+                <DetailMetricCard label="渠道模型映射" icon={ArrowRight} wide>
+                  <div className="space-y-2">
+                    {modelMappingEntries.map(([sourceModel, targetModel]) => (
+                      <ModelMappingPair
+                        key={`${sourceModel}->${targetModel}`}
+                        sourceModel={sourceModel}
+                        targetModel={targetModel}
+                      />
+                    ))}
+                  </div>
+                </DetailMetricCard>
+              )}
+            </div>
+          )}
 
           {/* 挂起详情（挂起优先展示） */}
           {isSuspended && (
@@ -822,36 +1039,6 @@ const EndpointDetailModal = ({
             </div>
           )}
 
-          {/* 冷却时间显示已移除（loop_retry 模式下与循环重试逻辑冲突） */}
-          <div className="mt-4">
-            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200/60">
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-xs text-slate-500">Token（脱敏）</div>
-                <Tooltip content={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}>
-                  <button
-                    onClick={() => {
-                      if (tokenRaw) {
-                        navigator.clipboard.writeText(tokenRaw);
-                      }
-                    }}
-                    disabled={!tokenRaw}
-                    className={`inline-flex items-center justify-center p-1 rounded-md transition-colors ${
-                      tokenRaw
-                        ? 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'
-                        : 'text-slate-300 cursor-not-allowed'
-                    }`}
-                    aria-label={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}
-                  >
-                    <Copy size={12} />
-                  </button>
-                </Tooltip>
-              </div>
-              <div className="text-sm font-mono text-slate-900 break-all">
-                {hasToken ? (tokenMasked || maskSecret(tokenRaw)) : '-'}
-              </div>
-            </div>
-          </div>
-
           {hasApiKey && (
             <div className="mt-3 bg-slate-50 rounded-xl p-3 border border-slate-200/60">
               <div className="flex items-center justify-between mb-1">
@@ -897,6 +1084,19 @@ const EndpointDetailModal = ({
               </pre>
             </div>
           )}
+
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <DetailMetricCard label="创建时间" icon={Clock}>
+              <span className="block truncate font-mono text-sm font-medium text-slate-700">
+                {createdAt}
+              </span>
+            </DetailMetricCard>
+            <DetailMetricCard label="更新时间" icon={RefreshCw}>
+              <span className="block truncate font-mono text-sm font-medium text-slate-700">
+                {updatedAt}
+              </span>
+            </DetailMetricCard>
+          </div>
         </div>
       </div>
     </div>
@@ -1103,7 +1303,7 @@ const CreateChannelModal = ({
                       className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                       disabled={loading}
                     />
-                    <ArrowRightLeft size={16} className="text-slate-400" />
+                    <ArrowRight size={16} className="text-slate-400" />
                     <input
                       type="text"
                       value={row.targetModel}
@@ -1615,6 +1815,7 @@ const ChannelsPage = () => {
   const [groups, setGroups] = useState([]);
   const [channelActionLoading, setChannelActionLoading] = useState(false);
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(true);
+  const [globalTimeoutSeconds, setGlobalTimeoutSeconds] = useState(300);
   // failoverDefaultCooldownSeconds 已移除
   const [channelsMeta, setChannelsMeta] = useState([]);
 
@@ -1742,11 +1943,13 @@ const ChannelsPage = () => {
       const cfg = await getConfig();
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(cfg?.failover_enabled !== false);
+      setGlobalTimeoutSeconds(Number(cfg?.global_timeout_seconds ?? cfg?.globalTimeoutSeconds ?? 300) || 300);
       // cooldownSeconds 加载已移除
     } catch (err) {
       console.error('获取配置失败:', err);
       if (seq !== configLoadSeqRef.current) return;
       setChannelFailoverEnabled(true);
+      setGlobalTimeoutSeconds(300);
     }
   }, []);
 
@@ -2730,6 +2933,10 @@ const ChannelsPage = () => {
         isOpen={detailOpen}
         isSqliteMode={isSqliteMode}
         channelFailoverEnabled={channelFailoverEnabled}
+        globalTimeoutSeconds={globalTimeoutSeconds}
+        channelMeta={
+          channelsMeta.find((item) => item?.name === (detailTarget?.channel || detailTarget?.group)) || null
+        }
         onClose={closeEndpointDetail}
         onEdit={(ep) => {
           closeEndpointDetail();

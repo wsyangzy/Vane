@@ -409,7 +409,7 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 //   - 格式：每行一个 JSON 对象（含完整 ArchiveEvent.Request）
 //   - 滚动策略：单文件超过 10 MB 时自动重命名为 .{timestamp} 备份并新建
 //   - 运维方式：用户/管理员可后续用脚本读取并通过 SQL 导入到数据库
-func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr error) error {
+func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr error) (err error) {
 	if len(events) == 0 {
 		return nil
 	}
@@ -434,7 +434,11 @@ func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr 
 	if err != nil {
 		return fmt.Errorf("open dump file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close dump file: %w", closeErr)
+		}
+	}()
 
 	dumpedCount := 0
 	for _, event := range events {
@@ -527,25 +531,29 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	}
 	connEvicted := false
 	defer func() {
-		if connEvicted {
-			// 已通过 evictConn 销毁，conn.Close() 会返回错误也无所谓
-			_ = conn.Close()
-			return
+		if closeErr := conn.Close(); closeErr != nil && !connEvicted {
+			slog.Warn("📦 关闭归档数据库连接失败", "error", closeErr)
 		}
-		_ = conn.Close()
 	}()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		// BeginTx 失败极可能是连接已被污染，强制驱逐
 		connEvicted = true
-		_ = evictConn(conn)
+		if evictErr := evictConn(conn); evictErr != nil {
+			slog.Warn("📦 驱逐归档数据库污染连接失败", "error", evictErr)
+		}
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	// defer 中的 rollback 是兜底，正常路径走 commit
+	committed := false
 	defer func() {
 		// 只有未 commit 时才需要 rollback
-		_ = tx.Rollback()
+		if !committed {
+			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+				slog.Debug("📦 回滚归档事务失败", "error", rbErr)
+			}
+		}
 	}()
 
 	// 🔧 [P1.6 修复] 使用 INSERT ... ON CONFLICT(request_id) DO UPDATE，
@@ -620,7 +628,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() {
+		if closeErr := stmt.Close(); closeErr != nil {
+			slog.Warn("📦 关闭归档批量写入语句失败", "error", closeErr)
+		}
+	}()
 
 	for _, event := range events {
 		req := event.Request
@@ -704,9 +716,12 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	if err := tx.Commit(); err != nil {
 		// Commit 失败（通常是 SQLITE_BUSY），驱逐这条连接避免后续 BeginTx 在污染连接上嵌套报错
 		connEvicted = true
-		_ = evictConn(conn)
+		if evictErr := evictConn(conn); evictErr != nil {
+			slog.Warn("📦 驱逐归档数据库污染连接失败", "error", evictErr)
+		}
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
+	committed = true
 
 	// 🔧 [P6 新增] 归档成功后更新内存计数器
 	// 注意：ON CONFLICT DO UPDATE 路径属于罕见场景（HotPool 溢出后又重新归档同 ID），
@@ -893,7 +908,9 @@ func evictConn(conn *sql.Conn) error {
 	rawErr := conn.Raw(func(driverConn interface{}) error {
 		// 主动 Close 底层连接以释放 SQLite C 资源
 		if c, ok := driverConn.(io.Closer); ok {
-			_ = c.Close()
+			if closeErr := c.Close(); closeErr != nil {
+				slog.Debug("关闭待驱逐数据库底层连接失败", "error", closeErr)
+			}
 		}
 		// 关键：返回 ErrBadConn 让 sql.DB 标记此 conn 为坏，不再放回 pool
 		return driver.ErrBadConn

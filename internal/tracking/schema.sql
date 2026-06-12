@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS codex_endpoints (
     is_active INTEGER NOT NULL DEFAULT 0,
     failover_enabled INTEGER NOT NULL DEFAULT 1,   -- 是否参与故障转移（1=参与）
     priority INTEGER NOT NULL DEFAULT 0,           -- 转移优先级（越小越优先）
+    timeout_seconds INTEGER NOT NULL DEFAULT 0,    -- 请求超时（秒，0=使用全局配置）
     cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 成本倍率（默认 1.0，无调整）
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,      -- 输入 token 成本倍率
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 输出 token 成本倍率

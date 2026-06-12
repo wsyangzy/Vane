@@ -433,71 +433,70 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	}
 
 	for _, r := range requests {
-		// 使用统一的时间格式（2025-12-04 17:18:48）
-		// 数据库存储的就是配置时区的时间，直接格式化，不做时区转换
-		chainItems := parseEndpointChain(r.EndpointChain)
-
-		record := RequestRecord{
-			RequestID:                     r.RequestID,
-			Timestamp:                     r.StartTime.Format("2006-01-02 15:04:05"),
-			Channel:                       r.Channel, // 渠道标签
-			Endpoint:                      r.EndpointName,
-			EndpointChain:                 chainItems,
-			Group:                         r.GroupName,
-			Model:                         r.ModelName,
-			OriginalModelName:             r.OriginalModelName,
-			ModelRewriteSource:            r.ModelRewriteSource,
-			ModelRewriteTarget:            r.ModelRewriteTarget,
-			Provider:                      r.Provider, // 提供商标识
-			Status:                        r.Status,
-			RetryCount:                    r.RetryCount,
-			FailureReason:                 r.FailureReason,
-			CancelReason:                  r.CancelReason,
-			InputTokens:                   r.InputTokens,
-			OutputTokens:                  r.OutputTokens,
-			ReasoningTokens:               r.ReasoningTokens,
-			BillableOutputTokens:          r.BillableOutputTokens,
-			BillingOutputTokenSource:      r.BillingOutputTokenSource,
-			CacheCreationTokens:           r.CacheCreationTokens,
-			CacheCreation5mTokens:         r.CacheCreation5mTokens,
-			CacheCreation1hTokens:         r.CacheCreation1hTokens,
-			CacheReadTokens:               r.CacheReadTokens,
-			IsStreaming:                   r.IsStreaming,
-			Cost:                          r.TotalCostUSD,
-			InputCostUSD:                  r.InputCostUSD,
-			OutputCostUSD:                 r.OutputCostUSD,
-			CacheCreationCostUSD:          r.CacheCreationCostUSD,
-			CacheCreation5mCostUSD:        r.CacheCreation5mCostUSD,
-			CacheCreation1hCostUSD:        r.CacheCreation1hCostUSD,
-			CacheReadCostUSD:              r.CacheReadCostUSD,
-			CostMultiplier:                r.CostMultiplier,
-			InputCostMultiplier:           r.InputCostMultiplier,
-			OutputCostMultiplier:          r.OutputCostMultiplier,
-			CacheCreationCostMultiplier:   r.CacheCreationCostMultiplier,
-			CacheCreationCostMultiplier1h: r.CacheCreationCostMultiplier1h,
-			CacheReadCostMultiplier:       r.CacheReadCostMultiplier,
-			ModelCostMultiplier:           r.ModelCostMultiplier,
-			ModelInputCostMultiplier:      r.ModelInputCostMultiplier,
-			ModelOutputCostMultiplier:     r.ModelOutputCostMultiplier,
-			ModelCacheReadCostMultiplier:  r.ModelCacheReadCostMultiplier,
-		}
-
-		// 处理指针字段
-		if r.HTTPStatusCode != nil {
-			record.HTTPStatus = *r.HTTPStatusCode
-		}
-		if r.DurationMs != nil {
-			record.ResponseTime = *r.DurationMs
-		}
-		if r.FirstByteMs != nil {
-			firstByteMs := *r.FirstByteMs
-			record.FirstByteMs = &firstByteMs
-		}
-
-		result.Requests = append(result.Requests, record)
+		result.Requests = append(result.Requests, requestDetailToRecord(r))
 	}
 
 	return result, nil
+}
+
+func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
+	// 使用统一的时间格式（2025-12-04 17:18:48）
+	record := RequestRecord{
+		RequestID:                     r.RequestID,
+		Timestamp:                     r.StartTime.Format("2006-01-02 15:04:05"),
+		Channel:                       r.Channel, // 渠道标签
+		Endpoint:                      r.EndpointName,
+		EndpointChain:                 parseEndpointChain(r.EndpointChain),
+		Group:                         r.GroupName,
+		Model:                         r.ModelName,
+		OriginalModelName:             r.OriginalModelName,
+		ModelRewriteSource:            r.ModelRewriteSource,
+		ModelRewriteTarget:            r.ModelRewriteTarget,
+		Provider:                      r.Provider, // 提供商标识
+		Status:                        r.Status,
+		RetryCount:                    r.RetryCount,
+		FailureReason:                 r.FailureReason,
+		CancelReason:                  r.CancelReason,
+		InputTokens:                   r.InputTokens,
+		OutputTokens:                  r.OutputTokens,
+		ReasoningTokens:               r.ReasoningTokens,
+		BillableOutputTokens:          r.BillableOutputTokens,
+		BillingOutputTokenSource:      r.BillingOutputTokenSource,
+		CacheCreationTokens:           r.CacheCreationTokens,
+		CacheCreation5mTokens:         r.CacheCreation5mTokens,
+		CacheCreation1hTokens:         r.CacheCreation1hTokens,
+		CacheReadTokens:               r.CacheReadTokens,
+		IsStreaming:                   r.IsStreaming,
+		Cost:                          r.TotalCostUSD,
+		InputCostUSD:                  r.InputCostUSD,
+		OutputCostUSD:                 r.OutputCostUSD,
+		CacheCreationCostUSD:          r.CacheCreationCostUSD,
+		CacheCreation5mCostUSD:        r.CacheCreation5mCostUSD,
+		CacheCreation1hCostUSD:        r.CacheCreation1hCostUSD,
+		CacheReadCostUSD:              r.CacheReadCostUSD,
+		CostMultiplier:                r.CostMultiplier,
+		InputCostMultiplier:           r.InputCostMultiplier,
+		OutputCostMultiplier:          r.OutputCostMultiplier,
+		CacheCreationCostMultiplier:   r.CacheCreationCostMultiplier,
+		CacheCreationCostMultiplier1h: r.CacheCreationCostMultiplier1h,
+		CacheReadCostMultiplier:       r.CacheReadCostMultiplier,
+		ModelCostMultiplier:           r.ModelCostMultiplier,
+		ModelInputCostMultiplier:      r.ModelInputCostMultiplier,
+		ModelOutputCostMultiplier:     r.ModelOutputCostMultiplier,
+		ModelCacheReadCostMultiplier:  r.ModelCacheReadCostMultiplier,
+	}
+
+	if r.HTTPStatusCode != nil {
+		record.HTTPStatus = *r.HTTPStatusCode
+	}
+	if r.DurationMs != nil {
+		record.ResponseTime = *r.DurationMs
+	}
+	if r.FirstByteMs != nil {
+		firstByteMs := *r.FirstByteMs
+		record.FirstByteMs = &firstByteMs
+	}
+	return record
 }
 
 // chainNode 链路节点（API 响应用）

@@ -31,8 +31,9 @@ type HealthChecker struct {
 	manager *EndpointManager
 	cfg     *config.Config // 动态读取 Health.* 字段，配置热生效
 
-	mu        sync.RWMutex
-	latencies map[string]int64 // endpoint name -> latency ms (-1 表示超时/不可达)
+	mu         sync.RWMutex
+	latencies  map[string]int64     // endpoint name -> latency ms (-1 表示超时/不可达)
+	lastChecks map[string]time.Time // endpoint name -> last probe time
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -47,11 +48,12 @@ func NewHealthChecker(manager *EndpointManager, cfg *config.Config, logger *slog
 		logger = slog.Default()
 	}
 	return &HealthChecker{
-		manager:   manager,
-		cfg:       cfg,
-		latencies: make(map[string]int64),
-		stopCh:    make(chan struct{}),
-		logger:    logger,
+		manager:    manager,
+		cfg:        cfg,
+		latencies:  make(map[string]int64),
+		lastChecks: make(map[string]time.Time),
+		stopCh:     make(chan struct{}),
+		logger:     logger,
 	}
 }
 
@@ -87,6 +89,18 @@ func (h *HealthChecker) GetLatencies() map[string]int64 {
 
 	result := make(map[string]int64, len(h.latencies))
 	for k, v := range h.latencies {
+		result[k] = v
+	}
+	return result
+}
+
+// GetLastChecks 获取所有端点的最近探测时间（供前端展示）
+func (h *HealthChecker) GetLastChecks() map[string]time.Time {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	result := make(map[string]time.Time, len(h.lastChecks))
+	for k, v := range h.lastChecks {
 		result[k] = v
 	}
 	return result
@@ -180,7 +194,7 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"error", err,
 		)
 		h.recordLatency(ep.Name, -1)
-		h.manager.MarkUnhealthy(ep.Name)
+		h.manager.MarkUnhealthyWithDetail(ep.Name, 0, err.Error())
 		return
 	}
 
@@ -205,7 +219,7 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"elapsed_ms", latencyMs,
 		)
 		h.recordLatency(ep.Name, -1)
-		h.manager.MarkUnhealthy(ep.Name)
+		h.manager.MarkUnhealthyWithDetail(ep.Name, 0, err.Error())
 		return
 	}
 	resp.Body.Close()
@@ -225,6 +239,7 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 func (h *HealthChecker) recordLatency(name string, ms int64) {
 	h.mu.Lock()
 	h.latencies[name] = ms
+	h.lastChecks[name] = time.Now()
 	h.mu.Unlock()
 }
 

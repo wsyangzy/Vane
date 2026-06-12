@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
+  ArrowRight,
   ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
@@ -39,6 +40,7 @@ import {
   Tooltip
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
+import ModelTag from '../requests/components/ModelTag.jsx';
 import {
   activateCodexChannel,
   activateCodexEndpoint,
@@ -125,6 +127,22 @@ const parseEndpointMultiplierPayload = (values) => {
   return { payload };
 };
 
+const formatEndpointTimeoutInputValue = (value) => {
+  const seconds = Number(value ?? 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0';
+  return String(Math.trunc(seconds));
+};
+
+const parseEndpointTimeoutPayload = (value) => {
+  const raw = String(value ?? '').trim();
+  if (raw === '') return { timeoutSeconds: 0 };
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return { error: '超时时间必须是大于等于 0 的整数秒数' };
+  }
+  return { timeoutSeconds: parsed };
+};
+
 const isDefaultMultiplierValue = (value) => {
   const parsed = Number(value ?? 1.0);
   return Number.isFinite(parsed) && Math.abs(parsed - 1.0) <= 0.000001;
@@ -191,6 +209,21 @@ const buildMultiplierBadge = (endpoint) => {
     text: `×${formatMultiplierExpression(totalMultiplier, 3)}`,
     title: `总成本倍率 × ${formatMultiplierExpression(totalMultiplier, 6)}`
   };
+};
+
+const formatLastCheck = (time) => {
+  if (!time || time === '-') return '-';
+  try {
+    const date = new Date(time);
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return String(time);
+  }
 };
 
 // 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
@@ -446,7 +479,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                         placeholder="gpt-5.4-mini"
                         className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
-                      <ArrowRightLeft size={16} className="text-slate-400" />
+                      <ArrowRight size={16} className="text-slate-400" />
                       <input
                         type="text"
                         value={row.targetModel}
@@ -492,6 +525,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
   const [name, setName] = useState(endpoint?.name || '');
   const [baseURL, setBaseURL] = useState(endpoint?.baseURL || '');
   const [priority, setPriority] = useState(endpoint?.priority ?? 0);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
   const [costMultiplier, setCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.costMultiplier ?? 1.0));
   const [inputCostMultiplier, setInputCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.inputCostMultiplier ?? 1.0));
   const [outputCostMultiplier, setOutputCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.outputCostMultiplier ?? 1.0));
@@ -554,6 +588,12 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
       setFieldError('base_url 必须以 http:// 或 https:// 开头');
       return;
     }
+    const timeoutResult = parseEndpointTimeoutPayload(timeoutSeconds);
+    if (timeoutResult.error) {
+      setActiveTab('basic');
+      setFieldError(timeoutResult.error);
+      return;
+    }
     const multiplierResult = parseEndpointMultiplierPayload({
       costMultiplier,
       inputCostMultiplier,
@@ -576,6 +616,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
       baseURL: trimmed,
       failoverEnabled,
       priority,
+      timeoutSeconds: timeoutResult.timeoutSeconds,
       ...multiplierResult.payload,
       modelMultipliers: modelMultiplierResult.payload,
       billingOutputTokenSource
@@ -678,6 +719,23 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
                     placeholder="0 = 最高优先级"
                   />
                   <p className="mt-1 text-xs text-slate-400">数字越小越优先</p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">超时（秒）</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={timeoutSeconds}
+                    onChange={(event) => {
+                      setTimeoutSeconds(event.target.value);
+                      if (fieldError) setFieldError('');
+                    }}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="0 = 使用全局默认"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">0 表示使用设置中的全局超时时间。</p>
                 </div>
 
                 <div
@@ -1187,55 +1245,48 @@ const summarizeEndpoint = (baseURL) => {
   }
 };
 
-const CodexHealthBadge = ({ state }) => {
+const CodexHealthBadge = ({ state, detail = false }) => {
   const configs = {
     healthy: {
       label: '健康',
       icon: CheckCircle2,
-      className: 'border-emerald-100 bg-emerald-50 text-emerald-600',
-      title: '最近一次 Codex 健康探测通过'
+      className: 'border-emerald-100 bg-emerald-50 text-emerald-600'
     },
     unhealthy: {
       label: '异常',
       icon: XCircle,
-      className: 'border-rose-100 bg-rose-50 text-rose-600',
-      title: '最近一次 Codex 健康探测失败或端点处于冷却中'
+      className: 'border-rose-100 bg-rose-50 text-rose-600'
     },
     unchecked: {
       label: '检测中',
       icon: Clock,
-      className: 'border-slate-200 bg-slate-50 text-slate-500',
-      title: '等待 Codex 健康探测结果'
+      className: 'border-slate-200 bg-slate-50 text-slate-500'
     },
     inactive: {
       label: '未接管',
       icon: Clock,
-      className: 'border-slate-200 bg-slate-50 text-slate-400',
-      title: '仅当前接管渠道会参与 Codex 健康探测'
+      className: 'border-slate-200 bg-slate-50 text-slate-400'
     },
     excluded: {
       label: '不参与',
       icon: ArrowRightLeft,
-      className: 'border-slate-200 bg-slate-50 text-slate-400',
-      title: '该端点未参与故障转移，不纳入健康探测范围'
+      className: 'border-slate-200 bg-slate-50 text-slate-400'
     }
   };
   const config = configs[state] || configs.unchecked;
 
   const Icon = config.icon;
   return (
-    <Tooltip content={config.title} className="flex-shrink-0">
-      <span
-        className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${config.className}`}
-      >
-        <Icon size={10} />
-        {config.label}
-      </span>
-    </Tooltip>
+    <span
+      className={`inline-flex ${detail ? 'h-6' : 'h-5'} flex-shrink-0 items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none ${config.className}`}
+    >
+      <Icon size={10} className="shrink-0" />
+      {config.label}
+    </span>
   );
 };
 
-const CodexLatencyBadge = ({ ms }) => {
+const CodexLatencyBadge = ({ ms, detail = false }) => {
   const msValue = Number(ms);
   if (!Number.isFinite(msValue) || msValue <= 0) return null;
 
@@ -1247,11 +1298,396 @@ const CodexLatencyBadge = ({ ms }) => {
   return (
     <Tooltip content="最近一次 Codex 健康探测延迟" className="flex-shrink-0">
       <span
-        className={`inline-flex items-center rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-medium ${className}`}
+        className={`inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[54px] items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none ${className}`}
       >
         {rounded}ms
       </span>
     </Tooltip>
+  );
+};
+
+const CodexRequestFailureBadge = ({ failCode, failReason, detail = false }) => {
+  const code = Number(failCode || 0);
+  const hasCode = Number.isFinite(code) && code > 0;
+  const hasReason = !!failReason;
+  if (!hasCode && !hasReason) return null;
+
+  const tooltip = [
+    hasCode ? `状态码: ${code}` : null,
+    hasReason ? `原因: ${failReason}` : null
+  ].filter(Boolean).join('\n');
+
+  return (
+    <Tooltip content={tooltip} className="flex-shrink-0">
+      <span className={`inline-flex ${detail ? 'h-6' : 'h-5'} items-center justify-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600`}>
+        <XCircle size={10} className="shrink-0" />
+        请求失败
+        {hasCode && <span className="font-mono">({code})</span>}
+      </span>
+    </Tooltip>
+  );
+};
+
+const DETAIL_CHIP_TONES = {
+  slate: 'border-slate-200 bg-white text-slate-700',
+  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  amber: 'border-amber-200 bg-amber-50 text-amber-700',
+  indigo: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+  sky: 'border-sky-200 bg-sky-50 text-sky-700'
+};
+
+const DetailMetricCard = ({ label, icon: Icon, wide = false, children }) => (
+  <div
+    className={`min-w-0 rounded-xl border border-slate-200/70 bg-slate-50 p-3.5 ${
+      wide ? 'md:col-span-2' : ''
+    }`}
+  >
+    <div className="mb-2 flex items-center gap-2">
+      {Icon && (
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+          <Icon size={13} />
+        </span>
+      )}
+      <span className="text-xs font-medium text-slate-500">{label}</span>
+    </div>
+    <div className="min-w-0">{children}</div>
+  </div>
+);
+
+const DetailChip = ({ children, tone = 'slate', mono = false }) => (
+  <span
+    className={`inline-flex min-h-7 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold leading-none ${
+      mono ? 'font-mono' : ''
+    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
+  >
+    {children}
+  </span>
+);
+
+const DetailPill = ({ children, icon: Icon, tone = 'slate', mono = false }) => (
+  <span
+    className={`inline-flex h-6 max-w-full items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap align-middle ${
+      mono ? 'font-mono' : ''
+    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
+  >
+    {Icon && <Icon size={10} className="shrink-0" />}
+    <span className="inline-flex min-w-0 items-center justify-center gap-1 leading-none">
+      {children}
+    </span>
+  </span>
+);
+
+const getDetailTimestamp = (...values) => {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text && text !== '-' && !text.startsWith('0001-01-01')) {
+      return text;
+    }
+  }
+  return '-';
+};
+
+const DetailTimeoutPill = ({ custom, value, tooltip }) => (
+  <Tooltip content={tooltip}>
+    <span className="inline-flex">
+      <DetailPill tone={custom ? 'amber' : 'sky'} icon={Clock}>
+        <span className="leading-none">{custom ? '超时' : '默认'}</span>
+        <span className="font-mono leading-none">{value}</span>
+      </DetailPill>
+    </span>
+  </Tooltip>
+);
+
+const MODEL_MAPPING_TAG_CLASS = 'max-w-full [&>span]:whitespace-normal [&>span]:break-all';
+
+const ModelMappingPair = ({ sourceModel, targetModel }) => (
+  <div className="flex min-h-7 min-w-0 flex-wrap items-center justify-start gap-2 py-0.5">
+    <ModelTag model={sourceModel} className={MODEL_MAPPING_TAG_CLASS} />
+    <ArrowRight size={14} className="shrink-0 text-slate-400" />
+    <ModelTag model={targetModel} className={MODEL_MAPPING_TAG_CLASS} />
+  </div>
+);
+
+const DetailTimestampFooter = ({ createdAt, updatedAt }) => (
+  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+    <DetailMetricCard label="创建时间" icon={Clock}>
+      <span className="block truncate font-mono text-sm font-medium text-slate-700">
+        {createdAt}
+      </span>
+    </DetailMetricCard>
+    <DetailMetricCard label="更新时间" icon={RefreshCw}>
+      <span className="block truncate font-mono text-sm font-medium text-slate-700">
+        {updatedAt}
+      </span>
+    </DetailMetricCard>
+  </div>
+);
+
+const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit }) => {
+  if (!endpoint) return null;
+
+  const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
+  const responseTimeMs = endpoint.responseTimeMs || endpoint.response_time_ms || 0;
+  const lastFailCode = Number(endpoint.lastFailCode || endpoint.last_fail_code || 0);
+  const lastFailReason = endpoint.lastFailReason || endpoint.last_fail_reason || '';
+  const hasFailDetail = (Number.isFinite(lastFailCode) && lastFailCode > 0) || !!lastFailReason;
+  const failoverEnabled = endpoint.failoverEnabled !== false;
+  const billingOption = BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS.find(
+    (option) => option.value === endpoint.billingOutputTokenSource
+  );
+  const billingSource = billingOption?.value || endpoint.billingOutputTokenSource || 'output_tokens';
+  const billingNameMap = {
+    output_tokens: '总输出',
+    reasoning_tokens: '推理输出',
+    visible_output_tokens: '可见补全'
+  };
+  const billingName = billingNameMap[billingSource] || billingOption?.label || billingSource;
+  const multiplierItems = [
+    { label: '总', value: endpoint.costMultiplier ?? 1, tone: 'indigo' },
+    { label: '输入', value: endpoint.inputCostMultiplier ?? 1, tone: 'slate' },
+    { label: '输出', value: endpoint.outputCostMultiplier ?? 1, tone: 'sky' },
+    { label: '缓存', value: endpoint.cacheReadCostMultiplier ?? 1, tone: 'amber' }
+  ];
+  const priority = Number(endpoint.priority || 0);
+  const effectiveModel = channel?.model || globalConfig?.model || '未设置';
+  const endpointTimeoutSeconds = Number(endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0);
+  const globalTimeoutSeconds = Number(globalConfig?.global_timeout_seconds ?? globalConfig?.globalTimeoutSeconds ?? 300) || 300;
+  const hasCustomTimeout = endpointTimeoutSeconds > 0;
+  const timeoutLabel = hasCustomTimeout ? `${endpointTimeoutSeconds}s` : `${globalTimeoutSeconds}s`;
+  const timeoutScope = endpointTimeoutSeconds > 0 ? '端点覆盖' : '使用全局超时';
+  const createdAt = getDetailTimestamp(endpoint.createdAt, endpoint.created_at, endpoint.CreatedAt);
+  const updatedAt = getDetailTimestamp(endpoint.updatedAt, endpoint.updated_at, endpoint.UpdatedAt);
+  const rawLastCheck = endpoint.lastCheck || endpoint.last_check || endpoint.LastCheck;
+  const lastCheck = formatLastCheck(rawLastCheck || updatedAt);
+  const modelMappingEntries = Object.entries(channel?.modelMapping || channel?.model_mapping || {})
+    .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
+    .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
+  const modelMultiplierRules = endpoint.modelMultipliers || endpoint.model_multipliers || [];
+  const normalizeDetailMultiplier = (value) => {
+    const parsed = typeof value === 'string'
+      ? parseMultiplierExpression(value, Number.NaN)
+      : Number(value);
+    return Number.isFinite(parsed) ? parsed : 1;
+  };
+  const isDefaultDetailMultiplier = (value) => Math.abs(normalizeDetailMultiplier(value) - 1) <= 0.000001;
+  const formatDetailMultiplier = (value) => `${formatMultiplierExpression(normalizeDetailMultiplier(value), 3)}x`;
+  const modelMultiplierValueKeys = [
+    ['costMultiplier', 'cost_multiplier'],
+    ['inputCostMultiplier', 'input_cost_multiplier'],
+    ['outputCostMultiplier', 'output_cost_multiplier'],
+    ['cacheReadCostMultiplier', 'cache_read_cost_multiplier']
+  ];
+  const hasCustomEndpointMultiplier = multiplierItems.some((item) => !isDefaultDetailMultiplier(item.value));
+  const hasCustomModelMultiplier = modelMultiplierRules.some((rule) => (
+    modelMultiplierValueKeys.some(([camelKey, snakeKey]) => (
+      !isDefaultDetailMultiplier(rule?.[camelKey] ?? rule?.[snakeKey] ?? 1)
+    ))
+  ));
+  const hasCustomCostMultiplier = hasCustomEndpointMultiplier || hasCustomModelMultiplier;
+  const hasModelMapping = modelMappingEntries.length > 0;
+
+  const rows = [
+    {
+      label: '渠道',
+      icon: Server,
+      content: (
+        <span className="text-sm font-semibold text-slate-900">{channel?.name || '-'}</span>
+      )
+    },
+    {
+      label: '模型',
+      icon: Server,
+      content: (
+        <ModelTag model={effectiveModel} />
+      )
+    }
+  ];
+
+  return renderModalPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm animate-fade-in"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose?.();
+      }}
+    >
+      <div
+        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-slate-100 px-6 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h2 className="truncate text-lg font-semibold text-slate-900">{endpoint.name || '未命名端点'}</h2>
+                <span className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                  {channel?.name || 'Codex'}
+                </span>
+                {endpoint.isActive && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                    <span className="h-1 w-1 rounded-full bg-emerald-500" />
+                    当前端点
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 truncate font-mono text-xs text-slate-500">{endpoint.baseURL || '<未设置 base_url>'}</p>
+            </div>
+
+            <div className="flex flex-shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={Pencil}
+                onClick={() => onEdit?.(endpoint)}
+              >
+                编辑
+              </Button>
+              <Button variant="ghost" size="sm" onClick={onClose}>
+                关闭
+              </Button>
+            </div>
+        </div>
+
+          <div className="mt-2 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <CodexHealthBadge state={healthState} detail />
+            <CodexLatencyBadge ms={responseTimeMs} detail />
+            <DetailPill tone="indigo" icon={Settings} mono>
+              P{priority}
+            </DetailPill>
+            <DetailTimeoutPill
+              custom={hasCustomTimeout}
+              value={timeoutLabel}
+              tooltip={`${timeoutScope}: ${timeoutLabel}`}
+            />
+            {!hasCustomCostMultiplier && (
+              <Tooltip content="未配置自定义倍率，使用默认 1x">
+                <span className="inline-flex">
+                  <DetailPill tone="slate" icon={Database}>
+                    <span className="leading-none">默认倍率</span>
+                    <span className="font-mono leading-none">1x</span>
+                  </DetailPill>
+                </span>
+              </Tooltip>
+            )}
+            <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={ArrowRightLeft}>
+              {failoverEnabled ? '参与故障转移' : '不参与转移'}
+            </DetailPill>
+            <DetailPill tone="sky" icon={Database}>
+              <span className="leading-none">{billingName}</span>
+              <span className="font-mono text-[9px] leading-none opacity-75">{billingSource}</span>
+            </DetailPill>
+            <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} detail />
+            <span className="flex-shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
+              最后检查 {lastCheck}
+            </span>
+          </div>
+        </div>
+
+        <div className="overflow-y-auto p-6">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {rows.map((row) => (
+              <DetailMetricCard
+                key={row.label}
+                label={row.label}
+                icon={row.icon}
+                wide={row.wide}
+              >
+                {row.content}
+              </DetailMetricCard>
+            ))}
+          </div>
+
+          {(hasCustomCostMultiplier || hasModelMapping) && (
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              {hasCustomCostMultiplier && (
+                <DetailMetricCard label="成本倍率" icon={Database} wide>
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2">
+                      {multiplierItems.map((item) => (
+                        <DetailChip key={item.label} tone={item.tone} mono>
+                          <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
+                          {formatDetailMultiplier(item.value)}
+                        </DetailChip>
+                      ))}
+                    </div>
+
+                    {modelMultiplierRules.length > 0 && (
+                      <div className="border-t border-slate-200/70 pt-3">
+                        <div className="mb-2 text-xs font-medium text-slate-500">模型附加倍率</div>
+                        <div className="space-y-2">
+                          {modelMultiplierRules.map((rule) => (
+                            <div
+                              key={rule.model}
+                              className="flex flex-wrap items-center gap-2"
+                            >
+                              <ModelTag model={rule.model} />
+                              <DetailChip tone="indigo" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">总</span>
+                                {formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)}
+                              </DetailChip>
+                              <DetailChip tone="slate" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输入</span>
+                                {formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)}
+                              </DetailChip>
+                              <DetailChip tone="sky" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输出</span>
+                                {formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}
+                              </DetailChip>
+                              <DetailChip tone="amber" mono>
+                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">缓存</span>
+                                {formatDetailMultiplier(rule.cacheReadCostMultiplier ?? rule.cache_read_cost_multiplier ?? 1)}
+                              </DetailChip>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </DetailMetricCard>
+              )}
+
+              {hasModelMapping && (
+                <DetailMetricCard label="渠道模型映射" icon={ArrowRight} wide>
+                  <div className="space-y-2">
+                    {modelMappingEntries.map(([sourceModel, targetModel]) => (
+                      <ModelMappingPair
+                        key={`${sourceModel}->${targetModel}`}
+                        sourceModel={sourceModel}
+                        targetModel={targetModel}
+                      />
+                    ))}
+                  </div>
+                </DetailMetricCard>
+              )}
+            </div>
+          )}
+
+          {hasFailDetail && (
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <XCircle size={16} className="text-rose-600" />
+                <div className="text-sm font-medium text-rose-800">异常详情</div>
+              </div>
+              <div className="space-y-2 text-sm">
+                {lastFailCode > 0 && (
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-[70px] font-medium text-rose-600">状态码:</span>
+                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-rose-900">{lastFailCode}</span>
+                  </div>
+                )}
+                {lastFailReason && (
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-[70px] font-medium text-rose-600">失败原因:</span>
+                    <span className="break-all text-rose-900">{lastFailReason}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -1265,6 +1701,7 @@ const EndpointRow = ({
   onActivate,
   onEdit,
   onDelete,
+  onOpen,
   onToggleFailover,
   actionLoading
 }) => {
@@ -1276,6 +1713,8 @@ const EndpointRow = ({
   const priority = endpoint.priority || 0;
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
   const responseTimeMs = endpoint.responseTimeMs || endpoint.response_time_ms || 0;
+  const lastFailCode = endpoint.lastFailCode || endpoint.last_fail_code || 0;
+  const lastFailReason = endpoint.lastFailReason || endpoint.last_fail_reason || '';
   const multiplierBadge = buildMultiplierBadge(endpoint);
 
   // 挂起态：当请求挂起且当前端点已激活时，toggle 变 amber，允许重复点击触发恢复
@@ -1310,7 +1749,16 @@ const EndpointRow = ({
   return (
     <div className="border-b border-slate-100 last:border-b-0">
       <div
-        className={`group/row flex items-center gap-3 px-4 py-2 transition-colors duration-150 ${
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen?.(endpoint)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onOpen?.(endpoint);
+          }
+        }}
+        className={`group/row flex cursor-pointer items-center gap-3 px-4 py-2 text-left transition-colors duration-150 ${
           endpoint.isActive ? 'bg-emerald-50/30' : 'hover:bg-slate-50/80'
         }`}
       >
@@ -1375,28 +1823,25 @@ const EndpointRow = ({
                   </span>
                 </Tooltip>
               )}
-              <Tooltip content={displayName} className="min-w-0 max-w-full">
-                <span
-                  className={`min-w-0 truncate text-xs font-semibold ${
-                    endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
-                  }`}
-                >
-                  {displayName}
-                </span>
-              </Tooltip>
+              <span
+                className={`block min-w-0 truncate text-xs font-semibold ${
+                  endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
+                }`}
+              >
+                {displayName}
+              </span>
             </span>
             <CodexHealthBadge state={healthState} />
             <CodexLatencyBadge ms={responseTimeMs} />
+            <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} />
           </div>
-          <Tooltip content={endpoint.baseURL} className="mt-0.5 block min-w-0">
-            <div
-              className={`truncate font-mono text-[11px] ${
-                endpoint.isActive ? 'text-slate-500' : 'text-slate-400'
-              }`}
-            >
-              {summary || '<未设置 base_url>'}
-            </div>
-          </Tooltip>
+          <div
+            className={`mt-0.5 truncate font-mono text-[11px] ${
+              endpoint.isActive ? 'text-slate-500' : 'text-slate-400'
+            }`}
+          >
+            {summary || '<未设置 base_url>'}
+          </div>
         </div>
 
         {/* 操作按钮（常驻显示） */}
@@ -1454,6 +1899,7 @@ const ChannelCard = ({
   onActivateEndpoint,
   onToggleEndpointFailover,
   onEditEndpoint,
+  onOpenEndpoint,
   onDeleteEndpoint
 }) => {
   const [isEndpointListExpanded, setIsEndpointListExpanded] = useState(false);
@@ -1675,6 +2121,7 @@ const ChannelCard = ({
                 onActivate={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
                 onEdit={onEditEndpoint}
+                onOpen={(ep) => onOpenEndpoint?.(ep, channel)}
                 onDelete={(ep) => onDeleteEndpoint?.(ep, channel)}
                 actionLoading={actionLoading}
               />
@@ -1704,7 +2151,8 @@ const CodexPage = () => {
   const [globalConfig, setGlobalConfig] = useState({
     model: '',
     reasoning_effort: 'xhigh',
-    enable_1m_context: false
+    enable_1m_context: false,
+    global_timeout_seconds: 300
   });
 
   // 刷新全局配置（在 page mount + 弹窗保存成功后调用）
@@ -1714,7 +2162,8 @@ const CodexPage = () => {
       setGlobalConfig({
         model: data.model || '',
         reasoning_effort: data.reasoning_effort || 'xhigh',
-        enable_1m_context: Boolean(data.enable_1m_context)
+        enable_1m_context: Boolean(data.enable_1m_context),
+        global_timeout_seconds: data.global_timeout_seconds || data.globalTimeoutSeconds || 300
       });
     } catch {
       // 静默失败：全局配置加载失败仅影响展示，不影响渠道管理
@@ -1735,9 +2184,17 @@ const CodexPage = () => {
   const [editingEndpoint, setEditingEndpoint] = useState(null);
   const [endpointFormError, setEndpointFormError] = useState('');
   const [deleteEndpointTarget, setDeleteEndpointTarget] = useState(null);
+  const [endpointDetailTarget, setEndpointDetailTarget] = useState(null);
 
   const activeChannel = channels.find((channel) => channel.isActive) || null;
   const activeEndpoint = activeChannel?.endpoints?.find((ep) => ep.isActive) || null;
+  const selectedEndpointDetail = endpointDetailTarget ? (() => {
+    const latestChannel = channels.find((channel) => channel.id === endpointDetailTarget.channelOwner?.id) ||
+      endpointDetailTarget.channelOwner;
+    const latestEndpoint = latestChannel?.endpoints?.find((endpoint) => endpoint.id === endpointDetailTarget.endpoint?.id) ||
+      endpointDetailTarget.endpoint;
+    return { channelOwner: latestChannel, endpoint: latestEndpoint };
+  })() : null;
 
   const overviewCards = [
     {
@@ -1913,7 +2370,7 @@ const CodexPage = () => {
     setEndpointFormError('');
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
@@ -1924,6 +2381,7 @@ const CodexPage = () => {
           baseURL,
           failoverEnabled,
           priority,
+          timeoutSeconds,
           costMultiplier,
           inputCostMultiplier,
           outputCostMultiplier,
@@ -1951,6 +2409,7 @@ const CodexPage = () => {
         baseURL,
         failoverEnabled,
         priority,
+        timeoutSeconds,
         costMultiplier,
         inputCostMultiplier,
         outputCostMultiplier,
@@ -2105,6 +2564,9 @@ const CodexPage = () => {
               onActivateEndpoint={handleActivateEndpoint}
               onToggleEndpointFailover={handleToggleEndpointFailover}
               onEditEndpoint={openEditEndpointForm}
+              onOpenEndpoint={(endpoint, channelOwner) =>
+                setEndpointDetailTarget({ endpoint, channelOwner })
+              }
               onDeleteEndpoint={(endpoint, channelOwner) =>
                 setDeleteEndpointTarget({ endpoint, channelOwner })
               }
@@ -2140,6 +2602,19 @@ const CodexPage = () => {
         />
       )}
 
+      {selectedEndpointDetail?.endpoint && (
+        <CodexEndpointDetailModal
+          endpoint={selectedEndpointDetail.endpoint}
+          channel={selectedEndpointDetail.channelOwner}
+          globalConfig={globalConfig}
+          onClose={() => setEndpointDetailTarget(null)}
+          onEdit={(endpoint) => {
+            setEndpointDetailTarget(null);
+            openEditEndpointForm(endpoint);
+          }}
+        />
+      )}
+
       {deleteChannelTarget && (
         <DeleteConfirmDialog
           title={`删除渠道「${deleteChannelTarget.name}」`}
@@ -2158,11 +2633,11 @@ const CodexPage = () => {
       {deleteEndpointTarget && (
         <DeleteConfirmDialog
           title="删除端点"
-          description={`即将从渠道「${deleteEndpointTarget.channelOwner?.name}」中移除该 base_url。`}
+          description={`即将从渠道「${deleteEndpointTarget.channelOwner?.name}」中删除端点「${deleteEndpointTarget.endpoint?.name || deleteEndpointTarget.endpoint?.baseURL || '未命名端点'}」。`}
           hint={
             deleteEndpointTarget.endpoint.isActive
-              ? '这是该渠道的当前激活端点；删除后会自动激活该渠道下一个端点（若有）。'
-              : '该端点未激活，删除不会触发 config.toml 改写。'
+              ? '这是该渠道的当前活跃端点；删除后系统会尝试切换到同渠道下一个可用端点。'
+              : '该端点未激活，删除后只会从该渠道的反代候选中移除。'
           }
           loading={actionLoading === `delete-endpoint-${deleteEndpointTarget.endpoint.id}`}
           onCancel={() => setDeleteEndpointTarget(null)}
