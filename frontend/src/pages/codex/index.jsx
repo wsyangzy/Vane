@@ -469,7 +469,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                 <div className="space-y-2">
                   {(formData.modelMappingRows || []).map((row, index) => (
                     <div
-                      key={`${index}-${row.sourceModel}-${row.targetModel}`}
+                      key={`codex-model-mapping-${index}`}
                       className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-center"
                     >
                       <input
