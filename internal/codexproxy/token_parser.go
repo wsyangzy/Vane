@@ -10,7 +10,10 @@ package codexproxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"strconv"
+	"strings"
 )
 
 // TokenResult 解析结果
@@ -21,6 +24,36 @@ type TokenResult struct {
 	TotalTokens     int64
 	CacheReadTokens int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
 	Model           string
+}
+
+// UpstreamStreamError 表示 OpenAI/Codex 以 HTTP 200 SSE 流返回的错误事件。
+// 这类错误不应被记录为 completed，否则会出现 token 全 0 的假成功记录。
+type UpstreamStreamError struct {
+	Type       string
+	Code       string
+	Message    string
+	StatusCode int
+}
+
+func (e *UpstreamStreamError) Error() string {
+	if e == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if e.Type != "" {
+		parts = append(parts, "type="+e.Type)
+	}
+	if e.Code != "" {
+		parts = append(parts, "code="+e.Code)
+	}
+	prefix := "upstream stream error"
+	if len(parts) > 0 {
+		prefix += " (" + strings.Join(parts, ", ") + ")"
+	}
+	if e.Message == "" {
+		return prefix
+	}
+	return fmt.Sprintf("%s: %s", prefix, e.Message)
 }
 
 // TokenParser 解析 OpenAI 格式响应中的 token 用量
@@ -124,6 +157,82 @@ type openAIResponse struct {
 	Model    string                 `json:"model"`
 	Usage    *openAIUsage           `json:"usage,omitempty"`    // Chat Completions API / Responses 非流式
 	Response *openAIResponseWrapper `json:"response,omitempty"` // Responses API SSE 事件包装
+}
+
+type openAIStreamErrorEnvelope struct {
+	Type     string                 `json:"type"`
+	Error    json.RawMessage        `json:"error,omitempty"`
+	Response *openAIStreamErrorBody `json:"response,omitempty"`
+}
+
+type openAIStreamErrorBody struct {
+	Status string          `json:"status"`
+	Error  json.RawMessage `json:"error,omitempty"`
+}
+
+type openAIStreamErrorDetail struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func parseStreamErrorDetail(raw json.RawMessage) *openAIStreamErrorDetail {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	var message string
+	if err := json.Unmarshal(raw, &message); err == nil {
+		message = strings.TrimSpace(message)
+		if message == "" {
+			return nil
+		}
+		return &openAIStreamErrorDetail{Message: message}
+	}
+	var detail openAIStreamErrorDetail
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return nil
+	}
+	detail.Type = strings.TrimSpace(detail.Type)
+	detail.Code = strings.TrimSpace(detail.Code)
+	detail.Message = strings.TrimSpace(detail.Message)
+	if detail.Type == "" && detail.Code == "" && detail.Message == "" {
+		return nil
+	}
+	return &detail
+}
+
+func streamErrorStatusCode(errorType, code, message, eventType string) int {
+	combined := strings.ToLower(strings.Join([]string{errorType, code, message, eventType}, " "))
+	switch {
+	case strings.Contains(combined, "capacity"),
+		strings.Contains(combined, "overload"),
+		strings.Contains(combined, "temporarily unavailable"),
+		strings.Contains(combined, "service unavailable"),
+		strings.Contains(combined, "server_error"),
+		strings.Contains(combined, "internal_error"):
+		return http.StatusServiceUnavailable
+	case strings.Contains(combined, "rate_limit"):
+		return http.StatusTooManyRequests
+	case strings.Contains(combined, "insufficient_quota"),
+		strings.Contains(combined, "billing"),
+		strings.Contains(combined, "payment"):
+		return http.StatusPaymentRequired
+	case strings.Contains(combined, "unauthorized"),
+		strings.Contains(combined, "authentication"):
+		return http.StatusUnauthorized
+	case strings.Contains(combined, "forbidden"),
+		strings.Contains(combined, "permission"):
+		return http.StatusForbidden
+	case strings.Contains(combined, "not_found"):
+		return http.StatusNotFound
+	case strings.Contains(combined, "invalid_request"),
+		strings.Contains(combined, "bad_request"):
+		return http.StatusBadRequest
+	case strings.Contains(combined, "failed"):
+		return http.StatusBadGateway
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 // resolveUsage 从 usage 中提取统一的 token 字段
@@ -269,4 +378,57 @@ func (p *TokenParser) ParseStreamingLine(line []byte) (result *TokenResult, isDo
 	}
 
 	return buildResult(model, usage), false
+}
+
+// ParseStreamingErrorLine 从 SSE data 行中提取 OpenAI/Codex 错误事件。
+// 支持：
+//   - data: {"type":"response.failed","response":{"error":{"message":"..."}}}
+//   - data: {"type":"error","error":{"type":"server_error","message":"..."}}
+//   - data: {"error":{"message":"..."}}
+func (p *TokenParser) ParseStreamingErrorLine(line []byte) *UpstreamStreamError {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, sseDataPrefix) {
+		return nil
+	}
+	payload := bytes.TrimSpace(trimmed[len(sseDataPrefix):])
+	if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
+		return nil
+	}
+	if !bytes.Contains(payload, []byte(`"error"`)) &&
+		!bytes.Contains(payload, []byte(`"response.failed"`)) {
+		return nil
+	}
+
+	var envelope openAIStreamErrorEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil
+	}
+
+	detail := parseStreamErrorDetail(envelope.Error)
+	if detail == nil && envelope.Response != nil {
+		detail = parseStreamErrorDetail(envelope.Response.Error)
+	}
+	if detail == nil && !strings.Contains(strings.ToLower(envelope.Type), "failed") {
+		return nil
+	}
+	if detail == nil {
+		detail = &openAIStreamErrorDetail{Message: "upstream stream failed"}
+	}
+
+	statusCode := streamErrorStatusCode(detail.Type, detail.Code, detail.Message, envelope.Type)
+	return &UpstreamStreamError{
+		Type:       firstNonEmpty(detail.Type, envelope.Type),
+		Code:       detail.Code,
+		Message:    detail.Message,
+		StatusCode: statusCode,
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

@@ -14,39 +14,12 @@ import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
-
-/**
- * 解析链路节点，兼容结构化格式和历史字符串格式。
- */
-const parseChainNode = (item) => {
-  if (!item) return { channel: '', credentialGroup: '', endpoint: '' };
-  if (typeof item === 'object' && item !== null) {
-    return {
-      channel: item.channel || '',
-      credentialGroup: item.credential_group || item.credentialGroup || item.group_name || item.group || '',
-      endpoint: item.endpoint || '',
-    };
-  }
-
-  const parts = String(item).split('::');
-  if (parts.length >= 3) {
-    return {
-      channel: parts[0] || '',
-      credentialGroup: parts[1] || '',
-      endpoint: parts.slice(2).join('::') || '',
-    };
-  }
-  if (parts.length === 2) {
-    return { channel: parts[0] || '', credentialGroup: '', endpoint: parts[1] || '' };
-  }
-  return { channel: '', credentialGroup: '', endpoint: parts[0] || '' };
-};
-
-const parseEndpointName = (item) => parseChainNode(item).endpoint;
-
-const shouldShowChainChannel = (request, interChannelFailoverEnabled) => (
-  (request?.provider || 'claude') !== 'codex' && Boolean(interChannelFailoverEnabled)
-);
+import {
+  chainHasMultipleChannels,
+  getEndpointChainItems,
+  parseChainNode,
+  parseEndpointName,
+} from '../utils/endpointChain.js';
 
 const ChainTooltipBadge = ({ label, value }) => (
   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-700/80 text-[9px] font-medium text-slate-100 ring-1 ring-white/10 shrink-0">
@@ -55,21 +28,12 @@ const ChainTooltipBadge = ({ label, value }) => (
   </span>
 );
 
-const getEndpointChainItems = (request) => {
-  if (Array.isArray(request.endpointChain)) return request.endpointChain;
-  if (Array.isArray(request.endpoint_chain)) return request.endpoint_chain;
-  if (typeof request.endpoint_chain === 'string') {
-    return request.endpoint_chain.split(' -> ').filter(s => s.trim());
-  }
-  return [];
-};
-
 /**
  * EndpointChainCell - 端点链路单元格组件（折叠显示 + Portal Tooltip）
  * 使用 createPortal 渲染到 document.body，避免被父容器 overflow 裁剪
  * @param {Object} request - 请求数据
  */
-const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
+const EndpointChainCell = ({ request }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPos, setTooltipPos] = useState(null);
   const triggerRef = useRef(null);
@@ -122,7 +86,7 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
   }, [showTooltip]);
 
   const chainItems = getEndpointChainItems(request);
-  const showChannelInChain = shouldShowChainChannel(request, interChannelFailoverEnabled);
+  const showChannelInChain = (request?.provider || 'claude') !== 'codex' && chainHasMultipleChannels(chainItems);
 
   // 获取链路长度（兼容 camelCase 和 Wails 原始 snake_case）
   const chainLength = Number.isFinite(request.endpointChainLength)
@@ -296,7 +260,7 @@ const LatencyCell = ({ request }) => (
  * @param {string} columnId - 列 ID
  * @param {Object} request - 请求数据
  */
-const renderCell = (columnId, request, interChannelFailoverEnabled) => {
+const renderCell = (columnId, request) => {
   switch (columnId) {
     case 'requestId':
       const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -348,7 +312,7 @@ const renderCell = (columnId, request, interChannelFailoverEnabled) => {
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':
-      return <EndpointChainCell request={request} interChannelFailoverEnabled={interChannelFailoverEnabled} />;
+      return <EndpointChainCell request={request} />;
     case 'duration':
       return <LatencyCell request={request} />;
     case 'inputTokens':
@@ -369,7 +333,7 @@ const renderCell = (columnId, request, interChannelFailoverEnabled) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick, interChannelFailoverEnabled }) => {
+const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
   const [clickCount, setClickCount] = React.useState(0);
   const [clickTimer, setClickTimer] = React.useState(null);
 
@@ -409,7 +373,7 @@ const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick, interCha
           key={colId}
           className="px-3 py-3 text-center align-middle"
         >
-          {renderCell(colId, request, interChannelFailoverEnabled)}
+          {renderCell(colId, request)}
         </td>
       ))}
     </tr>
@@ -436,8 +400,7 @@ const RequestsTable = ({
   onPageSizeChange,
   visibleColumns = [],
   columnConfigs = [],
-  onRowDoubleClick,
-  interChannelFailoverEnabled = false
+  onRowDoubleClick
 }) => {
   // 复制请求 ID
   const handleCopyId = (id) => {
@@ -496,7 +459,6 @@ const RequestsTable = ({
                   visibleColumns={visibleColumns}
                   onCopyId={handleCopyId}
                   onDoubleClick={onRowDoubleClick}
-                  interChannelFailoverEnabled={interChannelFailoverEnabled}
                 />
               ))
             )}

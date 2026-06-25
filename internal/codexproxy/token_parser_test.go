@@ -2,6 +2,8 @@ package codexproxy
 
 import (
 	"math"
+	"net/http"
+	"strings"
 	"testing"
 
 	"ai-relay-forwarder/internal/tracking"
@@ -137,6 +139,39 @@ func TestTokenParserAcceptsSSEDataWithoutSpace(t *testing.T) {
 	}
 	if result.ReasoningTokens != 22 {
 		t.Fatalf("expected reasoning tokens 22, got %d", result.ReasoningTokens)
+	}
+}
+
+func TestTokenParserParsesResponseFailedCapacityError(t *testing.T) {
+	line := []byte(`data: {"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"Selected model is at capacity. Please try a different model."}}}`)
+
+	streamErr := NewTokenParser().ParseStreamingErrorLine(line)
+	if streamErr == nil {
+		t.Fatal("expected stream error to be parsed")
+	}
+	if streamErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", streamErr.StatusCode)
+	}
+	if !strings.Contains(streamErr.Message, "Selected model is at capacity") {
+		t.Fatalf("unexpected message: %q", streamErr.Message)
+	}
+	if streamErr.Code != "server_error" {
+		t.Fatalf("expected code server_error, got %q", streamErr.Code)
+	}
+}
+
+func TestTokenParserParsesTopLevelStreamingError(t *testing.T) {
+	line := []byte(`data: {"error":{"type":"server_error","message":"Selected model is at capacity. Please try a different model."}}`)
+
+	streamErr := NewTokenParser().ParseStreamingErrorLine(line)
+	if streamErr == nil {
+		t.Fatal("expected stream error to be parsed")
+	}
+	if streamErr.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", streamErr.StatusCode)
+	}
+	if streamErr.Type != "server_error" {
+		t.Fatalf("expected type server_error, got %q", streamErr.Type)
 	}
 }
 

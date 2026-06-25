@@ -39,6 +39,11 @@ import {
   getDisplayTotalTokens,
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
+import {
+  chainHasMultipleChannels,
+  getEndpointChainItems,
+  parseChainNode,
+} from '../utils/endpointChain.js';
 
 const privacyRuleTypeLabels = {
   exact: '精准',
@@ -171,7 +176,7 @@ const FirstByteDetailBadge = ({ ms, status }) => {
 /**
  * 请求详情模态框主组件
  */
-const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnabled = false }) => {
+const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
@@ -218,7 +223,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
 
   const isCodexRequest = isCacheInclusiveProvider(request.provider);
   const isClaudeRequest = !isCodexRequest;
-  const showChannelInChain = isClaudeRequest && Boolean(interChannelFailoverEnabled);
 
   // 计算 Token 总数：Codex/OpenAI input_tokens 已包含 cached_tokens；兼容旧 Codex 记录的非缓存 input。
   const inputTokenCount = getDisplayInputTokens(request);
@@ -243,35 +247,20 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
   const streamLabel = request.isStreaming ? '流式请求' : '常规请求';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
 
-  const rawEndpointChain = request.endpointChain || request.endpoint_chain || [];
-  const endpointChain = Array.isArray(rawEndpointChain)
-    ? rawEndpointChain
-    : (typeof rawEndpointChain === 'string' ? rawEndpointChain.split(' -> ').filter(Boolean) : []);
+  const endpointChain = getEndpointChainItems(request);
   const chainNodes = endpointChain.map((item, index) => {
-    const hop = (typeof item === 'object' && item?.hop) || (index + 1);
-    // Handle structured object format: {hop, channel, credential_group, endpoint}
-    if (typeof item === 'object' && item !== null) {
-      const channel = item.channel || '';
-      const credentialGroup = item.credential_group || item.credentialGroup || item.group_name || item.group || '';
-      const endpoint = item.endpoint || '';
-      const raw = channel
-        ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
-        : endpoint;
-      return { raw, channel, credentialGroup, endpoint, hop };
+    const node = parseChainNode(item, index + 1);
+    if (!node.raw && !node.endpoint && !node.channel && !node.credentialGroup) return null;
+    if (endpointChain.length === 1 && !node.channel) {
+      return {
+        ...node,
+        channel: request.channel || request.group || '',
+        credentialGroup: node.credentialGroup || request.credentialGroup || request.groupName || '',
+      };
     }
-    // Handle legacy string format: "channel::endpoint", "channel::group::endpoint", or plain endpoint name
-    const raw = String(item || '').trim();
-    if (!raw) return null;
-    if (raw.includes('::')) {
-      const parts = raw.split('::');
-      const channel = parts.shift() || '';
-      const credentialGroup = parts.length >= 2 ? (parts.shift() || '') : '';
-      const endpoint = parts.join('::') || '';
-      return { raw, channel, credentialGroup, endpoint, hop };
-    }
-    const fallbackChannel = endpointChain.length === 1 ? (request.channel || request.group || '') : '';
-    return { raw, channel: fallbackChannel, credentialGroup: '', endpoint: raw, hop };
+    return node;
   }).filter(Boolean);
+  const showChannelInChain = isClaudeRequest && chainHasMultipleChannels(endpointChain);
   const currentChannelLabel = request.channel || request.group || chainNodes.find((node) => node.channel)?.channel || '';
   const hasUnknownChannel = showChannelInChain && chainNodes.some((node) => !node.channel);
   const channelTones = [
@@ -299,10 +288,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
     if (index === total - 1) return '最终';
     return '中转';
   };
-  const formatChainEndpointName = (credentialGroup, endpoint) => (
-    [credentialGroup, endpoint].filter(Boolean).join(' ') || endpoint || credentialGroup || '-'
-  );
-
   const errorText = [
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
     request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
@@ -839,9 +824,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                         const channelLabel = node.channel || '未知渠道';
                         const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
-                        const endpointDisplayLabel = showChannelInChain
-                          ? endpointLabel
-                          : formatChainEndpointName(groupLabel, endpointLabel);
                         const routeLabel = [
                           showChannelInChain ? channelLabel : '',
                           groupLabel,
@@ -870,26 +852,27 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                                 isSingle ? 'bg-indigo-500' : isFirst ? 'bg-blue-500' : isLast ? 'bg-emerald-500' : 'bg-slate-300'
                               }`} style={{ left: '-25px' }} />
                               {/* 卡片 */}
-                              <div className={`border ${tone.border} rounded-lg px-3 py-2 ${isLast && !isSingle ? 'bg-emerald-50/30' : isFirst && !isSingle ? 'bg-blue-50/30' : 'bg-slate-50/50'}`}>
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className={`text-[10px] font-bold shrink-0 ${
+                              <div className={`border ${tone.border} rounded-lg px-2.5 py-1.5 ${isLast && !isSingle ? 'bg-emerald-50/30' : isFirst && !isSingle ? 'bg-blue-50/30' : 'bg-slate-50/50'}`}>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className={`text-[10px] font-semibold shrink-0 ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-500' : isLast ? 'text-emerald-500' : 'text-slate-400'
                                   }`}>
                                     #{node.hop}
                                   </span>
                                   {showChannelInChain && (
-                                    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium border whitespace-nowrap ${tone.badge}`}>
+                                    <span className={`inline-flex items-center rounded px-1.5 py-[1px] text-[9px] font-medium border whitespace-nowrap ${tone.badge}`}>
                                       <span className="mr-1 text-current/70">渠道</span>{channelLabel}
                                     </span>
                                   )}
-                                  {(showChannelInChain || !node.channel) && groupLabel && (
-                                    <span className="inline-flex max-w-[6rem] items-center rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 shrink-0 truncate">
-                                      <span className="mr-1 text-violet-400">分组</span>{groupLabel}
+                                  {groupLabel && (
+                                    <span className="inline-flex max-w-[7rem] shrink-0 items-center rounded border border-violet-200/70 bg-violet-50/80 px-1.5 py-[1px] text-[9px] font-medium text-violet-600">
+                                      <span className="mr-1 text-violet-400">分组</span>
+                                      <span className="truncate">{groupLabel}</span>
                                     </span>
                                   )}
                                   <Tooltip content={routeLabel} className="min-w-0">
-                                    <span className="text-sm font-semibold text-slate-900 truncate">
-                                      {endpointDisplayLabel}
+                                    <span className="text-[13px] font-semibold text-slate-800 truncate">
+                                      {endpointLabel}
                                     </span>
                                   </Tooltip>
                                   <span className={`ml-auto shrink-0 text-[10px] ${

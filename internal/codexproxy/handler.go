@@ -33,6 +33,8 @@ type chainNode struct {
 	Endpoint        string `json:"endpoint"`
 }
 
+const maxPreOutputStreamBufferBytes = 256 * 1024
+
 // Handler 处理 Codex 代理请求
 type Handler struct {
 	manager        *EndpointManager
@@ -393,24 +395,41 @@ func (h *Handler) tryEndpointCycle(
 
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
-			h.manager.MarkHealthy(endpoint.ID)
-			// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
-			if len(*failedIDs) > 0 {
-				if err := h.manager.PromoteActive(endpoint.ID); err != nil {
-					h.logger.Warn("故障转移后提升活跃端点失败",
-						"request_id", requestID,
-						"endpoint_id", endpoint.ID,
-						"endpoint", endpoint.Name,
-						"error", err,
-					)
-				}
-			}
 			if isStreaming {
-				h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain))
+				if streamErr := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain)); streamErr != nil {
+					fwdErr = streamErr
+					resp = nil
+				} else {
+					h.manager.MarkHealthy(endpoint.ID)
+					// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
+					if len(*failedIDs) > 0 {
+						if err := h.manager.PromoteActive(endpoint.ID); err != nil {
+							h.logger.Warn("故障转移后提升活跃端点失败",
+								"request_id", requestID,
+								"endpoint_id", endpoint.ID,
+								"endpoint", endpoint.Name,
+								"error", err,
+							)
+						}
+					}
+					return cycleResult{completed: true}
+				}
 			} else {
+				h.manager.MarkHealthy(endpoint.ID)
+				// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
+				if len(*failedIDs) > 0 {
+					if err := h.manager.PromoteActive(endpoint.ID); err != nil {
+						h.logger.Warn("故障转移后提升活跃端点失败",
+							"request_id", requestID,
+							"endpoint_id", endpoint.ID,
+							"endpoint", endpoint.Name,
+							"error", err,
+						)
+					}
+				}
 				h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain))
+				return cycleResult{completed: true}
 			}
-			return cycleResult{completed: true}
 		}
 
 		// 失败路径：先读取上游响应摘要（仅当 resp 非空）
@@ -420,6 +439,9 @@ func (h *Handler) tryEndpointCycle(
 		if resp != nil {
 			status = resp.StatusCode
 			errBody, errSummary = h.readErrorBody(resp)
+		} else if streamErr, ok := fwdErr.(*UpstreamStreamError); ok {
+			status = streamErr.StatusCode
+			errSummary = streamErr.Error()
 		}
 
 		// 三态分类
@@ -715,22 +737,28 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 	w.Write(respBody)
 }
 
-// handleStreaming 处理流式响应：逐行透传 SSE 并提取 token
-func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, channelName string, hopsTried int) {
+// handleStreaming 处理流式响应：逐行透传 SSE 并提取 token。
+// 如果上游在真正输出前通过 SSE 返回错误事件，则返回错误交给外层端点循环做故障转移。
+func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, channelName string, hopsTried int) *UpstreamStreamError {
 	defer resp.Body.Close()
 
-	// 设置流式响应头
-	for key, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(key, v)
-		}
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(resp.StatusCode)
-
+	var headersWritten bool
 	flusher, canFlush := w.(http.Flusher)
+	writeHeaders := func() {
+		if headersWritten {
+			return
+		}
+		for key, values := range resp.Header {
+			for _, v := range values {
+				w.Header().Add(key, v)
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(resp.StatusCode)
+		headersWritten = true
+	}
 
 	// 🆕 [详细日志] 流式处理开始（emoji 风格，对齐 Claude 日志详细度）
 	h.logger.Info(fmt.Sprintf("🌊 [Codex流式] [%s] 开始流式处理，端点: %s", requestID, endpointName),
@@ -743,9 +771,63 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	var bytesProcessed int64
 	var modelLogged, usageLogged bool
 	var outputSentRecorded bool
+	var downstreamStreamErr *UpstreamStreamError
+	var pendingLines [][]byte
+	var pendingBytes int
+	currentEvent := ""
+
+	writeLine := func(line []byte) {
+		writeHeaders()
+		if !outputSentRecorded && len(bytes.TrimSpace(line)) > 0 {
+			h.recordOutputSent(requestID)
+			outputSentRecorded = true
+		}
+		w.Write(line)
+		w.Write([]byte("\n"))
+		if canFlush {
+			flusher.Flush()
+		}
+	}
+	flushPending := func() {
+		if len(pendingLines) == 0 {
+			return
+		}
+		for _, pending := range pendingLines {
+			writeLine(pending)
+		}
+		pendingLines = nil
+		pendingBytes = 0
+	}
+	bufferLine := func(line []byte) {
+		copied := append([]byte(nil), line...)
+		pendingLines = append(pendingLines, copied)
+		pendingBytes += len(copied) + 1
+		if pendingBytes >= maxPreOutputStreamBufferBytes {
+			flushPending()
+		}
+	}
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		bytesProcessed += int64(len(line)) + 1 // +1 for trailing newline
+
+		if eventName, ok := parseSSEEventName(line); ok {
+			currentEvent = eventName
+		}
+
+		if streamErr := h.tokenParser.ParseStreamingErrorLine(line); streamErr != nil {
+			if !headersWritten {
+				h.logger.Warn("[Codex 流式上游错误] 输出前捕获到可转移错误",
+					"provider", "codex",
+					"request_id", requestID,
+					"endpoint", endpointName,
+					"status_code", streamErr.StatusCode,
+					"error", streamErr.Error(),
+				)
+				return streamErr
+			}
+			downstreamStreamErr = streamErr
+		}
 
 		// 解析 token（流式最终 chunk 可能包含 usage）
 		if result, _ := h.tokenParser.ParseStreamingLine(line); result != nil {
@@ -766,16 +848,12 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 			lastResult = result
 		}
 
-		// 透传给客户端
-		if !outputSentRecorded && len(bytes.TrimSpace(line)) > 0 {
-			h.recordOutputSent(requestID)
-			outputSentRecorded = true
+		if !headersWritten && !isLikelyCodexOutputLine(currentEvent, line) {
+			bufferLine(line)
+			continue
 		}
-		w.Write(line)
-		w.Write([]byte("\n"))
-		if canFlush {
-			flusher.Flush()
-		}
+		flushPending()
+		writeLine(line)
 	}
 
 	// 🆕 [详细日志] 扫描器错误检测：非 nil 视为流式中断；nil 视为正常完成
@@ -783,11 +861,34 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		h.logger.Error(fmt.Sprintf("❌ [Codex流式失败] [%s] 端点: %s, 已处理 %d 字节, 错误: %v",
 			requestID, endpointName, bytesProcessed, scanErr),
 			"provider", "codex", "request_id", requestID)
+		if !headersWritten {
+			return &UpstreamStreamError{
+				Type:       "stream_read_error",
+				Message:    scanErr.Error(),
+				StatusCode: http.StatusBadGateway,
+			}
+		}
+		h.recordFailure(requestID, startTime, "network_error", scanErr.Error(), http.StatusBadGateway, nil, requestModel)
+		return nil
 	} else {
 		h.logger.Info(fmt.Sprintf("✅ [Codex流式完成] [%s] 端点: %s, 已处理 %d 字节",
 			requestID, endpointName, bytesProcessed),
 			"provider", "codex", "request_id", requestID)
 	}
+
+	if downstreamStreamErr != nil {
+		h.logger.Error("[Codex 流式上游错误] 已输出后收到错误事件，记录为失败",
+			"provider", "codex",
+			"request_id", requestID,
+			"endpoint", endpointName,
+			"status_code", downstreamStreamErr.StatusCode,
+			"error", downstreamStreamErr.Error(),
+		)
+		h.recordFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), downstreamStreamErr.StatusCode, nil, requestModel)
+		return nil
+	}
+
+	flushPending()
 
 	// 🆕 [Codex 生命周期] 增强的完成日志（含端点、渠道、token、状态码、耗时、跳数）
 	durationMs := time.Since(startTime).Milliseconds()
@@ -839,6 +940,38 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		"provider", "codex", "request_id", requestID)
 
 	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, channelName)
+	return nil
+}
+
+func parseSSEEventName(line []byte) (string, bool) {
+	trimmed := bytes.TrimSpace(line)
+	const eventPrefix = "event:"
+	if !bytes.HasPrefix(trimmed, []byte(eventPrefix)) {
+		return "", false
+	}
+	return strings.TrimSpace(string(trimmed[len(eventPrefix):])), true
+}
+
+func isLikelyCodexOutputLine(eventName string, line []byte) bool {
+	eventName = strings.ToLower(strings.TrimSpace(eventName))
+	if strings.Contains(eventName, "delta") ||
+		strings.Contains(eventName, "content") ||
+		strings.Contains(eventName, "output_text") {
+		return true
+	}
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, sseDataPrefix) {
+		return false
+	}
+	payload := bytes.TrimSpace(trimmed[len(sseDataPrefix):])
+	if bytes.Equal(payload, sseDoneMarker) {
+		return true
+	}
+	payloadLower := bytes.ToLower(payload)
+	return bytes.Contains(payloadLower, []byte(`"choices"`)) ||
+		bytes.Contains(payloadLower, []byte(`"delta"`)) ||
+		bytes.Contains(payloadLower, []byte(`"content"`)) ||
+		bytes.Contains(payloadLower, []byte(`"output_text"`))
 }
 
 // ============================================

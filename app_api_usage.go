@@ -6,11 +6,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
+	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/store"
 	"ai-relay-forwarder/internal/tracking"
 	"ai-relay-forwarder/internal/utils"
 )
@@ -356,6 +359,9 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	a.mu.RLock()
 	usageTracker := a.usageTracker
 	cfg := a.config
+	endpointManager := a.endpointManager
+	endpointStore := a.endpointStore
+	claudeCredentialGroupStore := a.claudeCredentialGroupStore
 	a.mu.RUnlock()
 
 	if usageTracker == nil {
@@ -435,8 +441,11 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		Total:    int(total),
 	}
 
+	credentialGroupLookup := endpointChainCredentialGroupLookup(ctx, endpointManager, endpointStore, claudeCredentialGroupStore)
 	for _, r := range requests {
-		result.Requests = append(result.Requests, requestDetailToRecord(r))
+		record := requestDetailToRecord(r)
+		enrichEndpointChainCredentialGroups(record.Provider, record.EndpointChain, credentialGroupLookup)
+		result.Requests = append(result.Requests, record)
 	}
 
 	return result, nil
@@ -577,6 +586,174 @@ func keyStringsToNodes(items []string) []chainNode {
 		}
 	}
 	return nodes
+}
+
+func endpointChainCredentialGroupLookup(
+	ctx context.Context,
+	endpointManager interface {
+		GetEndpoints() []*endpoint.Endpoint
+	},
+	endpointStore interface {
+		List(context.Context) ([]*store.EndpointRecord, error)
+	},
+	groupStore interface {
+		GetByID(context.Context, int64) (*store.ClaudeCredentialGroupRecord, error)
+		GetDefaultByChannel(context.Context, string) (*store.ClaudeCredentialGroupRecord, error)
+	},
+) map[string]string {
+	lookup := make(map[string]string)
+	addEndpointManagerCredentialGroupLookup(lookup, endpointManager)
+	addEndpointStoreCredentialGroupLookup(ctx, lookup, endpointStore, groupStore)
+	return lookup
+}
+
+func addEndpointManagerCredentialGroupLookup(lookup map[string]string, endpointManager interface {
+	GetEndpoints() []*endpoint.Endpoint
+}) {
+	if endpointManager == nil {
+		return
+	}
+	for _, ep := range endpointManager.GetEndpoints() {
+		if ep == nil {
+			continue
+		}
+		channel := strings.TrimSpace(ep.Config.Channel)
+		endpointName := strings.TrimSpace(ep.Config.Name)
+		if channel == "" || endpointName == "" {
+			continue
+		}
+		groupName := strings.TrimSpace(ep.Config.CredentialGroupName)
+		if groupName == "" {
+			groupName = strings.TrimSpace(ep.Config.Group)
+		}
+		if groupName == "" && ep.Config.CredentialGroupID > 0 {
+			groupName = fmt.Sprintf("g%d", ep.Config.CredentialGroupID)
+		}
+		if groupName == "" {
+			continue
+		}
+
+		addEndpointChainLookup(lookup, channel, endpointName, groupName)
+		addEndpointChainLookup(lookup, channel, ep.Config.URL, groupName)
+	}
+}
+
+func addEndpointStoreCredentialGroupLookup(
+	ctx context.Context,
+	lookup map[string]string,
+	endpointStore interface {
+		List(context.Context) ([]*store.EndpointRecord, error)
+	},
+	groupStore interface {
+		GetByID(context.Context, int64) (*store.ClaudeCredentialGroupRecord, error)
+		GetDefaultByChannel(context.Context, string) (*store.ClaudeCredentialGroupRecord, error)
+	},
+) {
+	if endpointStore == nil {
+		return
+	}
+	records, err := endpointStore.List(ctx)
+	if err != nil {
+		return
+	}
+	groupByID := make(map[int64]string)
+	defaultGroupByChannel := make(map[string]string)
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		channel := strings.TrimSpace(record.Channel)
+		groupName := endpointRecordCredentialGroupName(ctx, record, groupStore, groupByID, defaultGroupByChannel)
+		if channel == "" || groupName == "" {
+			continue
+		}
+		addEndpointChainLookup(lookup, channel, record.Name, groupName)
+		addEndpointChainLookup(lookup, channel, record.URL, groupName)
+	}
+}
+
+func endpointRecordCredentialGroupName(
+	ctx context.Context,
+	record *store.EndpointRecord,
+	groupStore interface {
+		GetByID(context.Context, int64) (*store.ClaudeCredentialGroupRecord, error)
+		GetDefaultByChannel(context.Context, string) (*store.ClaudeCredentialGroupRecord, error)
+	},
+	groupByID map[int64]string,
+	defaultGroupByChannel map[string]string,
+) string {
+	if record == nil {
+		return ""
+	}
+	if groupName := strings.TrimSpace(record.CredentialGroupName); groupName != "" {
+		return groupName
+	}
+	if groupStore != nil && record.CredentialGroupID > 0 {
+		groupName, ok := groupByID[record.CredentialGroupID]
+		if !ok {
+			if group, err := groupStore.GetByID(ctx, record.CredentialGroupID); err == nil && group != nil {
+				groupName = strings.TrimSpace(group.Name)
+			}
+			groupByID[record.CredentialGroupID] = groupName
+		}
+		if groupName != "" {
+			return groupName
+		}
+	}
+	channel := strings.TrimSpace(record.Channel)
+	if groupStore != nil && channel != "" {
+		groupName, ok := defaultGroupByChannel[channel]
+		if !ok {
+			if group, err := groupStore.GetDefaultByChannel(ctx, channel); err == nil && group != nil {
+				groupName = strings.TrimSpace(group.Name)
+			}
+			defaultGroupByChannel[channel] = groupName
+		}
+		if groupName != "" {
+			return groupName
+		}
+	}
+	if record.CredentialGroupID > 0 {
+		return fmt.Sprintf("g%d", record.CredentialGroupID)
+	}
+	return ""
+}
+
+func addEndpointChainLookup(lookup map[string]string, channel, endpointName, groupName string) {
+	key := endpointChainLookupKey(channel, endpointName)
+	if key == "" {
+		return
+	}
+	if existing, ok := lookup[key]; ok && existing != groupName {
+		lookup[key] = ""
+		return
+	}
+	lookup[key] = groupName
+}
+
+func enrichEndpointChainCredentialGroups(provider string, nodes []chainNode, lookup map[string]string) {
+	if len(nodes) == 0 || len(lookup) == 0 || provider == "codex" {
+		return
+	}
+	for i := range nodes {
+		if strings.TrimSpace(nodes[i].CredentialGroup) != "" {
+			continue
+		}
+		groupName := lookup[endpointChainLookupKey(nodes[i].Channel, nodes[i].Endpoint)]
+		if groupName == "" {
+			continue
+		}
+		nodes[i].CredentialGroup = groupName
+	}
+}
+
+func endpointChainLookupKey(channel, endpointName string) string {
+	channel = strings.TrimSpace(channel)
+	endpointName = strings.TrimSpace(endpointName)
+	if channel == "" || endpointName == "" {
+		return ""
+	}
+	return channel + "\x00" + endpointName
 }
 
 // ============================================================

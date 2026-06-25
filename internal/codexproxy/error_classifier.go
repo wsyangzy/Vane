@@ -3,7 +3,10 @@
 
 package codexproxy
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
 
 // ErrorAction 错误处理动作（三态）
 type ErrorAction int
@@ -41,30 +44,38 @@ func NewErrorClassifier() *ErrorClassifier {
 //   - HTTP 400 及其他 4xx              → ActionFailFast（客户端错误）
 func (c *ErrorClassifier) Classify(resp *http.Response, err error) ErrorAction {
 	if err != nil {
+		var streamErr *UpstreamStreamError
+		if errors.As(err, &streamErr) {
+			return c.classifyStatus(streamErr.StatusCode)
+		}
 		return ActionRetry
 	}
 	if resp == nil {
 		return ActionRetry
 	}
 
+	return c.classifyStatus(resp.StatusCode)
+}
+
+func (c *ErrorClassifier) classifyStatus(statusCode int) ErrorAction {
 	switch {
-	case resp.StatusCode == http.StatusRequestTimeout, // 408
-		resp.StatusCode == http.StatusTooEarly: // 425
+	case statusCode == http.StatusRequestTimeout, // 408
+		statusCode == http.StatusTooEarly: // 425
 		return ActionRetry
 
-	case resp.StatusCode >= 500:
+	case statusCode >= 500:
 		return ActionFailover
 
-	case resp.StatusCode == http.StatusUnauthorized, // 401
-		resp.StatusCode == http.StatusForbidden, // 403
-		resp.StatusCode == http.StatusNotFound, // 404
-		resp.StatusCode == http.StatusConflict, // 409
-		resp.StatusCode == http.StatusGone, // 410
-		resp.StatusCode == http.StatusUnavailableForLegalReasons: // 451
+	case statusCode == http.StatusUnauthorized, // 401
+		statusCode == http.StatusForbidden,                  // 403
+		statusCode == http.StatusNotFound,                   // 404
+		statusCode == http.StatusConflict,                   // 409
+		statusCode == http.StatusGone,                       // 410
+		statusCode == http.StatusUnavailableForLegalReasons: // 451
 		return ActionFailover
 
-	case resp.StatusCode == http.StatusTooManyRequests, // 429（限流）
-		resp.StatusCode == http.StatusPaymentRequired: // 402（欠费）
+	case statusCode == http.StatusTooManyRequests, // 429（限流）
+		statusCode == http.StatusPaymentRequired: // 402（欠费）
 		return ActionFailFast
 
 	default:
