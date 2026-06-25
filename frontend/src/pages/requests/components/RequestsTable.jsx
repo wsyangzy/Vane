@@ -28,6 +28,33 @@ const ChainTooltipBadge = ({ label, value }) => (
   </span>
 );
 
+const hasInterChannelTransfer = (request) => {
+  const provider = request?.provider || 'claude';
+  if (provider === 'codex') return false;
+  return chainHasMultipleChannels(getEndpointChainItems(request));
+};
+
+const ChannelCell = ({ request }) => {
+  const channelLabel = request.channel || '-';
+  const showTransferIcon = hasInterChannelTransfer(request);
+
+  return (
+    <span className="inline-flex max-w-[10rem] items-center justify-center gap-1.5 min-w-0">
+      <span className="text-purple-600 text-xs font-medium truncate">{channelLabel}</span>
+      {showTransferIcon && (
+        <Tooltip content="渠道间转移记录">
+          <span
+            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-violet-100/70 text-violet-600 ring-1 ring-inset ring-violet-200/70"
+            aria-label="渠道间转移记录"
+          >
+            <RefreshCw className="h-2.5 w-2.5 stroke-[2.4]" />
+          </span>
+        </Tooltip>
+      )}
+    </span>
+  );
+};
+
 /**
  * EndpointChainCell - 端点链路单元格组件（折叠显示 + Portal Tooltip）
  * 使用 createPortal 渲染到 document.body，避免被父容器 overflow 裁剪
@@ -310,7 +337,7 @@ const renderCell = (columnId, request) => {
         />
       );
     case 'channel':
-      return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
+      return <ChannelCell request={request} />;
     case 'endpoint':
       return <EndpointChainCell request={request} />;
     case 'duration':

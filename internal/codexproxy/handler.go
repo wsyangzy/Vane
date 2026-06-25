@@ -772,6 +772,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	var modelLogged, usageLogged bool
 	var outputSentRecorded bool
 	var downstreamStreamErr *UpstreamStreamError
+	var streamCompleted bool
 	var pendingLines [][]byte
 	var pendingBytes int
 	currentEvent := ""
@@ -830,7 +831,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		}
 
 		// 解析 token（流式最终 chunk 可能包含 usage）
-		if result, _ := h.tokenParser.ParseStreamingLine(line); result != nil {
+		if result, isDone := h.tokenParser.ParseStreamingLine(line); isDone {
+			streamCompleted = true
+		} else if result != nil {
 			// 🆕 [详细日志] 首次从 response 事件提取到模型时记录
 			if !modelLogged && result.Model != "" {
 				h.logger.Info(fmt.Sprintf("🎯 [Codex模型提取] [%s] 从response事件提取模型: %s",
@@ -846,6 +849,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 				usageLogged = true
 			}
 			lastResult = result
+		}
+		if isCodexStreamCompletionLine(currentEvent, line) {
+			streamCompleted = true
 		}
 
 		if !headersWritten && !isLikelyCodexOutputLine(currentEvent, line) {
@@ -866,6 +872,30 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 				Type:       "stream_read_error",
 				Message:    scanErr.Error(),
 				StatusCode: http.StatusBadGateway,
+			}
+		}
+		if isContextCanceledError(scanErr) {
+			if streamCompleted {
+				h.logger.Warn("[Codex 流式收尾取消] 已收到完成事件，按成功记录",
+					"provider", "codex",
+					"request_id", requestID,
+					"endpoint", endpointName,
+					"bytes_processed", bytesProcessed,
+					"error", scanErr,
+				)
+				h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, channelName)
+				return nil
+			}
+			if outputSentRecorded {
+				h.logger.Warn("[Codex 流式下游取消] 已输出内容后连接取消，按客户端取消记录",
+					"provider", "codex",
+					"request_id", requestID,
+					"endpoint", endpointName,
+					"bytes_processed", bytesProcessed,
+					"error", scanErr,
+				)
+				h.recordCancelled(requestID, startTime, "client_canceled_after_output", 499, lastResult, requestModel, endpointName, channelName)
+				return nil
 			}
 		}
 		h.recordFailure(requestID, startTime, "network_error", scanErr.Error(), http.StatusBadGateway, nil, requestModel)
@@ -972,6 +1002,29 @@ func isLikelyCodexOutputLine(eventName string, line []byte) bool {
 		bytes.Contains(payloadLower, []byte(`"delta"`)) ||
 		bytes.Contains(payloadLower, []byte(`"content"`)) ||
 		bytes.Contains(payloadLower, []byte(`"output_text"`))
+}
+
+func isCodexStreamCompletionLine(eventName string, line []byte) bool {
+	eventName = strings.ToLower(strings.TrimSpace(eventName))
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, sseDataPrefix) {
+		return false
+	}
+	if eventName == "response.completed" {
+		return true
+	}
+	payload := bytes.ToLower(bytes.TrimSpace(trimmed[len(sseDataPrefix):]))
+	return bytes.Contains(payload, []byte(`"response.completed"`))
+}
+
+func isContextCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "context canceled")
 }
 
 // ============================================
@@ -1155,6 +1208,21 @@ func (h *Handler) recordFailure(requestID string, startTime time.Time, reason st
 		modelName = requestModel
 	}
 	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", reason, detail, duration, httpStatus, tokens)
+}
+
+func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason string, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, channelName string) {
+	if h.usageTracker == nil {
+		return
+	}
+	duration := time.Since(startTime)
+	var tokens *tracking.TokenUsage
+	modelName := requestModel
+	if tokenResult != nil {
+		modelName = pickModelName(tokenResult.Model, requestModel)
+		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, endpointName))
+	}
+	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
+	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", reason, "", duration, httpStatus, tokens)
 }
 
 // ============================================
