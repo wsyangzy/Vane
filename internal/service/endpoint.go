@@ -723,9 +723,18 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 	token := record.Token
 	apiKey := record.ApiKey
 	credentialGroupName := record.CredentialGroupName
+	credentialGroupID := record.CredentialGroupID
 	credentialGroupOrder := 0
-	if s.credentialGroupStore != nil && record.CredentialGroupID > 0 {
-		if group, err := s.credentialGroupStore.GetByID(context.Background(), record.CredentialGroupID); err == nil && group != nil {
+	if s.credentialGroupStore != nil {
+		var group *store.ClaudeCredentialGroupRecord
+		if record.CredentialGroupID > 0 {
+			group, _ = s.credentialGroupStore.GetByID(context.Background(), record.CredentialGroupID)
+		}
+		if group == nil {
+			group, _ = s.credentialGroupStore.GetDefaultByChannel(context.Background(), record.Channel)
+		}
+		if group != nil {
+			credentialGroupID = group.ID
 			credentialGroupName = group.Name
 			credentialGroupOrder = s.credentialGroupOrder(context.Background(), record.Channel, group.ID)
 			if token == "" {
@@ -742,7 +751,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		URL:                  record.URL,
 		Channel:              record.Channel,
 		RuntimeKey:           EndpointRuntimeKey(record),
-		CredentialGroupID:    record.CredentialGroupID,
+		CredentialGroupID:    credentialGroupID,
 		CredentialGroupName:  credentialGroupName,
 		CredentialGroupOrder: credentialGroupOrder,
 		Priority:             record.Priority,

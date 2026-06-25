@@ -61,6 +61,23 @@ CREATE TABLE IF NOT EXISTS endpoints (
 	created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 	updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );
+CREATE TABLE IF NOT EXISTS claude_credential_groups (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	channel TEXT NOT NULL,
+	name TEXT NOT NULL,
+	token TEXT,
+	api_key TEXT,
+	is_default INTEGER DEFAULT 0,
+	cost_multiplier REAL DEFAULT 1.0,
+	input_cost_multiplier REAL DEFAULT 1.0,
+	output_cost_multiplier REAL DEFAULT 1.0,
+	cache_creation_cost_multiplier REAL DEFAULT 1.0,
+	cache_creation_cost_multiplier_1h REAL DEFAULT 1.0,
+	cache_read_cost_multiplier REAL DEFAULT 1.0,
+	model_multipliers TEXT NOT NULL DEFAULT '[]',
+	created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+	updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+);
 `
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
@@ -124,5 +141,56 @@ func TestEndpointService_UpdateEndpoint_ConflictSameChannelSameName(t *testing.T
 		t.Fatalf("预期同渠道同名更新失败，但实际成功")
 	} else if !strings.Contains(err.Error(), "同一凭证分组内端点名称必须唯一") {
 		t.Fatalf("错误原因不够明确: %v", err)
+	}
+}
+
+func TestEndpointService_RecordToConfigUsesDefaultCredentialGroup(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	groupStore := store.NewSQLiteClaudeCredentialGroupStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg, groupStore)
+
+	ctx := context.Background()
+	group, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel:   "ch-a",
+		Name:      "默认分组",
+		Token:     "group-token",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("创建默认分组失败: %v", err)
+	}
+
+	record, err := storeImpl.Create(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "ep-a",
+		URL:             "https://example.invalid",
+		FailoverEnabled: true,
+		Enabled:         true,
+		TimeoutSeconds:  1,
+	})
+	if err != nil {
+		t.Fatalf("创建端点失败: %v", err)
+	}
+
+	runtimeConfig := svc.recordToConfig(record)
+	if runtimeConfig.CredentialGroupID != group.ID {
+		t.Fatalf("credential group id = %d, want %d", runtimeConfig.CredentialGroupID, group.ID)
+	}
+	if runtimeConfig.CredentialGroupName != "默认分组" {
+		t.Fatalf("credential group name = %q, want 默认分组", runtimeConfig.CredentialGroupName)
+	}
+	if runtimeConfig.Token != "group-token" {
+		t.Fatalf("token = %q, want group-token", runtimeConfig.Token)
 	}
 }
