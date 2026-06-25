@@ -73,6 +73,9 @@ func endpointDisplayGroupName(ep *endpoint.Endpoint) string {
 	if ep.Config.CredentialGroupName != "" {
 		return ep.Config.CredentialGroupName
 	}
+	if ep.Config.Group != "" {
+		return ep.Config.Group
+	}
 	if ep.Config.CredentialGroupID > 0 {
 		return fmt.Sprintf("g%d", ep.Config.CredentialGroupID)
 	}

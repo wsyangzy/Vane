@@ -132,6 +132,18 @@ func TestEndpointRouteNameFallsBackToName(t *testing.T) {
 	}
 }
 
+func TestEndpointDisplayGroupNameFallsBackToConfigGroup(t *testing.T) {
+	ep := &endpoint.Endpoint{Config: config.EndpointConfig{
+		Name:    "ep-a",
+		Channel: "primary",
+		Group:   "默认分组",
+	}}
+
+	if got := endpointDisplayGroupName(ep); got != "默认分组" {
+		t.Fatalf("display group = %q, want 默认分组", got)
+	}
+}
+
 func TestFailoverTerminationClassifiesTerminalErrors(t *testing.T) {
 	tests := []struct {
 		name          string

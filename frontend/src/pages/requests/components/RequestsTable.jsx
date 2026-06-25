@@ -174,6 +174,7 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
     const singleNode = parseChainNode(chainHead);
     const singleEndpoint = singleNode.endpoint || request.endpoint || '';
     const singleChannel = singleNode.channel || request.channel || '';
+    const singleGroup = singleNode.credentialGroup || request.credentialGroup || request.groupName || '';
     if (!singleEndpoint) return <span className="text-gray-400 text-xs">-</span>;
     return (
       <div
@@ -183,20 +184,18 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
         onMouseLeave={handleMouseLeave}
       >
         <div className="inline-flex items-center gap-1.5 min-w-0">
-          {showChannelInChain && singleChannel && (
-            <span className="text-purple-600 text-xs font-medium truncate max-w-[80px]">
-              {singleChannel}
-            </span>
-          )}
           <span className="text-gray-600 text-xs truncate max-w-[140px]">
             {singleEndpoint}
           </span>
         </div>
-        {(singleChannel || singleEndpoint) && renderTooltip(
+        {(singleChannel || singleGroup || singleEndpoint) && renderTooltip(
           <div className="p-2.5 whitespace-nowrap">
             <div className="flex items-center gap-1.5">
               {showChannelInChain && singleChannel && (
                 <ChainTooltipBadge label="渠道" value={singleChannel} />
+              )}
+              {singleGroup && (
+                <ChainTooltipBadge label="分组" value={singleGroup} />
               )}
               <span className="text-slate-100">{singleEndpoint}</span>
             </div>
@@ -205,9 +204,6 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
       </div>
     );
   }
-
-  const tailNode = parseChainNode(chainTail);
-  const tailChannel = tailNode.channel || request.channel || '';
 
   // 多端点情况：折叠显示，悬浮查看完整路径
   return (
@@ -218,11 +214,6 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
       onMouseLeave={handleMouseLeave}
     >
       {/* 主显示：最终端点 + 跳数徽章 */}
-      {showChannelInChain && tailChannel && (
-        <span className="text-purple-600 text-xs font-medium truncate max-w-[80px]">
-          {tailChannel}
-        </span>
-      )}
       <span className="text-gray-700 text-xs font-medium truncate max-w-[100px]">
         {tailEndpoint}
       </span>
@@ -237,9 +228,12 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
           <div className="shrink-0 px-3 pt-3 pb-1 text-[10px] text-slate-400 font-medium uppercase tracking-wide">转移路径</div>
           <div className="overflow-y-auto min-h-0 px-3 pb-3 space-y-1" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(100,116,139,0.5) transparent' }}>
             {chainItems.map((item, idx) => {
-              const { channel, endpoint } = parseChainNode(item);
+              const { channel, credentialGroup, endpoint } = parseChainNode(item);
               const isLast = idx === chainItems.length - 1;
               const isFirst = idx === 0;
+              const displayName = showChannelInChain
+                ? (endpoint || channel || '-')
+                : (endpoint || credentialGroup || '-');
               return (
                 <div key={idx}>
                   <div className="flex items-center gap-2">
@@ -250,8 +244,11 @@ const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
                       {showChannelInChain && channel && (
                         <ChainTooltipBadge label="渠道" value={channel} />
                       )}
+                      {credentialGroup && (
+                        <ChainTooltipBadge label="分组" value={credentialGroup} />
+                      )}
                       <span className={`truncate ${isLast ? 'text-emerald-400 font-semibold' : isFirst ? 'text-blue-300' : 'text-slate-300'}`}>
-                        {endpoint || channel || '-'}
+                        {displayName}
                       </span>
                     </div>
                   </div>

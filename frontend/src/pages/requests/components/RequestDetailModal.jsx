@@ -299,6 +299,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
     if (index === total - 1) return '最终';
     return '中转';
   };
+  const formatChainEndpointName = (credentialGroup, endpoint) => (
+    [credentialGroup, endpoint].filter(Boolean).join(' ') || endpoint || credentialGroup || '-'
+  );
 
   const errorText = [
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
@@ -773,6 +776,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
               {/* 统计摘要条 */}
               {chainNodes.length > 0 && (() => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
+                const uniqueGroups = new Set(chainNodes.map(n => n.credentialGroup).filter(Boolean));
                 const uniqueEndpoints = new Set(chainNodes.map(n => n.endpoint).filter(Boolean));
                 const channelSwitches = showChannelInChain
                   ? chainNodes.filter((n, i) => i > 0 && n.channel && chainNodes[i - 1].channel && n.channel !== chainNodes[i - 1].channel).length
@@ -793,6 +797,12 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
                           <Layers className="w-3 h-3" />
                           渠道 {currentChannelLabel}
+                        </span>
+                      )}
+                      {uniqueGroups.size > 0 && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-50 text-violet-700 text-xs font-medium rounded-lg border border-violet-200">
+                          <Layers className="w-3 h-3" />
+                          {uniqueGroups.size} 分组
                         </span>
                       )}
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
@@ -827,9 +837,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                       )}
                       {chainNodes.map((node, idx) => {
                         const channelLabel = node.channel || '未知渠道';
+                        const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
+                        const endpointDisplayLabel = showChannelInChain
+                          ? endpointLabel
+                          : formatChainEndpointName(groupLabel, endpointLabel);
                         const routeLabel = [
                           showChannelInChain ? channelLabel : '',
+                          groupLabel,
                           endpointLabel
                         ].filter(Boolean).join(' / ');
                         const tone = getChannelTone(node.channel);
@@ -867,9 +882,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                                       <span className="mr-1 text-current/70">渠道</span>{channelLabel}
                                     </span>
                                   )}
+                                  {(showChannelInChain || !node.channel) && groupLabel && (
+                                    <span className="inline-flex max-w-[6rem] items-center rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 shrink-0 truncate">
+                                      <span className="mr-1 text-violet-400">分组</span>{groupLabel}
+                                    </span>
+                                  )}
                                   <Tooltip content={routeLabel} className="min-w-0">
                                     <span className="text-sm font-semibold text-slate-900 truncate">
-                                      {endpointLabel}
+                                      {endpointDisplayLabel}
                                     </span>
                                   </Tooltip>
                                   <span className={`ml-auto shrink-0 text-[10px] ${
