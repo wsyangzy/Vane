@@ -119,6 +119,48 @@ func TestAsyncEventProcessing(t *testing.T) {
 	}
 }
 
+func TestRecordPrivacyRedactionPersistsMatchesInRequestDetail(t *testing.T) {
+	config := &Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      50,
+		BatchSize:       5,
+		FlushInterval:   100 * time.Millisecond,
+		MaxRetry:        3,
+		CleanupInterval: 24 * time.Hour,
+		RetentionDays:   30,
+	}
+
+	tracker, err := NewUsageTracker(config)
+	if err != nil {
+		t.Fatalf("Failed to create usage tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	const requestID = "req-privacy-matches"
+	const summary = `{"changed":true,"hits":[{"rule_id":3,"rule_name":"手机号","type":"regex","category":"phone","count":1}]}`
+	const matches = `[{"rule_id":3,"rule_name":"手机号","type":"regex","category":"phone","raw":"13411110001","replacement":"fake_phone_0001"}]`
+
+	tracker.RecordRequestStart(requestID, "127.0.0.1", "test-agent", "POST", "/v1/messages", false)
+	tracker.RecordPrivacyRedaction(requestID, summary, matches)
+
+	req, ok := tracker.hotPool.Get(requestID)
+	if !ok {
+		t.Fatalf("request %s not found in hot pool", requestID)
+	}
+
+	detail := tracker.ActiveRequestToDetail(req)
+	if !detail.PrivacyRedacted {
+		t.Fatal("expected privacy redacted flag to be true")
+	}
+	if detail.PrivacyRedactionSummary != summary {
+		t.Fatalf("privacy summary mismatch: got %q want %q", detail.PrivacyRedactionSummary, summary)
+	}
+	if detail.PrivacyRedactionMatches != matches {
+		t.Fatalf("privacy matches mismatch: got %q want %q", detail.PrivacyRedactionMatches, matches)
+	}
+}
+
 func TestBatchProcessing(t *testing.T) {
 	// 🔧 [P5.1] 此测试依赖已废弃的 traditional eventChan 批处理路径
 	// P5.1 改造后 HotPool 单路径：start 状态只在内存中，不再走批处理事件队列

@@ -26,6 +26,7 @@ type StreamingHandler struct {
 	errorRecoveryFactory     ErrorRecoveryFactory
 	retryManagerFactory      RetryManagerFactory
 	suspensionManagerFactory SuspensionManagerFactory
+	privacyRedactor          PrivacyRedactor
 	// 🔧 [修复] 共享SuspensionManager实例，确保全局挂起限制生效
 	sharedSuspensionManager SuspensionManager
 }
@@ -58,6 +59,10 @@ func NewStreamingHandler(
 		// 确保流式请求与常规请求共享同一个全局挂起计数器
 		sharedSuspensionManager: sharedSuspensionManager,
 	}
+}
+
+func (sh *StreamingHandler) SetPrivacyRedactor(redactor PrivacyRedactor) {
+	sh.privacyRedactor = redactor
 }
 
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
@@ -335,12 +340,12 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		ep := endpoints[i]
 		lastFailedEndpoint = ep.Config.Name // 🚀 [端点自愈] 记录当前尝试的端点
 		// 记录已尝试的端点（确保严格优先级转移，不回退）
-		epKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+		epKey := endpoint.EndpointKeyForConfig(ep.Config)
 		triedEndpoints[epKey] = struct{}{}
 
 		// 更新生命周期管理器信息
 		routeGroup := endpointRouteName(ep)
-		lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
+		lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
 		lifecycleManager.UpdateStatus("forwarding", i, 0)
 
 		// 🔧 [端点上下文修复] 立即设置端点信息到请求上下文，确保所有分支（成功/失败/取消）的日志都能正确记录端点
@@ -368,6 +373,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			// 尝试连接端点
 			requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
+			requestBody, err := redactBodyBeforeForward(sh.privacyRedactor, requestBody, lifecycleManager)
+			if err != nil {
+				lastErr = err
+				break
+			}
 			resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 			// 🔧 [修复] 保存最后的响应，用于获取真实HTTP状态码
 			lastResp = resp
@@ -629,7 +639,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: suspend:" 数据行
 
 					// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
-					failedEndpointKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+					failedEndpointKey := epKey
 					result := sh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey)
 					switch result {
 					case SuspensionSuccess:
@@ -703,7 +713,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				if lastErr != nil && failReason == "" {
 					failReason = lastErr.Error()
 				}
-				sh.endpointManager.SetEndpointLastRequestFail(ep.Config.Name, failStatusCode, failReason)
+				sh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
 
 				if decision.SwitchEndpoint {
 					// 移除渠道内端点冷却，使用 triedEndpoints 追踪
@@ -869,8 +879,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					}
 
 					// 更新生命周期管理器信息
-					routeGroup := endpointRouteName(ep)
-					lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
+					lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
 					lifecycleManager.UpdateStatus("forwarding", lifecycleManager.GetAttemptCount(), 0)
 					*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", ep.Config.Name))
 
@@ -881,6 +890,13 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 					// 尝试转发请求
 					requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
+					requestBody, err := redactBodyBeforeForward(sh.privacyRedactor, requestBody, lifecycleManager)
+					if err != nil {
+						slog.Error("隐私脱敏失败，终止恢复重试发送", "request_id", connID, "endpoint", ep.Config.Name, "error", err)
+						lifecycleManager.FailRequest("privacy_redaction_failed", err.Error(), http.StatusInternalServerError)
+						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", http.StatusInternalServerError))
+						return
+					}
 					resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 					if err != nil && ctx.Err() != nil {
 						slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复重试期间检测到客户端取消，立即停止重试", connID))

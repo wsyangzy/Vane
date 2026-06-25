@@ -138,16 +138,19 @@ type RequestDetail struct {
 	OutputSentAt *time.Time `json:"output_sent_at"`
 	FirstByteMs  *int64     `json:"first_byte_ms"`
 
-	Channel            string `json:"channel"` // 渠道标签
-	EndpointName       string `json:"endpoint_name"`
-	EndpointChain      string `json:"endpoint_chain"`
-	GroupName          string `json:"group_name"`
-	ModelName          string `json:"model_name"`
-	OriginalModelName  string `json:"original_model_name"`
-	ModelRewriteSource string `json:"model_rewrite_source"`
-	ModelRewriteTarget string `json:"model_rewrite_target"`
-	IsStreaming        bool   `json:"is_streaming"` // 是否为流式请求
-	Provider           string `json:"provider"`     // 提供商标识: claude/codex
+	Channel                 string `json:"channel"` // 渠道标签
+	EndpointName            string `json:"endpoint_name"`
+	EndpointChain           string `json:"endpoint_chain"`
+	GroupName               string `json:"group_name"`
+	ModelName               string `json:"model_name"`
+	OriginalModelName       string `json:"original_model_name"`
+	ModelRewriteSource      string `json:"model_rewrite_source"`
+	ModelRewriteTarget      string `json:"model_rewrite_target"`
+	PrivacyRedacted         bool   `json:"privacy_redacted"`
+	PrivacyRedactionSummary string `json:"privacy_redaction_summary"`
+	PrivacyRedactionMatches string `json:"privacy_redaction_matches"`
+	IsStreaming             bool   `json:"is_streaming"` // 是否为流式请求
+	Provider                string `json:"provider"`     // 提供商标识: claude/codex
 
 	Status         string `json:"status"`
 	HTTPStatusCode *int   `json:"http_status_code"`
@@ -373,6 +376,9 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		COALESCE(original_model_name, '') as original_model_name,
 		COALESCE(model_rewrite_source, '') as model_rewrite_source,
 		COALESCE(model_rewrite_target, '') as model_rewrite_target,
+		COALESCE(privacy_redacted, false) as privacy_redacted,
+		COALESCE(privacy_redaction_summary, '') as privacy_redaction_summary,
+		COALESCE(privacy_redaction_matches, '') as privacy_redaction_matches,
 		COALESCE(is_streaming, false) as is_streaming,
 		COALESCE(provider, 'claude') as provider,
 		status, http_status_code, retry_count,
@@ -504,6 +510,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 			&detail.StartTime, &detail.EndTime, &detail.DurationMs, &detail.OutputSentAt,
 			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
 			&detail.OriginalModelName, &detail.ModelRewriteSource, &detail.ModelRewriteTarget,
+			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary, &detail.PrivacyRedactionMatches,
 			&detail.IsStreaming,
 			&detail.Provider,
 			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,

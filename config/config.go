@@ -202,24 +202,28 @@ type EndpointsStorageConfig struct {
 }
 
 type EndpointConfig struct {
-	Name                string            `yaml:"name"`
-	URL                 string            `yaml:"url"`
-	Channel             string            `yaml:"channel,omitempty"` // 渠道标签（用于分组展示）
-	Priority            int               `yaml:"priority"`
-	Group               string            `yaml:"group,omitempty"`             // DEPRECATED in
-	GroupPriority       int               `yaml:"group-priority,omitempty"`    // DEPRECATED in use Priority instead
-	FailoverEnabled     *bool             `yaml:"failover_enabled,omitempty"`  // 是否参与故障转移，默认: true
-	Cooldown            *time.Duration    `yaml:"cooldown,omitempty"`          // 端点级冷却时间（可选），默认使用全局配置
-	SkipHealthCheck     bool              `yaml:"skip_health_check,omitempty"` // 跳过健康检查（部分中转商不支持健康检查端点）
-	Token               string            `yaml:"token,omitempty"`             // 单 Token 配置（向后兼容）
-	ApiKey              string            `yaml:"api-key,omitempty"`           // 单 API Key 配置（向后兼容）
-	Tokens              []TokenConfig     `yaml:"tokens,omitempty"`            // 多 Token 配置（新功能）
-	ApiKeys             []ApiKeyConfig    `yaml:"api-keys,omitempty"`          // 多 API Key 配置（新功能）
-	Timeout             time.Duration     `yaml:"timeout"`
-	Headers             map[string]string `yaml:"headers,omitempty"`
-	SupportsCountTokens bool              `yaml:"supports_count_tokens,omitempty"` // 是否支持count_tokens端点
-	Enabled             *bool             `yaml:"enabled,omitempty"`               // 是否激活为代理端点（SQLite模式），默认: true
-	StreamOnly          bool              `yaml:"stream_only,omitempty"`           // 仅支持流式请求（非流请求不会路由到此端点）
+	Name                 string            `yaml:"name"`
+	URL                  string            `yaml:"url"`
+	Channel              string            `yaml:"channel,omitempty"` // 渠道标签（用于分组展示）
+	RuntimeKey           string            `yaml:"-"`                 // SQLite 运行时唯一键，不写入 YAML
+	CredentialGroupID    int64             `yaml:"-"`                 // SQLite Claude 凭证分组 ID
+	CredentialGroupName  string            `yaml:"-"`                 // SQLite Claude 凭证分组显示名
+	CredentialGroupOrder int               `yaml:"-"`                 // SQLite Claude 凭证分组运行时顺序
+	Priority             int               `yaml:"priority"`
+	Group                string            `yaml:"group,omitempty"`             // DEPRECATED in
+	GroupPriority        int               `yaml:"group-priority,omitempty"`    // DEPRECATED in use Priority instead
+	FailoverEnabled      *bool             `yaml:"failover_enabled,omitempty"`  // 是否参与故障转移，默认: true
+	Cooldown             *time.Duration    `yaml:"cooldown,omitempty"`          // 端点级冷却时间（可选），默认使用全局配置
+	SkipHealthCheck      bool              `yaml:"skip_health_check,omitempty"` // 跳过健康检查（部分中转商不支持健康检查端点）
+	Token                string            `yaml:"token,omitempty"`             // 单 Token 配置（向后兼容）
+	ApiKey               string            `yaml:"api-key,omitempty"`           // 单 API Key 配置（向后兼容）
+	Tokens               []TokenConfig     `yaml:"tokens,omitempty"`            // 多 Token 配置（新功能）
+	ApiKeys              []ApiKeyConfig    `yaml:"api-keys,omitempty"`          // 多 API Key 配置（新功能）
+	Timeout              time.Duration     `yaml:"timeout"`
+	Headers              map[string]string `yaml:"headers,omitempty"`
+	SupportsCountTokens  bool              `yaml:"supports_count_tokens,omitempty"` // 是否支持count_tokens端点
+	Enabled              *bool             `yaml:"enabled,omitempty"`               // 是否激活为代理端点（SQLite模式），默认: true
+	StreamOnly           bool              `yaml:"stream_only,omitempty"`           // 仅支持流式请求（非流请求不会路由到此端点）
 }
 
 // TokenConfig Token 配置项，用于多 Token 切换功能

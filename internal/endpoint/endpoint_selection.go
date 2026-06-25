@@ -82,10 +82,12 @@ func (m *Manager) GetActiveEndpointsIgnoringHealth() []*Endpoint {
 		}
 		filtered = append(filtered, ep)
 	}
-	return filtered
+	return m.sortHealthyEndpoints(filtered, false)
 }
 
-// sortHealthyEndpoints sorts healthy endpoints based on strategy with optional logging
+// sortHealthyEndpoints sorts healthy endpoints by credential group first, then by the configured
+// in-group strategy. This keeps failover deterministic: default credential group first, then
+// other groups by creation order, exhausting a group before moving to the next one.
 func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*Endpoint {
 	// Sort based on strategy
 	switch m.config.Strategy.Type {
@@ -95,7 +97,16 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 			healthy[j].mutex.RLock()
 			defer healthy[i].mutex.RUnlock()
 			defer healthy[j].mutex.RUnlock()
-			return healthy[i].Config.Priority < healthy[j].Config.Priority
+			if groupOrder := compareEndpointCredentialGroupOrder(healthy[i], healthy[j]); groupOrder != 0 {
+				return groupOrder < 0
+			}
+			if healthy[i].Config.Priority != healthy[j].Config.Priority {
+				return healthy[i].Config.Priority < healthy[j].Config.Priority
+			}
+			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+				return preferred < 0
+			}
+			return endpointSortKey(healthy[i]) < endpointSortKey(healthy[j])
 		})
 	case "fastest":
 		// Log endpoint latencies for fastest strategy (only if showLogs is true)
@@ -115,11 +126,99 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 			healthy[j].mutex.RLock()
 			defer healthy[i].mutex.RUnlock()
 			defer healthy[j].mutex.RUnlock()
-			return healthy[i].Status.ResponseTime < healthy[j].Status.ResponseTime
+			if groupOrder := compareEndpointCredentialGroupOrder(healthy[i], healthy[j]); groupOrder != 0 {
+				return groupOrder < 0
+			}
+			if healthy[i].Status.ResponseTime != healthy[j].Status.ResponseTime {
+				return healthy[i].Status.ResponseTime < healthy[j].Status.ResponseTime
+			}
+			if healthy[i].Config.Priority != healthy[j].Config.Priority {
+				return healthy[i].Config.Priority < healthy[j].Config.Priority
+			}
+			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+				return preferred < 0
+			}
+			return endpointSortKey(healthy[i]) < endpointSortKey(healthy[j])
 		})
 	}
 
 	return healthy
+}
+
+func compareEndpointCredentialGroupOrder(left, right *Endpoint) int {
+	leftOrder := 0
+	if left != nil {
+		leftOrder = left.Config.CredentialGroupOrder
+	}
+	rightOrder := 0
+	if right != nil {
+		rightOrder = right.Config.CredentialGroupOrder
+	}
+	if leftOrder == rightOrder {
+		return 0
+	}
+	if leftOrder < rightOrder {
+		return -1
+	}
+	return 1
+}
+
+func comparePreferredEndpoint(left, right *Endpoint) int {
+	leftPreferred := left != nil && left.Config.Enabled != nil && *left.Config.Enabled
+	rightPreferred := right != nil && right.Config.Enabled != nil && *right.Config.Enabled
+	if leftPreferred == rightPreferred {
+		return 0
+	}
+	if leftPreferred {
+		return -1
+	}
+	return 1
+}
+
+func endpointSortKey(ep *Endpoint) string {
+	if ep == nil {
+		return ""
+	}
+	if key := endpointKeyFromConfig(ep.Config); key != "" {
+		return key
+	}
+	return ep.Config.Name
+}
+
+func sortFastTestResultsByGroupThenResponseTime(results []*FastTestResult) []*FastTestResult {
+	successful := make([]*FastTestResult, 0, len(results))
+	for _, result := range results {
+		if result != nil && result.Success {
+			successful = append(successful, result)
+		}
+	}
+
+	sort.Slice(successful, func(i, j int) bool {
+		left := successful[i]
+		right := successful[j]
+		leftEndpoint := left.Endpoint
+		rightEndpoint := right.Endpoint
+		if groupOrder := compareEndpointCredentialGroupOrder(leftEndpoint, rightEndpoint); groupOrder != 0 {
+			return groupOrder < 0
+		}
+		if left.ResponseTime != right.ResponseTime {
+			return left.ResponseTime < right.ResponseTime
+		}
+		leftPriority := 0
+		if leftEndpoint != nil {
+			leftPriority = leftEndpoint.Config.Priority
+		}
+		rightPriority := 0
+		if rightEndpoint != nil {
+			rightPriority = rightEndpoint.Config.Priority
+		}
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		return endpointSortKey(leftEndpoint) < endpointSortKey(rightEndpoint)
+	})
+
+	return successful
 }
 
 // GetFastestEndpointsWithRealTimeTest returns endpoints from active groups sorted by real-time testing.
@@ -207,8 +306,8 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 			len(testResults), successCount, len(testResults)-successCount))
 	}
 
-	// Sort by response time (only successful results)
-	sortedResults := SortByResponseTime(testResults)
+	// Sort by credential group first, then response time within the group (only successful results).
+	sortedResults := sortFastTestResultsByGroupThenResponseTime(testResults)
 
 	if len(sortedResults) == 0 {
 		slog.WarnContext(ctx, "⚠️ [Fastest Response Mode] 活跃组所有端点测试失败，回退到健康检查模式")
@@ -416,7 +515,7 @@ func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint
 	for _, endpoint := range activeEndpoints {
 		// 检查是否在排除列表中
 		// 移除高频 DEBUG 日志，避免循环重试时日志膨胀
-		epKey := EndpointKey(endpoint.Config.Channel, endpoint.Config.Name)
+		epKey := endpointKeyFromConfig(endpoint.Config)
 		if _, excluded := excludeSet[epKey]; excluded {
 			continue
 		}
@@ -473,7 +572,7 @@ func (m *Manager) GetRecoveredEndpointsInChannel(triedKeys []string) []*Endpoint
 
 	var recovered []*Endpoint
 	for _, endpoint := range activeEndpoints {
-		epKey := EndpointKey(endpoint.Config.Channel, endpoint.Config.Name)
+		epKey := endpointKeyFromConfig(endpoint.Config)
 
 		// 检查是否参与故障转移
 		failoverEnabled := true

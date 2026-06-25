@@ -71,6 +71,8 @@ const GPT5_MINOR_COLOR_MAP = {
   6: createModelStyle('bg-[#EEF2FF] text-[#1E3A8A] border-[#818CF8]', 'openai')
 };
 
+const GPT5_CODEX_STYLE = createModelStyle('bg-[#F5F3FF] text-[#4338CA] border-[#A5B4FC]', 'openai');
+
 const GPT5_FALLBACK_COLORS = [
   createModelStyle('bg-[#27408B]/15 text-[#172554] border-[#27408B]/45', 'openai'),
   createModelStyle('bg-[#191970]/15 text-[#111827] border-[#191970]/45', 'openai'),
@@ -88,6 +90,10 @@ const CLAUDE_OPUS4_COLOR_MAP = {
 const getGpt5ColorClasses = (lowerName) => {
   const match = lowerName.match(/\bgpt[-.]?5(?:[.-](\d+))?\b/);
   if (!match) return null;
+
+  if (lowerName.includes('codex')) {
+    return GPT5_CODEX_STYLE;
+  }
 
   const minorVersion = match[1] ? Number(match[1]) : null;
   if (minorVersion === null) {

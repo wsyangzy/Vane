@@ -16,25 +16,52 @@ import Pagination from './Pagination.jsx';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
 
 /**
- * 解析链路端点，提取端点名称
- * 兼容对象格式 {channel, endpoint} 和旧字符串格式 "channel::endpoint"
+ * 解析链路节点，兼容结构化格式和历史字符串格式。
  */
-const parseEndpointName = (item) => {
-  if (!item) return '';
-  if (typeof item === 'object' && item !== null) return item.endpoint || '';
+const parseChainNode = (item) => {
+  if (!item) return { channel: '', credentialGroup: '', endpoint: '' };
+  if (typeof item === 'object' && item !== null) {
+    return {
+      channel: item.channel || '',
+      credentialGroup: item.credential_group || item.credentialGroup || item.group_name || item.group || '',
+      endpoint: item.endpoint || '',
+    };
+  }
+
   const parts = String(item).split('::');
-  return parts.length > 1 ? parts[1] : parts[0];
+  if (parts.length >= 3) {
+    return {
+      channel: parts[0] || '',
+      credentialGroup: parts[1] || '',
+      endpoint: parts.slice(2).join('::') || '',
+    };
+  }
+  if (parts.length === 2) {
+    return { channel: parts[0] || '', credentialGroup: '', endpoint: parts[1] || '' };
+  }
+  return { channel: '', credentialGroup: '', endpoint: parts[0] || '' };
 };
 
-/**
- * 解析链路端点，提取渠道名称
- * 兼容对象格式 {channel, endpoint} 和旧字符串格式 "channel::endpoint"
- */
-const parseChannelName = (item) => {
-  if (!item) return '';
-  if (typeof item === 'object' && item !== null) return item.channel || '';
-  const parts = String(item).split('::');
-  return parts.length > 1 ? parts[0] : '';
+const parseEndpointName = (item) => parseChainNode(item).endpoint;
+
+const shouldShowChainChannel = (request, interChannelFailoverEnabled) => (
+  (request?.provider || 'claude') !== 'codex' && Boolean(interChannelFailoverEnabled)
+);
+
+const ChainTooltipBadge = ({ label, value }) => (
+  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-700/80 text-[9px] font-medium text-slate-100 ring-1 ring-white/10 shrink-0">
+    <span className="text-slate-400">{label}</span>
+    <span>{value}</span>
+  </span>
+);
+
+const getEndpointChainItems = (request) => {
+  if (Array.isArray(request.endpointChain)) return request.endpointChain;
+  if (Array.isArray(request.endpoint_chain)) return request.endpoint_chain;
+  if (typeof request.endpoint_chain === 'string') {
+    return request.endpoint_chain.split(' -> ').filter(s => s.trim());
+  }
+  return [];
 };
 
 /**
@@ -42,7 +69,7 @@ const parseChannelName = (item) => {
  * 使用 createPortal 渲染到 document.body，避免被父容器 overflow 裁剪
  * @param {Object} request - 请求数据
  */
-const EndpointChainCell = ({ request }) => {
+const EndpointChainCell = ({ request, interChannelFailoverEnabled }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipPos, setTooltipPos] = useState(null);
   const triggerRef = useRef(null);
@@ -94,12 +121,15 @@ const EndpointChainCell = ({ request }) => {
     return () => window.removeEventListener('scroll', hide, true);
   }, [showTooltip]);
 
-  // 获取链路长度（api.js 已转换为 camelCase）
+  const chainItems = getEndpointChainItems(request);
+  const showChannelInChain = shouldShowChainChannel(request, interChannelFailoverEnabled);
+
+  // 获取链路长度（兼容 camelCase 和 Wails 原始 snake_case）
   const chainLength = Number.isFinite(request.endpointChainLength)
     ? request.endpointChainLength
-    : (Array.isArray(request.endpointChain) ? request.endpointChain.length : 0);
-  const chainHead = request.endpointChainHead || request.endpoint || '';
-  const chainTail = request.endpointChainTail || chainHead || '';
+    : chainItems.length;
+  const chainHead = request.endpointChainHead || chainItems[0] || request.endpoint || '';
+  const chainTail = request.endpointChainTail || chainItems[chainItems.length - 1] || chainHead || '';
 
   // 解析端点名称（去除 channel:: 前缀以简化显示）
   const tailEndpoint = parseEndpointName(chainTail);
@@ -141,8 +171,10 @@ const EndpointChainCell = ({ request }) => {
 
   // 单端点情况
   if (chainLength <= 1) {
-    const singleEndpoint = parseEndpointName(chainHead);
-    const singleChannel = parseChannelName(chainHead);
+    const singleNode = parseChainNode(chainHead);
+    const singleEndpoint = singleNode.endpoint || request.endpoint || '';
+    const singleChannel = singleNode.channel || request.channel || '';
+    const singleGroup = singleNode.credentialGroup || request.credentialGroup || request.group || '';
     if (!singleEndpoint) return <span className="text-gray-400 text-xs">-</span>;
     return (
       <div
@@ -154,12 +186,15 @@ const EndpointChainCell = ({ request }) => {
         <span className="text-gray-600 text-xs truncate max-w-[140px]">
           {singleEndpoint}
         </span>
-        {singleChannel && renderTooltip(
+        {(singleChannel || singleGroup || singleEndpoint) && renderTooltip(
           <div className="p-2.5 whitespace-nowrap">
             <div className="flex items-center gap-1.5">
-              <span className="px-1.5 py-0.5 bg-slate-700/80 text-slate-300 text-[9px] rounded font-medium">
-                {singleChannel}
-              </span>
+              {showChannelInChain && singleChannel && (
+                <ChainTooltipBadge label="渠道" value={singleChannel} />
+              )}
+              {singleGroup && (
+                <ChainTooltipBadge label="分组" value={singleGroup} />
+              )}
               <span className="text-slate-100">{singleEndpoint}</span>
             </div>
           </div>
@@ -169,12 +204,6 @@ const EndpointChainCell = ({ request }) => {
   }
 
   // 多端点情况：折叠显示，悬浮查看完整路径
-  const chainItems = Array.isArray(request.endpointChain)
-    ? request.endpointChain
-    : (typeof request.endpoint_chain === 'string'
-        ? request.endpoint_chain.split(' -> ').filter(s => s.trim())
-        : []);
-
   return (
     <div
       ref={triggerRef}
@@ -197,8 +226,7 @@ const EndpointChainCell = ({ request }) => {
           <div className="shrink-0 px-3 pt-3 pb-1 text-[10px] text-slate-400 font-medium uppercase tracking-wide">转移路径</div>
           <div className="overflow-y-auto min-h-0 px-3 pb-3 space-y-1" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(100,116,139,0.5) transparent' }}>
             {chainItems.map((item, idx) => {
-              const channel = parseChannelName(item);
-              const endpoint = parseEndpointName(item);
+              const { channel, credentialGroup, endpoint } = parseChainNode(item);
               const isLast = idx === chainItems.length - 1;
               const isFirst = idx === 0;
               return (
@@ -208,13 +236,14 @@ const EndpointChainCell = ({ request }) => {
                       {isFirst ? '起' : isLast ? '终' : '·'}
                     </span>
                     <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                      {channel && (
-                        <span className="px-1.5 py-0.5 bg-slate-700/80 text-slate-300 text-[9px] rounded shrink-0 font-medium">
-                          {channel}
-                        </span>
+                      {showChannelInChain && channel && (
+                        <ChainTooltipBadge label="渠道" value={channel} />
+                      )}
+                      {credentialGroup && (
+                        <ChainTooltipBadge label="分组" value={credentialGroup} />
                       )}
                       <span className={`truncate ${isLast ? 'text-emerald-400 font-semibold' : isFirst ? 'text-blue-300' : 'text-slate-300'}`}>
-                        {endpoint || item}
+                        {endpoint || credentialGroup || channel || '-'}
                       </span>
                     </div>
                   </div>
@@ -262,7 +291,7 @@ const LatencyCell = ({ request }) => (
  * @param {string} columnId - 列 ID
  * @param {Object} request - 请求数据
  */
-const renderCell = (columnId, request) => {
+const renderCell = (columnId, request, interChannelFailoverEnabled) => {
   switch (columnId) {
     case 'requestId':
       const StreamIcon = request.isStreaming ? Waves : RefreshCw;
@@ -314,7 +343,7 @@ const renderCell = (columnId, request) => {
     case 'channel':
       return <span className="text-purple-600 text-xs font-medium">{request.channel || '-'}</span>;
     case 'endpoint':
-      return <EndpointChainCell request={request} />;
+      return <EndpointChainCell request={request} interChannelFailoverEnabled={interChannelFailoverEnabled} />;
     case 'duration':
       return <LatencyCell request={request} />;
     case 'inputTokens':
@@ -335,7 +364,7 @@ const renderCell = (columnId, request) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
+const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick, interChannelFailoverEnabled }) => {
   const [clickCount, setClickCount] = React.useState(0);
   const [clickTimer, setClickTimer] = React.useState(null);
 
@@ -375,7 +404,7 @@ const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
           key={colId}
           className="px-3 py-3 text-center align-middle"
         >
-          {renderCell(colId, request)}
+          {renderCell(colId, request, interChannelFailoverEnabled)}
         </td>
       ))}
     </tr>
@@ -402,7 +431,8 @@ const RequestsTable = ({
   onPageSizeChange,
   visibleColumns = [],
   columnConfigs = [],
-  onRowDoubleClick
+  onRowDoubleClick,
+  interChannelFailoverEnabled = false
 }) => {
   // 复制请求 ID
   const handleCopyId = (id) => {
@@ -461,6 +491,7 @@ const RequestsTable = ({
                   visibleColumns={visibleColumns}
                   onCopyId={handleCopyId}
                   onDoubleClick={onRowDoubleClick}
+                  interChannelFailoverEnabled={interChannelFailoverEnabled}
                 />
               ))
             )}

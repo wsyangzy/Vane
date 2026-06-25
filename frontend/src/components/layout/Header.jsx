@@ -15,6 +15,7 @@ const NAV_TABS = [
   // 组管理入口已移除，配置简化后不再需要独立的组管理页面
   // { name: 'groups', label: '组管理' },
   { name: 'requests', label: '请求追踪' },
+  { name: 'privacy', label: '隐私防护' },
   { name: 'pricing', label: '基础定价' },
   // 新增日志页面
   { name: 'logs', label: '系统日志' },
@@ -58,7 +59,7 @@ const SlidingNav = ({ tabs, activeTab, onTabChange, className = '' }) => {
   }, [activeTab]);
 
   useEffect(() => {
-    updateSlider();
+    const animationFrame = window.requestAnimationFrame(updateSlider);
 
     const container = containerRef.current;
     const activeItem = itemRefs.current[activeTab];
@@ -74,6 +75,7 @@ const SlidingNav = ({ tabs, activeTab, onTabChange, className = '' }) => {
     window.addEventListener('resize', updateSlider);
 
     return () => {
+      window.cancelAnimationFrame(animationFrame);
       resizeObserver?.disconnect();
       window.removeEventListener('resize', updateSlider);
     };

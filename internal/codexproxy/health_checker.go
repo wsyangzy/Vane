@@ -32,8 +32,8 @@ type HealthChecker struct {
 	cfg     *config.Config // 动态读取 Health.* 字段，配置热生效
 
 	mu         sync.RWMutex
-	latencies  map[string]int64     // endpoint name -> latency ms (-1 表示超时/不可达)
-	lastChecks map[string]time.Time // endpoint name -> last probe time
+	latencies  map[int64]int64     // endpoint ID -> latency ms (-1 表示超时/不可达)
+	lastChecks map[int64]time.Time // endpoint ID -> last probe time
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -50,8 +50,8 @@ func NewHealthChecker(manager *EndpointManager, cfg *config.Config, logger *slog
 	return &HealthChecker{
 		manager:    manager,
 		cfg:        cfg,
-		latencies:  make(map[string]int64),
-		lastChecks: make(map[string]time.Time),
+		latencies:  make(map[int64]int64),
+		lastChecks: make(map[int64]time.Time),
 		stopCh:     make(chan struct{}),
 		logger:     logger,
 	}
@@ -83,11 +83,11 @@ func (h *HealthChecker) CheckNow() {
 }
 
 // GetLatencies 获取所有端点的延迟数据（供前端展示）
-func (h *HealthChecker) GetLatencies() map[string]int64 {
+func (h *HealthChecker) GetLatencies() map[int64]int64 {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	result := make(map[string]int64, len(h.latencies))
+	result := make(map[int64]int64, len(h.latencies))
 	for k, v := range h.latencies {
 		result[k] = v
 	}
@@ -95,11 +95,11 @@ func (h *HealthChecker) GetLatencies() map[string]int64 {
 }
 
 // GetLastChecks 获取所有端点的最近探测时间（供前端展示）
-func (h *HealthChecker) GetLastChecks() map[string]time.Time {
+func (h *HealthChecker) GetLastChecks() map[int64]time.Time {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	result := make(map[string]time.Time, len(h.lastChecks))
+	result := make(map[int64]time.Time, len(h.lastChecks))
 	for k, v := range h.lastChecks {
 		result[k] = v
 	}
@@ -180,6 +180,15 @@ func (h *HealthChecker) checkAll() {
 // checkEndpoint 对单个端点执行 HTTP GET base_url + healthPath 测量 RTT
 // timeout / healthPath 每次都动态读取，配置变更立即生效
 func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
+	if ep.SkipHealthCheck {
+		h.mu.Lock()
+		delete(h.latencies, ep.ID)
+		delete(h.lastChecks, ep.ID)
+		h.mu.Unlock()
+		h.manager.MarkHealthy(ep.ID)
+		return
+	}
+
 	_, timeout, healthPath := h.readHealthConfig()
 	url := buildProbeURL(ep.BaseURL, healthPath)
 
@@ -193,8 +202,8 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"url", url,
 			"error", err,
 		)
-		h.recordLatency(ep.Name, -1)
-		h.manager.MarkUnhealthyWithDetail(ep.Name, 0, err.Error())
+		h.recordLatency(ep.ID, -1)
+		h.manager.MarkUnhealthyWithDetail(ep.ID, 0, err.Error())
 		return
 	}
 
@@ -218,15 +227,15 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"error", err,
 			"elapsed_ms", latencyMs,
 		)
-		h.recordLatency(ep.Name, -1)
-		h.manager.MarkUnhealthyWithDetail(ep.Name, 0, err.Error())
+		h.recordLatency(ep.ID, -1)
+		h.manager.MarkUnhealthyWithDetail(ep.ID, 0, err.Error())
 		return
 	}
 	resp.Body.Close()
 
 	// 任何能收到响应的情况都视为端点可达（包括 401/403 等认证错误）
-	h.recordLatency(ep.Name, latencyMs)
-	h.manager.MarkHealthy(ep.Name)
+	h.recordLatency(ep.ID, latencyMs)
+	h.manager.MarkHealthy(ep.ID)
 
 	h.logger.Debug("Codex 端点探测成功",
 		"endpoint", ep.Name,
@@ -236,10 +245,14 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 }
 
 // recordLatency 记录端点延迟
-func (h *HealthChecker) recordLatency(name string, ms int64) {
+func (h *HealthChecker) recordLatency(endpointID int64, ms int64) {
+	if endpointID <= 0 {
+		return
+	}
+
 	h.mu.Lock()
-	h.latencies[name] = ms
-	h.lastChecks[name] = time.Now()
+	h.latencies[endpointID] = ms
+	h.lastChecks[endpointID] = time.Now()
 	h.mu.Unlock()
 }
 

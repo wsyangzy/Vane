@@ -20,15 +20,19 @@ import (
 
 // CodexEndpoint 运行时端点信息（合并渠道与端点数据）
 type CodexEndpoint struct {
-	ID              int64
-	ChannelID       int64
-	Name            string
-	BaseURL         string
-	APIKey          string // 来自所属 channel
-	IsActive        bool
-	FailoverEnabled bool
-	Priority        int
-	Timeout         time.Duration
+	ID                   int64
+	ChannelID            int64
+	CredentialGroupID    int64
+	CredentialGroupName  string
+	CredentialGroupOrder int
+	Name                 string
+	BaseURL              string
+	APIKey               string
+	IsActive             bool
+	FailoverEnabled      bool
+	SkipHealthCheck      bool
+	Priority             int
+	Timeout              time.Duration
 }
 
 type EndpointFailureDetail struct {
@@ -39,15 +43,16 @@ type EndpointFailureDetail struct {
 // EndpointManager 管理活跃渠道的端点，提供故障转移选择
 type EndpointManager struct {
 	// 依赖
-	channelStore  store.CodexChannelStore
-	endpointStore store.CodexEndpointStore
+	channelStore         store.CodexChannelStore
+	endpointStore        store.CodexEndpointStore
+	credentialGroupStore store.CodexCredentialGroupStore
 
 	// 运行时状态
 	mu             sync.RWMutex
-	endpoints      []*CodexEndpoint // 按 priority ASC 排序
+	endpoints      []*CodexEndpoint // 按凭证分组顺序、priority ASC 排序
 	activeChannel  *store.CodexChannelRecord
-	unhealthyMap   map[string]bool // name -> 是否标记为不健康（仅靠健康检查恢复）
-	failureDetails map[string]EndpointFailureDetail
+	unhealthyMap   map[int64]bool // endpoint ID -> 是否标记为不健康（仅靠健康检查恢复）
+	failureDetails map[int64]EndpointFailureDetail
 
 	// 活跃端点变更回调（由 App 注入，用于发送 Wails 事件刷新前端 UI）
 	onActiveChanged func()
@@ -59,17 +64,19 @@ type EndpointManager struct {
 func NewEndpointManager(
 	channelStore store.CodexChannelStore,
 	endpointStore store.CodexEndpointStore,
+	credentialGroupStore store.CodexCredentialGroupStore,
 	logger *slog.Logger,
 ) *EndpointManager {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &EndpointManager{
-		channelStore:   channelStore,
-		endpointStore:  endpointStore,
-		unhealthyMap:   make(map[string]bool),
-		failureDetails: make(map[string]EndpointFailureDetail),
-		logger:         logger,
+		channelStore:         channelStore,
+		endpointStore:        endpointStore,
+		credentialGroupStore: credentialGroupStore,
+		unhealthyMap:         make(map[int64]bool),
+		failureDetails:       make(map[int64]EndpointFailureDetail),
+		logger:               logger,
 	}
 }
 
@@ -96,49 +103,99 @@ func (m *EndpointManager) Reload() error {
 	}
 
 	endpoints := make([]*CodexEndpoint, 0, len(records))
+	var defaultGroup *store.CodexCredentialGroupRecord
+	groupByID := make(map[int64]*store.CodexCredentialGroupRecord)
+	groupOrderByID := make(map[int64]int)
+	if m.credentialGroupStore != nil {
+		groups, groupErr := m.credentialGroupStore.ListByChannelID(ctx, channel.ID)
+		if groupErr != nil {
+			m.logger.Warn("加载 Codex 凭证分组顺序失败，将回退到端点优先级排序",
+				"channel", channel.Name,
+				"error", groupErr,
+			)
+		}
+		for idx, group := range groups {
+			if group == nil {
+				continue
+			}
+			groupByID[group.ID] = group
+			groupOrderByID[group.ID] = idx
+			if group.IsDefault {
+				defaultGroup = group
+			}
+		}
+		if defaultGroup == nil {
+			defaultGroup, _ = m.credentialGroupStore.GetDefaultByChannelID(ctx, channel.ID)
+			if defaultGroup != nil {
+				groupByID[defaultGroup.ID] = defaultGroup
+				if _, ok := groupOrderByID[defaultGroup.ID]; !ok {
+					groupOrderByID[defaultGroup.ID] = 0
+				}
+			}
+		}
+	}
 	for _, r := range records {
+		group := defaultGroup
+		if m.credentialGroupStore != nil && r.CredentialGroupID > 0 {
+			if resolved := groupByID[r.CredentialGroupID]; resolved != nil {
+				group = resolved
+			} else if resolved, groupErr := m.credentialGroupStore.GetByID(ctx, r.CredentialGroupID); groupErr == nil && resolved != nil {
+				group = resolved
+				groupByID[resolved.ID] = resolved
+				if _, ok := groupOrderByID[resolved.ID]; !ok {
+					groupOrderByID[resolved.ID] = len(groupOrderByID)
+				}
+			}
+		}
+		apiKey := r.ApiKey
+		if apiKey == "" && group != nil {
+			apiKey = group.ApiKey
+		}
+		if apiKey == "" {
+			apiKey = channel.ApiKey
+		}
+		groupName := ""
+		groupOrder := len(groupOrderByID)
+		if group != nil {
+			groupName = group.Name
+			if order, ok := groupOrderByID[group.ID]; ok {
+				groupOrder = order
+			}
+		}
 		endpoints = append(endpoints, &CodexEndpoint{
-			ID:              r.ID,
-			ChannelID:       r.ChannelID,
-			Name:            r.Name,
-			BaseURL:         r.BaseURL,
-			APIKey:          channel.ApiKey,
-			IsActive:        r.IsActive,
-			FailoverEnabled: r.FailoverEnabled,
-			Priority:        r.Priority,
-			Timeout:         time.Duration(r.TimeoutSeconds) * time.Second,
+			ID:                   r.ID,
+			ChannelID:            r.ChannelID,
+			CredentialGroupID:    r.CredentialGroupID,
+			CredentialGroupName:  groupName,
+			CredentialGroupOrder: groupOrder,
+			Name:                 r.Name,
+			BaseURL:              r.BaseURL,
+			APIKey:               apiKey,
+			IsActive:             r.IsActive,
+			FailoverEnabled:      r.FailoverEnabled,
+			SkipHealthCheck:      r.SkipHealthCheck,
+			Priority:             r.Priority,
+			Timeout:              time.Duration(r.TimeoutSeconds) * time.Second,
 		})
 	}
-	validEndpoints := make(map[string]struct{}, len(endpoints))
+	validEndpoints := make(map[int64]struct{}, len(endpoints))
 	for _, ep := range endpoints {
-		validEndpoints[ep.Name] = struct{}{}
+		validEndpoints[ep.ID] = struct{}{}
 	}
 
-	// 排序：
-	// 1. priority ASC（数字小优先）
-	// 2. 同 priority 时，IsActive=true 的端点优先（用户手动设置的活跃端点）
-	// 3. 同 priority 且都非活跃时，按 ID 升序（创建时间早的优先，提供确定性顺序）
-	sort.Slice(endpoints, func(i, j int) bool {
-		if endpoints[i].Priority != endpoints[j].Priority {
-			return endpoints[i].Priority < endpoints[j].Priority
-		}
-		if endpoints[i].IsActive != endpoints[j].IsActive {
-			return endpoints[i].IsActive // true 排前面
-		}
-		return endpoints[i].ID < endpoints[j].ID
-	})
+	sortCodexEndpoints(endpoints)
 
 	m.mu.Lock()
 	m.activeChannel = channel
 	m.endpoints = endpoints
-	for name := range m.unhealthyMap {
-		if _, ok := validEndpoints[name]; !ok {
-			delete(m.unhealthyMap, name)
+	for id := range m.unhealthyMap {
+		if _, ok := validEndpoints[id]; !ok {
+			delete(m.unhealthyMap, id)
 		}
 	}
-	for name := range m.failureDetails {
-		if _, ok := validEndpoints[name]; !ok {
-			delete(m.failureDetails, name)
+	for id := range m.failureDetails {
+		if _, ok := validEndpoints[id]; !ok {
+			delete(m.failureDetails, id)
 		}
 	}
 	m.mu.Unlock()
@@ -154,10 +211,10 @@ func (m *EndpointManager) Reload() error {
 // 逻辑:
 // 1. 过滤 failover_enabled = true 的端点
 // 2. 排除 unhealthyMap 中标记为不健康的端点（仅靠健康检查恢复）
-// 3. 排除 failedNames 中的端点（本次请求已尝试过的）
+// 3. 排除 failedIDs 中的端点（本次请求已尝试过的）
 // 4. 按 priority ASC 排序，返回第一个
 // 5. 全部耗尽返回 error
-func (m *EndpointManager) GetNextEndpoint(failedNames []string) (*CodexEndpoint, error) {
+func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -165,19 +222,19 @@ func (m *EndpointManager) GetNextEndpoint(failedNames []string) (*CodexEndpoint,
 		return nil, fmt.Errorf("无可用 Codex 端点")
 	}
 
-	failedSet := make(map[string]struct{}, len(failedNames))
-	for _, name := range failedNames {
-		failedSet[name] = struct{}{}
+	failedSet := make(map[int64]struct{}, len(failedIDs))
+	for _, id := range failedIDs {
+		failedSet[id] = struct{}{}
 	}
 
 	for _, ep := range m.endpoints {
 		if !ep.FailoverEnabled {
 			continue
 		}
-		if _, failed := failedSet[ep.Name]; failed {
+		if _, failed := failedSet[ep.ID]; failed {
 			continue
 		}
-		if m.unhealthyMap[ep.Name] {
+		if m.unhealthyMap[ep.ID] {
 			continue
 		}
 		return ep, nil
@@ -213,50 +270,51 @@ func (m *EndpointManager) GetPrimaryEndpoint() (*CodexEndpoint, error) {
 }
 
 // MarkUnhealthy 标记端点为不健康（仅靠健康检查恢复，不再使用冷却时间）
-func (m *EndpointManager) MarkUnhealthy(name string) {
-	m.MarkUnhealthyWithDetail(name, 0, "")
+func (m *EndpointManager) MarkUnhealthy(endpointID int64) {
+	m.MarkUnhealthyWithDetail(endpointID, 0, "")
 }
 
 // MarkUnhealthyWithDetail 标记端点为不健康，并记录本次请求/探测的失败详情。
-func (m *EndpointManager) MarkUnhealthyWithDetail(name string, statusCode int, reason string) {
-	if name == "" {
+func (m *EndpointManager) MarkUnhealthyWithDetail(endpointID int64, statusCode int, reason string) {
+	if endpointID <= 0 {
 		return
 	}
 
 	m.mu.Lock()
-	_, wasUnhealthy := m.unhealthyMap[name]
-	oldDetail, hadDetail := m.failureDetails[name]
-	m.unhealthyMap[name] = true
+	name := m.endpointNameLocked(endpointID)
+	_, wasUnhealthy := m.unhealthyMap[endpointID]
+	oldDetail, hadDetail := m.failureDetails[endpointID]
+	m.unhealthyMap[endpointID] = true
 	if statusCode > 0 || reason != "" {
-		m.failureDetails[name] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
+		m.failureDetails[endpointID] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
 	}
-	newDetail := m.failureDetails[name]
+	newDetail := m.failureDetails[endpointID]
 	changed := !wasUnhealthy
 	if statusCode > 0 || reason != "" {
 		changed = changed || !hadDetail || oldDetail != newDetail
 	}
 	m.mu.Unlock()
 
-	m.logger.Warn("Codex 端点标记为不健康", "endpoint", name, "status_code", statusCode, "reason", reason)
+	m.logger.Warn("Codex 端点标记为不健康", "endpoint_id", endpointID, "endpoint", name, "status_code", statusCode, "reason", reason)
 	if changed {
 		m.notifyStateChanged()
 	}
 }
 
 // SetFailureDetail records the last failure detail without changing routing health.
-func (m *EndpointManager) SetFailureDetail(name string, statusCode int, reason string) {
-	if name == "" {
+func (m *EndpointManager) SetFailureDetail(endpointID int64, statusCode int, reason string) {
+	if endpointID <= 0 {
 		return
 	}
 
 	m.mu.Lock()
-	oldDetail, hadDetail := m.failureDetails[name]
+	oldDetail, hadDetail := m.failureDetails[endpointID]
 	if statusCode > 0 || reason != "" {
-		m.failureDetails[name] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
+		m.failureDetails[endpointID] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
 	} else {
-		delete(m.failureDetails, name)
+		delete(m.failureDetails, endpointID)
 	}
-	newDetail, hasDetail := m.failureDetails[name]
+	newDetail, hasDetail := m.failureDetails[endpointID]
 	changed := hadDetail != hasDetail || oldDetail != newDetail
 	m.mu.Unlock()
 
@@ -266,12 +324,16 @@ func (m *EndpointManager) SetFailureDetail(name string, statusCode int, reason s
 }
 
 // MarkHealthy 标记端点恢复健康（通常由健康检查器在探测成功后调用）
-func (m *EndpointManager) MarkHealthy(name string) {
+func (m *EndpointManager) MarkHealthy(endpointID int64) {
+	if endpointID <= 0 {
+		return
+	}
+
 	m.mu.Lock()
-	_, wasUnhealthy := m.unhealthyMap[name]
-	_, hadDetail := m.failureDetails[name]
-	delete(m.unhealthyMap, name)
-	delete(m.failureDetails, name)
+	_, wasUnhealthy := m.unhealthyMap[endpointID]
+	_, hadDetail := m.failureDetails[endpointID]
+	delete(m.unhealthyMap, endpointID)
+	delete(m.failureDetails, endpointID)
 	m.mu.Unlock()
 
 	if wasUnhealthy || hadDetail {
@@ -288,8 +350,8 @@ func (m *EndpointManager) ResetUnhealthy() {
 		m.mu.Unlock()
 		return
 	}
-	m.unhealthyMap = make(map[string]bool)
-	m.failureDetails = make(map[string]EndpointFailureDetail)
+	m.unhealthyMap = make(map[int64]bool)
+	m.failureDetails = make(map[int64]EndpointFailureDetail)
 	m.mu.Unlock()
 
 	m.logger.Info("Codex 端点不健康标记已重置（loop_retry 新一轮）")
@@ -299,21 +361,25 @@ func (m *EndpointManager) ResetUnhealthy() {
 // PromoteActive 将指定端点提升为活跃端点（同步到数据库的 codex_endpoints.is_active 字段）
 // 用于故障转移成功后将实际工作的端点标记为活跃，让前端 UI 反映真实路由状态
 // 不影响内存中的 endpoints 列表（IsActive 字段在 Reload 时刷新）
-func (m *EndpointManager) PromoteActive(name string) error {
+func (m *EndpointManager) PromoteActive(endpointID int64) error {
+	if endpointID <= 0 {
+		return fmt.Errorf("端点 ID 无效: %d", endpointID)
+	}
+
 	m.mu.RLock()
-	var targetID int64
+	var targetName string
 	var alreadyActive bool
 	for _, ep := range m.endpoints {
-		if ep.Name == name {
-			targetID = ep.ID
+		if ep.ID == endpointID {
+			targetName = ep.Name
 			alreadyActive = ep.IsActive
 			break
 		}
 	}
 	m.mu.RUnlock()
 
-	if targetID == 0 {
-		return fmt.Errorf("端点 %s 不在当前活跃渠道中", name)
+	if targetName == "" {
+		return fmt.Errorf("端点 ID %d 不在当前活跃渠道中", endpointID)
 	}
 	if alreadyActive {
 		return nil // 已是活跃端点，无需更新
@@ -321,28 +387,20 @@ func (m *EndpointManager) PromoteActive(name string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := m.endpointStore.SetActive(ctx, targetID); err != nil {
-		return fmt.Errorf("提升端点 %s 为活跃失败: %w", name, err)
+	if err := m.endpointStore.SetActive(ctx, endpointID); err != nil {
+		return fmt.Errorf("提升端点 %s 为活跃失败: %w", targetName, err)
 	}
 
 	// 同步更新内存状态（避免下次 Reload 之前 IsActive 不一致），并重新排序
-	// 排序规则与 Reload 一致：priority ASC → IsActive DESC → ID ASC
+	// 排序规则与 Reload 一致：凭证分组顺序 → priority ASC → IsActive DESC → ID ASC
 	m.mu.Lock()
 	for _, ep := range m.endpoints {
-		ep.IsActive = ep.Name == name
+		ep.IsActive = ep.ID == endpointID
 	}
-	sort.Slice(m.endpoints, func(i, j int) bool {
-		if m.endpoints[i].Priority != m.endpoints[j].Priority {
-			return m.endpoints[i].Priority < m.endpoints[j].Priority
-		}
-		if m.endpoints[i].IsActive != m.endpoints[j].IsActive {
-			return m.endpoints[i].IsActive
-		}
-		return m.endpoints[i].ID < m.endpoints[j].ID
-	})
+	sortCodexEndpoints(m.endpoints)
 	m.mu.Unlock()
 
-	m.logger.Info("Codex 端点已提升为活跃（故障转移后同步）", "endpoint", name)
+	m.logger.Info("Codex 端点已提升为活跃（故障转移后同步）", "endpoint_id", endpointID, "endpoint", targetName)
 	if m.onActiveChanged != nil {
 		go m.onActiveChanged()
 	}
@@ -368,22 +426,54 @@ func (m *EndpointManager) notifyStateChanged() {
 
 // IsHealthy 判断端点是否健康（不在 unhealthyMap 中即视为健康）
 // 用于前端健康图表统计；与 GetNextEndpoint 的健康判断逻辑保持一致。
-func (m *EndpointManager) IsHealthy(name string) bool {
+func (m *EndpointManager) IsHealthy(endpointID int64) bool {
+	if endpointID <= 0 {
+		return false
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return !m.unhealthyMap[name]
+	return !m.unhealthyMap[endpointID]
 }
 
-func (m *EndpointManager) GetFailureDetail(name string) (int, string, bool) {
+func sortCodexEndpoints(endpoints []*CodexEndpoint) {
+	sort.Slice(endpoints, func(i, j int) bool {
+		if endpoints[i].CredentialGroupOrder != endpoints[j].CredentialGroupOrder {
+			return endpoints[i].CredentialGroupOrder < endpoints[j].CredentialGroupOrder
+		}
+		if endpoints[i].Priority != endpoints[j].Priority {
+			return endpoints[i].Priority < endpoints[j].Priority
+		}
+		if endpoints[i].IsActive != endpoints[j].IsActive {
+			return endpoints[i].IsActive
+		}
+		return endpoints[i].ID < endpoints[j].ID
+	})
+}
+
+func (m *EndpointManager) GetFailureDetail(endpointID int64) (int, string, bool) {
+	if endpointID <= 0 {
+		return 0, "", false
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	detail, ok := m.failureDetails[name]
+	detail, ok := m.failureDetails[endpointID]
 	if !ok {
 		return 0, "", false
 	}
 	return detail.StatusCode, detail.Reason, true
+}
+
+func (m *EndpointManager) endpointNameLocked(endpointID int64) string {
+	for _, ep := range m.endpoints {
+		if ep.ID == endpointID {
+			return ep.Name
+		}
+	}
+	return ""
 }
 
 // GetActiveChannel 获取当前活跃渠道信息

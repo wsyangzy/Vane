@@ -37,8 +37,9 @@ func createEndpointServiceTestDB(t *testing.T) (*sql.DB, func()) {
 	schema := `
 CREATE TABLE IF NOT EXISTS endpoints (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	channel TEXT NOT NULL,
-	name TEXT NOT NULL,
+		channel TEXT NOT NULL,
+		credential_group_id INTEGER,
+		name TEXT NOT NULL,
 	url TEXT NOT NULL,
 	token TEXT,
 	api_key TEXT,
@@ -117,11 +118,11 @@ func TestEndpointService_UpdateEndpoint_ConflictSameChannelSameName(t *testing.T
 		t.Fatalf("创建端点2失败: %v", err)
 	}
 
-	// 允许不同渠道同名：将 ep2 移动到 ch-a 后应被阻拦，并提示“同渠道同名”原因。
+	// 允许不同渠道同名：将 ep2 移动到 ch-a 后应被阻拦，并提示“同凭证分组同名”原因。
 	ep2.Channel = ep1.Channel
 	if err := svc.UpdateEndpoint(ctx, ep2); err == nil {
 		t.Fatalf("预期同渠道同名更新失败，但实际成功")
-	} else if !strings.Contains(err.Error(), "同一渠道内端点名称必须唯一") {
+	} else if !strings.Contains(err.Error(), "同一凭证分组内端点名称必须唯一") {
 		t.Fatalf("错误原因不够明确: %v", err)
 	}
 }

@@ -286,6 +286,9 @@ type RequestRecord struct {
 	OriginalModelName        string      `json:"original_model_name"`
 	ModelRewriteSource       string      `json:"model_rewrite_source"`
 	ModelRewriteTarget       string      `json:"model_rewrite_target"`
+	PrivacyRedacted          bool        `json:"privacy_redacted"`
+	PrivacyRedactionSummary  string      `json:"privacy_redaction_summary,omitempty"`
+	PrivacyRedactionMatches  string      `json:"privacy_redaction_matches,omitempty"`
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
 	HTTPStatus               int         `json:"http_status"`
@@ -452,6 +455,9 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		OriginalModelName:             r.OriginalModelName,
 		ModelRewriteSource:            r.ModelRewriteSource,
 		ModelRewriteTarget:            r.ModelRewriteTarget,
+		PrivacyRedacted:               r.PrivacyRedacted,
+		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
+		PrivacyRedactionMatches:       r.PrivacyRedactionMatches,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
 		RetryCount:                    r.RetryCount,
@@ -501,14 +507,16 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 
 // chainNode 链路节点（API 响应用）
 type chainNode struct {
-	Hop      int    `json:"hop"`
-	Channel  string `json:"channel"`
-	Endpoint string `json:"endpoint"`
+	Hop             int    `json:"hop"`
+	Channel         string `json:"channel"`
+	CredentialGroup string `json:"credential_group,omitempty"`
+	Endpoint        string `json:"endpoint"`
 }
 
 // parseEndpointChain 解析端点链路字符串（兼容三种历史格式）
-//   - 新格式: [{"channel":"A","endpoint":"B"},...]
-//   - 中间格式: ["A::B","C::D"]
+//   - 新格式: [{"channel":"A","credential_group":"G","endpoint":"B"},...]
+//   - 兼容格式: [{"channel":"A","endpoint":"B"},...]
+//   - 中间格式: ["A::G::B","C::D"]
 //   - 旧格式: "A::B -> C::D -> ..."
 func parseEndpointChain(chain string) []chainNode {
 	if chain == "" {
@@ -541,7 +549,7 @@ func fillHopNumbers(nodes []chainNode) {
 	}
 }
 
-// keyStringsToNodes 将 "channel::endpoint" 格式字符串转为结构化节点
+// keyStringsToNodes 将 "channel::endpoint" 或 "channel::group::endpoint" 格式字符串转为结构化节点
 func keyStringsToNodes(items []string) []chainNode {
 	nodes := make([]chainNode, 0, len(items))
 	for _, item := range items {
@@ -550,8 +558,20 @@ func keyStringsToNodes(items []string) []chainNode {
 			continue
 		}
 		hop := len(nodes) + 1
-		if idx := strings.Index(trimmed, "::"); idx > 0 {
-			nodes = append(nodes, chainNode{Hop: hop, Channel: trimmed[:idx], Endpoint: trimmed[idx+2:]})
+		parts := strings.Split(trimmed, "::")
+		if len(parts) >= 3 && strings.TrimSpace(parts[0]) != "" {
+			nodes = append(nodes, chainNode{
+				Hop:             hop,
+				Channel:         strings.TrimSpace(parts[0]),
+				CredentialGroup: strings.TrimSpace(parts[1]),
+				Endpoint:        strings.TrimSpace(strings.Join(parts[2:], "::")),
+			})
+		} else if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" {
+			nodes = append(nodes, chainNode{
+				Hop:      hop,
+				Channel:  strings.TrimSpace(parts[0]),
+				Endpoint: strings.TrimSpace(parts[1]),
+			})
 		} else {
 			nodes = append(nodes, chainNode{Hop: hop, Endpoint: trimmed})
 		}

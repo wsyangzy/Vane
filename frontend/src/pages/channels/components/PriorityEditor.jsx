@@ -6,7 +6,11 @@
 
 import { useState, useRef, useImperativeHandle, forwardRef } from 'react';
 import { Minus, Plus } from 'lucide-react';
-import { Tooltip } from '@components/ui';
+
+const normalizePriority = (priority, fallback = 0) => {
+  const numeric = Number(priority);
+  return Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : fallback;
+};
 
 /**
  * 优先级编辑器组件
@@ -14,8 +18,9 @@ import { Tooltip } from '@components/ui';
  * @param {string} endpointName - 端点名称
  * @param {Function} onUpdate - 更新回调 (endpointName, newPriority) => Promise
  */
-const PriorityEditor = forwardRef(({ priority = 1, endpointName, onUpdate }, ref) => {
-  const [value, setValue] = useState(priority);
+const PriorityEditor = forwardRef(({ priority = 0, endpointName, onUpdate }, ref) => {
+  const currentPriority = normalizePriority(priority);
+  const [value, setValue] = useState(currentPriority);
   const [isUpdating, setIsUpdating] = useState(false);
   const inputRef = useRef(null);
 
@@ -27,7 +32,7 @@ const PriorityEditor = forwardRef(({ priority = 1, endpointName, onUpdate }, ref
   }));
 
   // 值变化是否需要更新
-  const hasChanged = value !== priority;
+  const hasChanged = value !== currentPriority;
 
   // 增加优先级
   const handleIncrease = () => {
@@ -36,15 +41,14 @@ const PriorityEditor = forwardRef(({ priority = 1, endpointName, onUpdate }, ref
 
   // 减少优先级
   const handleDecrease = () => {
-    if (value > 1) {
+    if (value > 0) {
       setValue(prev => prev - 1);
     }
   };
 
   // 手动输入
   const handleInputChange = (e) => {
-    const newValue = parseInt(e.target.value) || 1;
-    setValue(Math.max(1, newValue));
+    setValue(normalizePriority(e.target.value));
   };
 
   // 执行更新
@@ -58,11 +62,11 @@ const PriorityEditor = forwardRef(({ priority = 1, endpointName, onUpdate }, ref
         // 更新成功，保持当前值
       } else {
         // 更新失败，回退值
-        setValue(priority);
+        setValue(currentPriority);
       }
     } catch (error) {
       console.error('优先级更新失败:', error);
-      setValue(priority);
+      setValue(currentPriority);
     } finally {
       setIsUpdating(false);
     }
@@ -73,76 +77,68 @@ const PriorityEditor = forwardRef(({ priority = 1, endpointName, onUpdate }, ref
     if (e.key === 'Enter') {
       handleUpdate();
     } else if (e.key === 'Escape') {
-      setValue(priority);
+      setValue(currentPriority);
     }
   };
 
   return (
     <div className="inline-flex items-center gap-0.5">
       {/* 减少按钮 */}
-      <Tooltip content="降低优先级">
-        <button
-          onClick={handleDecrease}
-          disabled={value <= 1 || isUpdating}
-          className={`
-            p-1 rounded transition-colors
-            ${value <= 1 || isUpdating
-              ? 'text-slate-300 cursor-not-allowed'
-              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
-          `}
-          aria-label="降低优先级"
-        >
-          <Minus size={12} />
-        </button>
-      </Tooltip>
+      <button
+        onClick={handleDecrease}
+        disabled={value <= 0 || isUpdating}
+        className={`
+          p-1 rounded transition-colors
+          ${value <= 0 || isUpdating
+            ? 'text-slate-300 cursor-not-allowed'
+            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
+        `}
+        aria-label="降低优先级"
+      >
+        <Minus size={12} />
+      </button>
 
       {/* 输入框 */}
-      <Tooltip content={hasChanged ? '有未保存的更改' : '当前优先级'}>
-        <input
-          ref={inputRef}
-          type="number"
-          min="1"
-          value={value}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onBlur={() => {
-            if (hasChanged) handleUpdate();
-          }}
-          disabled={isUpdating}
-          className={`
-            w-10 h-7 text-center text-xs font-semibold rounded border transition-all
-            ${hasChanged
-              ? 'border-amber-300 bg-amber-50 text-amber-700'
-              : 'border-slate-200 bg-slate-50 text-slate-600'}
-            ${isUpdating ? 'opacity-50' : ''}
-            focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400
-          `}
-          aria-label={hasChanged ? '有未保存的更改' : '当前优先级'}
-        />
-      </Tooltip>
+      <input
+        ref={inputRef}
+        type="number"
+        min="0"
+        value={value}
+        onChange={handleInputChange}
+        onKeyDown={handleKeyDown}
+        onBlur={() => {
+          if (hasChanged) handleUpdate();
+        }}
+        disabled={isUpdating}
+        className={`
+          w-10 h-7 text-center text-xs font-semibold rounded border transition-all
+          ${hasChanged
+            ? 'border-amber-300 bg-amber-50 text-amber-700'
+            : 'border-slate-200 bg-slate-50 text-slate-600'}
+          ${isUpdating ? 'opacity-50' : ''}
+          focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400
+        `}
+        aria-label={hasChanged ? '有未保存的更改' : '当前优先级'}
+      />
 
       {/* 增加按钮 */}
-      <Tooltip content="提高优先级">
-        <button
-          onClick={handleIncrease}
-          disabled={isUpdating}
-          className={`
-            p-1 rounded transition-colors
-            ${isUpdating
-              ? 'text-slate-300 cursor-not-allowed'
-              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
-          `}
-          aria-label="提高优先级"
-        >
-          <Plus size={12} />
-        </button>
-      </Tooltip>
+      <button
+        onClick={handleIncrease}
+        disabled={isUpdating}
+        className={`
+          p-1 rounded transition-colors
+          ${isUpdating
+            ? 'text-slate-300 cursor-not-allowed'
+            : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}
+        `}
+        aria-label="提高优先级"
+      >
+        <Plus size={12} />
+      </button>
 
       {/* 更新指示器 */}
       {hasChanged && !isUpdating && (
-        <Tooltip content="有未保存的更改">
-          <span className="ml-1 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-        </Tooltip>
+        <span className="ml-1 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
       )}
     </div>
   );

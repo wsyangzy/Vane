@@ -487,7 +487,7 @@ func (m *Manager) SetEndpointSkipHealthCheck(endpointKey string, skip bool) {
 	defer m.endpointsMu.Unlock()
 
 	for _, ep := range m.endpoints {
-		key := EndpointKey(ep.Config.Channel, ep.Config.Name)
+		key := endpointKeyFromConfig(ep.Config)
 		if key == endpointKey {
 			ep.mutex.Lock()
 			ep.Config.SkipHealthCheck = skip

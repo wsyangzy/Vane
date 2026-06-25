@@ -12,16 +12,21 @@ import (
 	"ai-relay-forwarder/internal/tracking"
 )
 
-var codexEndpointNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N}\s_\-]{0,63}$`)
+var codexEndpointNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} _-]{0,63}$`)
 
 // CodexEndpointService 管理 Codex 端点（name + base_url）。
 type CodexEndpointService struct {
-	endpointStore store.CodexEndpointStore
-	channelStore  store.CodexChannelStore
+	endpointStore        store.CodexEndpointStore
+	channelStore         store.CodexChannelStore
+	credentialGroupStore store.CodexCredentialGroupStore
 }
 
-func NewCodexEndpointService(endpointStore store.CodexEndpointStore, channelStore store.CodexChannelStore) *CodexEndpointService {
-	return &CodexEndpointService{endpointStore: endpointStore, channelStore: channelStore}
+func NewCodexEndpointService(endpointStore store.CodexEndpointStore, channelStore store.CodexChannelStore, credentialGroupStore ...store.CodexCredentialGroupStore) *CodexEndpointService {
+	var groupStore store.CodexCredentialGroupStore
+	if len(credentialGroupStore) > 0 {
+		groupStore = credentialGroupStore[0]
+	}
+	return &CodexEndpointService{endpointStore: endpointStore, channelStore: channelStore, credentialGroupStore: groupStore}
 }
 
 func (s *CodexEndpointService) ListByChannelID(ctx context.Context, channelID int64) ([]*store.CodexEndpointRecord, error) {
@@ -49,21 +54,24 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	if channel == nil {
 		return nil, fmt.Errorf("Codex 渠道不存在: %d", record.ChannelID)
 	}
+	if err := s.ensureEndpointCredentialGroup(ctx, record); err != nil {
+		return nil, err
+	}
 
-	urlConflict, err := s.endpointStore.GetByChannelAndURL(ctx, record.ChannelID, record.BaseURL)
+	urlConflict, err := s.findEndpointURLConflict(ctx, record.ChannelID, record.CredentialGroupID, record.BaseURL)
 	if err != nil {
 		return nil, err
 	}
 	if urlConflict != nil {
-		return nil, fmt.Errorf("该渠道下已存在相同的 base_url")
+		return nil, fmt.Errorf("该凭证分组下已存在相同的 base_url")
 	}
 
-	nameConflict, err := s.endpointStore.GetByChannelAndName(ctx, record.ChannelID, record.Name)
+	nameConflict, err := s.findEndpointNameConflict(ctx, record.ChannelID, record.CredentialGroupID, record.Name)
 	if err != nil {
 		return nil, err
 	}
 	if nameConflict != nil {
-		return nil, fmt.Errorf("该渠道下已存在相同的端点名 '%s'", record.Name)
+		return nil, fmt.Errorf("该凭证分组下已存在相同的端点名 '%s'", record.Name)
 	}
 
 	record.IsActive = false
@@ -85,9 +93,10 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	return created, nil
 }
 
-func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, failoverEnabled bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
+func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)
+	apiKey = strings.TrimSpace(apiKey)
 	billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource)
 	normalizedModelMultipliers, err := normalizeCodexModelMultipliers(modelMultipliers)
 	if err != nil {
@@ -110,32 +119,38 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	if existing == nil {
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
+	if credentialGroupID <= 0 {
+		credentialGroupID = existing.CredentialGroupID
+	}
+	if err := s.validateCredentialGroup(ctx, existing.ChannelID, credentialGroupID); err != nil {
+		return err
+	}
 
-	if existing.Name == name && existing.BaseURL == baseURL && existing.FailoverEnabled == failoverEnabled && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
+	if existing.Name == name && existing.BaseURL == baseURL && existing.CredentialGroupID == credentialGroupID && existing.ApiKey == apiKey && existing.FailoverEnabled == failoverEnabled && existing.SkipHealthCheck == skipHealthCheck && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
 		return nil
 	}
 
-	if existing.BaseURL != baseURL {
-		urlConflict, err := s.endpointStore.GetByChannelAndURL(ctx, existing.ChannelID, baseURL)
+	if existing.BaseURL != baseURL || existing.CredentialGroupID != credentialGroupID {
+		urlConflict, err := s.findEndpointURLConflict(ctx, existing.ChannelID, credentialGroupID, baseURL)
 		if err != nil {
 			return err
 		}
 		if urlConflict != nil && urlConflict.ID != id {
-			return fmt.Errorf("该渠道下已存在相同的 base_url")
+			return fmt.Errorf("该凭证分组下已存在相同的 base_url")
 		}
 	}
 
-	if existing.Name != name {
-		nameConflict, err := s.endpointStore.GetByChannelAndName(ctx, existing.ChannelID, name)
+	if existing.Name != name || existing.CredentialGroupID != credentialGroupID {
+		nameConflict, err := s.findEndpointNameConflict(ctx, existing.ChannelID, credentialGroupID, name)
 		if err != nil {
 			return err
 		}
 		if nameConflict != nil && nameConflict.ID != id {
-			return fmt.Errorf("该渠道下已存在相同的端点名 '%s'", name)
+			return fmt.Errorf("该凭证分组下已存在相同的端点名 '%s'", name)
 		}
 	}
 
-	return s.endpointStore.Update(ctx, id, name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
+	return s.endpointStore.Update(ctx, id, name, baseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
 }
 
 // DeleteEndpoint 删除端点。若被删除的是当前激活端点：
@@ -175,6 +190,9 @@ func (s *CodexEndpointService) ActivateEndpoint(ctx context.Context, id int64) e
 	if existing == nil {
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
+	if !existing.FailoverEnabled {
+		return fmt.Errorf("Codex 端点未参与故障转移，不能设为当前端点")
+	}
 	return s.endpointStore.SetActive(ctx, id)
 }
 
@@ -187,6 +205,7 @@ func normalizeAndValidateCodexEndpoint(record *store.CodexEndpointRecord) error 
 	}
 	record.Name = strings.TrimSpace(record.Name)
 	record.BaseURL = strings.TrimSpace(record.BaseURL)
+	record.ApiKey = strings.TrimSpace(record.ApiKey)
 	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
 	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)
 	if err != nil {
@@ -200,6 +219,70 @@ func normalizeAndValidateCodexEndpoint(record *store.CodexEndpointRecord) error 
 		return err
 	}
 	return validateBaseURL(record.BaseURL)
+}
+
+func (s *CodexEndpointService) ensureEndpointCredentialGroup(ctx context.Context, record *store.CodexEndpointRecord) error {
+	if s.credentialGroupStore == nil {
+		return nil
+	}
+	if record.CredentialGroupID > 0 {
+		return s.validateCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
+	}
+	group, err := s.credentialGroupStore.GetDefaultByChannelID(ctx, record.ChannelID)
+	if err != nil {
+		return err
+	}
+	if group != nil {
+		record.CredentialGroupID = group.ID
+	}
+	return nil
+}
+
+func (s *CodexEndpointService) validateCredentialGroup(ctx context.Context, channelID int64, credentialGroupID int64) error {
+	if s.credentialGroupStore == nil || credentialGroupID <= 0 {
+		return nil
+	}
+	group, err := s.credentialGroupStore.GetByID(ctx, credentialGroupID)
+	if err != nil {
+		return err
+	}
+	if group == nil {
+		return fmt.Errorf("Codex 凭证分组不存在: %d", credentialGroupID)
+	}
+	if group.ChannelID != channelID {
+		return fmt.Errorf("凭证分组不属于当前渠道")
+	}
+	return nil
+}
+
+func (s *CodexEndpointService) findEndpointURLConflict(ctx context.Context, channelID, credentialGroupID int64, baseURL string) (*store.CodexEndpointRecord, error) {
+	conflict, err := s.endpointStore.GetByChannelCredentialGroupAndURL(ctx, channelID, credentialGroupID, baseURL)
+	if err != nil || conflict != nil {
+		return conflict, err
+	}
+	if !s.isDefaultCredentialGroup(ctx, channelID, credentialGroupID) {
+		return nil, nil
+	}
+	return s.endpointStore.GetByChannelCredentialGroupAndURL(ctx, channelID, 0, baseURL)
+}
+
+func (s *CodexEndpointService) findEndpointNameConflict(ctx context.Context, channelID, credentialGroupID int64, name string) (*store.CodexEndpointRecord, error) {
+	conflict, err := s.endpointStore.GetByChannelCredentialGroupAndName(ctx, channelID, credentialGroupID, name)
+	if err != nil || conflict != nil {
+		return conflict, err
+	}
+	if !s.isDefaultCredentialGroup(ctx, channelID, credentialGroupID) {
+		return nil, nil
+	}
+	return s.endpointStore.GetByChannelCredentialGroupAndName(ctx, channelID, 0, name)
+}
+
+func (s *CodexEndpointService) isDefaultCredentialGroup(ctx context.Context, channelID, credentialGroupID int64) bool {
+	if s.credentialGroupStore == nil || credentialGroupID <= 0 {
+		return false
+	}
+	group, err := s.credentialGroupStore.GetDefaultByChannelID(ctx, channelID)
+	return err == nil && group != nil && group.ID == credentialGroupID
 }
 
 func normalizeCodexModelMultipliers(rules []store.CodexModelMultiplierRecord) ([]store.CodexModelMultiplierRecord, error) {

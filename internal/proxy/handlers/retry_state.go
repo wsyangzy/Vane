@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strings"
 
 	"ai-relay-forwarder/internal/endpoint"
@@ -42,7 +43,7 @@ func endpointKeys(endpoints []*endpoint.Endpoint) []string {
 		if ep == nil {
 			continue
 		}
-		key := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+		key := endpoint.EndpointKeyForConfig(ep.Config)
 		if key == "" {
 			continue
 		}
@@ -63,6 +64,19 @@ func endpointRouteName(ep *endpoint.Endpoint) string {
 		return ep.Config.Channel
 	}
 	return ep.Config.Name
+}
+
+func endpointDisplayGroupName(ep *endpoint.Endpoint) string {
+	if ep == nil {
+		return ""
+	}
+	if ep.Config.CredentialGroupName != "" {
+		return ep.Config.CredentialGroupName
+	}
+	if ep.Config.CredentialGroupID > 0 {
+		return fmt.Sprintf("g%d", ep.Config.CredentialGroupID)
+	}
+	return endpointRouteName(ep)
 }
 
 func failoverTermination(err error) (terminate bool, loopLimit bool, errText string) {

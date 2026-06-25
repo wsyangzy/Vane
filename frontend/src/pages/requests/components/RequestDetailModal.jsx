@@ -20,11 +20,13 @@ import {
   Calendar,
   Database,
   AlertCircle,
+  ShieldCheck,
   TrendingUp,
   TrendingDown,
   Zap,
   Calculator,
-  Replace
+  Replace,
+  KeyRound
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -39,14 +41,62 @@ import {
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 
-const CHAIN_VIEW_STORAGE_KEY = 'request-detail.chain-view-mode';
+const privacyRuleTypeLabels = {
+  exact: '精准',
+  regex: '正则',
+  field: '字段',
+  keyword: '关键词',
+  validator: '校验',
+  entropy: '高熵',
+  structured: '结构'
+};
 
-const getCompactColumns = () => {
-  if (typeof window === 'undefined') return 3;
-  const width = window.innerWidth;
-  if (width >= 1024) return 3;
-  if (width >= 640) return 2;
-  return 1;
+const parsePrivacySummary = (value) => {
+  if (!value) return { changed: false, hits: [] };
+  if (typeof value === 'object') {
+    return {
+      changed: Boolean(value.changed),
+      hits: Array.isArray(value.hits) ? value.hits : []
+    };
+  }
+  if (typeof value !== 'string') return { changed: false, hits: [] };
+  try {
+    const parsed = JSON.parse(value);
+    return {
+      changed: Boolean(parsed?.changed),
+      hits: Array.isArray(parsed?.hits) ? parsed.hits : []
+    };
+  } catch {
+    return { changed: false, hits: [] };
+  }
+};
+
+const decodeBase64Utf8 = (value) => {
+  if (!value || typeof value !== 'string') return '';
+  try {
+    const binary = window.atob(value);
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return '';
+  }
+};
+
+const parsePrivacyMatches = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const getPrivacyMatchRaw = (match) => {
+  if (!match || typeof match !== 'object') return '';
+  return match.raw || match.raw_value || decodeBase64Utf8(match.raw_base64 || match.rawBase64);
 };
 
 /**
@@ -122,20 +172,10 @@ const FirstByteDetailBadge = ({ ms, status }) => {
 /**
  * 请求详情模态框主组件
  */
-const RequestDetailModal = ({ isOpen, onClose, request }) => {
+const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnabled = false }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
-  const [compactColumns, setCompactColumns] = useState(() => getCompactColumns());
-  const [chainViewMode, setChainViewMode] = useState(() => {
-    if (typeof window === 'undefined') return 'timeline';
-    try {
-      const savedMode = window.localStorage.getItem(CHAIN_VIEW_STORAGE_KEY);
-      return savedMode === 'timeline' || savedMode === 'compact' ? savedMode : 'timeline';
-    } catch {
-      return 'timeline';
-    }
-  });
   const requestIdCopyTimerRef = useRef(null);
 
   // ESC 键关闭 & 阻止滚动
@@ -156,27 +196,6 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(CHAIN_VIEW_STORAGE_KEY, chainViewMode);
-    } catch {
-      // 忽略持久化异常（如隐私模式）
-    }
-  }, [chainViewMode]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleResize = () => {
-      setCompactColumns(getCompactColumns());
-    };
-
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   useEffect(() => () => {
     if (requestIdCopyTimerRef.current) {
@@ -200,6 +219,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
   const isCodexRequest = isCacheInclusiveProvider(request.provider);
   const isClaudeRequest = !isCodexRequest;
+  const showChannelInChain = isClaudeRequest && Boolean(interChannelFailoverEnabled);
 
   // 计算 Token 总数：Codex/OpenAI input_tokens 已包含 cached_tokens；兼容旧 Codex 记录的非缓存 input。
   const inputTokenCount = getDisplayInputTokens(request);
@@ -230,36 +250,31 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     : (typeof rawEndpointChain === 'string' ? rawEndpointChain.split(' -> ').filter(Boolean) : []);
   const chainNodes = endpointChain.map((item, index) => {
     const hop = (typeof item === 'object' && item?.hop) || (index + 1);
-    // Handle structured object format: {hop, channel, endpoint}
+    // Handle structured object format: {hop, channel, credential_group, endpoint}
     if (typeof item === 'object' && item !== null) {
       const channel = item.channel || '';
+      const credentialGroup = item.credential_group || item.credentialGroup || item.group_name || item.group || '';
       const endpoint = item.endpoint || '';
-      return { raw: channel ? `${channel}::${endpoint}` : endpoint, channel, endpoint, hop };
+      const raw = channel
+        ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
+        : endpoint;
+      return { raw, channel, credentialGroup, endpoint, hop };
     }
-    // Handle legacy string format: "channel::endpoint" or plain endpoint name
+    // Handle legacy string format: "channel::endpoint", "channel::group::endpoint", or plain endpoint name
     const raw = String(item || '').trim();
     if (!raw) return null;
     if (raw.includes('::')) {
       const parts = raw.split('::');
       const channel = parts.shift() || '';
+      const credentialGroup = parts.length >= 2 ? (parts.shift() || '') : '';
       const endpoint = parts.join('::') || '';
-      return { raw, channel, endpoint, hop };
+      return { raw, channel, credentialGroup, endpoint, hop };
     }
     const fallbackChannel = endpointChain.length === 1 ? (request.channel || request.group || '') : '';
-    return { raw, channel: fallbackChannel, endpoint: raw, hop };
+    return { raw, channel: fallbackChannel, credentialGroup: '', endpoint: raw, hop };
   }).filter(Boolean);
-  const compactRows = [];
-  for (let i = 0; i < chainNodes.length; i += compactColumns) {
-    compactRows.push(chainNodes.slice(i, i + compactColumns));
-  }
-  const compactCardWidthClass = compactColumns === 1
-    ? 'w-full'
-    : compactColumns === 2
-      ? 'w-[calc((100%-0.625rem)/2)]'
-      : 'w-[calc((100%-1.25rem)/3)]';
-  const chainNodeIndexMap = new Map(chainNodes.map((node, idx) => [node, idx]));
-
-  const hasUnknownChannel = chainNodes.some((node) => !node.channel);
+  const currentChannelLabel = request.channel || request.group || chainNodes.find((node) => node.channel)?.channel || '';
+  const hasUnknownChannel = showChannelInChain && chainNodes.some((node) => !node.channel);
   const channelTones = [
     { badge: 'bg-blue-50 text-blue-600 border-blue-100', border: 'border-blue-200/70' },
     { badge: 'bg-emerald-50 text-emerald-600 border-emerald-100', border: 'border-emerald-200/70' },
@@ -279,6 +294,12 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     }
     return channelTones[sum % channelTones.length];
   };
+  const getChainRoleLabel = (index, total) => {
+    if (total <= 1) return '直达';
+    if (index === 0) return '起始';
+    if (index === total - 1) return '最终';
+    return '中转';
+  };
 
   const errorText = [
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
@@ -297,6 +318,10 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   };
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
+  const privacySummary = parsePrivacySummary(request.privacyRedactionSummary || request.privacy_redaction_summary);
+  const privacyRedacted = Boolean(request.privacyRedacted || request.privacy_redacted || privacySummary.changed);
+  const privacyHits = Array.isArray(privacySummary.hits) ? privacySummary.hits : [];
+  const privacyMatches = parsePrivacyMatches(request.privacyRedactionMatches || request.privacy_redaction_matches);
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-start justify-center pt-[15vh] px-4">
@@ -340,6 +365,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
               { id: 'network', label: '网络信息', icon: Server },
+              { id: 'privacy', label: '隐私防护', icon: ShieldCheck },
               { id: 'chain', label: '端点链路', icon: Layers }
             ].map((tab) => (
               <button
@@ -748,8 +774,11 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               {/* 统计摘要条 */}
               {chainNodes.length > 0 && (() => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
+                const uniqueGroups = new Set(chainNodes.map(n => n.credentialGroup).filter(Boolean));
                 const uniqueEndpoints = new Set(chainNodes.map(n => n.endpoint).filter(Boolean));
-                const channelSwitches = chainNodes.filter((n, i) => i > 0 && n.channel && chainNodes[i - 1].channel && n.channel !== chainNodes[i - 1].channel).length;
+                const channelSwitches = showChannelInChain
+                  ? chainNodes.filter((n, i) => i > 0 && n.channel && chainNodes[i - 1].channel && n.channel !== chainNodes[i - 1].channel).length
+                  : 0;
                 return (
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -757,10 +786,23 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                         <RefreshCw className="w-3 h-3" />
                         {chainNodes.length} 跳
                       </span>
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
-                        <Layers className="w-3 h-3" />
-                        {uniqueChannels.size} 渠道
-                      </span>
+                      {showChannelInChain ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
+                          <Layers className="w-3 h-3" />
+                          {uniqueChannels.size} 渠道
+                        </span>
+                      ) : currentChannelLabel && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
+                          <Layers className="w-3 h-3" />
+                          渠道 {currentChannelLabel}
+                        </span>
+                      )}
+                      {uniqueGroups.size > 0 && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-50 text-violet-700 text-xs font-medium rounded-lg border border-violet-200">
+                          <KeyRound className="w-3 h-3" />
+                          {uniqueGroups.size} 分组
+                        </span>
+                      )}
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
                         <Server className="w-3 h-3" />
                         {uniqueEndpoints.size} 端点
@@ -773,32 +815,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       )}
                     </div>
 
-                    <div className="inline-flex p-0.5 bg-slate-100 border border-slate-200 rounded-lg">
-                      <button
-                        type="button"
-                        onClick={() => setChainViewMode('timeline')}
-                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                          chainViewMode === 'timeline'
-                            ? 'bg-white text-slate-800 shadow-sm'
-                            : 'text-slate-500 hover:text-slate-700'
-                        }`}
-                        aria-pressed={chainViewMode === 'timeline'}
-                      >
-                        时间线
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setChainViewMode('compact')}
-                        className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                          chainViewMode === 'compact'
-                            ? 'bg-white text-slate-800 shadow-sm'
-                            : 'text-slate-500 hover:text-slate-700'
-                        }`}
-                        aria-pressed={chainViewMode === 'compact'}
-                      >
-                        紧凑
-                      </button>
-                    </div>
+                    <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500">
+                      时间线
+                    </span>
                   </div>
                 );
               })()}
@@ -808,83 +827,6 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 <div className="p-4">
                   {chainNodes.length === 0 ? (
                     <div className="text-sm text-slate-400 text-center py-4">暂无端点链路记录</div>
-                  ) : chainViewMode === 'compact' ? (
-                    <div className="space-y-1.5">
-                      {compactRows.map((row, rowIdx) => {
-                        const isReverseRow = rowIdx % 2 === 1;
-                        const displayRow = isReverseRow ? [...row].reverse() : row;
-                        const isLastRow = rowIdx === compactRows.length - 1;
-
-                        return (
-                          <div key={`row-${rowIdx}`}>
-                            <div className="flex items-stretch gap-2.5">
-                              {displayRow.map((node, displayIdx) => {
-                                const originalIndex = chainNodeIndexMap.get(node) ?? 0;
-                                const channelLabel = node.channel || '未知渠道';
-                                const endpointLabel = node.endpoint || node.raw || '-';
-                                const tone = getChannelTone(node.channel);
-                                const isFirst = originalIndex === 0;
-                                const isLast = originalIndex === chainNodes.length - 1;
-                                const isSingle = chainNodes.length === 1;
-                                const prevNode = chainNodes[originalIndex - 1];
-                                const isChannelSwitch = originalIndex > 0 && node.channel && prevNode?.channel && node.channel !== prevNode.channel;
-                                const hasNextInRow = displayIdx < displayRow.length - 1;
-                                const rowArrow = isReverseRow ? '←' : '→';
-
-                                return (
-                                  <div key={`${node.raw}-${originalIndex}`} className={`${compactCardWidthClass} min-w-0 flex items-center gap-2`}>
-                                    <div
-                                      className={`border ${tone.border} rounded-lg px-3 py-2 bg-white min-w-0 flex-1 ${isLast && !isSingle ? 'ring-1 ring-emerald-200/60' : ''}`}
-                                    >
-                                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                                        <span className={`text-[10px] font-bold ${
-                                          isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-500' : isLast ? 'text-emerald-500' : 'text-slate-400'
-                                        }`}>
-                                          #{node.hop}
-                                        </span>
-
-                                        <div className="flex items-center gap-1">
-                                          {isChannelSwitch && (
-                                            <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-600 font-medium">
-                                              <Zap className="w-2.5 h-2.5" />
-                                              切换
-                                            </span>
-                                          )}
-                                          {isSingle && <span className="text-[10px] text-slate-400">直达</span>}
-                                          {isFirst && !isSingle && <span className="text-[10px] text-blue-400">起始</span>}
-                                          {isLast && !isSingle && <span className="text-[10px] text-emerald-500">最终</span>}
-                                        </div>
-                                      </div>
-
-                                      <Tooltip content={`${channelLabel} / ${endpointLabel}`} className="min-w-0">
-                                        <div className="flex items-center gap-1.5 min-w-0">
-                                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border shrink-0 whitespace-nowrap ${tone.badge}`}>
-                                            {channelLabel}
-                                          </span>
-                                          <span className="text-xs font-semibold text-slate-800 truncate">
-                                            {endpointLabel}
-                                          </span>
-                                        </div>
-                                      </Tooltip>
-                                    </div>
-
-                                    {hasNextInRow && (
-                                      <span className="text-slate-300 text-sm shrink-0">{rowArrow}</span>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-
-                            {!isLastRow && (
-                              <div className={`flex ${isReverseRow ? 'justify-start' : 'justify-end'} px-1 mt-1 mb-0.5`}>
-                                <span className="text-slate-300 text-sm leading-none">↓</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
                   ) : (
                     <div className="relative pl-8">
                       {/* 贯穿竖线（绝对定位，首尾圆点之间） */}
@@ -893,15 +835,22 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       )}
                       {chainNodes.map((node, idx) => {
                         const channelLabel = node.channel || '未知渠道';
+                        const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
+                        const routeLabel = [
+                          showChannelInChain ? channelLabel : '',
+                          groupLabel,
+                          endpointLabel
+                        ].filter(Boolean).join(' / ');
                         const tone = getChannelTone(node.channel);
                         const isFirst = idx === 0;
                         const isLast = idx === chainNodes.length - 1;
                         const isSingle = chainNodes.length === 1;
-                        const isChannelSwitch = idx > 0 && node.channel && chainNodes[idx - 1].channel && node.channel !== chainNodes[idx - 1].channel;
+                        const isChannelSwitch = showChannelInChain && idx > 0 && node.channel && chainNodes[idx - 1].channel && node.channel !== chainNodes[idx - 1].channel;
+                        const roleLabel = getChainRoleLabel(idx, chainNodes.length);
 
                         return (
-                          <div key={`${node.raw}-${idx}`} className={`relative ${isLast ? '' : 'pb-3'}`}>
+                          <div key={`${node.raw}-${idx}`} className={`relative ${isLast ? '' : 'pb-2.5'}`}>
                             {/* 渠道切换提示（在卡片上方） */}
                             {isChannelSwitch && (
                               <div className="flex items-center gap-1 mb-1.5 ml-1">
@@ -916,30 +865,33 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                                 isSingle ? 'bg-indigo-500' : isFirst ? 'bg-blue-500' : isLast ? 'bg-emerald-500' : 'bg-slate-300'
                               }`} style={{ left: '-25px' }} />
                               {/* 卡片 */}
-                              <div className={`border ${tone.border} rounded-lg px-3 py-2 ${isLast && !isSingle ? 'bg-emerald-50/40' : isFirst && !isSingle ? 'bg-blue-50/40' : 'bg-slate-50/60'}`}>
+                              <div className={`border ${tone.border} rounded-lg px-3 py-2 ${isLast && !isSingle ? 'bg-emerald-50/30' : isFirst && !isSingle ? 'bg-blue-50/30' : 'bg-slate-50/50'}`}>
                                 <div className="flex items-center gap-2 min-w-0">
                                   <span className={`text-[10px] font-bold shrink-0 ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-500' : isLast ? 'text-emerald-500' : 'text-slate-400'
                                   }`}>
                                     #{node.hop}
                                   </span>
-                                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border whitespace-nowrap ${tone.badge}`}>
-                                    {channelLabel}
-                                  </span>
-                                  <Tooltip content={endpointLabel} className="min-w-0">
-                                    <span className="text-sm font-semibold text-slate-800 truncate">
+                                  {showChannelInChain && (
+                                    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium border whitespace-nowrap ${tone.badge}`}>
+                                      <span className="mr-1 text-current/70">渠道</span>{channelLabel}
+                                    </span>
+                                  )}
+                                  {groupLabel && (
+                                    <span className="inline-flex max-w-[6rem] items-center rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 shrink-0 truncate">
+                                      <span className="mr-1 text-violet-400">分组</span>{groupLabel}
+                                    </span>
+                                  )}
+                                  <Tooltip content={routeLabel} className="min-w-0">
+                                    <span className="text-sm font-semibold text-slate-900 truncate">
                                       {endpointLabel}
                                     </span>
                                   </Tooltip>
-                                  {isSingle && (
-                                    <span className="text-[10px] text-slate-400 ml-auto shrink-0">直达</span>
-                                  )}
-                                  {isFirst && !isSingle && (
-                                    <span className="text-[10px] text-blue-400 ml-auto shrink-0">起始</span>
-                                  )}
-                                  {isLast && !isSingle && (
-                                    <span className="text-[10px] text-emerald-500 ml-auto shrink-0">最终</span>
-                                  )}
+                                  <span className={`ml-auto shrink-0 text-[10px] ${
+                                    isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-400' : isLast ? 'text-emerald-500' : 'text-slate-400'
+                                  }`}>
+                                    {roleLabel}
+                                  </span>
                                 </div>
                               </div>
                             </div>
@@ -1081,6 +1033,89 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 <InfoRow icon={RefreshCw} label="重试次数" value={`${request.retry_count || request.retryCount || 0} 次`} />
                 <InfoRow icon={Activity} label="请求方法" value={request.method || 'POST'} />
                 <InfoRow icon={FileText} label="请求路径" value={request.path || '/v1/messages'} copyable />
+              </div>
+            </div>
+          )}
+
+          {/* 隐私防护 Tab */}
+          {activeTab === 'privacy' && (
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    隐私防护
+                  </h3>
+                </div>
+                <div className="p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-medium text-slate-500">处理结果</span>
+                    <span className={`inline-flex items-center rounded-md border px-2 py-1 text-xs font-semibold ${
+                      privacyRedacted
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : 'border-slate-200 bg-slate-50 text-slate-500'
+                    }`}>
+                      {privacyRedacted ? '已脱敏' : '未命中'}
+                    </span>
+                  </div>
+                  {privacyHits.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {privacyHits.map((hit, index) => (
+                        <span
+                          key={`${hit.rule_id || index}-${hit.type}`}
+                          className="min-w-0 max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 break-words [overflow-wrap:anywhere]"
+                        >
+                          {(hit.rule_name || '规则')} · {privacyRuleTypeLabels[hit.type] || hit.type || '规则'} × {hit.count || 0}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {privacyMatches.length > 0 && (
+                    <div className="mt-4 overflow-hidden rounded-lg border border-emerald-100 bg-emerald-50/40">
+                      <div className="border-b border-emerald-100 bg-white/70 px-3 py-2">
+                        <span className="text-xs font-semibold text-emerald-800">具体处理内容</span>
+                      </div>
+                      <div className="divide-y divide-emerald-100">
+                        {privacyMatches.map((match, index) => {
+                          const raw = getPrivacyMatchRaw(match);
+                          const replacement = match.replacement || match.replacement_value || '';
+                          const typeLabel = privacyRuleTypeLabels[match.type] || match.type || '规则';
+                          return (
+                            <div
+                              key={`${match.rule_id || 'rule'}-${index}-${replacement}`}
+                              className="grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center"
+                            >
+                              <div className="min-w-0">
+                                <div className="mb-1 flex items-center gap-2">
+                                  <span className="rounded border border-emerald-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
+                                    原文
+                                  </span>
+                                  <span className="min-w-0 truncate text-[11px] text-slate-500">
+                                    {match.rule_name || '规则'} · {typeLabel}
+                                  </span>
+                                </div>
+                                <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs leading-relaxed text-slate-800 break-words [overflow-wrap:anywhere]">
+                                  {raw || '-'}
+                                </div>
+                              </div>
+                              <div className="hidden text-xs font-semibold text-emerald-600 sm:block">-&gt;</div>
+                              <div className="min-w-0">
+                                <div className="mb-1">
+                                  <span className="rounded border border-emerald-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
+                                    替换值
+                                  </span>
+                                </div>
+                                <div className="rounded-md border border-emerald-200 bg-white px-2 py-1.5 font-mono text-xs leading-relaxed text-emerald-800 break-words [overflow-wrap:anywhere]">
+                                  {replacement || '-'}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}

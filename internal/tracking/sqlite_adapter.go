@@ -520,6 +520,21 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
 			description: "提供商标识字段（claude/codex）",
 		},
+		{
+			checkColumn: "privacy_redacted",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redacted BOOLEAN DEFAULT 0",
+			description: "隐私脱敏命中标记字段",
+		},
+		{
+			checkColumn: "privacy_redaction_summary",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redaction_summary TEXT",
+			description: "隐私脱敏摘要字段",
+		},
+		{
+			checkColumn: "privacy_redaction_matches",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redaction_matches TEXT",
+			description: "隐私脱敏命中明细字段",
+		},
 		// 端点倍率快照字段（用于详情页计费过程展示）
 		{
 			checkColumn: "cost_multiplier",
@@ -610,6 +625,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		description string
 	}{
 		{
+			checkColumn: "credential_group_id",
+			alterSQL:    "ALTER TABLE endpoints ADD COLUMN credential_group_id INTEGER REFERENCES claude_credential_groups(id) ON DELETE SET NULL",
+			description: "Claude 凭证分组引用字段",
+		},
+		{
 			checkColumn: "timeout_seconds",
 			alterSQL:    "ALTER TABLE endpoints ADD COLUMN timeout_seconds INTEGER DEFAULT 300",
 			description: "端点超时字段",
@@ -667,6 +687,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		alterSQL    string
 		description string
 	}{
+		{
+			checkColumn: "skip_health_check",
+			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN skip_health_check INTEGER NOT NULL DEFAULT 0",
+			description: "Codex 端点跳过健康检查字段",
+		},
 		{
 			checkColumn: "timeout_seconds",
 			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 0",
@@ -743,12 +768,18 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := runMigrations("endpoints", endpointsMigrations); err != nil {
 		return err
 	}
+	if err := s.ensureClaudeCredentialGroupsSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.backfillClaudeCredentialGroups(ctx); err != nil {
+		return err
+	}
 	if err := runMigrations("codex_endpoints", codexEndpointMigrations); err != nil {
 		return err
 	}
-	// 允许不同渠道端点同名（约束从 name 全局唯一调整为 (channel,name) 渠道内唯一）。
-	// SQLite 无法直接移除旧 UNIQUE(name) 约束，需要在发现旧约束时重建表。
-	if err := s.ensureEndpointsUniqueByChannelAndName(ctx); err != nil {
+	// 允许不同凭证分组端点同名（约束从 name/channel 级调整为 credential_group 级）。
+	// SQLite 无法直接移除旧 UNIQUE 约束，需要在发现旧约束时重建表。
+	if err := s.ensureEndpointsUniqueByCredentialGroup(ctx); err != nil {
 		return err
 	}
 	if err := runMigrations("channels", channelMigrations); err != nil {
@@ -790,7 +821,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	return nil
 }
 
-func (s *SQLiteAdapter) ensureEndpointsUniqueByChannelAndName(ctx context.Context) error {
+func (s *SQLiteAdapter) ensureEndpointsUniqueByCredentialGroup(ctx context.Context) error {
 	tableExists, err := s.tableExists(ctx, "endpoints")
 	if err != nil {
 		return fmt.Errorf("failed to check table endpoints: %w", err)
@@ -799,32 +830,27 @@ func (s *SQLiteAdapter) ensureEndpointsUniqueByChannelAndName(ctx context.Contex
 		return nil
 	}
 
-	hasLegacyUniqueOnName, hasDesiredUnique, err := s.detectEndpointsUniqueIndexes(ctx)
+	hasLegacyUniqueOnName, hasLegacyUniqueOnChannelName, hasDesiredUnique, err := s.detectEndpointsUniqueIndexes(ctx)
 	if err != nil {
 		return err
 	}
-	if hasDesiredUnique && !hasLegacyUniqueOnName {
+	if hasDesiredUnique && !hasLegacyUniqueOnName && !hasLegacyUniqueOnChannelName {
 		return nil
 	}
 
-	// 若存在旧 UNIQUE(name)，必须重建表，否则即使补一个新索引也仍会被旧约束拦住。
-	if hasLegacyUniqueOnName {
-		s.logger.Info("🔧 [数据库迁移] endpoints：检测到旧 UNIQUE(name)，将重建为 UNIQUE(channel,name)")
-		return s.rebuildEndpointsTableForChannelScopedUniq(ctx)
+	// 若存在旧 UNIQUE(name)/(channel,name)，必须重建表，否则不同分组同名仍会被旧约束拦住。
+	if hasLegacyUniqueOnName || hasLegacyUniqueOnChannelName {
+		s.logger.Info("🔧 [数据库迁移] endpoints：检测到旧唯一约束，将重建为凭证分组作用域唯一")
+		return s.rebuildEndpointsTableForCredentialGroupScopedUniq(ctx)
 	}
 
-	// 没有旧约束但也没有新约束：补一个唯一索引即可。
-	_, err = s.GetWriteDB().ExecContext(ctx, "CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_channel_name_unique ON endpoints(channel, name)")
-	if err != nil {
-		return fmt.Errorf("failed to create unique index endpoints(channel,name): %w", err)
-	}
-	return nil
+	return s.createEndpointCredentialGroupIndexes(ctx, s.GetWriteDB())
 }
 
-func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLegacyUniqueOnName bool, hasDesiredUnique bool, _ error) {
+func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLegacyUniqueOnName bool, hasLegacyUniqueOnChannelName bool, hasDesiredUnique bool, _ error) {
 	rows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_list(endpoints)")
 	if err != nil {
-		return false, false, fmt.Errorf("failed to query endpoints indexes: %w", err)
+		return false, false, false, fmt.Errorf("failed to query endpoints indexes: %w", err)
 	}
 	// 注意：database/sql 在 *sql.Rows 未 Close 前会占用连接。
 	// SQLite 连接池通常限制为 1（见 Open: SetMaxOpenConns(1)），如果在遍历 rows 时再发起嵌套 Query，
@@ -845,7 +871,7 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 		)
 		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
 			rows.Close()
-			return false, false, fmt.Errorf("failed to scan endpoints index: %w", err)
+			return false, false, false, fmt.Errorf("failed to scan endpoints index: %w", err)
 		}
 		if unique != 1 {
 			continue
@@ -854,7 +880,7 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return false, false, fmt.Errorf("failed to iterate endpoints index_list: %w", err)
+		return false, false, false, fmt.Errorf("failed to iterate endpoints index_list: %w", err)
 	}
 	rows.Close()
 
@@ -863,7 +889,7 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 		escaped := strings.ReplaceAll(it.name, "'", "''")
 		colRows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_info('"+escaped+"')")
 		if err != nil {
-			return false, false, fmt.Errorf("failed to query endpoints index_info(%s): %w", it.name, err)
+			return false, false, false, fmt.Errorf("failed to query endpoints index_info(%s): %w", it.name, err)
 		}
 
 		cols := make([]string, 0, 2)
@@ -872,7 +898,7 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 			var colName string
 			if err := colRows.Scan(&seqno, &cid, &colName); err != nil {
 				colRows.Close()
-				return false, false, fmt.Errorf("failed to scan endpoints index_info(%s): %w", it.name, err)
+				return false, false, false, fmt.Errorf("failed to scan endpoints index_info(%s): %w", it.name, err)
 			}
 			cols = append(cols, colName)
 		}
@@ -882,14 +908,19 @@ func (s *SQLiteAdapter) detectEndpointsUniqueIndexes(ctx context.Context) (hasLe
 			hasLegacyUniqueOnName = true
 		}
 		if len(cols) == 2 && cols[0] == "channel" && cols[1] == "name" {
+			if it.name != "idx_endpoints_unique_legacy_name" {
+				hasLegacyUniqueOnChannelName = true
+			}
+		}
+		if len(cols) == 3 && cols[0] == "channel" && cols[1] == "credential_group_id" && cols[2] == "name" {
 			hasDesiredUnique = true
 		}
 	}
 
-	return hasLegacyUniqueOnName, hasDesiredUnique, nil
+	return hasLegacyUniqueOnName, hasLegacyUniqueOnChannelName, hasDesiredUnique, nil
 }
 
-func (s *SQLiteAdapter) rebuildEndpointsTableForChannelScopedUniq(ctx context.Context) error {
+func (s *SQLiteAdapter) rebuildEndpointsTableForCredentialGroupScopedUniq(ctx context.Context) error {
 	// 注意：该迁移会锁表并重建 endpoints，但表体量通常较小（配置表），可接受。
 	tx, err := s.GetWriteDB().BeginTx(ctx, nil)
 	if err != nil {
@@ -911,6 +942,7 @@ CREATE TABLE endpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     channel TEXT NOT NULL,
+    credential_group_id INTEGER REFERENCES claude_credential_groups(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     url TEXT NOT NULL,
 
@@ -937,9 +969,7 @@ CREATE TABLE endpoints (
     enabled INTEGER DEFAULT 1,
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-
-    UNIQUE(channel, name)
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );`
 	if _, err := tx.ExecContext(ctx, createSQL); err != nil {
 		return fmt.Errorf("failed to create new endpoints table: %w", err)
@@ -948,7 +978,7 @@ CREATE TABLE endpoints (
 	// 复制数据（保留原 id）
 	copySQL := `
 INSERT INTO endpoints (
-    id, channel, name, url, token, api_key, headers,
+    id, channel, credential_group_id, name, url, token, api_key, headers,
     priority, failover_enabled, cooldown_seconds, timeout_seconds,
     supports_count_tokens, skip_health_check,
     cost_multiplier, input_cost_multiplier, output_cost_multiplier,
@@ -957,7 +987,7 @@ INSERT INTO endpoints (
     enabled, created_at, updated_at
 )
 SELECT
-    id, channel, name, url, token, api_key, headers,
+    id, channel, COALESCE(credential_group_id, NULL), name, url, token, api_key, headers,
     priority, failover_enabled, cooldown_seconds, timeout_seconds,
     supports_count_tokens, skip_health_check,
     cost_multiplier, input_cost_multiplier, output_cost_multiplier,
@@ -970,17 +1000,8 @@ FROM endpoints_old;`
 	}
 
 	// 重建索引
-	indexSQL := []string{
-		"CREATE INDEX IF NOT EXISTS idx_endpoints_channel ON endpoints(channel)",
-		"CREATE INDEX IF NOT EXISTS idx_endpoints_priority ON endpoints(priority)",
-		"CREATE INDEX IF NOT EXISTS idx_endpoints_enabled ON endpoints(enabled)",
-		"CREATE INDEX IF NOT EXISTS idx_endpoints_failover ON endpoints(failover_enabled)",
-		"CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_channel_name_unique ON endpoints(channel, name)",
-	}
-	for _, stmt := range indexSQL {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("failed to create endpoints index: %w", err)
-		}
+	if err := s.createEndpointCredentialGroupIndexes(ctx, tx); err != nil {
+		return err
 	}
 
 	// 重建触发器
@@ -1004,8 +1025,235 @@ END;`
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit endpoints rebuild: %w", err)
 	}
-	s.logger.Info("✅ [数据库迁移] endpoints：已重建为 UNIQUE(channel,name)")
+	s.logger.Info("✅ [数据库迁移] endpoints：已重建为凭证分组作用域唯一")
 	return nil
+}
+
+func (s *SQLiteAdapter) createEndpointCredentialGroupIndexes(ctx context.Context, executor interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}) error {
+	indexSQL := []string{
+		"CREATE INDEX IF NOT EXISTS idx_endpoints_channel ON endpoints(channel)",
+		"CREATE INDEX IF NOT EXISTS idx_endpoints_credential_group ON endpoints(credential_group_id)",
+		"CREATE INDEX IF NOT EXISTS idx_endpoints_priority ON endpoints(priority)",
+		"CREATE INDEX IF NOT EXISTS idx_endpoints_enabled ON endpoints(enabled)",
+		"CREATE INDEX IF NOT EXISTS idx_endpoints_failover ON endpoints(failover_enabled)",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_unique_group_name ON endpoints(channel, credential_group_id, name) WHERE credential_group_id IS NOT NULL",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_unique_legacy_name ON endpoints(channel, name) WHERE credential_group_id IS NULL",
+	}
+	for _, stmt := range indexSQL {
+		if _, err := executor.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("failed to create endpoints credential group index: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteAdapter) ensureClaudeCredentialGroupsSchema(ctx context.Context) error {
+	const ddl = `
+CREATE TABLE IF NOT EXISTS claude_credential_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    name TEXT NOT NULL,
+    token TEXT NOT NULL DEFAULT '',
+    api_key TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    cache_creation_cost_multiplier_1h REAL NOT NULL DEFAULT 1.0,
+    cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    model_multipliers TEXT NOT NULL DEFAULT '[]',
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    UNIQUE(channel, name)
+);
+CREATE INDEX IF NOT EXISTS idx_claude_credential_groups_channel ON claude_credential_groups(channel);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_credential_groups_single_default
+    ON claude_credential_groups(channel, is_default) WHERE is_default = 1;
+CREATE TRIGGER IF NOT EXISTS update_claude_credential_groups_timestamp
+    AFTER UPDATE ON claude_credential_groups
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE claude_credential_groups SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;`
+	if _, err := s.GetWriteDB().ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("failed to ensure claude_credential_groups schema: %w", err)
+	}
+	hasModelMultipliers, err := s.columnExists(ctx, "claude_credential_groups", "model_multipliers")
+	if err != nil {
+		return fmt.Errorf("failed to check claude_credential_groups.model_multipliers: %w", err)
+	}
+	if !hasModelMultipliers {
+		if _, err := s.GetWriteDB().ExecContext(ctx, `ALTER TABLE claude_credential_groups ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return fmt.Errorf("failed to add claude_credential_groups.model_multipliers: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteAdapter) backfillClaudeCredentialGroups(ctx context.Context) error {
+	endpointsExists, err := s.tableExists(ctx, "endpoints")
+	if err != nil {
+		return err
+	}
+	if !endpointsExists {
+		return nil
+	}
+
+	rows, err := s.GetWriteDB().QueryContext(ctx, `SELECT DISTINCT channel FROM endpoints WHERE channel <> '' ORDER BY channel ASC`)
+	if err != nil {
+		return fmt.Errorf("failed to query endpoint channels for credential group backfill: %w", err)
+	}
+	channels := make([]string, 0)
+	for rows.Next() {
+		var channel string
+		if err := rows.Scan(&channel); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan endpoint channel: %w", err)
+		}
+		channel = strings.TrimSpace(channel)
+		if channel != "" {
+			channels = append(channels, channel)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate endpoint channels: %w", err)
+	}
+	rows.Close()
+
+	for _, channel := range channels {
+		groupID, err := s.ensureDefaultClaudeCredentialGroup(ctx, channel)
+		if err != nil {
+			return err
+		}
+		if groupID <= 0 {
+			continue
+		}
+		if _, err := s.GetWriteDB().ExecContext(ctx, `
+			UPDATE claude_credential_groups
+			SET model_multipliers = (
+				SELECT COALESCE(ep.model_multipliers, '[]')
+				FROM endpoints ep
+				WHERE ep.channel = claude_credential_groups.channel
+					AND (ep.credential_group_id = claude_credential_groups.id OR ep.credential_group_id IS NULL OR ep.credential_group_id = 0)
+					AND COALESCE(ep.model_multipliers, '[]') NOT IN ('', '[]')
+				ORDER BY COALESCE(ep.priority, 1) ASC, COALESCE(ep.created_at, '') ASC, ep.id ASC
+				LIMIT 1
+			)
+			WHERE id = ?
+				AND COALESCE(model_multipliers, '[]') IN ('', '[]')
+				AND EXISTS (
+					SELECT 1
+					FROM endpoints ep
+					WHERE ep.channel = claude_credential_groups.channel
+						AND (ep.credential_group_id = claude_credential_groups.id OR ep.credential_group_id IS NULL OR ep.credential_group_id = 0)
+						AND COALESCE(ep.model_multipliers, '[]') NOT IN ('', '[]')
+				)
+		`, groupID); err != nil {
+			return fmt.Errorf("failed to backfill Claude credential group model multipliers for channel %s: %w", channel, err)
+		}
+		if _, err := s.GetWriteDB().ExecContext(ctx, `
+			UPDATE endpoints
+			SET credential_group_id = ?
+			WHERE channel = ? AND (credential_group_id IS NULL OR credential_group_id = 0)
+		`, groupID, channel); err != nil {
+			return fmt.Errorf("failed to backfill endpoints credential_group_id for channel %s: %w", channel, err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteAdapter) ensureDefaultClaudeCredentialGroup(ctx context.Context, channel string) (int64, error) {
+	var groupID int64
+	err := s.GetWriteDB().QueryRowContext(ctx, `
+		SELECT id FROM claude_credential_groups
+		WHERE channel = ? AND is_default = 1
+		LIMIT 1
+	`, channel).Scan(&groupID)
+	if err == nil {
+		return groupID, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, fmt.Errorf("failed to query default Claude credential group: %w", err)
+	}
+
+	var (
+		token                       string
+		apiKey                      string
+		costMultiplier              float64
+		inputCostMultiplier         float64
+		outputCostMultiplier        float64
+		cacheCreationCostMultiplier float64
+		cacheCreationMultiplier1h   float64
+		cacheReadCostMultiplier     float64
+		modelMultipliers            string
+	)
+	err = s.GetWriteDB().QueryRowContext(ctx, `
+		SELECT COALESCE(token, ''), COALESCE(api_key, ''),
+			COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
+			COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_creation_cost_multiplier, 1.0),
+			COALESCE(cache_creation_cost_multiplier_1h, 1.0), COALESCE(cache_read_cost_multiplier, 1.0),
+			COALESCE(model_multipliers, '[]')
+		FROM endpoints
+		WHERE channel = ?
+		ORDER BY COALESCE(priority, 1) ASC, COALESCE(created_at, '') ASC, id ASC
+		LIMIT 1
+	`, channel).Scan(
+		&token,
+		&apiKey,
+		&costMultiplier,
+		&inputCostMultiplier,
+		&outputCostMultiplier,
+		&cacheCreationCostMultiplier,
+		&cacheCreationMultiplier1h,
+		&cacheReadCostMultiplier,
+		&modelMultipliers,
+	)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, fmt.Errorf("failed to query endpoint seed for Claude credential group: %w", err)
+	}
+
+	result, err := s.GetWriteDB().ExecContext(ctx, `
+		INSERT OR IGNORE INTO claude_credential_groups (
+			channel, name, token, api_key, is_default, cost_multiplier,
+			input_cost_multiplier, output_cost_multiplier,
+			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h,
+			cache_read_cost_multiplier, model_multipliers
+		) VALUES (?, '默认分组', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+	`, channel, token, apiKey,
+		defaultSQLiteMigrationMultiplier(costMultiplier),
+		defaultSQLiteMigrationMultiplier(inputCostMultiplier),
+		defaultSQLiteMigrationMultiplier(outputCostMultiplier),
+		defaultSQLiteMigrationMultiplier(cacheCreationCostMultiplier),
+		defaultSQLiteMigrationMultiplier(cacheCreationMultiplier1h),
+		defaultSQLiteMigrationMultiplier(cacheReadCostMultiplier),
+		modelMultipliers)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create default Claude credential group: %w", err)
+	}
+	if id, err := result.LastInsertId(); err == nil && id > 0 {
+		return id, nil
+	}
+
+	if err := s.GetWriteDB().QueryRowContext(ctx, `
+		SELECT id FROM claude_credential_groups
+		WHERE channel = ? AND is_default = 1
+		LIMIT 1
+	`, channel).Scan(&groupID); err != nil {
+		return 0, fmt.Errorf("failed to load default Claude credential group after insert: %w", err)
+	}
+	return groupID, nil
+}
+
+func defaultSQLiteMigrationMultiplier(value float64) float64 {
+	if value <= 0 {
+		return 1.0
+	}
+	return value
 }
 
 func (s *SQLiteAdapter) tableExists(ctx context.Context, table string) (bool, error) {

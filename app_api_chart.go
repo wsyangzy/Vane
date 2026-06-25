@@ -335,7 +335,7 @@ func (a *App) GetCodexEndpointHealthChart() EndpointHealthData {
 			result.Excluded++
 			continue
 		}
-		if codexEndpointMgr.IsHealthy(ep.Name) {
+		if codexEndpointMgr.IsHealthy(ep.ID) {
 			result.Healthy++
 		} else {
 			result.Unhealthy++

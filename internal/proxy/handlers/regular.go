@@ -28,6 +28,7 @@ type RegularHandler struct {
 	errorRecoveryFactory     ErrorRecoveryFactory
 	retryManagerFactory      RetryManagerFactory
 	suspensionManagerFactory SuspensionManagerFactory
+	privacyRedactor          PrivacyRedactor
 	// 🔧 [修复] 共享SuspensionManager实例，确保全局挂起限制生效
 	sharedSuspensionManager SuspensionManager
 }
@@ -62,6 +63,10 @@ func NewRegularHandler(
 		// 确保常规请求与流式请求共享同一个全局挂起计数器
 		sharedSuspensionManager: sharedSuspensionManager,
 	}
+}
+
+func (rh *RegularHandler) SetPrivacyRedactor(redactor PrivacyRedactor) {
+	rh.privacyRedactor = redactor
 }
 
 // getDefaultStatusCodeForFinalStatus 根据最终状态获取默认HTTP状态码
@@ -179,11 +184,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		groupSwitchNeeded := false
 		for i, ep := range endpoints {
 			// 记录已尝试的端点（确保严格优先级转移，不回退）
-			epKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+			epKey := endpoint.EndpointKeyForConfig(ep.Config)
 			triedEndpoints[epKey] = struct{}{}
 
 			routeGroup := endpointRouteName(ep)
-			lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
+			lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
 			lifecycleManager.UpdateStatus("forwarding", i, 0)
 
 			// 🔧 [端点上下文修复] 立即设置端点信息到请求上下文，确保所有分支（成功/失败/取消）的日志都能正确记录端点
@@ -295,7 +300,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							connID, decision.Reason, ep.Config.Name))
 
 						// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
-						failedEndpointKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
+						failedEndpointKey := epKey
 						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey)
 						switch result {
 						case SuspensionSuccess:
@@ -338,7 +343,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					if err != nil && failReason == "" {
 						failReason = err.Error()
 					}
-					rh.endpointManager.SetEndpointLastRequestFail(ep.Config.Name, failStatusCode, failReason)
+					rh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
 
 					if decision.SwitchEndpoint {
 						// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
@@ -427,9 +432,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					default:
 					}
 
-					epKey := endpoint.EndpointKey(ep.Config.Channel, ep.Config.Name)
-					routeGroup := endpointRouteName(ep)
-					lifecycleManager.SetEndpoint(ep.Config.Name, routeGroup, ep.Config.Channel)
+					epKey := endpoint.EndpointKeyForConfig(ep.Config)
+					lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
 					*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", ep.Config.Name))
 
 					globalAttemptCount := lifecycleManager.IncrementAttempt()
@@ -535,6 +539,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 // executeRequest 执行单个请求
 func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, bodyBytes []byte, endpoint *endpoint.Endpoint, lifecycleManager RequestLifecycleManager) (*http.Response, error) {
 	bodyBytes = rewriteBodyForEndpoint(rh.forwarder, lifecycleManager, bodyBytes, endpoint)
+	var err error
+	bodyBytes, err = redactBodyBeforeForward(rh.privacyRedactor, bodyBytes, lifecycleManager)
+	if err != nil {
+		return nil, err
+	}
 
 	// 创建目标请求
 	targetURL := endpoint.Config.URL + r.URL.Path

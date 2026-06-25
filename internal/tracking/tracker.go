@@ -422,6 +422,9 @@ type UpdateOptions struct {
 	OriginalModelName  *string        // 改写前的原始请求模型
 	ModelRewriteSource *string        // 模型改写来源：mapping/channel_model
 	ModelRewriteTarget *string        // 改写后的目标模型
+	PrivacyRedacted    *bool          // 是否命中隐私脱敏
+	PrivacySummary     *string        // 隐私脱敏摘要（不含正文）
+	PrivacyMatches     *string        // 隐私脱敏命中明细（本机展示用）
 	EndTime            *time.Time     // 结束时间
 	Duration           *time.Duration // 持续时间
 	FailureReason      *string        // 失败原因（用于中间过程记录）
@@ -1161,6 +1164,15 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			if opts.ModelRewriteTarget != nil {
 				req.ModelRewriteTarget = *opts.ModelRewriteTarget
 			}
+			if opts.PrivacyRedacted != nil {
+				req.PrivacyRedacted = *opts.PrivacyRedacted
+			}
+			if opts.PrivacySummary != nil {
+				req.PrivacySummary = *opts.PrivacySummary
+			}
+			if opts.PrivacyMatches != nil {
+				req.PrivacyMatches = *opts.PrivacyMatches
+			}
 			if opts.FailureReason != nil {
 				req.FailureReason = *opts.FailureReason
 			}
@@ -1180,6 +1192,21 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 
 	// 🔧 [P5.1] HotPool 未启用时，update 操作无意义（无活跃请求记录）
 	slog.Debug("HotPool 未启用，跳过 update", "request_id", requestID)
+}
+
+func (ut *UsageTracker) RecordPrivacyRedaction(requestID string, summary string, matches ...string) {
+	if requestID == "" || summary == "" {
+		return
+	}
+	redacted := true
+	opts := UpdateOptions{
+		PrivacyRedacted: &redacted,
+		PrivacySummary:  &summary,
+	}
+	if len(matches) > 0 && matches[0] != "" {
+		opts.PrivacyMatches = &matches[0]
+	}
+	ut.RecordRequestUpdate(requestID, opts)
 }
 
 // RecordOutputSent records when the first response bytes were sent to the client.
@@ -1695,13 +1722,17 @@ func (ut *UsageTracker) GetEndpointMultiplier(endpointName string) EndpointMulti
 }
 
 func (ut *UsageTracker) GetEndpointMultiplierForEndpoint(channelName, endpointName string) EndpointMultiplier {
+	return ut.GetEndpointMultiplierForEndpointWithGroup(channelName, "", endpointName)
+}
+
+func (ut *UsageTracker) GetEndpointMultiplierForEndpointWithGroup(channelName, groupName, endpointName string) EndpointMultiplier {
 	ut.mu.RLock()
 	defer ut.mu.RUnlock()
 
 	if ut.endpointMu == nil {
 		return DefaultEndpointMultiplier()
 	}
-	for _, key := range endpointMultiplierLookupKeys(channelName, "", endpointName) {
+	for _, key := range endpointMultiplierLookupKeys(channelName, groupName, endpointName) {
 		if m, exists := ut.endpointMu[key]; exists {
 			return m
 		}
@@ -1710,13 +1741,17 @@ func (ut *UsageTracker) GetEndpointMultiplierForEndpoint(channelName, endpointNa
 }
 
 func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModel(channelName, endpointName, modelName string) EndpointMultiplier {
+	return ut.GetEndpointMultiplierForEndpointAndModelWithGroup(channelName, "", endpointName, modelName)
+}
+
+func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModelWithGroup(channelName, groupName, endpointName, modelName string) EndpointMultiplier {
 	ut.mu.RLock()
 	defer ut.mu.RUnlock()
 
 	if ut.endpointMu == nil {
 		return DefaultEndpointMultiplier()
 	}
-	for _, key := range endpointMultiplierLookupKeys(channelName, "", endpointName) {
+	for _, key := range endpointMultiplierLookupKeys(channelName, groupName, endpointName) {
 		if m, exists := ut.endpointMu[key]; exists {
 			return ResolveEndpointMultiplierForModel(m, modelName)
 		}
@@ -2412,6 +2447,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	originalModelName := req.OriginalModelName
 	modelRewriteSource := req.ModelRewriteSource
 	modelRewriteTarget := req.ModelRewriteTarget
+	privacyRedacted := req.PrivacyRedacted
+	privacySummary := req.PrivacySummary
+	privacyMatches := req.PrivacyMatches
 	isStreaming := req.IsStreaming
 	provider := req.Provider
 	status := req.Status
@@ -2535,6 +2573,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		OriginalModelName:             originalModelName,
 		ModelRewriteSource:            modelRewriteSource,
 		ModelRewriteTarget:            modelRewriteTarget,
+		PrivacyRedacted:               privacyRedacted,
+		PrivacyRedactionSummary:       privacySummary,
+		PrivacyRedactionMatches:       privacyMatches,
 		IsStreaming:                   isStreaming,
 		Provider:                      provider, // 提供商标识
 		Status:                        status,

@@ -314,10 +314,13 @@ export const fetchRequests = async (params = {}) => {
     }
     const endpoint = request.endpoint_name || request.endpoint || 'unknown';
 
-    // Convert chain item (object or string) to "channel::endpoint" key string
+    // Convert chain item (object or string) to "channel::group::endpoint" key string
     const chainItemToKey = (item) => {
       if (typeof item === 'object' && item !== null) {
-        return item.channel ? `${item.channel}::${item.endpoint || ''}` : (item.endpoint || '');
+        const group = item.credential_group || item.credentialGroup || item.group_name || item.group || '';
+        return item.channel
+          ? `${item.channel}::${group ? `${group}::` : ''}${item.endpoint || ''}`
+          : (item.endpoint || '');
       }
       return String(item || '');
     };
@@ -339,6 +342,12 @@ export const fetchRequests = async (params = {}) => {
       originalModelName: request.original_model_name || request.originalModelName || '',
       modelRewriteSource: request.model_rewrite_source || request.modelRewriteSource || '',
       modelRewriteTarget: request.model_rewrite_target || request.modelRewriteTarget || '',
+      privacy_redacted: Boolean(request.privacy_redacted ?? request.privacyRedacted),
+      privacy_redaction_summary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
+      privacy_redaction_matches: request.privacy_redaction_matches || request.privacyRedactionMatches || '',
+      privacyRedacted: Boolean(request.privacy_redacted ?? request.privacyRedacted),
+      privacyRedactionSummary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
+      privacyRedactionMatches: request.privacy_redaction_matches || request.privacyRedactionMatches || '',
       provider: request.provider || '',
       channel: request.channel || '',
       endpoint,
@@ -908,4 +917,67 @@ export const fetchPortInfo = async () => {
   // HTTP 环境
   const data = await fetchWithTimeout('/api/v1/settings/port');
   return data;
+};
+
+export const fetchPrivacyConfig = async () => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.getPrivacyConfig();
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const setPrivacyEnabled = async (enabled) => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.setPrivacyEnabled(enabled);
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const createPrivacyRule = async (input) => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.createPrivacyRule(input);
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const updatePrivacyRule = async (id, input) => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.updatePrivacyRule(id, input);
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const deletePrivacyRule = async (id) => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.deletePrivacyRule(id);
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const previewPrivacyRedaction = async (input) => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.previewPrivacyRedaction(input);
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const fetchPrivacySyntheticValues = async () => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.getPrivacySyntheticValues();
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const clearPrivacySyntheticValues = async () => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.clearPrivacySyntheticValues();
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
+};
+
+export const deletePrivacySyntheticValue = async (kind, rawHash) => {
+  if (isWailsEnvironment()) {
+    return await WailsApi.deletePrivacySyntheticValue(kind, rawHash);
+  }
+  throw new Error('HTTP 环境暂不支持隐私防护功能');
 };

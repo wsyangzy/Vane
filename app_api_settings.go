@@ -237,6 +237,7 @@ func (a *App) UpdateSetting(input UpdateSettingInput) error {
 		logger.Info("✅ 设置已更新", "category", input.Category, "key", input.Key)
 	}
 
+	a.emitEndpointUpdate()
 	return nil
 }
 
@@ -272,6 +273,7 @@ func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 		logger.Info("✅ 设置已批量更新并应用", "count", len(records))
 	}
 
+	a.emitEndpointUpdate()
 	return nil
 }
 

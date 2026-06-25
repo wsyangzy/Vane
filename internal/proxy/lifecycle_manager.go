@@ -128,6 +128,27 @@ func (rlm *RequestLifecycleManager) StartRequest(clientIP, userAgent, method, pa
 	})
 }
 
+func (rlm *RequestLifecycleManager) RecordPrivacyRedaction(summaryJSON string, redactedBody []byte, matchDetailsJSON string) {
+	if summaryJSON == "" {
+		return
+	}
+	requestID := rlm.stateManager.GetRequestID()
+	logger := rlm.logger
+	if logger == nil {
+		logger = slog.Default().With("provider", "claude")
+	}
+	logger.Debug("[隐私防护] 请求正文已脱敏",
+		"request_id", requestID,
+		"privacy_redaction_summary", summaryJSON,
+		"privacy_redaction_matches", matchDetailsJSON,
+		"privacy_redacted_body_bytes", len(redactedBody),
+		"privacy_redacted_body", string(redactedBody),
+	)
+	if rlm.usageTracker != nil && requestID != "" {
+		rlm.usageTracker.RecordPrivacyRedaction(requestID, summaryJSON, matchDetailsJSON)
+	}
+}
+
 // UpdateStatus 更新请求状态
 // 🎯 [SRP重构] 使用 stateManager 管理状态，保留模型搭便车逻辑
 // 调用 RecordRequestUpdate 记录状态变化，并实现模型信息搭便车更新机制
@@ -504,18 +525,18 @@ func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel
 		rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), updateOpts)
 
 		// 把端点倍率快照写入热池，供详情页展示计费过程
-		rlm.snapshotEndpointMultiplier(endpointName, channel)
+		rlm.snapshotEndpointMultiplier(endpointName, groupName, channel)
 	}
 }
 
 // snapshotEndpointMultiplier 从 UsageTracker 端点倍率缓存中读取当前端点的倍率
 // 并写入到 ActiveRequest 的快照字段。这样在归档/查询时可以展示该请求实际使用的倍率。
-func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, channel string) {
+func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, groupName, channel string) {
 	if rlm.usageTracker == nil || endpointName == "" {
 		return
 	}
 
-	mult := rlm.usageTracker.GetEndpointMultiplierForEndpoint(channel, endpointName)
+	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointWithGroup(channel, groupName, endpointName)
 
 	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
@@ -529,7 +550,8 @@ func (rlm *RequestLifecycleManager) snapshotEndpointMultiplierForModel(modelName
 		return
 	}
 	channel := rlm.stateManager.GetChannel()
-	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointAndModel(channel, endpointName, modelName)
+	groupName := rlm.stateManager.GetGroupName()
+	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointAndModelWithGroup(channel, groupName, endpointName, modelName)
 	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
 

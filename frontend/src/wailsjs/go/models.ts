@@ -1,15 +1,15 @@
 export namespace logging {
-	
+
 	export class LogEntry {
 	    timestamp: string;
 	    level: string;
 	    message: string;
 	    attrs: Record<string, string>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new LogEntry(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.timestamp = source["timestamp"];
@@ -21,19 +21,232 @@ export namespace logging {
 
 }
 
+export namespace privacy {
+
+	export class RedactionHit {
+	    rule_id: number;
+	    rule_name: string;
+	    type: string;
+	    category: string;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new RedactionHit(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rule_id = source["rule_id"];
+	        this.rule_name = source["rule_name"];
+	        this.type = source["type"];
+	        this.category = source["category"];
+	        this.count = source["count"];
+	    }
+	}
+	export class RedactionSummary {
+	    changed: boolean;
+	    hits: RedactionHit[];
+
+	    static createFrom(source: any = {}) {
+	        return new RedactionSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.changed = source["changed"];
+	        this.hits = this.convertValues(source["hits"], RedactionHit);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PrivacyRuleInput {
+	    name: string;
+	    type: string;
+	    category: string;
+	    pattern_or_value: string;
+	    replacement_mode: string;
+	    enabled: boolean;
+	    priority: number;
+
+	    static createFrom(source: any = {}) {
+	        return new PrivacyRuleInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.category = source["category"];
+	        this.pattern_or_value = source["pattern_or_value"];
+	        this.replacement_mode = source["replacement_mode"];
+	        this.enabled = source["enabled"];
+	        this.priority = source["priority"];
+	    }
+	}
+	export class PrivacyRule {
+	    id: number;
+	    name: string;
+	    type: string;
+	    category: string;
+	    pattern_or_value?: string;
+	    pattern_masked?: string;
+	    value_length?: number;
+	    replacement_mode: string;
+	    enabled: boolean;
+	    priority: number;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PrivacyRule(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.category = source["category"];
+	        this.pattern_or_value = source["pattern_or_value"];
+	        this.pattern_masked = source["pattern_masked"];
+	        this.value_length = source["value_length"];
+	        this.replacement_mode = source["replacement_mode"];
+	        this.enabled = source["enabled"];
+	        this.priority = source["priority"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class PrivacyConfig {
+	    enabled: boolean;
+	    rules: PrivacyRule[];
+
+	    static createFrom(source: any = {}) {
+	        return new PrivacyConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.rules = this.convertValues(source["rules"], PrivacyRule);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SyntheticValueRecord {
+	    raw_hash: string;
+	    raw_value: string;
+	    replacement: string;
+	    value: string;
+	    kind: string;
+	    created_at: string;
+	    last_seen_at: string;
+	    last_skip_at: string;
+	    reuse_count: number;
+	    skip_count: number;
+	    hit_count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SyntheticValueRecord(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.raw_hash = source["raw_hash"];
+	        this.raw_value = source["raw_value"];
+	        this.replacement = source["replacement"];
+	        this.value = source["value"];
+	        this.kind = source["kind"];
+	        this.created_at = source["created_at"];
+	        this.last_seen_at = source["last_seen_at"];
+	        this.last_skip_at = source["last_skip_at"];
+	        this.reuse_count = source["reuse_count"];
+	        this.skip_count = source["skip_count"];
+	        this.hit_count = source["hit_count"];
+	    }
+	}
+	export class PreviewResult {
+	    output: string;
+	    changed: boolean;
+	    hits: RedactionHit[];
+
+	    static createFrom(source: any = {}) {
+	        return new PreviewResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.output = source["output"];
+	        this.changed = source["changed"];
+	        this.hits = this.convertValues(source["hits"], RedactionHit);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace main {
-	
+
 	export class BatchHealthCheckResult {
 	    success: boolean;
 	    message: string;
 	    total: number;
 	    healthy_count: number;
 	    unhealthy_count: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BatchHealthCheckResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -47,11 +260,11 @@ export namespace main {
 	    category: string;
 	    key: string;
 	    value: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UpdateSettingInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.category = source["category"];
@@ -61,16 +274,16 @@ export namespace main {
 	}
 	export class BatchUpdateSettingsInput {
 	    settings: UpdateSettingInput[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BatchUpdateSettingsInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.settings = this.convertValues(source["settings"], UpdateSettingInput);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -95,11 +308,11 @@ export namespace main {
 	    description: string;
 	    icon: string;
 	    order: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CategoryInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -116,11 +329,12 @@ export namespace main {
 	    model_mapping: Record<string, string>;
 	    created_at: string;
 	    endpoint_count: number;
-	
+	    credential_groups: ClaudeCredentialGroupInfo[];
+
 	    static createFrom(source: any = {}) {
 	        return new ChannelInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -129,6 +343,53 @@ export namespace main {
 	        this.model_mapping = source["model_mapping"];
 	        this.created_at = source["created_at"];
 	        this.endpoint_count = source["endpoint_count"];
+	        this.credential_groups = (source["credential_groups"] || []).map((e: any) => new ClaudeCredentialGroupInfo(e));
+	    }
+	}
+	export class ClaudeCredentialGroupInfo {
+	    id: number;
+	    channel: string;
+	    name: string;
+	    token: string;
+	    api_key: string;
+	    token_masked: string;
+	    api_key_masked: string;
+	    is_default: boolean;
+	    cost_multiplier: number;
+	    input_cost_multiplier: number;
+	    output_cost_multiplier: number;
+	    cache_creation_cost_multiplier: number;
+	    cache_creation_cost_multiplier_1h: number;
+	    cache_read_cost_multiplier: number;
+	    model_multipliers: any[];
+	    endpoint_count: number;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ClaudeCredentialGroupInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.channel = source["channel"];
+	        this.name = source["name"];
+	        this.token = source["token"];
+	        this.api_key = source["api_key"];
+	        this.token_masked = source["token_masked"];
+	        this.api_key_masked = source["api_key_masked"];
+	        this.is_default = source["is_default"];
+	        this.cost_multiplier = source["cost_multiplier"];
+	        this.input_cost_multiplier = source["input_cost_multiplier"];
+	        this.output_cost_multiplier = source["output_cost_multiplier"];
+	        this.cache_creation_cost_multiplier = source["cache_creation_cost_multiplier"];
+	        this.cache_creation_cost_multiplier_1h = source["cache_creation_cost_multiplier_1h"];
+	        this.cache_read_cost_multiplier = source["cache_read_cost_multiplier"];
+	        this.model_multipliers = source["model_multipliers"];
+	        this.endpoint_count = source["endpoint_count"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
 	    }
 	}
 	export class ChartDataPoint {
@@ -141,11 +402,11 @@ export namespace main {
 	    max: number;
 	    value: number;
 	    timestamp: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ChartDataPoint(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.time = source["time"];
@@ -168,11 +429,11 @@ export namespace main {
 	    failover_enabled: boolean;
 	    failover_default_cooldown_seconds: number;
 	    endpoint_count: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ConfigInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.server_host = source["server_host"];
@@ -190,11 +451,11 @@ export namespace main {
 	    website?: string;
 	    priority: number;
 	    model_mapping: Record<string, string>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CreateChannelInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -289,9 +550,14 @@ export namespace main {
 	export class CodexEndpointInfo {
 	    id: number;
 	    channel_id: number;
+	    credential_group_id: number;
+	    credential_group_name: string;
+	    api_key: string;
+	    api_key_masked: string;
 	    name: string;
 	    base_url: string;
 	    is_active: boolean;
+	    skip_health_check: boolean;
 	    created_at: string;
 	    updated_at: string;
 
@@ -303,9 +569,52 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.channel_id = source["channel_id"];
+	        this.credential_group_id = source["credential_group_id"];
+	        this.credential_group_name = source["credential_group_name"];
+	        this.api_key = source["api_key"];
+	        this.api_key_masked = source["api_key_masked"];
 	        this.name = source["name"];
 	        this.base_url = source["base_url"];
 	        this.is_active = source["is_active"];
+	        this.skip_health_check = source["skip_health_check"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class CodexCredentialGroupInfo {
+	    id: number;
+	    channel_id: number;
+	    name: string;
+	    api_key: string;
+	    api_key_masked: string;
+	    is_default: boolean;
+	    costMultiplier: number;
+	    inputCostMultiplier: number;
+	    outputCostMultiplier: number;
+	    cacheReadCostMultiplier: number;
+	    billingOutputTokenSource: string;
+	    modelMultipliers: any[];
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CodexCredentialGroupInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.channel_id = source["channel_id"];
+	        this.name = source["name"];
+	        this.api_key = source["api_key"];
+	        this.api_key_masked = source["api_key_masked"];
+	        this.is_default = source["is_default"];
+	        this.costMultiplier = source["costMultiplier"];
+	        this.inputCostMultiplier = source["inputCostMultiplier"];
+	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
+	        this.modelMultipliers = source["modelMultipliers"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -321,6 +630,7 @@ export namespace main {
 	    enable_1m_context: boolean;
 	    website: string;
 	    is_active: boolean;
+	    credential_groups: CodexCredentialGroupInfo[];
 	    endpoints: CodexEndpointInfo[];
 	    created_at: string;
 	    updated_at: string;
@@ -341,6 +651,7 @@ export namespace main {
 	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
 	        this.is_active = source["is_active"];
+	        this.credential_groups = (source["credential_groups"] || []).map((e: any) => new CodexCredentialGroupInfo(e));
 	        this.endpoints = (source["endpoints"] || []).map((e: any) => new CodexEndpointInfo(e));
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -394,10 +705,71 @@ export namespace main {
 	        this.website = source["website"];
 	    }
 	}
-	export class CreateCodexEndpointInput {
+	export class CreateCodexCredentialGroupInput {
 	    channel_id: number;
 	    name: string;
+	    api_key: string;
+	    is_default: boolean;
+	    costMultiplier: number;
+	    inputCostMultiplier: number;
+	    outputCostMultiplier: number;
+	    cacheReadCostMultiplier: number;
+	    billingOutputTokenSource: string;
+	    modelMultipliers: any[];
+
+	    static createFrom(source: any = {}) {
+	        return new CreateCodexCredentialGroupInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channel_id = source["channel_id"];
+	        this.name = source["name"];
+	        this.api_key = source["api_key"];
+	        this.is_default = source["is_default"];
+	        this.costMultiplier = source["costMultiplier"];
+	        this.inputCostMultiplier = source["inputCostMultiplier"];
+	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
+	        this.modelMultipliers = source["modelMultipliers"];
+	    }
+}
+	export class UpdateCodexCredentialGroupInput {
+	    name: string;
+	    api_key: string;
+	    is_default: boolean;
+	    costMultiplier: number;
+	    inputCostMultiplier: number;
+	    outputCostMultiplier: number;
+	    cacheReadCostMultiplier: number;
+	    billingOutputTokenSource: string;
+	    modelMultipliers: any[];
+
+	    static createFrom(source: any = {}) {
+	        return new UpdateCodexCredentialGroupInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.api_key = source["api_key"];
+	        this.is_default = source["is_default"];
+	        this.costMultiplier = source["costMultiplier"];
+	        this.inputCostMultiplier = source["inputCostMultiplier"];
+	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
+	        this.modelMultipliers = source["modelMultipliers"];
+	    }
+}
+	export class CreateCodexEndpointInput {
+	    channel_id: number;
+	    credential_group_id: number;
+	    api_key: string;
+	    name: string;
 	    base_url: string;
+	    skip_health_check: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new CreateCodexEndpointInput(source);
@@ -406,13 +778,19 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.channel_id = source["channel_id"];
+	        this.credential_group_id = source["credential_group_id"];
+	        this.api_key = source["api_key"];
 	        this.name = source["name"];
 	        this.base_url = source["base_url"];
+	        this.skip_health_check = source["skip_health_check"];
 	    }
 	}
 	export class UpdateCodexEndpointInput {
 	    name: string;
 	    base_url: string;
+	    credential_group_id?: number;
+	    api_key?: string;
+	    skip_health_check?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new UpdateCodexEndpointInput(source);
@@ -422,10 +800,48 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.base_url = source["base_url"];
+	        this.credential_group_id = source["credential_group_id"];
+	        this.api_key = source["api_key"];
+	        this.skip_health_check = source["skip_health_check"];
 	    }
 	}
+	export class CreateClaudeCredentialGroupInput {
+	    channel: string;
+	    name: string;
+	    token: string;
+	    api_key: string;
+	    is_default: boolean;
+	    cost_multiplier: number;
+	    input_cost_multiplier: number;
+	    output_cost_multiplier: number;
+	    cache_creation_cost_multiplier: number;
+	    cache_creation_cost_multiplier_1h: number;
+	    cache_read_cost_multiplier: number;
+	    model_multipliers: any[];
+
+	    static createFrom(source: any = {}) {
+	        return new CreateClaudeCredentialGroupInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channel = source["channel"];
+	        this.name = source["name"];
+	        this.token = source["token"];
+	        this.api_key = source["api_key"];
+	        this.is_default = source["is_default"];
+	        this.cost_multiplier = source["cost_multiplier"];
+	        this.input_cost_multiplier = source["input_cost_multiplier"];
+	        this.output_cost_multiplier = source["output_cost_multiplier"];
+	        this.cache_creation_cost_multiplier = source["cache_creation_cost_multiplier"];
+	        this.cache_creation_cost_multiplier_1h = source["cache_creation_cost_multiplier_1h"];
+	        this.cache_read_cost_multiplier = source["cache_read_cost_multiplier"];
+	        this.model_multipliers = source["model_multipliers"];
+	    }
+}
 	export class CreateEndpointInput {
 	    channel: string;
+	    credential_group_id: number;
 	    name: string;
 	    url: string;
 	    token: string;
@@ -444,14 +860,15 @@ export namespace main {
 	    cache_creation_cost_multiplier_1h: number;
 	    cache_read_cost_multiplier: number;
 	    model_multipliers: any[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CreateEndpointInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.channel = source["channel"];
+	        this.credential_group_id = source["credential_group_id"];
 	        this.name = source["name"];
 	        this.url = source["url"];
 	        this.token = source["token"];
@@ -482,11 +899,11 @@ export namespace main {
 	    cache_creation_price_1h: number;
 	    cache_read_price: number;
 	    is_default: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CreateModelPricingInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.model_name = source["model_name"];
@@ -530,11 +947,11 @@ export namespace main {
 	    name: string;
 	    tokens: number;
 	    cost: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EndpointCostItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -548,11 +965,11 @@ export namespace main {
 	    skipped: number;
 	    excluded: number;
 	    total: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EndpointHealthData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.healthy = source["healthy"];
@@ -578,11 +995,11 @@ export namespace main {
 	    consecutive_fail: number;
 	    last_fail_code: number;
 	    last_fail_reason: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EndpointInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -607,11 +1024,11 @@ export namespace main {
 	    name: string;
 	    value: string;
 	    is_active: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new KeyInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.index = source["index"];
@@ -626,11 +1043,11 @@ export namespace main {
 	    api_keys: KeyInfo[];
 	    current_token_index: number;
 	    current_api_key_index: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EndpointKeysInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.endpoint = source["endpoint"];
@@ -639,7 +1056,7 @@ export namespace main {
 	        this.current_token_index = source["current_token_index"];
 	        this.current_api_key_index = source["current_api_key_index"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -661,6 +1078,8 @@ export namespace main {
 	export class EndpointRecordInfo {
 	    id: number;
 	    channel: string;
+	    credential_group_id: number;
+	    credential_group_name: string;
 	    name: string;
 	    url: string;
 	    token: string;
@@ -694,15 +1113,17 @@ export namespace main {
 	    in_cooldown: boolean;
 	    cooldown_until: string;
 	    cooldown_reason: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EndpointRecordInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.channel = source["channel"];
+	        this.credential_group_id = source["credential_group_id"];
+	        this.credential_group_name = source["credential_group_name"];
 	        this.name = source["name"];
 	        this.url = source["url"];
 	        this.token = source["token"];
@@ -743,11 +1164,11 @@ export namespace main {
 	    storage_type: string;
 	    total_count: number;
 	    enabled_count: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EndpointStorageStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -765,11 +1186,11 @@ export namespace main {
 	    endpoint_count: number;
 	    in_cooldown: boolean;
 	    cooldown_remain_ms: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new GroupInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -782,23 +1203,23 @@ export namespace main {
 	        this.cooldown_remain_ms = source["cooldown_remain_ms"];
 	    }
 	}
-	
+
 	export class KeysOverviewResult {
 	    endpoints: EndpointKeysInfo[];
 	    total: number;
 	    timestamp: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new KeysOverviewResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.endpoints = this.convertValues(source["endpoints"], EndpointKeysInfo);
 	        this.total = source["total"];
 	        this.timestamp = source["timestamp"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -830,11 +1251,11 @@ export namespace main {
 	    is_default: boolean;
 	    created_at: string;
 	    updated_at: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModelPricingInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -855,11 +1276,11 @@ export namespace main {
 	    enabled: boolean;
 	    total_count: number;
 	    has_default: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ModelPricingStorageStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -872,11 +1293,11 @@ export namespace main {
 	    actual_port: number;
 	    is_default: boolean;
 	    was_occupied: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PortInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.preferred_port = source["preferred_port"];
@@ -902,6 +1323,9 @@ export namespace main {
 	    retry_count: number;
 	    failure_reason?: string;
 	    cancel_reason?: string;
+	    privacy_redacted: boolean;
+	    privacy_redaction_summary?: string;
+	    privacy_redaction_matches?: string;
 	    input_tokens: number;
 	    output_tokens: number;
 	    cache_creation_tokens: number;
@@ -921,7 +1345,7 @@ export namespace main {
 	    static createFrom(source: any = {}) {
 	        return new RequestRecord(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -940,6 +1364,9 @@ export namespace main {
 	        this.retry_count = source["retry_count"];
 	        this.failure_reason = source["failure_reason"];
 	        this.cancel_reason = source["cancel_reason"];
+	        this.privacy_redacted = source["privacy_redacted"];
+	        this.privacy_redaction_summary = source["privacy_redaction_summary"];
+	        this.privacy_redaction_matches = source["privacy_redaction_matches"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
 	        this.cache_creation_tokens = source["cache_creation_tokens"];
@@ -962,11 +1389,11 @@ export namespace main {
 	    total: number;
 	    page: number;
 	    page_size: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RequestListResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.requests = this.convertValues(source["requests"], RequestRecord);
@@ -974,7 +1401,7 @@ export namespace main {
 	        this.page = source["page"];
 	        this.page_size = source["page_size"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1003,11 +1430,11 @@ export namespace main {
 	    channel: string;
 	    endpoint: string;
 	    group: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new RequestQueryParams(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.page = source["page"];
@@ -1021,18 +1448,18 @@ export namespace main {
 	        this.group = source["group"];
 	    }
 	}
-	
+
 	export class SaveFileResult {
 	    success: boolean;
 	    file_path: string;
 	    file_name: string;
 	    file_size: number;
 	    error?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SaveFileResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -1055,11 +1482,11 @@ export namespace main {
 	    requires_restart: boolean;
 	    created_at: string;
 	    updated_at: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SettingInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1075,7 +1502,7 @@ export namespace main {
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1099,11 +1526,11 @@ export namespace main {
 	    total_count: number;
 	    category_count: number;
 	    is_initialized: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SettingsStorageStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -1119,11 +1546,11 @@ export namespace main {
 	    key_type: string;
 	    new_index: number;
 	    timestamp: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SwitchKeyResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.success = source["success"];
@@ -1145,11 +1572,11 @@ export namespace main {
 	    active_group: string;
 	    config_path: string;
 	    auth_enabled: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SystemStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.version = source["version"];
@@ -1170,11 +1597,11 @@ export namespace main {
 	    cache_creation_tokens: number;
 	    cache_read_tokens: number;
 	    total_tokens: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TokenUsageData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.input_tokens = source["input_tokens"];
@@ -1189,11 +1616,11 @@ export namespace main {
 	    website?: string;
 	    priority: number;
 	    model_mapping: Record<string, string>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UpdateChannelInput(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -1202,7 +1629,7 @@ export namespace main {
 	        this.model_mapping = source["model_mapping"];
 	    }
 	}
-	
+
 	export class UsageStatsData {
 	    period: string;
 	    total_requests: number;
@@ -1211,11 +1638,11 @@ export namespace main {
 	    total_cost_usd: number;
 	    total_tokens: number;
 	    failed_requests: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UsageStatsData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.period = source["period"];
@@ -1236,11 +1663,11 @@ export namespace main {
 	    channel: string;
 	    endpoint: string;
 	    group: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UsageStatsQueryParams(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.period = source["period"];
@@ -1269,11 +1696,11 @@ export namespace main {
 	    all_time_total_cost: number;
 	    today_tokens: number;
 	    all_time_total_tokens: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new UsageSummary(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.total_requests = source["total_requests"];
@@ -1297,16 +1724,16 @@ export namespace main {
 }
 
 export namespace store {
-	
+
 	export class EnumOption {
 	    value: string;
 	    label: string;
 	    description: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EnumOption(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.value = source["value"];

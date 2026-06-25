@@ -17,6 +17,7 @@ const CodexPage = lazy(() => import('@pages/codex/index.jsx'));
 // 组管理页面已移除，配置简化后不再需要独立的组管理功能
 // const GroupsPage = lazy(() => import('@pages/groups/index.jsx'));
 const RequestsPage = lazy(() => import('@pages/requests/index.jsx'));
+const PrivacyPage = lazy(() => import('@pages/privacy/index.jsx'));
 const PricingPage = lazy(() => import('@pages/pricing/index.jsx'));
 // 配置页面改为设置页面（可编辑）
 const SettingsPage = lazy(() => import('@pages/settings/index.jsx'));
@@ -276,6 +277,7 @@ function App() {
       // 组管理页面已移除
       // groups: <GroupsPage />,
       requests: <RequestsPage />,
+      privacy: <PrivacyPage />,
       pricing: <PricingPage />,
       // 设置页面（可编辑）
       settings: <SettingsPage />,
@@ -346,4 +348,3 @@ function App() {
 }
 
 export default App;
-

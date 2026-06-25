@@ -24,6 +24,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  ShieldOff,
   Trash2,
   TriangleAlert,
   XCircle
@@ -40,13 +41,18 @@ import {
   Tooltip
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
+import useHorizontalScroll from '@hooks/useHorizontalScroll.js';
+import ModelMultiplierEditor from '../channels/components/ModelMultiplierEditor.jsx';
+import { buildInitialModelMultiplierRows, parseModelMultiplierRows } from '../channels/components/modelMultiplierRows.js';
 import ModelTag from '../requests/components/ModelTag.jsx';
 import {
   activateCodexChannel,
   activateCodexEndpoint,
   createCodexChannel,
+  createCodexCredentialGroup,
   createCodexEndpoint,
   deleteCodexChannelByID,
+  deleteCodexCredentialGroupByID,
   deleteCodexEndpointByID,
   getCodexChannels,
   getCodexGlobalConfig,
@@ -55,18 +61,56 @@ import {
   isWailsEnvironment,
   openExternalURL,
   subscribeToEvent,
+  setDefaultCodexCredentialGroup,
   updateCodexChannelByID,
+  updateCodexCredentialGroupByID,
   updateCodexEndpointByID,
   updateCodexGlobalConfig
 } from '@utils/wailsApi.js';
 import { formatMultiplierExpression, formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
 
-const buildInitialChannelForm = (channel) => ({
-  name: channel?.name || '',
-  apiKey: channel?.apiKey || '',
-  website: channel?.website || '',
-  model: channel?.model || '',
-  modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
+const getCredentialGroups = (channel) => {
+  const groups = channel?.credentialGroups || channel?.credential_groups || [];
+  return Array.isArray(groups) ? groups : [];
+};
+
+const getDefaultCredentialGroup = (channel) => {
+  const groups = getCredentialGroups(channel);
+  return groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
+};
+
+const buildChannelCredentialGroupFields = (group, channel) => ({
+  credentialGroupId: group?.id || 0,
+  credentialGroupName: group?.name || '默认分组',
+  credentialGroupApiKey: group?.apiKey || (!group ? channel?.apiKey || '' : ''),
+  credentialGroupCostMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? 1.0),
+  credentialGroupInputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? 1.0),
+  credentialGroupOutputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? 1.0),
+  credentialGroupCacheReadCostMultiplier: formatMultiplierInputValue(group?.cacheReadCostMultiplier ?? 1.0),
+  credentialGroupBillingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens'
+});
+
+const buildInitialChannelForm = (channel) => {
+  const defaultGroup = getDefaultCredentialGroup(channel);
+  return {
+    name: channel?.name || '',
+    website: channel?.website || '',
+    model: channel?.model || '',
+    ...buildChannelCredentialGroupFields(defaultGroup, channel),
+    modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
+  };
+};
+
+const buildInitialCredentialGroupForm = (group, channel) => ({
+  name: group?.name || '',
+  apiKey: group?.apiKey || '',
+  isDefault: Boolean(group?.isDefault || group?.is_default || (!group && getCredentialGroups(channel).length === 0)),
+  costMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? 1.0),
+  inputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? 1.0),
+  outputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? 1.0),
+  cacheReadCostMultiplier: formatMultiplierInputValue(group?.cacheReadCostMultiplier ?? 1.0),
+  billingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens',
+  modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
 });
 
 const buildInitialModelMappingRows = (modelMapping) => {
@@ -93,12 +137,13 @@ const buildModelMappingPayload = (rows) => {
 
 const CODEX_CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
+  { key: 'credential', label: '凭证分组' },
   { key: 'mapping', label: '模型映射' }
 ];
 
-const CODEX_ENDPOINT_FORM_TABS = [
+const CODEX_CREDENTIAL_GROUP_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
-  { key: 'billing', label: '计费设置' }
+  { key: 'billing', label: '成本倍率' }
 ];
 
 const BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS = [
@@ -127,6 +172,13 @@ const parseEndpointMultiplierPayload = (values) => {
   return { payload };
 };
 
+const normalizeMultiplierValue = (value) => {
+  const parsed = typeof value === 'string'
+    ? parseMultiplierExpression(value, Number.NaN)
+    : Number(value);
+  return Number.isFinite(parsed) ? parsed : 1;
+};
+
 const formatEndpointTimeoutInputValue = (value) => {
   const seconds = Number(value ?? 0);
   if (!Number.isFinite(seconds) || seconds <= 0) return '0';
@@ -141,74 +193,6 @@ const parseEndpointTimeoutPayload = (value) => {
     return { error: '超时时间必须是大于等于 0 的整数秒数' };
   }
   return { timeoutSeconds: parsed };
-};
-
-const isDefaultMultiplierValue = (value) => {
-  const parsed = Number(value ?? 1.0);
-  return Number.isFinite(parsed) && Math.abs(parsed - 1.0) <= 0.000001;
-};
-
-const hasFineGrainedModelMultiplier = (rule) => {
-  return !isDefaultMultiplierValue(rule?.inputCostMultiplier) ||
-    !isDefaultMultiplierValue(rule?.outputCostMultiplier) ||
-    !isDefaultMultiplierValue(rule?.cacheReadCostMultiplier);
-};
-
-const buildInitialModelMultiplierRows = (modelMultipliers) => {
-  return (modelMultipliers || [])
-    .map((rule) => ({
-      model: String(rule?.model || ''),
-      costMultiplier: formatMultiplierInputValue(rule?.costMultiplier ?? 1.0),
-      inputCostMultiplier: formatMultiplierInputValue(rule?.inputCostMultiplier ?? 1.0),
-      outputCostMultiplier: formatMultiplierInputValue(rule?.outputCostMultiplier ?? 1.0),
-      cacheReadCostMultiplier: formatMultiplierInputValue(rule?.cacheReadCostMultiplier ?? 1.0),
-      advancedOpen: hasFineGrainedModelMultiplier(rule)
-    }))
-    .filter((row) => row.model.trim());
-};
-
-const createEmptyModelMultiplierRow = () => ({
-  model: '',
-  costMultiplier: '1',
-  inputCostMultiplier: '1',
-  outputCostMultiplier: '1',
-  cacheReadCostMultiplier: '1',
-  advancedOpen: false
-});
-
-const parseModelMultiplierPayload = (rows) => {
-  const payload = [];
-  const seen = new Set();
-  for (const [index, row] of (rows || []).entries()) {
-    const model = String(row?.model || '').trim();
-    if (!model) continue;
-    if (seen.has(model)) {
-      return { error: `模型附加倍率重复：${model}` };
-    }
-    seen.add(model);
-
-    const multiplierResult = parseEndpointMultiplierPayload(row);
-    if (multiplierResult.error) {
-      return { error: `第 ${index + 1} 行模型附加倍率：${multiplierResult.error}` };
-    }
-    payload.push({
-      model,
-      ...multiplierResult.payload
-    });
-  }
-  return { payload };
-};
-
-const buildMultiplierBadge = (endpoint) => {
-  const totalMultiplier = Number(endpoint.costMultiplier ?? 1.0);
-  if (!Number.isFinite(totalMultiplier) || Math.abs(totalMultiplier - 1.0) <= 0.000001) {
-    return null;
-  }
-
-  return {
-    text: `×${formatMultiplierExpression(totalMultiplier, 3)}`,
-    title: `总成本倍率 × ${formatMultiplierExpression(totalMultiplier, 6)}`
-  };
 };
 
 const formatLastCheck = (time) => {
@@ -261,23 +245,23 @@ const getErrorMessage = (error, fallback = '操作失败') => {
 };
 
 // ============================================================================
-// 渠道编辑弹窗（仅 渠道名 + API Key + 官网；model/reasoning/1M 已迁移到全局设置）
+// 渠道编辑弹窗（渠道信息 + 创建时的默认凭证分组；model/reasoning/1M 已迁移到全局设置）
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKeyDirty, setApiKeyDirty] = useState(false);
   const isWails = isWailsEnvironment();
+  const isEdit = mode === 'edit';
+  const channelFormTabs = isEdit
+    ? CODEX_CHANNEL_FORM_TABS.filter((tab) => tab.key !== 'credential')
+    : CODEX_CHANNEL_FORM_TABS;
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
 
   const updateField = (key, value) => {
-    if (key === 'apiKey') {
-      setApiKeyDirty(true);
-    }
     setFormData((prev) => ({ ...prev, [key]: value }));
     if (fieldError) {
       setFieldError('');
@@ -316,29 +300,65 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
     });
   };
 
+  const buildCredentialGroupPayload = () => {
+    const multiplierResult = parseEndpointMultiplierPayload({
+      costMultiplier: formData.credentialGroupCostMultiplier,
+      inputCostMultiplier: formData.credentialGroupInputCostMultiplier,
+      outputCostMultiplier: formData.credentialGroupOutputCostMultiplier,
+      cacheReadCostMultiplier: formData.credentialGroupCacheReadCostMultiplier
+    });
+    if (multiplierResult.error) {
+      return { error: multiplierResult.error };
+    }
+    return {
+      payload: {
+        id: formData.credentialGroupId || 0,
+        name: formData.credentialGroupName.trim(),
+        apiKey: formData.credentialGroupApiKey.trim(),
+        isDefault: true,
+        ...multiplierResult.payload,
+        billingOutputTokenSource: formData.credentialGroupBillingOutputTokenSource
+      }
+    };
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
 
     const payload = {
       name: formData.name.trim(),
-      apiKey: formData.apiKey.trim(),
+      apiKey: isEdit ? '' : formData.credentialGroupApiKey.trim(),
       website: formData.website.trim(),
       model: formData.model.trim(),
-      modelMapping: buildModelMappingPayload(formData.modelMappingRows)
+      modelMapping: buildModelMappingPayload(formData.modelMappingRows),
+      credentialGroup: null
     };
 
-    if (!payload.name || !payload.apiKey) {
-      setFieldError('请填写渠道名和 API Key');
+    if (!payload.name) {
+      setActiveTab('basic');
+      setFieldError('请填写渠道名');
       return;
+    }
+
+    if (!isEdit) {
+      const credentialGroupResult = buildCredentialGroupPayload();
+      if (credentialGroupResult.error) {
+        setActiveTab('credential');
+        setFieldError(credentialGroupResult.error);
+        return;
+      }
+      payload.credentialGroup = credentialGroupResult.payload;
+      if (!payload.credentialGroup.name || !payload.credentialGroup.apiKey) {
+        setActiveTab('credential');
+        setFieldError('请填写默认凭证分组名称和 API Key');
+        return;
+      }
     }
 
     await onSave?.(payload);
   };
 
-  const isEdit = mode === 'edit';
-  const isMaskedApiKeyPreview = isEdit && !showApiKey && !apiKeyDirty && !!channel?.apiKeyMasked;
-  const apiKeyInputType = isMaskedApiKeyPreview ? 'text' : (showApiKey ? 'text' : 'password');
-  const apiKeyInputValue = isMaskedApiKeyPreview ? channel?.apiKeyMasked || '' : formData.apiKey;
+  const apiKeyInputType = showApiKey ? 'text' : 'password';
 
   return renderModalPortal(
     <div
@@ -356,7 +376,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
             </div>
             <div>
               <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道'}</h2>
-              <p className="mt-0.5 text-xs text-slate-500">渠道仅保存 API Key；模型/推理/1M 等在「Codex 配置」中全局调整</p>
+              <p className="mt-0.5 text-xs text-slate-500">渠道保存基础信息；API Key 在凭证分组中维护，模型/推理/1M 在「Codex 配置」中全局调整</p>
             </div>
           </div>
           <Tooltip content="关闭">
@@ -374,10 +394,12 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={CODEX_CHANNEL_FORM_TABS}
+              tabs={channelFormTabs}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
+              className={isEdit ? 'grid-cols-2' : 'grid-cols-3'}
+              buttonPaddingClass="px-2"
             />
           </div>
           <div className="space-y-4 overflow-y-auto px-6 py-6">
@@ -393,7 +415,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
               label="渠道名"
               value={formData.name}
               onChange={(event) => updateField('name', event.target.value)}
-              placeholder="例如：custom"
+              placeholder="例如：主渠道"
               autoFocus
             />
 
@@ -417,22 +439,34 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                 填入后该渠道将覆盖全局 model；不同渠道支持的模型可能不同
               </p>
             </div>
-
+              </>
+            ) : activeTab === 'credential' ? (
+              <div className="space-y-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">默认凭证分组</h3>
+                  <p className="mt-0.5 text-xs text-slate-500">创建渠道时会同时创建默认分组；多个服务商分组可在渠道卡片中继续添加和编辑。</p>
+                </div>
+                <Input
+                  label="默认凭证分组名称"
+                  value={formData.credentialGroupName}
+                  onChange={(event) => updateField('credentialGroupName', event.target.value)}
+                  placeholder="例如：默认分组 / 高倍率组"
+                  disabled={loading}
+                />
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">默认凭证分组 API Key</label>
               <div className="relative">
                 <input
                   type={apiKeyInputType}
-                  value={apiKeyInputValue}
-                  onChange={(event) => updateField('apiKey', event.target.value)}
+                  value={formData.credentialGroupApiKey}
+                  onChange={(event) => updateField('credentialGroupApiKey', event.target.value)}
                   placeholder="sk-..."
                   autoComplete="new-password"
                   data-form-type="other"
-                  readOnly={isMaskedApiKeyPreview}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
                 />
                 <Tooltip
-                  content={showApiKey ? '隐藏真实 API Key' : '显示真实 API Key'}
+                  content={showApiKey ? '隐藏 API Key' : '显示 API Key'}
                   className="absolute right-2 top-1/2 -translate-y-1/2"
                 >
                   <button
@@ -444,11 +478,43 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
                   </button>
                 </Tooltip>
               </div>
-              {isMaskedApiKeyPreview && (
-                <p className="mt-1 text-xs text-slate-400">点击图标查看真实值或直接输入新 Key 替换</p>
-              )}
             </div>
-              </>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">成本倍率</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      ['credentialGroupCostMultiplier', '总倍率'],
+                      ['credentialGroupInputCostMultiplier', '输入'],
+                      ['credentialGroupOutputCostMultiplier', '输出'],
+                      ['credentialGroupCacheReadCostMultiplier', '缓存']
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className="mb-1 block text-xs text-slate-500">{label}</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={formData[key]}
+                          onChange={(event) => updateField(key, event.target.value)}
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="1.0"
+                          disabled={loading}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">成本倍率直接作为该分组下 Codex 端点的计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">输出计费口径</label>
+                  <CustomSelect
+                    options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
+                    value={formData.credentialGroupBillingOutputTokenSource}
+                    onChange={(value) => updateField('credentialGroupBillingOutputTokenSource', value)}
+                    size="md"
+                    fullWidth
+                  />
+                </div>
+              </div>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -519,107 +585,64 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
 };
 
 // ============================================================================
-// 端点编辑弹窗（name + base_url）
+// 凭证分组编辑弹窗
 // ============================================================================
-const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCancel, onSave }) => {
-  const [name, setName] = useState(endpoint?.name || '');
-  const [baseURL, setBaseURL] = useState(endpoint?.baseURL || '');
-  const [priority, setPriority] = useState(endpoint?.priority ?? 0);
-  const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
-  const [costMultiplier, setCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.costMultiplier ?? 1.0));
-  const [inputCostMultiplier, setInputCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.inputCostMultiplier ?? 1.0));
-  const [outputCostMultiplier, setOutputCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.outputCostMultiplier ?? 1.0));
-  const [cacheReadCostMultiplier, setCacheReadCostMultiplier] = useState(formatMultiplierInputValue(endpoint?.cacheReadCostMultiplier ?? 1.0));
-  const [billingOutputTokenSource, setBillingOutputTokenSource] = useState(endpoint?.billingOutputTokenSource || 'output_tokens');
-  const [modelMultiplierRows, setModelMultiplierRows] = useState(buildInitialModelMultiplierRows(endpoint?.modelMultipliers));
-  const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
+const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, onCancel, onSave }) => {
+  const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
 
-  const updateModelMultiplierRow = (index, key, value) => {
-    setModelMultiplierRows((prev) =>
-      (prev || []).map((row, rowIndex) =>
-        rowIndex === index
-          ? { ...row, [key]: value }
-          : row
-      )
-    );
+  const updateField = (key, value) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
     if (fieldError) setFieldError('');
   };
 
-  const addModelMultiplierRow = () => {
-    setModelMultiplierRows((prev) => [...(prev || []), createEmptyModelMultiplierRow()]);
-  };
-
-  const removeModelMultiplierRow = (index) => {
-    setModelMultiplierRows((prev) => (prev || []).filter((_, rowIndex) => rowIndex !== index));
-  };
-
-  const toggleModelMultiplierDetails = (index) => {
-    setModelMultiplierRows((prev) =>
-      (prev || []).map((row, rowIndex) =>
-        rowIndex === index
-          ? { ...row, advancedOpen: !row.advancedOpen }
-          : row
-      )
-    );
+  const updateModelMultiplierRows = (rows) => {
+    setFormData((prev) => ({ ...prev, modelMultiplierRows: rows }));
+    if (fieldError) setFieldError('');
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    const trimmedName = name.trim();
-    const trimmed = baseURL.trim();
-    if (!trimmedName) {
-      setActiveTab('basic');
-      setFieldError('端点名称不能为空');
+    const name = formData.name.trim();
+    const apiKey = formData.apiKey.trim();
+    if (!name) {
+      setFieldError('分组名称不能为空');
       return;
     }
-    if (!trimmed) {
-      setActiveTab('basic');
-      setFieldError('base_url 不能为空');
-      return;
-    }
-    if (!/^https?:\/\//i.test(trimmed)) {
-      setActiveTab('basic');
-      setFieldError('base_url 必须以 http:// 或 https:// 开头');
-      return;
-    }
-    const timeoutResult = parseEndpointTimeoutPayload(timeoutSeconds);
-    if (timeoutResult.error) {
-      setActiveTab('basic');
-      setFieldError(timeoutResult.error);
+    if (!apiKey) {
+      setFieldError('API Key 不能为空');
       return;
     }
     const multiplierResult = parseEndpointMultiplierPayload({
-      costMultiplier,
-      inputCostMultiplier,
-      outputCostMultiplier,
-      cacheReadCostMultiplier
+      costMultiplier: formData.costMultiplier,
+      inputCostMultiplier: formData.inputCostMultiplier,
+      outputCostMultiplier: formData.outputCostMultiplier,
+      cacheReadCostMultiplier: formData.cacheReadCostMultiplier
     });
     if (multiplierResult.error) {
-      setActiveTab('billing');
       setFieldError(multiplierResult.error);
+      setActiveTab('billing');
       return;
     }
-    const modelMultiplierResult = parseModelMultiplierPayload(modelMultiplierRows);
+    const modelMultiplierResult = parseModelMultiplierRows(formData.modelMultiplierRows);
     if (modelMultiplierResult.error) {
-      setActiveTab('billing');
       setFieldError(modelMultiplierResult.error);
+      setActiveTab('billing');
       return;
     }
     await onSave?.({
-      name: trimmedName,
-      baseURL: trimmed,
-      failoverEnabled,
-      priority,
-      timeoutSeconds: timeoutResult.timeoutSeconds,
+      name,
+      apiKey,
+      isDefault: formData.isDefault,
       ...multiplierResult.payload,
-      modelMultipliers: modelMultiplierResult.payload,
-      billingOutputTokenSource
+      billingOutputTokenSource: formData.billingOutputTokenSource,
+      modelMultipliers: modelMultiplierResult.payload
     });
   };
 
@@ -637,10 +660,10 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
-              {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
+              <KeyRound size={18} />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑端点' : '添加端点'}</h2>
+              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑凭证分组' : '添加凭证分组'}</h2>
               <p className="mt-0.5 text-xs text-slate-500">渠道：{channel?.name}</p>
             </div>
           </div>
@@ -656,16 +679,232 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
           </Tooltip>
         </div>
 
-        <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
-          <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+        <form className="min-h-0 overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
+          <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={CODEX_ENDPOINT_FORM_TABS}
+              tabs={CODEX_CREDENTIAL_GROUP_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
+              className="grid-cols-2"
+              buttonPaddingClass="px-2"
             />
           </div>
 
+          <div className="px-6 py-5">
+            {(fieldError || serverError) && (
+              <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {fieldError || serverError}
+              </div>
+            )}
+
+            {activeTab === 'basic' && (
+              <div className="space-y-4">
+                <Input
+                  label="分组名称"
+                  value={formData.name}
+                  onChange={(event) => updateField('name', event.target.value)}
+                  placeholder="例如：主账号 / 高倍率组"
+                  autoFocus
+                  disabled={loading}
+                />
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
+                  <div className="relative">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      value={formData.apiKey}
+                      onChange={(event) => updateField('apiKey', event.target.value)}
+                      placeholder={isEdit && group?.apiKeyMasked ? group.apiKeyMasked : 'sk-...'}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      disabled={loading}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey((prev) => !prev)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                      tabIndex={-1}
+                    >
+                      {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => !loading && updateField('isDefault', !formData.isDefault)}
+                  className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
+                    formData.isDefault
+                      ? 'border-indigo-200 bg-indigo-50'
+                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                  } ${loading ? 'opacity-70' : ''}`}
+                >
+                  <span className={`text-sm font-medium ${formData.isDefault ? 'text-indigo-700' : 'text-slate-600'}`}>
+                    设为渠道默认分组
+                  </span>
+                  <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
+                    formData.isDefault ? 'bg-indigo-500' : 'bg-slate-300'
+                  }`}>
+                    <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      formData.isDefault ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'billing' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">成本倍率</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      ['costMultiplier', '总倍率'],
+                      ['inputCostMultiplier', '输入'],
+                      ['outputCostMultiplier', '输出'],
+                      ['cacheReadCostMultiplier', '缓存']
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className="mb-1 block text-xs text-slate-500">{label}</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={formData[key]}
+                          onChange={(event) => updateField(key, event.target.value)}
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          placeholder="1.0"
+                          disabled={loading}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">成本倍率直接作为该分组下 Codex 端点的计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">默认输出计费口径</label>
+                  <CustomSelect
+                    options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
+                    value={formData.billingOutputTokenSource}
+                    onChange={(value) => updateField('billingOutputTokenSource', value)}
+                    size="md"
+                    fullWidth
+                  />
+                </div>
+
+                <ModelMultiplierEditor
+                  rows={formData.modelMultiplierRows}
+                  onChange={updateModelMultiplierRows}
+                  disabled={loading}
+                />
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
+              <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>取消</Button>
+              <Button type="submit" variant="primary" loading={loading}>{isEdit ? '保存分组' : '添加分组'}</Button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================================
+// 端点编辑弹窗（name + base_url）
+// ============================================================================
+const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, serverError, onCancel, onSave }) => {
+  const [name, setName] = useState(endpoint?.name || '');
+  const [baseURL, setBaseURL] = useState(endpoint?.baseURL || '');
+  const credentialGroups = channel?.credentialGroups || [];
+  const defaultCredentialGroup = credentialGroups.find((group) => group.isDefault) || credentialGroups[0] || null;
+  const selectedCredentialGroup = credentialGroup || defaultCredentialGroup;
+  const credentialGroupId = endpoint?.credentialGroupId || endpoint?.credential_group_id || selectedCredentialGroup?.id || 0;
+  const [priority, setPriority] = useState(endpoint?.priority ?? 0);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
+  const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
+  const [fieldError, setFieldError] = useState('');
+  const isWails = isWailsEnvironment();
+  const modalTopPadding = isWails ? 48 : 16;
+  const modalBottomPadding = 16;
+  const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
+  const groupMultiplierItems = [
+    ['总', selectedCredentialGroup?.costMultiplier ?? 1],
+    ['输入', selectedCredentialGroup?.inputCostMultiplier ?? 1],
+    ['输出', selectedCredentialGroup?.outputCostMultiplier ?? 1],
+    ['缓存', selectedCredentialGroup?.cacheReadCostMultiplier ?? 1]
+  ];
+  const groupBillingSource = selectedCredentialGroup?.billingOutputTokenSource || 'output_tokens';
+  const groupBillingLabel = BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS.find((option) => option.value === groupBillingSource)?.label || groupBillingSource;
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    const trimmed = baseURL.trim();
+    if (!trimmedName) {
+      setFieldError('端点名称不能为空');
+      return;
+    }
+    if (!trimmed) {
+      setFieldError('base_url 不能为空');
+      return;
+    }
+    if (!/^https?:\/\//i.test(trimmed)) {
+      setFieldError('base_url 必须以 http:// 或 https:// 开头');
+      return;
+    }
+    const timeoutResult = parseEndpointTimeoutPayload(timeoutSeconds);
+    if (timeoutResult.error) {
+      setFieldError(timeoutResult.error);
+      return;
+    }
+    await onSave?.({
+      name: trimmedName,
+      baseURL: trimmed,
+      credentialGroupId,
+      failoverEnabled,
+      priority,
+      timeoutSeconds: timeoutResult.timeoutSeconds
+    });
+  };
+
+  const isEdit = mode === 'edit';
+
+  return renderModalPortal(
+    <div
+      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 backdrop-blur-sm animate-fade-in"
+      style={{ paddingTop: `${modalTopPadding}px` }}
+    >
+      <div
+        className="flex w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        style={{ maxHeight: modalMaxHeight }}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
+              {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑端点' : '添加端点'}</h2>
+              <p className="mt-0.5 text-xs text-slate-500">
+                渠道：{channel?.name} · 分组：{selectedCredentialGroup?.name || '默认分组'}
+              </p>
+            </div>
+          </div>
+          <Tooltip content="关闭">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              disabled={loading}
+            >
+              <XCircle size={18} />
+            </button>
+          </Tooltip>
+        </div>
+
+        <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="space-y-4 overflow-y-auto px-6 py-6">
             {(fieldError || serverError) && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -673,278 +912,115 @@ const EndpointFormModal = ({ mode, channel, endpoint, loading, serverError, onCa
               </div>
             )}
 
-            {activeTab === 'basic' ? (
-              <>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">端点名称</label>
-                  <input
-                    type="text"
-                    autoFocus
-                    value={name}
-                    onChange={(event) => {
-                      setName(event.target.value);
-                      if (fieldError) setFieldError('');
-                    }}
-                    placeholder="如：主线路 / 备用 / 上海节点"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">同一渠道下端点名称唯一，仅作 UI 标识。</p>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Base URL</label>
-                  <input
-                    type="text"
-                    value={baseURL}
-                    onChange={(event) => {
-                      setBaseURL(event.target.value);
-                      if (fieldError) setFieldError('');
-                    }}
-                    placeholder="https://code.newcli.com/codex/v1"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">
-                    切换激活端点时仅 config.toml 中该渠道 section 的 base_url 行会变化。
-                  </p>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={priority}
-                    onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="0 = 最高优先级"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">数字越小越优先</p>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">超时（秒）</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={timeoutSeconds}
-                    onChange={(event) => {
-                      setTimeoutSeconds(event.target.value);
-                      if (fieldError) setFieldError('');
-                    }}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="0 = 使用全局默认"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">0 表示使用设置中的全局超时时间。</p>
-                </div>
-
-                <div
-                  onClick={() => setFailoverEnabled(!failoverEnabled)}
-                  className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
-                    failoverEnabled
-                      ? 'border-indigo-200 bg-indigo-50'
-                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-                  }`}
-                >
-                  <span className={`text-sm font-medium ${failoverEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
-                    参与故障转移
-                  </span>
-                  <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
-                    failoverEnabled ? 'bg-indigo-500' : 'bg-slate-300'
-                  }`}>
-                    <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                      failoverEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`} />
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">总成本倍率</label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={costMultiplier}
-                    onChange={(event) => {
-                      setCostMultiplier(event.target.value);
-                      if (fieldError) setFieldError('');
-                    }}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    placeholder="1.0"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">所有成本完成计算后整体乘数，{MULTIPLIER_EXPRESSION_HELP}</p>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">细分成本倍率（可选）</label>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label className="mb-1 block text-xs text-slate-500">输入</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={inputCostMultiplier}
-                        onChange={(event) => {
-                          setInputCostMultiplier(event.target.value);
-                          if (fieldError) setFieldError('');
-                        }}
-                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder="1.0"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs text-slate-500">输出</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={outputCostMultiplier}
-                        onChange={(event) => {
-                          setOutputCostMultiplier(event.target.value);
-                          if (fieldError) setFieldError('');
-                        }}
-                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder="1"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs text-slate-500">缓存</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={cacheReadCostMultiplier}
-                        onChange={(event) => {
-                          setCacheReadCostMultiplier(event.target.value);
-                          if (fieldError) setFieldError('');
-                        }}
-                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder="1.0"
-                      />
-                    </div>
-                  </div>
-                  <p className="mt-1 text-xs text-slate-400">应用于各类型 token 成本计算，{MULTIPLIER_EXPRESSION_HELP}</p>
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">输出计费口径</label>
-                  <CustomSelect
-                    options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
-                    value={billingOutputTokenSource}
-                    onChange={setBillingOutputTokenSource}
-                    size="md"
-                    fullWidth
-                  />
-                  <p className="mt-1 text-xs text-slate-400">仅影响该 Codex 端点的输出成本计算。</p>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700">模型附加倍率</label>
-                      <p className="mt-0.5 text-xs text-slate-400">默认只设置总倍率；少数模型需要时再展开细分。</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={addModelMultiplierRow}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                    >
-                      <Plus size={14} />
-                      添加模型
-                    </button>
-                  </div>
-
-                  {modelMultiplierRows.length > 0 && (
-                    <div className="mt-3 space-y-2">
-                      {modelMultiplierRows.map((row, index) => (
-                        <div key={`model-multiplier-${index}`} className="rounded-lg border border-slate-200 bg-white p-3">
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto_auto] sm:items-end">
-                            <div className="min-w-0">
-                              <label className="mb-1 block text-xs text-slate-500">模型</label>
-                              <input
-                                type="text"
-                                value={row.model}
-                                onChange={(event) => updateModelMultiplierRow(index, 'model', event.target.value)}
-                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                placeholder="gpt-5.5"
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-500">总倍率</label>
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={row.costMultiplier}
-                                onChange={(event) => updateModelMultiplierRow(index, 'costMultiplier', event.target.value)}
-                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                placeholder="1"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => toggleModelMultiplierDetails(index)}
-                              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                            >
-                              细分
-                              <ChevronDown
-                                size={14}
-                                className={`transition-transform duration-200 ${row.advancedOpen ? 'rotate-180' : ''}`}
-                              />
-                            </button>
-                            <Tooltip content="删除">
-                              <button
-                                type="button"
-                                onClick={() => removeModelMultiplierRow(index)}
-                                className="inline-flex h-8 items-center justify-center rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </Tooltip>
-                          </div>
-
-                          {row.advancedOpen && (
-                            <div className="mt-2 grid grid-cols-1 gap-2 border-t border-slate-100 pt-2 sm:grid-cols-3">
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-500">输入</label>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={row.inputCostMultiplier}
-                                  onChange={(event) => updateModelMultiplierRow(index, 'inputCostMultiplier', event.target.value)}
-                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  placeholder="1"
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-500">输出</label>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={row.outputCostMultiplier}
-                                  onChange={(event) => updateModelMultiplierRow(index, 'outputCostMultiplier', event.target.value)}
-                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  placeholder="1"
-                                />
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-500">缓存</label>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={row.cacheReadCostMultiplier}
-                                  onChange={(event) => updateModelMultiplierRow(index, 'cacheReadCostMultiplier', event.target.value)}
-                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  placeholder="1"
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <KeyRound size={14} />
+                归属凭证分组
               </div>
-            )}
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs">
+                <span className="inline-flex max-w-full items-center gap-1 rounded-md bg-white px-2.5 py-1.5 font-medium text-slate-700">
+                  <span className="truncate">{selectedCredentialGroup?.name || '默认分组'}</span>
+                  {(selectedCredentialGroup?.isDefault || selectedCredentialGroup?.is_default) && (
+                    <span className="rounded bg-emerald-50 px-1 text-[10px] font-semibold text-emerald-600">默认</span>
+                  )}
+                </span>
+                {groupMultiplierItems.map(([label, value]) => (
+                  <span key={label} className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 font-mono text-[11px] font-semibold text-slate-600">
+                    <span className="font-sans text-[10px] font-medium text-slate-400">{label}</span>
+                    {formatMultiplierExpression(Number(value) || 1, 3)}x
+                  </span>
+                ))}
+                <span className="inline-flex min-w-0 items-center gap-1 rounded-md bg-white px-2 py-1 text-[11px] font-medium text-slate-500">
+                  <Database size={11} />
+                  <span className="truncate">{groupBillingLabel}</span>
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">端点名称</label>
+              <input
+                type="text"
+                autoFocus
+                value={name}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  if (fieldError) setFieldError('');
+                }}
+                placeholder="如：主线路 / 备用 / 上海节点"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-slate-400">同一凭证分组下端点名称唯一，仅作 UI 标识。</p>
+            </div>
+
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">Base URL</label>
+              <input
+                type="text"
+                value={baseURL}
+                onChange={(event) => {
+                  setBaseURL(event.target.value);
+                  if (fieldError) setFieldError('');
+                }}
+                placeholder="https://example.invalid/codex/v1"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                端点只保存线路信息；API Key 与计费倍率来自上方凭证分组。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={priority}
+                  onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="0 = 最高优先级"
+                />
+                <p className="mt-1 text-xs text-slate-400">数字越小越优先</p>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">超时（秒）</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={timeoutSeconds}
+                  onChange={(event) => {
+                    setTimeoutSeconds(event.target.value);
+                    if (fieldError) setFieldError('');
+                  }}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="0 = 使用全局默认"
+                />
+                <p className="mt-1 text-xs text-slate-400">0 表示使用设置中的全局超时时间。</p>
+              </div>
+            </div>
+
+            <div
+              onClick={() => setFailoverEnabled(!failoverEnabled)}
+              className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
+                failoverEnabled
+                  ? 'border-indigo-200 bg-indigo-50'
+                  : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+              }`}
+            >
+              <span className={`text-sm font-medium ${failoverEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
+                参与故障转移
+              </span>
+              <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
+                failoverEnabled ? 'bg-indigo-500' : 'bg-slate-300'
+              }`}>
+                <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                  failoverEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`} />
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
@@ -1257,6 +1333,11 @@ const CodexHealthBadge = ({ state, detail = false }) => {
       icon: XCircle,
       className: 'border-rose-100 bg-rose-50 text-rose-600'
     },
+    skipped: {
+      label: '跳过检测',
+      icon: ShieldOff,
+      className: 'border-purple-200 bg-purple-50 text-purple-600'
+    },
     unchecked: {
       label: '检测中',
       icon: Clock,
@@ -1296,13 +1377,12 @@ const CodexLatencyBadge = ({ ms, detail = false }) => {
   if (rounded > 1000) className = 'border-rose-100 bg-rose-50 text-rose-600';
 
   return (
-    <Tooltip content="最近一次 Codex 健康探测延迟" className="flex-shrink-0">
-      <span
-        className={`inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[54px] items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none ${className}`}
-      >
-        {rounded}ms
-      </span>
-    </Tooltip>
+    <span
+      className={`inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[54px] flex-shrink-0 items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none ${className}`}
+      aria-label="最近一次 Codex 健康探测延迟"
+    >
+      {rounded}ms
+    </span>
   );
 };
 
@@ -1312,19 +1392,20 @@ const CodexRequestFailureBadge = ({ failCode, failReason, detail = false }) => {
   const hasReason = !!failReason;
   if (!hasCode && !hasReason) return null;
 
-  const tooltip = [
+  const label = [
     hasCode ? `状态码: ${code}` : null,
     hasReason ? `原因: ${failReason}` : null
-  ].filter(Boolean).join('\n');
+  ].filter(Boolean).join('，');
 
   return (
-    <Tooltip content={tooltip} className="flex-shrink-0">
-      <span className={`inline-flex ${detail ? 'h-6' : 'h-5'} items-center justify-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600`}>
-        <XCircle size={10} className="shrink-0" />
-        请求失败
-        {hasCode && <span className="font-mono">({code})</span>}
-      </span>
-    </Tooltip>
+    <span
+      className={`inline-flex ${detail ? 'h-6' : 'h-5'} flex-shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600`}
+      aria-label={label || '请求失败'}
+    >
+      <XCircle size={10} className="shrink-0" />
+      请求失败
+      {hasCode && <span className="font-mono">({code})</span>}
+    </span>
   );
 };
 
@@ -1338,14 +1419,14 @@ const DETAIL_CHIP_TONES = {
 
 const DetailMetricCard = ({ label, icon: Icon, wide = false, children }) => (
   <div
-    className={`min-w-0 rounded-xl border border-slate-200/70 bg-slate-50 p-3.5 ${
+    className={`min-w-0 h-full rounded-xl border border-slate-200/70 bg-slate-50 p-3 ${
       wide ? 'md:col-span-2' : ''
     }`}
   >
-    <div className="mb-2 flex items-center gap-2">
+    <div className="mb-1.5 flex items-center gap-2">
       {Icon && (
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-          <Icon size={13} />
+        <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+          <Icon size={12} />
         </span>
       )}
       <span className="text-xs font-medium text-slate-500">{label}</span>
@@ -1432,10 +1513,16 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   const lastFailReason = endpoint.lastFailReason || endpoint.last_fail_reason || '';
   const hasFailDetail = (Number.isFinite(lastFailCode) && lastFailCode > 0) || !!lastFailReason;
   const failoverEnabled = endpoint.failoverEnabled !== false;
+  const endpointGroupID = Number(endpoint.credentialGroupId || endpoint.credential_group_id || 0);
+  const credentialGroup = (channel?.credentialGroups || []).find((group) => Number(group.id) === endpointGroupID) ||
+    getDefaultCredentialGroup(channel);
+  const credentialGroupName = credentialGroup?.name || endpoint.credentialGroupName || endpoint.credential_group_name || '默认分组';
+  const credentialGroupIsDefault = Boolean(credentialGroup?.isDefault || credentialGroup?.is_default);
+  const credentialGroupKeyMasked = credentialGroup?.apiKeyMasked || '';
+  const billingSource = credentialGroup?.billingOutputTokenSource || 'output_tokens';
   const billingOption = BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS.find(
-    (option) => option.value === endpoint.billingOutputTokenSource
+    (option) => option.value === billingSource
   );
-  const billingSource = billingOption?.value || endpoint.billingOutputTokenSource || 'output_tokens';
   const billingNameMap = {
     output_tokens: '总输出',
     reasoning_tokens: '推理输出',
@@ -1443,10 +1530,10 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   };
   const billingName = billingNameMap[billingSource] || billingOption?.label || billingSource;
   const multiplierItems = [
-    { label: '总', value: endpoint.costMultiplier ?? 1, tone: 'indigo' },
-    { label: '输入', value: endpoint.inputCostMultiplier ?? 1, tone: 'slate' },
-    { label: '输出', value: endpoint.outputCostMultiplier ?? 1, tone: 'sky' },
-    { label: '缓存', value: endpoint.cacheReadCostMultiplier ?? 1, tone: 'amber' }
+    { label: '总', value: credentialGroup?.costMultiplier ?? 1, tone: 'indigo' },
+    { label: '输入', value: credentialGroup?.inputCostMultiplier ?? 1, tone: 'slate' },
+    { label: '输出', value: credentialGroup?.outputCostMultiplier ?? 1, tone: 'sky' },
+    { label: '缓存', value: credentialGroup?.cacheReadCostMultiplier ?? 1, tone: 'amber' }
   ];
   const priority = Number(endpoint.priority || 0);
   const effectiveModel = channel?.model || globalConfig?.model || '未设置';
@@ -1462,28 +1549,13 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   const modelMappingEntries = Object.entries(channel?.modelMapping || channel?.model_mapping || {})
     .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
     .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
-  const modelMultiplierRules = endpoint.modelMultipliers || endpoint.model_multipliers || [];
   const normalizeDetailMultiplier = (value) => {
     const parsed = typeof value === 'string'
       ? parseMultiplierExpression(value, Number.NaN)
       : Number(value);
     return Number.isFinite(parsed) ? parsed : 1;
   };
-  const isDefaultDetailMultiplier = (value) => Math.abs(normalizeDetailMultiplier(value) - 1) <= 0.000001;
   const formatDetailMultiplier = (value) => `${formatMultiplierExpression(normalizeDetailMultiplier(value), 3)}x`;
-  const modelMultiplierValueKeys = [
-    ['costMultiplier', 'cost_multiplier'],
-    ['inputCostMultiplier', 'input_cost_multiplier'],
-    ['outputCostMultiplier', 'output_cost_multiplier'],
-    ['cacheReadCostMultiplier', 'cache_read_cost_multiplier']
-  ];
-  const hasCustomEndpointMultiplier = multiplierItems.some((item) => !isDefaultDetailMultiplier(item.value));
-  const hasCustomModelMultiplier = modelMultiplierRules.some((rule) => (
-    modelMultiplierValueKeys.some(([camelKey, snakeKey]) => (
-      !isDefaultDetailMultiplier(rule?.[camelKey] ?? rule?.[snakeKey] ?? 1)
-    ))
-  ));
-  const hasCustomCostMultiplier = hasCustomEndpointMultiplier || hasCustomModelMultiplier;
   const hasModelMapping = modelMappingEntries.length > 0;
 
   const rows = [
@@ -1499,6 +1571,45 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
       icon: Server,
       content: (
         <ModelTag model={effectiveModel} />
+      )
+    },
+    {
+      label: '凭证分组',
+      icon: KeyRound,
+      content: (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-semibold text-slate-900">{credentialGroupName}</span>
+            {credentialGroupIsDefault && (
+              <span className="flex-shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600">
+                默认
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
+            {credentialGroupKeyMasked || '使用分组凭证'}
+          </div>
+        </div>
+      )
+    },
+    {
+      label: '分组计费倍率',
+      icon: Database,
+      content: (
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {multiplierItems.map((item) => (
+            <DetailChip key={item.label} tone={item.tone} mono>
+              <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
+              {formatDetailMultiplier(item.value)}
+            </DetailChip>
+          ))}
+          <DetailChip tone="slate">
+            <Database size={11} className="mr-1 flex-shrink-0 text-slate-400" />
+            <span className="mr-1 text-[10px] text-slate-500">计费</span>
+            <span className="min-w-0 truncate font-medium text-slate-700">{billingName}</span>
+            <span className="ml-1 font-mono text-[9px] text-slate-400">{billingSource}</span>
+          </DetailChip>
+        </div>
       )
     }
   ];
@@ -1558,16 +1669,10 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
               value={timeoutLabel}
               tooltip={`${timeoutScope}: ${timeoutLabel}`}
             />
-            {!hasCustomCostMultiplier && (
-              <Tooltip content="未配置自定义倍率，使用默认 1x">
-                <span className="inline-flex">
-                  <DetailPill tone="slate" icon={Database}>
-                    <span className="leading-none">默认倍率</span>
-                    <span className="font-mono leading-none">1x</span>
-                  </DetailPill>
-                </span>
-              </Tooltip>
-            )}
+            <DetailPill tone="indigo" icon={Database}>
+              <span className="leading-none">分组倍率</span>
+              <span className="font-mono leading-none">{formatDetailMultiplier(credentialGroup?.costMultiplier ?? 1)}</span>
+            </DetailPill>
             <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={ArrowRightLeft}>
               {failoverEnabled ? '参与故障转移' : '不参与转移'}
             </DetailPill>
@@ -1596,68 +1701,19 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
             ))}
           </div>
 
-          {(hasCustomCostMultiplier || hasModelMapping) && (
+          {hasModelMapping && (
             <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-              {hasCustomCostMultiplier && (
-                <DetailMetricCard label="成本倍率" icon={Database} wide>
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2">
-                      {multiplierItems.map((item) => (
-                        <DetailChip key={item.label} tone={item.tone} mono>
-                          <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
-                          {formatDetailMultiplier(item.value)}
-                        </DetailChip>
-                      ))}
-                    </div>
-
-                    {modelMultiplierRules.length > 0 && (
-                      <div className="border-t border-slate-200/70 pt-3">
-                        <div className="mb-2 text-xs font-medium text-slate-500">模型附加倍率</div>
-                        <div className="space-y-2">
-                          {modelMultiplierRules.map((rule) => (
-                            <div
-                              key={rule.model}
-                              className="flex flex-wrap items-center gap-2"
-                            >
-                              <ModelTag model={rule.model} />
-                              <DetailChip tone="indigo" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">总</span>
-                                {formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)}
-                              </DetailChip>
-                              <DetailChip tone="slate" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输入</span>
-                                {formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)}
-                              </DetailChip>
-                              <DetailChip tone="sky" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输出</span>
-                                {formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}
-                              </DetailChip>
-                              <DetailChip tone="amber" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">缓存</span>
-                                {formatDetailMultiplier(rule.cacheReadCostMultiplier ?? rule.cache_read_cost_multiplier ?? 1)}
-                              </DetailChip>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </DetailMetricCard>
-              )}
-
-              {hasModelMapping && (
-                <DetailMetricCard label="渠道模型映射" icon={ArrowRight} wide>
-                  <div className="space-y-2">
-                    {modelMappingEntries.map(([sourceModel, targetModel]) => (
-                      <ModelMappingPair
-                        key={`${sourceModel}->${targetModel}`}
-                        sourceModel={sourceModel}
-                        targetModel={targetModel}
-                      />
-                    ))}
-                  </div>
-                </DetailMetricCard>
-              )}
+              <DetailMetricCard label="渠道模型映射" icon={ArrowRight} wide>
+                <div className="space-y-2">
+                  {modelMappingEntries.map(([sourceModel, targetModel]) => (
+                    <ModelMappingPair
+                      key={`${sourceModel}->${targetModel}`}
+                      sourceModel={sourceModel}
+                      targetModel={targetModel}
+                    />
+                  ))}
+                </div>
+              </DetailMetricCard>
             </div>
           )}
 
@@ -1697,34 +1753,42 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
 // ============================================================================
 const EndpointRow = ({
   endpoint,
+  credentialGroup,
   suspendedCount = 0,
   onActivate,
   onEdit,
   onDelete,
   onOpen,
   onToggleFailover,
+  onToggleSkipHealthCheck,
   actionLoading
 }) => {
   const isActivating = actionLoading === `activate-endpoint-${endpoint.id}`;
   const isDeleting = actionLoading === `delete-endpoint-${endpoint.id}`;
-  const summary = summarizeEndpoint(endpoint.baseURL);
+  const isTogglingSkipHealthCheck = actionLoading === `skip-health-endpoint-${endpoint.id}`;
   const displayName = endpoint.name || '未命名端点';
   const failoverEnabled = endpoint.failoverEnabled !== false;
+  const skipHealthCheck = Boolean(endpoint.skipHealthCheck || endpoint.skip_health_check);
   const priority = endpoint.priority || 0;
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
   const responseTimeMs = endpoint.responseTimeMs || endpoint.response_time_ms || 0;
   const lastFailCode = endpoint.lastFailCode || endpoint.last_fail_code || 0;
   const lastFailReason = endpoint.lastFailReason || endpoint.last_fail_reason || '';
-  const multiplierBadge = buildMultiplierBadge(endpoint);
+  const groupMultiplier = credentialGroup?.costMultiplier ?? endpoint.costMultiplier ?? 1;
+  const groupMultiplierValue = normalizeMultiplierValue(groupMultiplier);
+  const groupMultiplierLabel = `${formatMultiplierExpression(groupMultiplierValue, 3)}x`;
+  const isCustomGroupMultiplier = Math.abs(groupMultiplierValue - 1) > 0.000001;
 
   // 挂起态：当请求挂起且当前端点已激活时，toggle 变 amber，允许重复点击触发恢复
   const isSuspended = suspendedCount > 0;
   const showAmber = endpoint.isActive && isSuspended;
   const canRepeatActivate = endpoint.isActive && isSuspended;
+  const endpointSwitchDisabled = !failoverEnabled;
 
   const handleToggleActivate = (event) => {
     event.stopPropagation();
     if (isActivating) return;
+    if (endpointSwitchDisabled) return;
     // 正常态：已激活端点不可重复激活；挂起态：允许重复点击作为运维干预信号
     if (endpoint.isActive && !canRepeatActivate) return;
     onActivate?.(endpoint);
@@ -1746,42 +1810,42 @@ const EndpointRow = ({
     onToggleFailover?.(endpoint, !failoverEnabled);
   };
 
+  const handleSkipHealthCheckToggle = (event) => {
+    event.stopPropagation();
+    if (isTogglingSkipHealthCheck) return;
+    onToggleSkipHealthCheck?.(endpoint, !skipHealthCheck);
+  };
+
   return (
     <div className="border-b border-slate-100 last:border-b-0">
       <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onOpen?.(endpoint)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onOpen?.(endpoint);
-          }
-        }}
-        className={`group/row flex cursor-pointer items-center gap-3 px-4 py-2 text-left transition-colors duration-150 ${
+        className={`group/row flex min-h-[56px] items-start gap-3 px-4 py-1.5 text-left transition-colors duration-150 ${
           endpoint.isActive ? 'bg-emerald-50/30' : 'hover:bg-slate-50/80'
         }`}
       >
-        {/* 激活 Toggle（Apple HIG 风格） */}
-        <Tooltip
-          content={
-            showAmber
-              ? `已挂起 ${suspendedCount} 个请求，点击重新激活以唤醒`
-              : endpoint.isActive
-                ? '当前激活端点'
-                : '点击设为当前端点'
-          }
-          className="flex-shrink-0"
-        >
-          <div
+        <div className="flex h-5 w-[74px] flex-shrink-0 self-center items-center gap-3">
+          {/* 激活 Toggle（Apple HIG 风格） */}
+          <button
+            type="button"
             onClick={handleToggleActivate}
             className={`${
-              canRepeatActivate
+              endpointSwitchDisabled
+                ? 'cursor-not-allowed'
+                : canRepeatActivate
                 ? 'cursor-pointer'
                 : endpoint.isActive
                   ? 'cursor-default'
                   : 'cursor-pointer'
             }`}
+            aria-label={
+              endpointSwitchDisabled
+                ? '端点未参与故障转移，无法设为当前端点'
+                : endpoint.isActive
+                  ? '当前激活端点'
+                  : '设为当前端点'
+            }
+            aria-pressed={endpoint.isActive}
+            aria-disabled={endpointSwitchDisabled}
           >
             <div
               className={`relative h-[18px] w-8 rounded-full transition-colors duration-200 ease-out ${
@@ -1789,6 +1853,8 @@ const EndpointRow = ({
                   ? 'bg-amber-500 hover:bg-amber-600'
                   : endpoint.isActive
                     ? 'bg-emerald-500'
+                    : endpointSwitchDisabled
+                      ? 'bg-slate-100'
                     : isActivating
                       ? 'bg-emerald-300'
                       : 'bg-slate-200 group-hover/row:bg-slate-300'
@@ -1800,84 +1866,96 @@ const EndpointRow = ({
                 } ${isActivating ? 'animate-pulse' : ''}`}
               />
             </div>
-          </div>
-        </Tooltip>
+          </button>
 
-        {/* 优先级标签 */}
-        <Tooltip content={`优先级 ${priority}（越小越优先）`} className="flex-shrink-0">
-          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+          {/* 优先级标签 */}
+          <span className="inline-flex h-[18px] min-w-[30px] flex-shrink-0 items-center justify-center rounded bg-slate-100 px-1.5 text-[10px] font-medium leading-none text-slate-500">
             P{priority}
           </span>
-        </Tooltip>
+        </div>
 
-        {/* 端点摘要：name 在前，URL 在后 */}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="relative min-w-0 max-w-full">
-              {multiplierBadge && (
-                <Tooltip content={multiplierBadge.title} className="absolute -left-1 -top-3">
-                  <span
-                    className="inline-flex h-3 min-w-5 items-center justify-center whitespace-nowrap rounded-full bg-amber-500 px-1 text-[8px] font-bold leading-none text-white shadow-sm"
-                  >
-                    {multiplierBadge.text}
-                  </span>
-                </Tooltip>
+        {/* 端点摘要：名称独占第一行，状态标签放第二行避免挤压名称 */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpen?.(endpoint)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onOpen?.(endpoint);
+            }
+          }}
+          className="min-w-0 flex-1 cursor-pointer rounded-md py-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+        >
+          <div className="flex h-5 min-w-0 items-center">
+            <span
+              className={`relative inline-flex h-5 min-w-0 max-w-full items-center overflow-visible text-xs font-semibold leading-none ${
+                endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
+              }`}
+            >
+              <span className={`min-w-0 truncate leading-none ${isCustomGroupMultiplier ? 'pr-8' : ''}`}>{displayName}</span>
+              {isCustomGroupMultiplier && (
+                <span className="pointer-events-none absolute -top-1 right-0 z-10 inline-flex h-3 w-fit flex-shrink-0 items-center justify-center rounded-full bg-amber-500 px-1 font-mono text-[8px] font-bold leading-none text-white shadow-[0_1px_1px_rgba(217,119,6,0.35)] whitespace-nowrap">
+                  {groupMultiplierLabel}
+                </span>
               )}
-              <span
-                className={`block min-w-0 truncate text-xs font-semibold ${
-                  endpoint.isActive ? 'text-slate-900' : 'text-slate-700'
-                }`}
-              >
-                {displayName}
-              </span>
             </span>
+          </div>
+          <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible">
             <CodexHealthBadge state={healthState} />
             <CodexLatencyBadge ms={responseTimeMs} />
             <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} />
           </div>
-          <div
-            className={`mt-0.5 truncate font-mono text-[11px] ${
-              endpoint.isActive ? 'text-slate-500' : 'text-slate-400'
-            }`}
-          >
-            {summary || '<未设置 base_url>'}
-          </div>
         </div>
 
         {/* 操作按钮（常驻显示） */}
-        <div className="flex flex-shrink-0 items-center gap-0.5">
-          <Tooltip content={failoverEnabled ? '点击：不参与故障转移' : '点击：参与故障转移'}>
-            <button
-              type="button"
-              onClick={handleFailoverToggle}
-              className={`rounded-md p-1 transition-colors duration-150 ${
-                failoverEnabled
-                  ? 'text-indigo-600 hover:bg-indigo-50'
-                  : 'text-slate-400 hover:bg-slate-100'
-              }`}
-            >
-              <ArrowRightLeft size={12} />
-            </button>
-          </Tooltip>
-          <Tooltip content="编辑端点">
-            <button
-              type="button"
-              onClick={handleEdit}
-              className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
-            >
-              <Pencil size={12} />
-            </button>
-          </Tooltip>
-          <Tooltip content="删除端点">
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={isDeleting}
-              className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
-            >
-              {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
-            </button>
-          </Tooltip>
+        <div className="flex flex-shrink-0 self-center items-center gap-0.5">
+          <button
+            type="button"
+            onClick={handleFailoverToggle}
+            className={`rounded-md p-1 transition-colors duration-150 ${
+              failoverEnabled
+                ? 'text-indigo-600 hover:bg-indigo-50'
+                : 'text-slate-400 hover:bg-slate-100'
+            }`}
+            aria-label={failoverEnabled ? '点击：不参与故障转移' : '点击：参与故障转移'}
+            aria-pressed={failoverEnabled}
+          >
+            <ArrowRightLeft size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={handleSkipHealthCheckToggle}
+            disabled={isTogglingSkipHealthCheck}
+            className={`rounded-md p-1 transition-colors duration-150 ${
+              isTogglingSkipHealthCheck
+                ? 'cursor-wait text-purple-400 opacity-70'
+                : skipHealthCheck
+                  ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                  : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+            }`}
+            aria-label={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+            aria-pressed={skipHealthCheck}
+          >
+            {isTogglingSkipHealthCheck ? <Loader2 size={12} className="animate-spin" /> : <ShieldOff size={12} />}
+          </button>
+          <button
+            type="button"
+            onClick={handleEdit}
+            className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
+            aria-label="编辑端点"
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+            aria-label="删除端点"
+          >
+            {isDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+          </button>
         </div>
       </div>
     </div>
@@ -1895,20 +1973,65 @@ const ChannelCard = ({
   onActivateChannel,
   onEditChannel,
   onDeleteChannel,
+  onAddCredentialGroup,
+  onEditCredentialGroup,
+  onSetDefaultCredentialGroup,
+  onDeleteCredentialGroup,
   onAddEndpoint,
   onActivateEndpoint,
   onToggleEndpointFailover,
+  onToggleEndpointSkipHealthCheck,
   onEditEndpoint,
   onOpenEndpoint,
   onDeleteEndpoint
 }) => {
   const [isEndpointListExpanded, setIsEndpointListExpanded] = useState(false);
-  const endpointListRef = useRef(null);
+  const [selectedCredentialGroupID, setSelectedCredentialGroupID] = useState(0);
+  const {
+    scrollRef: credentialGroupScrollRef,
+    isDragging: isCredentialGroupDragging,
+    scrollHandlers: credentialGroupScrollHandlers
+  } = useHorizontalScroll();
+  const channelCardRef = useRef(null);
   const isSwitchingChannel = actionLoading === `activate-channel-${channel.id}`;
   const isDeletingChannel = actionLoading === `delete-channel-${channel.id}`;
   const endpoints = channel.endpoints || [];
-  const activeEndpoint = endpoints.find((ep) => ep.isActive) || null;
-  const hasMultiple = endpoints.length > 1;
+  const credentialGroups = channel.credentialGroups || [];
+  const defaultCredentialGroup = getDefaultCredentialGroup(channel);
+  const activeEndpointInChannel = endpoints.find((ep) => ep.isActive) || null;
+  const activeEndpointGroupID = Number(activeEndpointInChannel?.credentialGroupId || activeEndpointInChannel?.credential_group_id || 0);
+  const preferredCredentialGroupID = activeEndpointGroupID || Number(defaultCredentialGroup?.id || credentialGroups[0]?.id || 0);
+  const selectedCredentialGroup = credentialGroups.find((group) => Number(group.id) === Number(selectedCredentialGroupID)) ||
+    credentialGroups.find((group) => Number(group.id) === preferredCredentialGroupID) ||
+    defaultCredentialGroup ||
+    credentialGroups[0] ||
+    null;
+  const selectedCredentialGroupIDResolved = Number(selectedCredentialGroup?.id || 0);
+  const groupEndpointFilter = (endpoint) => {
+    const endpointGroupID = Number(endpoint.credentialGroupId || endpoint.credential_group_id || 0);
+    if (selectedCredentialGroupIDResolved > 0) {
+      if (selectedCredentialGroup?.isDefault || selectedCredentialGroup?.is_default) {
+        return endpointGroupID === selectedCredentialGroupIDResolved || endpointGroupID === 0;
+      }
+      return endpointGroupID === selectedCredentialGroupIDResolved;
+    }
+    return endpointGroupID === 0;
+  };
+  const getCredentialGroupForEndpoint = (endpoint) => {
+    const endpointGroupID = Number(endpoint.credentialGroupId || endpoint.credential_group_id || 0);
+    if (endpointGroupID > 0) {
+      return credentialGroups.find((group) => Number(group.id) === endpointGroupID) || defaultCredentialGroup || null;
+    }
+    return defaultCredentialGroup || selectedCredentialGroup || null;
+  };
+  const groupEndpoints = endpoints.filter(groupEndpointFilter);
+  const fallbackApiKeyMasked = defaultCredentialGroup?.apiKeyMasked || channel.apiKeyMasked || '';
+  const extraCredentialGroupCount = Math.max(
+    credentialGroups.length - (defaultCredentialGroup ? 1 : 0),
+    0
+  );
+  const activeEndpoint = groupEndpoints.find((ep) => ep.isActive) || null;
+  const hasMultiple = groupEndpoints.length > 1;
   const activeSuspendedCount = channel.isActive ? suspendedCount : 0;
   const routableEndpoints = endpoints.filter((ep) => ep.failoverEnabled !== false);
   const hasCodexHealthVerdict = routableEndpoints.some((ep) => {
@@ -1931,15 +2054,15 @@ const ChannelCard = ({
 
   // 折叠时展示哪些行：多端点 → 仅当前激活（无激活则取第一个作为占位）；单端点 → 直接显示
   const displayedEndpoints = isEndpointListExpanded || !hasMultiple
-    ? endpoints
-    : (activeEndpoint ? [activeEndpoint] : endpoints.slice(0, 1));
-  const hiddenCount = hasMultiple && !isEndpointListExpanded ? endpoints.length - displayedEndpoints.length : 0;
+    ? groupEndpoints
+    : (activeEndpoint ? [activeEndpoint] : groupEndpoints.slice(0, 1));
+  const hiddenCount = hasMultiple && !isEndpointListExpanded ? groupEndpoints.length - displayedEndpoints.length : 0;
 
   // 外部点击收起
   useEffect(() => {
     if (!isEndpointListExpanded) return undefined;
     const handlePointerDown = (event) => {
-      if (endpointListRef.current && !endpointListRef.current.contains(event.target)) {
+      if (channelCardRef.current && !channelCardRef.current.contains(event.target)) {
         setIsEndpointListExpanded(false);
       }
     };
@@ -1953,6 +2076,7 @@ const ChannelCard = ({
 
   return (
     <div
+      ref={channelCardRef}
       className={`group flex flex-col overflow-hidden rounded-xl border bg-white transition-all duration-150 ease-out shadow-[0_1px_2px_rgba(15,23,42,0.04)] hover:shadow-[0_4px_12px_-2px_rgba(15,23,42,0.08)] ${
         channel.isActive
           ? activeCardClass
@@ -2038,7 +2162,7 @@ const ChannelCard = ({
         </div>
       </div>
 
-      {/* 元数据条：模型 · 推理 · 1M · API Key
+      {/* 元数据条：模型 · 推理 · 1M · 默认凭证
           model 字段：渠道有自己的值则覆盖；否则用全局默认（来自 ~/.codex/config.toml）
           推理 / 1M：所有渠道共用全局配置 */}
       <div className="flex flex-nowrap items-center gap-x-3 gap-y-1.5 overflow-hidden border-t border-slate-100 px-4 py-2 text-[11px]">
@@ -2070,36 +2194,143 @@ const ChannelCard = ({
         <span className="flex-shrink-0 text-slate-300">·</span>
         <span className="inline-flex min-w-0 flex-1 items-center gap-1 text-slate-500">
           <KeyRound size={11} className="flex-shrink-0 text-slate-400" />
-          <span className="truncate font-mono text-[10px]">{channel.apiKeyMasked || '未配置'}</span>
+          <span className="truncate">{defaultCredentialGroup?.name || (fallbackApiKeyMasked ? '旧渠道 Key' : '未配置分组')}</span>
+          {extraCredentialGroupCount > 0 && (
+            <span className="flex-shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">
+              +{extraCredentialGroupCount}
+            </span>
+          )}
         </span>
       </div>
 
+      {/* 凭证分组 */}
+      <div className="flex h-[64px] flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
+        <div className="flex h-4 items-center">
+          <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+            Credentials · {credentialGroups.length}
+          </span>
+        </div>
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+          <div className="relative min-w-0 flex-1">
+            {credentialGroups.length > 1 && (
+              <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-5 bg-gradient-to-l from-white to-transparent" />
+            )}
+            <div
+              ref={credentialGroupScrollRef}
+              {...credentialGroupScrollHandlers}
+              className={`flex min-w-0 items-center gap-1.5 overflow-x-auto overflow-y-hidden pl-0.5 pr-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+                isCredentialGroupDragging ? 'cursor-grabbing select-none' : 'cursor-grab'
+              }`}
+            >
+              {credentialGroups.length === 0 ? (
+                <span className="truncate text-[11px] text-slate-400">暂无分组，将回退旧渠道 Key。</span>
+              ) : credentialGroups.map((group) => {
+                const groupIsDefault = group.isDefault || group.is_default;
+                const groupIsSelected = Number(group.id) === selectedCredentialGroupIDResolved;
+                const isDefaultingGroup = actionLoading === `default-credential-group-${group.id}`;
+                return (
+                  <span
+                    key={group.id}
+                    className={`inline-flex h-6 max-w-[13rem] flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[11px] transition-colors ${
+                      groupIsSelected
+                        ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCredentialGroupID(Number(group.id) || 0)}
+                      title={group.name}
+                      className="inline-flex min-w-0 items-center gap-1 rounded-sm px-0.5 text-left focus:outline-none focus-visible:outline-none"
+                    >
+                      <KeyRound
+                        size={11}
+                        className={
+                          groupIsSelected
+                            ? 'flex-shrink-0 text-indigo-500'
+                            : groupIsDefault
+                              ? 'flex-shrink-0 text-emerald-500'
+                              : 'flex-shrink-0 text-slate-400'
+                        }
+                      />
+                      <span className="max-w-[8rem] truncate font-medium">{group.name}</span>
+                      {groupIsDefault && <span className="flex-shrink-0 text-[10px] text-emerald-600">默认</span>}
+                    </button>
+                    {!groupIsDefault && (
+                      <Tooltip content="设为默认分组">
+                        <button
+                          type="button"
+                          onClick={() => onSetDefaultCredentialGroup?.(channel, group)}
+                          disabled={isDefaultingGroup}
+                          className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-emerald-600 focus:outline-none focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
+                          aria-label="设为默认分组"
+                        >
+                          {isDefaultingGroup ? <Loader2 size={10} className="animate-spin" /> : <CheckCircle2 size={10} />}
+                        </button>
+                      </Tooltip>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onEditCredentialGroup?.(channel, group)}
+                      className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-indigo-600 focus:outline-none focus-visible:outline-none"
+                    >
+                      <Pencil size={10} />
+                    </button>
+                    {!groupIsDefault && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteCredentialGroup?.(channel, group)}
+                        className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-rose-600 focus:outline-none focus-visible:outline-none"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+          <div className="h-5 w-px flex-shrink-0 bg-slate-200/80" />
+          <button
+            type="button"
+            onClick={() => onAddCredentialGroup?.(channel)}
+            className="inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:outline-none"
+          >
+            <Plus size={12} />
+            添加分组
+          </button>
+        </div>
+      </div>
+
       {/* 端点子列表 */}
-      <div ref={endpointListRef} className="border-t border-slate-100 bg-slate-50/30">
+      <div className="border-t border-slate-100 bg-slate-50/30">
         <div className="flex items-center justify-between px-4 py-1.5">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            <span>Endpoints · {endpoints.length}</span>
+            <span>Endpoints · {groupEndpoints.length}</span>
+            {selectedCredentialGroup && (
+              <span className="max-w-[9rem] truncate normal-case tracking-normal text-slate-500">
+                {selectedCredentialGroup.name}
+              </span>
+            )}
             {hasMultiple && (
-              <Tooltip content={isEndpointListExpanded ? '收起端点列表' : '展开全部端点'}>
-                <button
-                  type="button"
-                  onClick={() => setIsEndpointListExpanded((prev) => !prev)}
-                  className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
-                >
-                  {isEndpointListExpanded ? '收起' : `展开 ${hiddenCount} 个`}
-                  <ChevronDown
-                    size={11}
-                    className={`transition-transform duration-200 ease-out ${
-                      isEndpointListExpanded ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-              </Tooltip>
+              <button
+                type="button"
+                onClick={() => setIsEndpointListExpanded((prev) => !prev)}
+                className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
+              >
+                {isEndpointListExpanded ? '收起' : `展开 ${hiddenCount} 个`}
+                <ChevronDown
+                  size={11}
+                  className={`transition-transform duration-200 ease-out ${
+                    isEndpointListExpanded ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
             )}
           </div>
           <button
             type="button"
-            onClick={() => onAddEndpoint?.(channel)}
+            onClick={() => onAddEndpoint?.(channel, selectedCredentialGroup)}
             className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
           >
             <Plus size={12} />
@@ -2107,9 +2338,9 @@ const ChannelCard = ({
           </button>
         </div>
 
-        {endpoints.length === 0 ? (
+        {groupEndpoints.length === 0 ? (
           <div className="border-t border-slate-100 bg-white px-4 py-6 text-center text-[11px] text-slate-400">
-            暂无端点。请添加至少一个 base_url 以启用切换与激活。
+            当前分组暂无端点。请为该凭证分组添加至少一个 base_url。
           </div>
         ) : (
           <div className="border-t border-slate-100 bg-white">
@@ -2117,9 +2348,11 @@ const ChannelCard = ({
               <EndpointRow
                 key={endpoint.id}
                 endpoint={endpoint}
+                credentialGroup={getCredentialGroupForEndpoint(endpoint)}
                 suspendedCount={activeSuspendedCount}
                 onActivate={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
+                onToggleSkipHealthCheck={onToggleEndpointSkipHealthCheck}
                 onEdit={onEditEndpoint}
                 onOpen={(ep) => onOpenEndpoint?.(ep, channel)}
                 onDelete={(ep) => onDeleteEndpoint?.(ep, channel)}
@@ -2177,10 +2410,19 @@ const CodexPage = () => {
   const [channelFormError, setChannelFormError] = useState('');
   const [deleteChannelTarget, setDeleteChannelTarget] = useState(null);
 
+  // 凭证分组弹窗
+  const [showCredentialGroupForm, setShowCredentialGroupForm] = useState(false);
+  const [credentialGroupFormMode, setCredentialGroupFormMode] = useState('create');
+  const [credentialGroupFormChannel, setCredentialGroupFormChannel] = useState(null);
+  const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
+  const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
+  const [deleteCredentialGroupTarget, setDeleteCredentialGroupTarget] = useState(null);
+
   // 端点弹窗（创建 + 编辑共用 EndpointFormModal）
   const [showEndpointForm, setShowEndpointForm] = useState(false);
   const [endpointFormMode, setEndpointFormMode] = useState('create'); // 'create' | 'edit'
   const [endpointFormChannel, setEndpointFormChannel] = useState(null);
+  const [endpointFormCredentialGroup, setEndpointFormCredentialGroup] = useState(null);
   const [editingEndpoint, setEditingEndpoint] = useState(null);
   const [endpointFormError, setEndpointFormError] = useState('');
   const [deleteEndpointTarget, setDeleteEndpointTarget] = useState(null);
@@ -2317,10 +2559,32 @@ const CodexPage = () => {
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
+      const { credentialGroup, ...channelPayload } = payload;
       if (channelFormMode === 'edit' && editingChannel) {
-        await updateCodexChannelByID(editingChannel.id, payload);
+        await updateCodexChannelByID(editingChannel.id, channelPayload);
+        if (credentialGroup?.id) {
+          await updateCodexCredentialGroupByID(credentialGroup.id, credentialGroup);
+        } else if (credentialGroup) {
+          await createCodexCredentialGroup({
+            ...credentialGroup,
+            channelId: editingChannel.id
+          });
+        }
       } else {
-        await createCodexChannel(payload);
+        await createCodexChannel(channelPayload);
+        if (credentialGroup) {
+          const latestChannels = await getCodexChannels();
+          const createdChannel = latestChannels.find((channel) => channel.name === channelPayload.name);
+          const defaultGroup = getDefaultCredentialGroup(createdChannel);
+          if (defaultGroup?.id) {
+            await updateCodexCredentialGroupByID(defaultGroup.id, credentialGroup);
+          } else if (createdChannel?.id) {
+            await createCodexCredentialGroup({
+              ...credentialGroup,
+              channelId: createdChannel.id
+            });
+          }
+        }
       }
       await fetchData({ silent: true });
       closeChannelForm();
@@ -2345,10 +2609,88 @@ const CodexPage = () => {
     }
   };
 
+  // ===== 凭证分组动作 =====
+  const openCreateCredentialGroupForm = (channel) => {
+    setCredentialGroupFormMode('create');
+    setCredentialGroupFormChannel(channel);
+    setEditingCredentialGroup(null);
+    setCredentialGroupFormError('');
+    setShowCredentialGroupForm(true);
+  };
+
+  const openEditCredentialGroupForm = (channel, group) => {
+    setCredentialGroupFormMode('edit');
+    setCredentialGroupFormChannel(channel);
+    setEditingCredentialGroup(group);
+    setCredentialGroupFormError('');
+    setShowCredentialGroupForm(true);
+  };
+
+  const closeCredentialGroupForm = () => {
+    setShowCredentialGroupForm(false);
+    setCredentialGroupFormChannel(null);
+    setEditingCredentialGroup(null);
+    setCredentialGroupFormError('');
+  };
+
+  const handleSaveCredentialGroup = async (payload) => {
+    if (!credentialGroupFormChannel) return;
+    const loadingKey = credentialGroupFormMode === 'edit'
+      ? `save-credential-group-${editingCredentialGroup?.id}`
+      : 'create-credential-group';
+    setActionLoading(loadingKey);
+    setCredentialGroupFormError('');
+    try {
+      if (credentialGroupFormMode === 'edit' && editingCredentialGroup) {
+        await updateCodexCredentialGroupByID(editingCredentialGroup.id, payload);
+      } else {
+        await createCodexCredentialGroup({
+          ...payload,
+          channelId: credentialGroupFormChannel.id
+        });
+      }
+      await fetchData({ silent: true });
+      closeCredentialGroupForm();
+    } catch (err) {
+      setCredentialGroupFormError(getErrorMessage(err, '保存凭证分组失败'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleDeleteCredentialGroup = async () => {
+    const target = deleteCredentialGroupTarget;
+    if (!target?.group) return;
+    setActionLoading(`delete-credential-group-${target.group.id}`);
+    try {
+      await deleteCodexCredentialGroupByID(target.group.id);
+      await fetchData({ silent: true });
+      setDeleteCredentialGroupTarget(null);
+    } catch (err) {
+      setError(getErrorMessage(err, '删除凭证分组失败'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleSetDefaultCredentialGroup = async (_channel, group) => {
+    if (!group?.id) return;
+    setActionLoading(`default-credential-group-${group.id}`);
+    try {
+      await setDefaultCodexCredentialGroup(group.id);
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(getErrorMessage(err, '设置默认分组失败'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   // ===== 端点动作 =====
-  const openCreateEndpointForm = (channel) => {
+  const openCreateEndpointForm = (channel, credentialGroup = null) => {
     setEndpointFormMode('create');
     setEndpointFormChannel(channel);
+    setEndpointFormCredentialGroup(credentialGroup || getDefaultCredentialGroup(channel));
     setEditingEndpoint(null);
     setEndpointFormError('');
     setShowEndpointForm(true);
@@ -2356,8 +2698,12 @@ const CodexPage = () => {
 
   const openEditEndpointForm = (endpoint) => {
     const channel = channels.find((c) => c.id === endpoint.channelId) || null;
+    const endpointGroupID = endpoint.credentialGroupId || endpoint.credential_group_id || 0;
+    const endpointGroup = (channel?.credentialGroups || []).find((group) => Number(group.id) === Number(endpointGroupID)) ||
+      getDefaultCredentialGroup(channel);
     setEndpointFormMode('edit');
     setEndpointFormChannel(channel);
+    setEndpointFormCredentialGroup(endpointGroup);
     setEditingEndpoint(endpoint);
     setEndpointFormError('');
     setShowEndpointForm(true);
@@ -2366,11 +2712,12 @@ const CodexPage = () => {
   const closeEndpointForm = () => {
     setShowEndpointForm(false);
     setEndpointFormChannel(null);
+    setEndpointFormCredentialGroup(null);
     setEditingEndpoint(null);
     setEndpointFormError('');
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, credentialGroupId, failoverEnabled, priority, timeoutSeconds }) => {
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
@@ -2379,15 +2726,10 @@ const CodexPage = () => {
         await updateCodexEndpointByID(editingEndpoint.id, {
           name,
           baseURL,
+          credentialGroupId,
           failoverEnabled,
           priority,
-          timeoutSeconds,
-          costMultiplier,
-          inputCostMultiplier,
-          outputCostMultiplier,
-          cacheReadCostMultiplier,
-          billingOutputTokenSource,
-          modelMultipliers
+          timeoutSeconds
         });
         await fetchData({ silent: true });
         closeEndpointForm();
@@ -2405,17 +2747,12 @@ const CodexPage = () => {
     try {
       await createCodexEndpoint({
         channelId: endpointFormChannel.id,
+        credentialGroupId,
         name,
         baseURL,
         failoverEnabled,
         priority,
-        timeoutSeconds,
-        costMultiplier,
-        inputCostMultiplier,
-        outputCostMultiplier,
-        cacheReadCostMultiplier,
-        billingOutputTokenSource,
-        modelMultipliers
+        timeoutSeconds
       });
       await fetchData({ silent: true });
       closeEndpointForm();
@@ -2444,13 +2781,33 @@ const CodexPage = () => {
       await updateCodexEndpointByID(endpoint.id, {
         name: endpoint.name,
         baseURL: endpoint.baseURL,
+        credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
         failoverEnabled: enabled,
         priority: endpoint.priority,
-        billingOutputTokenSource: endpoint.billingOutputTokenSource || 'output_tokens'
+        timeoutSeconds: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0
       });
       await fetchData({ silent: true });
     } catch (err) {
       setError(getErrorMessage(err, '切换故障转移失败'));
+    }
+  };
+
+  const handleToggleEndpointSkipHealthCheck = async (endpoint, skipHealthCheck) => {
+    setActionLoading(`skip-health-endpoint-${endpoint.id}`);
+    try {
+      await updateCodexEndpointByID(endpoint.id, {
+        name: endpoint.name,
+        baseURL: endpoint.baseURL,
+        credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
+        skipHealthCheck,
+        priority: endpoint.priority,
+        timeoutSeconds: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0
+      });
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(getErrorMessage(err, '切换跳过检测失败'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -2560,9 +2917,16 @@ const CodexPage = () => {
               onActivateChannel={handleActivateChannel}
               onEditChannel={openEditChannelForm}
               onDeleteChannel={(c) => setDeleteChannelTarget(c)}
+              onAddCredentialGroup={openCreateCredentialGroupForm}
+              onEditCredentialGroup={openEditCredentialGroupForm}
+              onSetDefaultCredentialGroup={handleSetDefaultCredentialGroup}
+              onDeleteCredentialGroup={(channelOwner, group) =>
+                setDeleteCredentialGroupTarget({ channel: channelOwner, group })
+              }
               onAddEndpoint={openCreateEndpointForm}
               onActivateEndpoint={handleActivateEndpoint}
               onToggleEndpointFailover={handleToggleEndpointFailover}
+              onToggleEndpointSkipHealthCheck={handleToggleEndpointSkipHealthCheck}
               onEditEndpoint={openEditEndpointForm}
               onOpenEndpoint={(endpoint, channelOwner) =>
                 setEndpointDetailTarget({ endpoint, channelOwner })
@@ -2586,11 +2950,28 @@ const CodexPage = () => {
         />
       )}
 
+      {showCredentialGroupForm && (
+        <CredentialGroupFormModal
+          mode={credentialGroupFormMode}
+          channel={credentialGroupFormChannel}
+          group={editingCredentialGroup}
+          loading={
+            credentialGroupFormMode === 'edit'
+              ? actionLoading === `save-credential-group-${editingCredentialGroup?.id}`
+              : actionLoading === 'create-credential-group'
+          }
+          serverError={credentialGroupFormError}
+          onCancel={closeCredentialGroupForm}
+          onSave={handleSaveCredentialGroup}
+        />
+      )}
+
       {showEndpointForm && (
         <EndpointFormModal
           mode={endpointFormMode}
           channel={endpointFormChannel}
           endpoint={editingEndpoint}
+          credentialGroup={endpointFormCredentialGroup}
           loading={
             endpointFormMode === 'edit'
               ? actionLoading === `save-endpoint-${editingEndpoint?.id}`
@@ -2627,6 +3008,17 @@ const CodexPage = () => {
           loading={actionLoading === `delete-channel-${deleteChannelTarget.id}`}
           onCancel={() => setDeleteChannelTarget(null)}
           onConfirm={handleDeleteChannel}
+        />
+      )}
+
+      {deleteCredentialGroupTarget && (
+        <DeleteConfirmDialog
+          title="删除凭证分组"
+          description={`即将从渠道「${deleteCredentialGroupTarget.channel?.name}」中删除凭证分组「${deleteCredentialGroupTarget.group?.name}」。`}
+          hint="默认分组或仍被端点引用的分组不能删除；如需删除，请先切换端点使用其他分组。"
+          loading={actionLoading === `delete-credential-group-${deleteCredentialGroupTarget.group.id}`}
+          onCancel={() => setDeleteCredentialGroupTarget(null)}
+          onConfirm={handleDeleteCredentialGroup}
         />
       )}
 

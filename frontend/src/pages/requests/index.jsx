@@ -386,6 +386,7 @@ const RequestsPage = () => {
           visibleColumns={visibleColumns}
           columnConfigs={columnConfigs}
           onRowDoubleClick={handleRowDoubleClick}
+          interChannelFailoverEnabled={interChannelFailoverEnabled}
         />
       </div>
 
@@ -394,6 +395,7 @@ const RequestsPage = () => {
         isOpen={isDetailModalOpen}
         onClose={handleCloseDetailModal}
         request={selectedRequest}
+        interChannelFailoverEnabled={interChannelFailoverEnabled}
       />
     </div>
   );

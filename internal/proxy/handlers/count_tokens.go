@@ -12,6 +12,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // CountTokensHandler 处理 /v1/messages/count_tokens 请求
@@ -20,14 +21,16 @@ type CountTokensHandler struct {
 	config          *config.Config
 	endpointManager *endpoint.Manager
 	forwarder       *Forwarder
+	privacyRedactor PrivacyRedactor
 }
 
 // NewCountTokensHandler 创建 CountTokensHandler
-func NewCountTokensHandler(cfg *config.Config, em *endpoint.Manager, f *Forwarder) *CountTokensHandler {
+func NewCountTokensHandler(cfg *config.Config, em *endpoint.Manager, f *Forwarder, redactor PrivacyRedactor) *CountTokensHandler {
 	return &CountTokensHandler{
 		config:          cfg,
 		endpointManager: em,
 		forwarder:       f,
+		privacyRedactor: redactor,
 	}
 }
 
@@ -45,7 +48,7 @@ type CountTokensResponse struct {
 }
 
 // Handle 处理count_tokens请求 - 极简逻辑
-func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string) {
+func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
 	slog.Info(fmt.Sprintf("🔢 [Token计数] [%s] 收到count_tokens请求", connID))
 
 	// 1. 找配置了 supports_count_tokens: true 的端点
@@ -53,10 +56,19 @@ func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, 
 
 	// 2. 如果有，尝试转发
 	if len(supportedEndpoints) > 0 {
-		if result, ok := h.tryForward(ctx, r, bodyBytes, supportedEndpoints, connID); ok {
+		result, ok, redactionErr := h.tryForward(ctx, r, bodyBytes, supportedEndpoints, connID, lifecycleManager)
+		if redactionErr != nil {
+			if lifecycleManager != nil {
+				lifecycleManager.FailRequest("privacy_redaction_failed", redactionErr.Error(), http.StatusInternalServerError)
+			}
+			http.Error(w, fmt.Sprintf("隐私脱敏失败: %v", redactionErr), http.StatusInternalServerError)
+			return
+		}
+		if ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write(result)
+			h.completeCountTokensRequest(lifecycleManager, result)
 			slog.Info(fmt.Sprintf("✅ [Token计数-转发] [%s] 转发成功", connID))
 			return
 		}
@@ -67,7 +79,7 @@ func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	// 3. 本地估算
-	h.respondWithEstimation(w, bodyBytes, connID)
+	h.respondWithEstimation(w, bodyBytes, connID, lifecycleManager)
 }
 
 // getSupportedEndpoints 获取支持count_tokens的端点
@@ -85,9 +97,14 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 }
 
 // tryForward 尝试转发到支持的端点
-func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string) ([]byte, bool) {
+func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string, lifecycleManager RequestLifecycleManager) ([]byte, bool, error) {
 	for _, ep := range endpoints {
 		requestBody := h.forwarder.RewriteModelForEndpoint(bodyBytes, ep, connID).Body
+		var err error
+		requestBody, err = redactBodyBeforeForward(h.privacyRedactor, requestBody, lifecycleManager)
+		if err != nil {
+			return nil, false, err
+		}
 		targetURL := ep.Config.URL + "/v1/messages/count_tokens"
 		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(requestBody))
 		if err != nil {
@@ -111,18 +128,21 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 		if resp.StatusCode == http.StatusOK {
 			if bodyBytes, err := io.ReadAll(resp.Body); err == nil {
 				slog.Info(fmt.Sprintf("✅ [转发成功] [%s] 端点: %s", connID, ep.Config.Name))
-				return bodyBytes, true
+				return bodyBytes, true, nil
 			}
 		}
 	}
 
-	return nil, false
+	return nil, false, nil
 }
 
 // respondWithEstimation 返回本地估算结果
-func (h *CountTokensHandler) respondWithEstimation(w http.ResponseWriter, bodyBytes []byte, connID string) {
+func (h *CountTokensHandler) respondWithEstimation(w http.ResponseWriter, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
 	tokens, err := h.estimateTokens(bodyBytes)
 	if err != nil {
+		if lifecycleManager != nil {
+			lifecycleManager.FailRequest("count_tokens_estimation_failed", err.Error(), http.StatusBadRequest)
+		}
 		http.Error(w, fmt.Sprintf("Failed to estimate tokens: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -134,8 +154,23 @@ func (h *CountTokensHandler) respondWithEstimation(w http.ResponseWriter, bodyBy
 	w.Header().Set("X-Token-Estimation", "true") // 标记这是估算值
 	w.WriteHeader(http.StatusOK)
 	w.Write(responseBytes)
+	if lifecycleManager != nil {
+		lifecycleManager.CompleteRequest(&tracking.TokenUsage{InputTokens: int64(tokens)})
+	}
 
 	slog.Info(fmt.Sprintf("📊 [Token估算] [%s] 估算结果: %d tokens", connID, tokens))
+}
+
+func (h *CountTokensHandler) completeCountTokensRequest(lifecycleManager RequestLifecycleManager, body []byte) {
+	if lifecycleManager == nil {
+		return
+	}
+	var response CountTokensResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		lifecycleManager.CompleteRequest(nil)
+		return
+	}
+	lifecycleManager.CompleteRequest(&tracking.TokenUsage{InputTokens: int64(response.InputTokens)})
 }
 
 // estimateTokens 本地估算token数量

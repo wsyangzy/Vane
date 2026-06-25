@@ -40,6 +40,78 @@ func TestGetHealthyEndpoints_PriorityScopedToActiveChannel(t *testing.T) {
 	}
 }
 
+func TestGetHealthyEndpoints_PriorityKeepsCredentialGroupsContiguous(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "priority"},
+		Health:   config.HealthConfig{Timeout: 5 * time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "default-p5", URL: "http://example.invalid/default-p5", Channel: "A", CredentialGroupOrder: 0, Priority: 5, Timeout: 1 * time.Second},
+			{Name: "github-p0", URL: "http://example.invalid/github-p0", Channel: "A", CredentialGroupOrder: 1, Priority: 0, Timeout: 1 * time.Second},
+			{Name: "default-p6", URL: "http://example.invalid/default-p6", Channel: "A", CredentialGroupOrder: 0, Priority: 6, Timeout: 1 * time.Second},
+			{Name: "linuxdo-p0", URL: "http://example.invalid/linuxdo-p0", Channel: "A", CredentialGroupOrder: 2, Priority: 0, Timeout: 1 * time.Second},
+			{Name: "github-p1", URL: "http://example.invalid/github-p1", Channel: "A", CredentialGroupOrder: 1, Priority: 1, Timeout: 1 * time.Second},
+		},
+	}
+
+	m := NewManager(cfg)
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		ep.mutex.Unlock()
+	}
+
+	if err := m.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+
+	healthy := m.GetHealthyEndpoints()
+	got := endpointNames(healthy)
+	want := []string{"default-p5", "default-p6", "github-p0", "github-p1", "linuxdo-p0"}
+	if !sameStringSlice(got, want) {
+		t.Fatalf("unexpected order: got %v, want %v", got, want)
+	}
+}
+
+func TestGetHealthyEndpoints_FastestKeepsCredentialGroupsContiguous(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "fastest"},
+		Health:   config.HealthConfig{Timeout: 5 * time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "default-slow", URL: "http://example.invalid/default-slow", Channel: "A", CredentialGroupOrder: 0, Priority: 1, Timeout: 1 * time.Second},
+			{Name: "github-fast", URL: "http://example.invalid/github-fast", Channel: "A", CredentialGroupOrder: 1, Priority: 1, Timeout: 1 * time.Second},
+			{Name: "default-fast", URL: "http://example.invalid/default-fast", Channel: "A", CredentialGroupOrder: 0, Priority: 2, Timeout: 1 * time.Second},
+		},
+	}
+
+	m := NewManager(cfg)
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		switch ep.Config.Name {
+		case "default-slow":
+			ep.Status.ResponseTime = 900 * time.Millisecond
+		case "default-fast":
+			ep.Status.ResponseTime = 300 * time.Millisecond
+		case "github-fast":
+			ep.Status.ResponseTime = 10 * time.Millisecond
+		}
+		ep.mutex.Unlock()
+	}
+
+	if err := m.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+
+	healthy := m.GetHealthyEndpoints()
+	got := endpointNames(healthy)
+	want := []string{"default-fast", "default-slow", "github-fast"}
+	if !sameStringSlice(got, want) {
+		t.Fatalf("unexpected order: got %v, want %v", got, want)
+	}
+}
+
 func TestGetHealthyEndpoints_FailoverEnabledScopedToActiveChannel(t *testing.T) {
 	failoverFalse := false
 	failoverTrue := true
@@ -130,4 +202,28 @@ func TestGetHealthyEndpoints_IgnoresRequestFailedForNewRequests(t *testing.T) {
 		t.Fatalf("unexpected order: got [%s, %s], want [a1, a2]",
 			healthy[0].Config.Name, healthy[1].Config.Name)
 	}
+}
+
+func endpointNames(endpoints []*Endpoint) []string {
+	names := make([]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		if ep == nil {
+			names = append(names, "")
+			continue
+		}
+		names = append(names, ep.Config.Name)
+	}
+	return names
+}
+
+func sameStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

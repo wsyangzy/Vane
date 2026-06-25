@@ -17,21 +17,28 @@ import (
 // EndpointService 端点管理业务服务
 // 连接 EndpointStore（数据持久化）和 EndpointManager（运行时管理）
 type EndpointService struct {
-	store   store.EndpointStore
-	manager *endpoint.Manager
-	config  *config.Config
+	store                store.EndpointStore
+	manager              *endpoint.Manager
+	config               *config.Config
+	credentialGroupStore store.ClaudeCredentialGroupStore
 }
 
 // NewEndpointService 创建端点服务实例
 func NewEndpointService(
-	store store.EndpointStore,
+	endpointStore store.EndpointStore,
 	manager *endpoint.Manager,
 	cfg *config.Config,
+	credentialGroupStore ...store.ClaudeCredentialGroupStore,
 ) *EndpointService {
+	var groupStore store.ClaudeCredentialGroupStore
+	if len(credentialGroupStore) > 0 {
+		groupStore = credentialGroupStore[0]
+	}
 	return &EndpointService{
-		store:   store,
-		manager: manager,
-		config:  cfg,
+		store:                endpointStore,
+		manager:              manager,
+		config:               cfg,
+		credentialGroupStore: groupStore,
 	}
 }
 
@@ -44,16 +51,24 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 	if err := s.validateRecord(record); err != nil {
 		return nil, err
 	}
+	if err := s.ensureEndpointCredentialGroup(ctx, record); err != nil {
+		return nil, err
+	}
 
-	// 允许不同渠道同名端点，但同一渠道内必须唯一
-	if existing, err := s.store.GetByChannelAndName(ctx, record.Channel, record.Name); err != nil {
+	// 允许不同凭证分组同名端点，但同一凭证分组内必须唯一
+	if existing, err := s.findEndpointNameConflict(ctx, record.Channel, record.CredentialGroupID, record.Name); err != nil {
 		return nil, fmt.Errorf("校验端点名称失败: %w", err)
 	} else if existing != nil {
 		return nil, fmt.Errorf(
-			"同一渠道内端点名称必须唯一：渠道 '%s' 已存在同名端点 '%s'，请修改名称或选择其他渠道",
+			"同一凭证分组内端点名称必须唯一：渠道 '%s' 已存在同名端点 '%s'，请修改名称或选择其他凭证分组",
 			record.Channel,
 			record.Name,
 		)
+	}
+	if existing, err := s.findEndpointURLConflict(ctx, record.Channel, record.CredentialGroupID, record.URL); err != nil {
+		return nil, fmt.Errorf("校验端点 URL 失败: %w", err)
+	} else if existing != nil {
+		return nil, fmt.Errorf("同一凭证分组内已存在相同的端点 URL，请修改 URL 或选择其他凭证分组")
 	}
 
 	// 优先级自动递增
@@ -144,16 +159,31 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 	if err := s.validateRecord(record); err != nil {
 		return err
 	}
+	if record.CredentialGroupID <= 0 {
+		record.CredentialGroupID = existing.CredentialGroupID
+	}
+	if record.Channel != existing.Channel && record.CredentialGroupID == existing.CredentialGroupID {
+		record.CredentialGroupID = 0
+		record.CredentialGroupName = ""
+	}
+	if err := s.ensureEndpointCredentialGroup(ctx, record); err != nil {
+		return err
+	}
 
-	// 允许不同渠道同名，需确保"同渠道内唯一"约束
-	if other, err := s.store.GetByChannelAndName(ctx, record.Channel, record.Name); err != nil {
+	// 允许不同凭证分组同名，需确保"同分组内唯一"约束
+	if other, err := s.findEndpointNameConflict(ctx, record.Channel, record.CredentialGroupID, record.Name); err != nil {
 		return fmt.Errorf("校验端点名称失败: %w", err)
 	} else if other != nil && other.ID != record.ID {
 		return fmt.Errorf(
-			"同一渠道内端点名称必须唯一：渠道 '%s' 已存在同名端点 '%s'，请修改名称或选择其他渠道",
+			"同一凭证分组内端点名称必须唯一：渠道 '%s' 已存在同名端点 '%s'，请修改名称或选择其他凭证分组",
 			record.Channel,
 			record.Name,
 		)
+	}
+	if other, err := s.findEndpointURLConflict(ctx, record.Channel, record.CredentialGroupID, record.URL); err != nil {
+		return fmt.Errorf("校验端点 URL 失败: %w", err)
+	} else if other != nil && other.ID != record.ID {
+		return fmt.Errorf("同一凭证分组内已存在相同的端点 URL，请修改 URL 或选择其他凭证分组")
 	}
 
 	// 渠道变更时，自动调整优先级为目标渠道的下一个可用值
@@ -191,7 +221,7 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 
 			// 同步冲突端点到运行时管理器
 			conflictingCfg := s.recordToConfig(conflicting)
-			conflictingKey := endpoint.EndpointKey(conflicting.Channel, conflicting.Name)
+			conflictingKey := EndpointRuntimeKey(conflicting)
 			if err := s.manager.UpdateEndpointConfig(conflictingKey, conflictingCfg); err != nil {
 				slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新冲突端点运行时配置失败: %v", err))
 			}
@@ -208,7 +238,7 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 
 	// 更新运行时管理器
 	cfg := s.recordToConfig(record)
-	oldKey := endpoint.EndpointKey(existing.Channel, existing.Name)
+	oldKey := EndpointRuntimeKey(existing)
 	if err := s.manager.UpdateEndpointConfig(oldKey, cfg); err != nil {
 		slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %v", err))
 		// 不回滚数据库，下次重启会同步
@@ -232,7 +262,7 @@ func (s *EndpointService) DeleteEndpoint(ctx context.Context, name string) error
 	}
 
 	// 先从运行时管理器移除
-	if err := s.manager.RemoveEndpoint(endpoint.EndpointKey(existing.Channel, existing.Name)); err != nil {
+	if err := s.manager.RemoveEndpoint(EndpointRuntimeKey(existing)); err != nil {
 		slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 从管理器移除端点失败: %v", err))
 		// 继续删除数据库记录
 	}
@@ -260,7 +290,7 @@ func (s *EndpointService) DeleteEndpointByID(ctx context.Context, id int64) erro
 	}
 
 	// 先从运行时管理器移除
-	if err := s.manager.RemoveEndpoint(endpoint.EndpointKey(existing.Channel, existing.Name)); err != nil {
+	if err := s.manager.RemoveEndpoint(EndpointRuntimeKey(existing)); err != nil {
 		slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 从管理器移除端点失败: %v", err))
 	}
 
@@ -314,7 +344,7 @@ func (s *EndpointService) ActivateChannel(ctx context.Context, channel string) e
 
 		// 同步运行时配置
 		cfg := s.recordToConfig(record)
-		if err := s.manager.UpdateEndpointConfig(endpoint.EndpointKey(record.Channel, record.Name), cfg); err != nil {
+		if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(record), cfg); err != nil {
 			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %s - %v", record.Name, err))
 		}
 	}
@@ -326,6 +356,71 @@ func (s *EndpointService) ActivateChannel(ctx context.Context, channel string) e
 
 	slog.Info(fmt.Sprintf("✅ [EndpointService] 已激活渠道: %s (端点数: %d)", channel, len(records)))
 	return nil
+}
+
+// ActivateEndpointByID 激活指定端点为当前渠道首选端点。
+//
+// enabled 在 SQLite 模式下仍承担“当前活跃渠道”的持久化标记；这里仅保留指定端点
+// enabled=true，用于 UI 和路由排序识别当前首选端点。故障转移候选池仍由
+// failover_enabled 控制，其他同渠道端点不会因此退出故障转移链路。
+func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*store.EndpointRecord, error) {
+	if id <= 0 {
+		return nil, fmt.Errorf("端点ID不能为空")
+	}
+
+	target, err := s.store.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("获取端点配置失败: %w", err)
+	}
+	if target == nil {
+		return nil, fmt.Errorf("端点不存在: %d", id)
+	}
+	if !target.FailoverEnabled {
+		return nil, fmt.Errorf("端点未参与渠道内故障转移，不能设为当前路由端点")
+	}
+
+	records, err := s.store.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取端点列表失败: %w", err)
+	}
+
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		nextEnabled := record.ID == target.ID
+		if record.Enabled == nextEnabled {
+			if record.ID == target.ID {
+				target = record
+			}
+			continue
+		}
+
+		record.Enabled = nextEnabled
+		if err := s.store.Update(ctx, record); err != nil {
+			return nil, fmt.Errorf("更新端点激活状态失败: %s - %w", record.Name, err)
+		}
+
+		if s.manager != nil {
+			cfg := s.recordToConfig(record)
+			if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(record), cfg); err != nil {
+				slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %s - %v", record.Name, err))
+			}
+		}
+
+		if record.ID == target.ID {
+			target = record
+		}
+	}
+
+	if s.manager != nil {
+		if err := s.manager.ManualActivateGroup(target.Channel); err != nil {
+			return nil, fmt.Errorf("激活渠道失败: %w", err)
+		}
+	}
+
+	slog.Info(fmt.Sprintf("✅ [EndpointService] 已激活端点: %s/%s", target.Channel, target.Name))
+	return target, nil
 }
 
 // DeactivateChannel 停用指定渠道（SQLite 模式）
@@ -371,7 +466,7 @@ func (s *EndpointService) DeactivateChannel(ctx context.Context, channel string)
 
 		// 同步运行时配置
 		cfg := s.recordToConfig(record)
-		if err := s.manager.UpdateEndpointConfig(endpoint.EndpointKey(record.Channel, record.Name), cfg); err != nil {
+		if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(record), cfg); err != nil {
 			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %s - %v", record.Name, err))
 		}
 	}
@@ -509,7 +604,7 @@ func (s *EndpointService) SyncFromDatabase(ctx context.Context) error {
 						continue
 					}
 					cfg := s.recordToConfig(record)
-					if err := s.manager.UpdateEndpointConfig(endpoint.EndpointKey(record.Channel, record.Name), cfg); err != nil {
+					if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(record), cfg); err != nil {
 						slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %s - %v", record.Name, err))
 					}
 				}
@@ -537,11 +632,13 @@ func (s *EndpointService) GetEndpointWithHealth(ctx context.Context, name string
 	}
 
 	// 获取健康状态
-	status := s.manager.GetEndpointStatus(endpoint.EndpointKey(record.Channel, record.Name))
+	status := s.manager.GetEndpointStatus(EndpointRuntimeKey(record))
 
 	return map[string]interface{}{
 		"id":                                record.ID,
 		"channel":                           record.Channel,
+		"credential_group_id":               record.CredentialGroupID,
+		"credential_group_name":             record.CredentialGroupName,
 		"name":                              record.Name,
 		"url":                               record.URL,
 		"token_masked":                      maskToken(record.Token),
@@ -623,17 +720,38 @@ func normalizePositiveMultiplier(value float64) float64 {
 
 // recordToConfig 将数据库记录转换为配置对象
 func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.EndpointConfig {
+	token := record.Token
+	apiKey := record.ApiKey
+	credentialGroupName := record.CredentialGroupName
+	credentialGroupOrder := 0
+	if s.credentialGroupStore != nil && record.CredentialGroupID > 0 {
+		if group, err := s.credentialGroupStore.GetByID(context.Background(), record.CredentialGroupID); err == nil && group != nil {
+			credentialGroupName = group.Name
+			credentialGroupOrder = s.credentialGroupOrder(context.Background(), record.Channel, group.ID)
+			if token == "" {
+				token = group.Token
+			}
+			if apiKey == "" {
+				apiKey = group.ApiKey
+			}
+		}
+	}
+
 	cfg := config.EndpointConfig{
-		Name:                record.Name,
-		URL:                 record.URL,
-		Channel:             record.Channel,
-		Priority:            record.Priority,
-		Token:               record.Token,
-		ApiKey:              record.ApiKey,
-		Headers:             record.Headers,
-		Timeout:             time.Duration(record.TimeoutSeconds) * time.Second,
-		SupportsCountTokens: record.SupportsCountTokens,
-		SkipHealthCheck:     record.SkipHealthCheck,
+		Name:                 record.Name,
+		URL:                  record.URL,
+		Channel:              record.Channel,
+		RuntimeKey:           EndpointRuntimeKey(record),
+		CredentialGroupID:    record.CredentialGroupID,
+		CredentialGroupName:  credentialGroupName,
+		CredentialGroupOrder: credentialGroupOrder,
+		Priority:             record.Priority,
+		Token:                token,
+		ApiKey:               apiKey,
+		Headers:              record.Headers,
+		Timeout:              time.Duration(record.TimeoutSeconds) * time.Second,
+		SupportsCountTokens:  record.SupportsCountTokens,
+		SkipHealthCheck:      record.SkipHealthCheck,
 	}
 
 	// 设置 Enabled（是否作为代理端点）
@@ -651,6 +769,114 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 	}
 
 	return cfg
+}
+
+func (s *EndpointService) credentialGroupOrder(ctx context.Context, channel string, credentialGroupID int64) int {
+	if s.credentialGroupStore == nil || credentialGroupID <= 0 {
+		return 0
+	}
+	groups, err := s.credentialGroupStore.ListByChannel(ctx, channel)
+	if err != nil {
+		return 0
+	}
+	for idx, group := range groups {
+		if group != nil && group.ID == credentialGroupID {
+			return idx
+		}
+	}
+	return len(groups)
+}
+
+// EndpointRuntimeKey returns a collision-free runtime key for SQLite endpoints.
+func EndpointRuntimeKey(record *store.EndpointRecord) string {
+	if record == nil {
+		return ""
+	}
+	if record.CredentialGroupID > 0 {
+		return fmt.Sprintf("%s::g%d::%s", record.Channel, record.CredentialGroupID, record.Name)
+	}
+	return endpoint.EndpointKey(record.Channel, record.Name)
+}
+
+func (s *EndpointService) ensureEndpointCredentialGroup(ctx context.Context, record *store.EndpointRecord) error {
+	if s.credentialGroupStore == nil || record == nil {
+		return nil
+	}
+	if record.CredentialGroupID > 0 {
+		return s.validateCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
+	}
+	group, err := s.credentialGroupStore.GetDefaultByChannel(ctx, record.Channel)
+	if err != nil {
+		return err
+	}
+	if group == nil {
+		group, err = s.credentialGroupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+			Channel:                       record.Channel,
+			Name:                          DefaultClaudeCredentialGroupName,
+			Token:                         record.Token,
+			ApiKey:                        record.ApiKey,
+			IsDefault:                     true,
+			CostMultiplier:                normalizePositiveMultiplier(record.CostMultiplier),
+			InputCostMultiplier:           normalizePositiveMultiplier(record.InputCostMultiplier),
+			OutputCostMultiplier:          normalizePositiveMultiplier(record.OutputCostMultiplier),
+			CacheCreationCostMultiplier:   normalizePositiveMultiplier(record.CacheCreationCostMultiplier),
+			CacheCreationCostMultiplier1h: normalizePositiveMultiplier(record.CacheCreationCostMultiplier1h),
+			CacheReadCostMultiplier:       normalizePositiveMultiplier(record.CacheReadCostMultiplier),
+		})
+		if err != nil {
+			return err
+		}
+	}
+	record.CredentialGroupID = group.ID
+	record.CredentialGroupName = group.Name
+	return nil
+}
+
+func (s *EndpointService) validateCredentialGroup(ctx context.Context, channel string, credentialGroupID int64) error {
+	if s.credentialGroupStore == nil || credentialGroupID <= 0 {
+		return nil
+	}
+	group, err := s.credentialGroupStore.GetByID(ctx, credentialGroupID)
+	if err != nil {
+		return err
+	}
+	if group == nil {
+		return fmt.Errorf("Claude 凭证分组不存在: %d", credentialGroupID)
+	}
+	if group.Channel != channel {
+		return fmt.Errorf("凭证分组不属于当前渠道")
+	}
+	return nil
+}
+
+func (s *EndpointService) findEndpointNameConflict(ctx context.Context, channel string, credentialGroupID int64, name string) (*store.EndpointRecord, error) {
+	conflict, err := s.store.GetByChannelCredentialGroupAndName(ctx, channel, credentialGroupID, name)
+	if err != nil || conflict != nil {
+		return conflict, err
+	}
+	if !s.isDefaultCredentialGroup(ctx, channel, credentialGroupID) {
+		return nil, nil
+	}
+	return s.store.GetByChannelCredentialGroupAndName(ctx, channel, 0, name)
+}
+
+func (s *EndpointService) findEndpointURLConflict(ctx context.Context, channel string, credentialGroupID int64, url string) (*store.EndpointRecord, error) {
+	conflict, err := s.store.GetByChannelCredentialGroupAndURL(ctx, channel, credentialGroupID, url)
+	if err != nil || conflict != nil {
+		return conflict, err
+	}
+	if !s.isDefaultCredentialGroup(ctx, channel, credentialGroupID) {
+		return nil, nil
+	}
+	return s.store.GetByChannelCredentialGroupAndURL(ctx, channel, 0, url)
+}
+
+func (s *EndpointService) isDefaultCredentialGroup(ctx context.Context, channel string, credentialGroupID int64) bool {
+	if s.credentialGroupStore == nil || credentialGroupID <= 0 {
+		return false
+	}
+	group, err := s.credentialGroupStore.GetDefaultByChannel(ctx, channel)
+	return err == nil && group != nil && group.ID == credentialGroupID
 }
 
 // configToRecord 将配置对象转换为数据库记录

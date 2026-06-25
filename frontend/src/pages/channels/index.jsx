@@ -13,11 +13,9 @@ import {
   Database,
   AlertTriangle,
   Server,
-  Copy,
   ArrowRight,
   ArrowRightLeft,
   Calculator,
-  ShieldCheck,
   ShieldOff,
   CheckCircle2,
   XCircle,
@@ -25,9 +23,11 @@ import {
   ChevronDown,
   Pause,
   Play,
-  Power,
   Globe,
-  Settings
+  Settings,
+  KeyRound,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import {
   Button,
@@ -39,11 +39,13 @@ import {
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import useEndpointsData from '@hooks/useEndpointsData.js';
+import useHorizontalScroll from '@hooks/useHorizontalScroll.js';
 import {
   EndpointForm,
   DeleteConfirmDialog,
-  PriorityBadge
+  ModelMultiplierEditor
 } from './components';
+import { buildInitialModelMultiplierRows, parseModelMultiplierRows } from './components/modelMultiplierRows.js';
 import ModelTag from '../requests/components/ModelTag.jsx';
 import {
   getEndpointStorageStatus,
@@ -51,7 +53,7 @@ import {
   createEndpointRecord,
   updateEndpointRecordByID,
   deleteEndpointRecordByID,
-  toggleEndpointRecordByID,
+  activateEndpointRecordByID,
   setEndpointFailoverEnabledByID,
   setEndpointSkipHealthCheckByID, // 跳过健康检测
   getChannels,
@@ -64,15 +66,21 @@ import {
   resumeGroup,
   getNextAvailableChannel,
   getConfig,
+  getSettingsByCategory,
+  isInterChannelFailoverEnabled,
   isWailsEnvironment,
   openExternalURL,
   subscribeToEvent,
   getSuspendedRequestsCount,
   getSuspendedEndpointCounts,
   getManualRetryRequestsCount,
-  getManualRetryChannelCounts
+  getManualRetryChannelCounts,
+  createClaudeCredentialGroup,
+  updateClaudeCredentialGroupByID,
+  deleteClaudeCredentialGroupByID,
+  setDefaultClaudeCredentialGroup
 } from '@utils/wailsApi.js';
-import { formatMultiplierExpression, parseMultiplierExpression } from '@utils/multiplier.js';
+import { formatMultiplierExpression, formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
 
 const buildInitialModelMappingRows = (modelMapping) => {
   const entries = Object.entries(modelMapping || {})
@@ -101,6 +109,23 @@ const CHANNEL_FORM_TABS = [
   { key: 'mapping', label: '模型映射' }
 ];
 
+const CREDENTIAL_GROUP_FORM_TABS = [
+  { key: 'basic', label: '基础信息' },
+  { key: 'billing', label: '成本倍率' }
+];
+
+const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
+  { name: 'costMultiplier', label: '总倍率' },
+  { name: 'inputCostMultiplier', label: '输入倍率' },
+  { name: 'outputCostMultiplier', label: '输出倍率' },
+  { name: 'cacheReadCostMultiplier', label: '缓存读取倍率' },
+  { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率' },
+  { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
+];
+
+const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
+const CHANNEL_META_BADGE_CLASS = 'inline-flex h-5 items-center justify-center rounded-full border px-2 pt-0 pb-0 text-[10px] font-medium leading-[20px] whitespace-nowrap';
+
 const getErrorMessage = (error, fallback = '操作失败') => {
   if (!error) return fallback;
   if (typeof error === 'string') return error || fallback;
@@ -111,6 +136,48 @@ const getErrorMessage = (error, fallback = '操作失败') => {
   } catch {
     return String(error);
   }
+};
+
+const isValidMultiplierExpression = (value) => {
+  const parsed = parseMultiplierExpression(value, Number.NaN);
+  return Number.isFinite(parsed) && parsed >= 0;
+};
+
+const getClaudeCredentialGroups = (channelMeta) => (
+  Array.isArray(channelMeta?.credentialGroups)
+    ? channelMeta.credentialGroups
+    : Array.isArray(channelMeta?.credential_groups)
+      ? channelMeta.credential_groups
+      : []
+);
+
+const getDefaultClaudeCredentialGroup = (channelMeta) => {
+  const groups = getClaudeCredentialGroups(channelMeta);
+  return groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
+};
+
+const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
+  channel: group?.channel || channelName || '',
+  name: group?.name || '',
+  token: group?.token || '',
+  apiKey: group?.apiKey || group?.api_key || '',
+  isDefault: Boolean(group?.isDefault ?? group?.is_default ?? false),
+  costMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? group?.cost_multiplier ?? 1.0),
+  inputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? group?.input_cost_multiplier ?? 1.0),
+  outputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? group?.output_cost_multiplier ?? 1.0),
+  cacheCreationCostMultiplier: formatMultiplierInputValue(group?.cacheCreationCostMultiplier ?? group?.cache_creation_cost_multiplier ?? 1.0),
+  cacheCreationCostMultiplier1h: formatMultiplierInputValue(group?.cacheCreationCostMultiplier1h ?? group?.cache_creation_cost_multiplier_1h ?? 1.0),
+  cacheReadCostMultiplier: formatMultiplierInputValue(group?.cacheReadCostMultiplier ?? group?.cache_read_cost_multiplier ?? 1.0),
+  modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
+});
+
+const validateClaudeCredentialGroupMultipliers = (formData) => {
+  for (const field of CREDENTIAL_GROUP_MULTIPLIER_FIELDS) {
+    if (!isValidMultiplierExpression(formData[field.name])) {
+      return `${field.label}必须是非负数字或分数，例如 1.25 或 40/30`;
+    }
+  }
+  return '';
 };
 
 const DeleteChannelConfirmDialog = ({ channelName, endpointCount = 0, onConfirm, onCancel, loading }) => {
@@ -159,26 +226,35 @@ const DeleteChannelConfirmDialog = ({ channelName, endpointCount = 0, onConfirm,
   );
 };
 
-const DeactivateChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loading }) => {
-  const confirmDisabled = loading;
+const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onCancel, loading }) => {
+  const endpointCount = Number(group?.endpointCount ?? group?.endpoint_count ?? 0);
 
   return renderModalPortal(
     <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
         <div className="flex items-center gap-3 mb-4">
-          <div className="p-3 bg-amber-100 rounded-full">
-            <AlertTriangle className="text-amber-700" size={24} />
+          <div className="p-3 bg-rose-100 rounded-full">
+            <AlertTriangle className="text-rose-600" size={24} />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-slate-900">确认停用渠道</h3>
-            <p className="text-sm text-slate-500">停用后将没有激活渠道，请谨慎操作</p>
+            <h3 className="text-lg font-semibold text-slate-900">确认删除凭证分组</h3>
+            <p className="text-sm text-slate-500">此操作不可撤销</p>
           </div>
         </div>
 
         <p className="text-slate-700 mb-4">
-          确定要停用渠道 <span className="font-semibold">“{channelName}”</span> 吗？
-          停用后将没有激活渠道，所有请求会失败直到再次激活。
+          确定要删除渠道 <span className="font-semibold">“{channelName}”</span> 下的凭证分组{' '}
+          <span className="font-semibold">“{group?.name || '未命名分组'}”</span> 吗？
         </p>
+
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm mb-4">
+          <div className="font-medium">
+            {endpointCount > 0 ? `该分组仍被 ${endpointCount} 个端点引用` : '仅未被端点引用的非默认分组可以删除'}
+          </div>
+          <div className="text-xs text-amber-700 mt-2">
+            默认分组或仍被端点引用的分组不能删除；如需删除，请先切换端点使用其他分组。
+          </div>
+        </div>
 
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={onCancel} disabled={loading}>
@@ -186,12 +262,12 @@ const DeactivateChannelConfirmDialog = ({ channelName, onConfirm, onCancel, load
           </Button>
           <Button
             variant="danger"
-            icon={Power}
+            icon={Trash2}
             onClick={() => onConfirm?.()}
             loading={loading}
-            disabled={confirmDisabled}
+            disabled={loading}
           >
-            确认停用
+            确认删除
           </Button>
         </div>
       </div>
@@ -245,12 +321,12 @@ const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loa
 
 // 健康状态徽章（健康/异常/未检测/跳过检测）
 const HealthBadge = ({ healthy, neverChecked, skipped, detail = false }) => {
-  const baseClass = `inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[64px] flex-shrink-0 items-center justify-center rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap`;
+  const baseClass = `inline-flex ${detail ? 'h-6 min-w-[64px]' : 'h-5'} w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap`;
 
   if (skipped) {
     return (
       <div className={`${baseClass} bg-purple-50 text-purple-600 border-purple-200`}>
-        <ShieldOff size={10} className="mr-1" />
+        <ShieldOff size={10} className="shrink-0" />
         跳过检测
       </div>
     );
@@ -258,7 +334,7 @@ const HealthBadge = ({ healthy, neverChecked, skipped, detail = false }) => {
   if (neverChecked) {
     return (
       <div className={`${baseClass} bg-slate-50 text-slate-400 border-slate-200`}>
-        <Clock size={10} className="mr-1" />
+        <Clock size={10} className="shrink-0" />
         未检测
       </div>
     );
@@ -266,12 +342,12 @@ const HealthBadge = ({ healthy, neverChecked, skipped, detail = false }) => {
 
   return healthy ? (
     <div className={`${baseClass} bg-emerald-50 text-emerald-600 border-emerald-100`}>
-      <CheckCircle2 size={10} className="mr-1" />
+      <CheckCircle2 size={10} className="shrink-0" />
       健康
     </div>
   ) : (
     <div className={`${baseClass} bg-rose-50 text-rose-600 border-rose-100`}>
-      <XCircle size={10} className="mr-1" />
+      <XCircle size={10} className="shrink-0" />
       异常
     </div>
   );
@@ -284,18 +360,19 @@ const RequestFailedBadge = ({ failCode, failReason, detail = false }) => {
   const tooltipParts = [];
   if (hasFailCode) tooltipParts.push(`状态码: ${failCode}`);
   if (hasFailReason) tooltipParts.push(`原因: ${failReason}`);
-  const tooltip = tooltipParts.length > 0 ? tooltipParts.join('\n') : '请求失败';
+  const label = tooltipParts.length > 0 ? tooltipParts.join('，') : '请求失败';
 
   return (
-    <Tooltip content={tooltip}>
-      <div className={`inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[72px] flex-shrink-0 items-center justify-center rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600 whitespace-nowrap`}>
-        <XCircle size={10} className="mr-1" />
-        请求失败
-        {hasFailCode && (
-          <span className="ml-1 font-mono">({failCode})</span>
-        )}
-      </div>
-    </Tooltip>
+    <div
+      className={`inline-flex ${detail ? 'h-6 min-w-[72px]' : 'h-5'} w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600 whitespace-nowrap`}
+      aria-label={label}
+    >
+      <XCircle size={10} className="shrink-0" />
+      请求失败
+      {hasFailCode && (
+        <span className="font-mono">({failCode})</span>
+      )}
+    </div>
   );
 };
 
@@ -309,11 +386,7 @@ const LatencyBadge = ({ ms, inScope = true, detail = false }) => {
 
   const msValue = Number(ms);
   if (!Number.isFinite(msValue) || msValue <= 0) {
-    return (
-      <span className={`${baseClass} bg-slate-50 text-slate-300 border-slate-200`}>
-        -
-      </span>
-    );
+    return null;
   }
 
   const msInt = Math.max(1, Math.round(msValue));
@@ -344,17 +417,18 @@ const formatLastCheck = (time) => {
   }
 };
 
-const getAuthType = (endpoint) => {
-  if (!endpoint) return null;
-  if (endpoint.token || endpoint.tokenMasked) return 'Token';
-  if (endpoint.apiKey || endpoint.apiKeyMasked) return 'API Key';
-  return null;
-};
-
 const normalizeBool = (value, defaultValue = true) => {
   if (value === undefined || value === null) return defaultValue;
   if (value === false || value === 0 || value === '0') return false;
   return Boolean(value);
+};
+
+const parseSettingsBool = (value) => {
+  if (value === true || value === false) return value;
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return undefined;
 };
 
 const buildSuspendedEndpointKey = (endpoint) => {
@@ -365,6 +439,61 @@ const buildSuspendedEndpointKey = (endpoint) => {
   return `${channel}::${name}`;
 };
 
+const getEndpointIdentity = (endpoint) => (
+  endpoint?.id ? `id:${endpoint.id}` : buildSuspendedEndpointKey(endpoint)
+);
+
+const isSameEndpoint = (left, right) => (
+  !!left && !!right && getEndpointIdentity(left) === getEndpointIdentity(right)
+);
+
+const endpointParticipatesInFailover = (endpoint) => normalizeBool(
+  endpoint?.failoverEnabled ?? endpoint?.failover_enabled,
+  true
+);
+
+const sortEndpointRouteCandidates = (list) => [...list].sort((a, b) => {
+  const priorityA = Number.isFinite(Number(a?.priority)) ? Number(a.priority) : 999;
+  const priorityB = Number.isFinite(Number(b?.priority)) ? Number(b.priority) : 999;
+  if (priorityA !== priorityB) return priorityA - priorityB;
+  const idA = Number(a?.id);
+  const idB = Number(b?.id);
+  if (Number.isFinite(idA) && Number.isFinite(idB) && idA !== idB) return idA - idB;
+  return String(a?.name || '').localeCompare(String(b?.name || ''));
+});
+
+const endpointIsRouteAvailable = (endpoint) => {
+  if (!endpoint) return false;
+  if (!endpointParticipatesInFailover(endpoint)) return false;
+  if (endpoint.skipHealthCheck || endpoint.skip_health_check) return true;
+
+  const healthState = endpoint.health_state || endpoint.healthState || '';
+  if (healthState === 'healthy') return true;
+  if (healthState === 'unhealthy' || healthState === 'request_failed') return false;
+  if (endpoint.healthy) return true;
+  return Boolean(endpoint.never_checked || endpoint.neverChecked);
+};
+
+const pickCurrentRouteEndpoint = (endpoints, isActiveChannel) => {
+  if (!isActiveChannel || endpoints.length === 0) return null;
+
+  const explicitActive = endpoints.find((endpoint) =>
+    normalizeBool(endpoint?.isActive ?? endpoint?.is_active, false)
+  );
+  if (explicitActive) return explicitActive;
+
+  const candidates = sortEndpointRouteCandidates(endpoints.filter(endpointParticipatesInFailover));
+  if (candidates.length > 0) {
+    const enabledCandidates = candidates.filter((endpoint) => normalizeBool(endpoint?.enabled, false));
+    if (enabledCandidates.length === 1) return enabledCandidates[0];
+
+    const available = candidates.filter(endpointIsRouteAvailable);
+    return available.length > 0 ? available[0] : candidates[candidates.length - 1];
+  }
+
+  return endpoints.find((endpoint) => normalizeBool(endpoint?.enabled, false)) || null;
+};
+
 // ============================================
 // 端点精简行（对齐 Codex 管理页的端点列表密度）
 // ============================================
@@ -373,8 +502,11 @@ const EndpointMiniCard = ({
   endpoint,
   isActiveChannel,
   isSqliteMode,
+  isCurrentEndpoint = false,
+  healthInScope = true,
   channelFailoverEnabled = true,
   onOpen,
+  onActivateEndpoint,
   onToggleFailover,
   onToggleSkipHealthCheck, // 跳过健康检测回调
   onEdit,
@@ -382,7 +514,7 @@ const EndpointMiniCard = ({
 }) => {
   if (!endpoint) return null;
 
-  const inScope = endpoint._health_scope !== false;
+  const inScope = healthInScope && endpoint._health_scope !== false;
   const channelPaused = endpoint._channel_paused === true;
   const showPaused = channelFailoverEnabled && channelPaused;
   const responseTime = endpoint.response_time || endpoint.responseTimeMs || 0;
@@ -392,160 +524,191 @@ const EndpointMiniCard = ({
   const lastFailCode = endpoint.last_fail_code || endpoint.lastFailCode || 0;
   const lastFailReason = endpoint.last_fail_reason || endpoint.lastFailReason || '';
   const isRequestFailed = healthState === 'request_failed';
-  const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
 
-  const authType = getAuthType(endpoint);
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const multiplier = endpoint.costMultiplier || 1.0;
+  const numericPriority = Number(endpoint.priority);
+  const priorityValue = Number.isFinite(numericPriority) ? Math.max(0, Math.floor(numericPriority)) : 0;
   const isChannelActive = typeof isActiveChannel === 'boolean'
     ? isActiveChannel
     : Boolean(endpoint.group_is_active || endpoint.groupIsActive);
-  const endpointEnabled = isSqliteMode ? normalizeBool(endpoint.enabled, true) : isChannelActive;
+  const endpointEnabled = isSqliteMode
+    ? (isChannelActive && (isCurrentEndpoint || normalizeBool(endpoint.enabled, false)))
+    : isChannelActive;
+  const endpointSwitchActive = isSqliteMode
+    ? Boolean(isCurrentEndpoint)
+    : isChannelActive;
+  const endpointSwitchDisabled = !failoverEnabled;
+  const isUnclaimedEndpoint = !isChannelActive && !channelFailoverEnabled;
+  const showHealthBadge = inScope && !isUnclaimedEndpoint && (isSkipHealthCheck || !isRequestFailed);
+  const showRequestFailedBadge = inScope && !isUnclaimedEndpoint && isRequestFailed;
   const rowActive = failoverEnabled && isChannelActive && (!isSqliteMode || endpointEnabled);
-  const statusBadgeText = !failoverEnabled
-    ? '未启用'
-    : (showPaused
+  const statusBadgeText = isUnclaimedEndpoint
+    ? '未接管'
+    : (!failoverEnabled
+        ? '不参与'
+        : (showPaused
         ? '暂停'
         : (!isChannelActive
-        ? (channelFailoverEnabled ? '等待' : '未启用')
-        : (!endpointEnabled ? '未启用' : '')));
-  const statusBadgeTitle = !failoverEnabled
-    ? '该端点不参与渠道内故障转移，因此不会被使用/检测'
-    : (showPaused
+        ? ''
+        : '')));
+  const statusBadgeTitle = isUnclaimedEndpoint
+    ? '渠道间转移未开启，非当前接管渠道不参与健康检查'
+    : (!failoverEnabled
+        ? '该端点不参与渠道内故障转移，因此不会被使用/检测'
+        : (showPaused
         ? '渠道已暂停：不参与健康检查与故障转移'
         : (!isChannelActive
-            ? (channelFailoverEnabled ? '备用渠道端点：当前渠道非活跃' : '未启用渠道端点：渠道间故障转移未启用')
-            : (!endpointEnabled ? '端点未启用' : '')));
+            ? '备用渠道端点：当前渠道非活跃'
+            : '')));
 
   return (
     <div className="border-b border-slate-100 last:border-b-0">
       <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onOpen?.(endpoint)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onOpen?.(endpoint);
-          }
-        }}
-        className={`group/row relative flex min-h-[72px] items-center gap-3 px-4 py-2.5 text-left transition-colors duration-150 ${
+        className={`group/row relative flex min-h-[56px] items-start gap-3 px-4 py-1.5 text-left transition-colors duration-150 ${
           rowActive ? 'bg-indigo-50/20' : 'hover:bg-slate-50/80 opacity-85'
         }`}
       >
-        <div className="flex w-8 flex-shrink-0 items-center justify-start">
-          <PriorityBadge priority={endpoint.priority || 1} size="xs" className="flex-shrink-0" />
+        <div className="flex h-5 w-[74px] flex-shrink-0 self-center items-center gap-3">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!endpointSwitchDisabled && !endpointSwitchActive) {
+                onActivateEndpoint?.(endpoint);
+              }
+            }}
+            className={`relative inline-flex h-[18px] w-8 flex-shrink-0 rounded-full transition-colors duration-200 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${
+              endpointSwitchActive
+                ? 'bg-emerald-500'
+                : endpointSwitchDisabled
+                  ? 'cursor-not-allowed bg-slate-100'
+                  : 'bg-slate-200 group-hover/row:bg-slate-300'
+            }`}
+            aria-label={
+              endpointSwitchDisabled
+                ? '端点未参与故障转移，无法设为当前路由端点'
+                : endpointSwitchActive
+                  ? '当前路由端点'
+                  : '设为当前路由端点'
+            }
+            aria-pressed={endpointSwitchActive}
+            aria-disabled={endpointSwitchDisabled}
+          >
+            <span
+              className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow-[0_1px_2px_rgba(15,23,42,0.15)] transition-all duration-200 ease-out ${
+                endpointSwitchActive ? 'left-[16px]' : 'left-[2px]'
+              }`}
+            />
+          </button>
+
+          <span className="inline-flex h-[18px] min-w-[30px] flex-shrink-0 items-center justify-center rounded bg-slate-100 px-1.5 text-[10px] font-medium leading-none text-slate-500">
+            P{priorityValue}
+          </span>
         </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-            <span className="block min-w-0 max-w-[180px] flex-shrink truncate text-xs font-semibold text-slate-900">
-              {endpoint.name}
-            </span>
-            <LatencyBadge ms={responseTime} inScope={inScope} />
-            {statusBadgeText && (
-              <Tooltip content={statusBadgeTitle} disabled={!statusBadgeTitle}>
-                <span className="inline-flex h-5 min-w-[54px] flex-shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium leading-none text-slate-500 whitespace-nowrap">
-                  {statusBadgeText}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpen?.(endpoint)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onOpen?.(endpoint);
+            }
+          }}
+          className="min-w-0 flex-1 cursor-pointer rounded-md py-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
+        >
+          <div className="flex h-5 min-w-0 items-center">
+            <span className={`relative inline-flex h-5 min-w-0 max-w-full items-center overflow-visible text-xs font-semibold leading-none ${
+              endpointSwitchActive ? 'text-slate-900' : 'text-slate-700'
+            }`}>
+              <span className={`min-w-0 truncate leading-none ${multiplier && multiplier !== 1.0 ? 'pr-8' : ''}`}>{endpoint.name}</span>
+              {multiplier && multiplier !== 1.0 && (
+                <span className="pointer-events-none absolute -top-1 right-0 z-10 inline-flex h-3 w-fit flex-shrink-0 items-center justify-center rounded-full bg-amber-500 px-1 font-mono text-[8px] font-bold leading-none text-white shadow-[0_1px_1px_rgba(217,119,6,0.35)] whitespace-nowrap">
+                  {multiplier}x
                 </span>
-              </Tooltip>
-            )}
+              )}
+            </span>
+          </div>
+
+          <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible">
             {showHealthBadge && (
               <HealthBadge healthy={endpoint.healthy} neverChecked={isNeverChecked} skipped={isSkipHealthCheck} />
             )}
-            {isRequestFailed && (
+            {showRequestFailedBadge && (
               <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
             )}
-          </div>
-
-          <div className="mt-1 flex min-w-0 items-center gap-1.5">
-            <Tooltip content={endpoint.url || '未设置端点地址'}>
+            <LatencyBadge ms={responseTime} inScope={inScope} />
+            {statusBadgeText && (
               <span
-                className="inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                onClick={(e) => e.stopPropagation()}
+                className="inline-flex h-5 w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium leading-none text-slate-500 whitespace-nowrap"
+                aria-label={statusBadgeTitle || statusBadgeText}
               >
-                <Globe size={11} />
-              </span>
-            </Tooltip>
-            {authType && (
-              <span className="inline-flex h-5 min-w-[54px] flex-shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium leading-none text-slate-500">
-                <ShieldCheck size={10} className="mr-1 text-amber-500" />
-                {authType}
-              </span>
-            )}
-            {multiplier && multiplier !== 1.0 && (
-              <span className="inline-flex h-5 min-w-[42px] flex-shrink-0 items-center justify-center rounded-full border border-orange-100 bg-orange-50 px-1.5 font-mono text-[10px] font-medium leading-none text-orange-600">
-                {multiplier}x
+                {statusBadgeText === '不参与' && <ArrowRightLeft size={10} className="shrink-0" />}
+                {statusBadgeText}
               </span>
             )}
           </div>
         </div>
 
-        <div className="flex w-20 flex-shrink-0 items-center justify-end gap-0.5">
+        <div className="flex w-[92px] flex-shrink-0 self-center items-center justify-end gap-0.5">
           {isSqliteMode && (
             <>
-              <Tooltip content={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleFailover?.(endpoint, !failoverEnabled);
-                  }}
-                  className={`rounded-md p-1 transition-colors duration-150 ${
-                    failoverEnabled
-                      ? 'text-indigo-600 hover:bg-indigo-50'
-                      : 'text-slate-400 hover:bg-slate-100'
-                  }`}
-                  aria-label={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}
-                  aria-pressed={failoverEnabled}
-                >
-                  <ArrowRightLeft size={12} />
-                </button>
-              </Tooltip>
-              <Tooltip content={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
-                  }}
-                  className={`rounded-md p-1 transition-colors duration-150 ${
-                    isSkipHealthCheck
-                      ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
-                      : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
-                  }`}
-                  aria-label={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
-                  aria-pressed={isSkipHealthCheck}
-                >
-                  <ShieldOff size={12} />
-                </button>
-              </Tooltip>
-              <Tooltip content="编辑端点">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onEdit?.(endpoint);
-                  }}
-                  className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
-                  aria-label="编辑端点"
-                >
-                  <Pencil size={12} />
-                </button>
-              </Tooltip>
-              <Tooltip content="删除端点">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete?.(endpoint);
-                  }}
-                  className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600"
-                  aria-label="删除端点"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </Tooltip>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFailover?.(endpoint, !failoverEnabled);
+                }}
+                className={`rounded-md p-1 transition-colors duration-150 ${
+                  failoverEnabled
+                    ? 'text-indigo-600 hover:bg-indigo-50'
+                    : 'text-slate-400 hover:bg-slate-100'
+                }`}
+                aria-label={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}
+                aria-pressed={failoverEnabled}
+              >
+                <ArrowRightLeft size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
+                }}
+                className={`rounded-md p-1 transition-colors duration-150 ${
+                  isSkipHealthCheck
+                    ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                    : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                }`}
+                aria-label={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
+                aria-pressed={isSkipHealthCheck}
+              >
+                <ShieldOff size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit?.(endpoint);
+                }}
+                className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600"
+                aria-label="编辑端点"
+              >
+                <Pencil size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete?.(endpoint);
+                }}
+                className="rounded-md p-1 text-slate-400 transition-colors duration-150 hover:bg-rose-50 hover:text-rose-600"
+                aria-label="删除端点"
+              >
+                <Trash2 size={12} />
+              </button>
             </>
           )}
         </div>
@@ -719,53 +882,11 @@ const EndpointDetailModal = ({
   const hasCustomCostMultiplier = hasCustomEndpointMultiplier || hasCustomModelMultiplier;
   const hasModelMapping = modelMappingEntries.length > 0;
 
-  const tokenRaw = endpoint.token || '';
-  const apiKeyRaw = endpoint.apiKey || endpoint.api_key || '';
-  const tokenMasked = endpoint.tokenMasked || endpoint.token_masked || '';
-  const apiKeyMasked = endpoint.apiKeyMasked || endpoint.api_key_masked || '';
-  const hasToken = !!(tokenRaw || tokenMasked);
-  const hasApiKey = !!(apiKeyRaw || apiKeyMasked);
-  const maskSecret = (secret) => {
-    if (!secret) return '';
-    const s = String(secret);
-    if (s.length <= 8) return '********';
-    return `${s.slice(0, 6)}...${s.slice(-4)}`;
-  };
-
   const rows = [
     {
       label: '渠道',
       icon: Server,
       content: <span className="text-sm font-semibold text-slate-900">{channel}</span>
-    },
-    {
-      label: 'Token（脱敏）',
-      icon: ShieldCheck,
-      content: (
-        <div className="flex min-w-0 items-center justify-between gap-3">
-          <span className="min-w-0 break-all font-mono text-sm font-semibold text-slate-900">
-            {hasToken ? (tokenMasked || maskSecret(tokenRaw)) : '-'}
-          </span>
-          <Tooltip content={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}>
-            <button
-              onClick={() => {
-                if (tokenRaw) {
-                  navigator.clipboard.writeText(tokenRaw);
-                }
-              }}
-              disabled={!tokenRaw}
-              className={`inline-flex flex-shrink-0 items-center justify-center rounded-md p-1 transition-colors ${
-                tokenRaw
-                  ? 'text-slate-400 hover:bg-white/70 hover:text-indigo-600'
-                  : 'cursor-not-allowed text-slate-300'
-              }`}
-              aria-label={tokenRaw ? '复制原始 Token' : '无原始 Token（仅 SQLite 记录可复制）'}
-            >
-              <Copy size={12} />
-            </button>
-          </Tooltip>
-        </div>
-      )
     }
   ];
 
@@ -1035,35 +1156,6 @@ const EndpointDetailModal = ({
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-          )}
-
-          {hasApiKey && (
-            <div className="mt-3 bg-slate-50 rounded-xl p-3 border border-slate-200/60">
-              <div className="flex items-center justify-between mb-1">
-                <div className="text-xs text-slate-500">API Key（脱敏）</div>
-                <Tooltip content={apiKeyRaw ? '复制原始 API Key' : '无原始 API Key（仅 SQLite 记录可复制）'}>
-                  <button
-                    onClick={() => {
-                      if (apiKeyRaw) {
-                        navigator.clipboard.writeText(apiKeyRaw);
-                      }
-                    }}
-                    disabled={!apiKeyRaw}
-                    className={`inline-flex items-center justify-center p-1 rounded-md transition-colors ${
-                      apiKeyRaw
-                        ? 'text-slate-400 hover:text-indigo-600 hover:bg-white/70'
-                        : 'text-slate-300 cursor-not-allowed'
-                    }`}
-                    aria-label={apiKeyRaw ? '复制原始 API Key' : '无原始 API Key（仅 SQLite 记录可复制）'}
-                  >
-                    <Copy size={12} />
-                  </button>
-                </Tooltip>
-              </div>
-              <div className="text-sm font-mono text-slate-900 break-all">
-                {apiKeyMasked || maskSecret(apiKeyRaw)}
               </div>
             </div>
           )}
@@ -1345,6 +1437,260 @@ const CreateChannelModal = ({
   );
 };
 
+const ClaudeCredentialGroupFormModal = ({
+  open,
+  mode = 'create',
+  channelName = '',
+  group = null,
+  loading = false,
+  serverError = '',
+  onClose,
+  onSubmit
+}) => {
+  const isEdit = mode === 'edit';
+  const [formData, setFormData] = useState(() => buildInitialClaudeCredentialGroupForm(group, channelName));
+  const [activeTab, setActiveTab] = useState('basic');
+  const [error, setError] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  if (!open) return null;
+
+  const updateField = (key, value) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
+    if (error) setError('');
+  };
+
+  const updateModelMultiplierRows = (rows) => {
+    setFormData((prev) => ({ ...prev, modelMultiplierRows: rows }));
+    if (error) setError('');
+  };
+
+  const renderSecretInput = ({ label, field, placeholder, visible, setVisible }) => (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-700">{label}</label>
+      <div className="relative">
+        <input
+          type={visible ? 'text' : 'password'}
+          value={formData[field] || ''}
+          onChange={(event) => updateField(field, event.target.value)}
+          placeholder={placeholder}
+          autoComplete="new-password"
+          data-form-type="other"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+          disabled={loading}
+        />
+        <Tooltip content={visible ? '隐藏' : '显示'} className="absolute right-2 top-1/2 -translate-y-1/2">
+          <button
+            type="button"
+            onClick={() => setVisible((prev) => !prev)}
+            className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            tabIndex={-1}
+            aria-label={visible ? '隐藏' : '显示'}
+          >
+            {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </Tooltip>
+      </div>
+    </div>
+  );
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    const name = formData.name.trim();
+    const token = formData.token.trim();
+    const apiKey = formData.apiKey.trim();
+
+    if (!name) {
+      setError('分组名称不能为空');
+      return;
+    }
+    if (!token && !apiKey) {
+      setError('Token 与 API Key 至少填写一个');
+      return;
+    }
+
+    const multiplierError = validateClaudeCredentialGroupMultipliers(formData);
+    if (multiplierError) {
+      setError(multiplierError);
+      setActiveTab('billing');
+      return;
+    }
+
+    const modelMultiplierResult = parseModelMultiplierRows(formData.modelMultiplierRows);
+    if (modelMultiplierResult.error) {
+      setError(modelMultiplierResult.error);
+      setActiveTab('billing');
+      return;
+    }
+
+    await onSubmit?.({
+      ...formData,
+      channel: formData.channel || channelName,
+      name,
+      token,
+      apiKey,
+      modelMultipliers: modelMultiplierResult.payload
+    });
+  };
+
+  return renderModalPortal(
+    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 pt-12 backdrop-blur-sm animate-fade-in">
+      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
+              <KeyRound size={18} />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑凭证分组' : '添加凭证分组'}</h2>
+              <p className="mt-0.5 text-xs text-slate-500">渠道：{channelName || formData.channel || '-'}</p>
+            </div>
+          </div>
+          <Tooltip content="关闭">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              disabled={loading}
+              aria-label="关闭"
+            >
+              <XCircle size={18} />
+            </button>
+          </Tooltip>
+        </div>
+
+        <form className="max-h-[calc(100vh-8rem)] overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
+          <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+            <SegmentedTabs
+              tabs={CREDENTIAL_GROUP_FORM_TABS}
+              activeTab={activeTab}
+              onChange={setActiveTab}
+              disabled={loading}
+              className="grid-cols-2"
+              buttonPaddingClass="px-2"
+            />
+          </div>
+
+          <div className="px-6 py-5">
+            {(error || serverError) && (
+              <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {error || serverError}
+              </div>
+            )}
+
+            {activeTab === 'basic' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                    分组名称 <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    value={formData.name}
+                    onChange={(event) => updateField('name', event.target.value)}
+                    placeholder="例如：主账号 / 高倍率组"
+                    autoComplete="off"
+                    data-form-type="other"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    disabled={loading}
+                    autoFocus
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {renderSecretInput({
+                    label: 'Token',
+                    field: 'token',
+                    placeholder: 'sk-...',
+                    visible: showToken,
+                    setVisible: setShowToken
+                  })}
+                  {renderSecretInput({
+                    label: 'API Key',
+                    field: 'apiKey',
+                    placeholder: '可选 API Key',
+                    visible: showApiKey,
+                    setVisible: setShowApiKey
+                  })}
+                </div>
+
+                <div
+                  onClick={() => !loading && updateField('isDefault', !formData.isDefault)}
+                  className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
+                    formData.isDefault
+                      ? 'border-indigo-200 bg-indigo-50'
+                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
+                  } ${loading ? 'opacity-70' : ''}`}
+                  role="button"
+                  tabIndex={loading ? -1 : 0}
+                  onKeyDown={(event) => {
+                    if (loading) return;
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      updateField('isDefault', !formData.isDefault);
+                    }
+                  }}
+                >
+                  <span className={`text-sm font-medium ${formData.isDefault ? 'text-indigo-700' : 'text-slate-600'}`}>
+                    设为渠道默认分组
+                  </span>
+                  <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
+                    formData.isDefault ? 'bg-indigo-500' : 'bg-slate-300'
+                  }`}>
+                    <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      formData.isDefault ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'billing' && (
+              <div className="space-y-4">
+                <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">成本倍率</label>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
+                    <div key={field.name}>
+                      <label className="mb-1 block text-xs text-slate-500">{field.label}</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={formData[field.name]}
+                        onChange={(event) => updateField(field.name, event.target.value)}
+                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                        placeholder="1.0"
+                        disabled={loading}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-1 text-xs text-slate-400">成本倍率会作为该分组下 Claude 端点的默认计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
+                </div>
+
+                <ModelMultiplierEditor
+                  rows={formData.modelMultiplierRows}
+                  onChange={updateModelMultiplierRows}
+                  disabled={loading}
+                />
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
+              <Button type="button" variant="ghost" onClick={onClose} disabled={loading}>
+                取消
+              </Button>
+              <Button type="submit" variant="primary" loading={loading}>
+                {isEdit ? '保存分组' : '添加分组'}
+              </Button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
 // ============================================
 // 渠道卡片组件
 // ============================================
@@ -1362,21 +1708,72 @@ const ChannelCard = ({
   expanded = false,
   onToggleExpanded,
   onActivate,
-  onDeactivate,
   onPause,
   onResume,
   onAddEndpoint,
+  onAddCredentialGroup,
+  onEditCredentialGroup,
+  onDeleteCredentialGroup,
+  onSetDefaultCredentialGroup,
   onEditChannel,
   onDeleteChannel,
   onOpenEndpoint,
+  onActivateEndpoint,
   onToggleEndpointFailover,
   onToggleEndpointSkipHealthCheck, // 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
   manualRetryCount = 0,
+  credentialGroups = [],
   loading = false
 }) => {
-  const scopedEndpoints = endpoints.filter(e => e._health_scope !== false);
+  const [selectedCredentialGroupID, setSelectedCredentialGroupID] = useState(0);
+  const {
+    scrollRef: credentialGroupScrollRef,
+    isDragging: isCredentialGroupDragging,
+    scrollHandlers: credentialGroupScrollHandlers
+  } = useHorizontalScroll();
+  const groupActive = groupInfo?.active ?? groupInfo?.is_active;
+  const isActive = typeof groupActive === 'boolean'
+    ? groupActive
+    : activeChannelName === channelName;
+  const currentRouteEndpoint = pickCurrentRouteEndpoint(endpoints, isActive);
+  const defaultCredentialGroup = getDefaultClaudeCredentialGroup({ credentialGroups });
+  const activeEndpointGroupID = Number(
+    currentRouteEndpoint?.credentialGroupId ||
+    currentRouteEndpoint?.credential_group_id ||
+    0
+  );
+  const preferredCredentialGroupID = activeEndpointGroupID || Number(defaultCredentialGroup?.id || credentialGroups[0]?.id || 0);
+  const selectedCredentialGroup = credentialGroups.find((group) => Number(group.id) === Number(selectedCredentialGroupID)) ||
+    credentialGroups.find((group) => Number(group.id) === preferredCredentialGroupID) ||
+    defaultCredentialGroup ||
+    credentialGroups[0] ||
+    null;
+  const selectedCredentialGroupIDResolved = Number(selectedCredentialGroup?.id || 0);
+  const groupEndpointFilter = (endpoint) => {
+    if (credentialGroups.length === 0) return true;
+    const endpointGroupID = Number(endpoint?.credentialGroupId || endpoint?.credential_group_id || 0);
+    if (selectedCredentialGroupIDResolved > 0) {
+      if (selectedCredentialGroup?.isDefault || selectedCredentialGroup?.is_default) {
+        return endpointGroupID === selectedCredentialGroupIDResolved || endpointGroupID === 0;
+      }
+      return endpointGroupID === selectedCredentialGroupIDResolved;
+    }
+    return endpointGroupID === 0;
+  };
+  const groupEndpoints = endpoints.filter(groupEndpointFilter);
+
+  const isPaused = !!groupInfo?.paused;
+
+  // 渠道是否参与路由：
+  // - 仅渠道内转移时 → 只有活跃渠道参与
+  // - 渠道间转移时 → 未暂停的渠道参与
+  const channelParticipating = channelFailoverEnabled ? !isPaused : isActive;
+  const isUnclaimedChannel = !isActive && !channelFailoverEnabled;
+  const channelHealthInScope = channelParticipating;
+  const routeEndpoints = endpoints.filter(endpointParticipatesInFailover);
+  const scopedEndpoints = channelHealthInScope ? routeEndpoints.filter(e => e._health_scope !== false) : [];
   // 跳过检测的端点数
   const scopedSkippedCount = scopedEndpoints.filter(e => e.skipHealthCheck || e.skip_health_check).length;
   // 健康统计：跳过检测的端点视为健康
@@ -1385,11 +1782,9 @@ const ChannelCard = ({
 
   const totalCount = endpoints.length;
   const hasEndpoints = totalCount > 0;
+  const hasRouteEndpoints = routeEndpoints.length > 0;
   // 参与故障转移的端点数
-  const failoverEnabledCount = endpoints.filter(e => {
-    const isEnabled = isSqliteMode ? e.enabled : true;
-    return isEnabled && normalizeBool(e.failoverEnabled, true);
-  }).length;
+  const failoverEnabledCount = routeEndpoints.length;
 
   // 全部健康（含跳过检测视为健康）
   const allHealthy = hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === scopedTotalCount;
@@ -1403,16 +1798,6 @@ const ChannelCard = ({
     : 0;
   const hasManualRetry = manualRetryCountValue > 0;
 
-  const isActive = groupInfo?.active
-    ?? (isSqliteMode ? endpoints.some(e => e.enabled) : (activeChannelName === channelName));
-
-  const isPaused = !!groupInfo?.paused;
-
-  // 渠道是否参与路由：
-  // - 仅渠道内转移时 → 只有活跃渠道参与
-  // - 渠道间转移时 → 未暂停的渠道参与
-  const channelParticipating = channelFailoverEnabled ? !isPaused : isActive;
-
   // 端点标签显示逻辑：
   // - 渠道不参与路由 → 仅显示总数（灰色）
   // - 渠道参与路由且全部端点开启转移 → 仅显示总数（绿色）
@@ -1425,15 +1810,14 @@ const ChannelCard = ({
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
 
-  // 判断是否处于"全部失败"警示状态（用于渠道卡片内的提示框）：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
-  const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+  // 判断是否处于"全部失败"警示状态：渠道间故障转移关闭 + 活跃渠道 + 有端点 + 全部端点失败
+  const isAllEndpointsFailed = !channelFailoverEnabled && isActive && hasRouteEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
   const hasSuspendedRequests = suspendedRequestsCount > 0;
-  const showSuspendedPrompt = !channelFailoverEnabled && isActive && hasSuspendedRequests;
   const showRetryButton = isAllEndpointsFailed || (isActive && hasSuspendedRequests) || hasManualRetry;
   const showRetryOnInactive = hasManualRetry;
 
   // 判断当前活跃渠道是否所有端点都失败（用于边框颜色，不受 channelFailoverEnabled 影响）
-  const isActiveChannelAllFailed = isActive && hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
+  const isActiveChannelAllFailed = isActive && hasRouteEndpoints && scopedTotalCount > 0 && scopedHealthyCount === 0;
   const isActiveChannelInterrupted = isActive && (isActiveChannelAllFailed || hasManualRetry);
   const isActiveChannelSuspended = isActive && hasSuspendedRequests && !isActiveChannelInterrupted;
 
@@ -1447,15 +1831,15 @@ const ChannelCard = ({
 
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;
-  const visibleEndpoints = expanded ? endpoints : endpoints.slice(0, collapsedVisibleCount);
-  const hasMore = endpoints.length > collapsedVisibleCount;
+  const visibleEndpoints = expanded ? groupEndpoints : groupEndpoints.slice(0, collapsedVisibleCount);
+  const hasMore = groupEndpoints.length > collapsedVisibleCount;
 
-  const priorityValue = Number.isFinite(priority) ? Math.max(1, Math.floor(priority)) : null;
-  const hasValidPriority = priorityValue != null && priorityValue > 0 && priorityValue < 999;
+  const priorityValue = Number.isFinite(priority) ? Math.max(0, Math.floor(priority)) : null;
+  const hasValidPriority = priorityValue != null && priorityValue >= 0 && priorityValue < 999;
   const priorityLabel = hasValidPriority ? `P${priorityValue}` : 'P-';
   const priorityTone = !hasValidPriority
     ? 'bg-slate-50 text-slate-500 border-slate-200'
-    : priorityValue <= 1
+    : priorityValue <= 0
       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
       : priorityValue <= 3
         ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
@@ -1478,6 +1862,14 @@ const ChannelCard = ({
       : scopedHealthyCount > 0
         ? 'bg-amber-50 text-amber-800 border-amber-200'  // 部分健康 → 橙色
         : 'bg-rose-50 text-rose-700 border-rose-200';  // 全部失败 → 红色
+  const healthBadgeText = isUnclaimedChannel ? '未接管' : (hasEndpoints && scopedTotalCount === 0 ? '检测' : '健康');
+  const healthBadgeDetail = (() => {
+    if (isUnclaimedChannel) return '';
+    if (!hasEndpoints) return '-';
+    if (scopedTotalCount === 0) return '关闭';
+    if (allHealthy) return '';
+    return `${scopedHealthyCount}/${scopedTotalCount}`;
+  })();
 
   return (
     <div className={`
@@ -1486,181 +1878,169 @@ const ChannelCard = ({
       ${isActive ? activeHighlightClass : 'border-slate-200/70 hover:border-slate-300'}
     `} data-channel-card={channelName}>
       {/* 渠道头部 */}
-      <div className="px-4 py-3 border-b border-slate-100">
+      <div className="px-4 pt-3">
         <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 min-w-0">
-              {channelWebsite && (
-                <Tooltip content={channelWebsite}>
-                  <button
-                    type="button"
-                    className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-                    aria-label="打开渠道官网"
-                    onClick={() => openExternalURL(channelWebsite)}
-                  >
-                    <Globe size={14} />
-                  </button>
-                </Tooltip>
-              )}
-              <h2 className="truncate text-sm font-semibold tracking-tight text-slate-900 min-w-0">{channelName}</h2>
-              <span className={`inline-flex h-5 min-w-8 flex-shrink-0 items-center justify-center rounded-full border px-1.5 text-[10px] font-semibold leading-none whitespace-nowrap ${priorityTone}`}>
-                {priorityLabel}
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight text-slate-900">{channelName}</h2>
+            {isActive ? (
+              <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium tracking-tight ${
+                isActiveChannelInterrupted
+                  ? 'bg-rose-50 text-rose-700'
+                  : isActiveChannelSuspended
+                    ? 'bg-amber-50 text-amber-700'
+                    : 'bg-indigo-50 text-indigo-700'
+              }`}>
+                <span className={`h-1 w-1 rounded-full ${
+                  isActiveChannelInterrupted
+                    ? 'bg-rose-500'
+                    : isActiveChannelSuspended
+                      ? 'bg-amber-500'
+                      : 'bg-indigo-500'
+                }`} />
+                {isActiveChannelInterrupted ? '已中断' : isActiveChannelSuspended ? '挂起' : '当前接管'}
               </span>
-            </div>
+            ) : (
+              <span className="inline-flex flex-shrink-0 items-center rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-slate-500">
+                {channelFailoverEnabled ? '等待' : '未接管'}
+              </span>
+            )}
           </div>
 
           {/* 渠道操作 */}
-          <div className="flex items-center gap-0.5 flex-shrink-0">
-          {/* 非激活渠道按钮逻辑
-              - 开启渠道间转移 + 渠道已暂停：显示"激活"（仅激活，需先点恢复）
-              - 其他情况：显示"激活"
-          */}
-          {!isActive && isSqliteMode && hasEndpoints && (
-            <Tooltip content={
-              channelFailoverEnabled && isPaused
-                ? '请先点击"恢复"按钮取消暂停状态'
-                : (showRetryOnInactive ? '重试此渠道' : '激活此渠道')
-            }>
-              <button
-                type="button"
-                onClick={() => onActivate?.(channelName)}
-                disabled={loading || (channelFailoverEnabled && isPaused)}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors duration-150 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {showRetryOnInactive ? <RefreshCw size={12} /> : <Power size={12} />}
-                {showRetryOnInactive ? '重试' : '激活'}
-              </button>
-            </Tooltip>
-          )}
-          {isActive && isSqliteMode && (
-            showRetryButton ? (
-              <Tooltip content="重试当前渠道">
+          <div className="flex flex-shrink-0 items-center gap-0.5">
+            {/* 非激活渠道可手动设为当前；渠道间转移暂停态需先恢复 */}
+            {!isActive && isSqliteMode && hasEndpoints && (
+              <Tooltip content={
+                channelFailoverEnabled && isPaused
+                  ? '请先点击"恢复"按钮取消暂停状态'
+                  : (showRetryOnInactive ? '重试此渠道' : '设为当前接管渠道')
+              }>
                 <button
                   type="button"
                   onClick={() => onActivate?.(channelName)}
-                  disabled={loading}
+                  disabled={loading || (channelFailoverEnabled && isPaused)}
                   className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors duration-150 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <RefreshCw size={12} />
-                  重试
+                  {showRetryOnInactive ? <RefreshCw size={12} /> : <ArrowRightLeft size={12} />}
+                  {showRetryOnInactive ? '重试' : '设为当前'}
                 </button>
               </Tooltip>
-            ) : (
-              <Tooltip content="停用当前渠道">
+            )}
+            {isActive && isSqliteMode && showRetryButton && (
+                <Tooltip content="重试当前渠道">
+                  <button
+                    type="button"
+                    onClick={() => onActivate?.(channelName)}
+                    disabled={loading}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors duration-150 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} />
+                    重试
+                  </button>
+                </Tooltip>
+            )}
+            {/* 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
+            {channelFailoverEnabled && hasGroupInfo && !isPaused && (
+              <Tooltip content="暂停此渠道，使其不参与渠道间转移">
                 <button
                   type="button"
-                  onClick={() => onDeactivate?.(channelName)}
+                  onClick={() => onPause?.(channelName)}
                   disabled={loading}
-                  className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-600 transition-colors duration-150 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <Power size={12} />
-                  停用
+                  <Pause size={12} />
+                  暂停
                 </button>
               </Tooltip>
-            )
-          )}
-          {/* 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
-          {channelFailoverEnabled && hasGroupInfo && !isPaused && (
-            <Tooltip content="暂停此渠道，使其不参与渠道间转移">
-              <button
-                type="button"
-                onClick={() => onPause?.(channelName)}
-                disabled={loading}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Pause size={12} />
-                暂停
-              </button>
-            </Tooltip>
-          )}
-          {/* 恢复按钮仅在非活跃且已暂停时显示（活跃渠道一定是未暂停的） */}
-          {channelFailoverEnabled && hasGroupInfo && isPaused && !isActive && (
-            <Tooltip content="恢复此渠道，使其重新参与渠道间转移">
-              <button
-                type="button"
-                onClick={() => onResume?.(channelName)}
-                disabled={loading}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Play size={12} />
-                恢复
-              </button>
-            </Tooltip>
-          )}
-          {isSqliteMode && (
-            <Tooltip content="编辑渠道">
-              <button
-                type="button"
-                onClick={() => onEditChannel?.(channelName)}
-                disabled={loading}
-                className={`rounded-md p-1.5 transition-colors ${
-                  loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
-                }`}
-                aria-label="编辑渠道"
-              >
-                <Pencil size={14} />
-              </button>
-            </Tooltip>
-          )}
-          {isSqliteMode && (
-            <Tooltip content="删除渠道">
-              <button
-                type="button"
-                onClick={() => onDeleteChannel?.(channelName)}
-                disabled={loading}
-                className={`rounded-md p-1.5 transition-colors ${
-                  loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
-                }`}
-                aria-label="删除渠道"
-              >
-                <Trash2 size={14} />
-              </button>
-            </Tooltip>
-          )}
+            )}
+            {/* 恢复按钮仅在非活跃且已暂停时显示（活跃渠道一定是未暂停的） */}
+            {channelFailoverEnabled && hasGroupInfo && isPaused && !isActive && (
+              <Tooltip content="恢复此渠道，使其重新参与渠道间转移">
+                <button
+                  type="button"
+                  onClick={() => onResume?.(channelName)}
+                  disabled={loading}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Play size={12} />
+                  恢复
+                </button>
+              </Tooltip>
+            )}
+            {channelWebsite && (
+              <Tooltip content="打开渠道官网">
+                <button
+                  type="button"
+                  className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="打开渠道官网"
+                  onClick={() => openExternalURL(channelWebsite)}
+                >
+                  <Globe size={14} />
+                </button>
+              </Tooltip>
+            )}
+            {isSqliteMode && (
+              <Tooltip content="编辑渠道">
+                <button
+                  type="button"
+                  onClick={() => onEditChannel?.(channelName)}
+                  disabled={loading}
+                  className={`rounded-md p-1.5 transition-colors ${
+                    loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'
+                  }`}
+                  aria-label="编辑渠道"
+                >
+                  <Pencil size={14} />
+                </button>
+              </Tooltip>
+            )}
+            {isSqliteMode && (
+              <Tooltip content="删除渠道">
+                <button
+                  type="button"
+                  onClick={() => onDeleteChannel?.(channelName)}
+                  disabled={loading}
+                  className={`rounded-md p-1.5 transition-colors ${
+                    loading ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
+                  }`}
+                  aria-label="删除渠道"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </Tooltip>
+            )}
           </div>
         </div>
 
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] leading-4">
-          {isActive ? (
-            <span className={`inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-medium leading-none whitespace-nowrap ${
-              isActiveChannelInterrupted
-                ? 'bg-rose-50 text-rose-600 border-rose-100'
-                : isActiveChannelSuspended
-                  ? 'bg-amber-50 text-amber-700 border-amber-200'
-                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-            }`}>
-              {isActiveChannelInterrupted ? '已中断' : isActiveChannelSuspended ? '挂起' : '活跃'}
-            </span>
-          ) : (
-            <span className="inline-flex h-5 items-center rounded-full border border-slate-200 bg-slate-50 px-2 text-[10px] font-medium leading-none text-slate-500 whitespace-nowrap">
-              备用
-            </span>
-          )}
+        <div className="mt-3 -mx-4 flex flex-nowrap items-center gap-x-2.5 gap-y-1.5 overflow-hidden border-t border-slate-100 px-4 py-2 text-[11px]">
+          <span className={`${CHANNEL_META_BADGE_CLASS} min-w-[30px] flex-shrink-0 font-semibold ${priorityTone}`}>
+            {priorityLabel}
+          </span>
           {isPaused && channelFailoverEnabled && (
-            <span className="inline-flex h-5 items-center rounded-full border border-amber-200 bg-amber-50 px-2 text-[10px] font-medium leading-none text-amber-700 whitespace-nowrap">
+            <span className={`${CHANNEL_META_BADGE_CLASS} border-amber-200 bg-amber-50 text-amber-700`}>
               已暂停
             </span>
           )}
             {/* 冷却状态显示已移除 */}
           {isAllEndpointsFailed && (
-            <span className="inline-flex h-5 items-center rounded-full border border-rose-200 bg-rose-50 px-2 text-[10px] font-medium leading-none text-rose-600 whitespace-nowrap">
+            <span className={`${CHANNEL_META_BADGE_CLASS} border-rose-200 bg-rose-50 text-rose-600`}>
               全部失败
             </span>
           )}
           {hasManualRetry && (
-            <span className="inline-flex h-5 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 text-[10px] font-medium leading-none text-amber-700 whitespace-nowrap">
+            <span className={`${CHANNEL_META_BADGE_CLASS} gap-1 border-amber-200 bg-amber-50 text-amber-700`}>
               <RefreshCw size={10} />
               待重试 <span className="font-medium">{manualRetryCountValue}</span>
             </span>
           )}
           {!hasManualRetry && suspendedEndpointCount > 0 && (
-            <span className="inline-flex h-5 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 text-[10px] font-medium leading-none text-amber-700 whitespace-nowrap">
+            <span className={`${CHANNEL_META_BADGE_CLASS} gap-1 border-amber-200 bg-amber-50 text-amber-700`}>
               <Clock size={10} />
               挂起 <span className="font-medium">{suspendedEndpointCount}</span>
             </span>
           )}
 
-          <span className={`inline-flex h-5 items-center rounded-full border px-2 text-[10px] font-medium leading-none whitespace-nowrap ${
+          <span className={`${CHANNEL_META_BADGE_CLASS} ${
             endpointBadgeActive
               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
               : 'bg-slate-50 text-slate-600 border-slate-200'
@@ -1668,87 +2048,161 @@ const ChannelCard = ({
             端点 {showEndpointRatio ? `${failoverEnabledCount}/${totalCount}` : totalCount}
           </span>
           <Tooltip
-            content={hasEndpoints && scopedTotalCount === 0 ? '当前渠道不在健康检查范围（未参与故障转移/非活跃渠道）' : undefined}
-            disabled={!(hasEndpoints && scopedTotalCount === 0)}
+            content={
+              isUnclaimedChannel
+                ? '渠道间转移未开启，非当前接管渠道不参与健康检查'
+                : (hasEndpoints && scopedTotalCount === 0 ? '当前渠道不在健康检查范围（未参与故障转移/非活跃渠道）' : undefined)
+            }
+            disabled={!(isUnclaimedChannel || (hasEndpoints && scopedTotalCount === 0))}
           >
-            <span className={`inline-flex h-5 items-center gap-1 rounded-full border px-2 text-[10px] font-medium leading-none ${healthTone} whitespace-nowrap`}>
-              {hasEndpoints && scopedTotalCount === 0 ? '检测' : '健康'}{' '}
-              <span className="font-medium">
-                {!hasEndpoints
-                  ? '-'
-                  : scopedTotalCount === 0
-                    ? '关闭'
-                    : allHealthy
-                      ? ''
-                      : `${scopedHealthyCount}/${scopedTotalCount}`
-                }
-              </span>
+            <span className={`${CHANNEL_META_BADGE_CLASS} ${healthBadgeDetail ? 'gap-1' : ''} ${healthTone}`}>
+              <span className="leading-[20px]">{healthBadgeText}</span>
+              {healthBadgeDetail && (
+                <span className="font-medium leading-[20px]">{healthBadgeDetail}</span>
+              )}
             </span>
           </Tooltip>
         </div>
 
-        {/* 挂起等待提示（仅在活跃渠道显示） */}
-        {showSuspendedPrompt && (
-          <div className="mt-3 p-2.5 bg-purple-50/70 border border-purple-200 rounded-lg flex items-start gap-2">
-            <div className="p-1.5 bg-purple-100 rounded-full flex-shrink-0 animate-pulse">
-              <Clock className="w-3.5 h-3.5 text-purple-600" />
-            </div>
-            <div className="flex-1 text-xs text-purple-800">
-              <div className="font-medium">
-                {suspendedRequestsCount} 个请求正在等待端点恢复
-              </div>
-              <div className="text-[11px] text-purple-700 mt-0.5">
-                请求已挂起，点击「重试」按钮重新尝试当前渠道或激活其他渠道。
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 全部失败时的操作提示 */}
-        {isAllEndpointsFailed && (
-          <div className="mt-3 p-2.5 bg-rose-50/50 border border-rose-100 rounded-lg">
-            <p className="text-xs text-rose-600 mb-2">
-              当前渠道所有端点均不可用，请求将快速失败
-            </p>
-            <div className="flex items-center gap-2 text-[11px]">
-              <span className="text-slate-500">可选操作：</span>
-              <span className="px-2 py-0.5 bg-white border border-rose-200 rounded text-rose-600">
-                继续重试当前渠道
-              </span>
-              <span className="text-slate-400">或</span>
-              <span className="px-2 py-0.5 bg-white border border-indigo-200 rounded text-indigo-600">
-                手动切换其他渠道
-              </span>
-            </div>
-          </div>
-        )}
       </div>
+
+      {isSqliteMode && (
+        <div className="flex h-[64px] flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
+          <div className="flex h-4 items-center">
+            <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Credentials · {credentialGroups.length}
+            </span>
+          </div>
+          <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+            <div className="relative min-w-0 flex-1">
+              {credentialGroups.length > 1 && (
+                <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-5 bg-gradient-to-l from-white to-transparent" />
+              )}
+              <div
+                ref={credentialGroupScrollRef}
+                {...credentialGroupScrollHandlers}
+                className={`flex min-w-0 items-center gap-1.5 overflow-x-auto overflow-y-hidden pl-0.5 pr-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+                  isCredentialGroupDragging ? 'cursor-grabbing select-none' : 'cursor-grab'
+                }`}
+              >
+                {credentialGroups.length === 0 ? (
+                  <span className="truncate text-[11px] text-slate-400">暂无分组，将回退旧端点凭证。</span>
+                ) : credentialGroups.map((group) => {
+                  const groupIsDefault = group.isDefault || group.is_default;
+                  const groupIsSelected = Number(group.id) === selectedCredentialGroupIDResolved;
+                  return (
+                    <span
+                      key={group.id}
+                      className={`inline-flex h-6 max-w-[13rem] flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[11px] transition-colors ${
+                        groupIsSelected
+                          ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
+                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCredentialGroupID(Number(group.id) || 0)}
+                        title={group.name}
+                        className="inline-flex min-w-0 items-center gap-1 rounded-sm px-0.5 text-left focus:outline-none focus-visible:outline-none"
+                        disabled={loading}
+                      >
+                        <KeyRound
+                          size={11}
+                          className={
+                            groupIsSelected
+                              ? 'flex-shrink-0 text-indigo-500'
+                              : groupIsDefault
+                                ? 'flex-shrink-0 text-emerald-500'
+                                : 'flex-shrink-0 text-slate-400'
+                          }
+                        />
+                        <span className="max-w-[8rem] truncate font-medium">{group.name || '未命名分组'}</span>
+                        {groupIsDefault && <span className="flex-shrink-0 text-[10px] text-emerald-600">默认</span>}
+                      </button>
+                      {!groupIsDefault && (
+                        <Tooltip content="设为默认分组">
+                          <button
+                            type="button"
+                            onClick={() => onSetDefaultCredentialGroup?.(channelName, group)}
+                            className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-emerald-600 focus:outline-none focus-visible:outline-none"
+                            disabled={loading}
+                            aria-label="设为默认分组"
+                          >
+                            <CheckCircle2 size={10} />
+                          </button>
+                        </Tooltip>
+                      )}
+                      <Tooltip content="编辑分组">
+                        <button
+                          type="button"
+                          onClick={() => onEditCredentialGroup?.(channelName, group)}
+                          className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-indigo-600 focus:outline-none focus-visible:outline-none"
+                          disabled={loading}
+                          aria-label="编辑分组"
+                        >
+                          <Pencil size={10} />
+                        </button>
+                      </Tooltip>
+                      {!groupIsDefault && (
+                        <Tooltip content="删除分组">
+                          <button
+                            type="button"
+                            onClick={() => onDeleteCredentialGroup?.(channelName, group)}
+                            className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-rose-600 focus:outline-none focus-visible:outline-none"
+                            disabled={loading}
+                            aria-label="删除分组"
+                          >
+                            <Trash2 size={10} />
+                          </button>
+                        </Tooltip>
+                      )}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="h-5 w-px flex-shrink-0 bg-slate-200/80" />
+            <button
+              type="button"
+              onClick={() => onAddCredentialGroup?.(channelName)}
+              disabled={loading}
+              className="inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Plus size={12} />
+              添加分组
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 端点子列表 */}
       <div className="border-t border-slate-100 bg-slate-50/30">
         <div className="flex items-center justify-between px-4 py-1.5">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            <span>Endpoints · {endpoints.length}</span>
+            <span>Endpoints · {groupEndpoints.length}</span>
+            {selectedCredentialGroup && (
+              <span className="max-w-[9rem] truncate normal-case tracking-normal text-slate-500">
+                {selectedCredentialGroup.name}
+              </span>
+            )}
             {hasMore && (
-              <Tooltip content={expanded ? '收起端点列表' : '展开全部端点'}>
-                <button
-                  type="button"
-                  onClick={() => onToggleExpanded?.()}
-                  className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
-                >
-                  {expanded ? '收起' : `展开 ${endpoints.length - collapsedVisibleCount} 个`}
-                  <ChevronDown
-                    size={11}
-                    className={`transition-transform duration-200 ease-out ${expanded ? 'rotate-180' : ''}`}
-                  />
-                </button>
-              </Tooltip>
+              <button
+                type="button"
+                onClick={() => onToggleExpanded?.()}
+                className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
+              >
+                {expanded ? '收起' : `展开 ${groupEndpoints.length - collapsedVisibleCount} 个`}
+                <ChevronDown
+                  size={11}
+                  className={`transition-transform duration-200 ease-out ${expanded ? 'rotate-180' : ''}`}
+                />
+              </button>
             )}
           </div>
           {isSqliteMode && (
             <button
               type="button"
-              onClick={() => onAddEndpoint?.(channelName)}
+              onClick={() => onAddEndpoint?.(channelName, selectedCredentialGroup)}
               disabled={loading}
               className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -1760,18 +2214,21 @@ const ChannelCard = ({
 
         {visibleEndpoints.length === 0 ? (
           <div className="border-t border-slate-100 bg-white px-4 py-6 text-center text-[11px] text-slate-400">
-            暂无端点
+            {selectedCredentialGroup ? '当前凭证分组暂无端点' : '暂无端点'}
           </div>
         ) : (
           <div className="border-t border-slate-100 bg-white">
             {visibleEndpoints.map((endpoint, index) => (
               <EndpointMiniCard
-                key={endpoint.name || index}
+                key={endpoint.id || endpoint._id || `${channelName}-endpoint-${index}`}
                 endpoint={endpoint}
                 isActiveChannel={isActive}
                 isSqliteMode={isSqliteMode}
+                isCurrentEndpoint={isSameEndpoint(endpoint, currentRouteEndpoint)}
+                healthInScope={channelHealthInScope}
                 channelFailoverEnabled={channelFailoverEnabled}
                 onOpen={onOpenEndpoint}
+                onActivateEndpoint={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
                 onToggleSkipHealthCheck={onToggleEndpointSkipHealthCheck}
                 onEdit={onEditEndpoint}
@@ -1837,17 +2294,24 @@ const ChannelsPage = () => {
   const [editingChannel, setEditingChannel] = useState(null);
   const [editingEndpoint, setEditingEndpoint] = useState(null);
   const [defaultChannel, setDefaultChannel] = useState('');
+  const [defaultCredentialGroupId, setDefaultCredentialGroupId] = useState(0);
   const [lockChannel, setLockChannel] = useState(false);
   const [formLoading, setFormLoading] = useState(false);
   const [channelFormLoading, setChannelFormLoading] = useState(false);
+  const [showCredentialGroupForm, setShowCredentialGroupForm] = useState(false);
+  const [credentialGroupFormMode, setCredentialGroupFormMode] = useState('create');
+  const [credentialGroupFormChannel, setCredentialGroupFormChannel] = useState('');
+  const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
+  const [credentialGroupFormLoading, setCredentialGroupFormLoading] = useState(false);
+  const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
 
   // 删除确认状态
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteChannelTarget, setDeleteChannelTarget] = useState(null);
   const [deleteChannelLoading, setDeleteChannelLoading] = useState(false);
-  const [deactivateChannelTarget, setDeactivateChannelTarget] = useState(null);
-  const [deactivateChannelLoading, setDeactivateChannelLoading] = useState(false);
+  const [deleteCredentialGroupTarget, setDeleteCredentialGroupTarget] = useState(null);
+  const [deleteCredentialGroupLoading, setDeleteCredentialGroupLoading] = useState(false);
   const [pauseActiveChannelTarget, setPauseActiveChannelTarget] = useState(null);
   const [actionError, setActionError] = useState('');
 
@@ -1940,15 +2404,28 @@ const ChannelsPage = () => {
   const loadConfig = useCallback(async () => {
     const seq = ++configLoadSeqRef.current;
     try {
-      const cfg = await getConfig();
+      const [cfg, interChannelEnabled, failoverSettings] = await Promise.all([
+        getConfig(),
+        isInterChannelFailoverEnabled().catch(() => undefined),
+        getSettingsByCategory('failover').catch(() => [])
+      ]);
       if (seq !== configLoadSeqRef.current) return;
-      setChannelFailoverEnabled(cfg?.failover_enabled !== false);
+      const settingsFailoverEnabled = parseSettingsBool(
+        (failoverSettings || []).find(setting => setting?.key === 'enabled')?.value
+      );
+      const configFailoverEnabled = cfg?.failover_enabled ?? cfg?.failoverEnabled;
+      const resolvedFailoverEnabled = typeof settingsFailoverEnabled === 'boolean'
+        ? settingsFailoverEnabled
+        : (typeof interChannelEnabled === 'boolean'
+            ? interChannelEnabled
+            : (typeof configFailoverEnabled === 'boolean' ? configFailoverEnabled : false));
+      setChannelFailoverEnabled(resolvedFailoverEnabled);
       setGlobalTimeoutSeconds(Number(cfg?.global_timeout_seconds ?? cfg?.globalTimeoutSeconds ?? 300) || 300);
       // cooldownSeconds 加载已移除
     } catch (err) {
       console.error('获取配置失败:', err);
       if (seq !== configLoadSeqRef.current) return;
-      setChannelFailoverEnabled(true);
+      setChannelFailoverEnabled(false);
       setGlobalTimeoutSeconds(300);
     }
   }, []);
@@ -1990,6 +2467,23 @@ const ChannelsPage = () => {
       setChannelActionLoading(false);
     }
   }, [loadGroups, loadStorageStatus]);
+
+  const handleActivateEndpoint = useCallback(async (endpoint) => {
+    if (!endpoint?.id) return;
+    try {
+      setChannelActionLoading(true);
+      setActionError('');
+      await activateEndpointRecordByID(endpoint.id);
+      await loadStorageStatus();
+      await loadGroups();
+      await loadChannelsMeta();
+    } catch (err) {
+      console.error('切换当前路由端点失败:', err);
+      setActionError(`切换失败: ${getErrorMessage(err, '未知错误')}`);
+    } finally {
+      setChannelActionLoading(false);
+    }
+  }, [loadChannelsMeta, loadGroups, loadStorageStatus]);
 
   // 跳过健康检测快捷开关处理函数
   const handleToggleEndpointSkipHealthCheck = useCallback(async (endpoint, skip) => {
@@ -2053,6 +2547,7 @@ const ChannelsPage = () => {
       // 只在 SQLite 模式下刷新数据
       if (isSqliteModeRef.current) {
         console.log('📡 [Channels] 收到端点更新事件，刷新 SQLite 数据');
+        loadConfig();
         loadStorageStatus();
         loadGroups();
         loadChannelsMeta();
@@ -2064,7 +2559,7 @@ const ChannelsPage = () => {
         unsubscribe();
       }
     };
-  }, [loadChannelsMeta, loadGroups, loadStorageStatus]);
+  }, [loadChannelsMeta, loadConfig, loadGroups, loadStorageStatus]);
 
   // 批量健康检测处理
   const handleBatchHealthCheck = async () => {
@@ -2117,13 +2612,14 @@ const ChannelsPage = () => {
     };
   }, [expandedChannelName]);
 
-  // SQLite 模式下“enabled”语义为“激活渠道”，会同时启用该渠道下所有端点
   const activeChannel = useMemo(() => {
+    const activeGroup = groups.find(g => g.active);
+    if (activeGroup?.name) return activeGroup.name;
+
     if (isSqliteMode) {
       return storageEndpoints.find(e => e.enabled)?.channel || '';
     }
-    const activeGroup = groups.find(g => g.active);
-    if (activeGroup?.name) return activeGroup.name;
+
     // 兜底：从端点数据推断（避免 groups 加载失败时 UI 空白）
     const inferred = displayEndpoints.find(e => e.group_is_active)?.group
       || displayEndpoints.find(e => e.group_is_active)?.channel
@@ -2144,6 +2640,17 @@ const ChannelsPage = () => {
     displayEndpoints.forEach((e) => add(e.group || e.channel || ''));
     return ordered;
   }, [channelsMeta, displayEndpoints]);
+
+  const credentialGroupsByChannel = useMemo(() => {
+    const map = {};
+    channelsMeta.forEach((channel) => {
+      const name = channel?.name || '';
+      if (name) {
+        map[name] = getClaudeCredentialGroups(channel);
+      }
+    });
+    return map;
+  }, [channelsMeta]);
 
   const groupInfoMap = useMemo(() => {
     const map = new Map();
@@ -2327,11 +2834,7 @@ const ChannelsPage = () => {
       tooltip: String(displayStats.unchecked),
       subText: '未纳入当前检测范围',
       icon: ShieldOff,
-      statusColor: 'bg-slate-100 text-slate-500',
-      size: 'lg',
-      iconSize: 15,
-      iconContainerClassName: 'rounded-md p-1.5',
-      titleClassName: 'normal-case whitespace-nowrap tracking-[-0.02em] text-[10px]'
+      statusColor: 'bg-slate-100 text-slate-500'
     }
   ];
 
@@ -2394,6 +2897,107 @@ const ChannelsPage = () => {
     }
   }, [loadChannelsMeta, loadGroups]);
 
+  const openCreateCredentialGroupForm = useCallback((channelName) => {
+    const name = String(channelName || '').trim();
+    if (!name) return;
+    setCredentialGroupFormMode('create');
+    setCredentialGroupFormChannel(name);
+    setEditingCredentialGroup(null);
+    setCredentialGroupFormError('');
+    setShowCredentialGroupForm(true);
+  }, []);
+
+  const openEditCredentialGroupForm = useCallback((channelName, group) => {
+    const name = String(channelName || group?.channel || '').trim();
+    if (!name || !group) return;
+    setCredentialGroupFormMode('edit');
+    setCredentialGroupFormChannel(name);
+    setEditingCredentialGroup(group);
+    setCredentialGroupFormError('');
+    setShowCredentialGroupForm(true);
+  }, []);
+
+  const closeCredentialGroupForm = useCallback(() => {
+    setShowCredentialGroupForm(false);
+    setCredentialGroupFormChannel('');
+    setEditingCredentialGroup(null);
+    setCredentialGroupFormError('');
+  }, []);
+
+  const handleSaveCredentialGroup = useCallback(async (payload) => {
+    try {
+      setCredentialGroupFormLoading(true);
+      setCredentialGroupFormError('');
+      if (credentialGroupFormMode === 'edit' && editingCredentialGroup?.id) {
+        await updateClaudeCredentialGroupByID(editingCredentialGroup.id, payload);
+      } else {
+        await createClaudeCredentialGroup({
+          ...payload,
+          channel: credentialGroupFormChannel
+        });
+      }
+      closeCredentialGroupForm();
+      await loadStorageStatus();
+      await loadChannelsMeta();
+      await loadGroups();
+    } catch (err) {
+      console.error('保存凭证分组失败:', err);
+      setCredentialGroupFormError(getErrorMessage(err, '保存凭证分组失败'));
+    } finally {
+      setCredentialGroupFormLoading(false);
+    }
+  }, [
+    closeCredentialGroupForm,
+    credentialGroupFormChannel,
+    credentialGroupFormMode,
+    editingCredentialGroup,
+    loadChannelsMeta,
+    loadGroups,
+    loadStorageStatus
+  ]);
+
+  const handleSetDefaultCredentialGroup = useCallback(async (_channelName, group) => {
+    if (!group?.id) return;
+    try {
+      setChannelActionLoading(true);
+      await setDefaultClaudeCredentialGroup(group.id);
+      await loadStorageStatus();
+      await loadChannelsMeta();
+      await loadGroups();
+    } catch (err) {
+      console.error('设置默认凭证分组失败:', err);
+      setActionError(`设置默认分组失败: ${getErrorMessage(err, '未知错误')}`);
+    } finally {
+      setChannelActionLoading(false);
+    }
+  }, [loadChannelsMeta, loadGroups, loadStorageStatus]);
+
+  const handleDeleteCredentialGroup = useCallback((channelName, group) => {
+    if (!group?.id) return;
+    setDeleteCredentialGroupTarget({
+      channelName,
+      group
+    });
+  }, []);
+
+  const handleConfirmDeleteCredentialGroup = useCallback(async () => {
+    const target = deleteCredentialGroupTarget;
+    if (!target?.group?.id) return;
+    try {
+      setDeleteCredentialGroupLoading(true);
+      await deleteClaudeCredentialGroupByID(target.group.id);
+      setDeleteCredentialGroupTarget(null);
+      await loadStorageStatus();
+      await loadChannelsMeta();
+      await loadGroups();
+    } catch (err) {
+      console.error('删除凭证分组失败:', err);
+      setActionError(`删除凭证分组失败: ${getErrorMessage(err, '未知错误')}`);
+    } finally {
+      setDeleteCredentialGroupLoading(false);
+    }
+  }, [deleteCredentialGroupTarget, loadChannelsMeta, loadGroups, loadStorageStatus]);
+
   // 编辑端点
   const handleEdit = (endpoint) => {
     setEditingEndpoint(endpoint);
@@ -2427,6 +3031,7 @@ const ChannelsPage = () => {
       setShowForm(false);
       setEditingEndpoint(null);
       setDefaultChannel('');
+      setDefaultCredentialGroupId(0);
       setLockChannel(false);
       // 刷新列表
       await loadStorageStatus();
@@ -2457,27 +3062,6 @@ const ChannelsPage = () => {
       setDeleteLoading(false);
     }
   };
-
-  const performDeactivateChannel = useCallback(async (channelName) => {
-    if (!isSqliteMode) return;
-
-    try {
-      setDeactivateChannelLoading(true);
-      setActionError('');
-
-      const representativeId = storageEndpoints.find(e => e.channel === channelName)?.id;
-      if (!representativeId) throw new Error('未找到可用于停用的端点记录');
-
-      await toggleEndpointRecordByID(representativeId, false);
-      await loadStorageStatus();
-      await loadGroups();
-    } catch (err) {
-      console.error('停用渠道失败:', err);
-      setActionError(`停用失败: ${getErrorMessage(err, '未知错误')}`);
-    } finally {
-      setDeactivateChannelLoading(false);
-    }
-  }, [isSqliteMode, loadGroups, loadStorageStatus, storageEndpoints]);
 
   // 错误状态
   if (error && !isSqliteMode) {
@@ -2540,6 +3124,7 @@ const ChannelsPage = () => {
                 await refresh();
               }
               await loadGroups();
+              await loadChannelsMeta();
             }}
             loading={loading}
           >
@@ -2687,12 +3272,14 @@ const ChannelsPage = () => {
               channelFailoverEnabled={channelFailoverEnabled}
               suspendedRequestsCount={suspendedRequestsCount}
               manualRetryCount={manualRetryChannelCounts?.[section.name] ?? 0}
+              credentialGroups={credentialGroupsByChannel[section.name] || []}
               expanded={expandedChannelName === section.name}
               onToggleExpanded={() => {
                 setExpandedChannelName((prev) => (prev === section.name ? '' : section.name));
               }}
-              loading={channelActionLoading || deactivateChannelLoading}
+              loading={channelActionLoading}
               onOpenEndpoint={openEndpointDetail}
+              onActivateEndpoint={isSqliteMode ? handleActivateEndpoint : undefined}
               onToggleEndpointFailover={isSqliteMode ? handleToggleEndpointFailover : undefined}
               onToggleEndpointSkipHealthCheck={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
               onActivate={async (channelName) => {
@@ -2715,16 +3302,6 @@ const ChannelsPage = () => {
                 } finally {
                   setChannelActionLoading(false);
                 }
-              }}
-              onDeactivate={async (channelName) => {
-                if (!isSqliteMode) return;
-
-                const needConfirm = !channelFailoverEnabled || channelSections.length <= 1;
-                if (needConfirm) {
-                  setDeactivateChannelTarget({ name: channelName });
-                  return;
-                }
-                await performDeactivateChannel(channelName);
               }}
               onPause={async (channelName) => {
                 if (channelFailoverEnabled && section.groupInfo?.active) {
@@ -2765,8 +3342,13 @@ const ChannelsPage = () => {
                   setChannelActionLoading(false);
                 }
               }}
-              onAddEndpoint={(channelName) => {
+              onAddCredentialGroup={openCreateCredentialGroupForm}
+              onEditCredentialGroup={openEditCredentialGroupForm}
+              onDeleteCredentialGroup={handleDeleteCredentialGroup}
+              onSetDefaultCredentialGroup={handleSetDefaultCredentialGroup}
+              onAddEndpoint={(channelName, credentialGroup = null) => {
                 setDefaultChannel(channelName);
+                setDefaultCredentialGroupId(Number(credentialGroup?.id || 0) || 0);
                 setLockChannel(true);
                 handleCreate();
               }}
@@ -2775,6 +3357,7 @@ const ChannelsPage = () => {
               onEditEndpoint={(ep) => {
                 closeEndpointDetail();
                 setDefaultChannel('');
+                setDefaultCredentialGroupId(0);
                 setLockChannel(false);
                 handleEdit(ep);
               }}
@@ -2793,13 +3376,16 @@ const ChannelsPage = () => {
           endpoint={editingEndpoint}
           channels={channelOptions}
           existingEndpoints={isSqliteMode ? storageEndpoints : []}
+          credentialGroupsByChannel={credentialGroupsByChannel}
           defaultChannel={defaultChannel}
+          defaultCredentialGroupId={defaultCredentialGroupId}
           lockChannel={lockChannel}
           onSave={handleSave}
           onCancel={() => {
             setShowForm(false);
             setEditingEndpoint(null);
             setDefaultChannel('');
+            setDefaultCredentialGroupId(0);
             setLockChannel(false);
           }}
           loading={formLoading}
@@ -2831,6 +3417,19 @@ const ChannelsPage = () => {
         />
       )}
 
+      {showCredentialGroupForm && isSqliteMode && (
+        <ClaudeCredentialGroupFormModal
+          open
+          mode={credentialGroupFormMode}
+          channelName={credentialGroupFormChannel}
+          group={editingCredentialGroup}
+          loading={credentialGroupFormLoading}
+          serverError={credentialGroupFormError}
+          onClose={closeCredentialGroupForm}
+          onSubmit={handleSaveCredentialGroup}
+        />
+      )}
+
       {/* 删除确认弹窗 */}
       {deleteTarget && (
         <DeleteConfirmDialog
@@ -2838,6 +3437,16 @@ const ChannelsPage = () => {
           onConfirm={handleConfirmDelete}
           onCancel={() => setDeleteTarget(null)}
           loading={deleteLoading}
+        />
+      )}
+
+      {deleteCredentialGroupTarget && (
+        <DeleteCredentialGroupConfirmDialog
+          channelName={deleteCredentialGroupTarget.channelName}
+          group={deleteCredentialGroupTarget.group}
+          loading={deleteCredentialGroupLoading}
+          onCancel={() => setDeleteCredentialGroupTarget(null)}
+          onConfirm={handleConfirmDeleteCredentialGroup}
         />
       )}
 
@@ -2861,19 +3470,6 @@ const ChannelsPage = () => {
             } finally {
               setDeleteChannelLoading(false);
             }
-          }}
-        />
-      )}
-
-      {deactivateChannelTarget?.name && (
-        <DeactivateChannelConfirmDialog
-          channelName={deactivateChannelTarget.name}
-          loading={deactivateChannelLoading}
-          onCancel={() => setDeactivateChannelTarget(null)}
-          onConfirm={async () => {
-            const name = deactivateChannelTarget.name;
-            setDeactivateChannelTarget(null);
-            await performDeactivateChannel(name);
           }}
         />
       )}
@@ -2941,6 +3537,7 @@ const ChannelsPage = () => {
         onEdit={(ep) => {
           closeEndpointDetail();
           setDefaultChannel('');
+          setDefaultCredentialGroupId(0);
           setLockChannel(false);
           handleEdit(ep);
         }}

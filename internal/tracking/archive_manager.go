@@ -569,7 +569,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			original_model_name, model_rewrite_source, model_rewrite_target,
 			status, http_status_code, retry_count,
 			failure_reason, cancel_reason,
-			is_streaming, provider,
+			is_streaming, provider, privacy_redacted, privacy_redaction_summary, privacy_redaction_matches,
 			input_tokens, output_tokens,
 			reasoning_tokens, billable_output_tokens, billing_output_token_source,
 			cache_creation_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens,
@@ -580,7 +580,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
 			model_cost_multiplier, model_input_cost_multiplier, model_output_cost_multiplier, model_cache_read_cost_multiplier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(request_id) DO UPDATE SET
 			end_time = excluded.end_time,
 			duration_ms = excluded.duration_ms,
@@ -598,6 +598,9 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cancel_reason = excluded.cancel_reason,
 			is_streaming = excluded.is_streaming,
 			provider = excluded.provider,
+			privacy_redacted = excluded.privacy_redacted,
+			privacy_redaction_summary = excluded.privacy_redaction_summary,
+			privacy_redaction_matches = excluded.privacy_redaction_matches,
 			input_tokens = excluded.input_tokens,
 			output_tokens = excluded.output_tokens,
 			reasoning_tokens = excluded.reasoning_tokens,
@@ -680,6 +683,9 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			nullString(req.CancelReason),
 			req.IsStreaming,
 			defaultProvider(req.Provider),
+			req.PrivacyRedacted,
+			nullString(req.PrivacySummary),
+			nullString(req.PrivacyMatches),
 			req.InputTokens,
 			req.OutputTokens,
 			req.ReasoningTokens,

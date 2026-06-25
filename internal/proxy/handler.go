@@ -13,6 +13,7 @@ import (
 	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/events"
 	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/proxy/handlers"
 	"ai-relay-forwarder/internal/proxy/response"
 	"ai-relay-forwarder/internal/tracking"
@@ -35,6 +36,7 @@ type Handler struct {
 	forwarder            *handlers.Forwarder
 	regularHandler       *handlers.RegularHandler
 	streamingHandler     *handlers.StreamingHandler
+	privacyService       *privacy.Service
 	eventBus             events.EventBus // EventBus事件总线
 	// 🔧 [Critical修复] 保存共享的SuspensionManager实例的引用
 	// 确保在SetUsageTracker中重建Handler时保持共享状态
@@ -134,6 +136,16 @@ func NewHandler(endpointManager *endpoint.Manager, cfg *config.Config) *Handler 
 	return h
 }
 
+func (h *Handler) SetPrivacyService(service *privacy.Service) {
+	h.privacyService = service
+	if h.regularHandler != nil {
+		h.regularHandler.SetPrivacyRedactor(service)
+	}
+	if h.streamingHandler != nil {
+		h.streamingHandler.SetPrivacyRedactor(service)
+	}
+}
+
 // SetMonitoringMiddleware 设置监控中间件用于重试跟踪
 func (h *Handler) SetMonitoringMiddleware(mm *middleware.MonitoringMiddleware) {
 	h.monitoringMiddleware = mm
@@ -187,6 +199,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 			// 🔧 [Critical修复] 使用保存的共享SuspensionManager实例
 			h.sharedSuspensionManager,
 		)
+		h.regularHandler.SetPrivacyRedactor(h.privacyService)
 	}
 
 	// 重新创建streamingHandler以包含usageTracker
@@ -207,6 +220,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 			// 🔧 [Critical修复] 使用保存的共享SuspensionManager实例
 			h.sharedSuspensionManager,
 		)
+		h.streamingHandler.SetPrivacyRedactor(h.privacyService)
 	}
 
 	// 注意：h.tokenAnalyzer 已经在方法开头更新
@@ -253,6 +267,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/messages/count_tokens" && h.config.TokenCounting.Enabled {
 		ctx := r.Context()
 		connID, _ := r.Context().Value("conn_id").(string)
+		lifecycleManager := NewRequestLifecycleManagerWithRecoverySignal(h.usageTracker, h.monitoringMiddleware, connID, h.eventBus, h.recoverySignalManager)
 
 		// 读取请求体
 		var bodyBytes []byte
@@ -267,9 +282,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			r.Body.Close()
 		}
 
+		lifecycleManager.StartRequest(r.RemoteAddr, r.Header.Get("User-Agent"), r.Method, r.URL.Path, false)
+
 		// 使用CountTokensHandler处理
-		countTokensHandler := handlers.NewCountTokensHandler(h.config, h.endpointManager, h.forwarder)
-		countTokensHandler.Handle(ctx, w, r, bodyBytes, connID)
+		countTokensHandler := handlers.NewCountTokensHandler(h.config, h.endpointManager, h.forwarder, h.privacyService)
+		countTokensHandler.Handle(ctx, w, r, bodyBytes, connID, lifecycleManager)
 		return
 	}
 

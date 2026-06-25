@@ -6,7 +6,7 @@ timezone: "Asia/Shanghai"      # 全局时区设置，默认: Asia/Shanghai
                                # 其他有效值: "UTC", "America/New_York", "Europe/London" 等
 # 日志配置
 logging:
-  level: "debug"         # 日志级别: debug, info, warn, error，默认: info (生产构建自动覆盖为 info)
+  level: "info"          # 日志级别: debug, info, warn, error，默认: info
   format: "text"         # 日志格式: "json" 或 "text"，默认: text
 
   # 文件日志配置 (可选)

@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -25,59 +27,77 @@ type ServerConfig struct {
 	SuspensionMgr *SuspensionManager    // 请求挂起队列（nil 时不启用挂起）
 }
 
+// HTTPHandler 是可热更新 logger 的 Codex HTTP 处理器。
+type HTTPHandler struct {
+	handler *Handler
+	logger  *slog.Logger
+	mu      sync.RWMutex
+}
+
 // NewHTTPHandler 创建完整的 HTTP handler（含中间件）
 // 中间件链: recovery → logging → handler
-func NewHTTPHandler(manager *EndpointManager, cfg ServerConfig, logger *slog.Logger, usageTracker *tracking.UsageTracker) http.Handler {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	// 所有 Codex 代理日志附加 provider=codex，用于文件分流
-	logger = logger.With("provider", "codex")
-
+func NewHTTPHandler(manager *EndpointManager, cfg ServerConfig, logger *slog.Logger, usageTracker *tracking.UsageTracker, privacyService ...*privacy.Service) *HTTPHandler {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
 
-	handler := NewHandler(manager, timeout, cfg.Retry, cfg.Failover, cfg.SuspensionMgr, logger, usageTracker)
-
-	// 包装 logging 中间件
-	logged := loggingMiddleware(handler, logger)
-
-	// 包装 recovery 中间件
-	return recoveryMiddleware(logged, logger)
+	handler := NewHandler(manager, timeout, cfg.Retry, cfg.Failover, cfg.SuspensionMgr, logger, usageTracker, privacyService...)
+	httpHandler := &HTTPHandler{handler: handler}
+	httpHandler.UpdateLogger(logger)
+	return httpHandler
 }
 
-// loggingMiddleware 请求日志中间件
-func loggingMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		logger.Info("Codex 代理收到请求",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"remote", r.RemoteAddr,
-		)
-		next.ServeHTTP(w, r)
-		logger.Info("Codex 代理请求完成",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"duration_ms", time.Since(start).Milliseconds(),
-		)
-	})
+// UpdateLogger 更新 Codex HTTP handler 及其内部转发器使用的 logger。
+func (h *HTTPHandler) UpdateLogger(logger *slog.Logger) {
+	codexLogger := normalizeCodexLogger(logger)
+
+	h.mu.Lock()
+	h.logger = codexLogger
+	h.mu.Unlock()
+
+	if h.handler != nil {
+		h.handler.UpdateLogger(logger)
+	}
 }
 
-// recoveryMiddleware panic 恢复中间件
-func recoveryMiddleware(next http.Handler, logger *slog.Logger) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				logger.Error("Codex 代理 panic 恢复",
-					"panic", fmt.Sprintf("%v", rec),
-					"stack", string(debug.Stack()),
-				)
-				http.Error(w, `{"error":{"message":"internal server error","type":"proxy_error"}}`, http.StatusInternalServerError)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+func (h *HTTPHandler) currentLogger() *slog.Logger {
+	h.mu.RLock()
+	logger := h.logger
+	h.mu.RUnlock()
+	if logger == nil {
+		return normalizeCodexLogger(nil)
+	}
+	return logger
+}
+
+// ServeHTTP 执行 Codex 代理请求日志、panic 恢复和实际转发。
+func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logger := h.currentLogger()
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.Error("Codex 代理 panic 恢复",
+				"panic", fmt.Sprintf("%v", rec),
+				"stack", string(debug.Stack()),
+			)
+			http.Error(w, `{"error":{"message":"internal server error","type":"proxy_error"}}`, http.StatusInternalServerError)
+		}
+	}()
+
+	start := time.Now()
+	logger.Info("Codex 代理收到请求",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"remote", r.RemoteAddr,
+	)
+	if h.handler == nil {
+		http.Error(w, `{"error":{"message":"codex handler unavailable","type":"proxy_error"}}`, http.StatusServiceUnavailable)
+		return
+	}
+	h.handler.ServeHTTP(w, r)
+	logger.Info("Codex 代理请求完成",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 }

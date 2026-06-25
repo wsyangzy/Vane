@@ -32,8 +32,11 @@ type ActiveRequest struct {
 	OriginalModelName  string `json:"original_model_name"`  // 改写前的原始请求模型
 	ModelRewriteSource string `json:"model_rewrite_source"` // 模型改写来源：mapping/channel_model
 	ModelRewriteTarget string `json:"model_rewrite_target"` // 改写后的目标模型
-	FailureReason      string `json:"failure_reason"`       // 失败原因
-	CancelReason       string `json:"cancel_reason"`        // 取消原因
+	PrivacyRedacted    bool   `json:"privacy_redacted"`     // 请求体发送上游前是否已脱敏
+	PrivacySummary     string `json:"privacy_redaction_summary"`
+	PrivacyMatches     string `json:"privacy_redaction_matches"` // 本机展示用命中明细（含原文与替换值）
+	FailureReason      string `json:"failure_reason"`            // 失败原因
+	CancelReason       string `json:"cancel_reason"`             // 取消原因
 
 	// Token 累积（流式请求实时更新）
 	InputTokens              int64  `json:"input_tokens"`

@@ -54,6 +54,14 @@ func NewStreamingForwarder(logger *slog.Logger) *Forwarder {
 	}
 }
 
+// UpdateLogger updates the logger used by the forwarder.
+func (f *Forwarder) UpdateLogger(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	f.logger = logger
+}
+
 // Forward 将请求转发到指定端点
 func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoint) (*http.Response, error) {
 	// 构建目标 URL

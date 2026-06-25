@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"ai-relay-forwarder/internal/store"
 )
+
+var codexChannelNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} _-]{0,63}$`)
 
 // CodexChannelService 管理 Codex 渠道（共用配置层）。
 type CodexChannelService struct {
@@ -176,15 +179,14 @@ func normalizeAndValidateCodexChannel(record *store.CodexChannelRecord) error {
 	if record.Name == "" {
 		return fmt.Errorf("渠道名不能为空")
 	}
-	if !codexProviderNamePattern.MatchString(record.Name) {
-		return fmt.Errorf("渠道名仅允许字母、数字、连字符和下划线，且必须以字母或数字开头")
+	if !codexChannelNamePattern.MatchString(record.Name) {
+		return fmt.Errorf("渠道名必须以字母或数字开头，仅允许字母、数字、空格、连字符或下划线，长度 1-64")
 	}
 	if record.ProviderType == "" {
 		record.ProviderType = "openai-compatible"
 	}
-	if record.ApiKey == "" {
-		return fmt.Errorf("API Key 不能为空")
-	}
+	// ApiKey is now a compatibility fallback. New Codex credentials live in
+	// codex_credential_groups, so channels can be saved without a standalone key.
 	// 注：model / reasoning_effort / enable_1m_context 三个字段已迁移到 Codex 全局配置
 	// （~/.codex/config.toml），由「Codex 配置」弹窗独立管理；渠道层不再校验也不强制填充
 	// 默认值。数据库列允许为空，Codex 代理启用时同步逻辑会跳过 config.toml 写入。

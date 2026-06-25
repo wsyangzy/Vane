@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/service"
 	"ai-relay-forwarder/internal/store"
 )
 
@@ -24,6 +25,8 @@ import (
 type EndpointRecordInfo struct {
 	ID                            int64                                 `json:"id"`
 	Channel                       string                                `json:"channel"`
+	CredentialGroupID             int64                                 `json:"credential_group_id"`
+	CredentialGroupName           string                                `json:"credential_group_name"`
 	Name                          string                                `json:"name"`
 	URL                           string                                `json:"url"`
 	Token                         string                                `json:"token"`        // 本地桌面应用，直接返回原始 Token
@@ -65,6 +68,7 @@ type EndpointRecordInfo struct {
 // CreateEndpointInput 创建端点的输入参数
 type CreateEndpointInput struct {
 	Channel                       string                                `json:"channel"`
+	CredentialGroupID             int64                                 `json:"credential_group_id"`
 	Name                          string                                `json:"name"`
 	URL                           string                                `json:"url"`
 	Token                         string                                `json:"token"`
@@ -76,6 +80,42 @@ type CreateEndpointInput struct {
 	CooldownSeconds               *int                                  `json:"cooldown_seconds"`
 	TimeoutSeconds                int                                   `json:"timeout_seconds"`
 	SupportsCountTokens           bool                                  `json:"supports_count_tokens"`
+	CostMultiplier                float64                               `json:"cost_multiplier"`
+	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
+}
+
+type ClaudeCredentialGroupInfo struct {
+	ID                            int64                                 `json:"id"`
+	Channel                       string                                `json:"channel"`
+	Name                          string                                `json:"name"`
+	Token                         string                                `json:"token"`
+	ApiKey                        string                                `json:"api_key"`
+	TokenMasked                   string                                `json:"token_masked"`
+	ApiKeyMasked                  string                                `json:"api_key_masked"`
+	IsDefault                     bool                                  `json:"is_default"`
+	CostMultiplier                float64                               `json:"cost_multiplier"`
+	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	EndpointCount                 int                                   `json:"endpoint_count"`
+	CreatedAt                     string                                `json:"created_at"`
+	UpdatedAt                     string                                `json:"updated_at"`
+}
+
+type CreateClaudeCredentialGroupInput struct {
+	Channel                       string                                `json:"channel"`
+	Name                          string                                `json:"name"`
+	Token                         string                                `json:"token"`
+	ApiKey                        string                                `json:"api_key"`
+	IsDefault                     bool                                  `json:"is_default"`
 	CostMultiplier                float64                               `json:"cost_multiplier"`
 	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
 	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
@@ -154,7 +194,7 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 
 		// 获取运行时健康状态
 		if endpointManager != nil {
-			status := endpointManager.GetEndpointStatus(endpoint.EndpointKey(r.Channel, r.Name))
+			status := endpointManager.GetEndpointStatus(service.EndpointRuntimeKey(r))
 			info.Healthy = status.Healthy
 			info.NeverChecked = status.NeverChecked
 			info.ResponseTimeMs = float64(status.ResponseTime) / float64(time.Millisecond)
@@ -218,6 +258,12 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	}
 	if v, ok := detail["channel"].(string); ok {
 		info.Channel = v
+	}
+	if v, ok := detail["credential_group_id"].(int64); ok {
+		info.CredentialGroupID = v
+	}
+	if v, ok := detail["credential_group_name"].(string); ok {
+		info.CredentialGroupName = v
 	}
 	if v, ok := detail["url"].(string); ok {
 		info.URL = v
@@ -334,6 +380,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 
 	record := &store.EndpointRecord{
 		Channel:                       input.Channel,
+		CredentialGroupID:             input.CredentialGroupID,
 		Name:                          input.Name,
 		URL:                           input.URL,
 		Token:                         input.Token,
@@ -462,6 +509,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 	record := &store.EndpointRecord{
 		ID:                            existingRecord.ID,
 		Channel:                       channel,
+		CredentialGroupID:             resolveEndpointCredentialGroupID(input.CredentialGroupID, existingRecord, channel),
 		Name:                          newName,
 		URL:                           input.URL,
 		Token:                         token,  // 空值时保留原有值
@@ -599,6 +647,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 	record := &store.EndpointRecord{
 		ID:                            existingRecord.ID,
 		Channel:                       channel,
+		CredentialGroupID:             resolveEndpointCredentialGroupID(input.CredentialGroupID, existingRecord, channel),
 		Name:                          newName,
 		URL:                           input.URL,
 		Token:                         token,  // 空值时保留原有值
@@ -656,6 +705,19 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 	a.emitEndpointUpdate()
 
 	return nil
+}
+
+func resolveEndpointCredentialGroupID(inputID int64, existing *store.EndpointRecord, channel string) int64 {
+	if inputID > 0 {
+		return inputID
+	}
+	if existing == nil {
+		return 0
+	}
+	if strings.TrimSpace(channel) == "" || strings.TrimSpace(channel) == strings.TrimSpace(existing.Channel) {
+		return existing.CredentialGroupID
+	}
+	return 0
 }
 
 // SetEndpointFailoverEnabled 设置端点是否参与故障转移（快捷开关）
@@ -765,7 +827,7 @@ func (a *App) SetEndpointSkipHealthCheckByID(id int64, skip bool) error {
 
 	// 同步到运行时 endpoint manager
 	if endpointManager != nil {
-		endpointManager.SetEndpointSkipHealthCheck(endpoint.EndpointKey(record.Channel, record.Name), skip)
+		endpointManager.SetEndpointSkipHealthCheck(service.EndpointRuntimeKey(record), skip)
 	}
 
 	if logger != nil {
@@ -929,14 +991,45 @@ func (a *App) ToggleEndpointRecordByID(id int64, enabled bool) error {
 	return nil
 }
 
+// ActivateEndpointRecordByID 将指定端点设为当前渠道首选端点（按ID，避免同名歧义）。
+func (a *App) ActivateEndpointRecordByID(id int64) error {
+	a.mu.RLock()
+	endpointService := a.endpointService
+	logger := a.logger
+	a.mu.RUnlock()
+
+	if endpointService == nil {
+		return fmt.Errorf("端点存储服务未启用")
+	}
+	if id <= 0 {
+		return fmt.Errorf("端点ID不能为空")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	record, err := endpointService.ActivateEndpointByID(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if logger != nil && record != nil {
+		logger.Info("✅ 当前端点已切换", "id", id, "channel", record.Channel, "name", record.Name)
+	}
+
+	a.emitEndpointUpdate()
+	return nil
+}
+
 // ChannelInfo 渠道信息
 type ChannelInfo struct {
-	Name          string            `json:"name"`
-	Website       string            `json:"website,omitempty"`
-	Priority      int               `json:"priority"`
-	ModelMapping  map[string]string `json:"model_mapping"`
-	CreatedAt     string            `json:"created_at"`
-	EndpointCount int               `json:"endpoint_count"`
+	Name             string                      `json:"name"`
+	Website          string                      `json:"website,omitempty"`
+	Priority         int                         `json:"priority"`
+	ModelMapping     map[string]string           `json:"model_mapping"`
+	CreatedAt        string                      `json:"created_at"`
+	EndpointCount    int                         `json:"endpoint_count"`
+	CredentialGroups []ClaudeCredentialGroupInfo `json:"credential_groups"`
 }
 
 // GetChannels 获取所有渠道
@@ -945,6 +1038,8 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	endpointService := a.endpointService
 	channelService := a.channelService
 	usageTracker := a.usageTracker
+	claudeCredentialGroupService := a.claudeCredentialGroupService
+	claudeCredentialGroupStore := a.claudeCredentialGroupStore
 	a.mu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1018,13 +1113,15 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	// 1) channels 表中的渠道（已按 store 层排序），优先输出，保证 UI 顺序稳定
 	for _, name := range orderedChannels {
 		count := channelCount[name]
+		credentialGroups := a.listClaudeCredentialGroupInfos(ctx, claudeCredentialGroupService, claudeCredentialGroupStore, name)
 		result = append(result, ChannelInfo{
-			Name:          name,
-			Website:       channelWebsite[name],
-			Priority:      channelPriority[name],
-			ModelMapping:  channelModelMapping[name],
-			CreatedAt:     channelCreatedAt[name],
-			EndpointCount: count,
+			Name:             name,
+			Website:          channelWebsite[name],
+			Priority:         channelPriority[name],
+			ModelMapping:     channelModelMapping[name],
+			CreatedAt:        channelCreatedAt[name],
+			EndpointCount:    count,
+			CredentialGroups: credentialGroups,
 		})
 		seen[name] = struct{}{}
 	}
@@ -1034,13 +1131,15 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 		if _, ok := seen[name]; ok {
 			continue
 		}
+		credentialGroups := a.listClaudeCredentialGroupInfos(ctx, claudeCredentialGroupService, claudeCredentialGroupStore, name)
 		result = append(result, ChannelInfo{
-			Name:          name,
-			Website:       channelWebsite[name],
-			Priority:      999,
-			ModelMapping:  channelModelMapping[name],
-			CreatedAt:     "",
-			EndpointCount: count,
+			Name:             name,
+			Website:          channelWebsite[name],
+			Priority:         999,
+			ModelMapping:     channelModelMapping[name],
+			CreatedAt:        "",
+			EndpointCount:    count,
+			CredentialGroups: credentialGroups,
 		})
 	}
 
@@ -1065,6 +1164,192 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	return result, nil
 }
 
+func (a *App) listClaudeCredentialGroupInfos(ctx context.Context, svc *service.ClaudeCredentialGroupService, groupStore store.ClaudeCredentialGroupStore, channel string) []ClaudeCredentialGroupInfo {
+	if svc == nil {
+		return nil
+	}
+	groups, err := svc.ListByChannel(ctx, channel)
+	if err != nil {
+		return nil
+	}
+	result := make([]ClaudeCredentialGroupInfo, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, a.claudeCredentialGroupToInfo(ctx, groupStore, group))
+	}
+	return result
+}
+
+func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore store.ClaudeCredentialGroupStore, group *store.ClaudeCredentialGroupRecord) ClaudeCredentialGroupInfo {
+	if group == nil {
+		return ClaudeCredentialGroupInfo{}
+	}
+	info := ClaudeCredentialGroupInfo{
+		ID:                            group.ID,
+		Channel:                       group.Channel,
+		Name:                          group.Name,
+		Token:                         group.Token,
+		ApiKey:                        group.ApiKey,
+		TokenMasked:                   maskToken(group.Token),
+		ApiKeyMasked:                  maskToken(group.ApiKey),
+		IsDefault:                     group.IsDefault,
+		CostMultiplier:                group.CostMultiplier,
+		InputCostMultiplier:           group.InputCostMultiplier,
+		OutputCostMultiplier:          group.OutputCostMultiplier,
+		CacheCreationCostMultiplier:   group.CacheCreationCostMultiplier,
+		CacheCreationCostMultiplier1h: group.CacheCreationCostMultiplier1h,
+		CacheReadCostMultiplier:       group.CacheReadCostMultiplier,
+		ModelMultipliers:              group.ModelMultipliers,
+	}
+	if !group.CreatedAt.IsZero() {
+		info.CreatedAt = group.CreatedAt.Format("2006-01-02 15:04:05")
+	}
+	if !group.UpdatedAt.IsZero() {
+		info.UpdatedAt = group.UpdatedAt.Format("2006-01-02 15:04:05")
+	}
+	if groupStore != nil {
+		if count, err := groupStore.CountEndpoints(ctx, group.ID); err == nil {
+			info.EndpointCount = count
+		}
+	}
+	return info
+}
+
+func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) *store.ClaudeCredentialGroupRecord {
+	return &store.ClaudeCredentialGroupRecord{
+		Channel:                       input.Channel,
+		Name:                          input.Name,
+		Token:                         input.Token,
+		ApiKey:                        input.ApiKey,
+		IsDefault:                     input.IsDefault,
+		CostMultiplier:                input.CostMultiplier,
+		InputCostMultiplier:           input.InputCostMultiplier,
+		OutputCostMultiplier:          input.OutputCostMultiplier,
+		CacheCreationCostMultiplier:   input.CacheCreationCostMultiplier,
+		CacheCreationCostMultiplier1h: input.CacheCreationCostMultiplier1h,
+		CacheReadCostMultiplier:       input.CacheReadCostMultiplier,
+		ModelMultipliers:              input.ModelMultipliers,
+	}
+}
+
+func (a *App) refreshClaudeRuntimeAfterCredentialGroupChange(ctx context.Context) {
+	a.mu.RLock()
+	endpointService := a.endpointService
+	a.mu.RUnlock()
+	if endpointService != nil {
+		if err := endpointService.SyncFromDatabase(ctx); err != nil && a.logger != nil {
+			a.logger.Warn("⚠️ Claude 凭证分组变更后同步运行时端点失败", "error", err)
+		}
+	}
+	a.syncEndpointMultipliersToTracker(ctx)
+	a.emitEndpointUpdate()
+}
+
+func (a *App) CreateClaudeCredentialGroup(input CreateClaudeCredentialGroupInput) (ClaudeCredentialGroupInfo, error) {
+	a.mu.RLock()
+	svc := a.claudeCredentialGroupService
+	groupStore := a.claudeCredentialGroupStore
+	logger := a.logger
+	a.mu.RUnlock()
+	if svc == nil {
+		return ClaudeCredentialGroupInfo{}, fmt.Errorf("Claude 凭证分组服务未启用")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	created, err := svc.CreateGroup(ctx, claudeCredentialGroupInputToRecord(input))
+	if err != nil {
+		return ClaudeCredentialGroupInfo{}, err
+	}
+	if logger != nil {
+		logger.Info("✅ Claude 凭证分组已创建", "channel", created.Channel, "name", created.Name)
+	}
+	a.refreshClaudeRuntimeAfterCredentialGroupChange(ctx)
+	return a.claudeCredentialGroupToInfo(ctx, groupStore, created), nil
+}
+
+func (a *App) UpdateClaudeCredentialGroupByID(id int64, input CreateClaudeCredentialGroupInput) (ClaudeCredentialGroupInfo, error) {
+	a.mu.RLock()
+	svc := a.claudeCredentialGroupService
+	groupStore := a.claudeCredentialGroupStore
+	logger := a.logger
+	a.mu.RUnlock()
+	if svc == nil {
+		return ClaudeCredentialGroupInfo{}, fmt.Errorf("Claude 凭证分组服务未启用")
+	}
+	if id <= 0 {
+		return ClaudeCredentialGroupInfo{}, fmt.Errorf("凭证分组ID不能为空")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	record := claudeCredentialGroupInputToRecord(input)
+	if input.ModelMultipliers == nil {
+		if existing, err := svc.GetByID(ctx, id); err == nil && existing != nil {
+			record.ModelMultipliers = existing.ModelMultipliers
+		}
+	}
+	if err := svc.UpdateGroup(ctx, id, record); err != nil {
+		return ClaudeCredentialGroupInfo{}, err
+	}
+	updated, err := svc.GetByID(ctx, id)
+	if err != nil {
+		return ClaudeCredentialGroupInfo{}, err
+	}
+	if logger != nil && updated != nil {
+		logger.Info("✅ Claude 凭证分组已更新", "id", id, "channel", updated.Channel, "name", updated.Name)
+	}
+	a.refreshClaudeRuntimeAfterCredentialGroupChange(ctx)
+	return a.claudeCredentialGroupToInfo(ctx, groupStore, updated), nil
+}
+
+func (a *App) DeleteClaudeCredentialGroupByID(id int64) error {
+	a.mu.RLock()
+	svc := a.claudeCredentialGroupService
+	logger := a.logger
+	a.mu.RUnlock()
+	if svc == nil {
+		return fmt.Errorf("Claude 凭证分组服务未启用")
+	}
+	if id <= 0 {
+		return fmt.Errorf("凭证分组ID不能为空")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := svc.DeleteGroup(ctx, id); err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Info("✅ Claude 凭证分组已删除", "id", id)
+	}
+	a.refreshClaudeRuntimeAfterCredentialGroupChange(ctx)
+	return nil
+}
+
+func (a *App) SetDefaultClaudeCredentialGroup(id int64) error {
+	a.mu.RLock()
+	svc := a.claudeCredentialGroupService
+	logger := a.logger
+	a.mu.RUnlock()
+	if svc == nil {
+		return fmt.Errorf("Claude 凭证分组服务未启用")
+	}
+	if id <= 0 {
+		return fmt.Errorf("凭证分组ID不能为空")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := svc.SetDefault(ctx, id); err != nil {
+		return err
+	}
+	if logger != nil {
+		logger.Info("✅ Claude 默认凭证分组已更新", "id", id)
+	}
+	a.refreshClaudeRuntimeAfterCredentialGroupChange(ctx)
+	return nil
+}
+
 type CreateChannelInput struct {
 	Name         string            `json:"name"`
 	Website      string            `json:"website,omitempty"`
@@ -1075,6 +1360,7 @@ type CreateChannelInput struct {
 func (a *App) CreateChannel(input CreateChannelInput) error {
 	a.mu.RLock()
 	channelService := a.channelService
+	claudeCredentialGroupService := a.claudeCredentialGroupService
 	logger := a.logger
 	a.mu.RUnlock()
 
@@ -1099,6 +1385,11 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	})
 	if err != nil {
 		return err
+	}
+	if claudeCredentialGroupService != nil {
+		if _, err := claudeCredentialGroupService.EnsureDefaultGroup(ctx, input.Name); err != nil && logger != nil {
+			logger.Warn("⚠️ 创建渠道默认凭证分组失败", "channel", input.Name, "error", err)
+		}
 	}
 	if logger != nil {
 		logger.Info("✅ 渠道已创建", "name", input.Name)
@@ -1292,6 +1583,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 	channelService := a.channelService
 	endpointStore := a.endpointStore
 	endpointService := a.endpointService
+	claudeCredentialGroupStore := a.claudeCredentialGroupStore
 	usageTracker := a.usageTracker
 	storeDB := a.storeDB
 	logger := a.logger
@@ -1334,6 +1626,9 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 	}
 	endpointStore = endpointStore.WithTx(tx)
 	channelStore = channelStore.WithTx(tx)
+	if claudeCredentialGroupStore != nil {
+		claudeCredentialGroupStore = claudeCredentialGroupStore.WithTx(tx)
+	}
 
 	// 端点检查/删除
 	endpoints, err := endpointStore.ListByChannel(ctx, name)
@@ -1354,6 +1649,11 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 			if err := endpointStore.BatchDelete(ctx, names); err != nil {
 				return fmt.Errorf("删除渠道端点失败: %w", err)
 			}
+		}
+	}
+	if claudeCredentialGroupStore != nil {
+		if err := claudeCredentialGroupStore.DeleteByChannel(ctx, name); err != nil {
+			return err
 		}
 	}
 
@@ -1409,7 +1709,7 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 
 		// 获取运行时健康状态
 		if endpointManager != nil {
-			status := endpointManager.GetEndpointStatus(endpoint.EndpointKey(r.Channel, r.Name))
+			status := endpointManager.GetEndpointStatus(service.EndpointRuntimeKey(r))
 			info.Healthy = status.Healthy
 			info.ResponseTimeMs = float64(status.ResponseTime) / float64(time.Millisecond)
 			// 格式化最后检查时间
@@ -1433,6 +1733,8 @@ func (a *App) recordToInfo(r *store.EndpointRecord) EndpointRecordInfo {
 	info := EndpointRecordInfo{
 		ID:                            r.ID,
 		Channel:                       r.Channel,
+		CredentialGroupID:             r.CredentialGroupID,
+		CredentialGroupName:           r.CredentialGroupName,
 		Name:                          r.Name,
 		URL:                           r.URL,
 		Token:                         r.Token,  // 本地桌面应用，直接返回原始 Token

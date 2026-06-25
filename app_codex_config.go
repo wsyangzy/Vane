@@ -88,25 +88,52 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_codex_channels_is_active ON codex_channels(is_active)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_channels_single_active ON codex_channels(is_active) WHERE is_active = 1`,
 		`CREATE TRIGGER IF NOT EXISTS update_codex_channels_timestamp
-			AFTER UPDATE ON codex_channels
+				AFTER UPDATE ON codex_channels
 			FOR EACH ROW
 			WHEN NEW.updated_at = OLD.updated_at
-		BEGIN
-			UPDATE codex_channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
-		END`,
+			BEGIN
+				UPDATE codex_channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+			END`,
+		`CREATE TABLE IF NOT EXISTS codex_credential_groups (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
+				name TEXT NOT NULL,
+				api_key TEXT NOT NULL DEFAULT '',
+				is_default INTEGER NOT NULL DEFAULT 0,
+				cost_multiplier REAL NOT NULL DEFAULT 1.0,
+				input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+				output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+					cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+					billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
+					model_multipliers TEXT NOT NULL DEFAULT '[]',
+					created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+				updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+				UNIQUE(channel_id, name)
+			)`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_credential_groups_channel ON codex_credential_groups(channel_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_credential_groups_single_default
+				ON codex_credential_groups(channel_id, is_default) WHERE is_default = 1`,
+		`CREATE TRIGGER IF NOT EXISTS update_codex_credential_groups_timestamp
+				AFTER UPDATE ON codex_credential_groups
+				FOR EACH ROW
+				WHEN NEW.updated_at = OLD.updated_at
+			BEGIN
+				UPDATE codex_credential_groups SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+			END`,
 		`CREATE TABLE IF NOT EXISTS codex_endpoints (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
-			name TEXT NOT NULL,
-			base_url TEXT NOT NULL,
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
+					credential_group_id INTEGER REFERENCES codex_credential_groups(id) ON DELETE SET NULL,
+				api_key TEXT NOT NULL DEFAULT '',
+				name TEXT NOT NULL,
+				base_url TEXT NOT NULL,
 			is_active INTEGER NOT NULL DEFAULT 0,
+			skip_health_check INTEGER NOT NULL DEFAULT 0,
 			timeout_seconds INTEGER NOT NULL DEFAULT 0,
-			billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
-			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-			UNIQUE(channel_id, base_url),
-			UNIQUE(channel_id, name)
-		)`,
+				billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
+				created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+				updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+			)`,
 		`CREATE INDEX IF NOT EXISTS idx_codex_endpoints_channel ON codex_endpoints(channel_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_single_active_per_channel
 			ON codex_endpoints(channel_id, is_active) WHERE is_active = 1`,
@@ -140,6 +167,11 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// 为 Codex 凭证分组补充 schema、默认分组和端点引用
+	if err := a.ensureCodexCredentialGroupSchema(ctx, db); err != nil {
+		return err
+	}
+
 	// 为 codex_endpoints 补充故障转移字段（v7.2+）
 	if err := a.ensureCodexEndpointFailoverColumns(ctx, db); err != nil {
 		return err
@@ -165,6 +197,114 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
+	// 为 codex_endpoints 补充模型级倍率字段
+	if err := a.ensureCodexEndpointModelMultipliersColumn(ctx, db); err != nil {
+		return err
+	}
+
+	if err := a.backfillCodexEndpointCredentialGroups(ctx, db); err != nil {
+		return err
+	}
+
+	if err := a.backfillCodexCredentialGroupModelMultipliers(ctx, db); err != nil {
+		return err
+	}
+
+	if err := a.ensureCodexEndpointCredentialGroupUniqueConstraints(ctx, db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (a *App) ensureCodexCredentialGroupSchema(ctx context.Context, db *sql.DB) error {
+	columns := []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{"codex_endpoints", "credential_group_id", `ALTER TABLE codex_endpoints ADD COLUMN credential_group_id INTEGER`},
+		{"codex_endpoints", "api_key", `ALTER TABLE codex_endpoints ADD COLUMN api_key TEXT NOT NULL DEFAULT ''`},
+		{"codex_credential_groups", "cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"codex_credential_groups", "input_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN input_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"codex_credential_groups", "output_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"codex_credential_groups", "cache_read_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"codex_credential_groups", "billing_output_token_source", `ALTER TABLE codex_credential_groups ADD COLUMN billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens'`},
+		{"codex_credential_groups", "model_multipliers", `ALTER TABLE codex_credential_groups ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'`},
+	}
+	for _, col := range columns {
+		exists, err := sqliteColumnExists(ctx, db, col.table, col.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.ExecContext(ctx, col.ddl); err != nil {
+				return fmt.Errorf("为 %s 添加 %s 字段失败: %w", col.table, col.name, err)
+			}
+		}
+	}
+	if _, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_codex_credential_groups_channel ON codex_credential_groups(channel_id)`); err != nil {
+		return fmt.Errorf("创建 Codex 凭证分组渠道索引失败: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_credential_groups_single_default ON codex_credential_groups(channel_id, is_default) WHERE is_default = 1`); err != nil {
+		return fmt.Errorf("创建 Codex 默认凭证分组唯一索引失败: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO codex_credential_groups (
+			channel_id, name, api_key, is_default, cost_multiplier,
+			input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier,
+			billing_output_token_source, model_multipliers
+		)
+		SELECT id, '默认分组', api_key, 1, 1.0, 1.0, 1.0, 1.0, 'output_tokens', '[]'
+		FROM codex_channels ch
+		WHERE NOT EXISTS (
+			SELECT 1 FROM codex_credential_groups g WHERE g.channel_id = ch.id
+		)
+	`); err != nil {
+		return fmt.Errorf("回填 Codex 默认凭证分组失败: %w", err)
+	}
+	return nil
+}
+
+func (a *App) backfillCodexEndpointCredentialGroups(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE codex_endpoints
+		SET credential_group_id = (
+			SELECT id
+			FROM codex_credential_groups
+			WHERE channel_id = codex_endpoints.channel_id AND is_default = 1
+			LIMIT 1
+		)
+		WHERE credential_group_id IS NULL OR credential_group_id = 0
+	`); err != nil {
+		return fmt.Errorf("回填 Codex 端点凭证分组失败: %w", err)
+	}
+	return nil
+}
+
+func (a *App) backfillCodexCredentialGroupModelMultipliers(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+		UPDATE codex_credential_groups
+		SET model_multipliers = (
+			SELECT COALESCE(ep.model_multipliers, '[]')
+			FROM codex_endpoints ep
+			WHERE ep.channel_id = codex_credential_groups.channel_id
+				AND ep.credential_group_id = codex_credential_groups.id
+				AND COALESCE(ep.model_multipliers, '[]') NOT IN ('', '[]')
+			ORDER BY COALESCE(ep.priority, 0) ASC, COALESCE(ep.created_at, '') ASC, ep.id ASC
+			LIMIT 1
+		)
+		WHERE COALESCE(model_multipliers, '[]') IN ('', '[]')
+			AND EXISTS (
+				SELECT 1
+				FROM codex_endpoints ep
+				WHERE ep.channel_id = codex_credential_groups.channel_id
+					AND ep.credential_group_id = codex_credential_groups.id
+					AND COALESCE(ep.model_multipliers, '[]') NOT IN ('', '[]')
+			)
+	`); err != nil {
+		return fmt.Errorf("回填 Codex 凭证分组模型附加倍率失败: %w", err)
+	}
 	return nil
 }
 
@@ -179,12 +319,119 @@ func (a *App) ensureCodexEndpointNameColumn(ctx context.Context, db *sql.DB) err
 	if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN name TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("为 codex_endpoints 添加 name 字段失败: %w", err)
 	}
-	// 把空 name 兜底成 base_url（保留 UNIQUE 约束语义）
+	// 把空 name 兜底成 base_url；唯一约束由凭证分组级索引统一维护。
 	if _, err := db.ExecContext(ctx, `UPDATE codex_endpoints SET name = base_url WHERE name = '' OR name IS NULL`); err != nil {
 		return fmt.Errorf("回填 codex_endpoints.name 失败: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_name ON codex_endpoints(channel_id, name)`); err != nil {
-		return fmt.Errorf("创建 codex_endpoints name 唯一索引失败: %w", err)
+	return nil
+}
+
+func (a *App) ensureCodexEndpointCredentialGroupUniqueConstraints(ctx context.Context, db *sql.DB) error {
+	needsRebuild, err := codexEndpointHasChannelScopedUniqueConstraints(ctx, db)
+	if err != nil {
+		return err
+	}
+	if needsRebuild {
+		if err := a.rebuildCodexEndpointsForCredentialGroupUniqueness(ctx, db); err != nil {
+			return err
+		}
+	}
+
+	stmts := []string{
+		`DROP INDEX IF EXISTS idx_codex_endpoints_unique_name`,
+		`CREATE INDEX IF NOT EXISTS idx_codex_endpoints_channel ON codex_endpoints(channel_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_single_active_per_channel
+			ON codex_endpoints(channel_id, is_active) WHERE is_active = 1`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_group_base_url
+			ON codex_endpoints(channel_id, credential_group_id, base_url) WHERE credential_group_id IS NOT NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_legacy_base_url
+			ON codex_endpoints(channel_id, base_url) WHERE credential_group_id IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_group_name
+			ON codex_endpoints(channel_id, credential_group_id, name) WHERE credential_group_id IS NOT NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_legacy_name
+			ON codex_endpoints(channel_id, name) WHERE credential_group_id IS NULL`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("维护 Codex 端点凭证分组唯一约束失败: %w", err)
+		}
+	}
+	return nil
+}
+
+func codexEndpointHasChannelScopedUniqueConstraints(ctx context.Context, db *sql.DB) (bool, error) {
+	var tableSQL string
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 'codex_endpoints'`).Scan(&tableSQL); err != nil {
+		return false, fmt.Errorf("读取 codex_endpoints 表结构失败: %w", err)
+	}
+	normalized := strings.Join(strings.Fields(strings.ToLower(tableSQL)), "")
+	return strings.Contains(normalized, "unique(channel_id,base_url)") ||
+		strings.Contains(normalized, "unique(channel_id,name)"), nil
+}
+
+func (a *App) rebuildCodexEndpointsForCredentialGroupUniqueness(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启 Codex 端点唯一约束迁移事务失败: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	stmts := []string{
+		`DROP TRIGGER IF EXISTS update_codex_endpoints_timestamp`,
+		`CREATE TABLE codex_endpoints_group_scoped_unique (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
+			credential_group_id INTEGER REFERENCES codex_credential_groups(id) ON DELETE SET NULL,
+			api_key TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL,
+			base_url TEXT NOT NULL,
+			is_active INTEGER NOT NULL DEFAULT 0,
+			failover_enabled INTEGER NOT NULL DEFAULT 1,
+			priority INTEGER NOT NULL DEFAULT 0,
+			timeout_seconds INTEGER NOT NULL DEFAULT 0,
+			cost_multiplier REAL NOT NULL DEFAULT 1.0,
+			input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+			output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+			cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+			billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
+			model_multipliers TEXT NOT NULL DEFAULT '[]',
+			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+		)`,
+		`INSERT INTO codex_endpoints_group_scoped_unique (
+			id, channel_id, credential_group_id, api_key, name, base_url, is_active,
+			failover_enabled, priority, timeout_seconds, cost_multiplier,
+			input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier,
+			billing_output_token_source, model_multipliers, created_at, updated_at
+		)
+		SELECT
+			id, channel_id, credential_group_id, api_key, name, base_url, is_active,
+			failover_enabled, priority, timeout_seconds, cost_multiplier,
+			input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier,
+			billing_output_token_source, model_multipliers, created_at, updated_at
+		FROM codex_endpoints`,
+		`DROP TABLE codex_endpoints`,
+		`ALTER TABLE codex_endpoints_group_scoped_unique RENAME TO codex_endpoints`,
+		`CREATE TRIGGER IF NOT EXISTS update_codex_endpoints_timestamp
+			AFTER UPDATE ON codex_endpoints
+			FOR EACH ROW
+			WHEN NEW.updated_at = OLD.updated_at
+		BEGIN
+			UPDATE codex_endpoints SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+		END`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("迁移 Codex 端点唯一约束失败: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交 Codex 端点唯一约束迁移失败: %w", err)
+	}
+	if a.logger != nil {
+		a.logger.Info("✅ Codex 端点唯一约束已迁移到凭证分组维度")
 	}
 	return nil
 }
@@ -203,7 +450,7 @@ func (a *App) ensureCodexChannelModelMappingColumn(ctx context.Context, db *sql.
 	return nil
 }
 
-// ensureCodexEndpointFailoverColumns 为 codex_endpoints 补充 failover_enabled 和 priority 字段（幂等）。
+// ensureCodexEndpointFailoverColumns 为 codex_endpoints 补充 failover_enabled、skip_health_check 和 priority 字段（幂等）。
 func (a *App) ensureCodexEndpointFailoverColumns(ctx context.Context, db *sql.DB) error {
 	hasFailover, err := sqliteColumnExists(ctx, db, "codex_endpoints", "failover_enabled")
 	if err != nil {
@@ -212,6 +459,15 @@ func (a *App) ensureCodexEndpointFailoverColumns(ctx context.Context, db *sql.DB
 	if !hasFailover {
 		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1`); err != nil {
 			return fmt.Errorf("为 codex_endpoints 添加 failover_enabled 字段失败: %w", err)
+		}
+	}
+	hasSkipHealthCheck, err := sqliteColumnExists(ctx, db, "codex_endpoints", "skip_health_check")
+	if err != nil {
+		return err
+	}
+	if !hasSkipHealthCheck {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN skip_health_check INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("为 codex_endpoints 添加 skip_health_check 字段失败: %w", err)
 		}
 	}
 	hasPriority, err := sqliteColumnExists(ctx, db, "codex_endpoints", "priority")
@@ -292,6 +548,20 @@ func (a *App) ensureCodexEndpointBillingOutputTokenSourceColumn(ctx context.Cont
 	return nil
 }
 
+func (a *App) ensureCodexEndpointModelMultipliersColumn(ctx context.Context, db *sql.DB) error {
+	exists, err := sqliteColumnExists(ctx, db, "codex_endpoints", "model_multipliers")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return fmt.Errorf("为 codex_endpoints 添加 model_multipliers 字段失败: %w", err)
+	}
+	return nil
+}
+
 // migrateCodexProvidersToChannels 在首次启动时把旧 codex_providers 数据迁移到新表。
 // 幂等：仅当旧表存在 && 新 codex_channels 表为空时执行；迁移完成后把旧表重命名为 codex_providers_legacy_v7。
 func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, oldTableExists bool) error {
@@ -368,9 +638,20 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 		if err != nil {
 			return fmt.Errorf("获取迁移渠道 ID 失败: %w", err)
 		}
+		groupResult, err := tx.ExecContext(ctx, `
+			INSERT INTO codex_credential_groups (channel_id, name, api_key, is_default)
+			VALUES (?, ?, ?, 1)
+		`, channelID, "默认分组", r.apiKey)
+		if err != nil {
+			return fmt.Errorf("迁移默认凭证分组 %s 失败: %w", r.name, err)
+		}
+		groupID, err := groupResult.LastInsertId()
+		if err != nil {
+			return fmt.Errorf("获取迁移默认凭证分组 ID 失败: %w", err)
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO codex_endpoints (channel_id, name, base_url, is_active) VALUES (?, ?, ?, 1)
-		`, channelID, "默认端点", r.baseURL); err != nil {
+			INSERT INTO codex_endpoints (channel_id, credential_group_id, name, base_url, is_active) VALUES (?, ?, ?, ?, 1)
+		`, channelID, groupID, "默认端点", r.baseURL); err != nil {
 			return fmt.Errorf("迁移端点 %s 失败: %w", r.baseURL, err)
 		}
 	}
@@ -810,7 +1091,7 @@ func upsertCodexProviderSection(content string, record *store.CodexProviderRecor
 
 func deleteCodexProviderSection(content, name string) string {
 	lines := splitCodexLines(content)
-	header := fmt.Sprintf("[model_providers.%s]", name)
+	headers := codexProviderSectionHeaders(name)
 
 	start := -1
 	end := -1
@@ -818,7 +1099,7 @@ func deleteCodexProviderSection(content, name string) string {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if start == -1 {
-			if trimmed == header {
+			if containsString(headers, trimmed) {
 				start = i
 			}
 			continue
@@ -843,12 +1124,50 @@ func deleteCodexProviderSection(content, name string) string {
 
 func renderCodexProviderSection(record *store.CodexProviderRecord) []string {
 	return []string{
-		fmt.Sprintf("[model_providers.%s]", record.Name),
+		codexProviderSectionHeader(record.Name),
 		fmt.Sprintf("name = \"%s\"", escapeTomlString(record.Name)),
 		fmt.Sprintf("base_url = \"%s\"", escapeTomlString(record.BaseURL)),
 		fmt.Sprintf("wire_api = \"%s\"", codexProviderWireAPI),
 		"requires_openai_auth = true",
 	}
+}
+
+func codexProviderSectionHeader(name string) string {
+	if isTomlBareKey(name) {
+		return fmt.Sprintf("[model_providers.%s]", name)
+	}
+	return fmt.Sprintf("[model_providers.\"%s\"]", escapeTomlString(name))
+}
+
+func codexProviderSectionHeaders(name string) []string {
+	formatted := codexProviderSectionHeader(name)
+	legacy := fmt.Sprintf("[model_providers.%s]", name)
+	if formatted == legacy {
+		return []string{formatted}
+	}
+	return []string{formatted, legacy}
+}
+
+func isTomlBareKey(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func splitCodexLines(content string) []string {
@@ -938,12 +1257,26 @@ func (a *App) codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRe
 			effectiveModel = readCodexTopLevelString(string(content), "model")
 		}
 	}
+	effectiveApiKey := strings.TrimSpace(endpoint.ApiKey)
+	if effectiveApiKey == "" && a.codexCredentialGroupStore != nil && endpoint.CredentialGroupID > 0 {
+		if group, err := a.codexCredentialGroupStore.GetByID(context.Background(), endpoint.CredentialGroupID); err == nil && group != nil {
+			effectiveApiKey = strings.TrimSpace(group.ApiKey)
+		}
+	}
+	if effectiveApiKey == "" && a.codexCredentialGroupStore != nil {
+		if group, err := a.codexCredentialGroupStore.GetDefaultByChannelID(context.Background(), channel.ID); err == nil && group != nil {
+			effectiveApiKey = strings.TrimSpace(group.ApiKey)
+		}
+	}
+	if effectiveApiKey == "" {
+		effectiveApiKey = channel.ApiKey
+	}
 
 	return &store.CodexProviderRecord{
 		Name:            channel.Name,
 		ProviderType:    channel.ProviderType,
 		BaseURL:         endpoint.BaseURL,
-		ApiKey:          channel.ApiKey,
+		ApiKey:          effectiveApiKey,
 		Model:           effectiveModel,
 		ReasoningEffort: channel.ReasoningEffort,
 		Enable1MContext: channel.Enable1MContext,

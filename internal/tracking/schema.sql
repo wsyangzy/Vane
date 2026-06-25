@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS request_logs (
     model_rewrite_target TEXT,              -- 模型改写后的目标模型
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
     provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
+    privacy_redacted BOOLEAN DEFAULT 0,        -- 发送上游前是否命中隐私脱敏
+    privacy_redaction_summary TEXT,            -- 隐私脱敏命中摘要（不含原文/片段）
+    privacy_redaction_matches TEXT,            -- 本机展示用命中明细（含原文与替换值）
 
     -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled
@@ -149,6 +152,58 @@ BEGIN
 END;
 
 -- ============================================================================
+-- 隐私防护规则表
+-- 发送给上游服务商前按用户配置对请求正文做脱敏。仅保存规则和值，不保存请求正文。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS privacy_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,                         -- exact | regex | field | keyword | validator | entropy | structured
+    category TEXT NOT NULL,                     -- secret/token/name/phone/bank_card/id_card/custom
+    pattern_or_value TEXT NOT NULL,
+    replacement_mode TEXT NOT NULL DEFAULT 'placeholder', -- placeholder | pseudonym
+    enabled INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 100,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+);
+
+CREATE INDEX IF NOT EXISTS idx_privacy_rules_enabled ON privacy_rules(enabled);
+CREATE INDEX IF NOT EXISTS idx_privacy_rules_type_priority ON privacy_rules(type, priority);
+
+CREATE TABLE IF NOT EXISTS privacy_synthetic_values (
+    value TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    last_seen_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    hit_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_privacy_synthetic_values_kind ON privacy_synthetic_values(kind);
+
+CREATE TABLE IF NOT EXISTS privacy_synthetic_mappings (
+    kind TEXT NOT NULL,
+    raw_hash TEXT NOT NULL,
+    raw_value TEXT NOT NULL DEFAULT '',
+    replacement TEXT NOT NULL,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    last_seen_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, raw_hash),
+    UNIQUE (kind, replacement)
+);
+
+CREATE INDEX IF NOT EXISTS idx_privacy_synthetic_mappings_replacement ON privacy_synthetic_mappings(kind, replacement);
+
+CREATE TRIGGER IF NOT EXISTS update_privacy_rules_timestamp
+    AFTER UPDATE ON privacy_rules
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE privacy_rules SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
+-- ============================================================================
 -- 端点配置表 (新增 - 2025-12-05)
 -- 将端点配置从 config.yaml 迁移到 SQLite，支持动态增删改查
 -- ============================================================================
@@ -157,7 +212,8 @@ CREATE TABLE IF NOT EXISTS endpoints (
 
     -- ========== 基本信息 ==========
     channel TEXT NOT NULL,                          -- 渠道标签（用于分组展示）
-    name TEXT NOT NULL,                             -- 端点名称（同一渠道内唯一）
+    credential_group_id INTEGER REFERENCES claude_credential_groups(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,                             -- 端点名称（同一凭证分组内唯一）
     url TEXT NOT NULL,                              -- 端点 URL
 
     -- ========== 认证配置 ==========
@@ -189,17 +245,19 @@ CREATE TABLE IF NOT EXISTS endpoints (
 
     -- ========== 审计字段 ==========
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-
-    -- 约束：允许不同渠道同名端点，但同一渠道内名称必须唯一
-    UNIQUE(channel, name)
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );
 
 -- 端点表索引
 CREATE INDEX IF NOT EXISTS idx_endpoints_channel ON endpoints(channel);
+CREATE INDEX IF NOT EXISTS idx_endpoints_credential_group ON endpoints(credential_group_id);
 CREATE INDEX IF NOT EXISTS idx_endpoints_priority ON endpoints(priority);
 CREATE INDEX IF NOT EXISTS idx_endpoints_enabled ON endpoints(enabled);
 CREATE INDEX IF NOT EXISTS idx_endpoints_failover ON endpoints(failover_enabled);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_unique_group_name
+    ON endpoints(channel, credential_group_id, name) WHERE credential_group_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_unique_legacy_name
+    ON endpoints(channel, name) WHERE credential_group_id IS NULL;
 
 -- 端点表触发器：自动更新 updated_at
 CREATE TRIGGER IF NOT EXISTS update_endpoints_timestamp
@@ -237,6 +295,36 @@ BEGIN
     UPDATE channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 END;
 
+CREATE TABLE IF NOT EXISTS claude_credential_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    name TEXT NOT NULL,
+    token TEXT NOT NULL DEFAULT '',
+    api_key TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    cache_creation_cost_multiplier_1h REAL NOT NULL DEFAULT 1.0,
+    cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    UNIQUE(channel, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_claude_credential_groups_channel ON claude_credential_groups(channel);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_claude_credential_groups_single_default
+    ON claude_credential_groups(channel, is_default) WHERE is_default = 1;
+
+CREATE TRIGGER IF NOT EXISTS update_claude_credential_groups_timestamp
+    AFTER UPDATE ON claude_credential_groups
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE claude_credential_groups SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
 -- ============================================================================
 -- Codex Provider 表 (新增 - 2026-03-10)
 -- 独立维护 Codex Provider 配置，并通过单活 is_active 切换当前接管项
@@ -272,8 +360,8 @@ END;
 
 -- ============================================================================
 -- Codex 渠道-端点 两层模型 (新增 - 2026-05-13)
--- 一个渠道承载共用配置（API Key/模型/推理强度/1M 上下文/官网/provider_type）
--- 一个渠道下可挂多个端点，端点仅含 base_url；切换激活端点时只改写 config.toml 的 base_url 行
+-- 一个渠道承载共用配置（模型/推理强度/1M 上下文/官网/provider_type）
+-- 一个渠道下可挂多个凭证分组；端点归属到分组，同一渠道不同分组可复用相同端点名和 base_url
 -- 单活语义：全局唯一一个 codex_channels.is_active=1，每个渠道下唯一一个 codex_endpoints.is_active=1
 -- 旧 codex_providers 数据通过运行时 ensureCodexChannelsSchema 自动迁移到新表，旧表保留为 codex_providers_legacy_v7
 -- ============================================================================
@@ -306,14 +394,45 @@ BEGIN
     UPDATE codex_channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 END;
 
+CREATE TABLE IF NOT EXISTS codex_credential_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    UNIQUE(channel_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_codex_credential_groups_channel ON codex_credential_groups(channel_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_credential_groups_single_default
+    ON codex_credential_groups(channel_id, is_default) WHERE is_default = 1;
+
+CREATE TRIGGER IF NOT EXISTS update_codex_credential_groups_timestamp
+    AFTER UPDATE ON codex_credential_groups
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE codex_credential_groups SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
 CREATE TABLE IF NOT EXISTS codex_endpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,                                         -- 端点名（同渠道内唯一，仅作为 UI 标识）
+    credential_group_id INTEGER REFERENCES codex_credential_groups(id) ON DELETE SET NULL,
+    api_key TEXT NOT NULL DEFAULT '',                           -- 端点级 API Key 覆盖，通常为空
+    name TEXT NOT NULL,                                         -- 端点名（同凭证分组内唯一，仅作为 UI 标识）
     base_url TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 0,
     failover_enabled INTEGER NOT NULL DEFAULT 1,   -- 是否参与故障转移（1=参与）
+    skip_health_check INTEGER NOT NULL DEFAULT 0,  -- 跳过健康检查（1=跳过）
     priority INTEGER NOT NULL DEFAULT 0,           -- 转移优先级（越小越优先）
     timeout_seconds INTEGER NOT NULL DEFAULT 0,    -- 请求超时（秒，0=使用全局配置）
     cost_multiplier REAL NOT NULL DEFAULT 1.0,     -- 成本倍率（默认 1.0，无调整）
@@ -324,15 +443,20 @@ CREATE TABLE IF NOT EXISTS codex_endpoints (
     model_multipliers TEXT NOT NULL DEFAULT '[]', -- 按模型附加倍率 JSON
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-
-    UNIQUE(channel_id, base_url),
-    UNIQUE(channel_id, name)
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );
 
 CREATE INDEX IF NOT EXISTS idx_codex_endpoints_channel ON codex_endpoints(channel_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_single_active_per_channel
     ON codex_endpoints(channel_id, is_active) WHERE is_active = 1;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_group_base_url
+    ON codex_endpoints(channel_id, credential_group_id, base_url) WHERE credential_group_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_legacy_base_url
+    ON codex_endpoints(channel_id, base_url) WHERE credential_group_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_group_name
+    ON codex_endpoints(channel_id, credential_group_id, name) WHERE credential_group_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_codex_endpoints_unique_legacy_name
+    ON codex_endpoints(channel_id, name) WHERE credential_group_id IS NULL;
 
 CREATE TRIGGER IF NOT EXISTS update_codex_endpoints_timestamp
     AFTER UPDATE ON codex_endpoints

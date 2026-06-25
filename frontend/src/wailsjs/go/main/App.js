@@ -28,6 +28,10 @@ export function CreateChannel(arg1) {
   return Call.ByName("main.App.CreateChannel", arg1);
 }
 
+export function CreateClaudeCredentialGroup(arg1) {
+  return Call.ByName("main.App.CreateClaudeCredentialGroup", arg1);
+}
+
 export function CreateCodexProvider(arg1) {
   return Call.ByName("main.App.CreateCodexProvider", arg1);
 }
@@ -40,8 +44,20 @@ export function CreateModelPricing(arg1) {
   return Call.ByName("main.App.CreateModelPricing", arg1);
 }
 
+export function CreatePrivacyRule(arg1) {
+  return Call.ByName("main.App.CreatePrivacyRule", arg1);
+}
+
+export function ClearPrivacySyntheticValues() {
+  return Call.ByName("main.App.ClearPrivacySyntheticValues");
+}
+
 export function DeleteChannel(arg1, arg2) {
   return Call.ByName("main.App.DeleteChannel", arg1, arg2);
+}
+
+export function DeleteClaudeCredentialGroupByID(arg1) {
+  return Call.ByName("main.App.DeleteClaudeCredentialGroupByID", arg1);
 }
 
 export function DeleteCodexProviderByID(arg1) {
@@ -58,6 +74,14 @@ export function DeleteEndpointRecordByID(arg1) {
 
 export function DeleteModelPricing(arg1) {
   return Call.ByName("main.App.DeleteModelPricing", arg1);
+}
+
+export function DeletePrivacyRule(arg1) {
+  return Call.ByName("main.App.DeletePrivacyRule", arg1);
+}
+
+export function DeletePrivacySyntheticValue(arg1, arg2) {
+  return Call.ByName("main.App.DeletePrivacySyntheticValue", arg1, arg2);
 }
 
 export function GetAllSettings() {
@@ -176,6 +200,14 @@ export function GetProxyURL() {
   return Call.ByName("main.App.GetProxyURL");
 }
 
+export function GetPrivacyConfig() {
+  return Call.ByName("main.App.GetPrivacyConfig");
+}
+
+export function GetPrivacySyntheticValues() {
+  return Call.ByName("main.App.GetPrivacySyntheticValues");
+}
+
 export function GetRecentLogs(arg1) {
   return Call.ByName("main.App.GetRecentLogs", arg1);
 }
@@ -256,6 +288,10 @@ export function OpenLogDir() {
   return Call.ByName("main.App.OpenLogDir");
 }
 
+export function PreviewPrivacyRedaction(arg1) {
+  return Call.ByName("main.App.PreviewPrivacyRedaction", arg1);
+}
+
 export function PauseGroup(arg1) {
   return Call.ByName("main.App.PauseGroup", arg1);
 }
@@ -282,6 +318,14 @@ export function SaveLogFile(arg1, arg2) {
 
 export function SetDefaultModelPricing(arg1) {
   return Call.ByName("main.App.SetDefaultModelPricing", arg1);
+}
+
+export function SetDefaultClaudeCredentialGroup(arg1) {
+  return Call.ByName("main.App.SetDefaultClaudeCredentialGroup", arg1);
+}
+
+export function SetPrivacyEnabled(arg1) {
+  return Call.ByName("main.App.SetPrivacyEnabled", arg1);
 }
 
 export function SetEndpointFailoverEnabled(arg1, arg2) {
@@ -324,12 +368,20 @@ export function ToggleEndpointRecordByID(arg1, arg2) {
   return Call.ByName("main.App.ToggleEndpointRecordByID", arg1, arg2);
 }
 
+export function ActivateEndpointRecordByID(arg1) {
+  return Call.ByName("main.App.ActivateEndpointRecordByID", arg1);
+}
+
 export function TriggerHealthCheck(arg1) {
   return Call.ByName("main.App.TriggerHealthCheck", arg1);
 }
 
 export function UpdateChannel(arg1) {
   return Call.ByName("main.App.UpdateChannel", arg1);
+}
+
+export function UpdateClaudeCredentialGroupByID(arg1, arg2) {
+  return Call.ByName("main.App.UpdateClaudeCredentialGroupByID", arg1, arg2);
 }
 
 export function UpdateCodexProviderByID(arg1, arg2) {
@@ -346,6 +398,10 @@ export function UpdateEndpointRecordByID(arg1, arg2) {
 
 export function UpdateModelPricing(arg1, arg2) {
   return Call.ByName("main.App.UpdateModelPricing", arg1, arg2);
+}
+
+export function UpdatePrivacyRule(arg1, arg2) {
+  return Call.ByName("main.App.UpdatePrivacyRule", arg1, arg2);
 }
 
 export function UpdatePreferredPort(arg1) {
@@ -378,6 +434,22 @@ export function ActivateCodexChannel(arg1) {
   return Call.ByName("main.App.ActivateCodexChannel", arg1);
 }
 
+export function CreateCodexCredentialGroup(arg1) {
+  return Call.ByName("main.App.CreateCodexCredentialGroup", arg1);
+}
+
+export function UpdateCodexCredentialGroupByID(arg1, arg2) {
+  return Call.ByName("main.App.UpdateCodexCredentialGroupByID", arg1, arg2);
+}
+
+export function DeleteCodexCredentialGroupByID(arg1) {
+  return Call.ByName("main.App.DeleteCodexCredentialGroupByID", arg1);
+}
+
+export function SetDefaultCodexCredentialGroup(arg1) {
+  return Call.ByName("main.App.SetDefaultCodexCredentialGroup", arg1);
+}
+
 export function CreateCodexEndpoint(arg1) {
   return Call.ByName("main.App.CreateCodexEndpoint", arg1);
 }
@@ -405,4 +477,3 @@ export function GetCodexGlobalConfig() {
 export function UpdateCodexGlobalConfig(arg1) {
   return Call.ByName("main.App.UpdateCodexGlobalConfig", arg1);
 }
-

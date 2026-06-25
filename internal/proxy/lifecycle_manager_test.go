@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +21,33 @@ func TestRequestLifecycleManager_NewRequestLifecycleManager(t *testing.T) {
 	}
 	if rlm.GetLastStatus() != "pending" {
 		t.Error("Initial status should be 'pending'")
+	}
+}
+
+func TestRequestLifecycleManager_RecordPrivacyRedactionLogsDebugSummary(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	rlm := NewRequestLifecycleManager(nil, nil, "test-privacy-log", nil)
+	rlm.logger = logger.With("provider", "claude")
+
+	summary := `{"changed":true,"hits":[{"rule_name":"token rule","category":"token","count":1}]}`
+	matches := `[{"rule_name":"token rule","category":"token","raw":"sk-body-token","replacement":"fake_token_0001"}]`
+	rlm.RecordPrivacyRedaction(summary, []byte(`{"message":"fake_token_0001"}`), matches)
+
+	output := logs.String()
+	for _, expected := range []string{
+		"[隐私防护] 请求正文已脱敏",
+		"test-privacy-log",
+		"privacy_redaction_summary",
+		"privacy_redaction_matches",
+		"privacy_redacted_body",
+		"sk-body-token",
+		"fake_token_0001",
+		"token rule",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected debug log to contain %q, got %s", expected, output)
+		}
 	}
 }
 

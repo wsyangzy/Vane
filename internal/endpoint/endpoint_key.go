@@ -17,7 +17,16 @@ func EndpointKey(channel, name string) string {
 	return channel + endpointKeySeparator + name
 }
 
-func endpointKeyFromConfig(cfg config.EndpointConfig) string {
+// EndpointKeyForConfig returns the runtime key for a concrete endpoint config.
+// SQLite-managed Claude endpoints can have the same display name under different
+// credential groups, so recordToConfig supplies RuntimeKey for collision-free state.
+func EndpointKeyForConfig(cfg config.EndpointConfig) string {
+	if cfg.RuntimeKey != "" {
+		return cfg.RuntimeKey
+	}
 	return EndpointKey(cfg.Channel, cfg.Name)
 }
 
+func endpointKeyFromConfig(cfg config.EndpointConfig) string {
+	return EndpointKeyForConfig(cfg)
+}

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"ai-relay-forwarder/internal/events"
 	"ai-relay-forwarder/internal/logging"
 	"ai-relay-forwarder/internal/middleware"
+	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/proxy"
 	"ai-relay-forwarder/internal/service"
 	"ai-relay-forwarder/internal/store"
@@ -63,6 +65,10 @@ type App struct {
 	channelStore   store.ChannelStore      // 渠道数据持久化
 	channelService *service.ChannelService // 渠道业务服务
 
+	// Claude 凭证分组 (SQLite)
+	claudeCredentialGroupStore   store.ClaudeCredentialGroupStore      // Claude Token/API Key 分组
+	claudeCredentialGroupService *service.ClaudeCredentialGroupService // Claude 凭证分组业务
+
 	// 模型定价存储 (SQLite)
 	modelPricingStore   store.ModelPricingStore      // 模型定价数据持久化
 	modelPricingService *service.ModelPricingService // 模型定价业务服务
@@ -72,15 +78,21 @@ type App struct {
 	settingsService *service.SettingsService // 设置业务服务
 	portManager     *utils.PortManager       // 端口管理器
 
+	// 隐私防护 (SQLite)
+	privacyStore   *privacy.Store
+	privacyService *privacy.Service
+
 	// Codex Provider 存储 (SQLite)
 	codexProviderStore   store.CodexProviderStore      // Codex Provider 数据持久化（旧接口转调用）
 	codexProviderService *service.CodexProviderService // Codex Provider 业务服务（旧接口转调用）
 
 	// Codex 渠道-端点 两层存储 (SQLite, 2026-05-13 引入)
-	codexChannelStore    store.CodexChannelStore       // 渠道存储（共用配置）
-	codexEndpointStore   store.CodexEndpointStore      // 端点存储（仅 base_url）
-	codexChannelService  *service.CodexChannelService  // 渠道业务
-	codexEndpointService *service.CodexEndpointService // 端点业务
+	codexChannelStore           store.CodexChannelStore              // 渠道存储（共用配置）
+	codexEndpointStore          store.CodexEndpointStore             // 端点存储（仅 base_url）
+	codexCredentialGroupStore   store.CodexCredentialGroupStore      // Codex 凭证分组存储
+	codexChannelService         *service.CodexChannelService         // 渠道业务
+	codexEndpointService        *service.CodexEndpointService        // 端点业务
+	codexCredentialGroupService *service.CodexCredentialGroupService // 凭证分组业务
 
 	// HTTP 代理服务器 (保留，监听配置的端口)
 	proxyServer *http.Server
@@ -89,6 +101,7 @@ type App struct {
 	codexEndpointMgr   *codexproxy.EndpointManager
 	codexHealthCheck   *codexproxy.HealthChecker
 	codexSuspensionMgr *codexproxy.SuspensionManager
+	codexHTTPHandler   *codexproxy.HTTPHandler
 	codexActivationMu  sync.Mutex // 串行化 Codex 激活写库/写配置，避免快捷切换并发
 
 	// 应用状态
@@ -196,6 +209,9 @@ func (a *App) startup() {
 	// 1. 加载配置
 	a.loadConfig()
 
+	// 1.5. 在日志系统初始化前应用 SQLite 中的日志设置，避免先按 YAML 默认 debug 写入启动日志
+	a.applyPersistedLoggingConfigBeforeLogger()
+
 	// 2. 初始化日志
 	a.setupLogger()
 
@@ -215,6 +231,9 @@ func (a *App) startup() {
 
 	// 5.5 初始化设置服务 (SQLite)
 	a.setupSettingsStore()
+
+	// 5.6 初始化隐私防护服务 (SQLite)
+	a.setupPrivacyService()
 
 	// 6. 创建端点管理器（但不启动健康检查）
 	a.endpointManager = endpoint.NewManager(a.config)
@@ -584,6 +603,114 @@ func (a *App) setupLogger() {
 		"file_enabled", a.config.Logging.FileEnabled)
 }
 
+func (a *App) applyPersistedLoggingConfigBeforeLogger() {
+	if a.config == nil {
+		return
+	}
+	dbPath := strings.TrimSpace(a.config.UsageTracking.DatabasePath)
+	if a.config.UsageTracking.Database != nil && strings.TrimSpace(a.config.UsageTracking.Database.Path) != "" {
+		dbPath = strings.TrimSpace(a.config.UsageTracking.Database.Path)
+	}
+	if dbPath == "" || dbPath == ":memory:" {
+		return
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	db, err := sql.Open("sqlite", sqliteReadOnlyStartupDSN(dbPath))
+	if err != nil {
+		return
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT key, value
+		FROM settings
+		WHERE category = 'logging'
+		  AND key IN ('level', 'format')
+	`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return
+		}
+		value = strings.TrimSpace(value)
+		switch key {
+		case "level":
+			if isValidLoggingLevel(value) {
+				a.config.Logging.Level = strings.ToLower(value)
+			}
+		case "format":
+			if isValidLoggingFormat(value) {
+				a.config.Logging.Format = strings.ToLower(value)
+			}
+		}
+	}
+}
+
+func sqliteReadOnlyStartupDSN(dbPath string) string {
+	separator := "?"
+	if strings.Contains(dbPath, "?") {
+		separator = "&"
+	}
+	return dbPath + separator + "mode=ro&_busy_timeout=2000"
+}
+
+func isValidLoggingLevel(level string) bool {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug", "info", "warn", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidLoggingFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "text", "json":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) applyRuntimeLoggingConfig() {
+	if a.config == nil {
+		return
+	}
+	if a.logEmitter != nil {
+		a.logEmitter.Stop()
+	}
+
+	logger, broadcastHandler := setupLogger(a.config.Logging)
+	slog.SetDefault(logger)
+	a.logger = logger
+	a.logHandler = broadcastHandler
+	a.logEmitter = broadcastHandler.Emitter
+
+	utils.SetDebugConfig(a.config)
+	if a.configWatcher != nil {
+		a.configWatcher.UpdateLogger(logger)
+	}
+	if a.codexHTTPHandler != nil {
+		a.codexHTTPHandler.UpdateLogger(logger)
+	}
+	a.logger.Info("✅ 日志设置已应用",
+		"level", a.config.Logging.Level,
+		"file_enabled", a.config.Logging.FileEnabled)
+}
+
 // setupEventBus 设置事件总线
 func (a *App) setupEventBus() {
 	a.eventBus = events.NewEventBus(a.logger)
@@ -608,29 +735,40 @@ func (a *App) setupEndpointStore() {
 	// 创建 EndpointStore
 	a.endpointStore = store.NewSQLiteEndpointStore(db)
 
-	// 创建 EndpointService
-	a.endpointService = service.NewEndpointService(a.endpointStore, a.endpointManager, a.config)
-
 	// 创建 ChannelStore / ChannelService
 	a.channelStore = store.NewSQLiteChannelStore(db)
 	a.channelService = service.NewChannelService(a.channelStore)
+
+	// 创建 Claude CredentialGroupStore / Service
+	a.claudeCredentialGroupStore = store.NewSQLiteClaudeCredentialGroupStore(db)
+	a.claudeCredentialGroupService = service.NewClaudeCredentialGroupService(a.claudeCredentialGroupStore, a.channelStore, a.endpointStore)
+
+	// 创建 EndpointService
+	a.endpointService = service.NewEndpointService(a.endpointStore, a.endpointManager, a.config, a.claudeCredentialGroupStore)
 
 	// 从数据库同步端点到内存
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// 回填渠道表，保证“端点删光后渠道仍存在”
+	if a.channelService != nil {
+		if added, err := a.channelService.BackfillChannelsFromEndpoints(ctx, a.endpointStore); err != nil {
+			a.logger.Warn("⚠️ 渠道回填失败", "error", err)
+		} else if added > 0 {
+			a.logger.Info("✅ 渠道回填完成", "count", added)
+		}
+	}
+	if a.claudeCredentialGroupService != nil {
+		if updated, err := a.claudeCredentialGroupService.EnsureDefaultGroupsFromEndpoints(ctx); err != nil {
+			a.logger.Warn("⚠️ Claude 凭证分组回填失败", "error", err)
+		} else if updated > 0 {
+			a.logger.Info("✅ Claude 凭证分组回填完成", "endpoint_count", updated)
+		}
+	}
+
 	if err := a.endpointService.SyncFromDatabase(ctx); err != nil {
 		a.logger.Warn("⚠️ 从数据库同步端点失败，使用 YAML 配置", "error", err)
 	} else {
-		// 回填渠道表，保证“端点删光后渠道仍存在”
-		if a.channelService != nil {
-			if added, err := a.channelService.BackfillChannelsFromEndpoints(ctx, a.endpointStore); err != nil {
-				a.logger.Warn("⚠️ 渠道回填失败", "error", err)
-			} else if added > 0 {
-				a.logger.Info("✅ 渠道回填完成", "count", added)
-			}
-		}
-
 		// 同步渠道优先级到运行时，用于渠道间故障转移顺序
 		a.syncChannelPrioritiesToEndpointManager(ctx)
 		// 同步渠道“参与故障转移”开关（暂停/恢复持久化）
@@ -752,8 +890,10 @@ func (a *App) ensureCodexProviderService() {
 	codexProviderService := service.NewCodexProviderService(codexProviderStore)
 	codexChannelStore := store.NewSQLiteCodexChannelStore(db)
 	codexEndpointStore := store.NewSQLiteCodexEndpointStore(db)
+	codexCredentialGroupStore := store.NewSQLiteCodexCredentialGroupStore(db)
 	codexChannelService := service.NewCodexChannelService(codexChannelStore, codexEndpointStore)
-	codexEndpointService := service.NewCodexEndpointService(codexEndpointStore, codexChannelStore)
+	codexEndpointService := service.NewCodexEndpointService(codexEndpointStore, codexChannelStore, codexCredentialGroupStore)
+	codexCredentialGroupService := service.NewCodexCredentialGroupService(codexCredentialGroupStore, codexChannelStore, codexEndpointStore)
 
 	a.mu.Lock()
 	if a.codexProviderService == nil {
@@ -763,8 +903,10 @@ func (a *App) ensureCodexProviderService() {
 	if a.codexChannelService == nil {
 		a.codexChannelStore = codexChannelStore
 		a.codexEndpointStore = codexEndpointStore
+		a.codexCredentialGroupStore = codexCredentialGroupStore
 		a.codexChannelService = codexChannelService
 		a.codexEndpointService = codexEndpointService
+		a.codexCredentialGroupService = codexCredentialGroupService
 	}
 	a.mu.Unlock()
 }
@@ -978,16 +1120,92 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 		if err != nil {
 			a.logger.Warn("⚠️ 获取端点列表失败", "error", err)
 		} else {
+			legacyKeyCounts := make(map[string]int, len(endpoints))
 			for _, ep := range endpoints {
-				key := tracking.EndpointMultiplierKey(ep.Channel, ep.Name)
-				multipliers[key] = tracking.EndpointMultiplier{
-					CostMultiplier:                ep.CostMultiplier,
-					InputCostMultiplier:           ep.InputCostMultiplier,
-					OutputCostMultiplier:          ep.OutputCostMultiplier,
-					CacheCreationCostMultiplier:   ep.CacheCreationCostMultiplier,
-					CacheCreationCostMultiplier1h: ep.CacheCreationCostMultiplier1h,
-					CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
-					ModelMultipliers:              endpointModelMultipliersToTracking(ep.ModelMultipliers),
+				if ep == nil {
+					continue
+				}
+				legacyKeyCounts[tracking.EndpointMultiplierKey(ep.Channel, ep.Name)]++
+			}
+			claudeGroupsByID := make(map[int64]*store.ClaudeCredentialGroupRecord)
+			claudeDefaultGroupByChannel := make(map[string]*store.ClaudeCredentialGroupRecord)
+			if a.claudeCredentialGroupStore != nil {
+				for _, ep := range endpoints {
+					if ep == nil {
+						continue
+					}
+					if ep.CredentialGroupID > 0 {
+						if _, ok := claudeGroupsByID[ep.CredentialGroupID]; !ok {
+							if group, err := a.claudeCredentialGroupStore.GetByID(ctx, ep.CredentialGroupID); err == nil && group != nil {
+								claudeGroupsByID[ep.CredentialGroupID] = group
+							}
+						}
+					}
+					if ep.Channel != "" {
+						if _, ok := claudeDefaultGroupByChannel[ep.Channel]; !ok {
+							if group, err := a.claudeCredentialGroupStore.GetDefaultByChannel(ctx, ep.Channel); err == nil && group != nil {
+								claudeDefaultGroupByChannel[ep.Channel] = group
+							}
+						}
+					}
+				}
+			}
+			for _, ep := range endpoints {
+				if ep == nil {
+					continue
+				}
+				group := claudeGroupsByID[ep.CredentialGroupID]
+				if group == nil {
+					group = claudeDefaultGroupByChannel[ep.Channel]
+				}
+				groupName := ep.CredentialGroupName
+				groupCostMultiplier := 1.0
+				groupInputMultiplier := 1.0
+				groupOutputMultiplier := 1.0
+				groupCacheCreationMultiplier := 1.0
+				groupCacheCreation1hMultiplier := 1.0
+				groupCacheReadMultiplier := 1.0
+				groupModelMultipliers := []tracking.ModelMultiplier(nil)
+				if group != nil {
+					groupName = group.Name
+					groupCostMultiplier = defaultPositiveMultiplier(group.CostMultiplier)
+					groupInputMultiplier = defaultPositiveMultiplier(group.InputCostMultiplier)
+					groupOutputMultiplier = defaultPositiveMultiplier(group.OutputCostMultiplier)
+					groupCacheCreationMultiplier = defaultPositiveMultiplier(group.CacheCreationCostMultiplier)
+					groupCacheCreation1hMultiplier = defaultPositiveMultiplier(group.CacheCreationCostMultiplier1h)
+					groupCacheReadMultiplier = defaultPositiveMultiplier(group.CacheReadCostMultiplier)
+					groupModelMultipliers = endpointModelMultipliersToTracking(group.ModelMultipliers)
+				}
+				if groupName == "" && ep.CredentialGroupID > 0 {
+					groupName = fmt.Sprintf("g%d", ep.CredentialGroupID)
+				}
+				multiplier := tracking.EndpointMultiplier{
+					CostMultiplier:                groupCostMultiplier * defaultPositiveMultiplier(ep.CostMultiplier),
+					InputCostMultiplier:           groupInputMultiplier * defaultPositiveMultiplier(ep.InputCostMultiplier),
+					OutputCostMultiplier:          groupOutputMultiplier * defaultPositiveMultiplier(ep.OutputCostMultiplier),
+					CacheCreationCostMultiplier:   groupCacheCreationMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier),
+					CacheCreationCostMultiplier1h: groupCacheCreation1hMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier1h),
+					CacheReadCostMultiplier:       groupCacheReadMultiplier * defaultPositiveMultiplier(ep.CacheReadCostMultiplier),
+					ModelMultipliers:              mergeTrackingModelMultipliers(endpointModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
+				}
+				keys := []string{
+					tracking.EndpointMultiplierGroupKey(ep.Channel, groupName, ep.Name),
+					service.EndpointRuntimeKey(ep),
+				}
+				legacyKey := tracking.EndpointMultiplierKey(ep.Channel, ep.Name)
+				if legacyKeyCounts[legacyKey] <= 1 {
+					keys = append(keys, legacyKey)
+				}
+				seenKeys := make(map[string]struct{}, len(keys))
+				for _, key := range keys {
+					if key == "" {
+						continue
+					}
+					if _, ok := seenKeys[key]; ok {
+						continue
+					}
+					seenKeys[key] = struct{}{}
+					multipliers[key] = multiplier
 				}
 			}
 		}
@@ -1000,24 +1218,48 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 			a.logger.Warn("⚠️ 获取 Codex 渠道列表失败", "error", err)
 		} else {
 			for _, ch := range channels {
+				var defaultGroup *store.CodexCredentialGroupRecord
+				if a.codexCredentialGroupStore != nil {
+					defaultGroup, _ = a.codexCredentialGroupStore.GetDefaultByChannelID(ctx, ch.ID)
+				}
 				codexEndpoints, err := a.codexEndpointStore.ListByChannelID(ctx, ch.ID)
 				if err != nil {
 					a.logger.Warn("⚠️ 获取 Codex 端点列表失败", "channel", ch.Name, "error", err)
 					continue
 				}
 				for _, ep := range codexEndpoints {
+					group := defaultGroup
+					if a.codexCredentialGroupStore != nil && ep.CredentialGroupID > 0 {
+						if resolved, err := a.codexCredentialGroupStore.GetByID(ctx, ep.CredentialGroupID); err == nil && resolved != nil {
+							group = resolved
+						}
+					}
+					groupCostMultiplier := 1.0
+					groupInputMultiplier := 1.0
+					groupOutputMultiplier := 1.0
+					groupCacheReadMultiplier := 1.0
+					groupModelMultipliers := []tracking.ModelMultiplier(nil)
+					billingOutputTokenSource := "output_tokens"
+					if group != nil {
+						groupCostMultiplier = defaultPositiveMultiplier(group.CostMultiplier)
+						groupInputMultiplier = defaultPositiveMultiplier(group.InputCostMultiplier)
+						groupOutputMultiplier = defaultPositiveMultiplier(group.OutputCostMultiplier)
+						groupCacheReadMultiplier = defaultPositiveMultiplier(group.CacheReadCostMultiplier)
+						groupModelMultipliers = codexModelMultipliersToTracking(group.ModelMultipliers)
+						billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(group.BillingOutputTokenSource)
+					}
 					key := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
-					// Codex 端点目前没有 5m/1h 拆分倍率，统一应用 CacheReadCostMultiplier；
-					// 缓存创建倍率默认 1.0（不影响计算）
+					// Codex 的 API Key 与计费配置归属凭证分组；端点只表示 base_url 线路配置。
+					// 历史端点倍率字段保留为兼容存储，但不再参与运行时计费。
 					multipliers[key] = tracking.EndpointMultiplier{
-						CostMultiplier:                ep.CostMultiplier,
-						InputCostMultiplier:           ep.InputCostMultiplier,
-						OutputCostMultiplier:          ep.OutputCostMultiplier,
+						CostMultiplier:                groupCostMultiplier,
+						InputCostMultiplier:           groupInputMultiplier,
+						OutputCostMultiplier:          groupOutputMultiplier,
 						CacheCreationCostMultiplier:   1.0,
 						CacheCreationCostMultiplier1h: 1.0,
-						CacheReadCostMultiplier:       ep.CacheReadCostMultiplier,
-						BillingOutputTokenSource:      tracking.NormalizeBillingOutputTokenSource(ep.BillingOutputTokenSource),
-						ModelMultipliers:              codexModelMultipliersToTracking(ep.ModelMultipliers),
+						CacheReadCostMultiplier:       groupCacheReadMultiplier,
+						BillingOutputTokenSource:      billingOutputTokenSource,
+						ModelMultipliers:              mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
 					}
 				}
 			}
@@ -1063,11 +1305,50 @@ func codexModelMultipliersToTracking(rules []store.CodexModelMultiplierRecord) [
 	return result
 }
 
+func mergeTrackingModelMultipliers(primary, fallback []tracking.ModelMultiplier) []tracking.ModelMultiplier {
+	if len(primary) == 0 {
+		return fallback
+	}
+	if len(fallback) == 0 {
+		return primary
+	}
+
+	result := make([]tracking.ModelMultiplier, 0, len(primary)+len(fallback))
+	seen := make(map[string]struct{}, len(primary)+len(fallback))
+	appendRule := func(rule tracking.ModelMultiplier) {
+		model := strings.TrimSpace(rule.Model)
+		if model == "" {
+			return
+		}
+		if _, ok := seen[model]; ok {
+			return
+		}
+		seen[model] = struct{}{}
+		rule.Model = model
+		result = append(result, rule)
+	}
+	for _, rule := range primary {
+		appendRule(rule)
+	}
+	for _, rule := range fallback {
+		appendRule(rule)
+	}
+	return result
+}
+
+func defaultPositiveMultiplier(value float64) float64 {
+	if value <= 0 {
+		return 1.0
+	}
+	return value
+}
+
 // setupProxyHandler 设置代理处理器
 func (a *App) setupProxyHandler() {
 	// 创建代理处理器
 	a.proxyHandler = proxy.NewHandler(a.endpointManager, a.config)
 	a.proxyHandler.SetEventBus(a.eventBus)
+	a.proxyHandler.SetPrivacyService(a.privacyService)
 
 	// 创建中间件（Claude 代理日志附加 provider=claude，用于文件分流）
 	a.loggingMiddleware = middleware.NewLoggingMiddleware(a.logger.With("provider", "claude"))
@@ -1274,7 +1555,7 @@ func (a *App) initCodexProxy() {
 	}
 
 	// 创建 EndpointManager
-	mgr := codexproxy.NewEndpointManager(a.codexChannelStore, a.codexEndpointStore, a.logger)
+	mgr := codexproxy.NewEndpointManager(a.codexChannelStore, a.codexEndpointStore, a.codexCredentialGroupStore, a.logger)
 	if err := mgr.Reload(); err != nil {
 		a.logger.Error("Codex 端点管理器加载失败", "error", err)
 		return
@@ -1326,7 +1607,8 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 		Failover:      a.config.Failover,    // 故障转移配置（设置页 failover.*）
 		SuspensionMgr: a.codexSuspensionMgr, // 请求挂起队列
 	}
-	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker)
+	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker, a.privacyService)
+	a.codexHTTPHandler = baseHandler
 
 	// 公用 Claude 代理的鉴权中间件 + 日志中间件
 	var handler http.Handler = baseHandler
@@ -1374,6 +1656,7 @@ func (a *App) stopCodexProxy() {
 		a.codexHealthCheck = nil
 	}
 	a.codexEndpointMgr = nil
+	a.codexHTTPHandler = nil
 }
 
 // setupConfigReload 设置配置热重载
@@ -1396,6 +1679,9 @@ func (a *App) setupConfigReload() {
 		a.logger = newLogger
 		a.logHandler = newBroadcastHandler
 		a.logEmitter = newBroadcastHandler.Emitter
+		if a.codexHTTPHandler != nil {
+			a.codexHTTPHandler.UpdateLogger(newLogger)
+		}
 
 		// 更新各组件
 		a.configWatcher.UpdateLogger(newLogger)
@@ -1639,6 +1925,27 @@ func (a *App) setupSettingsStore() {
 	a.logger.Info("✅ 系统设置存储已启用 (SQLite)")
 }
 
+func (a *App) setupPrivacyService() {
+	db := a.storeDB
+	if db == nil && a.usageTracker != nil {
+		db = a.usageTracker.GetDB()
+	}
+	if db == nil {
+		a.logger.Warn("隐私防护服务未启用：数据库未就绪")
+		return
+	}
+
+	a.privacyStore = privacy.NewStore(db)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.privacyStore.EnsureSchema(ctx); err != nil {
+		a.logger.Warn("隐私防护规则表兼容升级失败", "error", err)
+		return
+	}
+	a.privacyService = privacy.NewService(a.privacyStore, nil, a.logger)
+	a.logger.Info("✅ 隐私防护服务已启用 (SQLite)")
+}
+
 // applySettingsToConfig 从数据库加载设置并应用到运行时配置
 func (a *App) applySettingsToConfig() {
 	if a.settingsService == nil {
@@ -1726,8 +2033,13 @@ func (a *App) applySettingsToConfig() {
 	a.config.UsageTracking.CleanupInterval = a.settingsService.GetDuration(ctx, service.CategoryRetention, "cleanup_interval", a.config.UsageTracking.CleanupInterval)
 
 	// 🔧 [P5.5.4 新增] Logging 日志配置（从 SQLite 同步）
+	oldLoggingLevel := a.config.Logging.Level
+	oldLoggingFormat := a.config.Logging.Format
 	a.config.Logging.Level = a.getSettingString(ctx, service.CategoryLogging, "level", a.config.Logging.Level)
 	a.config.Logging.Format = a.getSettingString(ctx, service.CategoryLogging, "format", a.config.Logging.Format)
+	if a.config.Logging.Level != oldLoggingLevel || a.config.Logging.Format != oldLoggingFormat {
+		a.applyRuntimeLoggingConfig()
+	}
 
 	// 🔧 [P5.5.4 新增] Timezone 时区配置（从 SQLite 同步）
 	// 注意：时区变更标记为 RequiresRestart=true，运行时变更只影响后续新生成的时间戳

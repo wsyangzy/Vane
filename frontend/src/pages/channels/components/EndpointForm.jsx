@@ -4,94 +4,14 @@
 // ============================================
 
 import { useState } from 'react';
-import { X, Save, AlertCircle, ChevronDown, Eye, EyeOff, Plus, Trash2 } from 'lucide-react';
+import { X, Save, AlertCircle } from 'lucide-react';
 import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
-import { formatMultiplierInputValue, isValidMultiplierExpression } from '@utils/multiplier.js';
-
-const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
-const MULTIPLIER_FIELDS = [
-  { name: 'costMultiplier', label: '总成本倍率' },
-  { name: 'inputCostMultiplier', label: '输入成本倍率' },
-  { name: 'outputCostMultiplier', label: '输出成本倍率' },
-  { name: 'cacheReadCostMultiplier', label: '缓存读取成本倍率' },
-  { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率' },
-  { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
-];
-
-const MODEL_MULTIPLIER_FIELDS = [
-  { name: 'costMultiplier', label: '总倍率' },
-  { name: 'inputCostMultiplier', label: '输入倍率' },
-  { name: 'outputCostMultiplier', label: '输出倍率' },
-  { name: 'cacheReadCostMultiplier', label: '缓存读取倍率' }
-];
 
 const ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
-  { key: 'auth', label: '认证信息' },
-  { key: 'routing', label: '路由配置' },
-  { key: 'billing', label: '成本倍率' }
+  { key: 'routing', label: '路由配置' }
 ];
-
-const hasFineGrainedModelMultiplier = (rule) => {
-  const isDefault = (value) => {
-    const parsed = Number(value ?? 1.0);
-    return Number.isFinite(parsed) && Math.abs(parsed - 1.0) <= 0.000001;
-  };
-  return !isDefault(rule?.inputCostMultiplier) ||
-    !isDefault(rule?.outputCostMultiplier) ||
-    !isDefault(rule?.cacheReadCostMultiplier);
-};
-
-const buildInitialModelMultiplierRows = (modelMultipliers) => {
-  return (modelMultipliers || [])
-    .map((rule) => ({
-      model: String(rule?.model || ''),
-      costMultiplier: formatMultiplierInputValue(rule?.costMultiplier ?? 1.0),
-      inputCostMultiplier: formatMultiplierInputValue(rule?.inputCostMultiplier ?? 1.0),
-      outputCostMultiplier: formatMultiplierInputValue(rule?.outputCostMultiplier ?? 1.0),
-      cacheReadCostMultiplier: formatMultiplierInputValue(rule?.cacheReadCostMultiplier ?? 1.0),
-      advancedOpen: hasFineGrainedModelMultiplier(rule)
-    }))
-    .filter((row) => row.model.trim());
-};
-
-const createEmptyModelMultiplierRow = () => ({
-  model: '',
-  costMultiplier: '1',
-  inputCostMultiplier: '1',
-  outputCostMultiplier: '1',
-  cacheReadCostMultiplier: '1',
-  advancedOpen: false
-});
-
-const parseModelMultiplierPayload = (rows) => {
-  const payload = [];
-  const seen = new Set();
-  for (const [index, row] of (rows || []).entries()) {
-    const model = String(row?.model || '').trim();
-    if (!model) continue;
-    if (seen.has(model)) {
-      return { error: `模型附加倍率重复：${model}` };
-    }
-    seen.add(model);
-
-    for (const field of MODEL_MULTIPLIER_FIELDS) {
-      if (!isValidMultiplierExpression(row?.[field.name])) {
-        return { error: `第 ${index + 1} 行模型附加倍率：${field.label}必须是非负数字或分数，例如 1.25 或 40/30` };
-      }
-    }
-
-    payload.push({
-      model,
-      costMultiplier: row.costMultiplier,
-      inputCostMultiplier: row.inputCostMultiplier,
-      outputCostMultiplier: row.outputCostMultiplier,
-      cacheReadCostMultiplier: row.cacheReadCostMultiplier
-    });
-  }
-  return { payload };
-};
 
 const getErrorMessage = (error, fallback = '保存失败') => {
   if (!error) return fallback;
@@ -109,7 +29,7 @@ const getErrorMessage = (error, fallback = '保存失败') => {
 // 表单输入组件
 // ============================================
 
-const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, required, disabled, help, error, inputMode }) => (
+const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, required, disabled, help, error, inputMode, min }) => (
   <div className="space-y-1">
     <label className="block text-sm font-medium text-slate-700">
       {label}
@@ -123,6 +43,7 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
       placeholder={placeholder}
       disabled={disabled}
       inputMode={inputMode}
+      min={min}
       autoComplete="off"
       data-form-type="other"
       className={`
@@ -137,44 +58,6 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
     {help && <p className="text-xs text-slate-400">{help}</p>}
   </div>
 );
-
-// 密码输入组件（带显示/隐藏切换）
-// 修复浏览器原生按钮与自定义按钮重复问题
-const PasswordInput = ({ label, name, value, onChange, placeholder, required, help }) => {
-  const [showPassword, setShowPassword] = useState(false);
-
-  return (
-    <div className="space-y-1">
-      <label className="block text-sm font-medium text-slate-700">
-        {label}
-        {required && <span className="text-rose-500 ml-1">*</span>}
-      </label>
-      <div className="relative">
-        <input
-          type={showPassword ? 'text' : 'password'}
-          name={name}
-          value={value || ''}
-          onChange={onChange}
-          placeholder={placeholder}
-          autoComplete="new-password"
-          data-form-type="other"
-          className="w-full px-3 py-2 pr-10 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
-        />
-        <Tooltip content={showPassword ? '隐藏' : '显示'} className="absolute right-2 top-1/2 -translate-y-1/2">
-          <button
-            type="button"
-            onClick={() => setShowPassword(!showPassword)}
-            className="p-1 text-slate-400 hover:text-slate-600 transition-colors"
-            aria-label={showPassword ? '隐藏' : '显示'}
-          >
-            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-          </button>
-        </Tooltip>
-      </div>
-      {help && <p className="text-xs text-slate-400">{help}</p>}
-    </div>
-  );
-};
 
 const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, compact = false }) => {
   const isChecked = !!checked;
@@ -267,8 +150,10 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, 
 const EndpointForm = ({
   endpoint = null,  // null = 新建模式, object = 编辑模式
   channels = [],
+  credentialGroupsByChannel = {},
   existingEndpoints = [],
   defaultChannel = '',
+  defaultCredentialGroupId = 0,
   lockChannel = false,
   onSave,
   onCancel,
@@ -284,30 +169,29 @@ const EndpointForm = ({
     if (endpoint) {
       return {
         channel: endpoint.channel || '',
+        credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
         name: endpoint.name || '',
         url: endpoint.url || '',
-        token: endpoint.token || '', // 本地桌面应用，直接显示已保存的 Token
-        apiKey: endpoint.apiKey || '', // 本地桌面应用，直接显示已保存的 ApiKey
-        priority: endpoint.priority || 1,
+        priority: endpoint.priority ?? 0,
         failoverEnabled: endpoint.failoverEnabled !== false,
         skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false,
         cooldownSeconds: endpoint.cooldownSeconds || '',
         timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
-        costMultiplier: formatMultiplierInputValue(endpoint.costMultiplier || 1.0),
-        inputCostMultiplier: formatMultiplierInputValue(endpoint.inputCostMultiplier || 1.0),
-        outputCostMultiplier: formatMultiplierInputValue(endpoint.outputCostMultiplier || 1.0),
-        cacheCreationCostMultiplier: formatMultiplierInputValue(endpoint.cacheCreationCostMultiplier || 1.0),
-        cacheCreationCostMultiplier1h: formatMultiplierInputValue(endpoint.cacheCreationCostMultiplier1h || 1.0),
-        cacheReadCostMultiplier: formatMultiplierInputValue(endpoint.cacheReadCostMultiplier || 1.0)
+        costMultiplier: endpoint.costMultiplier || 1.0,
+        inputCostMultiplier: endpoint.inputCostMultiplier || 1.0,
+        outputCostMultiplier: endpoint.outputCostMultiplier || 1.0,
+        cacheCreationCostMultiplier: endpoint.cacheCreationCostMultiplier || 1.0,
+        cacheCreationCostMultiplier1h: endpoint.cacheCreationCostMultiplier1h || 1.0,
+        cacheReadCostMultiplier: endpoint.cacheReadCostMultiplier || 1.0,
+        modelMultipliers: endpoint.modelMultipliers || endpoint.model_multipliers || []
       };
     }
     return {
       channel: defaultChannel || '',
+      credentialGroupId: Number(defaultCredentialGroupId) || 0,
       name: '',
       url: '',
-      token: '',
-      apiKey: '',
       priority: 0, // 新建时传0，让后端自动递增
       failoverEnabled: true,
       skipHealthCheck: false, // 默认不跳过健康检查
@@ -319,13 +203,13 @@ const EndpointForm = ({
       outputCostMultiplier: '1',
       cacheCreationCostMultiplier: '1',
       cacheCreationCostMultiplier1h: '1',
-      cacheReadCostMultiplier: '1'
+      cacheReadCostMultiplier: '1',
+      modelMultipliers: []
     };
   };
 
   // 表单状态
   const [formData, setFormData] = useState(getInitialFormData);
-  const [modelMultiplierRows, setModelMultiplierRows] = useState(() => buildInitialModelMultiplierRows(endpoint?.modelMultipliers));
   const [activeTab, setActiveTab] = useState('basic');
 
   // 表单错误
@@ -337,45 +221,36 @@ const EndpointForm = ({
       : []),
     ...uniqueChannels.map((channel) => ({ value: channel, label: channel }))
   ];
+  const selectedChannelGroups = credentialGroupsByChannel?.[formData.channel] || [];
+  const selectedCredentialGroupID = Number(formData.credentialGroupId || 0);
+  const selectedCredentialGroup = selectedChannelGroups.find((group) => Number(group.id) === selectedCredentialGroupID) ||
+    selectedChannelGroups.find((group) => group.isDefault || group.is_default) ||
+    selectedChannelGroups[0] ||
+    null;
+  const credentialGroupOptions = selectedChannelGroups.map((group) => ({
+    value: String(group.id),
+    label: `${group.name || '未命名分组'}${group.isDefault || group.is_default ? ' · 默认' : ''}`
+  }));
 
   // 处理输入变化
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData(prev => {
+      const next = {
+        ...prev,
+        [name]: type === 'checkbox' ? checked : value
+      };
+      if (name === 'channel') {
+        const groups = credentialGroupsByChannel?.[value] || [];
+        const defaultGroup = groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
+        next.credentialGroupId = defaultGroup?.id || 0;
+      }
+      return next;
+    });
     // 清除对应字段的错误
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: null }));
     }
-  };
-
-  const updateModelMultiplierRow = (index, key, value) => {
-    setModelMultiplierRows((prev) =>
-      (prev || []).map((row, rowIndex) =>
-        rowIndex === index ? { ...row, [key]: value } : row
-      )
-    );
-    if (errors.submit) {
-      setErrors((prev) => ({ ...prev, submit: null }));
-    }
-  };
-
-  const addModelMultiplierRow = () => {
-    setModelMultiplierRows((prev) => [...(prev || []), createEmptyModelMultiplierRow()]);
-  };
-
-  const removeModelMultiplierRow = (index) => {
-    setModelMultiplierRows((prev) => (prev || []).filter((_, rowIndex) => rowIndex !== index));
-  };
-
-  const toggleModelMultiplierDetails = (index) => {
-    setModelMultiplierRows((prev) =>
-      (prev || []).map((row, rowIndex) =>
-        rowIndex === index ? { ...row, advancedOpen: !row.advancedOpen } : row
-      )
-    );
   };
 
   // 表单验证
@@ -393,48 +268,30 @@ const EndpointForm = ({
     } else if (!/^https?:\/\/.+/.test(formData.url)) {
       newErrors.url = '请输入有效的 URL (以 http:// 或 https:// 开头)';
     }
-    if (!isEditMode && !formData.token.trim()) {
-      newErrors.token = '请输入 Token';
-    }
-    for (const field of MULTIPLIER_FIELDS) {
-      if (!isValidMultiplierExpression(formData[field.name])) {
-        const message = `${field.label}必须是非负数字或分数，例如 1.25 或 40/30`;
-        newErrors[field.name] = message;
-        if (!newErrors.submit) {
-          newErrors.submit = message;
-        }
-      }
-    }
-    const modelMultiplierResult = parseModelMultiplierPayload(modelMultiplierRows);
-    if (modelMultiplierResult.error) {
-      newErrors.submit = modelMultiplierResult.error;
-      newErrors.modelMultipliers = modelMultiplierResult.error;
-    }
 
     const targetChannel = formData.channel.trim();
     const targetName = formData.name.trim();
+    const targetCredentialGroupID = Number(formData.credentialGroupId || selectedCredentialGroup?.id || 0);
     if (targetChannel && targetName && Array.isArray(existingEndpoints) && existingEndpoints.length > 0) {
       const conflict = existingEndpoints.find((ep) => {
         if (!ep) return false;
         const epChannel = String(ep.channel || '').trim();
         const epName = String(ep.name || '').trim();
-        if (epChannel !== targetChannel || epName !== targetName) return false;
+        const epCredentialGroupID = Number(ep.credentialGroupId || ep.credential_group_id || 0);
+        if (epChannel !== targetChannel || epCredentialGroupID !== targetCredentialGroupID || epName !== targetName) return false;
         if (isEditMode && endpoint?.id && ep.id === endpoint.id) return false;
         return true;
       });
 
       if (conflict) {
-        newErrors.submit = `同一渠道内端点名称必须唯一：渠道 '${targetChannel}' 已存在同名端点 '${targetName}'，请修改名称或选择其他渠道`;
+        const groupName = selectedCredentialGroup?.name || '默认分组';
+        newErrors.submit = `同一凭证分组内端点名称必须唯一：渠道 '${targetChannel}' / 分组 '${groupName}' 已存在同名端点 '${targetName}'，请修改名称或选择其他分组`;
         newErrors.name = newErrors.submit;
       }
     }
 
     if (newErrors.channel || newErrors.name || newErrors.url) {
       setActiveTab('basic');
-    } else if (newErrors.token) {
-      setActiveTab('auth');
-    } else if (MULTIPLIER_FIELDS.some((field) => newErrors[field.name]) || newErrors.modelMultipliers) {
-      setActiveTab('billing');
     }
 
     setErrors(newErrors);
@@ -450,15 +307,13 @@ const EndpointForm = ({
     }
 
     try {
-      const modelMultiplierResult = parseModelMultiplierPayload(modelMultiplierRows);
-      if (modelMultiplierResult.error) {
-        setActiveTab('billing');
-        setErrors({ submit: modelMultiplierResult.error });
-        return;
-      }
+      const endpointPayload = { ...formData };
+      delete endpointPayload.token;
+      delete endpointPayload.apiKey;
       await onSave({
-        ...formData,
-        modelMultipliers: modelMultiplierResult.payload
+        ...endpointPayload,
+        credentialGroupId: Number(formData.credentialGroupId || selectedCredentialGroup?.id || 0) || 0,
+        modelMultipliers: formData.modelMultipliers || []
       });
     } catch (error) {
       console.error('保存失败:', error);
@@ -489,7 +344,7 @@ const EndpointForm = ({
               tabs={ENDPOINT_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
-              className="grid-cols-4"
+              className="grid-cols-2"
               buttonPaddingClass="px-2 sm:px-3"
             />
           </div>
@@ -522,7 +377,9 @@ const EndpointForm = ({
                         options={channelOptions}
                         value={formData.channel || ''}
                         onChange={(value) => {
-                          setFormData(prev => ({ ...prev, channel: value }));
+                          const groups = credentialGroupsByChannel?.[value] || [];
+                          const defaultGroup = groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
+                          setFormData(prev => ({ ...prev, channel: value, credentialGroupId: defaultGroup?.id || 0 }));
                           if (errors.channel) {
                             setErrors(prev => ({ ...prev, channel: null }));
                           }
@@ -559,6 +416,36 @@ const EndpointForm = ({
                 )}
               </div>
 
+              {selectedChannelGroups.length > 0 && (
+                <div>
+                  <div className="space-y-1">
+                    <label className="block text-sm font-medium text-slate-700">
+                      凭证分组
+                    </label>
+                    <CustomSelect
+                      options={credentialGroupOptions}
+                      value={String(selectedCredentialGroup?.id || formData.credentialGroupId || '')}
+                      onChange={(value) => {
+                        setFormData(prev => ({ ...prev, credentialGroupId: Number(value) || 0 }));
+                        if (errors.credentialGroupId) {
+                          setErrors(prev => ({ ...prev, credentialGroupId: null }));
+                        }
+                      }}
+                      disabled={loading}
+                      size="md"
+                      fullWidth
+                      placeholder="请选择凭证分组"
+                    />
+                    <p className="text-xs text-slate-400">
+                      端点归属到该分组后复用其中的 Token/API Key 与默认倍率
+                    </p>
+                  </div>
+                  {errors.credentialGroupId && (
+                    <p className="text-xs text-rose-500 mt-1">{errors.credentialGroupId}</p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <FormInput
                   label="端点名称"
@@ -574,55 +461,20 @@ const EndpointForm = ({
                   <p className="text-xs text-rose-500 mt-1">{errors.name}</p>
                 )}
               </div>
-            </div>
 
-            <div>
-              <FormInput
-                label="URL"
-                name="url"
-                value={formData.url}
-                onChange={handleChange}
-                placeholder="https://api.example.com"
-                required
-              />
-              {errors.url && (
-                <p className="text-xs text-rose-500 mt-1">{errors.url}</p>
-              )}
-            </div>
-          </div>
-          )}
-
-          {/* 认证信息 */}
-          {activeTab === 'auth' && (
-          <div className="space-y-4">
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-              认证信息
-            </h3>
-
-            <div>
-              <PasswordInput
-                label="Token"
-                name="token"
-                value={formData.token}
-                onChange={handleChange}
-                placeholder="sk-..."
-                required={!isEditMode}
-                help="Bearer Token 认证。清空后保存将保留原值"
-              />
-              {errors.token && (
-                <p className="text-xs text-rose-500 mt-1">{errors.token}</p>
-              )}
-            </div>
-
-            <div>
-              <PasswordInput
-                label="API Key (可选)"
-                name="apiKey"
-                value={formData.apiKey}
-                onChange={handleChange}
-                placeholder="可选的 API Key"
-                help="备用认证方式。清空后保存将保留原值"
-              />
+              <div className={selectedChannelGroups.length > 0 ? '' : 'col-span-2'}>
+                <FormInput
+                  label="URL"
+                  name="url"
+                  value={formData.url}
+                  onChange={handleChange}
+                  placeholder="https://api.example.com"
+                  required
+                />
+                {errors.url && (
+                  <p className="text-xs text-rose-500 mt-1">{errors.url}</p>
+                )}
+              </div>
             </div>
           </div>
           )}
@@ -644,8 +496,9 @@ const EndpointForm = ({
                   value={formData.priority}
                   onChange={handleChange}
                   type="number"
-                  placeholder="1"
-                  help="数字越小优先级越高，相同则交换"
+                  min="0"
+                  placeholder="0"
+                  help="0 = 最高优先级，数字越小优先级越高，相同则交换"
                 />
 
                 {/* 超时时间 - 留空使用全局默认值 */}
@@ -695,196 +548,6 @@ const EndpointForm = ({
           </div>
           )}
 
-          {/* 成本倍率 */}
-          {activeTab === 'billing' && (
-              <div className="rounded-xl bg-slate-50 p-4 space-y-4">
-                <p className="text-xs text-slate-500 mb-3">
-                  成本倍率用于调整不同端点的计费比例，默认为 1.0，{MULTIPLIER_EXPRESSION_HELP}
-                </p>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <FormInput
-                    label="总成本倍率"
-                    name="costMultiplier"
-                    value={formData.costMultiplier}
-                    onChange={handleChange}
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="1.0"
-                    error={errors.costMultiplier}
-                  />
-
-                  <FormInput
-                    label="输入成本倍率"
-                    name="inputCostMultiplier"
-                    value={formData.inputCostMultiplier}
-                    onChange={handleChange}
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="1.0"
-                    error={errors.inputCostMultiplier}
-                  />
-
-                  <FormInput
-                    label="输出成本倍率"
-                    name="outputCostMultiplier"
-                    value={formData.outputCostMultiplier}
-                    onChange={handleChange}
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="40/30"
-                    error={errors.outputCostMultiplier}
-                  />
-
-                  <FormInput
-                    label="缓存读取成本倍率"
-                    name="cacheReadCostMultiplier"
-                    value={formData.cacheReadCostMultiplier}
-                    onChange={handleChange}
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="1.0"
-                    error={errors.cacheReadCostMultiplier}
-                  />
-
-                  <FormInput
-                    label="5分钟缓存创建倍率"
-                    name="cacheCreationCostMultiplier"
-                    value={formData.cacheCreationCostMultiplier}
-                    onChange={handleChange}
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="1.0"
-                    error={errors.cacheCreationCostMultiplier}
-                    help="Claude 默认缓存类型"
-                  />
-
-                  <FormInput
-                    label="1小时缓存创建倍率"
-                    name="cacheCreationCostMultiplier1h"
-                    value={formData.cacheCreationCostMultiplier1h}
-                    onChange={handleChange}
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="1.0"
-                    error={errors.cacheCreationCostMultiplier1h}
-                    help="长效缓存类型"
-                  />
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700">模型附加倍率</label>
-                      <p className="mt-0.5 text-xs text-slate-400">请求使用映射后的模型命中规则；默认只设置总倍率。</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={addModelMultiplierRow}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                    >
-                      <Plus size={14} />
-                      添加模型
-                    </button>
-                  </div>
-
-                  {modelMultiplierRows.length > 0 && (
-                    <div className="mt-3 space-y-2">
-                      {modelMultiplierRows.map((row, index) => (
-                        <div key={`model-multiplier-${index}`} className="rounded-lg border border-slate-200 bg-slate-50/70 p-3">
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto_auto] sm:items-end">
-                            <div className="min-w-0">
-                              <label className="mb-1 block text-xs text-slate-500">模型</label>
-                              <input
-                                type="text"
-                                value={row.model}
-                                onChange={(event) => updateModelMultiplierRow(index, 'model', event.target.value)}
-                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                placeholder="claude-sonnet-4-20250514"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="mb-1 block text-xs text-slate-500">总倍率</label>
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={row.costMultiplier}
-                                onChange={(event) => updateModelMultiplierRow(index, 'costMultiplier', event.target.value)}
-                                className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                placeholder="1"
-                              />
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => toggleModelMultiplierDetails(index)}
-                              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                            >
-                              细分
-                              <ChevronDown
-                                size={14}
-                                className={`transition-transform duration-200 ${row.advancedOpen ? 'rotate-180' : ''}`}
-                              />
-                            </button>
-
-                            <Tooltip content="删除">
-                              <button
-                                type="button"
-                                onClick={() => removeModelMultiplierRow(index)}
-                                className="inline-flex h-8 items-center justify-center rounded-lg bg-white p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </Tooltip>
-                          </div>
-
-                          {row.advancedOpen && (
-                            <div className="mt-2 grid grid-cols-1 gap-2 border-t border-slate-200/70 pt-2 sm:grid-cols-3">
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-500">输入</label>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={row.inputCostMultiplier}
-                                  onChange={(event) => updateModelMultiplierRow(index, 'inputCostMultiplier', event.target.value)}
-                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  placeholder="1"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-500">输出</label>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={row.outputCostMultiplier}
-                                  onChange={(event) => updateModelMultiplierRow(index, 'outputCostMultiplier', event.target.value)}
-                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  placeholder="1"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1 block text-xs text-slate-500">缓存读取</label>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={row.cacheReadCostMultiplier}
-                                  onChange={(event) => updateModelMultiplierRow(index, 'cacheReadCostMultiplier', event.target.value)}
-                                  className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                  placeholder="1"
-                                />
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-          )}
           </div>
 
           {/* 按钮 - 固定在底部 */}

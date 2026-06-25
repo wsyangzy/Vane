@@ -68,30 +68,54 @@ type CodexProviderStorageStatus struct {
 
 // CodexChannelInfo 提供给前端展示的渠道信息（含端点列表）。
 type CodexChannelInfo struct {
-	ID              int64               `json:"id"`
-	Name            string              `json:"name"`
-	ProviderType    string              `json:"provider_type"`
-	ApiKey          string              `json:"api_key"`
-	ApiKeyMasked    string              `json:"api_key_masked"`
-	Model           string              `json:"model"`
-	ModelMapping    map[string]string   `json:"model_mapping"`
-	ReasoningEffort string              `json:"model_reasoning_effort"`
-	Enable1MContext bool                `json:"enable_1m_context"`
-	Website         string              `json:"website"`
-	IsActive        bool                `json:"is_active"`
-	Endpoints       []CodexEndpointInfo `json:"endpoints"`
-	CreatedAt       string              `json:"created_at"`
-	UpdatedAt       string              `json:"updated_at"`
+	ID               int64                      `json:"id"`
+	Name             string                     `json:"name"`
+	ProviderType     string                     `json:"provider_type"`
+	ApiKey           string                     `json:"api_key"`
+	ApiKeyMasked     string                     `json:"api_key_masked"`
+	Model            string                     `json:"model"`
+	ModelMapping     map[string]string          `json:"model_mapping"`
+	ReasoningEffort  string                     `json:"model_reasoning_effort"`
+	Enable1MContext  bool                       `json:"enable_1m_context"`
+	Website          string                     `json:"website"`
+	IsActive         bool                       `json:"is_active"`
+	CredentialGroups []CodexCredentialGroupInfo `json:"credential_groups"`
+	Endpoints        []CodexEndpointInfo        `json:"endpoints"`
+	CreatedAt        string                     `json:"created_at"`
+	UpdatedAt        string                     `json:"updated_at"`
+}
+
+// CodexCredentialGroupInfo 提供给前端展示的凭证分组信息。
+type CodexCredentialGroupInfo struct {
+	ID                       int64                              `json:"id"`
+	ChannelID                int64                              `json:"channel_id"`
+	Name                     string                             `json:"name"`
+	ApiKey                   string                             `json:"api_key"`
+	ApiKeyMasked             string                             `json:"api_key_masked"`
+	IsDefault                bool                               `json:"is_default"`
+	CostMultiplier           float64                            `json:"costMultiplier"`
+	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
+	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	CreatedAt                string                             `json:"created_at"`
+	UpdatedAt                string                             `json:"updated_at"`
 }
 
 // CodexEndpointInfo 提供给前端展示的端点信息（name + base_url）。
 type CodexEndpointInfo struct {
 	ID                       int64                              `json:"id"`
 	ChannelID                int64                              `json:"channel_id"`
+	CredentialGroupID        int64                              `json:"credential_group_id"`
+	CredentialGroupName      string                             `json:"credential_group_name"`
+	ApiKey                   string                             `json:"api_key"`
+	ApiKeyMasked             string                             `json:"api_key_masked"`
 	Name                     string                             `json:"name"`
 	BaseURL                  string                             `json:"base_url"`
 	IsActive                 bool                               `json:"is_active"`
 	FailoverEnabled          bool                               `json:"failover_enabled"`
+	SkipHealthCheck          bool                               `json:"skip_health_check"`
 	Healthy                  bool                               `json:"healthy"`
 	HealthState              string                             `json:"health_state"`
 	HealthInScope            bool                               `json:"health_in_scope"`
@@ -134,11 +158,39 @@ type UpdateCodexChannelInput struct {
 	Website         string            `json:"website"`
 }
 
+type CreateCodexCredentialGroupInput struct {
+	ChannelID                int64                              `json:"channel_id"`
+	Name                     string                             `json:"name"`
+	ApiKey                   string                             `json:"api_key"`
+	IsDefault                bool                               `json:"is_default"`
+	CostMultiplier           float64                            `json:"costMultiplier"`
+	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
+	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+}
+
+type UpdateCodexCredentialGroupInput struct {
+	Name                     string                             `json:"name"`
+	ApiKey                   string                             `json:"api_key"`
+	IsDefault                bool                               `json:"is_default"`
+	CostMultiplier           float64                            `json:"costMultiplier"`
+	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
+	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+}
+
 type CreateCodexEndpointInput struct {
 	ChannelID                int64                              `json:"channel_id"`
+	CredentialGroupID        int64                              `json:"credential_group_id"`
+	ApiKey                   string                             `json:"api_key"`
 	Name                     string                             `json:"name"`
 	BaseURL                  string                             `json:"base_url"`
 	FailoverEnabled          *bool                              `json:"failover_enabled"` // nil 时默认 true
+	SkipHealthCheck          bool                               `json:"skip_health_check"`
 	Priority                 int                                `json:"priority"`
 	TimeoutSeconds           int                                `json:"timeout_seconds"`         // 0 = 使用全局超时
 	CostMultiplier           float64                            `json:"costMultiplier"`          // 默认 1.0
@@ -152,7 +204,10 @@ type CreateCodexEndpointInput struct {
 type UpdateCodexEndpointInput struct {
 	Name                     string                             `json:"name"`
 	BaseURL                  string                             `json:"base_url"`
+	CredentialGroupID        *int64                             `json:"credential_group_id"`
+	ApiKey                   *string                            `json:"api_key"`
 	FailoverEnabled          *bool                              `json:"failover_enabled"`
+	SkipHealthCheck          *bool                              `json:"skip_health_check"`
 	Priority                 *int                               `json:"priority"`
 	TimeoutSeconds           *int                               `json:"timeout_seconds"`
 	CostMultiplier           *float64                           `json:"costMultiplier"`
@@ -210,6 +265,7 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 	a.mu.RLock()
 	channelService := a.codexChannelService
 	endpointService := a.codexEndpointService
+	credentialGroupService := a.codexCredentialGroupService
 	a.mu.RUnlock()
 	if channelService == nil || endpointService == nil {
 		return nil, fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
@@ -226,7 +282,14 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("获取渠道 '%s' 端点列表失败: %w", ch.Name, err)
 		}
-		result = append(result, a.buildCodexChannelInfo(ch, endpoints))
+		var credentialGroups []*store.CodexCredentialGroupRecord
+		if credentialGroupService != nil {
+			credentialGroups, err = credentialGroupService.ListByChannelID(ctx, ch.ID)
+			if err != nil {
+				return nil, fmt.Errorf("获取渠道 '%s' 凭证分组列表失败: %w", ch.Name, err)
+			}
+		}
+		result = append(result, a.buildCodexChannelInfo(ch, endpoints, credentialGroups))
 	}
 	return result, nil
 }
@@ -236,6 +299,7 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 
 	a.mu.RLock()
 	channelService := a.codexChannelService
+	credentialGroupService := a.codexCredentialGroupService
 	logger := a.logger
 	a.mu.RUnlock()
 	if channelService == nil {
@@ -252,6 +316,11 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 	if err != nil {
 		return fmt.Errorf("创建 Codex 渠道失败: %w", err)
 	}
+	if credentialGroupService != nil {
+		if _, err := credentialGroupService.EnsureDefaultGroup(ctx, created); err != nil {
+			return fmt.Errorf("创建 Codex 默认凭证分组失败: %w", err)
+		}
+	}
 
 	if logger != nil {
 		logger.Info("✅ Codex 渠道已创建", "name", created.Name, "is_active", created.IsActive)
@@ -266,6 +335,7 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 	a.mu.RLock()
 	channelService := a.codexChannelService
 	endpointService := a.codexEndpointService
+	credentialGroupService := a.codexCredentialGroupService
 	logger := a.logger
 	a.mu.RUnlock()
 	if channelService == nil || endpointService == nil {
@@ -288,6 +358,14 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 
 	if err := channelService.UpdateChannelByID(ctx, id, record); err != nil {
 		return fmt.Errorf("更新 Codex 渠道失败: %w", err)
+	}
+	if credentialGroupService != nil && record.ApiKey != "" {
+		if defaultGroup, groupErr := credentialGroupService.GetDefaultByChannelID(ctx, id); groupErr == nil && defaultGroup != nil && defaultGroup.ApiKey == previous.ApiKey {
+			defaultGroup.ApiKey = record.ApiKey
+			if err := credentialGroupService.UpdateGroup(ctx, defaultGroup.ID, defaultGroup); err != nil {
+				return fmt.Errorf("同步默认凭证分组失败: %w", err)
+			}
+		}
 	}
 
 	updated, err := channelService.GetChannelByID(ctx, id)
@@ -446,6 +524,124 @@ func (a *App) ActivateCodexChannel(id int64) error {
 }
 
 // ============================================================================
+// 新 Credential Group API
+// ============================================================================
+
+func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) (CodexCredentialGroupInfo, error) {
+	a.ensureCodexProviderService()
+
+	a.mu.RLock()
+	credentialGroupService := a.codexCredentialGroupService
+	logger := a.logger
+	a.mu.RUnlock()
+	if credentialGroupService == nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组服务未就绪，请稍后重试")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	created, err := credentialGroupService.CreateGroup(ctx, codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheReadCostMultiplier, input.BillingOutputTokenSource, input.ModelMultipliers))
+	if err != nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("创建 Codex 凭证分组失败: %w", err)
+	}
+	if logger != nil {
+		logger.Info("✅ Codex 凭证分组已创建", "channel_id", created.ChannelID, "name", created.Name, "is_default", created.IsDefault)
+	}
+	a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
+	return buildCodexCredentialGroupInfo(created), nil
+}
+
+func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredentialGroupInput) (CodexCredentialGroupInfo, error) {
+	a.ensureCodexProviderService()
+
+	a.mu.RLock()
+	credentialGroupService := a.codexCredentialGroupService
+	logger := a.logger
+	a.mu.RUnlock()
+	if credentialGroupService == nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组服务未就绪，请稍后重试")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	existing, err := credentialGroupService.GetByID(ctx, id)
+	if err != nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("读取 Codex 凭证分组失败: %w", err)
+	}
+	if existing == nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组不存在: %d", id)
+	}
+	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheReadCostMultiplier, input.BillingOutputTokenSource, input.ModelMultipliers)
+	if record.ApiKey == "" {
+		record.ApiKey = existing.ApiKey
+	}
+	if input.ModelMultipliers == nil {
+		record.ModelMultipliers = existing.ModelMultipliers
+	}
+	if err := credentialGroupService.UpdateGroup(ctx, id, record); err != nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("更新 Codex 凭证分组失败: %w", err)
+	}
+	updated, err := credentialGroupService.GetByID(ctx, id)
+	if err != nil {
+		return CodexCredentialGroupInfo{}, fmt.Errorf("读取更新后的 Codex 凭证分组失败: %w", err)
+	}
+	if logger != nil {
+		logger.Info("✅ Codex 凭证分组已更新", "id", id, "name", updated.Name, "is_default", updated.IsDefault)
+	}
+	a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
+	return buildCodexCredentialGroupInfo(updated), nil
+}
+
+func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
+	a.ensureCodexProviderService()
+
+	a.mu.RLock()
+	credentialGroupService := a.codexCredentialGroupService
+	logger := a.logger
+	a.mu.RUnlock()
+	if credentialGroupService == nil {
+		return fmt.Errorf("Codex 凭证分组服务未就绪，请稍后重试")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := credentialGroupService.DeleteGroup(ctx, id); err != nil {
+		return fmt.Errorf("删除 Codex 凭证分组失败: %w", err)
+	}
+	if logger != nil {
+		logger.Info("✅ Codex 凭证分组已删除", "id", id)
+	}
+	a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
+	return nil
+}
+
+func (a *App) SetDefaultCodexCredentialGroup(id int64) error {
+	a.ensureCodexProviderService()
+
+	a.mu.RLock()
+	credentialGroupService := a.codexCredentialGroupService
+	a.mu.RUnlock()
+	if credentialGroupService == nil {
+		return fmt.Errorf("Codex 凭证分组服务未就绪，请稍后重试")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := credentialGroupService.SetDefault(ctx, id); err != nil {
+		return fmt.Errorf("设置默认 Codex 凭证分组失败: %w", err)
+	}
+	a.emitCodexProviderUpdate()
+	go a.syncEndpointMultipliersToTracker(context.Background())
+	return nil
+}
+
+// ============================================================================
 // 新 Endpoint API
 // ============================================================================
 
@@ -469,9 +665,12 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 
 	record := &store.CodexEndpointRecord{
 		ChannelID:                input.ChannelID,
+		CredentialGroupID:        input.CredentialGroupID,
+		ApiKey:                   input.ApiKey,
 		Name:                     input.Name,
 		BaseURL:                  input.BaseURL,
 		FailoverEnabled:          input.FailoverEnabled == nil || *input.FailoverEnabled,
+		SkipHealthCheck:          input.SkipHealthCheck,
 		Priority:                 input.Priority,
 		TimeoutSeconds:           input.TimeoutSeconds,
 		CostMultiplier:           input.CostMultiplier,
@@ -546,6 +745,10 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if input.FailoverEnabled != nil {
 		failoverEnabled = *input.FailoverEnabled
 	}
+	skipHealthCheck := previous.SkipHealthCheck
+	if input.SkipHealthCheck != nil {
+		skipHealthCheck = *input.SkipHealthCheck
+	}
 	priority := previous.Priority
 	if input.Priority != nil {
 		priority = *input.Priority
@@ -578,8 +781,16 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if input.ModelMultipliers != nil {
 		modelMultipliers = input.ModelMultipliers
 	}
+	credentialGroupID := previous.CredentialGroupID
+	if input.CredentialGroupID != nil {
+		credentialGroupID = *input.CredentialGroupID
+	}
+	apiKey := previous.ApiKey
+	if input.ApiKey != nil {
+		apiKey = *input.ApiKey
+	}
 
-	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
+	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
 
@@ -866,6 +1077,43 @@ func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMa
 	}
 }
 
+func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) *store.CodexCredentialGroupRecord {
+	return &store.CodexCredentialGroupRecord{
+		ChannelID:                channelID,
+		Name:                     name,
+		ApiKey:                   apiKey,
+		IsDefault:                isDefault,
+		CostMultiplier:           costMultiplier,
+		InputCostMultiplier:      inputCostMultiplier,
+		OutputCostMultiplier:     outputCostMultiplier,
+		CacheReadCostMultiplier:  cacheReadCostMultiplier,
+		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource),
+		ModelMultipliers:         modelMultipliers,
+	}
+}
+
+func buildCodexCredentialGroupInfo(record *store.CodexCredentialGroupRecord) CodexCredentialGroupInfo {
+	if record == nil {
+		return CodexCredentialGroupInfo{}
+	}
+	return CodexCredentialGroupInfo{
+		ID:                       record.ID,
+		ChannelID:                record.ChannelID,
+		Name:                     record.Name,
+		ApiKey:                   record.ApiKey,
+		ApiKeyMasked:             maskToken(record.ApiKey),
+		IsDefault:                record.IsDefault,
+		CostMultiplier:           record.CostMultiplier,
+		InputCostMultiplier:      record.InputCostMultiplier,
+		OutputCostMultiplier:     record.OutputCostMultiplier,
+		CacheReadCostMultiplier:  record.CacheReadCostMultiplier,
+		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource),
+		ModelMultipliers:         record.ModelMultipliers,
+		CreatedAt:                formatCodexTime(record.CreatedAt),
+		UpdatedAt:                formatCodexTime(record.UpdatedAt),
+	}
+}
+
 func copyCodexModelMapping(modelMapping map[string]string) map[string]string {
 	if len(modelMapping) == 0 {
 		return map[string]string{}
@@ -877,7 +1125,7 @@ func copyCodexModelMapping(modelMapping map[string]string) map[string]string {
 	return copied
 }
 
-func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints []*store.CodexEndpointRecord) CodexChannelInfo {
+func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints []*store.CodexEndpointRecord, credentialGroups []*store.CodexCredentialGroupRecord) CodexChannelInfo {
 	a.mu.RLock()
 	endpointMgr := a.codexEndpointMgr
 	healthCheck := a.codexHealthCheck
@@ -890,8 +1138,8 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 		}
 	}
 
-	var latencies map[string]int64
-	var lastChecks map[string]time.Time
+	var latencies map[int64]int64
+	var lastChecks map[int64]time.Time
 	if healthCheck != nil {
 		latencies = healthCheck.GetLatencies()
 		lastChecks = healthCheck.GetLastChecks()
@@ -911,26 +1159,37 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 		IsActive:        record.IsActive,
 		Endpoints:       make([]CodexEndpointInfo, 0, len(endpoints)),
 	}
+	info.CredentialGroups = make([]CodexCredentialGroupInfo, 0, len(credentialGroups))
+	groupNames := make(map[int64]string, len(credentialGroups))
+	for _, group := range credentialGroups {
+		info.CredentialGroups = append(info.CredentialGroups, buildCodexCredentialGroupInfo(group))
+		groupNames[group.ID] = group.Name
+	}
 
 	for _, ep := range endpoints {
 		healthy, healthState, healthInScope, responseTimeMS := codexEndpointRuntimeHealth(record, ep, endpointMgr, activeChannelID, latencies)
 		lastFailCode := 0
 		lastFailReason := ""
 		if endpointMgr != nil && healthInScope {
-			lastFailCode, lastFailReason, _ = endpointMgr.GetFailureDetail(ep.Name)
+			lastFailCode, lastFailReason, _ = endpointMgr.GetFailureDetail(ep.ID)
 		}
 		info.Endpoints = append(info.Endpoints, CodexEndpointInfo{
 			ID:                       ep.ID,
 			ChannelID:                ep.ChannelID,
+			CredentialGroupID:        ep.CredentialGroupID,
+			CredentialGroupName:      groupNames[ep.CredentialGroupID],
+			ApiKey:                   ep.ApiKey,
+			ApiKeyMasked:             maskToken(ep.ApiKey),
 			Name:                     ep.Name,
 			BaseURL:                  ep.BaseURL,
 			IsActive:                 ep.IsActive,
 			FailoverEnabled:          ep.FailoverEnabled,
+			SkipHealthCheck:          ep.SkipHealthCheck,
 			Healthy:                  healthy,
 			HealthState:              healthState,
 			HealthInScope:            healthInScope,
 			ResponseTimeMS:           responseTimeMS,
-			LastCheck:                formatCodexTime(lastChecks[ep.Name]),
+			LastCheck:                formatCodexTime(lastChecks[ep.ID]),
 			LastFailCode:             lastFailCode,
 			LastFailReason:           lastFailReason,
 			Priority:                 ep.Priority,
@@ -956,7 +1215,7 @@ func codexEndpointRuntimeHealth(
 	endpoint *store.CodexEndpointRecord,
 	manager *codexproxy.EndpointManager,
 	activeChannelID int64,
-	latencies map[string]int64,
+	latencies map[int64]int64,
 ) (healthy bool, healthState string, healthInScope bool, responseTimeMS int64) {
 	if channel == nil || endpoint == nil {
 		return false, "unchecked", false, 0
@@ -967,15 +1226,18 @@ func codexEndpointRuntimeHealth(
 	if !endpoint.FailoverEnabled {
 		return false, "excluded", false, 0
 	}
+	if endpoint.SkipHealthCheck {
+		return false, "skipped", false, 0
+	}
 
-	latency, hasLatency := latencies[endpoint.Name]
+	latency, hasLatency := latencies[endpoint.ID]
 	if latency > 0 {
 		responseTimeMS = latency
 	}
 	if hasLatency && latency < 0 {
 		return false, "unhealthy", true, responseTimeMS
 	}
-	if manager != nil && !manager.IsHealthy(endpoint.Name) {
+	if manager != nil && !manager.IsHealthy(endpoint.ID) {
 		return false, "unhealthy", true, responseTimeMS
 	}
 	if hasLatency {

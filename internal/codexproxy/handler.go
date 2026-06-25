@@ -19,27 +19,30 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/tracking"
 )
 
 // chainNode 端点链路节点（结构化存储）
 // 序列化为 JSON 数组写入 tracking.UpdateOptions.EndpointChain，与 Claude 端
-// internal/proxy.ChainNode 保持同形（{hop, channel, endpoint}），供前端统一解析。
+// internal/proxy.ChainNode 保持兼容（{hop, channel, credential_group, endpoint}），供前端统一解析。
 type chainNode struct {
-	Hop      int    `json:"hop"`
-	Channel  string `json:"channel"`
-	Endpoint string `json:"endpoint"`
+	Hop             int    `json:"hop"`
+	Channel         string `json:"channel"`
+	CredentialGroup string `json:"credential_group,omitempty"`
+	Endpoint        string `json:"endpoint"`
 }
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
-	manager      *EndpointManager
-	forwarder    *Forwarder
-	streamFwd    *Forwarder
-	tokenParser  *TokenParser
-	classifier   *ErrorClassifier
-	logger       *slog.Logger
-	usageTracker *tracking.UsageTracker
+	manager        *EndpointManager
+	forwarder      *Forwarder
+	streamFwd      *Forwarder
+	tokenParser    *TokenParser
+	classifier     *ErrorClassifier
+	logger         *slog.Logger
+	usageTracker   *tracking.UsageTracker
+	privacyService *privacy.Service
 
 	// retryCfg 同端点重试配置（来自设置页 retry.*）
 	retryCfg config.RetryConfig
@@ -48,6 +51,13 @@ type Handler struct {
 	// suspensionMgr 请求挂起队列（loop_retry 全部耗尽后等待运维干预）
 	// 为 nil 时不启用挂起，直接返回失败
 	suspensionMgr *SuspensionManager
+}
+
+func normalizeCodexLogger(logger *slog.Logger) *slog.Logger {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return logger.With("provider", "codex")
 }
 
 // NewHandler 创建请求处理器
@@ -65,23 +75,38 @@ func NewHandler(
 	suspensionMgr *SuspensionManager,
 	logger *slog.Logger,
 	usageTracker *tracking.UsageTracker,
+	privacyService ...*privacy.Service,
 ) *Handler {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	// 所有 Codex 代理日志附加 provider=codex，用于文件分流
-	logger = logger.With("provider", "codex")
+	logger = normalizeCodexLogger(logger)
+	var redactor *privacy.Service
+	if len(privacyService) > 0 {
+		redactor = privacyService[0]
+	}
 	return &Handler{
-		manager:       manager,
-		forwarder:     NewForwarder(timeout, logger),
-		streamFwd:     NewStreamingForwarder(logger),
-		tokenParser:   NewTokenParser(),
-		classifier:    NewErrorClassifier(),
-		logger:        logger,
-		usageTracker:  usageTracker,
-		retryCfg:      retryCfg,
-		failoverCfg:   failoverCfg,
-		suspensionMgr: suspensionMgr,
+		manager:        manager,
+		forwarder:      NewForwarder(timeout, logger),
+		streamFwd:      NewStreamingForwarder(logger),
+		tokenParser:    NewTokenParser(),
+		classifier:     NewErrorClassifier(),
+		logger:         logger,
+		usageTracker:   usageTracker,
+		privacyService: redactor,
+		retryCfg:       retryCfg,
+		failoverCfg:    failoverCfg,
+		suspensionMgr:  suspensionMgr,
+	}
+}
+
+// UpdateLogger updates the logger used by this handler and its forwarders.
+func (h *Handler) UpdateLogger(logger *slog.Logger) {
+	logger = normalizeCodexLogger(logger)
+	h.logger = logger
+	if h.forwarder != nil {
+		h.forwarder.UpdateLogger(logger)
+	}
+	if h.streamFwd != nil {
+		h.streamFwd.UpdateLogger(logger)
 	}
 }
 
@@ -159,7 +184,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 7. 渠道内循环重试 + 挂起等待运维干预（最多挂起一次）
-	var failedNames []string
+	var failedIDs []int64
 	var endpointChain []chainNode
 	var lastErr error
 	var lastStatus int
@@ -172,7 +197,7 @@ outerLoop:
 			if loopRound > 0 {
 				// 新一轮：重置端点不健康状态 + 清空已失败名单，让所有端点重新可选
 				h.manager.ResetUnhealthy()
-				failedNames = failedNames[:0]
+				failedIDs = failedIDs[:0]
 				h.logger.Info("[Codex 循环重试]",
 					"provider", "codex",
 					"request_id", requestID,
@@ -184,7 +209,7 @@ outerLoop:
 			result := h.tryEndpointCycle(
 				w, r, body, requestID, startTime,
 				isStreaming, channelName, requestModel,
-				&failedNames, &endpointChain,
+				&failedIDs, &endpointChain,
 			)
 			if result.completed {
 				// 响应已写给客户端（成功 / 客户端取消 / FailFast）
@@ -209,7 +234,7 @@ outerLoop:
 		switch suspendRes {
 		case SuspendRecovered:
 			// 重置状态再来一轮 loop_retry
-			failedNames = failedNames[:0]
+			failedIDs = failedIDs[:0]
 			h.manager.ResetUnhealthy()
 			h.logger.Info("[Codex 挂起恢复] 运维干预后重新进入端点循环",
 				"provider", "codex",
@@ -287,7 +312,7 @@ func (h *Handler) tryEndpointCycle(
 	isStreaming bool,
 	channelName string,
 	requestModel string,
-	failedNames *[]string,
+	failedIDs *[]int64,
 	endpointChain *[]chainNode,
 ) cycleResult {
 	// 选择起始端点
@@ -315,13 +340,17 @@ func (h *Handler) tryEndpointCycle(
 
 	// 遍历当前轮可用端点
 	for {
-		// 追加链路节点（按 channel+endpoint 切换去重）
+		// 追加链路节点（按 channel+credential_group+endpoint 切换去重）
 		n := len(*endpointChain)
-		if n == 0 || (*endpointChain)[n-1].Channel != channelName || (*endpointChain)[n-1].Endpoint != endpoint.Name {
+		if n == 0 ||
+			(*endpointChain)[n-1].Channel != channelName ||
+			(*endpointChain)[n-1].CredentialGroup != endpoint.CredentialGroupName ||
+			(*endpointChain)[n-1].Endpoint != endpoint.Name {
 			*endpointChain = append(*endpointChain, chainNode{
-				Hop:      n + 1,
-				Channel:  channelName,
-				Endpoint: endpoint.Name,
+				Hop:             n + 1,
+				Channel:         channelName,
+				CredentialGroup: endpoint.CredentialGroupName,
+				Endpoint:        endpoint.Name,
 			})
 		}
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
@@ -331,6 +360,7 @@ func (h *Handler) tryEndpointCycle(
 			"provider", "codex",
 			"request_id", requestID,
 			"endpoint", endpoint.Name,
+			"credential_group", endpoint.CredentialGroupName,
 			"hop", len(*endpointChain),
 			"channel", channelName,
 		)
@@ -363,12 +393,13 @@ func (h *Handler) tryEndpointCycle(
 
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
-			h.manager.MarkHealthy(endpoint.Name)
+			h.manager.MarkHealthy(endpoint.ID)
 			// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
-			if len(*failedNames) > 0 {
-				if err := h.manager.PromoteActive(endpoint.Name); err != nil {
+			if len(*failedIDs) > 0 {
+				if err := h.manager.PromoteActive(endpoint.ID); err != nil {
 					h.logger.Warn("故障转移后提升活跃端点失败",
 						"request_id", requestID,
+						"endpoint_id", endpoint.ID,
 						"endpoint", endpoint.Name,
 						"error", err,
 					)
@@ -398,7 +429,7 @@ func (h *Handler) tryEndpointCycle(
 		if action == ActionFailFast {
 			if resp != nil {
 				detail := fmt.Sprintf("上游 HTTP %d: %s", status, errSummary)
-				h.manager.SetFailureDetail(endpoint.Name, status, detail)
+				h.manager.SetFailureDetail(endpoint.ID, status, detail)
 				h.logger.Error("[Codex 请求失败]",
 					"provider", "codex",
 					"request_id", requestID,
@@ -417,7 +448,7 @@ func (h *Handler) tryEndpointCycle(
 			if fwdErr != nil {
 				detail = fwdErr.Error()
 			}
-			h.manager.SetFailureDetail(endpoint.Name, 0, detail)
+			h.manager.SetFailureDetail(endpoint.ID, 0, detail)
 			h.logger.Error("[Codex 请求失败]",
 				"provider", "codex",
 				"request_id", requestID,
@@ -437,7 +468,7 @@ func (h *Handler) tryEndpointCycle(
 			resp.Body.Close()
 		}
 		failedEndpointName := endpoint.Name
-		*failedNames = append(*failedNames, endpoint.Name)
+		*failedIDs = append(*failedIDs, endpoint.ID)
 
 		// 失败原因日志
 		var reason string
@@ -452,10 +483,10 @@ func (h *Handler) tryEndpointCycle(
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
 		}
-		h.manager.MarkUnhealthyWithDetail(endpoint.Name, status, reason)
+		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 
 		// 选下个端点
-		next, nextErr := h.manager.GetNextEndpoint(*failedNames)
+		next, nextErr := h.manager.GetNextEndpoint(*failedIDs)
 		if nextErr != nil {
 			// 当前轮端点列表耗尽，返回让外层 loop 决定是否再来一轮
 			return cycleResult{
@@ -524,7 +555,24 @@ func (h *Handler) forwardWithRetry(
 			}
 		}
 
-		resp, err := fwd.Forward(r, body, endpoint)
+		requestBody := body
+		if h.privacyService != nil {
+			redacted, summary, changed, redactErr := h.privacyService.Redact(body)
+			if redactErr != nil {
+				return nil, fmt.Errorf("privacy redaction failed: %w", redactErr)
+			}
+			if changed {
+				requestBody = redacted
+				h.recordPrivacyRedaction(
+					requestID,
+					privacy.SummaryToJSON(summary),
+					redacted,
+					privacy.DebugMatchesToJSON(summary),
+				)
+			}
+		}
+
+		resp, err := fwd.Forward(r, requestBody, endpoint)
 		lastResp = resp
 		lastErr = err
 
@@ -842,7 +890,7 @@ func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming boo
 }
 
 // recordForwarding 记录转发状态（含端点链路 + 渠道）
-// chain 以 JSON 数组形式写入（形如 [{"hop":1,"channel":"xxx","endpoint":"yyy"}]），
+// chain 以 JSON 数组形式写入（形如 [{"hop":1,"channel":"xxx","credential_group":"group","endpoint":"yyy"}]），
 // 与 Claude 端 internal/proxy 写入的结构化格式一致，供前端统一解析与展示。
 func (h *Handler) recordForwarding(requestID string, endpointName, channelName, modelName string, chain []chainNode) {
 	if h.usageTracker == nil {
@@ -878,6 +926,26 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName, 
 	}
 	h.usageTracker.RecordRequestUpdate(requestID, opts)
 	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
+}
+
+func (h *Handler) recordPrivacyRedaction(requestID string, summaryJSON string, redactedBody []byte, matchDetailsJSON string) {
+	if requestID == "" || summaryJSON == "" {
+		return
+	}
+	logger := h.logger
+	if logger == nil {
+		logger = slog.Default().With("provider", "codex")
+	}
+	logger.Debug("[隐私防护] 请求正文已脱敏",
+		"request_id", requestID,
+		"privacy_redaction_summary", summaryJSON,
+		"privacy_redaction_matches", matchDetailsJSON,
+		"privacy_redacted_body_bytes", len(redactedBody),
+		"privacy_redacted_body", string(redactedBody),
+	)
+	if h.usageTracker != nil {
+		h.usageTracker.RecordPrivacyRedaction(requestID, summaryJSON, matchDetailsJSON)
+	}
 }
 
 // snapshotEndpointMultiplier 将 Codex 端点的倍率快照写入热池中的活跃请求

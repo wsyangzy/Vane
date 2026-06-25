@@ -278,7 +278,8 @@ func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, 
 		return "", fmt.Errorf("provider_name 不能为空")
 	}
 	lines := splitCodexLines(content)
-	header := fmt.Sprintf("[model_providers.%s]", providerName)
+	header := codexProviderSectionHeader(providerName)
+	headers := codexProviderSectionHeaders(providerName)
 	newLine := fmt.Sprintf(`base_url = "%s"`, escapeTomlString(baseURL))
 
 	sectionStart := -1
@@ -286,7 +287,7 @@ func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if sectionStart == -1 {
-			if trimmed == header {
+			if containsString(headers, trimmed) {
 				sectionStart = i
 			}
 			continue
@@ -315,6 +316,7 @@ func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, 
 	}
 
 	// Section 存在 → 找 base_url 行替换；找不到 → 在 section header 之后插入
+	lines[sectionStart] = header
 	for i := sectionStart + 1; i < sectionEnd; i++ {
 		trimmed := strings.TrimSpace(lines[i])
 		if isTopLevelTomlAssignment(trimmed, "base_url") {

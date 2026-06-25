@@ -22,7 +22,7 @@ import (
 
 // 版本信息（通过 ldflags 注入）
 var (
-	Version   = "7.4c"
+	Version   = "7.5"
 	Commit    = "unknown"
 	BuildTime = "unknown"
 	BuildMode = "dev" // 构建模式: "dev" 或 "release"（生产构建通过 ldflags 注入 "release"）
@@ -51,6 +51,21 @@ var trayIcon []byte
 // currentLogHandler 当前日志处理器引用（用于关闭）
 var currentLogHandlers []*SimpleHandler
 
+func datedLogPath(basePath string, fixedBaseName string) string {
+	ext := filepath.Ext(basePath)
+	if ext == "" {
+		ext = ".log"
+	}
+	name := strings.TrimSuffix(filepath.Base(basePath), filepath.Ext(basePath))
+	if fixedBaseName != "" {
+		name = fixedBaseName
+	}
+	if name == "" || name == "." {
+		name = "app"
+	}
+	return filepath.Join(filepath.Dir(basePath), fmt.Sprintf("%s-%s%s", name, time.Now().Format("2006-01-02"), ext))
+}
+
 // ============================================================
 // 日志相关
 // ============================================================
@@ -59,12 +74,6 @@ var currentLogHandlers []*SimpleHandler
 // 按 provider 分文件存储：app.log（默认）、claude.log、codex.log
 func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
 	logLevel := cfg.Level
-
-	// 生产构建时，自动将 debug 级别提升为 info（减少日志量）
-	if BuildMode == "release" && logLevel == "debug" {
-		logLevel = "info"
-		fmt.Println("🔧 [Release Mode] 日志级别自动调整: debug → info")
-	}
 
 	var level slog.Level
 	switch logLevel {
@@ -88,7 +97,7 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 	}
 	currentLogHandlers = nil
 
-	var appRotator, claudeRotator, codexRotator *logging.FileRotator
+	var appRotator, claudeRotator, codexRotator, debugRotator *logging.FileRotator
 	// 设置文件日志
 	if cfg.FileEnabled {
 		maxSize, err := logging.ParseSize(cfg.MaxFileSize)
@@ -98,15 +107,15 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 		}
 
 		// 主日志文件（app.log / app-dev.log）
-		appRotator, err = logging.NewFileRotator(cfg.FilePath, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		appLogFile := datedLogPath(cfg.FilePath, "")
+		appRotator, err = logging.NewFileRotator(appLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
 		if err != nil {
 			fmt.Printf("警告：无法创建日志文件轮转器: %v\n", err)
 			appRotator = nil
 		}
 
 		// Claude 代理日志文件（与主日志同目录）
-		logDir := filepath.Dir(cfg.FilePath)
-		claudeLogFile := filepath.Join(logDir, "claude.log")
+		claudeLogFile := datedLogPath(cfg.FilePath, "claude")
 		claudeRotator, err = logging.NewFileRotator(claudeLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
 		if err != nil {
 			fmt.Printf("警告：无法创建 Claude 日志文件轮转器: %v\n", err)
@@ -114,11 +123,21 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 		}
 
 		// Codex 代理日志文件
-		codexLogFile := filepath.Join(logDir, "codex.log")
+		codexLogFile := datedLogPath(cfg.FilePath, "codex")
 		codexRotator, err = logging.NewFileRotator(codexLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
 		if err != nil {
 			fmt.Printf("警告：无法创建 Codex 日志文件轮转器: %v\n", err)
 			codexRotator = nil
+		}
+
+		if level <= slog.LevelDebug {
+			// DEBUG 专用日志文件，保存所有 DEBUG 记录，便于排查时单独查看
+			debugLogFile := datedLogPath(cfg.FilePath, "debug")
+			debugRotator, err = logging.NewFileRotator(debugLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+			if err != nil {
+				fmt.Printf("警告：无法创建 DEBUG 日志文件轮转器: %v\n", err)
+				debugRotator = nil
+			}
 		}
 	}
 
@@ -140,13 +159,34 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 		fileRotator:              codexRotator,
 		disableFileResponseLimit: disableLimit,
 	}
+	var debugHandler *SimpleHandler
+	if debugRotator != nil {
+		debugHandler = &SimpleHandler{
+			level:                    slog.LevelDebug,
+			fileRotator:              debugRotator,
+			disableFileResponseLimit: true,
+			suppressConsole:          true,
+		}
+	}
 	currentLogHandlers = []*SimpleHandler{appHandler, claudeHandler, codexHandler}
+	if debugHandler != nil {
+		currentLogHandlers = append(currentLogHandlers, debugHandler)
+	}
 
 	// 用 BroadcastHandler 包装（添加日志查看功能 + provider 路由）
-	broadcastHandler := logging.NewBroadcastHandler(appHandler, 1000, claudeHandler, codexHandler)
+	var broadcastHandler *logging.BroadcastHandler
+	if debugHandler != nil {
+		broadcastHandler = logging.NewBroadcastHandler(appHandler, 1000, level, claudeHandler, codexHandler, debugHandler)
+	} else {
+		broadcastHandler = logging.NewBroadcastHandler(appHandler, 1000, level, claudeHandler, codexHandler)
+	}
 
 	if cfg.FileEnabled {
-		fmt.Printf("🔧 文件日志已启用: 路径=%s (分文件: claude.log, codex.log)\n", cfg.FilePath)
+		if debugHandler != nil {
+			fmt.Printf("🔧 文件日志已启用: 路径=%s (分文件: claude/codex/debug，按日期命名)\n", cfg.FilePath)
+		} else {
+			fmt.Printf("🔧 文件日志已启用: 路径=%s (分文件: claude/codex，按日期命名)\n", cfg.FilePath)
+		}
 	}
 
 	return slog.New(broadcastHandler), broadcastHandler
@@ -157,6 +197,7 @@ type SimpleHandler struct {
 	level                    slog.Level
 	fileRotator              *logging.FileRotator
 	disableFileResponseLimit bool
+	suppressConsole          bool
 }
 
 func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -199,14 +240,16 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 		h.fileRotator.Write([]byte(formattedMessage))
 	}
 
-	// 控制台输出
-	displayMessage := message
-	if len(displayMessage) > 500 {
-		displayMessage = displayMessage[:500] + "... (显示截断)"
-	}
+	if !h.suppressConsole {
+		// 控制台输出
+		displayMessage := message
+		if len(displayMessage) > 500 {
+			displayMessage = displayMessage[:500] + "... (显示截断)"
+		}
 
-	consoleMessage := fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s", timestamp, pid, gid, level, displayMessage)
-	fmt.Println(consoleMessage)
+		consoleMessage := fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s", timestamp, pid, gid, level, displayMessage)
+		fmt.Println(consoleMessage)
+	}
 
 	return nil
 }

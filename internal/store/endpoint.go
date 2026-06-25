@@ -25,9 +25,11 @@ type EndpointRecord struct {
 	ID int64 `json:"id"`
 
 	// 基本信息
-	Channel string `json:"channel"` // 渠道标签（用于分组展示）
-	Name    string `json:"name"`    // 端点唯一名称
-	URL     string `json:"url"`     // 端点 URL
+	Channel             string `json:"channel"`                         // 渠道标签（用于分组展示）
+	CredentialGroupID   int64  `json:"credential_group_id"`             // 凭证分组 ID
+	CredentialGroupName string `json:"credential_group_name,omitempty"` // 凭证分组显示名（查询聚合用）
+	Name                string `json:"name"`                            // 端点名称（同一凭证分组内唯一）
+	URL                 string `json:"url"`                             // 端点 URL
 
 	// 认证配置
 	Token   string            `json:"token,omitempty"`   // Bearer Token
@@ -70,6 +72,8 @@ type EndpointStore interface {
 	Get(ctx context.Context, name string) (*EndpointRecord, error)
 	GetByID(ctx context.Context, id int64) (*EndpointRecord, error)
 	GetByChannelAndName(ctx context.Context, channel, name string) (*EndpointRecord, error)
+	GetByChannelCredentialGroupAndName(ctx context.Context, channel string, credentialGroupID int64, name string) (*EndpointRecord, error)
+	GetByChannelCredentialGroupAndURL(ctx context.Context, channel string, credentialGroupID int64, url string) (*EndpointRecord, error)
 	List(ctx context.Context) ([]*EndpointRecord, error)
 	Update(ctx context.Context, record *EndpointRecord) error
 	Delete(ctx context.Context, name string) error
@@ -82,6 +86,7 @@ type EndpointStore interface {
 
 	// 查询
 	ListByChannel(ctx context.Context, channel string) ([]*EndpointRecord, error)
+	ListByCredentialGroupID(ctx context.Context, credentialGroupID int64) ([]*EndpointRecord, error)
 	ListEnabled(ctx context.Context) ([]*EndpointRecord, error)
 
 	// 优先级管理
@@ -106,6 +111,14 @@ type SQLiteEndpointStore struct {
 func NewSQLiteEndpointStore(db *sql.DB) *SQLiteEndpointStore {
 	return &SQLiteEndpointStore{db: db}
 }
+
+const endpointRecordColumns = `id, channel, COALESCE(credential_group_id, 0), name, url, token, api_key, headers,
+	priority, failover_enabled, cooldown_seconds, timeout_seconds,
+	skip_health_check, supports_count_tokens,
+	cost_multiplier, input_cost_multiplier, output_cost_multiplier,
+	cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+	COALESCE(model_multipliers, '[]'),
+	enabled, created_at, updated_at`
 
 // getQuerier 返回用于执行查询的对象（事务或数据库连接）
 func (s *SQLiteEndpointStore) getQuerier() interface {
@@ -155,19 +168,19 @@ func (s *SQLiteEndpointStore) Create(ctx context.Context, record *EndpointRecord
 	modelMultipliersJSON := encodeEndpointModelMultipliers(record.ModelMultipliers)
 
 	query := `
-		INSERT INTO endpoints (
-			channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			model_multipliers,
-			enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+			INSERT INTO endpoints (
+				channel, credential_group_id, name, url, token, api_key, headers,
+				priority, failover_enabled, cooldown_seconds, timeout_seconds,
+				skip_health_check, supports_count_tokens,
+				cost_multiplier, input_cost_multiplier, output_cost_multiplier,
+				cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+				model_multipliers,
+				enabled
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
-		record.Channel, record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
+		record.Channel, nullInt64IfZero(record.CredentialGroupID), record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
 		record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
 		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
@@ -197,15 +210,9 @@ func (s *SQLiteEndpointStore) Get(ctx context.Context, name string) (*EndpointRe
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints WHERE name = ?
-	`
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints WHERE name = ?
+		`
 
 	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, name))
 }
@@ -216,17 +223,39 @@ func (s *SQLiteEndpointStore) GetByChannelAndName(ctx context.Context, channel, 
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints WHERE channel = ? AND name = ?
-	`
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints WHERE channel = ? AND name = ?
+		`
 
 	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, name))
+}
+
+// GetByChannelCredentialGroupAndName 根据渠道+凭证分组+名称获取端点。
+func (s *SQLiteEndpointStore) GetByChannelCredentialGroupAndName(ctx context.Context, channel string, credentialGroupID int64, name string) (*EndpointRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints
+			WHERE channel = ? AND COALESCE(credential_group_id, 0) = ? AND name = ?
+		`
+
+	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, positiveInt64OrZero(credentialGroupID), name))
+}
+
+// GetByChannelCredentialGroupAndURL 根据渠道+凭证分组+URL 获取端点。
+func (s *SQLiteEndpointStore) GetByChannelCredentialGroupAndURL(ctx context.Context, channel string, credentialGroupID int64, url string) (*EndpointRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints
+			WHERE channel = ? AND COALESCE(credential_group_id, 0) = ? AND url = ?
+		`
+
+	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, positiveInt64OrZero(credentialGroupID), url))
 }
 
 // GetByID 根据 ID 获取端点
@@ -235,15 +264,9 @@ func (s *SQLiteEndpointStore) GetByID(ctx context.Context, id int64) (*EndpointR
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints WHERE id = ?
-	`
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints WHERE id = ?
+		`
 
 	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, id))
 }
@@ -254,16 +277,10 @@ func (s *SQLiteEndpointStore) List(ctx context.Context) ([]*EndpointRecord, erro
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints
-		ORDER BY priority ASC, channel ASC, name ASC
-	`
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints
+			ORDER BY priority ASC, channel ASC, name ASC
+		`
 
 	return s.scanEndpoints(ctx, query)
 }
@@ -339,11 +356,11 @@ func (s *SQLiteEndpointStore) updateByIDLocked(ctx context.Context, record *Endp
 	}
 
 	query := `
-		UPDATE endpoints SET
-			channel = ?, name = ?, url = ?, token = ?, api_key = ?, headers = ?,
-			priority = ?, failover_enabled = ?, cooldown_seconds = ?, timeout_seconds = ?,
-			skip_health_check = ?, supports_count_tokens = ?,
-			cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
+			UPDATE endpoints SET
+				channel = ?, credential_group_id = ?, name = ?, url = ?, token = ?, api_key = ?, headers = ?,
+				priority = ?, failover_enabled = ?, cooldown_seconds = ?, timeout_seconds = ?,
+				skip_health_check = ?, supports_count_tokens = ?,
+				cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?, cache_read_cost_multiplier = ?,
 			model_multipliers = ?,
 			enabled = ?
@@ -351,7 +368,7 @@ func (s *SQLiteEndpointStore) updateByIDLocked(ctx context.Context, record *Endp
 	`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
-		record.Channel, record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
+		record.Channel, nullInt64IfZero(record.CredentialGroupID), record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
 		record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
 		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
@@ -382,10 +399,10 @@ func (s *SQLiteEndpointStore) updateByChannelAndNameLocked(ctx context.Context, 
 	}
 
 	query := `
-		UPDATE endpoints SET
-			url = ?, token = ?, api_key = ?, headers = ?,
-			priority = ?, failover_enabled = ?, cooldown_seconds = ?, timeout_seconds = ?,
-			skip_health_check = ?, supports_count_tokens = ?,
+			UPDATE endpoints SET
+				credential_group_id = ?, url = ?, token = ?, api_key = ?, headers = ?,
+				priority = ?, failover_enabled = ?, cooldown_seconds = ?, timeout_seconds = ?,
+				skip_health_check = ?, supports_count_tokens = ?,
 			cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?, cache_read_cost_multiplier = ?,
 			model_multipliers = ?,
@@ -394,7 +411,7 @@ func (s *SQLiteEndpointStore) updateByChannelAndNameLocked(ctx context.Context, 
 	`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
-		record.URL, record.Token, record.ApiKey, string(headersJSON),
+		nullInt64IfZero(record.CredentialGroupID), record.URL, record.Token, record.ApiKey, string(headersJSON),
 		record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
 		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
@@ -453,16 +470,16 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 	defer tx.Rollback()
 
 	query := `
-		INSERT INTO endpoints (
-			channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			model_multipliers,
-			enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
+			INSERT INTO endpoints (
+				channel, credential_group_id, name, url, token, api_key, headers,
+				priority, failover_enabled, cooldown_seconds, timeout_seconds,
+				skip_health_check, supports_count_tokens,
+				cost_multiplier, input_cost_multiplier, output_cost_multiplier,
+				cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
+				model_multipliers,
+				enabled
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`
 
 	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
@@ -500,7 +517,7 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 		}
 
 		_, err = stmt.ExecContext(ctx,
-			record.Channel, record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
+			record.Channel, nullInt64IfZero(record.CredentialGroupID), record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
 			record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
 			boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 			record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
@@ -552,19 +569,28 @@ func (s *SQLiteEndpointStore) ListByChannel(ctx context.Context, channel string)
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints
-		WHERE channel = ?
-		ORDER BY priority ASC, created_at DESC, name ASC
-	`
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints
+			WHERE channel = ?
+			ORDER BY priority ASC, created_at DESC, name ASC
+		`
 
 	return s.scanEndpointsWithArgs(ctx, query, channel)
+}
+
+// ListByCredentialGroupID 根据凭证分组获取端点。
+func (s *SQLiteEndpointStore) ListByCredentialGroupID(ctx context.Context, credentialGroupID int64) ([]*EndpointRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints
+			WHERE credential_group_id = ?
+			ORDER BY priority ASC, created_at DESC, name ASC
+		`
+
+	return s.scanEndpointsWithArgs(ctx, query, credentialGroupID)
 }
 
 // ListEnabled 获取所有启用的端点
@@ -573,16 +599,10 @@ func (s *SQLiteEndpointStore) ListEnabled(ctx context.Context) ([]*EndpointRecor
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints
-		WHERE enabled = 1
-		ORDER BY channel ASC, priority ASC, created_at DESC, name ASC
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints
+			WHERE enabled = 1
+			ORDER BY channel ASC, priority ASC, created_at DESC, name ASC
 	`
 
 	return s.scanEndpoints(ctx, query)
@@ -620,7 +640,7 @@ func (s *SQLiteEndpointStore) scanEndpoint(row *sql.Row) (*EndpointRecord, error
 	var createdAt, updatedAt string
 
 	err := row.Scan(
-		&record.ID, &record.Channel, &record.Name, &record.URL,
+		&record.ID, &record.Channel, &record.CredentialGroupID, &record.Name, &record.URL,
 		&record.Token, &record.ApiKey, &headersJSON,
 		&record.Priority, &failoverEnabled, &cooldownSeconds, &record.TimeoutSeconds,
 		&skipHealthCheck, &supportsCountTokens,
@@ -686,7 +706,7 @@ func (s *SQLiteEndpointStore) scanEndpointsWithArgs(ctx context.Context, query s
 		var createdAt, updatedAt string
 
 		err := rows.Scan(
-			&record.ID, &record.Channel, &record.Name, &record.URL,
+			&record.ID, &record.Channel, &record.CredentialGroupID, &record.Name, &record.URL,
 			&record.Token, &record.ApiKey, &headersJSON,
 			&record.Priority, &failoverEnabled, &cooldownSeconds, &record.TimeoutSeconds,
 			&skipHealthCheck, &supportsCountTokens,
@@ -791,15 +811,9 @@ func (s *SQLiteEndpointStore) GetByChannelAndPriority(ctx context.Context, chann
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, channel, name, url, token, api_key, headers,
-			priority, failover_enabled, cooldown_seconds, timeout_seconds,
-			skip_health_check, supports_count_tokens,
-			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
-			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			COALESCE(model_multipliers, '[]'),
-			enabled, created_at, updated_at
-		FROM endpoints WHERE channel = ? AND priority = ?
-	`
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints WHERE channel = ? AND priority = ?
+		`
 
 	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, priority))
 }

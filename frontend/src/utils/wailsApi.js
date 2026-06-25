@@ -40,6 +40,98 @@ const normalizeModelMultipliers = (rules) => {
 
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
 
+const getExplicitModelMultipliers = (input, normalizer = normalizeModelMultipliers) => {
+  if (hasOwn(input, 'modelMultipliers')) {
+    return normalizer(input.modelMultipliers);
+  }
+  if (hasOwn(input, 'model_multipliers')) {
+    return normalizer(input.model_multipliers);
+  }
+  return undefined;
+};
+
+const mapClaudeCredentialGroup = (group = {}) => ({
+  id: group.id,
+  channel: group.channel || '',
+  name: group.name || '',
+  token: group.token || '',
+  apiKey: group.api_key || group.apiKey || '',
+  tokenMasked: group.token_masked || group.tokenMasked || '',
+  apiKeyMasked: group.api_key_masked || group.apiKeyMasked || '',
+  isDefault: Boolean(group.is_default ?? group.isDefault),
+  costMultiplier: group.cost_multiplier ?? group.costMultiplier ?? 1.0,
+  inputCostMultiplier: group.input_cost_multiplier ?? group.inputCostMultiplier ?? 1.0,
+  outputCostMultiplier: group.output_cost_multiplier ?? group.outputCostMultiplier ?? 1.0,
+  cacheCreationCostMultiplier: group.cache_creation_cost_multiplier ?? group.cacheCreationCostMultiplier ?? 1.0,
+  cacheCreationCostMultiplier1h: group.cache_creation_cost_multiplier_1h ?? group.cacheCreationCostMultiplier1h ?? 1.0,
+  cacheReadCostMultiplier: group.cache_read_cost_multiplier ?? group.cacheReadCostMultiplier ?? 1.0,
+  modelMultipliers: normalizeModelMultipliers(group.model_multipliers || group.modelMultipliers),
+  endpointCount: group.endpoint_count ?? group.endpointCount ?? 0,
+  createdAt: group.created_at || group.createdAt || '',
+  updatedAt: group.updated_at || group.updatedAt || ''
+});
+
+const buildClaudeCredentialGroupPayload = (input = {}) => {
+  const payload = {
+    channel: (input.channel || '').trim(),
+    name: (input.name || '').trim(),
+    token: (input.token || '').trim(),
+    api_key: (input.apiKey || input.api_key || '').trim(),
+    is_default: Boolean(input.isDefault || input.is_default),
+    cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
+    input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
+    output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
+    cache_creation_cost_multiplier: parseEndpointMultiplier(input.cacheCreationCostMultiplier),
+    cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
+    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
+  };
+  const modelMultipliers = getExplicitModelMultipliers(input);
+  if (modelMultipliers !== undefined) {
+    payload.model_multipliers = modelMultipliers;
+  }
+  return payload;
+};
+
+const normalizePrivacyRule = (rule = {}) => ({
+  id: rule.id,
+  name: rule.name || '',
+  type: rule.type || 'exact',
+  category: rule.category || 'custom',
+  pattern_or_value: rule.pattern_or_value || '',
+  replacement_mode: rule.replacement_mode || rule.replacementMode || 'placeholder',
+  replacementMode: rule.replacement_mode || rule.replacementMode || 'placeholder',
+  patternMasked: rule.pattern_masked || rule.patternMasked || '',
+  pattern_masked: rule.pattern_masked || rule.patternMasked || '',
+  valueLength: rule.value_length ?? rule.valueLength ?? 0,
+  value_length: rule.value_length ?? rule.valueLength ?? 0,
+  enabled: Boolean(rule.enabled),
+  priority: Number(rule.priority ?? 100),
+  created_at: rule.created_at || rule.createdAt || '',
+  updated_at: rule.updated_at || rule.updatedAt || ''
+});
+
+const normalizePrivacySyntheticValue = (record = {}) => ({
+  raw_hash: record.raw_hash || record.rawHash || '',
+  rawHash: record.raw_hash || record.rawHash || '',
+  raw_value: record.raw_value || record.rawValue || '',
+  rawValue: record.raw_value || record.rawValue || '',
+  replacement: record.replacement || record.value || '',
+  value: record.replacement || record.value || '',
+  kind: record.kind || 'custom',
+  created_at: record.created_at || record.createdAt || '',
+  createdAt: record.created_at || record.createdAt || '',
+  last_seen_at: record.last_seen_at || record.lastSeenAt || '',
+  lastSeenAt: record.last_seen_at || record.lastSeenAt || '',
+  last_skip_at: record.last_skip_at || record.lastSkipAt || '',
+  lastSkipAt: record.last_skip_at || record.lastSkipAt || '',
+  reuse_count: Number(record.reuse_count ?? record.reuseCount ?? 0),
+  reuseCount: Number(record.reuse_count ?? record.reuseCount ?? 0),
+  skip_count: Number(record.skip_count ?? record.skipCount ?? 0),
+  skipCount: Number(record.skip_count ?? record.skipCount ?? 0),
+  hit_count: Number(record.hit_count ?? record.hitCount ?? 0),
+  hitCount: Number(record.hit_count ?? record.hitCount ?? 0)
+});
+
 // 检测是否在 Wails 环境中运行
 // v3: 使用 window._wails 替代 v2 的 window.go
 export const isWailsEnvironment = () => {
@@ -616,6 +708,12 @@ export const getRequests = async (params = {}) => {
     originalModelName: r.original_model_name || '',
     modelRewriteSource: r.model_rewrite_source || '',
     modelRewriteTarget: r.model_rewrite_target || '',
+    privacy_redacted: Boolean(r.privacy_redacted),
+    privacy_redaction_summary: r.privacy_redaction_summary || '',
+    privacy_redaction_matches: r.privacy_redaction_matches || '',
+    privacyRedacted: Boolean(r.privacy_redacted),
+    privacyRedactionSummary: r.privacy_redaction_summary || '',
+    privacyRedactionMatches: r.privacy_redaction_matches || '',
     provider: r.provider || '',
     status: r.status,
     status_code: r.http_status,
@@ -666,6 +764,74 @@ export const getRequests = async (params = {}) => {
     pageSize: result.page_size,
     totalPages: Math.ceil(result.total / result.page_size)
   };
+};
+
+export const getPrivacyConfig = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const config = await WailsApp.GetPrivacyConfig();
+  return {
+    enabled: Boolean(config?.enabled),
+    rules: (config?.rules || []).map(normalizePrivacyRule)
+  };
+};
+
+export const setPrivacyEnabled = async (enabled) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.SetPrivacyEnabled(Boolean(enabled));
+};
+
+export const createPrivacyRule = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const rule = await WailsApp.CreatePrivacyRule(input);
+  return normalizePrivacyRule(rule);
+};
+
+export const updatePrivacyRule = async (id, input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const rule = await WailsApp.UpdatePrivacyRule(Number(id), input);
+  return normalizePrivacyRule(rule);
+};
+
+export const deletePrivacyRule = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.DeletePrivacyRule(Number(id));
+};
+
+export const previewPrivacyRedaction = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.PreviewPrivacyRedaction(String(input ?? ''));
+  return {
+    output: result?.output || '',
+    changed: Boolean(result?.changed),
+    hits: result?.hits || []
+  };
+};
+
+export const getPrivacySyntheticValues = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const records = await WailsApp.GetPrivacySyntheticValues();
+  return (records || []).map(normalizePrivacySyntheticValue);
+};
+
+export const clearPrivacySyntheticValues = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.ClearPrivacySyntheticValues();
+};
+
+export const deletePrivacySyntheticValue = async (kind, rawHash) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeletePrivacySyntheticValue(kind, rawHash);
+  return { success: true };
 };
 
 // ============================================
@@ -912,6 +1078,8 @@ export const getEndpointRecords = async () => {
   return (records || []).map(r => ({
     id: r.id,
     channel: r.channel,
+    credentialGroupId: r.credential_group_id ?? r.credentialGroupId ?? 0,
+    credentialGroupName: r.credential_group_name || r.credentialGroupName || '',
     name: r.name,
     url: r.url,
     token: r.token,       // 本地桌面应用，直接返回原始 Token
@@ -971,6 +1139,8 @@ export const getEndpointRecord = async (name) => {
   return {
     id: r.id,
     channel: r.channel,
+    credentialGroupId: r.credential_group_id ?? r.credentialGroupId ?? 0,
+    credentialGroupName: r.credential_group_name || r.credentialGroupName || '',
     name: r.name,
     url: r.url,
     tokenMasked: r.token_masked,
@@ -1022,6 +1192,7 @@ export const createEndpointRecord = async (input) => {
   // 转换为后端期望的格式
   const record = {
     channel: input.channel || '',
+    credential_group_id: Number(input.credentialGroupId ?? input.credential_group_id ?? 0) || 0,
     name: input.name || '',
     url: input.url || '',
     token: input.token || '',
@@ -1062,6 +1233,7 @@ export const updateEndpointRecord = async (name, input) => {
   // 转换为后端期望的格式
   const record = {
     channel: input.channel || '',
+    credential_group_id: Number(input.credentialGroupId ?? input.credential_group_id ?? 0) || 0,
     name: input.name || name,
     url: input.url || '',
     token: input.token || '',
@@ -1102,6 +1274,7 @@ export const updateEndpointRecordByID = async (id, input) => {
 
   const record = {
     channel: input.channel || '',
+    credential_group_id: Number(input.credentialGroupId ?? input.credential_group_id ?? 0) || 0,
     name: input.name || '',
     url: input.url || '',
     token: input.token || '',
@@ -1174,6 +1347,34 @@ export const deleteEndpointRecordByID = async (id) => {
   return { success: true };
 };
 
+export const createClaudeCredentialGroup = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const group = await WailsApp.CreateClaudeCredentialGroup(buildClaudeCredentialGroupPayload(input));
+  return mapClaudeCredentialGroup(group || {});
+};
+
+export const updateClaudeCredentialGroupByID = async (id, input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const group = await WailsApp.UpdateClaudeCredentialGroupByID(Number(id), buildClaudeCredentialGroupPayload(input));
+  return mapClaudeCredentialGroup(group || {});
+};
+
+export const deleteClaudeCredentialGroupByID = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeleteClaudeCredentialGroupByID(Number(id));
+  return { success: true };
+};
+
+export const setDefaultClaudeCredentialGroup = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetDefaultClaudeCredentialGroup(Number(id));
+  return { success: true };
+};
+
 /**
  * 切换端点启用状态
  * @param {string} name - 端点名称
@@ -1196,6 +1397,14 @@ export const toggleEndpointRecordByID = async (id, enabled) => {
   return { success: true };
 };
 
+export const activateEndpointRecordByID = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  await WailsApp.ActivateEndpointRecordByID(id);
+  return { success: true };
+};
+
 /**
  * 获取所有渠道
  * @returns {Promise<Array>} - 渠道列表 [{name, endpointCount}]
@@ -1211,7 +1420,8 @@ export const getChannels = async () => {
     priority: c.priority || 1,
     modelMapping: normalizeModelMapping(c.model_mapping || c.modelMapping),
     createdAt: c.created_at || '',
-    endpointCount: c.endpoint_count
+    endpointCount: c.endpoint_count,
+    credentialGroups: (c.credential_groups || c.credentialGroups || []).map(mapClaudeCredentialGroup)
   }));
 };
 
@@ -1605,10 +1815,18 @@ const normalizeCodexModelMultipliers = normalizeModelMultipliers;
 const mapCodexEndpoint = (endpoint) => ({
   id: endpoint.id,
   channelId: endpoint.channel_id,
+  credentialGroupId: endpoint.credential_group_id || endpoint.credentialGroupId || 0,
+  credential_group_id: endpoint.credential_group_id || endpoint.credentialGroupId || 0,
+  credentialGroupName: endpoint.credential_group_name || endpoint.credentialGroupName || '',
+  credential_group_name: endpoint.credential_group_name || endpoint.credentialGroupName || '',
+  apiKey: endpoint.api_key || endpoint.apiKey || '',
+  apiKeyMasked: endpoint.api_key_masked || endpoint.apiKeyMasked || '',
   name: endpoint.name || '',
   baseURL: endpoint.base_url,
   isActive: Boolean(endpoint.is_active),
   failoverEnabled: endpoint.failover_enabled !== false,
+  skipHealthCheck: Boolean(endpoint.skip_health_check),
+  skip_health_check: Boolean(endpoint.skip_health_check),
   healthy: Boolean(endpoint.healthy),
   healthState: endpoint.health_state || 'unchecked',
   health_state: endpoint.health_state || 'unchecked',
@@ -1635,6 +1853,25 @@ const mapCodexEndpoint = (endpoint) => ({
   last_check: endpoint.last_check || endpoint.lastCheck || endpoint.LastCheck || ''
 });
 
+const mapCodexCredentialGroup = (group) => ({
+  id: group.id,
+  channelId: group.channel_id,
+  channel_id: group.channel_id,
+  name: group.name || '',
+  apiKey: group.api_key || group.apiKey || '',
+  apiKeyMasked: group.api_key_masked || group.apiKeyMasked || '',
+  isDefault: Boolean(group.is_default ?? group.isDefault),
+  is_default: Boolean(group.is_default ?? group.isDefault),
+  costMultiplier: group.costMultiplier ?? 1.0,
+  inputCostMultiplier: group.inputCostMultiplier ?? 1.0,
+  outputCostMultiplier: group.outputCostMultiplier ?? 1.0,
+  cacheReadCostMultiplier: group.cacheReadCostMultiplier ?? 1.0,
+  billingOutputTokenSource: group.billingOutputTokenSource || group.billing_output_token_source || 'output_tokens',
+  modelMultipliers: normalizeCodexModelMultipliers(group.modelMultipliers || group.model_multipliers),
+  createdAt: group.created_at || group.createdAt || '',
+  updatedAt: group.updated_at || group.updatedAt || ''
+});
+
 const mapCodexChannel = (channel) => {
   // 显式按 createdAt + id 排序，确保激活操作不改变端点显示顺序
   // （即便后端因缓存或旧二进制返回了 is_active 优先排序）
@@ -1658,10 +1895,30 @@ const mapCodexChannel = (channel) => {
     enable1MContext: Boolean(channel.enable_1m_context),
     website: channel.website || '',
     isActive: Boolean(channel.is_active),
+    credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
     createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',
     updatedAt: channel.updated_at || channel.updatedAt || channel.UpdatedAt || ''
   };
+};
+
+const buildCodexCredentialGroupPayload = (input) => {
+  const payload = {
+    channel_id: input?.channelId || input?.channel_id || 0,
+    name: (input?.name || '').trim(),
+    api_key: (input?.apiKey || input?.api_key || '').trim(),
+    is_default: Boolean(input?.isDefault || input?.is_default),
+    costMultiplier: parseEndpointMultiplier(input?.costMultiplier),
+    inputCostMultiplier: parseEndpointMultiplier(input?.inputCostMultiplier),
+    outputCostMultiplier: parseEndpointMultiplier(input?.outputCostMultiplier),
+    cacheReadCostMultiplier: parseEndpointMultiplier(input?.cacheReadCostMultiplier),
+    billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
+  };
+  const modelMultipliers = getExplicitModelMultipliers(input, normalizeCodexModelMultipliers);
+  if (modelMultipliers !== undefined) {
+    payload.modelMultipliers = modelMultipliers;
+  }
+  return payload;
 };
 
 const buildCodexChannelPayload = (input) => ({
@@ -1730,49 +1987,69 @@ export const activateCodexChannel = async (id) => {
   return { success: true };
 };
 
+export const createCodexCredentialGroup = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const group = await WailsApp.CreateCodexCredentialGroup(buildCodexCredentialGroupPayload(input));
+  return mapCodexCredentialGroup(group || {});
+};
+
+export const updateCodexCredentialGroupByID = async (id, input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const group = await WailsApp.UpdateCodexCredentialGroupByID(id, buildCodexCredentialGroupPayload(input));
+  return mapCodexCredentialGroup(group || {});
+};
+
+export const deleteCodexCredentialGroupByID = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeleteCodexCredentialGroupByID(id);
+  return { success: true };
+};
+
+export const setDefaultCodexCredentialGroup = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetDefaultCodexCredentialGroup(id);
+  return { success: true };
+};
+
 /**
- * 在指定渠道下新增端点（name + base_url + 故障转移配置 + 成本倍率）
+ * 在指定渠道/凭证分组下新增端点。端点只负责 base_url 线路配置，API Key 与计费倍率归属凭证分组。
  */
-export const createCodexEndpoint = async ({ channelId, name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
+export const createCodexEndpoint = async ({ channelId, credentialGroupId, name, baseURL, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
     channel_id: channelId,
+    credential_group_id: credentialGroupId || 0,
     name: (name || '').trim(),
     base_url: (baseURL || '').trim()
   };
   if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
+  if (skipHealthCheck !== undefined) payload.skip_health_check = skipHealthCheck;
   if (priority !== undefined) payload.priority = priority;
   if (timeoutSeconds !== undefined) payload.timeout_seconds = parseEndpointTimeout(timeoutSeconds);
-  if (costMultiplier !== undefined) payload.costMultiplier = parseEndpointMultiplier(costMultiplier);
-  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = parseEndpointMultiplier(inputCostMultiplier);
-  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = parseEndpointMultiplier(outputCostMultiplier);
-  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = parseEndpointMultiplier(cacheReadCostMultiplier);
-  if (billingOutputTokenSource !== undefined) payload.billingOutputTokenSource = billingOutputTokenSource;
-  if (modelMultipliers !== undefined) payload.modelMultipliers = normalizeCodexModelMultipliers(modelMultipliers);
   await WailsApp.CreateCodexEndpoint(payload);
   return { success: true };
 };
 
 /**
- * 更新端点 name + base_url + failover_enabled + priority + 成本倍率
+ * 更新端点线路配置。未传的历史端点计费字段由后端保留，运行时不再读取端点级计费。
  */
-export const updateCodexEndpointByID = async (id, { name, baseURL, failoverEnabled, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers }) => {
+export const updateCodexEndpointByID = async (id, { name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const payload = {
     name: (name || '').trim(),
     base_url: (baseURL || '').trim()
   };
+  if (credentialGroupId !== undefined) payload.credential_group_id = credentialGroupId || 0;
   if (failoverEnabled !== undefined) payload.failover_enabled = failoverEnabled;
+  if (skipHealthCheck !== undefined) payload.skip_health_check = skipHealthCheck;
   if (priority !== undefined) payload.priority = priority;
   if (timeoutSeconds !== undefined) payload.timeout_seconds = parseEndpointTimeout(timeoutSeconds);
-  if (costMultiplier !== undefined) payload.costMultiplier = parseEndpointMultiplier(costMultiplier);
-  if (inputCostMultiplier !== undefined) payload.inputCostMultiplier = parseEndpointMultiplier(inputCostMultiplier);
-  if (outputCostMultiplier !== undefined) payload.outputCostMultiplier = parseEndpointMultiplier(outputCostMultiplier);
-  if (cacheReadCostMultiplier !== undefined) payload.cacheReadCostMultiplier = parseEndpointMultiplier(cacheReadCostMultiplier);
-  if (billingOutputTokenSource !== undefined) payload.billingOutputTokenSource = billingOutputTokenSource;
-  if (modelMultipliers !== undefined) payload.modelMultipliers = normalizeCodexModelMultipliers(modelMultipliers);
   await WailsApp.UpdateCodexEndpointByID(id, payload);
   return { success: true };
 };
