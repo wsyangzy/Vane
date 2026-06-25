@@ -4,7 +4,7 @@
 // ============================================
 
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { Check, AlertCircle, Loader2, Server, ChevronDown } from 'lucide-react'
+import { Check, AlertCircle, Loader2, ChevronDown } from 'lucide-react'
 
 const ActiveGroupSwitcher = ({
   groups = [],

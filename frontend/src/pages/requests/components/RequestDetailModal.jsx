@@ -25,8 +25,7 @@ import {
   TrendingDown,
   Zap,
   Calculator,
-  Replace,
-  KeyRound
+  Replace
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -774,7 +773,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
               {/* 统计摘要条 */}
               {chainNodes.length > 0 && (() => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
-                const uniqueGroups = new Set(chainNodes.map(n => n.credentialGroup).filter(Boolean));
                 const uniqueEndpoints = new Set(chainNodes.map(n => n.endpoint).filter(Boolean));
                 const channelSwitches = showChannelInChain
                   ? chainNodes.filter((n, i) => i > 0 && n.channel && chainNodes[i - 1].channel && n.channel !== chainNodes[i - 1].channel).length
@@ -795,12 +793,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
                           <Layers className="w-3 h-3" />
                           渠道 {currentChannelLabel}
-                        </span>
-                      )}
-                      {uniqueGroups.size > 0 && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-violet-50 text-violet-700 text-xs font-medium rounded-lg border border-violet-200">
-                          <KeyRound className="w-3 h-3" />
-                          {uniqueGroups.size} 分组
                         </span>
                       )}
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-50 text-slate-600 text-xs font-medium rounded-lg border border-slate-200">
@@ -835,11 +827,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                       )}
                       {chainNodes.map((node, idx) => {
                         const channelLabel = node.channel || '未知渠道';
-                        const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
                         const routeLabel = [
                           showChannelInChain ? channelLabel : '',
-                          groupLabel,
                           endpointLabel
                         ].filter(Boolean).join(' / ');
                         const tone = getChannelTone(node.channel);
@@ -855,7 +845,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                             {isChannelSwitch && (
                               <div className="flex items-center gap-1 mb-1.5 ml-1">
                                 <Zap className="w-3 h-3 text-amber-500" />
-                                <span className="text-[10px] text-amber-600 font-medium">渠道切换</span>
+                                <span className="text-[10px] text-amber-600 font-medium">渠道切换至 {channelLabel}</span>
                               </div>
                             )}
                             {/* 卡片行：相对定位容器，圆点绝对定位到卡片垂直中心 */}
@@ -875,11 +865,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, interChannelFailoverEnab
                                   {showChannelInChain && (
                                     <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium border whitespace-nowrap ${tone.badge}`}>
                                       <span className="mr-1 text-current/70">渠道</span>{channelLabel}
-                                    </span>
-                                  )}
-                                  {groupLabel && (
-                                    <span className="inline-flex max-w-[6rem] items-center rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 shrink-0 truncate">
-                                      <span className="mr-1 text-violet-400">分组</span>{groupLabel}
                                     </span>
                                   )}
                                   <Tooltip content={routeLabel} className="min-w-0">

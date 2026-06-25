@@ -1,7 +1,7 @@
 // ============================================
 // Toolbar - 页面工具栏
 // 简化端点切换（移除 Token 级联）
-// 渠道切换器条件显示（仅在未开启渠道间故障转移时显示）
+// 渠道切换器始终显示，渠道间转移不影响手动渠道选择
 // ============================================
 
 import { useEffect, useRef } from 'react';
@@ -29,7 +29,6 @@ import ActiveGroupSwitcher from './ActiveGroupSwitcher.jsx';
  * @param {Array} props.groups - 所有渠道列表（一个渠道=一个组）
  * @param {string} props.activeGroup - 当前活跃渠道名称
  * @param {Function} props.onGroupSwitch - 渠道切换回调 (channelName) => void
- * @param {boolean} props.interChannelFailoverEnabled - 渠道间故障转移是否启用
  * @param {React.ReactNode} props.filterPanel - 筛选面板
  */
 const Toolbar = ({
@@ -48,7 +47,6 @@ const Toolbar = ({
   groups = [],
   activeGroup = '',
   onGroupSwitch,
-  interChannelFailoverEnabled = false,
   filterPanel = null
 }) => {
   const viewConfigRef = useRef(null);
@@ -67,19 +65,14 @@ const Toolbar = ({
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      {/* 端点快捷切换器 - 仅在未开启渠道间故障转移时显示 */}
-      {!interChannelFailoverEnabled && (
-        <ActiveGroupSwitcher
-          groups={groups}
-          activeGroup={activeGroup}
-          onSwitch={onGroupSwitch}
-        />
-      )}
+      {/* 渠道快捷切换器 */}
+      <ActiveGroupSwitcher
+        groups={groups}
+        activeGroup={activeGroup}
+        onSwitch={onGroupSwitch}
+      />
 
-      {/* 分隔线 - 仅在渠道切换器显示时显示 */}
-      {!interChannelFailoverEnabled && (
-        <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
-      )}
+      <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
 
       {/* 快捷时间范围选择 */}
       <div className="hidden sm:flex items-center bg-white border border-gray-200 rounded-lg p-1 shadow-sm">

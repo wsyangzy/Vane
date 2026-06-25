@@ -15,10 +15,10 @@ type RequestStateManager struct {
 	startTime time.Time
 
 	// 端点信息（需要线程安全）
-	endpointMu   sync.RWMutex
-	endpointName string
-	groupName    string
-	channel      string
+	endpointMu      sync.RWMutex
+	endpointName    string
+	groupName       string
+	channel         string
 	endpointChainMu sync.RWMutex
 	endpointChain   []ChainNode
 
@@ -145,15 +145,16 @@ func (rsm *RequestStateManager) SetEndpoint(endpointName, groupName, channel str
 
 // ChainNode 链路节点（结构化存储）
 type ChainNode struct {
-	Hop      int    `json:"hop"`
-	Channel  string `json:"channel"`
-	Endpoint string `json:"endpoint"`
+	Hop             int    `json:"hop"`
+	Channel         string `json:"channel"`
+	CredentialGroup string `json:"credential_group,omitempty"`
+	Endpoint        string `json:"endpoint"`
 }
 
 // AppendEndpointChain 追加端点到链路（按切换去重）
-// 返回最新链路 JSON 数组（形如 [{"channel":"A","endpoint":"B"}]）
-func (rsm *RequestStateManager) AppendEndpointChain(channel, endpointName string) string {
-	if channel == "" && endpointName == "" {
+// 返回最新链路 JSON 数组（形如 [{"channel":"A","credential_group":"G","endpoint":"B"}]）
+func (rsm *RequestStateManager) AppendEndpointChain(channel, credentialGroup, endpointName string) string {
+	if channel == "" && credentialGroup == "" && endpointName == "" {
 		return rsm.GetEndpointChain()
 	}
 
@@ -161,8 +162,16 @@ func (rsm *RequestStateManager) AppendEndpointChain(channel, endpointName string
 	defer rsm.endpointChainMu.Unlock()
 
 	chainLen := len(rsm.endpointChain)
-	if chainLen == 0 || rsm.endpointChain[chainLen-1].Channel != channel || rsm.endpointChain[chainLen-1].Endpoint != endpointName {
-		rsm.endpointChain = append(rsm.endpointChain, ChainNode{Hop: chainLen + 1, Channel: channel, Endpoint: endpointName})
+	if chainLen == 0 ||
+		rsm.endpointChain[chainLen-1].Channel != channel ||
+		rsm.endpointChain[chainLen-1].CredentialGroup != credentialGroup ||
+		rsm.endpointChain[chainLen-1].Endpoint != endpointName {
+		rsm.endpointChain = append(rsm.endpointChain, ChainNode{
+			Hop:             chainLen + 1,
+			Channel:         channel,
+			CredentialGroup: credentialGroup,
+			Endpoint:        endpointName,
+		})
 	}
 
 	data, _ := json.Marshal(rsm.endpointChain)
