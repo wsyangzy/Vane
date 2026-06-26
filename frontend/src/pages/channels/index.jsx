@@ -1714,8 +1714,8 @@ const ChannelCard = ({
   const isActiveChannelSuspended = isActive && hasSuspendedRequests && !isActiveChannelInterrupted;
 
   const claudeActiveRouteClass = channelFailoverEnabled
-    ? 'border-violet-200 ring-1 ring-violet-100'
-    : 'border-indigo-200 ring-1 ring-indigo-100';
+    ? 'border-violet-300 ring-1 ring-violet-100'
+    : 'border-orange-300 ring-1 ring-orange-100';
 
   // 活跃渠道边框样式
   // 优先级：彻底中断 > 挂起等待 > 跨渠道转移 > 单渠道活跃
@@ -1729,10 +1729,10 @@ const ChannelCard = ({
     : 'border-slate-200/70 hover:border-slate-300';
   const activeReadyBadgeClass = channelFailoverEnabled
     ? 'bg-violet-50 text-violet-700'
-    : 'bg-indigo-50 text-indigo-700';
+    : 'bg-orange-50 text-orange-700';
   const activeReadyDotClass = channelFailoverEnabled
     ? 'bg-violet-500'
-    : 'bg-indigo-500';
+    : 'bg-orange-500';
   const waitingBadgeClass = channelFailoverEnabled && channelParticipating
     ? 'border-violet-200 bg-violet-50 text-violet-700'
     : 'border-slate-200 bg-slate-50 text-slate-500';
