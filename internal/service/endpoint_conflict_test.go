@@ -195,7 +195,7 @@ func TestEndpointService_RecordToConfigUsesDefaultCredentialGroup(t *testing.T) 
 	}
 }
 
-func TestEndpointService_UpdateEndpointRejectsDisablingActiveEndpointFailover(t *testing.T) {
+func TestEndpointService_UpdateEndpointDisablingActiveFailoverSwitchesToNextCandidate(t *testing.T) {
 	db, cleanup := createEndpointServiceTestDB(t)
 	defer cleanup()
 
@@ -211,22 +211,111 @@ func TestEndpointService_UpdateEndpointRejectsDisablingActiveEndpointFailover(t 
 	svc := NewEndpointService(storeImpl, manager, cfg)
 
 	ctx := context.Background()
-	record, err := storeImpl.Create(ctx, &store.EndpointRecord{
+	record, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
 		Channel:         "ch-a",
 		Name:            "active",
 		URL:             "https://example.invalid",
 		FailoverEnabled: true,
 		Enabled:         true,
 		TimeoutSeconds:  1,
+		Priority:        2,
+	})
+	if err != nil {
+		t.Fatalf("创建端点失败: %v", err)
+	}
+	standby, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "standby",
+		URL:             "https://standby.example.invalid",
+		FailoverEnabled: true,
+		Enabled:         false,
+		TimeoutSeconds:  1,
+		Priority:        1,
+	})
+	if err != nil {
+		t.Fatalf("创建备用端点失败: %v", err)
+	}
+	laterStandby, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "later-standby",
+		URL:             "https://later-standby.example.invalid",
+		FailoverEnabled: true,
+		Enabled:         false,
+		TimeoutSeconds:  1,
+		Priority:        1,
+	})
+	if err != nil {
+		t.Fatalf("创建后添加备用端点失败: %v", err)
+	}
+
+	record.FailoverEnabled = false
+	if err := svc.UpdateEndpoint(ctx, record); err != nil {
+		t.Fatalf("关闭当前路由端点故障转移失败: %v", err)
+	}
+
+	updatedActive, err := storeImpl.GetByID(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("重新读取当前端点失败: %v", err)
+	}
+	updatedStandby, err := storeImpl.GetByID(ctx, standby.ID)
+	if err != nil {
+		t.Fatalf("重新读取备用端点失败: %v", err)
+	}
+	if updatedActive.FailoverEnabled || updatedActive.Enabled {
+		t.Fatalf("预期原当前端点被关闭参与并取消当前状态，got enabled=%v failover=%v", updatedActive.Enabled, updatedActive.FailoverEnabled)
+	}
+	if !updatedStandby.Enabled {
+		t.Fatalf("预期备用端点成为当前路由端点")
+	}
+	updatedLaterStandby, err := storeImpl.GetByID(ctx, laterStandby.ID)
+	if err != nil {
+		t.Fatalf("重新读取后添加备用端点失败: %v", err)
+	}
+	if updatedLaterStandby.Enabled {
+		t.Fatalf("预期同优先级时更早添加的备用端点胜出")
+	}
+}
+
+func TestEndpointService_UpdateEndpointDisablingActiveFailoverRequiresCandidate(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg)
+
+	ctx := context.Background()
+	record, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "active",
+		URL:             "https://example.invalid",
+		FailoverEnabled: true,
+		Enabled:         true,
+		TimeoutSeconds:  1,
+		Priority:        1,
 	})
 	if err != nil {
 		t.Fatalf("创建端点失败: %v", err)
 	}
 
 	record.FailoverEnabled = false
-	if err := svc.UpdateEndpoint(ctx, record); err == nil {
-		t.Fatalf("预期当前路由端点关闭故障转移失败，但实际成功")
-	} else if !strings.Contains(err.Error(), "当前路由端点必须参与渠道内故障转移") {
-		t.Fatalf("错误原因不够明确: %v", err)
+	err = svc.UpdateEndpoint(ctx, record)
+	if err == nil || !strings.Contains(err.Error(), "没有其他参与渠道内故障转移的端点") {
+		t.Fatalf("预期缺少备用端点时报错，got: %v", err)
+	}
+
+	updatedActive, err := storeImpl.GetByID(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("重新读取当前端点失败: %v", err)
+	}
+	if !updatedActive.FailoverEnabled || !updatedActive.Enabled {
+		t.Fatalf("预期当前端点保持活跃并参与转移，got enabled=%v failover=%v", updatedActive.Enabled, updatedActive.FailoverEnabled)
 	}
 }

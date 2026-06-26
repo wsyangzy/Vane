@@ -48,6 +48,21 @@ import {
 import { buildInitialModelMultiplierRows, parseModelMultiplierRows } from './components/modelMultiplierRows.js';
 import ModelTag from '../requests/components/ModelTag.jsx';
 import {
+  DetailChip,
+  DetailMetricCard,
+  DetailPill,
+  DetailTimeoutPill,
+  DetailTimestampFooter,
+  ModelMappingPair
+} from '../management/shared/detailParts.jsx';
+import {
+  formatLastCheck,
+  getDetailTimestamp,
+  getErrorMessage,
+  getFailoverToggleErrorMessage
+} from '../management/shared/formatters.js';
+import { buildInitialModelMappingRows, buildModelMappingPayload } from '../management/shared/modelMapping.js';
+import {
   getEndpointStorageStatus,
   getEndpointRecords,
   createEndpointRecord,
@@ -82,28 +97,6 @@ import {
 } from '@utils/wailsApi.js';
 import { formatMultiplierExpression, formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
 
-const buildInitialModelMappingRows = (modelMapping) => {
-  const entries = Object.entries(modelMapping || {})
-    .map(([sourceModel, targetModel]) => ({
-      sourceModel: String(sourceModel || ''),
-      targetModel: String(targetModel || '')
-    }))
-    .filter((row) => row.sourceModel.trim() || row.targetModel.trim());
-
-  return entries.length > 0 ? entries : [{ sourceModel: '', targetModel: '' }];
-};
-
-const buildModelMappingPayload = (rows) => {
-  return (rows || []).reduce((mapping, row) => {
-    const sourceModel = String(row?.sourceModel || '').trim();
-    const targetModel = String(row?.targetModel || '').trim();
-    if (sourceModel && targetModel) {
-      mapping[sourceModel] = targetModel;
-    }
-    return mapping;
-  }, {});
-};
-
 const CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'mapping', label: '模型映射' }
@@ -136,18 +129,6 @@ const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
 
 const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
 const CHANNEL_META_BADGE_CLASS = 'inline-flex h-5 items-center justify-center rounded-full border px-2 pt-0 pb-0 text-[10px] font-medium leading-[20px] whitespace-nowrap';
-
-const getErrorMessage = (error, fallback = '操作失败') => {
-  if (!error) return fallback;
-  if (typeof error === 'string') return error || fallback;
-  if (error instanceof Error) return error.message || fallback;
-  if (typeof error?.message === 'string' && error.message) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-};
 
 const isValidMultiplierExpression = (value) => {
   const parsed = parseMultiplierExpression(value, Number.NaN);
@@ -413,21 +394,6 @@ const LatencyBadge = ({ ms, inScope = true, detail = false }) => {
   );
 };
 
-const formatLastCheck = (time) => {
-  if (!time || time === '-') return '-';
-  try {
-    const date = new Date(time);
-    return date.toLocaleString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  } catch {
-    return String(time);
-  }
-};
-
 const normalizeBool = (value, defaultValue = true) => {
   if (value === undefined || value === null) return defaultValue;
   if (value === false || value === 0 || value === '0') return false;
@@ -490,7 +456,8 @@ const EndpointMiniCard = ({
   onToggleFailover,
   onToggleSkipHealthCheck, // 跳过健康检测回调
   onEdit,
-  onDelete
+  onDelete,
+  canDisableFailover = true
 }) => {
   if (!endpoint) return null;
 
@@ -519,10 +486,12 @@ const EndpointMiniCard = ({
     ? Boolean(isCurrentEndpoint)
     : isChannelActive;
   const endpointSwitchDisabled = !failoverEnabled;
-  const failoverToggleDisabled = failoverEnabled && endpointSwitchActive;
+  const failoverToggleBlocked = failoverEnabled && endpointSwitchActive && !canDisableFailover;
   const isUnclaimedEndpoint = !isChannelActive && !channelFailoverEnabled;
   const showHealthBadge = inScope && !isUnclaimedEndpoint && (isSkipHealthCheck || !isRequestFailed);
-  const showRequestFailedBadge = inScope && !isUnclaimedEndpoint && isRequestFailed;
+  const hasRequestFailure = Number(lastFailCode) > 0 || !!lastFailReason || isRequestFailed;
+  const showRequestFailedBadge = inScope && !isUnclaimedEndpoint && hasRequestFailure;
+  const showLatencyBadge = inScope && !isUnclaimedEndpoint && !showRequestFailedBadge;
   const rowActive = failoverEnabled && isChannelActive && (!isSqliteMode || endpointEnabled);
   const statusBadgeText = isUnclaimedEndpoint
     ? '未接管'
@@ -620,7 +589,9 @@ const EndpointMiniCard = ({
             {showRequestFailedBadge && (
               <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} />
             )}
-            <LatencyBadge ms={responseTime} inScope={inScope} />
+            {showLatencyBadge && (
+              <LatencyBadge ms={responseTime} inScope={inScope} />
+            )}
             {statusBadgeText && (
               <span
                 className="inline-flex h-5 w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium leading-none text-slate-500 whitespace-nowrap"
@@ -640,23 +611,26 @@ const EndpointMiniCard = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (failoverToggleDisabled) return;
+                  if (failoverToggleBlocked) return;
                   onToggleFailover?.(endpoint, !failoverEnabled);
                 }}
-                disabled={failoverToggleDisabled}
+                disabled={failoverToggleBlocked}
+                title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
                 className={`rounded-md p-1 transition-colors duration-150 ${
-                  failoverToggleDisabled
+                  failoverToggleBlocked
                     ? 'cursor-not-allowed text-indigo-300 opacity-60'
                     : failoverEnabled
                     ? 'text-indigo-600 hover:bg-indigo-50'
                     : 'text-slate-400 hover:bg-slate-100'
                 }`}
                 aria-label={
-                  failoverToggleDisabled
-                    ? '当前路由端点必须参与渠道内故障转移'
+                  failoverToggleBlocked
+                    ? '至少保留一个参与转移的备用端点'
                     : failoverEnabled
-                      ? '点击：不参与渠道内故障转移'
-                      : '点击：参与渠道内故障转移'
+                    ? (endpointSwitchActive
+                        ? '点击：不参与渠道内故障转移，并自动切换当前路由端点'
+                        : '点击：不参与渠道内故障转移')
+                    : '点击：参与渠道内故障转移'
                 }
                 aria-pressed={failoverEnabled}
               >
@@ -712,88 +686,6 @@ const EndpointMiniCard = ({
 // 端点详情弹窗（点击端点卡片弹出）
 // ============================================
 
-const DETAIL_CHIP_TONES = {
-  slate: 'border-slate-200 bg-slate-50 text-slate-500',
-  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  amber: 'border-amber-200 bg-amber-50 text-amber-700',
-  rose: 'border-rose-200 bg-rose-50 text-rose-700',
-  purple: 'border-purple-200 bg-purple-50 text-purple-700',
-  indigo: 'border-indigo-200 bg-indigo-50 text-indigo-700',
-  sky: 'border-sky-200 bg-sky-50 text-sky-700'
-};
-
-const DetailMetricCard = ({ label, icon: Icon, wide = false, children }) => (
-  <div
-    className={`min-w-0 rounded-xl border border-slate-200/70 bg-slate-50 p-3.5 ${
-      wide ? 'md:col-span-2' : ''
-    }`}
-  >
-    <div className="mb-2 flex items-center gap-2">
-      {Icon && (
-        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-          <Icon size={13} />
-        </span>
-      )}
-      <span className="text-xs font-medium text-slate-500">{label}</span>
-    </div>
-    <div className="min-w-0">{children}</div>
-  </div>
-);
-
-const DetailChip = ({ children, tone = 'slate', mono = false }) => (
-  <span
-    className={`inline-flex min-h-7 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold leading-none ${
-      mono ? 'font-mono' : ''
-    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
-  >
-    {children}
-  </span>
-);
-
-const DetailPill = ({ children, icon: Icon, tone = 'slate', mono = false }) => (
-  <span
-    className={`inline-flex h-6 max-w-full items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap align-middle ${
-      mono ? 'font-mono' : ''
-    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
-  >
-    {Icon && <Icon size={10} className="shrink-0" />}
-    <span className="inline-flex min-w-0 items-center justify-center gap-1 leading-none">
-      {children}
-    </span>
-  </span>
-);
-
-const getDetailTimestamp = (...values) => {
-  for (const value of values) {
-    const text = String(value ?? '').trim();
-    if (text && text !== '-' && !text.startsWith('0001-01-01')) {
-      return text;
-    }
-  }
-  return '-';
-};
-
-const DetailTimeoutPill = ({ custom, value, tooltip }) => (
-  <Tooltip content={tooltip}>
-    <span className="inline-flex">
-      <DetailPill tone={custom ? 'amber' : 'sky'} icon={Clock}>
-        <span className="leading-none">{custom ? '超时' : '默认'}</span>
-        <span className="font-mono leading-none">{value}</span>
-      </DetailPill>
-    </span>
-  </Tooltip>
-);
-
-const MODEL_MAPPING_TAG_CLASS = 'max-w-full [&>span]:whitespace-normal [&>span]:break-all';
-
-const ModelMappingPair = ({ sourceModel, targetModel }) => (
-  <div className="flex min-h-7 min-w-0 flex-wrap items-center justify-start gap-2 py-0.5">
-    <ModelTag model={sourceModel} className={MODEL_MAPPING_TAG_CLASS} />
-    <ArrowRight size={14} className="shrink-0 text-slate-400" />
-    <ModelTag model={targetModel} className={MODEL_MAPPING_TAG_CLASS} />
-  </div>
-);
-
 const EndpointDetailModal = ({
   endpoint,
   isOpen,
@@ -827,7 +719,7 @@ const EndpointDetailModal = ({
   const isSuspended = suspendedCountValue > 0;
   const isRequestFailed = healthState === 'request_failed';
   const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
-  const hasFailDetail = (Number(lastFailCode) > 0) || !!lastFailReason;
+  const hasFailDetail = (Number(lastFailCode) > 0) || !!lastFailReason || isRequestFailed;
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
@@ -943,10 +835,12 @@ const EndpointDetailModal = ({
             {showHealthBadge && (
               <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} detail />
             )}
-            {isRequestFailed && (
+            {hasFailDetail && (
               <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} detail />
             )}
-            <LatencyBadge ms={responseTime} inScope={inScope} detail />
+            {!hasFailDetail && (
+              <LatencyBadge ms={responseTime} inScope={inScope} detail />
+            )}
 
             <DetailPill tone="indigo" icon={Settings} mono>
               P{priority}
@@ -1168,18 +1062,7 @@ const EndpointDetailModal = ({
             </div>
           )}
 
-          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <DetailMetricCard label="创建时间" icon={Clock}>
-              <span className="block truncate font-mono text-sm font-medium text-slate-700">
-                {createdAt}
-              </span>
-            </DetailMetricCard>
-            <DetailMetricCard label="更新时间" icon={RefreshCw}>
-              <span className="block truncate font-mono text-sm font-medium text-slate-700">
-                {updatedAt}
-              </span>
-            </DetailMetricCard>
-          </div>
+          <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
         </div>
       </div>
     </div>
@@ -2252,6 +2135,10 @@ const ChannelCard = ({
                 isCurrentEndpoint={isSameEndpoint(endpoint, currentRouteEndpoint)}
                 healthInScope={channelHealthInScope}
                 channelFailoverEnabled={channelFailoverEnabled}
+                canDisableFailover={
+                  !(endpointParticipatesInFailover(endpoint) && isSameEndpoint(endpoint, currentRouteEndpoint)) ||
+                  endpoints.some((candidate) => !isSameEndpoint(candidate, endpoint) && endpointParticipatesInFailover(candidate))
+                }
                 onOpen={onOpenEndpoint}
                 onActivateEndpoint={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
@@ -2487,7 +2374,7 @@ const ChannelsPage = () => {
       await loadGroups();
     } catch (err) {
       console.error('切换故障转移参与状态失败:', err);
-      setActionError(`操作失败: ${getErrorMessage(err, '未知错误')}`);
+      setActionError(getFailoverToggleErrorMessage(err, '操作失败'));
     } finally {
       setChannelActionLoading(false);
     }

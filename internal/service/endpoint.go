@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -154,9 +155,6 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 	if existing == nil {
 		return fmt.Errorf("端点不存在: %d", record.ID)
 	}
-	if existing.Enabled && !record.FailoverEnabled {
-		return fmt.Errorf("当前路由端点必须参与渠道内故障转移")
-	}
 
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {
@@ -234,6 +232,20 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		}
 	}
 
+	if existing.Enabled && !record.FailoverEnabled {
+		nextEndpoint, err := s.findNextFailoverEndpoint(ctx, existing.Channel, existing.ID)
+		if err != nil {
+			return err
+		}
+		if nextEndpoint == nil {
+			return fmt.Errorf("当前路由端点关闭参与转移失败：没有其他参与渠道内故障转移的端点")
+		}
+		if _, err := s.ActivateEndpointByID(ctx, nextEndpoint.ID); err != nil {
+			return fmt.Errorf("切换当前路由端点失败: %w", err)
+		}
+		record.Enabled = false
+	}
+
 	// 更新数据库（按 ID）
 	if err := s.store.UpdateByID(ctx, record); err != nil {
 		return fmt.Errorf("更新数据库失败: %w", err)
@@ -249,6 +261,36 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 
 	slog.Info(fmt.Sprintf("✅ [EndpointService] 更新端点成功: %s (优先级: %d)", record.Name, record.Priority))
 	return nil
+}
+
+func (s *EndpointService) findNextFailoverEndpoint(ctx context.Context, channel string, currentID int64) (*store.EndpointRecord, error) {
+	if s == nil || s.store == nil {
+		return nil, fmt.Errorf("端点存储服务未启用")
+	}
+	candidates, err := s.store.ListByChannel(ctx, channel)
+	if err != nil {
+		return nil, fmt.Errorf("获取渠道端点列表失败: %w", err)
+	}
+	filtered := make([]*store.EndpointRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.ID == currentID || !candidate.FailoverEnabled {
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if filtered[i].Priority != filtered[j].Priority {
+			return filtered[i].Priority < filtered[j].Priority
+		}
+		if !filtered[i].CreatedAt.Equal(filtered[j].CreatedAt) {
+			return filtered[i].CreatedAt.Before(filtered[j].CreatedAt)
+		}
+		return filtered[i].ID < filtered[j].ID
+	})
+	return filtered[0], nil
 }
 
 // DeleteEndpoint 删除端点

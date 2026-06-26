@@ -274,6 +274,7 @@ func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
 		baseURL := strings.TrimSpace(endpoint.Config.URL)
 		probeURL := baseURL + m.config.Health.HealthPath
 		req, err := http.NewRequestWithContext(m.ctx, http.MethodGet, probeURL, nil)
+		probeSucceeded := false
 		if err == nil {
 			token := m.GetTokenForEndpoint(endpoint)
 			if token == "" {
@@ -296,6 +297,8 @@ func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
 					"endpoint", endpoint.Config.Name,
 					"url", probeURL,
 					"error", doErr)
+			} else {
+				probeSucceeded = true
 			}
 		}
 
@@ -303,6 +306,11 @@ func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
 		endpoint.Status.LastCheck = time.Now()
 		endpoint.Status.ResponseTime = responseTime
 		endpoint.Status.Healthy = true // 假定可用，依赖实际请求/兜底机制验证
+		if probeSucceeded {
+			endpoint.Status.RequestFailed = false
+			endpoint.Status.LastRequestFailCode = 0
+			endpoint.Status.LastRequestFailReason = ""
+		}
 		// 保持 NeverChecked = true 以区分"跳过检测"与"正常健康"
 		endpoint.mutex.Unlock()
 		return

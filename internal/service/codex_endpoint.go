@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 
 	"ai-relay-forwarder/internal/store"
@@ -119,9 +120,6 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	if existing == nil {
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
-	if existing.IsActive && !failoverEnabled {
-		return fmt.Errorf("当前激活端点必须参与故障转移")
-	}
 	if credentialGroupID <= 0 {
 		credentialGroupID = existing.CredentialGroupID
 	}
@@ -153,7 +151,50 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
+	if existing.IsActive && !failoverEnabled {
+		nextEndpoint, err := s.findNextFailoverEndpoint(ctx, existing.ChannelID, existing.ID)
+		if err != nil {
+			return err
+		}
+		if nextEndpoint == nil {
+			return fmt.Errorf("当前激活端点关闭参与转移失败：没有其他参与故障转移的 Codex 端点")
+		}
+		if err := s.endpointStore.SetActive(ctx, nextEndpoint.ID); err != nil {
+			return fmt.Errorf("切换 Codex 激活端点失败: %w", err)
+		}
+	}
+
 	return s.endpointStore.Update(ctx, id, name, baseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
+}
+
+func (s *CodexEndpointService) findNextFailoverEndpoint(ctx context.Context, channelID int64, currentID int64) (*store.CodexEndpointRecord, error) {
+	if s == nil || s.endpointStore == nil {
+		return nil, fmt.Errorf("Codex 端点存储服务未启用")
+	}
+	candidates, err := s.endpointStore.ListByChannelID(ctx, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("获取 Codex 端点列表失败: %w", err)
+	}
+	filtered := make([]*store.CodexEndpointRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.ID == currentID || !candidate.FailoverEnabled {
+			continue
+		}
+		filtered = append(filtered, candidate)
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		if filtered[i].Priority != filtered[j].Priority {
+			return filtered[i].Priority < filtered[j].Priority
+		}
+		if !filtered[i].CreatedAt.Equal(filtered[j].CreatedAt) {
+			return filtered[i].CreatedAt.Before(filtered[j].CreatedAt)
+		}
+		return filtered[i].ID < filtered[j].ID
+	})
+	return filtered[0], nil
 }
 
 // DeleteEndpoint 删除端点。若被删除的是当前激活端点：

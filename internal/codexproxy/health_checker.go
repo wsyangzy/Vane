@@ -233,6 +233,8 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 	h.recordLatency(ep.ID, latencyMs)
 	if !skipHealthState {
 		h.manager.MarkHealthy(ep.ID)
+	} else {
+		h.manager.SetFailureDetail(ep.ID, 0, "")
 	}
 
 	h.logger.Debug("Codex 端点探测成功",

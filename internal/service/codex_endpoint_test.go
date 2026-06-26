@@ -102,7 +102,7 @@ func TestNormalizeAndValidateCodexEndpointAllowsInternalSpaces(t *testing.T) {
 	}
 }
 
-func TestCodexEndpointRejectsDisablingActiveEndpointFailover(t *testing.T) {
+func TestCodexEndpointDisablingActiveEndpointFailoverSwitchesToNextCandidate(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexEndpointTestDB(t)
 	channelStore := store.NewSQLiteCodexChannelStore(db)
@@ -139,6 +139,28 @@ func TestCodexEndpointRejectsDisablingActiveEndpointFailover(t *testing.T) {
 	if !active.IsActive {
 		t.Fatalf("expected first endpoint to be active")
 	}
+	standby, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "standby",
+		BaseURL:           "https://example.invalid/standby/v1",
+		FailoverEnabled:   true,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("create standby endpoint: %v", err)
+	}
+	laterStandby, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "later-standby",
+		BaseURL:           "https://example.invalid/later-standby/v1",
+		FailoverEnabled:   true,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("create later standby endpoint: %v", err)
+	}
 
 	err = endpointService.UpdateEndpointByID(
 		ctx,
@@ -158,11 +180,95 @@ func TestCodexEndpointRejectsDisablingActiveEndpointFailover(t *testing.T) {
 		active.BillingOutputTokenSource,
 		active.ModelMultipliers,
 	)
-	if err == nil {
-		t.Fatalf("expected active endpoint failover disable to be rejected")
+	if err != nil {
+		t.Fatalf("disable active endpoint failover: %v", err)
 	}
-	if !strings.Contains(err.Error(), "当前激活端点必须参与故障转移") {
-		t.Fatalf("unexpected error: %v", err)
+	updatedActive, err := endpointStore.GetByID(ctx, active.ID)
+	if err != nil {
+		t.Fatalf("reload active endpoint: %v", err)
+	}
+	updatedStandby, err := endpointStore.GetByID(ctx, standby.ID)
+	if err != nil {
+		t.Fatalf("reload standby endpoint: %v", err)
+	}
+	if updatedActive.FailoverEnabled || updatedActive.IsActive {
+		t.Fatalf("expected original active endpoint to be inactive and excluded, got active=%v failover=%v", updatedActive.IsActive, updatedActive.FailoverEnabled)
+	}
+	if !updatedStandby.IsActive {
+		t.Fatalf("expected standby endpoint to become active")
+	}
+	updatedLaterStandby, err := endpointStore.GetByID(ctx, laterStandby.ID)
+	if err != nil {
+		t.Fatalf("reload later standby endpoint: %v", err)
+	}
+	if updatedLaterStandby.IsActive {
+		t.Fatalf("expected earlier standby endpoint to win equal-priority tie")
+	}
+}
+
+func TestCodexEndpointDisablingActiveEndpointFailoverRequiresCandidate(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+	active, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "active",
+		BaseURL:           "https://example.invalid/codex/v1",
+		FailoverEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create active endpoint: %v", err)
+	}
+
+	err = endpointService.UpdateEndpointByID(
+		ctx,
+		active.ID,
+		active.Name,
+		active.BaseURL,
+		active.CredentialGroupID,
+		active.ApiKey,
+		false,
+		active.SkipHealthCheck,
+		active.Priority,
+		active.TimeoutSeconds,
+		active.CostMultiplier,
+		active.InputCostMultiplier,
+		active.OutputCostMultiplier,
+		active.CacheReadCostMultiplier,
+		active.BillingOutputTokenSource,
+		active.ModelMultipliers,
+	)
+	if err == nil || !strings.Contains(err.Error(), "没有其他参与故障转移") {
+		t.Fatalf("expected missing failover candidate error, got: %v", err)
+	}
+
+	updatedActive, err := endpointStore.GetByID(ctx, active.ID)
+	if err != nil {
+		t.Fatalf("reload active endpoint: %v", err)
+	}
+	if !updatedActive.FailoverEnabled || !updatedActive.IsActive {
+		t.Fatalf("expected active endpoint to remain active and included, got active=%v failover=%v", updatedActive.IsActive, updatedActive.FailoverEnabled)
 	}
 }
 

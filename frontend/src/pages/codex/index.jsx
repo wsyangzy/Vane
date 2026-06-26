@@ -46,6 +46,21 @@ import ModelMultiplierEditor from '../channels/components/ModelMultiplierEditor.
 import { buildInitialModelMultiplierRows, parseModelMultiplierRows } from '../channels/components/modelMultiplierRows.js';
 import ModelTag from '../requests/components/ModelTag.jsx';
 import {
+  DetailChip as BaseDetailChip,
+  DetailMetricCard as BaseDetailMetricCard,
+  DetailPill as BaseDetailPill,
+  DetailTimeoutPill as BaseDetailTimeoutPill,
+  DetailTimestampFooter as BaseDetailTimestampFooter,
+  ModelMappingPair
+} from '../management/shared/detailParts.jsx';
+import {
+  formatLastCheck,
+  getDetailTimestamp,
+  getErrorMessage,
+  getFailoverToggleErrorMessage
+} from '../management/shared/formatters.js';
+import { buildInitialModelMappingRows, buildModelMappingPayload } from '../management/shared/modelMapping.js';
+import {
   activateCodexChannel,
   activateCodexEndpoint,
   createCodexChannel,
@@ -68,6 +83,12 @@ import {
   updateCodexGlobalConfig
 } from '@utils/wailsApi.js';
 import { formatMultiplierExpression, formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
+
+const DetailMetricCard = (props) => <BaseDetailMetricCard {...props} density="compact" />;
+const DetailChip = (props) => <BaseDetailChip {...props} variant="codex" />;
+const DetailPill = (props) => <BaseDetailPill {...props} variant="codex" />;
+const DetailTimeoutPill = (props) => <BaseDetailTimeoutPill {...props} variant="codex" />;
+const DetailTimestampFooter = (props) => <BaseDetailTimestampFooter {...props} density="compact" />;
 
 const getCredentialGroups = (channel) => {
   const groups = channel?.credentialGroups || channel?.credential_groups || [];
@@ -112,28 +133,6 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
   billingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens',
   modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
 });
-
-const buildInitialModelMappingRows = (modelMapping) => {
-  const entries = Object.entries(modelMapping || {})
-    .map(([sourceModel, targetModel]) => ({
-      sourceModel: String(sourceModel || ''),
-      targetModel: String(targetModel || '')
-    }))
-    .filter((row) => row.sourceModel.trim() || row.targetModel.trim());
-
-  return entries.length > 0 ? entries : [{ sourceModel: '', targetModel: '' }];
-};
-
-const buildModelMappingPayload = (rows) => {
-  return (rows || []).reduce((mapping, row) => {
-    const sourceModel = String(row?.sourceModel || '').trim();
-    const targetModel = String(row?.targetModel || '').trim();
-    if (sourceModel && targetModel) {
-      mapping[sourceModel] = targetModel;
-    }
-    return mapping;
-  }, {});
-};
 
 const CODEX_CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
@@ -195,21 +194,6 @@ const parseEndpointTimeoutPayload = (value) => {
   return { timeoutSeconds: parsed };
 };
 
-const formatLastCheck = (time) => {
-  if (!time || time === '-') return '-';
-  try {
-    const date = new Date(time);
-    return date.toLocaleString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  } catch {
-    return String(time);
-  }
-};
-
 // 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
 // 在代理模式下，这些字段不再由渠道级管理，仅写入 ~/.codex/config.toml 由 Codex CLI 读取
 
@@ -231,18 +215,6 @@ const CodexLogo = ({ className = 'w-6 h-6' }) => (
     />
   </svg>
 );
-
-const getErrorMessage = (error, fallback = '操作失败') => {
-  if (!error) return fallback;
-  if (typeof error === 'string') return error || fallback;
-  if (error instanceof Error) return error.message || fallback;
-  if (typeof error?.message === 'string' && error.message) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-};
 
 // ============================================================================
 // 渠道编辑弹窗（渠道信息 + 创建时的默认凭证分组；model/reasoning/1M 已迁移到全局设置）
@@ -1409,101 +1381,6 @@ const CodexRequestFailureBadge = ({ failCode, failReason, detail = false }) => {
   );
 };
 
-const DETAIL_CHIP_TONES = {
-  slate: 'border-slate-200 bg-white text-slate-700',
-  emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  amber: 'border-amber-200 bg-amber-50 text-amber-700',
-  indigo: 'border-indigo-200 bg-indigo-50 text-indigo-700',
-  sky: 'border-sky-200 bg-sky-50 text-sky-700'
-};
-
-const DetailMetricCard = ({ label, icon: Icon, wide = false, children }) => (
-  <div
-    className={`min-w-0 h-full rounded-xl border border-slate-200/70 bg-slate-50 p-3 ${
-      wide ? 'md:col-span-2' : ''
-    }`}
-  >
-    <div className="mb-1.5 flex items-center gap-2">
-      {Icon && (
-        <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-100 text-slate-500">
-          <Icon size={12} />
-        </span>
-      )}
-      <span className="text-xs font-medium text-slate-500">{label}</span>
-    </div>
-    <div className="min-w-0">{children}</div>
-  </div>
-);
-
-const DetailChip = ({ children, tone = 'slate', mono = false }) => (
-  <span
-    className={`inline-flex min-h-7 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold leading-none ${
-      mono ? 'font-mono' : ''
-    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
-  >
-    {children}
-  </span>
-);
-
-const DetailPill = ({ children, icon: Icon, tone = 'slate', mono = false }) => (
-  <span
-    className={`inline-flex h-6 max-w-full items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap align-middle ${
-      mono ? 'font-mono' : ''
-    } ${DETAIL_CHIP_TONES[tone] || DETAIL_CHIP_TONES.slate}`}
-  >
-    {Icon && <Icon size={10} className="shrink-0" />}
-    <span className="inline-flex min-w-0 items-center justify-center gap-1 leading-none">
-      {children}
-    </span>
-  </span>
-);
-
-const getDetailTimestamp = (...values) => {
-  for (const value of values) {
-    const text = String(value ?? '').trim();
-    if (text && text !== '-' && !text.startsWith('0001-01-01')) {
-      return text;
-    }
-  }
-  return '-';
-};
-
-const DetailTimeoutPill = ({ custom, value, tooltip }) => (
-  <Tooltip content={tooltip}>
-    <span className="inline-flex">
-      <DetailPill tone={custom ? 'amber' : 'sky'} icon={Clock}>
-        <span className="leading-none">{custom ? '超时' : '默认'}</span>
-        <span className="font-mono leading-none">{value}</span>
-      </DetailPill>
-    </span>
-  </Tooltip>
-);
-
-const MODEL_MAPPING_TAG_CLASS = 'max-w-full [&>span]:whitespace-normal [&>span]:break-all';
-
-const ModelMappingPair = ({ sourceModel, targetModel }) => (
-  <div className="flex min-h-7 min-w-0 flex-wrap items-center justify-start gap-2 py-0.5">
-    <ModelTag model={sourceModel} className={MODEL_MAPPING_TAG_CLASS} />
-    <ArrowRight size={14} className="shrink-0 text-slate-400" />
-    <ModelTag model={targetModel} className={MODEL_MAPPING_TAG_CLASS} />
-  </div>
-);
-
-const DetailTimestampFooter = ({ createdAt, updatedAt }) => (
-  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-    <DetailMetricCard label="创建时间" icon={Clock}>
-      <span className="block truncate font-mono text-sm font-medium text-slate-700">
-        {createdAt}
-      </span>
-    </DetailMetricCard>
-    <DetailMetricCard label="更新时间" icon={RefreshCw}>
-      <span className="block truncate font-mono text-sm font-medium text-slate-700">
-        {updatedAt}
-      </span>
-    </DetailMetricCard>
-  </div>
-);
-
 const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit }) => {
   if (!endpoint) return null;
 
@@ -1660,7 +1537,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
 
           <div className="mt-2 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <CodexHealthBadge state={healthState} detail />
-            <CodexLatencyBadge ms={responseTimeMs} detail />
+            {!hasFailDetail && <CodexLatencyBadge ms={responseTimeMs} detail />}
             <DetailPill tone="indigo" icon={Settings} mono>
               P{priority}
             </DetailPill>
@@ -1761,7 +1638,8 @@ const EndpointRow = ({
   onOpen,
   onToggleFailover,
   onToggleSkipHealthCheck,
-  actionLoading
+  actionLoading,
+  canDisableFailover = true
 }) => {
   const isActivating = actionLoading === `activate-endpoint-${endpoint.id}`;
   const isDeleting = actionLoading === `delete-endpoint-${endpoint.id}`;
@@ -1784,7 +1662,8 @@ const EndpointRow = ({
   const showAmber = endpoint.isActive && isSuspended;
   const canRepeatActivate = endpoint.isActive && isSuspended;
   const endpointSwitchDisabled = !failoverEnabled;
-  const failoverToggleDisabled = failoverEnabled && endpoint.isActive;
+  const failoverToggleBlocked = failoverEnabled && endpoint.isActive && !canDisableFailover;
+  const hasRequestFailure = Number(lastFailCode) > 0 || !!lastFailReason;
 
   const handleToggleActivate = (event) => {
     event.stopPropagation();
@@ -1808,7 +1687,7 @@ const EndpointRow = ({
 
   const handleFailoverToggle = (event) => {
     event.stopPropagation();
-    if (failoverToggleDisabled) return;
+    if (failoverToggleBlocked) return;
     onToggleFailover?.(endpoint, !failoverEnabled);
   };
 
@@ -1905,8 +1784,11 @@ const EndpointRow = ({
           </div>
           <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible">
             <CodexHealthBadge state={healthState} />
-            <CodexLatencyBadge ms={responseTimeMs} />
-            <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} />
+            {hasRequestFailure ? (
+              <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} />
+            ) : (
+              <CodexLatencyBadge ms={responseTimeMs} />
+            )}
           </div>
         </div>
 
@@ -1915,20 +1797,23 @@ const EndpointRow = ({
           <button
             type="button"
             onClick={handleFailoverToggle}
-            disabled={failoverToggleDisabled}
+            disabled={failoverToggleBlocked}
+            title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
             className={`rounded-md p-1 transition-colors duration-150 ${
-              failoverToggleDisabled
+              failoverToggleBlocked
                 ? 'cursor-not-allowed text-indigo-300 opacity-60'
                 : failoverEnabled
                 ? 'text-indigo-600 hover:bg-indigo-50'
                 : 'text-slate-400 hover:bg-slate-100'
             }`}
             aria-label={
-              failoverToggleDisabled
-                ? '当前激活端点必须参与故障转移'
+              failoverToggleBlocked
+                ? '至少保留一个参与转移的备用端点'
                 : failoverEnabled
-                  ? '点击：不参与故障转移'
-                  : '点击：参与故障转移'
+                ? (endpoint.isActive
+                    ? '点击：不参与故障转移，并自动切换当前端点'
+                    : '点击：不参与故障转移')
+                : '点击：参与故障转移'
             }
             aria-pressed={failoverEnabled}
           >
@@ -2361,6 +2246,10 @@ const ChannelCard = ({
                 endpoint={endpoint}
                 credentialGroup={getCredentialGroupForEndpoint(endpoint)}
                 suspendedCount={activeSuspendedCount}
+                canDisableFailover={
+                  !(endpoint.isActive && endpoint.failoverEnabled !== false) ||
+                  endpoints.some((candidate) => candidate.id !== endpoint.id && candidate.failoverEnabled !== false)
+                }
                 onActivate={onActivateEndpoint}
                 onToggleFailover={onToggleEndpointFailover}
                 onToggleSkipHealthCheck={onToggleEndpointSkipHealthCheck}
@@ -2791,7 +2680,7 @@ const CodexPage = () => {
     try {
       await updateCodexEndpointByID(endpoint.id, {
         name: endpoint.name,
-        baseURL: endpoint.baseURL,
+        baseURL: endpoint.baseURL || endpoint.base_url,
         credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
         failoverEnabled: enabled,
         priority: endpoint.priority,
@@ -2799,7 +2688,7 @@ const CodexPage = () => {
       });
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '切换故障转移失败'));
+      setError(getFailoverToggleErrorMessage(err));
     }
   };
 
@@ -2808,7 +2697,7 @@ const CodexPage = () => {
     try {
       await updateCodexEndpointByID(endpoint.id, {
         name: endpoint.name,
-        baseURL: endpoint.baseURL,
+        baseURL: endpoint.baseURL || endpoint.base_url,
         credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
         skipHealthCheck,
         priority: endpoint.priority,
