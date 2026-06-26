@@ -180,17 +180,9 @@ func (h *HealthChecker) checkAll() {
 // checkEndpoint 对单个端点执行 HTTP GET base_url + healthPath 测量 RTT
 // timeout / healthPath 每次都动态读取，配置变更立即生效
 func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
-	if ep.SkipHealthCheck {
-		h.mu.Lock()
-		delete(h.latencies, ep.ID)
-		delete(h.lastChecks, ep.ID)
-		h.mu.Unlock()
-		h.manager.MarkHealthy(ep.ID)
-		return
-	}
-
 	_, timeout, healthPath := h.readHealthConfig()
 	url := buildProbeURL(ep.BaseURL, healthPath)
+	skipHealthState := ep.SkipHealthCheck
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -203,7 +195,9 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"error", err,
 		)
 		h.recordLatency(ep.ID, -1)
-		h.manager.MarkUnhealthyWithDetail(ep.ID, 0, err.Error())
+		if !skipHealthState {
+			h.manager.MarkUnhealthyWithDetail(ep.ID, 0, err.Error())
+		}
 		return
 	}
 
@@ -228,19 +222,24 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 			"elapsed_ms", latencyMs,
 		)
 		h.recordLatency(ep.ID, -1)
-		h.manager.MarkUnhealthyWithDetail(ep.ID, 0, err.Error())
+		if !skipHealthState {
+			h.manager.MarkUnhealthyWithDetail(ep.ID, 0, err.Error())
+		}
 		return
 	}
 	resp.Body.Close()
 
 	// 任何能收到响应的情况都视为端点可达（包括 401/403 等认证错误）
 	h.recordLatency(ep.ID, latencyMs)
-	h.manager.MarkHealthy(ep.ID)
+	if !skipHealthState {
+		h.manager.MarkHealthy(ep.ID)
+	}
 
 	h.logger.Debug("Codex 端点探测成功",
 		"endpoint", ep.Name,
 		"status", resp.StatusCode,
 		"latency_ms", latencyMs,
+		"skip_health_check", skipHealthState,
 	)
 }
 

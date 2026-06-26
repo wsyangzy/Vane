@@ -1836,7 +1836,7 @@ const ChannelCard = ({
     ? 'border-rose-300 ring-1 ring-rose-100'  // 全部失败 → 红色
     : isActiveChannelSuspended
       ? 'border-amber-300 ring-1 ring-amber-100'
-      : 'border-indigo-300 ring-1 ring-indigo-100';  // Claude 正常活跃 → 与 Codex 区分
+      : 'border-emerald-200 ring-1 ring-emerald-100';  // 与 Codex 正常活跃卡片保持一致
 
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;

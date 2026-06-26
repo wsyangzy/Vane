@@ -1226,14 +1226,14 @@ func codexEndpointRuntimeHealth(
 	if !endpoint.FailoverEnabled {
 		return false, "excluded", false, 0
 	}
-	if endpoint.SkipHealthCheck {
-		return false, "skipped", false, 0
-	}
-
 	latency, hasLatency := latencies[endpoint.ID]
 	if latency > 0 {
 		responseTimeMS = latency
 	}
+	if endpoint.SkipHealthCheck {
+		return false, "skipped", true, responseTimeMS
+	}
+
 	if hasLatency && latency < 0 {
 		return false, "unhealthy", true, responseTimeMS
 	}

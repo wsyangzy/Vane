@@ -1,6 +1,14 @@
 package codexproxy
 
-import "testing"
+import (
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"ai-relay-forwarder/config"
+)
 
 func TestBuildProbeURL(t *testing.T) {
 	tests := []struct {
@@ -82,5 +90,41 @@ func TestBuildProbeURL(t *testing.T) {
 				t.Fatalf("buildProbeURL(%q, %q) = %q, want %q", tt.baseURL, tt.healthPath, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHealthCheckerSkippedEndpointStillRecordsLatencyWithoutChangingHealth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Millisecond)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	manager := NewEndpointManager(nil, nil, nil, slog.Default())
+	const endpointID int64 = 42
+	manager.MarkUnhealthy(endpointID)
+
+	checker := NewHealthChecker(manager, &config.Config{
+		Health: config.HealthConfig{
+			HealthPath: "/health",
+		},
+	}, slog.Default())
+
+	checker.checkEndpoint(&CodexEndpoint{
+		ID:              endpointID,
+		Name:            "skipped",
+		BaseURL:         server.URL,
+		SkipHealthCheck: true,
+	})
+
+	latencies := checker.GetLatencies()
+	if got := latencies[endpointID]; got <= 0 {
+		t.Fatalf("expected skipped endpoint latency to be recorded, got %d", got)
+	}
+	if checker.GetLastChecks()[endpointID].IsZero() {
+		t.Fatalf("expected skipped endpoint last check time to be recorded")
+	}
+	if manager.IsHealthy(endpointID) {
+		t.Fatalf("expected skipped endpoint probe not to change routing health")
 	}
 }
