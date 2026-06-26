@@ -616,6 +616,7 @@ const SettingsPage = () => {
         <SettingsSection
           title="服务端口"
           icon={Server}
+          description="API 服务端口配置"
           onReset={() => handleResetCategory('server', '服务端口')}
           resetDisabled={saving}
         >
@@ -656,6 +657,7 @@ const SettingsPage = () => {
               key={category.name}
               title={category.label}
               icon={CATEGORY_ICONS[category.name] || Settings}
+              description={category.description}
               onReset={() => handleResetCategory(category.name, category.label)}
               resetDisabled={saving}
               className={isWideCategory ? 'lg:col-span-2' : ''}

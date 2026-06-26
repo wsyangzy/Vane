@@ -147,14 +147,17 @@ const SettingItem = ({
                 <ChangeDot />
               )}
               <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
-            {setting.requires_restart && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
-                <AlertTriangle size={10} className="mr-0.5" />
-                重启生效
-              </span>
+              {setting.requires_restart && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
+                  <AlertTriangle size={10} className="mr-0.5" />
+                  重启生效
+                </span>
+              )}
+            </div>
+            {setting.description && (
+              <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
             )}
           </div>
-        </div>
           <div className="flex items-center gap-2">
             {/* 显示跳过健康检测状态标签 */}
             {isLoopRetry && skipHealthCheck && (
@@ -216,6 +219,9 @@ const SettingItem = ({
               </span>
             )}
           </div>
+          {setting.description && (
+            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
@@ -270,6 +276,9 @@ const SettingItem = ({
               </span>
             )}
           </div>
+          {setting.description && (
+            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
@@ -308,6 +317,9 @@ const SettingItem = ({
       label: option.label
     }));
 
+    // 获取当前选中选项的描述
+    const currentOption = (forcedOptions || setting.enum_options)?.find(opt => opt.value === localValue);
+
     // 通用枚举类型使用下拉选择
     return (
       <div className="py-3 border-b border-slate-100 last:border-0 group">
@@ -325,6 +337,9 @@ const SettingItem = ({
                 </span>
               )}
             </div>
+            {setting.description && (
+              <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {hasChange && onRevert && (
@@ -342,6 +357,14 @@ const SettingItem = ({
             />
           </div>
         </div>
+        {/* 当前选项的详细说明 */}
+        {currentOption && currentOption.description && (
+          <div className="mt-2 pl-4 pr-32">
+            <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+              <p className="text-xs text-indigo-900 leading-relaxed">{currentOption.description}</p>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -368,6 +391,9 @@ const SettingItem = ({
               </span>
             )}
           </div>
+          {setting.description && (
+            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {hasChange && onRevert && (
@@ -403,6 +429,9 @@ const SettingItem = ({
               </span>
             )}
           </div>
+          {setting.description && (
+            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -462,6 +491,9 @@ const SettingItem = ({
             </span>
           )}
         </div>
+        {setting.description && (
+          <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+        )}
       </div>
       <div className="flex items-center gap-2">
         {hasChange && onRevert && (
