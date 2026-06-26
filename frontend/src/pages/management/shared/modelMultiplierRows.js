@@ -1,5 +1,7 @@
 import { formatMultiplierInputValue, isValidMultiplierExpression, parseMultiplierExpression } from '@utils/multiplier.js';
 
+export const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
+
 export const MODEL_MULTIPLIER_FIELDS = [
   { key: 'costMultiplier', label: '总倍率' },
   { key: 'inputCostMultiplier', label: '输入' },

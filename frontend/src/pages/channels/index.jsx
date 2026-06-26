@@ -42,11 +42,15 @@ import useEndpointsData from '@hooks/useEndpointsData.js';
 import useHorizontalScroll from '@hooks/useHorizontalScroll.js';
 import {
   EndpointForm,
-  DeleteConfirmDialog,
-  ModelMultiplierEditor
+  DeleteConfirmDialog
 } from './components';
-import { buildInitialModelMultiplierRows, parseModelMultiplierRows } from './components/modelMultiplierRows.js';
 import ModelTag from '../requests/components/ModelTag.jsx';
+import ModelMultiplierEditor from '../management/shared/ModelMultiplierEditor.jsx';
+import {
+  EndpointHealthBadge as HealthBadge,
+  EndpointLatencyBadge as LatencyBadge,
+  EndpointRequestFailureBadge as RequestFailedBadge
+} from '../management/shared/endpointBadges.jsx';
 import {
   DetailChip,
   DetailMetricCard,
@@ -57,11 +61,14 @@ import {
 } from '../management/shared/detailParts.jsx';
 import {
   formatLastCheck,
+  formatDetailMultiplier,
   getDetailTimestamp,
   getErrorMessage,
-  getFailoverToggleErrorMessage
+  getFailoverToggleErrorMessage,
+  isDefaultDetailMultiplier
 } from '../management/shared/formatters.js';
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '../management/shared/modelMapping.js';
+import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '../management/shared/modelMultiplierRows.js';
 import {
   getEndpointStorageStatus,
   getEndpointRecords,
@@ -95,7 +102,7 @@ import {
   deleteClaudeCredentialGroupByID,
   setDefaultClaudeCredentialGroup
 } from '@utils/wailsApi.js';
-import { formatMultiplierExpression, formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
+import { formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
 
 const CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
@@ -127,7 +134,6 @@ const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
 ];
 
-const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
 const CHANNEL_META_BADGE_CLASS = 'inline-flex h-5 items-center justify-center rounded-full border px-2 pt-0 pb-0 text-[10px] font-medium leading-[20px] whitespace-nowrap';
 
 const isValidMultiplierExpression = (value) => {
@@ -304,93 +310,6 @@ const PauseActiveChannelConfirmDialog = ({ channelName, onConfirm, onCancel, loa
         </div>
       </div>
     </div>
-  );
-};
-
-// ============================================
-// 端点表格行组件 (增强版 - 参考 test.jsx 设计)
-// ============================================
-
-// 健康状态徽章（健康/异常/未检测/跳过检测）
-const HealthBadge = ({ healthy, neverChecked, skipped, detail = false }) => {
-  const baseClass = `inline-flex ${detail ? 'h-6 min-w-[64px]' : 'h-5'} w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap`;
-
-  if (skipped) {
-    return (
-      <div className={`${baseClass} bg-purple-50 text-purple-600 border-purple-200`}>
-        <ShieldOff size={10} className="shrink-0" />
-        跳过检测
-      </div>
-    );
-  }
-  if (neverChecked) {
-    return (
-      <div className={`${baseClass} bg-slate-50 text-slate-400 border-slate-200`}>
-        <Clock size={10} className="shrink-0" />
-        未检测
-      </div>
-    );
-  }
-
-  return healthy ? (
-    <div className={`${baseClass} bg-emerald-50 text-emerald-600 border-emerald-100`}>
-      <CheckCircle2 size={10} className="shrink-0" />
-      健康
-    </div>
-  ) : (
-    <div className={`${baseClass} bg-rose-50 text-rose-600 border-rose-100`}>
-      <XCircle size={10} className="shrink-0" />
-      异常
-    </div>
-  );
-};
-
-// 请求失败徽章（与健康异常区分）
-const RequestFailedBadge = ({ failCode, failReason, detail = false }) => {
-  const hasFailCode = Number.isFinite(Number(failCode)) && Number(failCode) > 0;
-  const hasFailReason = !!failReason;
-  const tooltipParts = [];
-  if (hasFailCode) tooltipParts.push(`状态码: ${failCode}`);
-  if (hasFailReason) tooltipParts.push(`原因: ${failReason}`);
-  const label = tooltipParts.length > 0 ? tooltipParts.join('，') : '请求失败';
-
-  return (
-    <div
-      className={`inline-flex ${detail ? 'h-6 min-w-[72px]' : 'h-5'} w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600 whitespace-nowrap`}
-      aria-label={label}
-    >
-      <XCircle size={10} className="shrink-0" />
-      请求失败
-      {hasFailCode && (
-        <span className="font-mono">({failCode})</span>
-      )}
-    </div>
-  );
-};
-
-// 延迟指示器
-const LatencyBadge = ({ ms, inScope = true, detail = false }) => {
-  if (!inScope) {
-    return null;
-  }
-
-  const baseClass = `inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[54px] flex-shrink-0 items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none whitespace-nowrap`;
-
-  const msValue = Number(ms);
-  if (!Number.isFinite(msValue) || msValue <= 0) {
-    return null;
-  }
-
-  const msInt = Math.max(1, Math.round(msValue));
-
-  let colorClass = 'text-emerald-600 bg-emerald-50 border-emerald-100';
-  if (msInt > 500) colorClass = 'text-amber-600 bg-amber-50 border-amber-100';
-  if (msInt > 1000) colorClass = 'text-rose-600 bg-rose-50 border-rose-100';
-
-  return (
-    <span className={`${baseClass} ${colorClass}`}>
-      {msInt}ms
-    </span>
   );
 };
 
@@ -734,14 +653,6 @@ const EndpointDetailModal = ({
     .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
     .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
   const modelMultiplierRules = endpoint.modelMultipliers || endpoint.model_multipliers || [];
-  const normalizeDetailMultiplier = (value) => {
-    const parsed = typeof value === 'string'
-      ? parseMultiplierExpression(value, Number.NaN)
-      : Number(value);
-    return Number.isFinite(parsed) ? parsed : 1;
-  };
-  const isDefaultDetailMultiplier = (value) => Math.abs(normalizeDetailMultiplier(value) - 1) <= 0.000001;
-  const formatDetailMultiplier = (value) => `${formatMultiplierExpression(normalizeDetailMultiplier(value), 3)}x`;
   const multiplierItems = [
     { label: '总', value: endpoint.costMultiplier ?? endpoint.cost_multiplier ?? 1, tone: 'indigo' },
     { label: '输入', value: endpoint.inputCostMultiplier ?? endpoint.input_cost_multiplier ?? 1, tone: 'slate' },

@@ -7,23 +7,12 @@ import { useState } from 'react';
 import { X, Save, AlertCircle } from 'lucide-react';
 import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
+import { getErrorMessage } from '../../management/shared/formatters.js';
 
 const ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'routing', label: '路由配置' }
 ];
-
-const getErrorMessage = (error, fallback = '保存失败') => {
-  if (!error) return fallback;
-  if (typeof error === 'string') return error || fallback;
-  if (error instanceof Error) return error.message || fallback;
-  if (typeof error?.message === 'string' && error.message) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-};
 
 // ============================================
 // 表单输入组件

@@ -11,7 +11,6 @@ import {
   ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
-  Clock,
   Database,
   Eye,
   EyeOff,
@@ -42,8 +41,6 @@ import {
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import useHorizontalScroll from '@hooks/useHorizontalScroll.js';
-import ModelMultiplierEditor from '../channels/components/ModelMultiplierEditor.jsx';
-import { buildInitialModelMultiplierRows, parseModelMultiplierRows } from '../channels/components/modelMultiplierRows.js';
 import ModelTag from '../requests/components/ModelTag.jsx';
 import {
   DetailChip as BaseDetailChip,
@@ -55,11 +52,19 @@ import {
 } from '../management/shared/detailParts.jsx';
 import {
   formatLastCheck,
+  formatDetailMultiplier,
   getDetailTimestamp,
   getErrorMessage,
   getFailoverToggleErrorMessage
 } from '../management/shared/formatters.js';
+import ModelMultiplierEditor from '../management/shared/ModelMultiplierEditor.jsx';
+import {
+  EndpointHealthBadge as CodexHealthBadge,
+  EndpointLatencyBadge as CodexLatencyBadge,
+  EndpointRequestFailureBadge as CodexRequestFailureBadge
+} from '../management/shared/endpointBadges.jsx';
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '../management/shared/modelMapping.js';
+import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '../management/shared/modelMultiplierRows.js';
 import {
   activateCodexChannel,
   activateCodexEndpoint,
@@ -151,7 +156,6 @@ const BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS = [
   { value: 'visible_output_tokens', label: '可见补全 output - reasoning' }
 ];
 
-const MULTIPLIER_EXPRESSION_HELP = '支持小数或分数，如 1.25、40/30';
 const ENDPOINT_MULTIPLIER_FIELDS = [
   { label: '总成本倍率', key: 'costMultiplier' },
   { label: '输入成本倍率', key: 'inputCostMultiplier' },
@@ -1281,7 +1285,7 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
 // 渠道卡片（卡片头 + 端点子列表）
 // ============================================================================
 // ============================================================================
-// 端点行（紧凑表格风，参考 channels/EndpointRow）：
+// 端点行（紧凑表格风，延续渠道管理页密度）：
 // 左侧 toggle = 激活；行整体点击展开内嵌编辑（base_url 直改即保存）
 // ============================================================================
 const summarizeEndpoint = (baseURL) => {
@@ -1291,94 +1295,6 @@ const summarizeEndpoint = (baseURL) => {
   } catch {
     return baseURL || '';
   }
-};
-
-const CodexHealthBadge = ({ state, detail = false }) => {
-  const configs = {
-    healthy: {
-      label: '健康',
-      icon: CheckCircle2,
-      className: 'border-emerald-100 bg-emerald-50 text-emerald-600'
-    },
-    unhealthy: {
-      label: '异常',
-      icon: XCircle,
-      className: 'border-rose-100 bg-rose-50 text-rose-600'
-    },
-    skipped: {
-      label: '跳过检测',
-      icon: ShieldOff,
-      className: 'border-purple-200 bg-purple-50 text-purple-600'
-    },
-    unchecked: {
-      label: '检测中',
-      icon: Clock,
-      className: 'border-slate-200 bg-slate-50 text-slate-500'
-    },
-    inactive: {
-      label: '未接管',
-      icon: Clock,
-      className: 'border-slate-200 bg-slate-50 text-slate-400'
-    },
-    excluded: {
-      label: '不参与',
-      icon: ArrowRightLeft,
-      className: 'border-slate-200 bg-slate-50 text-slate-400'
-    }
-  };
-  const config = configs[state] || configs.unchecked;
-
-  const Icon = config.icon;
-  return (
-    <span
-      className={`inline-flex ${detail ? 'h-6' : 'h-5'} flex-shrink-0 items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none ${config.className}`}
-    >
-      <Icon size={10} className="shrink-0" />
-      {config.label}
-    </span>
-  );
-};
-
-const CodexLatencyBadge = ({ ms, detail = false }) => {
-  const msValue = Number(ms);
-  if (!Number.isFinite(msValue) || msValue <= 0) return null;
-
-  const rounded = Math.max(1, Math.round(msValue));
-  let className = 'border-emerald-100 bg-emerald-50 text-emerald-600';
-  if (rounded > 500) className = 'border-amber-100 bg-amber-50 text-amber-600';
-  if (rounded > 1000) className = 'border-rose-100 bg-rose-50 text-rose-600';
-
-  return (
-    <span
-      className={`inline-flex ${detail ? 'h-6' : 'h-5'} min-w-[54px] flex-shrink-0 items-center justify-center rounded-full border px-1.5 font-mono text-[10px] font-medium leading-none ${className}`}
-      aria-label="最近一次 Codex 健康探测延迟"
-    >
-      {rounded}ms
-    </span>
-  );
-};
-
-const CodexRequestFailureBadge = ({ failCode, failReason, detail = false }) => {
-  const code = Number(failCode || 0);
-  const hasCode = Number.isFinite(code) && code > 0;
-  const hasReason = !!failReason;
-  if (!hasCode && !hasReason) return null;
-
-  const label = [
-    hasCode ? `状态码: ${code}` : null,
-    hasReason ? `原因: ${failReason}` : null
-  ].filter(Boolean).join('，');
-
-  return (
-    <span
-      className={`inline-flex ${detail ? 'h-6' : 'h-5'} flex-shrink-0 items-center justify-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-1.5 text-[10px] font-medium leading-none text-orange-600`}
-      aria-label={label || '请求失败'}
-    >
-      <XCircle size={10} className="shrink-0" />
-      请求失败
-      {hasCode && <span className="font-mono">({code})</span>}
-    </span>
-  );
 };
 
 const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit }) => {
@@ -1426,13 +1342,6 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   const modelMappingEntries = Object.entries(channel?.modelMapping || channel?.model_mapping || {})
     .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
     .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
-  const normalizeDetailMultiplier = (value) => {
-    const parsed = typeof value === 'string'
-      ? parseMultiplierExpression(value, Number.NaN)
-      : Number(value);
-    return Number.isFinite(parsed) ? parsed : 1;
-  };
-  const formatDetailMultiplier = (value) => `${formatMultiplierExpression(normalizeDetailMultiplier(value), 3)}x`;
   const hasModelMapping = modelMappingEntries.length > 0;
 
   const rows = [
@@ -1557,7 +1466,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
               <span className="leading-none">{billingName}</span>
               <span className="font-mono text-[9px] leading-none opacity-75">{billingSource}</span>
             </DetailPill>
-            <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} detail />
+            <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} detail hideWhenEmpty />
             <span className="flex-shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
               最后检查 {lastCheck}
             </span>

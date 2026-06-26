@@ -1,3 +1,5 @@
+import { formatMultiplierExpression, parseMultiplierExpression } from '@utils/multiplier.js';
+
 export const getErrorMessage = (error, fallback = '操作失败') => {
   if (!error) return fallback;
   if (typeof error === 'string') return error || fallback;
@@ -48,3 +50,14 @@ export const getDetailTimestamp = (...values) => {
   }
   return '-';
 };
+
+export const normalizeDetailMultiplier = (value) => {
+  const parsed = typeof value === 'string'
+    ? parseMultiplierExpression(value, Number.NaN)
+    : Number(value);
+  return Number.isFinite(parsed) ? parsed : 1;
+};
+
+export const isDefaultDetailMultiplier = (value) => Math.abs(normalizeDetailMultiplier(value) - 1) <= 0.000001;
+
+export const formatDetailMultiplier = (value) => `${formatMultiplierExpression(normalizeDetailMultiplier(value), 3)}x`;
