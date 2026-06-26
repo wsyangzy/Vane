@@ -1830,13 +1830,29 @@ const ChannelCard = ({
   const isActiveChannelInterrupted = isActive && (isActiveChannelAllFailed || hasManualRetry);
   const isActiveChannelSuspended = isActive && hasSuspendedRequests && !isActiveChannelInterrupted;
 
+  const claudeActiveRouteClass = channelFailoverEnabled
+    ? 'border-violet-200 ring-1 ring-violet-100'
+    : 'border-indigo-200 ring-1 ring-indigo-100';
+
   // 活跃渠道边框样式
-  // 优先级：彻底中断 > 挂起等待 > 正常活跃
+  // 优先级：彻底中断 > 挂起等待 > 跨渠道转移 > 单渠道活跃
   const activeHighlightClass = isActiveChannelInterrupted
     ? 'border-rose-300 ring-1 ring-rose-100'  // 全部失败 → 红色
     : isActiveChannelSuspended
       ? 'border-amber-300 ring-1 ring-amber-100'
-      : 'border-emerald-200 ring-1 ring-emerald-100';  // 与 Codex 正常活跃卡片保持一致
+      : claudeActiveRouteClass;
+  const idleHighlightClass = channelFailoverEnabled && channelParticipating
+    ? 'border-violet-100/80 hover:border-violet-200'
+    : 'border-slate-200/70 hover:border-slate-300';
+  const activeReadyBadgeClass = channelFailoverEnabled
+    ? 'bg-violet-50 text-violet-700'
+    : 'bg-indigo-50 text-indigo-700';
+  const activeReadyDotClass = channelFailoverEnabled
+    ? 'bg-violet-500'
+    : 'bg-indigo-500';
+  const waitingBadgeClass = channelFailoverEnabled && channelParticipating
+    ? 'border-violet-200 bg-violet-50 text-violet-700'
+    : 'border-slate-200 bg-slate-50 text-slate-500';
 
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;
@@ -1884,7 +1900,7 @@ const ChannelCard = ({
     <div className={`
       group flex flex-col self-start overflow-hidden rounded-xl border bg-white
       shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-150 ease-out hover:shadow-[0_4px_12px_-2px_rgba(15,23,42,0.08)]
-      ${isActive ? activeHighlightClass : 'border-slate-200/70 hover:border-slate-300'}
+      ${isActive ? activeHighlightClass : idleHighlightClass}
     `} data-channel-card={channelName}>
       {/* 渠道头部 */}
       <div className="px-4 pt-3">
@@ -1897,19 +1913,19 @@ const ChannelCard = ({
                   ? 'bg-rose-50 text-rose-700'
                   : isActiveChannelSuspended
                     ? 'bg-amber-50 text-amber-700'
-                    : 'bg-indigo-50 text-indigo-700'
+                    : activeReadyBadgeClass
               }`}>
                 <span className={`h-1 w-1 rounded-full ${
                   isActiveChannelInterrupted
                     ? 'bg-rose-500'
                     : isActiveChannelSuspended
                       ? 'bg-amber-500'
-                      : 'bg-indigo-500'
+                      : activeReadyDotClass
                 }`} />
                 {isActiveChannelInterrupted ? '已中断' : isActiveChannelSuspended ? '挂起' : '当前接管'}
               </span>
             ) : (
-              <span className="inline-flex flex-shrink-0 items-center rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-slate-500">
+              <span className={`inline-flex flex-shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium tracking-tight ${waitingBadgeClass}`}>
                 {channelFailoverEnabled ? '等待' : '未接管'}
               </span>
             )}
