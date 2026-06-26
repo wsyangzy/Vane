@@ -154,6 +154,9 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 	if existing == nil {
 		return fmt.Errorf("端点不存在: %d", record.ID)
 	}
+	if existing.Enabled && !record.FailoverEnabled {
+		return fmt.Errorf("当前路由端点必须参与渠道内故障转移")
+	}
 
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {

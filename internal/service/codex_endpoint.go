@@ -119,6 +119,9 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	if existing == nil {
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
+	if existing.IsActive && !failoverEnabled {
+		return fmt.Errorf("当前激活端点必须参与故障转移")
+	}
 	if credentialGroupID <= 0 {
 		credentialGroupID = existing.CredentialGroupID
 	}

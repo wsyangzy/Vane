@@ -194,3 +194,39 @@ func TestEndpointService_RecordToConfigUsesDefaultCredentialGroup(t *testing.T) 
 		t.Fatalf("token = %q, want group-token", runtimeConfig.Token)
 	}
 }
+
+func TestEndpointService_UpdateEndpointRejectsDisablingActiveEndpointFailover(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg)
+
+	ctx := context.Background()
+	record, err := storeImpl.Create(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "active",
+		URL:             "https://example.invalid",
+		FailoverEnabled: true,
+		Enabled:         true,
+		TimeoutSeconds:  1,
+	})
+	if err != nil {
+		t.Fatalf("创建端点失败: %v", err)
+	}
+
+	record.FailoverEnabled = false
+	if err := svc.UpdateEndpoint(ctx, record); err == nil {
+		t.Fatalf("预期当前路由端点关闭故障转移失败，但实际成功")
+	} else if !strings.Contains(err.Error(), "当前路由端点必须参与渠道内故障转移") {
+		t.Fatalf("错误原因不够明确: %v", err)
+	}
+}

@@ -102,6 +102,70 @@ func TestNormalizeAndValidateCodexEndpointAllowsInternalSpaces(t *testing.T) {
 	}
 }
 
+func TestCodexEndpointRejectsDisablingActiveEndpointFailover(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+	active, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "active",
+		BaseURL:           "https://example.invalid/codex/v1",
+		FailoverEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create active endpoint: %v", err)
+	}
+	if !active.IsActive {
+		t.Fatalf("expected first endpoint to be active")
+	}
+
+	err = endpointService.UpdateEndpointByID(
+		ctx,
+		active.ID,
+		active.Name,
+		active.BaseURL,
+		active.CredentialGroupID,
+		active.ApiKey,
+		false,
+		active.SkipHealthCheck,
+		active.Priority,
+		active.TimeoutSeconds,
+		active.CostMultiplier,
+		active.InputCostMultiplier,
+		active.OutputCostMultiplier,
+		active.CacheReadCostMultiplier,
+		active.BillingOutputTokenSource,
+		active.ModelMultipliers,
+	)
+	if err == nil {
+		t.Fatalf("expected active endpoint failover disable to be rejected")
+	}
+	if !strings.Contains(err.Error(), "当前激活端点必须参与故障转移") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestNormalizeAndValidateCodexEndpointRejectsControlWhitespaceInNames(t *testing.T) {
 	cases := []string{
 		"主站\t直连",

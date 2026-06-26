@@ -1784,6 +1784,7 @@ const EndpointRow = ({
   const showAmber = endpoint.isActive && isSuspended;
   const canRepeatActivate = endpoint.isActive && isSuspended;
   const endpointSwitchDisabled = !failoverEnabled;
+  const failoverToggleDisabled = failoverEnabled && endpoint.isActive;
 
   const handleToggleActivate = (event) => {
     event.stopPropagation();
@@ -1807,6 +1808,7 @@ const EndpointRow = ({
 
   const handleFailoverToggle = (event) => {
     event.stopPropagation();
+    if (failoverToggleDisabled) return;
     onToggleFailover?.(endpoint, !failoverEnabled);
   };
 
@@ -1913,12 +1915,21 @@ const EndpointRow = ({
           <button
             type="button"
             onClick={handleFailoverToggle}
+            disabled={failoverToggleDisabled}
             className={`rounded-md p-1 transition-colors duration-150 ${
-              failoverEnabled
+              failoverToggleDisabled
+                ? 'cursor-not-allowed text-indigo-300 opacity-60'
+                : failoverEnabled
                 ? 'text-indigo-600 hover:bg-indigo-50'
                 : 'text-slate-400 hover:bg-slate-100'
             }`}
-            aria-label={failoverEnabled ? '点击：不参与故障转移' : '点击：参与故障转移'}
+            aria-label={
+              failoverToggleDisabled
+                ? '当前激活端点必须参与故障转移'
+                : failoverEnabled
+                  ? '点击：不参与故障转移'
+                  : '点击：参与故障转移'
+            }
             aria-pressed={failoverEnabled}
           >
             <ArrowRightLeft size={12} />

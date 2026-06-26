@@ -463,28 +463,6 @@ const endpointParticipatesInFailover = (endpoint) => normalizeBool(
   true
 );
 
-const sortEndpointRouteCandidates = (list) => [...list].sort((a, b) => {
-  const priorityA = Number.isFinite(Number(a?.priority)) ? Number(a.priority) : 999;
-  const priorityB = Number.isFinite(Number(b?.priority)) ? Number(b.priority) : 999;
-  if (priorityA !== priorityB) return priorityA - priorityB;
-  const idA = Number(a?.id);
-  const idB = Number(b?.id);
-  if (Number.isFinite(idA) && Number.isFinite(idB) && idA !== idB) return idA - idB;
-  return String(a?.name || '').localeCompare(String(b?.name || ''));
-});
-
-const endpointIsRouteAvailable = (endpoint) => {
-  if (!endpoint) return false;
-  if (!endpointParticipatesInFailover(endpoint)) return false;
-  if (endpoint.skipHealthCheck || endpoint.skip_health_check) return true;
-
-  const healthState = endpoint.health_state || endpoint.healthState || '';
-  if (healthState === 'healthy') return true;
-  if (healthState === 'unhealthy' || healthState === 'request_failed') return false;
-  if (endpoint.healthy) return true;
-  return Boolean(endpoint.never_checked || endpoint.neverChecked);
-};
-
 const pickCurrentRouteEndpoint = (endpoints, isActiveChannel) => {
   if (!isActiveChannel || endpoints.length === 0) return null;
 
@@ -492,15 +470,6 @@ const pickCurrentRouteEndpoint = (endpoints, isActiveChannel) => {
     normalizeBool(endpoint?.isActive ?? endpoint?.is_active, false)
   );
   if (explicitActive) return explicitActive;
-
-  const candidates = sortEndpointRouteCandidates(endpoints.filter(endpointParticipatesInFailover));
-  if (candidates.length > 0) {
-    const enabledCandidates = candidates.filter((endpoint) => normalizeBool(endpoint?.enabled, false));
-    if (enabledCandidates.length === 1) return enabledCandidates[0];
-
-    const available = candidates.filter(endpointIsRouteAvailable);
-    return available.length > 0 ? available[0] : candidates[candidates.length - 1];
-  }
 
   return endpoints.find((endpoint) => normalizeBool(endpoint?.enabled, false)) || null;
 };
@@ -550,6 +519,7 @@ const EndpointMiniCard = ({
     ? Boolean(isCurrentEndpoint)
     : isChannelActive;
   const endpointSwitchDisabled = !failoverEnabled;
+  const failoverToggleDisabled = failoverEnabled && endpointSwitchActive;
   const isUnclaimedEndpoint = !isChannelActive && !channelFailoverEnabled;
   const showHealthBadge = inScope && !isUnclaimedEndpoint && (isSkipHealthCheck || !isRequestFailed);
   const showRequestFailedBadge = inScope && !isUnclaimedEndpoint && isRequestFailed;
@@ -670,14 +640,24 @@ const EndpointMiniCard = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (failoverToggleDisabled) return;
                   onToggleFailover?.(endpoint, !failoverEnabled);
                 }}
+                disabled={failoverToggleDisabled}
                 className={`rounded-md p-1 transition-colors duration-150 ${
-                  failoverEnabled
+                  failoverToggleDisabled
+                    ? 'cursor-not-allowed text-indigo-300 opacity-60'
+                    : failoverEnabled
                     ? 'text-indigo-600 hover:bg-indigo-50'
                     : 'text-slate-400 hover:bg-slate-100'
                 }`}
-                aria-label={failoverEnabled ? '点击：不参与渠道内故障转移' : '点击：参与渠道内故障转移'}
+                aria-label={
+                  failoverToggleDisabled
+                    ? '当前路由端点必须参与渠道内故障转移'
+                    : failoverEnabled
+                      ? '点击：不参与渠道内故障转移'
+                      : '点击：参与渠道内故障转移'
+                }
                 aria-pressed={failoverEnabled}
               >
                 <ArrowRightLeft size={12} />
