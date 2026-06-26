@@ -114,6 +114,17 @@ const CREDENTIAL_GROUP_FORM_TABS = [
   { key: 'billing', label: '成本倍率' }
 ];
 
+const CLAUDE_CREDENTIAL_SECRET_TABS = [
+  { key: 'token', label: 'Token' },
+  { key: 'apiKey', label: 'API Key' }
+];
+
+const getInitialClaudeCredentialSecretType = (group) => {
+  const hasToken = Boolean(group?.token || group?.tokenMasked || group?.token_masked);
+  const hasApiKey = Boolean(group?.apiKey || group?.api_key || group?.apiKeyMasked || group?.api_key_masked);
+  return !hasToken && hasApiKey ? 'apiKey' : 'token';
+};
+
 const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   { name: 'costMultiplier', label: '总倍率' },
   { name: 'inputCostMultiplier', label: '输入倍率' },
@@ -1453,11 +1464,17 @@ const ClaudeCredentialGroupFormModal = ({
   const [error, setError] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [credentialSecretType, setCredentialSecretType] = useState(() => getInitialClaudeCredentialSecretType(group));
 
   if (!open) return null;
 
   const updateField = (key, value) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
+    if (error) setError('');
+  };
+
+  const updateCredentialSecretType = (nextType) => {
+    setCredentialSecretType(nextType);
     if (error) setError('');
   };
 
@@ -1498,15 +1515,19 @@ const ClaudeCredentialGroupFormModal = ({
   const handleSubmit = async (event) => {
     event.preventDefault();
     const name = formData.name.trim();
-    const token = formData.token.trim();
-    const apiKey = formData.apiKey.trim();
+    const token = credentialSecretType === 'token' ? formData.token.trim() : '';
+    const apiKey = credentialSecretType === 'apiKey' ? formData.apiKey.trim() : '';
 
     if (!name) {
       setError('分组名称不能为空');
       return;
     }
-    if (!token && !apiKey) {
-      setError('Token 与 API Key 至少填写一个');
+    if (credentialSecretType === 'token' && !token) {
+      setError('Token 不能为空');
+      return;
+    }
+    if (credentialSecretType === 'apiKey' && !apiKey) {
+      setError('API Key 不能为空');
       return;
     }
 
@@ -1597,18 +1618,26 @@ const ClaudeCredentialGroupFormModal = ({
                   />
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  {renderSecretInput({
+                <div className="space-y-3">
+                  <SegmentedTabs
+                    tabs={CLAUDE_CREDENTIAL_SECRET_TABS}
+                    activeTab={credentialSecretType}
+                    onChange={updateCredentialSecretType}
+                    disabled={loading}
+                    className="grid-cols-2"
+                    buttonPaddingClass="px-2"
+                  />
+                  {credentialSecretType === 'token' && renderSecretInput({
                     label: 'Token',
                     field: 'token',
                     placeholder: 'sk-...',
                     visible: showToken,
                     setVisible: setShowToken
                   })}
-                  {renderSecretInput({
+                  {credentialSecretType === 'apiKey' && renderSecretInput({
                     label: 'API Key',
                     field: 'apiKey',
-                    placeholder: '可选 API Key',
+                    placeholder: 'sk-ant-...',
                     visible: showApiKey,
                     setVisible: setShowApiKey
                   })}
