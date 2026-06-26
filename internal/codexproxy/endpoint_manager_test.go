@@ -67,6 +67,51 @@ func TestEndpointManagerUsesEndpointIDForDuplicateNamesAcrossCredentialGroups(t 
 	}
 }
 
+func TestEndpointManagerFastestStrategyUsesRecordedLatencyWithinCredentialGroup(t *testing.T) {
+	manager := &EndpointManager{
+		strategyType: "fastest",
+		endpoints: []*CodexEndpoint{
+			{
+				ID:                   1,
+				CredentialGroupOrder: 0,
+				Name:                 "priority-first",
+				FailoverEnabled:      true,
+				Priority:             1,
+			},
+			{
+				ID:                   2,
+				CredentialGroupOrder: 0,
+				Name:                 "fastest",
+				FailoverEnabled:      true,
+				Priority:             2,
+			},
+			{
+				ID:                   3,
+				CredentialGroupOrder: 1,
+				Name:                 "other-group-fastest",
+				FailoverEnabled:      true,
+				Priority:             1,
+			},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		latencies: map[int64]int64{
+			1: 120,
+			2: 20,
+			3: 1,
+		},
+		logger: newTestLogger(),
+	}
+
+	first, err := manager.GetPrimaryEndpoint()
+	if err != nil {
+		t.Fatalf("GetPrimaryEndpoint() error = %v", err)
+	}
+	if first.ID != 2 {
+		t.Fatalf("GetPrimaryEndpoint() ID = %d, want fastest endpoint ID 2", first.ID)
+	}
+}
+
 func TestSortCodexEndpointsKeepsCredentialGroupsContiguous(t *testing.T) {
 	endpoints := []*CodexEndpoint{
 		{

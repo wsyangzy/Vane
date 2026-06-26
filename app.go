@@ -1556,6 +1556,7 @@ func (a *App) initCodexProxy() {
 
 	// 创建 EndpointManager
 	mgr := codexproxy.NewEndpointManager(a.codexChannelStore, a.codexEndpointStore, a.codexCredentialGroupStore, a.logger)
+	mgr.SetConfig(a.config)
 	if err := mgr.Reload(); err != nil {
 		a.logger.Error("Codex 端点管理器加载失败", "error", err)
 		return
@@ -1686,6 +1687,9 @@ func (a *App) setupConfigReload() {
 		// 更新各组件
 		a.configWatcher.UpdateLogger(newLogger)
 		a.endpointManager.UpdateConfig(newCfg)
+		if a.codexEndpointMgr != nil {
+			a.codexEndpointMgr.SetConfig(newCfg)
+		}
 		a.proxyHandler.UpdateConfig(newCfg)
 		a.authMiddleware.UpdateConfig(newCfg.Auth)
 
@@ -2054,6 +2058,9 @@ func (a *App) applySettingsToConfig() {
 	// 更新各组件配置
 	if a.endpointManager != nil {
 		a.endpointManager.UpdateConfig(a.config)
+	}
+	if a.codexEndpointMgr != nil {
+		a.codexEndpointMgr.SetConfig(a.config)
 	}
 	if a.proxyHandler != nil {
 		a.proxyHandler.UpdateConfig(a.config)

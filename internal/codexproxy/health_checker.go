@@ -251,6 +251,10 @@ func (h *HealthChecker) recordLatency(endpointID int64, ms int64) {
 		return
 	}
 
+	if h.manager != nil {
+		h.manager.RecordLatency(endpointID, ms)
+	}
+
 	h.mu.Lock()
 	h.latencies[endpointID] = ms
 	h.lastChecks[endpointID] = time.Now()

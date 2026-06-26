@@ -144,6 +144,115 @@ func TestEndpointService_UpdateEndpoint_ConflictSameChannelSameName(t *testing.T
 	}
 }
 
+func TestEndpointService_UpdateEndpoint_SwapsPriorityConflict(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg)
+	ctx := context.Background()
+
+	first, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "first",
+		URL:             "https://first.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        1,
+	})
+	if err != nil {
+		t.Fatalf("创建第一个端点失败: %v", err)
+	}
+	second, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "second",
+		URL:             "https://second.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        5,
+	})
+	if err != nil {
+		t.Fatalf("创建第二个端点失败: %v", err)
+	}
+
+	second.Priority = first.Priority
+	if err := svc.UpdateEndpoint(ctx, second); err != nil {
+		t.Fatalf("更新第二个端点优先级失败: %v", err)
+	}
+
+	updatedFirst, err := storeImpl.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("重新读取第一个端点失败: %v", err)
+	}
+	updatedSecond, err := storeImpl.GetByID(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("重新读取第二个端点失败: %v", err)
+	}
+	if updatedFirst.Priority != 5 || updatedSecond.Priority != 1 {
+		t.Fatalf("预期优先级冲突时交换，got first=%d second=%d", updatedFirst.Priority, updatedSecond.Priority)
+	}
+}
+
+func TestEndpointService_UpdateEndpoint_ChannelMoveAssignsNextPriority(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg)
+	ctx := context.Background()
+
+	if _, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "existing",
+		URL:             "https://existing.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        1,
+	}); err != nil {
+		t.Fatalf("创建目标渠道已有端点失败: %v", err)
+	}
+	moving, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-b",
+		Name:            "moving",
+		URL:             "https://moving.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        1,
+	})
+	if err != nil {
+		t.Fatalf("创建待移动端点失败: %v", err)
+	}
+
+	moving.Channel = "ch-a"
+	if err := svc.UpdateEndpoint(ctx, moving); err != nil {
+		t.Fatalf("移动端点失败: %v", err)
+	}
+
+	updatedMoving, err := storeImpl.GetByID(ctx, moving.ID)
+	if err != nil {
+		t.Fatalf("重新读取移动端点失败: %v", err)
+	}
+	if updatedMoving.Priority != 2 {
+		t.Fatalf("预期跨渠道移动自动排到目标渠道末尾，got %d", updatedMoving.Priority)
+	}
+}
+
 func TestEndpointService_RecordToConfigUsesDefaultCredentialGroup(t *testing.T) {
 	db, cleanup := createEndpointServiceTestDB(t)
 	defer cleanup()

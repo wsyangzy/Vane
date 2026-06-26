@@ -52,6 +52,8 @@ type CodexEndpointStore interface {
 	GetByChannelAndName(ctx context.Context, channelID int64, name string) (*CodexEndpointRecord, error)
 	GetByChannelCredentialGroupAndURL(ctx context.Context, channelID, credentialGroupID int64, baseURL string) (*CodexEndpointRecord, error)
 	GetByChannelCredentialGroupAndName(ctx context.Context, channelID, credentialGroupID int64, name string) (*CodexEndpointRecord, error)
+	GetByChannelAndPriority(ctx context.Context, channelID int64, priority int) (*CodexEndpointRecord, error)
+	GetMaxPriorityByChannel(ctx context.Context, channelID int64) (int, error)
 	GetActiveByChannelID(ctx context.Context, channelID int64) (*CodexEndpointRecord, error)
 	ListByChannelID(ctx context.Context, channelID int64) ([]*CodexEndpointRecord, error)
 	Update(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []CodexModelMultiplierRecord) error
@@ -159,6 +161,29 @@ func (s *SQLiteCodexEndpointStore) GetByChannelCredentialGroupAndName(ctx contex
 
 	query := "SELECT " + codexEndpointColumns + " FROM codex_endpoints WHERE channel_id = ? AND COALESCE(credential_group_id, 0) = ? AND name = ?"
 	return s.scanRecord(s.getQuerier().QueryRowContext(ctx, query, channelID, positiveInt64OrZero(credentialGroupID), name))
+}
+
+func (s *SQLiteCodexEndpointStore) GetByChannelAndPriority(ctx context.Context, channelID int64, priority int) (*CodexEndpointRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := "SELECT " + codexEndpointColumns + " FROM codex_endpoints WHERE channel_id = ? AND priority = ?"
+	return s.scanRecord(s.getQuerier().QueryRowContext(ctx, query, channelID, priority))
+}
+
+func (s *SQLiteCodexEndpointStore) GetMaxPriorityByChannel(ctx context.Context, channelID int64) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var maxPriority sql.NullInt64
+	err := s.getQuerier().QueryRowContext(ctx, `SELECT MAX(priority) FROM codex_endpoints WHERE channel_id = ?`, channelID).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("获取 Codex 渠道最大优先级失败: %w", err)
+	}
+	if !maxPriority.Valid {
+		return 0, nil
+	}
+	return int(maxPriority.Int64), nil
 }
 
 func (s *SQLiteCodexEndpointStore) GetActiveByChannelID(ctx context.Context, channelID int64) (*CodexEndpointRecord, error) {

@@ -9,7 +9,6 @@ import { Tooltip } from '@components/ui';
 const SettingsSection = ({
   title,
   icon: Icon,
-  description,
   children,
   onReset,
   resetDisabled = false,
@@ -25,9 +24,6 @@ const SettingsSection = ({
         )}
         <div>
           <h3 className="font-semibold text-slate-900">{title}</h3>
-          {description && (
-            <p className="text-xs text-slate-400 mt-0.5">{description}</p>
-          )}
         </div>
       </div>
       {onReset && (

@@ -11,6 +11,13 @@ const parseEndpointMultiplier = (value, fallback = 1.0) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+export const parseEndpointPriority = (value, fallback = 1) => {
+  if (typeof value === 'string' && value.trim() === '') return fallback;
+  if (value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 const normalizeModelMapping = (mapping) => {
   if (!mapping || typeof mapping !== 'object' || Array.isArray(mapping)) {
     return {};
@@ -1239,7 +1246,7 @@ export const updateEndpointRecord = async (name, input) => {
     token: input.token || '',
     api_key: input.apiKey || '',
     headers: input.headers || {},
-    priority: parseInt(input.priority) || 1,
+    priority: parseEndpointPriority(input.priority),
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
@@ -1280,7 +1287,7 @@ export const updateEndpointRecordByID = async (id, input) => {
     token: input.token || '',
     api_key: input.apiKey || '',
     headers: input.headers || {},
-    priority: parseInt(input.priority) || 1,
+    priority: parseEndpointPriority(input.priority),
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,

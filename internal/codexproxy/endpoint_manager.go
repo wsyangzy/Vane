@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/store"
 )
 
@@ -49,10 +50,12 @@ type EndpointManager struct {
 
 	// 运行时状态
 	mu             sync.RWMutex
-	endpoints      []*CodexEndpoint // 按凭证分组顺序、priority ASC 排序
+	endpoints      []*CodexEndpoint // 按凭证分组顺序、priority ASC 排序；请求时可按策略临时排序候选
 	activeChannel  *store.CodexChannelRecord
 	unhealthyMap   map[int64]bool // endpoint ID -> 是否标记为不健康（仅靠健康检查恢复）
 	failureDetails map[int64]EndpointFailureDetail
+	latencies      map[int64]int64
+	strategyType   string
 
 	// 活跃端点变更回调（由 App 注入，用于发送 Wails 事件刷新前端 UI）
 	onActiveChanged func()
@@ -76,8 +79,19 @@ func NewEndpointManager(
 		credentialGroupStore: credentialGroupStore,
 		unhealthyMap:         make(map[int64]bool),
 		failureDetails:       make(map[int64]EndpointFailureDetail),
+		latencies:            make(map[int64]int64),
 		logger:               logger,
 	}
+}
+
+// SetConfig 注入运行时配置，供 Codex 端点选择复用全局路由策略。
+func (m *EndpointManager) SetConfig(cfg *config.Config) {
+	m.mu.Lock()
+	m.strategyType = "priority"
+	if cfg != nil && cfg.Strategy.Type == "fastest" {
+		m.strategyType = "fastest"
+	}
+	m.mu.Unlock()
 }
 
 // Reload 从数据库重新加载活跃渠道及其端点
@@ -198,6 +212,11 @@ func (m *EndpointManager) Reload() error {
 			delete(m.failureDetails, id)
 		}
 	}
+	for id := range m.latencies {
+		if _, ok := validEndpoints[id]; !ok {
+			delete(m.latencies, id)
+		}
+	}
 	m.mu.Unlock()
 
 	m.logger.Info("Codex 端点已重新加载",
@@ -212,7 +231,7 @@ func (m *EndpointManager) Reload() error {
 // 1. 过滤 failover_enabled = true 的端点
 // 2. 排除 unhealthyMap 中标记为不健康的端点（仅靠健康检查恢复）
 // 3. 排除 failedIDs 中的端点（本次请求已尝试过的）
-// 4. 按 priority ASC 排序，返回第一个
+// 4. 按配置的路由策略排序，返回第一个
 // 5. 全部耗尽返回 error
 func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, error) {
 	m.mu.RLock()
@@ -227,6 +246,7 @@ func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, er
 		failedSet[id] = struct{}{}
 	}
 
+	candidates := make([]*CodexEndpoint, 0, len(m.endpoints))
 	for _, ep := range m.endpoints {
 		if !ep.FailoverEnabled {
 			continue
@@ -237,14 +257,19 @@ func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, er
 		if m.unhealthyMap[ep.ID] {
 			continue
 		}
-		return ep, nil
+		candidates = append(candidates, ep)
+	}
+
+	if len(candidates) > 0 {
+		sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies)
+		return candidates[0], nil
 	}
 
 	return nil, fmt.Errorf("所有 Codex 端点均不可用（共 %d 个端点）", len(m.endpoints))
 }
 
 // GetPrimaryEndpoint 获取主端点
-// 优先级：按 priority ASC 排序选择第一个健康的端点
+// 优先级：按配置的路由策略选择第一个健康的端点
 // 这样 priority 才能真正驱动路由（不再仅依赖 IsActive 标记）
 // IsActive 仅作为 UI"当前激活"的展示标记，由 PromoteActive 跟随实际路由更新
 func (m *EndpointManager) GetPrimaryEndpoint() (*CodexEndpoint, error) {
@@ -267,6 +292,19 @@ func (m *EndpointManager) GetPrimaryEndpoint() (*CodexEndpoint, error) {
 		return m.endpoints[0], nil
 	}
 	return nil, fmt.Errorf("无可用 Codex 端点")
+}
+
+// RecordLatency 记录健康检查测得的 RTT，供 fastest 策略排序使用。
+func (m *EndpointManager) RecordLatency(endpointID int64, ms int64) {
+	if endpointID <= 0 {
+		return
+	}
+	m.mu.Lock()
+	if m.latencies == nil {
+		m.latencies = make(map[int64]int64)
+	}
+	m.latencies[endpointID] = ms
+	m.mu.Unlock()
 }
 
 // MarkUnhealthy 标记端点为不健康（仅靠健康检查恢复，不再使用冷却时间）
@@ -437,19 +475,78 @@ func (m *EndpointManager) IsHealthy(endpointID int64) bool {
 	return !m.unhealthyMap[endpointID]
 }
 
+func (m *EndpointManager) strategyTypeLocked() string {
+	if m.strategyType == "fastest" {
+		return "fastest"
+	}
+	return "priority"
+}
+
 func sortCodexEndpoints(endpoints []*CodexEndpoint) {
 	sort.Slice(endpoints, func(i, j int) bool {
-		if endpoints[i].CredentialGroupOrder != endpoints[j].CredentialGroupOrder {
-			return endpoints[i].CredentialGroupOrder < endpoints[j].CredentialGroupOrder
-		}
-		if endpoints[i].Priority != endpoints[j].Priority {
-			return endpoints[i].Priority < endpoints[j].Priority
-		}
-		if endpoints[i].IsActive != endpoints[j].IsActive {
-			return endpoints[i].IsActive
-		}
-		return endpoints[i].ID < endpoints[j].ID
+		return compareCodexEndpointPriority(endpoints[i], endpoints[j])
 	})
+}
+
+func sortCodexEndpointCandidates(endpoints []*CodexEndpoint, strategyType string, latencies map[int64]int64) {
+	sort.Slice(endpoints, func(i, j int) bool {
+		left := endpoints[i]
+		right := endpoints[j]
+		if left.CredentialGroupOrder != right.CredentialGroupOrder {
+			return left.CredentialGroupOrder < right.CredentialGroupOrder
+		}
+		if strategyType == "fastest" {
+			if latencyOrder := compareCodexEndpointLatency(left, right, latencies); latencyOrder != 0 {
+				return latencyOrder < 0
+			}
+		}
+		return compareCodexEndpointPriority(left, right)
+	})
+}
+
+func compareCodexEndpointPriority(left, right *CodexEndpoint) bool {
+	if left.CredentialGroupOrder != right.CredentialGroupOrder {
+		return left.CredentialGroupOrder < right.CredentialGroupOrder
+	}
+	if left.Priority != right.Priority {
+		return left.Priority < right.Priority
+	}
+	if left.IsActive != right.IsActive {
+		return left.IsActive
+	}
+	return left.ID < right.ID
+}
+
+func compareCodexEndpointLatency(left, right *CodexEndpoint, latencies map[int64]int64) int {
+	leftLatency, leftOK := latencyValue(left, latencies)
+	rightLatency, rightOK := latencyValue(right, latencies)
+	if leftOK && rightOK {
+		if leftLatency == rightLatency {
+			return 0
+		}
+		if leftLatency < rightLatency {
+			return -1
+		}
+		return 1
+	}
+	if leftOK {
+		return -1
+	}
+	if rightOK {
+		return 1
+	}
+	return 0
+}
+
+func latencyValue(endpoint *CodexEndpoint, latencies map[int64]int64) (int64, bool) {
+	if endpoint == nil || latencies == nil {
+		return 0, false
+	}
+	value, ok := latencies[endpoint.ID]
+	if !ok || value < 0 {
+		return 0, false
+	}
+	return value, true
 }
 
 func (m *EndpointManager) GetFailureDetail(endpointID int64) (int, string, bool) {

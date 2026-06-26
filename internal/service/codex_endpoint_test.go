@@ -102,6 +102,57 @@ func TestNormalizeAndValidateCodexEndpointAllowsInternalSpaces(t *testing.T) {
 	}
 }
 
+func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+
+	first, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "first",
+		BaseURL:           "https://example.invalid/first/v1",
+		FailoverEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create first endpoint: %v", err)
+	}
+	second, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "second",
+		BaseURL:           "https://example.invalid/second/v1",
+		FailoverEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create second endpoint: %v", err)
+	}
+
+	if first.Priority != 1 || second.Priority != 2 {
+		t.Fatalf("expected priorities 1 and 2, got %d and %d", first.Priority, second.Priority)
+	}
+}
+
 func TestCodexEndpointDisablingActiveEndpointFailoverSwitchesToNextCandidate(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexEndpointTestDB(t)
@@ -203,6 +254,87 @@ func TestCodexEndpointDisablingActiveEndpointFailoverSwitchesToNextCandidate(t *
 	}
 	if updatedLaterStandby.IsActive {
 		t.Fatalf("expected earlier standby endpoint to win equal-priority tie")
+	}
+}
+
+func TestCodexEndpointUpdateSwapsPriorityConflict(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+	first, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "first",
+		BaseURL:           "https://example.invalid/first/v1",
+		FailoverEnabled:   true,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("create first endpoint: %v", err)
+	}
+	second, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "second",
+		BaseURL:           "https://example.invalid/second/v1",
+		FailoverEnabled:   true,
+		Priority:          5,
+	})
+	if err != nil {
+		t.Fatalf("create second endpoint: %v", err)
+	}
+
+	if err := endpointService.UpdateEndpointByID(
+		ctx,
+		second.ID,
+		second.Name,
+		second.BaseURL,
+		second.CredentialGroupID,
+		second.ApiKey,
+		second.FailoverEnabled,
+		second.SkipHealthCheck,
+		first.Priority,
+		second.TimeoutSeconds,
+		second.CostMultiplier,
+		second.InputCostMultiplier,
+		second.OutputCostMultiplier,
+		second.CacheReadCostMultiplier,
+		second.BillingOutputTokenSource,
+		second.ModelMultipliers,
+	); err != nil {
+		t.Fatalf("update second endpoint priority: %v", err)
+	}
+
+	updatedFirst, err := endpointStore.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("reload first endpoint: %v", err)
+	}
+	updatedSecond, err := endpointStore.GetByID(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("reload second endpoint: %v", err)
+	}
+	if updatedFirst.Priority != 5 || updatedSecond.Priority != 1 {
+		t.Fatalf("expected priority swap, got first=%d second=%d", updatedFirst.Priority, updatedSecond.Priority)
 	}
 }
 

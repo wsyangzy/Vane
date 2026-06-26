@@ -57,6 +57,13 @@ const CATEGORY_ICONS = {
   timezone: Map
 };
 
+const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'failover', 'strategy'];
+
+const getCategoryOrder = (categoryName) => {
+  const index = CATEGORY_ORDER.indexOf(categoryName);
+  return index === -1 ? CATEGORY_ORDER.length : index;
+};
+
 // ============================================
 // Settings 页面主组件
 // ============================================
@@ -609,7 +616,6 @@ const SettingsPage = () => {
         <SettingsSection
           title="服务端口"
           icon={Server}
-          description="API 服务端口配置"
           onReset={() => handleResetCategory('server', '服务端口')}
           resetDisabled={saving}
         >
@@ -638,6 +644,10 @@ const SettingsPage = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {categories
           .filter(c => c.name !== 'server')
+          .sort((a, b) => (
+            getCategoryOrder(a.name) - getCategoryOrder(b.name) ||
+            (a.display_order ?? 0) - (b.display_order ?? 0)
+          ))
           .map(category => {
             const categorySettings = settingsByCategory[category.name]?.filter(shouldShowSetting) || [];
             const isWideCategory = categorySettings.length > 4;
@@ -646,7 +656,6 @@ const SettingsPage = () => {
               key={category.name}
               title={category.label}
               icon={CATEGORY_ICONS[category.name] || Settings}
-              description={category.description}
               onReset={() => handleResetCategory(category.name, category.label)}
               resetDisabled={saving}
               className={isWideCategory ? 'lg:col-span-2' : ''}

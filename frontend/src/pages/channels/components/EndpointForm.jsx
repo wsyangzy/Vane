@@ -4,10 +4,11 @@
 // ============================================
 
 import { useState } from 'react';
-import { X, Save, AlertCircle } from 'lucide-react';
+import { Database, KeyRound, X, Save, AlertCircle } from 'lucide-react';
 import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import { getErrorMessage } from '../../management/shared/formatters.js';
+import { formatMultiplierExpression } from '../../../utils/multiplier.js';
 
 const ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
@@ -220,6 +221,16 @@ const EndpointForm = ({
     value: String(group.id),
     label: `${group.name || '未命名分组'}${group.isDefault || group.is_default ? ' · 默认' : ''}`
   }));
+  const groupMultiplierItems = [
+    ['总', selectedCredentialGroup?.costMultiplier ?? 1],
+    ['输入', selectedCredentialGroup?.inputCostMultiplier ?? 1],
+    ['输出', selectedCredentialGroup?.outputCostMultiplier ?? 1],
+    ['缓存读取', selectedCredentialGroup?.cacheReadCostMultiplier ?? 1]
+  ];
+  const formatGroupMultiplier = (value) => {
+    const parsed = Number(value);
+    return `${formatMultiplierExpression(Number.isFinite(parsed) ? parsed : 1, 3)}x`;
+  };
 
   // 处理输入变化
   const handleChange = (e) => {
@@ -344,6 +355,33 @@ const EndpointForm = ({
             <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-rose-700 text-sm">
               <AlertCircle size={16} />
               {errors.submit}
+            </div>
+          )}
+
+          {selectedCredentialGroup && (
+            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                <KeyRound size={14} />
+                归属凭证分组
+              </div>
+              <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-xs">
+                <span className="inline-flex max-w-full items-center gap-1 rounded-md bg-white px-2.5 py-1.5 font-medium text-slate-700">
+                  <span className="truncate">{selectedCredentialGroup.name || '默认分组'}</span>
+                  {(selectedCredentialGroup.isDefault || selectedCredentialGroup.is_default) && (
+                    <span className="rounded bg-emerald-50 px-1 text-[10px] font-semibold text-emerald-600">默认</span>
+                  )}
+                </span>
+                {groupMultiplierItems.map(([label, value]) => (
+                  <span key={label} className="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 font-mono text-[11px] font-semibold text-slate-600">
+                    <span className="font-sans text-[10px] font-medium text-slate-400">{label}</span>
+                    {formatGroupMultiplier(value)}
+                  </span>
+                ))}
+                <span className="inline-flex min-w-0 items-center gap-1 rounded-md bg-white px-2 py-1 text-[11px] font-medium text-slate-500">
+                  <Database size={11} />
+                  <span className="truncate">分组倍率</span>
+                </span>
+              </div>
             </div>
           )}
 

@@ -69,6 +69,7 @@ import {
 } from '../management/shared/formatters.js';
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '../management/shared/modelMapping.js';
 import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '../management/shared/modelMultiplierRows.js';
+import { getCredentialGroupCostMultiplier, getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
 import {
   getEndpointStorageStatus,
   getEndpointRecords,
@@ -365,6 +366,7 @@ const pickCurrentRouteEndpoint = (endpoints, isActiveChannel) => {
 
 const EndpointMiniCard = ({
   endpoint,
+  credentialGroup,
   isActiveChannel,
   isSqliteMode,
   isCurrentEndpoint = false,
@@ -392,7 +394,8 @@ const EndpointMiniCard = ({
   const isRequestFailed = healthState === 'request_failed';
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
-  const multiplier = endpoint.costMultiplier || 1.0;
+  const multiplier = getCredentialGroupCostMultiplier(credentialGroup, endpoint);
+  const endpointURL = endpoint.url || endpoint.URL || endpoint.baseURL || endpoint.base_url || '';
   const numericPriority = Number(endpoint.priority);
   const priorityValue = Number.isFinite(numericPriority) ? Math.max(0, Math.floor(numericPriority)) : 0;
   const isChannelActive = typeof isActiveChannel === 'boolean'
@@ -492,7 +495,15 @@ const EndpointMiniCard = ({
             <span className={`relative inline-flex h-5 min-w-0 max-w-full items-center overflow-visible text-xs font-semibold leading-none ${
               endpointSwitchActive ? 'text-slate-900' : 'text-slate-700'
             }`}>
-              <span className={`min-w-0 truncate leading-none ${multiplier && multiplier !== 1.0 ? 'pr-8' : ''}`}>{endpoint.name}</span>
+              <Tooltip
+                content={endpointURL || endpoint.name}
+                className={`min-w-0 ${multiplier && multiplier !== 1.0 ? 'pr-8' : ''}`}
+                contentClassName="max-w-[420px] break-all font-mono"
+              >
+                <span className="block min-w-0 truncate leading-none">
+                  {endpoint.name}
+                </span>
+              </Tooltip>
               {multiplier && multiplier !== 1.0 && (
                 <span className="pointer-events-none absolute -top-1 right-0 z-10 inline-flex h-3 w-fit flex-shrink-0 items-center justify-center rounded-full bg-amber-500 px-1 font-mono text-[8px] font-bold leading-none text-white shadow-[0_1px_1px_rgba(217,119,6,0.35)] whitespace-nowrap">
                   {multiplier}x
@@ -607,6 +618,7 @@ const EndpointMiniCard = ({
 
 const EndpointDetailModal = ({
   endpoint,
+  credentialGroup,
   isOpen,
   isSqliteMode,
   channelFailoverEnabled = true,
@@ -652,14 +664,14 @@ const EndpointDetailModal = ({
   const modelMappingEntries = Object.entries(channelModelMapping)
     .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
     .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
-  const modelMultiplierRules = endpoint.modelMultipliers || endpoint.model_multipliers || [];
+  const modelMultiplierRules = credentialGroup?.modelMultipliers || credentialGroup?.model_multipliers || endpoint.modelMultipliers || endpoint.model_multipliers || [];
   const multiplierItems = [
-    { label: '总', value: endpoint.costMultiplier ?? endpoint.cost_multiplier ?? 1, tone: 'indigo' },
-    { label: '输入', value: endpoint.inputCostMultiplier ?? endpoint.input_cost_multiplier ?? 1, tone: 'slate' },
-    { label: '输出', value: endpoint.outputCostMultiplier ?? endpoint.output_cost_multiplier ?? 1, tone: 'sky' },
-    { label: '缓存读取', value: endpoint.cacheReadCostMultiplier ?? endpoint.cache_read_cost_multiplier ?? 1, tone: 'amber' },
-    { label: '5分钟写入', value: endpoint.cacheCreationCostMultiplier ?? endpoint.cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
-    { label: '1小时写入', value: endpoint.cacheCreationCostMultiplier1h ?? endpoint.cache_creation_cost_multiplier_1h ?? 1, tone: 'emerald' }
+    { label: '总', value: getCredentialGroupCostMultiplier(credentialGroup, endpoint), tone: 'indigo' },
+    { label: '输入', value: credentialGroup?.inputCostMultiplier ?? credentialGroup?.input_cost_multiplier ?? endpoint.inputCostMultiplier ?? endpoint.input_cost_multiplier ?? 1, tone: 'slate' },
+    { label: '输出', value: credentialGroup?.outputCostMultiplier ?? credentialGroup?.output_cost_multiplier ?? endpoint.outputCostMultiplier ?? endpoint.output_cost_multiplier ?? 1, tone: 'sky' },
+    { label: '缓存读取', value: credentialGroup?.cacheReadCostMultiplier ?? credentialGroup?.cache_read_cost_multiplier ?? endpoint.cacheReadCostMultiplier ?? endpoint.cache_read_cost_multiplier ?? 1, tone: 'amber' },
+    { label: '5分钟写入', value: credentialGroup?.cacheCreationCostMultiplier ?? credentialGroup?.cache_creation_cost_multiplier ?? endpoint.cacheCreationCostMultiplier ?? endpoint.cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
+    { label: '1小时写入', value: credentialGroup?.cacheCreationCostMultiplier1h ?? credentialGroup?.cache_creation_cost_multiplier_1h ?? endpoint.cacheCreationCostMultiplier1h ?? endpoint.cache_creation_cost_multiplier_1h ?? 1, tone: 'emerald' }
   ];
   const modelMultiplierValueKeys = [
     ['costMultiplier', 'cost_multiplier'],
@@ -1565,7 +1577,19 @@ const ChannelCard = ({
     }
     return endpointGroupID === 0;
   };
-  const groupEndpoints = endpoints.filter(groupEndpointFilter);
+  const getEndpointPriority = (value, fallback = 999) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  };
+  const groupEndpoints = endpoints.filter(groupEndpointFilter).sort((a, b) => {
+    const priorityDiff = getEndpointPriority(a?.priority) - getEndpointPriority(b?.priority);
+    if (priorityDiff !== 0) return priorityDiff;
+    const leftCreatedAt = a?.createdAt || a?.created_at || '';
+    const rightCreatedAt = b?.createdAt || b?.created_at || '';
+    const createdAtDiff = leftCreatedAt.localeCompare(rightCreatedAt);
+    if (createdAtDiff !== 0) return createdAtDiff;
+    return Number(a?.id || 0) - Number(b?.id || 0);
+  });
 
   const isPaused = !!groupInfo?.paused;
 
@@ -1608,7 +1632,7 @@ const ChannelCard = ({
   const showEndpointRatio = channelParticipating && failoverEnabledCount !== totalCount;
   const endpointBadgeActive = channelParticipating && failoverEnabledCount === totalCount;
 
-  const computedPriority = Math.min(...endpoints.map(e => e.priority || 999));
+  const computedPriority = Math.min(...endpoints.map(e => getEndpointPriority(e.priority)));
   const priority = Number.isFinite(channelPriority) && channelPriority > 0
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
@@ -2041,6 +2065,7 @@ const ChannelCard = ({
               <EndpointMiniCard
                 key={endpoint.id || endpoint._id || `${channelName}-endpoint-${index}`}
                 endpoint={endpoint}
+                credentialGroup={getCredentialGroupForEndpoint(credentialGroups, endpoint)}
                 isActiveChannel={isActive}
                 isSqliteMode={isSqliteMode}
                 isCurrentEndpoint={isSameEndpoint(endpoint, currentRouteEndpoint)}
@@ -2474,6 +2499,12 @@ const ChannelsPage = () => {
     });
     return map;
   }, [channelsMeta]);
+  const detailChannelName = detailTarget?.channel || detailTarget?.group || '';
+  const detailChannelMeta = channelsMeta.find((item) => item?.name === detailChannelName) || null;
+  const detailCredentialGroup = getCredentialGroupForEndpoint(
+    credentialGroupsByChannel[detailChannelName] || [],
+    detailTarget
+  );
 
   const groupInfoMap = useMemo(() => {
     const map = new Map();
@@ -2521,13 +2552,16 @@ const ChannelsPage = () => {
       if (c?.name) metaMap.set(c.name, c);
     });
 
-    const normalizePriority = (p) => (Number.isFinite(p) && p > 0 ? p : 999);
+    const normalizePriority = (p) => {
+      const parsed = Number(p);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 999;
+    };
     const compareDescString = (a, b) => (b || '').localeCompare(a || '');
 
     const sections = Array.from(map.entries()).map(([name, eps]) => {
       const meta = metaMap.get(name) || null;
       const gi = groupInfoMap.get(name) || null;
-      const computedPriority = eps.length > 0 ? Math.min(...eps.map(e => e.priority || 999)) : 999;
+      const computedPriority = eps.length > 0 ? Math.min(...eps.map(e => normalizePriority(e.priority))) : 999;
       const sortPriority = normalizePriority(meta?.priority ?? gi?.priority ?? computedPriority);
       const sortCreatedAt = meta?.createdAt || '';
 
@@ -3349,13 +3383,12 @@ const ChannelsPage = () => {
 
       <EndpointDetailModal
         endpoint={detailTarget}
+        credentialGroup={detailCredentialGroup}
         isOpen={detailOpen}
         isSqliteMode={isSqliteMode}
         channelFailoverEnabled={channelFailoverEnabled}
         globalTimeoutSeconds={globalTimeoutSeconds}
-        channelMeta={
-          channelsMeta.find((item) => item?.name === (detailTarget?.channel || detailTarget?.group)) || null
-        }
+        channelMeta={detailChannelMeta}
         onClose={closeEndpointDetail}
         onEdit={(ep) => {
           closeEndpointDetail();
