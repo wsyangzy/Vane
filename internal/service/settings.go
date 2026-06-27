@@ -24,6 +24,7 @@ const (
 	CategoryTokenCounting = "token_counting"
 	CategoryRetention     = "retention"
 	CategoryHotPool       = "hot_pool"
+	CategoryCache         = "cache"
 	CategoryServer        = "server"
 
 	// 🔧 [P5.5 新增] 为未来扩展预留的分类
@@ -134,6 +135,13 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 				Description: "配置历史数据保留策略",
 				Icon:        "📦",
 				Order:       8,
+			},
+			CategoryCache: {
+				Name:        CategoryCache,
+				Label:       "缓存性能",
+				Description: "配置统计聚合缓存和状态观测",
+				Icon:        "⚡",
+				Order:       9,
 			},
 			CategoryServer: {
 				Name:        CategoryServer,
@@ -491,6 +499,9 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	// Retention 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryRetention)...)
 
+	// Cache 设置
+	defaults = append(defaults, s.getDefaultsForCategory(CategoryCache)...)
+
 	// 🔧 [P5.5 新增] Logging / Timezone 设置（从 YAML 迁移到 SQLite）
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
@@ -574,6 +585,18 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		return []*store.SettingRecord{
 			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求日志保留天数，0 表示永久保留", DisplayOrder: 1},
 			{Category: CategoryRetention, Key: "cleanup_interval", Value: "24h", ValueType: ValueTypeDuration, Label: "清理间隔", Description: "自动清理任务的执行间隔", DisplayOrder: 2},
+		}
+
+	case CategoryCache:
+		return []*store.SettingRecord{
+			{Category: CategoryCache, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用缓存", Description: "启用统计聚合读路径缓存，不影响请求转发和计费事实记录", DisplayOrder: 1},
+			{Category: CategoryCache, Key: "usage_stats_ttl", Value: "5s", ValueType: ValueTypeDuration, Label: "统计卡片缓存", Description: "Usage Stats 数据库聚合部分缓存时间", DisplayOrder: 2},
+			{Category: CategoryCache, Key: "usage_summary_ttl", Value: "30s", ValueType: ValueTypeDuration, Label: "摘要缓存", Description: "Usage Summary 数据库聚合缓存时间", DisplayOrder: 3},
+			{Category: CategoryCache, Key: "token_usage_ttl", Value: "5s", ValueType: ValueTypeDuration, Label: "Token 缓存", Description: "今日 Token 聚合缓存时间", DisplayOrder: 4},
+			{Category: CategoryCache, Key: "endpoint_cost_today_ttl", Value: "10s", ValueType: ValueTypeDuration, Label: "今日端点成本缓存", Description: "今日端点成本聚合缓存时间", DisplayOrder: 5},
+			{Category: CategoryCache, Key: "endpoint_cost_history_ttl", Value: "5m", ValueType: ValueTypeDuration, Label: "历史端点成本缓存", Description: "历史日期端点成本聚合缓存时间", DisplayOrder: 6},
+			{Category: CategoryCache, Key: "max_entries", Value: "1000", ValueType: ValueTypeInt, Label: "最大条目数", Description: "每类缓存最多保留的 key 数量", DisplayOrder: 7},
+			{Category: CategoryCache, Key: "stale_on_error", Value: "true", ValueType: ValueTypeBool, Label: "错误时使用旧值", Description: "数据库瞬时错误时允许统计聚合展示旧值", DisplayOrder: 8},
 		}
 
 	case CategoryHotPool:

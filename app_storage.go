@@ -63,6 +63,10 @@ func (a *App) setupUsageTracker() {
 		a.logger.Error("使用追踪器初始化失败", "error", err)
 		return
 	}
+	a.usageTracker.SetUsageCacheInvalidationCallback(a.invalidateUsageQueryCaches)
+	if a.cacheRegistry != nil {
+		a.cacheRegistry.Register(a.usageTracker.UsageStatsCache())
+	}
 
 	a.logger.Info("📊 使用追踪已启用", "database", dbPath)
 }

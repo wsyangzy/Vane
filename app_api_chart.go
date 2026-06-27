@@ -5,9 +5,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 // ============================================================
@@ -362,6 +364,7 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 	a.mu.RLock()
 	usageTracker := a.usageTracker
 	logger := a.logger
+	cfg := a.config
 	a.mu.RUnlock()
 
 	if usageTracker == nil {
@@ -369,9 +372,42 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 	}
 
 	// 获取当日日期
-	date := time.Now().Format("2006-01-02")
+	loc := time.Local
+	if cfg != nil && cfg.Timezone != "" {
+		if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			loc = parsedLoc
+		}
+	}
+	date := time.Now().In(loc).Format("2006-01-02")
+	return a.getEndpointCostsForDate(usageTracker, date, provider, true, logger)
+}
 
-	// 查询端点成本数据
+func (a *App) getEndpointCostsForDate(usageTracker interface {
+	GetEndpointCostsForDate(context.Context, string) ([]tracking.EndpointCostSummary, error)
+}, date, provider string, isToday bool, logger interface {
+	Error(string, ...any)
+}) []EndpointCostItem {
+	a.ensureCacheRegistry()
+	cacheKey := fmt.Sprintf("date=%s|provider=%s", date, provider)
+	targetCache := a.endpointCostHistoryCache
+	if isToday {
+		targetCache = a.endpointCostTodayCache
+	}
+
+	items, err := targetCache.GetOrLoad(cacheKey, func() ([]EndpointCostItem, error) {
+		return queryEndpointCostsForDate(usageTracker, date, provider, logger)
+	})
+	if err != nil {
+		return []EndpointCostItem{}
+	}
+	return cloneEndpointCostItems(items)
+}
+
+func queryEndpointCostsForDate(usageTracker interface {
+	GetEndpointCostsForDate(context.Context, string) ([]tracking.EndpointCostSummary, error)
+}, date, provider string, logger interface {
+	Error(string, ...any)
+}) ([]EndpointCostItem, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -380,7 +416,7 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 		if logger != nil {
 			logger.Error("获取端点成本数据失败", "error", err)
 		}
-		return []EndpointCostItem{}
+		return nil, err
 	}
 
 	// 转换为前端期望的格式，按 provider 过滤
@@ -416,5 +452,14 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 		})
 	}
 
-	return result
+	return result, nil
+}
+
+func cloneEndpointCostItems(items []EndpointCostItem) []EndpointCostItem {
+	if len(items) == 0 {
+		return []EndpointCostItem{}
+	}
+	cloned := make([]EndpointCostItem, len(items))
+	copy(cloned, items)
+	return cloned
 }

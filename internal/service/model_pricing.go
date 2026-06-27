@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/store"
 	"ai-relay-forwarder/internal/tracking"
 )
@@ -22,6 +25,12 @@ type ModelPricingService struct {
 
 	// 默认定价缓存
 	defaultPricing *store.ModelPricingRecord
+
+	cacheHits          atomic.Uint64
+	cacheMisses        atomic.Uint64
+	cacheInvalidations atomic.Uint64
+	lastUpdatedAt      time.Time
+	lastInvalidatedAt  time.Time
 }
 
 // NewModelPricingService 创建模型定价服务实例
@@ -61,8 +70,8 @@ func (s *ModelPricingService) CreatePricing(ctx context.Context, record *store.M
 		return nil, fmt.Errorf("创建模型定价失败: %w", err)
 	}
 
-	// 更新缓存
-	s.updateCache(created)
+	// 清除缓存，强制后续读取从数据库加载新事实
+	s.clearCache()
 
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 创建模型定价: %s", record.ModelName))
 	return created, nil
@@ -74,9 +83,11 @@ func (s *ModelPricingService) GetPricing(ctx context.Context, modelName string) 
 	s.cacheMu.RLock()
 	if cached, ok := s.cache[modelName]; ok {
 		s.cacheMu.RUnlock()
+		s.cacheHits.Add(1)
 		return cached, nil
 	}
 	s.cacheMu.RUnlock()
+	s.cacheMisses.Add(1)
 
 	// 查数据库
 	record, err := s.store.Get(ctx, modelName)
@@ -108,9 +119,11 @@ func (s *ModelPricingService) GetDefaultPricing(ctx context.Context) *store.Mode
 	s.cacheMu.RLock()
 	if s.defaultPricing != nil {
 		s.cacheMu.RUnlock()
+		s.cacheHits.Add(1)
 		return s.defaultPricing
 	}
 	s.cacheMu.RUnlock()
+	s.cacheMisses.Add(1)
 
 	// 从数据库获取
 	record, err := s.store.GetDefault(ctx)
@@ -120,9 +133,9 @@ func (s *ModelPricingService) GetDefaultPricing(ctx context.Context) *store.Mode
 			ModelName:            "_default",
 			InputPrice:           3.0,
 			OutputPrice:          15.0,
-			CacheCreationPrice5m: 3.75,  // input * 1.25
-			CacheCreationPrice1h: 6.0,   // input * 2.0
-			CacheReadPrice:       0.30,  // input * 0.1
+			CacheCreationPrice5m: 3.75, // input * 1.25
+			CacheCreationPrice1h: 6.0,  // input * 2.0
+			CacheReadPrice:       0.30, // input * 0.1
 			IsDefault:            true,
 		}
 	}
@@ -183,8 +196,8 @@ func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *store.M
 		return fmt.Errorf("更新模型定价失败: %w", err)
 	}
 
-	// 更新缓存
-	s.updateCache(record)
+	// 清除缓存，强制后续读取从数据库加载新事实
+	s.clearCache()
 
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 更新模型定价: %s", record.ModelName))
 	return nil
@@ -212,9 +225,7 @@ func (s *ModelPricingService) DeletePricing(ctx context.Context, modelName strin
 	}
 
 	// 从缓存移除
-	s.cacheMu.Lock()
-	delete(s.cache, modelName)
-	s.cacheMu.Unlock()
+	s.clearCache()
 
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 删除模型定价: %s", modelName))
 	return nil
@@ -244,8 +255,8 @@ func (s *ModelPricingService) ImportFromYAML(ctx context.Context, modelPricing m
 			ModelName:            modelName,
 			InputPrice:           pricing.Input,
 			OutputPrice:          pricing.Output,
-			CacheCreationPrice5m: pricing.CacheCreation,        // YAML 中的 CacheCreation 默认为 5m
-			CacheCreationPrice1h: pricing.Input * 2.0,          // 1h 价格自动计算
+			CacheCreationPrice5m: pricing.CacheCreation, // YAML 中的 CacheCreation 默认为 5m
+			CacheCreationPrice1h: pricing.Input * 2.0,   // 1h 价格自动计算
 			CacheReadPrice:       pricing.CacheRead,
 			IsDefault:            false,
 		}
@@ -295,6 +306,7 @@ func (s *ModelPricingService) LoadCache(ctx context.Context) error {
 			s.defaultPricing = record
 		}
 	}
+	s.lastUpdatedAt = time.Now()
 
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 加载 %d 个模型定价到缓存", len(records)))
 	return nil
@@ -358,13 +370,49 @@ func (s *ModelPricingService) updateCache(record *store.ModelPricingRecord) {
 	if record.IsDefault {
 		s.defaultPricing = record
 	}
+	s.lastUpdatedAt = time.Now()
 }
 
 // clearCache 清除缓存
-func (s *ModelPricingService) clearCache() {
+func (s *ModelPricingService) clearCache() int {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 
+	removed := len(s.cache)
+	if s.defaultPricing != nil && removed == 0 {
+		removed = 1
+	}
 	s.cache = make(map[string]*store.ModelPricingRecord)
 	s.defaultPricing = nil
+	s.cacheInvalidations.Add(1)
+	s.lastInvalidatedAt = time.Now()
+	return removed
+}
+
+// InvalidateCache clears the model-pricing read cache.
+func (s *ModelPricingService) InvalidateCache() int {
+	if s == nil {
+		return 0
+	}
+	return s.clearCache()
+}
+
+// CacheStats returns a cache status snapshot for unified cache observability.
+func (s *ModelPricingService) CacheStats() appcache.Stats {
+	if s == nil {
+		return appcache.Stats{Name: "model-pricing"}
+	}
+	s.cacheMu.RLock()
+	stats := appcache.Stats{
+		Name:              "model-pricing",
+		Enabled:           true,
+		Size:              len(s.cache),
+		Hits:              s.cacheHits.Load(),
+		Misses:            s.cacheMisses.Load(),
+		Invalidations:     s.cacheInvalidations.Load(),
+		LastUpdatedAt:     s.lastUpdatedAt,
+		LastInvalidatedAt: s.lastInvalidatedAt,
+	}
+	s.cacheMu.RUnlock()
+	return stats
 }

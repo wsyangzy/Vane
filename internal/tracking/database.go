@@ -1223,6 +1223,8 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 		"cutoff_date", cutoffTime.Format("2006-01-02"),
 		"retention_days", ut.config.RetentionDays)
 
+	ut.invalidateUsageCaches()
+
 	// 更新汇总统计（异步）
 	go ut.updateUsageSummary()
 

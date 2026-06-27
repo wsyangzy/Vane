@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"ai-relay-forwarder/config"
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 type endpointLookupStub struct {
@@ -217,5 +221,141 @@ func TestEnrichEndpointChainCredentialGroupsSkipsCodex(t *testing.T) {
 
 	if nodes[0].CredentialGroup != "" {
 		t.Fatalf("codex chain group = %q, want empty", nodes[0].CredentialGroup)
+	}
+}
+
+type endpointCostTrackerStub struct {
+	calls int
+	fail  bool
+	costs []tracking.EndpointCostSummary
+}
+
+func (s *endpointCostTrackerStub) GetEndpointCostsForDate(context.Context, string) ([]tracking.EndpointCostSummary, error) {
+	s.calls++
+	if s.fail {
+		return nil, errors.New("database busy")
+	}
+	return s.costs, nil
+}
+
+type endpointCostTestLogger struct{}
+
+func (endpointCostTestLogger) Error(string, ...any) {}
+
+func TestEndpointCostCacheUsesCallerTodaySelection(t *testing.T) {
+	app := NewApp()
+	app.endpointCostTodayCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostToday, TTL: time.Minute, MaxEntries: 10, StaleOnError: true, Enabled: true})
+	app.endpointCostHistoryCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostHistory, TTL: time.Minute, MaxEntries: 10, StaleOnError: true, Enabled: true})
+
+	tracker := &endpointCostTrackerStub{costs: []tracking.EndpointCostSummary{
+		{EndpointName: "codex-main", Provider: "codex", InputTokens: 100, OutputTokens: 20, TotalCostUSD: 0.25},
+	}}
+
+	items := app.getEndpointCostsForDate(tracker, "1999-01-01", "codex", true, endpointCostTestLogger{})
+	if len(items) != 1 || items[0].Name != "codex-main" {
+		t.Fatalf("endpoint costs = %#v, want codex-main item", items)
+	}
+
+	todayStats := app.endpointCostTodayCache.Stats()
+	historyStats := app.endpointCostHistoryCache.Stats()
+	if todayStats.Misses != 1 || todayStats.Size != 1 {
+		t.Fatalf("expected today cache miss+entry, got misses=%d size=%d", todayStats.Misses, todayStats.Size)
+	}
+	if historyStats.Misses != 0 || historyStats.Size != 0 {
+		t.Fatalf("expected history cache untouched, got misses=%d size=%d", historyStats.Misses, historyStats.Size)
+	}
+}
+
+func TestEndpointCostCacheReturnsStaleValueOnLoaderError(t *testing.T) {
+	app := NewApp()
+	app.endpointCostTodayCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostToday, TTL: 5 * time.Millisecond, MaxEntries: 10, StaleOnError: true, Enabled: true})
+
+	tracker := &endpointCostTrackerStub{costs: []tracking.EndpointCostSummary{
+		{EndpointName: "claude-main", Provider: "claude", InputTokens: 42, OutputTokens: 8, TotalCostUSD: 0.12},
+	}}
+
+	first := app.getEndpointCostsForDate(tracker, "2026-06-27", "claude", true, endpointCostTestLogger{})
+	if len(first) != 1 || first[0].Name != "claude-main" {
+		t.Fatalf("first endpoint costs = %#v, want claude-main item", first)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	tracker.fail = true
+	tracker.costs = nil
+
+	second := app.getEndpointCostsForDate(tracker, "2026-06-27", "claude", true, endpointCostTestLogger{})
+	if len(second) != 1 || second[0].Name != "claude-main" {
+		t.Fatalf("second endpoint costs = %#v, want stale claude-main item", second)
+	}
+	if tracker.calls != 2 {
+		t.Fatalf("expected loader to be retried after TTL expiry, got %d calls", tracker.calls)
+	}
+}
+
+func TestQueryTokenUsageForRangeFiltersProvider(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+
+	recordTokenUsageForProvider(t, tracker, "claude-usage", "claude", 100, 10, 0, 5)
+	recordTokenUsageForProvider(t, tracker, "codex-usage", "codex", 200, 20, 0, 10)
+
+	got, err := queryTokenUsageForRange(tracker, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), "codex")
+	if err != nil {
+		t.Fatalf("queryTokenUsageForRange failed: %v", err)
+	}
+
+	if got.InputTokens != 190 || got.OutputTokens != 20 || got.CacheReadTokens != 10 || got.TotalTokens != 220 {
+		t.Fatalf("codex token usage = %#v, want input=190 output=20 cache_read=10 total=220", got)
+	}
+}
+
+func newAppUsageTestTracker(t *testing.T) *tracking.UsageTracker {
+	t.Helper()
+
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      100,
+		BatchSize:       10,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: 24 * time.Hour,
+		RetentionDays:   30,
+		ModelPricing: map[string]tracking.ModelPricing{
+			"test-model": {Input: 1, Output: 2, CacheCreation: 1, CacheRead: 0.1},
+		},
+		HotPool: &tracking.HotPoolSettings{
+			Enabled:          true,
+			MaxAge:           time.Hour,
+			MaxSize:          100,
+			CleanupInterval:  time.Hour,
+			ArchiveOnCleanup: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewUsageTracker failed: %v", err)
+	}
+	return tracker
+}
+
+func recordTokenUsageForProvider(t *testing.T, tracker *tracking.UsageTracker, requestID, provider string, input, output, cacheCreation, cacheRead int64) {
+	t.Helper()
+
+	tracker.RecordRequestStart(requestID, "127.0.0.1", "test-agent", "POST", "/v1/messages", false)
+	status := "processing"
+	model := "test-model"
+	tracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{
+		Provider:  &provider,
+		Status:    &status,
+		ModelName: &model,
+	})
+	tracker.RecordRequestSuccess(requestID, model, &tracking.TokenUsage{
+		InputTokens:         input,
+		OutputTokens:        output,
+		CacheCreationTokens: cacheCreation,
+		CacheReadTokens:     cacheRead,
+	}, 100*time.Millisecond)
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatalf("ForceFlush failed: %v", err)
 	}
 }

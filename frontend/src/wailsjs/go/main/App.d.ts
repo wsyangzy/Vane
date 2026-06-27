@@ -12,6 +12,8 @@ export function BatchHealthCheckAll():Promise<main.BatchHealthCheckResult>;
 
 export function BatchUpdateSettings(arg1:main.BatchUpdateSettingsInput):Promise<void>;
 
+export function ClearCache(arg1:main.ClearCacheInput):Promise<main.CacheClearResult>;
+
 export function CheckPortAvailable(arg1:number):Promise<boolean>;
 
 export function CreateChannel(arg1:main.CreateChannelInput):Promise<void>;
@@ -45,6 +47,8 @@ export function DeletePrivacyRule(arg1:number):Promise<void>;
 export function DeletePrivacySyntheticValue(arg1:string,arg2:string):Promise<void>;
 
 export function GetAllSettings():Promise<Array<main.SettingInfo>>;
+
+export function GetCacheStatus():Promise<main.CacheStatus>;
 
 export function GetChannels():Promise<Array<main.ChannelInfo>>;
 

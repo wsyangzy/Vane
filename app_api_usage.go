@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"ai-relay-forwarder/internal/endpoint"
@@ -19,7 +18,6 @@ import (
 )
 
 const usageDBQueryTimeout = 8 * time.Second
-const usageDBStatsCacheTTL = 30 * time.Second
 
 // ============================================================
 // 使用统计 API
@@ -44,20 +42,6 @@ type UsageSummary struct {
 	AllTimeTotalTokens   int64   `json:"all_time_total_tokens"` // 全部历史 tokens（数据库）
 }
 
-type usageDBStatsCache struct {
-	mu sync.Mutex
-
-	updatedAt          time.Time
-	allTimeTotalCost   float64
-	allTimeTotalTokens int64
-	allTimeTotal       int64
-	todayCost          float64
-	todayTokens        int64
-	todayRequests      int64
-}
-
-var globalUsageDBStatsCache usageDBStatsCache
-
 // GetUsageSummary 获取使用统计摘要
 // 当没有传递时间参数时，返回运行时统计（从内存）+ 全部历史请求总数（从数据库）
 // 当传递时间参数时，返回历史数据（从数据库）
@@ -72,6 +56,7 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 
 	// 如果没有传递时间参数，返回运行时统计（与 Web 版本 /api/v1/connections 一致）
 	if startTimeStr == "" && endTimeStr == "" {
+		a.ensureCacheRegistry()
 		if monitoringMiddleware == nil {
 			return UsageSummary{}, nil
 		}
@@ -99,72 +84,47 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 		)
 
 		if usageTracker != nil {
-			// DB 统计做缓存，避免前端轮询/事件推送时频繁查询导致阻塞
-			// 仅对无 provider 过滤的全量查询使用缓存；按 provider 过滤时直接查询
-			useCache := provider == ""
-			if useCache {
-				cache := &globalUsageDBStatsCache
-				cache.mu.Lock()
-				cacheFresh := !cache.updatedAt.IsZero() && time.Since(cache.updatedAt) < usageDBStatsCacheTTL
-				if cacheFresh {
-					allTimeTotalCost = cache.allTimeTotalCost
-					allTimeTotalTokens = cache.allTimeTotalTokens
-					allTimeTotal = cache.allTimeTotal
-					todayCost = cache.todayCost
-					todayTokens = cache.todayTokens
-					todayRequests = cache.todayRequests
+			loc := time.Local
+			if cfg != nil && cfg.Timezone != "" {
+				if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
+					loc = parsedLoc
 				}
-				cache.mu.Unlock()
+			}
+			now := time.Now().In(loc)
+			todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+			todayEnd := todayStart.Add(24 * time.Hour)
+			cacheKey := fmt.Sprintf("runtime|provider=%s|today=%s|tz=%s", provider, todayStart.Format("2006-01-02"), loc.String())
 
-				if !cacheFresh {
-					loc := time.Local
-					if cfg != nil && cfg.Timezone != "" {
-						if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
-							loc = parsedLoc
-						}
-					}
-
-					ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
-					allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now(), "")
-					cancel()
-
-					now := time.Now().In(loc)
-					todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-					todayEnd := todayStart.Add(24 * time.Hour)
-					ctx, cancel = context.WithTimeout(context.Background(), usageDBQueryTimeout)
-					todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd, "")
-					cancel()
-
-					cache := &globalUsageDBStatsCache
-					cache.mu.Lock()
-					cache.updatedAt = time.Now()
-					cache.allTimeTotalCost = allTimeTotalCost
-					cache.allTimeTotalTokens = allTimeTotalTokens
-					cache.allTimeTotal = allTimeTotal
-					cache.todayCost = todayCost
-					cache.todayTokens = todayTokens
-					cache.todayRequests = todayRequests
-					cache.mu.Unlock()
-				}
-			} else {
-				// 按 provider 过滤，不使用缓存
-				loc := time.Local
-				if cfg != nil && cfg.Timezone != "" {
-					if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
-						loc = parsedLoc
-					}
-				}
-
+			snapshot, err := a.usageSummaryCache.GetOrLoad(cacheKey, func() (usageSummaryDBSnapshot, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
-				allTimeTotalCost, allTimeTotalTokens, allTimeTotal = queryStatsFromDB(ctx, logger, usageTracker, time.Time{}, time.Now(), provider)
+				allTimeCost, allTimeTokens, allTimeRequests, err := queryStatsFromDBStrict(ctx, logger, usageTracker, time.Time{}, time.Now(), provider)
 				cancel()
+				if err != nil {
+					return usageSummaryDBSnapshot{}, err
+				}
 
-				now := time.Now().In(loc)
-				todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-				todayEnd := todayStart.Add(24 * time.Hour)
 				ctx, cancel = context.WithTimeout(context.Background(), usageDBQueryTimeout)
-				todayCost, todayTokens, todayRequests = queryStatsFromDB(ctx, logger, usageTracker, todayStart, todayEnd, provider)
+				dayCost, dayTokens, dayRequests, err := queryStatsFromDBStrict(ctx, logger, usageTracker, todayStart, todayEnd, provider)
 				cancel()
+				if err != nil {
+					return usageSummaryDBSnapshot{}, err
+				}
+				return usageSummaryDBSnapshot{
+					allTimeTotalCost:   allTimeCost,
+					allTimeTotalTokens: allTimeTokens,
+					allTimeTotal:       allTimeRequests,
+					todayCost:          dayCost,
+					todayTokens:        dayTokens,
+					todayRequests:      dayRequests,
+				}, nil
+			})
+			if err == nil {
+				allTimeTotalCost = snapshot.allTimeTotalCost
+				allTimeTotalTokens = snapshot.allTimeTotalTokens
+				allTimeTotal = snapshot.allTimeTotal
+				todayCost = snapshot.todayCost
+				todayTokens = snapshot.todayTokens
+				todayRequests = snapshot.todayRequests
 			}
 		}
 
@@ -216,34 +176,42 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
-	summaries, err := usageTracker.GetUsageSummary(ctx, startTime, endTime)
-	if err != nil {
-		return UsageSummary{}, err
-	}
+	a.ensureCacheRegistry()
+	cacheKey := fmt.Sprintf("history|provider=%s|start=%s|end=%s", provider, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano))
+	return a.usageHistoryCache.GetOrLoad(cacheKey, func() (UsageSummary, error) {
+		summaries, err := usageTracker.GetUsageSummary(ctx, startTime, endTime)
+		if err != nil {
+			return UsageSummary{}, err
+		}
 
-	// 聚合所有摘要
-	result := UsageSummary{}
-	for _, s := range summaries {
-		result.TotalRequests += int64(s.RequestCount)
-		result.SuccessRequests += int64(s.SuccessCount)
-		result.FailedRequests += int64(s.ErrorCount)
-		result.TotalInputTokens += s.TotalInputTokens
-		result.TotalOutputTokens += s.TotalOutputTokens
-		result.TotalCost += s.TotalCostUSD
-	}
-
-	return result, nil
+		// 聚合所有摘要
+		result := UsageSummary{}
+		for _, s := range summaries {
+			result.TotalRequests += int64(s.RequestCount)
+			result.SuccessRequests += int64(s.SuccessCount)
+			result.FailedRequests += int64(s.ErrorCount)
+			result.TotalInputTokens += s.TotalInputTokens
+			result.TotalOutputTokens += s.TotalOutputTokens
+			result.TotalCost += s.TotalCostUSD
+		}
+		return result, nil
+	})
 }
 
 // queryStatsFromDB 直接从 request_logs 表查询成本、tokens 和请求数
 func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tracking.UsageTracker, startTime, endTime time.Time, provider string) (cost float64, tokens int64, requests int64) {
+	cost, tokens, requests, _ = queryStatsFromDBStrict(ctx, logger, usageTracker, startTime, endTime, provider)
+	return cost, tokens, requests
+}
+
+func queryStatsFromDBStrict(ctx context.Context, logger *slog.Logger, usageTracker *tracking.UsageTracker, startTime, endTime time.Time, provider string) (cost float64, tokens int64, requests int64, err error) {
 	if usageTracker == nil {
-		return 0, 0, 0
+		return 0, 0, 0, fmt.Errorf("usage tracker is nil")
 	}
 
 	db := usageTracker.GetDB()
 	if db == nil {
-		return 0, 0, 0
+		return 0, 0, 0, fmt.Errorf("usage tracker database is nil")
 	}
 
 	var query string
@@ -265,15 +233,14 @@ func queryStatsFromDB(ctx context.Context, logger *slog.Logger, usageTracker *tr
 		}
 	}
 
-	err := db.QueryRowContext(ctx, query, args...).Scan(&cost, &tokens, &requests)
-	if err != nil {
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&cost, &tokens, &requests); err != nil {
 		if logger != nil {
 			logger.Debug("查询统计数据失败", "error", err)
 		}
-		return 0, 0, 0
+		return 0, 0, 0, err
 	}
 
-	return cost, tokens, requests
+	return cost, tokens, requests, nil
 }
 
 // RequestRecord 请求记录
@@ -965,7 +932,25 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 	now := time.Now().In(loc)
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	tomorrowStart := todayStart.Add(24 * time.Hour)
+	a.ensureCacheRegistry()
+	cacheKey := fmt.Sprintf("provider=%s|date=%s|tz=%s", provider, todayStart.Format("2006-01-02"), loc.String())
+	data, err := a.tokenUsageCache.GetOrLoad(cacheKey, func() (TokenUsageData, error) {
+		return queryTokenUsageForRange(usageTracker, todayStart, tomorrowStart, provider)
+	})
+	if err != nil {
+		return TokenUsageData{}
+	}
+	return data
+}
 
+func queryTokenUsageForRange(usageTracker *tracking.UsageTracker, startTime, endTime time.Time, provider string) (TokenUsageData, error) {
+	if usageTracker == nil {
+		return TokenUsageData{}, fmt.Errorf("usage tracker is nil")
+	}
+	db := usageTracker.GetDB()
+	if db == nil {
+		return TokenUsageData{}, fmt.Errorf("usage tracker database is nil")
+	}
 	query := `SELECT
 		COALESCE(SUM(` + tracking.DistributionInputTokensSQLExpression() + `), 0),
 		COALESCE(SUM(output_tokens), 0),
@@ -975,8 +960,8 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 		FROM request_logs
 		WHERE start_time >= ? AND start_time < ?`
 	args := []any{
-		todayStart.Format("2006-01-02 15:04:05"),
-		tomorrowStart.Format("2006-01-02 15:04:05"),
+		startTime.Format("2006-01-02 15:04:05"),
+		endTime.Format("2006-01-02 15:04:05"),
 	}
 	if provider != "" {
 		query += " AND provider = ?"
@@ -988,8 +973,7 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 
 	var input, output, cacheCreation, cacheRead, total int64
 	if err := db.QueryRowContext(ctx, query, args...).Scan(&input, &output, &cacheCreation, &cacheRead, &total); err != nil {
-		// 失败时返回零值（前端会显示"暂无数据"，但不阻塞）
-		return TokenUsageData{}
+		return TokenUsageData{}, err
 	}
 
 	return TokenUsageData{
@@ -998,5 +982,5 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 		CacheCreationTokens: cacheCreation,
 		CacheReadTokens:     cacheRead,
 		TotalTokens:         total,
-	}
+	}, nil
 }

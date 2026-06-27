@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	appcache "ai-relay-forwarder/internal/cache"
 )
 
 const totalTokensSQLExpression = `CASE
@@ -679,10 +681,72 @@ func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOp
 	return &totals, nil
 }
 
+// ConfigureUsageStatsCache applies runtime cache options for DB usage-stat totals.
+func (ut *UsageTracker) ConfigureUsageStatsCache(options appcache.Options) {
+	if ut == nil {
+		return
+	}
+	if options.Name == "" {
+		options.Name = "usage:stats"
+	}
+	if ut.usageStatsCache == nil {
+		ut.usageStatsCache = appcache.New[UsageStatsTotals](options)
+		return
+	}
+	ut.usageStatsCache.SetOptions(options)
+}
+
+// UsageStatsCacheStats returns the cache status snapshot for DB usage-stat totals.
+func (ut *UsageTracker) UsageStatsCacheStats() appcache.Stats {
+	if ut == nil || ut.usageStatsCache == nil {
+		return appcache.Stats{Name: "usage:stats"}
+	}
+	return ut.usageStatsCache.Stats()
+}
+
+// UsageStatsCache returns the managed cache instance for app-level registry wiring.
+func (ut *UsageTracker) UsageStatsCache() appcache.ManagedCache {
+	if ut == nil || ut.usageStatsCache == nil {
+		return nil
+	}
+	return ut.usageStatsCache
+}
+
+// InvalidateUsageStatsCache clears cached DB usage-stat totals.
+func (ut *UsageTracker) InvalidateUsageStatsCache() int {
+	if ut == nil || ut.usageStatsCache == nil {
+		return 0
+	}
+	return ut.usageStatsCache.Invalidate(appcache.InvalidateOptions{All: true})
+}
+
+func (ut *UsageTracker) queryUsageStatsTotalsCached(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {
+	if ut == nil || ut.usageStatsCache == nil {
+		return ut.QueryUsageStatsTotals(ctx, opts)
+	}
+
+	key := "usage:stats:" + queryOptsCacheKey(opts)
+	value, err := ut.usageStatsCache.GetOrLoad(key, func() (UsageStatsTotals, error) {
+		totals, err := ut.QueryUsageStatsTotals(ctx, opts)
+		if err != nil {
+			return UsageStatsTotals{}, err
+		}
+		if totals == nil {
+			return UsageStatsTotals{}, nil
+		}
+		return *totals, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	totals := value
+	return &totals, nil
+}
+
 // QueryUsageStatsTotalsWithHotPool 双源聚合：热池 + 数据库。
 // 相比 QueryRequestDetailsWithHotPool：不拉取大量明细，避免大数据量时拖慢 UI。
 func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {
-	dbTotals, err := ut.QueryUsageStatsTotals(ctx, opts)
+	dbTotals, err := ut.queryUsageStatsTotalsCached(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

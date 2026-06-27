@@ -20,6 +20,10 @@ export function BatchUpdateSettings(arg1) {
   return Call.ByName("main.App.BatchUpdateSettings", arg1);
 }
 
+export function ClearCache(arg1) {
+  return Call.ByName("main.App.ClearCache", arg1);
+}
+
 export function CheckPortAvailable(arg1) {
   return Call.ByName("main.App.CheckPortAvailable", arg1);
 }
@@ -86,6 +90,10 @@ export function DeletePrivacySyntheticValue(arg1, arg2) {
 
 export function GetAllSettings() {
   return Call.ByName("main.App.GetAllSettings");
+}
+
+export function GetCacheStatus() {
+  return Call.ByName("main.App.GetCacheStatus");
 }
 
 export function GetChannels() {

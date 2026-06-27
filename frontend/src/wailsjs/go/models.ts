@@ -256,6 +256,100 @@ export namespace main {
 	        this.unhealthy_count = source["unhealthy_count"];
 	    }
 	}
+	export class CacheStatusItem {
+	    name: string;
+	    enabled: boolean;
+	    ttl: string;
+	    max_entries: number;
+	    size: number;
+	    hits: number;
+	    misses: number;
+	    expired: number;
+	    evicted: number;
+	    invalidations: number;
+	    last_updated_at: string;
+	    last_invalidated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CacheStatusItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.ttl = source["ttl"];
+	        this.max_entries = source["max_entries"];
+	        this.size = source["size"];
+	        this.hits = source["hits"];
+	        this.misses = source["misses"];
+	        this.expired = source["expired"];
+	        this.evicted = source["evicted"];
+	        this.invalidations = source["invalidations"];
+	        this.last_updated_at = source["last_updated_at"];
+	        this.last_invalidated_at = source["last_invalidated_at"];
+	    }
+	}
+	export class CacheStatus {
+	    enabled: boolean;
+	    caches: CacheStatusItem[];
+
+	    static createFrom(source: any = {}) {
+	        return new CacheStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.caches = this.convertValues(source["caches"], CacheStatusItem);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ClearCacheInput {
+	    names: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new ClearCacheInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.names = source["names"];
+	    }
+	}
+	export class CacheClearResult {
+	    cleared_caches: number;
+	    cleared_entries: number;
+	    unknown_names?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new CacheClearResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.cleared_caches = source["cleared_caches"];
+	        this.cleared_entries = source["cleared_entries"];
+	        this.unknown_names = source["unknown_names"];
+	    }
+	}
 	export class UpdateSettingInput {
 	    category: string;
 	    key: string;
