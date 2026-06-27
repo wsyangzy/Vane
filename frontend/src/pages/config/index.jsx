@@ -10,7 +10,6 @@ import {
   RefreshCw,
   Server,
   Network,
-  Clock,
   Shield,
   Database,
   Globe

@@ -191,7 +191,7 @@ type CreateCodexEndpointInput struct {
 	BaseURL                  string                             `json:"base_url"`
 	FailoverEnabled          *bool                              `json:"failover_enabled"` // nil 时默认 true
 	SkipHealthCheck          bool                               `json:"skip_health_check"`
-	Priority                 int                                `json:"priority"`
+	Priority                 *int                               `json:"priority"`
 	TimeoutSeconds           int                                `json:"timeout_seconds"`         // 0 = 使用全局超时
 	CostMultiplier           float64                            `json:"costMultiplier"`          // 默认 1.0
 	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`     // 默认 1.0
@@ -663,6 +663,11 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	priority := -1
+	if input.Priority != nil {
+		priority = *input.Priority
+	}
+
 	record := &store.CodexEndpointRecord{
 		ChannelID:                input.ChannelID,
 		CredentialGroupID:        input.CredentialGroupID,
@@ -671,7 +676,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		BaseURL:                  input.BaseURL,
 		FailoverEnabled:          input.FailoverEnabled == nil || *input.FailoverEnabled,
 		SkipHealthCheck:          input.SkipHealthCheck,
-		Priority:                 input.Priority,
+		Priority:                 priority,
 		TimeoutSeconds:           input.TimeoutSeconds,
 		CostMultiplier:           input.CostMultiplier,
 		InputCostMultiplier:      input.InputCostMultiplier,

@@ -769,7 +769,16 @@ export namespace main {
 	    api_key: string;
 	    name: string;
 	    base_url: string;
+	    failover_enabled?: boolean;
 	    skip_health_check: boolean;
+	    priority?: number;
+	    timeout_seconds: number;
+	    costMultiplier: number;
+	    inputCostMultiplier: number;
+	    outputCostMultiplier: number;
+	    cacheReadCostMultiplier: number;
+	    billingOutputTokenSource: string;
+	    modelMultipliers: any[];
 
 	    static createFrom(source: any = {}) {
 	        return new CreateCodexEndpointInput(source);
@@ -782,7 +791,16 @@ export namespace main {
 	        this.api_key = source["api_key"];
 	        this.name = source["name"];
 	        this.base_url = source["base_url"];
+	        this.failover_enabled = source["failover_enabled"];
 	        this.skip_health_check = source["skip_health_check"];
+	        this.priority = source["priority"];
+	        this.timeout_seconds = source["timeout_seconds"];
+	        this.costMultiplier = source["costMultiplier"];
+	        this.inputCostMultiplier = source["inputCostMultiplier"];
+	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
+	        this.modelMultipliers = source["modelMultipliers"];
 	    }
 	}
 	export class UpdateCodexEndpointInput {
@@ -790,7 +808,16 @@ export namespace main {
 	    base_url: string;
 	    credential_group_id?: number;
 	    api_key?: string;
+	    failover_enabled?: boolean;
 	    skip_health_check?: boolean;
+	    priority?: number;
+	    timeout_seconds?: number;
+	    costMultiplier?: number;
+	    inputCostMultiplier?: number;
+	    outputCostMultiplier?: number;
+	    cacheReadCostMultiplier?: number;
+	    billingOutputTokenSource?: string;
+	    modelMultipliers: any[];
 
 	    static createFrom(source: any = {}) {
 	        return new UpdateCodexEndpointInput(source);
@@ -802,7 +829,16 @@ export namespace main {
 	        this.base_url = source["base_url"];
 	        this.credential_group_id = source["credential_group_id"];
 	        this.api_key = source["api_key"];
+	        this.failover_enabled = source["failover_enabled"];
 	        this.skip_health_check = source["skip_health_check"];
+	        this.priority = source["priority"];
+	        this.timeout_seconds = source["timeout_seconds"];
+	        this.costMultiplier = source["costMultiplier"];
+	        this.inputCostMultiplier = source["inputCostMultiplier"];
+	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
+	        this.modelMultipliers = source["modelMultipliers"];
 	    }
 	}
 	export class CreateClaudeCredentialGroupInput {

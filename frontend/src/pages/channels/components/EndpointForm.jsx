@@ -1,6 +1,6 @@
 // ============================================
 // 端点编辑表单组件 (SQLite 存储模式)
-// (2026-01-10) - 新建时隐藏优先级和超时字段（自动递增/使用全局默认）
+// (2026-01-10) - 新建时默认优先级为 0，超时使用全局默认
 // ============================================
 
 import { useState } from 'react';
@@ -506,40 +506,36 @@ const EndpointForm = ({
           </div>
           )}
 
-          {/* 路由配置（仅编辑模式显示标题和输入项） */}
+          {/* 路由配置 */}
           {activeTab === 'routing' && (
           <div className="space-y-4">
-            {isEditMode && (
-              <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-                路由配置
-              </h3>
-            )}
+            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
+              路由配置
+            </h3>
 
-            {isEditMode && (
-              <div className="grid gap-4 grid-cols-2">
-                <FormInput
-                  label="优先级"
-                  name="priority"
-                  value={formData.priority}
-                  onChange={handleChange}
-                  type="number"
-                  min="0"
-                  placeholder="0"
-                  help="0 = 最高优先级，数字越小优先级越高，相同则交换"
-                />
+            <div className="grid gap-4 grid-cols-2">
+              <FormInput
+                label="优先级"
+                name="priority"
+                value={formData.priority}
+                onChange={handleChange}
+                type="number"
+                min="0"
+                placeholder="0"
+                help="0 = 最高优先级，数字越小优先级越高，相同则交换"
+              />
 
-                {/* 超时时间 - 留空使用全局默认值 */}
-                <FormInput
-                  label="超时时间 (秒)"
-                  name="timeoutSeconds"
-                  value={formData.timeoutSeconds || ''}
-                  onChange={handleChange}
-                  type="number"
-                  placeholder="默认: 300 (全局配置)"
-                  help="单次请求的最大等待时间，留空使用全局配置"
-                />
-              </div>
-            )}
+              {/* 超时时间 - 留空使用全局默认值 */}
+              <FormInput
+                label="超时时间 (秒)"
+                name="timeoutSeconds"
+                value={formData.timeoutSeconds || ''}
+                onChange={handleChange}
+                type="number"
+                placeholder="默认: 300 (全局配置)"
+                help="单次请求的最大等待时间，留空使用全局配置"
+              />
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <FormCheckbox

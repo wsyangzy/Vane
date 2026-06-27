@@ -20,12 +20,14 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Save,
   Server,
   Settings,
   ShieldCheck,
   ShieldOff,
   Trash2,
   TriangleAlert,
+  X,
   XCircle
 } from 'lucide-react';
 import {
@@ -170,6 +172,15 @@ const CODEX_ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'routing', label: '路由配置' }
 ];
+
+const getNextCodexEndpointPriority = (channel) => {
+  const endpoints = Array.isArray(channel?.endpoints) ? channel.endpoints : [];
+  const maxPriority = endpoints.reduce((max, endpoint) => {
+    const priority = Number(endpoint?.priority);
+    return Number.isFinite(priority) ? Math.max(max, Math.floor(priority)) : max;
+  }, 0);
+  return maxPriority + 1;
+};
 
 const BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS = [
   { value: 'output_tokens', label: '总输出 output_tokens' },
@@ -811,9 +822,54 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
 // ============================================================================
 // 端点编辑弹窗（name + base_url）
 // ============================================================================
+const EndpointToggleTile = ({ label, checked, onChange, disabled }) => {
+  const toggle = () => {
+    if (!disabled) onChange?.(!checked);
+  };
+
+  return (
+    <div
+      onClick={toggle}
+      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors ${
+        checked ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-white hover:bg-slate-50/60'
+      } ${disabled ? 'cursor-not-allowed opacity-70' : ''}`}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          toggle();
+        }
+      }}
+    >
+      <span className="min-w-0 truncate text-xs font-semibold text-slate-800">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        disabled={disabled}
+        onClick={(event) => {
+          event.stopPropagation();
+          toggle();
+        }}
+        className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${
+          checked ? 'border-emerald-500 bg-emerald-500' : 'border-slate-200 bg-slate-200'
+        } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      >
+        <span
+          className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0.5'
+          }`}
+        />
+      </button>
+    </div>
+  );
+};
+
 const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, serverError, onCancel, onSave }) => {
   const [name, setName] = useState(endpoint?.name || '');
-  const [baseURL, setBaseURL] = useState(endpoint?.baseURL || '');
+  const [baseURL, setBaseURL] = useState(endpoint?.baseURL || endpoint?.base_url || '');
   const [activeTab, setActiveTab] = useState('basic');
   const credentialGroups = channel?.credentialGroups || [];
   const defaultCredentialGroup =
@@ -835,9 +891,11 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
       label: `${group.name || '默认分组'}${group.isDefault || group.is_default ? ' · 默认' : ''}`
     }))
   ];
-  const [priority, setPriority] = useState(endpoint?.priority ?? 0);
+  const isEdit = mode === 'edit';
+  const [priority, setPriority] = useState(endpoint?.priority ?? getNextCodexEndpointPriority(channel));
   const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
   const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
+  const [skipHealthCheck, setSkipHealthCheck] = useState(Boolean(endpoint?.skipHealthCheck || endpoint?.skip_health_check));
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
@@ -847,7 +905,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
     ['总', selectedCredentialGroup?.costMultiplier ?? 1],
     ['输入', selectedCredentialGroup?.inputCostMultiplier ?? 1],
     ['输出', selectedCredentialGroup?.outputCostMultiplier ?? 1],
-    ['缓存', selectedCredentialGroup?.cacheReadCostMultiplier ?? 1]
+    ['缓存读取', selectedCredentialGroup?.cacheReadCostMultiplier ?? 1]
   ];
   const groupBillingSource = selectedCredentialGroup?.billingOutputTokenSource || 'output_tokens';
   const groupBillingLabel = BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS.find((option) => option.value === groupBillingSource)?.label || groupBillingSource;
@@ -882,12 +940,11 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
       baseURL: trimmed,
       credentialGroupId: selectedCredentialGroupId,
       failoverEnabled,
-      priority,
+      skipHealthCheck,
+      priority: isEdit ? priority : 0,
       timeoutSeconds: timeoutResult.timeoutSeconds
     });
   };
-
-  const isEdit = mode === 'edit';
 
   return renderModalPortal(
     <div
@@ -895,31 +952,20 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
       style={{ paddingTop: `${modalTopPadding}px` }}
     >
       <div
-        className="flex w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
         style={{ maxHeight: modalMaxHeight }}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
-          <div className="flex items-start gap-3">
-            <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
-              {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑端点' : '添加端点'}</h2>
-              <p className="mt-0.5 text-xs text-slate-500">
-                渠道：{channel?.name} · 分组：{selectedCredentialGroup?.name || '默认分组'}
-              </p>
-            </div>
-          </div>
-          <Tooltip content="关闭">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
-              disabled={loading}
-            >
-              <XCircle size={18} />
-            </button>
-          </Tooltip>
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+          <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑端点' : '新建端点'}</h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            disabled={loading}
+            aria-label="关闭"
+          >
+            <X size={20} />
+          </button>
         </div>
 
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
@@ -966,61 +1012,84 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
             </div>
 
             {activeTab === 'basic' ? (
-              <>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">凭证分组</label>
-                  <CustomSelect
-                    options={credentialGroupOptions}
-                    value={String(selectedCredentialGroupId || '')}
-                    onChange={(value) => {
-                      setCredentialGroupId(Number(value) || 0);
-                      if (fieldError) setFieldError('');
-                    }}
-                    disabled={loading || credentialGroupOptions.length === 0}
-                    size="md"
-                    fullWidth
-                    placeholder="请选择凭证分组"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">
-                    端点归属到该分组后复用其中的 API Key 与默认倍率。
-                  </p>
-                </div>
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">基本信息</h3>
 
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">端点名称</label>
-                  <input
-                    type="text"
-                    autoFocus
-                    value={name}
-                    onChange={(event) => {
-                      setName(event.target.value);
-                      if (fieldError) setFieldError('');
-                    }}
-                    placeholder="如：主线路 / 备用 / 上海节点"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">同一凭证分组下端点名称唯一，仅作 UI 标识。</p>
-                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                      渠道 <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={channel?.name || ''}
+                      disabled
+                      className="w-full cursor-not-allowed rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-400"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">用于分块展示端点，并作为故障转移的第一层边界</p>
+                  </div>
 
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Base URL</label>
-                  <input
-                    type="text"
-                    value={baseURL}
-                    onChange={(event) => {
-                      setBaseURL(event.target.value);
-                      if (fieldError) setFieldError('');
-                    }}
-                    placeholder="https://example.invalid/codex/v1"
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">
-                    端点只保存线路信息；API Key 与计费倍率来自上方凭证分组。
-                  </p>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">凭证分组</label>
+                    <CustomSelect
+                      options={credentialGroupOptions}
+                      value={String(selectedCredentialGroupId || '')}
+                      onChange={(value) => {
+                        setCredentialGroupId(Number(value) || 0);
+                        if (fieldError) setFieldError('');
+                      }}
+                      disabled={loading || credentialGroupOptions.length === 0}
+                      size="md"
+                      fullWidth
+                      placeholder="请选择凭证分组"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">
+                      端点归属到该分组后复用其中的 API Key 与默认倍率
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                      端点名称 <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={name}
+                      onChange={(event) => {
+                        setName(event.target.value);
+                        if (fieldError) setFieldError('');
+                      }}
+                      placeholder="e.g. api-primary"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">同一凭证分组下端点名称唯一，仅作 UI 标识</p>
+                  </div>
+
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">
+                      URL <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={baseURL}
+                      onChange={(event) => {
+                        setBaseURL(event.target.value);
+                        if (fieldError) setFieldError('');
+                      }}
+                      placeholder="https://api.example.com"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    <p className="mt-1 text-xs text-slate-400">
+                      端点只保存线路信息；API Key 与计费倍率来自上方凭证分组
+                    </p>
+                  </div>
                 </div>
-              </>
+              </div>
             ) : (
-              <>
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">路由配置</h3>
+
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">优先级</label>
@@ -1029,14 +1098,17 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       min="0"
                       value={priority}
                       onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      placeholder="0 = 最高优先级"
+                      disabled={!isEdit || loading}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                      placeholder={isEdit ? '0 = 最高优先级' : '自动分配'}
                     />
-                    <p className="mt-1 text-xs text-slate-400">数字越小越优先，相同则交换。</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {isEdit ? '0 = 最高优先级，数字越小越优先，相同则交换' : '新建时自动按当前渠道最大优先级递增'}
+                    </p>
                   </div>
 
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">超时（秒）</label>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">超时时间 (秒)</label>
                     <input
                       type="number"
                       min="0"
@@ -1046,42 +1118,41 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                         setTimeoutSeconds(event.target.value);
                         if (fieldError) setFieldError('');
                       }}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      placeholder="0 = 使用全局默认"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      placeholder="默认: 300 (全局配置)"
                     />
-                    <p className="mt-1 text-xs text-slate-400">0 表示使用设置中的全局超时时间。</p>
+                    <p className="mt-1 text-xs text-slate-400">单次请求的最大等待时间，0 使用全局配置</p>
                   </div>
                 </div>
 
-                <div
-                  onClick={() => setFailoverEnabled(!failoverEnabled)}
-                  className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
-                    failoverEnabled
-                      ? 'border-indigo-200 bg-indigo-50'
-                      : 'border-slate-200 bg-slate-50 hover:border-slate-300'
-                  }`}
-                >
-                  <span className={`text-sm font-medium ${failoverEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
-                    参与故障转移
-                  </span>
-                  <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
-                    failoverEnabled ? 'bg-indigo-500' : 'bg-slate-300'
-                  }`}>
-                    <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                      failoverEnabled ? 'translate-x-5' : 'translate-x-0'
-                    }`} />
-                  </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Tooltip content="关闭后该端点不会参与同一渠道内的端点故障转移" className="block">
+                    <EndpointToggleTile
+                      label="参与渠道内故障转移"
+                      checked={failoverEnabled}
+                      onChange={setFailoverEnabled}
+                      disabled={loading}
+                    />
+                  </Tooltip>
+                  <Tooltip content="部分中转商不支持健康检查端点，开启后将跳过定时健康检测" className="block">
+                    <EndpointToggleTile
+                      label="跳过健康检查"
+                      checked={skipHealthCheck}
+                      onChange={setSkipHealthCheck}
+                      disabled={loading}
+                    />
+                  </Tooltip>
                 </div>
-              </>
+              </div>
             )}
           </div>
 
-          <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
-            <Button variant="secondary" onClick={onCancel} disabled={loading}>
+          <div className="flex flex-shrink-0 items-center justify-end gap-3 border-t border-slate-100 bg-white px-6 py-4">
+            <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>
               取消
             </Button>
-            <Button variant="primary" icon={isEdit ? Pencil : Plus} loading={loading} type="submit">
-              {isEdit ? '保存修改' : '添加端点'}
+            <Button variant="primary" icon={isEdit ? Pencil : Save} loading={loading} type="submit">
+              {isEdit ? '保存修改' : '创建端点'}
             </Button>
           </div>
         </form>
@@ -2611,7 +2682,7 @@ const CodexPage = () => {
     setEndpointFormError('');
   };
 
-  const handleSaveEndpoint = async ({ name, baseURL, credentialGroupId, failoverEnabled, priority, timeoutSeconds }) => {
+  const handleSaveEndpoint = async ({ name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
@@ -2622,6 +2693,7 @@ const CodexPage = () => {
           baseURL,
           credentialGroupId,
           failoverEnabled,
+          skipHealthCheck,
           priority,
           timeoutSeconds
         });
@@ -2645,6 +2717,7 @@ const CodexPage = () => {
         name,
         baseURL,
         failoverEnabled,
+        skipHealthCheck,
         priority,
         timeoutSeconds
       });

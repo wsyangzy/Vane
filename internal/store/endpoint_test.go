@@ -33,7 +33,8 @@ func createTestDB(t *testing.T) (*sql.DB, func()) {
 		CREATE TABLE IF NOT EXISTS endpoints (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			channel TEXT NOT NULL,
-			name TEXT UNIQUE NOT NULL,
+			credential_group_id INTEGER,
+			name TEXT NOT NULL,
 			url TEXT NOT NULL,
 			token TEXT,
 			api_key TEXT,
@@ -56,8 +57,13 @@ func createTestDB(t *testing.T) (*sql.DB, func()) {
 			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 		);
 		CREATE INDEX IF NOT EXISTS idx_endpoints_channel ON endpoints(channel);
+		CREATE INDEX IF NOT EXISTS idx_endpoints_credential_group ON endpoints(credential_group_id);
 		CREATE INDEX IF NOT EXISTS idx_endpoints_priority ON endpoints(priority);
 		CREATE INDEX IF NOT EXISTS idx_endpoints_enabled ON endpoints(enabled);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_unique_group_name
+			ON endpoints(channel, credential_group_id, name) WHERE credential_group_id IS NOT NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_unique_legacy_name
+			ON endpoints(channel, name) WHERE credential_group_id IS NULL;
 	`
 
 	if _, err := db.Exec(schema); err != nil {

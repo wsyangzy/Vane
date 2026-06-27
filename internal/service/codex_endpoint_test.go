@@ -143,6 +143,7 @@ func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
 		Name:              "second",
 		BaseURL:           "https://example.invalid/second/v1",
 		FailoverEnabled:   true,
+		Priority:          0,
 	})
 	if err != nil {
 		t.Fatalf("create second endpoint: %v", err)
@@ -150,6 +151,58 @@ func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
 
 	if first.Priority != 1 || second.Priority != 2 {
 		t.Fatalf("expected priorities 1 and 2, got %d and %d", first.Priority, second.Priority)
+	}
+}
+
+func TestCodexEndpointCreateAutoAssignsAfterExistingPriority(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+
+	_, err = endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "first",
+		BaseURL:           "https://example.invalid/first/v1",
+		FailoverEnabled:   true,
+		Priority:          5,
+	})
+	if err != nil {
+		t.Fatalf("create first endpoint: %v", err)
+	}
+	created, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "second",
+		BaseURL:           "https://example.invalid/second/v1",
+		FailoverEnabled:   true,
+		Priority:          0,
+	})
+	if err != nil {
+		t.Fatalf("create second endpoint: %v", err)
+	}
+	if created.Priority != 6 {
+		t.Fatalf("expected auto-assigned priority 6, got %d", created.Priority)
 	}
 }
 

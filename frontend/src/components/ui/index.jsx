@@ -108,7 +108,7 @@ export const KPICard = ({
             <div className={`rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor} ${iconContainerClassName}`}>
               <Icon size={resolvedIconSize} className={iconClassName} />
             </div>
-            <h3 className={`whitespace-nowrap text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'} ${titleClassName}`}>{title}</h3>
+            <h3 className={`${wrapTitle ? 'whitespace-normal break-words leading-snug' : 'whitespace-nowrap'} text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'} ${titleClassName}`}>{title}</h3>
           </div>
           <div
             className={`min-w-0 flex-1 text-right font-bold text-slate-900 cursor-default ${wrapValue ? 'whitespace-normal break-all leading-snug' : 'truncate'} ${isLarge ? 'text-[1.2rem]' : 'text-lg'} ${isLarge && wrapValue ? 'text-[1.05rem]' : ''} ${!isLarge && wrapValue ? 'text-base' : ''} ${valueClassName}`}

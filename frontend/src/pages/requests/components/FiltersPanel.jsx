@@ -46,12 +46,6 @@ const ChannelCascadeSelect = ({ groups = [], value = '', provider = '', onChange
   const [hoverProvider, setHoverProvider] = useState(activeProvider);
 
   useEffect(() => {
-    if (isOpen) {
-      setHoverProvider(activeProvider);
-    }
-  }, [activeProvider, isOpen]);
-
-  useEffect(() => {
     const handleClickOutside = (event) => {
       if (rootRef.current && !rootRef.current.contains(event.target)) {
         setIsOpen(false);
@@ -88,7 +82,11 @@ const ChannelCascadeSelect = ({ groups = [], value = '', provider = '', onChange
     <div ref={rootRef} className={`relative ${className}`}>
       <button
         type="button"
-        onClick={() => setIsOpen(prev => !prev)}
+        onClick={() => {
+          const nextOpen = !isOpen;
+          if (nextOpen) setHoverProvider(activeProvider);
+          setIsOpen(nextOpen);
+        }}
         className={`
           group inline-flex w-full min-w-[132px] items-center justify-between rounded-lg border bg-white
           px-2.5 py-1.5 text-xs font-medium transition-all duration-200
@@ -192,8 +190,7 @@ const ChannelCascadeSelect = ({ groups = [], value = '', provider = '', onChange
  * @param {Array} props.channels - 渠道列表（支持扁平数组或分组结构 [{provider, label, channels}]）
  * @param {Array} props.endpoints - 端点列表
  */
-const FiltersPanel = ({
-  isOpen,
+const FiltersPanelContent = ({
   onClose,
   filters,
   onApply,
@@ -205,14 +202,6 @@ const FiltersPanel = ({
   const [draftFilters, setDraftFilters] = useState(filters);
 
   useEffect(() => {
-    if (isOpen) {
-      setDraftFilters(filters);
-    }
-  }, [filters, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return undefined;
-
     const handleClickOutside = (event) => {
       if (panelRef.current && !panelRef.current.contains(event.target)) {
         onClose?.();
@@ -221,7 +210,7 @@ const FiltersPanel = ({
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen, onClose]);
+  }, [onClose]);
 
   const updateDraftFilter = (key, value) => {
     setDraftFilters(prev => ({ ...prev, [key]: value }));
@@ -259,8 +248,6 @@ const FiltersPanel = ({
     }).filter(opt => opt.value);
     return [{ value: '', label: '所有端点' }, ...options];
   }, [draftFilters.channel, draftFilters.provider, endpoints]);
-
-  if (!isOpen) return null;
 
   // 快捷时间范围按钮（暂时移除，太占空间）
   // const quickTimeRanges = ['今天', '昨天', '近1小时', '近24小时', '本周'];
@@ -391,6 +378,11 @@ const FiltersPanel = ({
       </div>
     </div>
   );
+};
+
+const FiltersPanel = ({ isOpen, ...props }) => {
+  if (!isOpen) return null;
+  return <FiltersPanelContent {...props} />;
 };
 
 export default FiltersPanel;

@@ -77,13 +77,18 @@ const KPICardsGrid = ({ data }) => {
   }, [])
 
   useEffect(() => {
-    loadProviderStats()
-    loadCodexChannelStats()
+    const initialLoad = setTimeout(() => {
+      loadProviderStats()
+      loadCodexChannelStats()
+    }, 0)
     const interval = setInterval(() => {
       loadProviderStats()
       loadCodexChannelStats()
     }, 30000)
-    return () => clearInterval(interval)
+    return () => {
+      clearTimeout(initialLoad)
+      clearInterval(interval)
+    }
   }, [loadProviderStats, loadCodexChannelStats])
 
   const endpointList = Array.isArray(endpoints.endpoints) ? endpoints.endpoints : []
