@@ -318,6 +318,10 @@ func (ut *UsageTracker) QueryUsageSummary(ctx context.Context, opts *QueryOption
 		query += " AND group_name = ?"
 		args = append(args, opts.GroupName)
 	}
+	if opts.Provider != "" {
+		query += " AND provider = ?"
+		args = append(args, opts.Provider)
+	}
 
 	query += " ORDER BY date DESC, total_cost_usd DESC"
 
@@ -718,6 +722,37 @@ func (ut *UsageTracker) InvalidateUsageStatsCache() int {
 		return 0
 	}
 	return ut.usageStatsCache.Invalidate(appcache.InvalidateOptions{All: true})
+}
+
+// ConfigureDBCountFallbackCache applies runtime cache options for request count fallback.
+func (ut *UsageTracker) ConfigureDBCountFallbackCache(options appcache.Options) {
+	if ut == nil {
+		return
+	}
+	if options.Name == "" {
+		options.Name = "requests:count-fallback"
+	}
+	if ut.dbCountFallbackCache == nil {
+		ut.dbCountFallbackCache = appcache.New[int](options)
+		return
+	}
+	ut.dbCountFallbackCache.SetOptions(options)
+}
+
+// DBCountFallbackCache returns the managed cache instance for app-level registry wiring.
+func (ut *UsageTracker) DBCountFallbackCache() appcache.ManagedCache {
+	if ut == nil || ut.dbCountFallbackCache == nil {
+		return nil
+	}
+	return ut.dbCountFallbackCache
+}
+
+// InvalidateDBCountFallbackCache clears cached DB count fallback values.
+func (ut *UsageTracker) InvalidateDBCountFallbackCache() int {
+	if ut == nil || ut.dbCountFallbackCache == nil {
+		return 0
+	}
+	return ut.dbCountFallbackCache.Invalidate(appcache.InvalidateOptions{All: true})
 }
 
 func (ut *UsageTracker) queryUsageStatsTotalsCached(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {

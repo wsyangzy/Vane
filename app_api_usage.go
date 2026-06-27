@@ -179,7 +179,12 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 	a.ensureCacheRegistry()
 	cacheKey := fmt.Sprintf("history|provider=%s|start=%s|end=%s", provider, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano))
 	return a.usageHistoryCache.GetOrLoad(cacheKey, func() (UsageSummary, error) {
-		summaries, err := usageTracker.GetUsageSummary(ctx, startTime, endTime)
+		summaries, err := usageTracker.QueryUsageSummary(ctx, &tracking.QueryOptions{
+			StartDate: &startTime,
+			EndDate:   &endTime,
+			Provider:  provider,
+			Limit:     100,
+		})
 		if err != nil {
 			return UsageSummary{}, err
 		}

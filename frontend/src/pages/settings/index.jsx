@@ -26,6 +26,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { Button, ErrorMessage, ConfirmDialog } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 import { SettingItem, SettingsSection, PortInfo } from './components';
 import {
   isWailsEnvironment,
@@ -77,6 +78,12 @@ const formatCacheHitRate = (hits = 0, misses = 0) => {
   return `${((hits / total) * 100).toFixed(1)}%`;
 };
 
+const formatCacheCapacity = (cache) => {
+  const size = cache?.size ?? 0;
+  const maxEntries = cache?.maxEntries ?? 0;
+  return maxEntries > 0 ? `${size}/${maxEntries}` : `${size}/不限`;
+};
+
 const formatCacheTime = (value) => {
   if (!value) return '-';
   const date = new Date(value);
@@ -99,139 +106,225 @@ const CacheStatusPanel = ({
   onRefresh,
   onClear
 }) => {
+  const [modalOpen, setModalOpen] = useState(false);
   const caches = status?.caches || [];
   const totalHits = caches.reduce((sum, item) => sum + (item.hits || 0), 0);
   const totalMisses = caches.reduce((sum, item) => sum + (item.misses || 0), 0);
   const totalSize = caches.reduce((sum, item) => sum + (item.size || 0), 0);
   const clearAllKey = getCacheClearKey([]);
+  const summaryText = loading
+    ? '正在刷新状态...'
+    : `${caches.length} 组 · ${totalSize} 项 · 命中率 ${formatCacheHitRate(totalHits, totalMisses)}`;
+
+  useEffect(() => {
+    if (!modalOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [modalOpen]);
 
   return (
-    <div className="mt-6 pt-5 border-t border-slate-100">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
+    <>
+      <div className="mt-4 rounded-xl bg-slate-50/80 px-3 py-2.5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold ring-1 ring-inset ${
+                status?.enabled
+                  ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                  : 'bg-slate-100 text-slate-500 ring-slate-200'
+              }`}>
+                {status?.enabled ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+                {status?.enabled ? '缓存已启用' : '缓存已禁用'}
+              </span>
+              <span className="text-xs font-medium text-slate-500">
+                {summaryText}
+              </span>
+            </div>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
-              status?.enabled
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-slate-200 bg-slate-50 text-slate-500'
-            }`}>
-              {status?.enabled ? '缓存已启用' : '缓存已禁用'}
-            </span>
-            <span className="text-xs font-medium text-slate-500">
-              {caches.length} 组 · {totalSize} 项 · 命中率 {formatCacheHitRate(totalHits, totalMisses)}
-            </span>
+            <Button
+              icon={Gauge}
+              variant="secondary"
+              size="sm"
+              onClick={() => setModalOpen(true)}
+              aria-haspopup="dialog"
+            >
+              查看状态明细
+            </Button>
+            <Button
+              icon={RefreshCw}
+              variant="secondary"
+              size="sm"
+              onClick={onRefresh}
+              disabled={loading || Boolean(clearing)}
+            >
+              刷新状态
+            </Button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            icon={RefreshCw}
-            variant="secondary"
-            size="sm"
-            onClick={onRefresh}
-            disabled={loading || Boolean(clearing)}
-          >
-            刷新状态
-          </Button>
-          <Button
-            icon={Trash2}
-            variant="dangerSoft"
-            size="sm"
-            onClick={() => onClear([])}
-            disabled={loading || Boolean(clearing) || caches.length === 0}
-            loading={clearing === clearAllKey}
-          >
-            清理全部
-          </Button>
-        </div>
+
+        {error && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            <AlertCircle size={15} />
+            <span className="min-w-0 break-words">{error}</span>
+          </div>
+        )}
       </div>
 
-      {error && (
-        <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          <AlertCircle size={15} />
-          <span className="min-w-0 break-words">{error}</span>
-        </div>
-      )}
+      {modalOpen && renderModalPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm animate-fade-in"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setModalOpen(false);
+          }}
+        >
+          <div
+            className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cache-status-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
+                  <Gauge size={20} />
+                </div>
+                <div className="min-w-0">
+                  <h2 id="cache-status-title" className="text-lg font-semibold text-slate-900">
+                    缓存运行状态
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {summaryText} · 占用/上限表示当前 key 数 / 自动淘汰上限
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  icon={RefreshCw}
+                  variant="secondary"
+                  size="sm"
+                  onClick={onRefresh}
+                  disabled={loading || Boolean(clearing)}
+                >
+                  刷新状态
+                </Button>
+                <Button
+                  icon={Trash2}
+                  variant="dangerSoft"
+                  size="sm"
+                  onClick={() => onClear([])}
+                  disabled={loading || Boolean(clearing) || caches.length === 0}
+                  loading={clearing === clearAllKey}
+                >
+                  清理全部
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setModalOpen(false)}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                  aria-label="关闭缓存状态弹窗"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
 
-      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-100">
-        <table className="w-full min-w-[760px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-400">
-            <tr>
-              <th className="px-3 py-2">名称</th>
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2">TTL</th>
-              <th className="px-3 py-2">容量</th>
-              <th className="px-3 py-2">命中率</th>
-              <th className="px-3 py-2">失效</th>
-              <th className="px-3 py-2">更新时间</th>
-              <th className="px-3 py-2 text-right">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
-            {loading && (
-              <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
-                  正在加载缓存状态...
-                </td>
-              </tr>
+            {error && (
+              <div className="mx-6 mt-4 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                <AlertCircle size={15} />
+                <span className="min-w-0 break-words">{error}</span>
+              </div>
             )}
-            {!loading && caches.length === 0 && (
+
+            <div className="overflow-auto p-6">
+              <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-400">
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
-                  暂无缓存状态
-                </td>
+                <th className="px-3 py-2">名称</th>
+                <th className="px-3 py-2">状态</th>
+                <th className="px-3 py-2">TTL</th>
+                <th className="px-3 py-2">占用/上限</th>
+                <th className="px-3 py-2">命中率</th>
+                <th className="px-3 py-2">失效</th>
+                <th className="px-3 py-2">更新时间</th>
+                <th className="px-3 py-2 text-right">操作</th>
               </tr>
-            )}
-            {!loading && caches.map((cache) => {
-              const rowClearKey = getCacheClearKey([cache.name]);
-              return (
-                <tr key={cache.name} className="text-slate-600">
-                  <td className="px-3 py-2">
-                    <span className="block max-w-[220px] truncate font-mono text-xs font-semibold text-slate-700">
-                      {cache.name}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                      cache.enabled
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {cache.enabled ? '启用' : '禁用'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500">{cache.ttl || '-'}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500">
-                    {cache.maxEntries > 0 ? `${cache.size}/${cache.maxEntries}` : cache.size}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500">
-                    {formatCacheHitRate(cache.hits, cache.misses)}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-slate-500">
-                    {cache.invalidations}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-500">
-                    <div className="whitespace-nowrap">{formatCacheTime(cache.lastUpdatedAt)}</div>
-                    <div className="whitespace-nowrap text-slate-400">清理 {formatCacheTime(cache.lastInvalidatedAt)}</div>
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <Button
-                      icon={Trash2}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onClear([cache.name])}
-                      disabled={Boolean(clearing)}
-                      loading={clearing === rowClearKey}
-                    >
-                      清理
-                    </Button>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {loading && (
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                    正在加载缓存状态...
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+              )}
+              {!loading && caches.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                    暂无缓存状态
+                  </td>
+                </tr>
+              )}
+              {!loading && caches.map((cache) => {
+                const rowClearKey = getCacheClearKey([cache.name]);
+                return (
+                  <tr key={cache.name} className="text-slate-600">
+                    <td className="px-3 py-2">
+                      <span className="block max-w-[220px] truncate font-mono text-xs font-semibold text-slate-700">
+                        {cache.name}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        cache.enabled
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {cache.enabled ? '启用' : '禁用'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{cache.ttl || '-'}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                      {formatCacheCapacity(cache)}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                      {formatCacheHitRate(cache.hits, cache.misses)}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                      {cache.invalidations}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-500">
+                      <div className="whitespace-nowrap">{formatCacheTime(cache.lastUpdatedAt)}</div>
+                      <div className="whitespace-nowrap text-slate-400">清理 {formatCacheTime(cache.lastInvalidatedAt)}</div>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <Button
+                        icon={Trash2}
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onClear([cache.name])}
+                        disabled={Boolean(clearing)}
+                        loading={clearing === rowClearKey}
+                      >
+                        清理
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 

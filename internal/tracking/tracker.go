@@ -484,7 +484,8 @@ type UsageTracker struct {
 
 	// usageStatsCache caches only DB aggregation totals. HotPool data is still
 	// added live on every QueryUsageStatsTotalsWithHotPool call.
-	usageStatsCache *appcache.Cache[UsageStatsTotals]
+	usageStatsCache      *appcache.Cache[UsageStatsTotals]
+	dbCountFallbackCache *appcache.Cache[int]
 
 	usageCacheInvalidatorMu sync.RWMutex
 	usageCacheInvalidator   func()
@@ -585,6 +586,11 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 			TTL:          5 * time.Second,
 			MaxEntries:   1000,
 			StaleOnError: true,
+		}),
+		dbCountFallbackCache: appcache.New[int](appcache.Options{
+			Name:       "requests:count-fallback",
+			MaxEntries: 1000,
+			Enabled:    true,
 		}),
 	}
 
@@ -2799,13 +2805,6 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 	return results, totalCount, nil
 }
 
-// dbCountCache 缓存上次成功的数据库总数（按 query options 签名分组）
-// 用于在 SQLITE_BUSY 等瞬时错误时降级，避免前端记录数突然跳变
-var (
-	dbCountCacheMu sync.RWMutex
-	dbCountCache   = map[string]int{}
-)
-
 // queryOptsCacheKey 为 QueryOptions 生成稳定的缓存 key
 func queryOptsCacheKey(opts *QueryOptions) string {
 	if opts == nil {
@@ -2819,16 +2818,29 @@ func queryOptsCacheKey(opts *QueryOptions) string {
 
 // getCachedDBCount 获取上次成功的 count（无缓存时返回 0）
 func (ut *UsageTracker) getCachedDBCount(opts *QueryOptions) int {
-	dbCountCacheMu.RLock()
-	defer dbCountCacheMu.RUnlock()
-	return dbCountCache[queryOptsCacheKey(opts)]
+	if ut == nil || ut.dbCountFallbackCache == nil {
+		return 0
+	}
+	count, ok := ut.dbCountFallbackCache.Get(queryOptsCacheKey(opts))
+	if !ok {
+		return 0
+	}
+	return count
 }
 
 // setCachedDBCount 缓存成功查询的 count
 func (ut *UsageTracker) setCachedDBCount(opts *QueryOptions, count int) {
-	dbCountCacheMu.Lock()
-	defer dbCountCacheMu.Unlock()
-	dbCountCache[queryOptsCacheKey(opts)] = count
+	if ut == nil {
+		return
+	}
+	if ut.dbCountFallbackCache == nil {
+		ut.dbCountFallbackCache = appcache.New[int](appcache.Options{
+			Name:       "requests:count-fallback",
+			MaxEntries: 1000,
+			Enabled:    true,
+		})
+	}
+	ut.dbCountFallbackCache.Set(queryOptsCacheKey(opts), count)
 }
 
 // getFilteredHotPoolRequests 获取过滤后的热池请求

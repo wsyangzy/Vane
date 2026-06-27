@@ -21,9 +21,11 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/utils"
 )
 
@@ -38,6 +40,12 @@ var (
 	portCheckCacheMap = make(map[string]portCheckCacheEntry) // key: "host:port"
 	portCheckCacheMu  sync.RWMutex
 	portCheckCacheTTL = 500 * time.Millisecond // 缓存有效期
+
+	portCheckCacheHits              atomic.Uint64
+	portCheckCacheMisses            atomic.Uint64
+	portCheckCacheExpired           atomic.Uint64
+	portCheckCacheInvalidations     atomic.Uint64
+	portCheckCacheLastInvalidatedAt time.Time
 )
 
 // ============================================================
@@ -110,6 +118,12 @@ var (
 	claudeCodeVersionCacheTime time.Time
 	claudeCodeVersionCacheTTL  = 5 * time.Minute // 缓存 5 分钟
 	claudeCodeVersionMu        sync.RWMutex
+
+	claudeCodeVersionCacheHits              atomic.Uint64
+	claudeCodeVersionCacheMisses            atomic.Uint64
+	claudeCodeVersionCacheExpired           atomic.Uint64
+	claudeCodeVersionCacheInvalidations     atomic.Uint64
+	claudeCodeVersionCacheLastInvalidatedAt time.Time
 )
 
 // GetClaudeCodeVersion 获取 Claude Code CLI 版本
@@ -120,9 +134,15 @@ func (a *App) GetClaudeCodeVersion() string {
 	if claudeCodeVersionCache != "" && time.Since(claudeCodeVersionCacheTime) < claudeCodeVersionCacheTTL {
 		cached := claudeCodeVersionCache
 		claudeCodeVersionMu.RUnlock()
+		claudeCodeVersionCacheHits.Add(1)
 		return cached
 	}
+	expired := claudeCodeVersionCache != ""
 	claudeCodeVersionMu.RUnlock()
+	if expired {
+		claudeCodeVersionCacheExpired.Add(1)
+	}
+	claudeCodeVersionCacheMisses.Add(1)
 
 	// 创建命令并配置 Windows 隐藏窗口
 	runClaudeCommand := func(args ...string) (string, error) {
@@ -192,6 +212,12 @@ var (
 	codexVersionCacheTime time.Time
 	codexVersionCacheTTL  = 5 * time.Minute // 缓存 5 分钟
 	codexVersionMu        sync.RWMutex
+
+	codexVersionCacheHits              atomic.Uint64
+	codexVersionCacheMisses            atomic.Uint64
+	codexVersionCacheExpired           atomic.Uint64
+	codexVersionCacheInvalidations     atomic.Uint64
+	codexVersionCacheLastInvalidatedAt time.Time
 )
 
 // GetCodexVersion 获取 Codex CLI 版本
@@ -202,9 +228,15 @@ func (a *App) GetCodexVersion() string {
 	if codexVersionCache != "" && time.Since(codexVersionCacheTime) < codexVersionCacheTTL {
 		cached := codexVersionCache
 		codexVersionMu.RUnlock()
+		codexVersionCacheHits.Add(1)
 		return cached
 	}
+	expired := codexVersionCache != ""
 	codexVersionMu.RUnlock()
+	if expired {
+		codexVersionCacheExpired.Add(1)
+	}
+	codexVersionCacheMisses.Add(1)
 
 	// 创建命令并配置 Windows 隐藏窗口
 	runCodexCommand := func(args ...string) (string, error) {
@@ -278,10 +310,13 @@ func (a *App) checkPortListening(host string, port int) bool {
 	if entry, ok := portCheckCacheMap[addr]; ok {
 		if time.Since(entry.timestamp) < portCheckCacheTTL {
 			portCheckCacheMu.RUnlock()
+			portCheckCacheHits.Add(1)
 			return entry.result
 		}
+		portCheckCacheExpired.Add(1)
 	}
 	portCheckCacheMu.RUnlock()
+	portCheckCacheMisses.Add(1)
 
 	// 缓存过期或不存在，执行真实检测
 	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
@@ -300,6 +335,131 @@ func (a *App) checkPortListening(host string, port int) bool {
 	portCheckCacheMu.Unlock()
 
 	return result
+}
+
+func portCheckCacheStats() appcache.Stats {
+	now := time.Now()
+	portCheckCacheMu.Lock()
+	for key, entry := range portCheckCacheMap {
+		if now.Sub(entry.timestamp) >= portCheckCacheTTL {
+			delete(portCheckCacheMap, key)
+			portCheckCacheExpired.Add(1)
+		}
+	}
+	lastUpdatedAt := time.Time{}
+	for _, entry := range portCheckCacheMap {
+		if entry.timestamp.After(lastUpdatedAt) {
+			lastUpdatedAt = entry.timestamp
+		}
+	}
+	stats := appcache.Stats{
+		Name:              cacheNameRuntimePortCheck,
+		Enabled:           true,
+		TTL:               portCheckCacheTTL,
+		Size:              len(portCheckCacheMap),
+		Hits:              portCheckCacheHits.Load(),
+		Misses:            portCheckCacheMisses.Load(),
+		Expired:           portCheckCacheExpired.Load(),
+		Invalidations:     portCheckCacheInvalidations.Load(),
+		LastUpdatedAt:     lastUpdatedAt,
+		LastInvalidatedAt: portCheckCacheLastInvalidatedAt,
+	}
+	portCheckCacheMu.Unlock()
+	return stats
+}
+
+func invalidatePortCheckCache() int {
+	portCheckCacheMu.Lock()
+	removed := len(portCheckCacheMap)
+	portCheckCacheMap = make(map[string]portCheckCacheEntry)
+	portCheckCacheLastInvalidatedAt = time.Now()
+	portCheckCacheMu.Unlock()
+	portCheckCacheInvalidations.Add(1)
+	return removed
+}
+
+func claudeCodeVersionCacheStats() appcache.Stats {
+	claudeCodeVersionMu.Lock()
+	if claudeCodeVersionCache != "" && time.Since(claudeCodeVersionCacheTime) >= claudeCodeVersionCacheTTL {
+		claudeCodeVersionCache = ""
+		claudeCodeVersionCacheTime = time.Time{}
+		claudeCodeVersionCacheExpired.Add(1)
+	}
+	size := 0
+	if claudeCodeVersionCache != "" {
+		size = 1
+	}
+	stats := appcache.Stats{
+		Name:              cacheNameRuntimeClaudeCLI,
+		Enabled:           true,
+		TTL:               claudeCodeVersionCacheTTL,
+		MaxEntries:        1,
+		Size:              size,
+		Hits:              claudeCodeVersionCacheHits.Load(),
+		Misses:            claudeCodeVersionCacheMisses.Load(),
+		Expired:           claudeCodeVersionCacheExpired.Load(),
+		Invalidations:     claudeCodeVersionCacheInvalidations.Load(),
+		LastUpdatedAt:     claudeCodeVersionCacheTime,
+		LastInvalidatedAt: claudeCodeVersionCacheLastInvalidatedAt,
+	}
+	claudeCodeVersionMu.Unlock()
+	return stats
+}
+
+func invalidateClaudeCodeVersionCache() int {
+	claudeCodeVersionMu.Lock()
+	removed := 0
+	if claudeCodeVersionCache != "" {
+		removed = 1
+	}
+	claudeCodeVersionCache = ""
+	claudeCodeVersionCacheTime = time.Time{}
+	claudeCodeVersionCacheLastInvalidatedAt = time.Now()
+	claudeCodeVersionMu.Unlock()
+	claudeCodeVersionCacheInvalidations.Add(1)
+	return removed
+}
+
+func codexVersionCacheStats() appcache.Stats {
+	codexVersionMu.Lock()
+	if codexVersionCache != "" && time.Since(codexVersionCacheTime) >= codexVersionCacheTTL {
+		codexVersionCache = ""
+		codexVersionCacheTime = time.Time{}
+		codexVersionCacheExpired.Add(1)
+	}
+	size := 0
+	if codexVersionCache != "" {
+		size = 1
+	}
+	stats := appcache.Stats{
+		Name:              cacheNameRuntimeCodexCLI,
+		Enabled:           true,
+		TTL:               codexVersionCacheTTL,
+		MaxEntries:        1,
+		Size:              size,
+		Hits:              codexVersionCacheHits.Load(),
+		Misses:            codexVersionCacheMisses.Load(),
+		Expired:           codexVersionCacheExpired.Load(),
+		Invalidations:     codexVersionCacheInvalidations.Load(),
+		LastUpdatedAt:     codexVersionCacheTime,
+		LastInvalidatedAt: codexVersionCacheLastInvalidatedAt,
+	}
+	codexVersionMu.Unlock()
+	return stats
+}
+
+func invalidateCodexVersionCache() int {
+	codexVersionMu.Lock()
+	removed := 0
+	if codexVersionCache != "" {
+		removed = 1
+	}
+	codexVersionCache = ""
+	codexVersionCacheTime = time.Time{}
+	codexVersionCacheLastInvalidatedAt = time.Now()
+	codexVersionMu.Unlock()
+	codexVersionCacheInvalidations.Add(1)
+	return removed
 }
 
 // ============================================================

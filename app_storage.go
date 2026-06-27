@@ -65,7 +65,7 @@ func (a *App) setupUsageTracker() {
 	}
 	a.usageTracker.SetUsageCacheInvalidationCallback(a.invalidateUsageQueryCaches)
 	if a.cacheRegistry != nil {
-		a.cacheRegistry.Register(a.usageTracker.UsageStatsCache())
+		a.registerUsageTrackerCaches()
 	}
 
 	a.logger.Info("📊 使用追踪已启用", "database", dbPath)

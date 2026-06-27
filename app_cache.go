@@ -15,6 +15,10 @@ const (
 	cacheNameTokenUsage          = "usage:token"
 	cacheNameEndpointCostToday   = "endpoint-cost:today"
 	cacheNameEndpointCostHistory = "endpoint-cost:history"
+	cacheNameRequestCount        = "requests:count-fallback"
+	cacheNameRuntimePortCheck    = "runtime:port-check"
+	cacheNameRuntimeClaudeCLI    = "runtime:claude-cli-version"
+	cacheNameRuntimeCodexCLI     = "runtime:codex-cli-version"
 )
 
 type usageSummaryDBSnapshot struct {
@@ -113,6 +117,7 @@ func (a *App) setupCacheRegistry() {
 	a.cacheRegistry.Register(a.tokenUsageCache)
 	a.cacheRegistry.Register(a.endpointCostTodayCache)
 	a.cacheRegistry.Register(a.endpointCostHistoryCache)
+	a.registerRuntimeStatusCaches()
 }
 
 func (a *App) registerModelPricingCache() {
@@ -125,6 +130,39 @@ func (a *App) registerModelPricingCache() {
 		stats:      service.CacheStats,
 		invalidate: service.InvalidateCache,
 	})
+}
+
+func (a *App) registerRuntimeStatusCaches() {
+	if a == nil || a.cacheRegistry == nil {
+		return
+	}
+	a.cacheRegistry.Register(externalCacheAdapter{
+		name:       cacheNameRuntimePortCheck,
+		stats:      portCheckCacheStats,
+		invalidate: invalidatePortCheckCache,
+	})
+	a.cacheRegistry.Register(externalCacheAdapter{
+		name:       cacheNameRuntimeClaudeCLI,
+		stats:      claudeCodeVersionCacheStats,
+		invalidate: invalidateClaudeCodeVersionCache,
+	})
+	a.cacheRegistry.Register(externalCacheAdapter{
+		name:       cacheNameRuntimeCodexCLI,
+		stats:      codexVersionCacheStats,
+		invalidate: invalidateCodexVersionCache,
+	})
+}
+
+func (a *App) registerUsageTrackerCaches() {
+	if a == nil || a.cacheRegistry == nil || a.usageTracker == nil {
+		return
+	}
+	if usageStatsCache := a.usageTracker.UsageStatsCache(); usageStatsCache != nil {
+		a.cacheRegistry.Register(usageStatsCache)
+	}
+	if countCache := a.usageTracker.DBCountFallbackCache(); countCache != nil {
+		a.cacheRegistry.Register(countCache)
+	}
 }
 
 func (a *App) ensureCacheRegistry() {
@@ -184,9 +222,8 @@ func (a *App) applyCacheSettings(ctx context.Context) {
 
 	if a.usageTracker != nil {
 		a.usageTracker.ConfigureUsageStatsCache(cacheOptions(cacheNameUsageStats, settings.UsageStatsTTL, settings))
-		if usageStatsCache := a.usageTracker.UsageStatsCache(); usageStatsCache != nil {
-			a.cacheRegistry.Register(usageStatsCache)
-		}
+		a.usageTracker.ConfigureDBCountFallbackCache(cacheOptions(cacheNameRequestCount, 0, settings))
+		a.registerUsageTrackerCaches()
 	}
 }
 
@@ -211,6 +248,7 @@ func (a *App) invalidateUsageQueryCaches() {
 	}
 	if a.usageTracker != nil {
 		a.usageTracker.InvalidateUsageStatsCache()
+		a.usageTracker.InvalidateDBCountFallbackCache()
 	}
 }
 
@@ -218,6 +256,8 @@ func (a *App) GetCacheStatus() (CacheStatus, error) {
 	if a.cacheRegistry == nil {
 		a.setupCacheRegistry()
 	}
+	a.registerRuntimeStatusCaches()
+	a.registerUsageTrackerCaches()
 	a.registerModelPricingCache()
 
 	status := CacheStatus{Enabled: true}
@@ -239,6 +279,8 @@ func (a *App) ClearCache(input ClearCacheInput) (CacheClearResult, error) {
 	if a.cacheRegistry == nil {
 		a.setupCacheRegistry()
 	}
+	a.registerRuntimeStatusCaches()
+	a.registerUsageTrackerCaches()
 	a.registerModelPricingCache()
 	result := a.cacheRegistry.Clear(appcache.ClearOptions{Names: input.Names})
 	return CacheClearResult{

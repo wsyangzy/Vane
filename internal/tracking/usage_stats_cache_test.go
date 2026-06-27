@@ -105,6 +105,59 @@ func TestUsageStatsCacheKeyIncludesProviderAndDateRange(t *testing.T) {
 	}
 }
 
+func TestQueryUsageSummaryFiltersProvider(t *testing.T) {
+	tracker := newUsageStatsCacheTestTracker(t)
+	defer tracker.Close()
+
+	persistCompletedRequest(t, tracker, "summary-claude-1", "claude", "model-a", 100, 50)
+	persistCompletedRequest(t, tracker, "summary-codex-1", "codex", "model-b", 200, 75)
+	tracker.updateUsageSummary()
+
+	start := time.Now().Add(-time.Hour)
+	end := time.Now().Add(time.Hour)
+	ctx := context.Background()
+
+	claudeSummaries, err := tracker.QueryUsageSummary(ctx, &QueryOptions{StartDate: &start, EndDate: &end, Provider: "claude"})
+	if err != nil {
+		t.Fatalf("claude usage summary failed: %v", err)
+	}
+	if total := usageSummaryRequestCount(claudeSummaries); total != 1 {
+		t.Fatalf("expected 1 claude summary request, got %d", total)
+	}
+
+	codexSummaries, err := tracker.QueryUsageSummary(ctx, &QueryOptions{StartDate: &start, EndDate: &end, Provider: "codex"})
+	if err != nil {
+		t.Fatalf("codex usage summary failed: %v", err)
+	}
+	if total := usageSummaryRequestCount(codexSummaries); total != 1 {
+		t.Fatalf("expected 1 codex summary request, got %d", total)
+	}
+}
+
+func TestDBCountFallbackCacheIsManaged(t *testing.T) {
+	tracker := newUsageStatsCacheTestTracker(t)
+	defer tracker.Close()
+
+	opts := &QueryOptions{Provider: "claude", Status: "success"}
+	tracker.setCachedDBCount(opts, 42)
+
+	if got := tracker.getCachedDBCount(opts); got != 42 {
+		t.Fatalf("expected cached DB count 42, got %d", got)
+	}
+	if managed := tracker.DBCountFallbackCache(); managed == nil {
+		t.Fatal("expected DB count fallback cache to be managed")
+	} else if stats := managed.Stats(); stats.Name != "requests:count-fallback" || stats.Size != 1 {
+		t.Fatalf("unexpected count fallback stats: name=%q size=%d", stats.Name, stats.Size)
+	}
+
+	if removed := tracker.InvalidateDBCountFallbackCache(); removed != 1 {
+		t.Fatalf("expected one count fallback entry to be invalidated, got %d", removed)
+	}
+	if got := tracker.getCachedDBCount(opts); got != 0 {
+		t.Fatalf("expected empty fallback count after invalidation, got %d", got)
+	}
+}
+
 func newUsageStatsCacheTestTracker(t *testing.T) *UsageTracker {
 	t.Helper()
 
@@ -134,6 +187,14 @@ func newUsageStatsCacheTestTracker(t *testing.T) *UsageTracker {
 		t.Fatalf("NewUsageTracker failed: %v", err)
 	}
 	return tracker
+}
+
+func usageSummaryRequestCount(summaries []UsageSummary) int {
+	total := 0
+	for _, summary := range summaries {
+		total += summary.RequestCount
+	}
+	return total
 }
 
 func persistCompletedRequest(t *testing.T, tracker *UsageTracker, requestID, provider, model string, input, output int64) {
