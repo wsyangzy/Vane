@@ -20,7 +20,7 @@ import (
 type ModelPricingInfo struct {
 	ID                   int64   `json:"id"`
 	ModelName            string  `json:"model_name"`
-	Provider             string  `json:"provider"`                // 提供商: claude/codex
+	Provider             string  `json:"provider"` // 提供商: claude/codex
 	DisplayName          string  `json:"display_name"`
 	Description          string  `json:"description"`
 	InputPrice           float64 `json:"input_price"`             // USD per 1M tokens
@@ -222,6 +222,7 @@ func (a *App) CreateModelPricing(input CreateModelPricingInput) error {
 	if err != nil {
 		return fmt.Errorf("创建模型定价失败: %w", err)
 	}
+	a.syncPricingToTracker(ctx)
 
 	if logger != nil {
 		logger.Info("✅ 模型定价已创建", "model", input.ModelName, "provider", provider)
@@ -266,6 +267,7 @@ func (a *App) UpdateModelPricing(modelName string, input CreateModelPricingInput
 	if err := modelPricingService.UpdatePricing(ctx, record); err != nil {
 		return fmt.Errorf("更新模型定价失败: %w", err)
 	}
+	a.syncPricingToTracker(ctx)
 
 	if logger != nil {
 		logger.Info("✅ 模型定价已更新", "model", modelName, "provider", provider)
@@ -292,6 +294,7 @@ func (a *App) DeleteModelPricing(modelName string) error {
 	if err := modelPricingService.DeletePricing(ctx, modelName); err != nil {
 		return fmt.Errorf("删除模型定价失败: %w", err)
 	}
+	a.syncPricingToTracker(ctx)
 
 	if logger != nil {
 		logger.Info("✅ 模型定价已删除", "model", modelName)
@@ -318,6 +321,7 @@ func (a *App) SetDefaultModelPricing(modelName string) error {
 	if err := modelPricingService.SetDefaultPricing(ctx, modelName); err != nil {
 		return fmt.Errorf("设置默认定价失败: %w", err)
 	}
+	a.syncPricingToTracker(ctx)
 
 	if logger != nil {
 		logger.Info("✅ 已设置默认模型定价", "model", modelName)

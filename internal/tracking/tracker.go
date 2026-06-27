@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
+	appcache "ai-relay-forwarder/internal/cache"
 	_ "modernc.org/sqlite"
 )
 
@@ -480,6 +481,13 @@ type UsageTracker struct {
 	// 🔧 [P6] 内存计数器：替代高频 count 查询，避免 SQLITE_BUSY
 	// 仅支持 total / by-provider 维度的过滤；其他过滤条件回退到 DB 查询
 	dbCounter *DBRequestCounter
+
+	// usageStatsCache caches only DB aggregation totals. HotPool data is still
+	// added live on every QueryUsageStatsTotalsWithHotPool call.
+	usageStatsCache *appcache.Cache[UsageStatsTotals]
+
+	usageCacheInvalidatorMu sync.RWMutex
+	usageCacheInvalidator   func()
 }
 
 // NewUsageTracker 创建新的使用跟踪器
@@ -571,6 +579,13 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 		readDB:     readDB,
 		writeDB:    writeDB,
 		writeQueue: make(chan WriteRequest, config.BufferSize), // 与事件队列容量一致
+
+		usageStatsCache: appcache.New[UsageStatsTotals](appcache.Options{
+			Name:         "usage:stats",
+			TTL:          5 * time.Second,
+			MaxEntries:   1000,
+			StaleOnError: true,
+		}),
 	}
 
 	// 初始化错误处理器
@@ -679,6 +694,7 @@ func (ut *UsageTracker) initHotPool() {
 	}
 	ut.archiveManager = NewArchiveManager(ut.adapter, archiveConfig, ut.pricing, ut.location)
 	ut.archiveManager.SetWriteLocker(&ut.writeMu)
+	ut.archiveManager.SetArchiveSuccessCallback(ut.invalidateUsageCachesAfterArchive)
 
 	// 🔧 [P6 新增] 把内存计数器注入 ArchiveManager，归档成功后增量维护 total / by-provider
 	if ut.dbCounter != nil {
@@ -706,6 +722,36 @@ func (ut *UsageTracker) initHotPool() {
 
 	// 启动归档超时清理goroutine
 	ut.hotPool.StartArchivingCleanup()
+}
+
+// SetUsageCacheInvalidationCallback registers an external invalidator for app-level usage caches.
+func (ut *UsageTracker) SetUsageCacheInvalidationCallback(callback func()) {
+	if ut == nil {
+		return
+	}
+	ut.usageCacheInvalidatorMu.Lock()
+	ut.usageCacheInvalidator = callback
+	ut.usageCacheInvalidatorMu.Unlock()
+	if ut.archiveManager != nil {
+		ut.archiveManager.SetArchiveSuccessCallback(ut.invalidateUsageCachesAfterArchive)
+	}
+}
+
+func (ut *UsageTracker) invalidateUsageCachesAfterArchive() {
+	ut.invalidateUsageCaches()
+}
+
+func (ut *UsageTracker) invalidateUsageCaches() {
+	if ut == nil {
+		return
+	}
+	ut.InvalidateUsageStatsCache()
+	ut.usageCacheInvalidatorMu.RLock()
+	callback := ut.usageCacheInvalidator
+	ut.usageCacheInvalidatorMu.RUnlock()
+	if callback != nil {
+		callback()
+	}
 }
 
 // now 返回当前配置时区的时间

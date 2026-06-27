@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/codexproxy"
 	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/events"
@@ -56,6 +57,14 @@ type App struct {
 	loggingMiddleware    *middleware.LoggingMiddleware
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	authMiddleware       *middleware.AuthMiddleware
+
+	// 读路径缓存治理
+	cacheRegistry            *appcache.Registry
+	usageSummaryCache        *appcache.Cache[usageSummaryDBSnapshot]
+	usageHistoryCache        *appcache.Cache[UsageSummary]
+	tokenUsageCache          *appcache.Cache[TokenUsageData]
+	endpointCostTodayCache   *appcache.Cache[[]EndpointCostItem]
+	endpointCostHistoryCache *appcache.Cache[[]EndpointCostItem]
 
 	// 端点存储 (SQLite)
 	endpointStore   store.EndpointStore      // 端点数据持久化
@@ -139,6 +148,7 @@ func NewApp() *App {
 		startTime: time.Now(),
 		stopChan:  make(chan struct{}),
 	}
+	a.setupCacheRegistry()
 	a.appState.Store(int32(AppStateStarting))
 	return a
 }
@@ -2068,6 +2078,8 @@ func (a *App) applySettingsToConfig() {
 	if a.authMiddleware != nil {
 		a.authMiddleware.UpdateConfig(a.config.Auth)
 	}
+
+	a.applyCacheSettings(ctx)
 }
 
 // getSettingString 获取字符串设置值（带默认值）

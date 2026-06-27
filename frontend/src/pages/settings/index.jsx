@@ -21,7 +21,9 @@ import {
   Archive,
   X,
   FileText,
-  Map
+  Map,
+  Gauge,
+  Trash2
 } from 'lucide-react';
 import { Button, ErrorMessage, ConfirmDialog } from '@components/ui';
 import { SettingItem, SettingsSection, PortInfo } from './components';
@@ -31,7 +33,9 @@ import {
   getAllSettings,
   batchUpdateSettings,
   resetCategorySettings,
-  getPortInfo
+  getPortInfo,
+  getCacheStatus,
+  clearCache
 } from '@utils/wailsApi.js';
 import {
   fetchSettingCategories,
@@ -54,14 +58,181 @@ const CATEGORY_ICONS = {
   retention: Archive,
   // 🔧 [P5.5.5 新增] Logging / Timezone 分类图标
   logging: FileText,
-  timezone: Map
+  timezone: Map,
+  cache: Gauge
 };
 
-const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'failover', 'strategy'];
+const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'failover', 'strategy', 'cache'];
 
 const getCategoryOrder = (categoryName) => {
   const index = CATEGORY_ORDER.indexOf(categoryName);
   return index === -1 ? CATEGORY_ORDER.length : index;
+};
+
+const getCacheClearKey = (names = []) => (names.length > 0 ? names.join('|') : '__all__');
+
+const formatCacheHitRate = (hits = 0, misses = 0) => {
+  const total = hits + misses;
+  if (total <= 0) return '-';
+  return `${((hits / total) * 100).toFixed(1)}%`;
+};
+
+const formatCacheTime = (value) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+};
+
+const CacheStatusPanel = ({
+  status,
+  loading,
+  error,
+  clearing,
+  onRefresh,
+  onClear
+}) => {
+  const caches = status?.caches || [];
+  const totalHits = caches.reduce((sum, item) => sum + (item.hits || 0), 0);
+  const totalMisses = caches.reduce((sum, item) => sum + (item.misses || 0), 0);
+  const totalSize = caches.reduce((sum, item) => sum + (item.size || 0), 0);
+  const clearAllKey = getCacheClearKey([]);
+
+  return (
+    <div className="mt-6 pt-5 border-t border-slate-100">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${
+              status?.enabled
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-slate-50 text-slate-500'
+            }`}>
+              {status?.enabled ? '缓存已启用' : '缓存已禁用'}
+            </span>
+            <span className="text-xs font-medium text-slate-500">
+              {caches.length} 组 · {totalSize} 项 · 命中率 {formatCacheHitRate(totalHits, totalMisses)}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            icon={RefreshCw}
+            variant="secondary"
+            size="sm"
+            onClick={onRefresh}
+            disabled={loading || Boolean(clearing)}
+          >
+            刷新状态
+          </Button>
+          <Button
+            icon={Trash2}
+            variant="dangerSoft"
+            size="sm"
+            onClick={() => onClear([])}
+            disabled={loading || Boolean(clearing) || caches.length === 0}
+            loading={clearing === clearAllKey}
+          >
+            清理全部
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+          <AlertCircle size={15} />
+          <span className="min-w-0 break-words">{error}</span>
+        </div>
+      )}
+
+      <div className="mt-4 overflow-x-auto rounded-lg border border-slate-100">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-400">
+            <tr>
+              <th className="px-3 py-2">名称</th>
+              <th className="px-3 py-2">状态</th>
+              <th className="px-3 py-2">TTL</th>
+              <th className="px-3 py-2">容量</th>
+              <th className="px-3 py-2">命中率</th>
+              <th className="px-3 py-2">失效</th>
+              <th className="px-3 py-2">更新时间</th>
+              <th className="px-3 py-2 text-right">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {loading && (
+              <tr>
+                <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                  正在加载缓存状态...
+                </td>
+              </tr>
+            )}
+            {!loading && caches.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-3 py-6 text-center text-sm text-slate-400">
+                  暂无缓存状态
+                </td>
+              </tr>
+            )}
+            {!loading && caches.map((cache) => {
+              const rowClearKey = getCacheClearKey([cache.name]);
+              return (
+                <tr key={cache.name} className="text-slate-600">
+                  <td className="px-3 py-2">
+                    <span className="block max-w-[220px] truncate font-mono text-xs font-semibold text-slate-700">
+                      {cache.name}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                      cache.enabled
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {cache.enabled ? '启用' : '禁用'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-500">{cache.ttl || '-'}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                    {cache.maxEntries > 0 ? `${cache.size}/${cache.maxEntries}` : cache.size}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                    {formatCacheHitRate(cache.hits, cache.misses)}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs text-slate-500">
+                    {cache.invalidations}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-500">
+                    <div className="whitespace-nowrap">{formatCacheTime(cache.lastUpdatedAt)}</div>
+                    <div className="whitespace-nowrap text-slate-400">清理 {formatCacheTime(cache.lastInvalidatedAt)}</div>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <Button
+                      icon={Trash2}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onClear([cache.name])}
+                      disabled={Boolean(clearing)}
+                      loading={clearing === rowClearKey}
+                    >
+                      清理
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 };
 
 // ============================================
@@ -79,6 +250,10 @@ const SettingsPage = () => {
   const [saveMessage, setSaveMessage] = useState(null);
   const [initRetryAttempt, setInitRetryAttempt] = useState(0); // 初始化重试次数
   const [resetConfirm, setResetConfirm] = useState({ isOpen: false, category: '', label: '' }); // 重置确认弹窗
+  const [cacheStatus, setCacheStatus] = useState(null);
+  const [cacheLoading, setCacheLoading] = useState(false);
+  const [cacheClearing, setCacheClearing] = useState('');
+  const [cacheError, setCacheError] = useState(null);
 
   const isWails = isWailsEnvironment();
   const initRetryRef = useRef({ count: 0, timer: null });
@@ -111,21 +286,54 @@ const SettingsPage = () => {
       msg.includes('context deadline exceeded');
   }, []);
 
+  const loadCacheStatus = useCallback(async ({ silent = false } = {}) => {
+    if (!isWails) {
+      setCacheStatus(null);
+      setCacheError(null);
+      return null;
+    }
+
+    try {
+      if (!silent) {
+        setCacheLoading(true);
+      }
+      setCacheError(null);
+      const status = await getCacheStatus();
+      setCacheStatus(status);
+      return status;
+    } catch (err) {
+      const msg = err?.message || String(err) || '缓存状态加载失败';
+      setCacheError(msg);
+      return null;
+    } finally {
+      if (!silent) {
+        setCacheLoading(false);
+      }
+    }
+  }, [isWails]);
+
   // 加载设置数据
   const loadSettings = useCallback(async () => {
     let willRetry = false;
     try {
       setLoading(true);
+      setCacheLoading(isWails);
       setError(null);
+      setCacheError(null);
       setSaveMessage(null);
 
       let categoriesData, settingsData, portData;
+      let cacheData = null;
 
       if (isWails) {
-        [categoriesData, settingsData, portData] = await Promise.all([
+        [categoriesData, settingsData, portData, cacheData] = await Promise.all([
           getSettingCategories(),
           getAllSettings(),
-          getPortInfo()
+          getPortInfo(),
+          getCacheStatus().catch(err => {
+            setCacheError(err?.message || String(err) || '缓存状态加载失败');
+            return null;
+          })
         ]);
       } else {
         [categoriesData, settingsData, portData] = await Promise.all([
@@ -138,6 +346,7 @@ const SettingsPage = () => {
       setCategories(categoriesData || []);
       setSettings(settingsData || []);
       setPortInfo(portData);
+      setCacheStatus(cacheData);
       setChanges({});
       setInitRetryAttempt(0);
       initRetryRef.current.count = 0;
@@ -172,6 +381,7 @@ const SettingsPage = () => {
     } finally {
       if (!willRetry) {
         setLoading(false);
+        setCacheLoading(false);
         setInitRetryAttempt(0);
       }
     }
@@ -387,6 +597,9 @@ const SettingsPage = () => {
         settingsData = await fetchAllSettings();
       }
       setSettings(settingsData || []);
+      if (category === 'cache') {
+        await loadCacheStatus({ silent: true });
+      }
 
       // 清除该分类相关的未保存变更
       setChanges(prev => {
@@ -403,7 +616,7 @@ const SettingsPage = () => {
     } finally {
       setSaving(false);
     }
-  }, [resetConfirm, isWails, setAutoHideMessage]);
+  }, [resetConfirm, isWails, setAutoHideMessage, loadCacheStatus]);
 
   // 取消重置操作
   const cancelResetCategory = useCallback(() => {
@@ -427,6 +640,31 @@ const SettingsPage = () => {
     setChanges(newChanges);
     setAutoHideMessage({ type: 'info', text: '已撤销该项修改' });
   }, [changes, setAutoHideMessage]);
+
+  const handleClearCache = useCallback(async (names = []) => {
+    if (!isWails) return;
+
+    const targetNames = Array.isArray(names) ? names : [];
+    const clearKey = getCacheClearKey(targetNames);
+    try {
+      setCacheClearing(clearKey);
+      setCacheError(null);
+      const result = await clearCache(targetNames);
+      setAutoHideMessage({
+        type: 'success',
+        text: targetNames.length > 0
+          ? `已清理 ${targetNames.join(', ')}`
+          : `已清理 ${result.clearedEntries} 条缓存项`
+      });
+      await loadCacheStatus({ silent: true });
+    } catch (err) {
+      const msg = err?.message || String(err) || '清理缓存失败';
+      setCacheError(msg);
+      setSaveMessage({ type: 'error', text: msg });
+    } finally {
+      setCacheClearing('');
+    }
+  }, [isWails, loadCacheStatus, setAutoHideMessage]);
 
   // 添加快捷键支持 (Ctrl+S / Cmd+S)
   useEffect(() => {
@@ -685,6 +923,16 @@ const SettingsPage = () => {
                   />
                 );
               })}
+              {category.name === 'cache' && isWails && (
+                <CacheStatusPanel
+                  status={cacheStatus}
+                  loading={cacheLoading}
+                  error={cacheError}
+                  clearing={cacheClearing}
+                  onRefresh={() => loadCacheStatus()}
+                  onClear={handleClearCache}
+                />
+              )}
               {(!settingsByCategory[category.name] || settingsByCategory[category.name].filter(shouldShowSetting).length === 0) && (
                 <div className="text-sm text-slate-400 text-center py-4">
                   暂无设置项

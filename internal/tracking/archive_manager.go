@@ -63,6 +63,9 @@ type ArchiveManager struct {
 	// 用于避免高频 COUNT 查询触发 SQLITE_BUSY，可选注入（nil 时退化为无计数）。
 	dbCounter *DBRequestCounter
 
+	archiveSuccessMu       sync.RWMutex
+	archiveSuccessCallback func()
+
 	// 🔧 [P1.7 新增] 同步刷新请求通道
 	// Flush() 调用时向此 channel 发送一个回复 channel，
 	// archiver 收到后立即刷新当前批次并通过回复 channel 报告完成
@@ -145,6 +148,23 @@ func (am *ArchiveManager) SetWriteLocker(locker sync.Locker) {
 // 🔧 [P6 新增] 与 SetHotPool 同源，避免在构造函数添加新参数破坏调用方
 func (am *ArchiveManager) SetDBCounter(counter *DBRequestCounter) {
 	am.dbCounter = counter
+}
+
+// SetArchiveSuccessCallback registers a callback that runs only after a batch
+// has been successfully inserted into request_logs.
+func (am *ArchiveManager) SetArchiveSuccessCallback(callback func()) {
+	am.archiveSuccessMu.Lock()
+	am.archiveSuccessCallback = callback
+	am.archiveSuccessMu.Unlock()
+}
+
+func (am *ArchiveManager) notifyArchiveSuccess() {
+	am.archiveSuccessMu.RLock()
+	callback := am.archiveSuccessCallback
+	am.archiveSuccessMu.RUnlock()
+	if callback != nil {
+		callback()
+	}
 }
 
 // UpdateEndpointMultipliers 更新端点成本倍率
@@ -367,6 +387,7 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 				}
 				am.hotPool.ConfirmArchived(requestIDs)
 			}
+			am.notifyArchiveSuccess()
 			return nil
 		}
 
