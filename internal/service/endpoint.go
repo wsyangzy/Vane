@@ -46,7 +46,7 @@ func NewEndpointService(
 // CreateEndpoint 创建新端点
 // 1. 保存到数据库
 // 2. 添加到运行时管理器
-// 优先级自动递增（若未指定或为0，则设为渠道内最大优先级+1）
+// 优先级自动递增（若未指定或为0，则设为凭证分组内最大优先级+1）
 func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.EndpointRecord) (*store.EndpointRecord, error) {
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {
@@ -74,9 +74,9 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 
 	// 优先级自动递增
 	if record.Priority <= 0 {
-		maxPriority, err := s.store.GetMaxPriorityByChannel(ctx, record.Channel)
+		maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
 		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取渠道最大优先级失败: %v，使用默认值1", err))
+			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取凭证分组最大优先级失败: %v，使用默认值1", err))
 			record.Priority = 1
 		} else {
 			record.Priority = maxPriority + 1
@@ -187,24 +187,24 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		return fmt.Errorf("同一凭证分组内已存在相同的端点 URL，请修改 URL 或选择其他凭证分组")
 	}
 
-	// 渠道变更时，自动调整优先级为目标渠道的下一个可用值
-	// 避免转移后与目标渠道现有端点的优先级冲突
-	if record.Channel != existing.Channel {
-		maxPriority, err := s.store.GetMaxPriorityByChannel(ctx, record.Channel)
+	scopeChanged := record.Channel != existing.Channel || record.CredentialGroupID != existing.CredentialGroupID
+	// 渠道或凭证分组变更时，自动调整优先级为目标分组的下一个可用值。
+	if scopeChanged {
+		maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
 		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取目标渠道最大优先级失败: %v", err))
+			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取目标凭证分组最大优先级失败: %v", err))
 			maxPriority = 0
 		}
 		newPriority := maxPriority + 1
-		slog.Info(fmt.Sprintf("🔄 [EndpointService] 端点渠道变更: %s -> %s，优先级自动调整: %d -> %d",
-			existing.Channel, record.Channel, record.Priority, newPriority))
+		slog.Info(fmt.Sprintf("🔄 [EndpointService] 端点归属变更: %s/%d -> %s/%d，优先级自动调整: %d -> %d",
+			existing.Channel, existing.CredentialGroupID, record.Channel, record.CredentialGroupID, record.Priority, newPriority))
 		record.Priority = newPriority
 	}
 
 	// 优先级冲突检测与对调
-	// 仅当优先级发生变化且在同一渠道内时触发
-	if record.Priority != existing.Priority && record.Channel == existing.Channel {
-		conflicting, err := s.store.GetByChannelAndPriority(ctx, record.Channel, record.Priority)
+	// 仅当优先级发生变化且仍在同一凭证分组内时触发
+	if record.Priority != existing.Priority && !scopeChanged {
+		conflicting, err := s.store.GetByChannelCredentialGroupAndPriority(ctx, record.Channel, record.CredentialGroupID, record.Priority)
 		if err != nil {
 			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 检查优先级冲突失败: %v", err))
 		} else if conflicting != nil && conflicting.ID != record.ID {

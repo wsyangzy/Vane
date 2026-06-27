@@ -154,6 +154,65 @@ func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
 	}
 }
 
+func TestCodexEndpointCreatePriorityIsScopedToCredentialGroup(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+	otherGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "github",
+		ApiKey:    "sk-github",
+	})
+	if err != nil {
+		t.Fatalf("create other group: %v", err)
+	}
+
+	defaultEndpoint, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "default-first",
+		BaseURL:           "https://example.invalid/default-first/v1",
+		FailoverEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create default endpoint: %v", err)
+	}
+	otherEndpoint, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: otherGroup.ID,
+		Name:              "other-first",
+		BaseURL:           "https://example.invalid/other-first/v1",
+		FailoverEnabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("create other endpoint: %v", err)
+	}
+
+	if defaultEndpoint.Priority != 1 || otherEndpoint.Priority != 1 {
+		t.Fatalf("expected each credential group to start at priority 1, got default=%d other=%d", defaultEndpoint.Priority, otherEndpoint.Priority)
+	}
+}
+
 func TestCodexEndpointCreateAutoAssignsAfterExistingPriority(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexEndpointTestDB(t)
@@ -388,6 +447,179 @@ func TestCodexEndpointUpdateSwapsPriorityConflict(t *testing.T) {
 	}
 	if updatedFirst.Priority != 5 || updatedSecond.Priority != 1 {
 		t.Fatalf("expected priority swap, got first=%d second=%d", updatedFirst.Priority, updatedSecond.Priority)
+	}
+}
+
+func TestCodexEndpointUpdatePriorityConflictIsScopedToCredentialGroup(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+	otherGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "github",
+		ApiKey:    "sk-github",
+	})
+	if err != nil {
+		t.Fatalf("create other group: %v", err)
+	}
+	defaultEndpoint, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "default-first",
+		BaseURL:           "https://example.invalid/default-first/v1",
+		FailoverEnabled:   true,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("create default endpoint: %v", err)
+	}
+	otherEndpoint, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: otherGroup.ID,
+		Name:              "other-first",
+		BaseURL:           "https://example.invalid/other-first/v1",
+		FailoverEnabled:   true,
+		Priority:          5,
+	})
+	if err != nil {
+		t.Fatalf("create other endpoint: %v", err)
+	}
+
+	if err := endpointService.UpdateEndpointByID(
+		ctx,
+		otherEndpoint.ID,
+		otherEndpoint.Name,
+		otherEndpoint.BaseURL,
+		otherEndpoint.CredentialGroupID,
+		otherEndpoint.ApiKey,
+		otherEndpoint.FailoverEnabled,
+		otherEndpoint.SkipHealthCheck,
+		defaultEndpoint.Priority,
+		otherEndpoint.TimeoutSeconds,
+		otherEndpoint.CostMultiplier,
+		otherEndpoint.InputCostMultiplier,
+		otherEndpoint.OutputCostMultiplier,
+		otherEndpoint.CacheReadCostMultiplier,
+		otherEndpoint.BillingOutputTokenSource,
+		otherEndpoint.ModelMultipliers,
+	); err != nil {
+		t.Fatalf("update other endpoint priority: %v", err)
+	}
+
+	updatedDefault, err := endpointStore.GetByID(ctx, defaultEndpoint.ID)
+	if err != nil {
+		t.Fatalf("reload default endpoint: %v", err)
+	}
+	updatedOther, err := endpointStore.GetByID(ctx, otherEndpoint.ID)
+	if err != nil {
+		t.Fatalf("reload other endpoint: %v", err)
+	}
+	if updatedDefault.Priority != 1 || updatedOther.Priority != 1 {
+		t.Fatalf("expected same priority across different groups without swap, got default=%d other=%d", updatedDefault.Priority, updatedOther.Priority)
+	}
+}
+
+func TestCodexEndpointMoveToCredentialGroupAssignsNextPriority(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+	otherGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "github",
+		ApiKey:    "sk-github",
+	})
+	if err != nil {
+		t.Fatalf("create other group: %v", err)
+	}
+	if _, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "target-existing",
+		BaseURL:           "https://example.invalid/target-existing/v1",
+		FailoverEnabled:   true,
+		Priority:          1,
+	}); err != nil {
+		t.Fatalf("create target existing endpoint: %v", err)
+	}
+	moving, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: otherGroup.ID,
+		Name:              "moving",
+		BaseURL:           "https://example.invalid/moving/v1",
+		FailoverEnabled:   true,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("create moving endpoint: %v", err)
+	}
+
+	if err := endpointService.UpdateEndpointByID(
+		ctx,
+		moving.ID,
+		moving.Name,
+		moving.BaseURL,
+		defaultGroup.ID,
+		moving.ApiKey,
+		moving.FailoverEnabled,
+		moving.SkipHealthCheck,
+		moving.Priority,
+		moving.TimeoutSeconds,
+		moving.CostMultiplier,
+		moving.InputCostMultiplier,
+		moving.OutputCostMultiplier,
+		moving.CacheReadCostMultiplier,
+		moving.BillingOutputTokenSource,
+		moving.ModelMultipliers,
+	); err != nil {
+		t.Fatalf("move endpoint to default group: %v", err)
+	}
+
+	updatedMoving, err := endpointStore.GetByID(ctx, moving.ID)
+	if err != nil {
+		t.Fatalf("reload moving endpoint: %v", err)
+	}
+	if updatedMoving.Priority != 2 {
+		t.Fatalf("expected moving endpoint to be appended to target group priority order, got %d", updatedMoving.Priority)
 	}
 }
 

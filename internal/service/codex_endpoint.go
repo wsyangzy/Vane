@@ -76,7 +76,7 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 	}
 
 	if record.Priority <= 0 {
-		maxPriority, err := s.endpointStore.GetMaxPriorityByChannel(ctx, record.ChannelID)
+		maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +134,14 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	if err := s.validateCredentialGroup(ctx, existing.ChannelID, credentialGroupID); err != nil {
 		return err
 	}
+	groupChanged := existing.CredentialGroupID != credentialGroupID
+	if groupChanged {
+		maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, existing.ChannelID, credentialGroupID)
+		if err != nil {
+			return fmt.Errorf("获取 Codex 目标凭证分组最大优先级失败: %w", err)
+		}
+		priority = maxPriority + 1
+	}
 
 	if existing.Name == name && existing.BaseURL == baseURL && existing.CredentialGroupID == credentialGroupID && existing.ApiKey == apiKey && existing.FailoverEnabled == failoverEnabled && existing.SkipHealthCheck == skipHealthCheck && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
 		return nil
@@ -172,8 +180,8 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
-	if existing.Priority != priority {
-		conflicting, err := s.endpointStore.GetByChannelAndPriority(ctx, existing.ChannelID, priority)
+	if !groupChanged && existing.Priority != priority {
+		conflicting, err := s.endpointStore.GetByChannelCredentialGroupAndPriority(ctx, existing.ChannelID, credentialGroupID, priority)
 		if err != nil {
 			return fmt.Errorf("检查 Codex 端点优先级冲突失败: %w", err)
 		}

@@ -206,6 +206,15 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 		return fmt.Errorf("写入 config.toml 失败 (%s): %w", path, err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.saveCodexDefaultConfig(ctx, input); err != nil {
+		if rollbackErr := restoreCodexFile(path, original, existed); rollbackErr != nil {
+			return fmt.Errorf("保存 Codex 全局默认配置失败: %w；回滚 config.toml 也失败: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("保存 Codex 全局默认配置失败: %w", err)
+	}
+
 	if a.logger != nil {
 		a.logger.Info("✅ Codex 全局配置已更新",
 			"path", path,

@@ -145,6 +145,77 @@ func TestEnsureCodexChannelsSchemaMigratesEndpointUniquenessToCredentialGroupSco
 	}
 }
 
+func TestArchiveCodexProvidersUsesStableLegacyTableName(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexSchemaTestDB(t)
+	app := &App{}
+
+	createCodexProviderArchiveTestTable(t, db, "codex_providers")
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO codex_providers (name, provider_type, base_url, api_key, model, model_reasoning_effort)
+		VALUES ('legacy', 'openai-compatible', 'https://example.invalid/v1', 'sk-test', 'gpt-5', 'high')
+	`); err != nil {
+		t.Fatalf("insert old provider: %v", err)
+	}
+
+	if err := app.archiveCodexProvidersTable(ctx, db); err != nil {
+		t.Fatalf("archive old provider table: %v", err)
+	}
+
+	if exists, err := sqliteTableExists(ctx, db, "codex_providers"); err != nil {
+		t.Fatalf("check old table: %v", err)
+	} else if exists {
+		t.Fatalf("expected old codex_providers table to be archived")
+	}
+	if exists, err := sqliteTableExists(ctx, db, "codex_providers_legacy"); err != nil {
+		t.Fatalf("check stable archive table: %v", err)
+	} else if !exists {
+		t.Fatalf("expected stable codex_providers_legacy archive table")
+	}
+	if exists, err := sqliteTableExists(ctx, db, "codex_providers_legacy_v7"); err != nil {
+		t.Fatalf("check deprecated archive table: %v", err)
+	} else if exists {
+		t.Fatalf("expected deprecated version-suffixed archive table to be removed")
+	}
+}
+
+func TestNormalizeCodexProviderArchiveTablesRemovesDeprecatedArchiveTable(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexSchemaTestDB(t)
+	app := &App{}
+
+	createCodexProviderArchiveTestTable(t, db, "codex_providers_legacy_v7")
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO codex_providers_legacy_v7 (name, provider_type, base_url, api_key, model, model_reasoning_effort)
+		VALUES ('legacy', 'openai-compatible', 'https://example.invalid/v1', 'sk-test', 'gpt-5', 'high')
+	`); err != nil {
+		t.Fatalf("insert deprecated archive provider: %v", err)
+	}
+
+	if err := app.normalizeCodexProviderArchiveTables(ctx, db); err != nil {
+		t.Fatalf("normalize archive tables: %v", err)
+	}
+
+	if exists, err := sqliteTableExists(ctx, db, "codex_providers_legacy"); err != nil {
+		t.Fatalf("check stable archive table: %v", err)
+	} else if !exists {
+		t.Fatalf("expected stable codex_providers_legacy archive table")
+	}
+	if exists, err := sqliteTableExists(ctx, db, "codex_providers_legacy_v7"); err != nil {
+		t.Fatalf("check deprecated archive table: %v", err)
+	} else if exists {
+		t.Fatalf("expected deprecated version-suffixed archive table to be removed")
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM codex_providers_legacy WHERE name = 'legacy'`).Scan(&count); err != nil {
+		t.Fatalf("count normalized rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected normalized archive row to be preserved, got %d", count)
+	}
+}
+
 func newCodexSchemaTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -155,6 +226,26 @@ func newCodexSchemaTestDB(t *testing.T) *sql.DB {
 		_ = db.Close()
 	})
 	return db
+}
+
+func createCodexProviderArchiveTestTable(t *testing.T, db *sql.DB, tableName string) {
+	t.Helper()
+	if _, err := db.Exec(`
+		CREATE TABLE ` + tableName + ` (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			provider_type TEXT NOT NULL DEFAULT 'openai-compatible',
+			base_url TEXT NOT NULL,
+			api_key TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			model_reasoning_effort TEXT NOT NULL DEFAULT '',
+			enable_1m_context INTEGER NOT NULL DEFAULT 0,
+			website TEXT,
+			is_active INTEGER NOT NULL DEFAULT 0
+		)
+	`); err != nil {
+		t.Fatalf("create %s: %v", tableName, err)
+	}
 }
 
 func createLegacyCodexEndpointSchema(t *testing.T, db *sql.DB) {

@@ -100,11 +100,11 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 			if groupOrder := compareEndpointCredentialGroupOrder(healthy[i], healthy[j]); groupOrder != 0 {
 				return groupOrder < 0
 			}
-			if healthy[i].Config.Priority != healthy[j].Config.Priority {
-				return healthy[i].Config.Priority < healthy[j].Config.Priority
-			}
 			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
 				return preferred < 0
+			}
+			if healthy[i].Config.Priority != healthy[j].Config.Priority {
+				return healthy[i].Config.Priority < healthy[j].Config.Priority
 			}
 			return endpointSortKey(healthy[i]) < endpointSortKey(healthy[j])
 		})

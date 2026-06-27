@@ -253,6 +253,220 @@ func TestEndpointService_UpdateEndpoint_ChannelMoveAssignsNextPriority(t *testin
 	}
 }
 
+func TestEndpointService_CreateEndpointPriorityIsScopedToCredentialGroup(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	groupStore := store.NewSQLiteClaudeCredentialGroupStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg, groupStore)
+	ctx := context.Background()
+
+	defaultGroup, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel:   "ch-a",
+		Name:      "default",
+		Token:     "token-a",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("创建默认分组失败: %v", err)
+	}
+	otherGroup, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel: "ch-a",
+		Name:    "github",
+		Token:   "token-b",
+	})
+	if err != nil {
+		t.Fatalf("创建其他分组失败: %v", err)
+	}
+
+	defaultEndpoint, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:           "ch-a",
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "default-first",
+		URL:               "https://default-first.example.invalid",
+		FailoverEnabled:   true,
+		TimeoutSeconds:    1,
+	})
+	if err != nil {
+		t.Fatalf("创建默认分组端点失败: %v", err)
+	}
+	otherEndpoint, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:           "ch-a",
+		CredentialGroupID: otherGroup.ID,
+		Name:              "other-first",
+		URL:               "https://other-first.example.invalid",
+		FailoverEnabled:   true,
+		TimeoutSeconds:    1,
+	})
+	if err != nil {
+		t.Fatalf("创建其他分组端点失败: %v", err)
+	}
+
+	if defaultEndpoint.Priority != 1 || otherEndpoint.Priority != 1 {
+		t.Fatalf("预期各凭证分组独立从优先级 1 开始，got default=%d other=%d", defaultEndpoint.Priority, otherEndpoint.Priority)
+	}
+}
+
+func TestEndpointService_UpdateEndpointPriorityConflictIsScopedToCredentialGroup(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	groupStore := store.NewSQLiteClaudeCredentialGroupStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg, groupStore)
+	ctx := context.Background()
+
+	defaultGroup, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel:   "ch-a",
+		Name:      "default",
+		Token:     "token-a",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("创建默认分组失败: %v", err)
+	}
+	otherGroup, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel: "ch-a",
+		Name:    "github",
+		Token:   "token-b",
+	})
+	if err != nil {
+		t.Fatalf("创建其他分组失败: %v", err)
+	}
+
+	defaultEndpoint, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:           "ch-a",
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "default-first",
+		URL:               "https://default-first.example.invalid",
+		FailoverEnabled:   true,
+		TimeoutSeconds:    1,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("创建默认分组端点失败: %v", err)
+	}
+	otherEndpoint, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:           "ch-a",
+		CredentialGroupID: otherGroup.ID,
+		Name:              "other-first",
+		URL:               "https://other-first.example.invalid",
+		FailoverEnabled:   true,
+		TimeoutSeconds:    1,
+		Priority:          5,
+	})
+	if err != nil {
+		t.Fatalf("创建其他分组端点失败: %v", err)
+	}
+
+	otherEndpoint.Priority = defaultEndpoint.Priority
+	if err := svc.UpdateEndpoint(ctx, otherEndpoint); err != nil {
+		t.Fatalf("更新其他分组端点优先级失败: %v", err)
+	}
+
+	updatedDefault, err := storeImpl.GetByID(ctx, defaultEndpoint.ID)
+	if err != nil {
+		t.Fatalf("重新读取默认分组端点失败: %v", err)
+	}
+	updatedOther, err := storeImpl.GetByID(ctx, otherEndpoint.ID)
+	if err != nil {
+		t.Fatalf("重新读取其他分组端点失败: %v", err)
+	}
+	if updatedDefault.Priority != 1 || updatedOther.Priority != 1 {
+		t.Fatalf("预期不同分组相同优先级不交换，got default=%d other=%d", updatedDefault.Priority, updatedOther.Priority)
+	}
+}
+
+func TestEndpointService_UpdateEndpointCredentialGroupMoveAssignsNextPriority(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout:    50 * time.Millisecond,
+			HealthPath: "",
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	groupStore := store.NewSQLiteClaudeCredentialGroupStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg, groupStore)
+	ctx := context.Background()
+
+	defaultGroup, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel:   "ch-a",
+		Name:      "default",
+		Token:     "token-a",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("创建默认分组失败: %v", err)
+	}
+	otherGroup, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel: "ch-a",
+		Name:    "github",
+		Token:   "token-b",
+	})
+	if err != nil {
+		t.Fatalf("创建其他分组失败: %v", err)
+	}
+
+	if _, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:           "ch-a",
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "target-existing",
+		URL:               "https://target-existing.example.invalid",
+		FailoverEnabled:   true,
+		TimeoutSeconds:    1,
+		Priority:          1,
+	}); err != nil {
+		t.Fatalf("创建目标分组已有端点失败: %v", err)
+	}
+	moving, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:           "ch-a",
+		CredentialGroupID: otherGroup.ID,
+		Name:              "moving",
+		URL:               "https://moving.example.invalid",
+		FailoverEnabled:   true,
+		TimeoutSeconds:    1,
+		Priority:          1,
+	})
+	if err != nil {
+		t.Fatalf("创建待移动端点失败: %v", err)
+	}
+
+	moving.CredentialGroupID = defaultGroup.ID
+	if err := svc.UpdateEndpoint(ctx, moving); err != nil {
+		t.Fatalf("移动端点到默认分组失败: %v", err)
+	}
+
+	updatedMoving, err := storeImpl.GetByID(ctx, moving.ID)
+	if err != nil {
+		t.Fatalf("重新读取移动端点失败: %v", err)
+	}
+	if updatedMoving.Priority != 2 {
+		t.Fatalf("预期移动端点排到目标分组末尾，got %d", updatedMoving.Priority)
+	}
+}
+
 func TestEndpointService_RecordToConfigUsesDefaultCredentialGroup(t *testing.T) {
 	db, cleanup := createEndpointServiceTestDB(t)
 	defer cleanup()

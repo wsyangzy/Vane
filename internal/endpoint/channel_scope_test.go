@@ -73,6 +73,39 @@ func TestGetHealthyEndpoints_PriorityKeepsCredentialGroupsContiguous(t *testing.
 	}
 }
 
+func TestGetHealthyEndpoints_PriorityKeepsEnabledEndpointStickyAfterPrioritySwap(t *testing.T) {
+	enabledTrue := true
+	enabledFalse := false
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "priority"},
+		Health:   config.HealthConfig{Timeout: 5 * time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "active-after-swap", URL: "http://example.invalid/active", Channel: "A", Priority: 3, Enabled: &enabledTrue, Timeout: 1 * time.Second},
+			{Name: "edited-to-zero", URL: "http://example.invalid/edited", Channel: "A", Priority: 0, Enabled: &enabledFalse, Timeout: 1 * time.Second},
+			{Name: "fallback", URL: "http://example.invalid/fallback", Channel: "A", Priority: 4, Enabled: &enabledFalse, Timeout: 1 * time.Second},
+		},
+	}
+
+	m := NewManager(cfg)
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		ep.mutex.Unlock()
+	}
+
+	if err := m.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+
+	healthy := m.GetHealthyEndpoints()
+	got := endpointNames(healthy)
+	want := []string{"active-after-swap", "edited-to-zero", "fallback"}
+	if !sameStringSlice(got, want) {
+		t.Fatalf("unexpected order: got %v, want %v", got, want)
+	}
+}
+
 func TestGetHealthyEndpoints_FastestKeepsCredentialGroupsContiguous(t *testing.T) {
 	cfg := &config.Config{
 		Strategy: config.StrategyConfig{Type: "fastest"},

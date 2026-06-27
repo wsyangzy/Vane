@@ -15,6 +15,10 @@ import (
 
 const codexProviderWireAPI = "responses"
 const codexProvider1MContextWindow = "1000000"
+const codexProvidersTableName = "codex_providers"
+const codexProvidersArchiveTableName = "codex_providers_legacy"
+
+var deprecatedCodexProviderArchiveTableNames = []string{"codex_providers_legacy_v7"}
 
 type codexTopLevelValue struct {
 	Value  string
@@ -33,29 +37,33 @@ func (a *App) ensureCodexProviderSchema(ctx context.Context) error {
 		return fmt.Errorf("Codex 提供商数据库未就绪")
 	}
 
-	tableExists, err := sqliteTableExists(ctx, db, "codex_providers")
+	if err := a.normalizeCodexProviderArchiveTables(ctx, db); err != nil {
+		return err
+	}
+
+	tableExists, err := sqliteTableExists(ctx, db, codexProvidersTableName)
 	if err != nil {
 		return err
 	}
 
 	if tableExists {
-		hasReasoning, err := sqliteColumnExists(ctx, db, "codex_providers", "model_reasoning_effort")
+		hasReasoning, err := sqliteColumnExists(ctx, db, codexProvidersTableName, "model_reasoning_effort")
 		if err != nil {
 			return err
 		}
 		if !hasReasoning {
-			if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh'"); err != nil {
-				return fmt.Errorf("为 codex_providers 添加 model_reasoning_effort 字段失败: %w", err)
+			if _, err := db.ExecContext(ctx, "ALTER TABLE "+codexProvidersTableName+" ADD COLUMN model_reasoning_effort TEXT NOT NULL DEFAULT 'xhigh'"); err != nil {
+				return fmt.Errorf("为 %s 添加 model_reasoning_effort 字段失败: %w", codexProvidersTableName, err)
 			}
 		}
 
-		hasEnable1MContext, err := sqliteColumnExists(ctx, db, "codex_providers", "enable_1m_context")
+		hasEnable1MContext, err := sqliteColumnExists(ctx, db, codexProvidersTableName, "enable_1m_context")
 		if err != nil {
 			return err
 		}
 		if !hasEnable1MContext {
-			if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers ADD COLUMN enable_1m_context INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("为 codex_providers 添加 enable_1m_context 字段失败: %w", err)
+			if _, err := db.ExecContext(ctx, "ALTER TABLE "+codexProvidersTableName+" ADD COLUMN enable_1m_context INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return fmt.Errorf("为 %s 添加 enable_1m_context 字段失败: %w", codexProvidersTableName, err)
 			}
 		}
 	}
@@ -563,7 +571,7 @@ func (a *App) ensureCodexEndpointModelMultipliersColumn(ctx context.Context, db 
 }
 
 // migrateCodexProvidersToChannels 在首次启动时把旧 codex_providers 数据迁移到新表。
-// 幂等：仅当旧表存在 && 新 codex_channels 表为空时执行；迁移完成后把旧表重命名为 codex_providers_legacy_v7。
+// 幂等：仅当旧表存在 && 新 codex_channels 表为空时执行；迁移完成后把旧表重命名为 codex_providers_legacy。
 func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, oldTableExists bool) error {
 	if !oldTableExists {
 		return nil
@@ -574,17 +582,17 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 		return fmt.Errorf("读取 codex_channels 计数失败: %w", err)
 	}
 	if channelCount > 0 {
-		// 已迁移过，幂等返回
-		return nil
+		// 已迁移过，仍归档旧表，避免最终库继续保留旧主表。
+		return a.archiveCodexProvidersTable(ctx, db)
 	}
 
 	var oldCount int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM codex_providers").Scan(&oldCount); err != nil {
-		return fmt.Errorf("读取 codex_providers 计数失败: %w", err)
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+codexProvidersTableName).Scan(&oldCount); err != nil {
+		return fmt.Errorf("读取 %s 计数失败: %w", codexProvidersTableName, err)
 	}
 	if oldCount == 0 {
 		// 旧表无数据，直接重命名作为归档
-		return a.archiveLegacyCodexProvidersTable(ctx, db)
+		return a.archiveCodexProvidersTable(ctx, db)
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -601,7 +609,7 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 		FROM codex_providers
 	`)
 	if err != nil {
-		return fmt.Errorf("读取旧 codex_providers 数据失败: %w", err)
+		return fmt.Errorf("读取旧 %s 数据失败: %w", codexProvidersTableName, err)
 	}
 
 	type legacyRow struct {
@@ -666,37 +674,143 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 		)
 	}
 
-	return a.archiveLegacyCodexProvidersTable(ctx, db)
+	return a.archiveCodexProvidersTable(ctx, db)
 }
 
-// archiveLegacyCodexProvidersTable 把旧表重命名为 *_legacy_v7 作为安全归档（非破坏性）。
-// 幂等：若旧表已不存在或归档表已存在则跳过。
-func (a *App) archiveLegacyCodexProvidersTable(ctx context.Context, db *sql.DB) error {
-	stillExists, err := sqliteTableExists(ctx, db, "codex_providers")
+// archiveCodexProvidersTable 把旧表重命名为 codex_providers_legacy 作为安全归档（非破坏性）。
+// 幂等：若旧表已不存在则跳过；若归档表已存在则合并后删除旧表。
+func (a *App) archiveCodexProvidersTable(ctx context.Context, db *sql.DB) error {
+	if err := a.normalizeCodexProviderArchiveTables(ctx, db); err != nil {
+		return err
+	}
+	stillExists, err := sqliteTableExists(ctx, db, codexProvidersTableName)
 	if err != nil {
 		return err
 	}
 	if !stillExists {
 		return nil
 	}
-	legacyExists, err := sqliteTableExists(ctx, db, "codex_providers_legacy_v7")
+	archiveExists, err := sqliteTableExists(ctx, db, codexProvidersArchiveTableName)
 	if err != nil {
 		return err
 	}
-	if legacyExists {
-		// 历史归档已存在，删除旧表（避免重复触发）
-		if _, err := db.ExecContext(ctx, "DROP TABLE codex_providers"); err != nil {
-			return fmt.Errorf("删除已归档的旧 codex_providers 失败: %w", err)
+	if archiveExists {
+		if err := mergeSQLiteTablesByCommonColumns(ctx, db, codexProvidersTableName, codexProvidersArchiveTableName); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, "DROP TABLE "+codexProvidersTableName); err != nil {
+			return fmt.Errorf("删除已归档的旧 %s 失败: %w", codexProvidersTableName, err)
 		}
 		return nil
 	}
-	if _, err := db.ExecContext(ctx, "ALTER TABLE codex_providers RENAME TO codex_providers_legacy_v7"); err != nil {
-		return fmt.Errorf("归档旧 codex_providers 失败: %w", err)
+	if _, err := db.ExecContext(ctx, "ALTER TABLE "+codexProvidersTableName+" RENAME TO "+codexProvidersArchiveTableName); err != nil {
+		return fmt.Errorf("归档旧 %s 失败: %w", codexProvidersTableName, err)
 	}
 	if a.logger != nil {
-		a.logger.Info("📦 旧 codex_providers 已归档为 codex_providers_legacy_v7")
+		a.logger.Info("📦 旧 codex_providers 已归档为 codex_providers_legacy")
 	}
 	return nil
+}
+
+func (a *App) normalizeCodexProviderArchiveTables(ctx context.Context, db *sql.DB) error {
+	for _, tableName := range deprecatedCodexProviderArchiveTableNames {
+		exists, err := sqliteTableExists(ctx, db, tableName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		archiveExists, err := sqliteTableExists(ctx, db, codexProvidersArchiveTableName)
+		if err != nil {
+			return err
+		}
+		if !archiveExists {
+			if _, err := db.ExecContext(ctx, "ALTER TABLE "+tableName+" RENAME TO "+codexProvidersArchiveTableName); err != nil {
+				return fmt.Errorf("归一化 Codex 旧归档表失败: %w", err)
+			}
+			continue
+		}
+		if err := mergeSQLiteTablesByCommonColumns(ctx, db, tableName, codexProvidersArchiveTableName); err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, "DROP TABLE "+tableName); err != nil {
+			return fmt.Errorf("删除 Codex 旧归档表失败: %w", err)
+		}
+	}
+	return nil
+}
+
+func mergeSQLiteTablesByCommonColumns(ctx context.Context, db *sql.DB, sourceTable, targetTable string) error {
+	sourceColumns, err := sqliteTableColumnNames(ctx, db, sourceTable)
+	if err != nil {
+		return err
+	}
+	targetColumns, err := sqliteTableColumnNames(ctx, db, targetTable)
+	if err != nil {
+		return err
+	}
+	targetSet := make(map[string]struct{}, len(targetColumns))
+	for _, column := range targetColumns {
+		targetSet[column] = struct{}{}
+	}
+	commonColumns := make([]string, 0, len(sourceColumns))
+	for _, column := range sourceColumns {
+		if _, ok := targetSet[column]; ok {
+			commonColumns = append(commonColumns, column)
+		}
+	}
+	if len(commonColumns) == 0 {
+		return fmt.Errorf("合并 SQLite 表失败：%s 与 %s 没有共同字段", sourceTable, targetTable)
+	}
+	quotedColumns := make([]string, 0, len(commonColumns))
+	for _, column := range commonColumns {
+		quotedColumns = append(quotedColumns, quoteSQLiteIdentifier(column))
+	}
+	columnList := strings.Join(quotedColumns, ", ")
+	query := fmt.Sprintf(
+		"INSERT OR IGNORE INTO %s (%s) SELECT %s FROM %s",
+		quoteSQLiteIdentifier(targetTable),
+		columnList,
+		columnList,
+		quoteSQLiteIdentifier(sourceTable),
+	)
+	if _, err := db.ExecContext(ctx, query); err != nil {
+		return fmt.Errorf("合并 SQLite 表 %s -> %s 失败: %w", sourceTable, targetTable, err)
+	}
+	return nil
+}
+
+func sqliteTableColumnNames(ctx context.Context, db *sql.DB, tableName string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+quoteSQLiteIdentifier(tableName)+")")
+	if err != nil {
+		return nil, fmt.Errorf("读取 SQLite 表字段失败: %w", err)
+	}
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultVal sql.NullString
+			pk         int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultVal, &pk); err != nil {
+			return nil, fmt.Errorf("扫描 SQLite 表字段失败: %w", err)
+		}
+		columns = append(columns, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代 SQLite 表字段失败: %w", err)
+	}
+	return columns, nil
+}
+
+func quoteSQLiteIdentifier(value string) string {
+	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }
 
 func nullableTomlString(s string) any {

@@ -660,6 +660,13 @@ const EndpointDetailModal = ({
   const effectiveGlobalTimeoutSeconds = Number(globalTimeoutSeconds) || 300;
   const timeoutLabel = hasCustomTimeout ? `${timeoutSeconds}s` : `${effectiveGlobalTimeoutSeconds}s`;
   const timeoutScope = hasCustomTimeout ? '端点覆盖' : '使用全局超时';
+  const credentialGroupName = credentialGroup?.name || endpoint.credentialGroupName || endpoint.credential_group_name || '默认分组';
+  const credentialGroupIsDefault = Boolean(credentialGroup?.isDefault || credentialGroup?.is_default);
+  const credentialGroupSecretMasked = credentialGroup?.tokenMasked ||
+    credentialGroup?.token_masked ||
+    credentialGroup?.apiKeyMasked ||
+    credentialGroup?.api_key_masked ||
+    '使用分组凭证';
   const channelModelMapping = channelMeta?.modelMapping || channelMeta?.model_mapping || {};
   const modelMappingEntries = Object.entries(channelModelMapping)
     .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
@@ -693,6 +700,25 @@ const EndpointDetailModal = ({
       label: '渠道',
       icon: Server,
       content: <span className="text-sm font-semibold text-slate-900">{channel}</span>
+    },
+    {
+      label: '凭证分组',
+      icon: KeyRound,
+      content: (
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-semibold text-slate-900">{credentialGroupName}</span>
+            {credentialGroupIsDefault && (
+              <span className="flex-shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600">
+                默认
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
+            {credentialGroupSecretMasked}
+          </div>
+        </div>
+      )
     }
   ];
 
@@ -775,16 +801,16 @@ const EndpointDetailModal = ({
               tooltip={`${timeoutScope}: ${timeoutLabel}`}
             />
 
-            {!hasCustomCostMultiplier && (
-              <Tooltip content="未配置自定义倍率，使用默认 1x">
-                <span className="inline-flex">
-                  <DetailPill tone="slate" icon={Database}>
-                    <span className="leading-none">默认倍率</span>
-                    <span className="font-mono leading-none">1x</span>
-                  </DetailPill>
-                </span>
-              </Tooltip>
-            )}
+            <Tooltip content={hasCustomCostMultiplier ? '使用凭证分组配置的计费倍率' : '未配置自定义倍率，使用默认 1x'}>
+              <span className="inline-flex">
+                <DetailPill tone={hasCustomCostMultiplier ? 'indigo' : 'slate'} icon={Database}>
+                  <span className="leading-none">{hasCustomCostMultiplier ? '分组倍率' : '默认倍率'}</span>
+                  <span className="font-mono leading-none">
+                    {formatDetailMultiplier(getCredentialGroupCostMultiplier(credentialGroup, endpoint))}
+                  </span>
+                </DetailPill>
+              </span>
+            </Tooltip>
 
             <Tooltip content={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}>
               <span className="inline-flex">
@@ -822,68 +848,66 @@ const EndpointDetailModal = ({
             ))}
           </div>
 
-          {(hasCustomCostMultiplier || hasModelMapping) && (
-            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-              {hasCustomCostMultiplier && (
-                <DetailMetricCard label="成本倍率" icon={Database} wide>
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2">
-                      {multiplierItems.map((item) => (
-                        <DetailChip key={item.label} tone={item.tone} mono>
-                          <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
-                          {formatDetailMultiplier(item.value)}
-                        </DetailChip>
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <DetailMetricCard label="分组计费倍率" icon={Database} wide>
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {multiplierItems.map((item) => (
+                    <DetailChip key={item.label} tone={item.tone} mono>
+                      <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
+                      {formatDetailMultiplier(item.value)}
+                    </DetailChip>
+                  ))}
+                </div>
+
+                {modelMultiplierRules.length > 0 && (
+                  <div className="border-t border-slate-200/70 pt-3">
+                    <div className="mb-2 text-xs font-medium text-slate-500">模型附加倍率</div>
+                    <div className="space-y-2">
+                      {modelMultiplierRules.map((rule, index) => (
+                        <div
+                          key={`${rule.model || 'model'}-${index}`}
+                          className="flex flex-wrap items-center gap-2"
+                        >
+                          <ModelTag model={rule.model} />
+                          <DetailChip tone="indigo" mono>
+                            <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">总</span>
+                            {formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)}
+                          </DetailChip>
+                          <DetailChip tone="slate" mono>
+                            <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输入</span>
+                            {formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)}
+                          </DetailChip>
+                          <DetailChip tone="sky" mono>
+                            <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输出</span>
+                            {formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}
+                          </DetailChip>
+                          <DetailChip tone="amber" mono>
+                            <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">缓存</span>
+                            {formatDetailMultiplier(rule.cacheReadCostMultiplier ?? rule.cache_read_cost_multiplier ?? 1)}
+                          </DetailChip>
+                        </div>
                       ))}
                     </div>
-
-                    {modelMultiplierRules.length > 0 && (
-                      <div className="border-t border-slate-200/70 pt-3">
-                        <div className="mb-2 text-xs font-medium text-slate-500">模型附加倍率</div>
-                        <div className="space-y-2">
-                          {modelMultiplierRules.map((rule, index) => (
-                            <div
-                              key={`${rule.model || 'model'}-${index}`}
-                              className="flex flex-wrap items-center gap-2"
-                            >
-                              <ModelTag model={rule.model} />
-                              <DetailChip tone="indigo" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">总</span>
-                                {formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)}
-                              </DetailChip>
-                              <DetailChip tone="slate" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输入</span>
-                                {formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)}
-                              </DetailChip>
-                              <DetailChip tone="sky" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">输出</span>
-                                {formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}
-                              </DetailChip>
-                              <DetailChip tone="amber" mono>
-                                <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">缓存</span>
-                                {formatDetailMultiplier(rule.cacheReadCostMultiplier ?? rule.cache_read_cost_multiplier ?? 1)}
-                              </DetailChip>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
-                </DetailMetricCard>
-              )}
+                )}
+              </div>
+            </DetailMetricCard>
+          </div>
 
-              {hasModelMapping && (
-                <DetailMetricCard label="渠道模型映射" icon={ArrowRight} wide>
-                  <div className="space-y-2">
-                    {modelMappingEntries.map(([sourceModel, targetModel]) => (
-                      <ModelMappingPair
-                        key={`${sourceModel}->${targetModel}`}
-                        sourceModel={sourceModel}
-                        targetModel={targetModel}
-                      />
-                    ))}
-                  </div>
-                </DetailMetricCard>
-              )}
+          {hasModelMapping && (
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <DetailMetricCard label="渠道模型映射" icon={ArrowRight} wide>
+                <div className="space-y-2">
+                  {modelMappingEntries.map(([sourceModel, targetModel]) => (
+                    <ModelMappingPair
+                      key={`${sourceModel}->${targetModel}`}
+                      sourceModel={sourceModel}
+                      targetModel={targetModel}
+                    />
+                  ))}
+                </div>
+              </DetailMetricCard>
             </div>
           )}
 

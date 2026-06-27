@@ -90,6 +90,8 @@ type EndpointStore interface {
 	ListEnabled(ctx context.Context) ([]*EndpointRecord, error)
 
 	// 优先级管理
+	GetMaxPriorityByChannelCredentialGroup(ctx context.Context, channel string, credentialGroupID int64) (int, error)
+	GetByChannelCredentialGroupAndPriority(ctx context.Context, channel string, credentialGroupID int64, priority int) (*EndpointRecord, error)
 	GetMaxPriorityByChannel(ctx context.Context, channel string) (int, error)                           // 获取渠道内最大优先级
 	GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) // 根据渠道和优先级获取端点
 
@@ -804,6 +806,22 @@ func (s *SQLiteEndpointStore) GetMaxPriorityByChannel(ctx context.Context, chann
 	return int(maxPriority.Int64), nil
 }
 
+func (s *SQLiteEndpointStore) GetMaxPriorityByChannelCredentialGroup(ctx context.Context, channel string, credentialGroupID int64) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var maxPriority sql.NullInt64
+	query := `SELECT MAX(priority) FROM endpoints WHERE channel = ? AND COALESCE(credential_group_id, 0) = ?`
+	err := s.getQuerier().QueryRowContext(ctx, query, channel, positiveInt64OrZero(credentialGroupID)).Scan(&maxPriority)
+	if err != nil {
+		return 0, fmt.Errorf("获取凭证分组最大优先级失败: %w", err)
+	}
+	if !maxPriority.Valid {
+		return 0, nil
+	}
+	return int(maxPriority.Int64), nil
+}
+
 // GetByChannelAndPriority 根据渠道和优先级获取端点
 // 用于修改优先级时检测冲突并实现对调
 func (s *SQLiteEndpointStore) GetByChannelAndPriority(ctx context.Context, channel string, priority int) (*EndpointRecord, error) {
@@ -816,4 +834,16 @@ func (s *SQLiteEndpointStore) GetByChannelAndPriority(ctx context.Context, chann
 		`
 
 	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, priority))
+}
+
+func (s *SQLiteEndpointStore) GetByChannelCredentialGroupAndPriority(ctx context.Context, channel string, credentialGroupID int64, priority int) (*EndpointRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+			SELECT ` + endpointRecordColumns + `
+			FROM endpoints WHERE channel = ? AND COALESCE(credential_group_id, 0) = ? AND priority = ?
+		`
+
+	return s.scanEndpoint(s.getQuerier().QueryRowContext(ctx, query, channel, positiveInt64OrZero(credentialGroupID), priority))
 }

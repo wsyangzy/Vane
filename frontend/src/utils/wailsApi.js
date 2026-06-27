@@ -2396,8 +2396,11 @@ export const getCodexGlobalConfig = async () => {
   const info = await WailsApp.GetCodexGlobalConfig();
   return {
     model: info?.model || '',
-    reasoning_effort: info?.reasoning_effort || '',
-    enable_1m_context: Boolean(info?.enable_1m_context),
+    reasoning_effort: info?.reasoning_effort || info?.reasoningEffort || '',
+    enable_1m_context: Boolean(info?.enable_1m_context ?? info?.enable1MContext),
+    effective_model: info?.effective_model || info?.effectiveModel || info?.model || '',
+    effective_reasoning_effort: info?.effective_reasoning_effort || info?.effectiveReasoningEffort || info?.reasoning_effort || info?.reasoningEffort || '',
+    effective_enable_1m_context: Boolean(info?.effective_enable_1m_context ?? info?.effectiveEnable1MContext ?? info?.enable_1m_context ?? info?.enable1MContext),
     global_timeout_seconds: info?.global_timeout_seconds || info?.globalTimeoutSeconds || info?.GlobalTimeoutSeconds || 300
   };
 };
@@ -2412,7 +2415,7 @@ export const updateCodexGlobalConfig = async (input) => {
   if (!WailsApp) throw new Error('Wails not available');
   await WailsApp.UpdateCodexGlobalConfig({
     model: input?.model || '',
-    reasoning_effort: input?.reasoning_effort || '',
-    enable_1m_context: Boolean(input?.enable_1m_context)
+    reasoning_effort: input?.reasoning_effort || input?.reasoningEffort || '',
+    enable_1m_context: Boolean(input?.enable_1m_context ?? input?.enable1MContext)
   });
 };

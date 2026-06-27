@@ -363,7 +363,7 @@ END;
 -- 一个渠道承载共用配置（模型/推理强度/1M 上下文/官网/provider_type）
 -- 一个渠道下可挂多个凭证分组；端点归属到分组，同一渠道不同分组可复用相同端点名和 base_url
 -- 单活语义：全局唯一一个 codex_channels.is_active=1，每个渠道下唯一一个 codex_endpoints.is_active=1
--- 旧 codex_providers 数据通过运行时 ensureCodexChannelsSchema 自动迁移到新表，旧表保留为 codex_providers_legacy_v7
+-- 旧 codex_providers 数据通过运行时 ensureCodexChannelsSchema 自动迁移到新表，旧表保留为 codex_providers_legacy
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS codex_channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

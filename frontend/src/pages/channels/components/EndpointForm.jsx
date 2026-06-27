@@ -1,6 +1,6 @@
 // ============================================
 // 端点编辑表单组件 (SQLite 存储模式)
-// (2026-01-10) - 新建时默认优先级为 0，超时使用全局默认
+// (2026-01-10) - 新建时后端自动分配优先级，超时使用全局默认
 // ============================================
 
 import { useState } from 'react';
@@ -133,6 +133,21 @@ const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, 
   );
 };
 
+const getEndpointCredentialGroupID = (endpoint) => Number(endpoint?.credentialGroupId || endpoint?.credential_group_id || 0);
+
+const getNextEndpointPriority = (existingEndpoints = [], channel = '', credentialGroupId = 0) => {
+  const targetChannel = String(channel || '').trim();
+  const targetCredentialGroupID = Number(credentialGroupId || 0);
+  const maxPriority = (Array.isArray(existingEndpoints) ? existingEndpoints : []).reduce((max, endpoint) => {
+    if (!endpoint) return max;
+    if (String(endpoint.channel || '').trim() !== targetChannel) return max;
+    if (getEndpointCredentialGroupID(endpoint) !== targetCredentialGroupID) return max;
+    const priority = Number(endpoint.priority);
+    return Number.isFinite(priority) ? Math.max(max, Math.floor(priority)) : max;
+  }, 0);
+  return maxPriority + 1;
+};
+
 // ============================================
 // 端点表单组件
 // ============================================
@@ -150,6 +165,7 @@ const EndpointForm = ({
   loading = false
 }) => {
   const isEditMode = !!endpoint;
+  const initialCredentialGroupID = Number(endpoint?.credentialGroupId || endpoint?.credential_group_id || defaultCredentialGroupId || 0);
   // 编辑模式下渠道名称不可修改（渠道是端点的核心标识之一）
   const channelDisabled = loading || isEditMode || lockChannel;
   const uniqueChannels = Array.from(new Set((channels || []).filter(Boolean).map(String)));
@@ -182,7 +198,7 @@ const EndpointForm = ({
       credentialGroupId: Number(defaultCredentialGroupId) || 0,
       name: '',
       url: '',
-      priority: 0, // 新建时传0，让后端自动递增
+      priority: getNextEndpointPriority(existingEndpoints, defaultChannel, defaultCredentialGroupId),
       failoverEnabled: true,
       skipHealthCheck: false, // 默认不跳过健康检查
       cooldownSeconds: '',
@@ -244,6 +260,7 @@ const EndpointForm = ({
         const groups = credentialGroupsByChannel?.[value] || [];
         const defaultGroup = groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
         next.credentialGroupId = defaultGroup?.id || 0;
+        next.priority = getNextEndpointPriority(existingEndpoints, value, next.credentialGroupId);
       }
       return next;
     });
@@ -310,6 +327,9 @@ const EndpointForm = ({
       const endpointPayload = { ...formData };
       delete endpointPayload.token;
       delete endpointPayload.apiKey;
+      if (!isEditMode) {
+        endpointPayload.priority = 0;
+      }
       await onSave({
         ...endpointPayload,
         credentialGroupId: Number(formData.credentialGroupId || selectedCredentialGroup?.id || 0) || 0,
@@ -406,7 +426,13 @@ const EndpointForm = ({
                         onChange={(value) => {
                           const groups = credentialGroupsByChannel?.[value] || [];
                           const defaultGroup = groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
-                          setFormData(prev => ({ ...prev, channel: value, credentialGroupId: defaultGroup?.id || 0 }));
+                          const nextCredentialGroupId = defaultGroup?.id || 0;
+                          setFormData(prev => ({
+                            ...prev,
+                            channel: value,
+                            credentialGroupId: nextCredentialGroupId,
+                            priority: getNextEndpointPriority(existingEndpoints, value, nextCredentialGroupId)
+                          }));
                           if (errors.channel) {
                             setErrors(prev => ({ ...prev, channel: null }));
                           }
@@ -453,7 +479,14 @@ const EndpointForm = ({
                       options={credentialGroupOptions}
                       value={String(selectedCredentialGroup?.id || formData.credentialGroupId || '')}
                       onChange={(value) => {
-                        setFormData(prev => ({ ...prev, credentialGroupId: Number(value) || 0 }));
+                        const nextCredentialGroupId = Number(value) || 0;
+                        setFormData(prev => ({
+                          ...prev,
+                          credentialGroupId: nextCredentialGroupId,
+                          priority: (!isEditMode || nextCredentialGroupId !== initialCredentialGroupID)
+                            ? getNextEndpointPriority(existingEndpoints, prev.channel, nextCredentialGroupId)
+                            : endpoint?.priority ?? getNextEndpointPriority(existingEndpoints, prev.channel, nextCredentialGroupId)
+                        }));
                         if (errors.credentialGroupId) {
                           setErrors(prev => ({ ...prev, credentialGroupId: null }));
                         }
@@ -522,7 +555,7 @@ const EndpointForm = ({
                 type="number"
                 min="0"
                 placeholder="0"
-                help="0 = 最高优先级，数字越小优先级越高，相同则交换"
+                help="0 = 最高优先级，数字越小优先级越高，同分组相同则交换"
               />
 
               {/* 超时时间 - 留空使用全局默认值 */}

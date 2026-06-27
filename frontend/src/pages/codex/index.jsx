@@ -173,9 +173,13 @@ const CODEX_ENDPOINT_FORM_TABS = [
   { key: 'routing', label: '路由配置' }
 ];
 
-const getNextCodexEndpointPriority = (channel) => {
+const getCodexEndpointCredentialGroupID = (endpoint) => Number(endpoint?.credentialGroupId || endpoint?.credential_group_id || 0);
+
+const getNextCodexEndpointPriority = (channel, credentialGroupID = 0) => {
   const endpoints = Array.isArray(channel?.endpoints) ? channel.endpoints : [];
+  const targetCredentialGroupID = Number(credentialGroupID || 0);
   const maxPriority = endpoints.reduce((max, endpoint) => {
+    if (getCodexEndpointCredentialGroupID(endpoint) !== targetCredentialGroupID) return max;
     const priority = Number(endpoint?.priority);
     return Number.isFinite(priority) ? Math.max(max, Math.floor(priority)) : max;
   }, 0);
@@ -892,7 +896,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
     }))
   ];
   const isEdit = mode === 'edit';
-  const [priority, setPriority] = useState(endpoint?.priority ?? getNextCodexEndpointPriority(channel));
+  const [priority, setPriority] = useState(endpoint?.priority ?? getNextCodexEndpointPriority(channel, initialCredentialGroupId));
   const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
   const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
   const [skipHealthCheck, setSkipHealthCheck] = useState(Boolean(endpoint?.skipHealthCheck || endpoint?.skip_health_check));
@@ -1035,7 +1039,13 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       options={credentialGroupOptions}
                       value={String(selectedCredentialGroupId || '')}
                       onChange={(value) => {
-                        setCredentialGroupId(Number(value) || 0);
+                        const nextCredentialGroupId = Number(value) || 0;
+                        setCredentialGroupId(nextCredentialGroupId);
+                        if (!isEdit || nextCredentialGroupId !== Number(initialCredentialGroupId || 0)) {
+                          setPriority(getNextCodexEndpointPriority(channel, nextCredentialGroupId));
+                        } else {
+                          setPriority(endpoint?.priority ?? getNextCodexEndpointPriority(channel, nextCredentialGroupId));
+                        }
                         if (fieldError) setFieldError('');
                       }}
                       disabled={loading || credentialGroupOptions.length === 0}
@@ -1103,7 +1113,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       placeholder={isEdit ? '0 = 最高优先级' : '自动分配'}
                     />
                     <p className="mt-1 text-xs text-slate-400">
-                      {isEdit ? '0 = 最高优先级，数字越小越优先，相同则交换' : '新建时自动按当前渠道最大优先级递增'}
+                      {isEdit ? '0 = 最高优先级，数字越小越优先，同分组相同则交换' : '新建时自动按当前凭证分组最大优先级递增'}
                     </p>
                   </div>
 
@@ -1266,7 +1276,7 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
         reasoning_effort: config.reasoning_effort,
         enable_1m_context: config.enable_1m_context
       });
-      onSaved?.();
+      await onSaved?.();
       onClose?.();
     } catch (err) {
       setError(getErrorMessage(err, '保存失败'));
@@ -2350,6 +2360,9 @@ const CodexPage = () => {
     model: '',
     reasoning_effort: 'xhigh',
     enable_1m_context: false,
+    effective_model: '',
+    effective_reasoning_effort: 'xhigh',
+    effective_enable_1m_context: false,
     global_timeout_seconds: 300
   });
 
@@ -2361,6 +2374,9 @@ const CodexPage = () => {
         model: data.model || '',
         reasoning_effort: data.reasoning_effort || 'xhigh',
         enable_1m_context: Boolean(data.enable_1m_context),
+        effective_model: data.effective_model || data.model || '',
+        effective_reasoning_effort: data.effective_reasoning_effort || data.reasoning_effort || 'xhigh',
+        effective_enable_1m_context: Boolean(data.effective_enable_1m_context ?? data.enable_1m_context),
         global_timeout_seconds: data.global_timeout_seconds || data.globalTimeoutSeconds || 300
       });
     } catch {
@@ -2402,6 +2418,8 @@ const CodexPage = () => {
       endpointDetailTarget.endpoint;
     return { channelOwner: latestChannel, endpoint: latestEndpoint };
   })() : null;
+  const currentCodexModel = globalConfig.effective_model || globalConfig.model || '未设置';
+  const currentCodexReasoningEffort = globalConfig.effective_reasoning_effort || globalConfig.reasoning_effort || 'xhigh';
 
   const overviewCards = [
     {
@@ -2413,8 +2431,19 @@ const CodexPage = () => {
     },
     {
       title: '当前模型',
-      value: globalConfig.model || '未设置',
-      subText: `推理强度 ${globalConfig.reasoning_effort || 'xhigh'}${globalConfig.enable_1m_context ? ' · 1M 上下文' : ''}`,
+      value: currentCodexModel,
+      subText: (
+        <span className="inline-flex max-w-full items-center gap-1.5 overflow-hidden align-middle">
+          <span className="flex-shrink-0 text-slate-400">推理</span>
+          <span className="min-w-0 truncate font-semibold text-amber-600">{currentCodexReasoningEffort}</span>
+          {globalConfig.effective_enable_1m_context && (
+            <>
+              <span className="flex-shrink-0 text-slate-300">·</span>
+              <span className="flex-shrink-0 font-semibold text-sky-600">1M</span>
+            </>
+          )}
+        </span>
+      ),
       icon: ShieldCheck,
       statusColor: 'bg-sky-50 text-sky-600'
     },
