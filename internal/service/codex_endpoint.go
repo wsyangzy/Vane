@@ -75,7 +75,7 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 		return nil, fmt.Errorf("该凭证分组下已存在相同的端点名 '%s'", record.Name)
 	}
 
-	if record.Priority <= 0 {
+	if record.Priority < 0 {
 		maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
 		if err != nil {
 			return nil, err

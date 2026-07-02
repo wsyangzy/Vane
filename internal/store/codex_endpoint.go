@@ -191,7 +191,7 @@ func (s *SQLiteCodexEndpointStore) GetMaxPriorityByChannelCredentialGroup(ctx co
 		return 0, fmt.Errorf("获取 Codex 凭证分组最大优先级失败: %w", err)
 	}
 	if !maxPriority.Valid {
-		return 0, nil
+		return -1, nil
 	}
 	return int(maxPriority.Int64), nil
 }
@@ -206,7 +206,7 @@ func (s *SQLiteCodexEndpointStore) GetMaxPriorityByChannel(ctx context.Context, 
 		return 0, fmt.Errorf("获取 Codex 渠道最大优先级失败: %w", err)
 	}
 	if !maxPriority.Valid {
-		return 0, nil
+		return -1, nil
 	}
 	return int(maxPriority.Int64), nil
 }

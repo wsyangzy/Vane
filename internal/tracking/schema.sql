@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     headers TEXT,                                   -- 自定义请求头 (JSON格式)
 
     -- ========== 路由配置 ==========
-    priority INTEGER DEFAULT 1,                     -- 优先级（数字越小越高）
+    priority INTEGER DEFAULT 0,                     -- 端点优先级（0 为最高，数字越小越高）
     failover_enabled INTEGER DEFAULT 1,             -- 是否参与故障转移 (1=是, 0=否)
     cooldown_seconds INTEGER,                       -- 冷却时间（秒，NULL=使用全局配置）
     timeout_seconds INTEGER DEFAULT 300,            -- 请求超时（秒）

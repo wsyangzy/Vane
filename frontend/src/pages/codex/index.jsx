@@ -182,7 +182,7 @@ const getNextCodexEndpointPriority = (channel, credentialGroupID = 0) => {
     if (getCodexEndpointCredentialGroupID(endpoint) !== targetCredentialGroupID) return max;
     const priority = Number(endpoint?.priority);
     return Number.isFinite(priority) ? Math.max(max, Math.floor(priority)) : max;
-  }, 0);
+  }, -1);
   return maxPriority + 1;
 };
 
@@ -945,7 +945,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
       credentialGroupId: selectedCredentialGroupId,
       failoverEnabled,
       skipHealthCheck,
-      priority: isEdit ? priority : 0,
+      priority,
       timeoutSeconds: timeoutResult.timeoutSeconds
     });
   };
@@ -1110,10 +1110,10 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
                       disabled={!isEdit || loading}
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                      placeholder={isEdit ? '0 = 最高优先级' : '自动分配'}
+                      placeholder="0 = 最高优先级"
                     />
                     <p className="mt-1 text-xs text-slate-400">
-                      {isEdit ? '0 = 最高优先级，数字越小越优先，同分组相同则交换' : '新建时自动按当前凭证分组最大优先级递增'}
+                      {isEdit ? '0 = 最高优先级，数字越小越优先，同分组相同则交换' : '新建时按当前凭证分组顺序递增，首个为 0'}
                     </p>
                   </div>
 

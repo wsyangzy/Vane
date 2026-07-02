@@ -799,9 +799,9 @@ func (s *SQLiteEndpointStore) GetMaxPriorityByChannel(ctx context.Context, chann
 		return 0, fmt.Errorf("获取渠道最大优先级失败: %w", err)
 	}
 
-	// 如果渠道内没有端点，返回 0（新端点优先级将是 1）
+	// 如果渠道内没有端点，返回 -1（新端点优先级将是 0）
 	if !maxPriority.Valid {
-		return 0, nil
+		return -1, nil
 	}
 	return int(maxPriority.Int64), nil
 }
@@ -817,7 +817,7 @@ func (s *SQLiteEndpointStore) GetMaxPriorityByChannelCredentialGroup(ctx context
 		return 0, fmt.Errorf("获取凭证分组最大优先级失败: %w", err)
 	}
 	if !maxPriority.Valid {
-		return 0, nil
+		return -1, nil
 	}
 	return int(maxPriority.Int64), nil
 }

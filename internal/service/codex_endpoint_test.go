@@ -102,7 +102,7 @@ func TestNormalizeAndValidateCodexEndpointAllowsInternalSpaces(t *testing.T) {
 	}
 }
 
-func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
+func TestCodexEndpointCreateAutoAssignsNegativePriority(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexEndpointTestDB(t)
 	channelStore := store.NewSQLiteCodexChannelStore(db)
@@ -133,6 +133,7 @@ func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
 		Name:              "first",
 		BaseURL:           "https://example.invalid/first/v1",
 		FailoverEnabled:   true,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("create first endpoint: %v", err)
@@ -143,14 +144,55 @@ func TestCodexEndpointCreateAssignsNextPriority(t *testing.T) {
 		Name:              "second",
 		BaseURL:           "https://example.invalid/second/v1",
 		FailoverEnabled:   true,
-		Priority:          0,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("create second endpoint: %v", err)
 	}
 
-	if first.Priority != 1 || second.Priority != 2 {
-		t.Fatalf("expected priorities 1 and 2, got %d and %d", first.Priority, second.Priority)
+	if first.Priority != 0 || second.Priority != 1 {
+		t.Fatalf("expected priorities 0 and 1, got %d and %d", first.Priority, second.Priority)
+	}
+}
+
+func TestCodexEndpointCreateKeepsExplicitZeroPriority(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+
+	created, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "first",
+		BaseURL:           "https://example.invalid/first/v1",
+		FailoverEnabled:   true,
+		Priority:          0,
+	})
+	if err != nil {
+		t.Fatalf("create endpoint: %v", err)
+	}
+	if created.Priority != 0 {
+		t.Fatalf("expected explicit priority 0, got %d", created.Priority)
 	}
 }
 
@@ -193,6 +235,7 @@ func TestCodexEndpointCreatePriorityIsScopedToCredentialGroup(t *testing.T) {
 		Name:              "default-first",
 		BaseURL:           "https://example.invalid/default-first/v1",
 		FailoverEnabled:   true,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("create default endpoint: %v", err)
@@ -203,13 +246,14 @@ func TestCodexEndpointCreatePriorityIsScopedToCredentialGroup(t *testing.T) {
 		Name:              "other-first",
 		BaseURL:           "https://example.invalid/other-first/v1",
 		FailoverEnabled:   true,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("create other endpoint: %v", err)
 	}
 
-	if defaultEndpoint.Priority != 1 || otherEndpoint.Priority != 1 {
-		t.Fatalf("expected each credential group to start at priority 1, got default=%d other=%d", defaultEndpoint.Priority, otherEndpoint.Priority)
+	if defaultEndpoint.Priority != 0 || otherEndpoint.Priority != 0 {
+		t.Fatalf("expected each credential group to start at priority 0, got default=%d other=%d", defaultEndpoint.Priority, otherEndpoint.Priority)
 	}
 }
 
@@ -255,7 +299,7 @@ func TestCodexEndpointCreateAutoAssignsAfterExistingPriority(t *testing.T) {
 		Name:              "second",
 		BaseURL:           "https://example.invalid/second/v1",
 		FailoverEnabled:   true,
-		Priority:          0,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("create second endpoint: %v", err)

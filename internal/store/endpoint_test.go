@@ -39,7 +39,7 @@ func createTestDB(t *testing.T) (*sql.DB, func()) {
 			token TEXT,
 			api_key TEXT,
 			headers TEXT,
-			priority INTEGER DEFAULT 1,
+			priority INTEGER DEFAULT 0,
 			failover_enabled INTEGER DEFAULT 1,
 			cooldown_seconds INTEGER,
 			timeout_seconds INTEGER DEFAULT 300,

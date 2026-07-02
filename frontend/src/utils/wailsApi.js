@@ -11,7 +11,7 @@ const parseEndpointMultiplier = (value, fallback = 1.0) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
-export const parseEndpointPriority = (value, fallback = 1) => {
+export const parseEndpointPriority = (value, fallback = 0) => {
   if (typeof value === 'string' && value.trim() === '') return fallback;
   if (value === null || value === undefined) return fallback;
   const parsed = Number(value);
@@ -1257,8 +1257,8 @@ export const createEndpointRecord = async (input) => {
     token: input.token || '',
     api_key: input.apiKey || '',
     headers: input.headers || {},
-    // 传 0 时让后端自动递增，不再强制转为 1
-    priority: Number.isInteger(Number(input.priority)) ? Number(input.priority) : 1,
+    // 未传时让后端自动递增；显式 0 是最高优先级
+    priority: Number.isInteger(Number(input.priority)) ? Number(input.priority) : -1,
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,

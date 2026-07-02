@@ -144,7 +144,7 @@ const getNextEndpointPriority = (existingEndpoints = [], channel = '', credentia
     if (getEndpointCredentialGroupID(endpoint) !== targetCredentialGroupID) return max;
     const priority = Number(endpoint.priority);
     return Number.isFinite(priority) ? Math.max(max, Math.floor(priority)) : max;
-  }, 0);
+  }, -1);
   return maxPriority + 1;
 };
 
@@ -327,9 +327,6 @@ const EndpointForm = ({
       const endpointPayload = { ...formData };
       delete endpointPayload.token;
       delete endpointPayload.apiKey;
-      if (!isEditMode) {
-        endpointPayload.priority = 0;
-      }
       await onSave({
         ...endpointPayload,
         credentialGroupId: Number(formData.credentialGroupId || selectedCredentialGroup?.id || 0) || 0,

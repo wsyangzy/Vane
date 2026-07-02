@@ -46,7 +46,7 @@ func NewEndpointService(
 // CreateEndpoint 创建新端点
 // 1. 保存到数据库
 // 2. 添加到运行时管理器
-// 优先级自动递增（若未指定或为0，则设为凭证分组内最大优先级+1）
+// 优先级自动递增（负数表示自动分配；0 是最高优先级）
 func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.EndpointRecord) (*store.EndpointRecord, error) {
 	// 验证必填字段
 	if err := s.validateRecord(record); err != nil {
@@ -73,11 +73,11 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 	}
 
 	// 优先级自动递增
-	if record.Priority <= 0 {
+	if record.Priority < 0 {
 		maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
 		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取凭证分组最大优先级失败: %v，使用默认值1", err))
-			record.Priority = 1
+			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取凭证分组最大优先级失败: %v，使用默认值0", err))
+			record.Priority = 0
 		} else {
 			record.Priority = maxPriority + 1
 		}

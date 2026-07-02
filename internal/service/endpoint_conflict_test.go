@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
 	token TEXT,
 	api_key TEXT,
 	headers TEXT,
-	priority INTEGER DEFAULT 1,
+	priority INTEGER DEFAULT 0,
 	failover_enabled INTEGER DEFAULT 1,
 	cooldown_seconds INTEGER,
 	timeout_seconds INTEGER DEFAULT 300,
@@ -295,6 +295,7 @@ func TestEndpointService_CreateEndpointPriorityIsScopedToCredentialGroup(t *test
 		URL:               "https://default-first.example.invalid",
 		FailoverEnabled:   true,
 		TimeoutSeconds:    1,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("创建默认分组端点失败: %v", err)
@@ -306,13 +307,44 @@ func TestEndpointService_CreateEndpointPriorityIsScopedToCredentialGroup(t *test
 		URL:               "https://other-first.example.invalid",
 		FailoverEnabled:   true,
 		TimeoutSeconds:    1,
+		Priority:          -1,
 	})
 	if err != nil {
 		t.Fatalf("创建其他分组端点失败: %v", err)
 	}
 
-	if defaultEndpoint.Priority != 1 || otherEndpoint.Priority != 1 {
-		t.Fatalf("预期各凭证分组独立从优先级 1 开始，got default=%d other=%d", defaultEndpoint.Priority, otherEndpoint.Priority)
+	if defaultEndpoint.Priority != 0 || otherEndpoint.Priority != 0 {
+		t.Fatalf("预期各凭证分组独立从优先级 0 开始，got default=%d other=%d", defaultEndpoint.Priority, otherEndpoint.Priority)
+	}
+}
+
+func TestEndpointService_CreateEndpointKeepsExplicitZeroPriority(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			CheckInterval: 10 * time.Second,
+			Timeout:       time.Second,
+		},
+	}
+	storeRepo := store.NewSQLiteEndpointStore(db)
+	manager := endpoint.NewManager(cfg)
+	svc := NewEndpointService(storeRepo, manager, cfg)
+
+	created, err := svc.CreateEndpoint(context.Background(), &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "first",
+		URL:             "https://first.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        0,
+	})
+	if err != nil {
+		t.Fatalf("创建端点失败: %v", err)
+	}
+	if created.Priority != 0 {
+		t.Fatalf("expected explicit priority 0, got %d", created.Priority)
 	}
 }
 
