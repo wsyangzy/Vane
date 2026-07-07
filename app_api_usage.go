@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/endpoint"
-	"ai-relay-forwarder/internal/store"
+	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	"ai-relay-forwarder/internal/tracking"
 	"ai-relay-forwarder/internal/utils"
 )
@@ -566,11 +566,11 @@ func endpointChainCredentialGroupLookup(
 		GetEndpoints() []*endpoint.Endpoint
 	},
 	endpointStore interface {
-		List(context.Context) ([]*store.EndpointRecord, error)
+		List(context.Context) ([]*claudestore.EndpointRecord, error)
 	},
 	groupStore interface {
-		GetByID(context.Context, int64) (*store.ClaudeCredentialGroupRecord, error)
-		GetDefaultByChannel(context.Context, string) (*store.ClaudeCredentialGroupRecord, error)
+		GetByID(context.Context, int64) (*claudestore.ClaudeCredentialGroupRecord, error)
+		GetDefaultByChannel(context.Context, string) (*claudestore.ClaudeCredentialGroupRecord, error)
 	},
 ) map[string]string {
 	lookup := make(map[string]string)
@@ -614,11 +614,11 @@ func addEndpointStoreCredentialGroupLookup(
 	ctx context.Context,
 	lookup map[string]string,
 	endpointStore interface {
-		List(context.Context) ([]*store.EndpointRecord, error)
+		List(context.Context) ([]*claudestore.EndpointRecord, error)
 	},
 	groupStore interface {
-		GetByID(context.Context, int64) (*store.ClaudeCredentialGroupRecord, error)
-		GetDefaultByChannel(context.Context, string) (*store.ClaudeCredentialGroupRecord, error)
+		GetByID(context.Context, int64) (*claudestore.ClaudeCredentialGroupRecord, error)
+		GetDefaultByChannel(context.Context, string) (*claudestore.ClaudeCredentialGroupRecord, error)
 	},
 ) {
 	if endpointStore == nil {
@@ -646,10 +646,10 @@ func addEndpointStoreCredentialGroupLookup(
 
 func endpointRecordCredentialGroupName(
 	ctx context.Context,
-	record *store.EndpointRecord,
+	record *claudestore.EndpointRecord,
 	groupStore interface {
-		GetByID(context.Context, int64) (*store.ClaudeCredentialGroupRecord, error)
-		GetDefaultByChannel(context.Context, string) (*store.ClaudeCredentialGroupRecord, error)
+		GetByID(context.Context, int64) (*claudestore.ClaudeCredentialGroupRecord, error)
+		GetDefaultByChannel(context.Context, string) (*claudestore.ClaudeCredentialGroupRecord, error)
 	},
 	groupByID map[int64]string,
 	defaultGroupByChannel map[string]string,

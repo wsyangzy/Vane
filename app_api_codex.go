@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"ai-relay-forwarder/internal/codexproxy"
-	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/providers/codex/proxy"
+	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -87,52 +87,52 @@ type CodexChannelInfo struct {
 
 // CodexCredentialGroupInfo 提供给前端展示的凭证分组信息。
 type CodexCredentialGroupInfo struct {
-	ID                       int64                              `json:"id"`
-	ChannelID                int64                              `json:"channel_id"`
-	Name                     string                             `json:"name"`
-	ApiKey                   string                             `json:"api_key"`
-	ApiKeyMasked             string                             `json:"api_key_masked"`
-	IsDefault                bool                               `json:"is_default"`
-	CostMultiplier           float64                            `json:"costMultiplier"`
-	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
-	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
-	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
-	CreatedAt                string                             `json:"created_at"`
-	UpdatedAt                string                             `json:"updated_at"`
+	ID                       int64                                   `json:"id"`
+	ChannelID                int64                                   `json:"channel_id"`
+	Name                     string                                  `json:"name"`
+	ApiKey                   string                                  `json:"api_key"`
+	ApiKeyMasked             string                                  `json:"api_key_masked"`
+	IsDefault                bool                                    `json:"is_default"`
+	CostMultiplier           float64                                 `json:"costMultiplier"`
+	InputCostMultiplier      float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                                 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                                 `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	CreatedAt                string                                  `json:"created_at"`
+	UpdatedAt                string                                  `json:"updated_at"`
 }
 
 // CodexEndpointInfo 提供给前端展示的端点信息（name + base_url）。
 type CodexEndpointInfo struct {
-	ID                       int64                              `json:"id"`
-	ChannelID                int64                              `json:"channel_id"`
-	CredentialGroupID        int64                              `json:"credential_group_id"`
-	CredentialGroupName      string                             `json:"credential_group_name"`
-	ApiKey                   string                             `json:"api_key"`
-	ApiKeyMasked             string                             `json:"api_key_masked"`
-	Name                     string                             `json:"name"`
-	BaseURL                  string                             `json:"base_url"`
-	IsActive                 bool                               `json:"is_active"`
-	FailoverEnabled          bool                               `json:"failover_enabled"`
-	SkipHealthCheck          bool                               `json:"skip_health_check"`
-	Healthy                  bool                               `json:"healthy"`
-	HealthState              string                             `json:"health_state"`
-	HealthInScope            bool                               `json:"health_in_scope"`
-	ResponseTimeMS           int64                              `json:"response_time_ms"`
-	LastCheck                string                             `json:"last_check"`
-	LastFailCode             int                                `json:"last_fail_code"`
-	LastFailReason           string                             `json:"last_fail_reason"`
-	Priority                 int                                `json:"priority"`
-	TimeoutSeconds           int                                `json:"timeout_seconds"`
-	CostMultiplier           float64                            `json:"costMultiplier"`
-	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
-	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
-	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
-	CreatedAt                string                             `json:"created_at"`
-	UpdatedAt                string                             `json:"updated_at"`
+	ID                       int64                                   `json:"id"`
+	ChannelID                int64                                   `json:"channel_id"`
+	CredentialGroupID        int64                                   `json:"credential_group_id"`
+	CredentialGroupName      string                                  `json:"credential_group_name"`
+	ApiKey                   string                                  `json:"api_key"`
+	ApiKeyMasked             string                                  `json:"api_key_masked"`
+	Name                     string                                  `json:"name"`
+	BaseURL                  string                                  `json:"base_url"`
+	IsActive                 bool                                    `json:"is_active"`
+	FailoverEnabled          bool                                    `json:"failover_enabled"`
+	SkipHealthCheck          bool                                    `json:"skip_health_check"`
+	Healthy                  bool                                    `json:"healthy"`
+	HealthState              string                                  `json:"health_state"`
+	HealthInScope            bool                                    `json:"health_in_scope"`
+	ResponseTimeMS           int64                                   `json:"response_time_ms"`
+	LastCheck                string                                  `json:"last_check"`
+	LastFailCode             int                                     `json:"last_fail_code"`
+	LastFailReason           string                                  `json:"last_fail_reason"`
+	Priority                 int                                     `json:"priority"`
+	TimeoutSeconds           int                                     `json:"timeout_seconds"`
+	CostMultiplier           float64                                 `json:"costMultiplier"`
+	InputCostMultiplier      float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                                 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                                 `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	CreatedAt                string                                  `json:"created_at"`
+	UpdatedAt                string                                  `json:"updated_at"`
 }
 
 // CreateCodexChannelInput 创建渠道（不含端点）。
@@ -159,63 +159,63 @@ type UpdateCodexChannelInput struct {
 }
 
 type CreateCodexCredentialGroupInput struct {
-	ChannelID                int64                              `json:"channel_id"`
-	Name                     string                             `json:"name"`
-	ApiKey                   string                             `json:"api_key"`
-	IsDefault                bool                               `json:"is_default"`
-	CostMultiplier           float64                            `json:"costMultiplier"`
-	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
-	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
-	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	ChannelID                int64                                   `json:"channel_id"`
+	Name                     string                                  `json:"name"`
+	ApiKey                   string                                  `json:"api_key"`
+	IsDefault                bool                                    `json:"is_default"`
+	CostMultiplier           float64                                 `json:"costMultiplier"`
+	InputCostMultiplier      float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                                 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                                 `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
 }
 
 type UpdateCodexCredentialGroupInput struct {
-	Name                     string                             `json:"name"`
-	ApiKey                   string                             `json:"api_key"`
-	IsDefault                bool                               `json:"is_default"`
-	CostMultiplier           float64                            `json:"costMultiplier"`
-	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`
-	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
-	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	Name                     string                                  `json:"name"`
+	ApiKey                   string                                  `json:"api_key"`
+	IsDefault                bool                                    `json:"is_default"`
+	CostMultiplier           float64                                 `json:"costMultiplier"`
+	InputCostMultiplier      float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier     float64                                 `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  float64                                 `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
 }
 
 type CreateCodexEndpointInput struct {
-	ChannelID                int64                              `json:"channel_id"`
-	CredentialGroupID        int64                              `json:"credential_group_id"`
-	ApiKey                   string                             `json:"api_key"`
-	Name                     string                             `json:"name"`
-	BaseURL                  string                             `json:"base_url"`
-	FailoverEnabled          *bool                              `json:"failover_enabled"` // nil 时默认 true
-	SkipHealthCheck          bool                               `json:"skip_health_check"`
-	Priority                 *int                               `json:"priority"`
-	TimeoutSeconds           int                                `json:"timeout_seconds"`         // 0 = 使用全局超时
-	CostMultiplier           float64                            `json:"costMultiplier"`          // 默认 1.0
-	InputCostMultiplier      float64                            `json:"inputCostMultiplier"`     // 默认 1.0
-	OutputCostMultiplier     float64                            `json:"outputCostMultiplier"`    // 默认 1.0
-	CacheReadCostMultiplier  float64                            `json:"cacheReadCostMultiplier"` // 默认 1.0
-	BillingOutputTokenSource string                             `json:"billingOutputTokenSource"`
-	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	ChannelID                int64                                   `json:"channel_id"`
+	CredentialGroupID        int64                                   `json:"credential_group_id"`
+	ApiKey                   string                                  `json:"api_key"`
+	Name                     string                                  `json:"name"`
+	BaseURL                  string                                  `json:"base_url"`
+	FailoverEnabled          *bool                                   `json:"failover_enabled"` // nil 时默认 true
+	SkipHealthCheck          bool                                    `json:"skip_health_check"`
+	Priority                 *int                                    `json:"priority"`
+	TimeoutSeconds           int                                     `json:"timeout_seconds"`         // 0 = 使用全局超时
+	CostMultiplier           float64                                 `json:"costMultiplier"`          // 默认 1.0
+	InputCostMultiplier      float64                                 `json:"inputCostMultiplier"`     // 默认 1.0
+	OutputCostMultiplier     float64                                 `json:"outputCostMultiplier"`    // 默认 1.0
+	CacheReadCostMultiplier  float64                                 `json:"cacheReadCostMultiplier"` // 默认 1.0
+	BillingOutputTokenSource string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
 }
 
 type UpdateCodexEndpointInput struct {
-	Name                     string                             `json:"name"`
-	BaseURL                  string                             `json:"base_url"`
-	CredentialGroupID        *int64                             `json:"credential_group_id"`
-	ApiKey                   *string                            `json:"api_key"`
-	FailoverEnabled          *bool                              `json:"failover_enabled"`
-	SkipHealthCheck          *bool                              `json:"skip_health_check"`
-	Priority                 *int                               `json:"priority"`
-	TimeoutSeconds           *int                               `json:"timeout_seconds"`
-	CostMultiplier           *float64                           `json:"costMultiplier"`
-	InputCostMultiplier      *float64                           `json:"inputCostMultiplier"`
-	OutputCostMultiplier     *float64                           `json:"outputCostMultiplier"`
-	CacheReadCostMultiplier  *float64                           `json:"cacheReadCostMultiplier"`
-	BillingOutputTokenSource *string                            `json:"billingOutputTokenSource"`
-	ModelMultipliers         []store.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	Name                     string                                  `json:"name"`
+	BaseURL                  string                                  `json:"base_url"`
+	CredentialGroupID        *int64                                  `json:"credential_group_id"`
+	ApiKey                   *string                                 `json:"api_key"`
+	FailoverEnabled          *bool                                   `json:"failover_enabled"`
+	SkipHealthCheck          *bool                                   `json:"skip_health_check"`
+	Priority                 *int                                    `json:"priority"`
+	TimeoutSeconds           *int                                    `json:"timeout_seconds"`
+	CostMultiplier           *float64                                `json:"costMultiplier"`
+	InputCostMultiplier      *float64                                `json:"inputCostMultiplier"`
+	OutputCostMultiplier     *float64                                `json:"outputCostMultiplier"`
+	CacheReadCostMultiplier  *float64                                `json:"cacheReadCostMultiplier"`
+	BillingOutputTokenSource *string                                 `json:"billingOutputTokenSource"`
+	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
 }
 
 // ============================================================================
@@ -282,7 +282,7 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("获取渠道 '%s' 端点列表失败: %w", ch.Name, err)
 		}
-		var credentialGroups []*store.CodexCredentialGroupRecord
+		var credentialGroups []*codexstore.CodexCredentialGroupRecord
 		if credentialGroupService != nil {
 			credentialGroups, err = credentialGroupService.ListByChannelID(ctx, ch.ID)
 			if err != nil {
@@ -425,7 +425,7 @@ func (a *App) DeleteCodexChannelByID(id int64) error {
 
 	if target.IsActive {
 		nextChannel, _ := channelService.GetActiveChannel(ctx)
-		var nextEndpoint *store.CodexEndpointRecord
+		var nextEndpoint *codexstore.CodexEndpointRecord
 		if nextChannel != nil {
 			nextEndpoint, err = endpointService.GetActiveByChannelID(ctx, nextChannel.ID)
 			if err != nil {
@@ -668,7 +668,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		priority = *input.Priority
 	}
 
-	record := &store.CodexEndpointRecord{
+	record := &codexstore.CodexEndpointRecord{
 		ChannelID:                input.ChannelID,
 		CredentialGroupID:        input.CredentialGroupID,
 		ApiKey:                   input.ApiKey,
@@ -1069,8 +1069,8 @@ func (a *App) ActivateCodexProvider(id int64) error {
 // 内部转换辅助
 // ============================================================================
 
-func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMapping map[string]string, reasoningEffort, website string, enable1M bool) *store.CodexChannelRecord {
-	return &store.CodexChannelRecord{
+func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMapping map[string]string, reasoningEffort, website string, enable1M bool) *codexstore.CodexChannelRecord {
+	return &codexstore.CodexChannelRecord{
 		Name:            name,
 		ProviderType:    providerType,
 		ApiKey:          apiKey,
@@ -1082,8 +1082,8 @@ func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMa
 	}
 }
 
-func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) *store.CodexCredentialGroupRecord {
-	return &store.CodexCredentialGroupRecord{
+func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []codexstore.CodexModelMultiplierRecord) *codexstore.CodexCredentialGroupRecord {
+	return &codexstore.CodexCredentialGroupRecord{
 		ChannelID:                channelID,
 		Name:                     name,
 		ApiKey:                   apiKey,
@@ -1097,7 +1097,7 @@ func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isD
 	}
 }
 
-func buildCodexCredentialGroupInfo(record *store.CodexCredentialGroupRecord) CodexCredentialGroupInfo {
+func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord) CodexCredentialGroupInfo {
 	if record == nil {
 		return CodexCredentialGroupInfo{}
 	}
@@ -1130,7 +1130,7 @@ func copyCodexModelMapping(modelMapping map[string]string) map[string]string {
 	return copied
 }
 
-func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints []*store.CodexEndpointRecord, credentialGroups []*store.CodexCredentialGroupRecord) CodexChannelInfo {
+func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpoints []*codexstore.CodexEndpointRecord, credentialGroups []*codexstore.CodexCredentialGroupRecord) CodexChannelInfo {
 	a.mu.RLock()
 	endpointMgr := a.codexEndpointMgr
 	healthCheck := a.codexHealthCheck
@@ -1216,8 +1216,8 @@ func (a *App) buildCodexChannelInfo(record *store.CodexChannelRecord, endpoints 
 }
 
 func codexEndpointRuntimeHealth(
-	channel *store.CodexChannelRecord,
-	endpoint *store.CodexEndpointRecord,
+	channel *codexstore.CodexChannelRecord,
+	endpoint *codexstore.CodexEndpointRecord,
 	manager *codexproxy.EndpointManager,
 	activeChannelID int64,
 	latencies map[int64]int64,

@@ -14,7 +14,7 @@ import (
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/providers/claude/proxy"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -279,8 +279,8 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 
 	// 创建模拟网络中断的读取器
 	networkErrorReader := &NetworkErrorReader{
-		data:     []byte(sseData),
-		position: 0,
+		data:       []byte(sseData),
+		position:   0,
 		errorAfter: len(sseData) - 100, // 在部分数据后产生网络错误
 	}
 

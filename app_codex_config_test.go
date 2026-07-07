@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai-relay-forwarder/internal/store"
+	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 
 	_ "modernc.org/sqlite"
 )
@@ -26,7 +26,7 @@ func TestCodexProviderSectionHeaderUsesQuotedKeyForUnicodeName(t *testing.T) {
 }
 
 func TestUpsertCodexProviderSectionUsesQuotedUnicodeHeader(t *testing.T) {
-	record := &store.CodexProviderRecord{
+	record := &codexstore.CodexProviderRecord{
 		Name:            "主渠道",
 		BaseURL:         "https://example.invalid/codex/v1",
 		ApiKey:          "test-key",

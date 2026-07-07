@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/providers/claude/proxy"
 	"ai-relay-forwarder/internal/tracking"
 )
 

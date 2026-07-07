@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"ai-relay-forwarder/internal/store"
+	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 )
 
 const codexProviderWireAPI = "responses"
@@ -849,7 +849,7 @@ func (a *App) getCodexAuthPath() (string, error) {
 	return filepath.Join(codexHome, "auth.json"), nil
 }
 
-func (a *App) syncActiveCodexProviderToConfig(record *store.CodexProviderRecord, previousName string) error {
+func (a *App) syncActiveCodexProviderToConfig(record *codexstore.CodexProviderRecord, previousName string) error {
 	if record == nil {
 		return fmt.Errorf("Codex 提供商记录为空")
 	}
@@ -913,7 +913,7 @@ func (a *App) syncActiveCodexProviderToConfig(record *store.CodexProviderRecord,
 	return nil
 }
 
-func (a *App) removeCodexProviderConfig(name string, nextActive *store.CodexProviderRecord) error {
+func (a *App) removeCodexProviderConfig(name string, nextActive *codexstore.CodexProviderRecord) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("Codex 提供商标识不能为空")
 	}
@@ -1059,7 +1059,7 @@ func upsertCodexAuthConfig(content string, apiKey string) ([]byte, error) {
 	return append(updated, '\n'), nil
 }
 
-func buildCodexTopLevelConfigValues(record *store.CodexProviderRecord) map[string]codexTopLevelValue {
+func buildCodexTopLevelConfigValues(record *codexstore.CodexProviderRecord) map[string]codexTopLevelValue {
 	values := map[string]codexTopLevelValue{
 		"model": {
 			Value:  record.Model,
@@ -1186,7 +1186,7 @@ func removeCodexTopLevelConfig(content string, keys []string) string {
 	return joinCodexLines(filtered)
 }
 
-func upsertCodexProviderSection(content string, record *store.CodexProviderRecord) (string, error) {
+func upsertCodexProviderSection(content string, record *codexstore.CodexProviderRecord) (string, error) {
 	if record == nil {
 		return "", fmt.Errorf("Codex 提供商记录为空")
 	}
@@ -1236,7 +1236,7 @@ func deleteCodexProviderSection(content, name string) string {
 	return joinCodexLines(lines)
 }
 
-func renderCodexProviderSection(record *store.CodexProviderRecord) []string {
+func renderCodexProviderSection(record *codexstore.CodexProviderRecord) []string {
 	return []string{
 		codexProviderSectionHeader(record.Name),
 		fmt.Sprintf("name = \"%s\"", escapeTomlString(record.Name)),
@@ -1359,7 +1359,7 @@ func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) (
 //   - 全局也为空 → 写入空字符串（保持现有行为，由 Codex CLI 自己报错）
 //
 // 改为方法以便访问 App 的 codex 配置读取能力。
-func (a *App) codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRecord, endpoint *store.CodexEndpointRecord) *store.CodexProviderRecord {
+func (a *App) codexChannelEndpointAsProviderRecord(channel *codexstore.CodexChannelRecord, endpoint *codexstore.CodexEndpointRecord) *codexstore.CodexProviderRecord {
 	if channel == nil || endpoint == nil {
 		return nil
 	}
@@ -1386,7 +1386,7 @@ func (a *App) codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRe
 		effectiveApiKey = channel.ApiKey
 	}
 
-	return &store.CodexProviderRecord{
+	return &codexstore.CodexProviderRecord{
 		Name:            channel.Name,
 		ProviderType:    channel.ProviderType,
 		BaseURL:         endpoint.BaseURL,
@@ -1400,7 +1400,7 @@ func (a *App) codexChannelEndpointAsProviderRecord(channel *store.CodexChannelRe
 
 // syncActiveCodexChannelToConfig 将渠道+激活端点同步到 ~/.codex/config.toml 与 auth.json。
 // previousChannelName 不为空且与当前不同时，先移除旧 section（用于渠道改名）。
-func (a *App) syncActiveCodexChannelToConfig(channel *store.CodexChannelRecord, endpoint *store.CodexEndpointRecord, previousChannelName string) error {
+func (a *App) syncActiveCodexChannelToConfig(channel *codexstore.CodexChannelRecord, endpoint *codexstore.CodexEndpointRecord, previousChannelName string) error {
 	if channel == nil {
 		return fmt.Errorf("Codex 渠道为空")
 	}
@@ -1429,12 +1429,12 @@ func (a *App) isCodexProxyEnabled() bool {
 
 // applyCodexProxyOverride 已废弃 - 代理启用时不再修改 config.toml
 // 保留函数以避免影响其他可能的调用者，但实际是 no-op
-func (a *App) applyCodexProxyOverride(_ *store.CodexProviderRecord) {
+func (a *App) applyCodexProxyOverride(_ *codexstore.CodexProviderRecord) {
 	// no-op: Codex 代理启用时跳过 config.toml 写入
 }
 
 // removeCodexChannelConfig 删除指定渠道的 config.toml section；若 nextChannel/nextEndpoint 不为空，则切换到下一个渠道。
-func (a *App) removeCodexChannelConfig(name string, nextChannel *store.CodexChannelRecord, nextEndpoint *store.CodexEndpointRecord) error {
+func (a *App) removeCodexChannelConfig(name string, nextChannel *codexstore.CodexChannelRecord, nextEndpoint *codexstore.CodexEndpointRecord) error {
 	// 当 Codex 代理启用时，不再修改 config.toml
 	if a.isCodexProxyEnabled() {
 		if a.logger != nil {
@@ -1444,7 +1444,7 @@ func (a *App) removeCodexChannelConfig(name string, nextChannel *store.CodexChan
 		}
 		return nil
 	}
-	var nextRecord *store.CodexProviderRecord
+	var nextRecord *codexstore.CodexProviderRecord
 	if nextChannel != nil && nextEndpoint != nil {
 		nextRecord = a.codexChannelEndpointAsProviderRecord(nextChannel, nextEndpoint)
 	}

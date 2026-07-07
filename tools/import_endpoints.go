@@ -10,7 +10,7 @@ import (
 	"log"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/store"
+	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 
 	_ "modernc.org/sqlite"
 )
@@ -32,11 +32,11 @@ func main() {
 	defer db.Close()
 
 	// 3. 创建存储层
-	endpointStore := store.NewSQLiteEndpointStore(db)
+	endpointStore := claudestore.NewSQLiteEndpointStore(db)
 
 	// 4. 转换端点配置为记录
 	ctx := context.Background()
-	records := make([]*store.EndpointRecord, 0, len(cfg.Endpoints))
+	records := make([]*claudestore.EndpointRecord, 0, len(cfg.Endpoints))
 
 	for i, ep := range cfg.Endpoints {
 		// 确定 channel（优先使用 group，否则用 name）
@@ -79,7 +79,7 @@ func main() {
 			cooldownSeconds = &cd
 		}
 
-		record := &store.EndpointRecord{
+		record := &claudestore.EndpointRecord{
 			Channel:                     channel,
 			Name:                        ep.Name,
 			URL:                         ep.URL,

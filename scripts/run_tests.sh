@@ -155,8 +155,8 @@ if [[ $RUN_UNIT == true ]]; then
         run_test_package "./config" "配置原有"
     fi
     
-    if [[ -f "internal/proxy/token_parser_test.go" ]]; then
-        run_test_package "./internal/proxy" "代理原有"
+    if [[ -f "internal/providers/claude/proxy/token_parser_test.go" ]]; then
+        run_test_package "./internal/providers/claude/proxy" "代理原有"
     fi
     
     if [[ -f "internal/endpoint/manager_test.go" ]]; then

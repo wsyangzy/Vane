@@ -22,13 +22,17 @@ import (
 
 	"ai-relay-forwarder/config"
 	appcache "ai-relay-forwarder/internal/cache"
-	"ai-relay-forwarder/internal/codexproxy"
 	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/events"
 	"ai-relay-forwarder/internal/logging"
 	"ai-relay-forwarder/internal/middleware"
 	"ai-relay-forwarder/internal/privacy"
-	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/providers/claude/proxy"
+	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
+	claudestore "ai-relay-forwarder/internal/providers/claude/store"
+	codexproxy "ai-relay-forwarder/internal/providers/codex/proxy"
+	codexservice "ai-relay-forwarder/internal/providers/codex/service"
+	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/service"
 	"ai-relay-forwarder/internal/store"
 	"ai-relay-forwarder/internal/tracking"
@@ -67,16 +71,16 @@ type App struct {
 	endpointCostHistoryCache *appcache.Cache[[]EndpointCostItem]
 
 	// 端点存储 (SQLite)
-	endpointStore   store.EndpointStore      // 端点数据持久化
-	endpointService *service.EndpointService // 端点业务服务
+	endpointStore   claudestore.EndpointStore      // 端点数据持久化
+	endpointService *claudeservice.EndpointService // 端点业务服务
 
 	// 渠道存储 (SQLite)
-	channelStore   store.ChannelStore      // 渠道数据持久化
-	channelService *service.ChannelService // 渠道业务服务
+	channelStore   claudestore.ChannelStore      // 渠道数据持久化
+	channelService *claudeservice.ChannelService // 渠道业务服务
 
 	// Claude 凭证分组 (SQLite)
-	claudeCredentialGroupStore   store.ClaudeCredentialGroupStore      // Claude Token/API Key 分组
-	claudeCredentialGroupService *service.ClaudeCredentialGroupService // Claude 凭证分组业务
+	claudeCredentialGroupStore   claudestore.ClaudeCredentialGroupStore      // Claude Token/API Key 分组
+	claudeCredentialGroupService *claudeservice.ClaudeCredentialGroupService // Claude 凭证分组业务
 
 	// 模型定价存储 (SQLite)
 	modelPricingStore   store.ModelPricingStore      // 模型定价数据持久化
@@ -92,16 +96,16 @@ type App struct {
 	privacyService *privacy.Service
 
 	// Codex Provider 存储 (SQLite)
-	codexProviderStore   store.CodexProviderStore      // Codex Provider 数据持久化（旧接口转调用）
-	codexProviderService *service.CodexProviderService // Codex Provider 业务服务（旧接口转调用）
+	codexProviderStore   codexstore.CodexProviderStore      // Codex Provider 数据持久化（旧接口转调用）
+	codexProviderService *codexservice.CodexProviderService // Codex Provider 业务服务（旧接口转调用）
 
 	// Codex 渠道-端点 两层存储 (SQLite, 2026-05-13 引入)
-	codexChannelStore           store.CodexChannelStore              // 渠道存储（共用配置）
-	codexEndpointStore          store.CodexEndpointStore             // 端点存储（仅 base_url）
-	codexCredentialGroupStore   store.CodexCredentialGroupStore      // Codex 凭证分组存储
-	codexChannelService         *service.CodexChannelService         // 渠道业务
-	codexEndpointService        *service.CodexEndpointService        // 端点业务
-	codexCredentialGroupService *service.CodexCredentialGroupService // 凭证分组业务
+	codexChannelStore           codexstore.CodexChannelStore              // 渠道存储（共用配置）
+	codexEndpointStore          codexstore.CodexEndpointStore             // 端点存储（仅 base_url）
+	codexCredentialGroupStore   codexstore.CodexCredentialGroupStore      // Codex 凭证分组存储
+	codexChannelService         *codexservice.CodexChannelService         // 渠道业务
+	codexEndpointService        *codexservice.CodexEndpointService        // 端点业务
+	codexCredentialGroupService *codexservice.CodexCredentialGroupService // 凭证分组业务
 
 	// HTTP 代理服务器 (保留，监听配置的端口)
 	proxyServer *http.Server
@@ -743,18 +747,18 @@ func (a *App) setupEndpointStore() {
 	}
 
 	// 创建 EndpointStore
-	a.endpointStore = store.NewSQLiteEndpointStore(db)
+	a.endpointStore = claudestore.NewSQLiteEndpointStore(db)
 
 	// 创建 ChannelStore / ChannelService
-	a.channelStore = store.NewSQLiteChannelStore(db)
-	a.channelService = service.NewChannelService(a.channelStore)
+	a.channelStore = claudestore.NewSQLiteChannelStore(db)
+	a.channelService = claudeservice.NewChannelService(a.channelStore)
 
 	// 创建 Claude CredentialGroupStore / Service
-	a.claudeCredentialGroupStore = store.NewSQLiteClaudeCredentialGroupStore(db)
-	a.claudeCredentialGroupService = service.NewClaudeCredentialGroupService(a.claudeCredentialGroupStore, a.channelStore, a.endpointStore)
+	a.claudeCredentialGroupStore = claudestore.NewSQLiteClaudeCredentialGroupStore(db)
+	a.claudeCredentialGroupService = claudeservice.NewClaudeCredentialGroupService(a.claudeCredentialGroupStore, a.channelStore, a.endpointStore)
 
 	// 创建 EndpointService
-	a.endpointService = service.NewEndpointService(a.endpointStore, a.endpointManager, a.config, a.claudeCredentialGroupStore)
+	a.endpointService = claudeservice.NewEndpointService(a.endpointStore, a.endpointManager, a.config, a.claudeCredentialGroupStore)
 
 	// 从数据库同步端点到内存
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -896,14 +900,14 @@ func (a *App) ensureCodexProviderService() {
 		return
 	}
 
-	codexProviderStore := store.NewSQLiteCodexProviderStore(db)
-	codexProviderService := service.NewCodexProviderService(codexProviderStore)
-	codexChannelStore := store.NewSQLiteCodexChannelStore(db)
-	codexEndpointStore := store.NewSQLiteCodexEndpointStore(db)
-	codexCredentialGroupStore := store.NewSQLiteCodexCredentialGroupStore(db)
-	codexChannelService := service.NewCodexChannelService(codexChannelStore, codexEndpointStore)
-	codexEndpointService := service.NewCodexEndpointService(codexEndpointStore, codexChannelStore, codexCredentialGroupStore)
-	codexCredentialGroupService := service.NewCodexCredentialGroupService(codexCredentialGroupStore, codexChannelStore, codexEndpointStore)
+	codexProviderStore := codexstore.NewSQLiteCodexProviderStore(db)
+	codexProviderService := codexservice.NewCodexProviderService(codexProviderStore)
+	codexChannelStore := codexstore.NewSQLiteCodexChannelStore(db)
+	codexEndpointStore := codexstore.NewSQLiteCodexEndpointStore(db)
+	codexCredentialGroupStore := codexstore.NewSQLiteCodexCredentialGroupStore(db)
+	codexChannelService := codexservice.NewCodexChannelService(codexChannelStore, codexEndpointStore)
+	codexEndpointService := codexservice.NewCodexEndpointService(codexEndpointStore, codexChannelStore, codexCredentialGroupStore)
+	codexCredentialGroupService := codexservice.NewCodexCredentialGroupService(codexCredentialGroupStore, codexChannelStore, codexEndpointStore)
 
 	a.mu.Lock()
 	if a.codexProviderService == nil {
@@ -1137,8 +1141,8 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 				}
 				legacyKeyCounts[tracking.EndpointMultiplierKey(ep.Channel, ep.Name)]++
 			}
-			claudeGroupsByID := make(map[int64]*store.ClaudeCredentialGroupRecord)
-			claudeDefaultGroupByChannel := make(map[string]*store.ClaudeCredentialGroupRecord)
+			claudeGroupsByID := make(map[int64]*claudestore.ClaudeCredentialGroupRecord)
+			claudeDefaultGroupByChannel := make(map[string]*claudestore.ClaudeCredentialGroupRecord)
 			if a.claudeCredentialGroupStore != nil {
 				for _, ep := range endpoints {
 					if ep == nil {
@@ -1200,7 +1204,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 				}
 				keys := []string{
 					tracking.EndpointMultiplierGroupKey(ep.Channel, groupName, ep.Name),
-					service.EndpointRuntimeKey(ep),
+					claudeservice.EndpointRuntimeKey(ep),
 				}
 				legacyKey := tracking.EndpointMultiplierKey(ep.Channel, ep.Name)
 				if legacyKeyCounts[legacyKey] <= 1 {
@@ -1228,7 +1232,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 			a.logger.Warn("⚠️ 获取 Codex 渠道列表失败", "error", err)
 		} else {
 			for _, ch := range channels {
-				var defaultGroup *store.CodexCredentialGroupRecord
+				var defaultGroup *codexstore.CodexCredentialGroupRecord
 				if a.codexCredentialGroupStore != nil {
 					defaultGroup, _ = a.codexCredentialGroupStore.GetDefaultByChannelID(ctx, ch.ID)
 				}
@@ -1281,7 +1285,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 	a.logger.Debug("已同步端点倍率到 UsageTracker", "count", len(multipliers))
 }
 
-func endpointModelMultipliersToTracking(rules []store.EndpointModelMultiplierRecord) []tracking.ModelMultiplier {
+func endpointModelMultipliersToTracking(rules []claudestore.EndpointModelMultiplierRecord) []tracking.ModelMultiplier {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -1298,7 +1302,7 @@ func endpointModelMultipliersToTracking(rules []store.EndpointModelMultiplierRec
 	return result
 }
 
-func codexModelMultipliersToTracking(rules []store.CodexModelMultiplierRecord) []tracking.ModelMultiplier {
+func codexModelMultipliersToTracking(rules []codexstore.CodexModelMultiplierRecord) []tracking.ModelMultiplier {
 	if len(rules) == 0 {
 		return nil
 	}

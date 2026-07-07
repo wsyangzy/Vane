@@ -10,7 +10,7 @@ import (
 	"ai-relay-forwarder/config"
 	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/endpoint"
-	"ai-relay-forwarder/internal/store"
+	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -23,23 +23,23 @@ func (s endpointLookupStub) GetEndpoints() []*endpoint.Endpoint {
 }
 
 type endpointRecordLookupStub struct {
-	records []*store.EndpointRecord
+	records []*claudestore.EndpointRecord
 }
 
-func (s endpointRecordLookupStub) List(context.Context) ([]*store.EndpointRecord, error) {
+func (s endpointRecordLookupStub) List(context.Context) ([]*claudestore.EndpointRecord, error) {
 	return s.records, nil
 }
 
 type credentialGroupLookupStub struct {
-	byID     map[int64]*store.ClaudeCredentialGroupRecord
-	defaults map[string]*store.ClaudeCredentialGroupRecord
+	byID     map[int64]*claudestore.ClaudeCredentialGroupRecord
+	defaults map[string]*claudestore.ClaudeCredentialGroupRecord
 }
 
-func (s credentialGroupLookupStub) GetByID(_ context.Context, id int64) (*store.ClaudeCredentialGroupRecord, error) {
+func (s credentialGroupLookupStub) GetByID(_ context.Context, id int64) (*claudestore.ClaudeCredentialGroupRecord, error) {
 	return s.byID[id], nil
 }
 
-func (s credentialGroupLookupStub) GetDefaultByChannel(_ context.Context, channel string) (*store.ClaudeCredentialGroupRecord, error) {
+func (s credentialGroupLookupStub) GetDefaultByChannel(_ context.Context, channel string) (*claudestore.ClaudeCredentialGroupRecord, error) {
 	return s.defaults[channel], nil
 }
 
@@ -152,13 +152,13 @@ func TestEndpointChainCredentialGroupLookupUsesStoredDefaultGroup(t *testing.T) 
 		context.Background(),
 		endpointLookupStub{},
 		endpointRecordLookupStub{
-			records: []*store.EndpointRecord{
+			records: []*claudestore.EndpointRecord{
 				{Channel: "anyrouter", Name: "大陆网络优化", URL: "https://cn.example/v1"},
 				{Channel: "anyrouter", Name: "主站直连", URL: "https://direct.example/v1"},
 			},
 		},
 		credentialGroupLookupStub{
-			defaults: map[string]*store.ClaudeCredentialGroupRecord{
+			defaults: map[string]*claudestore.ClaudeCredentialGroupRecord{
 				"anyrouter": {Channel: "anyrouter", Name: "默认分组", IsDefault: true},
 			},
 		},

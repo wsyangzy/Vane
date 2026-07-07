@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/proxy"
+	"ai-relay-forwarder/internal/providers/claude/proxy"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -276,6 +276,7 @@ func TestTokenParserIsolated(t *testing.T) {
 // 快速辅助类型，避免测试超时
 
 type quickFlusher struct{}
+
 func (f *quickFlusher) Flush() {}
 
 type quickEOFReader struct {

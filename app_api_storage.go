@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/endpoint"
-	"ai-relay-forwarder/internal/service"
-	"ai-relay-forwarder/internal/store"
+	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
+	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 )
 
 // ============================================================
@@ -23,33 +23,33 @@ import (
 
 // EndpointRecordInfo 端点记录信息（给前端用的结构体）
 type EndpointRecordInfo struct {
-	ID                            int64                                 `json:"id"`
-	Channel                       string                                `json:"channel"`
-	CredentialGroupID             int64                                 `json:"credential_group_id"`
-	CredentialGroupName           string                                `json:"credential_group_name"`
-	Name                          string                                `json:"name"`
-	URL                           string                                `json:"url"`
-	Token                         string                                `json:"token"`        // 本地桌面应用，直接返回原始 Token
-	ApiKey                        string                                `json:"api_key"`      // 本地桌面应用，直接返回原始 ApiKey
-	TokenMasked                   string                                `json:"token_masked"` // 脱敏后的 Token（列表展示用）
-	ApiKeyMasked                  string                                `json:"api_key_masked"`
-	Headers                       map[string]string                     `json:"headers"`
-	Priority                      int                                   `json:"priority"`
-	FailoverEnabled               bool                                  `json:"failover_enabled"`
-	SkipHealthCheck               bool                                  `json:"skip_health_check"` // 跳过健康检查
-	CooldownSeconds               *int                                  `json:"cooldown_seconds"`
-	TimeoutSeconds                int                                   `json:"timeout_seconds"`
-	SupportsCountTokens           bool                                  `json:"supports_count_tokens"`
-	CostMultiplier                float64                               `json:"cost_multiplier"`
-	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
-	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
-	Enabled                       bool                                  `json:"enabled"`
-	CreatedAt                     string                                `json:"created_at"`
-	UpdatedAt                     string                                `json:"updated_at"`
+	ID                            int64                                       `json:"id"`
+	Channel                       string                                      `json:"channel"`
+	CredentialGroupID             int64                                       `json:"credential_group_id"`
+	CredentialGroupName           string                                      `json:"credential_group_name"`
+	Name                          string                                      `json:"name"`
+	URL                           string                                      `json:"url"`
+	Token                         string                                      `json:"token"`        // 本地桌面应用，直接返回原始 Token
+	ApiKey                        string                                      `json:"api_key"`      // 本地桌面应用，直接返回原始 ApiKey
+	TokenMasked                   string                                      `json:"token_masked"` // 脱敏后的 Token（列表展示用）
+	ApiKeyMasked                  string                                      `json:"api_key_masked"`
+	Headers                       map[string]string                           `json:"headers"`
+	Priority                      int                                         `json:"priority"`
+	FailoverEnabled               bool                                        `json:"failover_enabled"`
+	SkipHealthCheck               bool                                        `json:"skip_health_check"` // 跳过健康检查
+	CooldownSeconds               *int                                        `json:"cooldown_seconds"`
+	TimeoutSeconds                int                                         `json:"timeout_seconds"`
+	SupportsCountTokens           bool                                        `json:"supports_count_tokens"`
+	CostMultiplier                float64                                     `json:"cost_multiplier"`
+	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                                     `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                                     `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                                     `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	Enabled                       bool                                        `json:"enabled"`
+	CreatedAt                     string                                      `json:"created_at"`
+	UpdatedAt                     string                                      `json:"updated_at"`
 	// 运行时健康状态
 	Healthy        bool    `json:"healthy"`
 	HealthState    string  `json:"health_state"`  // 健康状态枚举 (healthy/unhealthy/unchecked/skipped)
@@ -67,62 +67,62 @@ type EndpointRecordInfo struct {
 
 // CreateEndpointInput 创建端点的输入参数
 type CreateEndpointInput struct {
-	Channel                       string                                `json:"channel"`
-	CredentialGroupID             int64                                 `json:"credential_group_id"`
-	Name                          string                                `json:"name"`
-	URL                           string                                `json:"url"`
-	Token                         string                                `json:"token"`
-	ApiKey                        string                                `json:"api_key"`
-	Headers                       map[string]string                     `json:"headers"`
-	Priority                      int                                   `json:"priority"`
-	FailoverEnabled               bool                                  `json:"failover_enabled"`
-	SkipHealthCheck               bool                                  `json:"skip_health_check"` // 跳过健康检查
-	CooldownSeconds               *int                                  `json:"cooldown_seconds"`
-	TimeoutSeconds                int                                   `json:"timeout_seconds"`
-	SupportsCountTokens           bool                                  `json:"supports_count_tokens"`
-	CostMultiplier                float64                               `json:"cost_multiplier"`
-	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
-	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	Channel                       string                                      `json:"channel"`
+	CredentialGroupID             int64                                       `json:"credential_group_id"`
+	Name                          string                                      `json:"name"`
+	URL                           string                                      `json:"url"`
+	Token                         string                                      `json:"token"`
+	ApiKey                        string                                      `json:"api_key"`
+	Headers                       map[string]string                           `json:"headers"`
+	Priority                      int                                         `json:"priority"`
+	FailoverEnabled               bool                                        `json:"failover_enabled"`
+	SkipHealthCheck               bool                                        `json:"skip_health_check"` // 跳过健康检查
+	CooldownSeconds               *int                                        `json:"cooldown_seconds"`
+	TimeoutSeconds                int                                         `json:"timeout_seconds"`
+	SupportsCountTokens           bool                                        `json:"supports_count_tokens"`
+	CostMultiplier                float64                                     `json:"cost_multiplier"`
+	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                                     `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                                     `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                                     `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
 }
 
 type ClaudeCredentialGroupInfo struct {
-	ID                            int64                                 `json:"id"`
-	Channel                       string                                `json:"channel"`
-	Name                          string                                `json:"name"`
-	Token                         string                                `json:"token"`
-	ApiKey                        string                                `json:"api_key"`
-	TokenMasked                   string                                `json:"token_masked"`
-	ApiKeyMasked                  string                                `json:"api_key_masked"`
-	IsDefault                     bool                                  `json:"is_default"`
-	CostMultiplier                float64                               `json:"cost_multiplier"`
-	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
-	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
-	EndpointCount                 int                                   `json:"endpoint_count"`
-	CreatedAt                     string                                `json:"created_at"`
-	UpdatedAt                     string                                `json:"updated_at"`
+	ID                            int64                                       `json:"id"`
+	Channel                       string                                      `json:"channel"`
+	Name                          string                                      `json:"name"`
+	Token                         string                                      `json:"token"`
+	ApiKey                        string                                      `json:"api_key"`
+	TokenMasked                   string                                      `json:"token_masked"`
+	ApiKeyMasked                  string                                      `json:"api_key_masked"`
+	IsDefault                     bool                                        `json:"is_default"`
+	CostMultiplier                float64                                     `json:"cost_multiplier"`
+	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                                     `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                                     `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                                     `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	EndpointCount                 int                                         `json:"endpoint_count"`
+	CreatedAt                     string                                      `json:"created_at"`
+	UpdatedAt                     string                                      `json:"updated_at"`
 }
 
 type CreateClaudeCredentialGroupInput struct {
-	Channel                       string                                `json:"channel"`
-	Name                          string                                `json:"name"`
-	Token                         string                                `json:"token"`
-	ApiKey                        string                                `json:"api_key"`
-	IsDefault                     bool                                  `json:"is_default"`
-	CostMultiplier                float64                               `json:"cost_multiplier"`
-	InputCostMultiplier           float64                               `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64                               `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64                               `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64                               `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64                               `json:"cache_read_cost_multiplier"`
-	ModelMultipliers              []store.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	Channel                       string                                      `json:"channel"`
+	Name                          string                                      `json:"name"`
+	Token                         string                                      `json:"token"`
+	ApiKey                        string                                      `json:"api_key"`
+	IsDefault                     bool                                        `json:"is_default"`
+	CostMultiplier                float64                                     `json:"cost_multiplier"`
+	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64                                     `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64                                     `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64                                     `json:"cache_read_cost_multiplier"`
+	ModelMultipliers              []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
 }
 
 // EndpointStorageStatus 端点存储状态
@@ -194,7 +194,7 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 
 		// 获取运行时健康状态
 		if endpointManager != nil {
-			status := endpointManager.GetEndpointStatus(service.EndpointRuntimeKey(r))
+			status := endpointManager.GetEndpointStatus(claudeservice.EndpointRuntimeKey(r))
 			info.Healthy = status.Healthy
 			info.NeverChecked = status.NeverChecked
 			info.ResponseTimeMs = float64(status.ResponseTime) / float64(time.Millisecond)
@@ -301,7 +301,7 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	if v, ok := detail["cache_read_cost_multiplier"].(float64); ok {
 		info.CacheReadCostMultiplier = v
 	}
-	if v, ok := detail["model_multipliers"].([]store.EndpointModelMultiplierRecord); ok {
+	if v, ok := detail["model_multipliers"].([]claudestore.EndpointModelMultiplierRecord); ok {
 		info.ModelMultipliers = v
 	}
 	if v, ok := detail["enabled"].(bool); ok {
@@ -378,7 +378,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		}
 	}
 
-	record := &store.EndpointRecord{
+	record := &claudestore.EndpointRecord{
 		Channel:                       input.Channel,
 		CredentialGroupID:             input.CredentialGroupID,
 		Name:                          input.Name,
@@ -506,7 +506,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		modelMultipliers = existingRecord.ModelMultipliers
 	}
 
-	record := &store.EndpointRecord{
+	record := &claudestore.EndpointRecord{
 		ID:                            existingRecord.ID,
 		Channel:                       channel,
 		CredentialGroupID:             resolveEndpointCredentialGroupID(input.CredentialGroupID, existingRecord, channel),
@@ -644,7 +644,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 		modelMultipliers = existingRecord.ModelMultipliers
 	}
 
-	record := &store.EndpointRecord{
+	record := &claudestore.EndpointRecord{
 		ID:                            existingRecord.ID,
 		Channel:                       channel,
 		CredentialGroupID:             resolveEndpointCredentialGroupID(input.CredentialGroupID, existingRecord, channel),
@@ -707,7 +707,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 	return nil
 }
 
-func resolveEndpointCredentialGroupID(inputID int64, existing *store.EndpointRecord, channel string) int64 {
+func resolveEndpointCredentialGroupID(inputID int64, existing *claudestore.EndpointRecord, channel string) int64 {
 	if inputID > 0 {
 		return inputID
 	}
@@ -827,7 +827,7 @@ func (a *App) SetEndpointSkipHealthCheckByID(id int64, skip bool) error {
 
 	// 同步到运行时 endpoint manager
 	if endpointManager != nil {
-		endpointManager.SetEndpointSkipHealthCheck(service.EndpointRuntimeKey(record), skip)
+		endpointManager.SetEndpointSkipHealthCheck(claudeservice.EndpointRuntimeKey(record), skip)
 	}
 
 	if logger != nil {
@@ -1164,7 +1164,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	return result, nil
 }
 
-func (a *App) listClaudeCredentialGroupInfos(ctx context.Context, svc *service.ClaudeCredentialGroupService, groupStore store.ClaudeCredentialGroupStore, channel string) []ClaudeCredentialGroupInfo {
+func (a *App) listClaudeCredentialGroupInfos(ctx context.Context, svc *claudeservice.ClaudeCredentialGroupService, groupStore claudestore.ClaudeCredentialGroupStore, channel string) []ClaudeCredentialGroupInfo {
 	if svc == nil {
 		return nil
 	}
@@ -1179,7 +1179,7 @@ func (a *App) listClaudeCredentialGroupInfos(ctx context.Context, svc *service.C
 	return result
 }
 
-func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore store.ClaudeCredentialGroupStore, group *store.ClaudeCredentialGroupRecord) ClaudeCredentialGroupInfo {
+func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claudestore.ClaudeCredentialGroupStore, group *claudestore.ClaudeCredentialGroupRecord) ClaudeCredentialGroupInfo {
 	if group == nil {
 		return ClaudeCredentialGroupInfo{}
 	}
@@ -1214,8 +1214,8 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore store.
 	return info
 }
 
-func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) *store.ClaudeCredentialGroupRecord {
-	return &store.ClaudeCredentialGroupRecord{
+func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) *claudestore.ClaudeCredentialGroupRecord {
+	return &claudestore.ClaudeCredentialGroupRecord{
 		Channel:                       input.Channel,
 		Name:                          input.Name,
 		Token:                         input.Token,
@@ -1377,7 +1377,7 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := channelService.CreateChannel(ctx, &store.ChannelRecord{
+	_, err := channelService.CreateChannel(ctx, &claudestore.ChannelRecord{
 		Name:         input.Name,
 		Website:      input.Website,
 		Priority:     input.Priority,
@@ -1427,7 +1427,7 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := channelService.UpdateChannel(ctx, &store.ChannelRecord{
+	if err := channelService.UpdateChannel(ctx, &claudestore.ChannelRecord{
 		Name:         input.Name,
 		Website:      input.Website,
 		Priority:     input.Priority,
@@ -1622,7 +1622,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 	}()
 
 	if endpointStore == nil {
-		endpointStore = store.NewSQLiteEndpointStore(db)
+		endpointStore = claudestore.NewSQLiteEndpointStore(db)
 	}
 	endpointStore = endpointStore.WithTx(tx)
 	channelStore = channelStore.WithTx(tx)
@@ -1709,7 +1709,7 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 
 		// 获取运行时健康状态
 		if endpointManager != nil {
-			status := endpointManager.GetEndpointStatus(service.EndpointRuntimeKey(r))
+			status := endpointManager.GetEndpointStatus(claudeservice.EndpointRuntimeKey(r))
 			info.Healthy = status.Healthy
 			info.ResponseTimeMs = float64(status.ResponseTime) / float64(time.Millisecond)
 			// 格式化最后检查时间
@@ -1729,7 +1729,7 @@ func (a *App) GetEndpointsByChannel(channel string) ([]EndpointRecordInfo, error
 }
 
 // recordToInfo 将数据库记录转换为前端 Info 结构
-func (a *App) recordToInfo(r *store.EndpointRecord) EndpointRecordInfo {
+func (a *App) recordToInfo(r *claudestore.EndpointRecord) EndpointRecordInfo {
 	info := EndpointRecordInfo{
 		ID:                            r.ID,
 		Channel:                       r.Channel,
