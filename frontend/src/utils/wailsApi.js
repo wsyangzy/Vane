@@ -1258,7 +1258,7 @@ export const createEndpointRecord = async (input) => {
     api_key: input.apiKey || '',
     headers: input.headers || {},
     // 未传时让后端自动递增；显式 0 是最高优先级
-    priority: Number.isInteger(Number(input.priority)) ? Number(input.priority) : -1,
+    priority: parseEndpointPriority(input.priority, -1),
     failover_enabled: input.failoverEnabled !== false,
     skip_health_check: !!skipHealthCheck,
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,

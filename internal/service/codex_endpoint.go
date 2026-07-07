@@ -75,12 +75,45 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 		return nil, fmt.Errorf("该凭证分组下已存在相同的端点名 '%s'", record.Name)
 	}
 
+	explicitPriority := record.Priority >= 0
 	if record.Priority < 0 {
 		maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
 		if err != nil {
 			return nil, err
 		}
 		record.Priority = maxPriority + 1
+	}
+	if explicitPriority {
+		conflicting, err := s.endpointStore.GetByChannelCredentialGroupAndPriority(ctx, record.ChannelID, record.CredentialGroupID, record.Priority)
+		if err != nil {
+			return nil, fmt.Errorf("检查 Codex 端点优先级冲突失败: %w", err)
+		}
+		if conflicting != nil {
+			maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
+			if err != nil {
+				return nil, fmt.Errorf("获取 Codex 凭证分组最大优先级失败: %w", err)
+			}
+			if err := s.endpointStore.Update(
+				ctx,
+				conflicting.ID,
+				conflicting.Name,
+				conflicting.BaseURL,
+				conflicting.CredentialGroupID,
+				conflicting.ApiKey,
+				conflicting.FailoverEnabled,
+				conflicting.SkipHealthCheck,
+				maxPriority+1,
+				conflicting.TimeoutSeconds,
+				conflicting.CostMultiplier,
+				conflicting.InputCostMultiplier,
+				conflicting.OutputCostMultiplier,
+				conflicting.CacheReadCostMultiplier,
+				conflicting.BillingOutputTokenSource,
+				conflicting.ModelMultipliers,
+			); err != nil {
+				return nil, fmt.Errorf("Codex 端点优先级替换失败: %w", err)
+			}
+		}
 	}
 
 	record.IsActive = false

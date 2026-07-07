@@ -178,7 +178,7 @@ const EndpointForm = ({
         credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
         name: endpoint.name || '',
         url: endpoint.url || '',
-        priority: endpoint.priority ?? 0,
+        priority: String(endpoint.priority ?? 0),
         failoverEnabled: endpoint.failoverEnabled !== false,
         skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false,
         cooldownSeconds: endpoint.cooldownSeconds || '',
@@ -198,7 +198,7 @@ const EndpointForm = ({
       credentialGroupId: Number(defaultCredentialGroupId) || 0,
       name: '',
       url: '',
-      priority: getNextEndpointPriority(existingEndpoints, defaultChannel, defaultCredentialGroupId),
+      priority: '',
       failoverEnabled: true,
       skipHealthCheck: false, // 默认不跳过健康检查
       cooldownSeconds: '',
@@ -260,7 +260,7 @@ const EndpointForm = ({
         const groups = credentialGroupsByChannel?.[value] || [];
         const defaultGroup = groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
         next.credentialGroupId = defaultGroup?.id || 0;
-        next.priority = getNextEndpointPriority(existingEndpoints, value, next.credentialGroupId);
+        next.priority = isEditMode ? String(getNextEndpointPriority(existingEndpoints, value, next.credentialGroupId)) : '';
       }
       return next;
     });
@@ -284,6 +284,13 @@ const EndpointForm = ({
       newErrors.url = '请输入端点 URL';
     } else if (!/^https?:\/\/.+/.test(formData.url)) {
       newErrors.url = '请输入有效的 URL (以 http:// 或 https:// 开头)';
+    }
+    const priorityRaw = String(formData.priority ?? '').trim();
+    if (priorityRaw !== '') {
+      const priorityValue = Number(priorityRaw);
+      if (!Number.isInteger(priorityValue) || priorityValue < 0) {
+        newErrors.priority = '优先级必须是大于等于 0 的整数';
+      }
     }
 
     const targetChannel = formData.channel.trim();
@@ -309,6 +316,8 @@ const EndpointForm = ({
 
     if (newErrors.channel || newErrors.name || newErrors.url) {
       setActiveTab('basic');
+    } else if (newErrors.priority) {
+      setActiveTab('routing');
     }
 
     setErrors(newErrors);
@@ -327,6 +336,9 @@ const EndpointForm = ({
       const endpointPayload = { ...formData };
       delete endpointPayload.token;
       delete endpointPayload.apiKey;
+      if (isEditMode && String(endpointPayload.priority ?? '').trim() === '') {
+        endpointPayload.priority = endpoint?.priority ?? 0;
+      }
       await onSave({
         ...endpointPayload,
         credentialGroupId: Number(formData.credentialGroupId || selectedCredentialGroup?.id || 0) || 0,
@@ -428,7 +440,7 @@ const EndpointForm = ({
                             ...prev,
                             channel: value,
                             credentialGroupId: nextCredentialGroupId,
-                            priority: getNextEndpointPriority(existingEndpoints, value, nextCredentialGroupId)
+                            priority: isEditMode ? String(getNextEndpointPriority(existingEndpoints, value, nextCredentialGroupId)) : ''
                           }));
                           if (errors.channel) {
                             setErrors(prev => ({ ...prev, channel: null }));
@@ -480,9 +492,11 @@ const EndpointForm = ({
                         setFormData(prev => ({
                           ...prev,
                           credentialGroupId: nextCredentialGroupId,
-                          priority: (!isEditMode || nextCredentialGroupId !== initialCredentialGroupID)
-                            ? getNextEndpointPriority(existingEndpoints, prev.channel, nextCredentialGroupId)
-                            : endpoint?.priority ?? getNextEndpointPriority(existingEndpoints, prev.channel, nextCredentialGroupId)
+                          priority: isEditMode
+                            ? String(nextCredentialGroupId !== initialCredentialGroupID
+                              ? getNextEndpointPriority(existingEndpoints, prev.channel, nextCredentialGroupId)
+                              : endpoint?.priority ?? getNextEndpointPriority(existingEndpoints, prev.channel, nextCredentialGroupId))
+                            : ''
                         }));
                         if (errors.credentialGroupId) {
                           setErrors(prev => ({ ...prev, credentialGroupId: null }));
@@ -544,16 +558,21 @@ const EndpointForm = ({
             </h3>
 
             <div className="grid gap-4 grid-cols-2">
-              <FormInput
-                label="优先级"
-                name="priority"
-                value={formData.priority}
-                onChange={handleChange}
-                type="number"
-                min="0"
-                placeholder="0"
-                help="0 = 最高优先级，数字越小优先级越高，同分组相同则交换"
-              />
+              <div>
+                <FormInput
+                  label="优先级"
+                  name="priority"
+                  value={formData.priority}
+                  onChange={handleChange}
+                  type="number"
+                  min="0"
+                  placeholder={`留空自动分配 P${getNextEndpointPriority(existingEndpoints, formData.channel, selectedCredentialGroupID)}`}
+                  help={isEditMode ? '0 = 最高优先级，数字越小优先级越高，同分组相同则交换' : `留空自动分配为 P${getNextEndpointPriority(existingEndpoints, formData.channel, selectedCredentialGroupID)}；填写后按填写值保存，重复则替换`}
+                />
+                {errors.priority && (
+                  <p className="text-xs text-rose-500 mt-1">{errors.priority}</p>
+                )}
+              </div>
 
               {/* 超时时间 - 留空使用全局默认值 */}
               <FormInput

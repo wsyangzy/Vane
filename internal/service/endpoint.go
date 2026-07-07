@@ -72,6 +72,7 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 		return nil, fmt.Errorf("同一凭证分组内已存在相同的端点 URL，请修改 URL 或选择其他凭证分组")
 	}
 
+	explicitPriority := record.Priority >= 0
 	// 优先级自动递增
 	if record.Priority < 0 {
 		maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
@@ -82,6 +83,27 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 			record.Priority = maxPriority + 1
 		}
 		slog.Info(fmt.Sprintf("🔢 [EndpointService] 自动分配优先级: %s -> %d", record.Name, record.Priority))
+	}
+	if explicitPriority {
+		conflicting, err := s.store.GetByChannelCredentialGroupAndPriority(ctx, record.Channel, record.CredentialGroupID, record.Priority)
+		if err != nil {
+			return nil, fmt.Errorf("检查端点优先级冲突失败: %w", err)
+		}
+		if conflicting != nil {
+			maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
+			if err != nil {
+				return nil, fmt.Errorf("获取凭证分组最大优先级失败: %w", err)
+			}
+			conflicting.Priority = maxPriority + 1
+			if err := s.store.UpdateByID(ctx, conflicting); err != nil {
+				return nil, fmt.Errorf("端点优先级替换失败: %w", err)
+			}
+			conflictingCfg := s.recordToConfig(conflicting)
+			conflictingKey := EndpointRuntimeKey(conflicting)
+			if err := s.manager.UpdateEndpointConfig(conflictingKey, conflictingCfg); err != nil {
+				slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新冲突端点运行时配置失败: %v", err))
+			}
+		}
 	}
 
 	// 保存到数据库

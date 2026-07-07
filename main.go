@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"ai-relay-forwarder/internal/utils"
@@ -29,6 +30,14 @@ var (
 
 // 运行时变量
 var startTime = time.Now()
+
+const (
+	mainWindowDefaultWidth  = 1440
+	mainWindowDefaultHeight = 900
+	mainWindowMinWidth      = 1200
+	mainWindowMinHeight     = 620
+	mainWindowWorkAreaInset = 48
+)
 
 func main() {
 	flag.Parse()
@@ -109,10 +118,10 @@ func main() {
 	// 创建主窗口
 	window := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            windowTitle,
-		Width:            1440,
-		Height:           900,
-		MinWidth:         1200,
-		MinHeight:        700,
+		Width:            mainWindowDefaultWidth,
+		Height:           mainWindowDefaultHeight,
+		MinWidth:         mainWindowMinWidth,
+		MinHeight:        mainWindowMinHeight,
 		BackgroundColour: application.RGBA{Red: 26, Green: 26, Blue: 46, Alpha: 255},
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
@@ -129,6 +138,7 @@ func main() {
 
 	// 保存窗口引用
 	appInstance.window = window
+	var fitMainWindowOnce sync.Once
 
 	// 注册窗口关闭钩子：隐藏到托盘而非真正关闭
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
@@ -141,6 +151,9 @@ func main() {
 
 	// 注册窗口显示钩子（相当于 domReady）
 	window.RegisterHook(events.Common.WindowShow, func(e *application.WindowEvent) {
+		fitMainWindowOnce.Do(func() {
+			fitMainWindowToWorkArea(wailsApp, window)
+		})
 		// 首次显示时执行初始化
 		appInstance.onWindowReady()
 	})
@@ -160,6 +173,34 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func fitMainWindowToWorkArea(app *application.App, window *application.WebviewWindow) {
+	if app == nil || window == nil || window.IsMaximised() || window.IsFullscreen() {
+		return
+	}
+
+	screen, err := window.GetScreen()
+	if err != nil || screen == nil {
+		screen = app.Screen.GetPrimary()
+	}
+	if screen == nil || screen.WorkArea.Width <= mainWindowWorkAreaInset || screen.WorkArea.Height <= mainWindowWorkAreaInset {
+		return
+	}
+
+	width, height := window.Size()
+	if width <= 0 || height <= 0 {
+		return
+	}
+
+	maxWidth := screen.WorkArea.Width - mainWindowWorkAreaInset
+	maxHeight := screen.WorkArea.Height - mainWindowWorkAreaInset
+	nextWidth := min(width, maxWidth)
+	nextHeight := min(height, maxHeight)
+	if nextWidth != width || nextHeight != height {
+		window.SetSize(nextWidth, nextHeight)
+	}
+	window.SetScreen(screen)
 }
 
 // setupSystemTray 配置系统托盘（使用 Wails v3 原生支持）

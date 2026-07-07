@@ -348,6 +348,53 @@ func TestEndpointService_CreateEndpointKeepsExplicitZeroPriority(t *testing.T) {
 	}
 }
 
+func TestEndpointService_CreateEndpointMovesExplicitPriorityConflictToNextPriority(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			CheckInterval: 10 * time.Second,
+			Timeout:       time.Second,
+		},
+	}
+	storeRepo := store.NewSQLiteEndpointStore(db)
+	manager := endpoint.NewManager(cfg)
+	svc := NewEndpointService(storeRepo, manager, cfg)
+	ctx := context.Background()
+
+	first, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "first",
+		URL:             "https://first.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        0,
+	})
+	if err != nil {
+		t.Fatalf("创建第一个端点失败: %v", err)
+	}
+	second, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            "second",
+		URL:             "https://second.example.invalid",
+		FailoverEnabled: true,
+		TimeoutSeconds:  1,
+		Priority:        0,
+	})
+	if err != nil {
+		t.Fatalf("创建第二个端点失败: %v", err)
+	}
+
+	updatedFirst, err := storeRepo.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("重新读取第一个端点失败: %v", err)
+	}
+	if second.Priority != 0 || updatedFirst.Priority != 1 {
+		t.Fatalf("预期新端点占用 P0 且旧端点移动到 P1，got second=%d first=%d", second.Priority, updatedFirst.Priority)
+	}
+}
+
 func TestEndpointService_UpdateEndpointPriorityConflictIsScopedToCredentialGroup(t *testing.T) {
 	db, cleanup := createEndpointServiceTestDB(t)
 	defer cleanup()
@@ -597,7 +644,7 @@ func TestEndpointService_UpdateEndpointDisablingActiveFailoverSwitchesToNextCand
 		FailoverEnabled: true,
 		Enabled:         false,
 		TimeoutSeconds:  1,
-		Priority:        1,
+		Priority:        3,
 	})
 	if err != nil {
 		t.Fatalf("创建后添加备用端点失败: %v", err)
@@ -627,7 +674,7 @@ func TestEndpointService_UpdateEndpointDisablingActiveFailoverSwitchesToNextCand
 		t.Fatalf("重新读取后添加备用端点失败: %v", err)
 	}
 	if updatedLaterStandby.Enabled {
-		t.Fatalf("预期同优先级时更早添加的备用端点胜出")
+		t.Fatalf("预期更低优先级的备用端点不被选中")
 	}
 }
 

@@ -196,6 +196,63 @@ func TestCodexEndpointCreateKeepsExplicitZeroPriority(t *testing.T) {
 	}
 }
 
+func TestCodexEndpointCreateMovesExplicitPriorityConflictToNextPriority(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name:         "anyrouter",
+		ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	defaultGroup, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID,
+		Name:      "default",
+		ApiKey:    "sk-default",
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create default group: %v", err)
+	}
+
+	first, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "first",
+		BaseURL:           "https://example.invalid/first/v1",
+		FailoverEnabled:   true,
+		Priority:          0,
+	})
+	if err != nil {
+		t.Fatalf("create first endpoint: %v", err)
+	}
+	second, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID:         channel.ID,
+		CredentialGroupID: defaultGroup.ID,
+		Name:              "second",
+		BaseURL:           "https://example.invalid/second/v1",
+		FailoverEnabled:   true,
+		Priority:          0,
+	})
+	if err != nil {
+		t.Fatalf("create second endpoint: %v", err)
+	}
+
+	updatedFirst, err := endpointStore.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("reload first endpoint: %v", err)
+	}
+	if second.Priority != 0 || updatedFirst.Priority != 1 {
+		t.Fatalf("expected new endpoint to take priority 0 and existing endpoint to move to 1, got second=%d first=%d", second.Priority, updatedFirst.Priority)
+	}
+}
+
 func TestCodexEndpointCreatePriorityIsScopedToCredentialGroup(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexEndpointTestDB(t)
@@ -363,7 +420,7 @@ func TestCodexEndpointDisablingActiveEndpointFailoverSwitchesToNextCandidate(t *
 		Name:              "later-standby",
 		BaseURL:           "https://example.invalid/later-standby/v1",
 		FailoverEnabled:   true,
-		Priority:          1,
+		Priority:          2,
 	})
 	if err != nil {
 		t.Fatalf("create later standby endpoint: %v", err)

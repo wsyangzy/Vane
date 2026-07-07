@@ -234,6 +234,16 @@ const parseEndpointTimeoutPayload = (value) => {
   return { timeoutSeconds: parsed };
 };
 
+const parseEndpointPriorityPayload = (value) => {
+  const raw = String(value ?? '').trim();
+  if (raw === '') return { priority: undefined };
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return { error: '优先级必须是大于等于 0 的整数' };
+  }
+  return { priority: parsed };
+};
+
 // 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
 // 在代理模式下，这些字段不再由渠道级管理，仅写入 ~/.codex/config.toml 由 Codex CLI 读取
 
@@ -729,7 +739,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
                       value={formData.apiKey}
                       onChange={(event) => updateField('apiKey', event.target.value)}
                       placeholder={isEdit && group?.apiKeyMasked ? group.apiKeyMasked : 'sk-...'}
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
                       disabled={loading}
                     />
                     <button
@@ -896,7 +906,8 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
     }))
   ];
   const isEdit = mode === 'edit';
-  const [priority, setPriority] = useState(endpoint?.priority ?? getNextCodexEndpointPriority(channel, initialCredentialGroupId));
+  const initialPriority = getNextCodexEndpointPriority(channel, initialCredentialGroupId);
+  const [priority, setPriority] = useState(() => (isEdit ? String(endpoint?.priority ?? initialPriority) : ''));
   const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
   const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
   const [skipHealthCheck, setSkipHealthCheck] = useState(Boolean(endpoint?.skipHealthCheck || endpoint?.skip_health_check));
@@ -933,6 +944,12 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
       setFieldError('base_url 必须以 http:// 或 https:// 开头');
       return;
     }
+    const priorityResult = parseEndpointPriorityPayload(priority);
+    if (priorityResult.error) {
+      setActiveTab('routing');
+      setFieldError(priorityResult.error);
+      return;
+    }
     const timeoutResult = parseEndpointTimeoutPayload(timeoutSeconds);
     if (timeoutResult.error) {
       setActiveTab('routing');
@@ -945,7 +962,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
       credentialGroupId: selectedCredentialGroupId,
       failoverEnabled,
       skipHealthCheck,
-      priority,
+      priority: priorityResult.priority,
       timeoutSeconds: timeoutResult.timeoutSeconds
     });
   };
@@ -1041,10 +1058,12 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       onChange={(value) => {
                         const nextCredentialGroupId = Number(value) || 0;
                         setCredentialGroupId(nextCredentialGroupId);
-                        if (!isEdit || nextCredentialGroupId !== Number(initialCredentialGroupId || 0)) {
-                          setPriority(getNextCodexEndpointPriority(channel, nextCredentialGroupId));
-                        } else {
-                          setPriority(endpoint?.priority ?? getNextCodexEndpointPriority(channel, nextCredentialGroupId));
+                        if (isEdit) {
+                          if (nextCredentialGroupId !== Number(initialCredentialGroupId || 0)) {
+                            setPriority(String(getNextCodexEndpointPriority(channel, nextCredentialGroupId)));
+                          } else {
+                            setPriority(String(endpoint?.priority ?? getNextCodexEndpointPriority(channel, nextCredentialGroupId)));
+                          }
                         }
                         if (fieldError) setFieldError('');
                       }}
@@ -1107,13 +1126,16 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       type="number"
                       min="0"
                       value={priority}
-                      onChange={(event) => setPriority(parseInt(event.target.value) || 0)}
-                      disabled={!isEdit || loading}
+                      onChange={(event) => {
+                        setPriority(event.target.value);
+                        if (fieldError) setFieldError('');
+                      }}
+                      disabled={loading}
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
-                      placeholder="0 = 最高优先级"
+                      placeholder={isEdit ? '0 = 最高优先级' : `留空自动分配 P${getNextCodexEndpointPriority(channel, selectedCredentialGroupId)}`}
                     />
                     <p className="mt-1 text-xs text-slate-400">
-                      {isEdit ? '0 = 最高优先级，数字越小越优先，同分组相同则交换' : '新建时按当前凭证分组顺序递增，首个为 0'}
+                      {isEdit ? '0 = 最高优先级，数字越小越优先，同分组相同则交换' : `留空自动分配为 P${getNextCodexEndpointPriority(channel, selectedCredentialGroupId)}；填写后按填写值保存，重复则替换`}
                     </p>
                   </div>
 
