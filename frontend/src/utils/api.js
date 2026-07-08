@@ -630,6 +630,9 @@ export const fetchEndpointCostsData = async (provider = '') => {
 
       return data.labels.map((name, i) => ({
         name,
+        channel: '',
+        endpoint: name,
+        group: '',
         tokens: tokensData[i] || 0,
         cost: costData[i] || 0
       }));

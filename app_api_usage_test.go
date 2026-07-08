@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/endpoint"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
+	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -248,12 +250,12 @@ func TestEndpointCostCacheUsesCallerTodaySelection(t *testing.T) {
 	app.endpointCostHistoryCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostHistory, TTL: time.Minute, MaxEntries: 10, StaleOnError: true, Enabled: true})
 
 	tracker := &endpointCostTrackerStub{costs: []tracking.EndpointCostSummary{
-		{EndpointName: "codex-main", Provider: "codex", InputTokens: 100, OutputTokens: 20, TotalCostUSD: 0.25},
+		{Channel: "Codex 正价", EndpointName: "codex-main", GroupName: "国内", Provider: "codex", InputTokens: 100, OutputTokens: 20, TotalCostUSD: 0.25},
 	}}
 
 	items := app.getEndpointCostsForDate(tracker, "1999-01-01", "codex", true, endpointCostTestLogger{})
-	if len(items) != 1 || items[0].Name != "codex-main" {
-		t.Fatalf("endpoint costs = %#v, want codex-main item", items)
+	if len(items) != 1 || items[0].Name != "codex-main (国内)" || items[0].Channel != "Codex 正价" || items[0].Endpoint != "codex-main" || items[0].Group != "国内" {
+		t.Fatalf("endpoint costs = %#v, want structured codex-main item", items)
 	}
 
 	todayStats := app.endpointCostTodayCache.Stats()
@@ -306,6 +308,83 @@ func TestQueryTokenUsageForRangeFiltersProvider(t *testing.T) {
 
 	if got.InputTokens != 190 || got.OutputTokens != 20 || got.CacheReadTokens != 10 || got.TotalTokens != 220 {
 		t.Fatalf("codex token usage = %#v, want input=190 output=20 cache_read=10 total=220", got)
+	}
+}
+
+func TestSyncEndpointMultipliersKeepsCodexCredentialGroupDimension(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+
+	ctx := context.Background()
+	db := tracker.GetDB()
+	channelStore := codexstore.NewSQLiteCodexChannelStore(db)
+	groupStore := codexstore.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := codexstore.NewSQLiteCodexEndpointStore(db)
+
+	channel, err := channelStore.Create(ctx, &codexstore.CodexChannelRecord{
+		Name:            "快跑API",
+		ProviderType:    "openai-compatible",
+		ApiKey:          "legacy-key",
+		Model:           "gpt-5",
+		ReasoningEffort: "xhigh",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	subsidy, err := groupStore.Create(ctx, &codexstore.CodexCredentialGroupRecord{
+		ChannelID:      channel.ID,
+		Name:           "补贴",
+		ApiKey:         "subsidy-key",
+		IsDefault:      true,
+		CostMultiplier: 0.4,
+	})
+	if err != nil {
+		t.Fatalf("create subsidy group: %v", err)
+	}
+	fullPrice, err := groupStore.Create(ctx, &codexstore.CodexCredentialGroupRecord{
+		ChannelID:      channel.ID,
+		Name:           "正价",
+		ApiKey:         "full-key",
+		CostMultiplier: 1.5,
+	})
+	if err != nil {
+		t.Fatalf("create full price group: %v", err)
+	}
+	for _, group := range []*codexstore.CodexCredentialGroupRecord{subsidy, fullPrice} {
+		_, err := endpointStore.Create(ctx, &codexstore.CodexEndpointRecord{
+			ChannelID:         channel.ID,
+			CredentialGroupID: group.ID,
+			Name:              "国内",
+			BaseURL:           "https://example.test/v1",
+			FailoverEnabled:   true,
+			Priority:          0,
+			CostMultiplier:    1,
+		})
+		if err != nil {
+			t.Fatalf("create endpoint for group %s: %v", group.Name, err)
+		}
+	}
+
+	app := &App{
+		logger:                    slog.Default(),
+		usageTracker:              tracker,
+		codexChannelStore:         channelStore,
+		codexEndpointStore:        endpointStore,
+		codexCredentialGroupStore: groupStore,
+	}
+	app.syncEndpointMultipliersToTracker(ctx)
+
+	subsidyMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("快跑API", "补贴", "国内")
+	if subsidyMultiplier.CostMultiplier != 0.4 {
+		t.Fatalf("subsidy multiplier = %.2f, want 0.40", subsidyMultiplier.CostMultiplier)
+	}
+	fullPriceMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("快跑API", "正价", "国内")
+	if fullPriceMultiplier.CostMultiplier != 1.5 {
+		t.Fatalf("full price multiplier = %.2f, want 1.50", fullPriceMultiplier.CostMultiplier)
+	}
+	legacyMultiplier := tracker.GetEndpointMultiplierForEndpoint("快跑API", "国内")
+	if legacyMultiplier.CostMultiplier != 1.0 {
+		t.Fatalf("duplicate-name legacy multiplier = %.2f, want default 1.00", legacyMultiplier.CostMultiplier)
 	}
 }
 

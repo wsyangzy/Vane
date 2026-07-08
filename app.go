@@ -1225,7 +1225,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 		}
 	}
 
-	// 2. Codex 端点倍率（每个端点的 key = channel.name::endpoint.name）
+	// 2. Codex 端点倍率（每个端点的 key = channel.name::credential_group.name::endpoint.name）
 	if a.codexChannelStore != nil && a.codexEndpointStore != nil {
 		channels, err := a.codexChannelStore.List(ctx)
 		if err != nil {
@@ -1241,13 +1241,24 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					a.logger.Warn("⚠️ 获取 Codex 端点列表失败", "channel", ch.Name, "error", err)
 					continue
 				}
+				legacyKeyCounts := make(map[string]int, len(codexEndpoints))
 				for _, ep := range codexEndpoints {
+					if ep == nil {
+						continue
+					}
+					legacyKeyCounts[tracking.EndpointMultiplierKey(ch.Name, ep.Name)]++
+				}
+				for _, ep := range codexEndpoints {
+					if ep == nil {
+						continue
+					}
 					group := defaultGroup
 					if a.codexCredentialGroupStore != nil && ep.CredentialGroupID > 0 {
 						if resolved, err := a.codexCredentialGroupStore.GetByID(ctx, ep.CredentialGroupID); err == nil && resolved != nil {
 							group = resolved
 						}
 					}
+					groupName := ""
 					groupCostMultiplier := 1.0
 					groupInputMultiplier := 1.0
 					groupOutputMultiplier := 1.0
@@ -1255,6 +1266,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					groupModelMultipliers := []tracking.ModelMultiplier(nil)
 					billingOutputTokenSource := "output_tokens"
 					if group != nil {
+						groupName = group.Name
 						groupCostMultiplier = defaultPositiveMultiplier(group.CostMultiplier)
 						groupInputMultiplier = defaultPositiveMultiplier(group.InputCostMultiplier)
 						groupOutputMultiplier = defaultPositiveMultiplier(group.OutputCostMultiplier)
@@ -1262,10 +1274,12 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						groupModelMultipliers = codexModelMultipliersToTracking(group.ModelMultipliers)
 						billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(group.BillingOutputTokenSource)
 					}
-					key := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
+					if groupName == "" && ep.CredentialGroupID > 0 {
+						groupName = fmt.Sprintf("g%d", ep.CredentialGroupID)
+					}
 					// Codex 的 API Key 与计费配置归属凭证分组；端点只表示 base_url 线路配置。
 					// 历史端点倍率字段保留为兼容存储，但不再参与运行时计费。
-					multipliers[key] = tracking.EndpointMultiplier{
+					multiplier := tracking.EndpointMultiplier{
 						CostMultiplier:                groupCostMultiplier,
 						InputCostMultiplier:           groupInputMultiplier,
 						OutputCostMultiplier:          groupOutputMultiplier,
@@ -1274,6 +1288,26 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						CacheReadCostMultiplier:       groupCacheReadMultiplier,
 						BillingOutputTokenSource:      billingOutputTokenSource,
 						ModelMultipliers:              mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
+					}
+					legacyKey := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
+					groupKey := tracking.EndpointMultiplierGroupKey(ch.Name, groupName, ep.Name)
+					keys := make([]string, 0, 2)
+					if groupKey != "" && (groupKey != legacyKey || legacyKeyCounts[legacyKey] <= 1) {
+						keys = append(keys, groupKey)
+					}
+					if legacyKeyCounts[legacyKey] <= 1 {
+						keys = append(keys, legacyKey)
+					}
+					seenKeys := make(map[string]struct{}, len(keys))
+					for _, key := range keys {
+						if key == "" {
+							continue
+						}
+						if _, ok := seenKeys[key]; ok {
+							continue
+						}
+						seenKeys[key] = struct{}{}
+						multipliers[key] = multiplier
 					}
 				}
 			}

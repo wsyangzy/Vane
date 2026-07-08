@@ -122,6 +122,31 @@ func generateRequestID() string {
 // strPtr 返回字符串指针（用于 UpdateOptions）
 func strPtr(s string) *string { return &s }
 
+func appendUniqueInt64(ids []int64, values ...int64) []int64 {
+	if len(values) == 0 {
+		return ids
+	}
+	seen := make(map[int64]struct{}, len(ids)+len(values))
+	for _, id := range ids {
+		seen[id] = struct{}{}
+	}
+	for _, id := range values {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func isCredentialGroupFailureStatus(statusCode int) bool {
+	return statusCode == http.StatusPaymentRequired || statusCode == http.StatusTooManyRequests
+}
+
 // ServeHTTP 实现 http.Handler
 // 三层重试结构：
 //  1. 外层 loop_retry: 端点列表耗尽后是否回到首位再来一轮（受 failover.loop_retry/max_loops 控制）
@@ -396,7 +421,7 @@ func (h *Handler) tryEndpointCycle(
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
 			if isStreaming {
-				if streamErr := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain)); streamErr != nil {
+				if streamErr := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain)); streamErr != nil {
 					fwdErr = streamErr
 					resp = nil
 				} else {
@@ -427,7 +452,7 @@ func (h *Handler) tryEndpointCycle(
 						)
 					}
 				}
-				h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, channelName, len(*endpointChain))
+				h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
 				return cycleResult{completed: true}
 			}
 		}
@@ -490,7 +515,7 @@ func (h *Handler) tryEndpointCycle(
 			resp.Body.Close()
 		}
 		failedEndpointName := endpoint.Name
-		*failedIDs = append(*failedIDs, endpoint.ID)
+		*failedIDs = appendUniqueInt64(*failedIDs, endpoint.ID)
 
 		// 失败原因日志
 		var reason string
@@ -504,6 +529,17 @@ func (h *Handler) tryEndpointCycle(
 			h.logger.Warn(fmt.Sprintf("🔁 [Codex故障转移] [%s] 端点: %s, HTTP状态: %d, 上游响应: %s",
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
+		}
+		if isCredentialGroupFailureStatus(status) {
+			groupEndpointIDs := h.manager.endpointIDsInCredentialGroup(endpoint.CredentialGroupID, endpoint.CredentialGroupName)
+			*failedIDs = appendUniqueInt64(*failedIDs, groupEndpointIDs...)
+			h.logger.Warn("[Codex 凭证分组故障转移]",
+				"provider", "codex",
+				"request_id", requestID,
+				"credential_group", endpoint.CredentialGroupName,
+				"skipped_endpoint_count", len(groupEndpointIDs),
+				"status_code", status,
+			)
 		}
 		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 
@@ -633,7 +669,7 @@ func (h *Handler) buildExhaustedDetail(maxLoops int, chain []chainNode, lastErr 
 }
 
 // handleNonStreaming 处理非流式响应：读取完整 body，解析 token，写回客户端
-func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, channelName string, hopsTried int) {
+func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) {
 	defer resp.Body.Close()
 
 	// 🆕 [详细日志] 非流式处理开始（emoji 风格，对齐 Claude 日志详细度）
@@ -725,7 +761,7 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		"provider", "codex", "request_id", requestID)
 
 	h.recordOutputSent(requestID)
-	h.recordSuccess(requestID, startTime, resp.StatusCode, tokenResult, requestModel, endpointName, channelName)
+	h.recordSuccess(requestID, startTime, resp.StatusCode, tokenResult, requestModel, endpointName, groupName, channelName)
 
 	// 复制响应头
 	for key, values := range resp.Header {
@@ -739,7 +775,7 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 
 // handleStreaming 处理流式响应：逐行透传 SSE 并提取 token。
 // 如果上游在真正输出前通过 SSE 返回错误事件，则返回错误交给外层端点循环做故障转移。
-func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, channelName string, hopsTried int) *UpstreamStreamError {
+func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) *UpstreamStreamError {
 	defer resp.Body.Close()
 
 	var headersWritten bool
@@ -883,7 +919,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"bytes_processed", bytesProcessed,
 					"error", scanErr,
 				)
-				h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, channelName)
+				h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
 				return nil
 			}
 			if outputSentRecorded {
@@ -894,7 +930,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"bytes_processed", bytesProcessed,
 					"error", scanErr,
 				)
-				h.recordCancelled(requestID, startTime, "client_canceled_after_output", 499, lastResult, requestModel, endpointName, channelName)
+				h.recordCancelled(requestID, startTime, "client_canceled_after_output", 499, lastResult, requestModel, endpointName, groupName, channelName)
 				return nil
 			}
 		}
@@ -969,7 +1005,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		requestID, modelName, inputTokens, outputTokens, inputTokens+outputTokens, cacheReadTokens, durationMs),
 		"provider", "codex", "request_id", requestID)
 
-	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, channelName)
+	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
 	return nil
 }
 
@@ -1082,6 +1118,7 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName, 
 	if h.usageTracker == nil {
 		return
 	}
+	groupName := latestCredentialGroupName(chain)
 	chainBytes, err := json.Marshal(chain)
 	if err != nil {
 		// 序列化失败仅记录日志，跳过 EndpointChain 字段更新以避免写入脏数据
@@ -1096,8 +1133,11 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName, 
 		if channelName != "" {
 			opts.Channel = strPtr(channelName)
 		}
+		if groupName != "" {
+			opts.GroupName = strPtr(groupName)
+		}
 		h.usageTracker.RecordRequestUpdate(requestID, opts)
-		h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
+		h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
 		return
 	}
 	chainStr := string(chainBytes)
@@ -1110,8 +1150,11 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName, 
 	if channelName != "" {
 		opts.Channel = strPtr(channelName)
 	}
+	if groupName != "" {
+		opts.GroupName = strPtr(groupName)
+	}
 	h.usageTracker.RecordRequestUpdate(requestID, opts)
-	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
+	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
 }
 
 func (h *Handler) recordPrivacyRedaction(requestID string, summaryJSON string, redactedBody []byte, matchDetailsJSON string) {
@@ -1136,12 +1179,19 @@ func (h *Handler) recordPrivacyRedaction(requestID string, summaryJSON string, r
 
 // snapshotEndpointMultiplier 将 Codex 端点的倍率快照写入热池中的活跃请求
 // 用于详情页计费过程展示
-func (h *Handler) snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName string) {
+func (h *Handler) snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName string) {
 	if h.usageTracker == nil || requestID == "" || endpointName == "" {
 		return
 	}
-	mult := h.usageTracker.GetEndpointMultiplierForEndpointAndModel(channelName, endpointName, modelName)
+	mult := h.usageTracker.GetEndpointMultiplierForEndpointAndModelWithGroup(channelName, groupName, endpointName, modelName)
 	_ = h.usageTracker.UpdateActiveRequestMultiplier(requestID, mult)
+}
+
+func latestCredentialGroupName(chain []chainNode) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	return chain[len(chain)-1].CredentialGroup
 }
 
 // pickModelName 在响应未携带 model 时回退到请求体 model
@@ -1152,11 +1202,11 @@ func pickModelName(responseModel, requestModel string) string {
 	return requestModel
 }
 
-func (h *Handler) endpointBillingOutputTokenSource(channelName, endpointName string) string {
+func (h *Handler) endpointBillingOutputTokenSource(channelName, groupName, endpointName string) string {
 	if h.usageTracker == nil || endpointName == "" {
 		return tracking.BillingOutputTokenSourceOutput
 	}
-	mult := h.usageTracker.GetEndpointMultiplierForEndpoint(channelName, endpointName)
+	mult := h.usageTracker.GetEndpointMultiplierForEndpointWithGroup(channelName, groupName, endpointName)
 	return tracking.NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
 }
 
@@ -1176,7 +1226,7 @@ func buildTokenUsage(tr *TokenResult, billingOutputTokenSource string) *tracking
 }
 
 // recordSuccess 记录请求成功
-func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, channelName string) {
+func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, groupName, channelName string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -1185,11 +1235,11 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 	var modelName string
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
-		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, endpointName))
+		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, groupName, endpointName))
 	} else {
 		modelName = requestModel
 	}
-	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
+	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
 	h.usageTracker.RecordRequestSuccess(requestID, modelName, tokens, duration)
 }
 
@@ -1210,7 +1260,7 @@ func (h *Handler) recordFailure(requestID string, startTime time.Time, reason st
 	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", reason, detail, duration, httpStatus, tokens)
 }
 
-func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason string, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, channelName string) {
+func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason string, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, groupName, channelName string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -1219,9 +1269,9 @@ func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason 
 	modelName := requestModel
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
-		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, endpointName))
+		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, groupName, endpointName))
 	}
-	h.snapshotEndpointMultiplier(requestID, channelName, endpointName, modelName)
+	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
 	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", reason, "", duration, httpStatus, tokens)
 }
 

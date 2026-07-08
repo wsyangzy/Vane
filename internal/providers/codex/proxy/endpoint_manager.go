@@ -312,6 +312,30 @@ func (m *EndpointManager) MarkUnhealthy(endpointID int64) {
 	m.MarkUnhealthyWithDetail(endpointID, 0, "")
 }
 
+func (m *EndpointManager) endpointIDsInCredentialGroup(groupID int64, groupName string) []int64 {
+	if groupID <= 0 && groupName == "" {
+		return nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids := make([]int64, 0)
+	for _, ep := range m.endpoints {
+		if ep == nil {
+			continue
+		}
+		if groupID > 0 && ep.CredentialGroupID == groupID {
+			ids = append(ids, ep.ID)
+			continue
+		}
+		if groupID <= 0 && groupName != "" && ep.CredentialGroupName == groupName {
+			ids = append(ids, ep.ID)
+		}
+	}
+	return ids
+}
+
 // MarkUnhealthyWithDetail 标记端点为不健康，并记录本次请求/探测的失败详情。
 func (m *EndpointManager) MarkUnhealthyWithDetail(endpointID int64, statusCode int, reason string) {
 	if endpointID <= 0 {

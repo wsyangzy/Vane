@@ -25,15 +25,30 @@ const formatTokens = (value) => {
   return value.toString();
 };
 
+const parseEndpointCostLabel = (label) => {
+  const name = String(label || '')
+  const match = name.match(/^(.*?)\s*\((.*?)\)\s*$/)
+  if (!match) {
+    return { endpoint: name, group: '' }
+  }
+  return {
+    endpoint: match[1]?.trim() || name,
+    group: match[2]?.trim() || ''
+  }
+}
+
 // 自定义 Tooltip
 const CustomTooltip = ({ active, payload }) => {
   if (!active || !payload || !payload.length) return null;
 
   const item = payload[0]?.payload
   const providerLabel = item?.provider === 'codex' ? 'Codex' : 'Claude'
+  const channelName = item?.channel || item?.channelName || '-'
+  const groupName = item?.group || item?.groupName || '-'
+  const endpointName = item?.endpoint || item?.endpointName || item?.name || '-'
 
   return (
-    <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
+    <div className="min-w-[240px] max-w-[320px] bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
       <div className="flex items-center gap-2 mb-2">
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
           item?.provider === 'codex'
@@ -42,7 +57,17 @@ const CustomTooltip = ({ active, payload }) => {
         }`}>
           {providerLabel}
         </span>
-        <span className="font-medium text-slate-900">{item?.name}</span>
+        <span className="min-w-0 flex-1 break-words font-medium text-slate-900">{channelName}</span>
+      </div>
+      <div className="mb-2 space-y-1 border-b border-slate-100 pb-2">
+        <div className="flex items-start justify-between gap-4 text-xs">
+          <span className="text-slate-400">分组</span>
+          <span className="max-w-[190px] break-words text-right font-medium text-slate-700">{groupName}</span>
+        </div>
+        <div className="flex items-start justify-between gap-4 text-xs">
+          <span className="text-slate-400">端点</span>
+          <span className="max-w-[190px] break-words text-right font-medium text-slate-700">{endpointName}</span>
+        </div>
       </div>
       {payload.map((entry, index) => (
         <div key={index} className="flex items-center justify-between gap-4">
@@ -108,11 +133,17 @@ const TokenCostChart = () => {
           // 如果是 Chart.js 格式，转换为 Recharts 格式
           const tokensData = data.datasets.find(d => d.label?.includes('Token'))?.data || [];
           const costData = data.datasets.find(d => d.label?.includes('成本') || d.label?.includes('Cost'))?.data || [];
-          const converted = data.labels.map((name, i) => ({
-            name,
-            tokens: tokensData[i] || 0,
-            cost: costData[i] || 0
-          }));
+          const converted = data.labels.map((name, i) => {
+            const labelParts = parseEndpointCostLabel(name)
+            return {
+              name,
+              channel: '',
+              endpoint: labelParts.endpoint,
+              group: labelParts.group,
+              tokens: tokensData[i] || 0,
+              cost: costData[i] || 0
+            }
+          });
           setChartData(converted);
         }
         console.log('📊 [SSE] 端点成本图已更新');

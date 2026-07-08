@@ -1041,14 +1041,14 @@ export const getCodexEndpointHealthChart = async () => {
 /**
  * 获取当日端点成本数据
  * @param {string} provider - 提供商过滤（'claude'/'codex'/'')
- * @returns {Promise<Array>} - 端点成本数据 [{name, tokens, cost}]
+ * @returns {Promise<Array>} - 端点成本数据 [{name, channel, endpoint, group, tokens, cost, provider}]
  */
 export const getEndpointCosts = async (provider = '') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
   const data = await WailsApp.GetEndpointCosts(provider);
-  // 数据已经是 [{name, tokens, cost}] 格式
+  // 数据已经是 [{name, channel, endpoint, group, tokens, cost, provider}] 格式
   return data || [];
 };
 

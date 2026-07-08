@@ -17,11 +17,11 @@ const (
 	ActionRetry ErrorAction = iota
 
 	// ActionFailover 跨端点切换：当前端点不可恢复但其他端点可能正常
-	// 适用：5xx、401/403、404、409、410、451
+	// 适用：5xx、401/402/403/404、409/410、429、451
 	ActionFailover
 
 	// ActionFailFast 立即失败：重试或切换均无意义
-	// 适用：400（请求格式错误）、402（账户欠费）、429（限流/配额）、其他 4xx
+	// 适用：400（请求格式错误）、其他 4xx
 	ActionFailFast
 )
 
@@ -39,8 +39,7 @@ func NewErrorClassifier() *ErrorClassifier {
 //   - 网络错误（连接超时、DNS 失败等） → ActionRetry（瞬时，同端点重试）
 //   - HTTP 408/425                     → ActionRetry（瞬时超时类）
 //   - HTTP 5xx                         → ActionFailover（端点宕机，切换端点）
-//   - HTTP 401/403/404/409/410/451     → ActionFailover（端点级问题，切换端点）
-//   - HTTP 402/429                     → ActionFailFast（计费/限流，切换端点也无意义）
+//   - HTTP 401/402/403/404/409/410/429/451 → ActionFailover（端点或凭证分组级问题，切换端点/分组）
 //   - HTTP 400 及其他 4xx              → ActionFailFast（客户端错误）
 func (c *ErrorClassifier) Classify(resp *http.Response, err error) ErrorAction {
 	if err != nil {
@@ -67,16 +66,14 @@ func (c *ErrorClassifier) classifyStatus(statusCode int) ErrorAction {
 		return ActionFailover
 
 	case statusCode == http.StatusUnauthorized, // 401
+		statusCode == http.StatusPaymentRequired,            // 402
 		statusCode == http.StatusForbidden,                  // 403
 		statusCode == http.StatusNotFound,                   // 404
 		statusCode == http.StatusConflict,                   // 409
 		statusCode == http.StatusGone,                       // 410
+		statusCode == http.StatusTooManyRequests,            // 429
 		statusCode == http.StatusUnavailableForLegalReasons: // 451
 		return ActionFailover
-
-	case statusCode == http.StatusTooManyRequests, // 429（限流）
-		statusCode == http.StatusPaymentRequired: // 402（欠费）
-		return ActionFailFast
 
 	default:
 		// HTTP 400 及其他未列出的 4xx

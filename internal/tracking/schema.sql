@@ -405,6 +405,7 @@ CREATE TABLE IF NOT EXISTS codex_credential_groups (
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
+    model_multipliers TEXT NOT NULL DEFAULT '[]', -- 按模型附加倍率 JSON
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     UNIQUE(channel_id, name)

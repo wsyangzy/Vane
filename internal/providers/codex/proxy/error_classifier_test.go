@@ -18,3 +18,16 @@ func TestErrorClassifierFailsOverCapacityStreamError(t *testing.T) {
 		t.Fatalf("expected ActionFailover, got %v", action)
 	}
 }
+
+func TestErrorClassifierFailsOverCredentialGroupErrors(t *testing.T) {
+	classifier := NewErrorClassifier()
+	for _, statusCode := range []int{
+		http.StatusPaymentRequired,
+		http.StatusTooManyRequests,
+	} {
+		resp := &http.Response{StatusCode: statusCode}
+		if action := classifier.Classify(resp, nil); action != ActionFailover {
+			t.Fatalf("status %d: expected ActionFailover, got %v", statusCode, action)
+		}
+	}
+}

@@ -3,8 +3,10 @@ package tracking
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -248,6 +250,7 @@ func (t UsageStatsTotals) AvgDurationMs() float64 {
 
 // EndpointCostSummary represents cost summary data for an endpoint
 type EndpointCostSummary struct {
+	Channel      string  `json:"channel"`
 	EndpointName string  `json:"endpoint_name"`
 	GroupName    string  `json:"group_name"`
 	Provider     string  `json:"provider"`
@@ -901,25 +904,24 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 	endOfDay := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 23, 59, 59, 999999999, location)
 
 	query := `SELECT
+		COALESCE(channel, '') as channel,
 		COALESCE(endpoint_name, '') as endpoint_name,
 		COALESCE(group_name, '') as group_name,
+		COALESCE(endpoint_chain, '') as endpoint_chain,
 		COALESCE(provider, 'claude') as provider,
-		COALESCE(SUM(` + totalTokensSQLExpression + `), 0) as total_tokens,
-		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
-		COUNT(*) as request_count,
-		SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as success_count,
-		COALESCE(SUM(input_tokens), 0) as input_tokens,
-		COALESCE(SUM(output_tokens), 0) as output_tokens,
-		COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
-		COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
-		COALESCE(SUM(input_cost_usd), 0.0) as input_cost_usd,
-		COALESCE(SUM(output_cost_usd), 0.0) as output_cost_usd,
-		COALESCE(SUM(cache_creation_cost_usd), 0.0) as cache_creation_cost_usd,
-		COALESCE(SUM(cache_read_cost_usd), 0.0) as cache_read_cost_usd
+		COALESCE(status, '') as status,
+		COALESCE(` + totalTokensSQLExpression + `, 0) as total_tokens,
+		COALESCE(total_cost_usd, 0.0) as total_cost_usd,
+		COALESCE(input_tokens, 0) as input_tokens,
+		COALESCE(output_tokens, 0) as output_tokens,
+		COALESCE(cache_creation_tokens, 0) as cache_creation_tokens,
+		COALESCE(cache_read_tokens, 0) as cache_read_tokens,
+		COALESCE(input_cost_usd, 0.0) as input_cost_usd,
+		COALESCE(output_cost_usd, 0.0) as output_cost_usd,
+		COALESCE(cache_creation_cost_usd, 0.0) as cache_creation_cost_usd,
+		COALESCE(cache_read_cost_usd, 0.0) as cache_read_cost_usd
 		FROM request_logs
-		WHERE start_time >= ? AND start_time <= ?
-		GROUP BY endpoint_name, group_name, provider
-		ORDER BY total_cost_usd DESC`
+		WHERE start_time >= ? AND start_time <= ?`
 
 	rows, err := ut.readDB.QueryContext(ctx, query, ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay))
 	if err != nil {
@@ -928,22 +930,80 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 	}
 	defer rows.Close()
 
-	var costs []EndpointCostSummary
+	type endpointCostKey struct {
+		Channel      string
+		EndpointName string
+		GroupName    string
+		Provider     string
+	}
+	type endpointCostRow struct {
+		Channel              string
+		EndpointName         string
+		GroupName            string
+		EndpointChain        string
+		Provider             string
+		Status               string
+		TotalTokens          int64
+		TotalCostUSD         float64
+		InputTokens          int64
+		OutputTokens         int64
+		CacheCreationTokens  int64
+		CacheReadTokens      int64
+		InputCostUSD         float64
+		OutputCostUSD        float64
+		CacheCreationCostUSD float64
+		CacheReadCostUSD     float64
+	}
+
+	grouped := make(map[endpointCostKey]*EndpointCostSummary)
 	for rows.Next() {
-		var cost EndpointCostSummary
+		var row endpointCostRow
 		err := rows.Scan(
-			&cost.EndpointName, &cost.GroupName, &cost.Provider, &cost.TotalTokens, &cost.TotalCostUSD,
-			&cost.RequestCount, &cost.SuccessCount,
-			&cost.InputTokens, &cost.OutputTokens,
-			&cost.CacheCreationTokens, &cost.CacheReadTokens,
-			&cost.InputCostUSD, &cost.OutputCostUSD,
-			&cost.CacheCreationCostUSD, &cost.CacheReadCostUSD,
+			&row.Channel, &row.EndpointName, &row.GroupName, &row.EndpointChain, &row.Provider, &row.Status,
+			&row.TotalTokens, &row.TotalCostUSD,
+			&row.InputTokens, &row.OutputTokens,
+			&row.CacheCreationTokens, &row.CacheReadTokens,
+			&row.InputCostUSD, &row.OutputCostUSD,
+			&row.CacheCreationCostUSD, &row.CacheReadCostUSD,
 		)
 		if err != nil {
 			slog.Error("Failed to scan endpoint cost row", "error", err)
 			return nil, fmt.Errorf("failed to scan endpoint cost: %w", err)
 		}
-		costs = append(costs, cost)
+		groupName := row.GroupName
+		if groupName == "" {
+			groupName = endpointChainCredentialGroup(row.EndpointChain)
+		}
+		key := endpointCostKey{
+			Channel:      row.Channel,
+			EndpointName: row.EndpointName,
+			GroupName:    groupName,
+			Provider:     row.Provider,
+		}
+		cost := grouped[key]
+		if cost == nil {
+			cost = &EndpointCostSummary{
+				Channel:      row.Channel,
+				EndpointName: row.EndpointName,
+				GroupName:    groupName,
+				Provider:     row.Provider,
+			}
+			grouped[key] = cost
+		}
+		cost.TotalTokens += row.TotalTokens
+		cost.TotalCostUSD += row.TotalCostUSD
+		cost.RequestCount++
+		if row.Status == "completed" {
+			cost.SuccessCount++
+		}
+		cost.InputTokens += row.InputTokens
+		cost.OutputTokens += row.OutputTokens
+		cost.CacheCreationTokens += row.CacheCreationTokens
+		cost.CacheReadTokens += row.CacheReadTokens
+		cost.InputCostUSD += row.InputCostUSD
+		cost.OutputCostUSD += row.OutputCostUSD
+		cost.CacheCreationCostUSD += row.CacheCreationCostUSD
+		cost.CacheReadCostUSD += row.CacheReadCostUSD
 	}
 
 	if err = rows.Err(); err != nil {
@@ -951,10 +1011,56 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		return nil, fmt.Errorf("error iterating endpoint cost rows: %w", err)
 	}
 
+	costs := make([]EndpointCostSummary, 0, len(grouped))
+	for _, cost := range grouped {
+		costs = append(costs, *cost)
+	}
+	sort.Slice(costs, func(i, j int) bool {
+		if costs[i].TotalCostUSD != costs[j].TotalCostUSD {
+			return costs[i].TotalCostUSD > costs[j].TotalCostUSD
+		}
+		if costs[i].Channel != costs[j].Channel {
+			return costs[i].Channel < costs[j].Channel
+		}
+		if costs[i].EndpointName != costs[j].EndpointName {
+			return costs[i].EndpointName < costs[j].EndpointName
+		}
+		return costs[i].GroupName < costs[j].GroupName
+	})
+
 	slog.Debug("Successfully queried endpoint costs",
 		"date", date,
 		"endpoint_count", len(costs),
 		"total_endpoints", len(costs))
 
 	return costs, nil
+}
+
+type endpointChainGroupNode struct {
+	CredentialGroup string `json:"credential_group"`
+}
+
+func endpointChainCredentialGroup(chain string) string {
+	chain = strings.TrimSpace(chain)
+	if chain == "" {
+		return ""
+	}
+
+	var nodes []endpointChainGroupNode
+	if err := json.Unmarshal([]byte(chain), &nodes); err == nil {
+		for i := len(nodes) - 1; i >= 0; i-- {
+			if nodes[i].CredentialGroup != "" {
+				return nodes[i].CredentialGroup
+			}
+		}
+	}
+
+	parts := strings.Split(chain, " -> ")
+	for i := len(parts) - 1; i >= 0; i-- {
+		fields := strings.Split(parts[i], "::")
+		if len(fields) >= 3 && strings.TrimSpace(fields[1]) != "" {
+			return strings.TrimSpace(fields[1])
+		}
+	}
+	return ""
 }

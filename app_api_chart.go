@@ -353,6 +353,9 @@ func (a *App) GetCodexEndpointHealthChart() EndpointHealthData {
 // EndpointCostItem 端点成本数据项（用于前端图表）
 type EndpointCostItem struct {
 	Name     string  `json:"name"`
+	Channel  string  `json:"channel"`
+	Endpoint string  `json:"endpoint"`
+	Group    string  `json:"group"`
 	Tokens   int64   `json:"tokens"`
 	Cost     float64 `json:"cost"`
 	Provider string  `json:"provider"`
@@ -446,6 +449,9 @@ func queryEndpointCostsForDate(usageTracker interface {
 
 		result = append(result, EndpointCostItem{
 			Name:     name,
+			Channel:  cost.Channel,
+			Endpoint: cost.EndpointName,
+			Group:    cost.GroupName,
 			Tokens:   totalTokens,
 			Cost:     cost.TotalCostUSD,
 			Provider: prov,

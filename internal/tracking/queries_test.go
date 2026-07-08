@@ -373,6 +373,101 @@ func TestExportOperations(t *testing.T) {
 	})
 }
 
+func TestGetEndpointCostsForDateKeepsChannelDimension(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       10,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: 24 * time.Hour,
+		RetentionDays:   30,
+		HotPool: &HotPoolSettings{
+			Enabled: false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewUsageTracker failed: %v", err)
+	}
+	defer tracker.Close()
+
+	rows := []struct {
+		requestID string
+		channel   string
+		cost      float64
+	}{
+		{"cost-channel-a", "渠道A", 1.25},
+		{"cost-channel-b", "渠道B", 2.50},
+	}
+	for _, row := range rows {
+		_, err := tracker.db.Exec(`
+			INSERT INTO request_logs (
+				request_id, start_time, status, provider, channel, endpoint_name, group_name,
+				input_tokens, output_tokens, total_cost_usd
+			) VALUES (?, ?, 'completed', 'codex', ?, '国内', 'default', 100, 20, ?)
+		`, row.requestID, "2026-07-08 12:00:00", row.channel, row.cost)
+		if err != nil {
+			t.Fatalf("insert request log failed: %v", err)
+		}
+	}
+
+	costs, err := tracker.GetEndpointCostsForDate(context.Background(), "2026-07-08")
+	if err != nil {
+		t.Fatalf("GetEndpointCostsForDate failed: %v", err)
+	}
+	if len(costs) != 2 {
+		t.Fatalf("endpoint costs len = %d, want 2: %#v", len(costs), costs)
+	}
+	if costs[0].Channel != "渠道B" || costs[0].EndpointName != "国内" || costs[0].GroupName != "default" {
+		t.Fatalf("first endpoint cost = %#v, want highest-cost channel row", costs[0])
+	}
+	if costs[1].Channel != "渠道A" {
+		t.Fatalf("second endpoint cost = %#v, want 渠道A", costs[1])
+	}
+}
+
+func TestGetEndpointCostsForDateFallsBackToEndpointChainGroup(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       10,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: 24 * time.Hour,
+		RetentionDays:   30,
+		HotPool: &HotPoolSettings{
+			Enabled: false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewUsageTracker failed: %v", err)
+	}
+	defer tracker.Close()
+
+	_, err = tracker.db.Exec(`
+		INSERT INTO request_logs (
+			request_id, start_time, status, provider, channel, endpoint_name, group_name, endpoint_chain,
+			input_tokens, output_tokens, total_cost_usd
+		) VALUES (?, ?, 'completed', 'codex', '快跑API', '国内', '', ?, 100, 20, 2.93)
+	`, "cost-chain-group", "2026-07-08 12:00:00", `[{"hop":1,"channel":"快跑API","credential_group":"轮询","endpoint":"国内"}]`)
+	if err != nil {
+		t.Fatalf("insert request log failed: %v", err)
+	}
+
+	costs, err := tracker.GetEndpointCostsForDate(context.Background(), "2026-07-08")
+	if err != nil {
+		t.Fatalf("GetEndpointCostsForDate failed: %v", err)
+	}
+	if len(costs) != 1 {
+		t.Fatalf("endpoint costs len = %d, want 1: %#v", len(costs), costs)
+	}
+	if costs[0].GroupName != "轮询" {
+		t.Fatalf("expected group name from endpoint_chain, got %q", costs[0].GroupName)
+	}
+}
+
 func TestCleanupOperations(t *testing.T) {
 	// 🔧 [P5.1] 此测试依赖已废弃的 traditional eventChan 路径（RecordRequestStart 立即写入数据库）
 	// P5.1 改造后 HotPool 单路径：start 状态只在内存中，完成后才归档到数据库

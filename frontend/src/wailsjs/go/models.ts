@@ -1075,8 +1075,12 @@ export namespace main {
 	}
 	export class EndpointCostItem {
 	    name: string;
+	    channel: string;
+	    endpoint: string;
+	    group: string;
 	    tokens: number;
 	    cost: number;
+	    provider: string;
 
 	    static createFrom(source: any = {}) {
 	        return new EndpointCostItem(source);
@@ -1085,8 +1089,12 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
+	        this.channel = source["channel"];
+	        this.endpoint = source["endpoint"];
+	        this.group = source["group"];
 	        this.tokens = source["tokens"];
 	        this.cost = source["cost"];
+	        this.provider = source["provider"];
 	    }
 	}
 	export class EndpointHealthData {
