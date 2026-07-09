@@ -24,6 +24,8 @@ export const parseChainNode = (item, hop) => {
     const channel = item.channel || '';
     const credentialGroup = item.credential_group || item.credentialGroup || item.group_name || item.group || '';
     const endpoint = item.endpoint || '';
+    const statusCode = Number(item.status_code ?? item.statusCode ?? item.http_status ?? item.httpStatus ?? 0) || 0;
+    const error = item.error || item.error_message || item.errorMessage || item.failure_reason || item.failureReason || '';
     const raw = channel
       ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
       : endpoint;
@@ -32,6 +34,8 @@ export const parseChainNode = (item, hop) => {
       channel,
       credentialGroup,
       endpoint,
+      statusCode,
+      error,
       hop: item.hop || hop,
     };
   }

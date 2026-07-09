@@ -21,9 +21,25 @@ test('parseEndpointChain keeps structured JSON chain nodes', () => {
     channel: 'CCTQ',
     credentialGroup: 'default',
     endpoint: 'Ark API',
+    statusCode: 0,
+    error: '',
     hop: 1,
   });
   assert.equal(chainHasMultipleChannels(chain), true);
+});
+
+test('parseChainNode keeps structured endpoint error details', () => {
+  const node = parseChainNode({
+    hop: 1,
+    channel: 'CCTQ',
+    credential_group: 'default',
+    endpoint: 'Ark API',
+    status_code: 403,
+    error: '{"error":{"message":"quota exceeded"}}',
+  });
+
+  assert.equal(node.statusCode, 403);
+  assert.equal(node.error, '{"error":{"message":"quota exceeded"}}');
 });
 
 test('parseEndpointChain supports legacy transfer path strings', () => {

@@ -497,6 +497,8 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
+	StatusCode      int    `json:"status_code,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // parseEndpointChain 解析端点链路字符串（兼容三种历史格式）

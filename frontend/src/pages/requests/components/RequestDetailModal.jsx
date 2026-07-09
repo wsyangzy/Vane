@@ -25,7 +25,9 @@ import {
   TrendingDown,
   Zap,
   Calculator,
-  Replace
+  Replace,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -85,6 +87,68 @@ const decodeBase64Utf8 = (value) => {
     return '';
   }
 };
+
+const pickEndpointErrorValue = (errorObject, key) => {
+  if (!errorObject || typeof errorObject !== 'object') return '';
+  const direct = errorObject[key];
+  const nested = errorObject.error && typeof errorObject.error === 'object' ? errorObject.error[key] : '';
+  return String(direct || nested || '').trim();
+};
+
+const compactEndpointErrorReason = (type, code, message, fallback) => {
+  const text = `${type} ${code} ${message} ${fallback}`.toLowerCase();
+  if ((text.includes('负载') && text.includes('上限')) || text.includes('capacity')) return '模型负载上限';
+  if (text.includes('insufficient') || text.includes('quota') || text.includes('balance')) return '额度不足';
+  if (text.includes('invalid url')) return 'URL 无效';
+  if (text.includes('rate_limit') || text.includes('rate limit') || text.includes('限流')) return '限流';
+  if (text.includes('timeout') || text.includes('timed out') || text.includes('超时')) return '请求超时';
+  if (text.includes('unauthorized') || text.includes('forbidden') || text.includes('permission')) return '认证或权限失败';
+  return code || type || message || fallback;
+};
+
+const parseEndpointErrorInfo = (errorText, statusCode) => {
+  const raw = String(errorText || '').trim();
+  if (!raw) return { raw: '', compact: '', summary: '', message: '', type: '', code: '' };
+
+  let parsed = null;
+  const jsonStart = raw.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      parsed = JSON.parse(raw.slice(jsonStart));
+    } catch {
+      parsed = null;
+    }
+  }
+
+  const message = pickEndpointErrorValue(parsed, 'message');
+  const type = pickEndpointErrorValue(parsed, 'type');
+  const code = pickEndpointErrorValue(parsed, 'code');
+  const fallback = raw.replace(/^HTTP\s+\d+:\s*/i, '').trim();
+  const parts = [
+    statusCode ? `HTTP ${statusCode}` : '',
+    type,
+    code && code !== type ? code : '',
+    message || fallback,
+  ].filter(Boolean);
+  const compactReason = compactEndpointErrorReason(type, code, message, fallback);
+  const compact = [statusCode ? `HTTP ${statusCode}` : '', compactReason].filter(Boolean).join(' · ');
+
+  return {
+    raw,
+    compact,
+    summary: parts.join(' · '),
+    message,
+    type,
+    code,
+  };
+};
+
+const EndpointErrorTooltipContent = ({ summary }) => (
+  <div className="max-w-[28rem] space-y-1 text-left">
+    <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-200">错误摘要</div>
+    <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{summary}</div>
+  </div>
+);
 
 const parsePrivacyMatches = (value) => {
   if (!value) return [];
@@ -180,6 +244,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
+  const [endpointErrorDisplayMode, setEndpointErrorDisplayMode] = useState('compact');
   const requestIdCopyTimerRef = useRef(null);
 
   // ESC 键关闭 & 阻止滚动
@@ -261,6 +326,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     return node;
   }).filter(Boolean);
   const showChannelInChain = isClaudeRequest && chainHasMultipleChannels(endpointChain);
+  const hasEndpointErrors = chainNodes.some((node) => Boolean(node.error));
   const currentChannelLabel = request.channel || request.group || chainNodes.find((node) => node.channel)?.channel || '';
   const hasUnknownChannel = showChannelInChain && chainNodes.some((node) => !node.channel);
   const channelTones = [
@@ -321,7 +387,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
       {/* 模态框内容 - 固定高度，内容区域滚动 */}
       <div className="relative w-full max-w-3xl max-h-[80vh] bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200 flex flex-col overflow-hidden">
         {/* 头部 - 固定不滚动 */}
-        <div className="flex-shrink-0 px-6 py-4 border-b border-slate-100 bg-white rounded-t-2xl flex items-center justify-between">
+        <div className="flex-shrink-0 py-4 pl-6 pr-11 border-b border-slate-100 bg-white rounded-t-2xl flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-indigo-50 rounded-lg">
               <FileText className="w-5 h-5 text-indigo-600" />
@@ -346,7 +412,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* Tab 导航 - 固定不滚动 */}
-        <div className="flex-shrink-0 pl-6 pr-10 pt-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="flex-shrink-0 pl-6 pr-11 pt-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {[
               { id: 'overview', label: '概览', icon: Activity },
@@ -802,9 +868,33 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       )}
                     </div>
 
-                    <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500">
-                      时间线
-                    </span>
+                    <div className="ml-auto flex items-center gap-2">
+                      {hasEndpointErrors && (
+                        <div className="inline-flex items-center rounded-lg border border-rose-100 bg-rose-50 p-0.5">
+                          {[
+                            { mode: 'compact', label: '缩略', icon: EyeOff },
+                            { mode: 'summary', label: '详细', icon: Eye },
+                          ].map((item) => (
+                            <button
+                              key={item.mode}
+                              type="button"
+                              onClick={() => setEndpointErrorDisplayMode(item.mode)}
+                              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+                                endpointErrorDisplayMode === item.mode
+                                  ? 'bg-white text-rose-700 shadow-sm'
+                                  : 'text-rose-500 hover:bg-rose-100'
+                              }`}
+                            >
+                              <item.icon className="h-3 w-3" />
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500">
+                        时间线
+                      </span>
+                    </div>
                   </div>
                 );
               })()}
@@ -824,6 +914,12 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                         const channelLabel = node.channel || '未知渠道';
                         const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
+                        const endpointError = node.error || '';
+                        const endpointErrorInfo = parseEndpointErrorInfo(endpointError, node.statusCode);
+                        const isEndpointErrorCompact = endpointErrorDisplayMode === 'compact';
+                        const endpointErrorLabel = isEndpointErrorCompact
+                          ? endpointErrorInfo.compact
+                          : endpointErrorInfo.summary;
                         const routeLabel = [
                           showChannelInChain ? channelLabel : '',
                           groupLabel,
@@ -870,17 +966,42 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                                       <span className="truncate">{groupLabel}</span>
                                     </span>
                                   )}
-                                  <Tooltip content={routeLabel} className="min-w-0">
-                                    <span className="text-[13px] font-semibold text-slate-800 truncate">
-                                      {endpointLabel}
-                                    </span>
-                                  </Tooltip>
-                                  <span className={`ml-auto shrink-0 text-[10px] ${
+                                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                                    <Tooltip content={routeLabel} className="min-w-0 max-w-[12rem]">
+                                      <span className="block truncate text-[13px] font-semibold text-slate-800">
+                                        {endpointLabel}
+                                      </span>
+                                    </Tooltip>
+                                    {endpointError && isEndpointErrorCompact && (
+                                      <Tooltip
+                                        content={<EndpointErrorTooltipContent summary={endpointErrorInfo.summary} />}
+                                        contentClassName="max-w-[32rem] border-rose-900/40 bg-slate-950 px-3 py-2"
+                                        className="min-w-0 flex-1"
+                                      >
+                                        <span className="block min-w-0 truncate rounded border border-rose-100 bg-rose-50/80 px-1.5 py-[1px] text-[10px] font-medium leading-5 text-rose-600">
+                                          错误：{endpointErrorLabel}
+                                        </span>
+                                      </Tooltip>
+                                    )}
+                                  </div>
+                                  <span className={`shrink-0 text-[10px] ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-400' : isLast ? 'text-emerald-500' : 'text-slate-400'
                                   }`}>
                                     {roleLabel}
                                   </span>
                                 </div>
+                                {endpointError && !isEndpointErrorCompact && (
+                                  <div
+                                    className="mt-1.5 min-w-0 rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] leading-relaxed text-rose-700 break-words [overflow-wrap:anywhere]"
+                                  >
+                                    <span className="shrink-0 font-medium text-rose-600">错误：</span>
+                                    <span className={
+                                      'break-words [overflow-wrap:anywhere]'
+                                    }>
+                                      {endpointErrorLabel}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -1110,7 +1231,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* 底部操作栏 - 固定不滚动 */}
-        <div className="flex-shrink-0 px-6 py-4 border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm rounded-b-2xl flex justify-between items-center">
+        <div className="flex-shrink-0 py-4 pl-6 pr-11 border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm rounded-b-2xl flex justify-between items-center">
           <div className="text-xs text-slate-500">
             Request ID: <span className="font-mono text-slate-700">{request.requestId}</span>
           </div>
