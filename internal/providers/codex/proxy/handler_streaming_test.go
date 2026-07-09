@@ -130,17 +130,17 @@ func TestRecordForwardingStoresCredentialGroupName(t *testing.T) {
 	}
 }
 
-func TestTryEndpointCycleSkipsCredentialGroupAfterRateLimit(t *testing.T) {
+func TestTryEndpointCycleSkipsCredentialGroupAfterInsufficientQuota(t *testing.T) {
 	var primaryBHits atomic.Int32
 	var backupHits atomic.Int32
 
 	primaryA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, `{"error":{"type":"rate_limit_error","message":"limited"}}`, http.StatusTooManyRequests)
+		http.Error(w, `{"error":{"code":"insufficient_user_quota","message":"Insufficient account balance for the selected group. Please top up and try again, or switch to a group with available quota."}}`, http.StatusForbidden)
 	}))
 	defer primaryA.Close()
 	primaryB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		primaryBHits.Add(1)
-		http.Error(w, `{"error":{"type":"rate_limit_error","message":"same group limited"}}`, http.StatusTooManyRequests)
+		http.Error(w, `{"error":{"code":"insufficient_user_quota","message":"same group insufficient quota"}}`, http.StatusForbidden)
 	}))
 	defer primaryB.Close()
 	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -161,7 +161,9 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterRateLimit(t *testing.T) {
 				Name:                 "国内-a",
 				BaseURL:              primaryA.URL,
 				APIKey:               "primary-key",
+				IsActive:             true,
 				FailoverEnabled:      true,
+				SkipHealthCheck:      true,
 				Priority:             0,
 			},
 			{
@@ -173,6 +175,7 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterRateLimit(t *testing.T) {
 				BaseURL:              primaryB.URL,
 				APIKey:               "primary-key",
 				FailoverEnabled:      true,
+				SkipHealthCheck:      true,
 				Priority:             1,
 			},
 			{
@@ -183,7 +186,6 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterRateLimit(t *testing.T) {
 				Name:                 "国内-backup",
 				BaseURL:              backup.URL,
 				APIKey:               "backup-key",
-				IsActive:             true,
 				FailoverEnabled:      true,
 				Priority:             0,
 			},
@@ -208,7 +210,7 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterRateLimit(t *testing.T) {
 	var failedIDs []int64
 	var endpointChain []chainNode
 
-	result := handler.tryEndpointCycle(recorder, req, body, "req-rate-limit-group", time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain)
+	result := handler.tryEndpointCycle(recorder, req, body, "req-rate-limit-group", time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, "")
 	if !result.completed {
 		t.Fatalf("expected request to complete via backup endpoint, got incomplete result: %+v", result)
 	}
@@ -226,6 +228,149 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterRateLimit(t *testing.T) {
 	}
 	if endpointChain[0].CredentialGroup != "主分组" || endpointChain[1].CredentialGroup != "备用分组" {
 		t.Fatalf("unexpected endpoint chain groups: %#v", endpointChain)
+	}
+	if endpointChain[0].StatusCode != http.StatusForbidden || !strings.Contains(endpointChain[0].Error, "Insufficient account balance") {
+		t.Fatalf("expected failed chain node to include upstream error, got %#v", endpointChain[0])
+	}
+}
+
+func TestTryEndpointCycleCachesCredentialGroupFailureWithinTurn(t *testing.T) {
+	var primaryAHits atomic.Int32
+	var primaryBHits atomic.Int32
+	var backupHits atomic.Int32
+
+	primaryA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryAHits.Add(1)
+		http.Error(w, `{"error":{"code":"insufficient_user_quota","message":"Insufficient account balance for the selected group."}}`, http.StatusForbidden)
+	}))
+	defer primaryA.Close()
+	primaryB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryBHits.Add(1)
+		http.Error(w, `{"error":{"code":"insufficient_user_quota","message":"same group insufficient quota"}}`, http.StatusForbidden)
+	}))
+	defer primaryB.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer backup.Close()
+
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{
+				ID:                   1,
+				CredentialGroupID:    10,
+				CredentialGroupName:  "主分组",
+				CredentialGroupOrder: 0,
+				Name:                 "国内-a",
+				BaseURL:              primaryA.URL,
+				APIKey:               "primary-key",
+				IsActive:             true,
+				FailoverEnabled:      true,
+				Priority:             0,
+			},
+			{
+				ID:                   2,
+				CredentialGroupID:    10,
+				CredentialGroupName:  "主分组",
+				CredentialGroupOrder: 0,
+				Name:                 "国内-b",
+				BaseURL:              primaryB.URL,
+				APIKey:               "primary-key",
+				FailoverEnabled:      true,
+				Priority:             1,
+			},
+			{
+				ID:                   3,
+				CredentialGroupID:    20,
+				CredentialGroupName:  "备用分组",
+				CredentialGroupOrder: 1,
+				Name:                 "国内-backup",
+				BaseURL:              backup.URL,
+				APIKey:               "backup-key",
+				FailoverEnabled:      true,
+				Priority:             0,
+			},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+	handler := &Handler{
+		manager:       manager,
+		forwarder:     NewForwarder(time.Second, newTestLogger()),
+		streamFwd:     NewStreamingForwarder(newTestLogger()),
+		tokenParser:   NewTokenParser(),
+		classifier:    NewErrorClassifier(),
+		logger:        newTestLogger(),
+		usageTracker:  nil,
+		suspensionMgr: nil,
+	}
+	body := []byte(`{"model":"gpt-5.5","stream":false}`)
+
+	run := func(requestID, turnKey string) []chainNode {
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+		recorder := httptest.NewRecorder()
+		var failedIDs []int64
+		var endpointChain []chainNode
+
+		result := handler.tryEndpointCycle(recorder, req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, turnKey)
+		if !result.completed {
+			t.Fatalf("expected request %s to complete via backup endpoint, got incomplete result: %+v", requestID, result)
+		}
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected request %s backup endpoint 200, got %d body=%q", requestID, recorder.Code, recorder.Body.String())
+		}
+		return endpointChain
+	}
+
+	firstChain := run("req-turn-1-a", "turn-1")
+	if primaryAHits.Load() != 1 || primaryBHits.Load() != 0 || backupHits.Load() != 1 {
+		t.Fatalf("unexpected first request hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
+	}
+	if len(firstChain) != 2 || firstChain[0].CredentialGroup != "主分组" || firstChain[1].CredentialGroup != "备用分组" {
+		t.Fatalf("unexpected first request chain: %#v", firstChain)
+	}
+
+	secondChain := run("req-turn-1-b", "turn-1")
+	if primaryAHits.Load() != 1 || primaryBHits.Load() != 0 || backupHits.Load() != 2 {
+		t.Fatalf("same turn should skip cached failed group, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
+	}
+	if len(secondChain) != 1 || secondChain[0].CredentialGroup != "备用分组" {
+		t.Fatalf("same turn should route directly to backup group, got chain: %#v", secondChain)
+	}
+
+	thirdChain := run("req-turn-2", "turn-2")
+	if primaryAHits.Load() != 1 || primaryBHits.Load() != 1 || backupHits.Load() != 3 {
+		t.Fatalf("new turn should retry primary group, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
+	}
+	if len(thirdChain) != 2 || thirdChain[0].CredentialGroup != "主分组" || thirdChain[1].CredentialGroup != "备用分组" {
+		t.Fatalf("new turn should try primary group again before backup, got chain: %#v", thirdChain)
+	}
+}
+
+func TestRequestTurnFailureCacheKeyUsesUserInputAcrossResponseChain(t *testing.T) {
+	body := []byte(`{"previous_response_id":"resp-1","input":[{"role":"user","content":[{"type":"input_text","text":"修复这个问题"}]}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+
+	key := requestTurnFailureCacheKey(req, body)
+	if key == "" {
+		t.Fatal("expected key from user input")
+	}
+	if same := requestTurnFailureCacheKey(req, body); same != key {
+		t.Fatalf("expected stable key for same request, got %q and %q", key, same)
+	}
+
+	nextBody := []byte(`{"previous_response_id":"resp-2","input":[{"role":"user","content":[{"type":"input_text","text":"修复这个问题"}]}]}`)
+	if next := requestTurnFailureCacheKey(req, nextBody); next != key {
+		t.Fatalf("expected same user input to keep the turn cache across response chain, got %q and %q", key, next)
+	}
+
+	toolOnly := []byte(`{"previous_response_id":"resp-2","input":[{"type":"function_call_output","call_id":"call-1","output":"ok"}]}`)
+	if key := requestTurnFailureCacheKey(req, toolOnly); key != "" {
+		t.Fatalf("expected no new key for tool-only request, got %q", key)
 	}
 }
 

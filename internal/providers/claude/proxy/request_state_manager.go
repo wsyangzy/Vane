@@ -149,6 +149,8 @@ type ChainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
+	StatusCode      int    `json:"status_code,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // AppendEndpointChain 追加端点到链路（按切换去重）
@@ -185,6 +187,24 @@ func (rsm *RequestStateManager) GetEndpointChain() string {
 	if len(rsm.endpointChain) == 0 {
 		return ""
 	}
+	data, _ := json.Marshal(rsm.endpointChain)
+	return string(data)
+}
+
+func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, errorText string) string {
+	if errorText == "" {
+		return rsm.GetEndpointChain()
+	}
+
+	rsm.endpointChainMu.Lock()
+	defer rsm.endpointChainMu.Unlock()
+	if len(rsm.endpointChain) == 0 {
+		return ""
+	}
+	last := &rsm.endpointChain[len(rsm.endpointChain)-1]
+	last.StatusCode = statusCode
+	last.Error = errorText
+
 	data, _ := json.Marshal(rsm.endpointChain)
 	return string(data)
 }

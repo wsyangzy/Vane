@@ -811,8 +811,15 @@ func (rlm *RequestLifecycleManager) HandleError(err error) {
 		// 状态转换由重试逻辑控制(retry/suspended/failed)，不在HandleError中处理
 		if rlm.usageTracker != nil {
 			failureReason := rlm.MapErrorTypeToFailureReason(handlers.ErrorType(errorCtx.ErrorType))
+			chain := rlm.stateManager.AnnotateEndpointChainError(
+				handlers.GetStatusCodeFromError(err, nil),
+				handlers.ExtractUpstreamErrorMessage(err),
+			)
 			opts := tracking.UpdateOptions{
 				FailureReason: &failureReason,
+			}
+			if chain != "" {
+				opts.EndpointChain = &chain
 			}
 			rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), opts)
 		}

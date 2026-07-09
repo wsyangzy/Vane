@@ -428,8 +428,8 @@ func (s *EndpointService) ActivateChannel(ctx context.Context, channel string) e
 // ActivateEndpointByID 激活指定端点为当前渠道首选端点。
 //
 // enabled 在 SQLite 模式下仍承担“当前活跃渠道”的持久化标记；这里仅保留指定端点
-// enabled=true，用于 UI 和路由排序识别当前首选端点。故障转移候选池仍由
-// failover_enabled 控制，其他同渠道端点不会因此退出故障转移链路。
+// enabled=true，用于 UI 展示，并在端点 priority 相同时作为路由排序的兜底首选。
+// 故障转移候选池仍由 failover_enabled 控制，其他同渠道端点不会因此退出故障转移链路。
 func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*store.EndpointRecord, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("端点ID不能为空")

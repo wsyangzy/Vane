@@ -13,7 +13,7 @@ func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(
 			Type: "fastest",
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 		EndpointsStorage: config.EndpointsStorageConfig{
 			Type: "yaml",
@@ -53,6 +53,53 @@ func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(
 	}
 }
 
+func TestTriggerRequestFailoverWithFailedEndpoints_UsesChannelPriorityAndSkipHealthOverride(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{
+			Type: "fastest",
+		},
+		Failover: config.FailoverConfig{
+			Enabled: true,
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{
+			Type: "yaml",
+		},
+		Endpoints: []config.EndpointConfig{
+			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1, Timeout: 2 * time.Second},
+			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 0, Timeout: 2 * time.Second},
+			{Name: "c1", URL: "http://example.invalid/c1", Channel: "C", Priority: 50, SkipHealthCheck: true, Timeout: 2 * time.Second},
+		},
+	}
+
+	mgr := NewManager(cfg)
+	mgr.UpdateChannelPriorities(map[string]int{
+		"A": 1,
+		"B": 2,
+		"C": 20,
+	})
+
+	for _, ep := range mgr.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = false
+		ep.Status.NeverChecked = false
+		switch ep.Config.Channel {
+		case "B":
+			ep.Status.ResponseTime = 10 * time.Millisecond
+		case "C":
+			ep.Status.ResponseTime = 200 * time.Millisecond
+		}
+		ep.mutex.Unlock()
+	}
+
+	newChannel, err := mgr.TriggerRequestFailoverWithFailedEndpoints([]string{"a1"}, "all_retries_exhausted")
+	if err != nil {
+		t.Fatalf("TriggerRequestFailoverWithFailedEndpoints error: %v", err)
+	}
+	if newChannel != "C" {
+		t.Fatalf("newChannel mismatch: got %q, want %q", newChannel, "C")
+	}
+}
+
 func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown(t *testing.T) {
 	failoverFalse := false
 
@@ -61,7 +108,7 @@ func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown
 			Type: "fastest",
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 		EndpointsStorage: config.EndpointsStorageConfig{
 			Type: "yaml",

@@ -73,7 +73,7 @@ func TestGetHealthyEndpoints_PriorityKeepsCredentialGroupsContiguous(t *testing.
 	}
 }
 
-func TestGetHealthyEndpoints_PriorityKeepsEnabledEndpointStickyAfterPrioritySwap(t *testing.T) {
+func TestGetHealthyEndpoints_PriorityTakesPrecedenceOverEnabledEndpoint(t *testing.T) {
 	enabledTrue := true
 	enabledFalse := false
 	cfg := &config.Config{
@@ -100,7 +100,7 @@ func TestGetHealthyEndpoints_PriorityKeepsEnabledEndpointStickyAfterPrioritySwap
 
 	healthy := m.GetHealthyEndpoints()
 	got := endpointNames(healthy)
-	want := []string{"active-after-swap", "edited-to-zero", "fallback"}
+	want := []string{"edited-to-zero", "active-after-swap", "fallback"}
 	if !sameStringSlice(got, want) {
 		t.Fatalf("unexpected order: got %v, want %v", got, want)
 	}
@@ -234,6 +234,76 @@ func TestGetHealthyEndpoints_IgnoresRequestFailedForNewRequests(t *testing.T) {
 	if healthy[0].Config.Name != "a1" || healthy[1].Config.Name != "a2" {
 		t.Fatalf("unexpected order: got [%s, %s], want [a1, a2]",
 			healthy[0].Config.Name, healthy[1].Config.Name)
+	}
+}
+
+func TestGetHealthyEndpoints_SkipHealthCheckBypassesHealthFilter(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "priority"},
+		Health:   config.HealthConfig{Timeout: 5 * time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "regular-unhealthy", URL: "http://example.invalid/a1", Channel: "A", Priority: 1, Timeout: 1 * time.Second},
+			{Name: "skip-health", URL: "http://example.invalid/a2", Channel: "A", Priority: 2, SkipHealthCheck: true, Timeout: 1 * time.Second},
+		},
+	}
+
+	m := NewManager(cfg)
+	if err := m.ManualActivateGroupWithForce("A", true); err != nil {
+		t.Fatalf("ManualActivateGroupWithForce(A) error: %v", err)
+	}
+
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = false
+		ep.Status.NeverChecked = false
+		ep.mutex.Unlock()
+	}
+
+	healthy := m.GetHealthyEndpoints()
+	got := endpointNames(healthy)
+	want := []string{"skip-health"}
+	if !sameStringSlice(got, want) {
+		t.Fatalf("unexpected routable endpoints: got %v, want %v", got, want)
+	}
+}
+
+func TestTurnFailedCredentialGroupIsSkippedOnlyWithinSameTurn(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "priority"},
+		Health:   config.HealthConfig{Timeout: 5 * time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "old-p0", URL: "http://example.invalid/old-p0", Channel: "A", RuntimeKey: "A::old-p0", CredentialGroupID: 101, CredentialGroupName: "old", CredentialGroupOrder: 0, Priority: 0, Timeout: 1 * time.Second},
+			{Name: "old-p1", URL: "http://example.invalid/old-p1", Channel: "A", RuntimeKey: "A::old-p1", CredentialGroupID: 101, CredentialGroupName: "old", CredentialGroupOrder: 0, Priority: 1, Timeout: 1 * time.Second},
+			{Name: "new-p0", URL: "http://example.invalid/new-p0", Channel: "A", RuntimeKey: "A::new-p0", CredentialGroupID: 202, CredentialGroupName: "new", CredentialGroupOrder: 1, Priority: 0, Timeout: 1 * time.Second},
+		},
+	}
+
+	m := NewManager(cfg)
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		ep.mutex.Unlock()
+	}
+	if err := m.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+
+	all := m.GetAllEndpoints()
+	if !m.RememberFailedCredentialGroupForTurn("turn-1", all[0]) {
+		t.Fatalf("expected credential group failure to be remembered")
+	}
+
+	gotSameTurn := endpointNames(m.GetHealthyEndpointsForTurn("turn-1"))
+	wantSameTurn := []string{"new-p0"}
+	if !sameStringSlice(gotSameTurn, wantSameTurn) {
+		t.Fatalf("unexpected same-turn endpoints: got %v, want %v", gotSameTurn, wantSameTurn)
+	}
+
+	gotNextTurn := endpointNames(m.GetHealthyEndpointsForTurn("turn-2"))
+	wantNextTurn := []string{"old-p0", "old-p1", "new-p0"}
+	if !sameStringSlice(gotNextTurn, wantNextTurn) {
+		t.Fatalf("unexpected next-turn endpoints: got %v, want %v", gotNextTurn, wantNextTurn)
 	}
 }
 

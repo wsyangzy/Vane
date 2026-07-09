@@ -41,6 +41,15 @@ type EndpointFailureDetail struct {
 	Reason     string
 }
 
+type credentialGroupRef struct {
+	ID   int64
+	Name string
+}
+
+func (g credentialGroupRef) valid() bool {
+	return g.ID > 0 || g.Name != ""
+}
+
 // EndpointManager 管理活跃渠道的端点，提供故障转移选择
 type EndpointManager struct {
 	// 依赖
@@ -226,14 +235,15 @@ func (m *EndpointManager) Reload() error {
 	return nil
 }
 
-// GetNextEndpoint 获取下一个可用端点（排除已失败的和不健康的）
+// GetNextEndpoint 获取下一个可用端点（排除当前请求已失败的端点和当前问答已失败的凭证分组）
 // 逻辑:
 // 1. 过滤 failover_enabled = true 的端点
-// 2. 排除 unhealthyMap 中标记为不健康的端点（仅靠健康检查恢复）
-// 3. 排除 failedIDs 中的端点（本次请求已尝试过的）
-// 4. 按配置的路由策略排序，返回第一个
-// 5. 全部耗尽返回 error
-func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, error) {
+// 2. 排除 failedIDs 中的端点（本次请求已尝试过的）
+// 3. 排除 skippedGroups 中的凭证分组（当前问答已确认失败）
+// 4. 过滤健康检查失败的普通端点；skip_health_check=true 的端点绕过健康过滤
+// 5. 按配置的路由策略排序，返回第一个
+// 6. 全部耗尽返回 error
+func (m *EndpointManager) GetNextEndpoint(failedIDs []int64, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -254,7 +264,10 @@ func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, er
 		if _, failed := failedSet[ep.ID]; failed {
 			continue
 		}
-		if m.unhealthyMap[ep.ID] {
+		if credentialGroupSkipped(ep, skippedGroups) {
+			continue
+		}
+		if !m.endpointHealthAllowsRoutingLocked(ep) {
 			continue
 		}
 		candidates = append(candidates, ep)
@@ -268,30 +281,58 @@ func (m *EndpointManager) GetNextEndpoint(failedIDs []int64) (*CodexEndpoint, er
 	return nil, fmt.Errorf("所有 Codex 端点均不可用（共 %d 个端点）", len(m.endpoints))
 }
 
-// GetPrimaryEndpoint 获取主端点
-// 优先级：按配置的路由策略选择第一个健康的端点
-// 这样 priority 才能真正驱动路由（不再仅依赖 IsActive 标记）
-// IsActive 仅作为 UI"当前激活"的展示标记，由 PromoteActive 跟随实际路由更新
-func (m *EndpointManager) GetPrimaryEndpoint() (*CodexEndpoint, error) {
-	// 复用 GetNextEndpoint 的健康/优先级筛选逻辑，传入空 failedNames 表示首次选择
-	ep, err := m.GetNextEndpoint(nil)
-	if err == nil {
-		return ep, nil
-	}
-
-	// 健康端点全部耗尽时降级：返回 IsActive 标记的端点（即便不健康）
-	// 进一步降级：返回第一个端点（如果有的话）
+// GetPrimaryEndpoint 获取主端点。
+// priority 驱动路由，IsActive 只在同优先级时作为兜底排序标记。
+func (m *EndpointManager) GetPrimaryEndpoint(skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	candidates := make([]*CodexEndpoint, 0, len(m.endpoints))
 	for _, e := range m.endpoints {
-		if e.IsActive {
-			return e, nil
+		if !e.FailoverEnabled || credentialGroupSkipped(e, skippedGroups) {
+			continue
 		}
+		if !m.endpointHealthAllowsRoutingLocked(e) {
+			continue
+		}
+		candidates = append(candidates, e)
 	}
-	if len(m.endpoints) > 0 {
-		return m.endpoints[0], nil
+	if len(candidates) > 0 {
+		sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies)
+		return candidates[0], nil
 	}
 	return nil, fmt.Errorf("无可用 Codex 端点")
+}
+
+func (m *EndpointManager) endpointHealthAllowsRoutingLocked(ep *CodexEndpoint) bool {
+	if ep == nil {
+		return false
+	}
+	if ep.SkipHealthCheck {
+		return true
+	}
+	return !m.unhealthyMap[ep.ID]
+}
+
+func credentialGroupSkipped(ep *CodexEndpoint, skippedGroups []credentialGroupRef) bool {
+	if ep == nil || len(skippedGroups) == 0 {
+		return false
+	}
+	for _, group := range skippedGroups {
+		if !group.valid() {
+			continue
+		}
+		if group.ID > 0 {
+			if ep.CredentialGroupID == group.ID {
+				return true
+			}
+			continue
+		}
+		if ep.CredentialGroupName == group.Name {
+			return true
+		}
+	}
+	return false
 }
 
 // RecordLatency 记录健康检查测得的 RTT，供 fastest 策略排序使用。
@@ -446,6 +487,9 @@ func (m *EndpointManager) PromoteActive(endpointID int64) error {
 	if alreadyActive {
 		return nil // 已是活跃端点，无需更新
 	}
+	if m.endpointStore == nil {
+		return fmt.Errorf("Codex 端点存储未初始化")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -486,8 +530,8 @@ func (m *EndpointManager) notifyStateChanged() {
 	}
 }
 
-// IsHealthy 判断端点是否健康（不在 unhealthyMap 中即视为健康）
-// 用于前端健康图表统计；与 GetNextEndpoint 的健康判断逻辑保持一致。
+// IsHealthy 判断端点健康检查状态（不在 unhealthyMap 中即视为健康）。
+// 请求路由会硬过滤健康检查失败的普通端点；skip_health_check=true 的端点绕过过滤。
 func (m *EndpointManager) IsHealthy(endpointID int64) bool {
 	if endpointID <= 0 {
 		return false

@@ -46,7 +46,7 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 			continue
 		}
 
-		// 渠道内至少有一个"可用端点"才视为可切换（与渠道内路由候选保持一致）
+		// 渠道内至少有一个可路由端点才视为可切换；skip_health_check 会绕过健康过滤。
 		hasAvailableEndpoint := false
 
 		bestRT := time.Duration(math.MaxInt64)
@@ -60,23 +60,16 @@ func (m *Manager) collectFailoverCandidatesExcluding(exclude map[string]struct{}
 			if ep.Config.FailoverEnabled != nil {
 				failoverEnabled = *ep.Config.FailoverEnabled
 			}
-			if !failoverEnabled {
-				continue
-			}
-
-			ep.mutex.RLock()
-			isHealthy := ep.Status.Healthy
-			neverChecked := ep.Status.NeverChecked
-			rt := ep.Status.ResponseTime
-			ep.mutex.RUnlock()
-
-			if !(isHealthy || neverChecked) {
+			if !failoverEnabled || !endpointHealthAllowsRouting(ep) {
 				continue
 			}
 
 			hasAvailableEndpoint = true
 
 			// fastest 策略的排序依据：优先使用"已测得"的响应时间；未测得则不参与 bestRT
+			ep.mutex.RLock()
+			rt := ep.Status.ResponseTime
+			ep.mutex.RUnlock()
 			if rt > 0 {
 				hasBestRT = true
 				if rt < bestRT {

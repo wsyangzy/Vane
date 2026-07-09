@@ -98,6 +98,8 @@ func (rh *RegularHandler) HandleRegularRequestUnified(ctx context.Context, w htt
 // loopCount: 当前循环重试轮数（用于限制最大循环次数）
 func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int) {
 	connID := lifecycleManager.GetRequestID()
+	turnFailureKey := requestTurnFailureCacheKey(r, bodyBytes)
+	ctx = endpoint.ContextWithTurnFailureKey(ctx, turnFailureKey)
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
 
@@ -144,34 +146,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpointsExcluding(ctx, stringSetKeys(triedEndpoints)))
 		}
 		if len(endpoints) == 0 {
-			// 创建特殊错误，交给错误分类和重试系统处理
 			noHealthyErr := fmt.Errorf("no healthy endpoints available")
-			errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
-			errorCtx := errorRecovery.ClassifyError(noHealthyErr, connID, "", "", 0)
-
-			if errorCtx.ErrorType == ErrorTypeNoHealthyEndpoints {
-				// 尝试获取所有活跃端点，忽略健康状态
-				allActiveEndpoints := rh.endpointManager.GetActiveEndpointsIgnoringHealth()
-
-				if len(allActiveEndpoints) > 0 {
-					slog.InfoContext(ctx, fmt.Sprintf("🔄 [健康检查回退] [%s] 忽略健康状态，尝试 %d 个活跃端点",
-						connID, len(allActiveEndpoints)))
-					endpoints = filterStreamOnlyEndpoints(allActiveEndpoints)
-					// 继续正常处理流程
-				} else {
-					// 真的没有端点，直接失败（不挂起）
-					lifecycleManager.HandleError(noHealthyErr)
-					lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusUnprocessableEntity)
-					http.Error(w, "No endpoints available in active groups", http.StatusUnprocessableEntity)
-					return
-				}
-			} else {
-				// 按原来逻辑处理，直接失败（不挂起）
-				lifecycleManager.HandleError(noHealthyErr)
-				lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
-				http.Error(w, "No healthy endpoints available", http.StatusUnprocessableEntity)
-				return
-			}
+			lifecycleManager.HandleError(noHealthyErr)
+			lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
+			http.Error(w, "No healthy endpoints available", http.StatusUnprocessableEntity)
+			return
 		}
 
 		// 记录当前尝试的渠道（用于方案B：后续跨渠道故障转移时不回访）
@@ -185,6 +164,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		for i, ep := range endpoints {
 			// 记录已尝试的端点（确保严格优先级转移，不回退）
 			epKey := endpoint.EndpointKeyForConfig(ep.Config)
+			if _, alreadyTried := triedEndpoints[epKey]; alreadyTried {
+				continue
+			}
 			triedEndpoints[epKey] = struct{}{}
 
 			routeGroup := endpointRouteName(ep)
@@ -344,6 +326,14 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						failReason = err.Error()
 					}
 					rh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
+					failSummary := failReason
+					if err != nil {
+						failSummary = ExtractUpstreamErrorMessage(err)
+					}
+					if rememberCredentialGroupFailureForTurn(rh.endpointManager, turnFailureKey, ep, failStatusCode, failSummary, triedEndpoints) {
+						slog.Warn(fmt.Sprintf("🔁 [凭证分组跳过] [%s] 分组 %s 在当前问答中失败，后续请求将跳过同组端点",
+							connID, endpointDisplayGroupName(ep)))
+					}
 
 					if decision.SwitchEndpoint {
 						// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点

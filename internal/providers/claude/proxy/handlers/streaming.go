@@ -187,6 +187,8 @@ func (sh *StreamingHandler) HandleStreamingRequest(ctx context.Context, w http.R
 // handleStreaming 流式处理（带错误恢复）
 func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
 	connID := lifecycleManager.GetRequestID()
+	turnFailureKey := requestTurnFailureCacheKey(r, bodyBytes)
+	ctx = endpoint.ContextWithTurnFailureKey(ctx, turnFailureKey)
 
 	// 🔧 [P2-S2 修复] 获取 Flusher - 不支持时直接 503，拒绝伪装
 	// 旧逻辑用 noOpFlusher 静默退化，会导致客户端长时间等不到流式数据，
@@ -282,43 +284,13 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	}
 
 	if len(endpoints) == 0 {
-		// 创建特殊错误，交给错误分类和重试系统处理
 		noHealthyErr := fmt.Errorf("no healthy endpoints available")
-		errorRecovery := sh.errorRecoveryFactory.NewErrorRecoveryManager(sh.usageTracker)
-		errorCtx := errorRecovery.ClassifyError(noHealthyErr, connID, "", "", 0)
-
-		if errorCtx.ErrorType == ErrorTypeNoHealthyEndpoints {
-			// 尝试获取所有活跃端点，忽略健康状态
-			allActiveEndpoints := sh.endpointManager.GetActiveEndpointsIgnoringHealth()
-
-			if len(allActiveEndpoints) > 0 {
-				slog.InfoContext(ctx, fmt.Sprintf("🔄 [健康检查回退] [%s] 忽略健康状态，尝试 %d 个活跃端点",
-					connID, len(allActiveEndpoints)))
-				endpoints = allActiveEndpoints
-				// 继续正常处理流程
-			} else {
-				// 真的没有端点
-				lifecycleManager.HandleError(noHealthyErr)
-				// 🔧 [修复] 2025-12-11: 所有端点不可用时必须终结请求
-				// 使用 422 (Unprocessable Entity) 而非 503，防止 Claude Code 客户端自动重试
-				// 503 表示"服务暂时不可用"，客户端会自动重试；422 表示"无法处理请求"，客户端不会重试
-				lifecycleManager.FailRequest("no_endpoints", "No endpoints available in active groups", http.StatusUnprocessableEntity)
-				w.WriteHeader(http.StatusUnprocessableEntity)
-				// 使用正确的 SSE 终止序列，防止客户端自动重连
-				terminateSSEStreamWithError(w, flusher, "No endpoints available in active groups")
-				return
-			}
-		} else {
-			// 按原来逻辑处理
-			lifecycleManager.HandleError(noHealthyErr)
-			// 🔧 [修复] 2025-12-11: 所有端点不可用时必须终结请求
-			// 使用 422 (Unprocessable Entity) 而非 503，防止 Claude Code 客户端自动重试
-			lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			// 使用正确的 SSE 终止序列，防止客户端自动重连
-			terminateSSEStreamWithError(w, flusher, "No healthy endpoints available")
-			return
-		}
+		lifecycleManager.HandleError(noHealthyErr)
+		// 使用 422 (Unprocessable Entity) 而非 503，防止 Claude Code 客户端自动重试
+		lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		terminateSSEStreamWithError(w, flusher, "No healthy endpoints available")
+		return
 	}
 
 	// 方案B：记录当前尝试的渠道（用于后续跨渠道故障转移时不回访）
@@ -341,6 +313,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		lastFailedEndpoint = ep.Config.Name // 🚀 [端点自愈] 记录当前尝试的端点
 		// 记录已尝试的端点（确保严格优先级转移，不回退）
 		epKey := endpoint.EndpointKeyForConfig(ep.Config)
+		if _, alreadyTried := triedEndpoints[epKey]; alreadyTried {
+			continue
+		}
 		triedEndpoints[epKey] = struct{}{}
 
 		// 更新生命周期管理器信息
@@ -714,6 +689,14 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					failReason = lastErr.Error()
 				}
 				sh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
+				failSummary := failReason
+				if lastErr != nil {
+					failSummary = ExtractUpstreamErrorMessage(lastErr)
+				}
+				if rememberCredentialGroupFailureForTurn(sh.endpointManager, endpoint.TurnFailureKeyFromContext(ctx), ep, failStatusCode, failSummary, triedEndpoints) {
+					slog.Warn(fmt.Sprintf("🔁 [凭证分组跳过] [%s] 分组 %s 在当前问答中失败，后续请求将跳过同组端点",
+						connID, endpointDisplayGroupName(ep)))
+				}
 
 				if decision.SwitchEndpoint {
 					// 移除渠道内端点冷却，使用 triedEndpoints 追踪

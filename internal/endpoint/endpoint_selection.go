@@ -11,57 +11,35 @@ import (
 	"strings"
 )
 
-// GetHealthyEndpoints returns a list of healthy endpoints from active groups based on strategy.
+// GetHealthyEndpoints returns routable endpoints from active groups based on strategy.
 // 以"渠道(channel)"为单位路由，优先只返回当前激活渠道内的端点；
 // 跨渠道切换由请求级故障转移触发（见 TriggerRequestFailover）。
+// 健康检查状态是路由硬过滤；skip_health_check=true 的端点绕过该过滤。
 // 冷却机制已移除
 func (m *Manager) GetHealthyEndpoints() []*Endpoint {
-	// 使用快照机制
-	m.endpointsMu.RLock()
-	snapshot := make([]*Endpoint, len(m.endpoints))
-	copy(snapshot, m.endpoints)
-	m.endpointsMu.RUnlock()
-
-	// 1. 首先尝试获取活跃组（当前激活渠道）的端点
-	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
-
-	var healthy []*Endpoint
-	for _, endpoint := range activeEndpoints {
-		// 检查是否参与故障转移（默认为 true），不参与则不作为代理候选
-		failoverEnabled := true
-		if endpoint.Config.FailoverEnabled != nil {
-			failoverEnabled = *endpoint.Config.FailoverEnabled
-		}
-		if !failoverEnabled {
-			continue
-		}
-
-		endpoint.mutex.RLock()
-		isHealthy := endpoint.Status.Healthy
-		skipHealthCheck := endpoint.Config.SkipHealthCheck // 跳过健康检查的端点也视为可用
-		endpoint.mutex.RUnlock()
-
-		// 路由只依赖健康检查结果；RequestFailed 仅作为诊断标记，不应跨请求污染候选池。
-		if isHealthy || skipHealthCheck {
-			healthy = append(healthy, endpoint)
-		}
-	}
-
-	// 2. 如果当前激活渠道有可用端点，直接返回
-	if len(healthy) > 0 {
-		return m.sortHealthyEndpoints(healthy, true)
-	}
-
-	// 当前渠道没有可用端点：由上层触发跨渠道故障转移
-	return nil
+	return m.GetHealthyEndpointsForTurn("")
 }
 
-// GetActiveEndpointsIgnoringHealth 返回当前活跃渠道内“参与故障转移”的端点列表（忽略健康状态）。
-// 用途：当健康检查判定“无健康端点”时，作为兜底允许继续尝试请求转发；但必须仍然遵守 failover_enabled 语义。
-func (m *Manager) GetActiveEndpointsIgnoringHealth() []*Endpoint {
+func (m *Manager) GetHealthyEndpointsForTurn(turnKey string) []*Endpoint {
+	candidates := m.activeEndpointCandidates(nil, turnKey)
+	if len(candidates) == 0 {
+		return nil
+	}
+	return m.sortHealthyEndpoints(candidates, true)
+}
+
+func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string) []*Endpoint {
 	if m == nil || m.groupManager == nil {
 		return nil
 	}
+
+	excludeSet := make(map[string]struct{}, len(excludeKeys))
+	for _, key := range excludeKeys {
+		if key != "" {
+			excludeSet[key] = struct{}{}
+		}
+	}
+	skippedGroups := m.failedCredentialGroupsForTurn(turnKey)
 
 	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.GetAllEndpoints())
 	if len(activeEndpoints) == 0 {
@@ -73,6 +51,13 @@ func (m *Manager) GetActiveEndpointsIgnoringHealth() []*Endpoint {
 		if ep == nil {
 			continue
 		}
+		epKey := endpointKeyFromConfig(ep.Config)
+		if _, excluded := excludeSet[epKey]; excluded {
+			continue
+		}
+		if credentialGroupSkipped(ep, skippedGroups) {
+			continue
+		}
 		failoverEnabled := true
 		if ep.Config.FailoverEnabled != nil {
 			failoverEnabled = *ep.Config.FailoverEnabled
@@ -80,9 +65,12 @@ func (m *Manager) GetActiveEndpointsIgnoringHealth() []*Endpoint {
 		if !failoverEnabled {
 			continue
 		}
+		if !endpointHealthAllowsRouting(ep) {
+			continue
+		}
 		filtered = append(filtered, ep)
 	}
-	return m.sortHealthyEndpoints(filtered, false)
+	return filtered
 }
 
 // sortHealthyEndpoints sorts healthy endpoints by credential group first, then by the configured
@@ -100,11 +88,11 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 			if groupOrder := compareEndpointCredentialGroupOrder(healthy[i], healthy[j]); groupOrder != 0 {
 				return groupOrder < 0
 			}
-			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
-				return preferred < 0
-			}
 			if healthy[i].Config.Priority != healthy[j].Config.Priority {
 				return healthy[i].Config.Priority < healthy[j].Config.Priority
+			}
+			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+				return preferred < 0
 			}
 			return endpointSortKey(healthy[i]) < endpointSortKey(healthy[j])
 		})
@@ -143,6 +131,20 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 	}
 
 	return healthy
+}
+
+func endpointHealthAllowsRouting(ep *Endpoint) bool {
+	if ep == nil {
+		return false
+	}
+	if ep.Config.SkipHealthCheck {
+		return true
+	}
+	ep.mutex.RLock()
+	healthy := ep.Status.Healthy
+	neverChecked := ep.Status.NeverChecked
+	ep.mutex.RUnlock()
+	return healthy || neverChecked
 }
 
 func compareEndpointCredentialGroupOrder(left, right *Endpoint) int {
@@ -224,36 +226,7 @@ func sortFastTestResultsByGroupThenResponseTime(results []*FastTestResult) []*Fa
 // GetFastestEndpointsWithRealTimeTest returns endpoints from active groups sorted by real-time testing.
 // 以“渠道(channel)”为单位路由，只测试/排序当前激活渠道内端点。
 func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*Endpoint {
-	// 使用快照机制
-	m.endpointsMu.RLock()
-	snapshot := make([]*Endpoint, len(m.endpoints))
-	copy(snapshot, m.endpoints)
-	m.endpointsMu.RUnlock()
-
-	// 1. 首先尝试获取活跃组（当前激活渠道）的端点
-	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
-
-	var healthy []*Endpoint
-	for _, endpoint := range activeEndpoints {
-		// 检查是否参与故障转移（默认为 true），不参与则不作为代理候选
-		failoverEnabled := true
-		if endpoint.Config.FailoverEnabled != nil {
-			failoverEnabled = *endpoint.Config.FailoverEnabled
-		}
-		if !failoverEnabled {
-			continue
-		}
-
-		endpoint.mutex.RLock()
-		isHealthy := endpoint.Status.Healthy
-		skipHealthCheck := endpoint.Config.SkipHealthCheck // 跳过健康检查的端点也视为可用
-		endpoint.mutex.RUnlock()
-
-		if isHealthy || skipHealthCheck {
-			healthy = append(healthy, endpoint)
-		}
-	}
-
+	healthy := m.activeEndpointCandidates(nil, TurnFailureKeyFromContext(ctx))
 	if len(healthy) == 0 {
 		return healthy
 	}
@@ -494,58 +467,15 @@ func (m *Manager) GetEndpointCount() int {
 // 冷却机制已移除
 // excludeKeys: 已尝试端点的 key 列表（channel::name 格式）
 func (m *Manager) GetHealthyEndpointsExcluding(excludeKeys []string) []*Endpoint {
-	// 构建排除集合
-	excludeSet := make(map[string]struct{}, len(excludeKeys))
-	for _, key := range excludeKeys {
-		if key != "" {
-			excludeSet[key] = struct{}{}
-		}
+	return m.GetHealthyEndpointsExcludingForTurn(excludeKeys, "")
+}
+
+func (m *Manager) GetHealthyEndpointsExcludingForTurn(excludeKeys []string, turnKey string) []*Endpoint {
+	candidates := m.activeEndpointCandidates(excludeKeys, turnKey)
+	if len(candidates) == 0 {
+		return nil
 	}
-
-	// 使用快照机制
-	m.endpointsMu.RLock()
-	snapshot := make([]*Endpoint, len(m.endpoints))
-	copy(snapshot, m.endpoints)
-	m.endpointsMu.RUnlock()
-
-	// 1. 首先尝试获取活跃组（当前激活渠道）的端点
-	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(snapshot)
-
-	var healthy []*Endpoint
-	for _, endpoint := range activeEndpoints {
-		// 检查是否在排除列表中
-		// 移除高频 DEBUG 日志，避免循环重试时日志膨胀
-		epKey := endpointKeyFromConfig(endpoint.Config)
-		if _, excluded := excludeSet[epKey]; excluded {
-			continue
-		}
-
-		// 检查是否参与故障转移（默认为 true），不参与则不作为代理候选
-		failoverEnabled := true
-		if endpoint.Config.FailoverEnabled != nil {
-			failoverEnabled = *endpoint.Config.FailoverEnabled
-		}
-		if !failoverEnabled {
-			continue
-		}
-
-		endpoint.mutex.RLock()
-		isHealthy := endpoint.Status.Healthy
-		skipHealthCheck := endpoint.Config.SkipHealthCheck // 跳过健康检查的端点也视为可用
-		endpoint.mutex.RUnlock()
-
-		if isHealthy || skipHealthCheck {
-			healthy = append(healthy, endpoint)
-		}
-	}
-
-	// 2. 如果当前激活渠道有可用端点，直接返回
-	if len(healthy) > 0 {
-		return m.sortHealthyEndpoints(healthy, false) // 不打印日志，避免重复
-	}
-
-	// 当前渠道没有可用端点：由上层触发跨渠道故障转移
-	return nil
+	return m.sortHealthyEndpoints(candidates, false)
 }
 
 // GetRecoveredEndpointsInChannel 获取当前渠道内已恢复的端点

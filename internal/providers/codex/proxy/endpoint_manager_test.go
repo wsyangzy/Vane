@@ -112,6 +112,84 @@ func TestEndpointManagerFastestStrategyUsesRecordedLatencyWithinCredentialGroup(
 	}
 }
 
+func TestEndpointManagerPrimaryUsesCredentialGroupBeforeActiveEndpoint(t *testing.T) {
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{
+				ID:                   1,
+				CredentialGroupOrder: 0,
+				Name:                 "old-group-p0",
+				FailoverEnabled:      true,
+				Priority:             0,
+			},
+			{
+				ID:                   2,
+				CredentialGroupOrder: 2,
+				Name:                 "active-new-group",
+				IsActive:             true,
+				FailoverEnabled:      true,
+				Priority:             0,
+			},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+
+	first, err := manager.GetPrimaryEndpoint()
+	if err != nil {
+		t.Fatalf("GetPrimaryEndpoint() error = %v", err)
+	}
+	if first.ID != 1 {
+		t.Fatalf("GetPrimaryEndpoint() ID = %d, want credential-group-priority endpoint ID 1", first.ID)
+	}
+}
+
+func TestEndpointManagerSkipHealthCheckBypassesHealthFilter(t *testing.T) {
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{
+				ID:                   1,
+				CredentialGroupOrder: 0,
+				Name:                 "regular-unhealthy",
+				IsActive:             true,
+				FailoverEnabled:      true,
+				Priority:             0,
+			},
+			{
+				ID:                   2,
+				CredentialGroupOrder: 0,
+				Name:                 "skip-health",
+				FailoverEnabled:      true,
+				SkipHealthCheck:      true,
+				Priority:             1,
+			},
+		},
+		unhealthyMap: map[int64]bool{
+			1: true,
+			2: true,
+		},
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+
+	first, err := manager.GetPrimaryEndpoint()
+	if err != nil {
+		t.Fatalf("GetPrimaryEndpoint() error = %v", err)
+	}
+	if first.ID != 2 {
+		t.Fatalf("GetPrimaryEndpoint() ID = %d, want skip-health endpoint ID 2", first.ID)
+	}
+
+	next, err := manager.GetNextEndpoint(nil)
+	if err != nil {
+		t.Fatalf("GetNextEndpoint() error = %v", err)
+	}
+	if next.ID != 2 {
+		t.Fatalf("GetNextEndpoint() ID = %d, want skip-health endpoint ID 2", next.ID)
+	}
+}
+
 func TestSortCodexEndpointsKeepsCredentialGroupsContiguous(t *testing.T) {
 	endpoints := []*CodexEndpoint{
 		{

@@ -30,3 +30,21 @@ func TestRequestStateManagerAppendEndpointChainIncludesCredentialGroup(t *testin
 		t.Fatalf("unexpected second node: %#v", second)
 	}
 }
+
+func TestRequestStateManagerAnnotateEndpointChainError(t *testing.T) {
+	manager := NewRequestStateManager("req-chain-error")
+
+	manager.AppendEndpointChain("公益站", "aws", "Ark API")
+	chain := manager.AnnotateEndpointChainError(403, `{"error":{"message":"quota exceeded"}}`)
+
+	var nodes []ChainNode
+	if err := json.Unmarshal([]byte(chain), &nodes); err != nil {
+		t.Fatalf("endpoint chain should be valid JSON: %v", err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected one chain node, got %d", len(nodes))
+	}
+	if nodes[0].StatusCode != 403 || nodes[0].Error != `{"error":{"message":"quota exceeded"}}` {
+		t.Fatalf("unexpected chain error fields: %#v", nodes[0])
+	}
+}

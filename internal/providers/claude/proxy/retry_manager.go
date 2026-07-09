@@ -84,14 +84,13 @@ func (rm *RetryManager) GetHealthyEndpoints(ctx context.Context) []*endpoint.End
 	if rm.endpointMgr.GetConfig().Strategy.Type == "fastest" && rm.endpointMgr.GetConfig().Strategy.FastTestEnabled {
 		return rm.endpointMgr.GetFastestEndpointsWithRealTimeTest(ctx)
 	}
-	// 否则返回健康的端点
-	return rm.endpointMgr.GetHealthyEndpoints()
+	return rm.endpointMgr.GetHealthyEndpointsForTurn(endpoint.TurnFailureKeyFromContext(ctx))
 }
 
 // GetHealthyEndpointsExcluding 获取健康端点列表，排除已尝试的端点
 // 用于实现严格优先级转移逻辑，确保在同一请求链路内只能向下一优先级转移
 func (rm *RetryManager) GetHealthyEndpointsExcluding(ctx context.Context, excludeKeys []string) []*endpoint.Endpoint {
-	return rm.endpointMgr.GetHealthyEndpointsExcluding(excludeKeys)
+	return rm.endpointMgr.GetHealthyEndpointsExcludingForTurn(excludeKeys, endpoint.TurnFailureKeyFromContext(ctx))
 }
 
 // GetRecoveredEndpointsInChannel 获取当前渠道内已恢复的端点

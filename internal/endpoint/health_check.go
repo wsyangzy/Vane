@@ -458,7 +458,7 @@ func (e *Endpoint) GetHealthState() string {
 	e.mutex.RUnlock()
 
 	// 1. 请求失败标记（优先级高于健康检查状态）
-	// RequestFailed 表示端点因请求转发失败而被标记，即使健康检查通过也不可用
+	// RequestFailed 表示端点因请求转发失败而被标记，仅用于 UI/诊断展示。
 	if requestFailed {
 		return "request_failed"
 	}
@@ -482,7 +482,7 @@ func (e *Endpoint) GetHealthState() string {
 }
 
 // MarkRequestFailed 标记端点为请求失败状态
-// 新增方法，用于渠道内端点切换时立即标记失败端点，防止端点循环
+// 新增方法，用于渠道内端点切换时立即标记失败端点，供 UI 展示失败状态。
 // 仅作为诊断标记使用，不应覆盖健康检查结果
 // err: 失败的原因错误（可为 nil）
 func (e *Endpoint) MarkRequestFailed(err error) {
@@ -490,7 +490,7 @@ func (e *Endpoint) MarkRequestFailed(err error) {
 	defer e.mutex.Unlock()
 
 	e.Status.RequestFailed = true
-	e.Status.NeverChecked = false // 防止 neverChecked 端点被误判为可用
+	e.Status.NeverChecked = false // 请求已触达过该端点，展示上不再视为未检测
 
 	// 记录失败原因供 UI 显示
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"ai-relay-forwarder/config"
@@ -31,9 +33,13 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
+	StatusCode      int    `json:"status_code,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 const maxPreOutputStreamBufferBytes = 256 * 1024
+const failedCredentialGroupCacheIdle = 30 * time.Minute
+const maxTurnFingerprintTextBytes = 8192
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
@@ -53,6 +59,11 @@ type Handler struct {
 	// suspensionMgr 请求挂起队列（loop_retry 全部耗尽后等待运维干预）
 	// 为 nil 时不启用挂起，直接返回失败
 	suspensionMgr *SuspensionManager
+
+	turnFailureCacheMu       sync.Mutex
+	turnFailureCacheKey      string
+	turnFailureCacheTouched  time.Time
+	turnFailedCredentialKeys map[credentialGroupRef]struct{}
 }
 
 func normalizeCodexLogger(logger *slog.Logger) *slog.Logger {
@@ -143,8 +154,224 @@ func appendUniqueInt64(ids []int64, values ...int64) []int64 {
 	return ids
 }
 
-func isCredentialGroupFailureStatus(statusCode int) bool {
-	return statusCode == http.StatusPaymentRequired || statusCode == http.StatusTooManyRequests
+func isCredentialGroupFailure(statusCode int, summary string) bool {
+	if statusCode == http.StatusPaymentRequired || statusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if statusCode != http.StatusForbidden {
+		return false
+	}
+	text := strings.ToLower(summary)
+	return strings.Contains(text, "insufficient_user_quota") ||
+		strings.Contains(text, "insufficient account balance") ||
+		strings.Contains(text, "available quota")
+}
+
+func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef {
+	if endpoint == nil {
+		return credentialGroupRef{}
+	}
+	return credentialGroupRef{ID: endpoint.CredentialGroupID, Name: endpoint.CredentialGroupName}
+}
+
+func (h *Handler) failedCredentialGroupsForTurn(turnKey string) []credentialGroupRef {
+	if h == nil {
+		return nil
+	}
+	now := time.Now()
+
+	h.turnFailureCacheMu.Lock()
+	defer h.turnFailureCacheMu.Unlock()
+
+	if !h.prepareTurnFailureCacheLocked(turnKey, now) || len(h.turnFailedCredentialKeys) == 0 {
+		return nil
+	}
+	groups := make([]credentialGroupRef, 0, len(h.turnFailedCredentialKeys))
+	for group := range h.turnFailedCredentialKeys {
+		groups = append(groups, group)
+	}
+	return groups
+}
+
+func (h *Handler) rememberFailedCredentialGroupForTurn(turnKey string, group credentialGroupRef) {
+	if h == nil || !group.valid() {
+		return
+	}
+	now := time.Now()
+
+	h.turnFailureCacheMu.Lock()
+	defer h.turnFailureCacheMu.Unlock()
+
+	if !h.prepareTurnFailureCacheLocked(turnKey, now) {
+		return
+	}
+	h.turnFailedCredentialKeys[group] = struct{}{}
+}
+
+func (h *Handler) prepareTurnFailureCacheLocked(turnKey string, now time.Time) bool {
+	if h.turnFailedCredentialKeys == nil {
+		h.turnFailedCredentialKeys = make(map[credentialGroupRef]struct{})
+	}
+	if turnKey != "" {
+		if h.turnFailureCacheKey != turnKey {
+			h.turnFailureCacheKey = turnKey
+			h.turnFailedCredentialKeys = make(map[credentialGroupRef]struct{})
+		}
+		h.turnFailureCacheTouched = now
+		return true
+	}
+	if h.turnFailureCacheKey == "" {
+		return false
+	}
+	if !h.turnFailureCacheTouched.IsZero() && now.Sub(h.turnFailureCacheTouched) > failedCredentialGroupCacheIdle {
+		h.turnFailureCacheKey = ""
+		h.turnFailedCredentialKeys = make(map[credentialGroupRef]struct{})
+		return false
+	}
+	h.turnFailureCacheTouched = now
+	return true
+}
+
+func requestTurnFailureCacheKey(r *http.Request, body []byte) string {
+	if r != nil {
+		for _, header := range []string{
+			"X-Codex-Turn-ID",
+			"X-Codex-Prompt-ID",
+			"X-Codex-User-Message-ID",
+			"X-OpenAI-Turn-ID",
+			"OpenAI-Turn-ID",
+		} {
+			if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
+				return hashTurnCacheKey(strings.ToLower(header), value)
+			}
+		}
+	}
+
+	var payload any
+	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	obj, ok := payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if value := explicitTurnIDFromPayload(obj); value != "" {
+		return hashTurnCacheKey("explicit", value)
+	}
+	if value := lastUserInputText(obj); value != "" {
+		return hashTurnCacheKey("user", value)
+	}
+	return ""
+}
+
+func explicitTurnIDFromPayload(obj map[string]any) string {
+	for _, key := range []string{"turn_id", "turnId", "prompt_id", "promptId", "user_message_id", "userMessageId"} {
+		if value := stringValue(obj[key]); value != "" {
+			return key + ":" + value
+		}
+	}
+	if metadata, ok := obj["metadata"].(map[string]any); ok {
+		for _, key := range []string{"turn_id", "turnId", "prompt_id", "promptId", "user_message_id", "userMessageId"} {
+			if value := stringValue(metadata[key]); value != "" {
+				return "metadata." + key + ":" + value
+			}
+		}
+	}
+	return ""
+}
+
+func lastUserInputText(obj map[string]any) string {
+	for _, key := range []string{"input", "messages"} {
+		if text := lastUserTextFromValue(obj[key]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func lastUserTextFromValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case []any:
+		for i := len(typed) - 1; i >= 0; i-- {
+			item, ok := typed[i].(map[string]any)
+			if !ok {
+				continue
+			}
+			role := strings.ToLower(stringValue(item["role"]))
+			if role != "user" {
+				continue
+			}
+			if text := collectTurnContentText(item["content"]); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func collectTurnContentText(value any) string {
+	var builder strings.Builder
+	appendTurnContentText(&builder, value)
+	return strings.TrimSpace(builder.String())
+}
+
+func appendTurnContentText(builder *strings.Builder, value any) {
+	if builder.Len() >= maxTurnFingerprintTextBytes {
+		return
+	}
+	switch typed := value.(type) {
+	case string:
+		appendTurnText(builder, typed)
+	case []any:
+		for _, item := range typed {
+			appendTurnContentText(builder, item)
+			if builder.Len() >= maxTurnFingerprintTextBytes {
+				return
+			}
+		}
+	case map[string]any:
+		if text := stringValue(typed["text"]); text != "" {
+			appendTurnText(builder, text)
+			return
+		}
+		if text := stringValue(typed["input_text"]); text != "" {
+			appendTurnText(builder, text)
+			return
+		}
+		if content, ok := typed["content"]; ok {
+			appendTurnContentText(builder, content)
+		}
+	}
+}
+
+func appendTurnText(builder *strings.Builder, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" || builder.Len() >= maxTurnFingerprintTextBytes {
+		return
+	}
+	if builder.Len() > 0 {
+		builder.WriteByte('\n')
+	}
+	remaining := maxTurnFingerprintTextBytes - builder.Len()
+	if len(text) > remaining {
+		text = text[:remaining]
+	}
+	builder.WriteString(text)
+}
+
+func stringValue(value any) string {
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func hashTurnCacheKey(prefix, value string) string {
+	sum := sha256.Sum256([]byte(prefix + "\x00" + value))
+	return prefix + ":" + hex.EncodeToString(sum[:12])
 }
 
 // ServeHTTP 实现 http.Handler
@@ -163,6 +390,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+	turnFailureKey := requestTurnFailureCacheKey(r, body)
 
 	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
 	channelName := ""
@@ -236,7 +464,7 @@ outerLoop:
 			result := h.tryEndpointCycle(
 				w, r, body, requestID, startTime,
 				isStreaming, channelName, requestModel,
-				&failedIDs, &endpointChain,
+				&failedIDs, &endpointChain, turnFailureKey,
 			)
 			if result.completed {
 				// 响应已写给客户端（成功 / 客户端取消 / FailFast）
@@ -341,9 +569,11 @@ func (h *Handler) tryEndpointCycle(
 	requestModel string,
 	failedIDs *[]int64,
 	endpointChain *[]chainNode,
+	turnFailureKey string,
 ) cycleResult {
 	// 选择起始端点
-	endpoint, err := h.manager.GetPrimaryEndpoint()
+	skippedGroups := h.failedCredentialGroupsForTurn(turnFailureKey)
+	endpoint, err := h.manager.GetPrimaryEndpoint(skippedGroups...)
 	if err != nil {
 		// 首次就无端点：写错误并完成
 		if len(*endpointChain) == 0 {
@@ -476,6 +706,8 @@ func (h *Handler) tryEndpointCycle(
 		if action == ActionFailFast {
 			if resp != nil {
 				detail := fmt.Sprintf("上游 HTTP %d: %s", status, errSummary)
+				annotateLastChainError(endpointChain, status, errSummary)
+				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 				h.manager.SetFailureDetail(endpoint.ID, status, detail)
 				h.logger.Error("[Codex 请求失败]",
 					"provider", "codex",
@@ -495,6 +727,8 @@ func (h *Handler) tryEndpointCycle(
 			if fwdErr != nil {
 				detail = fwdErr.Error()
 			}
+			annotateLastChainError(endpointChain, 0, detail)
+			h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 			h.manager.SetFailureDetail(endpoint.ID, 0, detail)
 			h.logger.Error("[Codex 请求失败]",
 				"provider", "codex",
@@ -530,7 +764,10 @@ func (h *Handler) tryEndpointCycle(
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
 		}
-		if isCredentialGroupFailureStatus(status) {
+		annotateLastChainError(endpointChain, status, chainErrorText(fwdErr, errSummary, reason))
+		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
+		if isCredentialGroupFailure(status, errSummary) {
+			h.rememberFailedCredentialGroupForTurn(turnFailureKey, credentialGroupRefFromEndpoint(endpoint))
 			groupEndpointIDs := h.manager.endpointIDsInCredentialGroup(endpoint.CredentialGroupID, endpoint.CredentialGroupName)
 			*failedIDs = appendUniqueInt64(*failedIDs, groupEndpointIDs...)
 			h.logger.Warn("[Codex 凭证分组故障转移]",
@@ -544,7 +781,8 @@ func (h *Handler) tryEndpointCycle(
 		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 
 		// 选下个端点
-		next, nextErr := h.manager.GetNextEndpoint(*failedIDs)
+		skippedGroups = h.failedCredentialGroupsForTurn(turnFailureKey)
+		next, nextErr := h.manager.GetNextEndpoint(*failedIDs, skippedGroups...)
 		if nextErr != nil {
 			// 当前轮端点列表耗尽，返回让外层 loop 决定是否再来一轮
 			return cycleResult{
@@ -1192,6 +1430,29 @@ func latestCredentialGroupName(chain []chainNode) string {
 		return ""
 	}
 	return chain[len(chain)-1].CredentialGroup
+}
+
+func annotateLastChainError(chain *[]chainNode, statusCode int, errorText string) {
+	if chain == nil || len(*chain) == 0 {
+		return
+	}
+	errorText = strings.TrimSpace(errorText)
+	if errorText == "" {
+		return
+	}
+	last := &(*chain)[len(*chain)-1]
+	last.StatusCode = statusCode
+	last.Error = errorText
+}
+
+func chainErrorText(err error, errSummary, fallback string) string {
+	if err != nil {
+		return err.Error()
+	}
+	if strings.TrimSpace(errSummary) != "" {
+		return errSummary
+	}
+	return fallback
 }
 
 // pickModelName 在响应未携带 model 时回退到请求体 model

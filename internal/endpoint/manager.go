@@ -34,7 +34,7 @@ type EndpointStatus struct {
 	// 请求失败标记，与 Healthy（健康检查状态）分离
 	// - Healthy: 由健康检查更新，表示端点是否"可达"
 	// - RequestFailed: 由请求转发更新，表示端点是否"因请求失败而被标记"
-	// 端点可用条件：Healthy=true && RequestFailed=false
+	// 二者仅作为 UI/诊断状态；真实路由可用性由请求结果决定，不能被健康检查硬过滤
 	// 重置时机：loop_retry 触发时重置为 false
 	RequestFailed bool
 	// 记录最后一次请求失败的 HTTP 状态码，用于 UI 显示
@@ -86,6 +86,11 @@ type Manager struct {
 	healthThrottleMu       sync.Mutex
 	healthThrottleLastTime map[string]time.Time // endpoint key -> 上次检查时间
 	healthThrottleInterval time.Duration        // 节流窗口
+
+	turnFailureCacheMu       sync.Mutex
+	turnFailureCacheKey      string
+	turnFailureCacheTouched  time.Time
+	turnFailedCredentialRefs map[credentialGroupRef]struct{}
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
