@@ -5,7 +5,7 @@
 // ============================================
 
 import { useEffect, useRef } from 'react';
-import { Filter, Settings2, ChevronDown } from 'lucide-react';
+import { Activity, Filter, Settings2, ChevronDown } from 'lucide-react';
 import { TIME_RANGE_OPTIONS } from '../utils/constants.js';
 import ViewConfigPanel from './ViewConfigPanel.jsx';
 import AutoRefreshControl from './AutoRefreshControl.jsx';
@@ -20,6 +20,8 @@ import ActiveGroupSwitcher from './ActiveGroupSwitcher.jsx';
  * @param {Function} props.onFilterToggle - 筛选面板切换回调
  * @param {boolean} props.isViewConfigOpen - 列配置面板是否打开
  * @param {Function} props.onViewConfigToggle - 列配置面板切换回调
+ * @param {boolean} props.isHeatmapOpen - Token 分布面板是否打开
+ * @param {Function} props.onHeatmapToggle - Token 分布面板切换回调
  * @param {Function} props.onRefresh - 刷新回调
  * @param {Array} props.columns - 所有列配置
  * @param {Array} props.visibleColumns - 当前可见的列ID数组
@@ -30,6 +32,7 @@ import ActiveGroupSwitcher from './ActiveGroupSwitcher.jsx';
  * @param {string} props.activeGroup - 当前活跃渠道名称
  * @param {Function} props.onGroupSwitch - 渠道切换回调 (channelName) => void
  * @param {React.ReactNode} props.filterPanel - 筛选面板
+ * @param {React.ReactNode} props.heatmapPanel - Token 分布面板
  */
 const Toolbar = ({
   activeTimeRange = 'today',
@@ -38,6 +41,8 @@ const Toolbar = ({
   onFilterToggle,
   isViewConfigOpen = false,
   onViewConfigToggle,
+  isHeatmapOpen = false,
+  onHeatmapToggle,
   onRefresh,
   columns = [],
   visibleColumns = [],
@@ -47,9 +52,11 @@ const Toolbar = ({
   groups = [],
   activeGroup = '',
   onGroupSwitch,
-  filterPanel = null
+  filterPanel = null,
+  heatmapPanel = null
 }) => {
   const viewConfigRef = useRef(null);
+  const heatmapRef = useRef(null);
 
   useEffect(() => {
     if (!isViewConfigOpen) return;
@@ -62,6 +69,18 @@ const Toolbar = ({
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, [isViewConfigOpen, onViewConfigToggle]);
+
+  useEffect(() => {
+    if (!isHeatmapOpen) return;
+
+    const handlePointerDown = (event) => {
+      if (heatmapRef.current?.contains(event.target)) return;
+      onHeatmapToggle?.(false);
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isHeatmapOpen, onHeatmapToggle]);
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -109,6 +128,24 @@ const Toolbar = ({
           />
         </button>
         {filterPanel}
+      </div>
+
+      <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
+
+      {/* Token 分布按钮 */}
+      <div ref={heatmapRef} className="relative">
+        <button
+          onClick={() => onHeatmapToggle?.()}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all shadow-sm border ${
+            isHeatmapOpen
+              ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
+              : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          <span className="hidden sm:inline">分布</span>
+        </button>
+        {heatmapPanel}
       </div>
 
       <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>

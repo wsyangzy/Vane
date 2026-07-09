@@ -13,7 +13,7 @@ import { useFilters } from './hooks/useFilters.js';
 import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
 import { useAutoRefresh } from './hooks/useAutoRefresh.js';
-import { FiltersPanel, StatsOverview, RequestsTable, Toolbar, RequestDetailModal } from './components';
+import { FiltersPanel, StatsOverview, RequestsTable, Toolbar, RequestDetailModal, TokenUsageHeatmapPanel } from './components';
 import { PAGINATION_CONFIG } from './utils/constants.js';
 
 // ============================================
@@ -40,6 +40,7 @@ const RequestsPage = () => {
   // 面板状态
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isViewConfigOpen, setIsViewConfigOpen] = useState(false);
+  const [isHeatmapOpen, setIsHeatmapOpen] = useState(false);
 
   // 详情模态框状态
   const [selectedRequest, setSelectedRequest] = useState(null);
@@ -61,7 +62,7 @@ const RequestsPage = () => {
   } = useColumnConfig();
 
   // 时间范围 Hook
-  const { activeRange, selectRange } = useTimeRange((timeRange) => {
+  const { activeRange, selectRange, clearRange } = useTimeRange((timeRange) => {
     updateFilters(timeRange);
     setPagination(prev => ({ ...prev, page: 1 }));
   });
@@ -121,6 +122,8 @@ const RequestsPage = () => {
       { provider: 'codex', label: 'Codex', channels: codexNames.sort() }
     ];
   }, [endpoints, codexChannels, groups]);
+
+  const heatmapQueryParams = useMemo(() => buildQueryParams(), [buildQueryParams]);
 
   // ==================== 数据加载 ====================
 
@@ -214,6 +217,7 @@ const RequestsPage = () => {
   const handleFilterToggle = () => {
     setIsFilterOpen(!isFilterOpen);
     setIsViewConfigOpen(false); // 关闭列配置
+    setIsHeatmapOpen(false);
   };
 
   // 列配置面板切换
@@ -222,6 +226,16 @@ const RequestsPage = () => {
     setIsViewConfigOpen(resolvedOpen);
     if (resolvedOpen) {
       setIsFilterOpen(false); // 关闭筛选面板
+      setIsHeatmapOpen(false);
+    }
+  };
+
+  const handleHeatmapToggle = (nextOpen) => {
+    const resolvedOpen = typeof nextOpen === 'boolean' ? nextOpen : !isHeatmapOpen;
+    setIsHeatmapOpen(resolvedOpen);
+    if (resolvedOpen) {
+      setIsFilterOpen(false);
+      setIsViewConfigOpen(false);
     }
   };
 
@@ -229,6 +243,7 @@ const RequestsPage = () => {
   const handleApplyFilters = (nextFilters) => {
     if (nextFilters) {
       updateFilters(nextFilters);
+      clearRange();
     }
     setPagination(prev => ({ ...prev, page: 1 }));
   };
@@ -340,6 +355,8 @@ const RequestsPage = () => {
           onFilterToggle={handleFilterToggle}
           isViewConfigOpen={isViewConfigOpen}
           onViewConfigToggle={handleViewConfigToggle}
+          isHeatmapOpen={isHeatmapOpen}
+          onHeatmapToggle={handleHeatmapToggle}
           onRefresh={loadData}
           columns={columnConfigs}
           visibleColumns={visibleColumns}
@@ -361,6 +378,13 @@ const RequestsPage = () => {
               endpoints={allEndpoints}
             />
           }
+          heatmapPanel={
+            <TokenUsageHeatmapPanel
+              isOpen={isHeatmapOpen}
+              onClose={() => setIsHeatmapOpen(false)}
+              queryParams={heatmapQueryParams}
+            />
+          }
         />
       </div>
 
@@ -371,12 +395,12 @@ const RequestsPage = () => {
           claudeStats={claudeStats}
           codexStats={codexStats}
           total={pagination.total}
-          isBlurred={isFilterOpen || isViewConfigOpen}
+          isBlurred={isFilterOpen || isViewConfigOpen || isHeatmapOpen}
         />
       </div>
 
       {/* 请求列表表格 - 面板打开时blur */}
-      <div className={`flex-1 min-h-0 transition-all duration-300 ${isFilterOpen || isViewConfigOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
+      <div className={`flex-1 min-h-0 transition-all duration-300 ${isFilterOpen || isViewConfigOpen || isHeatmapOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
         <RequestsTable
           requests={requests}
           loading={loading}

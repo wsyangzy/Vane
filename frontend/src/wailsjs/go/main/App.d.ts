@@ -134,6 +134,8 @@ export function GetSystemStatus():Promise<main.SystemStatus>;
 
 export function GetTokenUsage(arg1:string):Promise<main.TokenUsageData>;
 
+export function GetTokenUsageHeatmap(arg1:main.RequestQueryParams):Promise<Array<main.TokenUsageHeatmapDay>>;
+
 export function GetUsageStats(arg1:main.UsageStatsQueryParams):Promise<main.UsageStatsData>;
 
 export function GetUsageSummary(arg1:string,arg2:string,arg3:string):Promise<main.UsageSummary>;

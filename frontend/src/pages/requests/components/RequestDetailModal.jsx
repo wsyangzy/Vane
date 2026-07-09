@@ -346,7 +346,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* Tab 导航 - 固定不滚动 */}
-        <div className="flex-shrink-0 px-6 pt-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="flex-shrink-0 pl-6 pr-10 pt-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {[
               { id: 'overview', label: '概览', icon: Activity },

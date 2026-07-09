@@ -994,6 +994,37 @@ export const getTokenUsage = async (provider = '') => {
   };
 };
 
+export const getTokenUsageHeatmap = async (params = {}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const queryParams = {
+    page: 0,
+    page_size: 0,
+    start_date: params.start_date || params.start_time || params.startDate || '',
+    end_date: params.end_date || params.end_time || params.endDate || '',
+    status: params.status || '',
+    model: params.model || '',
+    channel: params.channel || '',
+    endpoint: params.endpoint || '',
+    group: params.group || '',
+    provider: params.provider || ''
+  };
+
+  const items = await WailsApp.GetTokenUsageHeatmap(queryParams);
+  return (items || []).map(item => ({
+    date: item.date || '',
+    bucket: item.bucket || 'day',
+    requestCount: item.request_count || 0,
+    input: item.input_tokens || 0,
+    output: item.output_tokens || 0,
+    cacheCreation: item.cache_creation_tokens || 0,
+    cacheRead: item.cache_read_tokens || 0,
+    total: item.total_tokens || 0,
+    intensity: Number(item.intensity || 0)
+  }));
+};
+
 // ============================================
 // 端点健康状态图表 API
 // ============================================

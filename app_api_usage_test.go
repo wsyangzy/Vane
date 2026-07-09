@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"reflect"
@@ -311,6 +312,163 @@ func TestQueryTokenUsageForRangeFiltersProvider(t *testing.T) {
 	}
 }
 
+func TestQueryTokenUsageHeatmapMatchesRequestFilters(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+
+	db := tracker.GetDB()
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "match-day-1", startTime: "2026-07-01 10:00:00",
+		status: "timeout", provider: "codex", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
+		input: 200, output: 20, cacheRead: 10,
+	})
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "status-miss", startTime: "2026-07-01 11:00:00",
+		status: "completed", provider: "codex", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
+		input: 900, output: 90,
+	})
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "provider-miss", startTime: "2026-07-01 12:00:00",
+		status: "timeout", provider: "claude", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
+		input: 900, output: 90,
+	})
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "match-day-3", startTime: "2026-07-03 11:00:00",
+		status: "failed", provider: "codex", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
+		input: 300, output: 30, cacheRead: 15,
+	})
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 7, 3, 23, 59, 0, 0, time.UTC)
+	got, err := queryTokenUsageHeatmap(tracker, &tracking.QueryOptions{
+		StartDate:    &start,
+		EndDate:      &end,
+		Status:       "failed",
+		Provider:     "codex",
+		ModelName:    "gpt-5",
+		Channel:      "合租巴士",
+		EndpointName: "大陆优化",
+		GroupName:    "正价",
+	})
+	if err != nil {
+		t.Fatalf("queryTokenUsageHeatmap failed: %v", err)
+	}
+
+	if len(got) != 72 {
+		t.Fatalf("heatmap len = %d, want 72 hourly buckets: %#v", len(got), got)
+	}
+	if got[10].Date != "2026-07-01 10" || got[10].InputTokens != 190 || got[10].OutputTokens != 20 || got[10].TotalTokens != 220 {
+		t.Fatalf("hour 2026-07-01 10 = %#v, want codex-only tokens", got[10])
+	}
+	if got[10].Bucket != "hour" {
+		t.Fatalf("bucket = %q, want hour", got[10].Bucket)
+	}
+	if got[34].Date != "2026-07-02 10" || got[34].TotalTokens != 0 {
+		t.Fatalf("empty hour = %#v, want empty filled hour", got[34])
+	}
+	if got[59].Date != "2026-07-03 11" || got[59].InputTokens != 285 || got[59].OutputTokens != 30 || got[59].TotalTokens != 330 {
+		t.Fatalf("hour 2026-07-03 11 = %#v, want codex-only tokens", got[59])
+	}
+	if got[10].Intensity != 220.0/330.0 || got[59].Intensity != 1 {
+		t.Fatalf("intensity = %.4f %.4f, want normalized by peak total", got[10].Intensity, got[59].Intensity)
+	}
+}
+
+func TestQueryTokenUsageHeatmapUsesHourlyBucketsForSingleDay(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+
+	db := tracker.GetDB()
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "hour-10-a", startTime: "2026-07-01 10:05:00",
+		status: "completed", provider: "codex", model: "gpt-5",
+		input: 100, output: 10, cacheRead: 5,
+	})
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "hour-10-b", startTime: "2026-07-01 10:55:00",
+		status: "completed", provider: "codex", model: "gpt-5",
+		input: 50, output: 5,
+	})
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "next-day-miss", startTime: "2026-07-02 10:00:00",
+		status: "completed", provider: "codex", model: "gpt-5",
+		input: 500, output: 50,
+	})
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 7, 1, 23, 59, 0, 0, time.UTC)
+	got, err := queryTokenUsageHeatmap(tracker, &tracking.QueryOptions{
+		StartDate: &start,
+		EndDate:   &end,
+		Provider:  "codex",
+	})
+	if err != nil {
+		t.Fatalf("queryTokenUsageHeatmap failed: %v", err)
+	}
+
+	if len(got) != 24 {
+		t.Fatalf("heatmap len = %d, want 24: %#v", len(got), got)
+	}
+	if got[10].Date != "2026-07-01 10" || got[10].Bucket != "hour" {
+		t.Fatalf("hour bucket = %#v, want 2026-07-01 10/hour", got[10])
+	}
+	if got[10].InputTokens != 145 || got[10].OutputTokens != 15 || got[10].TotalTokens != 165 || got[10].Intensity != 1 {
+		t.Fatalf("hour 10 = %#v, want summed codex tokens", got[10])
+	}
+	if got[9].TotalTokens != 0 || got[11].TotalTokens != 0 {
+		t.Fatalf("neighbor hours = %#v %#v, want empty filled hours", got[9], got[11])
+	}
+}
+
+func TestQueryTokenUsageHeatmapUsesDailyBucketsForThirtyDayRanges(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+
+	db := tracker.GetDB()
+	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
+		requestID: "thirty-day-range-day", startTime: "2026-07-20 10:05:00",
+		status: "completed", provider: "codex", model: "gpt-5",
+		input: 100, output: 10,
+	})
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 7, 30, 23, 59, 0, 0, time.UTC)
+	got, err := queryTokenUsageHeatmap(tracker, &tracking.QueryOptions{
+		StartDate: &start,
+		EndDate:   &end,
+		Provider:  "codex",
+	})
+	if err != nil {
+		t.Fatalf("queryTokenUsageHeatmap failed: %v", err)
+	}
+
+	if len(got) != 30 {
+		t.Fatalf("heatmap len = %d, want 30 daily buckets: %#v", len(got), got)
+	}
+	if got[19].Date != "2026-07-20" || got[19].Bucket != "day" || got[19].TotalTokens != 110 {
+		t.Fatalf("day bucket = %#v, want 2026-07-20/day tokens", got[19])
+	}
+}
+
+func TestBuildRequestQueryOptionsParsesTimeRange(t *testing.T) {
+	opts := buildRequestQueryOptions(RequestQueryParams{
+		StartDate: "2026-07-01T08:30",
+		EndDate:   "2026-07-03T23:59",
+		Status:    "failed",
+		Provider:  "codex",
+	}, "Asia/Shanghai", 0, 0)
+
+	if got := opts.StartDate.Format("2006-01-02 15:04:05"); got != "2026-07-01 08:30:00" {
+		t.Fatalf("start = %s, want 2026-07-01 08:30:00", got)
+	}
+	if got := opts.EndDate.Format("2006-01-02 15:04:05"); got != "2026-07-03 23:59:00" {
+		t.Fatalf("end = %s, want 2026-07-03 23:59:00", got)
+	}
+	if opts.Status != "failed" || opts.Provider != "codex" {
+		t.Fatalf("filters = status %q provider %q, want failed/codex", opts.Status, opts.Provider)
+	}
+}
+
 func TestSyncEndpointMultipliersKeepsCodexCredentialGroupDimension(t *testing.T) {
 	tracker := newAppUsageTestTracker(t)
 	defer tracker.Close()
@@ -436,5 +594,37 @@ func recordTokenUsageForProvider(t *testing.T, tracker *tracking.UsageTracker, r
 	}, 100*time.Millisecond)
 	if err := tracker.ForceFlush(); err != nil {
 		t.Fatalf("ForceFlush failed: %v", err)
+	}
+}
+
+type heatmapUsageRow struct {
+	requestID     string
+	startTime     string
+	status        string
+	provider      string
+	model         string
+	channel       string
+	endpoint      string
+	group         string
+	input         int64
+	output        int64
+	cacheCreation int64
+	cacheRead     int64
+}
+
+func mustInsertHeatmapUsage(t *testing.T, db interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}, row heatmapUsageRow) {
+	t.Helper()
+
+	_, err := db.Exec(`INSERT INTO request_logs (
+		request_id, start_time, status, provider, model_name, channel, endpoint_name, group_name,
+		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.requestID, row.startTime, row.status, row.provider, row.model, row.channel, row.endpoint, row.group,
+		row.input, row.output, row.cacheCreation, row.cacheRead,
+	)
+	if err != nil {
+		t.Fatalf("insert heatmap usage %s: %v", row.requestID, err)
 	}
 }

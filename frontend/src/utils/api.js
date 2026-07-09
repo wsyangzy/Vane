@@ -575,6 +575,22 @@ export const fetchTokenUsageData = async (provider = '') => {
 };
 
 /**
+ * 获取按请求追踪条件聚合的 Token 使用分布
+ * @param {Object} params - 请求追踪查询参数
+ */
+export const fetchTokenUsageHeatmapData = async (params = {}) => {
+  try {
+    if (isWailsEnvironment()) {
+      return await WailsApi.getTokenUsageHeatmap(params);
+    }
+    return [];
+  } catch (error) {
+    console.error('获取 Token 使用分布数据失败:', error);
+    return [];
+  }
+};
+
+/**
  * 获取端点健康状态数据
  */
 export const fetchEndpointHealthData = async () => {

@@ -17,7 +17,10 @@ import (
 	"ai-relay-forwarder/internal/utils"
 )
 
-const usageDBQueryTimeout = 8 * time.Second
+const (
+	usageDBQueryTimeout             = 8 * time.Second
+	tokenUsageHeatmapHourlyMaxRange = 7 * 24 * time.Hour
+)
 
 // ============================================================
 // 使用统计 API
@@ -325,6 +328,49 @@ type RequestQueryParams struct {
 	Provider  string `json:"provider"`   // 可选：提供商标识 claude/codex
 }
 
+func buildRequestQueryOptions(params RequestQueryParams, timezone string, limit, offset int) *tracking.QueryOptions {
+	loc := time.Local
+	if timezone != "" {
+		if parsedLoc, err := time.LoadLocation(timezone); err == nil {
+			loc = parsedLoc
+		}
+	}
+
+	var startTime, endTime time.Time
+	if params.StartDate != "" {
+		if t, err := parseTimeWithLocation(params.StartDate, loc); err == nil {
+			startTime = t.In(loc)
+		}
+	}
+	if params.EndDate != "" {
+		if t, err := parseTimeWithLocation(params.EndDate, loc); err == nil {
+			endTime = t.In(loc)
+		}
+	}
+
+	if startTime.IsZero() {
+		now := time.Now().In(loc)
+		startTime = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	}
+	if endTime.IsZero() {
+		now := time.Now().In(loc)
+		endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
+	}
+
+	return &tracking.QueryOptions{
+		StartDate:    &startTime,
+		EndDate:      &endTime,
+		ModelName:    params.Model,
+		Channel:      params.Channel,
+		EndpointName: params.Endpoint,
+		GroupName:    params.Group,
+		Status:       params.Status,
+		Provider:     params.Provider,
+		Limit:        limit,
+		Offset:       offset,
+	}
+}
+
 // GetRequests 获取请求记录列表（热池+数据库双源查询）
 // 支持筛选参数：时间范围、状态、模型等
 func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) {
@@ -354,52 +400,11 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
 
-	// 解析时间参数（使用配置的时区）
-	loc := time.Local
-	if cfg != nil && cfg.Timezone != "" {
-		if l, err := time.LoadLocation(cfg.Timezone); err == nil {
-			loc = l
-		}
+	timezone := ""
+	if cfg != nil {
+		timezone = cfg.Timezone
 	}
-
-	var startTime, endTime time.Time
-
-	// 解析开始时间
-	if params.StartDate != "" {
-		if t, err := parseTimeWithLocation(params.StartDate, loc); err == nil {
-			startTime = t
-		}
-	}
-	// 解析结束时间
-	if params.EndDate != "" {
-		if t, err := parseTimeWithLocation(params.EndDate, loc); err == nil {
-			endTime = t
-		}
-	}
-
-	// 如果没有传时间参数，默认查询今天
-	if startTime.IsZero() {
-		now := time.Now().In(loc)
-		startTime = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	}
-	if endTime.IsZero() {
-		now := time.Now().In(loc)
-		endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
-	}
-
-	// 使用热池+数据库双源查询（与 HTTP API 一致）
-	opts := &tracking.QueryOptions{
-		StartDate:    &startTime,
-		EndDate:      &endTime,
-		ModelName:    params.Model,
-		Channel:      params.Channel, // 渠道筛选
-		EndpointName: params.Endpoint,
-		GroupName:    params.Group,
-		Status:       params.Status,
-		Provider:     params.Provider, // 提供商筛选
-		Limit:        pageSize,
-		Offset:       offset,
-	}
+	opts := buildRequestQueryOptions(params, timezone, pageSize, offset)
 
 	requests, total, err := usageTracker.QueryRequestDetailsWithHotPool(ctx, opts)
 	if err != nil {
@@ -911,6 +916,19 @@ type TokenUsageData struct {
 	TotalTokens         int64 `json:"total_tokens"`
 }
 
+// TokenUsageHeatmapDay Token 使用热力图单日数据
+type TokenUsageHeatmapDay struct {
+	Date                string  `json:"date"`
+	Bucket              string  `json:"bucket"`
+	RequestCount        int64   `json:"request_count"`
+	InputTokens         int64   `json:"input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	CacheCreationTokens int64   `json:"cache_creation_tokens"`
+	CacheReadTokens     int64   `json:"cache_read_tokens"`
+	TotalTokens         int64   `json:"total_tokens"`
+	Intensity           float64 `json:"intensity"`
+}
+
 // GetTokenUsage 获取今日 Token 使用统计（从数据库查询，覆盖 Claude 和 Codex）
 // provider 参数过滤：空字符串 = 全部，"claude" / "codex" = 按 provider 过滤
 func (a *App) GetTokenUsage(provider string) TokenUsageData {
@@ -944,6 +962,28 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 	})
 	if err != nil {
 		return TokenUsageData{}
+	}
+	return data
+}
+
+// GetTokenUsageHeatmap 按请求追踪筛选条件聚合每日 Token 使用分布
+func (a *App) GetTokenUsageHeatmap(params RequestQueryParams) []TokenUsageHeatmapDay {
+	a.mu.RLock()
+	usageTracker := a.usageTracker
+	cfg := a.config
+	a.mu.RUnlock()
+
+	if usageTracker == nil {
+		return []TokenUsageHeatmapDay{}
+	}
+
+	timezone := ""
+	if cfg != nil {
+		timezone = cfg.Timezone
+	}
+	data, err := queryTokenUsageHeatmap(usageTracker, buildRequestQueryOptions(params, timezone, 0, 0))
+	if err != nil {
+		return []TokenUsageHeatmapDay{}
 	}
 	return data
 }
@@ -988,4 +1028,145 @@ func queryTokenUsageForRange(usageTracker *tracking.UsageTracker, startTime, end
 		CacheReadTokens:     cacheRead,
 		TotalTokens:         total,
 	}, nil
+}
+
+func queryTokenUsageHeatmap(usageTracker *tracking.UsageTracker, opts *tracking.QueryOptions) ([]TokenUsageHeatmapDay, error) {
+	if usageTracker == nil {
+		return nil, fmt.Errorf("usage tracker is nil")
+	}
+	if opts == nil || opts.StartDate == nil || opts.EndDate == nil {
+		return []TokenUsageHeatmapDay{}, nil
+	}
+	db := usageTracker.GetDB()
+	if db == nil {
+		return nil, fmt.Errorf("usage tracker database is nil")
+	}
+
+	startTime := *opts.StartDate
+	endTime := *opts.EndDate
+	if endTime.Before(startTime) {
+		return []TokenUsageHeatmapDay{}, nil
+	}
+
+	bucket := "day"
+	bucketExpr := "substr(start_time, 1, 10)"
+	if endTime.Sub(startTime) <= tokenUsageHeatmapHourlyMaxRange {
+		bucket = "hour"
+		bucketExpr = "substr(start_time, 1, 13)"
+	}
+
+	query := `SELECT
+		` + bucketExpr + ` AS bucket,
+		COUNT(*),
+		COALESCE(SUM(` + tracking.DistributionInputTokensSQLExpression() + `), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_creation_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(` + tracking.TotalTokensSQLExpression() + `), 0)
+		FROM request_logs
+		WHERE 1=1`
+	args := []any{}
+	query, args = appendRequestQuerySQLFilters(query, args, opts)
+	query += " GROUP BY bucket ORDER BY bucket ASC"
+
+	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+	defer cancel()
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byBucket := make(map[string]TokenUsageHeatmapDay)
+	var maxTokens int64
+	for rows.Next() {
+		var item TokenUsageHeatmapDay
+		if err := rows.Scan(&item.Date, &item.RequestCount, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.TotalTokens); err != nil {
+			return nil, err
+		}
+		item.Bucket = bucket
+		if item.TotalTokens > maxTokens {
+			maxTokens = item.TotalTokens
+		}
+		byBucket[item.Date] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if bucket == "hour" {
+		rangeStart := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), startTime.Hour(), 0, 0, 0, startTime.Location())
+		rangeEnd := time.Date(endTime.Year(), endTime.Month(), endTime.Day(), endTime.Hour(), 0, 0, 0, endTime.Location()).Add(time.Hour)
+		hours := make([]TokenUsageHeatmapDay, 0, int(rangeEnd.Sub(rangeStart).Hours())+1)
+		for cursor := rangeStart; cursor.Before(rangeEnd); cursor = cursor.Add(time.Hour) {
+			key := cursor.Format("2006-01-02 15")
+			item := byBucket[key]
+			item.Date = key
+			item.Bucket = bucket
+			if maxTokens > 0 && item.TotalTokens > 0 {
+				item.Intensity = float64(item.TotalTokens) / float64(maxTokens)
+			}
+			hours = append(hours, item)
+		}
+		return hours, nil
+	}
+
+	rangeStart := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 0, 0, 0, 0, startTime.Location())
+	rangeEnd := time.Date(endTime.Year(), endTime.Month(), endTime.Day(), 0, 0, 0, 0, endTime.Location()).AddDate(0, 0, 1)
+	days := make([]TokenUsageHeatmapDay, 0, int(rangeEnd.Sub(rangeStart).Hours()/24)+1)
+	for cursor := rangeStart; cursor.Before(rangeEnd); cursor = cursor.AddDate(0, 0, 1) {
+		date := cursor.Format("2006-01-02")
+		day := byBucket[date]
+		day.Date = date
+		day.Bucket = bucket
+		if maxTokens > 0 && day.TotalTokens > 0 {
+			day.Intensity = float64(day.TotalTokens) / float64(maxTokens)
+		}
+		days = append(days, day)
+	}
+	return days, nil
+}
+
+func appendRequestQuerySQLFilters(query string, args []any, opts *tracking.QueryOptions) (string, []any) {
+	if opts == nil {
+		return query, args
+	}
+	if opts.StartDate != nil {
+		query += " AND start_time >= ?"
+		args = append(args, opts.StartDate.Format("2006-01-02 15:04:05"))
+	}
+	if opts.EndDate != nil {
+		query += " AND start_time <= ?"
+		args = append(args, opts.EndDate.Format("2006-01-02 15:04:05")+".999999999")
+	}
+	if opts.ModelName != "" {
+		query += " AND model_name = ?"
+		args = append(args, opts.ModelName)
+	}
+	if opts.Channel != "" {
+		query += " AND channel = ?"
+		args = append(args, opts.Channel)
+	}
+	if opts.EndpointName != "" {
+		query += " AND endpoint_name = ?"
+		args = append(args, opts.EndpointName)
+	}
+	if opts.GroupName != "" {
+		query += " AND group_name = ?"
+		args = append(args, opts.GroupName)
+	}
+	if opts.Status != "" {
+		if opts.Status == "failed" {
+			query += " AND status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
+		} else {
+			query += " AND status = ?"
+			args = append(args, opts.Status)
+		}
+	}
+	if opts.Provider != "" {
+		query += " AND provider = ?"
+		args = append(args, opts.Provider)
+	}
+	return query, args
 }

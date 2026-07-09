@@ -63,9 +63,14 @@ export const useTimeRange = (onRangeChange) => {
     onRangeChange?.(timeRange);
   }, [onRangeChange]);
 
+  const clearRange = useCallback(() => {
+    setActiveRange('');
+  }, []);
+
   return {
     activeRange,
-    selectRange
+    selectRange,
+    clearRange
   };
 };
 

@@ -1078,6 +1078,7 @@ export namespace main {
 	    channel: string;
 	    endpoint: string;
 	    group: string;
+	    provider: string;
 	    tokens: number;
 	    cost: number;
 	    provider: string;
@@ -1584,6 +1585,7 @@ export namespace main {
 	        this.channel = source["channel"];
 	        this.endpoint = source["endpoint"];
 	        this.group = source["group"];
+	        this.provider = source["provider"];
 	    }
 	}
 
@@ -1747,6 +1749,34 @@ export namespace main {
 	        this.cache_creation_tokens = source["cache_creation_tokens"];
 	        this.cache_read_tokens = source["cache_read_tokens"];
 	        this.total_tokens = source["total_tokens"];
+	    }
+	}
+	export class TokenUsageHeatmapDay {
+	    date: string;
+	    bucket: string;
+	    request_count: number;
+	    input_tokens: number;
+	    output_tokens: number;
+	    cache_creation_tokens: number;
+	    cache_read_tokens: number;
+	    total_tokens: number;
+	    intensity: number;
+
+	    static createFrom(source: any = {}) {
+	        return new TokenUsageHeatmapDay(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.bucket = source["bucket"];
+	        this.request_count = source["request_count"];
+	        this.input_tokens = source["input_tokens"];
+	        this.output_tokens = source["output_tokens"];
+	        this.cache_creation_tokens = source["cache_creation_tokens"];
+	        this.cache_read_tokens = source["cache_read_tokens"];
+	        this.total_tokens = source["total_tokens"];
+	        this.intensity = source["intensity"];
 	    }
 	}
 	export class UpdateChannelInput {

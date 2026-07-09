@@ -264,6 +264,10 @@ export function GetTokenUsage(arg1) {
   return Call.ByName("main.App.GetTokenUsage", arg1);
 }
 
+export function GetTokenUsageHeatmap(arg1) {
+  return Call.ByName("main.App.GetTokenUsageHeatmap", arg1);
+}
+
 export function GetUsageStats(arg1) {
   return Call.ByName("main.App.GetUsageStats", arg1);
 }
