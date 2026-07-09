@@ -387,7 +387,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
       {/* 模态框内容 - 固定高度，内容区域滚动 */}
       <div className="relative w-full max-w-3xl max-h-[80vh] bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200 flex flex-col overflow-hidden">
         {/* 头部 - 固定不滚动 */}
-        <div className="flex-shrink-0 py-4 pl-6 pr-11 border-b border-slate-100 bg-white rounded-t-2xl flex items-center justify-between">
+        <div className="flex-shrink-0 py-4 pl-6 pr-14 border-b border-slate-100 bg-white rounded-t-2xl flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-indigo-50 rounded-lg">
               <FileText className="w-5 h-5 text-indigo-600" />
@@ -412,7 +412,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* Tab 导航 - 固定不滚动 */}
-        <div className="flex-shrink-0 pl-6 pr-11 pt-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="flex-shrink-0 pl-6 pr-14 pt-4 border-b border-slate-100 bg-slate-50/50">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {[
               { id: 'overview', label: '概览', icon: Activity },
@@ -439,7 +439,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* 内容区域 - 自动填充剩余空间并滚动 */}
-        <div className="flex-1 p-6 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 min-h-0">
+        <div className="flex-1 py-6 pl-6 pr-11 overflow-y-auto [scrollbar-gutter:stable] scrollbar-thin scrollbar-thumb-slate-200 min-h-0">
           {/* 概览 Tab */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
@@ -972,17 +972,6 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                                         {endpointLabel}
                                       </span>
                                     </Tooltip>
-                                    {endpointError && isEndpointErrorCompact && (
-                                      <Tooltip
-                                        content={<EndpointErrorTooltipContent summary={endpointErrorInfo.summary} />}
-                                        contentClassName="max-w-[32rem] border-rose-900/40 bg-slate-950 px-3 py-2"
-                                        className="min-w-0 flex-1"
-                                      >
-                                        <span className="block min-w-0 truncate rounded border border-rose-100 bg-rose-50/80 px-1.5 py-[1px] text-[10px] font-medium leading-5 text-rose-600">
-                                          错误：{endpointErrorLabel}
-                                        </span>
-                                      </Tooltip>
-                                    )}
                                   </div>
                                   <span className={`shrink-0 text-[10px] ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-400' : isLast ? 'text-emerald-500' : 'text-slate-400'
@@ -990,17 +979,25 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                                     {roleLabel}
                                   </span>
                                 </div>
-                                {endpointError && !isEndpointErrorCompact && (
-                                  <div
-                                    className="mt-1.5 min-w-0 rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] leading-relaxed text-rose-700 break-words [overflow-wrap:anywhere]"
-                                  >
-                                    <span className="shrink-0 font-medium text-rose-600">错误：</span>
-                                    <span className={
-                                      'break-words [overflow-wrap:anywhere]'
-                                    }>
-                                      {endpointErrorLabel}
-                                    </span>
-                                  </div>
+                                {endpointError && (
+                                  isEndpointErrorCompact ? (
+                                    <Tooltip
+                                      content={<EndpointErrorTooltipContent summary={endpointErrorInfo.summary} />}
+                                      contentClassName="max-w-[32rem] border-rose-900/40 bg-slate-950 px-3 py-2"
+                                      className="mt-1.5 block min-w-0"
+                                    >
+                                      <div className="min-w-0 truncate rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] font-medium leading-5 text-rose-600">
+                                        错误：{endpointErrorLabel}
+                                      </div>
+                                    </Tooltip>
+                                  ) : (
+                                    <div className="mt-1.5 min-w-0 rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] leading-relaxed text-rose-700 break-words [overflow-wrap:anywhere]">
+                                      <span className="shrink-0 font-medium text-rose-600">错误：</span>
+                                      <span className="break-words [overflow-wrap:anywhere]">
+                                        {endpointErrorLabel}
+                                      </span>
+                                    </div>
+                                  )
                                 )}
                               </div>
                             </div>
@@ -1231,7 +1228,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* 底部操作栏 - 固定不滚动 */}
-        <div className="flex-shrink-0 py-4 pl-6 pr-11 border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm rounded-b-2xl flex justify-between items-center">
+        <div className="flex-shrink-0 py-4 pl-6 pr-14 border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm rounded-b-2xl flex justify-between items-center">
           <div className="text-xs text-slate-500">
             Request ID: <span className="font-mono text-slate-700">{request.requestId}</span>
           </div>
