@@ -16,6 +16,8 @@ import {
   EyeOff,
   Globe,
   KeyRound,
+  Link2,
+  Link2Off,
   Loader2,
   Pencil,
   Plus,
@@ -1817,6 +1819,28 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
               最后检查 {lastCheck}
             </span>
           </div>
+          {hasFailDetail && (
+            <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <XCircle size={16} className="text-rose-600" />
+                <div className="text-sm font-medium text-rose-800">异常详情</div>
+              </div>
+              <div className="space-y-2 text-sm">
+                {lastFailCode > 0 && (
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-[70px] font-medium text-rose-600">状态码:</span>
+                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-rose-900">{lastFailCode}</span>
+                  </div>
+                )}
+                {lastFailReason && (
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-[70px] font-medium text-rose-600">失败原因:</span>
+                    <span className="break-all text-rose-900">{lastFailReason}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="overflow-y-auto p-6">
@@ -1846,29 +1870,6 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
                   ))}
                 </div>
               </DetailMetricCard>
-            </div>
-          )}
-
-          {hasFailDetail && (
-            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <XCircle size={16} className="text-rose-600" />
-                <div className="text-sm font-medium text-rose-800">异常详情</div>
-              </div>
-              <div className="space-y-2 text-sm">
-                {lastFailCode > 0 && (
-                  <div className="flex items-start gap-2">
-                    <span className="min-w-[70px] font-medium text-rose-600">状态码:</span>
-                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-rose-900">{lastFailCode}</span>
-                  </div>
-                )}
-                {lastFailReason && (
-                  <div className="flex items-start gap-2">
-                    <span className="min-w-[70px] font-medium text-rose-600">失败原因:</span>
-                    <span className="break-all text-rose-900">{lastFailReason}</span>
-                  </div>
-                )}
-              </div>
             </div>
           )}
 
@@ -2140,6 +2141,7 @@ const ChannelCard = ({
   onAddEndpoint,
   onActivateEndpoint,
   onToggleEndpointFailover,
+  onSetGroupEndpointFailover,
   onToggleEndpointSkipHealthCheck,
   onEditEndpoint,
   onOpenEndpoint,
@@ -2216,6 +2218,41 @@ const ChannelCard = ({
     ? groupEndpoints
     : groupEndpoints.slice(0, 1);
   const hiddenCount = hasMultiple && !isEndpointListExpanded ? groupEndpoints.length - displayedEndpoints.length : 0;
+  const groupFailoverEndpoints = groupEndpoints.filter((ep) => ep.failoverEnabled !== false);
+  const groupNonFailoverEndpoints = groupEndpoints.filter((ep) => ep.failoverEnabled === false);
+  const activeEndpointInSelectedGroup = !!activeEndpointInChannel &&
+    groupEndpoints.some((ep) => ep.id === activeEndpointInChannel.id);
+  const hasFailoverOutsideSelectedGroup = endpoints.some((ep) => (
+    !groupEndpointFilter(ep) && ep.failoverEnabled !== false
+  ));
+  const disableGroupFailoverBlocked = groupFailoverEndpoints.length === 0 ||
+    (activeEndpointInSelectedGroup && !hasFailoverOutsideSelectedGroup);
+  const disableGroupFailoverTargets = activeEndpointInSelectedGroup
+    ? [
+      ...groupFailoverEndpoints.filter((ep) => ep.id !== activeEndpointInChannel.id),
+      activeEndpointInChannel
+    ].filter((ep) => ep?.failoverEnabled !== false)
+    : groupFailoverEndpoints;
+  const disableGroupFailoverActionKey = `disable-group-failover-${channel.id}-${selectedCredentialGroupIDResolved || 'legacy'}`;
+  const enableGroupFailoverActionKey = `enable-group-failover-${channel.id}-${selectedCredentialGroupIDResolved || 'legacy'}`;
+  const isDisablingGroupFailover = actionLoading === disableGroupFailoverActionKey;
+  const isEnablingGroupFailover = actionLoading === enableGroupFailoverActionKey;
+  const disableGroupFailoverTip = groupFailoverEndpoints.length === 0
+    ? '当前分组没有参与转移的端点'
+    : activeEndpointInSelectedGroup && !hasFailoverOutsideSelectedGroup
+      ? '当前路由端点在此分组，需先让其他分组至少一个端点参与转移'
+      : `将当前分组 ${groupFailoverEndpoints.length} 个端点设为不参与转移`;
+  const enableGroupFailoverTip = groupNonFailoverEndpoints.length === 0
+    ? '当前分组端点已全部参与转移'
+    : `将当前分组 ${groupNonFailoverEndpoints.length} 个端点设为参与转移`;
+  const shouldEnableGroupFailover = groupNonFailoverEndpoints.length > 0;
+  const groupFailoverActionTargets = shouldEnableGroupFailover ? groupNonFailoverEndpoints : disableGroupFailoverTargets;
+  const groupFailoverActionKey = shouldEnableGroupFailover ? enableGroupFailoverActionKey : disableGroupFailoverActionKey;
+  const groupFailoverActionLoading = shouldEnableGroupFailover ? isEnablingGroupFailover : isDisablingGroupFailover;
+  const groupFailoverActionDisabled = shouldEnableGroupFailover
+    ? groupNonFailoverEndpoints.length === 0
+    : disableGroupFailoverBlocked;
+  const groupFailoverActionTip = shouldEnableGroupFailover ? enableGroupFailoverTip : disableGroupFailoverTip;
 
   // 外部点击收起
   useEffect(() => {
@@ -2487,14 +2524,37 @@ const ChannelCard = ({
               </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => onAddEndpoint?.(channel, selectedCredentialGroup)}
-            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
-          >
-            <Plus size={12} />
-            添加端点
-          </button>
+          <div className="flex flex-shrink-0 items-center gap-1">
+            <Tooltip content={groupFailoverActionTip}>
+              <button
+                type="button"
+                onClick={() => onSetGroupEndpointFailover?.(groupFailoverActionTargets, shouldEnableGroupFailover, groupFailoverActionKey)}
+                disabled={groupFailoverActionLoading || groupFailoverActionDisabled}
+                className={`rounded-md p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                  shouldEnableGroupFailover
+                    ? 'text-emerald-600 hover:bg-emerald-50'
+                    : 'text-indigo-600 hover:bg-indigo-50'
+                }`}
+                aria-label={shouldEnableGroupFailover ? '当前分组全部参与转移' : '当前分组全部不参与转移'}
+              >
+                {groupFailoverActionLoading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : shouldEnableGroupFailover ? (
+                  <Link2 size={12} />
+                ) : (
+                  <Link2Off size={12} />
+                )}
+              </button>
+            </Tooltip>
+            <button
+              type="button"
+              onClick={() => onAddEndpoint?.(channel, selectedCredentialGroup)}
+              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <Plus size={12} />
+              添加端点
+            </button>
+          </div>
         </div>
 
         {groupEndpoints.length === 0 ? (
@@ -2988,6 +3048,29 @@ const CodexPage = () => {
     }
   };
 
+  const handleSetGroupEndpointFailover = async (targetEndpoints = [], enabled, loadingKey = 'set-group-failover') => {
+    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    if (targets.length === 0) return;
+    setActionLoading(loadingKey);
+    try {
+      for (const endpoint of targets) {
+        await updateCodexEndpointByID(endpoint.id, {
+          name: endpoint.name,
+          baseURL: endpoint.baseURL || endpoint.base_url,
+          credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
+          failoverEnabled: enabled,
+          priority: endpoint.priority,
+          timeoutSeconds: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0
+        });
+      }
+      await fetchData({ silent: true });
+    } catch (err) {
+      setError(getFailoverToggleErrorMessage(err, '批量操作失败'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const handleToggleEndpointSkipHealthCheck = async (endpoint, skipHealthCheck) => {
     setActionLoading(`skip-health-endpoint-${endpoint.id}`);
     try {
@@ -3127,6 +3210,7 @@ const CodexPage = () => {
               onAddEndpoint={openCreateEndpointForm}
               onActivateEndpoint={handleActivateEndpoint}
               onToggleEndpointFailover={handleToggleEndpointFailover}
+              onSetGroupEndpointFailover={handleSetGroupEndpointFailover}
               onToggleEndpointSkipHealthCheck={handleToggleEndpointSkipHealthCheck}
               onEditEndpoint={openEditEndpointForm}
               onOpenEndpoint={(endpoint, channelOwner) =>

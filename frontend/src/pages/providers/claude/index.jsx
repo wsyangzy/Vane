@@ -16,13 +16,16 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Calculator,
+  Link2,
+  Link2Off,
   ShieldOff,
   CheckCircle2,
   XCircle,
   Clock,
   ChevronDown,
   Pause,
-  Play,
+  Route,
+  RouteOff,
   Globe,
   Settings,
   KeyRound,
@@ -882,6 +885,32 @@ const EndpointDetailModal = ({
               最后检查 {lastCheck}
             </span>
           </div>
+          {!isSuspended && hasFailDetail && (
+            <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <XCircle size={16} className="text-rose-600" />
+                <div className="text-sm font-medium text-rose-800">异常详情</div>
+              </div>
+              <div className="space-y-2 text-sm">
+                {lastFailCode > 0 && (
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-[70px] font-medium text-rose-600">状态码:</span>
+                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-rose-900">
+                      {lastFailCode}
+                    </span>
+                  </div>
+                )}
+                {lastFailReason && (
+                  <div className="flex items-start gap-2">
+                    <span className="min-w-[70px] font-medium text-rose-600">失败原因:</span>
+                    <span className="break-all text-rose-900">
+                      {lastFailReason}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="overflow-y-auto p-6">
@@ -1005,36 +1034,6 @@ const EndpointDetailModal = ({
                           </div>
                         )}
                       </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 异常详情显示 - 有错误信息时显示 */}
-          {!isSuspended && hasFailDetail && (
-            <div className="mt-4">
-              <div className="bg-rose-50 rounded-xl p-4 border border-rose-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <XCircle size={16} className="text-rose-600" />
-                  <div className="text-sm font-medium text-rose-800">异常详情</div>
-                </div>
-                <div className="space-y-2 text-sm">
-                  {lastFailCode > 0 && (
-                    <div className="flex items-start gap-2">
-                      <span className="text-rose-600 font-medium min-w-[70px]">状态码:</span>
-                      <span className="font-mono text-rose-900 bg-rose-100 px-2 py-0.5 rounded">
-                        {lastFailCode}
-                      </span>
-                    </div>
-                  )}
-                  {lastFailReason && (
-                    <div className="flex items-start gap-2">
-                      <span className="text-rose-600 font-medium min-w-[70px]">失败原因:</span>
-                      <span className="text-rose-900 break-all">
-                        {lastFailReason}
-                      </span>
                     </div>
                   )}
                 </div>
@@ -1723,6 +1722,7 @@ const ChannelCard = ({
   onOpenEndpoint,
   onActivateEndpoint,
   onToggleEndpointFailover,
+  onSetGroupEndpointFailover,
   onToggleEndpointSkipHealthCheck, // 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
@@ -1864,6 +1864,35 @@ const ChannelCard = ({
   const collapsedVisibleCount = 1;
   const visibleEndpoints = expanded ? groupEndpoints : groupEndpoints.slice(0, collapsedVisibleCount);
   const hasMore = groupEndpoints.length > collapsedVisibleCount;
+  const groupFailoverEndpoints = groupEndpoints.filter(endpointParticipatesInFailover);
+  const groupNonFailoverEndpoints = groupEndpoints.filter((endpoint) => !endpointParticipatesInFailover(endpoint));
+  const currentRouteInSelectedGroup = !!currentRouteEndpoint &&
+    groupEndpoints.some((endpoint) => isSameEndpoint(endpoint, currentRouteEndpoint));
+  const hasFailoverOutsideSelectedGroup = endpoints.some((endpoint) => (
+    !groupEndpointFilter(endpoint) && endpointParticipatesInFailover(endpoint)
+  ));
+  const disableGroupFailoverBlocked = groupFailoverEndpoints.length === 0 ||
+    (currentRouteInSelectedGroup && !hasFailoverOutsideSelectedGroup);
+  const disableGroupFailoverTargets = currentRouteInSelectedGroup
+    ? [
+      ...groupFailoverEndpoints.filter((endpoint) => !isSameEndpoint(endpoint, currentRouteEndpoint)),
+      currentRouteEndpoint
+    ].filter(endpointParticipatesInFailover)
+    : groupFailoverEndpoints;
+  const disableGroupFailoverTip = groupFailoverEndpoints.length === 0
+    ? '当前分组没有参与转移的端点'
+    : currentRouteInSelectedGroup && !hasFailoverOutsideSelectedGroup
+      ? '当前路由端点在此分组，需先让其他分组至少一个端点参与转移'
+      : `将当前分组 ${groupFailoverEndpoints.length} 个端点设为不参与转移`;
+  const enableGroupFailoverTip = groupNonFailoverEndpoints.length === 0
+    ? '当前分组端点已全部参与转移'
+    : `将当前分组 ${groupNonFailoverEndpoints.length} 个端点设为参与转移`;
+  const shouldEnableGroupFailover = groupNonFailoverEndpoints.length > 0;
+  const groupFailoverActionTargets = shouldEnableGroupFailover ? groupNonFailoverEndpoints : disableGroupFailoverTargets;
+  const groupFailoverActionDisabled = shouldEnableGroupFailover
+    ? groupNonFailoverEndpoints.length === 0
+    : disableGroupFailoverBlocked;
+  const groupFailoverActionTip = shouldEnableGroupFailover ? enableGroupFailoverTip : disableGroupFailoverTip;
 
   const priorityValue = Number.isFinite(priority) ? Math.max(0, Math.floor(priority)) : null;
   const hasValidPriority = priorityValue != null && priorityValue >= 0 && priorityValue < 999;
@@ -1977,10 +2006,10 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onPause?.(channelName)}
                   disabled={loading}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="暂停此渠道"
                 >
-                  <Pause size={12} />
-                  暂停
+                  <RouteOff size={14} />
                 </button>
               </Tooltip>
             )}
@@ -1991,10 +2020,10 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onResume?.(channelName)}
                   disabled={loading}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="恢复此渠道"
                 >
-                  <Play size={12} />
-                  恢复
+                  <Route size={14} />
                 </button>
               </Tooltip>
             )}
@@ -2231,15 +2260,32 @@ const ChannelCard = ({
             )}
           </div>
           {isSqliteMode && (
-            <button
-              type="button"
-              onClick={() => onAddEndpoint?.(channelName, selectedCredentialGroup)}
-              disabled={loading}
-              className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Plus size={12} />
-              添加端点
-            </button>
+            <div className="flex flex-shrink-0 items-center gap-1">
+              <Tooltip content={groupFailoverActionTip}>
+                <button
+                  type="button"
+                  onClick={() => onSetGroupEndpointFailover?.(groupFailoverActionTargets, shouldEnableGroupFailover)}
+                  disabled={loading || groupFailoverActionDisabled}
+                  className={`rounded-md p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                    shouldEnableGroupFailover
+                      ? 'text-emerald-600 hover:bg-emerald-50'
+                      : 'text-indigo-600 hover:bg-indigo-50'
+                  }`}
+                  aria-label={shouldEnableGroupFailover ? '当前分组全部参与转移' : '当前分组全部不参与转移'}
+                >
+                  {shouldEnableGroupFailover ? <Link2 size={12} /> : <Link2Off size={12} />}
+                </button>
+              </Tooltip>
+              <button
+                type="button"
+                onClick={() => onAddEndpoint?.(channelName, selectedCredentialGroup)}
+                disabled={loading}
+                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Plus size={12} />
+                添加端点
+              </button>
+            </div>
           )}
         </div>
 
@@ -2499,6 +2545,25 @@ const ChannelsPage = () => {
     } catch (err) {
       console.error('切换故障转移参与状态失败:', err);
       setActionError(getFailoverToggleErrorMessage(err, '操作失败'));
+    } finally {
+      setChannelActionLoading(false);
+    }
+  }, [loadGroups, loadStorageStatus]);
+
+  const handleSetGroupEndpointFailover = useCallback(async (targetEndpoints = [], enabled) => {
+    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    if (targets.length === 0) return;
+    try {
+      setChannelActionLoading(true);
+      setActionError('');
+      for (const endpoint of targets) {
+        await setEndpointFailoverEnabledByID(endpoint.id, enabled);
+      }
+      await loadStorageStatus();
+      await loadGroups();
+    } catch (err) {
+      console.error('批量切换分组端点转移失败:', err);
+      setActionError(getFailoverToggleErrorMessage(err, '批量操作失败'));
     } finally {
       setChannelActionLoading(false);
     }
@@ -3340,6 +3405,7 @@ const ChannelsPage = () => {
               onOpenEndpoint={openEndpointDetail}
               onActivateEndpoint={isSqliteMode ? handleActivateEndpoint : undefined}
               onToggleEndpointFailover={isSqliteMode ? handleToggleEndpointFailover : undefined}
+              onSetGroupEndpointFailover={isSqliteMode ? handleSetGroupEndpointFailover : undefined}
               onToggleEndpointSkipHealthCheck={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
               onActivate={async (channelName) => {
                 if (channelFailoverEnabled && section.groupInfo?.paused) {
