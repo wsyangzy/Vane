@@ -1,4 +1,11 @@
-import { ArrowRightLeft, CheckCircle2, Clock, ShieldOff, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, Repeat, ShieldOff, Slash, XCircle } from 'lucide-react';
+
+const RepeatOffIcon = ({ size = 10, className = '' }) => (
+  <span className={`relative inline-flex flex-shrink-0 ${className}`} style={{ width: size, height: size }}>
+    <Repeat size={size} />
+    <Slash size={size} strokeWidth={2.5} className="absolute inset-0" />
+  </span>
+);
 
 const HEALTH_BADGES = {
   healthy: ['健康', CheckCircle2, 'border-emerald-100 bg-emerald-50 text-emerald-600'],
@@ -7,7 +14,7 @@ const HEALTH_BADGES = {
   neverChecked: ['未检测', Clock, 'border-slate-200 bg-slate-50 text-slate-400'],
   unchecked: ['检测中', Clock, 'border-slate-200 bg-slate-50 text-slate-500'],
   inactive: ['未接管', Clock, 'border-slate-200 bg-slate-50 text-slate-400'],
-  excluded: ['不参与', ArrowRightLeft, 'border-slate-200 bg-slate-50 text-slate-400']
+  excluded: ['不参与', RepeatOffIcon, 'border-slate-200 bg-slate-50 text-slate-400']
 };
 
 export const EndpointHealthBadge = ({ state, healthy, neverChecked, skipped, detail = false }) => {

@@ -16,9 +16,10 @@ import {
   ArrowRight,
   ArrowRightLeft,
   Calculator,
-  Link2,
-  Link2Off,
+  Repeat,
+  ShieldCheck,
   ShieldOff,
+  Slash,
   CheckCircle2,
   XCircle,
   Clock,
@@ -109,6 +110,13 @@ import {
   setDefaultClaudeCredentialGroup
 } from '@utils/wailsApi.js';
 import { formatMultiplierInputValue, parseMultiplierExpression } from '@utils/multiplier.js';
+
+const RepeatOffIcon = ({ size = 12 }) => (
+  <span className="relative inline-flex flex-shrink-0" style={{ width: size, height: size }}>
+    <Repeat size={size} />
+    <Slash size={size} strokeWidth={2.5} className="absolute inset-0" />
+  </span>
+);
 
 const CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
@@ -512,7 +520,7 @@ const EndpointMiniCard = ({
   return (
     <div className="border-b border-slate-100 last:border-b-0">
       <div
-        className={`group/row relative flex min-h-[56px] items-start gap-3 px-4 py-1.5 text-left transition-colors duration-150 ${
+        className={`group/row relative flex h-[56px] min-h-[56px] max-h-[56px] items-start gap-3 px-4 py-1.5 text-left transition-colors duration-150 ${
           rowActive ? 'bg-indigo-50/20' : 'hover:bg-slate-50/80 opacity-85'
         }`}
       >
@@ -621,7 +629,7 @@ const EndpointMiniCard = ({
                 }}
                 disabled={failoverToggleBlocked}
                 title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
-                className={`rounded-md p-1 transition-colors duration-150 ${
+                className={`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 ${
                   failoverToggleBlocked
                     ? 'cursor-not-allowed text-indigo-300 opacity-60'
                     : failoverEnabled
@@ -639,7 +647,7 @@ const EndpointMiniCard = ({
                 }
                 aria-pressed={failoverEnabled}
               >
-                <ArrowRightLeft size={12} />
+                {failoverEnabled ? <RepeatOffIcon size={12} /> : <Repeat size={12} />}
               </button>
               <button
                 type="button"
@@ -647,15 +655,15 @@ const EndpointMiniCard = ({
                   e.stopPropagation();
                   onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
                 }}
-                className={`rounded-md p-1 transition-colors duration-150 ${
-                  isSkipHealthCheck
-                    ? 'bg-purple-50 text-purple-600 hover:bg-purple-100'
-                    : 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
-                }`}
+                    className={`rounded-md p-1 transition-colors duration-150 ${
+                      isSkipHealthCheck
+                        ? 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
+                        : 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                    }`}
                 aria-label={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
                 aria-pressed={isSkipHealthCheck}
               >
-                <ShieldOff size={12} />
+                {isSkipHealthCheck ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
               </button>
               <button
                 type="button"
@@ -1840,6 +1848,7 @@ const ChannelCard = ({
   onActivateEndpoint,
   onToggleEndpointFailover,
   onSetGroupEndpointFailover,
+  onSetGroupEndpointSkipHealthCheck,
   onToggleEndpointSkipHealthCheck, // 跳过健康检测回调
   onEditEndpoint,
   onDeleteEndpoint,
@@ -1983,6 +1992,8 @@ const ChannelCard = ({
   const hasMore = groupEndpoints.length > collapsedVisibleCount;
   const groupFailoverEndpoints = groupEndpoints.filter(endpointParticipatesInFailover);
   const groupNonFailoverEndpoints = groupEndpoints.filter((endpoint) => !endpointParticipatesInFailover(endpoint));
+  const groupSkippedHealthEndpoints = groupEndpoints.filter((endpoint) => endpoint.skipHealthCheck || endpoint.skip_health_check);
+  const groupCheckedHealthEndpoints = groupEndpoints.filter((endpoint) => !(endpoint.skipHealthCheck || endpoint.skip_health_check));
   const currentRouteInSelectedGroup = !!currentRouteEndpoint &&
     groupEndpoints.some((endpoint) => isSameEndpoint(endpoint, currentRouteEndpoint));
   const hasFailoverOutsideSelectedGroup = endpoints.some((endpoint) => (
@@ -2010,6 +2021,13 @@ const ChannelCard = ({
     ? groupNonFailoverEndpoints.length === 0
     : disableGroupFailoverBlocked;
   const groupFailoverActionTip = shouldEnableGroupFailover ? enableGroupFailoverTip : disableGroupFailoverTip;
+  const shouldSkipGroupHealthCheck = groupCheckedHealthEndpoints.length > 0;
+  const groupHealthActionTargets = shouldSkipGroupHealthCheck ? groupCheckedHealthEndpoints : groupSkippedHealthEndpoints;
+  const groupHealthActionTip = shouldSkipGroupHealthCheck
+    ? `将当前分组 ${groupCheckedHealthEndpoints.length} 个端点设为跳过检测`
+    : groupSkippedHealthEndpoints.length > 0
+      ? `恢复当前分组 ${groupSkippedHealthEndpoints.length} 个端点的健康检测`
+      : '当前分组没有端点';
 
   const priorityValue = Number.isFinite(priority) ? Math.max(0, Math.floor(priority)) : null;
   const hasValidPriority = priorityValue != null && priorityValue >= 0 && priorityValue < 999;
@@ -2354,7 +2372,7 @@ const ChannelCard = ({
 
       {/* 端点子列表 */}
       <div className="border-t border-slate-100 bg-slate-50/30">
-        <div className="flex items-center justify-between px-4 py-1.5">
+        <div className="flex h-9 items-center justify-between px-4">
           <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
             <span>Endpoints · {groupEndpoints.length}</span>
             {selectedCredentialGroup && (
@@ -2383,14 +2401,29 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onSetGroupEndpointFailover?.(groupFailoverActionTargets, shouldEnableGroupFailover)}
                   disabled={loading || groupFailoverActionDisabled}
-                  className={`rounded-md p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                  className={`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
                     shouldEnableGroupFailover
                       ? 'text-emerald-600 hover:bg-emerald-50'
                       : 'text-indigo-600 hover:bg-indigo-50'
                   }`}
                   aria-label={shouldEnableGroupFailover ? '当前分组全部参与转移' : '当前分组全部不参与转移'}
                 >
-                  {shouldEnableGroupFailover ? <Link2 size={12} /> : <Link2Off size={12} />}
+                  {shouldEnableGroupFailover ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
+                </button>
+              </Tooltip>
+              <Tooltip content={groupHealthActionTip}>
+                <button
+                  type="button"
+                  onClick={() => onSetGroupEndpointSkipHealthCheck?.(groupHealthActionTargets, shouldSkipGroupHealthCheck)}
+                  disabled={loading || groupHealthActionTargets.length === 0}
+                  className={`rounded-md p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                    shouldSkipGroupHealthCheck
+                      ? 'text-purple-600 hover:bg-purple-50'
+                      : 'text-emerald-600 hover:bg-emerald-50'
+                  }`}
+                  aria-label={shouldSkipGroupHealthCheck ? '当前分组全部跳过检测' : '当前分组全部恢复检测'}
+                >
+                  {shouldSkipGroupHealthCheck ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}
                 </button>
               </Tooltip>
               <button
@@ -2681,6 +2714,25 @@ const ChannelsPage = () => {
     } catch (err) {
       console.error('批量切换分组端点转移失败:', err);
       setActionError(getFailoverToggleErrorMessage(err, '批量操作失败'));
+    } finally {
+      setChannelActionLoading(false);
+    }
+  }, [loadGroups, loadStorageStatus]);
+
+  const handleSetGroupEndpointSkipHealthCheck = useCallback(async (targetEndpoints = [], skip) => {
+    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    if (targets.length === 0) return;
+    try {
+      setChannelActionLoading(true);
+      setActionError('');
+      for (const endpoint of targets) {
+        await setEndpointSkipHealthCheckByID(endpoint.id, skip);
+      }
+      await loadStorageStatus();
+      await loadGroups();
+    } catch (err) {
+      console.error('批量切换分组端点跳过检测失败:', err);
+      setActionError(`批量操作失败: ${getErrorMessage(err, '未知错误')}`);
     } finally {
       setChannelActionLoading(false);
     }
@@ -3523,6 +3575,7 @@ const ChannelsPage = () => {
               onActivateEndpoint={isSqliteMode ? handleActivateEndpoint : undefined}
               onToggleEndpointFailover={isSqliteMode ? handleToggleEndpointFailover : undefined}
               onSetGroupEndpointFailover={isSqliteMode ? handleSetGroupEndpointFailover : undefined}
+              onSetGroupEndpointSkipHealthCheck={isSqliteMode ? handleSetGroupEndpointSkipHealthCheck : undefined}
               onToggleEndpointSkipHealthCheck={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
               onActivate={async (channelName) => {
                 if (channelFailoverEnabled && section.groupInfo?.paused) {
