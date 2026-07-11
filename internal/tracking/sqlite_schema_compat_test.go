@@ -84,6 +84,27 @@ CREATE TABLE IF NOT EXISTS channels (
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );
+
+CREATE TABLE IF NOT EXISTS model_pricing (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_name TEXT UNIQUE NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'claude',
+    input_price REAL NOT NULL DEFAULT 3.0,
+    output_price REAL NOT NULL DEFAULT 15.0,
+    cache_creation_price_5m REAL DEFAULT 3.75,
+    cache_creation_price_1h REAL DEFAULT 6.0,
+    cache_read_price REAL DEFAULT 0.30,
+    display_name TEXT,
+    description TEXT,
+    is_default INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+);
+
+INSERT INTO model_pricing (
+    model_name, provider, input_price, output_price,
+    cache_creation_price_5m, cache_creation_price_1h, cache_read_price
+) VALUES ('legacy-model', 'codex', 2.0, 8.0, 2.5, 4.0, 0.2);
 `)
 	if err != nil {
 		t.Fatalf("create legacy schema: %v", err)
@@ -123,6 +144,51 @@ CREATE TABLE IF NOT EXISTS channels (
 	}
 	if !sqliteColumnExists(t, adapter.GetReadDB(), "channels", "failover_enabled") {
 		t.Fatalf("expected channels.failover_enabled to exist after InitSchema")
+	}
+	for _, c := range []string{
+		"long_context_cost_multiplier",
+		"long_context_input_cost_multiplier",
+		"long_context_output_cost_multiplier",
+		"long_context_cache_creation_cost_multiplier",
+		"long_context_cache_read_cost_multiplier",
+		"disable_long_context_pricing",
+	} {
+		if !sqliteColumnExists(t, adapter.GetReadDB(), "claude_credential_groups", c) {
+			t.Fatalf("expected claude_credential_groups.%s to exist after InitSchema", c)
+		}
+	}
+
+	longContextColumns := []string{
+		"long_context_threshold",
+		"long_context_input_price",
+		"long_context_cache_read_price",
+		"long_context_cache_write_price",
+		"long_context_output_price",
+	}
+	for _, column := range longContextColumns {
+		if !sqliteColumnExists(t, adapter.GetReadDB(), "model_pricing", column) {
+			t.Fatalf("expected model_pricing.%s to exist after InitSchema", column)
+		}
+	}
+
+	var (
+		threshold                                                 int64
+		inputPrice                                                float64
+		longInput, longCacheRead, longCacheWrite, longOutputPrice float64
+	)
+	if err := adapter.GetReadDB().QueryRowContext(ctx, `
+		SELECT input_price, long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price
+		FROM model_pricing WHERE model_name = 'legacy-model'
+	`).Scan(&inputPrice, &threshold, &longInput, &longCacheRead, &longCacheWrite, &longOutputPrice); err != nil {
+		t.Fatalf("query migrated model pricing: %v", err)
+	}
+	if inputPrice != 2.0 {
+		t.Fatalf("expected legacy input price to be preserved, got %f", inputPrice)
+	}
+	if threshold != 0 || longInput != 0 || longCacheRead != 0 || longCacheWrite != 0 || longOutputPrice != 0 {
+		t.Fatalf("expected migrated long-context pricing to default to zero")
 	}
 }
 

@@ -46,14 +46,20 @@ func (s *CodexCredentialGroupService) EnsureDefaultGroup(ctx context.Context, ch
 		return existing, nil
 	}
 	record := &store.CodexCredentialGroupRecord{
-		ChannelID:               channel.ID,
-		Name:                    DefaultCodexCredentialGroupName,
-		ApiKey:                  channel.ApiKey,
-		IsDefault:               true,
-		CostMultiplier:          1.0,
-		InputCostMultiplier:     1.0,
-		OutputCostMultiplier:    1.0,
-		CacheReadCostMultiplier: 1.0,
+		ChannelID:                              channel.ID,
+		Name:                                   DefaultCodexCredentialGroupName,
+		ApiKey:                                 channel.ApiKey,
+		IsDefault:                              true,
+		CostMultiplier:                         1.0,
+		InputCostMultiplier:                    1.0,
+		OutputCostMultiplier:                   1.0,
+		CacheCreationCostMultiplier:            1.0,
+		CacheReadCostMultiplier:                1.0,
+		LongContextCostMultiplier:              1.0,
+		LongContextInputCostMultiplier:         1.0,
+		LongContextOutputCostMultiplier:        1.0,
+		LongContextCacheCreationCostMultiplier: 1.0,
+		LongContextCacheReadCostMultiplier:     1.0,
 	}
 	if s.endpointStore != nil {
 		endpoints, err := s.endpointStore.ListByChannelID(ctx, channel.ID)
@@ -139,7 +145,13 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	record.CostMultiplier = defaultCodexMultiplier(record.CostMultiplier)
 	record.InputCostMultiplier = defaultCodexMultiplier(record.InputCostMultiplier)
 	record.OutputCostMultiplier = defaultCodexMultiplier(record.OutputCostMultiplier)
+	record.CacheCreationCostMultiplier = defaultCodexMultiplier(record.CacheCreationCostMultiplier)
 	record.CacheReadCostMultiplier = defaultCodexMultiplier(record.CacheReadCostMultiplier)
+	record.LongContextCostMultiplier = defaultCodexMultiplier(record.LongContextCostMultiplier)
+	record.LongContextInputCostMultiplier = defaultCodexMultiplier(record.LongContextInputCostMultiplier)
+	record.LongContextOutputCostMultiplier = defaultCodexMultiplier(record.LongContextOutputCostMultiplier)
+	record.LongContextCacheCreationCostMultiplier = defaultCodexMultiplier(record.LongContextCacheCreationCostMultiplier)
+	record.LongContextCacheReadCostMultiplier = defaultCodexMultiplier(record.LongContextCacheReadCostMultiplier)
 	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)
 	if err != nil {
 		return err

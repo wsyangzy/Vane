@@ -90,39 +90,51 @@ type CreateEndpointInput struct {
 }
 
 type ClaudeCredentialGroupInfo struct {
-	ID                            int64                                       `json:"id"`
-	Channel                       string                                      `json:"channel"`
-	Name                          string                                      `json:"name"`
-	Token                         string                                      `json:"token"`
-	ApiKey                        string                                      `json:"api_key"`
-	TokenMasked                   string                                      `json:"token_masked"`
-	ApiKeyMasked                  string                                      `json:"api_key_masked"`
-	IsDefault                     bool                                        `json:"is_default"`
-	CostMultiplier                float64                                     `json:"cost_multiplier"`
-	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64                                     `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64                                     `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64                                     `json:"cache_read_cost_multiplier"`
-	ModelMultipliers              []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
-	EndpointCount                 int                                         `json:"endpoint_count"`
-	CreatedAt                     string                                      `json:"created_at"`
-	UpdatedAt                     string                                      `json:"updated_at"`
+	ID                                     int64                                       `json:"id"`
+	Channel                                string                                      `json:"channel"`
+	Name                                   string                                      `json:"name"`
+	Token                                  string                                      `json:"token"`
+	ApiKey                                 string                                      `json:"api_key"`
+	TokenMasked                            string                                      `json:"token_masked"`
+	ApiKeyMasked                           string                                      `json:"api_key_masked"`
+	IsDefault                              bool                                        `json:"is_default"`
+	CostMultiplier                         float64                                     `json:"cost_multiplier"`
+	InputCostMultiplier                    float64                                     `json:"input_cost_multiplier"`
+	OutputCostMultiplier                   float64                                     `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier            float64                                     `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h          float64                                     `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier                float64                                     `json:"cache_read_cost_multiplier"`
+	LongContextCostMultiplier              float64                                     `json:"long_context_cost_multiplier"`
+	LongContextInputCostMultiplier         float64                                     `json:"long_context_input_cost_multiplier"`
+	LongContextOutputCostMultiplier        float64                                     `json:"long_context_output_cost_multiplier"`
+	LongContextCacheCreationCostMultiplier float64                                     `json:"long_context_cache_creation_cost_multiplier"`
+	LongContextCacheReadCostMultiplier     float64                                     `json:"long_context_cache_read_cost_multiplier"`
+	DisableLongContextPricing              bool                                        `json:"disable_long_context_pricing"`
+	ModelMultipliers                       []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	EndpointCount                          int                                         `json:"endpoint_count"`
+	CreatedAt                              string                                      `json:"created_at"`
+	UpdatedAt                              string                                      `json:"updated_at"`
 }
 
 type CreateClaudeCredentialGroupInput struct {
-	Channel                       string                                      `json:"channel"`
-	Name                          string                                      `json:"name"`
-	Token                         string                                      `json:"token"`
-	ApiKey                        string                                      `json:"api_key"`
-	IsDefault                     bool                                        `json:"is_default"`
-	CostMultiplier                float64                                     `json:"cost_multiplier"`
-	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64                                     `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64                                     `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64                                     `json:"cache_read_cost_multiplier"`
-	ModelMultipliers              []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
+	Channel                                string                                      `json:"channel"`
+	Name                                   string                                      `json:"name"`
+	Token                                  string                                      `json:"token"`
+	ApiKey                                 string                                      `json:"api_key"`
+	IsDefault                              bool                                        `json:"is_default"`
+	CostMultiplier                         float64                                     `json:"cost_multiplier"`
+	InputCostMultiplier                    float64                                     `json:"input_cost_multiplier"`
+	OutputCostMultiplier                   float64                                     `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier            float64                                     `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h          float64                                     `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier                float64                                     `json:"cache_read_cost_multiplier"`
+	LongContextCostMultiplier              float64                                     `json:"long_context_cost_multiplier"`
+	LongContextInputCostMultiplier         float64                                     `json:"long_context_input_cost_multiplier"`
+	LongContextOutputCostMultiplier        float64                                     `json:"long_context_output_cost_multiplier"`
+	LongContextCacheCreationCostMultiplier float64                                     `json:"long_context_cache_creation_cost_multiplier"`
+	LongContextCacheReadCostMultiplier     float64                                     `json:"long_context_cache_read_cost_multiplier"`
+	DisableLongContextPricing              bool                                        `json:"disable_long_context_pricing"`
+	ModelMultipliers                       []claudestore.EndpointModelMultiplierRecord `json:"model_multipliers"`
 }
 
 // EndpointStorageStatus 端点存储状态
@@ -1184,21 +1196,27 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		return ClaudeCredentialGroupInfo{}
 	}
 	info := ClaudeCredentialGroupInfo{
-		ID:                            group.ID,
-		Channel:                       group.Channel,
-		Name:                          group.Name,
-		Token:                         group.Token,
-		ApiKey:                        group.ApiKey,
-		TokenMasked:                   maskToken(group.Token),
-		ApiKeyMasked:                  maskToken(group.ApiKey),
-		IsDefault:                     group.IsDefault,
-		CostMultiplier:                group.CostMultiplier,
-		InputCostMultiplier:           group.InputCostMultiplier,
-		OutputCostMultiplier:          group.OutputCostMultiplier,
-		CacheCreationCostMultiplier:   group.CacheCreationCostMultiplier,
-		CacheCreationCostMultiplier1h: group.CacheCreationCostMultiplier1h,
-		CacheReadCostMultiplier:       group.CacheReadCostMultiplier,
-		ModelMultipliers:              group.ModelMultipliers,
+		ID:                                     group.ID,
+		Channel:                                group.Channel,
+		Name:                                   group.Name,
+		Token:                                  group.Token,
+		ApiKey:                                 group.ApiKey,
+		TokenMasked:                            maskToken(group.Token),
+		ApiKeyMasked:                           maskToken(group.ApiKey),
+		IsDefault:                              group.IsDefault,
+		CostMultiplier:                         group.CostMultiplier,
+		InputCostMultiplier:                    group.InputCostMultiplier,
+		OutputCostMultiplier:                   group.OutputCostMultiplier,
+		CacheCreationCostMultiplier:            group.CacheCreationCostMultiplier,
+		CacheCreationCostMultiplier1h:          group.CacheCreationCostMultiplier1h,
+		CacheReadCostMultiplier:                group.CacheReadCostMultiplier,
+		LongContextCostMultiplier:              group.LongContextCostMultiplier,
+		LongContextInputCostMultiplier:         group.LongContextInputCostMultiplier,
+		LongContextOutputCostMultiplier:        group.LongContextOutputCostMultiplier,
+		LongContextCacheCreationCostMultiplier: group.LongContextCacheCreationCostMultiplier,
+		LongContextCacheReadCostMultiplier:     group.LongContextCacheReadCostMultiplier,
+		DisableLongContextPricing:              group.DisableLongContextPricing,
+		ModelMultipliers:                       group.ModelMultipliers,
 	}
 	if !group.CreatedAt.IsZero() {
 		info.CreatedAt = group.CreatedAt.Format("2006-01-02 15:04:05")
@@ -1216,18 +1234,24 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 
 func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) *claudestore.ClaudeCredentialGroupRecord {
 	return &claudestore.ClaudeCredentialGroupRecord{
-		Channel:                       input.Channel,
-		Name:                          input.Name,
-		Token:                         input.Token,
-		ApiKey:                        input.ApiKey,
-		IsDefault:                     input.IsDefault,
-		CostMultiplier:                input.CostMultiplier,
-		InputCostMultiplier:           input.InputCostMultiplier,
-		OutputCostMultiplier:          input.OutputCostMultiplier,
-		CacheCreationCostMultiplier:   input.CacheCreationCostMultiplier,
-		CacheCreationCostMultiplier1h: input.CacheCreationCostMultiplier1h,
-		CacheReadCostMultiplier:       input.CacheReadCostMultiplier,
-		ModelMultipliers:              input.ModelMultipliers,
+		Channel:                                input.Channel,
+		Name:                                   input.Name,
+		Token:                                  input.Token,
+		ApiKey:                                 input.ApiKey,
+		IsDefault:                              input.IsDefault,
+		CostMultiplier:                         input.CostMultiplier,
+		InputCostMultiplier:                    input.InputCostMultiplier,
+		OutputCostMultiplier:                   input.OutputCostMultiplier,
+		CacheCreationCostMultiplier:            input.CacheCreationCostMultiplier,
+		CacheCreationCostMultiplier1h:          input.CacheCreationCostMultiplier1h,
+		CacheReadCostMultiplier:                input.CacheReadCostMultiplier,
+		LongContextCostMultiplier:              input.LongContextCostMultiplier,
+		LongContextInputCostMultiplier:         input.LongContextInputCostMultiplier,
+		LongContextOutputCostMultiplier:        input.LongContextOutputCostMultiplier,
+		LongContextCacheCreationCostMultiplier: input.LongContextCacheCreationCostMultiplier,
+		LongContextCacheReadCostMultiplier:     input.LongContextCacheReadCostMultiplier,
+		DisableLongContextPricing:              input.DisableLongContextPricing,
+		ModelMultipliers:                       input.ModelMultipliers,
 	}
 }
 

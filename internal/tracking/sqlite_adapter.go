@@ -813,6 +813,31 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
 			description: "模型定价提供商标识字段（claude/codex）",
 		},
+		{
+			checkColumn: "long_context_threshold",
+			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN long_context_threshold INTEGER NOT NULL DEFAULT 0",
+			description: "Long context 原始输入 token 阈值",
+		},
+		{
+			checkColumn: "long_context_input_price",
+			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN long_context_input_price REAL NOT NULL DEFAULT 0",
+			description: "Long context 输入价格",
+		},
+		{
+			checkColumn: "long_context_cache_read_price",
+			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN long_context_cache_read_price REAL NOT NULL DEFAULT 0",
+			description: "Long context 缓存读取价格",
+		},
+		{
+			checkColumn: "long_context_cache_write_price",
+			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN long_context_cache_write_price REAL NOT NULL DEFAULT 0",
+			description: "Long context 缓存写入价格",
+		},
+		{
+			checkColumn: "long_context_output_price",
+			alterSQL:    "ALTER TABLE model_pricing ADD COLUMN long_context_output_price REAL NOT NULL DEFAULT 0",
+			description: "Long context 输出价格",
+		},
 	}
 	if err := runMigrations("model_pricing", modelPricingMigrations); err != nil {
 		return err
@@ -1064,6 +1089,12 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     cache_creation_cost_multiplier_1h REAL NOT NULL DEFAULT 1.0,
     cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
     model_multipliers TEXT NOT NULL DEFAULT '[]',
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -1089,6 +1120,27 @@ END;`
 	if !hasModelMultipliers {
 		if _, err := s.GetWriteDB().ExecContext(ctx, `ALTER TABLE claude_credential_groups ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return fmt.Errorf("failed to add claude_credential_groups.model_multipliers: %w", err)
+		}
+	}
+	for _, migration := range []struct {
+		column string
+		ddl    string
+	}{
+		{"long_context_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"long_context_input_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_input_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"long_context_output_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"long_context_cache_creation_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"long_context_cache_read_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"disable_long_context_pricing", `ALTER TABLE claude_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 0`},
+	} {
+		exists, err := s.columnExists(ctx, "claude_credential_groups", migration.column)
+		if err != nil {
+			return fmt.Errorf("failed to check claude_credential_groups.%s: %w", migration.column, err)
+		}
+		if !exists {
+			if _, err := s.GetWriteDB().ExecContext(ctx, migration.ddl); err != nil {
+				return fmt.Errorf("failed to add claude_credential_groups.%s: %w", migration.column, err)
+			}
 		}
 	}
 	return nil

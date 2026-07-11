@@ -116,6 +116,66 @@ func TestEnsureCodexChannelsSchemaAllowsDuplicateEndpointsAcrossCredentialGroups
 	}
 }
 
+func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexSchemaTestDB(t)
+	app := &App{}
+
+	if err := app.ensureCodexChannelsSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	channelID := insertCodexSchemaTestChannel(t, db, "billing-fields")
+	groupID := insertCodexSchemaTestCredentialGroup(t, db, channelID, "default", true)
+	var cacheCreationMultiplier, longContextMultiplier float64
+	var longContextInputMultiplier, longContextOutputMultiplier float64
+	var longContextCacheCreationMultiplier, longContextCacheReadMultiplier float64
+	var disableLongContext int
+	if err := db.QueryRowContext(ctx, `
+		SELECT cache_creation_cost_multiplier, long_context_cost_multiplier,
+			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
+			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
+			disable_long_context_pricing
+		FROM codex_credential_groups WHERE id = ?
+	`, groupID).Scan(&cacheCreationMultiplier, &longContextMultiplier,
+		&longContextInputMultiplier, &longContextOutputMultiplier,
+		&longContextCacheCreationMultiplier, &longContextCacheReadMultiplier,
+		&disableLongContext); err != nil {
+		t.Fatalf("read credential-group billing defaults: %v", err)
+	}
+	if cacheCreationMultiplier != 1 || longContextMultiplier != 1 ||
+		longContextInputMultiplier != 1 || longContextOutputMultiplier != 1 ||
+		longContextCacheCreationMultiplier != 1 || longContextCacheReadMultiplier != 1 || disableLongContext != 0 {
+		t.Fatalf("unexpected billing defaults: cache=%v long=%v disabled=%v", cacheCreationMultiplier, longContextMultiplier, disableLongContext)
+	}
+
+	groupStore := codexstore.NewSQLiteCodexCredentialGroupStore(db)
+	group, err := groupStore.GetByID(ctx, groupID)
+	if err != nil {
+		t.Fatalf("read credential group: %v", err)
+	}
+	group.CacheCreationCostMultiplier = 1.2
+	group.LongContextCostMultiplier = 1.5
+	group.LongContextInputCostMultiplier = 1.1
+	group.LongContextOutputCostMultiplier = 1.2
+	group.LongContextCacheCreationCostMultiplier = 1.3
+	group.LongContextCacheReadCostMultiplier = 1.4
+	group.DisableLongContextPricing = true
+	if err := groupStore.Update(ctx, group); err != nil {
+		t.Fatalf("update credential-group billing fields: %v", err)
+	}
+	updated, err := groupStore.GetByID(ctx, groupID)
+	if err != nil {
+		t.Fatalf("read updated credential group: %v", err)
+	}
+	if updated.CacheCreationCostMultiplier != 1.2 || updated.LongContextCostMultiplier != 1.5 ||
+		updated.LongContextInputCostMultiplier != 1.1 || updated.LongContextOutputCostMultiplier != 1.2 ||
+		updated.LongContextCacheCreationCostMultiplier != 1.3 || updated.LongContextCacheReadCostMultiplier != 1.4 ||
+		!updated.DisableLongContextPricing {
+		t.Fatalf("billing fields did not survive round trip: %+v", updated)
+	}
+}
+
 func TestEnsureCodexChannelsSchemaMigratesEndpointUniquenessToCredentialGroupScope(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexSchemaTestDB(t)

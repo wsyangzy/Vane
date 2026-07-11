@@ -17,12 +17,19 @@ type CodexCredentialGroupRecord struct {
 	ApiKey    string `json:"api_key,omitempty"`
 	IsDefault bool   `json:"is_default"`
 
-	CostMultiplier           float64                      `json:"cost_multiplier"`
-	InputCostMultiplier      float64                      `json:"input_cost_multiplier"`
-	OutputCostMultiplier     float64                      `json:"output_cost_multiplier"`
-	CacheReadCostMultiplier  float64                      `json:"cache_read_cost_multiplier"`
-	BillingOutputTokenSource string                       `json:"billing_output_token_source"`
-	ModelMultipliers         []CodexModelMultiplierRecord `json:"model_multipliers"`
+	CostMultiplier                         float64                      `json:"cost_multiplier"`
+	InputCostMultiplier                    float64                      `json:"input_cost_multiplier"`
+	OutputCostMultiplier                   float64                      `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier            float64                      `json:"cache_creation_cost_multiplier"`
+	CacheReadCostMultiplier                float64                      `json:"cache_read_cost_multiplier"`
+	LongContextCostMultiplier              float64                      `json:"long_context_cost_multiplier"`
+	LongContextInputCostMultiplier         float64                      `json:"long_context_input_cost_multiplier"`
+	LongContextOutputCostMultiplier        float64                      `json:"long_context_output_cost_multiplier"`
+	LongContextCacheCreationCostMultiplier float64                      `json:"long_context_cache_creation_cost_multiplier"`
+	LongContextCacheReadCostMultiplier     float64                      `json:"long_context_cache_read_cost_multiplier"`
+	DisableLongContextPricing              bool                         `json:"disable_long_context_pricing"`
+	BillingOutputTokenSource               string                       `json:"billing_output_token_source"`
+	ModelMultipliers                       []CodexModelMultiplierRecord `json:"model_multipliers"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -71,7 +78,11 @@ func (s *SQLiteCodexCredentialGroupStore) getQuerier() interface {
 
 const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
-	COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_read_cost_multiplier, 1.0),
+	COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_creation_cost_multiplier, 1.0),
+	COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(long_context_cost_multiplier, 1.0),
+	COALESCE(long_context_input_cost_multiplier, 1.0), COALESCE(long_context_output_cost_multiplier, 1.0),
+	COALESCE(long_context_cache_creation_cost_multiplier, 1.0), COALESCE(long_context_cache_read_cost_multiplier, 1.0),
+	COALESCE(disable_long_context_pricing, 0),
 	COALESCE(billing_output_token_source, 'output_tokens'), COALESCE(model_multipliers, '[]'),
 	COALESCE(created_at, ''), COALESCE(updated_at, '')`
 
@@ -98,14 +109,25 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 	result, err := s.getQuerier().ExecContext(ctx, `
 		INSERT INTO codex_credential_groups (
 			channel_id, name, api_key, is_default, cost_multiplier,
-			input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier,
+			input_cost_multiplier, output_cost_multiplier, cache_creation_cost_multiplier,
+			cache_read_cost_multiplier, long_context_cost_multiplier,
+			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
+			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
+			disable_long_context_pricing,
 			billing_output_token_source, model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.ChannelID, record.Name, record.ApiKey, boolToInt(record.IsDefault),
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
 		defaultCodexStoreMultiplier(record.OutputCostMultiplier),
+		defaultCodexStoreMultiplier(record.CacheCreationCostMultiplier),
 		defaultCodexStoreMultiplier(record.CacheReadCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextInputCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextOutputCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextCacheCreationCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextCacheReadCostMultiplier),
+		boolToInt(record.DisableLongContextPricing),
 		defaultBillingOutputTokenSource(record.BillingOutputTokenSource),
 		encodeCodexModelMultipliers(record.ModelMultipliers))
 	if err != nil {
@@ -196,13 +218,24 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 		UPDATE codex_credential_groups
 		SET name = ?, api_key = ?, is_default = ?, cost_multiplier = ?,
 			input_cost_multiplier = ?, output_cost_multiplier = ?,
-			cache_read_cost_multiplier = ?, billing_output_token_source = ?, model_multipliers = ?
+			cache_creation_cost_multiplier = ?, cache_read_cost_multiplier = ?,
+			long_context_cost_multiplier = ?, long_context_input_cost_multiplier = ?,
+			long_context_output_cost_multiplier = ?, long_context_cache_creation_cost_multiplier = ?,
+			long_context_cache_read_cost_multiplier = ?, disable_long_context_pricing = ?,
+			billing_output_token_source = ?, model_multipliers = ?
 		WHERE id = ?
 	`, record.Name, record.ApiKey, boolToInt(record.IsDefault),
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
 		defaultCodexStoreMultiplier(record.OutputCostMultiplier),
+		defaultCodexStoreMultiplier(record.CacheCreationCostMultiplier),
 		defaultCodexStoreMultiplier(record.CacheReadCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextInputCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextOutputCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextCacheCreationCostMultiplier),
+		defaultCodexStoreMultiplier(record.LongContextCacheReadCostMultiplier),
+		boolToInt(record.DisableLongContextPricing),
 		defaultBillingOutputTokenSource(record.BillingOutputTokenSource),
 		encodeCodexModelMultipliers(record.ModelMultipliers),
 		record.ID)
@@ -266,16 +299,23 @@ func scanCodexCredentialGroupRow(scanner interface {
 	Scan(dest ...interface{}) error
 }) (*CodexCredentialGroupRecord, error) {
 	var (
-		record                   CodexCredentialGroupRecord
-		isDefault                int
-		costMultiplier           float64
-		inputCostMultiplier      float64
-		outputCostMultiplier     float64
-		cacheReadCostMultiplier  float64
-		billingOutputTokenSource string
-		modelMultipliersJSON     string
-		createdAt                string
-		updatedAt                string
+		record                             CodexCredentialGroupRecord
+		isDefault                          int
+		costMultiplier                     float64
+		inputCostMultiplier                float64
+		outputCostMultiplier               float64
+		cacheCreationCostMultiplier        float64
+		cacheReadCostMultiplier            float64
+		longContextCostMultiplier          float64
+		longContextInputMultiplier         float64
+		longContextOutputMultiplier        float64
+		longContextCacheCreationMultiplier float64
+		longContextCacheReadMultiplier     float64
+		disableLongContextPricing          int
+		billingOutputTokenSource           string
+		modelMultipliersJSON               string
+		createdAt                          string
+		updatedAt                          string
 	)
 	if err := scanner.Scan(
 		&record.ID,
@@ -286,7 +326,14 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&costMultiplier,
 		&inputCostMultiplier,
 		&outputCostMultiplier,
+		&cacheCreationCostMultiplier,
 		&cacheReadCostMultiplier,
+		&longContextCostMultiplier,
+		&longContextInputMultiplier,
+		&longContextOutputMultiplier,
+		&longContextCacheCreationMultiplier,
+		&longContextCacheReadMultiplier,
+		&disableLongContextPricing,
 		&billingOutputTokenSource,
 		&modelMultipliersJSON,
 		&createdAt,
@@ -301,7 +348,14 @@ func scanCodexCredentialGroupRow(scanner interface {
 	record.CostMultiplier = defaultCodexStoreMultiplier(costMultiplier)
 	record.InputCostMultiplier = defaultCodexStoreMultiplier(inputCostMultiplier)
 	record.OutputCostMultiplier = defaultCodexStoreMultiplier(outputCostMultiplier)
+	record.CacheCreationCostMultiplier = defaultCodexStoreMultiplier(cacheCreationCostMultiplier)
 	record.CacheReadCostMultiplier = defaultCodexStoreMultiplier(cacheReadCostMultiplier)
+	record.LongContextCostMultiplier = defaultCodexStoreMultiplier(longContextCostMultiplier)
+	record.LongContextInputCostMultiplier = defaultCodexStoreMultiplier(longContextInputMultiplier)
+	record.LongContextOutputCostMultiplier = defaultCodexStoreMultiplier(longContextOutputMultiplier)
+	record.LongContextCacheCreationCostMultiplier = defaultCodexStoreMultiplier(longContextCacheCreationMultiplier)
+	record.LongContextCacheReadCostMultiplier = defaultCodexStoreMultiplier(longContextCacheReadMultiplier)
+	record.DisableLongContextPricing = disableLongContextPricing != 0
 	record.BillingOutputTokenSource = defaultBillingOutputTokenSource(billingOutputTokenSource)
 	record.ModelMultipliers = decodeCodexModelMultipliers(modelMultipliersJSON)
 	record.CreatedAt = parseSQLiteDateTime(createdAt)

@@ -3,6 +3,8 @@ package tracking
 import (
 	"math"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // TestCalculateCost_Basic 测试基础成本计算
@@ -62,6 +64,155 @@ func TestCalculateCost_InputIncludesCacheRead(t *testing.T) {
 	if math.Abs(result.TotalCost-0.038590) > 0.000001 {
 		t.Fatalf("Expected TotalCost $0.038590, got $%.6f", result.TotalCost)
 	}
+}
+
+func TestCalculateCost_InputIncludesCacheReadAndWrite(t *testing.T) {
+	pricing := &ModelPricing{
+		Input:         10,
+		CacheCreation: 12.5,
+		CacheRead:     1,
+	}
+	usage := &TokenUsage{
+		InputTokens:            1_000_000,
+		CacheCreationTokens:    300_000,
+		CacheReadTokens:        200_000,
+		InputIncludesCacheRead: true,
+	}
+
+	result := CalculateCost(usage, pricing, nil)
+
+	if math.Abs(result.InputCost-5.0) > 0.000001 {
+		t.Fatalf("expected ordinary input cost $5.000000 after cache read/write deduction, got $%.6f", result.InputCost)
+	}
+	if math.Abs(result.CacheCreationCost-3.75) > 0.000001 {
+		t.Fatalf("expected cache write cost $3.750000, got $%.6f", result.CacheCreationCost)
+	}
+	if math.Abs(result.CacheReadCost-0.2) > 0.000001 {
+		t.Fatalf("expected cache read cost $0.200000, got $%.6f", result.CacheReadCost)
+	}
+}
+
+func TestCalculateCost_LongContextThreshold(t *testing.T) {
+	var pricing ModelPricing
+	if err := yaml.Unmarshal([]byte(`
+input: 2
+output: 4
+cache_creation: 2.5
+cache_read: 0.2
+long_context_threshold: 1000000
+long_context_input_price: 10
+long_context_output_price: 20
+long_context_cache_write_price: 12.5
+long_context_cache_read_price: 1
+`), &pricing); err != nil {
+		t.Fatalf("decode long-context pricing: %v", err)
+	}
+
+	t.Run("below threshold uses standard prices", func(t *testing.T) {
+		usage := &TokenUsage{
+			InputTokens:            900_000,
+			OutputTokens:           50_000,
+			CacheCreationTokens:    200_000,
+			CacheReadTokens:        100_000,
+			InputIncludesCacheRead: true,
+		}
+
+		result := CalculateCost(usage, &pricing, nil)
+
+		if math.Abs(result.InputCost-1.2) > 0.000001 ||
+			math.Abs(result.OutputCost-0.2) > 0.000001 ||
+			math.Abs(result.CacheCreationCost-0.5) > 0.000001 ||
+			math.Abs(result.CacheReadCost-0.02) > 0.000001 {
+			t.Fatalf("expected standard prices below threshold, got %+v", result)
+		}
+	})
+
+	t.Run("threshold itself still uses standard prices", func(t *testing.T) {
+		usage := &TokenUsage{
+			InputTokens:  1_000_000,
+			OutputTokens: 50_000,
+		}
+
+		result := CalculateCost(usage, &pricing, nil)
+
+		if math.Abs(result.InputCost-2.0) > 0.000001 || math.Abs(result.OutputCost-0.2) > 0.000001 {
+			t.Fatalf("expected standard prices at the strict threshold, got %+v", result)
+		}
+	})
+
+	t.Run("above threshold uses long-context prices and multiplier", func(t *testing.T) {
+		usage := &TokenUsage{
+			InputTokens:            1_000_001,
+			OutputTokens:           50_000,
+			CacheCreationTokens:    200_000,
+			CacheReadTokens:        100_000,
+			InputIncludesCacheRead: true,
+		}
+		multiplier := &EndpointMultiplier{
+			CostMultiplier:                         0.5,
+			InputCostMultiplier:                    2,
+			OutputCostMultiplier:                   3,
+			CacheCreationCostMultiplier:            4,
+			CacheReadCostMultiplier:                5,
+			ModelCostMultiplier:                    1.5,
+			ModelInputCostMultiplier:               1.25,
+			ModelOutputCostMultiplier:              1.2,
+			ModelCacheReadCostMultiplier:           1.1,
+			LongContextCostMultiplier:              2,
+			LongContextInputCostMultiplier:         1.1,
+			LongContextOutputCostMultiplier:        1.2,
+			LongContextCacheCreationCostMultiplier: 1.3,
+			LongContextCacheReadCostMultiplier:     1.4,
+		}
+
+		result := CalculateCost(usage, &pricing, multiplier)
+
+		if math.Abs(result.InputCost-28.87504125) > 0.000001 {
+			t.Fatalf("expected long-context input cost $26.2500375, got $%.6f", result.InputCost)
+		}
+		if math.Abs(result.OutputCost-6.48) > 0.000001 {
+			t.Fatalf("expected long-context output cost $5.400000, got $%.6f", result.OutputCost)
+		}
+		if math.Abs(result.CacheCreationCost-19.5) > 0.000001 {
+			t.Fatalf("expected long-context cache write cost $15.000000, got $%.6f", result.CacheCreationCost)
+		}
+		if math.Abs(result.CacheReadCost-1.155) > 0.000001 {
+			t.Fatalf("expected long-context cache read cost $0.825000, got $%.6f", result.CacheReadCost)
+		}
+		if math.Abs(result.TotalCost-56.01004125) > 0.000001 {
+			t.Fatalf("expected long-context total cost $47.4750375, got $%.6f", result.TotalCost)
+		}
+	})
+
+	t.Run("disabled long-context pricing keeps standard prices", func(t *testing.T) {
+		usage := &TokenUsage{InputTokens: 1_000_001, OutputTokens: 50_000}
+		multiplier := &EndpointMultiplier{
+			CostMultiplier:            1,
+			InputCostMultiplier:       1,
+			OutputCostMultiplier:      1,
+			LongContextCostMultiplier: 3,
+			DisableLongContextPricing: true,
+		}
+
+		result := CalculateCost(usage, &pricing, multiplier)
+
+		if math.Abs(result.InputCost-2.000002) > 0.000001 || math.Abs(result.OutputCost-0.2) > 0.000001 {
+			t.Fatalf("expected standard prices when long-context pricing is disabled, got %+v", result)
+		}
+	})
+
+	t.Run("incomplete long-context prices fall back to standard prices", func(t *testing.T) {
+		incomplete := pricing
+		incomplete.LongContextOutputPrice = 0
+		usage := &TokenUsage{InputTokens: 1_000_001, OutputTokens: 50_000}
+		multiplier := &EndpointMultiplier{LongContextCostMultiplier: 4}
+
+		result := CalculateCost(usage, &incomplete, multiplier)
+
+		if math.Abs(result.InputCost-2.000002) > 0.000001 || math.Abs(result.OutputCost-0.2) > 0.000001 {
+			t.Fatalf("expected standard-price fallback for incomplete long-context config, got %+v", result)
+		}
+	})
 }
 
 func TestDisplayTotalTokens_CodexRawAndLegacyInput(t *testing.T) {

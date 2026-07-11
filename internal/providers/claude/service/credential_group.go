@@ -49,15 +49,20 @@ func (s *ClaudeCredentialGroupService) EnsureDefaultGroup(ctx context.Context, c
 	}
 
 	record := &store.ClaudeCredentialGroupRecord{
-		Channel:                       channel,
-		Name:                          DefaultClaudeCredentialGroupName,
-		IsDefault:                     true,
-		CostMultiplier:                1.0,
-		InputCostMultiplier:           1.0,
-		OutputCostMultiplier:          1.0,
-		CacheCreationCostMultiplier:   1.0,
-		CacheCreationCostMultiplier1h: 1.0,
-		CacheReadCostMultiplier:       1.0,
+		Channel:                                channel,
+		Name:                                   DefaultClaudeCredentialGroupName,
+		IsDefault:                              true,
+		CostMultiplier:                         1.0,
+		InputCostMultiplier:                    1.0,
+		OutputCostMultiplier:                   1.0,
+		CacheCreationCostMultiplier:            1.0,
+		CacheCreationCostMultiplier1h:          1.0,
+		CacheReadCostMultiplier:                1.0,
+		LongContextCostMultiplier:              1.0,
+		LongContextInputCostMultiplier:         1.0,
+		LongContextOutputCostMultiplier:        1.0,
+		LongContextCacheCreationCostMultiplier: 1.0,
+		LongContextCacheReadCostMultiplier:     1.0,
 	}
 
 	if s.endpointStore != nil {
@@ -196,6 +201,11 @@ func (s *ClaudeCredentialGroupService) normalizeAndValidate(ctx context.Context,
 	record.CacheCreationCostMultiplier = normalizePositiveMultiplier(record.CacheCreationCostMultiplier)
 	record.CacheCreationCostMultiplier1h = normalizePositiveMultiplier(record.CacheCreationCostMultiplier1h)
 	record.CacheReadCostMultiplier = normalizePositiveMultiplier(record.CacheReadCostMultiplier)
+	record.LongContextCostMultiplier = normalizePositiveMultiplier(record.LongContextCostMultiplier)
+	record.LongContextInputCostMultiplier = normalizePositiveMultiplier(record.LongContextInputCostMultiplier)
+	record.LongContextOutputCostMultiplier = normalizePositiveMultiplier(record.LongContextOutputCostMultiplier)
+	record.LongContextCacheCreationCostMultiplier = normalizePositiveMultiplier(record.LongContextCacheCreationCostMultiplier)
+	record.LongContextCacheReadCostMultiplier = normalizePositiveMultiplier(record.LongContextCacheReadCostMultiplier)
 	modelMultipliers, err := normalizeEndpointModelMultipliers(record.ModelMultipliers)
 	if err != nil {
 		return err

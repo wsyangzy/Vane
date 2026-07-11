@@ -1028,6 +1028,11 @@ export namespace main {
 	    cache_creation_price_5m: number;
 	    cache_creation_price_1h: number;
 	    cache_read_price: number;
+	    long_context_threshold: number;
+	    long_context_input_price: number;
+	    long_context_cache_read_price: number;
+	    long_context_cache_write_price: number;
+	    long_context_output_price: number;
 	    is_default: boolean;
 
 	    static createFrom(source: any = {}) {
@@ -1044,6 +1049,11 @@ export namespace main {
 	        this.cache_creation_price_5m = source["cache_creation_price_5m"];
 	        this.cache_creation_price_1h = source["cache_creation_price_1h"];
 	        this.cache_read_price = source["cache_read_price"];
+	        this.long_context_threshold = source["long_context_threshold"];
+	        this.long_context_input_price = source["long_context_input_price"];
+	        this.long_context_cache_read_price = source["long_context_cache_read_price"];
+	        this.long_context_cache_write_price = source["long_context_cache_write_price"];
+	        this.long_context_output_price = source["long_context_output_price"];
 	        this.is_default = source["is_default"];
 	    }
 	}
@@ -1387,6 +1397,11 @@ export namespace main {
 	    cache_creation_price_5m: number;
 	    cache_creation_price_1h: number;
 	    cache_read_price: number;
+	    long_context_threshold: number;
+	    long_context_input_price: number;
+	    long_context_cache_read_price: number;
+	    long_context_cache_write_price: number;
+	    long_context_output_price: number;
 	    is_default: boolean;
 	    created_at: string;
 	    updated_at: string;
@@ -1406,6 +1421,11 @@ export namespace main {
 	        this.cache_creation_price_5m = source["cache_creation_price_5m"];
 	        this.cache_creation_price_1h = source["cache_creation_price_1h"];
 	        this.cache_read_price = source["cache_read_price"];
+	        this.long_context_threshold = source["long_context_threshold"];
+	        this.long_context_input_price = source["long_context_input_price"];
+	        this.long_context_cache_read_price = source["long_context_cache_read_price"];
+	        this.long_context_cache_write_price = source["long_context_cache_write_price"];
+	        this.long_context_output_price = source["long_context_output_price"];
 	        this.is_default = source["is_default"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];

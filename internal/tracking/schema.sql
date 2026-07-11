@@ -308,6 +308,12 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     cache_creation_cost_multiplier_1h REAL NOT NULL DEFAULT 1.0,
     cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     UNIQUE(channel, name)
@@ -403,7 +409,14 @@ CREATE TABLE IF NOT EXISTS codex_credential_groups (
     cost_multiplier REAL NOT NULL DEFAULT 1.0,
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
     billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
     model_multipliers TEXT NOT NULL DEFAULT '[]', -- 按模型附加倍率 JSON
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -484,6 +497,11 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     cache_creation_price_5m REAL DEFAULT 3.75,      -- 5分钟缓存创建价格 (通常为 input * 1.25)
     cache_creation_price_1h REAL DEFAULT 6.0,       -- 1小时缓存创建价格 (通常为 input * 2.0)
     cache_read_price REAL DEFAULT 0.30,             -- 缓存读取价格 (通常为 input * 0.1)
+    long_context_threshold INTEGER NOT NULL DEFAULT 0,         -- Long context 原始输入 token 阈值，0 表示禁用
+    long_context_input_price REAL NOT NULL DEFAULT 0,          -- Long context 输入价格
+    long_context_cache_read_price REAL NOT NULL DEFAULT 0,     -- Long context 缓存读取价格
+    long_context_cache_write_price REAL NOT NULL DEFAULT 0,    -- Long context 缓存写入价格
+    long_context_output_price REAL NOT NULL DEFAULT 0,         -- Long context 输出价格
 
     -- ========== 模型元信息 ==========
     display_name TEXT,                              -- 显示名称（用于前端展示）

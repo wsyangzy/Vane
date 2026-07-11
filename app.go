@@ -1179,6 +1179,12 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 				groupCacheCreationMultiplier := 1.0
 				groupCacheCreation1hMultiplier := 1.0
 				groupCacheReadMultiplier := 1.0
+				groupLongContextMultiplier := 1.0
+				groupLongContextInputMultiplier := 1.0
+				groupLongContextOutputMultiplier := 1.0
+				groupLongContextCacheCreationMultiplier := 1.0
+				groupLongContextCacheReadMultiplier := 1.0
+				groupDisableLongContextPricing := false
 				groupModelMultipliers := []tracking.ModelMultiplier(nil)
 				if group != nil {
 					groupName = group.Name
@@ -1188,19 +1194,31 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					groupCacheCreationMultiplier = defaultPositiveMultiplier(group.CacheCreationCostMultiplier)
 					groupCacheCreation1hMultiplier = defaultPositiveMultiplier(group.CacheCreationCostMultiplier1h)
 					groupCacheReadMultiplier = defaultPositiveMultiplier(group.CacheReadCostMultiplier)
+					groupLongContextMultiplier = defaultPositiveMultiplier(group.LongContextCostMultiplier)
+					groupLongContextInputMultiplier = defaultPositiveMultiplier(group.LongContextInputCostMultiplier)
+					groupLongContextOutputMultiplier = defaultPositiveMultiplier(group.LongContextOutputCostMultiplier)
+					groupLongContextCacheCreationMultiplier = defaultPositiveMultiplier(group.LongContextCacheCreationCostMultiplier)
+					groupLongContextCacheReadMultiplier = defaultPositiveMultiplier(group.LongContextCacheReadCostMultiplier)
+					groupDisableLongContextPricing = group.DisableLongContextPricing
 					groupModelMultipliers = endpointModelMultipliersToTracking(group.ModelMultipliers)
 				}
 				if groupName == "" && ep.CredentialGroupID > 0 {
 					groupName = fmt.Sprintf("g%d", ep.CredentialGroupID)
 				}
 				multiplier := tracking.EndpointMultiplier{
-					CostMultiplier:                groupCostMultiplier * defaultPositiveMultiplier(ep.CostMultiplier),
-					InputCostMultiplier:           groupInputMultiplier * defaultPositiveMultiplier(ep.InputCostMultiplier),
-					OutputCostMultiplier:          groupOutputMultiplier * defaultPositiveMultiplier(ep.OutputCostMultiplier),
-					CacheCreationCostMultiplier:   groupCacheCreationMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier),
-					CacheCreationCostMultiplier1h: groupCacheCreation1hMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier1h),
-					CacheReadCostMultiplier:       groupCacheReadMultiplier * defaultPositiveMultiplier(ep.CacheReadCostMultiplier),
-					ModelMultipliers:              mergeTrackingModelMultipliers(endpointModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
+					CostMultiplier:                         groupCostMultiplier * defaultPositiveMultiplier(ep.CostMultiplier),
+					InputCostMultiplier:                    groupInputMultiplier * defaultPositiveMultiplier(ep.InputCostMultiplier),
+					OutputCostMultiplier:                   groupOutputMultiplier * defaultPositiveMultiplier(ep.OutputCostMultiplier),
+					CacheCreationCostMultiplier:            groupCacheCreationMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier),
+					CacheCreationCostMultiplier1h:          groupCacheCreation1hMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier1h),
+					CacheReadCostMultiplier:                groupCacheReadMultiplier * defaultPositiveMultiplier(ep.CacheReadCostMultiplier),
+					LongContextCostMultiplier:              groupLongContextMultiplier,
+					LongContextInputCostMultiplier:         groupLongContextInputMultiplier,
+					LongContextOutputCostMultiplier:        groupLongContextOutputMultiplier,
+					LongContextCacheCreationCostMultiplier: groupLongContextCacheCreationMultiplier,
+					LongContextCacheReadCostMultiplier:     groupLongContextCacheReadMultiplier,
+					DisableLongContextPricing:              groupDisableLongContextPricing,
+					ModelMultipliers:                       mergeTrackingModelMultipliers(endpointModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
 				}
 				keys := []string{
 					tracking.EndpointMultiplierGroupKey(ep.Channel, groupName, ep.Name),
@@ -1262,7 +1280,14 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					groupCostMultiplier := 1.0
 					groupInputMultiplier := 1.0
 					groupOutputMultiplier := 1.0
+					groupCacheCreationMultiplier := 1.0
 					groupCacheReadMultiplier := 1.0
+					groupLongContextMultiplier := 1.0
+					groupLongContextInputMultiplier := 1.0
+					groupLongContextOutputMultiplier := 1.0
+					groupLongContextCacheCreationMultiplier := 1.0
+					groupLongContextCacheReadMultiplier := 1.0
+					groupDisableLongContextPricing := false
 					groupModelMultipliers := []tracking.ModelMultiplier(nil)
 					billingOutputTokenSource := "output_tokens"
 					if group != nil {
@@ -1270,7 +1295,14 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						groupCostMultiplier = defaultPositiveMultiplier(group.CostMultiplier)
 						groupInputMultiplier = defaultPositiveMultiplier(group.InputCostMultiplier)
 						groupOutputMultiplier = defaultPositiveMultiplier(group.OutputCostMultiplier)
+						groupCacheCreationMultiplier = defaultPositiveMultiplier(group.CacheCreationCostMultiplier)
 						groupCacheReadMultiplier = defaultPositiveMultiplier(group.CacheReadCostMultiplier)
+						groupLongContextMultiplier = defaultPositiveMultiplier(group.LongContextCostMultiplier)
+						groupLongContextInputMultiplier = defaultPositiveMultiplier(group.LongContextInputCostMultiplier)
+						groupLongContextOutputMultiplier = defaultPositiveMultiplier(group.LongContextOutputCostMultiplier)
+						groupLongContextCacheCreationMultiplier = defaultPositiveMultiplier(group.LongContextCacheCreationCostMultiplier)
+						groupLongContextCacheReadMultiplier = defaultPositiveMultiplier(group.LongContextCacheReadCostMultiplier)
+						groupDisableLongContextPricing = group.DisableLongContextPricing
 						groupModelMultipliers = codexModelMultipliersToTracking(group.ModelMultipliers)
 						billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(group.BillingOutputTokenSource)
 					}
@@ -1280,14 +1312,20 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					// Codex 的 API Key 与计费配置归属凭证分组；端点只表示 base_url 线路配置。
 					// 历史端点倍率字段保留为兼容存储，但不再参与运行时计费。
 					multiplier := tracking.EndpointMultiplier{
-						CostMultiplier:                groupCostMultiplier,
-						InputCostMultiplier:           groupInputMultiplier,
-						OutputCostMultiplier:          groupOutputMultiplier,
-						CacheCreationCostMultiplier:   1.0,
-						CacheCreationCostMultiplier1h: 1.0,
-						CacheReadCostMultiplier:       groupCacheReadMultiplier,
-						BillingOutputTokenSource:      billingOutputTokenSource,
-						ModelMultipliers:              mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
+						CostMultiplier:                         groupCostMultiplier,
+						InputCostMultiplier:                    groupInputMultiplier,
+						OutputCostMultiplier:                   groupOutputMultiplier,
+						CacheCreationCostMultiplier:            groupCacheCreationMultiplier,
+						CacheCreationCostMultiplier1h:          1.0,
+						CacheReadCostMultiplier:                groupCacheReadMultiplier,
+						LongContextCostMultiplier:              groupLongContextMultiplier,
+						LongContextInputCostMultiplier:         groupLongContextInputMultiplier,
+						LongContextOutputCostMultiplier:        groupLongContextOutputMultiplier,
+						LongContextCacheCreationCostMultiplier: groupLongContextCacheCreationMultiplier,
+						LongContextCacheReadCostMultiplier:     groupLongContextCacheReadMultiplier,
+						DisableLongContextPricing:              groupDisableLongContextPricing,
+						BillingOutputTokenSource:               billingOutputTokenSource,
+						ModelMultipliers:                       mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
 					}
 					legacyKey := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
 					groupKey := tracking.EndpointMultiplierGroupKey(ch.Name, groupName, ep.Name)

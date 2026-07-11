@@ -57,7 +57,7 @@ const getExplicitModelMultipliers = (input, normalizer = normalizeModelMultiplie
   return undefined;
 };
 
-const mapClaudeCredentialGroup = (group = {}) => ({
+export const mapClaudeCredentialGroup = (group = {}) => ({
   id: group.id,
   channel: group.channel || '',
   name: group.name || '',
@@ -72,13 +72,19 @@ const mapClaudeCredentialGroup = (group = {}) => ({
   cacheCreationCostMultiplier: group.cache_creation_cost_multiplier ?? group.cacheCreationCostMultiplier ?? 1.0,
   cacheCreationCostMultiplier1h: group.cache_creation_cost_multiplier_1h ?? group.cacheCreationCostMultiplier1h ?? 1.0,
   cacheReadCostMultiplier: group.cache_read_cost_multiplier ?? group.cacheReadCostMultiplier ?? 1.0,
+  longContextCostMultiplier: group.long_context_cost_multiplier ?? group.longContextCostMultiplier ?? 1.0,
+  longContextInputCostMultiplier: group.long_context_input_cost_multiplier ?? group.longContextInputCostMultiplier ?? 1.0,
+  longContextOutputCostMultiplier: group.long_context_output_cost_multiplier ?? group.longContextOutputCostMultiplier ?? 1.0,
+  longContextCacheCreationCostMultiplier: group.long_context_cache_creation_cost_multiplier ?? group.longContextCacheCreationCostMultiplier ?? 1.0,
+  longContextCacheReadCostMultiplier: group.long_context_cache_read_cost_multiplier ?? group.longContextCacheReadCostMultiplier ?? 1.0,
+  disableLongContextPricing: Boolean(group.disable_long_context_pricing ?? group.disableLongContextPricing),
   modelMultipliers: normalizeModelMultipliers(group.model_multipliers || group.modelMultipliers),
   endpointCount: group.endpoint_count ?? group.endpointCount ?? 0,
   createdAt: group.created_at || group.createdAt || '',
   updatedAt: group.updated_at || group.updatedAt || ''
 });
 
-const buildClaudeCredentialGroupPayload = (input = {}) => {
+export const buildClaudeCredentialGroupPayload = (input = {}) => {
   const payload = {
     channel: (input.channel || '').trim(),
     name: (input.name || '').trim(),
@@ -90,7 +96,13 @@ const buildClaudeCredentialGroupPayload = (input = {}) => {
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
     cache_creation_cost_multiplier: parseEndpointMultiplier(input.cacheCreationCostMultiplier),
     cache_creation_cost_multiplier_1h: parseEndpointMultiplier(input.cacheCreationCostMultiplier1h),
-    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier)
+    cache_read_cost_multiplier: parseEndpointMultiplier(input.cacheReadCostMultiplier),
+    long_context_cost_multiplier: parseEndpointMultiplier(input.longContextCostMultiplier),
+    long_context_input_cost_multiplier: parseEndpointMultiplier(input.longContextInputCostMultiplier),
+    long_context_output_cost_multiplier: parseEndpointMultiplier(input.longContextOutputCostMultiplier),
+    long_context_cache_creation_cost_multiplier: parseEndpointMultiplier(input.longContextCacheCreationCostMultiplier),
+    long_context_cache_read_cost_multiplier: parseEndpointMultiplier(input.longContextCacheReadCostMultiplier),
+    disable_long_context_pricing: Boolean(input.disableLongContextPricing)
   };
   const modelMultipliers = getExplicitModelMultipliers(input);
   if (modelMultipliers !== undefined) {
@@ -1595,6 +1607,48 @@ export const getEndpointsByChannel = async (channel) => {
 // 模型定价管理 API (SQLite)
 // ============================================
 
+export const mapModelPricingRecord = (record = {}) => ({
+  id: record.id,
+  modelName: record.model_name,
+  provider: record.provider || 'claude',
+  displayName: record.display_name,
+  description: record.description,
+  inputPrice: record.input_price,
+  outputPrice: record.output_price,
+  cacheCreationPrice5m: record.cache_creation_price_5m,
+  cacheCreationPrice1h: record.cache_creation_price_1h,
+  cacheReadPrice: record.cache_read_price,
+  longContextThreshold: record.long_context_threshold ?? 0,
+  longContextInputPrice: record.long_context_input_price ?? 0,
+  longContextCacheReadPrice: record.long_context_cache_read_price ?? 0,
+  longContextCacheWritePrice: record.long_context_cache_write_price ?? 0,
+  longContextOutputPrice: record.long_context_output_price ?? 0,
+  isDefault: record.is_default,
+  createdAt: record.created_at,
+  updatedAt: record.updated_at
+});
+
+export const buildModelPricingPayload = (input = {}, fallbackModelName = '') => {
+  const threshold = Number(input.longContextThreshold);
+  return {
+    model_name: input.modelName || fallbackModelName,
+    provider: input.provider || 'claude',
+    display_name: input.displayName || '',
+    description: input.description || '',
+    input_price: parseFloat(input.inputPrice) || 3.0,
+    output_price: parseFloat(input.outputPrice) || 15.0,
+    cache_creation_price_5m: parseFloat(input.cacheCreationPrice5m) || 0,
+    cache_creation_price_1h: parseFloat(input.cacheCreationPrice1h) || 0,
+    cache_read_price: parseFloat(input.cacheReadPrice) || 0,
+    long_context_threshold: Number.isSafeInteger(threshold) ? threshold : 0,
+    long_context_input_price: parseFloat(input.longContextInputPrice) || 0,
+    long_context_cache_read_price: parseFloat(input.longContextCacheReadPrice) || 0,
+    long_context_cache_write_price: parseFloat(input.longContextCacheWritePrice) || 0,
+    long_context_output_price: parseFloat(input.longContextOutputPrice) || 0,
+    is_default: input.isDefault || false
+  };
+};
+
 /**
  * 获取模型定价存储状态
  * @returns {Promise<Object>} - {enabled, totalCount, hasDefault}
@@ -1620,21 +1674,7 @@ export const getModelPricings = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   const records = await WailsApp.GetModelPricings();
-  return (records || []).map(r => ({
-    id: r.id,
-    modelName: r.model_name,
-    provider: r.provider || 'claude',
-    displayName: r.display_name,
-    description: r.description,
-    inputPrice: r.input_price,
-    outputPrice: r.output_price,
-    cacheCreationPrice5m: r.cache_creation_price_5m,
-    cacheCreationPrice1h: r.cache_creation_price_1h,
-    cacheReadPrice: r.cache_read_price,
-    isDefault: r.is_default,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at
-  }));
+  return (records || []).map(mapModelPricingRecord);
 };
 
 /**
@@ -1647,21 +1687,7 @@ export const getModelPricingsByProvider = async (provider) => {
   if (!WailsApp) throw new Error('Wails not available');
 
   const records = await WailsApp.GetModelPricingsByProvider(provider || 'claude');
-  return (records || []).map(r => ({
-    id: r.id,
-    modelName: r.model_name,
-    provider: r.provider || 'claude',
-    displayName: r.display_name,
-    description: r.description,
-    inputPrice: r.input_price,
-    outputPrice: r.output_price,
-    cacheCreationPrice5m: r.cache_creation_price_5m,
-    cacheCreationPrice1h: r.cache_creation_price_1h,
-    cacheReadPrice: r.cache_read_price,
-    isDefault: r.is_default,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at
-  }));
+  return (records || []).map(mapModelPricingRecord);
 };
 
 /**
@@ -1674,21 +1700,7 @@ export const getModelPricing = async (modelName) => {
   if (!WailsApp) throw new Error('Wails not available');
 
   const r = await WailsApp.GetModelPricing(modelName);
-  return {
-    id: r.id,
-    modelName: r.model_name,
-    provider: r.provider || 'claude',
-    displayName: r.display_name,
-    description: r.description,
-    inputPrice: r.input_price,
-    outputPrice: r.output_price,
-    cacheCreationPrice5m: r.cache_creation_price_5m,
-    cacheCreationPrice1h: r.cache_creation_price_1h,
-    cacheReadPrice: r.cache_read_price,
-    isDefault: r.is_default,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at
-  };
+  return mapModelPricingRecord(r);
 };
 
 /**
@@ -1700,19 +1712,7 @@ export const createModelPricing = async (input) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  // 转换为后端期望的格式
-  const record = {
-    model_name: input.modelName || '',
-    provider: input.provider || 'claude',
-    display_name: input.displayName || '',
-    description: input.description || '',
-    input_price: parseFloat(input.inputPrice) || 3.0,
-    output_price: parseFloat(input.outputPrice) || 15.0,
-    cache_creation_price_5m: parseFloat(input.cacheCreationPrice5m) || 0,
-    cache_creation_price_1h: parseFloat(input.cacheCreationPrice1h) || 0,
-    cache_read_price: parseFloat(input.cacheReadPrice) || 0,
-    is_default: input.isDefault || false
-  };
+  const record = buildModelPricingPayload(input);
 
   await WailsApp.CreateModelPricing(record);
   return { success: true };
@@ -1728,19 +1728,7 @@ export const updateModelPricing = async (modelName, input) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  // 转换为后端期望的格式
-  const record = {
-    model_name: input.modelName || modelName,
-    provider: input.provider || 'claude',
-    display_name: input.displayName || '',
-    description: input.description || '',
-    input_price: parseFloat(input.inputPrice) || 3.0,
-    output_price: parseFloat(input.outputPrice) || 15.0,
-    cache_creation_price_5m: parseFloat(input.cacheCreationPrice5m) || 0,
-    cache_creation_price_1h: parseFloat(input.cacheCreationPrice1h) || 0,
-    cache_read_price: parseFloat(input.cacheReadPrice) || 0,
-    is_default: input.isDefault || false
-  };
+  const record = buildModelPricingPayload(input, modelName);
 
   await WailsApp.UpdateModelPricing(modelName, record);
   return { success: true };
@@ -1943,7 +1931,7 @@ const mapCodexEndpoint = (endpoint) => ({
   last_check: endpoint.last_check || endpoint.lastCheck || endpoint.LastCheck || ''
 });
 
-const mapCodexCredentialGroup = (group) => ({
+export const mapCodexCredentialGroup = (group) => ({
   id: group.id,
   channelId: group.channel_id,
   channel_id: group.channel_id,
@@ -1955,7 +1943,14 @@ const mapCodexCredentialGroup = (group) => ({
   costMultiplier: group.costMultiplier ?? 1.0,
   inputCostMultiplier: group.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: group.outputCostMultiplier ?? 1.0,
+  cacheCreationCostMultiplier: group.cacheCreationCostMultiplier ?? 1.0,
   cacheReadCostMultiplier: group.cacheReadCostMultiplier ?? 1.0,
+  longContextCostMultiplier: group.longContextCostMultiplier ?? 1.0,
+  longContextInputCostMultiplier: group.longContextInputCostMultiplier ?? 1.0,
+  longContextOutputCostMultiplier: group.longContextOutputCostMultiplier ?? 1.0,
+  longContextCacheCreationCostMultiplier: group.longContextCacheCreationCostMultiplier ?? 1.0,
+  longContextCacheReadCostMultiplier: group.longContextCacheReadCostMultiplier ?? 1.0,
+  disableLongContextPricing: Boolean(group.disableLongContextPricing),
   billingOutputTokenSource: group.billingOutputTokenSource || group.billing_output_token_source || 'output_tokens',
   modelMultipliers: normalizeCodexModelMultipliers(group.modelMultipliers || group.model_multipliers),
   createdAt: group.created_at || group.createdAt || '',
@@ -1992,7 +1987,7 @@ const mapCodexChannel = (channel) => {
   };
 };
 
-const buildCodexCredentialGroupPayload = (input) => {
+export const buildCodexCredentialGroupPayload = (input) => {
   const payload = {
     channel_id: input?.channelId || input?.channel_id || 0,
     name: (input?.name || '').trim(),
@@ -2001,7 +1996,14 @@ const buildCodexCredentialGroupPayload = (input) => {
     costMultiplier: parseEndpointMultiplier(input?.costMultiplier),
     inputCostMultiplier: parseEndpointMultiplier(input?.inputCostMultiplier),
     outputCostMultiplier: parseEndpointMultiplier(input?.outputCostMultiplier),
+    cacheCreationCostMultiplier: parseEndpointMultiplier(input?.cacheCreationCostMultiplier),
     cacheReadCostMultiplier: parseEndpointMultiplier(input?.cacheReadCostMultiplier),
+    longContextCostMultiplier: parseEndpointMultiplier(input?.longContextCostMultiplier),
+    longContextInputCostMultiplier: parseEndpointMultiplier(input?.longContextInputCostMultiplier),
+    longContextOutputCostMultiplier: parseEndpointMultiplier(input?.longContextOutputCostMultiplier),
+    longContextCacheCreationCostMultiplier: parseEndpointMultiplier(input?.longContextCacheCreationCostMultiplier),
+    longContextCacheReadCostMultiplier: parseEndpointMultiplier(input?.longContextCacheReadCostMultiplier),
+    disableLongContextPricing: Boolean(input?.disableLongContextPricing),
     billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
   };
   const modelMultipliers = getExplicitModelMultipliers(input, normalizeCodexModelMultipliers);

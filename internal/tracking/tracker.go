@@ -146,7 +146,7 @@ type RequestCompleteData struct {
 	CacheReadTokens          int64         `json:"cache_read_tokens"`
 	Duration                 time.Duration `json:"duration"`
 	FailureReason            string        `json:"failure_reason,omitempty"` // 可选：失败原因
-	InputIncludesCacheRead   bool          `json:"-"`                        // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	InputIncludesCacheRead   bool          `json:"-"`                        // OpenAI/Codex input_tokens 包含缓存读取和写入，仅计费时扣除
 }
 
 // TokenUsage token使用统计
@@ -160,16 +160,21 @@ type TokenUsage struct {
 	CacheReadTokens          int64
 	CacheCreation5mTokens    int64 // 5分钟缓存创建 tokens (1.25x 定价)
 	CacheCreation1hTokens    int64 // 1小时缓存创建 tokens (2x 定价)
-	InputIncludesCacheRead   bool  // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	InputIncludesCacheRead   bool  // OpenAI/Codex input_tokens 包含缓存读取和写入，仅计费时扣除
 }
 
 // ModelPricing 模型定价配置
 type ModelPricing struct {
-	Input           float64 `yaml:"input"`             // per 1M tokens
-	Output          float64 `yaml:"output"`            // per 1M tokens
-	CacheCreation   float64 `yaml:"cache_creation"`    // per 1M tokens (5分钟缓存创建，1.25x input)
-	CacheCreation1h float64 `yaml:"cache_creation_1h"` // per 1M tokens (1小时缓存创建，2x input)
-	CacheRead       float64 `yaml:"cache_read"`        // per 1M tokens (缓存读取)
+	Input                      float64 `yaml:"input"`                          // per 1M tokens
+	Output                     float64 `yaml:"output"`                         // per 1M tokens
+	CacheCreation              float64 `yaml:"cache_creation"`                 // per 1M tokens (5分钟缓存创建，1.25x input)
+	CacheCreation1h            float64 `yaml:"cache_creation_1h"`              // per 1M tokens (1小时缓存创建，2x input)
+	CacheRead                  float64 `yaml:"cache_read"`                     // per 1M tokens (缓存读取)
+	LongContextThreshold       int64   `yaml:"long_context_threshold"`         // 原始输入 tokens 达到该值时启用，0 表示禁用
+	LongContextInputPrice      float64 `yaml:"long_context_input_price"`       // per 1M tokens
+	LongContextOutputPrice     float64 `yaml:"long_context_output_price"`      // per 1M tokens
+	LongContextCacheWritePrice float64 `yaml:"long_context_cache_write_price"` // per 1M tokens
+	LongContextCacheReadPrice  float64 `yaml:"long_context_cache_read_price"`  // per 1M tokens
 }
 
 type ModelMultiplier struct {
@@ -186,34 +191,45 @@ type ModelMultiplier struct {
 //  1. 细分倍率：在每个分项成本计算时相乘（默认 1.0 = 不影响）
 //  2. 总倍率：所有分项成本计算完成后，作为整体乘数应用（默认 1.0 = 不影响）
 type EndpointMultiplier struct {
-	CostMultiplier                float64 // 总体倍率（默认 1.0，叠加在所有分项后）
-	InputCostMultiplier           float64 // 输入成本倍率（默认 1.0）
-	OutputCostMultiplier          float64 // 输出成本倍率（默认 1.0）
-	CacheCreationCostMultiplier   float64 // 5分钟缓存创建成本倍率（默认 1.0）
-	CacheCreationCostMultiplier1h float64 // 1小时缓存创建成本倍率（默认 1.0）
-	CacheReadCostMultiplier       float64 // 缓存读取成本倍率（默认 1.0）
-	BillingOutputTokenSource      string  // Codex 输出计费口径，默认 output_tokens
-	ModelCostMultiplier           float64 // 命中模型附加总倍率（默认 1.0）
-	ModelInputCostMultiplier      float64 // 命中模型附加输入倍率（默认 1.0）
-	ModelOutputCostMultiplier     float64 // 命中模型附加输出倍率（默认 1.0）
-	ModelCacheReadCostMultiplier  float64 // 命中模型附加缓存读取倍率（默认 1.0）
-	ModelMultipliers              []ModelMultiplier
+	CostMultiplier                         float64 // 总体倍率（默认 1.0，叠加在所有分项后）
+	InputCostMultiplier                    float64 // 输入成本倍率（默认 1.0）
+	OutputCostMultiplier                   float64 // 输出成本倍率（默认 1.0）
+	CacheCreationCostMultiplier            float64 // 5分钟缓存创建成本倍率（默认 1.0）
+	CacheCreationCostMultiplier1h          float64 // 1小时缓存创建成本倍率（默认 1.0）
+	CacheReadCostMultiplier                float64 // 缓存读取成本倍率（默认 1.0）
+	LongContextCostMultiplier              float64 // Long context 附加倍率（默认 1.0，仅命中 Long context 定价时应用）
+	LongContextInputCostMultiplier         float64
+	LongContextOutputCostMultiplier        float64
+	LongContextCacheCreationCostMultiplier float64
+	LongContextCacheReadCostMultiplier     float64
+	DisableLongContextPricing              bool    // 禁用 Long context 定价，默认 false（跟随模型）
+	BillingOutputTokenSource               string  // Codex 输出计费口径，默认 output_tokens
+	ModelCostMultiplier                    float64 // 命中模型附加总倍率（默认 1.0）
+	ModelInputCostMultiplier               float64 // 命中模型附加输入倍率（默认 1.0）
+	ModelOutputCostMultiplier              float64 // 命中模型附加输出倍率（默认 1.0）
+	ModelCacheReadCostMultiplier           float64 // 命中模型附加缓存读取倍率（默认 1.0）
+	ModelMultipliers                       []ModelMultiplier
 }
 
 // DefaultEndpointMultiplier 返回默认端点倍率（全部为 1.0）
 func DefaultEndpointMultiplier() EndpointMultiplier {
 	return EndpointMultiplier{
-		CostMultiplier:                1.0,
-		InputCostMultiplier:           1.0,
-		OutputCostMultiplier:          1.0,
-		CacheCreationCostMultiplier:   1.0,
-		CacheCreationCostMultiplier1h: 1.0,
-		CacheReadCostMultiplier:       1.0,
-		BillingOutputTokenSource:      BillingOutputTokenSourceOutput,
-		ModelCostMultiplier:           1.0,
-		ModelInputCostMultiplier:      1.0,
-		ModelOutputCostMultiplier:     1.0,
-		ModelCacheReadCostMultiplier:  1.0,
+		CostMultiplier:                         1.0,
+		InputCostMultiplier:                    1.0,
+		OutputCostMultiplier:                   1.0,
+		CacheCreationCostMultiplier:            1.0,
+		CacheCreationCostMultiplier1h:          1.0,
+		CacheReadCostMultiplier:                1.0,
+		LongContextCostMultiplier:              1.0,
+		LongContextInputCostMultiplier:         1.0,
+		LongContextOutputCostMultiplier:        1.0,
+		LongContextCacheCreationCostMultiplier: 1.0,
+		LongContextCacheReadCostMultiplier:     1.0,
+		BillingOutputTokenSource:               BillingOutputTokenSourceOutput,
+		ModelCostMultiplier:                    1.0,
+		ModelInputCostMultiplier:               1.0,
+		ModelOutputCostMultiplier:              1.0,
+		ModelCacheReadCostMultiplier:           1.0,
 	}
 }
 
@@ -282,36 +298,55 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 		return v
 	}
 
-	// 获取 1h 缓存定价（如果未设置，使用 2x input 作为默认）
-	cacheCreation1hPrice := pricing.CacheCreation1h
-	if cacheCreation1hPrice <= 0 {
-		cacheCreation1hPrice = pricing.Input * 2.0 // 默认 2x input
-	}
-
-	inputTokensForCost := usage.InputTokens
-	if usage.InputIncludesCacheRead && usage.CacheReadTokens > 0 {
-		if usage.CacheReadTokens >= inputTokensForCost {
-			inputTokensForCost = 0
-		} else {
-			inputTokensForCost -= usage.CacheReadTokens
+	inputPrice := pricing.Input
+	outputPrice := pricing.Output
+	cacheCreationPrice := pricing.CacheCreation
+	cacheReadPrice := pricing.CacheRead
+	longContextActive := !m.DisableLongContextPricing &&
+		pricing.LongContextThreshold > 0 &&
+		usage.InputTokens > pricing.LongContextThreshold &&
+		pricing.LongContextInputPrice > 0 &&
+		pricing.LongContextOutputPrice > 0
+	if longContextActive {
+		inputPrice = pricing.LongContextInputPrice
+		outputPrice = pricing.LongContextOutputPrice
+		if pricing.LongContextCacheWritePrice > 0 {
+			cacheCreationPrice = pricing.LongContextCacheWritePrice
+		}
+		if pricing.LongContextCacheReadPrice > 0 {
+			cacheReadPrice = pricing.LongContextCacheReadPrice
 		}
 	}
 
+	// 获取 1h 缓存定价（如果未设置，使用当前输入价格的 2x 作为默认）
+	cacheCreation1hPrice := pricing.CacheCreation1h
+	if longContextActive && pricing.LongContextCacheWritePrice > 0 {
+		cacheCreation1hPrice = pricing.LongContextCacheWritePrice
+	} else if cacheCreation1hPrice <= 0 {
+		cacheCreation1hPrice = inputPrice * 2.0 // 默认 2x input
+	}
+
+	inputTokensForCost := usage.InputTokens
+	if usage.InputIncludesCacheRead {
+		inputTokensForCost -= min(inputTokensForCost, max(usage.CacheReadTokens, int64(0)))
+		inputTokensForCost -= min(inputTokensForCost, max(usage.CacheCreationTokens, int64(0)))
+	}
+
 	// 基础成本计算（每百万 token）
-	inputCost := float64(inputTokensForCost) * pricing.Input / 1_000_000
+	inputCost := float64(inputTokensForCost) * inputPrice / 1_000_000
 	outputTokensForCost := ResolveBillableOutputTokens(usage)
-	outputCost := float64(outputTokensForCost) * pricing.Output / 1_000_000
-	cacheReadCost := float64(usage.CacheReadTokens) * pricing.CacheRead / 1_000_000
+	outputCost := float64(outputTokensForCost) * outputPrice / 1_000_000
+	cacheReadCost := float64(usage.CacheReadTokens) * cacheReadPrice / 1_000_000
 
 	// 分开计算 5m 和 1h 缓存成本
 	var cache5mCost, cache1hCost float64
 	if usage.CacheCreation5mTokens > 0 || usage.CacheCreation1hTokens > 0 {
 		// 有分开的缓存数据，分别计算
-		cache5mCost = float64(usage.CacheCreation5mTokens) * pricing.CacheCreation / 1_000_000
+		cache5mCost = float64(usage.CacheCreation5mTokens) * cacheCreationPrice / 1_000_000
 		cache1hCost = float64(usage.CacheCreation1hTokens) * cacheCreation1hPrice / 1_000_000
 	} else {
 		// 向后兼容：只有总数，默认使用 5m 定价
-		cache5mCost = float64(usage.CacheCreationTokens) * pricing.CacheCreation / 1_000_000
+		cache5mCost = float64(usage.CacheCreationTokens) * cacheCreationPrice / 1_000_000
 		cache1hCost = 0
 	}
 	cacheCreationCost := cache5mCost + cache1hCost
@@ -324,6 +359,15 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 	cache5mCost *= ensureMultiplier(m.CacheCreationCostMultiplier)
 	cache1hCost *= ensureMultiplier(m.CacheCreationCostMultiplier1h)
 	cacheCreationCost = cache5mCost + cache1hCost
+	if longContextActive {
+		longContextMult := ensureMultiplier(m.LongContextCostMultiplier)
+		inputCost *= ensureMultiplier(m.LongContextInputCostMultiplier) * longContextMult
+		outputCost *= ensureMultiplier(m.LongContextOutputCostMultiplier) * longContextMult
+		cache5mCost *= ensureMultiplier(m.LongContextCacheCreationCostMultiplier) * longContextMult
+		cache1hCost *= ensureMultiplier(m.LongContextCacheCreationCostMultiplier) * longContextMult
+		cacheCreationCost = cache5mCost + cache1hCost
+		cacheReadCost *= ensureMultiplier(m.LongContextCacheReadCostMultiplier) * longContextMult
+	}
 
 	// 2. 总倍率：端点总倍率 * 模型总倍率，应用到所有分项
 	totalMult := ensureMultiplier(m.CostMultiplier) * ensureMultiplier(m.ModelCostMultiplier)

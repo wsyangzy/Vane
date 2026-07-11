@@ -252,28 +252,38 @@ func (s *ModelPricingService) ImportFromYAML(ctx context.Context, modelPricing m
 	// 转换模型定价
 	for modelName, pricing := range modelPricing {
 		record := &store.ModelPricingRecord{
-			ModelName:            modelName,
-			InputPrice:           pricing.Input,
-			OutputPrice:          pricing.Output,
-			CacheCreationPrice5m: pricing.CacheCreation, // YAML 中的 CacheCreation 默认为 5m
-			CacheCreationPrice1h: pricing.Input * 2.0,   // 1h 价格自动计算
-			CacheReadPrice:       pricing.CacheRead,
-			IsDefault:            false,
+			ModelName:                  modelName,
+			InputPrice:                 pricing.Input,
+			OutputPrice:                pricing.Output,
+			CacheCreationPrice5m:       pricing.CacheCreation, // YAML 中的 CacheCreation 默认为 5m
+			CacheCreationPrice1h:       pricing.Input * 2.0,   // 1h 价格自动计算
+			CacheReadPrice:             pricing.CacheRead,
+			LongContextThreshold:       pricing.LongContextThreshold,
+			LongContextInputPrice:      pricing.LongContextInputPrice,
+			LongContextCacheReadPrice:  pricing.LongContextCacheReadPrice,
+			LongContextCacheWritePrice: pricing.LongContextCacheWritePrice,
+			LongContextOutputPrice:     pricing.LongContextOutputPrice,
+			IsDefault:                  false,
 		}
 		records = append(records, record)
 	}
 
 	// 添加默认定价
 	defaultRecord := &store.ModelPricingRecord{
-		ModelName:            "_default",
-		DisplayName:          "默认定价",
-		Description:          "未知模型使用的默认定价",
-		InputPrice:           defaultPricing.Input,
-		OutputPrice:          defaultPricing.Output,
-		CacheCreationPrice5m: defaultPricing.CacheCreation,
-		CacheCreationPrice1h: defaultPricing.Input * 2.0,
-		CacheReadPrice:       defaultPricing.CacheRead,
-		IsDefault:            true,
+		ModelName:                  "_default",
+		DisplayName:                "默认定价",
+		Description:                "未知模型使用的默认定价",
+		InputPrice:                 defaultPricing.Input,
+		OutputPrice:                defaultPricing.Output,
+		CacheCreationPrice5m:       defaultPricing.CacheCreation,
+		CacheCreationPrice1h:       defaultPricing.Input * 2.0,
+		CacheReadPrice:             defaultPricing.CacheRead,
+		LongContextThreshold:       defaultPricing.LongContextThreshold,
+		LongContextInputPrice:      defaultPricing.LongContextInputPrice,
+		LongContextCacheReadPrice:  defaultPricing.LongContextCacheReadPrice,
+		LongContextCacheWritePrice: defaultPricing.LongContextCacheWritePrice,
+		LongContextOutputPrice:     defaultPricing.LongContextOutputPrice,
+		IsDefault:                  true,
 	}
 	records = append(records, defaultRecord)
 
@@ -321,10 +331,15 @@ func (s *ModelPricingService) GetPricingCount(ctx context.Context) (int, error) 
 // 注意：CacheCreation 使用 5m 价格，因为大多数请求使用默认 5 分钟缓存
 func (s *ModelPricingService) ToTrackingPricing(record *store.ModelPricingRecord) tracking.ModelPricing {
 	return tracking.ModelPricing{
-		Input:         record.InputPrice,
-		Output:        record.OutputPrice,
-		CacheCreation: record.CacheCreationPrice5m, // 使用 5m 价格作为默认
-		CacheRead:     record.CacheReadPrice,
+		Input:                      record.InputPrice,
+		Output:                     record.OutputPrice,
+		CacheCreation:              record.CacheCreationPrice5m, // 使用 5m 价格作为默认
+		CacheRead:                  record.CacheReadPrice,
+		LongContextThreshold:       record.LongContextThreshold,
+		LongContextInputPrice:      record.LongContextInputPrice,
+		LongContextCacheReadPrice:  record.LongContextCacheReadPrice,
+		LongContextCacheWritePrice: record.LongContextCacheWritePrice,
+		LongContextOutputPrice:     record.LongContextOutputPrice,
 	}
 }
 
@@ -338,6 +353,21 @@ func (s *ModelPricingService) validateRecord(record *store.ModelPricingRecord) e
 	}
 	if record.OutputPrice < 0 {
 		return fmt.Errorf("输出价格不能为负数")
+	}
+	if record.LongContextThreshold < 0 {
+		return fmt.Errorf("Long context 阈值不能为负数")
+	}
+	if record.LongContextInputPrice < 0 {
+		return fmt.Errorf("Long context 输入价格不能为负数")
+	}
+	if record.LongContextCacheReadPrice < 0 {
+		return fmt.Errorf("Long context 缓存读取价格不能为负数")
+	}
+	if record.LongContextCacheWritePrice < 0 {
+		return fmt.Errorf("Long context 缓存写入价格不能为负数")
+	}
+	if record.LongContextOutputPrice < 0 {
+		return fmt.Errorf("Long context 输出价格不能为负数")
 	}
 	return nil
 }

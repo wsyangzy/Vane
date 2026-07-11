@@ -19,11 +19,16 @@ type ModelPricingRecord struct {
 	Provider  string `json:"provider"`   // 提供商标识: claude/codex
 
 	// 定价信息 (USD per 1M tokens)
-	InputPrice            float64 `json:"input_price"`              // 输入价格
-	OutputPrice           float64 `json:"output_price"`             // 输出价格
-	CacheCreationPrice5m  float64 `json:"cache_creation_price_5m"`  // 5分钟缓存创建价格 (input * 1.25)
-	CacheCreationPrice1h  float64 `json:"cache_creation_price_1h"`  // 1小时缓存创建价格 (input * 2.0)
-	CacheReadPrice        float64 `json:"cache_read_price"`         // 缓存读取价格 (input * 0.1)
+	InputPrice                 float64 `json:"input_price"`                    // 输入价格
+	OutputPrice                float64 `json:"output_price"`                   // 输出价格
+	CacheCreationPrice5m       float64 `json:"cache_creation_price_5m"`        // 5分钟缓存创建价格 (input * 1.25)
+	CacheCreationPrice1h       float64 `json:"cache_creation_price_1h"`        // 1小时缓存创建价格 (input * 2.0)
+	CacheReadPrice             float64 `json:"cache_read_price"`               // 缓存读取价格 (input * 0.1)
+	LongContextThreshold       int64   `json:"long_context_threshold"`         // 原始输入 token 阈值，0 表示禁用
+	LongContextInputPrice      float64 `json:"long_context_input_price"`       // Long context 输入价格
+	LongContextCacheReadPrice  float64 `json:"long_context_cache_read_price"`  // Long context 缓存读取价格
+	LongContextCacheWritePrice float64 `json:"long_context_cache_write_price"` // Long context 缓存写入价格
+	LongContextOutputPrice     float64 `json:"long_context_output_price"`      // Long context 输出价格
 
 	// 模型元信息
 	DisplayName string `json:"display_name,omitempty"` // 显示名称
@@ -115,9 +120,12 @@ func (s *SQLiteModelPricingStore) Create(ctx context.Context, record *ModelPrici
 		INSERT INTO model_pricing (
 			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'),
 			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 	`
@@ -125,6 +133,9 @@ func (s *SQLiteModelPricingStore) Create(ctx context.Context, record *ModelPrici
 	result, err := s.getQuerier().ExecContext(ctx, query,
 		record.ModelName, record.Provider, record.InputPrice, record.OutputPrice,
 		record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
+		record.LongContextThreshold, record.LongContextInputPrice,
+		record.LongContextCacheReadPrice, record.LongContextCacheWritePrice,
+		record.LongContextOutputPrice,
 		record.DisplayName, record.Description, boolToInt(record.IsDefault),
 	)
 	if err != nil {
@@ -151,6 +162,9 @@ func (s *SQLiteModelPricingStore) Get(ctx context.Context, modelName string) (*M
 	query := `
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
 			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
@@ -168,6 +182,9 @@ func (s *SQLiteModelPricingStore) GetByID(ctx context.Context, id int64) (*Model
 	query := `
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
 			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
@@ -185,6 +202,9 @@ func (s *SQLiteModelPricingStore) List(ctx context.Context) ([]*ModelPricingReco
 	query := `
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
 			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
@@ -203,6 +223,9 @@ func (s *SQLiteModelPricingStore) ListByProvider(ctx context.Context, provider s
 	query := `
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			COALESCE(created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
 			COALESCE(updated_at, created_at, strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
@@ -223,6 +246,9 @@ func (s *SQLiteModelPricingStore) Update(ctx context.Context, record *ModelPrici
 		UPDATE model_pricing SET
 			provider = ?, input_price = ?, output_price = ?,
 			cache_creation_price_5m = ?, cache_creation_price_1h = ?, cache_read_price = ?,
+			long_context_threshold = ?, long_context_input_price = ?,
+			long_context_cache_read_price = ?, long_context_cache_write_price = ?,
+			long_context_output_price = ?,
 			display_name = ?, description = ?, is_default = ?,
 			updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')
 		WHERE model_name = ?
@@ -236,6 +262,9 @@ func (s *SQLiteModelPricingStore) Update(ctx context.Context, record *ModelPrici
 	result, err := s.getQuerier().ExecContext(ctx, query,
 		provider, record.InputPrice, record.OutputPrice,
 		record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
+		record.LongContextThreshold, record.LongContextInputPrice,
+		record.LongContextCacheReadPrice, record.LongContextCacheWritePrice,
+		record.LongContextOutputPrice,
 		record.DisplayName, record.Description, boolToInt(record.IsDefault),
 		record.ModelName,
 	)
@@ -299,9 +328,12 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 		INSERT INTO model_pricing (
 			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'),
 			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 	`
@@ -336,6 +368,9 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 		_, err = stmt.ExecContext(ctx,
 			record.ModelName, record.Provider, record.InputPrice, record.OutputPrice,
 			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
+			record.LongContextThreshold, record.LongContextInputPrice,
+			record.LongContextCacheReadPrice, record.LongContextCacheWritePrice,
+			record.LongContextOutputPrice,
 			record.DisplayName, record.Description, boolToInt(record.IsDefault),
 		)
 		if err != nil {
@@ -370,8 +405,11 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 		INSERT INTO model_pricing (
 			model_name, provider, input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(model_name) DO UPDATE SET
 			provider = excluded.provider,
 			input_price = excluded.input_price,
@@ -379,6 +417,11 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 			cache_creation_price_5m = excluded.cache_creation_price_5m,
 			cache_creation_price_1h = excluded.cache_creation_price_1h,
 			cache_read_price = excluded.cache_read_price,
+			long_context_threshold = excluded.long_context_threshold,
+			long_context_input_price = excluded.long_context_input_price,
+			long_context_cache_read_price = excluded.long_context_cache_read_price,
+			long_context_cache_write_price = excluded.long_context_cache_write_price,
+			long_context_output_price = excluded.long_context_output_price,
 			display_name = excluded.display_name,
 			description = excluded.description,
 			is_default = excluded.is_default
@@ -414,6 +457,9 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 		_, err = stmt.ExecContext(ctx,
 			record.ModelName, record.Provider, record.InputPrice, record.OutputPrice,
 			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
+			record.LongContextThreshold, record.LongContextInputPrice,
+			record.LongContextCacheReadPrice, record.LongContextCacheWritePrice,
+			record.LongContextOutputPrice,
 			record.DisplayName, record.Description, boolToInt(record.IsDefault),
 		)
 		if err != nil {
@@ -436,6 +482,9 @@ func (s *SQLiteModelPricingStore) GetDefault(ctx context.Context) (*ModelPricing
 	query := `
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			created_at, updated_at
 		FROM model_pricing WHERE is_default = 1 LIMIT 1
@@ -452,6 +501,9 @@ func (s *SQLiteModelPricingStore) GetDefaultByProvider(ctx context.Context, prov
 	query := `
 		SELECT id, model_name, COALESCE(provider, 'claude'), input_price, output_price,
 			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price,
+			long_context_cache_read_price, long_context_cache_write_price,
+			long_context_output_price,
 			display_name, description, is_default,
 			created_at, updated_at
 		FROM model_pricing WHERE is_default = 1 AND COALESCE(provider, 'claude') = ? LIMIT 1
@@ -544,6 +596,9 @@ func (s *SQLiteModelPricingStore) scanModelPricing(row *sql.Row) (*ModelPricingR
 		&record.ID, &record.ModelName, &provider,
 		&record.InputPrice, &record.OutputPrice,
 		&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice,
+		&record.LongContextThreshold, &record.LongContextInputPrice,
+		&record.LongContextCacheReadPrice, &record.LongContextCacheWritePrice,
+		&record.LongContextOutputPrice,
 		&displayName, &description, &isDefault,
 		&createdAt, &updatedAt,
 	)
@@ -608,6 +663,9 @@ func (s *SQLiteModelPricingStore) scanModelPricings(ctx context.Context, query s
 			&record.ID, &record.ModelName, &provider,
 			&record.InputPrice, &record.OutputPrice,
 			&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice,
+			&record.LongContextThreshold, &record.LongContextInputPrice,
+			&record.LongContextCacheReadPrice, &record.LongContextCacheWritePrice,
+			&record.LongContextOutputPrice,
 			&displayName, &description, &isDefault,
 			&createdAt, &updatedAt,
 		)
