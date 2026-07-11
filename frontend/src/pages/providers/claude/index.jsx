@@ -49,6 +49,7 @@ import {
 } from './components';
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
+import LongContextMultiplierSettings from '@pages/management/shared/LongContextMultiplierSettings.jsx';
 import {
   EndpointHealthBadge as HealthBadge,
   EndpointLatencyBadge as LatencyBadge,
@@ -135,13 +136,26 @@ const getInitialClaudeCredentialSecretType = (group) => {
   return !hasToken && hasApiKey ? 'apiKey' : 'token';
 };
 
-const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
+const STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   { name: 'costMultiplier', label: '总倍率' },
   { name: 'inputCostMultiplier', label: '输入倍率' },
   { name: 'outputCostMultiplier', label: '输出倍率' },
   { name: 'cacheReadCostMultiplier', label: '缓存读取倍率' },
   { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率' },
   { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
+];
+
+const LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
+  { name: 'longContextCostMultiplier', label: 'Long context 总倍率' },
+  { name: 'longContextInputCostMultiplier', label: 'Long context 输入倍率' },
+  { name: 'longContextOutputCostMultiplier', label: 'Long context 输出倍率' },
+  { name: 'longContextCacheCreationCostMultiplier', label: 'Long context 缓存创建倍率' },
+  { name: 'longContextCacheReadCostMultiplier', label: 'Long context 缓存读取倍率' }
+];
+
+const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
+  ...STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS,
+  ...LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS
 ];
 
 const CHANNEL_META_BADGE_CLASS = 'inline-flex h-5 items-center justify-center rounded-full border px-2 pt-0 pb-0 text-[10px] font-medium leading-[20px] whitespace-nowrap';
@@ -219,6 +233,14 @@ const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
   cacheCreationCostMultiplier: formatMultiplierInputValue(group?.cacheCreationCostMultiplier ?? group?.cache_creation_cost_multiplier ?? 1.0),
   cacheCreationCostMultiplier1h: formatMultiplierInputValue(group?.cacheCreationCostMultiplier1h ?? group?.cache_creation_cost_multiplier_1h ?? 1.0),
   cacheReadCostMultiplier: formatMultiplierInputValue(group?.cacheReadCostMultiplier ?? group?.cache_read_cost_multiplier ?? 1.0),
+  longContextCostMultiplier: formatMultiplierInputValue(group?.longContextCostMultiplier ?? group?.long_context_cost_multiplier ?? 1.0),
+  longContextInputCostMultiplier: formatMultiplierInputValue(group?.longContextInputCostMultiplier ?? group?.long_context_input_cost_multiplier ?? 1.0),
+  longContextOutputCostMultiplier: formatMultiplierInputValue(group?.longContextOutputCostMultiplier ?? group?.long_context_output_cost_multiplier ?? 1.0),
+  longContextCacheCreationCostMultiplier: formatMultiplierInputValue(group?.longContextCacheCreationCostMultiplier ?? group?.long_context_cache_creation_cost_multiplier ?? 1.0),
+  longContextCacheReadCostMultiplier: formatMultiplierInputValue(group?.longContextCacheReadCostMultiplier ?? group?.long_context_cache_read_cost_multiplier ?? 1.0),
+  disableLongContextPricing: group
+    ? Boolean(group.disableLongContextPricing ?? group.disable_long_context_pricing)
+    : true,
   copyEndpointsFromGroupId: '',
   modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
 });
@@ -733,6 +755,16 @@ const EndpointDetailModal = ({
     { label: '5分钟写入', value: credentialGroup?.cacheCreationCostMultiplier ?? credentialGroup?.cache_creation_cost_multiplier ?? endpoint.cacheCreationCostMultiplier ?? endpoint.cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
     { label: '1小时写入', value: credentialGroup?.cacheCreationCostMultiplier1h ?? credentialGroup?.cache_creation_cost_multiplier_1h ?? endpoint.cacheCreationCostMultiplier1h ?? endpoint.cache_creation_cost_multiplier_1h ?? 1, tone: 'emerald' }
   ];
+  const longContextPricingEnabled = Boolean(credentialGroup) && !Boolean(
+    credentialGroup.disableLongContextPricing ?? credentialGroup.disable_long_context_pricing
+  );
+  const longContextMultiplierItems = [
+    { label: '总', value: credentialGroup?.longContextCostMultiplier ?? credentialGroup?.long_context_cost_multiplier ?? 1, tone: 'indigo' },
+    { label: '输入', value: credentialGroup?.longContextInputCostMultiplier ?? credentialGroup?.long_context_input_cost_multiplier ?? 1, tone: 'slate' },
+    { label: '输出', value: credentialGroup?.longContextOutputCostMultiplier ?? credentialGroup?.long_context_output_cost_multiplier ?? 1, tone: 'sky' },
+    { label: '缓存创建', value: credentialGroup?.longContextCacheCreationCostMultiplier ?? credentialGroup?.long_context_cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
+    { label: '缓存读取', value: credentialGroup?.longContextCacheReadCostMultiplier ?? credentialGroup?.long_context_cache_read_cost_multiplier ?? 1, tone: 'amber' }
+  ];
   const modelMultiplierValueKeys = [
     ['costMultiplier', 'cost_multiplier'],
     ['inputCostMultiplier', 'input_cost_multiplier'],
@@ -972,6 +1004,18 @@ const EndpointDetailModal = ({
                 )}
               </div>
             </DetailMetricCard>
+            {longContextPricingEnabled && (
+              <DetailMetricCard label="Long context 分组倍率" icon={Database} wide>
+                <div className="flex flex-wrap gap-2">
+                  {longContextMultiplierItems.map((item) => (
+                    <DetailChip key={item.label} tone={item.tone} mono>
+                      <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
+                      {formatDetailMultiplier(item.value)}
+                    </DetailChip>
+                  ))}
+                </div>
+              </DetailMetricCard>
+            )}
           </div>
 
           {hasModelMapping && (
@@ -1320,6 +1364,7 @@ const ClaudeCredentialGroupFormModal = ({
 }) => {
   const isEdit = mode === 'edit';
   const [formData, setFormData] = useState(() => buildInitialClaudeCredentialGroupForm(group, channelName));
+  const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -1342,6 +1387,21 @@ const ClaudeCredentialGroupFormModal = ({
 
   const updateField = (key, value) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
+    if (error) setError('');
+  };
+
+  const handleLongContextToggle = () => {
+    if (loading) return;
+    if (formData.disableLongContextPricing) {
+      setLongContextSettingsOpen(true);
+      return;
+    }
+    updateField('disableLongContextPricing', true);
+  };
+
+  const handleLongContextSave = (values) => {
+    setFormData((current) => ({ ...current, ...values, disableLongContextPricing: false }));
+    setLongContextSettingsOpen(false);
     if (error) setError('');
   };
 
@@ -1477,8 +1537,8 @@ const ClaudeCredentialGroupFormModal = ({
   };
 
   return renderModalPortal(
-    <div className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-slate-900/30 px-4 pb-4 pt-12 backdrop-blur-sm animate-fade-in">
-      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-hidden bg-slate-900/30 p-4 backdrop-blur-sm animate-fade-in">
+      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
@@ -1502,7 +1562,7 @@ const ClaudeCredentialGroupFormModal = ({
           </Tooltip>
         </div>
 
-        <form className="max-h-[calc(100vh-8rem)] overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
+        <form className="min-h-0 flex-1 overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
           {formStep === 'copyNames' ? (
             <EndpointCopyNameEditorStep
               endpoints={copyStepEndpoints}
@@ -1648,9 +1708,9 @@ const ClaudeCredentialGroupFormModal = ({
             {activeTab === 'billing' && (
               <div className="space-y-4">
                 <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">成本倍率</label>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  {CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">普通成本倍率</label>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  {STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
                     <div key={field.name}>
                       <label className="mb-1 block text-xs text-slate-500">{field.label}</label>
                       <input
@@ -1667,6 +1727,63 @@ const ClaudeCredentialGroupFormModal = ({
                 </div>
                 <p className="mt-1 text-xs text-slate-400">成本倍率会作为该分组下 Claude 端点的默认计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
                 </div>
+
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!formData.disableLongContextPricing}
+                  onClick={handleLongContextToggle}
+                  className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
+                    formData.disableLongContextPricing
+                      ? 'border-slate-200 bg-slate-50'
+                      : 'border-indigo-200 bg-indigo-50/60'
+                  } ${loading ? 'cursor-not-allowed opacity-70' : 'hover:border-indigo-300'}`}
+                  disabled={loading}
+                >
+                  <div>
+                    <div className="text-sm font-medium text-slate-700">Long context 计费</div>
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      {formData.disableLongContextPricing ? '不启用，始终使用普通模型价格' : '跟随模型定价，命中阈值后应用 Long context 倍率'}
+                    </div>
+                  </div>
+                  <span className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    formData.disableLongContextPricing ? 'bg-slate-300' : 'bg-indigo-600'
+                  }`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      formData.disableLongContextPricing ? 'translate-x-0.5' : 'translate-x-[1.375rem]'
+                    }`} />
+                  </span>
+                </button>
+
+                {!formData.disableLongContextPricing && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-700">Long context 倍率已配置</div>
+                        <div className="mt-0.5 text-xs text-slate-500">命中阈值后使用以下倍率</div>
+                      </div>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => setLongContextSettingsOpen(true)} disabled={loading}>编辑</Button>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
+                        <div key={field.name} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                          <div className="truncate text-[11px] text-slate-400">{field.label.replace('Long context ', '')}</div>
+                          <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{formData[field.name]}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {longContextSettingsOpen && (
+                  <LongContextMultiplierSettings
+                    fields={LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS}
+                    values={formData}
+                    disabled={loading}
+                    onCancel={() => setLongContextSettingsOpen(false)}
+                    onSave={handleLongContextSave}
+                  />
+                )}
 
                 <ModelMultiplierEditor
                   rows={formData.modelMultiplierRows}
