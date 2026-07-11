@@ -47,7 +47,7 @@ type ActiveRequest struct {
 	CacheCreation5mTokens    int64  `json:"cache_creation_5m_tokens"` // 5分钟缓存
 	CacheCreation1hTokens    int64  `json:"cache_creation_1h_tokens"` // 1小时缓存
 	CacheReadTokens          int64  `json:"cache_read_tokens"`
-	InputIncludesCacheRead   bool   `json:"-"` // OpenAI/Codex input_tokens 包含 cached_tokens，仅计费时扣除
+	InputIncludesCacheRead   bool   `json:"-"` // OpenAI/Codex input_tokens 包含缓存读取和写入，仅计费时扣除
 	BillingOutputTokenSource string `json:"billing_output_token_source"`
 
 	// 端点倍率快照（请求开始时由生命周期管理器写入，归档时持久化）

@@ -155,16 +155,25 @@ func appendUniqueInt64(ids []int64, values ...int64) []int64 {
 }
 
 func isCredentialGroupFailure(statusCode int, summary string) bool {
-	if statusCode == http.StatusPaymentRequired || statusCode == http.StatusTooManyRequests {
+	if statusCode == http.StatusPaymentRequired {
 		return true
 	}
-	if statusCode != http.StatusForbidden {
+	if statusCode != http.StatusForbidden && statusCode != http.StatusTooManyRequests {
 		return false
 	}
 	text := strings.ToLower(summary)
-	return strings.Contains(text, "insufficient_user_quota") ||
+	return strings.Contains(text, "insufficient_quota") ||
+		strings.Contains(text, "insufficient_user_quota") ||
 		strings.Contains(text, "insufficient account balance") ||
-		strings.Contains(text, "available quota")
+		strings.Contains(text, "insufficient balance") ||
+		strings.Contains(text, "insufficient_balance") ||
+		strings.Contains(text, "quota exhausted") ||
+		strings.Contains(text, "exceeded your current quota") ||
+		strings.Contains(text, "billing hard limit") ||
+		strings.Contains(text, "billing exhausted") ||
+		strings.Contains(text, "billing_exhausted") ||
+		strings.Contains(text, "credits exhausted") ||
+		strings.Contains(text, "balance exhausted")
 }
 
 func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef {
@@ -574,24 +583,21 @@ func (h *Handler) tryEndpointCycle(
 	// 选择起始端点
 	skippedGroups := h.failedCredentialGroupsForTurn(turnFailureKey)
 	endpoint, err := h.manager.GetPrimaryEndpoint(skippedGroups...)
+	if err != nil && len(*endpointChain) == 0 {
+		// 新请求不能被上一请求留下的全局 unhealthy 状态直接挡在选路之前。
+		// 仅在尚未产生真实链路时重置一次；凭证分组跳过状态仍然保留。
+		h.manager.ResetUnhealthy()
+		endpoint, err = h.manager.GetPrimaryEndpoint(skippedGroups...)
+	}
 	if err != nil {
-		// 首次就无端点：写错误并完成
-		if len(*endpointChain) == 0 {
-			h.logger.Error("无可用端点", "error", err)
-			h.logger.Error("[Codex 请求失败]",
-				"provider", "codex",
-				"request_id", requestID,
-				"failure_reason", "network_error",
-				"detail", "无可用 Codex 端点",
-				"duration_ms", time.Since(startTime).Milliseconds(),
-				"endpoints_tried", 0,
-				"channel", channelName,
-			)
-			h.recordFailure(requestID, startTime, "network_error", "无可用 Codex 端点", http.StatusServiceUnavailable, nil, requestModel)
-			h.writeError(w, http.StatusServiceUnavailable, "无可用 Codex 端点")
-			return cycleResult{completed: true}
-		}
-		// 非首轮：返回让外层决定
+		h.logger.Warn("[Codex 当前轮无可用端点]",
+			"provider", "codex",
+			"request_id", requestID,
+			"error", err,
+			"endpoints_tried", len(*endpointChain),
+			"channel", channelName,
+		)
+		// 交给外层 loop_retry；下一轮会重置历史 unhealthy 状态后重新选路。
 		return cycleResult{completed: false, lastErr: err}
 	}
 
@@ -599,7 +605,9 @@ func (h *Handler) tryEndpointCycle(
 	for {
 		// 追加链路节点（按 channel+credential_group+endpoint 切换去重）
 		n := len(*endpointChain)
+		previousAttemptFailed := n > 0 && ((*endpointChain)[n-1].StatusCode != 0 || (*endpointChain)[n-1].Error != "")
 		if n == 0 ||
+			previousAttemptFailed ||
 			(*endpointChain)[n-1].Channel != channelName ||
 			(*endpointChain)[n-1].CredentialGroup != endpoint.CredentialGroupName ||
 			(*endpointChain)[n-1].Endpoint != endpoint.Name {
@@ -1471,7 +1479,7 @@ func (h *Handler) endpointBillingOutputTokenSource(channelName, groupName, endpo
 	return tracking.NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
 }
 
-// buildTokenUsage 从 TokenResult 构造 tracking.TokenUsage（包含缓存读取）
+// buildTokenUsage 从 TokenResult 构造 tracking.TokenUsage（包含缓存读取和写入）
 func buildTokenUsage(tr *TokenResult, billingOutputTokenSource string) *tracking.TokenUsage {
 	if tr == nil {
 		return nil
@@ -1481,6 +1489,7 @@ func buildTokenUsage(tr *TokenResult, billingOutputTokenSource string) *tracking
 		OutputTokens:             tr.OutputTokens,
 		ReasoningTokens:          tr.ReasoningTokens,
 		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource),
+		CacheCreationTokens:      tr.CacheWriteTokens,
 		CacheReadTokens:          tr.CacheReadTokens,
 		InputIncludesCacheRead:   true,
 	}

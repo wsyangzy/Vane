@@ -64,6 +64,54 @@ func TestTokenParserPreservesProviderUsageAndBillsCachedInputOnce(t *testing.T) 
 	}
 }
 
+func TestTokenParserCarriesResponsesCacheWriteTokensToBilling(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-5.6-sol",
+		"usage": {
+			"input_tokens": 2048,
+			"output_tokens": 64,
+			"total_tokens": 2112,
+			"input_tokens_details": {
+				"cached_tokens": 0,
+				"cache_write_tokens": 1024
+			}
+		}
+	}`)
+
+	result := NewTokenParser().ParseNonStreaming(body)
+	if result == nil {
+		t.Fatal("expected usage to be parsed")
+	}
+	usage := buildTokenUsage(result, tracking.BillingOutputTokenSourceOutput)
+	if usage.CacheCreationTokens != 1024 {
+		t.Fatalf("expected cache write tokens 1024, got %d", usage.CacheCreationTokens)
+	}
+}
+
+func TestTokenParserCarriesChatCacheWriteTokenStringsToBilling(t *testing.T) {
+	body := []byte(`{
+		"model": "gpt-5.6-terra",
+		"usage": {
+			"prompt_tokens": "1536",
+			"completion_tokens": "32",
+			"total_tokens": "1568",
+			"prompt_tokens_details": {
+				"cached_tokens": "0",
+				"cache_write_tokens": "512"
+			}
+		}
+	}`)
+
+	result := NewTokenParser().ParseNonStreaming(body)
+	if result == nil {
+		t.Fatal("expected usage to be parsed")
+	}
+	usage := buildTokenUsage(result, tracking.BillingOutputTokenSourceOutput)
+	if usage.CacheCreationTokens != 512 {
+		t.Fatalf("expected cache write tokens 512, got %d", usage.CacheCreationTokens)
+	}
+}
+
 func TestTokenParserAcceptsProviderUsageVariants(t *testing.T) {
 	body := []byte(`{
 		"model": "gpt5.5",

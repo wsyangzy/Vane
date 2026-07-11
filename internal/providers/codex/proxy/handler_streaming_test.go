@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -231,6 +232,269 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterInsufficientQuota(t *testing.T
 	}
 	if endpointChain[0].StatusCode != http.StatusForbidden || !strings.Contains(endpointChain[0].Error, "Insufficient account balance") {
 		t.Fatalf("expected failed chain node to include upstream error, got %#v", endpointChain[0])
+	}
+}
+
+func TestIsCredentialGroupFailureKeepsTransient429AtEndpointScope(t *testing.T) {
+	for _, summary := range []string{
+		`{"error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for account, please retry later"}}`,
+		`{"error":{"code":"rate_limit_exceeded","message":"Rate limited; your available quota will reset shortly"}}`,
+	} {
+		if isCredentialGroupFailure(http.StatusTooManyRequests, summary) {
+			t.Fatalf("transient rate limit should stay at endpoint scope: %s", summary)
+		}
+	}
+}
+
+func TestIsCredentialGroupFailureTreatsExhaustedQuota429AsGroupFailure(t *testing.T) {
+	for _, summary := range []string{
+		`{"error":{"code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}`,
+		`{"error":{"code":"billing_exhausted","message":"Billing exhausted for this account"}}`,
+		`{"error":{"code":"insufficient_balance","message":"Insufficient balance"}}`,
+	} {
+		if !isCredentialGroupFailure(http.StatusTooManyRequests, summary) {
+			t.Fatalf("account-level quota failure should skip the credential group: %s", summary)
+		}
+	}
+}
+
+func TestTryEndpointCycleKeepsSameCredentialGroupAfterTransient429(t *testing.T) {
+	var sameGroupHits atomic.Int32
+	var backupHits atomic.Int32
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for account, please retry later"}}`, http.StatusTooManyRequests)
+	}))
+	defer primary.Close()
+	sameGroup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		sameGroupHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer sameGroup.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer backup.Close()
+
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{
+				ID:                   1,
+				CredentialGroupID:    10,
+				CredentialGroupName:  "订阅",
+				CredentialGroupOrder: 0,
+				Name:                 "大陆优化-a",
+				BaseURL:              primary.URL,
+				APIKey:               "primary-key",
+				IsActive:             true,
+				FailoverEnabled:      true,
+				SkipHealthCheck:      true,
+				Priority:             0,
+			},
+			{
+				ID:                   2,
+				CredentialGroupID:    10,
+				CredentialGroupName:  "订阅",
+				CredentialGroupOrder: 0,
+				Name:                 "大陆优化-b",
+				BaseURL:              sameGroup.URL,
+				APIKey:               "primary-key",
+				FailoverEnabled:      true,
+				SkipHealthCheck:      true,
+				Priority:             1,
+			},
+			{
+				ID:                   3,
+				CredentialGroupID:    20,
+				CredentialGroupName:  "备用",
+				CredentialGroupOrder: 1,
+				Name:                 "海外备用",
+				BaseURL:              backup.URL,
+				APIKey:               "backup-key",
+				FailoverEnabled:      true,
+				SkipHealthCheck:      true,
+				Priority:             0,
+			},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+	handler := &Handler{
+		manager:      manager,
+		forwarder:    NewForwarder(time.Second, newTestLogger()),
+		streamFwd:    NewStreamingForwarder(newTestLogger()),
+		tokenParser:  NewTokenParser(),
+		classifier:   NewErrorClassifier(),
+		logger:       newTestLogger(),
+		usageTracker: nil,
+	}
+	body := []byte(`{"model":"gpt-5.5","stream":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+	recorder := httptest.NewRecorder()
+	var failedIDs []int64
+	var endpointChain []chainNode
+
+	result := handler.tryEndpointCycle(recorder, req, body, "req-transient-429", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, "turn-transient-429")
+	if !result.completed {
+		t.Fatalf("expected request to complete via same-group endpoint, got incomplete result: %+v", result)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected same-group endpoint 200, got %d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if sameGroupHits.Load() != 1 {
+		t.Fatalf("expected next endpoint in the same credential group to be hit once, got %d", sameGroupHits.Load())
+	}
+	if backupHits.Load() != 0 {
+		t.Fatalf("transient 429 should not skip to the backup credential group, got %d backup hits", backupHits.Load())
+	}
+	if len(endpointChain) != 2 || endpointChain[0].CredentialGroup != "订阅" || endpointChain[1].CredentialGroup != "订阅" {
+		t.Fatalf("expected endpoint-to-endpoint chain inside 订阅, got %#v", endpointChain)
+	}
+	if endpointChain[0].StatusCode != http.StatusTooManyRequests || !strings.Contains(endpointChain[0].Error, "Concurrency limit exceeded") {
+		t.Fatalf("expected first chain node to retain provider 429 detail, got %#v", endpointChain[0])
+	}
+}
+
+func TestTryEndpointCycleKeepsRepeatedEndpointAttemptsAcrossLoops(t *testing.T) {
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			http.Error(w, `{"error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded"}}`, http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+	}))
+	defer upstream.Close()
+
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{
+				ID:                  1,
+				CredentialGroupID:   10,
+				CredentialGroupName: "订阅",
+				Name:                "大陆优化",
+				BaseURL:             upstream.URL,
+				APIKey:              "test-key",
+				IsActive:            true,
+				FailoverEnabled:     true,
+			},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+	handler := &Handler{
+		manager:      manager,
+		forwarder:    NewForwarder(time.Second, newTestLogger()),
+		streamFwd:    NewStreamingForwarder(newTestLogger()),
+		tokenParser:  NewTokenParser(),
+		classifier:   NewErrorClassifier(),
+		logger:       newTestLogger(),
+		usageTracker: nil,
+	}
+	body := []byte(`{"model":"gpt-5.5","stream":false}`)
+	var failedIDs []int64
+	var endpointChain []chainNode
+
+	first := handler.tryEndpointCycle(
+		httptest.NewRecorder(),
+		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))),
+		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, "",
+	)
+	if first.completed {
+		t.Fatalf("expected first 429 attempt to exhaust the loop, got %+v", first)
+	}
+
+	manager.ResetUnhealthy()
+	failedIDs = failedIDs[:0]
+	recorder := httptest.NewRecorder()
+	second := handler.tryEndpointCycle(
+		recorder,
+		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))),
+		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, "",
+	)
+	if !second.completed || recorder.Code != http.StatusOK {
+		t.Fatalf("expected second loop attempt to succeed, result=%+v status=%d body=%q", second, recorder.Code, recorder.Body.String())
+	}
+	if len(endpointChain) != 2 {
+		t.Fatalf("expected both real attempts in the chain, got %#v", endpointChain)
+	}
+	if endpointChain[0].StatusCode != http.StatusTooManyRequests || endpointChain[0].Error == "" {
+		t.Fatalf("expected first attempt to keep its 429 error, got %#v", endpointChain[0])
+	}
+	if endpointChain[1].StatusCode != 0 || endpointChain[1].Error != "" {
+		t.Fatalf("expected successful final attempt without stale error, got %#v", endpointChain[1])
+	}
+}
+
+func TestServeHTTPRecoversFromInitiallyUnhealthyEndpointsBeforeExhaustion(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.FailoverConfig
+	}{
+		{name: "loop retry disabled", cfg: config.FailoverConfig{}},
+		{name: "single configured loop", cfg: config.FailoverConfig{LoopRetry: true, MaxLoops: 1}},
+		{name: "multiple configured loops", cfg: config.FailoverConfig{LoopRetry: true, MaxLoops: 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				hits.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}`))
+			}))
+			defer upstream.Close()
+
+			manager := &EndpointManager{
+				endpoints: []*CodexEndpoint{
+					{
+						ID:                  1,
+						CredentialGroupID:   10,
+						CredentialGroupName: "订阅",
+						Name:                "大陆优化",
+						BaseURL:             upstream.URL,
+						APIKey:              "test-key",
+						IsActive:            true,
+						FailoverEnabled:     true,
+					},
+				},
+				unhealthyMap: map[int64]bool{
+					1: true,
+				},
+				failureDetails: map[int64]EndpointFailureDetail{
+					1: {StatusCode: http.StatusTooManyRequests, Reason: "previous request failed"},
+				},
+				logger: newTestLogger(),
+			}
+			handler := NewHandler(
+				manager,
+				time.Second,
+				config.RetryConfig{},
+				tc.cfg,
+				nil,
+				newTestLogger(),
+				nil,
+			)
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":false}`))
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected the recovered endpoint to be selected, got %d body=%q", recorder.Code, recorder.Body.String())
+			}
+			if hits.Load() != 1 {
+				t.Fatalf("expected recovered endpoint to be tried once, got %d hits", hits.Load())
+			}
+			if !manager.IsHealthy(1) {
+				t.Fatal("expected successful endpoint to remain healthy after reset")
+			}
+		})
 	}
 }
 

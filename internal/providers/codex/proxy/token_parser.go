@@ -18,12 +18,13 @@ import (
 
 // TokenResult 解析结果
 type TokenResult struct {
-	InputTokens     int64
-	OutputTokens    int64
-	ReasoningTokens int64
-	TotalTokens     int64
-	CacheReadTokens int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
-	Model           string
+	InputTokens      int64
+	OutputTokens     int64
+	ReasoningTokens  int64
+	TotalTokens      int64
+	CacheReadTokens  int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
+	CacheWriteTokens int64 // GPT-5.6+ cache_write_tokens（写入缓存的输入部分）
+	Model            string
 }
 
 // UpstreamStreamError 表示 OpenAI/Codex 以 HTTP 200 SSE 流返回的错误事件。
@@ -100,12 +101,14 @@ func tokenCountValue(v flexibleTokenCount) int64 {
 
 // openAIInputTokensDetails Responses API 输入 token 详情
 type openAIInputTokensDetails struct {
-	CachedTokens flexibleTokenCount `json:"cached_tokens"`
+	CachedTokens     flexibleTokenCount `json:"cached_tokens"`
+	CacheWriteTokens flexibleTokenCount `json:"cache_write_tokens"`
 }
 
 // openAIPromptTokensDetails Chat Completions API 中的提示词 token 详情（部分实现提供）
 type openAIPromptTokensDetails struct {
-	CachedTokens flexibleTokenCount `json:"cached_tokens"`
+	CachedTokens     flexibleTokenCount `json:"cached_tokens"`
+	CacheWriteTokens flexibleTokenCount `json:"cache_write_tokens"`
 }
 
 // openAIOutputTokensDetails Responses API 输出 token 详情
@@ -237,9 +240,9 @@ func streamErrorStatusCode(errorType, code, message, eventType string) int {
 
 // resolveUsage 从 usage 中提取统一的 token 字段
 // Responses API 字段优先；如果都为 0 则回退到 Chat Completions 字段
-func resolveUsage(u *openAIUsage) (input, output, cacheRead, reasoning int64) {
+func resolveUsage(u *openAIUsage) (input, output, cacheRead, cacheWrite, reasoning int64) {
 	if u == nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	// 优先使用 Responses API 字段
 	if u.InputTokens > 0 || u.OutputTokens > 0 {
@@ -256,6 +259,14 @@ func resolveUsage(u *openAIUsage) (input, output, cacheRead, reasoning int64) {
 		cacheRead = tokenCountValue(u.InputTokenDetails.CachedTokens)
 	} else if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens > 0 {
 		cacheRead = tokenCountValue(u.PromptTokensDetails.CachedTokens)
+	}
+	// 缓存写入：与缓存读取相同，优先 Responses API 字段。
+	if u.InputTokensDetails != nil && u.InputTokensDetails.CacheWriteTokens > 0 {
+		cacheWrite = tokenCountValue(u.InputTokensDetails.CacheWriteTokens)
+	} else if u.InputTokenDetails != nil && u.InputTokenDetails.CacheWriteTokens > 0 {
+		cacheWrite = tokenCountValue(u.InputTokenDetails.CacheWriteTokens)
+	} else if u.PromptTokensDetails != nil && u.PromptTokensDetails.CacheWriteTokens > 0 {
+		cacheWrite = tokenCountValue(u.PromptTokensDetails.CacheWriteTokens)
 	}
 	if u.OutputTokensDetails != nil && u.OutputTokensDetails.ReasoningTokens > 0 {
 		reasoning = tokenCountValue(u.OutputTokensDetails.ReasoningTokens)
@@ -274,9 +285,9 @@ func buildResult(model string, usage *openAIUsage) *TokenResult {
 	if usage == nil {
 		return nil
 	}
-	input, output, cacheRead, reasoning := resolveUsage(usage)
+	input, output, cacheRead, cacheWrite, reasoning := resolveUsage(usage)
 	// 容错：如果两种字段都未提供任何 token，视为无效（避免污染数据）
-	if input == 0 && output == 0 && cacheRead == 0 && reasoning == 0 && usage.TotalTokens == 0 {
+	if input == 0 && output == 0 && cacheRead == 0 && cacheWrite == 0 && reasoning == 0 && usage.TotalTokens == 0 {
 		return nil
 	}
 	total := tokenCountValue(usage.TotalTokens)
@@ -284,12 +295,13 @@ func buildResult(model string, usage *openAIUsage) *TokenResult {
 		total = input + output
 	}
 	return &TokenResult{
-		InputTokens:     input,
-		OutputTokens:    output,
-		ReasoningTokens: reasoning,
-		TotalTokens:     total,
-		CacheReadTokens: cacheRead,
-		Model:           model,
+		InputTokens:      input,
+		OutputTokens:     output,
+		ReasoningTokens:  reasoning,
+		TotalTokens:      total,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		Model:            model,
 	}
 }
 
