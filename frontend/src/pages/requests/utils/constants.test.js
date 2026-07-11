@@ -12,9 +12,9 @@ test('request type column exists but stays hidden by default', () => {
   assert.equal(DEFAULT_VISIBLE_COLUMNS.includes('requestType'), false);
 });
 
-test('model column has a bounded width for long model names', () => {
+test('model column keeps its natural width for complete single-line model names', () => {
   const modelColumn = TABLE_COLUMNS.find((column) => column.id === 'model');
 
   assert.ok(modelColumn, 'model column should be registered');
-  assert.equal(modelColumn.width, '8rem');
+  assert.equal(modelColumn.width, 'auto');
 });

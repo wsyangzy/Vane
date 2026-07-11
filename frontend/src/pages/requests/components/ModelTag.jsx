@@ -239,32 +239,22 @@ const ModelTag = ({
     : '';
   const tag = (
     <span
-      className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${modelStyle.classes} ${className}`}
+      className={`inline-flex w-fit max-w-none items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${modelStyle.classes} ${className}`}
     >
       <BrandIcon className={modelStyle.icon === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
-      <span className="min-w-0 truncate">
-        {displayName}
-      </span>
+      <span>{displayName}</span>
+      {rewriteIndicator && (
+        <Replace
+          className={`h-3 w-3 shrink-0 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
+          aria-label={rewriteIndicator.label}
+        />
+      )}
     </span>
   );
 
-  if (!rewriteIndicator) {
-    return (
-      <Tooltip content={title || displayName} className="max-w-full min-w-0">
-        {tag}
-      </Tooltip>
-    );
-  }
-
   return (
-    <Tooltip content={title || rewriteTitle} className="max-w-full min-w-0">
-      <span className="relative inline-flex max-w-full min-w-0 pr-5 align-middle">
-        {tag}
-        <Replace
-          className={`absolute right-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
-          aria-label={rewriteIndicator.label}
-        />
-      </span>
+    <Tooltip content={title || rewriteTitle || displayName}>
+      {tag}
     </Tooltip>
   );
 };

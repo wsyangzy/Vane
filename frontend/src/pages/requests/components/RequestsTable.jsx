@@ -452,7 +452,7 @@ const RequestsTable = ({
       </div>
 
       {/* 表格 */}
-      <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-auto">
+      <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         {loading && (
           <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
             <LoadingSpinner text="加载请求数据..." />
