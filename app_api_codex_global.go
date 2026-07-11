@@ -1,8 +1,8 @@
 package main
 
 // app_api_codex_global.go - Codex 全局配置 API
-// 读写 ~/.codex/config.toml 中的关键字段（model / reasoning_effort / 1M / base_url）
-// 这些字段在代理模式下不再由渠道级管理，而是作为全局配置由 Codex CLI 直接读取。
+// 读写 ~/.codex/config.toml 中的全局 model / 1M / base_url，并兼容读取 reasoning_effort。
+// reasoning_effort 由 Codex 客户端按会话管理，Relay 不再写入或覆盖。
 //
 // 设计原则：
 //   - base_url 不让用户手填，自动取自「设置 → 服务端口」的 host:port + /v1
@@ -19,12 +19,7 @@ import (
 const codexDefaultProviderName = "ai-relay-forwarder"
 const codexGlobalSettingsCategory = "codex_global"
 const codexGlobalDefaultModelKey = "default_model"
-const codexGlobalDefaultReasoningEffortKey = "default_reasoning_effort"
 const codexGlobalDefaultEnable1MContextKey = "default_enable_1m_context"
-
-var codexReasoningEffortValues = map[string]struct{}{
-	"low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {}, "ultra": {},
-}
 
 // CodexGlobalConfigInfo 用于读取 ~/.codex/config.toml 中的全局配置（前端展示）
 // base_url 由系统自动同步自服务端口，不向前端暴露
@@ -42,7 +37,7 @@ type CodexGlobalConfigInfo struct {
 // 不接受 base_url / provider_name，由后端自动决定
 type CodexGlobalConfigInput struct {
 	Model           string `json:"model"`
-	ReasoningEffort string `json:"reasoning_effort"`
+	ReasoningEffort string `json:"reasoning_effort"` // Deprecated: 仅保留 Wails 兼容，更新时忽略
 	Enable1MContext bool   `json:"enable_1m_context"`
 }
 
@@ -113,9 +108,6 @@ func (a *App) loadCodexDefaultConfig(ctx context.Context, fallback CodexGlobalCo
 	if model, err := settingsService.GetValue(ctx, codexGlobalSettingsCategory, codexGlobalDefaultModelKey); err == nil && strings.TrimSpace(model) != "" {
 		defaults.Model = strings.TrimSpace(model)
 	}
-	if effort, err := settingsService.GetValue(ctx, codexGlobalSettingsCategory, codexGlobalDefaultReasoningEffortKey); err == nil && strings.TrimSpace(effort) != "" {
-		defaults.ReasoningEffort = strings.TrimSpace(effort)
-	}
 	if enabled, err := settingsService.GetValue(ctx, codexGlobalSettingsCategory, codexGlobalDefaultEnable1MContextKey); err == nil && strings.TrimSpace(enabled) != "" {
 		defaults.Enable1MContext = parseCodexBool(enabled)
 	}
@@ -131,9 +123,6 @@ func (a *App) saveCodexDefaultConfig(ctx context.Context, input CodexGlobalConfi
 	}
 
 	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultModelKey, strings.TrimSpace(input.Model)); err != nil {
-		return err
-	}
-	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultReasoningEffortKey, strings.TrimSpace(input.ReasoningEffort)); err != nil {
 		return err
 	}
 	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultEnable1MContextKey, renderCodexBool(input.Enable1MContext)); err != nil {
@@ -158,18 +147,9 @@ func renderCodexBool(value bool) string {
 	return "false"
 }
 
-func normalizeCodexReasoningEffort(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if _, ok := codexReasoningEffortValues[normalized]; ok {
-		return normalized
-	}
-	return "xhigh"
-}
-
 // UpdateCodexGlobalConfig 更新 Codex 全局配置并写回 ~/.codex/config.toml
 // base_url 自动取自系统当前的 server.host:port，确保与「设置 → 服务端口」一致
 func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
-	input.ReasoningEffort = normalizeCodexReasoningEffort(input.ReasoningEffort)
 	path, content, existed, err := a.readCodexFileAllowMissing(a.getCodexConfigPath)
 	if err != nil {
 		return err
@@ -187,11 +167,10 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 	// 2. 自动计算 base_url（取自系统 server 配置）
 	baseURL := a.computeCodexProxyBaseURL()
 
-	// 3. 写顶层字段（model / model_reasoning_effort / model_provider）
+	// 3. 写 Relay 管理的顶层字段；model_reasoning_effort 由客户端管理，保持原值
 	topValues := map[string]codexTopLevelValue{
-		"model":                  {Value: strings.TrimSpace(input.Model), Quoted: true},
-		"model_reasoning_effort": {Value: strings.TrimSpace(input.ReasoningEffort), Quoted: true},
-		"model_provider":         {Value: providerName, Quoted: true},
+		"model":          {Value: strings.TrimSpace(input.Model), Quoted: true},
+		"model_provider": {Value: providerName, Quoted: true},
 	}
 	if input.Enable1MContext {
 		topValues["model_context_window"] = codexTopLevelValue{Value: codexProvider1MContextWindow, Quoted: false}
@@ -233,7 +212,6 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 			"path", path,
 			"provider_name", providerName,
 			"model", input.Model,
-			"reasoning_effort", input.ReasoningEffort,
 			"enable_1m_context", input.Enable1MContext,
 			"base_url", baseURL,
 		)

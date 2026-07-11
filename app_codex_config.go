@@ -924,7 +924,6 @@ func (a *App) syncActiveCodexProviderToConfig(record *codexstore.CodexProviderRe
 			"model_provider", record.Name,
 			"model", record.Model,
 			"enable_1m_context", record.Enable1MContext,
-			"reasoning_effort", record.ReasoningEffort,
 		)
 	}
 
@@ -943,7 +942,7 @@ func (a *App) removeCodexProviderConfig(name string, nextActive *codexstore.Code
 
 	updatedConfig := deleteCodexProviderSection(string(originalConfig), name)
 	if nextActive == nil {
-		updatedConfig = removeCodexTopLevelConfig(updatedConfig, []string{"model", "model_context_window", "model_reasoning_effort", "model_provider"})
+		updatedConfig = removeCodexTopLevelConfig(updatedConfig, []string{"model", "model_context_window", "model_provider"})
 		if err := writeCodexFile(configPath, []byte(updatedConfig)); err != nil {
 			if rollbackErr := restoreCodexFile(configPath, originalConfig, configExisted); rollbackErr != nil {
 				return fmt.Errorf("写入 Codex 配置文件失败 (%s): %w；回滚也失败: %v", configPath, err, rollbackErr)
@@ -1081,10 +1080,6 @@ func buildCodexTopLevelConfigValues(record *codexstore.CodexProviderRecord) map[
 	values := map[string]codexTopLevelValue{
 		"model": {
 			Value:  record.Model,
-			Quoted: true,
-		},
-		"model_reasoning_effort": {
-			Value:  record.ReasoningEffort,
 			Quoted: true,
 		},
 		"model_provider": {

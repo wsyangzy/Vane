@@ -450,6 +450,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 7. 渠道内循环重试 + 挂起等待运维干预（最多挂起一次）
 	var failedIDs []int64
 	var endpointChain []chainNode
+	attemptCount := 0
 	var lastErr error
 	var lastStatus int
 	var lastSummary string
@@ -473,7 +474,7 @@ outerLoop:
 			result := h.tryEndpointCycle(
 				w, r, body, requestID, startTime,
 				isStreaming, channelName, requestModel,
-				&failedIDs, &endpointChain, turnFailureKey,
+				&failedIDs, &endpointChain, &attemptCount, turnFailureKey,
 			)
 			if result.completed {
 				// 响应已写给客户端（成功 / 客户端取消 / FailFast）
@@ -578,6 +579,7 @@ func (h *Handler) tryEndpointCycle(
 	requestModel string,
 	failedIDs *[]int64,
 	endpointChain *[]chainNode,
+	attemptCount *int,
 	turnFailureKey string,
 ) cycleResult {
 	// 选择起始端点
@@ -638,7 +640,14 @@ func (h *Handler) tryEndpointCycle(
 		)
 
 		// 同端点重试转发
-		resp, fwdErr := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID)
+		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID)
+		if attempts > 0 && attemptCount != nil {
+			*attemptCount += attempts
+			retryCount := *attemptCount - 1
+			if h.usageTracker != nil {
+				h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{RetryCount: &retryCount})
+			}
+		}
 
 		// 客户端取消（context.Canceled）：直接结束
 		if errors.Is(fwdErr, context.Canceled) {
@@ -822,7 +831,7 @@ func (h *Handler) forwardWithRetry(
 	endpoint *CodexEndpoint,
 	isStreaming bool,
 	requestID string,
-) (*http.Response, error) {
+) (*http.Response, error, int) {
 	fwd := h.forwarder
 	if isStreaming {
 		fwd = h.streamFwd
@@ -835,6 +844,7 @@ func (h *Handler) forwardWithRetry(
 
 	var lastResp *http.Response
 	var lastErr error
+	attempts := 0
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
@@ -855,7 +865,7 @@ func (h *Handler) forwardWithRetry(
 			select {
 			case <-time.After(delay):
 			case <-r.Context().Done():
-				return nil, r.Context().Err()
+				return nil, r.Context().Err(), attempts
 			}
 		}
 
@@ -863,7 +873,7 @@ func (h *Handler) forwardWithRetry(
 		if h.privacyService != nil {
 			redacted, summary, changed, redactErr := h.privacyService.Redact(body)
 			if redactErr != nil {
-				return nil, fmt.Errorf("privacy redaction failed: %w", redactErr)
+				return nil, fmt.Errorf("privacy redaction failed: %w", redactErr), attempts
 			}
 			if changed {
 				requestBody = redacted
@@ -877,26 +887,27 @@ func (h *Handler) forwardWithRetry(
 		}
 
 		resp, err := fwd.Forward(r, requestBody, endpoint)
+		attempts++
 		lastResp = resp
 		lastErr = err
 
 		// 客户端取消直接返回
 		if errors.Is(err, context.Canceled) {
-			return resp, err
+			return resp, err, attempts
 		}
 
 		// 只有 ActionRetry 才继续重试；其他动作（含成功、ActionFailover、ActionFailFast）立即返回
 		action := h.classifier.Classify(resp, err)
 		if action != ActionRetry {
-			return resp, err
+			return resp, err, attempts
 		}
 		// ActionRetry 但已是最后一次：返回让外层 cycle 切换端点
 		if attempt+1 >= maxAttempts {
-			return resp, err
+			return resp, err, attempts
 		}
 	}
 
-	return lastResp, lastErr
+	return lastResp, lastErr, attempts
 }
 
 // buildExhaustedDetail 构造端点耗尽时的错误描述
@@ -1510,7 +1521,7 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 		modelName = requestModel
 	}
 	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
-	h.usageTracker.RecordRequestSuccess(requestID, modelName, tokens, duration)
+	h.usageTracker.RecordRequestSuccessWithHTTPStatus(requestID, modelName, tokens, duration, httpStatus)
 }
 
 // recordFailure 记录请求失败

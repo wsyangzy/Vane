@@ -131,6 +131,135 @@ func TestRecordForwardingStoresCredentialGroupName(t *testing.T) {
 	}
 }
 
+func TestRecordSuccessPersistsActualHTTPStatus(t *testing.T) {
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{
+		Enabled:         true,
+		DatabasePath:    filepath.Join(t.TempDir(), "usage.db"),
+		BufferSize:      10,
+		BatchSize:       5,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: time.Hour,
+		RetentionDays:   1,
+	})
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	handler := &Handler{usageTracker: tracker, logger: newTestLogger()}
+	requestID := "req-success-http-status"
+	tracker.RecordRequestStart(requestID, "127.0.0.1", "test-agent", http.MethodPost, "/v1/responses", false)
+	handler.recordSuccess(requestID, time.Now(), http.StatusCreated, nil, "gpt-5.5", "primary", "default", "CCTQ")
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	if len(details) != 1 || details[0].HTTPStatusCode == nil || *details[0].HTTPStatusCode != http.StatusCreated {
+		t.Fatalf("expected HTTP status %d, got %#v", http.StatusCreated, details)
+	}
+}
+
+func TestForwardWithRetryReturnsActualAttemptCount(t *testing.T) {
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			http.Error(w, "retry", http.StatusRequestTimeout)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	handler := &Handler{
+		forwarder:  NewForwarder(time.Second, newTestLogger()),
+		streamFwd:  NewStreamingForwarder(newTestLogger()),
+		classifier: NewErrorClassifier(),
+		logger:     newTestLogger(),
+		retryCfg: config.RetryConfig{
+			MaxAttempts: 2,
+		},
+	}
+	endpoint := &CodexEndpoint{Name: "primary", BaseURL: upstream.URL, APIKey: "test-key"}
+	body := []byte(`{"model":"gpt-5.5","stream":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+
+	resp, err, attempts := handler.forwardWithRetry(req, body, endpoint, false, "req-attempt-count")
+	if err != nil {
+		t.Fatalf("forwardWithRetry failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if attempts != 2 || hits.Load() != 2 {
+		t.Fatalf("attempts = %d, upstream hits = %d, want 2", attempts, hits.Load())
+	}
+}
+
+func TestTryEndpointCyclePersistsRetryCountAcrossEndpointsAndLoops(t *testing.T) {
+	var primaryHits atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if primaryHits.Add(1) <= 2 {
+			http.Error(w, "retry", http.StatusRequestTimeout)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "busy", http.StatusTooManyRequests)
+	}))
+	defer backup.Close()
+
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{
+		Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 10, BatchSize: 5,
+		FlushInterval: time.Hour, MaxRetry: 1, CleanupInterval: time.Hour, RetentionDays: 1,
+	})
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	defer tracker.Close()
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{ID: 1, Name: "primary", BaseURL: primary.URL, APIKey: "key", IsActive: true, FailoverEnabled: true, Priority: 0},
+			{ID: 2, Name: "backup", BaseURL: backup.URL, APIKey: "key", FailoverEnabled: true, Priority: 1},
+		},
+		unhealthyMap: make(map[int64]bool), failureDetails: make(map[int64]EndpointFailureDetail), logger: newTestLogger(),
+	}
+	handler := &Handler{
+		manager: manager, forwarder: NewForwarder(time.Second, newTestLogger()), streamFwd: NewStreamingForwarder(newTestLogger()),
+		tokenParser: NewTokenParser(), classifier: NewErrorClassifier(), logger: newTestLogger(), usageTracker: tracker,
+		retryCfg: config.RetryConfig{MaxAttempts: 2},
+	}
+	requestID := "req-retry-across-loops"
+	body := []byte(`{"model":"gpt-5.5","stream":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+	handler.recordStart(requestID, req, false, "CCTQ", "gpt-5.5", modelRewriteResult{})
+	var failedIDs []int64
+	var endpointChain []chainNode
+	attemptCount := 0
+
+	first := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount, "")
+	if first.completed {
+		t.Fatalf("expected first loop to exhaust endpoints, got %+v", first)
+	}
+	manager.ResetUnhealthy()
+	failedIDs = failedIDs[:0]
+	second := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount, "")
+	if !second.completed {
+		t.Fatalf("expected second loop to succeed, got %+v", second)
+	}
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	if attemptCount != 4 || len(details) != 1 || details[0].RetryCount != 3 {
+		t.Fatalf("attempts=%d details=%#v, want 4 attempts and 3 retries", attemptCount, details)
+	}
+}
+
 func TestTryEndpointCycleSkipsCredentialGroupAfterInsufficientQuota(t *testing.T) {
 	var primaryBHits atomic.Int32
 	var backupHits atomic.Int32
@@ -211,7 +340,7 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterInsufficientQuota(t *testing.T
 	var failedIDs []int64
 	var endpointChain []chainNode
 
-	result := handler.tryEndpointCycle(recorder, req, body, "req-rate-limit-group", time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, "")
+	result := handler.tryEndpointCycle(recorder, req, body, "req-rate-limit-group", time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, new(int), "")
 	if !result.completed {
 		t.Fatalf("expected request to complete via backup endpoint, got incomplete result: %+v", result)
 	}
@@ -338,7 +467,7 @@ func TestTryEndpointCycleKeepsSameCredentialGroupAfterTransient429(t *testing.T)
 	var failedIDs []int64
 	var endpointChain []chainNode
 
-	result := handler.tryEndpointCycle(recorder, req, body, "req-transient-429", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, "turn-transient-429")
+	result := handler.tryEndpointCycle(recorder, req, body, "req-transient-429", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int), "turn-transient-429")
 	if !result.completed {
 		t.Fatalf("expected request to complete via same-group endpoint, got incomplete result: %+v", result)
 	}
@@ -404,7 +533,7 @@ func TestTryEndpointCycleKeepsRepeatedEndpointAttemptsAcrossLoops(t *testing.T) 
 	first := handler.tryEndpointCycle(
 		httptest.NewRecorder(),
 		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))),
-		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, "",
+		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int), "",
 	)
 	if first.completed {
 		t.Fatalf("expected first 429 attempt to exhaust the loop, got %+v", first)
@@ -416,7 +545,7 @@ func TestTryEndpointCycleKeepsRepeatedEndpointAttemptsAcrossLoops(t *testing.T) 
 	second := handler.tryEndpointCycle(
 		recorder,
 		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))),
-		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, "",
+		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int), "",
 	)
 	if !second.completed || recorder.Code != http.StatusOK {
 		t.Fatalf("expected second loop attempt to succeed, result=%+v status=%d body=%q", second, recorder.Code, recorder.Body.String())
@@ -580,7 +709,7 @@ func TestTryEndpointCycleCachesCredentialGroupFailureWithinTurn(t *testing.T) {
 		var failedIDs []int64
 		var endpointChain []chainNode
 
-		result := handler.tryEndpointCycle(recorder, req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, turnKey)
+		result := handler.tryEndpointCycle(recorder, req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, new(int), turnKey)
 		if !result.completed {
 			t.Fatalf("expected request %s to complete via backup endpoint, got incomplete result: %+v", requestID, result)
 		}

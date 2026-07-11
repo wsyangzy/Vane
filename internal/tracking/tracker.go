@@ -1331,15 +1331,27 @@ func (ut *UsageTracker) RecordOutputSent(requestID string) {
 // RecordRequestSuccess 记录请求成功完成
 // 一次性更新所有成功相关字段：status='completed', end_time, duration_ms, Token和成本信息
 func (ut *UsageTracker) RecordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration) {
-	ut.RecordRequestSuccessWithQuality(requestID, modelName, tokens, duration, "")
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, 200, "")
 }
 
 // RecordRequestSuccessWithQuality 记录请求成功完成（支持数据质量标记）
 // 🔧 [方案A实现] 2025-12-20: 原子操作，在 CompleteAndArchive 中一次性设置所有字段包括 failureReason
 // 一次性更新所有成功相关字段：status='completed', end_time, duration_ms, Token、成本信息和可选的 failure_reason
 func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName string, tokens *TokenUsage, duration time.Duration, failureReason string) {
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, 200, failureReason)
+}
+
+// RecordRequestSuccessWithHTTPStatus 记录带真实上游状态码的成功请求。
+func (ut *UsageTracker) RecordRequestSuccessWithHTTPStatus(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int) {
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, httpStatus, "")
+}
+
+func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int, failureReason string) {
 	if ut.config == nil || !ut.config.Enabled {
 		return
+	}
+	if httpStatus <= 0 {
+		httpStatus = 200
 	}
 
 	// 🚀 [架构修复] 支持 nil tokens，确保耗时信息总是被记录
@@ -1375,6 +1387,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 		now := ut.now()
 		err := ut.hotPool.CompleteAndArchive(requestID, func(req *ActiveRequest) {
 			req.Status = "completed"
+			req.HTTPStatus = httpStatus
 			req.ModelName = modelName
 			// 🔧 [P1.4 防御] 仅当本次提供的 token 非零，或之前没有被失败路径记录过时，才覆盖
 			// 避免"先 RecordFailedRequestTokens 记录了真实 token → 后 CompleteAndArchive 传入零值覆盖"
@@ -1426,6 +1439,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 				"cache_creation_1h_tokens":    cacheCreation1hTokens,
 				"cache_read_tokens":           cacheReadTokens,
 				"duration_ms":                 duration.Milliseconds(),
+				"http_status":                 httpStatus,
 				"failure_reason":              failureReason,
 				"error":                       err.Error(),
 			})
@@ -1440,6 +1454,7 @@ func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName str
 		"reason":        "hot_pool_disabled",
 		"input_tokens":  inputTokens,
 		"output_tokens": outputTokens,
+		"http_status":   httpStatus,
 	})
 }
 

@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import {
   chainHasMultipleChannels,
   getEndpointChainItems,
+  getRequestNetworkDisplayState,
   parseChainNode,
   parseEndpointChain,
   parseEndpointName,
+  summarizeEndpointAttempts,
 } from './endpointChain.js';
 import * as endpointChainUtils from './endpointChain.js';
 
@@ -112,4 +114,52 @@ test('request channel label never treats a Codex credential group as its channel
   assert.equal(getChannelLabel?.({ provider: 'codex', group: '订阅' }, [], ''), '');
   assert.equal(getChannelLabel?.({ provider: 'claude', group: 'Claude 兼容渠道' }, [], ''), 'Claude 兼容渠道');
   assert.equal(getChannelLabel?.({ provider: 'codex', channel: '合租巴士' }, [], ''), '合租巴士');
+});
+
+test('summarizeEndpointAttempts separates retries from adjacent identity transfers', () => {
+  assert.deepEqual(summarizeEndpointAttempts({
+    retry_count: 3,
+    endpoint_chain: [
+      { channel: 'CCTQ', credential_group: 'primary', endpoint: 'A' },
+      { channel: 'CCTQ', credential_group: 'backup', endpoint: 'B' },
+      { channel: 'CCTQ', credential_group: 'backup', endpoint: 'B' },
+    ],
+  }), {
+    attemptCount: 4,
+    retryCount: 3,
+    transferCount: 1,
+    transferred: true,
+    firstEndpoint: 'A',
+    finalEndpoint: 'B',
+  });
+});
+
+test('summarizeEndpointAttempts uses chain length as the historical retry floor', () => {
+  const summary = summarizeEndpointAttempts({
+    retry_count: 0,
+    endpoint_chain: 'CCTQ::primary::A -> CCTQ::backup::B',
+  });
+
+  assert.equal(summary.attemptCount, 2);
+  assert.equal(summary.retryCount, 1);
+  assert.equal(summary.transferCount, 1);
+});
+
+test('summarizeEndpointAttempts uses the recorded endpoint for direct requests without a chain', () => {
+  const summary = summarizeEndpointAttempts({ endpoint: 'direct-endpoint', endpoint_chain: [] });
+
+  assert.equal(summary.firstEndpoint, 'direct-endpoint');
+  assert.equal(summary.finalEndpoint, 'direct-endpoint');
+  assert.equal(summary.attemptCount, 1);
+});
+
+test('network display state preserves unknown duration and streaming values', () => {
+  assert.deepEqual(getRequestNetworkDisplayState({}), {
+    durationMs: null,
+    isStreaming: null,
+  });
+  assert.deepEqual(getRequestNetworkDisplayState({ duration: 0, isStreaming: false }), {
+    durationMs: 0,
+    isStreaming: false,
+  });
 });

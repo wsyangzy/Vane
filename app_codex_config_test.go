@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +12,59 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+func TestBuildCodexTopLevelConfigValuesLeavesReasoningEffortClientManaged(t *testing.T) {
+	record := &codexstore.CodexProviderRecord{
+		Name:            "relay",
+		Model:           "gpt-5.6",
+		ReasoningEffort: "high",
+	}
+
+	values := buildCodexTopLevelConfigValues(record)
+	if _, exists := values["model_reasoning_effort"]; exists {
+		t.Fatal("model_reasoning_effort must not be managed by provider sync")
+	}
+
+	updated, err := upsertCodexTopLevelConfig(`model_reasoning_effort = "minimal"`, values)
+	if err != nil {
+		t.Fatalf("upsert top-level config: %v", err)
+	}
+	if !strings.Contains(updated, `model_reasoning_effort = "minimal"`) {
+		t.Fatalf("client-managed reasoning effort changed:\n%s", updated)
+	}
+}
+
+func TestRemoveCodexProviderConfigPreservesClientManagedReasoningEffort(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	configPath := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		`model = "gpt-5.6"`,
+		`model_reasoning_effort = "minimal"`,
+		`model_provider = "relay"`,
+		``,
+		`[model_providers.relay]`,
+		`base_url = "https://relay.example.invalid/v1"`,
+	}, "\n")), 0644); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+
+	if err := (&App{}).removeCodexProviderConfig("relay", nil); err != nil {
+		t.Fatalf("remove provider config: %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, `model_reasoning_effort = "minimal"`) {
+		t.Fatalf("client-managed reasoning effort should be preserved:\n%s", text)
+	}
+	if strings.Contains(text, `model = "gpt-5.6"`) || strings.Contains(text, `model_provider = "relay"`) {
+		t.Fatalf("Relay-managed top-level config should be removed:\n%s", text)
+	}
+}
 
 func TestCodexProviderSectionHeaderUsesQuotedKeyForUnicodeName(t *testing.T) {
 	if got, want := codexProviderSectionHeader("custom_1"), "[model_providers.custom_1]"; got != want {

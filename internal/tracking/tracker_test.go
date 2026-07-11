@@ -119,6 +119,43 @@ func TestAsyncEventProcessing(t *testing.T) {
 	}
 }
 
+func TestRecordRequestSuccessPersistsHTTPStatus(t *testing.T) {
+	config := &Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       5,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: time.Hour,
+		RetentionDays:   1,
+	}
+	tracker, err := NewUsageTracker(config)
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	tracker.RecordRequestStart("req-success-default-status", "127.0.0.1", "test-agent", "POST", "/v1/responses", false)
+	tracker.RecordRequestSuccess("req-success-default-status", "gpt-test", nil, 10*time.Millisecond)
+	tracker.RecordRequestStart("req-success-real-status", "127.0.0.1", "test-agent", "POST", "/v1/responses", false)
+	tracker.RecordRequestSuccessWithHTTPStatus("req-success-real-status", "gpt-test", nil, 10*time.Millisecond, 201)
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &QueryOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	statuses := make(map[string]int, len(details))
+	for _, detail := range details {
+		if detail.HTTPStatusCode != nil {
+			statuses[detail.RequestID] = *detail.HTTPStatusCode
+		}
+	}
+	if statuses["req-success-default-status"] != 200 || statuses["req-success-real-status"] != 201 {
+		t.Fatalf("unexpected persisted success statuses: %#v", statuses)
+	}
+}
+
 func TestRecordPrivacyRedactionPersistsMatchesInRequestDetail(t *testing.T) {
 	config := &Config{
 		Enabled:         true,

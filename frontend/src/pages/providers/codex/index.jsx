@@ -72,11 +72,6 @@ import {
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '@pages/management/shared/modelMapping.js';
 import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '@pages/management/shared/modelMultiplierRows.js';
 import {
-  CODEX_REASONING_EFFORT_OPTIONS,
-  getCodexReasoningEffortLoadState,
-  normalizeCodexReasoningEffort,
-} from './reasoningEffort.js';
-import {
   activateCodexChannel,
   activateCodexEndpoint,
   createCodexChannel,
@@ -326,8 +321,8 @@ const parseEndpointPriorityPayload = (value) => {
   return { priority: parsed };
 };
 
-// 注：model / reasoningEffort / enable1MContext 三个字段已迁移到「设置」页全局配置
-// 在代理模式下，这些字段不再由渠道级管理，仅写入 ~/.codex/config.toml 由 Codex CLI 读取
+// 注：model / enable1MContext 已迁移到「设置」页全局配置；推理强度由 Codex 客户端按会话管理
+// 在代理模式下，这些字段不再由渠道级管理
 
 // Codex 官方品牌图标（来源：lobe-icons / OpenAI Codex）
 // 使用 currentColor 填充，可被父级 text-white 等颜色 token 控制
@@ -1515,12 +1510,11 @@ const DeleteConfirmDialog = ({ title, description, hint, loading, onCancel, onCo
 
 // ============================================================================
 // Codex 全局配置弹窗（直接读写 ~/.codex/config.toml）
-// 字段：model / reasoning_effort / enable_1m_context（base_url 由后端自动同步）
+// 字段：model / enable_1m_context（base_url 由后端自动同步）
 // 显式保存模式：点击「保存」才写入文件
 // ============================================================================
 const DEFAULT_CONFIG = {
   model: '',
-  reasoning_effort: 'xhigh',
   enable_1m_context: false
 };
 
@@ -1541,14 +1535,12 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
     getCodexGlobalConfig()
       .then((data) => {
         if (canceled) return;
-        const reasoningEffortState = getCodexReasoningEffortLoadState(data.reasoning_effort);
         const loaded = {
           model: data.model || '',
-          reasoning_effort: reasoningEffortState.value,
           enable_1m_context: Boolean(data.enable_1m_context)
         };
         setConfig(loaded);
-        setInitialConfig({ ...loaded, reasoning_effort: reasoningEffortState.initialValue });
+        setInitialConfig(loaded);
       })
       .catch((err) => {
         if (canceled) return;
@@ -1573,7 +1565,6 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
     try {
       await updateCodexGlobalConfig({
         model: config.model,
-        reasoning_effort: normalizeCodexReasoningEffort(config.reasoning_effort),
         enable_1m_context: config.enable_1m_context
       });
       await onSaved?.();
@@ -1587,7 +1578,6 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
 
   const hasChanges =
     config.model !== initialConfig.model ||
-    config.reasoning_effort !== initialConfig.reasoning_effort ||
     config.enable_1m_context !== initialConfig.enable_1m_context;
 
   return renderModalPortal(
@@ -1646,39 +1636,6 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
                 <p className="mt-1 text-xs text-slate-400">作为所有渠道的默认值；某个渠道可在其编辑弹窗里单独覆盖</p>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">推理强度</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {CODEX_REASONING_EFFORT_OPTIONS.map((option) => {
-                    const isSelected = option.value === config.reasoning_effort;
-                    return (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => updateField('reasoning_effort', option.value)}
-                        className={`rounded-xl border px-3 py-2 text-left transition-all ${
-                          isSelected
-                            ? 'border-amber-300 bg-amber-50 text-amber-900 shadow-sm'
-                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-sm font-semibold">{option.label}</span>
-                          <span
-                            className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.1em] ${
-                              isSelected ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'
-                            }`}
-                          >
-                            {option.hint}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="mt-1 text-xs text-slate-400">写入顶层 model_reasoning_effort 字段</p>
               </div>
 
               <div className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
@@ -2262,7 +2219,7 @@ const ChannelCard = ({
   channel,
   actionLoading,
   suspendedCount = 0,
-  globalConfig = { model: '', reasoning_effort: 'xhigh', enable_1m_context: false },
+  globalConfig = { model: '', enable_1m_context: false },
   onActivateChannel,
   onEditChannel,
   onDeleteChannel,
@@ -2490,9 +2447,9 @@ const ChannelCard = ({
         </div>
       </div>
 
-      {/* 元数据条：模型 · 推理 · 1M · 默认凭证
+      {/* 元数据条：模型 · 1M · 默认凭证
           model 字段：渠道有自己的值则覆盖；否则用全局默认（来自 ~/.codex/config.toml）
-          推理 / 1M：所有渠道共用全局配置 */}
+          1M：所有渠道共用全局配置 */}
       <div className="flex flex-nowrap items-center gap-x-3 gap-y-1.5 overflow-hidden border-t border-slate-100 px-4 py-2 text-[11px]">
         <span className="inline-flex flex-shrink-0 items-center gap-1 text-slate-600">
           <ShieldCheck size={11} className="text-emerald-500" />
@@ -2508,10 +2465,6 @@ const ChannelCard = ({
               {channel.model ? '渠道' : '全局'}
             </span>
           </Tooltip>
-        </span>
-        <span className="flex-shrink-0 text-slate-300">·</span>
-        <span className="flex-shrink-0 text-slate-500">
-          推理 <span className="font-medium text-amber-600">{globalConfig.reasoning_effort || 'xhigh'}</span>
         </span>
         {globalConfig.enable_1m_context && (
           <>
@@ -2738,10 +2691,8 @@ const CodexPage = () => {
   // Codex 全局配置（来自 ~/.codex/config.toml，所有渠道共用）
   const [globalConfig, setGlobalConfig] = useState({
     model: '',
-    reasoning_effort: 'xhigh',
     enable_1m_context: false,
     effective_model: '',
-    effective_reasoning_effort: 'xhigh',
     effective_enable_1m_context: false,
     global_timeout_seconds: 300
   });
@@ -2752,10 +2703,8 @@ const CodexPage = () => {
       const data = await getCodexGlobalConfig();
       setGlobalConfig({
         model: data.model || '',
-        reasoning_effort: normalizeCodexReasoningEffort(data.reasoning_effort),
         enable_1m_context: Boolean(data.enable_1m_context),
         effective_model: data.effective_model || data.model || '',
-        effective_reasoning_effort: normalizeCodexReasoningEffort(data.effective_reasoning_effort || data.reasoning_effort),
         effective_enable_1m_context: Boolean(data.effective_enable_1m_context ?? data.enable_1m_context),
         global_timeout_seconds: data.global_timeout_seconds || data.globalTimeoutSeconds || 300
       });
@@ -2799,7 +2748,6 @@ const CodexPage = () => {
     return { channelOwner: latestChannel, endpoint: latestEndpoint };
   })() : null;
   const currentCodexModel = globalConfig.effective_model || globalConfig.model || '未设置';
-  const currentCodexReasoningEffort = globalConfig.effective_reasoning_effort || globalConfig.reasoning_effort || 'xhigh';
 
   const overviewCards = [
     {
@@ -2812,18 +2760,7 @@ const CodexPage = () => {
     {
       title: '当前模型',
       value: currentCodexModel,
-      subText: (
-        <span className="inline-flex max-w-full items-center gap-1.5 overflow-hidden align-middle">
-          <span className="flex-shrink-0 text-slate-400">推理</span>
-          <span className="min-w-0 truncate font-semibold text-amber-600">{currentCodexReasoningEffort}</span>
-          {globalConfig.effective_enable_1m_context && (
-            <>
-              <span className="flex-shrink-0 text-slate-300">·</span>
-              <span className="flex-shrink-0 font-semibold text-sky-600">1M</span>
-            </>
-          )}
-        </span>
-      ),
+      subText: globalConfig.effective_enable_1m_context ? '已启用 1M 上下文' : '客户端可按会话覆盖',
       icon: ShieldCheck,
       statusColor: 'bg-sky-50 text-sky-600'
     },

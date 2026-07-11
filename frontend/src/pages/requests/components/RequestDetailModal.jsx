@@ -32,7 +32,7 @@ import {
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import DurationBadge from './DurationBadge.jsx';
-import { formatCost, formatTimestamp } from '@utils/api.js';
+import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
 import { formatMultiplierDisplayValue } from '@utils/multiplier.js';
 import { Tooltip } from '@components/ui';
 import {
@@ -44,9 +44,11 @@ import {
 import {
   chainHasMultipleChannels,
   getEndpointChainItems,
+  getRequestNetworkDisplayState,
   getRequestChannelLabel,
   getRequestCredentialGroupLabel,
   parseChainNode,
+  summarizeEndpointAttempts,
 } from '../utils/endpointChain.js';
 
 const privacyRuleTypeLabels = {
@@ -190,7 +192,7 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
         <span className="text-sm font-medium">{label}</span>
       </div>
       <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
-        <span className="min-w-0 max-w-full text-right font-mono text-sm text-slate-900">
+        <span className="min-w-0 max-w-full whitespace-pre-wrap break-words text-right font-mono text-sm text-slate-900 [overflow-wrap:anywhere]">
           {value || '-'}
         </span>
         {copyable && (
@@ -327,6 +329,10 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     }
     return node;
   }).filter(Boolean);
+  const networkSummary = summarizeEndpointAttempts(request, chainNodes);
+  const networkDisplayState = getRequestNetworkDisplayState(request);
+  const networkHTTPStatus = request.httpStatusCode ?? request.http_status_code ?? request.statusCode;
+  const networkFirstByteMs = request.firstByteMs ?? request.first_byte_ms;
   const currentCredentialGroupLabel = getRequestCredentialGroupLabel(request, chainNodes);
   const showChannelInChain = isClaudeRequest && chainHasMultipleChannels(endpointChain);
   const hasEndpointErrors = chainNodes.some((node) => Boolean(node.error));
@@ -1158,15 +1164,44 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
 
           {/* 网络信息 Tab */}
           {activeTab === 'network' && (
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
-                <h3 className="text-sm font-semibold text-slate-900">网络详情</h3>
+            <div className="space-y-4">
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-900">请求结果</h3>
+                </div>
+                <div className="px-4">
+                  <InfoRow icon={Server} label="HTTP 状态码" value={networkHTTPStatus > 0 ? networkHTTPStatus : '-'} />
+                  <InfoRow icon={Activity} label="请求状态" value={<RequestStatusBadge status={request.status} />} />
+                  <InfoRow icon={Waves} label="流式状态" value={networkDisplayState.isStreaming == null ? '-' : (networkDisplayState.isStreaming ? '流式' : '非流式')} />
+                  <InfoRow icon={Clock} label="总耗时" value={networkDisplayState.durationMs == null ? '-' : formatDuration(networkDisplayState.durationMs)} />
+                  <InfoRow icon={Zap} label="首字耗时" value={networkFirstByteMs == null ? '-' : formatDuration(networkFirstByteMs)} />
+                </div>
               </div>
-              <div className="px-4">
-                <InfoRow icon={Server} label="HTTP 状态码" value={request.http_status_code || request.httpStatusCode || '-'} />
-                <InfoRow icon={RefreshCw} label="重试次数" value={`${request.retry_count || request.retryCount || 0} 次`} />
-                <InfoRow icon={Activity} label="请求方法" value={request.method || 'POST'} />
-                <InfoRow icon={FileText} label="请求路径" value={request.path || '/v1/messages'} copyable />
+
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-900">路由与尝试</h3>
+                </div>
+                <div className="px-4">
+                  <InfoRow icon={Replace} label="是否转移" value={networkSummary.transferred ? '已转移' : '未转移'} />
+                  <InfoRow icon={Activity} label="尝试次数" value={`${networkSummary.attemptCount} 次`} />
+                  <InfoRow icon={RefreshCw} label="重试次数" value={`${networkSummary.retryCount} 次`} />
+                  <InfoRow icon={Layers} label="转移次数" value={`${networkSummary.transferCount} 次`} />
+                  <InfoRow icon={Server} label="起始端点" value={networkSummary.firstEndpoint || '-'} />
+                  <InfoRow icon={Server} label="最终端点" value={networkSummary.finalEndpoint || request.endpoint || '-'} />
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                  <h3 className="text-sm font-semibold text-slate-900">请求信息</h3>
+                </div>
+                <div className="px-4">
+                  <InfoRow icon={Activity} label="请求方法" value={request.method || '-'} />
+                  <InfoRow icon={FileText} label="请求路径" value={request.path || '-'} copyable />
+                  <InfoRow icon={Server} label="客户端 IP" value={request.clientIP || request.client_ip || '-'} copyable />
+                  <InfoRow icon={FileText} label="User-Agent" value={request.userAgent || request.user_agent || '-'} copyable />
+                </div>
               </div>
             </div>
           )}

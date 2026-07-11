@@ -327,6 +327,13 @@ export const fetchRequests = async (params = {}) => {
     const endpointChainLength = endpointChain.length > 0 ? endpointChain.length : (endpoint ? 1 : 0);
     const endpointChainHead = endpointChain.length > 0 ? chainItemToKey(endpointChain[0]) : (endpoint || '');
     const endpointChainTail = endpointChain.length > 0 ? chainItemToKey(endpointChain[endpointChain.length - 1]) : (endpoint || '');
+    const httpStatusCode = normalizeNumberOrNull(
+      request.http_status_code ?? request.httpStatusCode ?? request.http_status ?? request.httpStatus ?? request.status_code ?? request.statusCode
+    );
+    const rawRetryCount = Number(request.retry_count ?? request.retryCount ?? 0);
+    const retryCount = Number.isFinite(rawRetryCount) ? Math.max(0, Math.trunc(rawRetryCount)) : 0;
+    const clientIP = request.client_ip || request.clientIP || '';
+    const userAgent = request.user_agent || request.userAgent || '';
 
     return ({
       ...request,
@@ -349,6 +356,16 @@ export const fetchRequests = async (params = {}) => {
       privacyRedactionSummary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
       privacyRedactionMatches: request.privacy_redaction_matches || request.privacyRedactionMatches || '',
       provider: request.provider || '',
+      http_status_code: httpStatusCode,
+      httpStatusCode,
+      retry_count: retryCount,
+      retryCount,
+      method: request.method || '',
+      path: request.path || '',
+      client_ip: clientIP,
+      clientIP,
+      user_agent: userAgent,
+      userAgent,
       channel: request.channel || '',
       endpoint,
       endpointChain,
@@ -385,8 +402,8 @@ export const fetchRequests = async (params = {}) => {
       modelInputCostMultiplier: request.model_input_cost_multiplier ?? request.modelInputCostMultiplier ?? 1.0,
       modelOutputCostMultiplier: request.model_output_cost_multiplier ?? request.modelOutputCostMultiplier ?? 1.0,
       modelCacheReadCostMultiplier: request.model_cache_read_cost_multiplier ?? request.modelCacheReadCostMultiplier ?? 1.0,
-      isStreaming: request.is_streaming || request.isStreaming || false,
-      statusCode: request.status_code || request.statusCode
+      isStreaming: request.is_streaming ?? request.isStreaming ?? false,
+      statusCode: httpStatusCode
     });
   };
 

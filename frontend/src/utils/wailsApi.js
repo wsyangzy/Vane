@@ -684,6 +684,19 @@ export const getUsageSummary = async (startTime = '', endTime = '', provider = '
   };
 };
 
+export const mapRequestNetworkFields = (record = {}) => {
+  const httpStatus = record.http_status ?? record.httpStatus ?? record.http_status_code ?? record.httpStatusCode ?? 0;
+  return {
+    status_code: httpStatus,
+    http_status_code: httpStatus,
+    retry_count: record.retry_count ?? record.retryCount ?? 0,
+    method: record.method || '',
+    path: record.path || '',
+    client_ip: record.client_ip || record.clientIP || '',
+    user_agent: record.user_agent || record.userAgent || '',
+  };
+};
+
 export const getRequests = async (params = {}) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -735,9 +748,7 @@ export const getRequests = async (params = {}) => {
     privacyRedactionMatches: r.privacy_redaction_matches || '',
     provider: r.provider || '',
     status: r.status,
-    status_code: r.http_status,
-    http_status_code: r.http_status,  // 添加 http_status_code 映射
-    retry_count: r.retry_count || 0,  // 添加重试次数
+    ...mapRequestNetworkFields(r),
     input_tokens: r.input_tokens,
     output_tokens: r.output_tokens,
     reasoning_tokens: r.reasoning_tokens ?? 0,
@@ -2467,13 +2478,13 @@ export const getCodexSuspendedCount = async () => {
 };
 
 // ============================================================================
-// Codex 全局配置（~/.codex/config.toml 中的 model / reasoning_effort / 1M）
+// Codex 全局配置（Relay 更新 model / 1M；reasoning_effort 仅只读兼容）
 // base_url 由后端自动同步自「设置 → 服务端口」，前端不可编辑
 // ============================================================================
 
 /**
  * 读取 Codex 全局配置
- * @returns {Promise<{model:string, reasoning_effort:string, enable_1m_context:boolean}>}
+ * @returns {Promise<{model:string, reasoning_effort:string, enable_1m_context:boolean}>} reasoning_effort 仅兼容读取
  */
 export const getCodexGlobalConfig = async () => {
   await initWails();
@@ -2491,9 +2502,9 @@ export const getCodexGlobalConfig = async () => {
 };
 
 /**
- * 更新 Codex 全局配置（直接写 ~/.codex/config.toml）
+ * 更新 Codex 全局配置（直接写 ~/.codex/config.toml；后端忽略 reasoning_effort）
  * base_url 由后端自动取 server.host:port + /v1
- * @param {{model:string, reasoning_effort:string, enable_1m_context:boolean}} input
+ * @param {{model:string, reasoning_effort?:string, enable_1m_context:boolean}} input reasoning_effort 为兼容字段
  */
 export const updateCodexGlobalConfig = async (input) => {
   await initWails();

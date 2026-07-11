@@ -94,6 +94,36 @@ func TestParseEndpointChain(t *testing.T) {
 	}
 }
 
+func TestRequestDetailToRecordMapsNetworkFields(t *testing.T) {
+	record := requestDetailToRecord(tracking.RequestDetail{
+		RequestID: "req-network-fields",
+		ClientIP:  "192.0.2.10:1234",
+		UserAgent: "Codex CLI/1.0",
+		Method:    "PATCH",
+		Path:      "/v1/responses",
+	})
+
+	if record.ClientIP != "192.0.2.10:1234" || record.UserAgent != "Codex CLI/1.0" || record.Method != "PATCH" || record.Path != "/v1/responses" {
+		t.Fatalf("network fields were not mapped: %#v", record)
+	}
+}
+
+func TestRequestDetailToRecordUsesEndpointChainAsHistoricalRetryFloor(t *testing.T) {
+	record := requestDetailToRecord(tracking.RequestDetail{
+		RequestID:     "req-historical-retry",
+		Status:        "completed",
+		RetryCount:    0,
+		EndpointChain: `[{"hop":1,"channel":"CCTQ","credential_group":"primary","endpoint":"A"},{"hop":2,"channel":"CCTQ","credential_group":"backup","endpoint":"B"}]`,
+	})
+
+	if record.RetryCount != 1 {
+		t.Fatalf("retry count = %d, want historical floor 1", record.RetryCount)
+	}
+	if record.HTTPStatus != 200 {
+		t.Fatalf("completed historical HTTP status = %d, want 200", record.HTTPStatus)
+	}
+}
+
 func TestEnrichEndpointChainCredentialGroups(t *testing.T) {
 	nodes := []chainNode{
 		{Hop: 1, Channel: "公益站", Endpoint: "Ark API"},

@@ -1469,6 +1469,10 @@ export namespace main {
 	    id: string;
 	    request_id: string;
 	    timestamp: string;
+	    client_ip: string;
+	    user_agent: string;
+	    method: string;
+	    path: string;
 	    channel: string;
 	    endpoint: string;
 	    endpoint_chain: string;
@@ -1510,6 +1514,10 @@ export namespace main {
 	        this.id = source["id"];
 	        this.request_id = source["request_id"];
 	        this.timestamp = source["timestamp"];
+	        this.client_ip = source["client_ip"];
+	        this.user_agent = source["user_agent"];
+	        this.method = source["method"];
+	        this.path = source["path"];
 	        this.channel = source["channel"];
 	        this.endpoint = source["endpoint"];
 	        this.endpoint_chain = source["endpoint_chain"];

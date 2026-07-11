@@ -1,7 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import * as wailsApi from './wailsApi.js';
+
+test('generated RequestRecord model includes request network fields', () => {
+  const source = readFileSync(new URL('../wailsjs/go/models.ts', import.meta.url), 'utf8');
+  const requestRecord = source.match(/export class RequestRecord \{([\s\S]*?)static createFrom/)?.[1] || '';
+
+  for (const field of ['client_ip', 'user_agent', 'method', 'path']) {
+    assert.match(requestRecord, new RegExp(`\\b${field}: string;`));
+  }
+});
+
+test('request network bridge maps snake and camel case fields without losing zero retries', () => {
+  const mapped = wailsApi.mapRequestNetworkFields({
+    httpStatus: 204,
+    retryCount: 0,
+    method: 'DELETE',
+    path: '/v1/responses/1',
+    clientIP: '192.0.2.20:4321',
+    userAgent: 'Codex Desktop/1.0',
+  });
+
+  assert.deepEqual(mapped, {
+    status_code: 204,
+    http_status_code: 204,
+    retry_count: 0,
+    method: 'DELETE',
+    path: '/v1/responses/1',
+    client_ip: '192.0.2.20:4321',
+    user_agent: 'Codex Desktop/1.0',
+  });
+});
 
 test('parseEndpointPriority preserves zero as the highest priority', () => {
   assert.equal(wailsApi.parseEndpointPriority(0), 0);

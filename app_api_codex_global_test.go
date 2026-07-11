@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestUpdateCodexGlobalConfigPersistsDefaultsForNextRead(t *testing.T) {
+func TestUpdateCodexGlobalConfigPersistsOwnedDefaultsAndPreservesReasoningEffort(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -45,9 +45,6 @@ func TestUpdateCodexGlobalConfigPersistsDefaultsForNextRead(t *testing.T) {
 	settingsService := service.NewSettingsService(store.NewSQLiteSettingsStore(db))
 	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultModelKey, "gpt-old"); err != nil {
 		t.Fatalf("seed model setting: %v", err)
-	}
-	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultReasoningEffortKey, "xhigh"); err != nil {
-		t.Fatalf("seed effort setting: %v", err)
 	}
 	if err := settingsService.Set(ctx, codexGlobalSettingsCategory, codexGlobalDefaultEnable1MContextKey, "true"); err != nil {
 		t.Fatalf("seed 1m setting: %v", err)
@@ -87,8 +84,8 @@ func TestUpdateCodexGlobalConfigPersistsDefaultsForNextRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get global config: %v", err)
 	}
-	if got.Model != "gpt-new" || got.ReasoningEffort != "low" || got.Enable1MContext {
-		t.Fatalf("global config = {model:%q effort:%q 1m:%v}, want {gpt-new low false}",
+	if got.Model != "gpt-new" || got.ReasoningEffort != "xhigh" || got.Enable1MContext {
+		t.Fatalf("global config = {model:%q effort:%q 1m:%v}, want {gpt-new xhigh false}",
 			got.Model, got.ReasoningEffort, got.Enable1MContext)
 	}
 
@@ -98,13 +95,13 @@ func TestUpdateCodexGlobalConfigPersistsDefaultsForNextRead(t *testing.T) {
 	}
 	text := string(content)
 	if !strings.Contains(text, `model = "gpt-new"`) ||
-		!strings.Contains(text, `model_reasoning_effort = "low"`) ||
+		!strings.Contains(text, `model_reasoning_effort = "xhigh"`) ||
 		strings.Contains(text, "model_context_window") {
 		t.Fatalf("unexpected config.toml after update:\n%s", text)
 	}
 }
 
-func TestUpdateCodexGlobalConfigNormalizesUnsupportedReasoningEffort(t *testing.T) {
+func TestUpdateCodexGlobalConfigPreservesClientManagedReasoningEffort(t *testing.T) {
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
 	configPath := filepath.Join(codexHome, "config.toml")
@@ -135,7 +132,7 @@ func TestUpdateCodexGlobalConfigNormalizesUnsupportedReasoningEffort(t *testing.
 	if err != nil {
 		t.Fatalf("read config.toml: %v", err)
 	}
-	if !strings.Contains(string(content), `model_reasoning_effort = "xhigh"`) {
-		t.Fatalf("unsupported reasoning effort should be normalized to xhigh:\n%s", content)
+	if !strings.Contains(string(content), `model_reasoning_effort = "minimal"`) {
+		t.Fatalf("client-managed reasoning effort should be preserved:\n%s", content)
 	}
 }

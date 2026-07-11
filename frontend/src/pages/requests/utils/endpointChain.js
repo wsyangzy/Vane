@@ -113,4 +113,40 @@ export const chainHasMultipleChannels = (items) => {
   return channels.size > 1;
 };
 
+export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
+  const nodes = parsedNodes || getEndpointChainItems(request).map((item, index) => parseChainNode(item, index + 1));
+  const directEndpoint = request.endpoint || request.endpoint_name || '';
+  const rawRetryCount = Number(request.retry_count ?? request.retryCount ?? 0);
+  const storedRetryCount = Number.isFinite(rawRetryCount) ? Math.max(0, Math.trunc(rawRetryCount)) : 0;
+  const retryCount = Math.max(storedRetryCount, nodes.length - 1);
+  let transferCount = 0;
+
+  for (let index = 1; index < nodes.length; index += 1) {
+    const previous = nodes[index - 1];
+    const current = nodes[index];
+    const previousIdentity = [previous.channel, previous.credentialGroup, previous.endpoint].join('\u0000');
+    const currentIdentity = [current.channel, current.credentialGroup, current.endpoint].join('\u0000');
+    if (previousIdentity !== currentIdentity) transferCount += 1;
+  }
+
+  return {
+    attemptCount: Math.max(1, retryCount + 1, nodes.length),
+    retryCount,
+    transferCount,
+    transferred: transferCount > 0,
+    firstEndpoint: nodes[0]?.endpoint || directEndpoint,
+    finalEndpoint: nodes[nodes.length - 1]?.endpoint || directEndpoint,
+  };
+};
+
+export const getRequestNetworkDisplayState = (request = {}) => {
+  const rawDuration = request.duration ?? request.duration_ms;
+  const duration = rawDuration === null || rawDuration === undefined || rawDuration === '' ? null : Number(rawDuration);
+  const rawStreaming = request.isStreaming ?? request.is_streaming;
+  return {
+    durationMs: Number.isFinite(duration) ? duration : null,
+    isStreaming: typeof rawStreaming === 'boolean' ? rawStreaming : null,
+  };
+};
+
 export const parseEndpointName = (item) => parseChainNode(item).endpoint;

@@ -256,6 +256,10 @@ type RequestRecord struct {
 	ID                       string      `json:"id"`
 	RequestID                string      `json:"request_id"`
 	Timestamp                string      `json:"timestamp"`
+	ClientIP                 string      `json:"client_ip"`
+	UserAgent                string      `json:"user_agent"`
+	Method                   string      `json:"method"`
+	Path                     string      `json:"path"`
 	Channel                  string      `json:"channel"` // 渠道标签
 	Endpoint                 string      `json:"endpoint"`
 	EndpointChain            []chainNode `json:"endpoint_chain"` // 端点尝试链路（结构化 JSON 数组）
@@ -430,12 +434,22 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 
 func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 	// 使用统一的时间格式（2025-12-04 17:18:48）
+	endpointChain := parseEndpointChain(r.EndpointChain)
+	retryCount := r.RetryCount
+	// Historical endpoint_chain nodes provide a lower bound for routing attempts, not an exact transport retry count.
+	if chainRetryFloor := len(endpointChain) - 1; chainRetryFloor > retryCount {
+		retryCount = chainRetryFloor
+	}
 	record := RequestRecord{
 		RequestID:                     r.RequestID,
 		Timestamp:                     r.StartTime.Format("2006-01-02 15:04:05"),
+		ClientIP:                      r.ClientIP,
+		UserAgent:                     r.UserAgent,
+		Method:                        r.Method,
+		Path:                          r.Path,
 		Channel:                       r.Channel, // 渠道标签
 		Endpoint:                      r.EndpointName,
-		EndpointChain:                 parseEndpointChain(r.EndpointChain),
+		EndpointChain:                 endpointChain,
 		Group:                         r.GroupName,
 		Model:                         r.ModelName,
 		OriginalModelName:             r.OriginalModelName,
@@ -446,7 +460,7 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		PrivacyRedactionMatches:       r.PrivacyRedactionMatches,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
-		RetryCount:                    r.RetryCount,
+		RetryCount:                    retryCount,
 		FailureReason:                 r.FailureReason,
 		CancelReason:                  r.CancelReason,
 		InputTokens:                   r.InputTokens,
@@ -480,6 +494,8 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 
 	if r.HTTPStatusCode != nil {
 		record.HTTPStatus = *r.HTTPStatusCode
+	} else if r.Status == "completed" {
+		record.HTTPStatus = 200
 	}
 	if r.DurationMs != nil {
 		record.ResponseTime = *r.DurationMs
