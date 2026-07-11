@@ -49,7 +49,7 @@ export const TABLE_COLUMNS = [
   { id: 'provider', label: '提供商', alwaysVisible: false, width: 'auto' },
   { id: 'requestType', label: '请求类型', alwaysVisible: false, width: 'auto' },
   { id: 'status', label: '状态', alwaysVisible: false, width: 'auto' },
-  { id: 'model', label: '模型', alwaysVisible: false, width: 'auto' },
+  { id: 'model', label: '模型', alwaysVisible: false, width: '8rem' },
   { id: 'channel', label: '渠道', alwaysVisible: false, width: 'auto' },
   { id: 'endpoint', label: '链路', alwaysVisible: false, width: 'auto' },
   { id: 'duration', label: '用时/首字', alwaysVisible: false, width: 'auto' },

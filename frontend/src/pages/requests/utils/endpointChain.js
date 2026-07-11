@@ -72,6 +72,34 @@ export const getEndpointChainItems = (request) => {
   return parseEndpointChain(request?.endpoint_chain);
 };
 
+export const getRequestCredentialGroupLabel = (request = {}, chainNodes = []) => {
+  const credentialGroup = String(chainNodes[chainNodes.length - 1]?.credentialGroup || '').trim();
+  if (credentialGroup) return credentialGroup;
+
+  const directGroup = String(request.credentialGroup || request.groupName || request.group_name || '').trim();
+  if (directGroup) return directGroup;
+
+  if (String(request.provider || '').toLowerCase() === 'codex') {
+    return String(request.group || '').trim() || '-';
+  }
+  return '-';
+};
+
+export const getRequestChannelLabel = (request = {}, chainNodes = [], fallback = '-') => {
+  const directChannel = String(request.channel || '').trim();
+  if (directChannel) return directChannel;
+
+  for (let index = chainNodes.length - 1; index >= 0; index -= 1) {
+    const channel = String(chainNodes[index]?.channel || '').trim();
+    if (channel) return channel;
+  }
+
+  if (String(request.provider || '').toLowerCase() !== 'codex') {
+    return String(request.group || '').trim() || fallback;
+  }
+  return fallback;
+};
+
 export const chainHasChannel = (items) => (
   items.some((item) => Boolean(parseChainNode(item).channel))
 );

@@ -21,14 +21,16 @@ export const getDisplayInputTokens = (request) => {
 export const getBillableInputTokens = (request) => {
   const inputTokens = numeric(request?.inputTokens ?? request?.input_tokens);
   const cacheReadTokens = numeric(request?.cacheReadTokens ?? request?.cache_read_tokens);
+  const cacheWriteTokens = numeric(request?.cacheCreationTokens ?? request?.cache_creation_tokens);
 
   if (!isCacheInclusiveProvider(request?.provider)) {
     return inputTokens;
   }
-  if (cacheReadTokens > inputTokens) {
+  const cachedInputTokens = cacheReadTokens + cacheWriteTokens;
+  if (cachedInputTokens > inputTokens) {
     return inputTokens;
   }
-  return Math.max(0, inputTokens - cacheReadTokens);
+  return Math.max(0, inputTokens - cachedInputTokens);
 };
 
 export const getDisplayTotalTokens = (request) => {

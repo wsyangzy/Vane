@@ -8,6 +8,7 @@ import {
   parseEndpointChain,
   parseEndpointName,
 } from './endpointChain.js';
+import * as endpointChainUtils from './endpointChain.js';
 
 test('parseEndpointChain keeps structured JSON chain nodes', () => {
   const chain = parseEndpointChain(JSON.stringify([
@@ -85,4 +86,30 @@ test('chainHasMultipleChannels only reports actual inter-channel paths', () => {
     { channel: 'anyrouter', credential_group: '默认分组', endpoint: 'hk-node' },
     { channel: 'Right Code', credential_group: 'AWSQ逆向渠道', endpoint: 'AWSQ逆向渠道' },
   ]), true);
+});
+
+test('request credential group label prefers the current chain node and keeps Codex group fallback', () => {
+  const getLabel = endpointChainUtils.getRequestCredentialGroupLabel;
+  const chainNodes = [
+    { credentialGroup: '起始分组' },
+    { credentialGroup: '订阅' },
+  ];
+
+  assert.equal(getLabel?.({ provider: 'codex', group: '旧分组' }, chainNodes), '订阅');
+  assert.equal(getLabel?.({ provider: 'codex', credentialGroup: '直接分组' }, []), '直接分组');
+  assert.equal(getLabel?.({ provider: 'codex', groupName: '记录分组' }, []), '记录分组');
+  assert.equal(getLabel?.({ provider: 'codex', group: '订阅' }, []), '订阅');
+  assert.equal(getLabel?.({ provider: 'claude', group: '渠道字段' }, []), '-');
+  assert.equal(getLabel?.(
+    { provider: 'codex', credentialGroup: '最终记录分组' },
+    [{ credentialGroup: '失败旧分组' }, { credentialGroup: '' }],
+  ), '最终记录分组');
+});
+
+test('request channel label never treats a Codex credential group as its channel', () => {
+  const getChannelLabel = endpointChainUtils.getRequestChannelLabel;
+
+  assert.equal(getChannelLabel?.({ provider: 'codex', group: '订阅' }, [], ''), '');
+  assert.equal(getChannelLabel?.({ provider: 'claude', group: 'Claude 兼容渠道' }, [], ''), 'Claude 兼容渠道');
+  assert.equal(getChannelLabel?.({ provider: 'codex', channel: '合租巴士' }, [], ''), '合租巴士');
 });

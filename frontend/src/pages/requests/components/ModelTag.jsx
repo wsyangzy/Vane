@@ -237,26 +237,31 @@ const ModelTag = ({
   const rewriteTitle = rewriteIndicator
     ? `${rewriteIndicator.label}: ${originalModel || '-'} -> ${rewriteTarget || displayName}`
     : '';
-
   const tag = (
     <span
-      className={`inline-flex w-fit max-w-none items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${modelStyle.classes} ${className}`}
+      className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${modelStyle.classes} ${className}`}
     >
       <BrandIcon className={modelStyle.icon === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
-      <span className="whitespace-nowrap">{displayName}</span>
+      <span className="min-w-0 truncate">
+        {displayName}
+      </span>
     </span>
   );
 
   if (!rewriteIndicator) {
-    return tag;
+    return (
+      <Tooltip content={title || displayName} className="max-w-full min-w-0">
+        {tag}
+      </Tooltip>
+    );
   }
 
   return (
-    <Tooltip content={title || rewriteTitle}>
-      <span className="relative inline-flex align-middle">
+    <Tooltip content={title || rewriteTitle} className="max-w-full min-w-0">
+      <span className="relative inline-flex max-w-full min-w-0 pr-5 align-middle">
         {tag}
         <Replace
-          className={`absolute left-full top-1/2 ml-1.5 h-3.5 w-3.5 -translate-y-1/2 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
+          className={`absolute right-0 top-1/2 h-3.5 w-3.5 -translate-y-1/2 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
           aria-label={rewriteIndicator.label}
         />
       </span>

@@ -312,7 +312,7 @@ export const fetchRequests = async (params = {}) => {
     } else {
       endpointChain = [];
     }
-    const endpoint = request.endpoint_name || request.endpoint || 'unknown';
+    const endpoint = request.endpoint_name || request.endpoint || '';
 
     // Convert chain item (object or string) to "channel::group::endpoint" key string
     const chainItemToKey = (item) => {
@@ -355,7 +355,7 @@ export const fetchRequests = async (params = {}) => {
       endpointChainHead,
       endpointChainTail,
       endpointChainLength,
-      group: request.group_name || request.group || 'default',
+      group: request.group_name || request.group || '',
       duration: request.duration_ms || request.duration || 0,
       firstByteMs: normalizeNumberOrNull(request.first_byte_ms ?? request.firstByteMs ?? request.first_byte_time ?? request.firstByteTime),
       inputTokens: request.input_tokens || request.inputTokens || 0,

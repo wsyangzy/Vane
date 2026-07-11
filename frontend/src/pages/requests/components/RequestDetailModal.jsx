@@ -44,6 +44,8 @@ import {
 import {
   chainHasMultipleChannels,
   getEndpointChainItems,
+  getRequestChannelLabel,
+  getRequestCredentialGroupLabel,
   parseChainNode,
 } from '../utils/endpointChain.js';
 
@@ -182,13 +184,13 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
   };
 
   return (
-    <div className="flex items-start justify-between py-3 border-b border-slate-100 last:border-b-0 group">
+    <div className="flex items-start justify-between py-2 border-b border-slate-100 last:border-b-0 group">
       <div className="flex items-center gap-2 text-slate-500 min-w-[120px]">
         <Icon className="w-4 h-4 flex-shrink-0" />
         <span className="text-sm font-medium">{label}</span>
       </div>
-      <div className="flex items-center gap-2 flex-1 justify-end">
-        <span className="text-sm font-mono text-slate-900 text-right">
+      <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+        <span className="min-w-0 max-w-full text-right font-mono text-sm text-slate-900">
           {value || '-'}
         </span>
         {copyable && (
@@ -319,15 +321,16 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
     if (endpointChain.length === 1 && !node.channel) {
       return {
         ...node,
-        channel: request.channel || request.group || '',
+        channel: getRequestChannelLabel(request, [node], ''),
         credentialGroup: node.credentialGroup || request.credentialGroup || request.groupName || '',
       };
     }
     return node;
   }).filter(Boolean);
+  const currentCredentialGroupLabel = getRequestCredentialGroupLabel(request, chainNodes);
   const showChannelInChain = isClaudeRequest && chainHasMultipleChannels(endpointChain);
   const hasEndpointErrors = chainNodes.some((node) => Boolean(node.error));
-  const currentChannelLabel = request.channel || request.group || chainNodes.find((node) => node.channel)?.channel || '';
+  const currentChannelLabel = getRequestChannelLabel(request, chainNodes);
   const hasUnknownChannel = showChannelInChain && chainNodes.some((node) => !node.channel);
   const channelTones = [
     { badge: 'bg-blue-50 text-blue-600 border-blue-100', border: 'border-blue-200/70' },
@@ -377,7 +380,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const privacyMatches = parsePrivacyMatches(request.privacyRedactionMatches || request.privacy_redaction_matches);
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-start justify-center pt-[15vh] px-4">
+    <div className="absolute inset-x-0 -top-6 bottom-0 z-[10000] flex items-center justify-center p-4">
       {/* 背景遮罩 */}
       <div
         className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200"
@@ -385,9 +388,9 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
       />
 
       {/* 模态框内容 - 固定高度，内容区域滚动 */}
-      <div className="relative w-full max-w-3xl max-h-[80vh] bg-white rounded-2xl shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200 flex flex-col overflow-hidden">
+      <div className="relative flex h-[80vh] max-h-[48rem] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200">
         {/* 头部 - 固定不滚动 */}
-        <div className="flex-shrink-0 py-4 pl-6 pr-14 border-b border-slate-100 bg-white rounded-t-2xl flex items-center justify-between">
+        <div className="flex flex-shrink-0 items-center justify-between rounded-t-2xl border-b border-slate-100 bg-white px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-indigo-50 rounded-lg">
               <FileText className="w-5 h-5 text-indigo-600" />
@@ -412,7 +415,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* Tab 导航 - 固定不滚动 */}
-        <div className="flex-shrink-0 pl-6 pr-14 pt-4 border-b border-slate-100 bg-slate-50/50">
+        <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-6 pt-4">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {[
               { id: 'overview', label: '概览', icon: Activity },
@@ -439,7 +442,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* 内容区域 - 自动填充剩余空间并滚动 */}
-        <div className="flex-1 py-6 pl-6 pr-11 overflow-y-auto [scrollbar-gutter:stable] scrollbar-thin scrollbar-thumb-slate-200 min-h-0">
+        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2 [scrollbar-gutter:stable] scrollbar-thin scrollbar-thumb-slate-200">
           {/* 概览 Tab */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
@@ -469,7 +472,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
                   <h3 className="text-sm font-semibold text-slate-900">基本信息</h3>
                 </div>
-                <div className="p-4">
+                <div className="px-4">
                   <InfoRow icon={FileText} label="请求 ID" value={request.requestId} copyable />
                   {request.rawRequestId && request.rawRequestId !== request.requestId && (
                     <InfoRow icon={FileText} label="记录 ID" value={request.rawRequestId} copyable />
@@ -485,8 +488,33 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                       </span>
                     )}
                   />
-                  <InfoRow icon={Server} label="端点" value={request.endpoint} />
-                  <InfoRow icon={Layers} label="渠道" value={request.channel || request.group} />
+                  <InfoRow
+                    icon={Layers}
+                    label="渠道"
+                    value={(
+                      <span className="inline-flex min-w-0 max-w-full items-center rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-right text-xs font-medium text-blue-700 [overflow-wrap:anywhere]">
+                        {currentChannelLabel || '-'}
+                      </span>
+                    )}
+                  />
+                  <InfoRow
+                    icon={Database}
+                    label="分组"
+                    value={(
+                      <span className="inline-flex min-w-0 max-w-full items-center rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-right text-xs font-medium text-violet-700 [overflow-wrap:anywhere]">
+                        {currentCredentialGroupLabel || '-'}
+                      </span>
+                    )}
+                  />
+                  <InfoRow
+                    icon={Server}
+                    label="端点"
+                    value={(
+                      <span className="inline-flex min-w-0 max-w-full items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-right text-xs font-medium text-slate-700 [overflow-wrap:anywhere]">
+                        {request.endpoint || '-'}
+                      </span>
+                    )}
+                  />
                 </div>
               </div>
 
@@ -597,7 +625,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                   cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadBasePrice, color: 'amber' },
                   cache5mBasePrice > 0 && { key: 'cache5m', label: '5m 缓存创建', value: cache5mBasePrice, color: 'purple' },
                   cache1hBasePrice > 0 && { key: 'cache1h', label: '1h 缓存创建', value: cache1hBasePrice, color: 'violet' },
-                  aggregateCacheCreationPrice > 0 && { key: 'cacheCreation', label: '缓存创建', value: aggregateCacheCreationPrice, color: 'slate' }
+                  aggregateCacheCreationPrice > 0 && { key: 'cacheCreation', label: isCodexRequest ? '缓存写入' : '缓存创建', value: aggregateCacheCreationPrice, color: 'slate' }
                 ].filter(Boolean)
 
                 const multiplierBadges = [
@@ -667,7 +695,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     key: 'cache1h', label: '1h 缓存创建', tokens: cache1hTokens, price: cache1hBasePrice, multiplierText: buildMultiplierText(cache1hMultiplier), cost: removeTotalMultiplier(cache1hCost)
                   },
                   !hasSplitCache && cacheCreationTokens > 0 && {
-                    key: 'cacheCreation', label: '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, cost: removeTotalMultiplier(cacheCreationCost)
+                    key: 'cacheCreation', label: isCodexRequest ? '缓存写入' : '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, cost: removeTotalMultiplier(cacheCreationCost)
                   }
                 ].filter(Boolean)
 
@@ -1134,7 +1162,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
                 <h3 className="text-sm font-semibold text-slate-900">网络详情</h3>
               </div>
-              <div className="p-4">
+              <div className="px-4">
                 <InfoRow icon={Server} label="HTTP 状态码" value={request.http_status_code || request.httpStatusCode || '-'} />
                 <InfoRow icon={RefreshCw} label="重试次数" value={`${request.retry_count || request.retryCount || 0} 次`} />
                 <InfoRow icon={Activity} label="请求方法" value={request.method || 'POST'} />
@@ -1228,7 +1256,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
 
         {/* 底部操作栏 - 固定不滚动 */}
-        <div className="flex-shrink-0 py-4 pl-6 pr-14 border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm rounded-b-2xl flex justify-between items-center">
+        <div className="flex flex-shrink-0 items-center justify-between rounded-b-2xl border-t border-slate-100 bg-slate-50/80 px-6 py-4 backdrop-blur-sm">
           <div className="text-xs text-slate-500">
             Request ID: <span className="font-mono text-slate-700">{request.requestId}</span>
           </div>

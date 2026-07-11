@@ -360,7 +360,7 @@ const renderCell = (columnId, request) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
+const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
   const [clickCount, setClickCount] = React.useState(0);
   const [clickTimer, setClickTimer] = React.useState(null);
 
@@ -395,12 +395,13 @@ const RequestRow = ({ request, visibleColumns, onCopyId, onDoubleClick }) => {
       className="hover:bg-gray-50/80 transition-colors group cursor-pointer"
       onClick={handleRowClick}
     >
-      {visibleColumns.map(colId => (
+      {columns.map((column) => (
         <td
-          key={colId}
-          className="px-3 py-3 text-center align-middle"
+          key={column.id}
+          className={`min-w-0 px-3 py-3 text-center align-middle ${column.id === 'model' ? 'overflow-hidden' : ''}`}
+          style={column.width === 'auto' ? undefined : { width: column.width, maxWidth: column.width }}
         >
-          {renderCell(colId, request)}
+          {renderCell(column.id, request)}
         </td>
       ))}
     </tr>
@@ -440,7 +441,7 @@ const RequestsTable = ({
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-full min-h-0">
       {/* 表头 */}
-      <div className="px-4 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/30">
+      <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/30 px-4 py-4">
         <div className="flex items-center gap-2">
           <h3 className="font-semibold text-gray-800">请求明细</h3>
           <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full font-medium">
@@ -465,6 +466,7 @@ const RequestsTable = ({
                 <th
                   key={col.id}
                   className="px-3 py-3 font-medium text-xs uppercase tracking-wider text-center align-middle"
+                  style={col.width === 'auto' ? undefined : { width: col.width, maxWidth: col.width }}
                 >
                   {col.label}
                 </th>
@@ -483,7 +485,7 @@ const RequestsTable = ({
                 <RequestRow
                   key={req.rawRequestId || req.requestId}
                   request={req}
-                  visibleColumns={visibleColumns}
+                  columns={visibleColumnConfigs}
                   onCopyId={handleCopyId}
                   onDoubleClick={onRowDoubleClick}
                 />
