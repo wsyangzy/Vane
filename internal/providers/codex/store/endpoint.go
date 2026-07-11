@@ -256,7 +256,9 @@ func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, b
 		return fmt.Errorf("base_url 不能为空")
 	}
 
-	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET name = ?, base_url = ?, credential_group_id = ?, api_key = ?, failover_enabled = ?, skip_health_check = ?, priority = ?, timeout_seconds = ?, cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?, cache_read_cost_multiplier = ?, billing_output_token_source = ?, model_multipliers = ? WHERE id = ?`, name, baseURL, nullInt64IfZero(credentialGroupID), apiKey, boolToInt(failoverEnabled), boolToInt(skipHealthCheck), priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, defaultBillingOutputTokenSource(billingOutputTokenSource), encodeCodexModelMultipliers(modelMultipliers), id)
+	result, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
+		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET name = ?, base_url = ?, credential_group_id = ?, api_key = ?, failover_enabled = ?, skip_health_check = ?, priority = ?, timeout_seconds = ?, cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?, cache_read_cost_multiplier = ?, billing_output_token_source = ?, model_multipliers = ? WHERE id = ?`, name, baseURL, nullInt64IfZero(credentialGroupID), apiKey, boolToInt(failoverEnabled), boolToInt(skipHealthCheck), priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, defaultBillingOutputTokenSource(billingOutputTokenSource), encodeCodexModelMultipliers(modelMultipliers), id)
+	})
 	if err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
 	}
@@ -298,11 +300,15 @@ func (s *SQLiteCodexEndpointStore) SetActive(ctx context.Context, id int64) erro
 		return fmt.Errorf("查询 Codex 端点 channel_id 失败: %w", err)
 	}
 
-	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 0 WHERE channel_id = ?`, channelID); err != nil {
+	if _, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
+		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 0 WHERE channel_id = ?`, channelID)
+	}); err != nil {
 		return fmt.Errorf("清空渠道激活端点失败: %w", err)
 	}
 
-	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 1 WHERE id = ?`, id); err != nil {
+	if _, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
+		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 1 WHERE id = ?`, id)
+	}); err != nil {
 		return fmt.Errorf("设置激活端点失败: %w", err)
 	}
 	return nil
