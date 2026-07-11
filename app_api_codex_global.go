@@ -22,6 +22,10 @@ const codexGlobalDefaultModelKey = "default_model"
 const codexGlobalDefaultReasoningEffortKey = "default_reasoning_effort"
 const codexGlobalDefaultEnable1MContextKey = "default_enable_1m_context"
 
+var codexReasoningEffortValues = map[string]struct{}{
+	"low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {}, "ultra": {},
+}
+
 // CodexGlobalConfigInfo 用于读取 ~/.codex/config.toml 中的全局配置（前端展示）
 // base_url 由系统自动同步自服务端口，不向前端暴露
 type CodexGlobalConfigInfo struct {
@@ -154,9 +158,18 @@ func renderCodexBool(value bool) string {
 	return "false"
 }
 
+func normalizeCodexReasoningEffort(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if _, ok := codexReasoningEffortValues[normalized]; ok {
+		return normalized
+	}
+	return "xhigh"
+}
+
 // UpdateCodexGlobalConfig 更新 Codex 全局配置并写回 ~/.codex/config.toml
 // base_url 自动取自系统当前的 server.host:port，确保与「设置 → 服务端口」一致
 func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
+	input.ReasoningEffort = normalizeCodexReasoningEffort(input.ReasoningEffort)
 	path, content, existed, err := a.readCodexFileAllowMissing(a.getCodexConfigPath)
 	if err != nil {
 		return err

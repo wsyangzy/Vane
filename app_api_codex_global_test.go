@@ -103,3 +103,39 @@ func TestUpdateCodexGlobalConfigPersistsDefaultsForNextRead(t *testing.T) {
 		t.Fatalf("unexpected config.toml after update:\n%s", text)
 	}
 }
+
+func TestUpdateCodexGlobalConfigNormalizesUnsupportedReasoningEffort(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	configPath := filepath.Join(codexHome, "config.toml")
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		`model = "gpt-5.6-sol"`,
+		`model_reasoning_effort = "minimal"`,
+		`model_provider = "anyrouter"`,
+		``,
+		`[model_providers.anyrouter]`,
+		`base_url = "https://old.example.invalid/v1"`,
+	}, "\n")), 0644); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+
+	app := &App{
+		config: &config.Config{
+			Server: config.ServerConfig{Host: "127.0.0.1", Port: 18087},
+		},
+	}
+	if err := app.UpdateCodexGlobalConfig(CodexGlobalConfigInput{
+		Model:           "gpt-5.6-sol",
+		ReasoningEffort: "minimal",
+	}); err != nil {
+		t.Fatalf("update global config: %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	if !strings.Contains(string(content), `model_reasoning_effort = "xhigh"`) {
+		t.Fatalf("unsupported reasoning effort should be normalized to xhigh:\n%s", content)
+	}
+}
