@@ -192,6 +192,89 @@ INSERT INTO model_pricing (
 	}
 }
 
+func TestSQLiteAdapter_InitSchema_DisablesLegacyLongContextPricingOnce(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "long-context-default.db")
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{
+		Type:         "sqlite",
+		DatabasePath: dbPath,
+		Timezone:     "Asia/Shanghai",
+	})
+	if err != nil {
+		t.Fatalf("NewSQLiteAdapter: %v", err)
+	}
+	if err := adapter.Open(); err != nil {
+		t.Fatalf("adapter.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("initial InitSchema: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	db := adapter.GetWriteDB()
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO claude_credential_groups (channel, name, disable_long_context_pricing)
+		VALUES ('legacy-claude', 'default', 0);
+		INSERT INTO codex_channels (name, provider_type, api_key, model)
+		VALUES ('legacy-codex', 'openai-compatible', '', 'gpt-5');
+		INSERT INTO codex_credential_groups (channel_id, name, disable_long_context_pricing)
+		SELECT id, 'default', 0 FROM codex_channels WHERE name = 'legacy-codex';
+		DELETE FROM schema_versions WHERE version = '20260712_default_disable_long_context_pricing';
+	`); err != nil {
+		t.Fatalf("seed legacy credential groups: %v", err)
+	}
+
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("migrating InitSchema: %v", err)
+	}
+
+	assertLongContextDisabled := func(table string) {
+		t.Helper()
+		var disabled int
+		if err := adapter.GetReadDB().QueryRowContext(ctx, "SELECT disable_long_context_pricing FROM "+table+" LIMIT 1").Scan(&disabled); err != nil {
+			t.Fatalf("query %s: %v", table, err)
+		}
+		if disabled != 1 {
+			t.Fatalf("expected %s legacy group to default Long context off, got %d", table, disabled)
+		}
+	}
+	assertLongContextDisabled("claude_credential_groups")
+	assertLongContextDisabled("codex_credential_groups")
+
+	var migrationCount int
+	if err := adapter.GetReadDB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM schema_versions
+		WHERE version = '20260712_default_disable_long_context_pricing'
+	`).Scan(&migrationCount); err != nil {
+		t.Fatalf("query migration version: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("expected one Long context default migration record, got %d", migrationCount)
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		UPDATE claude_credential_groups SET disable_long_context_pricing = 0;
+		UPDATE codex_credential_groups SET disable_long_context_pricing = 0;
+	`); err != nil {
+		t.Fatalf("simulate explicit enable: %v", err)
+	}
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("idempotent InitSchema: %v", err)
+	}
+
+	for _, table := range []string{"claude_credential_groups", "codex_credential_groups"} {
+		var disabled int
+		if err := adapter.GetReadDB().QueryRowContext(ctx, "SELECT disable_long_context_pricing FROM "+table+" LIMIT 1").Scan(&disabled); err != nil {
+			t.Fatalf("query preserved %s state: %v", table, err)
+		}
+		if disabled != 0 {
+			t.Fatalf("expected repeated InitSchema to preserve explicit %s state, got %d", table, disabled)
+		}
+	}
+}
+
 func sqliteColumnExists(t *testing.T, db *sql.DB, table, column string) bool {
 	t.Helper()
 	rows, err := db.Query("PRAGMA table_info(" + table + ")")

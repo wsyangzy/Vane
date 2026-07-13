@@ -31,6 +31,13 @@ test('Claude credential group and endpoint controls match Codex repeat and shiel
   assert.match(source, /shouldSkipGroupHealthCheck\s*\?\s*<ShieldOff size=\{12\} \/>\s*:\s*<ShieldCheck size=\{12\} \/>/);
 });
 
+test('Claude failover status displays use repeat icons instead of the legacy route-switch icon', () => {
+  assert.match(source, /statusBadgeText === '不参与' && <RepeatOffIcon size=\{10\}/);
+  assert.match(source, /icon=\{failoverEnabled \? Repeat : RepeatOffIcon\}/);
+  assert.match(source, /failoverEnabled \? '参与故障转移' : '不参与转移'/);
+  assert.doesNotMatch(source, /DetailPill[^>]*icon=\{ArrowRightLeft\}/);
+});
+
 test('Claude failover action hover targets keep a fixed square size', () => {
   const squareFailoverButtons = source.match(/className=\{`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md/g) || [];
   assert.equal(squareFailoverButtons.length, 2);

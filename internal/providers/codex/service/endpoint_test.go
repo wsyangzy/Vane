@@ -853,7 +853,7 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1,
 			long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1,
 			long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1,
-			disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
+			disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
 			billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
 			model_multipliers TEXT NOT NULL DEFAULT '[]',
 			created_at TEXT NOT NULL DEFAULT '',

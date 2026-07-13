@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
 	long_context_output_cost_multiplier REAL DEFAULT 1.0,
 	long_context_cache_creation_cost_multiplier REAL DEFAULT 1.0,
 	long_context_cache_read_cost_multiplier REAL DEFAULT 1.0,
-	disable_long_context_pricing INTEGER DEFAULT 0,
+	disable_long_context_pricing INTEGER DEFAULT 1,
 	model_multipliers TEXT NOT NULL DEFAULT '[]',
 	created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 	updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')

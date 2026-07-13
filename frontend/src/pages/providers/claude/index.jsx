@@ -610,7 +610,7 @@ const EndpointMiniCard = ({
                 className="inline-flex h-5 w-fit flex-shrink-0 items-center justify-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium leading-none text-slate-500 whitespace-nowrap"
                 aria-label={statusBadgeTitle || statusBadgeText}
               >
-                {statusBadgeText === '不参与' && <ArrowRightLeft size={10} className="shrink-0" />}
+                {statusBadgeText === '不参与' && <RepeatOffIcon size={10} />}
                 {statusBadgeText}
               </span>
             )}
@@ -907,8 +907,8 @@ const EndpointDetailModal = ({
 
             <Tooltip content={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}>
               <span className="inline-flex">
-                <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={ArrowRightLeft}>
-                  {failoverEnabled ? '渠道内故障转移' : '不参与转移'}
+                <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={failoverEnabled ? Repeat : RepeatOffIcon}>
+                  {failoverEnabled ? '参与故障转移' : '不参与转移'}
                 </DetailPill>
               </span>
             </Tooltip>

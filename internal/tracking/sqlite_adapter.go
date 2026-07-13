@@ -774,6 +774,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := s.backfillClaudeCredentialGroups(ctx); err != nil {
 		return err
 	}
+	if err := s.migrateLongContextPricingDefault(ctx); err != nil {
+		return err
+	}
 	if err := runMigrations("codex_endpoints", codexEndpointMigrations); err != nil {
 		return err
 	}
@@ -844,6 +847,40 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+const longContextPricingDefaultMigrationVersion = "20260712_default_disable_long_context_pricing"
+
+func (s *SQLiteAdapter) migrateLongContextPricingDefault(ctx context.Context) error {
+	applied, err := s.isSchemaVersionApplied(ctx, longContextPricingDefaultMigrationVersion)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
+	for _, table := range []string{"claude_credential_groups", "codex_credential_groups"} {
+		exists, err := s.tableExists(ctx, table)
+		if err != nil {
+			return fmt.Errorf("failed to check %s for Long context default migration: %w", table, err)
+		}
+		if !exists {
+			continue
+		}
+		hasColumn, err := s.columnExists(ctx, table, "disable_long_context_pricing")
+		if err != nil {
+			return fmt.Errorf("failed to check %s.disable_long_context_pricing: %w", table, err)
+		}
+		if !hasColumn {
+			continue
+		}
+		if _, err := s.GetWriteDB().ExecContext(ctx, "UPDATE "+table+" SET disable_long_context_pricing = 1"); err != nil {
+			return fmt.Errorf("failed to disable Long context pricing for legacy %s rows: %w", table, err)
+		}
+	}
+
+	return s.recordSchemaVersion(ctx, longContextPricingDefaultMigrationVersion, "凭证分组 Long context 计费默认关闭")
 }
 
 func (s *SQLiteAdapter) ensureEndpointsUniqueByCredentialGroup(ctx context.Context) error {
@@ -1094,7 +1131,7 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
-    disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
+    disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
     model_multipliers TEXT NOT NULL DEFAULT '[]',
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -1131,7 +1168,7 @@ END;`
 		{"long_context_output_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_cache_creation_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_cache_read_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
-		{"disable_long_context_pricing", `ALTER TABLE claude_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 0`},
+		{"disable_long_context_pricing", `ALTER TABLE claude_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 1`},
 	} {
 		exists, err := s.columnExists(ctx, "claude_credential_groups", migration.column)
 		if err != nil {
@@ -1274,8 +1311,8 @@ func (s *SQLiteAdapter) ensureDefaultClaudeCredentialGroup(ctx context.Context, 
 			channel, name, token, api_key, is_default, cost_multiplier,
 			input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h,
-			cache_read_cost_multiplier, model_multipliers
-		) VALUES (?, '默认分组', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+			cache_read_cost_multiplier, disable_long_context_pricing, model_multipliers
+		) VALUES (?, '默认分组', ?, ?, 1, ?, ?, ?, ?, ?, ?, 1, ?)
 	`, channel, token, apiKey,
 		defaultSQLiteMigrationMultiplier(costMultiplier),
 		defaultSQLiteMigrationMultiplier(inputCostMultiplier),

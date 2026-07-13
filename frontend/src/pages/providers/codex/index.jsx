@@ -1891,7 +1891,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
               <span className="leading-none">分组倍率</span>
               <span className="font-mono leading-none">{formatDetailMultiplier(credentialGroup?.costMultiplier ?? 1)}</span>
             </DetailPill>
-            <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={ArrowRightLeft}>
+            <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={failoverEnabled ? Repeat : RepeatOffIcon}>
               {failoverEnabled ? '参与故障转移' : '不参与转移'}
             </DetailPill>
             <DetailPill tone="sky" icon={Database}>

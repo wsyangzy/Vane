@@ -200,7 +200,7 @@ func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testi
 	}
 	if cacheCreationMultiplier != 1 || longContextMultiplier != 1 ||
 		longContextInputMultiplier != 1 || longContextOutputMultiplier != 1 ||
-		longContextCacheCreationMultiplier != 1 || longContextCacheReadMultiplier != 1 || disableLongContext != 0 {
+		longContextCacheCreationMultiplier != 1 || longContextCacheReadMultiplier != 1 || disableLongContext != 1 {
 		t.Fatalf("unexpected billing defaults: cache=%v long=%v disabled=%v", cacheCreationMultiplier, longContextMultiplier, disableLongContext)
 	}
 

@@ -118,7 +118,7 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 					long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
 					long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
 					long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
-					disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
+					disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
 					billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
 					model_multipliers TEXT NOT NULL DEFAULT '[]',
 					created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
@@ -250,7 +250,7 @@ func (a *App) ensureCodexCredentialGroupSchema(ctx context.Context, db *sql.DB) 
 		{"codex_credential_groups", "long_context_output_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"codex_credential_groups", "long_context_cache_creation_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"codex_credential_groups", "long_context_cache_read_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
-		{"codex_credential_groups", "disable_long_context_pricing", `ALTER TABLE codex_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 0`},
+		{"codex_credential_groups", "disable_long_context_pricing", `ALTER TABLE codex_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 1`},
 		{"codex_credential_groups", "billing_output_token_source", `ALTER TABLE codex_credential_groups ADD COLUMN billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens'`},
 		{"codex_credential_groups", "model_multipliers", `ALTER TABLE codex_credential_groups ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'`},
 	}
@@ -281,7 +281,7 @@ func (a *App) ensureCodexCredentialGroupSchema(ctx context.Context, db *sql.DB) 
 			disable_long_context_pricing,
 			billing_output_token_source, model_multipliers
 		)
-		SELECT id, '默认分组', api_key, 1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0, 'output_tokens', '[]'
+		SELECT id, '默认分组', api_key, 1, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1, 'output_tokens', '[]'
 		FROM codex_channels ch
 		WHERE NOT EXISTS (
 			SELECT 1 FROM codex_credential_groups g WHERE g.channel_id = ch.id
@@ -665,8 +665,8 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 			return fmt.Errorf("获取迁移渠道 ID 失败: %w", err)
 		}
 		groupResult, err := tx.ExecContext(ctx, `
-			INSERT INTO codex_credential_groups (channel_id, name, api_key, is_default)
-			VALUES (?, ?, ?, 1)
+			INSERT INTO codex_credential_groups (channel_id, name, api_key, is_default, disable_long_context_pricing)
+			VALUES (?, ?, ?, 1, 1)
 		`, channelID, "默认分组", r.apiKey)
 		if err != nil {
 			return fmt.Errorf("迁移默认凭证分组 %s 失败: %w", r.name, err)

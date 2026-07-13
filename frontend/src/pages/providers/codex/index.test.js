@@ -44,6 +44,11 @@ test('credential group bulk controls and endpoint rows use repeat and shield act
   assert.match(source, /shouldSkipGroupHealthCheck\s*\?\s*<ShieldOff size=\{12\} \/>\s*:\s*<ShieldCheck size=\{12\} \/>/);
 });
 
+test('Codex endpoint details use repeat icons for the current failover state', () => {
+  assert.match(source, /icon=\{failoverEnabled \? Repeat : RepeatOffIcon\}/);
+  assert.doesNotMatch(source, /DetailPill[^>]*icon=\{ArrowRightLeft\}/);
+});
+
 test('Codex failover action hover targets keep a fixed square size', () => {
   const squareFailoverButtons = source.match(/className=\{`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md/g) || [];
   assert.equal(squareFailoverButtons.length, 2);

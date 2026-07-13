@@ -313,7 +313,7 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
-    disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
+    disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     UNIQUE(channel, name)
@@ -416,7 +416,7 @@ CREATE TABLE IF NOT EXISTS codex_credential_groups (
     long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
-    disable_long_context_pricing INTEGER NOT NULL DEFAULT 0,
+    disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
     billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
     model_multipliers TEXT NOT NULL DEFAULT '[]', -- 按模型附加倍率 JSON
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
