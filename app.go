@@ -379,6 +379,7 @@ func (a *App) HideMainWindow() {
 // 优雅退出：先让 Wails 处理关闭，超时后强制退出
 func (a *App) RequestQuit() {
 	a.markQuitting()
+	a.stopDevWatcherAfterQuit()
 
 	// 在 goroutine 中执行退出，避免阻塞 UI
 	go func() {
@@ -395,125 +396,107 @@ func (a *App) RequestQuit() {
 	}()
 }
 
-// OpenLogDir 打开日志目录（托盘菜单使用）
-func (a *App) OpenLogDir() {
-	logDir := utils.GetLogDir()
+const devWatcherPIDFile = ".wails-dev-watcher.pid"
 
-	// 确保目录存在
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("创建日志目录失败", "error", err)
-		}
+func parseDevWatcherPID(data []byte) (int, error) {
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil || pid <= 0 {
+		return 0, fmt.Errorf("无效的 Wails dev watcher PID")
+	}
+	return pid, nil
+}
+
+func devWatcherStopScript(pid int) string {
+	return fmt.Sprintf(`
+Start-Sleep -Milliseconds 1000
+$process = Get-CimInstance Win32_Process -Filter "ProcessId = %d" -ErrorAction SilentlyContinue
+if ($null -eq $process) { exit 0 }
+$commandLine = [string]$process.CommandLine
+if ($process.Name -ne 'wails3.exe' -or $commandLine -notmatch '(^|\s)dev(\s|$)') { exit 0 }
+& taskkill.exe /T /F /PID %d *> $null
+`, pid, pid)
+}
+
+func (a *App) stopDevWatcherAfterQuit() {
+	if BuildMode != "dev" || goruntime.GOOS != "windows" {
 		return
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return
+	}
+	pidFile := filepath.Join(filepath.Dir(executable), devWatcherPIDFile)
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return
+	}
+	pid, err := parseDevWatcherPID(data)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(pidFile)
 
-	// 跨平台打开目录
+	cmd := exec.Command(
+		"powershell.exe",
+		"-NoProfile",
+		"-NonInteractive",
+		"-WindowStyle", "Hidden",
+		"-Command", devWatcherStopScript(pid),
+	)
+	if err := cmd.Start(); err != nil && a.logger != nil {
+		a.logger.Warn("无法通知 Wails dev watcher 退出", "error", err)
+	}
+}
+
+func (a *App) openDirectory(path, label string) error {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return fmt.Errorf("创建%s失败: %w", label, err)
+	}
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", logDir)
+		cmd = exec.Command("explorer", path)
 	case "darwin":
-		cmd = exec.Command("open", logDir)
+		cmd = exec.Command("open", path)
 	case "linux":
-		cmd = exec.Command("xdg-open", logDir)
+		cmd = exec.Command("xdg-open", path)
 	default:
-		if a.logger != nil {
-			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
-		}
-		return
+		return fmt.Errorf("当前操作系统不支持打开目录: %s", goruntime.GOOS)
 	}
-
 	if err := cmd.Start(); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("打开日志目录失败", "error", err, "path", logDir)
-		}
+		return fmt.Errorf("打开%s失败: %w", label, err)
 	}
+	return nil
+}
+
+// OpenLogDir 打开日志目录（托盘菜单使用）
+func (a *App) OpenLogDir() error {
+	return a.openDirectory(utils.GetLogDir(), "日志目录")
+}
+
+// OpenDataDir 打开数据库与历史归档所在目录。
+func (a *App) OpenDataDir() error {
+	return a.openDirectory(utils.GetDataDir(), "数据目录")
 }
 
 // OpenClaudeConfigDir 打开 Claude 配置目录（托盘菜单使用）
 // Claude 配置目录通常位于用户主目录下的 .claude 文件夹
-func (a *App) OpenClaudeConfigDir() {
+func (a *App) OpenClaudeConfigDir() error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		if a.logger != nil {
-			a.logger.Warn("获取用户主目录失败", "error", err)
-		}
-		return
+		return fmt.Errorf("获取用户主目录失败: %w", err)
 	}
-
-	claudeConfigDir := filepath.Join(homeDir, ".claude")
-
-	// 检查目录是否存在
-	if _, err := os.Stat(claudeConfigDir); os.IsNotExist(err) {
-		if a.logger != nil {
-			a.logger.Warn("Claude 配置目录不存在", "path", claudeConfigDir)
-		}
-		// 仍然尝试打开，让文件管理器显示错误
-	}
-
-	// 跨平台打开目录
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", claudeConfigDir)
-	case "darwin":
-		cmd = exec.Command("open", claudeConfigDir)
-	case "linux":
-		cmd = exec.Command("xdg-open", claudeConfigDir)
-	default:
-		if a.logger != nil {
-			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
-		}
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("打开 Claude 配置目录失败", "error", err, "path", claudeConfigDir)
-		}
-	}
+	return a.openDirectory(filepath.Join(homeDir, ".claude"), "Claude 配置目录")
 }
 
 // OpenCodexConfigDir 打开 Codex 配置目录
 // Codex 配置目录通常位于用户主目录下的 .codex 文件夹（或 CODEX_HOME 环境变量指定）
-func (a *App) OpenCodexConfigDir() {
+func (a *App) OpenCodexConfigDir() error {
 	codexHome, err := a.getCodexHomeDir()
 	if err != nil {
-		if a.logger != nil {
-			a.logger.Warn("获取 Codex 配置目录失败", "error", err)
-		}
-		return
+		return fmt.Errorf("获取 Codex 配置目录失败: %w", err)
 	}
-
-	// 检查目录是否存在
-	if _, err := os.Stat(codexHome); os.IsNotExist(err) {
-		if a.logger != nil {
-			a.logger.Warn("Codex 配置目录不存在", "path", codexHome)
-		}
-		// 仍然尝试打开，让文件管理器显示错误
-	}
-
-	// 跨平台打开目录
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", codexHome)
-	case "darwin":
-		cmd = exec.Command("open", codexHome)
-	case "linux":
-		cmd = exec.Command("xdg-open", codexHome)
-	default:
-		if a.logger != nil {
-			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
-		}
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("打开 Codex 配置目录失败", "error", err, "path", codexHome)
-		}
-	}
+	return a.openDirectory(codexHome, "Codex 配置目录")
 }
 
 // GetProxyAddress 获取当前代理地址（托盘菜单"复制代理地址"使用）

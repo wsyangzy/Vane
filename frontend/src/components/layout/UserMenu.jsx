@@ -12,6 +12,7 @@ import {
   Check,
   Clock,
   Cpu,
+  Database,
   Terminal,
   RefreshCw
 } from 'lucide-react';
@@ -24,9 +25,11 @@ import {
   openClaudeConfigDir,
   openCodexConfigDir,
   openLogDir,
+  openDataDir,
   requestQuit,
   copyToClipboard
 } from '@utils/wailsApi.js';
+import { useToast } from '@components/ui';
 
 // 信息卡片项目组件（移到外部避免 lint 警告）
 const InfoItem = ({ icon: Icon, iconBg, iconColor, label, value, delay, isLoaded, extra, valueClass }) => (
@@ -65,6 +68,7 @@ const UserMenu = () => {
   const [isLoaded, setIsLoaded] = useState(false);
   const menuRef = useRef(null);
   const isWails = isWailsEnvironment();
+  const toast = useToast();
 
   // 加载系统信息
   const loadSystemInfo = useCallback(async () => {
@@ -166,7 +170,7 @@ const UserMenu = () => {
       await openClaudeConfigDir();
       setIsOpen(false);
     } catch (error) {
-      console.error('Failed to open config dir:', error);
+      toast.error(error?.message || '打开 Claude 配置目录失败', '打开失败');
     }
   };
 
@@ -176,7 +180,7 @@ const UserMenu = () => {
       await openCodexConfigDir();
       setIsOpen(false);
     } catch (error) {
-      console.error('Failed to open Codex config dir:', error);
+      toast.error(error?.message || '打开 Codex 配置目录失败', '打开失败');
     }
   };
 
@@ -186,7 +190,16 @@ const UserMenu = () => {
       await openLogDir();
       setIsOpen(false);
     } catch (error) {
-      console.error('Failed to open log dir:', error);
+      toast.error(error?.message || '打开日志目录失败', '打开失败');
+    }
+  };
+
+  const handleOpenDataDir = async () => {
+    try {
+      await openDataDir();
+      setIsOpen(false);
+    } catch (error) {
+      toast.error(error?.message || '打开数据目录失败', '打开失败');
     }
   };
 
@@ -462,24 +475,31 @@ const UserMenu = () => {
           >
             <button
               onClick={handleOpenConfigDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-all duration-150 hover:translate-x-1"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
             >
               <FolderOpen size={16} className="text-slate-400" />
               <span>打开 Claude 配置目录</span>
             </button>
             <button
               onClick={handleOpenCodexConfigDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-all duration-150 hover:translate-x-1"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
             >
               <FolderOpen size={16} className="text-slate-400" />
               <span>打开 Codex 配置目录</span>
             </button>
             <button
               onClick={handleOpenLogDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-all duration-150 hover:translate-x-1"
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
             >
               <FileText size={16} className="text-slate-400" />
               <span>打开日志目录</span>
+            </button>
+            <button
+              onClick={handleOpenDataDir}
+              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
+            >
+              <Database size={16} className="text-slate-400" />
+              <span>打开数据目录</span>
             </button>
           </div>
 

@@ -300,6 +300,10 @@ export function OpenCodexConfigDir() {
   return Call.ByName("main.App.OpenCodexConfigDir");
 }
 
+export function OpenDataDir() {
+  return Call.ByName("main.App.OpenDataDir");
+}
+
 export function OpenLogDir() {
   return Call.ByName("main.App.OpenLogDir");
 }

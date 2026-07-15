@@ -13,6 +13,12 @@ test('generated RequestRecord model includes request network fields', () => {
   }
 });
 
+test('generated App binding exposes the data directory action', () => {
+  const source = readFileSync(new URL('../wailsjs/go/main/App.js', import.meta.url), 'utf8');
+  assert.match(source, /export function OpenDataDir\(\)/);
+  assert.match(source, /Call\.ByName\("main\.App\.OpenDataDir"\)/);
+});
+
 test('request network bridge maps snake and camel case fields without losing zero retries', () => {
   const mapped = wailsApi.mapRequestNetworkFields({
     httpStatus: 204,

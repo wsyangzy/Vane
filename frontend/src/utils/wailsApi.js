@@ -913,6 +913,12 @@ export const openLogDir = async () => {
   return await WailsApp.OpenLogDir();
 };
 
+export const openDataDir = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.OpenDataDir();
+};
+
 /**
  * 请求退出应用
  */

@@ -151,6 +151,8 @@ export function OpenClaudeConfigDir():Promise<void>;
 
 export function OpenCodexConfigDir():Promise<void>;
 
+export function OpenDataDir():Promise<void>;
+
 export function OpenLogDir():Promise<void>;
 
 export function PreviewPrivacyRedaction(arg1:string):Promise<privacy.PreviewResult>;

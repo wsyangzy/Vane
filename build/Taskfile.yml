@@ -29,7 +29,7 @@ tasks:
     deps:
       - install:frontend:deps
     cmds:
-      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+      - npm run dev:watch -- --port {{.VITE_PORT}} --strictPort
 
   generate:bindings:
     summary: Generates Wails v3 bindings

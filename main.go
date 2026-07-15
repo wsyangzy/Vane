@@ -249,6 +249,14 @@ func setupSystemTray(app *application.App, window *application.WebviewWindow, ap
 		}
 	})
 
+	// 打开数据目录
+	mOpenDataDir := menu.Add("打开数据目录")
+	mOpenDataDir.OnClick(func(ctx *application.Context) {
+		if appInstance != nil {
+			appInstance.OpenDataDir()
+		}
+	})
+
 	// 打开 Claude 配置目录
 	mOpenClaudeDir := menu.Add("打开 Claude 配置目录")
 	mOpenClaudeDir.OnClick(func(ctx *application.Context) {
