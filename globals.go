@@ -22,7 +22,7 @@ import (
 
 // 版本信息（通过 ldflags 注入）
 var (
-	Version   = "8.3"
+	Version   = "8.4"
 	Commit    = "unknown"
 	BuildTime = "unknown"
 	BuildMode = "dev" // 构建模式: "dev" 或 "release"（生产构建通过 ldflags 注入 "release"）
