@@ -149,7 +149,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 			CategoryRetention: {
 				Name:        CategoryRetention,
 				Label:       "数据保留",
-				Description: "配置历史数据保留策略",
+				Description: "配置请求历史保留策略；历史请求自动按自然月归档",
 				Icon:        "📦",
 				Order:       8,
 			},
@@ -598,6 +598,9 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		{CategoryServer, "codex_host"},
 		{CategoryServer, "codex_port"},
 		{CategoryServer, "codex_timeout"},
+		// 请求历史固定每日维护并按自然月归档，不再暴露技术参数。
+		{CategoryRetention, "cleanup_interval"},
+		{CategoryRetention, "max_active_database_size_mb"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -752,8 +755,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 
 	case CategoryRetention:
 		return []*store.SettingRecord{
-			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求日志保留天数，0 表示永久保留", DisplayOrder: 1},
-			{Category: CategoryRetention, Key: "cleanup_interval", Value: "24h", ValueType: ValueTypeDuration, Label: "清理间隔", Description: "自动清理任务的执行间隔", DisplayOrder: 2},
+			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求记录保留天数，0 表示永久保留；历史请求自动按自然月归档分库", DisplayOrder: 1},
 		}
 
 	case CategoryCache:

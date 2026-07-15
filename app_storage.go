@@ -43,18 +43,22 @@ func (a *App) setupUsageTracker() {
 
 	// 重构：定价配置完全从 SQLite 加载，不再依赖 config.yaml
 	// 初始化时使用空定价，后续由 syncPricingToTracker() 从数据库加载
+	archiveEnvironment := "dev"
+	if strings.EqualFold(BuildMode, "release") {
+		archiveEnvironment = "release"
+	}
 	trackingConfig := &tracking.Config{
-		Enabled:         a.config.UsageTracking.Enabled,
-		DatabasePath:    dbPath,
-		Database:        a.config.UsageTracking.Database,
-		BufferSize:      a.config.UsageTracking.BufferSize,
-		BatchSize:       a.config.UsageTracking.BatchSize,
-		FlushInterval:   a.config.UsageTracking.FlushInterval,
-		MaxRetry:        a.config.UsageTracking.MaxRetry,
-		RetentionDays:   a.config.UsageTracking.RetentionDays,
-		CleanupInterval: a.config.UsageTracking.CleanupInterval,
-		ModelPricing:    nil,                     // 定价从 SQLite model_pricing 表加载
-		DefaultPricing:  tracking.ModelPricing{}, // 默认定价从 SQLite 加载
+		Enabled:          a.config.UsageTracking.Enabled,
+		DatabasePath:     dbPath,
+		Database:         a.config.UsageTracking.Database,
+		BufferSize:       a.config.UsageTracking.BufferSize,
+		BatchSize:        a.config.UsageTracking.BatchSize,
+		FlushInterval:    a.config.UsageTracking.FlushInterval,
+		MaxRetry:         a.config.UsageTracking.MaxRetry,
+		RetentionDays:    a.config.UsageTracking.RetentionDays,
+		ArchiveDirectory: filepath.Join(utils.GetDataDir(), "archive", archiveEnvironment),
+		ModelPricing:     nil,                     // 定价从 SQLite model_pricing 表加载
+		DefaultPricing:   tracking.ModelPricing{}, // 默认定价从 SQLite 加载
 	}
 
 	var err error
@@ -83,7 +87,7 @@ func (a *App) setupStoreDB() {
 	// 运行时回填，确保后续组件拿到统一路径（即使 usage_tracking.enabled=false）。
 	a.config.UsageTracking.DatabasePath = dbPath
 
-	// 即使未启用 usage tracking，也执行旧库迁移，避免共享 usage.db 导致锁冲突。
+	// 即使未启用 usage tracking，也将旧的环境专用数据库迁移到统一的 usage.db。
 	a.migrateLegacyDatabaseIfNeeded()
 
 	// 确保数据库目录存在

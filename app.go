@@ -572,17 +572,9 @@ func (a *App) loadConfig() {
 	a.configWatcher = configWatcher
 	cfg := configWatcher.GetConfig()
 
-	// ⚠️ 关键：立即覆盖所有路径为用户目录（在任何组件初始化之前）
-	// Dev 模式使用独立的数据库和日志文件，避免与 release 版本冲突
-	logFileName := "app.log"
-	dbFileName := "usage.db"
-	if BuildMode == "dev" {
-		logFileName = "app-dev.log"
-		dbFileName = "usage-dev.db"
-	}
-	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), logFileName)
-	// 为避免与旧版本共享同一 usage.db 产生锁冲突，默认切换到新文件名，并在启动时自动迁移旧数据。
-	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), dbFileName)
+	// 立即覆盖所有运行时路径为用户目录；环境只用于归档分层。
+	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), "app.log")
+	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "usage.db")
 
 	// 同时设置 Database 配置（如果存在）
 	if cfg.UsageTracking.Database != nil {
@@ -1986,7 +1978,7 @@ func (a *App) setupSettingsStore() {
 
 	// 设置配置变更回调 - 热更新
 	a.settingsService.SetOnChangeCallback(func() {
-		a.applySettingsToConfig()
+		a.applySettingsToConfig(true)
 	})
 
 	// 初始化默认设置（如果表为空）
@@ -1999,7 +1991,7 @@ func (a *App) setupSettingsStore() {
 	}
 
 	// 从数据库加载设置并应用到配置
-	a.applySettingsToConfig()
+	a.applySettingsToConfig(false)
 
 	// 初始化端口管理器
 	preferredPort := a.settingsService.GetInt(ctx, service.CategoryServer, "preferred_port", a.config.Server.Port)
@@ -2036,8 +2028,8 @@ func (a *App) setupPrivacyService() {
 	a.logger.Info("✅ 隐私防护服务已启用 (SQLite)")
 }
 
-// applySettingsToConfig 从数据库加载设置并应用到运行时配置
-func (a *App) applySettingsToConfig() {
+// applySettingsToConfig 从数据库加载设置并应用到运行时配置。
+func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
 	if a.settingsService == nil {
 		return
 	}
@@ -2130,7 +2122,16 @@ func (a *App) applySettingsToConfig() {
 
 	// 数据保留配置
 	a.config.UsageTracking.RetentionDays = a.settingsService.GetInt(ctx, service.CategoryRetention, "retention_days", a.config.UsageTracking.RetentionDays)
-	a.config.UsageTracking.CleanupInterval = a.settingsService.GetDuration(ctx, service.CategoryRetention, "cleanup_interval", a.config.UsageTracking.CleanupInterval)
+	if a.usageTracker != nil {
+		applyPolicy := a.usageTracker.ConfigureRetentionPolicy
+		if runRetentionMaintenance {
+			applyPolicy = a.usageTracker.UpdateRetentionPolicy
+		}
+		if err := applyPolicy(a.config.UsageTracking.RetentionDays); err != nil {
+			a.logger.Error("应用数据保留策略失败", "error", err)
+			a.emitNotification("error", "数据保留策略更新失败", err.Error())
+		}
+	}
 
 	// 🔧 [P5.5.4 新增] Logging 日志配置（从 SQLite 同步）
 	oldLoggingLevel := a.config.Logging.Level

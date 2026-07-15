@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"ai-relay-forwarder/config"
 )
@@ -21,11 +20,16 @@ func closeCurrentLogHandlersForTest() {
 	currentLogHandlers = nil
 }
 
-func TestSetupLoggerHonorsDebugLevelInReleaseBuild(t *testing.T) {
+func setBuildModeForTest(t *testing.T, mode string) {
+	t.Helper()
 	originalBuildMode := BuildMode
-	BuildMode = "release"
+	BuildMode = mode
+	t.Cleanup(func() { BuildMode = originalBuildMode })
+}
+
+func TestSetupLoggerHonorsDebugLevelInReleaseBuild(t *testing.T) {
+	setBuildModeForTest(t, "release")
 	t.Cleanup(func() {
-		BuildMode = originalBuildMode
 		closeCurrentLogHandlersForTest()
 	})
 
@@ -46,7 +50,8 @@ func TestSetupLoggerHonorsDebugLevelInReleaseBuild(t *testing.T) {
 	t.Fatalf("expected debug log in release mode, got %+v", logs)
 }
 
-func TestSetupLoggerUsesDatedFilesAndDedicatedDebugFile(t *testing.T) {
+func TestSetupLoggerKeepsActiveFilesAtRootAndDedicatedDebugFile(t *testing.T) {
+	setBuildModeForTest(t, "dev")
 	t.Cleanup(closeCurrentLogHandlersForTest)
 
 	logDir := t.TempDir()
@@ -58,25 +63,29 @@ func TestSetupLoggerUsesDatedFilesAndDedicatedDebugFile(t *testing.T) {
 		MaxFiles:    5,
 	})
 
-	logger.Info("info log for dated file")
+	logger.Info("info log for active file")
 	logger.Debug("debug log for dedicated file", "privacy_redacted_body", `{"token":"fake_token_0001"}`)
 	closeCurrentLogHandlersForTest()
 
-	date := time.Now().Format("2006-01-02")
-	appPath := filepath.Join(logDir, "app-"+date+".log")
-	debugPath := filepath.Join(logDir, "debug-"+date+".log")
+	appPath := filepath.Join(logDir, "app.log")
+	debugPath := filepath.Join(logDir, "debug.log")
+	for _, filename := range []string{"app.log", "claude.log", "codex.log", "debug.log"} {
+		if _, err := os.Stat(filepath.Join(logDir, filename)); err != nil {
+			t.Fatalf("active log %s should stay in the root log directory: %v", filename, err)
+		}
+	}
 
 	appBytes, err := os.ReadFile(appPath)
 	if err != nil {
-		t.Fatalf("read dated app log: %v", err)
+		t.Fatalf("read active app log: %v", err)
 	}
-	if !strings.Contains(string(appBytes), "info log for dated file") {
-		t.Fatalf("dated app log missing info entry: %s", appBytes)
+	if !strings.Contains(string(appBytes), "info log for active file") {
+		t.Fatalf("active app log missing info entry: %s", appBytes)
 	}
 
 	debugBytes, err := os.ReadFile(debugPath)
 	if err != nil {
-		t.Fatalf("read dated debug log: %v", err)
+		t.Fatalf("read active debug log: %v", err)
 	}
 	debugText := string(debugBytes)
 	for _, expected := range []string{"debug log for dedicated file", "privacy_redacted_body", "fake_token_0001"} {
@@ -87,6 +96,7 @@ func TestSetupLoggerUsesDatedFilesAndDedicatedDebugFile(t *testing.T) {
 }
 
 func TestSetupLoggerInfoLevelDoesNotCreateDebugFileOrExposeDebugLogs(t *testing.T) {
+	setBuildModeForTest(t, "dev")
 	t.Cleanup(closeCurrentLogHandlersForTest)
 
 	logDir := t.TempDir()
@@ -102,9 +112,8 @@ func TestSetupLoggerInfoLevelDoesNotCreateDebugFileOrExposeDebugLogs(t *testing.
 	logger.Info("info log should be visible")
 	closeCurrentLogHandlersForTest()
 
-	date := time.Now().Format("2006-01-02")
-	appPath := filepath.Join(logDir, "app-"+date+".log")
-	debugPath := filepath.Join(logDir, "debug-"+date+".log")
+	appPath := filepath.Join(logDir, "app.log")
+	debugPath := filepath.Join(logDir, "debug.log")
 
 	if _, err := os.Stat(debugPath); !os.IsNotExist(err) {
 		t.Fatalf("debug log file should not be created for info level, stat err=%v", err)
@@ -112,7 +121,7 @@ func TestSetupLoggerInfoLevelDoesNotCreateDebugFileOrExposeDebugLogs(t *testing.
 
 	appBytes, err := os.ReadFile(appPath)
 	if err != nil {
-		t.Fatalf("read dated app log: %v", err)
+		t.Fatalf("read active app log: %v", err)
 	}
 	appText := string(appBytes)
 	if strings.Contains(appText, "debug log should be filtered") {
@@ -129,6 +138,31 @@ func TestSetupLoggerInfoLevelDoesNotCreateDebugFileOrExposeDebugLogs(t *testing.
 	}
 }
 
+func TestSetupLoggerKeepsReleaseActiveFileAtRoot(t *testing.T) {
+	setBuildModeForTest(t, "release")
+	t.Cleanup(closeCurrentLogHandlersForTest)
+
+	logDir := t.TempDir()
+	logger, _ := setupLogger(config.LoggingConfig{
+		Level:       "info",
+		FileEnabled: true,
+		FilePath:    filepath.Join(logDir, "app.log"),
+		MaxFileSize: "10MB",
+		MaxFiles:    5,
+	})
+	logger.Info("release environment log")
+	closeCurrentLogHandlersForTest()
+
+	appPath := filepath.Join(logDir, "app.log")
+	appBytes, err := os.ReadFile(appPath)
+	if err != nil {
+		t.Fatalf("read release app log: %v", err)
+	}
+	if !strings.Contains(string(appBytes), "release environment log") {
+		t.Fatalf("release app log missing entry: %s", appBytes)
+	}
+}
+
 func TestApplyPersistedLoggingConfigBeforeLogger(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "usage.db")
 	db, err := sql.Open("sqlite", dbPath)
@@ -137,13 +171,14 @@ func TestApplyPersistedLoggingConfigBeforeLogger(t *testing.T) {
 	}
 	_, err = db.Exec(`
 		CREATE TABLE settings (
+			provider TEXT NOT NULL,
 			category TEXT NOT NULL,
 			key TEXT NOT NULL,
 			value TEXT NOT NULL,
-			UNIQUE(category, key)
+			UNIQUE(provider, category, key)
 		);
-		INSERT INTO settings (category, key, value) VALUES ('logging', 'level', 'info');
-		INSERT INTO settings (category, key, value) VALUES ('logging', 'format', 'json');
+		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'level', 'info');
+		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'format', 'json');
 	`)
 	if closeErr := db.Close(); closeErr != nil && err == nil {
 		err = closeErr

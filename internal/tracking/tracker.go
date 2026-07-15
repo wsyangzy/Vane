@@ -422,14 +422,15 @@ type Config struct {
 	// 新增：数据库配置（优先级高于 DatabasePath）
 	Database *config.DatabaseBackendConfig `yaml:"database,omitempty"`
 
-	BufferSize      int                     `yaml:"buffer_size"`
-	BatchSize       int                     `yaml:"batch_size"`
-	FlushInterval   time.Duration           `yaml:"flush_interval"`
-	MaxRetry        int                     `yaml:"max_retry"`
-	RetentionDays   int                     `yaml:"retention_days"`
-	CleanupInterval time.Duration           `yaml:"cleanup_interval"`
-	ModelPricing    map[string]ModelPricing `yaml:"model_pricing"`
-	DefaultPricing  ModelPricing            `yaml:"default_pricing"`
+	BufferSize       int                     `yaml:"buffer_size"`
+	BatchSize        int                     `yaml:"batch_size"`
+	FlushInterval    time.Duration           `yaml:"flush_interval"`
+	MaxRetry         int                     `yaml:"max_retry"`
+	RetentionDays    int                     `yaml:"retention_days"`
+	CleanupInterval  time.Duration           `yaml:"-"`
+	ArchiveDirectory string                  `yaml:"-"`
+	ModelPricing     map[string]ModelPricing `yaml:"model_pricing"`
+	DefaultPricing   ModelPricing            `yaml:"default_pricing"`
 
 	// 🔥 新增：热池配置
 	HotPool *HotPoolSettings `yaml:"hot_pool,omitempty"`
@@ -533,37 +534,40 @@ type UsageTracker struct {
 
 	usageCacheInvalidatorMu sync.RWMutex
 	usageCacheInvalidator   func()
+
+	retentionMu      sync.RWMutex
+	retentionChanged chan struct{}
+	historyMu        sync.RWMutex
 }
 
 // NewUsageTracker 创建新的使用跟踪器
-func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, error) {
-	if config == nil || !config.Enabled {
-		return &UsageTracker{config: config}, nil
+func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, error) {
+	if cfg == nil || !cfg.Enabled {
+		return &UsageTracker{config: cfg}, nil
 	}
 
 	// 设置默认值
-	if config.BufferSize <= 0 {
-		config.BufferSize = 1000
+	if cfg.BufferSize <= 0 {
+		cfg.BufferSize = 1000
 	}
-	if config.BatchSize <= 0 {
-		config.BatchSize = 100
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = 100
 	}
-	if config.FlushInterval <= 0 {
-		config.FlushInterval = 30 * time.Second
+	if cfg.FlushInterval <= 0 {
+		cfg.FlushInterval = 30 * time.Second
 	}
-	if config.MaxRetry <= 0 {
-		config.MaxRetry = 3
+	if cfg.MaxRetry <= 0 {
+		cfg.MaxRetry = 3
 	}
-	if config.CleanupInterval <= 0 {
-		config.CleanupInterval = 24 * time.Hour // 默认24小时清理一次
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = 24 * time.Hour // 默认24小时清理一次
 	}
-
 	// 构建数据库配置
 	tz := ""
 	if len(globalTimezone) > 0 {
 		tz = globalTimezone[0]
 	}
-	dbConfig, err := buildDatabaseConfig(config, tz)
+	dbConfig, err := buildDatabaseConfig(cfg, tz)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build database config: %w", err)
 	}
@@ -607,12 +611,13 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 
 	ut := &UsageTracker{
 		// 原有字段（兼容性）
-		db:        db, // 兼容性：指向readDB
-		eventChan: make(chan RequestEvent, config.BufferSize),
-		config:    config,
-		pricing:   config.ModelPricing,
-		ctx:       ctx,
-		cancel:    cancel,
+		db:               db, // 兼容性：指向readDB
+		eventChan:        make(chan RequestEvent, cfg.BufferSize),
+		config:           cfg,
+		pricing:          cfg.ModelPricing,
+		ctx:              ctx,
+		cancel:           cancel,
+		retentionChanged: make(chan struct{}, 1),
 
 		// 时区支持
 		location: location,
@@ -623,7 +628,7 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 		// 读写分离组件（从适配器获取）
 		readDB:     readDB,
 		writeDB:    writeDB,
-		writeQueue: make(chan WriteRequest, config.BufferSize), // 与事件队列容量一致
+		writeQueue: make(chan WriteRequest, cfg.BufferSize), // 与事件队列容量一致
 
 		usageStatsCache: appcache.New[UsageStatsTotals](appcache.Options{
 			Name:         "usage:stats",
@@ -659,6 +664,12 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 	if err := ut.cleanupCrashedRequests(); err != nil {
 		// 清理失败不应该阻塞启动，仅记录警告
 		slog.Warn("启动时清理僵尸请求失败（不影响启动）", "error", err)
+	}
+	if err := ut.reconcileHistoryArchives(); err != nil {
+		slog.Error("启动时恢复月度历史归档失败", "error", err)
+	}
+	if err := ut.archiveClosedMonths(context.Background()); err != nil {
+		slog.Error("启动时执行请求历史月度归档失败", "error", err)
 	}
 
 	// 🔧 [P6 新增] 初始化内存请求计数器：替代 QueryRequestDetailsWithHotPool 中的高频 COUNT 查询
@@ -697,8 +708,8 @@ func NewUsageTracker(config *Config, globalTimezone ...string) (*UsageTracker, e
 
 	slog.Info("✅ 使用跟踪器初始化完成",
 		"database_type", adapter.GetDatabaseType(),
-		"buffer_size", config.BufferSize,
-		"batch_size", config.BatchSize,
+		"buffer_size", cfg.BufferSize,
+		"batch_size", cfg.BatchSize,
 		"hot_pool_enabled", ut.hotPoolEnabled)
 
 	return ut, nil
@@ -810,6 +821,54 @@ func (ut *UsageTracker) now() time.Time {
 		return time.Now() // 后备方案
 	}
 	return time.Now().In(ut.location)
+}
+
+type retentionPolicy struct {
+	retentionDays   int
+	cleanupInterval time.Duration
+}
+
+func (ut *UsageTracker) currentRetentionPolicy() retentionPolicy {
+	ut.retentionMu.RLock()
+	defer ut.retentionMu.RUnlock()
+	if ut.config == nil {
+		return retentionPolicy{}
+	}
+	return retentionPolicy{
+		retentionDays:   ut.config.RetentionDays,
+		cleanupInterval: ut.config.CleanupInterval,
+	}
+}
+
+// UpdateRetentionPolicy applies cleanup settings without restarting the tracker.
+func (ut *UsageTracker) UpdateRetentionPolicy(retentionDays int) error {
+	return ut.applyRetentionPolicy(retentionDays, true)
+}
+
+// ConfigureRetentionPolicy loads cleanup settings without starting maintenance immediately.
+func (ut *UsageTracker) ConfigureRetentionPolicy(retentionDays int) error {
+	return ut.applyRetentionPolicy(retentionDays, false)
+}
+
+func (ut *UsageTracker) applyRetentionPolicy(retentionDays int, runNow bool) error {
+	if ut == nil || ut.config == nil {
+		return fmt.Errorf("使用追踪器未初始化")
+	}
+	if retentionDays < 0 {
+		return fmt.Errorf("数据保留天数不能小于 0")
+	}
+	ut.retentionMu.Lock()
+	ut.config.RetentionDays = retentionDays
+	ut.retentionMu.Unlock()
+
+	if !runNow {
+		return nil
+	}
+	select {
+	case ut.retentionChanged <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 // buildDatabaseConfig 从Config构建DatabaseConfig
@@ -2005,7 +2064,6 @@ func (ut *UsageTracker) GetUsageSummary(ctx context.Context, startTime, endTime 
 	opts := &QueryOptions{
 		StartDate: &startTime,
 		EndDate:   &endTime,
-		Limit:     100,
 	}
 	return ut.QueryUsageSummary(ctx, opts)
 }
@@ -2026,110 +2084,79 @@ func (ut *UsageTracker) GetRequestLogs(ctx context.Context, startTime, endTime t
 
 // GetUsageStats 获取使用统计（便利方法，使用读连接）
 func (ut *UsageTracker) GetUsageStats(ctx context.Context, startTime, endTime time.Time) (*UsageStatsDetailed, error) {
-	if ut.readDB == nil {
-		return nil, fmt.Errorf("read database not initialized")
-	}
-
-	query := `SELECT 
-		COUNT(*) as total_requests,
-		SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END) as success_requests,
-		SUM(CASE WHEN status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END) as error_requests,
-		SUM(` + totalTokensSQLExpression + `) as total_tokens,
-		SUM(total_cost_usd) as total_cost
-		FROM request_logs 
-		WHERE start_time >= ? AND start_time <= ?`
-
-	var stats UsageStatsDetailed
-	err := ut.readDB.QueryRowContext(ctx, query, startTime, endTime).Scan(
-		&stats.TotalRequests,
-		&stats.SuccessRequests,
-		&stats.ErrorRequests,
-		&stats.TotalTokens,
-		&stats.TotalCost,
-	)
+	totals, err := ut.QueryUsageStatsTotals(ctx, &QueryOptions{StartDate: &startTime, EndDate: &endTime})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query detailed usage stats: %w", err)
 	}
-
-	// 获取模型统计（使用读连接）
-	modelQuery := `SELECT model_name, COUNT(*), SUM(total_cost_usd)
-		FROM request_logs 
-		WHERE start_time >= ? AND start_time <= ? AND model_name IS NOT NULL AND model_name != ''
-		GROUP BY model_name`
-
-	rows, err := ut.readDB.QueryContext(ctx, modelQuery, startTime, endTime)
+	stats := &UsageStatsDetailed{
+		TotalRequests:   totals.TotalRequests,
+		SuccessRequests: totals.SuccessRequests,
+		ErrorRequests:   totals.FailedRequests,
+		TotalTokens:     totals.TotalTokens,
+		TotalCost:       totals.TotalCostUSD,
+		ModelStats:      make(map[string]ModelStat),
+		EndpointStats:   make(map[string]EndpointStat),
+		GroupStats:      make(map[string]GroupStat),
+	}
+	startBound := ut.formatStartTimeQueryBound(startTime)
+	endBound := ut.formatEndTimeQueryBound(endTime)
+	err = ut.forEachHistorySource(ctx, &startTime, &endTime, func(source historyQuerySource) error {
+		queries := []struct {
+			column string
+			apply  func(string, int64, float64)
+		}{
+			{column: "model_name", apply: func(name string, requests int64, cost float64) {
+				current := stats.ModelStats[name]
+				current.RequestCount += requests
+				current.TotalCost += cost
+				stats.ModelStats[name] = current
+			}},
+			{column: "endpoint_name", apply: func(name string, requests int64, cost float64) {
+				current := stats.EndpointStats[name]
+				current.RequestCount += requests
+				current.TotalCost += cost
+				stats.EndpointStats[name] = current
+			}},
+			{column: "group_name", apply: func(name string, requests int64, cost float64) {
+				current := stats.GroupStats[name]
+				current.RequestCount += requests
+				current.TotalCost += cost
+				stats.GroupStats[name] = current
+			}},
+		}
+		for _, groupedQuery := range queries {
+			query := fmt.Sprintf(`SELECT %s, COUNT(*), COALESCE(SUM(total_cost_usd), 0)
+				FROM request_logs
+				WHERE start_time >= ? AND start_time <= ? AND %s IS NOT NULL AND %s != ''
+				GROUP BY %s`, groupedQuery.column, groupedQuery.column, groupedQuery.column, groupedQuery.column)
+			rows, err := source.db.QueryContext(ctx, query, startBound, endBound)
+			if err != nil {
+				return err
+			}
+			for rows.Next() {
+				var name string
+				var requests int64
+				var cost float64
+				if err := rows.Scan(&name, &requests, &cost); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				groupedQuery.apply(name, requests, cost)
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to query model stats: %w", err)
+		return nil, fmt.Errorf("failed to query detailed usage dimensions: %w", err)
 	}
-	defer rows.Close()
-
-	stats.ModelStats = make(map[string]ModelStat)
-	for rows.Next() {
-		var modelName string
-		var requests int64
-		var cost float64
-		if err := rows.Scan(&modelName, &requests, &cost); err != nil {
-			continue
-		}
-		stats.ModelStats[modelName] = ModelStat{
-			RequestCount: requests,
-			TotalCost:    cost,
-		}
-	}
-
-	// 获取端点统计（使用读连接）
-	endpointQuery := `SELECT endpoint_name, COUNT(*), SUM(total_cost_usd)
-		FROM request_logs 
-		WHERE start_time >= ? AND start_time <= ? AND endpoint_name IS NOT NULL AND endpoint_name != ''
-		GROUP BY endpoint_name`
-
-	rows2, err := ut.readDB.QueryContext(ctx, endpointQuery, startTime, endTime)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query endpoint stats: %w", err)
-	}
-	defer rows2.Close()
-
-	stats.EndpointStats = make(map[string]EndpointStat)
-	for rows2.Next() {
-		var endpointName string
-		var requests int64
-		var cost float64
-		if err := rows2.Scan(&endpointName, &requests, &cost); err != nil {
-			continue
-		}
-		stats.EndpointStats[endpointName] = EndpointStat{
-			RequestCount: requests,
-			TotalCost:    cost,
-		}
-	}
-
-	// 获取组统计（使用读连接）
-	groupQuery := `SELECT group_name, COUNT(*), SUM(total_cost_usd)
-		FROM request_logs 
-		WHERE start_time >= ? AND start_time <= ? AND group_name IS NOT NULL AND group_name != ''
-		GROUP BY group_name`
-
-	rows3, err := ut.readDB.QueryContext(ctx, groupQuery, startTime, endTime)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query group stats: %w", err)
-	}
-	defer rows3.Close()
-
-	stats.GroupStats = make(map[string]GroupStat)
-	for rows3.Next() {
-		var groupName string
-		var requests int64
-		var cost float64
-		if err := rows3.Scan(&groupName, &requests, &cost); err != nil {
-			continue
-		}
-		stats.GroupStats[groupName] = GroupStat{
-			RequestCount: requests,
-			TotalCost:    cost,
-		}
-	}
-
-	return &stats, nil
+	return stats, nil
 }
 
 // ExportToCSV 导出为CSV格式
@@ -2760,9 +2787,13 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 	// 2. 获取数据库总数（用于分页计算）
 	// 🔧 [P6] 优先尝试内存计数器（仅支持 total / by-provider 维度）：
 	//   - 命中：完全避免 DB 查询，杜绝 SQLITE_BUSY 触发的跳变
-	//   - 未命中（带复杂过滤或未初始化）：回退到原有 DB 查询 + 缓存降级
+	//   - 存在月度归档时必须走跨库计数，不能只读活动库计数器
 	var dbCount int
-	if ut.dbCounter != nil {
+	hasHistory, err := ut.hasHistoryArchives()
+	if err != nil {
+		return nil, 0, err
+	}
+	if ut.dbCounter != nil && !hasHistory {
 		if v, ok := ut.dbCounter.Get(opts); ok {
 			dbCount = int(v)
 			// 同步更新缓存，方便后续即便回退到 DB 路径时也有最新数值兜底
@@ -2780,8 +2811,15 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 				ut.setCachedDBCount(opts, dbCount)
 			}
 		}
+	} else if hasHistory {
+		cnt, err := ut.CountRequestDetails(ctx, opts)
+		if err != nil {
+			return nil, 0, err
+		}
+		dbCount = cnt
+		ut.setCachedDBCount(opts, dbCount)
 	} else {
-		// 计数器未注入（防御性路径），保持原有行为
+		// 计数器未注入（防御性路径），保持原有降级行为
 		cnt, err := ut.CountRequestDetails(ctx, opts)
 		if err != nil {
 			if shouldLogThrottled("count_request_details_failed") {
@@ -2829,15 +2867,12 @@ func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts
 			dbOpts.Limit = remaining + hotPoolCount // 多取一些用于去重
 			dbRequests, err := ut.QueryRequestDetails(ctx, &dbOpts)
 			if err != nil {
-				if shouldLogThrottled("query_request_details_failed") {
-					slog.Warn("Failed to query database requests", "error", err)
-				}
-			} else {
-				// 添加数据库请求（排除已在热池中的）
-				for _, req := range dbRequests {
-					if !hotPoolIDs[req.RequestID] && len(results) < limit {
-						results = append(results, req)
-					}
+				return nil, 0, fmt.Errorf("failed to query database requests: %w", err)
+			}
+			// 添加数据库请求（排除已在热池中的）
+			for _, req := range dbRequests {
+				if !hotPoolIDs[req.RequestID] && len(results) < limit {
+					results = append(results, req)
 				}
 			}
 		}

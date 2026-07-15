@@ -129,12 +129,14 @@ type UsageTrackingConfig struct {
 	// 新增：数据库配置（可选，优先级高于 database_path）
 	Database *DatabaseBackendConfig `yaml:"database,omitempty"` // Database configuration (optional)
 
-	BufferSize      int           `yaml:"buffer_size"`      // Event buffer size, default: 1000
-	BatchSize       int           `yaml:"batch_size"`       // Batch write size, default: 100
-	FlushInterval   time.Duration `yaml:"flush_interval"`   // Force flush interval, default: 30s
-	MaxRetry        int           `yaml:"max_retry"`        // Max retry count for write failures, default: 3
-	RetentionDays   int           `yaml:"retention_days"`   // Data retention days (0=permanent), default: 90
-	CleanupInterval time.Duration `yaml:"cleanup_interval"` // Cleanup task execution interval, default: 24h
+	BufferSize    int           `yaml:"buffer_size"`    // Event buffer size, default: 1000
+	BatchSize     int           `yaml:"batch_size"`     // Batch write size, default: 100
+	FlushInterval time.Duration `yaml:"flush_interval"` // Force flush interval, default: 30s
+	MaxRetry      int           `yaml:"max_retry"`      // Max retry count for write failures, default: 3
+	RetentionDays int           `yaml:"retention_days"` // Data retention days (0=permanent), default: 90
+	// Deprecated: 历史请求固定每日维护并按自然月归档；保留字段仅兼容旧配置文件。
+	CleanupInterval         time.Duration `yaml:"cleanup_interval"`
+	MaxActiveDatabaseSizeMB int           `yaml:"max_active_database_size_mb"`
 
 	// Deprecated: 以下定价配置已废弃，迁移到 SQLite model_pricing 表
 	// 通过前端「定价」页面管理，这些字段仅保留用于向后兼容解析

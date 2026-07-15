@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fetchRequests } from './api.js';
+import { fetchEndpointCostsData, fetchRequests, fetchTokenUsageData } from './api.js';
 
 test('fetchRequests keeps an unselected endpoint empty instead of fabricating unknown', async () => {
   const originalFetch = globalThis.fetch;
@@ -67,5 +67,22 @@ test('fetchRequests normalizes request network fields in both naming styles', as
     assert.equal(request.user_agent, 'Codex CLI/1.0');
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('usage chart helpers propagate history query failures', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalConsoleError = console.error;
+  globalThis.fetch = async () => {
+    throw new Error('归档 2026-06 查询失败');
+  };
+  console.error = () => {};
+
+  try {
+    await assert.rejects(fetchTokenUsageData(), /归档 2026-06 查询失败/);
+    await assert.rejects(fetchEndpointCostsData(), /归档 2026-06 查询失败/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    console.error = originalConsoleError;
   }
 });

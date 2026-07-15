@@ -270,6 +270,24 @@ type EndpointCostSummary struct {
 	CacheReadCostUSD     float64 `json:"cache_read_cost_usd"`
 }
 
+type TokenUsageTotals struct {
+	InputTokens         int64
+	OutputTokens        int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	TotalTokens         int64
+}
+
+type TokenUsageBucket struct {
+	Key                 string
+	RequestCount        int64
+	InputTokens         int64
+	OutputTokens        int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	TotalTokens         int64
+}
+
 // GetDB returns the read database connection for external queries (读写分离：返回读连接)
 func (ut *UsageTracker) GetDB() *sql.DB {
 	return ut.readDB
@@ -287,7 +305,56 @@ func (ut *UsageTracker) GetWriteDB() *sql.DB {
 
 // QueryUsageSummary queries usage summary data
 func (ut *UsageTracker) QueryUsageSummary(ctx context.Context, opts *QueryOptions) ([]UsageSummary, error) {
-	if ut.readDB == nil {
+	if opts == nil {
+		opts = &QueryOptions{}
+	}
+	sourceOpts := *opts
+	sourceOpts.Offset = 0
+	if opts.Limit > 0 {
+		sourceOpts.Limit = max(opts.Offset, 0) + opts.Limit
+	}
+
+	var summaries []UsageSummary
+	err := ut.forEachHistorySource(ctx, opts.StartDate, opts.EndDate, func(source historyQuerySource) error {
+		sourceSummaries, err := queryUsageSummaryFromSource(ctx, source.db, &sourceOpts)
+		if err != nil {
+			return err
+		}
+		summaries = append(summaries, sourceSummaries...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].Date != summaries[j].Date {
+			return summaries[i].Date > summaries[j].Date
+		}
+		if summaries[i].TotalCostUSD != summaries[j].TotalCostUSD {
+			return summaries[i].TotalCostUSD > summaries[j].TotalCostUSD
+		}
+		if summaries[i].ModelName != summaries[j].ModelName {
+			return summaries[i].ModelName < summaries[j].ModelName
+		}
+		if summaries[i].EndpointName != summaries[j].EndpointName {
+			return summaries[i].EndpointName < summaries[j].EndpointName
+		}
+		return summaries[i].GroupName < summaries[j].GroupName
+	})
+
+	start := max(opts.Offset, 0)
+	if start >= len(summaries) {
+		return []UsageSummary{}, nil
+	}
+	end := len(summaries)
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+	}
+	return summaries[start:end], nil
+}
+
+func queryUsageSummaryFromSource(ctx context.Context, db *sql.DB, opts *QueryOptions) ([]UsageSummary, error) {
+	if db == nil {
 		return nil, fmt.Errorf("read database not initialized")
 	}
 
@@ -337,7 +404,7 @@ func (ut *UsageTracker) QueryUsageSummary(ctx context.Context, opts *QueryOption
 		args = append(args, opts.Offset)
 	}
 
-	rows, err := ut.readDB.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query usage summary: %w", err)
 	}
@@ -369,7 +436,55 @@ func (ut *UsageTracker) QueryUsageSummary(ctx context.Context, opts *QueryOption
 
 // QueryRequestDetails queries detailed request records
 func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOptions) ([]RequestDetail, error) {
-	if ut.readDB == nil {
+	if opts == nil {
+		opts = &QueryOptions{}
+	}
+	sourceOpts := *opts
+	sourceOpts.Offset = 0
+	if opts.Limit > 0 {
+		sourceOpts.Limit = max(opts.Offset, 0) + opts.Limit
+	}
+
+	capacity := max(sourceOpts.Limit, 0)
+	details := make([]RequestDetail, 0, capacity)
+	seen := make(map[string]struct{})
+	err := ut.forEachHistorySource(ctx, opts.StartDate, opts.EndDate, func(source historyQuerySource) error {
+		sourceDetails, err := ut.queryRequestDetailsFromSource(ctx, source.db, &sourceOpts)
+		if err != nil {
+			return err
+		}
+		for _, detail := range sourceDetails {
+			if _, exists := seen[detail.RequestID]; exists {
+				continue
+			}
+			seen[detail.RequestID] = struct{}{}
+			details = append(details, detail)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(details, func(i, j int) bool {
+		if !details[i].StartTime.Equal(details[j].StartTime) {
+			return details[i].StartTime.After(details[j].StartTime)
+		}
+		return details[i].RequestID > details[j].RequestID
+	})
+
+	start := max(opts.Offset, 0)
+	if start >= len(details) {
+		return []RequestDetail{}, nil
+	}
+	end := len(details)
+	if opts.Limit > 0 && start+opts.Limit < end {
+		end = start + opts.Limit
+	}
+	return details[start:end], nil
+}
+
+func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *sql.DB, opts *QueryOptions) ([]RequestDetail, error) {
+	if db == nil {
 		return nil, fmt.Errorf("read database not initialized")
 	}
 
@@ -493,7 +608,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		args = append(args, opts.Provider)
 	}
 
-	query += " ORDER BY start_time DESC"
+	query += " ORDER BY start_time DESC, request_id DESC"
 
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
@@ -504,7 +619,7 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		args = append(args, opts.Offset)
 	}
 
-	rows, err := ut.readDB.QueryContext(ctx, query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query request details: %w", err)
 	}
@@ -559,12 +674,8 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 
 // QueryUsageStats queries aggregated usage statistics
 func (ut *UsageTracker) QueryUsageStats(ctx context.Context, period string) (*UsageStats, error) {
-	if ut.readDB == nil {
-		return nil, fmt.Errorf("read database not initialized")
-	}
-
 	// Calculate date range based on period
-	endDate := time.Now()
+	endDate := ut.now()
 	var startDate time.Time
 
 	switch period {
@@ -580,25 +691,18 @@ func (ut *UsageTracker) QueryUsageStats(ctx context.Context, period string) (*Us
 		startDate = endDate.AddDate(0, 0, -7) // default to 7 days
 	}
 
-	query := `SELECT 
-		COUNT(*) as total_requests,
-		CAST(SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) * 100 as success_rate,
-		AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END) as avg_duration,
-		SUM(total_cost_usd) as total_cost
-		FROM request_logs 
-		WHERE start_time >= ? AND start_time <= ?`
-
-	var stats UsageStats
-	stats.Period = period
-
-	err := ut.readDB.QueryRowContext(ctx, query, ut.formatStartTimeQueryBound(startDate), ut.formatEndTimeQueryBound(endDate)).Scan(
-		&stats.TotalRequests,
-		&stats.SuccessRate,
-		&stats.AvgDuration,
-		&stats.TotalCost,
-	)
+	totals, err := ut.QueryUsageStatsTotals(ctx, &QueryOptions{StartDate: &startDate, EndDate: &endDate})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query usage stats: %w", err)
+	}
+	stats := UsageStats{
+		Period:        period,
+		TotalRequests: int(totals.TotalRequests),
+		AvgDuration:   totals.AvgDurationMs(),
+		TotalCost:     totals.TotalCostUSD,
+	}
+	if totals.TotalRequests > 0 {
+		stats.SuccessRate = float64(totals.SuccessRequests) / float64(totals.TotalRequests) * 100
 	}
 
 	// 添加调试日志
@@ -615,7 +719,28 @@ func (ut *UsageTracker) QueryUsageStats(ctx context.Context, period string) (*Us
 // QueryUsageStatsTotals 查询聚合统计（数据库部分）。
 // 该方法只做聚合，不返回明细，适用于前端统计卡片/图表的快速刷新。
 func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {
-	if ut.readDB == nil {
+	var combined UsageStatsTotals
+	var startTime, endTime *time.Time
+	if opts != nil {
+		startTime = opts.StartDate
+		endTime = opts.EndDate
+	}
+	err := ut.forEachHistorySource(ctx, startTime, endTime, func(source historyQuerySource) error {
+		totals, err := ut.queryUsageStatsTotalsFromSource(ctx, source.db, opts)
+		if err != nil {
+			return err
+		}
+		combined.add(*totals)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &combined, nil
+}
+
+func (ut *UsageTracker) queryUsageStatsTotalsFromSource(ctx context.Context, db *sql.DB, opts *QueryOptions) (*UsageStatsTotals, error) {
+	if db == nil {
 		return nil, fmt.Errorf("read database not initialized")
 	}
 
@@ -673,7 +798,7 @@ func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOp
 	}
 
 	var totals UsageStatsTotals
-	if err := ut.readDB.QueryRowContext(ctx, query, args...).Scan(
+	if err := db.QueryRowContext(ctx, query, args...).Scan(
 		&totals.TotalRequests,
 		&totals.SuccessRequests,
 		&totals.FailedRequests,
@@ -820,7 +945,23 @@ func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, op
 
 // CountRequestDetails returns the total count of request details matching the query options
 func (ut *UsageTracker) CountRequestDetails(ctx context.Context, opts *QueryOptions) (int, error) {
-	if ut.readDB == nil {
+	if opts == nil {
+		opts = &QueryOptions{}
+	}
+	total := 0
+	err := ut.forEachHistorySource(ctx, opts.StartDate, opts.EndDate, func(source historyQuerySource) error {
+		count, err := ut.countRequestDetailsFromSource(ctx, source.db, opts)
+		if err != nil {
+			return err
+		}
+		total += count
+		return nil
+	})
+	return total, err
+}
+
+func (ut *UsageTracker) countRequestDetailsFromSource(ctx context.Context, db *sql.DB, opts *QueryOptions) (int, error) {
+	if db == nil {
 		return 0, fmt.Errorf("read database not initialized")
 	}
 
@@ -867,7 +1008,7 @@ func (ut *UsageTracker) CountRequestDetails(ctx context.Context, opts *QueryOpti
 	}
 
 	var count int
-	err := ut.readDB.QueryRowContext(ctx, query, args...).Scan(&count)
+	err := db.QueryRowContext(ctx, query, args...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count request details: %w", err)
 	}
@@ -923,13 +1064,6 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		FROM request_logs
 		WHERE start_time >= ? AND start_time <= ?`
 
-	rows, err := ut.readDB.QueryContext(ctx, query, ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay))
-	if err != nil {
-		slog.Error("Failed to query endpoint costs", "error", err, "date", date, "start_time", startOfDay, "end_time", endOfDay)
-		return nil, fmt.Errorf("failed to query endpoint costs for date %s: %w", date, err)
-	}
-	defer rows.Close()
-
 	type endpointCostKey struct {
 		Channel      string
 		EndpointName string
@@ -956,59 +1090,64 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 	}
 
 	grouped := make(map[endpointCostKey]*EndpointCostSummary)
-	for rows.Next() {
-		var row endpointCostRow
-		err := rows.Scan(
-			&row.Channel, &row.EndpointName, &row.GroupName, &row.EndpointChain, &row.Provider, &row.Status,
-			&row.TotalTokens, &row.TotalCostUSD,
-			&row.InputTokens, &row.OutputTokens,
-			&row.CacheCreationTokens, &row.CacheReadTokens,
-			&row.InputCostUSD, &row.OutputCostUSD,
-			&row.CacheCreationCostUSD, &row.CacheReadCostUSD,
-		)
+	err = ut.forEachHistorySource(ctx, &startOfDay, &endOfDay, func(source historyQuerySource) error {
+		rows, err := source.db.QueryContext(ctx, query, ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay))
 		if err != nil {
-			slog.Error("Failed to scan endpoint cost row", "error", err)
-			return nil, fmt.Errorf("failed to scan endpoint cost: %w", err)
+			return err
 		}
-		groupName := row.GroupName
-		if groupName == "" {
-			groupName = endpointChainCredentialGroup(row.EndpointChain)
-		}
-		key := endpointCostKey{
-			Channel:      row.Channel,
-			EndpointName: row.EndpointName,
-			GroupName:    groupName,
-			Provider:     row.Provider,
-		}
-		cost := grouped[key]
-		if cost == nil {
-			cost = &EndpointCostSummary{
+		defer rows.Close()
+		for rows.Next() {
+			var row endpointCostRow
+			if err := rows.Scan(
+				&row.Channel, &row.EndpointName, &row.GroupName, &row.EndpointChain, &row.Provider, &row.Status,
+				&row.TotalTokens, &row.TotalCostUSD,
+				&row.InputTokens, &row.OutputTokens,
+				&row.CacheCreationTokens, &row.CacheReadTokens,
+				&row.InputCostUSD, &row.OutputCostUSD,
+				&row.CacheCreationCostUSD, &row.CacheReadCostUSD,
+			); err != nil {
+				return fmt.Errorf("failed to scan endpoint cost: %w", err)
+			}
+			groupName := row.GroupName
+			if groupName == "" {
+				groupName = endpointChainCredentialGroup(row.EndpointChain)
+			}
+			key := endpointCostKey{
 				Channel:      row.Channel,
 				EndpointName: row.EndpointName,
 				GroupName:    groupName,
 				Provider:     row.Provider,
 			}
-			grouped[key] = cost
+			cost := grouped[key]
+			if cost == nil {
+				cost = &EndpointCostSummary{
+					Channel:      row.Channel,
+					EndpointName: row.EndpointName,
+					GroupName:    groupName,
+					Provider:     row.Provider,
+				}
+				grouped[key] = cost
+			}
+			cost.TotalTokens += row.TotalTokens
+			cost.TotalCostUSD += row.TotalCostUSD
+			cost.RequestCount++
+			if row.Status == "completed" {
+				cost.SuccessCount++
+			}
+			cost.InputTokens += row.InputTokens
+			cost.OutputTokens += row.OutputTokens
+			cost.CacheCreationTokens += row.CacheCreationTokens
+			cost.CacheReadTokens += row.CacheReadTokens
+			cost.InputCostUSD += row.InputCostUSD
+			cost.OutputCostUSD += row.OutputCostUSD
+			cost.CacheCreationCostUSD += row.CacheCreationCostUSD
+			cost.CacheReadCostUSD += row.CacheReadCostUSD
 		}
-		cost.TotalTokens += row.TotalTokens
-		cost.TotalCostUSD += row.TotalCostUSD
-		cost.RequestCount++
-		if row.Status == "completed" {
-			cost.SuccessCount++
-		}
-		cost.InputTokens += row.InputTokens
-		cost.OutputTokens += row.OutputTokens
-		cost.CacheCreationTokens += row.CacheCreationTokens
-		cost.CacheReadTokens += row.CacheReadTokens
-		cost.InputCostUSD += row.InputCostUSD
-		cost.OutputCostUSD += row.OutputCostUSD
-		cost.CacheCreationCostUSD += row.CacheCreationCostUSD
-		cost.CacheReadCostUSD += row.CacheReadCostUSD
-	}
-
-	if err = rows.Err(); err != nil {
-		slog.Error("Error iterating endpoint cost rows", "error", err)
-		return nil, fmt.Errorf("error iterating endpoint cost rows: %w", err)
+		return rows.Err()
+	})
+	if err != nil {
+		slog.Error("Failed to query endpoint costs", "error", err, "date", date, "start_time", startOfDay, "end_time", endOfDay)
+		return nil, fmt.Errorf("failed to query endpoint costs for date %s: %w", date, err)
 	}
 
 	costs := make([]EndpointCostSummary, 0, len(grouped))
@@ -1034,6 +1173,149 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		"total_endpoints", len(costs))
 
 	return costs, nil
+}
+
+func (ut *UsageTracker) QueryTokenUsageTotals(ctx context.Context, startTime, endTime time.Time, provider string) (TokenUsageTotals, error) {
+	query := `SELECT
+		COALESCE(SUM(` + distributionInputTokensSQLExpression + `), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_creation_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(` + totalTokensSQLExpression + `), 0)
+		FROM request_logs
+		WHERE start_time >= ? AND start_time < ?`
+	args := []any{ut.formatStartTimeQueryBound(startTime), ut.formatStartTimeQueryBound(endTime)}
+	if provider != "" {
+		query += " AND provider = ?"
+		args = append(args, provider)
+	}
+
+	var totals TokenUsageTotals
+	err := ut.forEachHistorySource(ctx, &startTime, &endTime, func(source historyQuerySource) error {
+		var sourceTotals TokenUsageTotals
+		if err := source.db.QueryRowContext(ctx, query, args...).Scan(
+			&sourceTotals.InputTokens,
+			&sourceTotals.OutputTokens,
+			&sourceTotals.CacheCreationTokens,
+			&sourceTotals.CacheReadTokens,
+			&sourceTotals.TotalTokens,
+		); err != nil {
+			return err
+		}
+		totals.InputTokens += sourceTotals.InputTokens
+		totals.OutputTokens += sourceTotals.OutputTokens
+		totals.CacheCreationTokens += sourceTotals.CacheCreationTokens
+		totals.CacheReadTokens += sourceTotals.CacheReadTokens
+		totals.TotalTokens += sourceTotals.TotalTokens
+		return nil
+	})
+	return totals, err
+}
+
+func (ut *UsageTracker) QueryTokenUsageBuckets(ctx context.Context, opts *QueryOptions, bucket string) ([]TokenUsageBucket, error) {
+	if opts == nil || opts.StartDate == nil || opts.EndDate == nil {
+		return []TokenUsageBucket{}, nil
+	}
+	bucketExpression := "substr(start_time, 1, 10)"
+	if bucket == "hour" {
+		bucketExpression = "substr(start_time, 1, 13)"
+	} else if bucket != "day" {
+		return nil, fmt.Errorf("unsupported token usage bucket %q", bucket)
+	}
+
+	query := `SELECT ` + bucketExpression + ` AS bucket,
+		COUNT(*),
+		COALESCE(SUM(` + distributionInputTokensSQLExpression + `), 0),
+		COALESCE(SUM(output_tokens), 0),
+		COALESCE(SUM(cache_creation_tokens), 0),
+		COALESCE(SUM(cache_read_tokens), 0),
+		COALESCE(SUM(` + totalTokensSQLExpression + `), 0)
+		FROM request_logs WHERE 1=1`
+	query, args := ut.appendRequestQueryFilters(query, nil, opts)
+	query += " GROUP BY bucket ORDER BY bucket ASC"
+
+	byKey := make(map[string]TokenUsageBucket)
+	err := ut.forEachHistorySource(ctx, opts.StartDate, opts.EndDate, func(source historyQuerySource) error {
+		rows, err := source.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item TokenUsageBucket
+			if err := rows.Scan(
+				&item.Key,
+				&item.RequestCount,
+				&item.InputTokens,
+				&item.OutputTokens,
+				&item.CacheCreationTokens,
+				&item.CacheReadTokens,
+				&item.TotalTokens,
+			); err != nil {
+				return err
+			}
+			current := byKey[item.Key]
+			current.Key = item.Key
+			current.RequestCount += item.RequestCount
+			current.InputTokens += item.InputTokens
+			current.OutputTokens += item.OutputTokens
+			current.CacheCreationTokens += item.CacheCreationTokens
+			current.CacheReadTokens += item.CacheReadTokens
+			current.TotalTokens += item.TotalTokens
+			byKey[item.Key] = current
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]TokenUsageBucket, 0, len(byKey))
+	for _, item := range byKey {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
+	return items, nil
+}
+
+func (ut *UsageTracker) appendRequestQueryFilters(query string, args []any, opts *QueryOptions) (string, []any) {
+	if opts == nil {
+		return query, args
+	}
+	if opts.StartDate != nil {
+		query += " AND start_time >= ?"
+		args = append(args, ut.formatStartTimeQueryBound(*opts.StartDate))
+	}
+	if opts.EndDate != nil {
+		query += " AND start_time <= ?"
+		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
+	}
+	if opts.ModelName != "" {
+		query += " AND model_name = ?"
+		args = append(args, opts.ModelName)
+	}
+	if opts.Channel != "" {
+		query += " AND channel = ?"
+		args = append(args, opts.Channel)
+	}
+	if opts.EndpointName != "" {
+		query += " AND endpoint_name = ?"
+		args = append(args, opts.EndpointName)
+	}
+	if opts.GroupName != "" {
+		query += " AND group_name = ?"
+		args = append(args, opts.GroupName)
+	}
+	if opts.Status == "failed" {
+		query += " AND status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
+	} else if opts.Status != "" {
+		query += " AND status = ?"
+		args = append(args, opts.Status)
+	}
+	if opts.Provider != "" {
+		query += " AND provider = ?"
+		args = append(args, opts.Provider)
+	}
+	return query, args
 }
 
 type endpointChainGroupNode struct {

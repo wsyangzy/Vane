@@ -1049,27 +1049,45 @@ func (ut *UsageTracker) calculateCost(modelName string, tokens *TokenUsage) (inp
 func (ut *UsageTracker) periodicCleanup() {
 	defer ut.wg.Done()
 
-	ticker := time.NewTicker(ut.config.CleanupInterval)
-	defer ticker.Stop()
+	policy := ut.currentRetentionPolicy()
+	timer := time.NewTimer(policy.cleanupInterval)
+	defer timer.Stop()
 
-	slog.Debug("Periodic cleanup task started", "interval", ut.config.CleanupInterval)
+	slog.Debug("Periodic cleanup task started", "interval", policy.cleanupInterval)
 
 	for {
 		select {
-		case <-ticker.C:
-			if err := ut.cleanupOldRecords(); err != nil {
-				slog.Error("Failed to cleanup old records", "error", err)
-				continue
-			}
-
-			// 🔧 [P2.4 新增] 清理后执行 ANALYZE + 增量 VACUUM
-			ut.postCleanupMaintenance()
-
+		case <-timer.C:
+		case <-ut.retentionChanged:
 		case <-ut.ctx.Done():
 			slog.Debug("Periodic cleanup task stopped")
 			return
 		}
+
+		if err := ut.runRetentionMaintenance(); err != nil {
+			slog.Error("Failed to apply retention policy", "error", err)
+		}
+
+		policy = ut.currentRetentionPolicy()
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(policy.cleanupInterval)
 	}
+}
+
+func (ut *UsageTracker) runRetentionMaintenance() error {
+	if err := ut.cleanupOldRecords(); err != nil {
+		return err
+	}
+	if err := ut.archiveClosedMonths(context.Background()); err != nil {
+		return err
+	}
+	ut.postCleanupMaintenance()
+	return nil
 }
 
 // postCleanupMaintenance 清理后的数据库维护任务
@@ -1111,11 +1129,14 @@ func (ut *UsageTracker) postCleanupMaintenance() {
 //   - 新实现：每批 1000 行，每批之间释放锁，让其他读写操作有机会执行
 //   - 这对长时间运行的大数据库尤其重要（数十万行待删除场景）
 func (ut *UsageTracker) cleanupOldRecords() error {
-	if ut.config.RetentionDays <= 0 {
+	policy := ut.currentRetentionPolicy()
+	if policy.retentionDays <= 0 {
 		return nil // 永久保留
 	}
+	ut.historyMu.Lock()
+	defer ut.historyMu.Unlock()
 
-	cutoffTime := time.Now().AddDate(0, 0, -ut.config.RetentionDays)
+	cutoffTime := ut.now().AddDate(0, 0, -policy.retentionDays)
 
 	// 🔧 [P2.5] 分批删除 request_logs，每批 1000 行
 	const batchSize = 1000
@@ -1211,6 +1232,9 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 	case <-ut.ctx.Done():
 		return ut.ctx.Err()
 	}
+	if err := ut.cleanupHistoryArchivesBefore(context.Background(), cutoffTime); err != nil {
+		return err
+	}
 
 	// 运行VACUUM以回收空间（通过写队列，仅对SQLite有效）
 	// 说明：
@@ -1221,7 +1245,7 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 	// 记录清理结果
 	slog.Info("Cleaned up old records",
 		"cutoff_date", cutoffTime.Format("2006-01-02"),
-		"retention_days", ut.config.RetentionDays)
+		"retention_days", policy.retentionDays)
 
 	ut.invalidateUsageCaches()
 

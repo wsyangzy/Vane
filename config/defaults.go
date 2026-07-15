@@ -159,9 +159,6 @@ func (c *Config) setUsageTrackingDefaults() {
 	if c.UsageTracking.RetentionDays == 0 {
 		c.UsageTracking.RetentionDays = 90
 	}
-	if c.UsageTracking.CleanupInterval == 0 {
-		c.UsageTracking.CleanupInterval = 24 * time.Hour
-	}
 }
 
 func (c *Config) setTokenCountingDefaults() {
