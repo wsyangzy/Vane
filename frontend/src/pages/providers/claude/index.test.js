@@ -111,3 +111,15 @@ test('Claude refresh replaces the standalone check-all action', () => {
   assert.doesNotMatch(source, /检测全部/);
   assert.doesNotMatch(source, /icon=\{Activity\}/);
 });
+
+test('Claude header shows the SQLite channel refresh time', () => {
+  assert.match(source, /const \[channelsLastUpdate, setChannelsLastUpdate\] = useState\('\'\);/);
+  assert.match(source, /setChannelsLastUpdate\(new Date\(\)\.toLocaleTimeString\(\)\)/);
+  assert.match(source, /const headerLastUpdate = isSqliteMode \? channelsLastUpdate : lastUpdate/);
+  assert.match(source, /headerLastUpdate &&/);
+});
+
+test('Claude header does not show the SSE realtime badge', () => {
+  assert.doesNotMatch(source, /SSE 状态指示器/);
+  assert.doesNotMatch(source, /sseConnectionStatus/);
+});

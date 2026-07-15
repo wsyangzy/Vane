@@ -2392,7 +2392,6 @@ const ChannelsPage = () => {
     stats,
     refresh,
     performBatchHealthCheckAll,
-    sseConnectionStatus,
     lastUpdate
   } = useEndpointsData({ enabled: storageStatus ? !isSqliteMode : false });
 
@@ -2403,6 +2402,7 @@ const ChannelsPage = () => {
   const [globalTimeoutSeconds, setGlobalTimeoutSeconds] = useState(300);
   // failoverDefaultCooldownSeconds 已移除
   const [channelsMeta, setChannelsMeta] = useState([]);
+  const [channelsLastUpdate, setChannelsLastUpdate] = useState('');
 
   // 挂起请求计数（用于显示等待提示）
   const [suspendedRequestsCount, setSuspendedRequestsCount] = useState(0);
@@ -2516,6 +2516,7 @@ const ChannelsPage = () => {
     if (!sqliteEnabled) {
       if (seq === channelsMetaLoadSeqRef.current) {
         setChannelsMeta([]);
+        setChannelsLastUpdate('');
       }
       return;
     }
@@ -2523,6 +2524,7 @@ const ChannelsPage = () => {
       const list = await getChannels();
       if (seq !== channelsMetaLoadSeqRef.current) return;
       setChannelsMeta(Array.isArray(list) ? list : []);
+      setChannelsLastUpdate(new Date().toLocaleTimeString());
     } catch (err) {
       console.error('获取渠道列表失败:', err);
       // 避免瞬时失败导致 UI “清空”，保留上一次结果
@@ -2916,6 +2918,8 @@ const ChannelsPage = () => {
       return (a.name || '').localeCompare(b.name || '');
     });
   }, [activeChannel, channelOptions, channelsMeta, groupInfoMap, scopedDisplayEndpoints]);
+
+  const headerLastUpdate = isSqliteMode ? channelsLastUpdate : lastUpdate;
 
   const credentialGroupEndpointCopyOptions = useMemo(() => {
     if (credentialGroupFormMode !== 'create' || !credentialGroupFormChannel) return [];
@@ -3330,23 +3334,13 @@ const ChannelsPage = () => {
             <h1 className="text-2xl font-bold text-slate-900">Claude 管理</h1>
             <p className="text-slate-500 text-sm mt-1">
               以渠道为单位进行路由与故障转移，渠道内优先在端点之间切换，渠道耗尽后跨渠道切换
-              {lastUpdate && (
-                <span className="ml-2 text-slate-400">· 更新于 {lastUpdate}</span>
+              {headerLastUpdate && (
+                <span className="ml-2 text-slate-400">· 更新于 {headerLastUpdate}</span>
               )}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* SSE 状态指示器 */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-500">
-            <span className={`w-2 h-2 rounded-full ${
-              sseConnectionStatus === 'connected' ? 'bg-emerald-400' :
-              sseConnectionStatus === 'connecting' ? 'bg-amber-400 animate-pulse' :
-              'bg-slate-300'
-            }`} />
-            {sseConnectionStatus === 'connected' ? '实时' : '离线'}
-          </div>
-
           {/* 刷新按钮 */}
           <Button
             variant="ghost"
