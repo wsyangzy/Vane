@@ -383,6 +383,8 @@ CREATE TABLE IF NOT EXISTS codex_channels (
     enable_1m_context INTEGER NOT NULL DEFAULT 0,
     website TEXT,
     is_active INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 0,
+    failover_enabled INTEGER NOT NULL DEFAULT 1,
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
@@ -535,6 +537,7 @@ CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- ========== 设置标识 ==========
+    provider TEXT NOT NULL CHECK (provider IN ('global', 'claude', 'codex')), -- 配置作用域
     category TEXT NOT NULL,                         -- 分类: strategy, retry, health, failover, request, streaming, auth, token_counting, retention, hot_pool, server
     key TEXT NOT NULL,                              -- 配置键
 
@@ -554,12 +557,12 @@ CREATE TABLE IF NOT EXISTS settings (
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 
-    UNIQUE(category, key)
+    UNIQUE(provider, category, key)
 );
 
 -- 设置表索引
-CREATE INDEX IF NOT EXISTS idx_settings_category ON settings(category);
-CREATE INDEX IF NOT EXISTS idx_settings_category_key ON settings(category, key);
+CREATE INDEX IF NOT EXISTS idx_settings_provider_category ON settings(provider, category);
+CREATE INDEX IF NOT EXISTS idx_settings_provider_category_key ON settings(provider, category, key);
 
 -- 设置表触发器：自动更新 updated_at
 CREATE TRIGGER IF NOT EXISTS update_settings_timestamp

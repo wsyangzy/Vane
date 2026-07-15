@@ -6,7 +6,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Waves, RefreshCw, GitBranch, ChevronRight } from 'lucide-react';
+import { Waves, RefreshCw, Route, ChevronRight } from 'lucide-react';
 import { LoadingSpinner, Tooltip } from '@components/ui';
 import { formatCost, formatTimestamp } from '@utils/api.js';
 import DurationBadge from './DurationBadge.jsx';
@@ -15,10 +15,11 @@ import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
 import {
-  chainHasMultipleChannels,
+  countChannelSwitches,
   getEndpointChainItems,
   parseChainNode,
   parseEndpointName,
+  requestHasInterChannelTransfer,
 } from '../utils/endpointChain.js';
 
 const ChainTooltipBadge = ({ label, value }) => (
@@ -28,28 +29,21 @@ const ChainTooltipBadge = ({ label, value }) => (
   </span>
 );
 
-const hasInterChannelTransfer = (request) => {
-  const provider = request?.provider || 'claude';
-  if (provider === 'codex') return false;
-  return chainHasMultipleChannels(getEndpointChainItems(request));
-};
-
 const ChannelCell = ({ request }) => {
   const channelLabel = request.channel || '-';
-  const showTransferIcon = hasInterChannelTransfer(request);
+  const channelTransferCount = countChannelSwitches(getEndpointChainItems(request));
 
   return (
     <span className="inline-flex max-w-[10rem] items-center justify-center gap-1.5 min-w-0">
       <span className="text-purple-600 text-xs font-medium truncate">{channelLabel}</span>
-      {showTransferIcon && (
-        <Tooltip content="渠道间转移记录">
-          <span
-            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-violet-100/70 text-violet-600 ring-1 ring-inset ring-violet-200/70"
-            aria-label="渠道间转移记录"
-          >
-            <RefreshCw className="h-2.5 w-2.5 stroke-[2.4]" />
-          </span>
-        </Tooltip>
+      {channelTransferCount > 0 && (
+        <span
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-medium rounded-full border border-indigo-100 whitespace-nowrap"
+          aria-label={`渠道切换 ${channelTransferCount} 次`}
+        >
+          <Route className="w-2.5 h-2.5" />
+          <span>{channelTransferCount}</span>
+        </span>
       )}
     </span>
   );
@@ -113,7 +107,7 @@ const EndpointChainCell = ({ request }) => {
   }, [showTooltip]);
 
   const chainItems = getEndpointChainItems(request);
-  const showChannelInChain = (request?.provider || 'claude') !== 'codex' && chainHasMultipleChannels(chainItems);
+  const showChannelInChain = requestHasInterChannelTransfer(request);
 
   // 获取链路长度（兼容 camelCase 和 Wails 原始 snake_case）
   const chainLength = Number.isFinite(request.endpointChainLength)
@@ -209,7 +203,7 @@ const EndpointChainCell = ({ request }) => {
         {tailEndpoint}
       </span>
       <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-medium rounded-full border border-indigo-100 whitespace-nowrap">
-        <GitBranch className="w-2.5 h-2.5" />
+        <Route className="w-2.5 h-2.5" />
         <span>{chainLength}</span>
       </span>
 

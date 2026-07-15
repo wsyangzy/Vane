@@ -161,7 +161,12 @@ func (h *HealthChecker) loop() {
 
 // checkAll 对所有端点执行一轮探测
 func (h *HealthChecker) checkAll() {
-	endpoints := h.manager.GetAllEndpoints()
+	channelFailoverEnabled := h.cfg != nil && h.cfg.CodexFailover.Enabled
+	endpoints, err := h.manager.GetHealthCheckEndpoints(context.Background(), channelFailoverEnabled)
+	if err != nil {
+		h.logger.Warn("加载 Codex 健康检查端点失败", "error", err)
+		return
+	}
 	if len(endpoints) == 0 {
 		return
 	}

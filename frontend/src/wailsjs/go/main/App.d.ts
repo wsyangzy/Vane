@@ -123,6 +123,7 @@ export function GetSetting(arg1:string,arg2:string):Promise<main.SettingInfo>;
 export function GetSettingCategories():Promise<Array<main.CategoryInfo>>;
 
 export function GetSettingsByCategory(arg1:string):Promise<Array<main.SettingInfo>>;
+export function GetSettingsByScope(arg1:main.ScopedSettingsInput):Promise<Array<main.SettingInfo>>;
 
 export function GetSettingsStorageStatus():Promise<main.SettingsStorageStatus>;
 
@@ -159,6 +160,7 @@ export function PauseGroup(arg1:string):Promise<void>;
 export function RequestQuit():Promise<void>;
 
 export function ResetCategorySettings(arg1:string):Promise<void>;
+export function ResetSettingsByScope(arg1:main.ScopedSettingsInput):Promise<void>;
 
 export function ResolvePortConflict(arg1:string):Promise<main.PortConflictResult>;
 
@@ -206,6 +208,7 @@ export function UpdateCodexProviderByID(arg1:number,arg2:main.UpdateCodexProvide
 export function GetCodexChannels():Promise<Array<main.CodexChannelInfo>>;
 export function CreateCodexChannel(arg1:main.CreateCodexChannelInput):Promise<void>;
 export function UpdateCodexChannelByID(arg1:number,arg2:main.UpdateCodexChannelInput):Promise<void>;
+export function SetCodexChannelFailoverEnabled(arg1:number,arg2:boolean):Promise<void>;
 export function DeleteCodexChannelByID(arg1:number):Promise<void>;
 export function ActivateCodexChannel(arg1:number):Promise<void>;
 export function CreateCodexCredentialGroup(arg1:main.CreateCodexCredentialGroupInput):Promise<main.CodexCredentialGroupInfo>;

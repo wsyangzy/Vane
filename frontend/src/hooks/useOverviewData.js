@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { fetchStatus, fetchConnections, fetchEndpoints, fetchGroups, formatUptime } from '@utils/api.js';
+import { useToast } from '@components/ui';
 import useSSE from './useSSE.js';
 
 const useOverviewData = () => {
@@ -30,12 +31,13 @@ const useOverviewData = () => {
       total_suspended_requests: 0
     },
     lastUpdate: null,
-    loading: true,
-    error: null
+    loading: true
   });
 
   const [isInitialized, setIsInitialized] = useState(false);
   const [startTimestamp, setStartTimestamp] = useState(null);
+  const loadErrorRef = useRef('');
+  const toast = useToast();
 
   // 用于触发重新加载的标志
   const reloadTriggerRef = useRef(0);
@@ -195,7 +197,7 @@ const useOverviewData = () => {
   const loadData = useCallback(async () => {
     try {
       if (!isInitialized) {
-        setData(prev => ({ ...prev, loading: true, error: null }));
+        setData(prev => ({ ...prev, loading: true }));
       }
 
       const [status, endpoints, connections, groups] = await Promise.all([
@@ -235,32 +237,39 @@ const useOverviewData = () => {
         connections: { ...prevData.connections, ...connections },
         groups: { ...prevData.groups, ...groups },
         lastUpdate: new Date().toLocaleTimeString(),
-        loading: false,
-        error: null
+        loading: false
       }));
 
+      loadErrorRef.current = '';
       setIsInitialized(true);
     } catch (error) {
       console.error('数据加载失败:', error);
+      const message = error?.message || '数据加载失败';
+      if (loadErrorRef.current !== message) {
+        toast.error(message, '概览数据加载失败');
+        loadErrorRef.current = message;
+      }
       setData(prev => ({
         ...prev,
-        loading: false,
-        error: error.message || '数据加载失败'
+        loading: false
       }));
     }
-  }, [isInitialized, startTimestamp]);
+  }, [isInitialized, startTimestamp, toast]);
 
   // 初始加载
   useEffect(() => {
-    loadData();
+    const initialLoad = setTimeout(loadData, 0);
+    return () => clearTimeout(initialLoad);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 组切换事件触发重新加载
   useEffect(() => {
-    if (reloadTrigger > 0) {
+    if (reloadTrigger <= 0) return undefined;
+    const reloadTimer = setTimeout(() => {
       console.log('🔄 [SSE] 执行组切换后的数据重新加载');
       loadData();
-    }
+    }, 0);
+    return () => clearTimeout(reloadTimer);
   }, [reloadTrigger, loadData]);
 
   // SSE 失败时启用定时刷新

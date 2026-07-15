@@ -6,9 +6,9 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart3 } from 'lucide-react';
-import { ErrorMessage } from '@components/ui';
+import { useToast } from '@components/ui';
 import { fetchRequests, fetchModels, fetchUsageStats, fetchEndpoints, fetchGroups, activateGroup, fetchInterChannelFailoverEnabled } from '@utils/api.js';
-import { getCodexChannels, activateCodexChannel } from '@utils/wailsApi.js';
+import { getCodexChannels, activateCodexChannel, getSettingsByScope } from '@utils/wailsApi.js';
 import { useFilters } from './hooks/useFilters.js';
 import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
@@ -34,8 +34,9 @@ const RequestsPage = () => {
   const [groups, setGroups] = useState([]); // 渠道列表（一个渠道=一个组）
   const [activeGroup, setActiveGroup] = useState(''); // 当前活跃渠道名称（沿用字段名兼容历史）
   const [interChannelFailoverEnabled, setInterChannelFailoverEnabled] = useState(false); // 渠道间故障转移是否启用
+  const [codexInterChannelFailoverEnabled, setCodexInterChannelFailoverEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const toast = useToast();
 
   // 面板状态
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -75,6 +76,16 @@ const RequestsPage = () => {
     totalPages: 1
   });
 
+  const visibleClaudeGroups = useMemo(() => (
+    interChannelFailoverEnabled ? groups.filter(group => !group.paused) : groups
+  ), [groups, interChannelFailoverEnabled]);
+
+  const visibleCodexChannels = useMemo(() => (
+    codexInterChannelFailoverEnabled
+      ? codexChannels.filter(channel => channel.failoverEnabled !== false)
+      : codexChannels
+  ), [codexChannels, codexInterChannelFailoverEnabled]);
+
   // 合并 Claude 端点 + Codex 渠道下的端点（每个端点附带渠道名，用于按渠道过滤）
   const allEndpoints = useMemo(() => {
     const claudeEndpoints = (endpoints || []).map(ep => ({ ...ep, provider: 'claude' }))
@@ -90,30 +101,31 @@ const RequestsPage = () => {
 
   // 合并 Claude groups + Codex channels 为统一格式（用于 Toolbar 渠道切换器）
   const allGroups = useMemo(() => {
-    const claudeGroups = (groups || []).map(g => ({ ...g, provider: 'claude' }))
-    const codexGroups = (codexChannels || []).map(ch => ({
+    const claudeGroups = visibleClaudeGroups.map(g => ({ ...g, provider: 'claude' }))
+    const codexGroups = visibleCodexChannels.map(ch => ({
       name: ch.name,
       provider: 'codex',
       is_active: Boolean(ch.isActive || ch.is_active),
       priority: ch.priority ?? 999
     }))
     return [...claudeGroups, ...codexGroups]
-  }, [groups, codexChannels])
+  }, [visibleClaudeGroups, visibleCodexChannels])
 
   // 从端点列表 + 渠道组 + Codex 渠道构造分组结构（按 Provider 分两级）
   const channels = useMemo(() => {
     const claudeSet = new Set();
+    const visibleClaudeNames = new Set(visibleClaudeGroups.map(group => group.name || group.Name).filter(Boolean));
     // 从端点数据中提取渠道名
     endpoints.forEach(ep => {
       const channel = ep.channel || ep.Channel || ep.group || ep.group_name;
-      if (channel) claudeSet.add(channel);
+      if (channel && (!interChannelFailoverEnabled || visibleClaudeNames.has(channel))) claudeSet.add(channel);
     });
     // 从渠道组数据中补充（确保即使端点未加载也能显示渠道）
-    groups.forEach(g => {
+    visibleClaudeGroups.forEach(g => {
       const name = g.name || g.Name;
       if (name) claudeSet.add(name);
     });
-    const codexNames = (codexChannels || [])
+    const codexNames = visibleCodexChannels
       .map(ch => ch?.name)
       .filter(Boolean);
 
@@ -121,19 +133,19 @@ const RequestsPage = () => {
       { provider: 'claude', label: 'Claude', channels: Array.from(claudeSet).sort() },
       { provider: 'codex', label: 'Codex', channels: codexNames.sort() }
     ];
-  }, [endpoints, codexChannels, groups]);
+  }, [endpoints, interChannelFailoverEnabled, visibleClaudeGroups, visibleCodexChannels]);
 
   const heatmapQueryParams = useMemo(() => buildQueryParams(), [buildQueryParams]);
 
   // ==================== 数据加载 ====================
 
   const loadData = useCallback(async (silent = false) => {
+    const isSilent = silent === true;
     try {
       // 静默刷新时不改变 loading 状态，避免闪屏
-      if (!silent) {
+      if (!isSilent) {
         setLoading(true);
       }
-      setError(null);
 
       const queryParams = buildQueryParams();
 
@@ -145,7 +157,7 @@ const RequestsPage = () => {
 
       // 简化数据获取，移除 keysData
       // 添加渠道间故障转移状态获取 + Codex 渠道列表 + 按 Provider 分组统计
-      const [requestsData, statsData, claudeStatsData, codexStatsData, modelsData, endpointsData, groupsData, failoverEnabled, codexChannelsData] = await Promise.all([
+      const [requestsData, statsData, claudeStatsData, codexStatsData, modelsData, endpointsData, groupsData, failoverEnabled, codexChannelsData, codexFailoverSettings] = await Promise.all([
         fetchRequests({
           ...queryParams,
           page: pagination.page,
@@ -158,7 +170,8 @@ const RequestsPage = () => {
         fetchEndpoints(),
         fetchGroups(),
         fetchInterChannelFailoverEnabled(),
-        getCodexChannels().catch(() => []) // Codex 渠道获取失败不影响主流程
+        getCodexChannels().catch(() => []), // Codex 渠道获取失败不影响主流程
+        getSettingsByScope('codex', 'failover').catch(() => [])
       ]);
 
       setRequests(requestsData.requests);
@@ -198,15 +211,20 @@ const RequestsPage = () => {
 
       // 设置渠道间故障转移状态
       setInterChannelFailoverEnabled(failoverEnabled);
+      const codexEnabledSetting = codexFailoverSettings.find(setting => setting.key === 'enabled');
+      setCodexInterChannelFailoverEnabled(String(codexEnabledSetting?.value).toLowerCase() === 'true');
     } catch (err) {
-      setError(err.message);
+      console.error('加载请求追踪数据失败:', err);
+      if (!isSilent) {
+        toast.error(err?.message || '请求数据加载失败', '请求数据加载失败');
+      }
     } finally {
       // 只有手动刷新才会改变 loading 状态
-      if (!silent) {
+      if (!isSilent) {
         setLoading(false);
       }
     }
-  }, [buildQueryParams, pagination.page, pagination.pageSize]);
+  }, [buildQueryParams, pagination.page, pagination.pageSize, toast]);
 
   // 自动刷新 Hook (必须在 loadData 定义之后)
   const autoRefresh = useAutoRefresh(loadData);
@@ -321,16 +339,6 @@ const RequestsPage = () => {
   }, [loadData]);
 
   // ==================== 渲染 ====================
-
-  if (error) {
-    return (
-      <ErrorMessage
-        title="请求数据加载失败"
-        message={error}
-        onRetry={loadData}
-      />
-    );
-  }
 
   return (
     <div className="h-full flex flex-col gap-6 pb-4 animate-in fade-in slide-in-from-bottom-2 duration-500 relative min-h-0">

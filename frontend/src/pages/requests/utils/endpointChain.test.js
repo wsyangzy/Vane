@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 
 import {
   chainHasMultipleChannels,
+  countChannelSwitches,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   parseChainNode,
   parseEndpointChain,
   parseEndpointName,
+  requestHasInterChannelTransfer,
   summarizeEndpointAttempts,
 } from './endpointChain.js';
 import * as endpointChainUtils from './endpointChain.js';
@@ -88,6 +90,40 @@ test('chainHasMultipleChannels only reports actual inter-channel paths', () => {
     { channel: 'anyrouter', credential_group: '默认分组', endpoint: 'hk-node' },
     { channel: 'Right Code', credential_group: 'AWSQ逆向渠道', endpoint: 'AWSQ逆向渠道' },
   ]), true);
+});
+
+test('countChannelSwitches counts adjacent channel changes only', () => {
+  assert.equal(countChannelSwitches([
+    { channel: 'Ciallo', endpoint: 'A' },
+    { channel: 'Ciallo', endpoint: 'B' },
+    { channel: 'Ark API', endpoint: 'C' },
+    { channel: 'Ark API', endpoint: 'D' },
+    { channel: 'Ciallo', endpoint: 'E' },
+  ]), 2);
+  assert.equal(countChannelSwitches([
+    { channel: 'Ciallo', endpoint: 'A' },
+    { channel: '', endpoint: 'unknown' },
+    { channel: 'Ark API', endpoint: 'B' },
+  ]), 0);
+});
+
+test('Codex multi-channel paths report inter-channel transfer from recorded data', () => {
+  assert.equal(requestHasInterChannelTransfer({
+    provider: 'codex',
+    endpoint_chain: [
+      { channel: 'Ciallo', credential_group: '默认分组', endpoint: '主线路' },
+      { channel: 'Ark API', credential_group: '默认分组', endpoint: '默认端点' },
+      { channel: 'Ciallo', credential_group: '默认分组', endpoint: 'CF优选线路' },
+    ],
+  }), true);
+
+  assert.equal(requestHasInterChannelTransfer({
+    provider: 'codex',
+    endpoint_chain: [
+      { channel: 'Ciallo', credential_group: '默认分组', endpoint: '主线路' },
+      { channel: 'Ciallo', credential_group: '默认分组', endpoint: 'CF优选线路' },
+    ],
+  }), false);
 });
 
 test('request credential group label prefers the current chain node and keeps Codex group fallback', () => {

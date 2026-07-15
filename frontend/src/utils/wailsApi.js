@@ -1990,6 +1990,8 @@ const mapCodexChannel = (channel) => {
     reasoningEffort: channel.model_reasoning_effort || '',
     enable1MContext: Boolean(channel.enable_1m_context),
     website: channel.website || '',
+    priority: channel.priority ?? 0,
+    failoverEnabled: channel.failover_enabled !== false,
     isActive: Boolean(channel.is_active),
     credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
@@ -2032,7 +2034,9 @@ const buildCodexChannelPayload = (input) => ({
   model_mapping: normalizeCodexModelMapping(input?.modelMapping || input?.model_mapping),
   model_reasoning_effort: (input?.reasoningEffort || input?.modelReasoningEffort || '').trim(),
   enable_1m_context: Boolean(input?.enable1MContext || input?.enable_1m_context),
-  website: (input?.website || '').trim()
+  website: (input?.website || '').trim(),
+  priority: Number.parseInt(input?.priority, 10) || 0,
+  failover_enabled: input?.failoverEnabled !== false
 });
 
 const parseEndpointTimeout = (value) => {
@@ -2048,6 +2052,16 @@ export const getCodexChannels = async () => {
   if (!WailsApp) throw new Error('Wails not available');
   const channels = await WailsApp.GetCodexChannels();
   return (channels || []).map(mapCodexChannel);
+};
+
+export const getNextAvailableCodexChannel = async (excludeId) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const channel = await WailsApp.GetNextAvailableCodexChannel(Number(excludeId));
+  return {
+    id: Number(channel?.id ?? channel?.ID ?? 0),
+    name: channel?.name ?? channel?.Name ?? ''
+  };
 };
 
 /**
@@ -2067,6 +2081,13 @@ export const updateCodexChannelByID = async (id, input) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   await WailsApp.UpdateCodexChannelByID(id, buildCodexChannelPayload(input));
+  return { success: true };
+};
+
+export const setCodexChannelFailoverEnabled = async (id, enabled) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetCodexChannelFailoverEnabled(id, Boolean(enabled));
   return { success: true };
 };
 
@@ -2227,6 +2248,7 @@ export const getAllSettings = async () => {
   const settings = await WailsApp.GetAllSettings();
   return (settings || []).map(s => ({
     id: s.id,
+    provider: s.provider,
     category: s.category,
     key: s.key,
     value: s.value,
@@ -2252,6 +2274,7 @@ export const getSettingsByCategory = async (category) => {
   const settings = await WailsApp.GetSettingsByCategory(category);
   return (settings || []).map(s => ({
     id: s.id,
+    provider: s.provider,
     category: s.category,
     key: s.key,
     value: s.value,
@@ -2278,6 +2301,7 @@ export const getSetting = async (category, key) => {
   const s = await WailsApp.GetSetting(category, key);
   return {
     id: s.id,
+    provider: s.provider,
     category: s.category,
     key: s.key,
     value: s.value,
@@ -2298,11 +2322,12 @@ export const getSetting = async (category, key) => {
  * @param {string} value - 新值
  * @returns {Promise<Object>} - {success: true}
  */
-export const updateSetting = async (category, key, value) => {
+export const updateSetting = async (category, key, value, provider = category === 'failover' ? 'claude' : 'global') => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
   await WailsApp.UpdateSetting({
+    provider,
     category,
     key,
     value
@@ -2324,11 +2349,26 @@ export const batchUpdateSettings = async (input) => {
 
   await WailsApp.BatchUpdateSettings({
     settings: settingsArray.map(s => ({
+	  provider: s.provider || (s.category === 'failover' ? 'claude' : 'global'),
       category: s.category,
       key: s.key,
       value: s.value
     }))
   });
+  return { success: true };
+};
+
+export const getSettingsByScope = async (provider, category) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const settings = await WailsApp.GetSettingsByScope({ provider, category });
+  return (settings || []).map(s => ({ ...s, provider: s.provider }));
+};
+
+export const resetSettingsByScope = async (provider, category) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.ResetSettingsByScope({ provider, category });
   return { success: true };
 };
 

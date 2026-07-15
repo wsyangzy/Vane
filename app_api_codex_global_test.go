@@ -26,6 +26,7 @@ func TestUpdateCodexGlobalConfigPersistsOwnedDefaultsAndPreservesReasoningEffort
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE settings (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL,
 			category TEXT NOT NULL,
 			key TEXT NOT NULL,
 			value TEXT NOT NULL,
@@ -36,7 +37,7 @@ func TestUpdateCodexGlobalConfigPersistsOwnedDefaultsAndPreservesReasoningEffort
 			requires_restart INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT '',
 			updated_at DATETIME DEFAULT '',
-			UNIQUE(category, key)
+			UNIQUE(provider, category, key)
 		)
 	`); err != nil {
 		t.Fatalf("create settings table: %v", err)

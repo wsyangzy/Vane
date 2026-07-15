@@ -89,6 +89,8 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 			enable_1m_context INTEGER NOT NULL DEFAULT 0,
 			website TEXT,
 			is_active INTEGER NOT NULL DEFAULT 0,
+			priority INTEGER NOT NULL DEFAULT 0,
+			failover_enabled INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 		)`,
@@ -164,6 +166,20 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("创建 Codex 渠道-端点 schema 失败: %w", err)
+		}
+	}
+	for _, column := range []struct{ name, ddl string }{
+		{"priority", `ALTER TABLE codex_channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`},
+		{"failover_enabled", `ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1`},
+	} {
+		exists, err := sqliteColumnExists(ctx, db, "codex_channels", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.ExecContext(ctx, column.ddl); err != nil {
+				return fmt.Errorf("为 codex_channels 添加 %s 失败: %w", column.name, err)
+			}
 		}
 	}
 
@@ -625,6 +641,7 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 		SELECT name, provider_type, base_url, api_key, model, model_reasoning_effort,
 			COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0)
 		FROM codex_providers
+		ORDER BY id ASC
 	`)
 	if err != nil {
 		return fmt.Errorf("读取旧 %s 数据失败: %w", codexProvidersTableName, err)
@@ -650,13 +667,13 @@ func (a *App) migrateCodexProvidersToChannels(ctx context.Context, db *sql.DB, o
 		return fmt.Errorf("迭代旧 codex_providers 数据失败: %w", err)
 	}
 
-	for _, r := range rowsBuf {
+	for priority, r := range rowsBuf {
 		websiteArg := nullableTomlString(r.website)
 		channelResult, err := tx.ExecContext(ctx, `
 			INSERT INTO codex_channels (name, provider_type, api_key, model, model_reasoning_effort,
-				enable_1m_context, website, is_active)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`, r.name, r.providerType, r.apiKey, r.model, r.reasoningEffort, r.enable1M, websiteArg, r.isActive)
+				enable_1m_context, website, is_active, priority)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, r.name, r.providerType, r.apiKey, r.model, r.reasoningEffort, r.enable1M, websiteArg, r.isActive, priority)
 		if err != nil {
 			return fmt.Errorf("迁移渠道 %s 失败: %w", r.name, err)
 		}

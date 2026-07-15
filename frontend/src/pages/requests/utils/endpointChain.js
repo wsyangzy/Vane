@@ -113,6 +113,20 @@ export const chainHasMultipleChannels = (items) => {
   return channels.size > 1;
 };
 
+export const countChannelSwitches = (items = []) => {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((count, item, index) => {
+    if (index === 0) return count;
+    const previousChannel = parseChainNode(items[index - 1]).channel;
+    const currentChannel = parseChainNode(item).channel;
+    return count + (previousChannel && currentChannel && previousChannel !== currentChannel ? 1 : 0);
+  }, 0);
+};
+
+export const requestHasInterChannelTransfer = (request = {}) => (
+  chainHasMultipleChannels(getEndpointChainItems(request))
+);
+
 export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
   const nodes = parsedNodes || getEndpointChainItems(request).map((item, index) => parseChainNode(item, index + 1));
   const directEndpoint = request.endpoint || request.endpoint_name || '';

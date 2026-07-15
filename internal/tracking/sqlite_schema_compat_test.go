@@ -275,6 +275,117 @@ func TestSQLiteAdapter_InitSchema_DisablesLegacyLongContextPricingOnce(t *testin
 	}
 }
 
+func TestSQLiteAdapter_InitSchema_ScopesLegacySettingsByProvider(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "settings-provider.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE settings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			category TEXT NOT NULL,
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			value_type TEXT NOT NULL DEFAULT 'string',
+			label TEXT,
+			description TEXT,
+			display_order INTEGER NOT NULL DEFAULT 0,
+			requires_restart INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(category, key)
+		);
+		INSERT INTO settings (category, key, value) VALUES
+			('failover', 'enabled', 'true'),
+			('health', 'timeout', '5s');
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{Type: "sqlite", DatabasePath: dbPath, Timezone: "Asia/Shanghai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSetting := func(provider, category, key, want string) {
+		t.Helper()
+		var got string
+		if err := adapter.GetReadDB().QueryRow(
+			`SELECT value FROM settings WHERE provider = ? AND category = ? AND key = ?`,
+			provider, category, key,
+		).Scan(&got); err != nil {
+			t.Fatalf("query %s/%s/%s: %v", provider, category, key, err)
+		}
+		if got != want {
+			t.Fatalf("%s/%s/%s = %q, want %q", provider, category, key, got, want)
+		}
+	}
+	assertSetting("claude", "failover", "enabled", "true")
+	assertSetting("global", "health", "timeout", "5s")
+
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("idempotent InitSchema: %v", err)
+	}
+}
+
+func TestSQLiteAdapter_InitSchema_NormalizesPausedCodexChannelPriorities(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex-channel-priority.db")
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{Type: "sqlite", DatabasePath: dbPath, Timezone: "Asia/Shanghai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := adapter.GetWriteDB().Exec(`
+		INSERT INTO codex_channels (name, provider_type, api_key, model, model_reasoning_effort, priority, failover_enabled)
+		VALUES
+			('active', 'openai-compatible', '', '', 'xhigh', 0, 1),
+			('paused', 'openai-compatible', '', '', 'xhigh', 1, 0),
+			('standby', 'openai-compatible', '', '', 'xhigh', 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := adapter.GetReadDB().Query(`SELECT priority FROM codex_channels ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var priorities []int
+	for rows.Next() {
+		var priority int
+		if err := rows.Scan(&priority); err != nil {
+			t.Fatal(err)
+		}
+		priorities = append(priorities, priority)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(priorities) != 3 || priorities[0] != 0 || priorities[1] != 1 || priorities[2] != 2 {
+		t.Fatalf("expected priorities [0 1 2] across participating and paused channels, got %v", priorities)
+	}
+}
+
 func sqliteColumnExists(t *testing.T, db *sql.DB, table, column string) bool {
 	t.Helper()
 	rows, err := db.Query("PRAGMA table_info(" + table + ")")

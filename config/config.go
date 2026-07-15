@@ -23,6 +23,7 @@ type Config struct {
 	Streaming        StreamingConfig        `yaml:"streaming"`
 	Group            GroupConfig            `yaml:"group"`             // Group configuration (DEPRECATED: use Failover instead)
 	Failover         FailoverConfig         `yaml:"failover"`          // 故障转移与请求挂起配置（见 failover.go）
+	CodexFailover    FailoverConfig         `yaml:"-"`                 // Codex 独立故障转移配置（SQLite provider=codex）
 	UsageTracking    UsageTrackingConfig    `yaml:"usage_tracking"`    // Usage tracking configuration
 	TokenCounting    TokenCountingConfig    `yaml:"token_counting"`    // Token counting configuration
 	EndpointsStorage EndpointsStorageConfig `yaml:"endpoints_storage"` // Endpoints storage configuration

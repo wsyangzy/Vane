@@ -350,7 +350,8 @@ export namespace main {
 	        this.unknown_names = source["unknown_names"];
 	    }
 	}
-	export class UpdateSettingInput {
+export class UpdateSettingInput {
+	    provider: string;
 	    category: string;
 	    key: string;
 	    value: string;
@@ -361,9 +362,21 @@ export namespace main {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
 	        this.category = source["category"];
 	        this.key = source["key"];
 	        this.value = source["value"];
+	    }
+	}
+	export class ScopedSettingsInput {
+	    provider: string;
+	    category: string;
+
+	    static createFrom(source: any = {}) { return new ScopedSettingsInput(source); }
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.category = source["category"];
 	    }
 	}
 	export class BatchUpdateSettingsInput {
@@ -570,6 +583,8 @@ export namespace main {
 	    enable_1m_context: boolean;
 	    website: string;
 	    is_active: boolean;
+	    priority: number;
+	    failover_enabled: boolean;
 	    created_at: string;
 	    updated_at: string;
 
@@ -590,6 +605,8 @@ export namespace main {
 	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
 	        this.is_active = source["is_active"];
+	        this.priority = source["priority"];
+	        this.failover_enabled = source["failover_enabled"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -623,6 +640,8 @@ export namespace main {
 	    model_reasoning_effort: string;
 	    enable_1m_context: boolean;
 	    website: string;
+	    priority: number;
+	    failover_enabled?: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new CreateCodexProviderInput(source);
@@ -638,6 +657,8 @@ export namespace main {
 	        this.model_reasoning_effort = source["model_reasoning_effort"];
 	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
+	        this.priority = source["priority"];
+	        this.failover_enabled = source["failover_enabled"];
 	    }
 	}
 	// ============ Codex Channel-Endpoint 类型（2026-05-13 新增） ============
@@ -723,6 +744,8 @@ export namespace main {
 	    model_reasoning_effort: string;
 	    enable_1m_context: boolean;
 	    website: string;
+	    priority: number;
+	    failover_enabled?: boolean;
 	    is_active: boolean;
 	    credential_groups: CodexCredentialGroupInfo[];
 	    endpoints: CodexEndpointInfo[];
@@ -744,6 +767,8 @@ export namespace main {
 	        this.model_reasoning_effort = source["model_reasoning_effort"];
 	        this.enable_1m_context = source["enable_1m_context"];
 	        this.website = source["website"];
+	        this.priority = source["priority"];
+	        this.failover_enabled = source["failover_enabled"];
 	        this.is_active = source["is_active"];
 	        this.credential_groups = (source["credential_groups"] || []).map((e: any) => new CodexCredentialGroupInfo(e));
 	        this.endpoints = (source["endpoints"] || []).map((e: any) => new CodexEndpointInfo(e));
@@ -1637,8 +1662,9 @@ export namespace main {
 	        this.error = source["error"];
 	    }
 	}
-	export class SettingInfo {
+export class SettingInfo {
 	    id: number;
+	    provider: string;
 	    category: string;
 	    key: string;
 	    value: string;
@@ -1658,6 +1684,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
+	        this.provider = source["provider"];
 	        this.category = source["category"];
 	        this.key = source["key"];
 	        this.value = source["value"];

@@ -21,6 +21,7 @@ import (
 // SettingInfo 设置信息（给前端用的结构体）
 type SettingInfo struct {
 	ID              int64              `json:"id"`
+	Provider        string             `json:"provider"`
 	Category        string             `json:"category"`
 	Key             string             `json:"key"`
 	Value           string             `json:"value"`
@@ -53,9 +54,15 @@ type SettingsStorageStatus struct {
 
 // UpdateSettingInput 更新单个设置的输入
 type UpdateSettingInput struct {
+	Provider string `json:"provider"`
 	Category string `json:"category"`
 	Key      string `json:"key"`
 	Value    string `json:"value"`
+}
+
+type ScopedSettingsInput struct {
+	Provider string `json:"provider"`
+	Category string `json:"category"`
 }
 
 // BatchUpdateSettingsInput 批量更新设置的输入
@@ -191,6 +198,26 @@ func (a *App) GetSettingsByCategory(category string) ([]SettingInfo, error) {
 	return result, nil
 }
 
+func (a *App) GetSettingsByScope(input ScopedSettingsInput) ([]SettingInfo, error) {
+	a.mu.RLock()
+	settingsService := a.settingsService
+	a.mu.RUnlock()
+	if settingsService == nil {
+		return nil, a.errSettingsServiceDisabled()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	records, err := settingsService.GetByCategoryScoped(ctx, service.SettingsProvider(input.Provider), input.Category)
+	if err != nil {
+		return nil, fmt.Errorf("获取 Provider 设置失败: %w", err)
+	}
+	result := make([]SettingInfo, 0, len(records))
+	for _, record := range records {
+		result = append(result, a.settingRecordToInfo(record))
+	}
+	return result, nil
+}
+
 // GetSetting 获取单个设置
 func (a *App) GetSetting(category, key string) (SettingInfo, error) {
 	a.mu.RLock()
@@ -229,7 +256,14 @@ func (a *App) UpdateSetting(input UpdateSettingInput) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := settingsService.Set(ctx, input.Category, input.Key, input.Value); err != nil {
+	provider := input.Provider
+	if provider == "" {
+		provider = string(service.ProviderGlobal)
+		if input.Category == service.CategoryFailover {
+			provider = string(service.ProviderClaude)
+		}
+	}
+	if err := settingsService.SetScoped(ctx, service.SettingsProvider(provider), input.Category, input.Key, input.Value); err != nil {
 		return fmt.Errorf("更新设置失败: %w", err)
 	}
 
@@ -259,6 +293,7 @@ func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 	records := make([]*store.SettingRecord, 0, len(input.Settings))
 	for _, s := range input.Settings {
 		records = append(records, &store.SettingRecord{
+			Provider: s.Provider,
 			Category: s.Category,
 			Key:      s.Key,
 			Value:    s.Value,
@@ -275,6 +310,18 @@ func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 
 	a.emitEndpointUpdate()
 	return nil
+}
+
+func (a *App) ResetSettingsByScope(input ScopedSettingsInput) error {
+	a.mu.RLock()
+	settingsService := a.settingsService
+	a.mu.RUnlock()
+	if settingsService == nil {
+		return a.errSettingsServiceDisabled()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return settingsService.ResetCategoryScoped(ctx, service.SettingsProvider(input.Provider), input.Category)
 }
 
 // ResetCategorySettings 重置分类设置为默认值
@@ -379,6 +426,7 @@ func (a *App) CheckPortAvailable(port int) bool {
 func (a *App) settingRecordToInfo(r *store.SettingRecord) SettingInfo {
 	info := SettingInfo{
 		ID:              r.ID,
+		Provider:        r.Provider,
 		Category:        r.Category,
 		Key:             r.Key,
 		Value:           r.Value,

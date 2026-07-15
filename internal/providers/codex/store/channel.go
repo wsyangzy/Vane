@@ -24,6 +24,8 @@ type CodexChannelRecord struct {
 	Enable1MContext bool              `json:"enable_1m_context"`
 	Website         string            `json:"website,omitempty"`
 	IsActive        bool              `json:"is_active"`
+	Priority        int               `json:"priority"`
+	FailoverEnabled bool              `json:"failover_enabled"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -39,6 +41,7 @@ type CodexChannelStore interface {
 	UpdateByID(ctx context.Context, id int64, record *CodexChannelRecord) error
 	DeleteByID(ctx context.Context, id int64) error
 	SetActive(ctx context.Context, id int64) error
+	SetFailoverEnabled(ctx context.Context, id int64, enabled bool) error
 
 	WithTx(tx *sql.Tx) CodexChannelStore
 }
@@ -70,7 +73,7 @@ func (s *SQLiteCodexChannelStore) getQuerier() interface {
 }
 
 const codexChannelColumns = `id, name, provider_type, api_key, model, model_reasoning_effort,
-		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), created_at, updated_at`
+		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), COALESCE(priority, 0), COALESCE(failover_enabled, 1), created_at, updated_at`
 
 func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChannelRecord) (*CodexChannelRecord, error) {
 	s.mu.Lock()
@@ -90,8 +93,8 @@ func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChann
 	query := `
 		INSERT INTO codex_channels (
 			name, provider_type, api_key, model, model_mapping, model_reasoning_effort,
-			enable_1m_context, website, is_active
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			enable_1m_context, website, is_active, priority, failover_enabled
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	result, err := s.getQuerier().ExecContext(
 		ctx,
@@ -105,6 +108,8 @@ func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChann
 		boolToInt(record.Enable1MContext),
 		nullIfEmpty(record.Website),
 		boolToInt(record.IsActive),
+		record.Priority,
+		boolToInt(record.FailoverEnabled),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Codex 渠道失败: %w", err)
@@ -147,7 +152,7 @@ func (s *SQLiteCodexChannelStore) List(ctx context.Context) ([]*CodexChannelReco
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	query := "SELECT " + codexChannelColumns + " FROM codex_channels ORDER BY is_active DESC, created_at DESC, name ASC"
+	query := "SELECT " + codexChannelColumns + " FROM codex_channels ORDER BY is_active DESC, priority ASC, created_at ASC, name ASC"
 
 	rows, err := s.getQuerier().QueryContext(ctx, query)
 	if err != nil {
@@ -188,7 +193,7 @@ func (s *SQLiteCodexChannelStore) UpdateByID(ctx context.Context, id int64, reco
 	query := `
 		UPDATE codex_channels
 		SET name = ?, provider_type = ?, api_key = ?, model = ?, model_mapping = ?, model_reasoning_effort = ?,
-		    enable_1m_context = ?, website = ?
+		    enable_1m_context = ?, website = ?, priority = ?, failover_enabled = ?
 		WHERE id = ?
 	`
 	result, err := s.getQuerier().ExecContext(
@@ -202,6 +207,8 @@ func (s *SQLiteCodexChannelStore) UpdateByID(ctx context.Context, id int64, reco
 		record.ReasoningEffort,
 		boolToInt(record.Enable1MContext),
 		nullIfEmpty(record.Website),
+		record.Priority,
+		boolToInt(record.FailoverEnabled),
 		id,
 	)
 	if err != nil {
@@ -253,6 +260,20 @@ func (s *SQLiteCodexChannelStore) SetActive(ctx context.Context, id int64) error
 	return nil
 }
 
+func (s *SQLiteCodexChannelStore) SetFailoverEnabled(ctx context.Context, id int64, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET failover_enabled = ? WHERE id = ?`, boolToInt(enabled), id)
+	if err != nil {
+		return fmt.Errorf("更新 Codex 渠道故障转移状态失败: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	return nil
+}
+
 func (s *SQLiteCodexChannelStore) scanRecord(row *sql.Row) (*CodexChannelRecord, error) {
 	return scanCodexChannelRow(row)
 }
@@ -272,6 +293,7 @@ func scanCodexChannelRow(scanner interface {
 		modelMappingJSON string
 		website          string
 		isActive         int
+		failoverEnabled  int
 		createdAt        string
 		updatedAt        string
 	)
@@ -287,6 +309,8 @@ func scanCodexChannelRow(scanner interface {
 		&enable1M,
 		&website,
 		&isActive,
+		&record.Priority,
+		&failoverEnabled,
 		&createdAt,
 		&updatedAt,
 	)
@@ -305,6 +329,7 @@ func scanCodexChannelRow(scanner interface {
 	record.Enable1MContext = enable1M != 0
 	record.Website = website
 	record.IsActive = isActive != 0
+	record.FailoverEnabled = failoverEnabled != 0
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	return &record, nil

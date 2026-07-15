@@ -860,7 +860,7 @@ func (a *App) ensureModelPricingService() {
 
 func (a *App) setupCodexProviderStore() {
 	a.ensureCodexProviderService()
-	if a.codexProviderService == nil {
+	if a.codexChannelService == nil {
 		if a.logger != nil {
 			a.logger.Debug("Codex Provider 存储跳过初始化 (数据库未就绪)")
 		}
@@ -875,13 +875,13 @@ func (a *App) setupCodexProviderStore() {
 		return
 	}
 
-	providers, err := a.codexProviderService.ListProviders(ctx)
+	channels, err := a.codexChannelService.ListChannels(ctx)
 	if err != nil {
-		a.logger.Warn("⚠️ 加载 Codex Provider 列表失败", "error", err)
+		a.logger.Warn("⚠️ 加载 Codex 渠道列表失败", "error", err)
 		return
 	}
 
-	a.logger.Info("✅ Codex Provider 存储已启用 (SQLite)", "count", len(providers))
+	a.logger.Info("✅ Codex Provider 存储已启用 (SQLite)", "count", len(channels))
 }
 
 func (a *App) ensureCodexProviderService() {
@@ -1649,7 +1649,7 @@ func (a *App) initCodexProxy() {
 	}
 	// 注册活跃端点变更回调：故障转移成功提升端点后，刷新前端 UI
 	mgr.SetOnActiveChanged(func() {
-		a.emitCodexProviderUpdate()
+		a.emitCodexProviderStateUpdate()
 	})
 	a.codexEndpointMgr = mgr
 
@@ -1657,7 +1657,7 @@ func (a *App) initCodexProxy() {
 	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger)
 	// 按设置项决定是否启动定时探测；保留实例以供 GetLatencies 等接口使用
 	// 与 Claude 端对齐：仅当 Enabled + LoopRetry + SkipHealthCheck 三者都为 true 时才跳过
-	if !a.config.Failover.ShouldSkipHealthCheck() {
+	if !a.config.CodexFailover.ShouldSkipHealthCheck() {
 		hc.Start()
 	} else {
 		a.logger.Info("Codex 健康检查器已创建但未启动（ShouldSkipHealthCheck=true）")
@@ -1667,8 +1667,8 @@ func (a *App) initCodexProxy() {
 	// 创建 SuspensionManager（请求挂起队列）
 	// 当 loop_retry 全部耗尽后将请求挂起，等待运维通过 UI 重新激活渠道/端点
 	sm := codexproxy.NewSuspensionManager(
-		a.config.Failover.MaxSuspendedRequests,
-		a.config.Failover.LoopRetrySuspendTimeout,
+		a.config.CodexFailover.MaxSuspendedRequests,
+		a.config.CodexFailover.LoopRetrySuspendTimeout,
 		a.logger,
 	)
 	// 注册挂起数变化回调，推送前端事件
@@ -1690,9 +1690,9 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 
 	cfg := codexproxy.ServerConfig{
 		Timeout:       a.config.CodexServer.Timeout,
-		Retry:         a.config.Retry,       // 同端点重试配置（设置页 retry.*）
-		Failover:      a.config.Failover,    // 故障转移配置（设置页 failover.*）
-		SuspensionMgr: a.codexSuspensionMgr, // 请求挂起队列
+		Retry:         a.config.Retry,         // 同端点重试配置（设置页 retry.*）
+		Failover:      a.config.CodexFailover, // Codex 独立故障转移配置
+		SuspensionMgr: a.codexSuspensionMgr,   // 请求挂起队列
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker, a.privacyService)
 	a.codexHTTPHandler = baseHandler
@@ -2093,6 +2093,16 @@ func (a *App) applySettingsToConfig() {
 	a.config.Failover.SkipHealthCheck = a.settingsService.GetBool(ctx, service.CategoryFailover, "skip_health_check", a.config.Failover.SkipHealthCheck)
 	// 达到最大循环轮数后的手动等待超时
 	a.config.Failover.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.Failover.LoopRetrySuspendTimeout)
+
+	// Codex 独立故障转移配置
+	a.config.CodexFailover.Enabled = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "enabled", false)
+	a.config.CodexFailover.LoopRetry = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "loop_retry", true)
+	a.config.CodexFailover.MaxLoops = a.settingsService.GetIntScoped(ctx, service.ProviderCodex, service.CategoryFailover, "max_loops", 3)
+	a.config.CodexFailover.SkipHealthCheck = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "skip_health_check", false)
+	a.config.CodexFailover.LoopRetrySuspendTimeout = a.settingsService.GetDurationScoped(ctx, service.ProviderCodex, service.CategoryFailover, "loop_retry_wait_timeout", 120*time.Second)
+	if a.codexHTTPHandler != nil {
+		a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+	}
 
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
