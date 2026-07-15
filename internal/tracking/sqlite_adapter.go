@@ -478,6 +478,10 @@ func (s *SQLiteAdapter) recordSchemaVersion(ctx context.Context, version, descri
 
 // migrateSchema 执行数据库迁移（添加 5m/1h 缓存字段）
 func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
+	if err := s.ensureSettingsProviderScope(ctx); err != nil {
+		return err
+	}
+
 	// request_logs 迁移：历史上先上线 usage tracking，后续补充缓存字段
 	requestLogMigrations := []struct {
 		checkColumn string
@@ -703,6 +707,14 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			description: "Codex 端点模型附加倍率字段",
 		},
 	}
+	codexChannelMigrations := []struct {
+		checkColumn string
+		alterSQL    string
+		description string
+	}{
+		{"priority", "ALTER TABLE codex_channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0", "Codex 渠道优先级字段"},
+		{"failover_enabled", "ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1", "Codex 渠道故障转移参与字段"},
+	}
 
 	channelMigrations := []struct {
 		checkColumn string
@@ -780,6 +792,12 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := runMigrations("codex_endpoints", codexEndpointMigrations); err != nil {
 		return err
 	}
+	if err := runMigrations("codex_channels", codexChannelMigrations); err != nil {
+		return err
+	}
+	if err := s.normalizeCodexChannelPriorities(ctx); err != nil {
+		return err
+	}
 	// 允许不同凭证分组端点同名（约束从 name/channel 级调整为 credential_group 级）。
 	// SQLite 无法直接移除旧 UNIQUE 约束，需要在发现旧约束时重建表。
 	if err := s.ensureEndpointsUniqueByCredentialGroup(ctx); err != nil {
@@ -846,6 +864,142 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		return err
 	}
 
+	return nil
+}
+
+func (s *SQLiteAdapter) normalizeCodexChannelPriorities(ctx context.Context) error {
+	exists, err := s.tableExists(ctx, "codex_channels")
+	if err != nil || !exists {
+		return err
+	}
+	exists, err = s.columnExists(ctx, "codex_channels", "priority")
+	if err != nil || !exists {
+		return err
+	}
+	rows, err := s.writeDB.QueryContext(ctx, `
+		SELECT id, priority
+		FROM codex_channels
+		ORDER BY priority ASC, id ASC`)
+	if err != nil {
+		return fmt.Errorf("查询 Codex 渠道优先级失败: %w", err)
+	}
+	type channelPriority struct {
+		id       int64
+		priority int
+	}
+	var channels []channelPriority
+	maxPriority := -1
+	for rows.Next() {
+		var channel channelPriority
+		if err := rows.Scan(&channel.id, &channel.priority); err != nil {
+			rows.Close()
+			return fmt.Errorf("读取 Codex 渠道优先级失败: %w", err)
+		}
+		channels = append(channels, channel)
+		if channel.priority > maxPriority {
+			maxPriority = channel.priority
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	used := make(map[int]struct{}, len(channels))
+	for _, channel := range channels {
+		if _, exists := used[channel.priority]; !exists {
+			used[channel.priority] = struct{}{}
+			continue
+		}
+		maxPriority++
+		if _, err := s.writeDB.ExecContext(ctx, `UPDATE codex_channels SET priority = ? WHERE id = ?`, maxPriority, channel.id); err != nil {
+			return fmt.Errorf("修复 Codex 渠道重复优先级失败: %w", err)
+		}
+		used[maxPriority] = struct{}{}
+	}
+	return nil
+}
+
+func (s *SQLiteAdapter) ensureSettingsProviderScope(ctx context.Context) error {
+	exists, err := s.tableExists(ctx, "settings")
+	if err != nil || !exists {
+		return err
+	}
+	hasProvider, err := s.columnExists(ctx, "settings", "provider")
+	if err != nil || hasProvider {
+		return err
+	}
+
+	tx, err := s.GetWriteDB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin settings provider migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	statements := []string{
+		`DROP INDEX IF EXISTS idx_settings_category`,
+		`DROP INDEX IF EXISTS idx_settings_category_key`,
+		`DROP TRIGGER IF EXISTS update_settings_timestamp`,
+		`ALTER TABLE settings RENAME TO settings_legacy_provider_scope`,
+		`CREATE TABLE settings (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			provider TEXT NOT NULL CHECK (provider IN ('global', 'claude', 'codex')),
+			category TEXT NOT NULL,
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			value_type TEXT DEFAULT 'string',
+			label TEXT,
+			description TEXT,
+			display_order INTEGER DEFAULT 0,
+			requires_restart INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			UNIQUE(provider, category, key)
+		)`,
+		`INSERT INTO settings (
+			id, provider, category, key, value, value_type, label, description,
+			display_order, requires_restart, created_at, updated_at
+		) SELECT
+			id, CASE WHEN category = 'failover' THEN 'claude' ELSE 'global' END,
+			category, key, value, value_type, label, description,
+			display_order, requires_restart, created_at, updated_at
+		FROM settings_legacy_provider_scope`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate settings provider scope: %w", err)
+		}
+	}
+
+	var oldCount, newCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM settings_legacy_provider_scope`).Scan(&oldCount); err != nil {
+		return fmt.Errorf("count legacy settings: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM settings`).Scan(&newCount); err != nil {
+		return fmt.Errorf("count migrated settings: %w", err)
+	}
+	if oldCount != newCount {
+		return fmt.Errorf("settings provider migration row mismatch: old=%d new=%d", oldCount, newCount)
+	}
+
+	for _, statement := range []string{
+		`DROP TABLE settings_legacy_provider_scope`,
+		`CREATE INDEX idx_settings_provider_category ON settings(provider, category)`,
+		`CREATE INDEX idx_settings_provider_category_key ON settings(provider, category, key)`,
+		`CREATE TRIGGER update_settings_timestamp
+			AFTER UPDATE ON settings
+			FOR EACH ROW
+			WHEN NEW.updated_at = OLD.updated_at
+			BEGIN
+				UPDATE settings SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+			END`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("finalize settings provider migration: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit settings provider migration: %w", err)
+	}
 	return nil
 }
 

@@ -5,7 +5,6 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  Activity,
   RefreshCw,
   Plus,
   Pencil,
@@ -118,6 +117,8 @@ const RepeatOffIcon = ({ size = 12 }) => (
   </span>
 );
 
+const ENDPOINT_STATE_BUTTON_CLASS = 'inline-flex size-5 min-h-5 min-w-5 max-h-5 max-w-5 flex-shrink-0 appearance-none items-center justify-center rounded-md border-0 p-0 leading-none transition-colors duration-150';
+
 const CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'mapping', label: '模型映射' }
@@ -165,8 +166,6 @@ const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   ...STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS,
   ...LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS
 ];
-
-const CHANNEL_META_BADGE_CLASS = 'inline-flex h-5 items-center justify-center rounded-full border px-2 pt-0 pb-0 text-[10px] font-medium leading-[20px] whitespace-nowrap';
 
 const isValidMultiplierExpression = (value) => {
   const parsed = parseMultiplierExpression(value, Number.NaN);
@@ -629,12 +628,12 @@ const EndpointMiniCard = ({
                 }}
                 disabled={failoverToggleBlocked}
                 title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
-                className={`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 ${
+                className={`${ENDPOINT_STATE_BUTTON_CLASS} ${
                   failoverToggleBlocked
                     ? 'cursor-not-allowed text-indigo-300 opacity-60'
                     : failoverEnabled
-                    ? 'text-indigo-600 hover:bg-indigo-50'
-                    : 'text-slate-400 hover:bg-slate-100'
+                    ? 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                    : 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600'
                 }`}
                 aria-label={
                   failoverToggleBlocked
@@ -647,7 +646,7 @@ const EndpointMiniCard = ({
                 }
                 aria-pressed={failoverEnabled}
               >
-                {failoverEnabled ? <RepeatOffIcon size={12} /> : <Repeat size={12} />}
+                {failoverEnabled ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
               </button>
               <button
                 type="button"
@@ -655,15 +654,15 @@ const EndpointMiniCard = ({
                   e.stopPropagation();
                   onToggleSkipHealthCheck?.(endpoint, !isSkipHealthCheck);
                 }}
-                    className={`rounded-md p-1 transition-colors duration-150 ${
-                      isSkipHealthCheck
-                        ? 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
-                        : 'bg-purple-50 text-purple-600 hover:bg-purple-100'
-                    }`}
+                className={`${ENDPOINT_STATE_BUTTON_CLASS} ${
+                  isSkipHealthCheck
+                    ? 'text-slate-400 hover:bg-slate-100 hover:text-emerald-600'
+                    : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                }`}
                 aria-label={isSkipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
                 aria-pressed={isSkipHealthCheck}
               >
-                {isSkipHealthCheck ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
+                {isSkipHealthCheck ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}
               </button>
               <button
                 type="button"
@@ -1134,7 +1133,7 @@ const CreateChannelModal = ({
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
   // 新建时传 0，让后端自动递增；编辑时使用原有优先级
-  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority || 1) : 0));
+  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority ?? 0) : 0));
   const [modelMappingRows, setModelMappingRows] = useState(() => buildInitialModelMappingRows(initialValue?.modelMapping));
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
@@ -1253,7 +1252,7 @@ const CreateChannelModal = ({
                   <label className="block text-sm font-medium text-slate-700">优先级</label>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     value={priority}
                     onChange={(e) => setPriority(e.target.value)}
                     autoComplete="off"
@@ -1911,12 +1910,10 @@ const ChannelCard = ({
   // - 仅渠道内转移时 → 只有活跃渠道参与
   // - 渠道间转移时 → 未暂停的渠道参与
   const channelParticipating = channelFailoverEnabled ? !isPaused : isActive;
-  const isUnclaimedChannel = !isActive && !channelFailoverEnabled;
   const channelHealthInScope = channelParticipating;
   const routeEndpoints = endpoints.filter(endpointParticipatesInFailover);
   const scopedEndpoints = channelHealthInScope ? routeEndpoints.filter(e => e._health_scope !== false) : [];
   // 跳过检测的端点数
-  const scopedSkippedCount = scopedEndpoints.filter(e => e.skipHealthCheck || e.skip_health_check).length;
   // 健康统计：跳过检测的端点视为健康
   const scopedHealthyCount = scopedEndpoints.filter(e => e.healthy || e.skipHealthCheck || e.skip_health_check).length;
   const scopedTotalCount = scopedEndpoints.length;
@@ -1924,30 +1921,14 @@ const ChannelCard = ({
   const totalCount = endpoints.length;
   const hasEndpoints = totalCount > 0;
   const hasRouteEndpoints = routeEndpoints.length > 0;
-  // 参与故障转移的端点数
-  const failoverEnabledCount = routeEndpoints.length;
-
-  // 全部健康（含跳过检测视为健康）
-  const allHealthy = hasEndpoints && scopedTotalCount > 0 && scopedHealthyCount === scopedTotalCount;
   const hasGroupInfo = !!groupInfo;
-  const suspendedEndpointCount = endpoints.filter((endpoint) => {
-    const count = endpoint?.suspendedCount || endpoint?.suspended_count || 0;
-    return Number(count) > 0;
-  }).length;
   const manualRetryCountValue = Number.isFinite(Number(manualRetryCount))
     ? Number(manualRetryCount)
     : 0;
   const hasManualRetry = manualRetryCountValue > 0;
 
-  // 端点标签显示逻辑：
-  // - 渠道不参与路由 → 仅显示总数（灰色）
-  // - 渠道参与路由且全部端点开启转移 → 仅显示总数（绿色）
-  // - 渠道参与路由但部分端点关闭转移 → 显示 N/M（灰色）
-  const showEndpointRatio = channelParticipating && failoverEnabledCount !== totalCount;
-  const endpointBadgeActive = channelParticipating && failoverEnabledCount === totalCount;
-
   const computedPriority = Math.min(...endpoints.map(e => getEndpointPriority(e.priority)));
-  const priority = Number.isFinite(channelPriority) && channelPriority > 0
+  const priority = Number.isFinite(channelPriority) && channelPriority >= 0
     ? channelPriority
     : (groupInfo?.priority ?? (Number.isFinite(computedPriority) ? computedPriority : 999));
 
@@ -1976,16 +1957,6 @@ const ChannelCard = ({
   const idleHighlightClass = channelFailoverEnabled && channelParticipating
     ? 'border-violet-100/80 hover:border-violet-200'
     : 'border-slate-200/70 hover:border-slate-300';
-  const activeReadyBadgeClass = channelFailoverEnabled
-    ? 'bg-violet-50 text-violet-700'
-    : 'bg-orange-50 text-orange-700';
-  const activeReadyDotClass = channelFailoverEnabled
-    ? 'bg-violet-500'
-    : 'bg-orange-500';
-  const waitingBadgeClass = channelFailoverEnabled && channelParticipating
-    ? 'border-violet-200 bg-violet-50 text-violet-700'
-    : 'border-slate-200 bg-slate-50 text-slate-500';
-
   // 默认折叠态：统一只展示 1 个端点，保证同行渠道卡片基础高度一致
   const collapsedVisibleCount = 1;
   const visibleEndpoints = expanded ? groupEndpoints : groupEndpoints.slice(0, collapsedVisibleCount);
@@ -2032,39 +2003,6 @@ const ChannelCard = ({
   const priorityValue = Number.isFinite(priority) ? Math.max(0, Math.floor(priority)) : null;
   const hasValidPriority = priorityValue != null && priorityValue >= 0 && priorityValue < 999;
   const priorityLabel = hasValidPriority ? `P${priorityValue}` : 'P-';
-  const priorityTone = !hasValidPriority
-    ? 'bg-slate-50 text-slate-500 border-slate-200'
-    : priorityValue <= 0
-      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-      : priorityValue <= 3
-        ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-        : priorityValue <= 10
-          ? 'bg-slate-50 text-slate-700 border-slate-200'
-          : 'bg-slate-50 text-slate-500 border-slate-200';
-
-  // 健康标签颜色判断
-  // - 无端点/不在检查范围 → 灰色
-  // - 全部健康（无跳过贡献）→ 绿色
-  // - 全部健康（有跳过贡献）→ 紫色
-  // - 部分健康 → 橙色
-  // - 全部失败 → 红色
-  const healthTone = !hasEndpoints || scopedTotalCount === 0
-    ? 'bg-slate-50 text-slate-500 border-slate-200'
-    : scopedHealthyCount === scopedTotalCount
-      ? scopedSkippedCount > 0
-        ? 'bg-purple-50 text-purple-700 border-purple-200'  // 全健康但有跳过 → 紫色
-        : 'bg-emerald-50 text-emerald-700 border-emerald-200'  // 全健康无跳过 → 绿色
-      : scopedHealthyCount > 0
-        ? 'bg-amber-50 text-amber-800 border-amber-200'  // 部分健康 → 橙色
-        : 'bg-rose-50 text-rose-700 border-rose-200';  // 全部失败 → 红色
-  const healthBadgeText = isUnclaimedChannel ? '未接管' : (hasEndpoints && scopedTotalCount === 0 ? '检测' : '健康');
-  const healthBadgeDetail = (() => {
-    if (isUnclaimedChannel) return '';
-    if (!hasEndpoints) return '-';
-    if (scopedTotalCount === 0) return '关闭';
-    if (allHealthy) return '';
-    return `${scopedHealthyCount}/${scopedTotalCount}`;
-  })();
 
   return (
     <div className={`
@@ -2073,30 +2011,35 @@ const ChannelCard = ({
       ${isActive ? activeHighlightClass : idleHighlightClass}
     `} data-channel-card={channelName}>
       {/* 渠道头部 */}
-      <div className="px-4 pt-3">
+      <div className="px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight text-slate-900">{channelName}</h2>
-            {isActive ? (
-              <span className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium tracking-tight ${
-                isActiveChannelInterrupted
-                  ? 'bg-rose-50 text-rose-700'
-                  : isActiveChannelSuspended
-                    ? 'bg-amber-50 text-amber-700'
-                    : activeReadyBadgeClass
-              }`}>
-                <span className={`h-1 w-1 rounded-full ${
-                  isActiveChannelInterrupted
-                    ? 'bg-rose-500'
-                    : isActiveChannelSuspended
-                      ? 'bg-amber-500'
-                      : activeReadyDotClass
-                }`} />
-                {isActiveChannelInterrupted ? '已中断' : isActiveChannelSuspended ? '挂起' : '当前接管'}
-              </span>
-            ) : (
-              <span className={`inline-flex flex-shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium tracking-tight ${waitingBadgeClass}`}>
-                {channelFailoverEnabled ? '等待' : '未接管'}
+            {isActive && (
+              isActiveChannelInterrupted ? (
+                <Tooltip content="当前 Claude 接管渠道的可用端点已全部异常，请检查端点或切换渠道" className="flex-shrink-0">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-rose-700">
+                    <AlertTriangle size={10} className="text-rose-600" />
+                    已中断
+                  </span>
+                </Tooltip>
+              ) : isActiveChannelSuspended ? (
+                <Tooltip content={`已有 ${suspendedRequestsCount} 个请求挂起，请点击当前端点或其他渠道重新激活`} className="flex-shrink-0">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-amber-700">
+                    <AlertTriangle size={10} className="text-amber-600" />
+                    等待重新激活 · {suspendedRequestsCount}
+                  </span>
+                </Tooltip>
+              ) : (
+                <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium tracking-tight text-emerald-700">
+                  <span className="h-1 w-1 rounded-full bg-emerald-500" />
+                  当前接管
+                </span>
+              )
+            )}
+            {channelFailoverEnabled && (
+              <span className="inline-flex h-[18px] min-w-[30px] flex-shrink-0 items-center justify-center rounded bg-slate-100 px-1.5 text-[10px] font-medium leading-none text-slate-500">
+                {priorityLabel}
               </span>
             )}
           </div>
@@ -2141,10 +2084,10 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onPause?.(channelName)}
                   disabled={loading}
-                  className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-label="暂停此渠道"
+                  className="inline-flex size-[26px] flex-shrink-0 items-center justify-center rounded-md bg-indigo-50 text-indigo-600 transition-colors duration-150 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="当前渠道参与渠道间转移，点击暂停"
                 >
-                  <RouteOff size={14} />
+                  <Route size={14} />
                 </button>
               </Tooltip>
             )}
@@ -2155,10 +2098,10 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onResume?.(channelName)}
                   disabled={loading}
-                  className="rounded-md p-1.5 text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-label="恢复此渠道"
+                  className="inline-flex size-[26px] flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="当前渠道已暂停渠道间转移，点击恢复"
                 >
-                  <Route size={14} />
+                  <RouteOff size={14} />
                 </button>
               </Tooltip>
             )}
@@ -2207,66 +2150,19 @@ const ChannelCard = ({
           </div>
         </div>
 
-        <div className="mt-3 -mx-4 flex flex-nowrap items-center gap-x-2.5 gap-y-1.5 overflow-hidden border-t border-slate-100 px-4 py-2 text-[11px]">
-          <span className={`${CHANNEL_META_BADGE_CLASS} min-w-[30px] flex-shrink-0 font-semibold ${priorityTone}`}>
-            {priorityLabel}
-          </span>
-          {isPaused && channelFailoverEnabled && (
-            <span className={`${CHANNEL_META_BADGE_CLASS} border-amber-200 bg-amber-50 text-amber-700`}>
-              已暂停
-            </span>
-          )}
-            {/* 冷却状态显示已移除 */}
-          {isAllEndpointsFailed && (
-            <span className={`${CHANNEL_META_BADGE_CLASS} border-rose-200 bg-rose-50 text-rose-600`}>
-              全部失败
-            </span>
-          )}
-          {hasManualRetry && (
-            <span className={`${CHANNEL_META_BADGE_CLASS} gap-1 border-amber-200 bg-amber-50 text-amber-700`}>
-              <RefreshCw size={10} />
-              待重试 <span className="font-medium">{manualRetryCountValue}</span>
-            </span>
-          )}
-          {!hasManualRetry && suspendedEndpointCount > 0 && (
-            <span className={`${CHANNEL_META_BADGE_CLASS} gap-1 border-amber-200 bg-amber-50 text-amber-700`}>
-              <Clock size={10} />
-              挂起 <span className="font-medium">{suspendedEndpointCount}</span>
-            </span>
-          )}
-
-          <span className={`${CHANNEL_META_BADGE_CLASS} ${
-            endpointBadgeActive
-              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-              : 'bg-slate-50 text-slate-600 border-slate-200'
-          }`}>
-            端点 {showEndpointRatio ? `${failoverEnabledCount}/${totalCount}` : totalCount}
-          </span>
-          <Tooltip
-            content={
-              isUnclaimedChannel
-                ? '渠道间转移未开启，非当前接管渠道不参与健康检查'
-                : (hasEndpoints && scopedTotalCount === 0 ? '当前渠道不在健康检查范围（未参与故障转移/非活跃渠道）' : undefined)
-            }
-            disabled={!(isUnclaimedChannel || (hasEndpoints && scopedTotalCount === 0))}
-          >
-            <span className={`${CHANNEL_META_BADGE_CLASS} ${healthBadgeDetail ? 'gap-1' : ''} ${healthTone}`}>
-              <span className="leading-[20px]">{healthBadgeText}</span>
-              {healthBadgeDetail && (
-                <span className="font-medium leading-[20px]">{healthBadgeDetail}</span>
-              )}
-            </span>
-          </Tooltip>
-        </div>
-
       </div>
 
       {isSqliteMode && (
         <div className="flex h-[64px] flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
-          <div className="flex h-4 items-center">
+          <div className="flex h-4 items-center gap-2">
             <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
               Credentials · {credentialGroups.length}
             </span>
+            {channelFailoverEnabled && isPaused && (
+              <span className="inline-flex h-4 flex-shrink-0 items-center rounded bg-amber-50 px-1.5 text-[9px] font-medium leading-none text-amber-700">
+                已暂停
+              </span>
+            )}
           </div>
           <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
             <div className="relative min-w-0 flex-1">
@@ -2401,14 +2297,14 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onSetGroupEndpointFailover?.(groupFailoverActionTargets, shouldEnableGroupFailover)}
                   disabled={loading || groupFailoverActionDisabled}
-                  className={`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                  className={`${ENDPOINT_STATE_BUTTON_CLASS} disabled:cursor-not-allowed ${
                     shouldEnableGroupFailover
-                      ? 'text-emerald-600 hover:bg-emerald-50'
-                      : 'text-indigo-600 hover:bg-indigo-50'
+                      ? 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600'
+                      : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
                   }`}
-                  aria-label={shouldEnableGroupFailover ? '当前分组全部参与转移' : '当前分组全部不参与转移'}
+                  aria-label={shouldEnableGroupFailover ? '当前分组存在不参与转移的端点' : '当前分组端点全部参与转移'}
                 >
-                  {shouldEnableGroupFailover ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
+                  {shouldEnableGroupFailover ? <RepeatOffIcon size={12} /> : <Repeat size={12} />}
                 </button>
               </Tooltip>
               <Tooltip content={groupHealthActionTip}>
@@ -2416,14 +2312,14 @@ const ChannelCard = ({
                   type="button"
                   onClick={() => onSetGroupEndpointSkipHealthCheck?.(groupHealthActionTargets, shouldSkipGroupHealthCheck)}
                   disabled={loading || groupHealthActionTargets.length === 0}
-                  className={`rounded-md p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                  className={`${ENDPOINT_STATE_BUTTON_CLASS} disabled:cursor-not-allowed ${
                     shouldSkipGroupHealthCheck
-                      ? 'text-purple-600 hover:bg-purple-50'
-                      : 'text-emerald-600 hover:bg-emerald-50'
+                      ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                      : 'text-slate-400 hover:bg-slate-100 hover:text-emerald-600'
                   }`}
-                  aria-label={shouldSkipGroupHealthCheck ? '当前分组全部跳过检测' : '当前分组全部恢复检测'}
+                  aria-label={shouldSkipGroupHealthCheck ? '当前分组存在正常检测的端点' : '当前分组端点全部跳过检测'}
                 >
-                  {shouldSkipGroupHealthCheck ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}
+                  {shouldSkipGroupHealthCheck ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
                 </button>
               </Tooltip>
               <button
@@ -2831,18 +2727,16 @@ const ChannelsPage = () => {
     };
   }, [loadChannelsMeta, loadConfig, loadGroups, loadStorageStatus]);
 
-  // 批量健康检测处理
-  const handleBatchHealthCheck = async () => {
+  const handleRefresh = async () => {
     setBatchCheckLoading(true);
     try {
       await performBatchHealthCheckAll();
-      // 刷新数据以获取最新的健康状态、响应时间等
       if (isSqliteMode) {
         await loadStorageStatus();
-        await loadGroups();
       } else {
-        await loadGroups();
+        await refresh();
       }
+      await Promise.all([loadGroups(), loadChannelsMeta()]);
     } catch (err) {
       console.error('批量健康检测失败:', err);
       setActionError(`批量健康检测失败: ${getErrorMessage(err, '未知错误')}`);
@@ -3041,18 +2935,12 @@ const ChannelsPage = () => {
   const hasLastCheck = (e) => !!(e?.lastCheck || e?.last_check);
   const isNeverCheckedEndpoint = (e) => e?.never_checked || e?.neverChecked || !hasLastCheck(e);
 
-  // 计算检测范围内的渠道数
-  const scopedChannelCount = useMemo(() => {
-    if (!channelFailoverEnabled) {
-      // 关闭渠道间转移：仅活跃渠道
-      return activeChannel ? 1 : 0;
-    }
-    // 开启渠道间转移：参与的渠道数（非暂停）
+  const participatingChannelCount = useMemo(() => {
     return channelSections.filter(section => {
       const gi = groupInfoMap.get(section.name);
       return !gi?.paused;
     }).length;
-  }, [channelFailoverEnabled, activeChannel, channelSections, groupInfoMap]);
+  }, [channelSections, groupInfoMap]);
 
   // 检测范围内的端点数
   const scopedEndpointCount = useMemo(() => {
@@ -3073,15 +2961,10 @@ const ChannelsPage = () => {
           : 0
       }
     : { ...stats, skipped: stats.skipped || 0 };
-  const channelOverviewCards = [
-    {
-      title: channelFailoverEnabled ? '参与渠道' : '活跃渠道',
-      value: String(scopedChannelCount),
-      tooltip: String(scopedChannelCount),
-      subText: `总渠道 ${channelSections.length} 个`,
-      icon: ArrowRightLeft,
-      statusColor: 'bg-slate-100 text-slate-700'
-    },
+  const activeChannelSection = channelSections.find((section) => section.name === activeChannel) || null;
+  const activeChannelEndpointCount = activeChannelSection?.endpoints?.length || 0;
+  const activeChannelCredentialGroupCount = (credentialGroupsByChannel[activeChannel] || []).length;
+  const failoverOverviewCards = [
     {
       title: '参与端点',
       value: String(scopedEndpointCount),
@@ -3121,8 +3004,67 @@ const ChannelsPage = () => {
       subText: '未纳入当前检测范围',
       icon: ShieldOff,
       statusColor: 'bg-slate-100 text-slate-500'
+    },
+    {
+      title: '参与渠道',
+      value: String(participatingChannelCount),
+      tooltip: String(participatingChannelCount),
+      subText: `总渠道 ${channelSections.length} 个`,
+      icon: ArrowRightLeft,
+      statusColor: 'bg-slate-100 text-slate-700'
     }
   ];
+  const activeChannelOverviewCards = [
+    {
+      title: '凭证分组',
+      value: String(activeChannelCredentialGroupCount),
+      tooltip: String(activeChannelCredentialGroupCount),
+      subText: activeChannel ? `当前渠道 ${activeChannel}` : '暂无活跃渠道',
+      icon: KeyRound,
+      statusColor: 'bg-sky-50 text-sky-600'
+    },
+    {
+      title: '参与端点',
+      value: String(scopedEndpointCount),
+      tooltip: String(scopedEndpointCount),
+      subText: '当前活跃渠道参与路由',
+      icon: Server,
+      statusColor: 'bg-indigo-50 text-indigo-600'
+    },
+    {
+      title: '健康端点',
+      value: String(displayStats.healthy),
+      tooltip: String(displayStats.healthy),
+      subText: '当前活跃渠道通过检测',
+      icon: CheckCircle2,
+      statusColor: 'bg-emerald-50 text-emerald-600'
+    },
+    {
+      title: '跳过检测',
+      value: String(displayStats.skipped || 0),
+      tooltip: String(displayStats.skipped || 0),
+      subText: '当前活跃渠道跳过检测',
+      icon: Pause,
+      statusColor: 'bg-violet-50 text-violet-600'
+    },
+    {
+      title: '异常端点',
+      value: String(displayStats.unhealthy),
+      tooltip: String(displayStats.unhealthy),
+      subText: '当前活跃渠道判定异常',
+      icon: XCircle,
+      statusColor: 'bg-rose-50 text-rose-600'
+    },
+    {
+      title: '总端点',
+      value: String(activeChannelEndpointCount),
+      tooltip: String(activeChannelEndpointCount),
+      subText: '当前活跃渠道全部端点',
+      icon: Database,
+      statusColor: 'bg-slate-100 text-slate-700'
+    }
+  ];
+  const channelOverviewCards = channelFailoverEnabled ? failoverOverviewCards : activeChannelOverviewCards;
 
   // ============================================
   // CRUD 操作处理
@@ -3158,7 +3100,7 @@ const ChannelsPage = () => {
     setEditingChannel({
       name,
       website: meta?.website || '',
-      priority: meta?.priority || 1,
+      priority: meta?.priority ?? 0,
       modelMapping: meta?.modelMapping || {}
     });
     setShowEditChannel(true);
@@ -3410,27 +3352,10 @@ const ChannelsPage = () => {
             variant="ghost"
             size="sm"
             icon={RefreshCw}
-            onClick={async () => {
-              if (isSqliteMode) {
-                await loadStorageStatus();
-              } else {
-                await refresh();
-              }
-              await loadGroups();
-              await loadChannelsMeta();
-            }}
-            loading={loading}
+            onClick={handleRefresh}
+            loading={loading || batchCheckLoading}
           >
             刷新
-          </Button>
-
-          {/* 批量检测按钮 */}
-          <Button
-            icon={Activity}
-            loading={batchCheckLoading}
-            onClick={handleBatchHealthCheck}
-          >
-            检测全部
           </Button>
 
           {/* 新建渠道按钮 (SQLite 模式) */}
@@ -3500,7 +3425,7 @@ const ChannelsPage = () => {
       )}
 
       {/* 全部端点失败警示 - 仅在启用渠道间故障转移时显示全局警示；未启用时在渠道卡片内显示 */}
-      {channelFailoverEnabled && scopedChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
+      {channelFailoverEnabled && participatingChannelCount > 0 && scopedEndpointCount > 0 && displayStats.healthy === 0 && (
         <div className="mb-6 p-4 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-3">
           <div className="p-2 bg-rose-100 rounded-full flex-shrink-0">
             <AlertTriangle className="w-5 h-5 text-rose-600" />
@@ -3510,7 +3435,7 @@ const ChannelsPage = () => {
               所有端点均处于不可用状态
             </div>
             <div className="text-sm text-rose-700 mt-1">
-              当前 {scopedChannelCount} 个参与渠道共 {scopedEndpointCount} 个端点全部异常，请求将根据恢复策略处理（快速失败/循环重试/智能等待）。
+              当前 {participatingChannelCount} 个参与渠道共 {scopedEndpointCount} 个端点全部异常，请求将根据恢复策略处理（快速失败/循环重试/智能等待）。
             </div>
             <div className="flex items-center gap-3 mt-3 text-[11px]">
               <span className="text-slate-500">建议操作：</span>

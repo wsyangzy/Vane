@@ -5,7 +5,7 @@
 // 含 Claude/Codex 分项悬浮提示
 // ============================================
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   DollarSign,
   Zap,
@@ -13,7 +13,7 @@ import {
   Network,
   Activity
 } from 'lucide-react'
-import { KPICard } from '@components/ui'
+import { KPICard, useToast } from '@components/ui'
 import {
   getUsageSummary,
   getCodexChannels,
@@ -43,19 +43,39 @@ const KPICardsGrid = ({ data }) => {
   const [providerStats, setProviderStats] = useState(null)
   // Codex 渠道用于概览 KPI 的渠道数和端点总数
   const [codexChannelStats, setCodexChannelStats] = useState({ channels: [], totalAll: 0, loaded: false })
+  const providerStatsErrorRef = useRef('')
+  const toast = useToast()
 
   const loadProviderStats = useCallback(async () => {
     if (!isWailsEnvironment()) return
-    try {
-      const [claude, codex] = await Promise.all([
-        getUsageSummary('', '', 'claude').catch(() => null),
-        getUsageSummary('', '', 'codex').catch(() => null)
-      ])
-      setProviderStats({ claude, codex })
-    } catch {
-      // 静默处理
+    const [claudeResult, codexResult] = await Promise.allSettled([
+      getUsageSummary('', '', 'claude'),
+      getUsageSummary('', '', 'codex')
+    ])
+
+    setProviderStats(previous => ({
+      claude: claudeResult.status === 'fulfilled' ? claudeResult.value : previous?.claude || null,
+      codex: codexResult.status === 'fulfilled' ? codexResult.value : previous?.codex || null
+    }))
+
+    const failures = [
+      ['Claude', claudeResult],
+      ['Codex', codexResult]
+    ].filter(([, result]) => result.status === 'rejected')
+
+    if (failures.length === 0) {
+      providerStatsErrorRef.current = ''
+      return
     }
-  }, [])
+
+    const message = failures
+      .map(([provider, result]) => `${provider}: ${result.reason?.message || String(result.reason || '查询失败')}`)
+      .join('；')
+    if (providerStatsErrorRef.current !== message) {
+      toast.error(message, '用量统计加载失败')
+      providerStatsErrorRef.current = message
+    }
+  }, [toast])
 
   const loadCodexChannelStats = useCallback(async () => {
     if (!isWailsEnvironment()) return

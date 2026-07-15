@@ -57,9 +57,6 @@ func (c *Config) validateUsageTracking() error {
 	if c.UsageTracking.RetentionDays < 0 {
 		return fmt.Errorf("retention days cannot be negative")
 	}
-	if c.UsageTracking.CleanupInterval <= 0 && c.UsageTracking.RetentionDays > 0 {
-		return fmt.Errorf("cleanup interval must be greater than 0 when retention is enabled")
-	}
 	return nil
 }
 

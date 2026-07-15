@@ -42,12 +42,13 @@ import {
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 import {
-  chainHasMultipleChannels,
+  countChannelSwitches,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   getRequestChannelLabel,
   getRequestCredentialGroupLabel,
   parseChainNode,
+  requestHasInterChannelTransfer,
   summarizeEndpointAttempts,
 } from '../utils/endpointChain.js';
 
@@ -334,7 +335,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const networkHTTPStatus = request.httpStatusCode ?? request.http_status_code ?? request.statusCode;
   const networkFirstByteMs = request.firstByteMs ?? request.first_byte_ms;
   const currentCredentialGroupLabel = getRequestCredentialGroupLabel(request, chainNodes);
-  const showChannelInChain = isClaudeRequest && chainHasMultipleChannels(endpointChain);
+  const showChannelInChain = requestHasInterChannelTransfer(request);
   const hasEndpointErrors = chainNodes.some((node) => Boolean(node.error));
   const currentChannelLabel = getRequestChannelLabel(request, chainNodes);
   const hasUnknownChannel = showChannelInChain && chainNodes.some((node) => !node.channel);
@@ -863,9 +864,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
                 const uniqueGroups = new Set(chainNodes.map(n => n.credentialGroup).filter(Boolean));
                 const uniqueEndpoints = new Set(chainNodes.map(n => n.endpoint).filter(Boolean));
-                const channelSwitches = showChannelInChain
-                  ? chainNodes.filter((n, i) => i > 0 && n.channel && chainNodes[i - 1].channel && n.channel !== chainNodes[i - 1].channel).length
-                  : 0;
+                const channelSwitches = showChannelInChain ? countChannelSwitches(chainNodes) : 0;
                 return (
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">

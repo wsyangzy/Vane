@@ -15,6 +15,7 @@ type SettingRecord struct {
 	ID int64 `json:"id"`
 
 	// 设置标识
+	Provider string `json:"provider"` // 作用域: global, claude, codex
 	Category string `json:"category"` // 分类: strategy, retry, health, etc.
 	Key      string `json:"key"`      // 配置键
 
@@ -48,16 +49,20 @@ type EnumOption struct {
 // SettingsStore 定义设置存储接口
 type SettingsStore interface {
 	// CRUD 操作
+	GetScoped(ctx context.Context, provider, category, key string) (*SettingRecord, error)
+	SetScoped(ctx context.Context, provider, category, key, value string) error
 	Get(ctx context.Context, category, key string) (*SettingRecord, error)
 	Set(ctx context.Context, category, key, value string) error
 	Delete(ctx context.Context, category, key string) error
 
 	// 批量操作
+	GetByCategoryScoped(ctx context.Context, provider, category string) ([]*SettingRecord, error)
 	GetByCategory(ctx context.Context, category string) ([]*SettingRecord, error)
 	GetAll(ctx context.Context) ([]*SettingRecord, error)
 	BatchSet(ctx context.Context, records []*SettingRecord) error
 	BatchUpdateValues(ctx context.Context, records []*SettingRecord) error // 只更新value
 	DeleteByCategory(ctx context.Context, category string) error
+	DeleteByCategoryScoped(ctx context.Context, provider, category string) error
 
 	// 初始化
 	InitDefaults(ctx context.Context, defaults []*SettingRecord) error
@@ -72,6 +77,30 @@ type SettingsStore interface {
 	ListCategories(ctx context.Context) ([]string, error)
 }
 
+func (s *SQLiteSettingsStore) GetByCategoryScoped(ctx context.Context, provider, category string) ([]*SettingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	query := `
+		SELECT id, provider, category, key, value, value_type,
+			COALESCE(label, ''), COALESCE(description, ''),
+			display_order, requires_restart, created_at, updated_at
+		FROM settings
+		WHERE provider = ? AND category = ?
+		ORDER BY display_order ASC, key ASC
+	`
+	return s.scanSettings(ctx, query, provider, category)
+}
+
+func (s *SQLiteSettingsStore) DeleteByCategoryScoped(ctx context.Context, provider, category string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE provider = ? AND category = ?`, provider, category)
+	if err != nil {
+		return fmt.Errorf("删除分类设置失败: %w", err)
+	}
+	return nil
+}
+
 // SQLiteSettingsStore 实现 SettingsStore 接口
 type SQLiteSettingsStore struct {
 	db *sql.DB
@@ -83,62 +112,70 @@ func NewSQLiteSettingsStore(db *sql.DB) *SQLiteSettingsStore {
 	return &SQLiteSettingsStore{db: db}
 }
 
-// Get 获取单个设置
-func (s *SQLiteSettingsStore) Get(ctx context.Context, category, key string) (*SettingRecord, error) {
+func defaultSettingsProvider(category string) string {
+	if category == "failover" {
+		return "claude"
+	}
+	return "global"
+}
+
+// GetScoped 获取指定 Provider 的单个设置。
+func (s *SQLiteSettingsStore) GetScoped(ctx context.Context, provider, category, key string) (*SettingRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, category, key, value, value_type,
+		SELECT id, provider, category, key, value, value_type,
 			COALESCE(label, '') as label,
 			COALESCE(description, '') as description,
 			display_order, requires_restart, created_at, updated_at
 		FROM settings
-		WHERE category = ? AND key = ?
+		WHERE provider = ? AND category = ? AND key = ?
 	`
 
 	var record SettingRecord
 	var requiresRestart int
 	var createdAt, updatedAt string
-
-	err := s.db.QueryRowContext(ctx, query, category, key).Scan(
-		&record.ID, &record.Category, &record.Key, &record.Value, &record.ValueType,
+	err := s.db.QueryRowContext(ctx, query, provider, category, key).Scan(
+		&record.ID, &record.Provider, &record.Category, &record.Key, &record.Value, &record.ValueType,
 		&record.Label, &record.Description, &record.DisplayOrder,
 		&requiresRestart, &createdAt, &updatedAt,
 	)
-
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("获取设置失败: %w", err)
 	}
-
 	record.RequiresRestart = requiresRestart == 1
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
-
 	return &record, nil
+}
+
+// SetScoped 设置指定 Provider 的单个值。
+func (s *SQLiteSettingsStore) SetScoped(ctx context.Context, provider, category, key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO settings (provider, category, key, value)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(provider, category, key) DO UPDATE SET value = excluded.value
+	`, provider, category, key, value)
+	if err != nil {
+		return fmt.Errorf("设置值失败: %w", err)
+	}
+	return nil
+}
+
+// Get 获取单个设置
+func (s *SQLiteSettingsStore) Get(ctx context.Context, category, key string) (*SettingRecord, error) {
+	return s.GetScoped(ctx, defaultSettingsProvider(category), category, key)
 }
 
 // Set 设置单个值（存在则更新，不存在则插入）
 func (s *SQLiteSettingsStore) Set(ctx context.Context, category, key, value string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	query := `
-		INSERT INTO settings (category, key, value)
-		VALUES (?, ?, ?)
-		ON CONFLICT(category, key) DO UPDATE SET
-			value = excluded.value
-	`
-
-	_, err := s.db.ExecContext(ctx, query, category, key, value)
-	if err != nil {
-		return fmt.Errorf("设置值失败: %w", err)
-	}
-
-	return nil
+	return s.SetScoped(ctx, defaultSettingsProvider(category), category, key, value)
 }
 
 // BatchUpdateValues 批量更新值（只更新 value，保留其他元数据）
@@ -157,7 +194,7 @@ func (s *SQLiteSettingsStore) BatchUpdateValues(ctx context.Context, records []*
 	defer tx.Rollback()
 
 	// 只更新 value，不影响 label、description 等元数据
-	query := `UPDATE settings SET value = ? WHERE category = ? AND key = ?`
+	query := `UPDATE settings SET value = ? WHERE provider = ? AND category = ? AND key = ?`
 
 	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
@@ -166,7 +203,11 @@ func (s *SQLiteSettingsStore) BatchUpdateValues(ctx context.Context, records []*
 	defer stmt.Close()
 
 	for _, record := range records {
-		_, err = stmt.ExecContext(ctx, record.Value, record.Category, record.Key)
+		provider := record.Provider
+		if provider == "" {
+			provider = defaultSettingsProvider(record.Category)
+		}
+		_, err = stmt.ExecContext(ctx, record.Value, provider, record.Category, record.Key)
 		if err != nil {
 			return fmt.Errorf("更新 %s.%s 失败: %w", record.Category, record.Key, err)
 		}
@@ -184,9 +225,9 @@ func (s *SQLiteSettingsStore) Delete(ctx context.Context, category, key string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	query := `DELETE FROM settings WHERE category = ? AND key = ?`
+	query := `DELETE FROM settings WHERE provider = ? AND category = ? AND key = ?`
 
-	_, err := s.db.ExecContext(ctx, query, category, key)
+	_, err := s.db.ExecContext(ctx, query, defaultSettingsProvider(category), category, key)
 	if err != nil {
 		return fmt.Errorf("删除设置失败: %w", err)
 	}
@@ -201,16 +242,16 @@ func (s *SQLiteSettingsStore) GetByCategory(ctx context.Context, category string
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, category, key, value, value_type,
+		SELECT id, provider, category, key, value, value_type,
 			COALESCE(label, '') as label,
 			COALESCE(description, '') as description,
 			display_order, requires_restart, created_at, updated_at
 		FROM settings
-		WHERE category = ?
+		WHERE provider = ? AND category = ?
 		ORDER BY display_order ASC, key ASC
 	`
 
-	return s.scanSettings(ctx, query, category)
+	return s.scanSettings(ctx, query, defaultSettingsProvider(category), category)
 }
 
 // GetAll 获取所有设置
@@ -219,12 +260,12 @@ func (s *SQLiteSettingsStore) GetAll(ctx context.Context) ([]*SettingRecord, err
 	defer s.mu.RUnlock()
 
 	query := `
-		SELECT id, category, key, value, value_type,
+		SELECT id, provider, category, key, value, value_type,
 			COALESCE(label, '') as label,
 			COALESCE(description, '') as description,
 			display_order, requires_restart, created_at, updated_at
 		FROM settings
-		ORDER BY category ASC, display_order ASC, key ASC
+		ORDER BY provider ASC, category ASC, display_order ASC, key ASC
 	`
 
 	return s.scanSettings(ctx, query)
@@ -246,9 +287,9 @@ func (s *SQLiteSettingsStore) BatchSet(ctx context.Context, records []*SettingRe
 	defer tx.Rollback()
 
 	query := `
-		INSERT INTO settings (category, key, value, value_type, label, description, display_order, requires_restart)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(category, key) DO UPDATE SET
+		INSERT INTO settings (provider, category, key, value, value_type, label, description, display_order, requires_restart)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, category, key) DO UPDATE SET
 			value = excluded.value,
 			value_type = excluded.value_type,
 			label = excluded.label,
@@ -264,8 +305,12 @@ func (s *SQLiteSettingsStore) BatchSet(ctx context.Context, records []*SettingRe
 	defer stmt.Close()
 
 	for _, record := range records {
+		provider := record.Provider
+		if provider == "" {
+			provider = defaultSettingsProvider(record.Category)
+		}
 		_, err = stmt.ExecContext(ctx,
-			record.Category, record.Key, record.Value, record.ValueType,
+			provider, record.Category, record.Key, record.Value, record.ValueType,
 			record.Label, record.Description, record.DisplayOrder,
 			boolToInt(record.RequiresRestart),
 		)
@@ -286,9 +331,9 @@ func (s *SQLiteSettingsStore) DeleteByCategory(ctx context.Context, category str
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	query := `DELETE FROM settings WHERE category = ?`
+	query := `DELETE FROM settings WHERE provider = ? AND category = ?`
 
-	_, err := s.db.ExecContext(ctx, query, category)
+	_, err := s.db.ExecContext(ctx, query, defaultSettingsProvider(category), category)
 	if err != nil {
 		return fmt.Errorf("删除分类设置失败: %w", err)
 	}
@@ -337,9 +382,9 @@ func (s *SQLiteSettingsStore) SyncMetadata(ctx context.Context, defaults []*Sett
 	// 只更新元数据，不更新 value（保留用户设置的值）
 	// 如果记录不存在，则插入默认值
 	query := `
-		INSERT INTO settings (category, key, value, value_type, label, description, display_order, requires_restart)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(category, key) DO UPDATE SET
+		INSERT INTO settings (provider, category, key, value, value_type, label, description, display_order, requires_restart)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, category, key) DO UPDATE SET
 			value_type = excluded.value_type,
 			label = excluded.label,
 			description = excluded.description,
@@ -354,8 +399,12 @@ func (s *SQLiteSettingsStore) SyncMetadata(ctx context.Context, defaults []*Sett
 	defer stmt.Close()
 
 	for _, record := range defaults {
+		provider := record.Provider
+		if provider == "" {
+			provider = defaultSettingsProvider(record.Category)
+		}
 		_, err = stmt.ExecContext(ctx,
-			record.Category, record.Key, record.Value, record.ValueType,
+			provider, record.Category, record.Key, record.Value, record.ValueType,
 			record.Label, record.Description, record.DisplayOrder,
 			boolToInt(record.RequiresRestart),
 		)
@@ -391,7 +440,7 @@ func (s *SQLiteSettingsStore) CountByCategory(ctx context.Context, category stri
 	defer s.mu.RUnlock()
 
 	var count int
-	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settings WHERE category = ?", category).Scan(&count)
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settings WHERE provider = ? AND category = ?", defaultSettingsProvider(category), category).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("获取分类设置数量失败: %w", err)
 	}
@@ -441,7 +490,7 @@ func (s *SQLiteSettingsStore) scanSettings(ctx context.Context, query string, ar
 		var createdAt, updatedAt string
 
 		err := rows.Scan(
-			&record.ID, &record.Category, &record.Key, &record.Value, &record.ValueType,
+			&record.ID, &record.Provider, &record.Category, &record.Key, &record.Value, &record.ValueType,
 			&record.Label, &record.Description, &record.DisplayOrder,
 			&requiresRestart, &createdAt, &updatedAt,
 		)

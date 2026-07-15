@@ -21,6 +21,8 @@ import {
   Plus,
   RefreshCw,
   Repeat,
+  Route,
+  RouteOff,
   Save,
   Server,
   Settings,
@@ -83,12 +85,14 @@ import {
   deleteCodexEndpointByID,
   getCodexChannels,
   getCodexGlobalConfig,
-  getCodexProviderStorageStatus,
+  getNextAvailableCodexChannel,
+  getSettingsByScope,
   getCodexSuspendedCount,
   isWailsEnvironment,
   openExternalURL,
   subscribeToEvent,
   setDefaultCodexCredentialGroup,
+  setCodexChannelFailoverEnabled,
   updateCodexChannelByID,
   updateCodexCredentialGroupByID,
   updateCodexEndpointByID,
@@ -107,6 +111,8 @@ const RepeatOffIcon = ({ size = 12 }) => (
     <Slash size={size} strokeWidth={2.5} className="absolute inset-0" />
   </span>
 );
+
+const ENDPOINT_STATE_BUTTON_CLASS = 'inline-flex size-5 min-h-5 min-w-5 max-h-5 max-w-5 flex-shrink-0 appearance-none items-center justify-center rounded-md border-0 p-0 leading-none transition-colors duration-150';
 
 const getCredentialGroups = (channel) => {
   const groups = channel?.credentialGroups || channel?.credential_groups || [];
@@ -158,6 +164,8 @@ const buildInitialChannelForm = (channel) => {
     name: channel?.name || '',
     website: channel?.website || '',
     model: channel?.model || '',
+    priority: channel ? String(channel.priority ?? 0) : '',
+    failoverEnabled: channel?.failoverEnabled !== false,
     ...buildChannelCredentialGroupFields(defaultGroup, channel),
     modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
   };
@@ -353,7 +361,7 @@ const CodexLogo = ({ className = 'w-6 h-6' }) => (
 // ============================================================================
 // 渠道编辑弹窗（渠道信息 + 创建时的默认凭证分组；model/reasoning/1M 已迁移到全局设置）
 // ============================================================================
-const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSave }) => {
+const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
@@ -444,6 +452,8 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
       website: formData.website.trim(),
       model: formData.model.trim(),
       modelMapping: buildModelMappingPayload(formData.modelMappingRows),
+      priority: isEdit ? Math.max(0, Number.parseInt(formData.priority, 10) || 0) : -1,
+      failoverEnabled: formData.failoverEnabled,
       credentialGroup: null
     };
 
@@ -514,7 +524,7 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
               buttonPaddingClass="px-2"
             />
           </div>
-          <div className="space-y-4 overflow-y-auto px-6 py-6">
+          <div className="space-y-3.5 overflow-y-auto px-6 py-5">
             {(fieldError || serverError) && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {fieldError || serverError}
@@ -523,20 +533,55 @@ const ChannelFormModal = ({ mode, channel, loading, serverError, onCancel, onSav
 
             {activeTab === 'basic' ? (
               <>
-            <Input
-              label="渠道名"
-              value={formData.name}
-              onChange={(event) => updateField('name', event.target.value)}
-              placeholder="例如：主渠道"
-              autoFocus
-            />
+            <div className="grid grid-cols-2 gap-4">
+              <Input
+                label="渠道名"
+                value={formData.name}
+                onChange={(event) => updateField('name', event.target.value)}
+                placeholder="例如：主渠道"
+                autoFocus
+              />
+              <Input
+                label="官网地址（可选）"
+                value={formData.website}
+                onChange={(event) => updateField('website', event.target.value)}
+                placeholder="https://platform.openai.com"
+              />
+            </div>
 
-            <Input
-              label="官网地址（可选）"
-              value={formData.website}
-              onChange={(event) => updateField('website', event.target.value)}
-              placeholder="https://platform.openai.com"
-            />
+            {channelFailoverEnabled && isEdit && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">参与渠道间故障转移</span>
+                  <div className="flex h-[42px] min-w-0 items-center justify-between gap-4 rounded-lg border border-slate-200 px-3">
+                    <span className="truncate text-xs text-slate-400">
+                      {channel?.isActive ? '活跃渠道请在卡片中暂停' : '关闭后自动转移会跳过此渠道'}
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={formData.failoverEnabled}
+                      onClick={() => updateField('failoverEnabled', !formData.failoverEnabled)}
+                      disabled={Boolean(channel?.isActive)}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${formData.failoverEnabled ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                    >
+                      <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${formData.failoverEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                </div>
+                <label className="block">
+                  <span className="mb-1.5 block text-sm font-medium text-slate-700">优先级</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={formData.priority}
+                    onChange={(event) => updateField('priority', event.target.value)}
+                    className="h-[42px] w-full rounded-lg border border-slate-200 px-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">数字越小越优先，相同则交换</p>
+                </label>
+              </div>
+            )}
 
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-700">模型（可选）</label>
@@ -953,7 +998,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
                       formData.isDefault ? 'bg-indigo-500' : 'bg-slate-300'
                     }`}>
                       <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                        formData.isDefault ? 'translate-x-5' : 'translate-x-0'
+                      formData.isDefault ? 'translate-x-5' : 'translate-x-0'
                       }`} />
                     </div>
                   </button>
@@ -1515,6 +1560,26 @@ const DeleteConfirmDialog = ({ title, description, hint, loading, onCancel, onCo
   );
 };
 
+const ActiveChannelPauseDialog = ({ channelName, nextChannelName, loading, onCancel, onConfirm }) => renderModalPortal(
+  <div className="fixed inset-0 z-[100] flex items-start justify-center bg-slate-900/30 px-4 pt-[20vh] backdrop-blur-sm animate-fade-in">
+    <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-xl">
+      <div className="flex items-start gap-3 px-6 py-5">
+        <div className="rounded-xl bg-amber-100 p-2 text-amber-700"><TriangleAlert size={18} /></div>
+        <div>
+          <h2 className="text-lg font-semibold text-slate-900">确认暂停活跃渠道</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            确定要暂停当前接管渠道“{channelName}”吗？暂停后将自动切换到“{nextChannelName}”。
+          </p>
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
+        <Button variant="secondary" onClick={onCancel} disabled={loading}>取消</Button>
+        <Button variant="danger" loading={loading} onClick={onConfirm}>确认暂停</Button>
+      </div>
+    </div>
+  </div>
+);
+
 // ============================================================================
 // Codex 全局配置弹窗（直接读写 ~/.codex/config.toml）
 // 字段：model / enable_1m_context（base_url 由后端自动同步）
@@ -1674,8 +1739,8 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
                     }`}
                   >
                     <span
-                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                        config.enable_1m_context ? 'translate-x-5' : 'translate-x-0.5'
+                      className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                        config.enable_1m_context ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>
@@ -1710,15 +1775,6 @@ const CodexGlobalConfigModal = ({ onClose, onSaved }) => {
 // 端点行（紧凑表格风，延续渠道管理页密度）：
 // 左侧 toggle = 激活；行整体点击展开内嵌编辑（base_url 直改即保存）
 // ============================================================================
-const summarizeEndpoint = (baseURL) => {
-  try {
-    const u = new URL(baseURL);
-    return u.host + (u.pathname && u.pathname !== '/' ? u.pathname : '');
-  } catch {
-    return baseURL || '';
-  }
-};
-
 const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit }) => {
   if (!endpoint) return null;
 
@@ -1991,7 +2047,8 @@ const EndpointRow = ({
   onToggleFailover,
   onToggleSkipHealthCheck,
   actionLoading,
-  canDisableFailover = true
+  canDisableFailover = true,
+  channelPaused = false
 }) => {
   const isActivating = actionLoading === `activate-endpoint-${endpoint.id}`;
   const isDeleting = actionLoading === `delete-endpoint-${endpoint.id}`;
@@ -2017,6 +2074,7 @@ const EndpointRow = ({
   const endpointSwitchDisabled = !failoverEnabled;
   const failoverToggleBlocked = failoverEnabled && endpoint.isActive && !canDisableFailover;
   const hasRequestFailure = Number(lastFailCode) > 0 || !!lastFailReason;
+  const showChannelPaused = channelPaused && failoverEnabled;
 
   const handleToggleActivate = (event) => {
     event.stopPropagation();
@@ -2144,11 +2202,22 @@ const EndpointRow = ({
             </span>
           </div>
           <div className="mt-0.5 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-visible">
-            <CodexHealthBadge state={healthState} />
-            {hasRequestFailure ? (
-              <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} />
+            {showChannelPaused ? (
+              <span
+                className="inline-flex h-5 w-fit flex-shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-1.5 text-[10px] font-medium leading-none text-slate-500 whitespace-nowrap"
+                aria-label="渠道已暂停：不参与健康检查与故障转移"
+              >
+                暂停
+              </span>
             ) : (
-              <CodexLatencyBadge ms={responseTimeMs} />
+              <>
+                <CodexHealthBadge state={healthState} />
+                {hasRequestFailure ? (
+                  <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} />
+                ) : (
+                  <CodexLatencyBadge ms={responseTimeMs} />
+                )}
+              </>
             )}
           </div>
         </div>
@@ -2160,12 +2229,12 @@ const EndpointRow = ({
             onClick={handleFailoverToggle}
             disabled={failoverToggleBlocked}
             title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
-            className={`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 ${
+            className={`${ENDPOINT_STATE_BUTTON_CLASS} ${
               failoverToggleBlocked
                 ? 'cursor-not-allowed text-indigo-300 opacity-60'
                 : failoverEnabled
-                ? 'text-indigo-600 hover:bg-indigo-50'
-                : 'text-slate-400 hover:bg-slate-100'
+                ? 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                : 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600'
             }`}
             aria-label={
               failoverToggleBlocked
@@ -2178,25 +2247,25 @@ const EndpointRow = ({
             }
             aria-pressed={failoverEnabled}
           >
-            {failoverEnabled ? <RepeatOffIcon size={12} /> : <Repeat size={12} />}
+            {failoverEnabled ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
           </button>
           <button
             type="button"
             onClick={handleSkipHealthCheckToggle}
             disabled={isTogglingSkipHealthCheck}
-            className={`rounded-md p-1 transition-colors duration-150 ${
+            className={`${ENDPOINT_STATE_BUTTON_CLASS} ${
               isTogglingSkipHealthCheck
-                ? 'cursor-wait text-purple-400 opacity-70'
+                ? 'cursor-wait text-emerald-400 opacity-70'
                 : skipHealthCheck
-                  ? 'text-slate-400 hover:bg-slate-100 hover:text-purple-600'
-                  : 'bg-purple-50 text-purple-600 hover:bg-purple-100'
+                  ? 'text-slate-400 hover:bg-slate-100 hover:text-emerald-600'
+                  : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
             }`}
             aria-label={skipHealthCheck ? '已跳过健康检测 (点击关闭)' : '跳过健康检测 (点击开启)'}
             aria-pressed={skipHealthCheck}
           >
             {isTogglingSkipHealthCheck ? (
               <Loader2 size={12} className="animate-spin" />
-            ) : skipHealthCheck ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
+            ) : skipHealthCheck ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}
           </button>
           <button
             type="button"
@@ -2229,7 +2298,9 @@ const ChannelCard = ({
   actionLoading,
   suspendedCount = 0,
   globalConfig = { model: '', enable_1m_context: false },
+  channelFailoverEnabled = false,
   onActivateChannel,
+  onToggleChannelFailover,
   onEditChannel,
   onDeleteChannel,
   onAddCredentialGroup,
@@ -2255,6 +2326,8 @@ const ChannelCard = ({
   const channelCardRef = useRef(null);
   const isSwitchingChannel = actionLoading === `activate-channel-${channel.id}`;
   const isDeletingChannel = actionLoading === `delete-channel-${channel.id}`;
+  const isTogglingChannelFailover = actionLoading === `toggle-channel-failover-${channel.id}`;
+  const channelActivationDisabled = channelFailoverEnabled && channel.failoverEnabled === false;
   const endpoints = channel.endpoints || [];
   const credentialGroups = channel.credentialGroups || [];
   const defaultCredentialGroup = getDefaultCredentialGroup(channel);
@@ -2394,6 +2467,9 @@ const ChannelCard = ({
       <div className="flex items-center justify-between gap-3 px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <h3 className="truncate text-sm font-semibold tracking-tight text-slate-900">{channel.name}</h3>
+          {!channel.isActive && channelFailoverEnabled && (
+            <span className="inline-flex h-[18px] min-w-[30px] flex-shrink-0 items-center justify-center rounded bg-slate-100 px-1.5 text-[10px] font-medium leading-none text-slate-500">P{channel.priority ?? 0}</span>
+          )}
           {channel.isActive && (
             isActiveChannelInterrupted ? (
               <Tooltip content="当前 Codex 接管渠道的可用端点已全部异常，请检查端点或切换渠道" className="flex-shrink-0">
@@ -2420,19 +2496,29 @@ const ChannelCard = ({
               </span>
             )
           )}
+          {channel.isActive && channelFailoverEnabled && (
+            <span className="inline-flex h-[18px] min-w-[30px] flex-shrink-0 items-center justify-center rounded bg-slate-100 px-1.5 text-[10px] font-medium leading-none text-slate-500">P{channel.priority ?? 0}</span>
+          )}
         </div>
 
         <div className="flex flex-shrink-0 items-center gap-0.5">
           {!channel.isActive && (
-            <Tooltip content="设为当前接管渠道">
+            <Tooltip content={channelActivationDisabled ? '请先恢复此渠道，使其重新参与渠道间转移' : '设为当前接管渠道'}>
               <button
                 type="button"
                 onClick={() => onActivateChannel?.(channel)}
-                disabled={isSwitchingChannel}
+                disabled={isSwitchingChannel || channelActivationDisabled}
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-indigo-600 transition-colors duration-150 hover:bg-indigo-50 disabled:opacity-50"
               >
                 {isSwitchingChannel ? <Loader2 size={12} className="animate-spin" /> : <ArrowRightLeft size={12} />}
                 设为当前
+              </button>
+            </Tooltip>
+          )}
+          {channelFailoverEnabled && (
+            <Tooltip content={channel.failoverEnabled !== false ? '暂停此渠道，使其不参与渠道间转移' : '恢复此渠道，使其重新参与渠道间转移'}>
+              <button type="button" onClick={() => onToggleChannelFailover?.(channel, channel.failoverEnabled === false)} disabled={isTogglingChannelFailover} className={`inline-flex size-[26px] flex-shrink-0 items-center justify-center rounded-md transition-colors disabled:cursor-wait disabled:text-indigo-400 disabled:opacity-70 ${channel.failoverEnabled !== false ? 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100' : 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600'}`}>
+                {isTogglingChannelFailover ? <Loader2 size={14} className="animate-spin" /> : channel.failoverEnabled !== false ? <Route size={14} /> : <RouteOff size={14} />}
               </button>
             </Tooltip>
           )}
@@ -2495,7 +2581,7 @@ const ChannelCard = ({
           </>
         )}
         <span className="flex-shrink-0 text-slate-300">·</span>
-        <span className="inline-flex min-w-0 flex-1 items-center gap-1 text-slate-500">
+        <span className="inline-flex min-w-0 flex-shrink items-center gap-1 text-slate-500">
           <KeyRound size={11} className="flex-shrink-0 text-slate-400" />
           <span className="truncate">{defaultCredentialGroup?.name || (fallbackApiKeyMasked ? '旧渠道 Key' : '未配置分组')}</span>
           {extraCredentialGroupCount > 0 && (
@@ -2504,6 +2590,12 @@ const ChannelCard = ({
             </span>
           )}
         </span>
+        {channelFailoverEnabled && channel.failoverEnabled === false && (
+          <>
+            <span className="flex-shrink-0 text-slate-300">·</span>
+            <span className="inline-flex h-[18px] flex-shrink-0 items-center rounded bg-amber-50 px-1.5 text-[10px] font-medium leading-none text-amber-700">已暂停</span>
+          </>
+        )}
       </div>
 
       {/* 凭证分组 */}
@@ -2637,16 +2729,16 @@ const ChannelCard = ({
                 type="button"
                 onClick={() => onSetGroupEndpointFailover?.(groupFailoverActionTargets, shouldEnableGroupFailover, groupFailoverActionKey)}
                 disabled={groupFailoverActionLoading || groupFailoverActionDisabled}
-                className={`inline-flex size-5 flex-shrink-0 items-center justify-center rounded-md transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                className={`${ENDPOINT_STATE_BUTTON_CLASS} disabled:cursor-not-allowed ${
                   shouldEnableGroupFailover
-                    ? 'text-emerald-600 hover:bg-emerald-50'
-                    : 'text-indigo-600 hover:bg-indigo-50'
+                    ? 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600'
+                    : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
                 }`}
-                aria-label={shouldEnableGroupFailover ? '当前分组全部参与转移' : '当前分组全部不参与转移'}
+                aria-label={shouldEnableGroupFailover ? '当前分组存在不参与转移的端点' : '当前分组端点全部参与转移'}
               >
                 {groupFailoverActionLoading ? (
                   <Loader2 size={12} className="animate-spin" />
-                ) : shouldEnableGroupFailover ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
+                ) : shouldEnableGroupFailover ? <RepeatOffIcon size={12} /> : <Repeat size={12} />}
               </button>
             </Tooltip>
             <Tooltip content={groupHealthActionTip}>
@@ -2654,16 +2746,16 @@ const ChannelCard = ({
                 type="button"
                 onClick={() => onSetGroupEndpointSkipHealthCheck?.(groupHealthActionTargets, shouldSkipGroupHealthCheck, groupHealthActionKey)}
                 disabled={groupHealthActionLoading || groupHealthActionDisabled}
-                className={`rounded-md p-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:text-slate-300 disabled:opacity-60 ${
+                className={`${ENDPOINT_STATE_BUTTON_CLASS} disabled:cursor-not-allowed ${
                   shouldSkipGroupHealthCheck
-                    ? 'text-purple-600 hover:bg-purple-50'
-                    : 'text-emerald-600 hover:bg-emerald-50'
+                    ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                    : 'text-slate-400 hover:bg-slate-100 hover:text-emerald-600'
                 }`}
-                aria-label={shouldSkipGroupHealthCheck ? '当前分组全部跳过检测' : '当前分组全部恢复检测'}
+                aria-label={shouldSkipGroupHealthCheck ? '当前分组存在正常检测的端点' : '当前分组端点全部跳过检测'}
               >
                 {groupHealthActionLoading ? (
                   <Loader2 size={12} className="animate-spin" />
-                ) : shouldSkipGroupHealthCheck ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}
+                ) : shouldSkipGroupHealthCheck ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
               </button>
             </Tooltip>
             <button
@@ -2689,6 +2781,7 @@ const ChannelCard = ({
                 endpoint={endpoint}
                 credentialGroup={getCredentialGroupForEndpoint(endpoint)}
                 suspendedCount={activeSuspendedCount}
+                channelPaused={channelFailoverEnabled && channel.failoverEnabled === false}
                 canDisableFailover={
                   !(endpoint.isActive && endpoint.failoverEnabled !== false) ||
                   endpoints.some((candidate) => candidate.id !== endpoint.id && candidate.failoverEnabled !== false)
@@ -2715,13 +2808,13 @@ const ChannelCard = ({
 const CodexPage = () => {
   const toast = useToast();
   const [channels, setChannels] = useState([]);
-  const [storageStatus, setStorageStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState('');
   const [error, setError] = useState('');
   const [lastUpdate, setLastUpdate] = useState('');
   // Codex 挂起请求数（>0 时触发渠道卡片/端点 toggle 的 amber 警示色）
   const [suspendedCount, setSuspendedCount] = useState(0);
+  const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(false);
   // Codex 全局配置弹窗
   const [showGlobalConfig, setShowGlobalConfig] = useState(false);
   // Codex 全局配置（来自 ~/.codex/config.toml，所有渠道共用）
@@ -2755,6 +2848,7 @@ const CodexPage = () => {
   const [editingChannel, setEditingChannel] = useState(null);
   const [channelFormError, setChannelFormError] = useState('');
   const [deleteChannelTarget, setDeleteChannelTarget] = useState(null);
+  const [activeChannelPauseTarget, setActiveChannelPauseTarget] = useState(null);
 
   // 凭证分组弹窗
   const [showCredentialGroupForm, setShowCredentialGroupForm] = useState(false);
@@ -2775,7 +2869,6 @@ const CodexPage = () => {
   const [endpointDetailTarget, setEndpointDetailTarget] = useState(null);
 
   const activeChannel = channels.find((channel) => channel.isActive) || null;
-  const activeEndpoint = activeChannel?.endpoints?.find((ep) => ep.isActive) || null;
   const selectedEndpointDetail = endpointDetailTarget ? (() => {
     const latestChannel = channels.find((channel) => channel.id === endpointDetailTarget.channelOwner?.id) ||
       endpointDetailTarget.channelOwner;
@@ -2783,58 +2876,129 @@ const CodexPage = () => {
       endpointDetailTarget.endpoint;
     return { channelOwner: latestChannel, endpoint: latestEndpoint };
   })() : null;
-  const currentCodexModel = globalConfig.effective_model || globalConfig.model || '未设置';
-
-  const overviewCards = [
+  const allEndpoints = channels.flatMap((channel) =>
+    (channel.endpoints || []).map((endpoint) => ({ channel, endpoint }))
+  );
+  const endpointInScope = ({ channel, endpoint }) => {
+    if (endpoint.failoverEnabled === false) return false;
+    return channelFailoverEnabled ? channel.failoverEnabled !== false : channel.isActive;
+  };
+  const scopedEndpoints = allEndpoints.filter(endpointInScope);
+  const endpointHealthState = ({ endpoint }) => endpoint.healthState || endpoint.health_state || 'unchecked';
+  const skippedEndpointCount = scopedEndpoints.filter((item) => endpointHealthState(item) === 'skipped').length;
+  const healthyEndpointCount = scopedEndpoints.filter((item) => {
+    const state = endpointHealthState(item);
+    return state === 'healthy' || state === 'skipped';
+  }).length;
+  const unhealthyEndpointCount = scopedEndpoints.filter((item) => endpointHealthState(item) === 'unhealthy').length;
+  const uncheckedEndpointCount = allEndpoints.filter((item) => {
+    if (!endpointInScope(item)) return true;
+    const state = endpointHealthState(item);
+    return state === 'unchecked' || state === 'inactive' || state === 'excluded';
+  }).length;
+  const participatingChannelCount = channels.filter((channel) => channel.failoverEnabled !== false).length;
+  const activeChannelEndpoints = activeChannel?.endpoints || [];
+  const activeChannelCredentialGroupCount = activeChannel?.credentialGroups?.length || 0;
+  const failoverOverviewCards = [
     {
-      title: '当前接管',
-      value: activeChannel?.name || '未设置',
-      subText: activeChannel ? '已接管 config.toml / auth.json' : '请选择一个渠道设为当前',
+      title: '参与端点',
+      value: String(scopedEndpoints.length),
+      subText: `端点总数 ${allEndpoints.length} 个`,
+      icon: Server,
+      statusColor: 'bg-indigo-50 text-indigo-600'
+    },
+    {
+      title: '健康端点',
+      value: String(healthyEndpointCount),
+      subText: '当前通过健康检测',
       icon: CheckCircle2,
       statusColor: 'bg-emerald-50 text-emerald-600'
     },
     {
-      title: '当前模型',
-      value: currentCodexModel,
-      subText: globalConfig.effective_enable_1m_context ? '已启用 1M 上下文' : '客户端可按会话覆盖',
-      icon: ShieldCheck,
+      title: '跳过检测',
+      value: String(skippedEndpointCount),
+      subText: '已标记跳过健康检查',
+      icon: ShieldOff,
+      statusColor: 'bg-violet-50 text-violet-600'
+    },
+    {
+      title: '异常端点',
+      value: String(unhealthyEndpointCount),
+      subText: '当前判定异常',
+      icon: XCircle,
+      statusColor: 'bg-rose-50 text-rose-600'
+    },
+    {
+      title: '未参与端点',
+      value: String(uncheckedEndpointCount),
+      subText: '未纳入当前检测范围',
+      icon: ShieldOff,
+      statusColor: 'bg-slate-100 text-slate-500'
+    },
+    {
+      title: '参与渠道',
+      value: String(participatingChannelCount),
+      subText: `总渠道 ${channels.length} 个`,
+      icon: ArrowRightLeft,
+      statusColor: 'bg-slate-100 text-slate-700'
+    }
+  ];
+  const activeChannelOverviewCards = [
+    {
+      title: '凭证分组',
+      value: String(activeChannelCredentialGroupCount),
+      subText: activeChannel ? `当前渠道 ${activeChannel.name}` : '暂无活跃渠道',
+      icon: KeyRound,
       statusColor: 'bg-sky-50 text-sky-600'
     },
     {
-      title: '当前端点',
-      value: activeEndpoint ? (activeEndpoint.name || '未命名端点') : '未激活',
-      subText: activeEndpoint
-        ? summarizeEndpoint(activeEndpoint.baseURL)
-        : '请激活一个端点以接管 base_url',
-      icon: Globe,
+      title: '参与端点',
+      value: String(scopedEndpoints.length),
+      subText: '当前活跃渠道参与路由',
+      icon: Server,
       statusColor: 'bg-indigo-50 text-indigo-600'
     },
     {
-      title: '已保存渠道',
-      value: String(storageStatus?.totalCount ?? channels.length),
-      subText: '数据库中维护的渠道数量',
-      icon: Database,
-      statusColor: 'bg-slate-100 text-slate-600'
+      title: '健康端点',
+      value: String(healthyEndpointCount),
+      subText: '当前活跃渠道通过检测',
+      icon: CheckCircle2,
+      statusColor: 'bg-emerald-50 text-emerald-600'
     },
     {
-      title: '存储状态',
-      value: storageStatus?.enabled ? 'SQLite' : 'Pending',
-      subText: lastUpdate ? `更新于 ${lastUpdate}` : '等待首次同步',
-      icon: Server,
-      statusColor: 'bg-amber-50 text-amber-600'
+      title: '跳过检测',
+      value: String(skippedEndpointCount),
+      subText: '当前活跃渠道跳过检测',
+      icon: ShieldOff,
+      statusColor: 'bg-violet-50 text-violet-600'
+    },
+    {
+      title: '异常端点',
+      value: String(unhealthyEndpointCount),
+      subText: '当前活跃渠道判定异常',
+      icon: XCircle,
+      statusColor: 'bg-rose-50 text-rose-600'
+    },
+    {
+      title: '总端点',
+      value: String(activeChannelEndpoints.length),
+      subText: '当前活跃渠道全部端点',
+      icon: Database,
+      statusColor: 'bg-slate-100 text-slate-700'
     }
   ];
+  const overviewCards = channelFailoverEnabled ? failoverOverviewCards : activeChannelOverviewCards;
 
   const fetchData = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
     setError('');
     try {
-      const [list, status] = await Promise.all([
+      const [list, failoverSettings] = await Promise.all([
         getCodexChannels(),
-        getCodexProviderStorageStatus().catch(() => null)
+        getSettingsByScope('codex', 'failover').catch(() => [])
       ]);
       setChannels(list);
-      if (status) setStorageStatus(status);
+      setChannelFailoverEnabled((failoverSettings || []).find((setting) => setting.key === 'enabled')?.value === 'true');
       setLastUpdate(new Date().toLocaleTimeString());
     } catch (err) {
       setError(getErrorMessage(err, '加载 Codex 渠道失败'));
@@ -2871,12 +3035,55 @@ const CodexPage = () => {
   // ===== 渠道动作 =====
   const handleActivateChannel = async (channel) => {
     if (channel.isActive) return;
+    if (channelFailoverEnabled && channel.failoverEnabled === false) {
+      toast.error('请先恢复此渠道，使其重新参与渠道间转移', '无法设为当前');
+      return;
+    }
     setActionLoading(`activate-channel-${channel.id}`);
     try {
       await activateCodexChannel(channel.id);
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '切换渠道失败'));
+      toast.error(getErrorMessage(err, '切换渠道失败'), '切换失败');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleToggleChannelFailover = async (channel, enabled) => {
+    if (channel.isActive && !enabled) {
+      setActionLoading(`prepare-channel-pause-${channel.id}`);
+      try {
+        const nextChannel = await getNextAvailableCodexChannel(channel.id);
+        setActiveChannelPauseTarget({ channel, nextChannel });
+      } catch (err) {
+        toast.error(getFailoverToggleErrorMessage(err, '没有其他可用于接管的 Codex 渠道'), '无法暂停');
+      } finally {
+        setActionLoading('');
+      }
+      return;
+    }
+    setActionLoading(`toggle-channel-failover-${channel.id}`);
+    try {
+      await setCodexChannelFailoverEnabled(channel.id, enabled);
+      await fetchData({ silent: true });
+    } catch (err) {
+      toast.error(getFailoverToggleErrorMessage(err, '更新渠道故障转移状态失败'), '操作失败');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleConfirmActiveChannelPause = async () => {
+    const channel = activeChannelPauseTarget?.channel;
+    if (!channel) return;
+    setActionLoading(`toggle-channel-failover-${channel.id}`);
+    try {
+      await setCodexChannelFailoverEnabled(channel.id, false);
+      setActiveChannelPauseTarget(null);
+      await fetchData({ silent: true });
+    } catch (err) {
+      toast.error(getFailoverToggleErrorMessage(err, '暂停当前接管渠道失败'), '操作失败');
     } finally {
       setActionLoading('');
     }
@@ -2936,7 +3143,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       closeChannelForm();
     } catch (err) {
-      setChannelFormError(getErrorMessage(err, '保存渠道失败'));
+      toast.error(getFailoverToggleErrorMessage(err, '保存渠道失败'), '保存失败');
     } finally {
       setActionLoading('');
     }
@@ -3282,7 +3489,7 @@ const CodexPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {overviewCards.map((card) => (
           <KPICard
             key={card.title}
@@ -3327,7 +3534,9 @@ const CodexPage = () => {
               actionLoading={actionLoading}
               suspendedCount={suspendedCount}
               globalConfig={globalConfig}
+              channelFailoverEnabled={channelFailoverEnabled}
               onActivateChannel={handleActivateChannel}
+              onToggleChannelFailover={handleToggleChannelFailover}
               onEditChannel={openEditChannelForm}
               onDeleteChannel={(c) => setDeleteChannelTarget(c)}
               onAddCredentialGroup={openCreateCredentialGroupForm}
@@ -3358,6 +3567,7 @@ const CodexPage = () => {
         <ChannelFormModal
           mode={channelFormMode}
           channel={editingChannel}
+          channelFailoverEnabled={channelFailoverEnabled}
           loading={actionLoading === 'create-channel' || actionLoading === 'update-channel'}
           serverError={channelFormError}
           onCancel={closeChannelForm}
@@ -3424,6 +3634,16 @@ const CodexPage = () => {
           loading={actionLoading === `delete-channel-${deleteChannelTarget.id}`}
           onCancel={() => setDeleteChannelTarget(null)}
           onConfirm={handleDeleteChannel}
+        />
+      )}
+
+      {activeChannelPauseTarget && (
+        <ActiveChannelPauseDialog
+          channelName={activeChannelPauseTarget.channel?.name}
+          nextChannelName={activeChannelPauseTarget.nextChannel?.name}
+          loading={actionLoading === `toggle-channel-failover-${activeChannelPauseTarget.channel?.id}`}
+          onCancel={() => setActiveChannelPauseTarget(null)}
+          onConfirm={handleConfirmActiveChannelPause}
         />
       )}
 

@@ -81,8 +81,6 @@ func (a *App) emitEndpointUpdate() {
 // emitCodexProviderUpdate 发送 Codex Provider 更新到前端
 func (a *App) emitCodexProviderUpdate() {
 	a.mu.RLock()
-	window := a.window
-	running := a.isRunning
 	codexMgr := a.codexEndpointMgr
 	healthCheck := a.codexHealthCheck
 	a.mu.RUnlock()
@@ -101,6 +99,16 @@ func (a *App) emitCodexProviderUpdate() {
 	if healthCheck != nil {
 		healthCheck.CheckNow()
 	}
+
+	a.emitCodexProviderStateUpdate()
+}
+
+// emitCodexProviderStateUpdate 只推送运行时状态，不触发重新加载或健康探测。
+func (a *App) emitCodexProviderStateUpdate() {
+	a.mu.RLock()
+	window := a.window
+	running := a.isRunning
+	a.mu.RUnlock()
 
 	if !running || window == nil {
 		return
@@ -192,4 +200,3 @@ func (a *App) emitNotification(level, title, message string) {
 		"message": message,
 	})
 }
-

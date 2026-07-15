@@ -114,8 +114,8 @@ function LogFilters({
             aria-label={autoScroll ? '已开启自动滚动' : '已关闭自动滚动'}
           >
             <span
-              className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${
-                autoScroll ? 'translate-x-5' : 'translate-x-0.5'
+              className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${
+                autoScroll ? 'translate-x-5' : 'translate-x-0'
               }`}
             />
           </button>

@@ -43,6 +43,7 @@ const maxTurnFingerprintTextBytes = 8192
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
+	configMu       sync.RWMutex
 	manager        *EndpointManager
 	forwarder      *Forwarder
 	streamFwd      *Forwarder
@@ -64,6 +65,13 @@ type Handler struct {
 	turnFailureCacheKey      string
 	turnFailureCacheTouched  time.Time
 	turnFailedCredentialKeys map[credentialGroupRef]struct{}
+}
+
+func (h *Handler) UpdateConfig(retryCfg config.RetryConfig, failoverCfg config.FailoverConfig) {
+	h.configMu.Lock()
+	h.retryCfg = retryCfg
+	h.failoverCfg = failoverCfg
+	h.configMu.Unlock()
 }
 
 func normalizeCodexLogger(logger *slog.Logger) *slog.Logger {
@@ -389,6 +397,8 @@ func hashTurnCacheKey(prefix, value string) string {
 //  2. 中层 endpoint cycle: 按优先级遍历当前轮可用端点
 //  3. 内层 same-endpoint retry: 单端点的瞬时错误指数退避重试（受 retry.* 控制）
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.configMu.RLock()
+	defer h.configMu.RUnlock()
 	startTime := time.Now()
 	requestID := generateRequestID()
 
@@ -399,6 +409,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+	originalBody := append([]byte(nil), body...)
 	turnFailureKey := requestTurnFailureCacheKey(r, body)
 
 	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
@@ -458,33 +469,65 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 outerLoop:
 	for {
+	rounds:
 		for loopRound := 0; loopRound < maxLoops; loopRound++ {
+			triedChannels := make(map[int64]struct{})
 			if loopRound > 0 {
-				// 新一轮：重置端点不健康状态 + 清空已失败名单，让所有端点重新可选
+				// 新一轮始终从最高优先级参与渠道开始，避免重复上一轮的末尾渠道。
 				h.manager.ResetUnhealthy()
 				failedIDs = failedIDs[:0]
+				first, switchErr := h.manager.ActivateNextChannelForFailover(r.Context(), triedChannels)
+				if switchErr != nil {
+					lastErr = switchErr
+					break rounds
+				}
+				triedChannels[first.ID] = struct{}{}
+				channelName = first.Name
+				channelRewrite := rewriteModelWithMappingDetails(originalBody, first.ModelMapping, strings.TrimSpace(first.Model), h.logger, requestID)
+				body = channelRewrite.Body
+				requestModel = h.tokenParser.ParseModelFromBody(body)
 				h.logger.Info("[Codex 循环重试]",
 					"provider", "codex",
 					"request_id", requestID,
 					"round", loopRound+1,
 					"max_loops", maxLoops,
 				)
+			} else if active := h.manager.GetActiveChannel(); active != nil {
+				// 首轮从当前接管渠道开始；挂起恢复后也重新建立本轮状态。
+				triedChannels[active.ID] = struct{}{}
+				channelName = active.Name
+				channelRewrite := rewriteModelWithMappingDetails(originalBody, active.ModelMapping, strings.TrimSpace(active.Model), h.logger, requestID)
+				body = channelRewrite.Body
+				requestModel = h.tokenParser.ParseModelFromBody(body)
 			}
 
-			result := h.tryEndpointCycle(
-				w, r, body, requestID, startTime,
-				isStreaming, channelName, requestModel,
-				&failedIDs, &endpointChain, &attemptCount, turnFailureKey,
-			)
-			if result.completed {
-				// 响应已写给客户端（成功 / 客户端取消 / FailFast）
-				return
+			for {
+				result := h.tryEndpointCycle(
+					w, r, body, requestID, startTime,
+					isStreaming, channelName, requestModel,
+					&failedIDs, &endpointChain, &attemptCount, turnFailureKey,
+				)
+				if result.completed {
+					return
+				}
+				lastErr = result.lastErr
+				lastStatus = result.lastStatus
+				lastSummary = result.lastSummary
+				if !h.failoverCfg.Enabled {
+					break
+				}
+				next, switchErr := h.manager.ActivateNextChannelForFailover(r.Context(), triedChannels)
+				if switchErr != nil {
+					break
+				}
+				triedChannels[next.ID] = struct{}{}
+				channelName = next.Name
+				channelRewrite := rewriteModelWithMappingDetails(originalBody, next.ModelMapping, strings.TrimSpace(next.Model), h.logger, requestID)
+				body = channelRewrite.Body
+				requestModel = h.tokenParser.ParseModelFromBody(body)
+				failedIDs = failedIDs[:0]
+				h.logger.Info("[Codex 渠道间故障转移]", "request_id", requestID, "channel", channelName, "round", loopRound+1)
 			}
-
-			// 端点列表耗尽，保存最后一次失败信息，决定是否再来一轮
-			lastErr = result.lastErr
-			lastStatus = result.lastStatus
-			lastSummary = result.lastSummary
 		}
 
 		// loop_retry 全部耗尽 → 尝试挂起等待运维干预（最多挂起一次）

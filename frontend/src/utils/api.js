@@ -587,7 +587,7 @@ export const fetchTokenUsageData = async (provider = '') => {
     };
   } catch (error) {
     console.error('获取 Token 使用数据失败:', error);
-    return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0, total: 0 };
+    throw error;
   }
 };
 
@@ -603,7 +603,7 @@ export const fetchTokenUsageHeatmapData = async (params = {}) => {
     return [];
   } catch (error) {
     console.error('获取 Token 使用分布数据失败:', error);
-    return [];
+    throw error;
   }
 };
 
@@ -673,7 +673,7 @@ export const fetchEndpointCostsData = async (provider = '') => {
     return [];
   } catch (error) {
     console.error('获取端点成本数据失败:', error);
-    return [];
+    throw error;
   }
 };
 

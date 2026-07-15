@@ -294,6 +294,47 @@ func TestArchiveCodexProvidersUsesStableLegacyTableName(t *testing.T) {
 	}
 }
 
+func TestMigrateCodexProvidersAssignsUniqueZeroBasedChannelPriorities(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexSchemaTestDB(t)
+	app := &App{}
+	if err := app.ensureCodexChannelsSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	createCodexProviderArchiveTestTable(t, db, "codex_providers")
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO codex_providers (name, provider_type, base_url, api_key, model, model_reasoning_effort)
+		VALUES
+			('first', 'openai-compatible', 'https://first.invalid/v1', 'sk-first', 'gpt-5', 'high'),
+			('second', 'openai-compatible', 'https://second.invalid/v1', 'sk-second', 'gpt-5', 'high')
+	`); err != nil {
+		t.Fatalf("insert old providers: %v", err)
+	}
+
+	if err := app.migrateCodexProvidersToChannels(ctx, db, true); err != nil {
+		t.Fatalf("migrate providers: %v", err)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT priority FROM codex_channels ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query priorities: %v", err)
+	}
+	defer rows.Close()
+	var priorities []int
+	for rows.Next() {
+		var priority int
+		if err := rows.Scan(&priority); err != nil {
+			t.Fatalf("scan priority: %v", err)
+		}
+		priorities = append(priorities, priority)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate priorities: %v", err)
+	}
+	if len(priorities) != 2 || priorities[0] != 0 || priorities[1] != 1 {
+		t.Fatalf("expected migrated priorities [0 1], got %v", priorities)
+	}
+}
+
 func TestNormalizeCodexProviderArchiveTablesRemovesDeprecatedArchiveTable(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexSchemaTestDB(t)
@@ -377,6 +418,8 @@ func createLegacyCodexEndpointSchema(t *testing.T, db *sql.DB) {
 			enable_1m_context INTEGER NOT NULL DEFAULT 0,
 			website TEXT,
 			is_active INTEGER NOT NULL DEFAULT 0,
+			priority INTEGER NOT NULL DEFAULT 0,
+			failover_enabled INTEGER NOT NULL DEFAULT 1,
 			created_at DATETIME DEFAULT '',
 			updated_at DATETIME DEFAULT ''
 		)`,

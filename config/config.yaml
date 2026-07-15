@@ -83,7 +83,6 @@ usage_tracking:
   batch_size: 15                        # 批量写入大小，默认: 100
   flush_interval: "5s"                  # 强制刷新间隔，默认: 30s
   max_retry: 5                           # 写入失败最大重试次数，默认: 3
-
 # 代理配置 (可选)
 proxy:
   enabled: false              # 是否启用代理

@@ -15,7 +15,7 @@ import (
 	"ai-relay-forwarder/internal/utils"
 )
 
-// migrateLegacyDatabaseIfNeeded 将旧版本默认库 usage.db 迁移到新版本默认库 usage.db。
+// migrateLegacyDatabaseIfNeeded 将旧的环境专用数据库迁移到统一的 usage.db。
 func (a *App) migrateLegacyDatabaseIfNeeded() {
 	newPath := a.getEffectiveUsageDBPath()
 	if newPath == "" {
@@ -23,29 +23,29 @@ func (a *App) migrateLegacyDatabaseIfNeeded() {
 	}
 
 	defaultNew := filepath.Join(utils.GetDataDir(), "usage.db")
-	defaultOld := filepath.Join(utils.GetDataDir(), "usage.db")
 	if filepath.Clean(newPath) != filepath.Clean(defaultNew) {
 		return
 	}
 
-	legacyCandidates := []string{}
+	legacyCandidates := []string{
+		filepath.Join(utils.GetDataDir(), "usage-dev.db"),
+		filepath.Join(utils.GetDataDir(), "usage-v2.db"),
+	}
 
 	// 兼容旧版本/调试环境可能使用的相对路径（例如安装目录/data/*.db 或运行目录/data/*.db）
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		legacyCandidates = append(legacyCandidates,
-			filepath.Join(exeDir, "data", "usage.db"),
-			filepath.Join(exeDir, "data", "usage.db"),
+			filepath.Join(exeDir, "data", "usage-dev.db"),
+			filepath.Join(exeDir, "data", "usage-v2.db"),
 		)
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		legacyCandidates = append(legacyCandidates,
-			filepath.Join(cwd, "data", "usage.db"),
-			filepath.Join(cwd, "data", "usage.db"),
+			filepath.Join(cwd, "data", "usage-dev.db"),
+			filepath.Join(cwd, "data", "usage-v2.db"),
 		)
 	}
-	// 兼容更老版本：用户目录下的 usage.db
-	legacyCandidates = append(legacyCandidates, defaultOld)
 
 	existingLegacy := make([]string, 0, len(legacyCandidates))
 	seen := make(map[string]struct{}, len(legacyCandidates))
@@ -105,7 +105,7 @@ func (a *App) migrateLegacyDatabaseIfNeeded() {
 		}
 
 		a.logger.Info("✅ 旧数据迁移完成", "old", bestLegacy, "new", defaultNew)
-		a.emitNotification("success", "旧数据已迁移", "已将旧版本数据库迁移到新数据库文件（避免新旧版本冲突）。")
+		a.emitNotification("success", "旧数据已迁移", "已将旧的环境专用数据库迁移到统一的 usage.db。")
 		return
 	}
 

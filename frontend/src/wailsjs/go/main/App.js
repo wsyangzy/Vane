@@ -244,6 +244,10 @@ export function GetSettingsByCategory(arg1) {
   return Call.ByName("main.App.GetSettingsByCategory", arg1);
 }
 
+export function GetSettingsByScope(arg1) {
+  return Call.ByName("main.App.GetSettingsByScope", arg1);
+}
+
 export function GetSettingsStorageStatus() {
   return Call.ByName("main.App.GetSettingsStorageStatus");
 }
@@ -296,6 +300,10 @@ export function OpenCodexConfigDir() {
   return Call.ByName("main.App.OpenCodexConfigDir");
 }
 
+export function OpenDataDir() {
+  return Call.ByName("main.App.OpenDataDir");
+}
+
 export function OpenLogDir() {
   return Call.ByName("main.App.OpenLogDir");
 }
@@ -314,6 +322,10 @@ export function RequestQuit() {
 
 export function ResetCategorySettings(arg1) {
   return Call.ByName("main.App.ResetCategorySettings", arg1);
+}
+
+export function ResetSettingsByScope(arg1) {
+  return Call.ByName("main.App.ResetSettingsByScope", arg1);
 }
 
 export function ResolvePortConflict(arg1) {
@@ -436,6 +448,10 @@ export function CreateCodexChannel(arg1) {
 
 export function UpdateCodexChannelByID(arg1, arg2) {
   return Call.ByName("main.App.UpdateCodexChannelByID", arg1, arg2);
+}
+
+export function SetCodexChannelFailoverEnabled(arg1, arg2) {
+  return Call.ByName("main.App.SetCodexChannelFailoverEnabled", arg1, arg2);
 }
 
 export function DeleteCodexChannelByID(arg1) {

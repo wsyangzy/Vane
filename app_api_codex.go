@@ -79,10 +79,17 @@ type CodexChannelInfo struct {
 	Enable1MContext  bool                       `json:"enable_1m_context"`
 	Website          string                     `json:"website"`
 	IsActive         bool                       `json:"is_active"`
+	Priority         int                        `json:"priority"`
+	FailoverEnabled  bool                       `json:"failover_enabled"`
 	CredentialGroups []CodexCredentialGroupInfo `json:"credential_groups"`
 	Endpoints        []CodexEndpointInfo        `json:"endpoints"`
 	CreatedAt        string                     `json:"created_at"`
 	UpdatedAt        string                     `json:"updated_at"`
+}
+
+type CodexChannelCandidateInfo struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 // CodexCredentialGroupInfo 提供给前端展示的凭证分组信息。
@@ -159,6 +166,8 @@ type CreateCodexChannelInput struct {
 	ReasoningEffort string            `json:"model_reasoning_effort"`
 	Enable1MContext bool              `json:"enable_1m_context"`
 	Website         string            `json:"website"`
+	Priority        int               `json:"priority"`
+	FailoverEnabled *bool             `json:"failover_enabled"`
 }
 
 type UpdateCodexChannelInput struct {
@@ -170,6 +179,8 @@ type UpdateCodexChannelInput struct {
 	ReasoningEffort string            `json:"model_reasoning_effort"`
 	Enable1MContext bool              `json:"enable_1m_context"`
 	Website         string            `json:"website"`
+	Priority        int               `json:"priority"`
+	FailoverEnabled *bool             `json:"failover_enabled"`
 }
 
 type CreateCodexCredentialGroupInput struct {
@@ -322,6 +333,23 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 	return result, nil
 }
 
+func (a *App) GetNextAvailableCodexChannel(excludeID int64) (CodexChannelCandidateInfo, error) {
+	a.ensureCodexProviderService()
+	a.mu.RLock()
+	channelService := a.codexChannelService
+	a.mu.RUnlock()
+	if channelService == nil {
+		return CodexChannelCandidateInfo{}, fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	next, err := channelService.GetNextFailoverChannel(ctx, excludeID)
+	if err != nil {
+		return CodexChannelCandidateInfo{}, err
+	}
+	return CodexChannelCandidateInfo{ID: next.ID, Name: next.Name}, nil
+}
+
 func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 	a.ensureCodexProviderService()
 
@@ -336,6 +364,8 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 
 	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model, input.ModelMapping,
 		input.ReasoningEffort, input.Website, input.Enable1MContext)
+	record.Priority = input.Priority
+	record.FailoverEnabled = input.FailoverEnabled == nil || *input.FailoverEnabled
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -383,6 +413,12 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 	if previous == nil {
 		return fmt.Errorf("Codex 渠道不存在: %d", id)
 	}
+	record.Priority = input.Priority
+	if input.FailoverEnabled == nil {
+		record.FailoverEnabled = previous.FailoverEnabled
+	} else {
+		record.FailoverEnabled = *input.FailoverEnabled
+	}
 
 	if err := channelService.UpdateChannelByID(ctx, id, record); err != nil {
 		return fmt.Errorf("更新 Codex 渠道失败: %w", err)
@@ -421,6 +457,81 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 		logger.Info("✅ Codex 渠道已更新", "id", id, "name", record.Name)
 	}
 	a.emitCodexProviderUpdate()
+	return nil
+}
+
+// SetCodexChannelFailoverEnabled 只更新渠道是否参与渠道间故障转移。
+func (a *App) SetCodexChannelFailoverEnabled(id int64, enabled bool) error {
+	a.ensureCodexProviderService()
+	a.mu.RLock()
+	channelService := a.codexChannelService
+	endpointService := a.codexEndpointService
+	logger := a.logger
+	a.mu.RUnlock()
+	if channelService == nil || endpointService == nil {
+		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
+	}
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	target, err := channelService.GetChannelByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取 Codex 渠道失败: %w", err)
+	}
+	if target == nil {
+		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	if enabled || !target.IsActive {
+		if err := channelService.SetFailoverEnabled(ctx, id, enabled); err != nil {
+			return fmt.Errorf("更新 Codex 渠道故障转移状态失败: %w", err)
+		}
+		a.emitCodexProviderUpdate()
+		return nil
+	}
+
+	next, err := channelService.GetNextFailoverChannel(ctx, id)
+	if err != nil {
+		return fmt.Errorf("暂停当前接管渠道失败: %w", err)
+	}
+	nextEndpoint, err := channelService.EnsureActiveEndpoint(ctx, next.ID, true)
+	if err != nil {
+		return fmt.Errorf("准备后续 Codex 渠道端点失败: %w", err)
+	}
+	if nextEndpoint == nil {
+		return fmt.Errorf("暂停当前接管渠道失败: 候选渠道 '%s' 没有参与故障转移的端点", next.Name)
+	}
+	previousEndpoint, _ := endpointService.GetActiveByChannelID(ctx, target.ID)
+	rollback := func(cause error) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		_ = channelService.SetFailoverEnabled(rollbackCtx, target.ID, true)
+		_ = channelService.ActivateChannel(rollbackCtx, target.ID, false)
+		_ = a.reloadCodexEndpointManager()
+		if previousEndpoint != nil {
+			_ = a.syncActiveCodexChannelToConfig(target, previousEndpoint, next.Name)
+		}
+		return cause
+	}
+
+	if err := channelService.ActivateChannel(ctx, next.ID, true); err != nil {
+		return fmt.Errorf("切换到后续 Codex 渠道失败: %w", err)
+	}
+	if err := channelService.SetFailoverEnabled(ctx, target.ID, false); err != nil {
+		return rollback(fmt.Errorf("暂停原 Codex 渠道失败: %w", err))
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return rollback(fmt.Errorf("切换 Codex 运行时渠道失败: %w", err))
+	}
+	if err := a.syncActiveCodexChannelToConfig(next, nextEndpoint, target.Name); err != nil {
+		return rollback(fmt.Errorf("切换 Codex 配置接管失败: %w", err))
+	}
+	if logger != nil {
+		logger.Info("Codex 活跃渠道已暂停并自动切换", "paused_channel", target.Name, "active_channel", next.Name)
+	}
+	a.emitCodexProviderUpdate()
+	a.broadcastCodexRecovery()
 	return nil
 }
 
@@ -484,6 +595,7 @@ func (a *App) ActivateCodexChannel(id int64) error {
 	channelService := a.codexChannelService
 	endpointService := a.codexEndpointService
 	logger := a.logger
+	requireFailoverEnabled := a.config != nil && a.config.CodexFailover.Enabled
 	a.mu.RUnlock()
 	if channelService == nil || endpointService == nil {
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
@@ -502,7 +614,7 @@ func (a *App) ActivateCodexChannel(id int64) error {
 
 	activated := previousActive
 	if previousActive == nil || previousActive.ID != id {
-		if err := channelService.ActivateChannel(ctx, id); err != nil {
+		if err := channelService.ActivateChannel(ctx, id, requireFailoverEnabled); err != nil {
 			return fmt.Errorf("切换 Codex 渠道失败: %w", err)
 		}
 
@@ -514,10 +626,19 @@ func (a *App) ActivateCodexChannel(id int64) error {
 	if activated == nil {
 		return fmt.Errorf("激活后的渠道不存在: %d", id)
 	}
+	if requireFailoverEnabled && !activated.FailoverEnabled {
+		return fmt.Errorf("切换 Codex 渠道失败: 渠道 '%s' 已暂停，请先恢复渠道间故障转移", activated.Name)
+	}
 
-	endpoint, err := channelService.EnsureActiveEndpoint(ctx, activated.ID)
+	endpoint, err := channelService.EnsureActiveEndpoint(ctx, activated.ID, requireFailoverEnabled)
 	if err != nil {
 		return fmt.Errorf("确保激活端点失败: %w", err)
+	}
+	if endpoint == nil && requireFailoverEnabled {
+		if previousActive != nil && previousActive.ID != id {
+			_ = channelService.ActivateChannel(ctx, previousActive.ID, false)
+		}
+		return fmt.Errorf("切换 Codex 渠道失败: 渠道 '%s' 没有参与故障转移的端点", activated.Name)
 	}
 	if endpoint == nil {
 		// 渠道下没有任何端点，仍允许激活但提示用户
@@ -533,13 +654,27 @@ func (a *App) ActivateCodexChannel(id int64) error {
 		previousName = previousActive.Name
 	}
 
-	if err := a.syncActiveCodexChannelToConfig(activated, endpoint, previousName); err != nil {
+	previousEndpoint := (*codexstore.CodexEndpointRecord)(nil)
+	if previousActive != nil && previousActive.ID != id {
+		previousEndpoint, _ = endpointService.GetActiveByChannelID(ctx, previousActive.ID)
+	}
+	rollback := func(cause error) error {
 		if previousActive != nil && previousActive.ID != id {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer rollbackCancel()
-			_ = channelService.ActivateChannel(rollbackCtx, previousActive.ID)
+			_ = channelService.ActivateChannel(rollbackCtx, previousActive.ID, false)
+			_ = a.reloadCodexEndpointManager()
+			if previousEndpoint != nil {
+				_ = a.syncActiveCodexChannelToConfig(previousActive, previousEndpoint, activated.Name)
+			}
 		}
-		return fmt.Errorf("切换 Codex 渠道失败: 配置接管未生效: %w", err)
+		return cause
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return rollback(fmt.Errorf("切换 Codex 渠道失败: 运行时未生效: %w", err))
+	}
+	if err := a.syncActiveCodexChannelToConfig(activated, endpoint, previousName); err != nil {
+		return rollback(fmt.Errorf("切换 Codex 渠道失败: 配置接管未生效: %w", err))
 	}
 
 	if logger != nil {
@@ -549,6 +684,16 @@ func (a *App) ActivateCodexChannel(id int64) error {
 	// 唤醒所有挂起请求（运维通过 UI 切换渠道 = 恢复信号）
 	a.broadcastCodexRecovery()
 	return nil
+}
+
+func (a *App) reloadCodexEndpointManager() error {
+	a.mu.RLock()
+	manager := a.codexEndpointMgr
+	a.mu.RUnlock()
+	if manager == nil {
+		return nil
+	}
+	return manager.Reload()
 }
 
 // ============================================================================
@@ -1204,6 +1349,8 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 		Enable1MContext: record.Enable1MContext,
 		Website:         record.Website,
 		IsActive:        record.IsActive,
+		Priority:        record.Priority,
+		FailoverEnabled: record.FailoverEnabled,
 		Endpoints:       make([]CodexEndpointInfo, 0, len(endpoints)),
 	}
 	info.CredentialGroups = make([]CodexCredentialGroupInfo, 0, len(credentialGroups))
@@ -1213,8 +1360,9 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 		groupNames[group.ID] = group.Name
 	}
 
+	channelFailoverEnabled := a.config != nil && a.config.CodexFailover.Enabled
 	for _, ep := range endpoints {
-		healthy, healthState, healthInScope, responseTimeMS := codexEndpointRuntimeHealth(record, ep, endpointMgr, activeChannelID, latencies)
+		healthy, healthState, healthInScope, responseTimeMS := codexEndpointRuntimeHealth(record, ep, endpointMgr, activeChannelID, channelFailoverEnabled, latencies)
 		lastFailCode := 0
 		lastFailReason := ""
 		if endpointMgr != nil && healthInScope {
@@ -1262,12 +1410,17 @@ func codexEndpointRuntimeHealth(
 	endpoint *codexstore.CodexEndpointRecord,
 	manager *codexproxy.EndpointManager,
 	activeChannelID int64,
+	channelFailoverEnabled bool,
 	latencies map[int64]int64,
 ) (healthy bool, healthState string, healthInScope bool, responseTimeMS int64) {
 	if channel == nil || endpoint == nil {
 		return false, "unchecked", false, 0
 	}
-	if !channel.IsActive || (manager != nil && activeChannelID != channel.ID) {
+	channelInScope := channel.IsActive
+	if channelFailoverEnabled {
+		channelInScope = channel.FailoverEnabled
+	}
+	if !channelInScope || (!channelFailoverEnabled && manager != nil && activeChannelID != channel.ID) {
 		return false, "inactive", false, 0
 	}
 	if !endpoint.FailoverEnabled {

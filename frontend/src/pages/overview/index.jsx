@@ -4,7 +4,7 @@
 // ============================================
 
 import { LayoutDashboard } from 'lucide-react';
-import { LoadingSpinner, ErrorMessage } from '@components/ui';
+import { LoadingSpinner } from '@components/ui';
 import useOverviewData from '@hooks/useOverviewData.js';
 
 // 子组件
@@ -22,18 +22,8 @@ import ConnectionActivityChart from './components/ConnectionActivityChart.jsx';
 // ============================================
 
 const OverviewPage = () => {
-  const { data, refresh, isInitialized } = useOverviewData();
+  const { data, isInitialized } = useOverviewData();
   const uptimeSeconds = data?.status?.uptime_seconds || 0;
-
-  if (data.error) {
-    return (
-      <ErrorMessage
-        title="数据加载失败"
-        message={data.error}
-        onRetry={refresh}
-      />
-    );
-  }
 
   if (data.loading && !isInitialized) {
     return <LoadingSpinner text="加载监控数据..." />;

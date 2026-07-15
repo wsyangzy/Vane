@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, RefreshCw, X } from 'lucide-react';
-import { Tooltip } from '@components/ui';
+import { Tooltip, useToast } from '@components/ui';
 import { fetchTokenUsageHeatmapData } from '@utils/api.js';
 
 const HEAT_LEVELS = [
@@ -114,6 +114,7 @@ const TokenUsageHeatmapPanel = ({ isOpen, onClose, queryParams = {} }) => {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const toast = useToast();
   const queryKey = useMemo(() => JSON.stringify(queryParams || {}), [queryParams]);
 
   const loadData = useCallback(async (showRefreshing = false) => {
@@ -127,12 +128,12 @@ const TokenUsageHeatmapPanel = ({ isOpen, onClose, queryParams = {} }) => {
       setItems(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('加载 Token 活动分布失败:', error);
-      setItems([]);
+      toast.error(error?.message || 'Token 活动分布加载失败', 'Token 活动分布加载失败');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [queryKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queryKey, toast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!isOpen) return;

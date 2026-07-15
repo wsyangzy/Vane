@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:watch": "node ./scripts/vite-watch.mjs",
     "build": "vite build",
     "lint": "eslint .",
     "type-check": "node ./scripts/type-check.mjs",

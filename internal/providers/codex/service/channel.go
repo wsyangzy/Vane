@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"ai-relay-forwarder/internal/providers/codex/store"
@@ -52,6 +53,29 @@ func (s *CodexChannelService) CreateChannel(ctx context.Context, record *store.C
 	}
 
 	record.IsActive = false
+	channels, err := s.channelStore.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	maxPriority := -1
+	var conflicting *store.CodexChannelRecord
+	for _, channel := range channels {
+		if channel.Priority > maxPriority {
+			maxPriority = channel.Priority
+		}
+		if channel.Priority == record.Priority {
+			conflicting = channel
+		}
+	}
+	if record.Priority < 0 {
+		record.Priority = maxPriority + 1
+	} else if conflicting != nil {
+		moved := *conflicting
+		moved.Priority = maxPriority + 1
+		if err := s.channelStore.UpdateByID(ctx, moved.ID, &moved); err != nil {
+			return nil, fmt.Errorf("Codex 渠道优先级顺延失败: %w", err)
+		}
+	}
 	created, err := s.channelStore.Create(ctx, record)
 	if err != nil {
 		return nil, err
@@ -90,8 +114,44 @@ func (s *CodexChannelService) UpdateChannelByID(ctx context.Context, id int64, r
 	if nameConflict != nil && nameConflict.ID != id {
 		return fmt.Errorf("Codex 渠道 '%s' 已存在", record.Name)
 	}
+	if existing.IsActive && !record.FailoverEnabled {
+		return fmt.Errorf("当前接管渠道不能暂停，请先切换到其他渠道")
+	}
+	if existing.Priority != record.Priority {
+		channels, err := s.channelStore.List(ctx)
+		if err != nil {
+			return err
+		}
+		for _, channel := range channels {
+			if channel.ID != id && channel.Priority == record.Priority {
+				swapped := *channel
+				swapped.Priority = existing.Priority
+				if err := s.channelStore.UpdateByID(ctx, swapped.ID, &swapped); err != nil {
+					return fmt.Errorf("Codex 渠道优先级对调失败: %w", err)
+				}
+				break
+			}
+		}
+	} else if record.FailoverEnabled && !existing.FailoverEnabled {
+		if err := s.validateUniquePriority(ctx, id, record.Priority); err != nil {
+			return err
+		}
+	}
 
 	return s.channelStore.UpdateByID(ctx, id, record)
+}
+
+func (s *CodexChannelService) validateUniquePriority(ctx context.Context, excludeID int64, priority int) error {
+	channels, err := s.channelStore.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, channel := range channels {
+		if channel.ID != excludeID && channel.Priority == priority {
+			return fmt.Errorf("Codex 渠道优先级 P%d 已被渠道 '%s' 使用", priority, channel.Name)
+		}
+	}
+	return nil
 }
 
 // DeleteChannel 删除渠道。若被删除的是当前激活渠道：尝试激活下一个渠道。
@@ -123,7 +183,7 @@ func (s *CodexChannelService) DeleteChannelByID(ctx context.Context, id int64) e
 	return s.channelStore.SetActive(ctx, channels[0].ID)
 }
 
-func (s *CodexChannelService) ActivateChannel(ctx context.Context, id int64) error {
+func (s *CodexChannelService) ActivateChannel(ctx context.Context, id int64, requireFailoverEnabled bool) error {
 	existing, err := s.channelStore.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -131,19 +191,73 @@ func (s *CodexChannelService) ActivateChannel(ctx context.Context, id int64) err
 	if existing == nil {
 		return fmt.Errorf("Codex 渠道不存在: %d", id)
 	}
+	if requireFailoverEnabled && !existing.FailoverEnabled {
+		return fmt.Errorf("Codex 渠道 '%s' 已暂停，请先恢复渠道间故障转移", existing.Name)
+	}
 	return s.channelStore.SetActive(ctx, id)
+}
+
+// GetNextFailoverChannel 返回最高优先级且至少包含一个参与转移端点的候选渠道。
+func (s *CodexChannelService) GetNextFailoverChannel(ctx context.Context, excludeID int64) (*store.CodexChannelRecord, error) {
+	if s.endpointStore == nil {
+		return nil, fmt.Errorf("Codex 端点存储未就绪")
+	}
+	channels, err := s.channelStore.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(channels, func(i, j int) bool {
+		if channels[i].Priority != channels[j].Priority {
+			return channels[i].Priority < channels[j].Priority
+		}
+		return channels[i].ID < channels[j].ID
+	})
+	for _, channel := range channels {
+		if channel == nil || channel.ID == excludeID || !channel.FailoverEnabled {
+			continue
+		}
+		endpoints, err := s.endpointStore.ListByChannelID(ctx, channel.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, endpoint := range endpoints {
+			if endpoint != nil && endpoint.FailoverEnabled {
+				return channel, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("没有可用于接管的 Codex 渠道")
+}
+
+func (s *CodexChannelService) SetFailoverEnabled(ctx context.Context, id int64, enabled bool) error {
+	channel, err := s.channelStore.GetByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if channel == nil {
+		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	if !enabled && channel.IsActive {
+		return fmt.Errorf("当前接管渠道不能暂停，请先切换到其他渠道")
+	}
+	if enabled {
+		if err := s.validateUniquePriority(ctx, id, channel.Priority); err != nil {
+			return err
+		}
+	}
+	return s.channelStore.SetFailoverEnabled(ctx, id, enabled)
 }
 
 // EnsureActiveEndpoint 确保激活渠道下至少有一个激活端点。
 // 若当前激活渠道下没有 is_active=1 的端点：
 //   - 有端点：自动激活创建时间最早的那个
 //   - 无端点：返回 nil endpoint（调用方需要决定如何处理 config.toml）
-func (s *CodexChannelService) EnsureActiveEndpoint(ctx context.Context, channelID int64) (*store.CodexEndpointRecord, error) {
+func (s *CodexChannelService) EnsureActiveEndpoint(ctx context.Context, channelID int64, requireFailoverEnabled bool) (*store.CodexEndpointRecord, error) {
 	active, err := s.endpointStore.GetActiveByChannelID(ctx, channelID)
 	if err != nil {
 		return nil, err
 	}
-	if active != nil {
+	if active != nil && (!requireFailoverEnabled || active.FailoverEnabled) {
 		return active, nil
 	}
 
@@ -151,16 +265,16 @@ func (s *CodexChannelService) EnsureActiveEndpoint(ctx context.Context, channelI
 	if err != nil {
 		return nil, err
 	}
-	if len(endpoints) == 0 {
-		return nil, nil
+	for _, endpoint := range endpoints {
+		if endpoint == nil || (requireFailoverEnabled && !endpoint.FailoverEnabled) {
+			continue
+		}
+		if err := s.endpointStore.SetActive(ctx, endpoint.ID); err != nil {
+			return nil, err
+		}
+		return s.endpointStore.GetByID(ctx, endpoint.ID)
 	}
-
-	// 选择 ListByChannelID 返回的第一项（按 is_active DESC, created_at ASC 排序，没有激活时取最早）
-	first := endpoints[0]
-	if err := s.endpointStore.SetActive(ctx, first.ID); err != nil {
-		return nil, err
-	}
-	return s.endpointStore.GetByID(ctx, first.ID)
+	return nil, nil
 }
 
 func normalizeAndValidateCodexChannel(record *store.CodexChannelRecord) error {

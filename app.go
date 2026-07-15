@@ -379,6 +379,7 @@ func (a *App) HideMainWindow() {
 // 优雅退出：先让 Wails 处理关闭，超时后强制退出
 func (a *App) RequestQuit() {
 	a.markQuitting()
+	a.stopDevWatcherAfterQuit()
 
 	// 在 goroutine 中执行退出，避免阻塞 UI
 	go func() {
@@ -395,125 +396,107 @@ func (a *App) RequestQuit() {
 	}()
 }
 
-// OpenLogDir 打开日志目录（托盘菜单使用）
-func (a *App) OpenLogDir() {
-	logDir := utils.GetLogDir()
+const devWatcherPIDFile = ".wails-dev-watcher.pid"
 
-	// 确保目录存在
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("创建日志目录失败", "error", err)
-		}
+func parseDevWatcherPID(data []byte) (int, error) {
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(data)), "%d", &pid); err != nil || pid <= 0 {
+		return 0, fmt.Errorf("无效的 Wails dev watcher PID")
+	}
+	return pid, nil
+}
+
+func devWatcherStopScript(pid int) string {
+	return fmt.Sprintf(`
+Start-Sleep -Milliseconds 1000
+$process = Get-CimInstance Win32_Process -Filter "ProcessId = %d" -ErrorAction SilentlyContinue
+if ($null -eq $process) { exit 0 }
+$commandLine = [string]$process.CommandLine
+if ($process.Name -ne 'wails3.exe' -or $commandLine -notmatch '(^|\s)dev(\s|$)') { exit 0 }
+& taskkill.exe /T /F /PID %d *> $null
+`, pid, pid)
+}
+
+func (a *App) stopDevWatcherAfterQuit() {
+	if BuildMode != "dev" || goruntime.GOOS != "windows" {
 		return
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return
+	}
+	pidFile := filepath.Join(filepath.Dir(executable), devWatcherPIDFile)
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return
+	}
+	pid, err := parseDevWatcherPID(data)
+	if err != nil {
+		return
+	}
+	_ = os.Remove(pidFile)
 
-	// 跨平台打开目录
+	cmd := exec.Command(
+		"powershell.exe",
+		"-NoProfile",
+		"-NonInteractive",
+		"-WindowStyle", "Hidden",
+		"-Command", devWatcherStopScript(pid),
+	)
+	if err := cmd.Start(); err != nil && a.logger != nil {
+		a.logger.Warn("无法通知 Wails dev watcher 退出", "error", err)
+	}
+}
+
+func (a *App) openDirectory(path, label string) error {
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return fmt.Errorf("创建%s失败: %w", label, err)
+	}
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", logDir)
+		cmd = exec.Command("explorer", path)
 	case "darwin":
-		cmd = exec.Command("open", logDir)
+		cmd = exec.Command("open", path)
 	case "linux":
-		cmd = exec.Command("xdg-open", logDir)
+		cmd = exec.Command("xdg-open", path)
 	default:
-		if a.logger != nil {
-			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
-		}
-		return
+		return fmt.Errorf("当前操作系统不支持打开目录: %s", goruntime.GOOS)
 	}
-
 	if err := cmd.Start(); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("打开日志目录失败", "error", err, "path", logDir)
-		}
+		return fmt.Errorf("打开%s失败: %w", label, err)
 	}
+	return nil
+}
+
+// OpenLogDir 打开日志目录（托盘菜单使用）
+func (a *App) OpenLogDir() error {
+	return a.openDirectory(utils.GetLogDir(), "日志目录")
+}
+
+// OpenDataDir 打开数据库与历史归档所在目录。
+func (a *App) OpenDataDir() error {
+	return a.openDirectory(utils.GetDataDir(), "数据目录")
 }
 
 // OpenClaudeConfigDir 打开 Claude 配置目录（托盘菜单使用）
 // Claude 配置目录通常位于用户主目录下的 .claude 文件夹
-func (a *App) OpenClaudeConfigDir() {
+func (a *App) OpenClaudeConfigDir() error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		if a.logger != nil {
-			a.logger.Warn("获取用户主目录失败", "error", err)
-		}
-		return
+		return fmt.Errorf("获取用户主目录失败: %w", err)
 	}
-
-	claudeConfigDir := filepath.Join(homeDir, ".claude")
-
-	// 检查目录是否存在
-	if _, err := os.Stat(claudeConfigDir); os.IsNotExist(err) {
-		if a.logger != nil {
-			a.logger.Warn("Claude 配置目录不存在", "path", claudeConfigDir)
-		}
-		// 仍然尝试打开，让文件管理器显示错误
-	}
-
-	// 跨平台打开目录
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", claudeConfigDir)
-	case "darwin":
-		cmd = exec.Command("open", claudeConfigDir)
-	case "linux":
-		cmd = exec.Command("xdg-open", claudeConfigDir)
-	default:
-		if a.logger != nil {
-			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
-		}
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("打开 Claude 配置目录失败", "error", err, "path", claudeConfigDir)
-		}
-	}
+	return a.openDirectory(filepath.Join(homeDir, ".claude"), "Claude 配置目录")
 }
 
 // OpenCodexConfigDir 打开 Codex 配置目录
 // Codex 配置目录通常位于用户主目录下的 .codex 文件夹（或 CODEX_HOME 环境变量指定）
-func (a *App) OpenCodexConfigDir() {
+func (a *App) OpenCodexConfigDir() error {
 	codexHome, err := a.getCodexHomeDir()
 	if err != nil {
-		if a.logger != nil {
-			a.logger.Warn("获取 Codex 配置目录失败", "error", err)
-		}
-		return
+		return fmt.Errorf("获取 Codex 配置目录失败: %w", err)
 	}
-
-	// 检查目录是否存在
-	if _, err := os.Stat(codexHome); os.IsNotExist(err) {
-		if a.logger != nil {
-			a.logger.Warn("Codex 配置目录不存在", "path", codexHome)
-		}
-		// 仍然尝试打开，让文件管理器显示错误
-	}
-
-	// 跨平台打开目录
-	var cmd *exec.Cmd
-	switch goruntime.GOOS {
-	case "windows":
-		cmd = exec.Command("explorer", codexHome)
-	case "darwin":
-		cmd = exec.Command("open", codexHome)
-	case "linux":
-		cmd = exec.Command("xdg-open", codexHome)
-	default:
-		if a.logger != nil {
-			a.logger.Warn("不支持的操作系统", "os", goruntime.GOOS)
-		}
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		if a.logger != nil {
-			a.logger.Warn("打开 Codex 配置目录失败", "error", err, "path", codexHome)
-		}
-	}
+	return a.openDirectory(codexHome, "Codex 配置目录")
 }
 
 // GetProxyAddress 获取当前代理地址（托盘菜单"复制代理地址"使用）
@@ -572,17 +555,9 @@ func (a *App) loadConfig() {
 	a.configWatcher = configWatcher
 	cfg := configWatcher.GetConfig()
 
-	// ⚠️ 关键：立即覆盖所有路径为用户目录（在任何组件初始化之前）
-	// Dev 模式使用独立的数据库和日志文件，避免与 release 版本冲突
-	logFileName := "app.log"
-	dbFileName := "usage.db"
-	if BuildMode == "dev" {
-		logFileName = "app-dev.log"
-		dbFileName = "usage-dev.db"
-	}
-	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), logFileName)
-	// 为避免与旧版本共享同一 usage.db 产生锁冲突，默认切换到新文件名，并在启动时自动迁移旧数据。
-	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), dbFileName)
+	// 立即覆盖所有运行时路径为用户目录；环境只用于归档分层。
+	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), "app.log")
+	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "usage.db")
 
 	// 同时设置 Database 配置（如果存在）
 	if cfg.UsageTracking.Database != nil {
@@ -860,7 +835,7 @@ func (a *App) ensureModelPricingService() {
 
 func (a *App) setupCodexProviderStore() {
 	a.ensureCodexProviderService()
-	if a.codexProviderService == nil {
+	if a.codexChannelService == nil {
 		if a.logger != nil {
 			a.logger.Debug("Codex Provider 存储跳过初始化 (数据库未就绪)")
 		}
@@ -875,13 +850,13 @@ func (a *App) setupCodexProviderStore() {
 		return
 	}
 
-	providers, err := a.codexProviderService.ListProviders(ctx)
+	channels, err := a.codexChannelService.ListChannels(ctx)
 	if err != nil {
-		a.logger.Warn("⚠️ 加载 Codex Provider 列表失败", "error", err)
+		a.logger.Warn("⚠️ 加载 Codex 渠道列表失败", "error", err)
 		return
 	}
 
-	a.logger.Info("✅ Codex Provider 存储已启用 (SQLite)", "count", len(providers))
+	a.logger.Info("✅ Codex Provider 存储已启用 (SQLite)", "count", len(channels))
 }
 
 func (a *App) ensureCodexProviderService() {
@@ -1649,7 +1624,7 @@ func (a *App) initCodexProxy() {
 	}
 	// 注册活跃端点变更回调：故障转移成功提升端点后，刷新前端 UI
 	mgr.SetOnActiveChanged(func() {
-		a.emitCodexProviderUpdate()
+		a.emitCodexProviderStateUpdate()
 	})
 	a.codexEndpointMgr = mgr
 
@@ -1657,7 +1632,7 @@ func (a *App) initCodexProxy() {
 	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger)
 	// 按设置项决定是否启动定时探测；保留实例以供 GetLatencies 等接口使用
 	// 与 Claude 端对齐：仅当 Enabled + LoopRetry + SkipHealthCheck 三者都为 true 时才跳过
-	if !a.config.Failover.ShouldSkipHealthCheck() {
+	if !a.config.CodexFailover.ShouldSkipHealthCheck() {
 		hc.Start()
 	} else {
 		a.logger.Info("Codex 健康检查器已创建但未启动（ShouldSkipHealthCheck=true）")
@@ -1667,8 +1642,8 @@ func (a *App) initCodexProxy() {
 	// 创建 SuspensionManager（请求挂起队列）
 	// 当 loop_retry 全部耗尽后将请求挂起，等待运维通过 UI 重新激活渠道/端点
 	sm := codexproxy.NewSuspensionManager(
-		a.config.Failover.MaxSuspendedRequests,
-		a.config.Failover.LoopRetrySuspendTimeout,
+		a.config.CodexFailover.MaxSuspendedRequests,
+		a.config.CodexFailover.LoopRetrySuspendTimeout,
 		a.logger,
 	)
 	// 注册挂起数变化回调，推送前端事件
@@ -1690,9 +1665,9 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 
 	cfg := codexproxy.ServerConfig{
 		Timeout:       a.config.CodexServer.Timeout,
-		Retry:         a.config.Retry,       // 同端点重试配置（设置页 retry.*）
-		Failover:      a.config.Failover,    // 故障转移配置（设置页 failover.*）
-		SuspensionMgr: a.codexSuspensionMgr, // 请求挂起队列
+		Retry:         a.config.Retry,         // 同端点重试配置（设置页 retry.*）
+		Failover:      a.config.CodexFailover, // Codex 独立故障转移配置
+		SuspensionMgr: a.codexSuspensionMgr,   // 请求挂起队列
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker, a.privacyService)
 	a.codexHTTPHandler = baseHandler
@@ -1986,7 +1961,7 @@ func (a *App) setupSettingsStore() {
 
 	// 设置配置变更回调 - 热更新
 	a.settingsService.SetOnChangeCallback(func() {
-		a.applySettingsToConfig()
+		a.applySettingsToConfig(true)
 	})
 
 	// 初始化默认设置（如果表为空）
@@ -1999,7 +1974,7 @@ func (a *App) setupSettingsStore() {
 	}
 
 	// 从数据库加载设置并应用到配置
-	a.applySettingsToConfig()
+	a.applySettingsToConfig(false)
 
 	// 初始化端口管理器
 	preferredPort := a.settingsService.GetInt(ctx, service.CategoryServer, "preferred_port", a.config.Server.Port)
@@ -2036,8 +2011,8 @@ func (a *App) setupPrivacyService() {
 	a.logger.Info("✅ 隐私防护服务已启用 (SQLite)")
 }
 
-// applySettingsToConfig 从数据库加载设置并应用到运行时配置
-func (a *App) applySettingsToConfig() {
+// applySettingsToConfig 从数据库加载设置并应用到运行时配置。
+func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
 	if a.settingsService == nil {
 		return
 	}
@@ -2094,6 +2069,16 @@ func (a *App) applySettingsToConfig() {
 	// 达到最大循环轮数后的手动等待超时
 	a.config.Failover.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.Failover.LoopRetrySuspendTimeout)
 
+	// Codex 独立故障转移配置
+	a.config.CodexFailover.Enabled = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "enabled", false)
+	a.config.CodexFailover.LoopRetry = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "loop_retry", true)
+	a.config.CodexFailover.MaxLoops = a.settingsService.GetIntScoped(ctx, service.ProviderCodex, service.CategoryFailover, "max_loops", 3)
+	a.config.CodexFailover.SkipHealthCheck = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "skip_health_check", false)
+	a.config.CodexFailover.LoopRetrySuspendTimeout = a.settingsService.GetDurationScoped(ctx, service.ProviderCodex, service.CategoryFailover, "loop_retry_wait_timeout", 120*time.Second)
+	if a.codexHTTPHandler != nil {
+		a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+	}
+
 	// 请求控制配置
 	a.config.GlobalTimeout = a.settingsService.GetDuration(ctx, service.CategoryRequest, "global_timeout", a.config.GlobalTimeout)
 	// 普通挂起等待超时
@@ -2120,7 +2105,16 @@ func (a *App) applySettingsToConfig() {
 
 	// 数据保留配置
 	a.config.UsageTracking.RetentionDays = a.settingsService.GetInt(ctx, service.CategoryRetention, "retention_days", a.config.UsageTracking.RetentionDays)
-	a.config.UsageTracking.CleanupInterval = a.settingsService.GetDuration(ctx, service.CategoryRetention, "cleanup_interval", a.config.UsageTracking.CleanupInterval)
+	if a.usageTracker != nil {
+		applyPolicy := a.usageTracker.ConfigureRetentionPolicy
+		if runRetentionMaintenance {
+			applyPolicy = a.usageTracker.UpdateRetentionPolicy
+		}
+		if err := applyPolicy(a.config.UsageTracking.RetentionDays); err != nil {
+			a.logger.Error("应用数据保留策略失败", "error", err)
+			a.emitNotification("error", "数据保留策略更新失败", err.Error())
+		}
+	}
 
 	// 🔧 [P5.5.4 新增] Logging 日志配置（从 SQLite 同步）
 	oldLoggingLevel := a.config.Logging.Level

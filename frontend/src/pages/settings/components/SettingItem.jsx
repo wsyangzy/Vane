@@ -476,6 +476,8 @@ const SettingItem = ({
   }
 
   // 其他类型使用文本/数字输入框
+  const min = setting.category === 'retention' && setting.key === 'retention_days' ? 0 : undefined;
+
   return (
     <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
       <div className="flex-1 min-w-0 pr-4">
@@ -502,21 +504,23 @@ const SettingItem = ({
             disabled={disabled}
           />
         )}
-        <input
-          type={config.type}
-          value={localValue}
-          onChange={handleChange}
-          disabled={disabled}
-          step={config.step}
-          placeholder={config.placeholder}
-          className={`
-            w-32 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
-            font-mono text-right
-            focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-            ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-            ${setting.key === 'token' ? 'w-80' : ''}
-          `}
-        />
+        <div className={`relative ${setting.key === 'token' ? 'w-80' : 'w-32'}`}>
+          <input
+            type={config.type}
+            value={localValue}
+            onChange={handleChange}
+            disabled={disabled}
+            step={config.step}
+            min={min}
+            placeholder={config.placeholder}
+            className={`
+              w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
+              font-mono text-right
+              focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
+              ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+            `}
+          />
+        </div>
       </div>
     </div>
   );

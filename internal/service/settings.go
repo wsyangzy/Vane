@@ -34,6 +34,23 @@ const (
 	CategoryTimezone       = "timezone"        // 全局时区
 )
 
+type SettingsProvider string
+
+const (
+	ProviderGlobal SettingsProvider = "global"
+	ProviderClaude SettingsProvider = "claude"
+	ProviderCodex  SettingsProvider = "codex"
+)
+
+func validateSettingsProvider(provider SettingsProvider) error {
+	switch provider {
+	case ProviderGlobal, ProviderClaude, ProviderCodex:
+		return nil
+	default:
+		return fmt.Errorf("无效的设置 Provider: %s", provider)
+	}
+}
+
 // ConfigSource 表示配置项的来源
 // 🔧 [P5.5 新增] 用于前端配置溯源诊断
 type ConfigSource string
@@ -132,7 +149,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 			CategoryRetention: {
 				Name:        CategoryRetention,
 				Label:       "数据保留",
-				Description: "配置历史数据保留策略",
+				Description: "配置请求历史保留策略；历史请求自动按自然月归档",
 				Icon:        "📦",
 				Order:       8,
 			},
@@ -211,6 +228,54 @@ func (s *SettingsService) Get(ctx context.Context, category, key string) (*store
 	return record, nil
 }
 
+func (s *SettingsService) GetScoped(ctx context.Context, provider SettingsProvider, category, key string) (*store.SettingRecord, error) {
+	if err := validateSettingsProvider(provider); err != nil {
+		return nil, err
+	}
+	record, err := s.store.GetScoped(ctx, string(provider), category, key)
+	if err != nil || record == nil {
+		return record, err
+	}
+	s.enrichEnumOptions([]*store.SettingRecord{record})
+	return record, nil
+}
+
+func (s *SettingsService) GetBoolScoped(ctx context.Context, provider SettingsProvider, category, key string, defaultVal bool) bool {
+	record, err := s.GetScoped(ctx, provider, category, key)
+	if err != nil || record == nil || record.Value == "" {
+		return defaultVal
+	}
+	value, err := strconv.ParseBool(record.Value)
+	if err != nil {
+		return defaultVal
+	}
+	return value
+}
+
+func (s *SettingsService) GetIntScoped(ctx context.Context, provider SettingsProvider, category, key string, defaultVal int) int {
+	record, err := s.GetScoped(ctx, provider, category, key)
+	if err != nil || record == nil {
+		return defaultVal
+	}
+	value, err := strconv.Atoi(record.Value)
+	if err != nil {
+		return defaultVal
+	}
+	return value
+}
+
+func (s *SettingsService) GetDurationScoped(ctx context.Context, provider SettingsProvider, category, key string, defaultVal time.Duration) time.Duration {
+	record, err := s.GetScoped(ctx, provider, category, key)
+	if err != nil || record == nil {
+		return defaultVal
+	}
+	value, err := time.ParseDuration(record.Value)
+	if err != nil {
+		return defaultVal
+	}
+	return value
+}
+
 // GetValue 获取设置值（仅返回值字符串）
 func (s *SettingsService) GetValue(ctx context.Context, category, key string) (string, error) {
 	record, err := s.store.Get(ctx, category, key)
@@ -279,6 +344,17 @@ func (s *SettingsService) GetByCategory(ctx context.Context, category string) ([
 	return records, nil
 }
 
+func (s *SettingsService) GetByCategoryScoped(ctx context.Context, provider SettingsProvider, category string) ([]*store.SettingRecord, error) {
+	if err := validateSettingsProvider(provider); err != nil {
+		return nil, err
+	}
+	records, err := s.store.GetByCategoryScoped(ctx, string(provider), category)
+	if err == nil {
+		s.enrichEnumOptions(records)
+	}
+	return records, err
+}
+
 // GetAll 获取所有设置
 func (s *SettingsService) GetAll(ctx context.Context) ([]*store.SettingRecord, error) {
 	records, err := s.store.GetAll(ctx)
@@ -324,11 +400,32 @@ func (s *SettingsService) enrichEnumOptions(records []*store.SettingRecord) {
 
 // Set 设置单个值
 func (s *SettingsService) Set(ctx context.Context, category, key, value string) error {
-	if err := s.store.Set(ctx, category, key, value); err != nil {
+	provider := ProviderGlobal
+	if category == CategoryFailover {
+		provider = ProviderClaude
+	}
+	return s.SetScoped(ctx, provider, category, key, value)
+}
+
+func (s *SettingsService) SetScoped(ctx context.Context, provider SettingsProvider, category, key, value string) error {
+	if err := validateSettingValue(provider, category, key, value); err != nil {
 		return err
 	}
-	s.triggerOnChange(category, key)
+	if err := s.store.SetScoped(ctx, string(provider), category, key, value); err != nil {
+		return err
+	}
+	s.triggerOnChangeScoped(provider, category, key)
 	return nil
+}
+
+func (s *SettingsService) triggerOnChangeScoped(provider SettingsProvider, category, key string) {
+	record, _ := s.store.GetScoped(context.Background(), string(provider), category, key)
+	if record != nil && record.RequiresRestart {
+		return
+	}
+	if s.onChangeFunc != nil {
+		s.onChangeFunc()
+	}
 }
 
 // BatchSet 批量设置（不触发回调，需手动触发）
@@ -339,6 +436,21 @@ func (s *SettingsService) BatchSet(ctx context.Context, records []*store.Setting
 // UpdateAndApply 批量更新并应用（触发热更新）
 // 只更新 value，保留 label、description 等元数据
 func (s *SettingsService) UpdateAndApply(ctx context.Context, records []*store.SettingRecord) error {
+	for _, record := range records {
+		if record == nil {
+			return fmt.Errorf("设置记录不能为空")
+		}
+		provider := SettingsProvider(record.Provider)
+		if provider == "" {
+			provider = ProviderGlobal
+			if record.Category == CategoryFailover {
+				provider = ProviderClaude
+			}
+		}
+		if err := validateSettingValue(provider, record.Category, record.Key, record.Value); err != nil {
+			return err
+		}
+	}
 	if err := s.store.BatchUpdateValues(ctx, records); err != nil {
 		return fmt.Errorf("保存设置失败: %w", err)
 	}
@@ -349,6 +461,24 @@ func (s *SettingsService) UpdateAndApply(ctx context.Context, records []*store.S
 		slog.Info("✅ [SettingsService] 设置已保存并应用热更新")
 	}
 
+	return nil
+}
+
+func validateSettingValue(provider SettingsProvider, category, key, value string) error {
+	if err := validateSettingsProvider(provider); err != nil {
+		return err
+	}
+	if category != CategoryRetention {
+		return nil
+	}
+
+	switch key {
+	case "retention_days":
+		days, err := strconv.Atoi(value)
+		if err != nil || days < 0 {
+			return fmt.Errorf("数据保留天数必须是大于或等于 0 的整数")
+		}
+	}
 	return nil
 }
 
@@ -373,6 +503,31 @@ func (s *SettingsService) ResetCategory(ctx context.Context, category string) er
 	}
 
 	slog.Info(fmt.Sprintf("✅ [SettingsService] 分类 %s 已重置为默认值", category))
+	return nil
+}
+
+func (s *SettingsService) ResetCategoryScoped(ctx context.Context, provider SettingsProvider, category string) error {
+	if err := validateSettingsProvider(provider); err != nil {
+		return err
+	}
+	if err := s.store.DeleteByCategoryScoped(ctx, string(provider), category); err != nil {
+		return fmt.Errorf("删除分类设置失败: %w", err)
+	}
+	defaults := s.getDefaultsForCategory(category)
+	for _, record := range defaults {
+		record.Provider = string(provider)
+		if provider == ProviderCodex && category == CategoryFailover && record.Key == "enabled" {
+			record.Value = "false"
+		}
+	}
+	if len(defaults) > 0 {
+		if err := s.store.BatchSet(ctx, defaults); err != nil {
+			return fmt.Errorf("重置默认值失败: %w", err)
+		}
+	}
+	if s.onChangeFunc != nil {
+		s.onChangeFunc()
+	}
 	return nil
 }
 
@@ -443,6 +598,9 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		{CategoryServer, "codex_host"},
 		{CategoryServer, "codex_port"},
 		{CategoryServer, "codex_timeout"},
+		// 请求历史固定每日维护并按自然月归档，不再暴露技术参数。
+		{CategoryRetention, "cleanup_interval"},
+		{CategoryRetention, "max_active_database_size_mb"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -482,8 +640,17 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	// Health 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryHealth)...)
 
-	// Failover 设置
-	defaults = append(defaults, s.getDefaultsForCategory(CategoryFailover)...)
+	// Provider 专属 Failover 设置
+	for _, provider := range []SettingsProvider{ProviderClaude, ProviderCodex} {
+		for _, record := range s.getDefaultsForCategory(CategoryFailover) {
+			copy := *record
+			copy.Provider = string(provider)
+			if provider == ProviderCodex && copy.Key == "enabled" {
+				copy.Value = "false"
+			}
+			defaults = append(defaults, &copy)
+		}
+	}
 
 	// Request 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryRequest)...)
@@ -506,6 +673,11 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
 
+	for _, record := range defaults {
+		if record.Provider == "" {
+			record.Provider = string(ProviderGlobal)
+		}
+	}
 	return defaults
 }
 
@@ -583,8 +755,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 
 	case CategoryRetention:
 		return []*store.SettingRecord{
-			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求日志保留天数，0 表示永久保留", DisplayOrder: 1},
-			{Category: CategoryRetention, Key: "cleanup_interval", Value: "24h", ValueType: ValueTypeDuration, Label: "清理间隔", Description: "自动清理任务的执行间隔", DisplayOrder: 2},
+			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求记录保留天数，0 表示永久保留；历史请求自动按自然月归档分库", DisplayOrder: 1},
 		}
 
 	case CategoryCache:

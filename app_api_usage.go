@@ -121,14 +121,15 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 					todayRequests:      dayRequests,
 				}, nil
 			})
-			if err == nil {
-				allTimeTotalCost = snapshot.allTimeTotalCost
-				allTimeTotalTokens = snapshot.allTimeTotalTokens
-				allTimeTotal = snapshot.allTimeTotal
-				todayCost = snapshot.todayCost
-				todayTokens = snapshot.todayTokens
-				todayRequests = snapshot.todayRequests
+			if err != nil {
+				return UsageSummary{}, fmt.Errorf("查询历史使用统计失败: %w", err)
 			}
+			allTimeTotalCost = snapshot.allTimeTotalCost
+			allTimeTotalTokens = snapshot.allTimeTotalTokens
+			allTimeTotal = snapshot.allTimeTotal
+			todayCost = snapshot.todayCost
+			todayTokens = snapshot.todayTokens
+			todayRequests = snapshot.todayRequests
 		}
 
 		return UsageSummary{
@@ -186,7 +187,6 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 			StartDate: &startTime,
 			EndDate:   &endTime,
 			Provider:  provider,
-			Limit:     100,
 		})
 		if err != nil {
 			return UsageSummary{}, err
@@ -216,39 +216,19 @@ func queryStatsFromDBStrict(ctx context.Context, logger *slog.Logger, usageTrack
 	if usageTracker == nil {
 		return 0, 0, 0, fmt.Errorf("usage tracker is nil")
 	}
-
-	db := usageTracker.GetDB()
-	if db == nil {
-		return 0, 0, 0, fmt.Errorf("usage tracker database is nil")
+	opts := &tracking.QueryOptions{Provider: provider}
+	if !startTime.IsZero() {
+		opts.StartDate = &startTime
+		opts.EndDate = &endTime
 	}
-
-	var query string
-	var args []any
-	totalTokensExpr := tracking.TotalTokensSQLExpression()
-
-	if startTime.IsZero() {
-		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(" + totalTokensExpr + "), 0), COUNT(*) FROM request_logs"
-		if provider != "" {
-			query += " WHERE provider = ?"
-			args = append(args, provider)
-		}
-	} else {
-		query = "SELECT COALESCE(SUM(total_cost_usd), 0), COALESCE(SUM(" + totalTokensExpr + "), 0), COUNT(*) FROM request_logs WHERE start_time >= ? AND start_time < ?"
-		args = append(args, startTime, endTime)
-		if provider != "" {
-			query += " AND provider = ?"
-			args = append(args, provider)
-		}
-	}
-
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&cost, &tokens, &requests); err != nil {
+	totals, err := usageTracker.QueryUsageStatsTotals(ctx, opts)
+	if err != nil {
 		if logger != nil {
 			logger.Debug("查询统计数据失败", "error", err)
 		}
 		return 0, 0, 0, err
 	}
-
-	return cost, tokens, requests, nil
+	return totals.TotalCostUSD, totals.TotalTokens, totals.TotalRequests, nil
 }
 
 // RequestRecord 请求记录
@@ -861,7 +841,10 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 		}
 
 		totals, err := usageTracker.QueryUsageStatsTotalsWithHotPool(ctx, opts)
-		if err == nil && totals != nil {
+		if err != nil {
+			return result, err
+		}
+		if totals != nil {
 			result.TotalRequests = int(totals.TotalRequests)
 			result.FailedCount = int(totals.FailedRequests)
 			result.TotalTokens = totals.TotalTokens
@@ -874,7 +857,6 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 
 			return result, nil
 		}
-		// 查询失败时，继续使用运行时统计（降级方案）
 	}
 
 	// 从运行时 Metrics 获取统计（降级方案，或无 usageTracker 时）
@@ -949,19 +931,14 @@ type TokenUsageHeatmapDay struct {
 
 // GetTokenUsage 获取今日 Token 使用统计（从数据库查询，覆盖 Claude 和 Codex）
 // provider 参数过滤：空字符串 = 全部，"claude" / "codex" = 按 provider 过滤
-func (a *App) GetTokenUsage(provider string) TokenUsageData {
+func (a *App) GetTokenUsage(provider string) (TokenUsageData, error) {
 	a.mu.RLock()
 	usageTracker := a.usageTracker
 	cfg := a.config
 	a.mu.RUnlock()
 
 	if usageTracker == nil {
-		return TokenUsageData{}
-	}
-
-	db := usageTracker.GetDB()
-	if db == nil {
-		return TokenUsageData{}
+		return TokenUsageData{}, nil
 	}
 
 	loc := time.Local
@@ -979,20 +956,20 @@ func (a *App) GetTokenUsage(provider string) TokenUsageData {
 		return queryTokenUsageForRange(usageTracker, todayStart, tomorrowStart, provider)
 	})
 	if err != nil {
-		return TokenUsageData{}
+		return TokenUsageData{}, err
 	}
-	return data
+	return data, nil
 }
 
 // GetTokenUsageHeatmap 按请求追踪筛选条件聚合每日 Token 使用分布
-func (a *App) GetTokenUsageHeatmap(params RequestQueryParams) []TokenUsageHeatmapDay {
+func (a *App) GetTokenUsageHeatmap(params RequestQueryParams) ([]TokenUsageHeatmapDay, error) {
 	a.mu.RLock()
 	usageTracker := a.usageTracker
 	cfg := a.config
 	a.mu.RUnlock()
 
 	if usageTracker == nil {
-		return []TokenUsageHeatmapDay{}
+		return []TokenUsageHeatmapDay{}, nil
 	}
 
 	timezone := ""
@@ -1001,50 +978,27 @@ func (a *App) GetTokenUsageHeatmap(params RequestQueryParams) []TokenUsageHeatma
 	}
 	data, err := queryTokenUsageHeatmap(usageTracker, buildRequestQueryOptions(params, timezone, 0, 0))
 	if err != nil {
-		return []TokenUsageHeatmapDay{}
+		return nil, err
 	}
-	return data
+	return data, nil
 }
 
 func queryTokenUsageForRange(usageTracker *tracking.UsageTracker, startTime, endTime time.Time, provider string) (TokenUsageData, error) {
 	if usageTracker == nil {
 		return TokenUsageData{}, fmt.Errorf("usage tracker is nil")
 	}
-	db := usageTracker.GetDB()
-	if db == nil {
-		return TokenUsageData{}, fmt.Errorf("usage tracker database is nil")
-	}
-	query := `SELECT
-		COALESCE(SUM(` + tracking.DistributionInputTokensSQLExpression() + `), 0),
-		COALESCE(SUM(output_tokens), 0),
-		COALESCE(SUM(cache_creation_tokens), 0),
-		COALESCE(SUM(cache_read_tokens), 0),
-		COALESCE(SUM(` + tracking.TotalTokensSQLExpression() + `), 0)
-		FROM request_logs
-		WHERE start_time >= ? AND start_time < ?`
-	args := []any{
-		startTime.Format("2006-01-02 15:04:05"),
-		endTime.Format("2006-01-02 15:04:05"),
-	}
-	if provider != "" {
-		query += " AND provider = ?"
-		args = append(args, provider)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
-
-	var input, output, cacheCreation, cacheRead, total int64
-	if err := db.QueryRowContext(ctx, query, args...).Scan(&input, &output, &cacheCreation, &cacheRead, &total); err != nil {
+	totals, err := usageTracker.QueryTokenUsageTotals(ctx, startTime, endTime, provider)
+	if err != nil {
 		return TokenUsageData{}, err
 	}
-
 	return TokenUsageData{
-		InputTokens:         input,
-		OutputTokens:        output,
-		CacheCreationTokens: cacheCreation,
-		CacheReadTokens:     cacheRead,
-		TotalTokens:         total,
+		InputTokens:         totals.InputTokens,
+		OutputTokens:        totals.OutputTokens,
+		CacheCreationTokens: totals.CacheCreationTokens,
+		CacheReadTokens:     totals.CacheReadTokens,
+		TotalTokens:         totals.TotalTokens,
 	}, nil
 }
 
@@ -1055,11 +1009,6 @@ func queryTokenUsageHeatmap(usageTracker *tracking.UsageTracker, opts *tracking.
 	if opts == nil || opts.StartDate == nil || opts.EndDate == nil {
 		return []TokenUsageHeatmapDay{}, nil
 	}
-	db := usageTracker.GetDB()
-	if db == nil {
-		return nil, fmt.Errorf("usage tracker database is nil")
-	}
-
 	startTime := *opts.StartDate
 	endTime := *opts.EndDate
 	if endTime.Before(startTime) {
@@ -1067,50 +1016,34 @@ func queryTokenUsageHeatmap(usageTracker *tracking.UsageTracker, opts *tracking.
 	}
 
 	bucket := "day"
-	bucketExpr := "substr(start_time, 1, 10)"
 	if endTime.Sub(startTime) <= tokenUsageHeatmapHourlyMaxRange {
 		bucket = "hour"
-		bucketExpr = "substr(start_time, 1, 13)"
 	}
-
-	query := `SELECT
-		` + bucketExpr + ` AS bucket,
-		COUNT(*),
-		COALESCE(SUM(` + tracking.DistributionInputTokensSQLExpression() + `), 0),
-		COALESCE(SUM(output_tokens), 0),
-		COALESCE(SUM(cache_creation_tokens), 0),
-		COALESCE(SUM(cache_read_tokens), 0),
-		COALESCE(SUM(` + tracking.TotalTokensSQLExpression() + `), 0)
-		FROM request_logs
-		WHERE 1=1`
-	args := []any{}
-	query, args = appendRequestQuerySQLFilters(query, args, opts)
-	query += " GROUP BY bucket ORDER BY bucket ASC"
 
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
-
-	rows, err := db.QueryContext(ctx, query, args...)
+	buckets, err := usageTracker.QueryTokenUsageBuckets(ctx, opts, bucket)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	byBucket := make(map[string]TokenUsageHeatmapDay)
 	var maxTokens int64
-	for rows.Next() {
-		var item TokenUsageHeatmapDay
-		if err := rows.Scan(&item.Date, &item.RequestCount, &item.InputTokens, &item.OutputTokens, &item.CacheCreationTokens, &item.CacheReadTokens, &item.TotalTokens); err != nil {
-			return nil, err
+	for _, value := range buckets {
+		item := TokenUsageHeatmapDay{
+			Date:                value.Key,
+			RequestCount:        value.RequestCount,
+			InputTokens:         value.InputTokens,
+			OutputTokens:        value.OutputTokens,
+			CacheCreationTokens: value.CacheCreationTokens,
+			CacheReadTokens:     value.CacheReadTokens,
+			TotalTokens:         value.TotalTokens,
 		}
 		item.Bucket = bucket
 		if item.TotalTokens > maxTokens {
 			maxTokens = item.TotalTokens
 		}
 		byBucket[item.Date] = item
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 
 	if bucket == "hour" {
@@ -1144,47 +1077,4 @@ func queryTokenUsageHeatmap(usageTracker *tracking.UsageTracker, opts *tracking.
 		days = append(days, day)
 	}
 	return days, nil
-}
-
-func appendRequestQuerySQLFilters(query string, args []any, opts *tracking.QueryOptions) (string, []any) {
-	if opts == nil {
-		return query, args
-	}
-	if opts.StartDate != nil {
-		query += " AND start_time >= ?"
-		args = append(args, opts.StartDate.Format("2006-01-02 15:04:05"))
-	}
-	if opts.EndDate != nil {
-		query += " AND start_time <= ?"
-		args = append(args, opts.EndDate.Format("2006-01-02 15:04:05")+".999999999")
-	}
-	if opts.ModelName != "" {
-		query += " AND model_name = ?"
-		args = append(args, opts.ModelName)
-	}
-	if opts.Channel != "" {
-		query += " AND channel = ?"
-		args = append(args, opts.Channel)
-	}
-	if opts.EndpointName != "" {
-		query += " AND endpoint_name = ?"
-		args = append(args, opts.EndpointName)
-	}
-	if opts.GroupName != "" {
-		query += " AND group_name = ?"
-		args = append(args, opts.GroupName)
-	}
-	if opts.Status != "" {
-		if opts.Status == "failed" {
-			query += " AND status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout')"
-		} else {
-			query += " AND status = ?"
-			args = append(args, opts.Status)
-		}
-	}
-	if opts.Provider != "" {
-		query += " AND provider = ?"
-		args = append(args, opts.Provider)
-	}
-	return query, args
 }

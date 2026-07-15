@@ -834,6 +834,8 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			enable_1m_context INTEGER NOT NULL DEFAULT 0,
 			website TEXT,
 			is_active INTEGER NOT NULL DEFAULT 0,
+			priority INTEGER NOT NULL DEFAULT 1,
+			failover_enabled INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,

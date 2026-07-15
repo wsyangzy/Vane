@@ -51,27 +51,12 @@ var trayIcon []byte
 // currentLogHandler 当前日志处理器引用（用于关闭）
 var currentLogHandlers []*SimpleHandler
 
-func datedLogPath(basePath string, fixedBaseName string) string {
-	ext := filepath.Ext(basePath)
-	if ext == "" {
-		ext = ".log"
-	}
-	name := strings.TrimSuffix(filepath.Base(basePath), filepath.Ext(basePath))
-	if fixedBaseName != "" {
-		name = fixedBaseName
-	}
-	if name == "" || name == "." {
-		name = "app"
-	}
-	return filepath.Join(filepath.Dir(basePath), fmt.Sprintf("%s-%s%s", name, time.Now().Format("2006-01-02"), ext))
-}
-
 // ============================================================
 // 日志相关
 // ============================================================
 
 // setupLogger 配置结构化日志
-// 按 provider 分文件存储：app.log（默认）、claude.log、codex.log
+// 按环境、provider 和月份分目录存储，并按日期切分文件。
 func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
 	logLevel := cfg.Level
 
@@ -106,25 +91,32 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 			maxSize = 100 * 1024 * 1024
 		}
 
-		// 主日志文件（app.log / app-dev.log）
-		appLogFile := datedLogPath(cfg.FilePath, "")
-		appRotator, err = logging.NewFileRotator(appLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		environment := "dev"
+		if strings.EqualFold(BuildMode, "release") {
+			environment = "release"
+		}
+		logRoot := filepath.Dir(cfg.FilePath)
+		newRotator := func(stream string) (*logging.FileRotator, error) {
+			filename := filepath.Join(logRoot, stream+".log")
+			if stream == "app" {
+				filename = cfg.FilePath
+			}
+			return logging.NewArchivingFileRotator(filename, logRoot, environment, stream, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		}
+
+		appRotator, err = newRotator("app")
 		if err != nil {
 			fmt.Printf("警告：无法创建日志文件轮转器: %v\n", err)
 			appRotator = nil
 		}
 
-		// Claude 代理日志文件（与主日志同目录）
-		claudeLogFile := datedLogPath(cfg.FilePath, "claude")
-		claudeRotator, err = logging.NewFileRotator(claudeLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		claudeRotator, err = newRotator("claude")
 		if err != nil {
 			fmt.Printf("警告：无法创建 Claude 日志文件轮转器: %v\n", err)
 			claudeRotator = nil
 		}
 
-		// Codex 代理日志文件
-		codexLogFile := datedLogPath(cfg.FilePath, "codex")
-		codexRotator, err = logging.NewFileRotator(codexLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		codexRotator, err = newRotator("codex")
 		if err != nil {
 			fmt.Printf("警告：无法创建 Codex 日志文件轮转器: %v\n", err)
 			codexRotator = nil
@@ -132,8 +124,7 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 
 		if level <= slog.LevelDebug {
 			// DEBUG 专用日志文件，保存所有 DEBUG 记录，便于排查时单独查看
-			debugLogFile := datedLogPath(cfg.FilePath, "debug")
-			debugRotator, err = logging.NewFileRotator(debugLogFile, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+			debugRotator, err = newRotator("debug")
 			if err != nil {
 				fmt.Printf("警告：无法创建 DEBUG 日志文件轮转器: %v\n", err)
 				debugRotator = nil
@@ -182,10 +173,16 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 	}
 
 	if cfg.FileEnabled {
+		logRoot := filepath.Dir(cfg.FilePath)
+		environment := "dev"
+		if strings.EqualFold(BuildMode, "release") {
+			environment = "release"
+		}
+		archiveRoot := filepath.Join(logRoot, environment)
 		if debugHandler != nil {
-			fmt.Printf("🔧 文件日志已启用: 路径=%s (分文件: claude/codex/debug，按日期命名)\n", cfg.FilePath)
+			fmt.Printf("🔧 文件日志已启用: 活动目录=%s，归档目录=%s (app/claude/codex/debug)\n", logRoot, archiveRoot)
 		} else {
-			fmt.Printf("🔧 文件日志已启用: 路径=%s (分文件: claude/codex，按日期命名)\n", cfg.FilePath)
+			fmt.Printf("🔧 文件日志已启用: 活动目录=%s，归档目录=%s (app/claude/codex)\n", logRoot, archiveRoot)
 		}
 	}
 

@@ -61,6 +61,12 @@ func (h *HTTPHandler) UpdateLogger(logger *slog.Logger) {
 	}
 }
 
+func (h *HTTPHandler) UpdateConfig(retryCfg config.RetryConfig, failoverCfg config.FailoverConfig) {
+	if h.handler != nil {
+		h.handler.UpdateConfig(retryCfg, failoverCfg)
+	}
+}
+
 func (h *HTTPHandler) currentLogger() *slog.Logger {
 	h.mu.RLock()
 	logger := h.logger

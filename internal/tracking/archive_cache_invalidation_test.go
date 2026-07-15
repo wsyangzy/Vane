@@ -24,7 +24,9 @@ func TestArchiveSuccessCallbackInvalidatesUsageCache(t *testing.T) {
 func TestCleanupOldRecordsInvalidatesUsageCachesAfterSuccessfulCleanup(t *testing.T) {
 	tracker := newUsageStatsCacheTestTracker(t)
 	defer tracker.Close()
+	tracker.retentionMu.Lock()
 	tracker.config.RetentionDays = 1
+	tracker.retentionMu.Unlock()
 	tracker.ConfigureUsageStatsCache(appcache.Options{
 		Name:         "usage-stats-test",
 		TTL:          time.Minute,
