@@ -15,7 +15,7 @@ import (
 	"ai-relay-forwarder/internal/providers/codex/store"
 )
 
-// 注意：冷却机制已完全移除（参考 Claude 端 internal/endpoint/cooldown.go 历史经验）
+// 注意：冷却机制已完全移除（参考 Claude 端 internal/providers/claude/proxy/endpoint/cooldown.go 历史经验）
 // 原因：loop_retry 模式下冷却机制与循环重试逻辑冲突
 // 失败端点仅靠健康检查恢复或被运维通过 UI 重新激活
 

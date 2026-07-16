@@ -22,12 +22,12 @@ import (
 
 	"ai-relay-forwarder/config"
 	appcache "ai-relay-forwarder/internal/cache"
-	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/events"
 	"ai-relay-forwarder/internal/logging"
 	"ai-relay-forwarder/internal/middleware"
 	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/providers/claude/proxy"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	codexproxy "ai-relay-forwarder/internal/providers/codex/proxy"
@@ -1665,6 +1665,7 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 
 	cfg := codexproxy.ServerConfig{
 		Timeout:       a.config.CodexServer.Timeout,
+		Config:        a.config,
 		Retry:         a.config.Retry,         // 同端点重试配置（设置页 retry.*）
 		Failover:      a.config.CodexFailover, // Codex 独立故障转移配置
 		SuspensionMgr: a.codexSuspensionMgr,   // 请求挂起队列

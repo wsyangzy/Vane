@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 // ModelRewriteResult 描述一次请求体 model 改写结果。

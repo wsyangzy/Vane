@@ -11,7 +11,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	appcache "ai-relay-forwarder/internal/cache"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/tracking"

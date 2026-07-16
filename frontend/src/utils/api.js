@@ -766,102 +766,6 @@ export const formatTimestamp = (timestamp) => {
 };
 
 // ============================================
-// 端点存储 API (SQLite)
-// ============================================
-
-/**
- * 获取端点存储状态
- * @returns {Promise<Object>} - {enabled, storageType, totalCount, enabledCount}
- */
-export const fetchEndpointStorageStatus = async () => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.getEndpointStorageStatus();
-  }
-  // HTTP 环境暂不支持
-  return { enabled: false, storageType: 'yaml', totalCount: 0, enabledCount: 0 };
-};
-
-/**
- * 获取所有端点记录（SQLite 存储）
- * @returns {Promise<Array>} - 端点记录数组
- */
-export const fetchEndpointRecords = async () => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.getEndpointRecords();
-  }
-  // HTTP 环境暂不支持
-  return [];
-};
-
-/**
- * 创建端点记录
- * @param {Object} input - 端点配置
- * @returns {Promise<Object>}
- */
-export const createEndpoint = async (input) => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.createEndpointRecord(input);
-  }
-  throw new Error('HTTP 环境暂不支持端点存储功能');
-};
-
-/**
- * 更新端点配置
- * @param {string} name - 端点名称
- * @param {Object} input - 更新的配置
- * @returns {Promise<Object>}
- */
-export const updateEndpoint = async (name, input) => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.updateEndpointRecord(name, input);
-  }
-  throw new Error('HTTP 环境暂不支持端点存储功能');
-};
-
-/**
- * 删除端点
- * @param {string} name - 端点名称
- * @returns {Promise<Object>}
- */
-export const deleteEndpoint = async (name) => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.deleteEndpointRecord(name);
-  }
-  throw new Error('HTTP 环境暂不支持端点存储功能');
-};
-
-/**
- * 切换端点启用状态
- * @param {string} name - 端点名称
- * @param {boolean} enabled - 是否启用
- * @returns {Promise<Object>}
- */
-export const toggleEndpoint = async (name, enabled) => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.toggleEndpointRecord(name, enabled);
-  }
-  throw new Error('HTTP 环境暂不支持端点存储功能');
-};
-
-/**
- * 获取所有渠道
- * @returns {Promise<Array>} - 渠道列表
- */
-export const fetchChannels = async () => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.getChannels();
-  }
-  return [];
-};
-
-// ============================================
 // 系统设置 API (SQLite)
 // ============================================
 
@@ -890,21 +794,6 @@ export const fetchAllSettings = async () => {
   }
   // HTTP 环境
   const data = await fetchWithTimeout('/api/v1/settings');
-  return data.settings || data || [];
-};
-
-/**
- * 获取指定分类的设置
- * @param {string} category - 分类名称
- * @returns {Promise<Array>} - 设置记录数组
- */
-export const fetchSettingsByCategory = async (category) => {
-  // Wails 环境使用绑定
-  if (isWailsEnvironment()) {
-    return await WailsApi.getSettingsByCategory(category);
-  }
-  // HTTP 环境
-  const data = await fetchWithTimeout(`/api/v1/settings/${encodeURIComponent(category)}`);
   return data.settings || data || [];
 };
 

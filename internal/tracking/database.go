@@ -1097,24 +1097,18 @@ func (ut *UsageTracker) postCleanupMaintenance() {
 		return
 	}
 
-	// 仅对 SQLite 适配器有效
-	sqliteAdapter, ok := ut.adapter.(*SQLiteAdapter)
-	if !ok {
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	// 1. ANALYZE 更新统计信息
-	if err := sqliteAdapter.PerformAnalyze(ctx); err != nil {
+	if err := ut.adapter.PerformAnalyze(ctx); err != nil {
 		slog.Warn("⚠️ [P2.4] ANALYZE 失败（不影响业务）", "error", err)
 	} else {
 		slog.Debug("✅ [P2.4] ANALYZE 完成")
 	}
 
 	// 2. 增量 VACUUM 回收空间（仅在 auto_vacuum=INCREMENTAL 时有效）
-	if err := sqliteAdapter.PerformIncrementalVacuum(ctx, 0); err != nil {
+	if err := ut.adapter.PerformIncrementalVacuum(ctx, 0); err != nil {
 		// 这是正常情况：旧数据库可能不是 INCREMENTAL 模式
 		slog.Debug("incremental_vacuum 跳过（auto_vacuum 未启用或无可回收空间）", "error", err)
 	} else {
@@ -1255,13 +1249,8 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 	return nil
 }
 
-// vacuumDatabase 运行VACUUM命令回收数据库空间（仅SQLite需要）
+// vacuumDatabase 运行VACUUM命令回收数据库空间
 func (ut *UsageTracker) vacuumDatabase(ctx context.Context) error {
-	if ut.adapter.GetDatabaseType() != "sqlite" {
-		slog.Debug("Skipping VACUUM - not a SQLite database")
-		return nil
-	}
-
 	slog.Debug("Running database VACUUM to reclaim space...")
 
 	// VACUUM不能在事务中运行
@@ -1426,20 +1415,14 @@ func (ut *UsageTracker) getDatabaseStatsInternal(ctx context.Context) (*Database
 		}
 	}
 
-	// 获取数据库文件大小（SQLite特有，使用读连接）
-	if ut.adapter.GetDatabaseType() == "sqlite" {
-		var pageCount, pageSize int64
-		err = ut.readDB.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
+	// 获取 SQLite 数据库文件大小（使用读连接）
+	var pageCount, pageSize int64
+	err = ut.readDB.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
+	if err == nil {
+		err = ut.readDB.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
 		if err == nil {
-			err = ut.readDB.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize)
-			if err == nil {
-				stats.DatabaseSize = pageCount * pageSize
-			}
+			stats.DatabaseSize = pageCount * pageSize
 		}
-	} else {
-		// MySQL数据库大小查询（可选）
-		// 这里可以添加查询information_schema来获取表大小的逻辑
-		stats.DatabaseSize = 0
 	}
 
 	// 获取总成本（使用读连接）

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/tracking"
 )
 

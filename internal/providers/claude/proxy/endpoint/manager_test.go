@@ -215,7 +215,7 @@ func TestGetEndpointByNameWithGroups(t *testing.T) {
 			AutoSwitchBetweenGroups: true, // Enable auto switching for this test
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 		Endpoints: []config.EndpointConfig{
 			{
@@ -375,7 +375,7 @@ func TestGroupEventBusPublish(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 		Endpoints: []config.EndpointConfig{
 			{
@@ -514,7 +514,7 @@ func TestGroupEventBusIntegration(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 		Endpoints: []config.EndpointConfig{
 			{

@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -25,7 +25,7 @@ type RegularHandler struct {
 	responseProcessor        ResponseProcessor
 	tokenAnalyzer            TokenAnalyzer
 	retryHandler             RetryHandler
-	errorRecoveryFactory     ErrorRecoveryFactory
+	errorRecovery            ErrorRecoveryManager
 	retryManagerFactory      RetryManagerFactory
 	suspensionManagerFactory SuspensionManagerFactory
 	privacyRedactor          PrivacyRedactor
@@ -42,7 +42,7 @@ func NewRegularHandler(
 	responseProcessor ResponseProcessor,
 	tokenAnalyzer TokenAnalyzer,
 	retryHandler RetryHandler,
-	errorRecoveryFactory ErrorRecoveryFactory,
+	errorRecovery ErrorRecoveryManager,
 	retryManagerFactory RetryManagerFactory,
 	suspensionManagerFactory SuspensionManagerFactory,
 	// 🔧 [Critical修复] 直接接受共享的SuspensionManager实例
@@ -56,7 +56,7 @@ func NewRegularHandler(
 		responseProcessor:        responseProcessor,
 		tokenAnalyzer:            tokenAnalyzer,
 		retryHandler:             retryHandler,
-		errorRecoveryFactory:     errorRecoveryFactory,
+		errorRecovery:            errorRecovery,
 		retryManagerFactory:      retryManagerFactory,
 		suspensionManagerFactory: suspensionManagerFactory,
 		// 🔧 [Critical修复] 使用传入的共享SuspensionManager实例
@@ -123,7 +123,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	// 创建管理器 - 修复依赖注入
 	retryMgr := rh.retryManagerFactory.NewRetryManager()
-	errorRecovery := rh.errorRecoveryFactory.NewErrorRecoveryManager(rh.usageTracker)
+	errorRecovery := rh.errorRecovery
 
 	// 方案B：本次请求链路内"渠道间故障转移"不回访已尝试渠道，避免冷却结束后循环
 	// 支持从外部传入已尝试状态（递归调用时保持状态）
@@ -257,13 +257,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 				// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
-				lifecycleManager.PrepareErrorContext(&errorCtx)
+				lifecycleManager.PrepareErrorContext(errorCtx)
 				lifecycleManager.HandleError(err)
 
 				// 🔢 [关键修复] 分离局部和全局计数语义
 				// localAttempt: 当前端点内的尝试次数，用于退避计算
 				// globalAttemptCount: 全局尝试次数，用于限流策略
-				decision := retryMgr.ShouldRetryWithDecision(&errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
+				decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
 				if decision.FinalStatus == "cancelled" {
 					lifecycleManager.CancelRequest("client disconnected", nil)
 					statusCode := getDefaultStatusCodeForFinalStatus("cancelled")

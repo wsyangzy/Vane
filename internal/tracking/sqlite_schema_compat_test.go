@@ -111,7 +111,6 @@ INSERT INTO model_pricing (
 	}
 
 	adapter, err := NewSQLiteAdapter(DatabaseConfig{
-		Type:         "sqlite",
 		DatabasePath: dbPath,
 		Timezone:     "Asia/Shanghai",
 	})
@@ -195,7 +194,6 @@ INSERT INTO model_pricing (
 func TestSQLiteAdapter_InitSchema_DisablesLegacyLongContextPricingOnce(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "long-context-default.db")
 	adapter, err := NewSQLiteAdapter(DatabaseConfig{
-		Type:         "sqlite",
 		DatabasePath: dbPath,
 		Timezone:     "Asia/Shanghai",
 	})
@@ -305,7 +303,7 @@ func TestSQLiteAdapter_InitSchema_ScopesLegacySettingsByProvider(t *testing.T) {
 	}
 	_ = db.Close()
 
-	adapter, err := NewSQLiteAdapter(DatabaseConfig{Type: "sqlite", DatabasePath: dbPath, Timezone: "Asia/Shanghai"})
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{DatabasePath: dbPath, Timezone: "Asia/Shanghai"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +338,7 @@ func TestSQLiteAdapter_InitSchema_ScopesLegacySettingsByProvider(t *testing.T) {
 
 func TestSQLiteAdapter_InitSchema_NormalizesPausedCodexChannelPriorities(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex-channel-priority.db")
-	adapter, err := NewSQLiteAdapter(DatabaseConfig{Type: "sqlite", DatabasePath: dbPath, Timezone: "Asia/Shanghai"})
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{DatabasePath: dbPath, Timezone: "Asia/Shanghai"})
 	if err != nil {
 		t.Fatal(err)
 	}

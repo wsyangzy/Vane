@@ -74,7 +74,9 @@ import {
 } from '@pages/management/shared/formatters.js';
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '@pages/management/shared/modelMapping.js';
 import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '@pages/management/shared/modelMultiplierRows.js';
+import { selectPersistedEndpoints } from '@pages/management/shared/endpointActions.js';
 import { getCredentialGroupCostMultiplier, getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
+import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
 import {
   getEndpointStorageStatus,
   getEndpointRecords,
@@ -213,20 +215,6 @@ const buildClaudeEndpointCopyOptions = (credentialGroups = [], endpoints = []) =
     })
     .filter((option) => option.value && option.endpointCount > 0)
 );
-
-const buildClaudeEndpointCopyPayload = (endpoint, channelName, credentialGroupId) => ({
-  channel: channelName,
-  credentialGroupId,
-  name: endpoint?.name || '',
-  url: endpoint?.url || endpoint?.baseURL || endpoint?.base_url || '',
-  headers: endpoint?.headers || {},
-  priority: endpoint?.priority,
-  failoverEnabled: endpoint?.failoverEnabled ?? endpoint?.failover_enabled ?? true,
-  skipHealthCheck: endpoint?.skipHealthCheck ?? endpoint?.skip_health_check ?? false,
-  cooldownSeconds: endpoint?.cooldownSeconds ?? endpoint?.cooldown_seconds ?? null,
-  timeoutSeconds: endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 300,
-  supportsCountTokens: endpoint?.supportsCountTokens ?? endpoint?.supports_count_tokens ?? false
-});
 
 const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
   channel: group?.channel || channelName || '',
@@ -2599,7 +2587,7 @@ const ChannelsPage = () => {
   }, [loadGroups, loadStorageStatus]);
 
   const handleSetGroupEndpointFailover = useCallback(async (targetEndpoints = [], enabled) => {
-    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    const targets = selectPersistedEndpoints(targetEndpoints);
     if (targets.length === 0) return;
     try {
       setChannelActionLoading(true);
@@ -2618,7 +2606,7 @@ const ChannelsPage = () => {
   }, [loadGroups, loadStorageStatus]);
 
   const handleSetGroupEndpointSkipHealthCheck = useCallback(async (targetEndpoints = [], skip) => {
-    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    const targets = selectPersistedEndpoints(targetEndpoints);
     if (targets.length === 0) return;
     try {
       setChannelActionLoading(true);

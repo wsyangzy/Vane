@@ -21,4 +21,3 @@ func ChannelKey(ep *Endpoint) string {
 	}
 	return ChannelKeyFromConfig(ep.Config)
 }
-

@@ -165,7 +165,7 @@ graph TB
 
 | 模块 | 路径 | 职责 | 详细文档 |
 |------|------|------|----------|
-| **Endpoint** | `internal/endpoint/` | 端点管理、健康检查、故障转移 | [📄 CLAUDE.md](internal/endpoint/CLAUDE.md) |
+| **Endpoint** | `internal/providers/claude/proxy/endpoint/` | 端点管理、健康检查、故障转移 | [📄 CLAUDE.md](internal/providers/claude/proxy/endpoint/CLAUDE.md) |
 | **Proxy** | `internal/proxy/` | 请求转发、流式处理、错误恢复 | [📄 CLAUDE.md](internal/proxy/CLAUDE.md) |
 | **Tracking** | `internal/tracking/` | 使用追踪、热池架构、数据归档 | [📄 CLAUDE.md](internal/tracking/CLAUDE.md) |
 | **Service** | `internal/service/` | 业务逻辑层（渠道/端点/定价） | [📄 CLAUDE.md](internal/service/CLAUDE.md) |
@@ -299,7 +299,7 @@ cd frontend && npm run dev
 ```bash
 # ✅ 推荐：只运行修改相关的单元测试
 go test ./internal/proxy/...      # 代理模块
-go test ./internal/endpoint/...   # 端点管理
+go test ./internal/providers/claude/proxy/endpoint/...   # 端点管理
 go test ./internal/tracking/...   # 使用量追踪
 go test ./config/...              # 配置模块
 

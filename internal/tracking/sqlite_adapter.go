@@ -1694,11 +1694,6 @@ func (s *SQLiteAdapter) buildSQLiteDSN(dbPath string) string {
 	return basePath + separator + "_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_foreign_keys=1&_busy_timeout=60000"
 }
 
-// GetDatabaseType 返回数据库类型标识
-func (s *SQLiteAdapter) GetDatabaseType() string {
-	return "sqlite"
-}
-
 // diagnoseTimezoneSettings 诊断SQLite时区设置，帮助调试时区不一致问题
 func (s *SQLiteAdapter) diagnoseTimezoneSettings() {
 	// SQLite时区诊断相对简单，因为我们在应用层处理时区

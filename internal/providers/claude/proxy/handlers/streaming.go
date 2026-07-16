@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -23,7 +23,7 @@ type StreamingHandler struct {
 	usageTracker             *tracking.UsageTracker
 	tokenParserFactory       TokenParserFactory
 	streamProcessorFactory   StreamProcessorFactory
-	errorRecoveryFactory     ErrorRecoveryFactory
+	errorRecovery            ErrorRecoveryManager
 	retryManagerFactory      RetryManagerFactory
 	suspensionManagerFactory SuspensionManagerFactory
 	privacyRedactor          PrivacyRedactor
@@ -39,7 +39,7 @@ func NewStreamingHandler(
 	usageTracker *tracking.UsageTracker,
 	tokenParserFactory TokenParserFactory,
 	streamProcessorFactory StreamProcessorFactory,
-	errorRecoveryFactory ErrorRecoveryFactory,
+	errorRecovery ErrorRecoveryManager,
 	retryManagerFactory RetryManagerFactory,
 	suspensionManagerFactory SuspensionManagerFactory,
 	// 🔧 [Critical修复] 直接接受共享的SuspensionManager实例
@@ -52,7 +52,7 @@ func NewStreamingHandler(
 		usageTracker:             usageTracker,
 		tokenParserFactory:       tokenParserFactory,
 		streamProcessorFactory:   streamProcessorFactory,
-		errorRecoveryFactory:     errorRecoveryFactory,
+		errorRecovery:            errorRecovery,
 		retryManagerFactory:      retryManagerFactory,
 		suspensionManagerFactory: suspensionManagerFactory,
 		// 🔧 [Critical修复] 使用传入的共享SuspensionManager实例
@@ -564,7 +564,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 
 			// 🔧 使用增强的RetryManager进行统一决策
-			errorRecovery := sh.errorRecoveryFactory.NewErrorRecoveryManager(sh.usageTracker)
+			errorRecovery := sh.errorRecovery
 			errorCtx := errorRecovery.ClassifyError(lastErr, connID, ep.Config.Name, routeGroup, attempt-1)
 
 			// 🔥 [计费感知分类] 2025-12-29: 根据HasOutputContent()动态调整Stream错误的可重试性
@@ -583,15 +583,15 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			// 🚀 [状态机重构] Phase 4: 分离状态转换与失败原因记录
 			// 预设错误上下文（避免重复分类），由HandleError统一记录失败原因
-			lifecycleManager.PrepareErrorContext(&errorCtx)
+			lifecycleManager.PrepareErrorContext(errorCtx)
 			lifecycleManager.HandleError(lastErr)
 
 			// 使用函数开头创建的重试管理器（避免重复创建）
 			// 🔢 [关键修复] 分离局部和全局计数语义
 			// attempt: 当前端点内的尝试次数，用于退避计算
 			// globalAttemptCount: 全局尝试次数，用于限流策略
-			decision := retryMgr.ShouldRetryWithDecision(&errorCtx, attempt, globalAttemptCount, true) // 流式请求: isStreaming=true
-			lastDecision = &decision                                                                   // 保存决策，供外层逻辑使用
+			decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, true) // 流式请求: isStreaming=true
+			lastDecision = &decision                                                                  // 保存决策，供外层逻辑使用
 
 			// 检查决策结果
 			if decision.FinalStatus == "cancelled" {
@@ -768,7 +768,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					failureReason := "unknown_error"
 					if lastErr != nil {
 						// 重新分类错误以获取准确的失败原因
-						errorRecovery := sh.errorRecoveryFactory.NewErrorRecoveryManager(sh.usageTracker)
+						errorRecovery := sh.errorRecovery
 						errorCtx := errorRecovery.ClassifyError(lastErr, connID, "", "", 0)
 						failureReason = lifecycleManager.MapErrorTypeToFailureReason(errorCtx.ErrorType)
 					}

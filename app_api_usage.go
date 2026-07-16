@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	"ai-relay-forwarder/internal/tracking"
 	"ai-relay-forwarder/internal/utils"

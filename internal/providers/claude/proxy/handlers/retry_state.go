@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 func nextFailoverLoopState(loopCount int, failedChannel, newChannel string, triedChannels, triedEndpoints map[string]struct{}) (int, bool, bool) {

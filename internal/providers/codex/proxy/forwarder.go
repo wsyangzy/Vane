@@ -11,18 +11,21 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"ai-relay-forwarder/internal/transport"
 )
 
 // Forwarder 执行实际的 HTTP 转发
 type Forwarder struct {
 	client             *http.Client
+	transportProvider  *transport.Provider
 	timeout            time.Duration
 	useEndpointTimeout bool
 	logger             *slog.Logger
 }
 
 // NewForwarder 创建转发器实例
-func NewForwarder(timeout time.Duration, logger *slog.Logger) *Forwarder {
+func NewForwarder(timeout time.Duration, logger *slog.Logger, providers ...*transport.Provider) *Forwarder {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
@@ -33,6 +36,7 @@ func NewForwarder(timeout time.Duration, logger *slog.Logger) *Forwarder {
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		transportProvider:  firstTransportProvider(providers...),
 		timeout:            timeout,
 		useEndpointTimeout: true,
 		logger:             logger,
@@ -40,7 +44,7 @@ func NewForwarder(timeout time.Duration, logger *slog.Logger) *Forwarder {
 }
 
 // NewStreamingForwarder 创建流式转发器（无超时）
-func NewStreamingForwarder(logger *slog.Logger) *Forwarder {
+func NewStreamingForwarder(logger *slog.Logger, providers ...*transport.Provider) *Forwarder {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -48,6 +52,7 @@ func NewStreamingForwarder(logger *slog.Logger) *Forwarder {
 		client: &http.Client{
 			Timeout: 0, // 流式请求不设超时
 		},
+		transportProvider:  firstTransportProvider(providers...),
 		timeout:            0,
 		useEndpointTimeout: false,
 		logger:             logger,
@@ -90,7 +95,11 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	removeHopByHopHeaders(req)
 
 	// 执行转发
-	resp, err := f.clientForEndpoint(endpoint).Do(req)
+	client, err := f.clientForEndpoint(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("创建转发客户端失败: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("转发请求失败: %w", err)
 	}
@@ -98,13 +107,28 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	return resp, nil
 }
 
-func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) *http.Client {
-	if !f.useEndpointTimeout || endpoint == nil || endpoint.Timeout <= 0 || endpoint.Timeout == f.timeout {
-		return f.client
+func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) (*http.Client, error) {
+	client := f.client
+	if f.transportProvider != nil {
+		tr, err := f.transportProvider.Default()
+		if err != nil {
+			return nil, err
+		}
+		client = &http.Client{Timeout: f.client.Timeout, Transport: tr}
 	}
-	client := *f.client
-	client.Timeout = endpoint.Timeout
-	return &client
+	if !f.useEndpointTimeout || endpoint == nil || endpoint.Timeout <= 0 || endpoint.Timeout == f.timeout {
+		return client, nil
+	}
+	clientCopy := *client
+	clientCopy.Timeout = endpoint.Timeout
+	return &clientCopy, nil
+}
+
+func firstTransportProvider(providers ...*transport.Provider) *transport.Provider {
+	if len(providers) > 0 && providers[0] != nil {
+		return providers[0]
+	}
+	return nil
 }
 
 // buildTargetURL 构建目标 URL: endpoint.BaseURL + request path + query

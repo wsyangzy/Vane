@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/tracking"
 )
 

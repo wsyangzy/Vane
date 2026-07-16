@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 const maxTurnFingerprintTextBytes = 8192

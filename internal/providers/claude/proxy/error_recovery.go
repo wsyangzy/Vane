@@ -12,40 +12,29 @@ import (
 	"syscall"
 	"time"
 
+	"ai-relay-forwarder/internal/providers/claude/proxy/contracts"
 	"ai-relay-forwarder/internal/tracking"
 )
 
-// ErrorType 错误类型枚举
-type ErrorType int
+type ErrorType = contracts.ErrorType
+type ErrorContext = contracts.ErrorContext
 
 const (
-	ErrorTypeUnknown              ErrorType = iota
-	ErrorTypeNetwork                        // 网络错误（连接失败等，可重试）
-	ErrorTypeEOF                            // EOF 错误（连接中断，不可重试，避免重复计费）
-	ErrorTypeConnectionTimeout              // 连接超时（可重试，未开始处理）
-	ErrorTypeResponseTimeout                // 响应超时（不可重试，可能已计费）
-	ErrorTypeTimeout                        // 超时错误（兼容旧代码，映射到响应超时）
-	ErrorTypeHTTP                           // HTTP错误
-	ErrorTypeServerError                    // 服务器错误（5xx）
-	ErrorTypeStream                         // 流式处理错误
-	ErrorTypeAuth                           // 认证错误
-	ErrorTypeRateLimit                      // 限流错误
-	ErrorTypeParsing                        // 解析错误
-	ErrorTypeClientCancel                   // 客户端取消错误
-	ErrorTypeNoHealthyEndpoints             // 没有健康端点可用
+	ErrorTypeUnknown            = contracts.ErrorTypeUnknown
+	ErrorTypeNetwork            = contracts.ErrorTypeNetwork
+	ErrorTypeEOF                = contracts.ErrorTypeEOF
+	ErrorTypeConnectionTimeout  = contracts.ErrorTypeConnectionTimeout
+	ErrorTypeResponseTimeout    = contracts.ErrorTypeResponseTimeout
+	ErrorTypeTimeout            = contracts.ErrorTypeTimeout
+	ErrorTypeHTTP               = contracts.ErrorTypeHTTP
+	ErrorTypeServerError        = contracts.ErrorTypeServerError
+	ErrorTypeStream             = contracts.ErrorTypeStream
+	ErrorTypeAuth               = contracts.ErrorTypeAuth
+	ErrorTypeRateLimit          = contracts.ErrorTypeRateLimit
+	ErrorTypeParsing            = contracts.ErrorTypeParsing
+	ErrorTypeClientCancel       = contracts.ErrorTypeClientCancel
+	ErrorTypeNoHealthyEndpoints = contracts.ErrorTypeNoHealthyEndpoints
 )
-
-// ErrorContext 错误上下文信息
-type ErrorContext struct {
-	RequestID      string
-	EndpointName   string
-	GroupName      string
-	AttemptCount   int
-	ErrorType      ErrorType
-	OriginalError  error
-	RetryableAfter time.Duration // 建议重试延迟
-	MaxRetries     int
-}
 
 // ErrorRecoveryManager 错误恢复管理器
 // 负责识别错误类型、制定恢复策略、执行恢复操作
@@ -715,43 +704,13 @@ func (erm *ErrorRecoveryManager) calculateBackoffDelay(attempt int) time.Duratio
 	return delay
 }
 
-// String 实现 ErrorType 的字符串方法，用于与重试策略的类型断言兼容
-func (et ErrorType) String() string {
-	switch et {
-	case ErrorTypeNetwork:
-		return "网络"
-	case ErrorTypeEOF:
-		return "EOF中断"
-	case ErrorTypeConnectionTimeout:
-		return "连接超时"
-	case ErrorTypeResponseTimeout:
-		return "响应超时"
-	case ErrorTypeTimeout:
-		return "超时"
-	case ErrorTypeHTTP:
-		return "HTTP"
-	case ErrorTypeServerError:
-		return "服务器"
-	case ErrorTypeStream:
-		return "流处理"
-	case ErrorTypeAuth:
-		return "认证"
-	case ErrorTypeRateLimit:
-		return "限流"
-	case ErrorTypeParsing:
-		return "解析"
-	case ErrorTypeClientCancel:
-		return "客户端取消"
-	case ErrorTypeNoHealthyEndpoints:
-		return "无健康端点"
-	default:
-		return "未知"
-	}
-}
-
 // getErrorTypeName 获取错误类型名称（保持向后兼容）
 func (erm *ErrorRecoveryManager) getErrorTypeName(errorType ErrorType) string {
 	return errorType.String()
+}
+
+func (erm *ErrorRecoveryManager) GetErrorTypeName(errorType ErrorType) string {
+	return erm.getErrorTypeName(errorType)
 }
 
 // SetRetryPolicy 设置重试策略

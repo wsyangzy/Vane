@@ -43,7 +43,7 @@ func DefaultArchiveManagerConfig() ArchiveManagerConfig {
 // ArchiveManager 管理归档写入
 type ArchiveManager struct {
 	archiveChan chan *ArchiveEvent
-	adapter     DatabaseAdapter
+	adapter     *SQLiteAdapter
 	config      ArchiveManagerConfig
 
 	// 🔧 [P3.3 新增] pricingMu 保护 pricing 和 endpointMu 两个 map 的引用替换
@@ -95,7 +95,7 @@ type ArchiveStats struct {
 }
 
 // NewArchiveManager 创建归档管理器
-func NewArchiveManager(adapter DatabaseAdapter, config ArchiveManagerConfig, pricing map[string]ModelPricing, location *time.Location) *ArchiveManager {
+func NewArchiveManager(adapter *SQLiteAdapter, config ArchiveManagerConfig, pricing map[string]ModelPricing, location *time.Location) *ArchiveManager {
 	if config.ChannelSize <= 0 {
 		config.ChannelSize = 1000
 	}
@@ -498,12 +498,6 @@ func (am *ArchiveManager) getDumpFilePath() string {
 	if am.adapter == nil {
 		return ""
 	}
-	dbType := am.adapter.GetDatabaseType()
-	if dbType != "sqlite" {
-		// 非 SQLite 情况下不主动决定路径，避免写入意外位置
-		return ""
-	}
-	// 从 SQLite adapter 拿到 DB 文件路径
 	// 简化做法：直接放在用户 home 下的子目录（与 tracker DatabasePath 同源）
 	homeDir, err := os.UserHomeDir()
 	if err != nil {

@@ -208,8 +208,7 @@ func ensureSchemaForDB(dbPath, timezone string) (err error) {
 	if dbPath == "" {
 		return nil
 	}
-	adapter, err := tracking.NewDatabaseAdapter(tracking.DatabaseConfig{
-		Type:         "sqlite",
+	adapter, err := tracking.NewSQLiteAdapter(tracking.DatabaseConfig{
 		DatabasePath: dbPath,
 		Timezone:     timezone,
 	})

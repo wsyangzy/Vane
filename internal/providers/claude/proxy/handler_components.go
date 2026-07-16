@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/providers/claude/proxy/handlers"
 	"ai-relay-forwarder/internal/providers/claude/proxy/response"
 	"ai-relay-forwarder/internal/tracking"
@@ -53,50 +53,9 @@ func (spa *StreamProcessorAdapter) HasSentContent() bool {
 	return spa.innerProcessor.HasSentContent()
 }
 
-// ErrorRecoveryManagerAdapter 适配 *ErrorRecoveryManager → handlers.ErrorRecoveryManager
-type ErrorRecoveryManagerAdapter struct {
-	innerManager *ErrorRecoveryManager
-}
-
-func (era *ErrorRecoveryManagerAdapter) ClassifyError(err error, connID, endpointName, groupName string, attemptCount int) handlers.ErrorContext {
-	ctx := era.innerManager.ClassifyError(err, connID, endpointName, groupName, attemptCount)
-	return handlers.ErrorContext{
-		RequestID:      ctx.RequestID,
-		EndpointName:   ctx.EndpointName,
-		GroupName:      ctx.GroupName,
-		AttemptCount:   ctx.AttemptCount,
-		ErrorType:      handlers.ErrorType(ctx.ErrorType),
-		OriginalError:  ctx.OriginalError,
-		RetryableAfter: ctx.RetryableAfter,
-		MaxRetries:     ctx.MaxRetries,
-	}
-}
-
-func (era *ErrorRecoveryManagerAdapter) HandleFinalFailure(errorCtx handlers.ErrorContext) {
-	innerCtx := ErrorContext{
-		RequestID:      errorCtx.RequestID,
-		EndpointName:   errorCtx.EndpointName,
-		GroupName:      errorCtx.GroupName,
-		AttemptCount:   errorCtx.AttemptCount,
-		ErrorType:      ErrorType(errorCtx.ErrorType),
-		OriginalError:  errorCtx.OriginalError,
-		RetryableAfter: errorCtx.RetryableAfter,
-		MaxRetries:     errorCtx.MaxRetries,
-	}
-	era.innerManager.HandleFinalFailure(&innerCtx)
-}
-
-func (era *ErrorRecoveryManagerAdapter) GetErrorTypeName(errorType handlers.ErrorType) string {
-	return era.innerManager.getErrorTypeName(ErrorType(errorType))
-}
-
 // TokenAnalyzerAdapter 适配 *response.TokenAnalyzer → handlers.TokenAnalyzer
 type TokenAnalyzerAdapter struct {
 	innerAnalyzer *response.TokenAnalyzer
-}
-
-func (taa *TokenAnalyzerAdapter) AnalyzeResponseForTokens(ctx context.Context, responseBody, endpointName string, r *http.Request) {
-	taa.innerAnalyzer.AnalyzeResponseForTokens(ctx, responseBody, endpointName, r)
 }
 
 func (taa *TokenAnalyzerAdapter) AnalyzeResponseForTokensUnified(responseBytes []byte, connID, endpointName string) (*tracking.TokenUsage, string) {
@@ -161,13 +120,6 @@ func (f *StreamProcessorFactoryImpl) NewStreamProcessor(
 
 	innerProcessor := NewStreamProcessor(concreteTokenParser, usageTracker, w, flusher, requestID, endpoint)
 	return &StreamProcessorAdapter{innerProcessor: innerProcessor}
-}
-
-type ErrorRecoveryFactoryImpl struct{}
-
-func (f *ErrorRecoveryFactoryImpl) NewErrorRecoveryManager(usageTracker *tracking.UsageTracker) handlers.ErrorRecoveryManager {
-	innerManager := NewErrorRecoveryManager(usageTracker)
-	return &ErrorRecoveryManagerAdapter{innerManager: innerManager}
 }
 
 type RetryManagerFactoryImpl struct {

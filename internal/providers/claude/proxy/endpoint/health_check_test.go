@@ -52,4 +52,3 @@ func TestHealthCheck_SkipHealthCheck_RecordsLatencyButKeepsNeverChecked(t *testi
 		t.Fatalf("expected LastCheck to be set")
 	}
 }
-

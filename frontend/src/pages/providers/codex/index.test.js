@@ -1,9 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { buildCodexEndpointMutationPayload, selectPersistedEndpoints } from '../../management/shared/endpointActions.js';
+import { formatMultiplierInputValue } from '../../../utils/multiplier.js';
 
 const source = await import('node:fs').then(({ readFileSync }) => readFileSync(new URL('./index.jsx', import.meta.url), 'utf8'));
 const endpointBadgeSource = await import('node:fs').then(({ readFileSync }) => readFileSync(new URL('../../management/shared/endpointBadges.jsx', import.meta.url), 'utf8'));
 const wailsApiSource = await import('node:fs').then(({ readFileSync }) => readFileSync(new URL('../../../utils/wailsApi.js', import.meta.url), 'utf8'));
+
+test('Codex endpoint mutations preserve endpoint identity and requested state', () => {
+  assert.deepEqual(buildCodexEndpointMutationPayload({
+    name: 'primary',
+    base_url: 'https://codex.test',
+    credential_group_id: 7,
+    priority: 2,
+    timeout_seconds: 90
+  }, { failoverEnabled: false }), {
+    name: 'primary',
+    baseURL: 'https://codex.test',
+    credentialGroupId: 7,
+    priority: 2,
+    timeoutSeconds: 90,
+    failoverEnabled: false
+  });
+});
+
+test('Codex bulk actions target only persisted endpoints', () => {
+  assert.deepEqual(selectPersistedEndpoints([{ id: 1 }, { id: null }, { id: 4 }]), [{ id: 1 }, { id: 4 }]);
+});
+
+test('Codex multiplier form state preserves fractional expressions', () => {
+  assert.equal(formatMultiplierInputValue('40/30'), '40/30');
+});
 
 test('credential-group long-context billing uses a switch and detailed multipliers', () => {
   assert.match(source, /role="switch"/);

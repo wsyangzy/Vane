@@ -56,7 +56,7 @@ func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 			AutoSwitchBetweenGroups: false,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         false,
+			Enabled: false,
 		},
 	}
 

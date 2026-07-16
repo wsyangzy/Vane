@@ -73,6 +73,7 @@ import {
   EndpointRequestFailureBadge as CodexRequestFailureBadge
 } from '@pages/management/shared/endpointBadges.jsx';
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '@pages/management/shared/modelMapping.js';
+import { buildCodexEndpointMutationPayload, selectPersistedEndpoints } from '@pages/management/shared/endpointActions.js';
 import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '@pages/management/shared/modelMultiplierRows.js';
 import {
   activateCodexChannel,
@@ -3361,20 +3362,15 @@ const CodexPage = () => {
   };
 
   const handleSetGroupEndpointFailover = async (targetEndpoints = [], enabled, loadingKey = 'set-group-failover') => {
-    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    const targets = selectPersistedEndpoints(targetEndpoints);
     if (targets.length === 0) return;
     setError('');
     setActionLoading(loadingKey);
     try {
       for (const endpoint of targets) {
-        await updateCodexEndpointByID(endpoint.id, {
-          name: endpoint.name,
-          baseURL: endpoint.baseURL || endpoint.base_url,
-          credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
-          failoverEnabled: enabled,
-          priority: endpoint.priority,
-          timeoutSeconds: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0
-        });
+        await updateCodexEndpointByID(endpoint.id, buildCodexEndpointMutationPayload(endpoint, {
+          failoverEnabled: enabled
+        }));
       }
       await fetchData({ silent: true });
     } catch (err) {
@@ -3385,19 +3381,14 @@ const CodexPage = () => {
   };
 
   const handleSetGroupEndpointSkipHealthCheck = async (targetEndpoints = [], skipHealthCheck, loadingKey = 'set-group-health') => {
-    const targets = targetEndpoints.filter((endpoint) => endpoint?.id);
+    const targets = selectPersistedEndpoints(targetEndpoints);
     if (targets.length === 0) return;
     setActionLoading(loadingKey);
     try {
       for (const endpoint of targets) {
-        await updateCodexEndpointByID(endpoint.id, {
-          name: endpoint.name,
-          baseURL: endpoint.baseURL || endpoint.base_url,
-          credentialGroupId: endpoint.credentialGroupId || endpoint.credential_group_id || 0,
-          skipHealthCheck,
-          priority: endpoint.priority,
-          timeoutSeconds: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0
-        });
+        await updateCodexEndpointByID(endpoint.id, buildCodexEndpointMutationPayload(endpoint, {
+          skipHealthCheck
+        }));
       }
       await fetchData({ silent: true });
     } catch (err) {

@@ -14,6 +14,7 @@ import (
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/transport"
 )
 
 // ServerConfig 服务器配置
@@ -22,6 +23,7 @@ import (
 // v7.3+ 增加 SuspensionMgr 接入请求挂起队列（loop_retry 全部耗尽后等待运维干预）。
 type ServerConfig struct {
 	Timeout       time.Duration
+	Config        *config.Config
 	Retry         config.RetryConfig    // 同端点重试配置（来自设置页 retry.*）
 	Failover      config.FailoverConfig // 故障转移配置（来自设置页 failover.*）
 	SuspensionMgr *SuspensionManager    // 请求挂起队列（nil 时不启用挂起）
@@ -42,7 +44,8 @@ func NewHTTPHandler(manager *EndpointManager, cfg ServerConfig, logger *slog.Log
 		timeout = 300 * time.Second
 	}
 
-	handler := NewHandler(manager, timeout, cfg.Retry, cfg.Failover, cfg.SuspensionMgr, logger, usageTracker, privacyService...)
+	transportProvider := transport.NewProvider(cfg.Config)
+	handler := NewHandlerWithTransport(manager, timeout, cfg.Retry, cfg.Failover, cfg.SuspensionMgr, logger, usageTracker, transportProvider, privacyService...)
 	httpHandler := &HTTPHandler{handler: handler}
 	httpHandler.UpdateLogger(logger)
 	return httpHandler

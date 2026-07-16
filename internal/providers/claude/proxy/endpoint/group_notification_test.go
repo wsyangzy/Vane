@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 // TestGroupChangeNotifications tests the group change notification system
@@ -19,7 +19,7 @@ func TestGroupChangeNotifications(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -139,7 +139,7 @@ func TestGroupCooldownNotifications(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -210,7 +210,7 @@ func TestGroupPauseResumeNotifications(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -313,7 +313,7 @@ func TestGroupNotificationConcurrency(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -411,7 +411,7 @@ func TestGroupNotificationMemoryLeak(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -480,7 +480,7 @@ func TestGroupNotificationBuffering(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -555,7 +555,7 @@ func TestGroupNotificationErrorConditions(t *testing.T) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -609,7 +609,7 @@ func BenchmarkGroupNotificationSubscribe(b *testing.B) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 
@@ -629,7 +629,7 @@ func BenchmarkGroupNotificationBroadcast(b *testing.B) {
 			AutoSwitchBetweenGroups: true,
 		},
 		Failover: config.FailoverConfig{
-			Enabled:         true,
+			Enabled: true,
 		},
 	}
 

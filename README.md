@@ -287,7 +287,7 @@ usage_tracking:
 | 模块     | 路径                   | 职责                           |
 | -------- | ---------------------- | ------------------------------ |
 | 代理引擎 | `internal/providers/claude/proxy/` | 请求转发、流式处理、错误恢复、重试预算 |
-| 端点管理 | `internal/endpoint/` | 端点调度、健康检查（含节流）、故障转移 |
+| 端点管理 | `internal/providers/claude/proxy/endpoint/` | 端点调度、健康检查（含节流）、故障转移 |
 | 使用追踪 | `internal/tracking/` | 热池缓存、数据库写入、统计查询、归档失败降级 |
 | 业务服务 | `internal/service/`  | 设置管理、渠道服务、定价服务 |
 | 数据存储 | `internal/store/`    | SQLite 抽象、Settings 持久化 |

@@ -1,7 +1,40 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { selectPersistedEndpoints } from '../../management/shared/endpointActions.js';
+import { formatMultiplierInputValue } from '../../../utils/multiplier.js';
+import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
 
 const source = await import('node:fs').then(({ readFileSync }) => readFileSync(new URL('./index.jsx', import.meta.url), 'utf8'));
+
+test('Claude endpoint copy payload preserves channel, group and endpoint settings', () => {
+  assert.deepEqual(buildClaudeEndpointCopyPayload({
+    name: 'secondary',
+    base_url: 'https://example.test',
+    failover_enabled: false,
+    skip_health_check: true,
+    timeout_seconds: 45
+  }, 'Claude A', 12), {
+    channel: 'Claude A',
+    credentialGroupId: 12,
+    name: 'secondary',
+    url: 'https://example.test',
+    headers: {},
+    priority: undefined,
+    failoverEnabled: false,
+    skipHealthCheck: true,
+    cooldownSeconds: null,
+    timeoutSeconds: 45,
+    supportsCountTokens: false
+  });
+});
+
+test('Claude bulk actions target only persisted endpoints', () => {
+  assert.deepEqual(selectPersistedEndpoints([{ id: 3 }, {}, null, { id: 0 }, { id: 9 }]), [{ id: 3 }, { id: 9 }]);
+});
+
+test('Claude multiplier form state preserves fractional expressions', () => {
+  assert.equal(formatMultiplierInputValue('40/30'), '40/30');
+});
 
 test('credential-group billing separates standard and conditional long-context multipliers', () => {
   assert.match(source, /role="switch"/);

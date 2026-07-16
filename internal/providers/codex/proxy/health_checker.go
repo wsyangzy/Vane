@@ -3,7 +3,7 @@
 // 记录 RTT 并根据超时情况标记端点健康状态。
 //
 // 配置热生效：interval / timeout / health_path 每次 ticker / 探测时动态从 config 读取，
-// 与 Claude 端 internal/endpoint/health_check.go 的行为保持一致。
+// 与 Claude 端 internal/providers/claude/proxy/endpoint/health_check.go 的行为保持一致。
 
 package codexproxy
 

@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/events"
 	"ai-relay-forwarder/internal/middleware"
 	"ai-relay-forwarder/internal/privacy"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/providers/claude/proxy/handlers"
 	"ai-relay-forwarder/internal/providers/claude/proxy/response"
 	"ai-relay-forwarder/internal/tracking"
@@ -72,7 +72,7 @@ func NewHandler(endpointManager *endpoint.Manager, cfg *config.Config) *Handler 
 	// 创建工厂实例
 	tokenParserFactory := &TokenParserFactoryImpl{}
 	streamProcessorFactory := &StreamProcessorFactoryImpl{}
-	errorRecoveryFactory := &ErrorRecoveryFactoryImpl{}
+	errorRecovery := NewErrorRecoveryManager(nil)
 	retryManagerFactory := &RetryManagerFactoryImpl{
 		config:          cfg,
 		errorRecovery:   NewErrorRecoveryManager(nil), // 临时创建，后续会在工厂中重新创建
@@ -107,7 +107,7 @@ func NewHandler(endpointManager *endpoint.Manager, cfg *config.Config) *Handler 
 		h.responseProcessor,  // 传入已创建的responseProcessor
 		tokenAnalyzerAdapter, // 传入TokenAnalyzer适配器
 		retryHandlerAdapter,  // 传入RetryHandler适配器
-		errorRecoveryFactory,
+		errorRecovery,
 		retryManagerFactory,
 		suspensionManagerFactory,
 		// 🔧 [Critical修复] 传入共享的SuspensionManager实例
@@ -122,7 +122,7 @@ func NewHandler(endpointManager *endpoint.Manager, cfg *config.Config) *Handler 
 		nil, // usageTracker will be set later
 		tokenParserFactory,
 		streamProcessorFactory,
-		errorRecoveryFactory,
+		errorRecovery,
 		retryManagerFactory, // 传递retryManagerFactory
 		suspensionManagerFactory,
 		// 🔧 [Critical修复] 传入相同的共享SuspensionManager实例
@@ -167,7 +167,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 	h.tokenAnalyzer = response.NewTokenAnalyzer(ut, h.retryHandler.monitoringMiddleware, provider)
 
 	// 创建共用的工厂实例
-	errorRecoveryFactory := &ErrorRecoveryFactoryImpl{}
+	errorRecovery := NewErrorRecoveryManager(ut)
 	retryManagerFactory := &RetryManagerFactoryImpl{
 		config:          h.config,
 		errorRecovery:   NewErrorRecoveryManager(nil), // 临时创建，后续会在工厂中重新创建
@@ -193,7 +193,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 			h.responseProcessor,  // responseProcessor
 			tokenAnalyzerAdapter, // tokenAnalyzer适配器
 			retryHandlerAdapter,  // retryHandler适配器
-			errorRecoveryFactory,
+			errorRecovery,
 			retryManagerFactory,
 			suspensionManagerFactory,
 			// 🔧 [Critical修复] 使用保存的共享SuspensionManager实例
@@ -214,7 +214,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 			ut, // 设置usageTracker
 			tokenParserFactory,
 			streamProcessorFactory,
-			errorRecoveryFactory,
+			errorRecovery,
 			retryManagerFactory,
 			suspensionManagerFactory,
 			// 🔧 [Critical修复] 使用保存的共享SuspensionManager实例

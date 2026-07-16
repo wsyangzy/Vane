@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 func TestNextFailoverLoopStateKeepsStateForNewChannel(t *testing.T) {

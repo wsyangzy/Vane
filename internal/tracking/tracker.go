@@ -508,8 +508,8 @@ type UsageTracker struct {
 	// 时区支持
 	location *time.Location // 配置的时区
 
-	// 新增：数据库适配器
-	adapter DatabaseAdapter // 数据库适配器接口
+	// SQLite 数据库适配器
+	adapter *SQLiteAdapter
 
 	// 新增：读写分离组件（从适配器获取）
 	readDB     *sql.DB           // 读连接池 (多连接)
@@ -572,8 +572,8 @@ func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, erro
 		return nil, fmt.Errorf("failed to build database config: %w", err)
 	}
 
-	// 创建数据库适配器
-	adapter, err := NewDatabaseAdapter(dbConfig)
+	// 创建 SQLite 数据库适配器
+	adapter, err := NewSQLiteAdapter(dbConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create database adapter: %w", err)
 	}
@@ -707,7 +707,7 @@ func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, erro
 	ut.initHotPool()
 
 	slog.Info("✅ 使用跟踪器初始化完成",
-		"database_type", adapter.GetDatabaseType(),
+		"database_type", "sqlite",
 		"buffer_size", cfg.BufferSize,
 		"batch_size", cfg.BatchSize,
 		"hot_pool_enabled", ut.hotPoolEnabled)
@@ -876,17 +876,8 @@ func (ut *UsageTracker) applyRetentionPolicy(retentionDays int, runNow bool) err
 func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig, error) {
 	var dbConfig DatabaseConfig
 
-	// 设置数据库类型（仅支持 SQLite）
-	dbConfig.Type = "sqlite"
-
 	// 优先使用新的Database配置
 	if config.Database != nil {
-		// 检查是否配置了 MySQL（已废弃）
-		if config.Database.Type == "mysql" {
-			slog.Warn("⚠️  MySQL 配置已废弃，将使用 SQLite",
-				"reason", "v4.1.0 移除了 MySQL 支持",
-				"suggestion", "请修改配置 type: sqlite 或删除 database.type 配置")
-		}
 		// 兼容：配置里写了 database 但没写 path 时，回退到 DatabasePath（由上层默认填充为用户目录路径）。
 		if config.Database.Path != "" {
 			dbConfig.DatabasePath = config.Database.Path
@@ -968,8 +959,7 @@ func (ut *UsageTracker) initDatabaseWithAdapter() error {
 		return fmt.Errorf("failed to initialize database schema: %w", err)
 	}
 
-	slog.Info("数据库Schema初始化完成",
-		"database_type", ut.adapter.GetDatabaseType())
+	slog.Info("数据库Schema初始化完成", "database_type", "sqlite")
 
 	return nil
 }

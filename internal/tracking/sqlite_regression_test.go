@@ -325,7 +325,7 @@ func TestSQLiteUpsertBehavior(t *testing.T) {
 
 	// 测试adapter的BuildInsertOrReplaceQuery方法
 	t.Run("TestBuildInsertOrReplaceQuery", func(t *testing.T) {
-		adapter := tracker.adapter.(*SQLiteAdapter)
+		adapter := tracker.adapter
 
 		// 测试包含多个字段的情况
 		columns := []string{"request_id", "client_ip", "status", "updated_at"}
@@ -345,7 +345,7 @@ func TestSQLiteUpsertBehavior(t *testing.T) {
 
 	// 测试只有主键的情况
 	t.Run("TestBuildInsertOrReplaceQueryOnlyPrimaryKey", func(t *testing.T) {
-		adapter := tracker.adapter.(*SQLiteAdapter)
+		adapter := tracker.adapter
 
 		columns := []string{"request_id"}
 		values := []string{"?"}

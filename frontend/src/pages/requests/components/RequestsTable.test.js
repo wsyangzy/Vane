@@ -1,10 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {
+  countChannelSwitches,
+  getEndpointChainItems,
+  getRequestNetworkDisplayState,
+  requestHasInterChannelTransfer,
+  summarizeEndpointAttempts
+} from '../utils/endpointChain.js';
+import { getBillableInputTokens, getDisplayTotalTokens } from '../utils/tokenDisplay.js';
 
 const source = fs.readFileSync(new URL('./RequestsTable.jsx', import.meta.url), 'utf8');
 const detailSource = fs.readFileSync(new URL('./RequestDetailModal.jsx', import.meta.url), 'utf8');
 const pageSource = fs.readFileSync(new URL('../index.jsx', import.meta.url), 'utf8');
+
+test('request display calculations preserve retry, transfer and token semantics', () => {
+  const request = {
+    provider: 'codex',
+    input_tokens: 100,
+    cache_read_tokens: 30,
+    output_tokens: 20,
+    retry_count: 2,
+    endpoint_chain: JSON.stringify([
+      { channel: 'A', credential_group: 'default', endpoint: 'one' },
+      { channel: 'A', credential_group: 'default', endpoint: 'one' },
+      { channel: 'B', credential_group: 'backup', endpoint: 'two' }
+    ]),
+    duration_ms: 125,
+    is_streaming: true
+  };
+  const items = getEndpointChainItems(request);
+  assert.equal(requestHasInterChannelTransfer(request), true);
+  assert.equal(countChannelSwitches(items), 1);
+  assert.deepEqual(summarizeEndpointAttempts(request), {
+    attemptCount: 3,
+    retryCount: 2,
+    transferCount: 1,
+    transferred: true,
+    firstEndpoint: 'one',
+    finalEndpoint: 'two'
+  });
+  assert.equal(getBillableInputTokens(request), 70);
+  assert.equal(getDisplayTotalTokens(request), 120);
+  assert.deepEqual(getRequestNetworkDisplayState(request), { durationMs: 125, isStreaming: true });
+});
 
 test('request table never exposes a horizontal scrollbar', () => {
   assert.match(source, /overflow-x-hidden/);

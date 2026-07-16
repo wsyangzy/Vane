@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/events"
 	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/providers/claude/proxy/handlers"
 	"ai-relay-forwarder/internal/tracking"
 )
@@ -734,19 +734,7 @@ func (rlm *RequestLifecycleManager) PrepareErrorContext(errorCtx *handlers.Error
 		return
 	}
 
-	// 将 handlers.ErrorContext 转换为 proxy.ErrorContext，避免跨包指针依赖
-	converted := &ErrorContext{
-		RequestID:      errorCtx.RequestID,
-		EndpointName:   errorCtx.EndpointName,
-		GroupName:      errorCtx.GroupName,
-		AttemptCount:   errorCtx.AttemptCount,
-		ErrorType:      ErrorType(errorCtx.ErrorType),
-		OriginalError:  errorCtx.OriginalError,
-		RetryableAfter: errorCtx.RetryableAfter,
-		MaxRetries:     errorCtx.MaxRetries,
-	}
-
-	rlm.pendingErrorContext = converted
+	rlm.pendingErrorContext = errorCtx
 	rlm.pendingErrorOriginal = errorCtx.OriginalError
 }
 
@@ -810,7 +798,7 @@ func (rlm *RequestLifecycleManager) HandleError(err error) {
 		// 其他错误: 不改变状态，只记录failure_reason
 		// 状态转换由重试逻辑控制(retry/suspended/failed)，不在HandleError中处理
 		if rlm.usageTracker != nil {
-			failureReason := rlm.MapErrorTypeToFailureReason(handlers.ErrorType(errorCtx.ErrorType))
+			failureReason := rlm.MapErrorTypeToFailureReason(errorCtx.ErrorType)
 			chain := rlm.stateManager.AnnotateEndpointChainError(
 				handlers.GetStatusCodeFromError(err, nil),
 				handlers.ExtractUpstreamErrorMessage(err),

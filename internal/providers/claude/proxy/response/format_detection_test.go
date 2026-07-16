@@ -1,10 +1,7 @@
 package response
 
 import (
-	"context"
-	"net/http"
 	"testing"
-	"time"
 
 	"ai-relay-forwarder/internal/monitor"
 	"ai-relay-forwarder/internal/tracking"
@@ -231,7 +228,7 @@ func TestFormatName(t *testing.T) {
 // 这个测试专门验证原始bug场景的修复效果
 func TestTokenParsingBugFix(t *testing.T) {
 	// 原始问题场景：JSON响应包含工具调用中的SSE示例代码
-	problematicResponse := `{"id":"msg_014ZcQTryoxeMyCMKErsjnuc","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_01EHJCK9w1ukF6ZXqaZHhwoJ","name":"Bash","input":{"command":"cat > /tmp/backward_compat.go << 'EOF'\npackage main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc testStandardClaudeAPI() {\n\tfmt.Println(\"🧪 测试标准Claude API响应格式兼容性...\")\n\t\n\t// 标准Claude API的正常SSE流\n\tlines := []string{\n\t\t\"event: message_start\",\n\t\t`+"`"+`data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"model\":\"claude-3-sonnet-20240229\",\"role\":\"assistant\"}}`+"`"+`,\n\t\t\"\",\n\t\t\"event: message_delta\", \n\t\t`+"`"+`data: {\"type\":\"message_delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}`+"`"+`,\n\t\t\"\",\n\t}\n}"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":7,"cache_creation_input_tokens":1223,"cache_read_input_tokens":129351,"cache_creation":{"ephemeral_5m_input_tokens":1223,"ephemeral_1h_input_tokens":0},"output_tokens":1009,"service_tier":"standard"}}`
+	problematicResponse := `{"id":"msg_014ZcQTryoxeMyCMKErsjnuc","type":"message","role":"assistant","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_01EHJCK9w1ukF6ZXqaZHhwoJ","name":"Bash","input":{"command":"cat > /tmp/backward_compat.go << 'EOF'\npackage main\n\nimport (\n\t\"fmt\"\n\t\"strings\"\n)\n\nfunc testStandardClaudeAPI() {\n\tfmt.Println(\"🧪 测试标准Claude API响应格式兼容性...\")\n\t\n\t// 标准Claude API的正常SSE流\n\tlines := []string{\n\t\t\"event: message_start\",\n\t\t` + "`" + `data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"model\":\"claude-3-sonnet-20240229\",\"role\":\"assistant\"}}` + "`" + `,\n\t\t\"\",\n\t\t\"event: message_delta\", \n\t\t` + "`" + `data: {\"type\":\"message_delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hello\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}` + "`" + `,\n\t\t\"\",\n\t}\n}"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":7,"cache_creation_input_tokens":1223,"cache_read_input_tokens":129351,"cache_creation":{"ephemeral_5m_input_tokens":1223,"ephemeral_1h_input_tokens":0},"output_tokens":1009,"service_tier":"standard"}}`
 
 	t.Run("原始bug场景修复验证", func(t *testing.T) {
 		// 测试格式检测
@@ -286,10 +283,6 @@ func TestAllEntryPointsUsingNewFormatDetection(t *testing.T) {
 	// 原始bug响应
 	problematicResponse := `{"id":"msg_123","content":[{"input":{"command":"lines := []string{\"event: message_start\",\"event: message_delta\"}"}}],"usage":{"input_tokens":7,"output_tokens":1009}}`
 
-	ctx := context.Background()
-	req := &http.Request{}
-	req = req.WithContext(context.WithValue(req.Context(), "conn_id", "test-123"))
-
 	t.Run("AnalyzeResponseForTokensUnified入口点", func(t *testing.T) {
 		// 这个入口点已经修复，应该正确识别JSON
 		tokenUsage, modelName := analyzer.AnalyzeResponseForTokensUnified([]byte(problematicResponse), "test-123", "test-endpoint")
@@ -301,23 +294,6 @@ func TestAllEntryPointsUsingNewFormatDetection(t *testing.T) {
 
 		// 应该返回合适的结果（可能是non_token_response，但不应该是SSE相关的）
 		t.Logf("✅ AnalyzeResponseForTokensUnified正确处理：tokenUsage=%v, modelName=%s", tokenUsage, modelName)
-	})
-
-	t.Run("AnalyzeResponseForTokens入口点", func(t *testing.T) {
-		// 这个入口点现在也应该使用新的格式检测
-		analyzer.AnalyzeResponseForTokens(ctx, problematicResponse, "test-endpoint", req)
-
-		// 由于这是void函数，我们通过检查是否没有panic来验证
-		t.Log("✅ AnalyzeResponseForTokens没有panic，使用了新的格式检测")
-	})
-
-	t.Run("AnalyzeResponseForTokensWithLifecycle入口点", func(t *testing.T) {
-		// 这个入口点现在也应该使用新的格式检测
-		mockLifecycleManager := &mockLifecycleManager{}
-		analyzer.AnalyzeResponseForTokensWithLifecycle(ctx, problematicResponse, "test-endpoint", req, mockLifecycleManager)
-
-		// 由于这是void函数，我们通过检查是否没有panic来验证
-		t.Log("✅ AnalyzeResponseForTokensWithLifecycle没有panic，使用了新的格式检测")
 	})
 }
 
@@ -337,7 +313,3 @@ type mockTokenParser struct{}
 func (m *mockTokenParser) ParseSSELine(line string) *monitor.TokenUsage { return nil }
 func (m *mockTokenParser) SetModelName(model string)                    {}
 func (m *mockTokenParser) GetFinalUsage() *tracking.TokenUsage          { return nil }
-
-type mockLifecycleManager struct{}
-
-func (m *mockLifecycleManager) GetDuration() time.Duration { return 0 }

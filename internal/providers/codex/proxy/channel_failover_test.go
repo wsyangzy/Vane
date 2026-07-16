@@ -164,7 +164,7 @@ func TestHandlerStartsEveryRetryRoundFromHighestPriorityChannel(t *testing.T) {
 func newChannelFailoverTestManager(t *testing.T) (*EndpointManager, *sql.DB, func()) {
 	t.Helper()
 	adapter, err := tracking.NewSQLiteAdapter(tracking.DatabaseConfig{
-		Type: "sqlite", DatabasePath: filepath.Join(t.TempDir(), "failover.db"), Timezone: "Asia/Shanghai",
+		DatabasePath: filepath.Join(t.TempDir(), "failover.db"), Timezone: "Asia/Shanghai",
 	})
 	if err != nil {
 		t.Fatal(err)

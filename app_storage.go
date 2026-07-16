@@ -131,8 +131,7 @@ func (a *App) setupStoreDB() {
 
 	// 当 usageTracker 未启用/初始化失败时，仍需要确保管理表（settings/channels/endpoints/model_pricing/codex_providers 等）存在。
 	if a.usageTracker == nil && dbReady {
-		adapter, err := tracking.NewDatabaseAdapter(tracking.DatabaseConfig{
-			Type:         "sqlite",
+		adapter, err := tracking.NewSQLiteAdapter(tracking.DatabaseConfig{
 			DatabasePath: dbPath,
 			Timezone:     a.config.Timezone,
 		})

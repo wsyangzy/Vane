@@ -23,6 +23,7 @@ import (
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/tracking"
+	"ai-relay-forwarder/internal/transport"
 )
 
 // chainNode 端点链路节点（结构化存储）
@@ -98,6 +99,34 @@ func NewHandler(
 	usageTracker *tracking.UsageTracker,
 	privacyService ...*privacy.Service,
 ) *Handler {
+	return newHandler(manager, timeout, retryCfg, failoverCfg, suspensionMgr, logger, usageTracker, nil, privacyService...)
+}
+
+func NewHandlerWithTransport(
+	manager *EndpointManager,
+	timeout time.Duration,
+	retryCfg config.RetryConfig,
+	failoverCfg config.FailoverConfig,
+	suspensionMgr *SuspensionManager,
+	logger *slog.Logger,
+	usageTracker *tracking.UsageTracker,
+	transportProvider *transport.Provider,
+	privacyService ...*privacy.Service,
+) *Handler {
+	return newHandler(manager, timeout, retryCfg, failoverCfg, suspensionMgr, logger, usageTracker, transportProvider, privacyService...)
+}
+
+func newHandler(
+	manager *EndpointManager,
+	timeout time.Duration,
+	retryCfg config.RetryConfig,
+	failoverCfg config.FailoverConfig,
+	suspensionMgr *SuspensionManager,
+	logger *slog.Logger,
+	usageTracker *tracking.UsageTracker,
+	transportProvider *transport.Provider,
+	privacyService ...*privacy.Service,
+) *Handler {
 	// 所有 Codex 代理日志附加 provider=codex，用于文件分流
 	logger = normalizeCodexLogger(logger)
 	var redactor *privacy.Service
@@ -106,8 +135,8 @@ func NewHandler(
 	}
 	return &Handler{
 		manager:        manager,
-		forwarder:      NewForwarder(timeout, logger),
-		streamFwd:      NewStreamingForwarder(logger),
+		forwarder:      NewForwarder(timeout, logger, transportProvider),
+		streamFwd:      NewStreamingForwarder(logger, transportProvider),
 		tokenParser:    NewTokenParser(),
 		classifier:     NewErrorClassifier(),
 		logger:         logger,

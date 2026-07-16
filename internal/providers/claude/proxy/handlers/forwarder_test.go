@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 func TestForwarder_ForwardRequestToEndpoint(t *testing.T) {
@@ -89,10 +89,10 @@ func TestForwarder_CopyHeaders(t *testing.T) {
 
 	// 创建端点配置
 	endpointConfig := config.EndpointConfig{
-		Name:    "test-endpoint",
-		URL:     "https://api.example.com",
-		Token:   "test-token",
-		ApiKey:  "test-api-key",
+		Name:   "test-endpoint",
+		URL:    "https://api.example.com",
+		Token:  "test-token",
+		ApiKey: "test-api-key",
 		Headers: map[string]string{
 			"X-Custom-Header": "custom-value",
 		},
@@ -110,7 +110,7 @@ func TestForwarder_CopyHeaders(t *testing.T) {
 	srcReq.Header.Set("Content-Type", "application/json")
 	srcReq.Header.Set("User-Agent", "Test-Client")
 	srcReq.Header.Set("Authorization", "Bearer client-token") // 应该被覆盖
-	srcReq.Header.Set("X-API-Key", "client-api-key")         // 应该被移除
+	srcReq.Header.Set("X-API-Key", "client-api-key")          // 应该被移除
 
 	// 创建目标请求
 	dstReq := httptest.NewRequest("POST", "https://api.example.com/test", nil)

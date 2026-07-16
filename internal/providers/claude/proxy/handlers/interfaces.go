@@ -6,8 +6,9 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/endpoint"
 	"ai-relay-forwarder/internal/monitor"
+	"ai-relay-forwarder/internal/providers/claude/proxy/contracts"
+	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -79,42 +80,29 @@ type RequestLifecycleManager interface {
 
 // ErrorRecoveryManager 错误恢复管理器接口
 type ErrorRecoveryManager interface {
-	ClassifyError(err error, connID, endpointName, groupName string, attemptCount int) ErrorContext
-	HandleFinalFailure(errorCtx ErrorContext)
+	ClassifyError(err error, connID, endpointName, groupName string, attemptCount int) *ErrorContext
+	HandleFinalFailure(errorCtx *ErrorContext)
 	GetErrorTypeName(errorType ErrorType) string
 }
 
-// ErrorContext 错误上下文信息
-type ErrorContext struct {
-	RequestID      string
-	EndpointName   string
-	GroupName      string
-	AttemptCount   int
-	ErrorType      ErrorType
-	OriginalError  error
-	RetryableAfter time.Duration
-	MaxRetries     int
-}
-
-// ErrorType 错误类型枚举
-// 注意：值顺序必须与 proxy/error_recovery.go 中的 ErrorType 完全一致
-type ErrorType int
+type ErrorType = contracts.ErrorType
+type ErrorContext = contracts.ErrorContext
 
 const (
-	ErrorTypeUnknown            ErrorType = iota // 0: 未知错误
-	ErrorTypeNetwork                             // 1: 网络错误（连接失败等，可重试）
-	ErrorTypeEOF                                 // 2: EOF 错误（连接中断，不可重试，避免重复计费）
-	ErrorTypeConnectionTimeout                   // 3: 连接超时（可重试，未开始处理）
-	ErrorTypeResponseTimeout                     // 4: 响应超时（不可重试，可能已计费）
-	ErrorTypeTimeout                             // 5: 超时错误（兼容旧代码）
-	ErrorTypeHTTP                                // 6: HTTP错误
-	ErrorTypeServerError                         // 7: 服务器错误（5xx）
-	ErrorTypeStream                              // 8: 流式处理错误
-	ErrorTypeAuth                                // 9: 认证错误
-	ErrorTypeRateLimit                           // 10: 限流错误
-	ErrorTypeParsing                             // 11: 解析错误
-	ErrorTypeClientCancel                        // 12: 客户端取消错误
-	ErrorTypeNoHealthyEndpoints                  // 13: 没有健康端点可用
+	ErrorTypeUnknown            = contracts.ErrorTypeUnknown
+	ErrorTypeNetwork            = contracts.ErrorTypeNetwork
+	ErrorTypeEOF                = contracts.ErrorTypeEOF
+	ErrorTypeConnectionTimeout  = contracts.ErrorTypeConnectionTimeout
+	ErrorTypeResponseTimeout    = contracts.ErrorTypeResponseTimeout
+	ErrorTypeTimeout            = contracts.ErrorTypeTimeout
+	ErrorTypeHTTP               = contracts.ErrorTypeHTTP
+	ErrorTypeServerError        = contracts.ErrorTypeServerError
+	ErrorTypeStream             = contracts.ErrorTypeStream
+	ErrorTypeAuth               = contracts.ErrorTypeAuth
+	ErrorTypeRateLimit          = contracts.ErrorTypeRateLimit
+	ErrorTypeParsing            = contracts.ErrorTypeParsing
+	ErrorTypeClientCancel       = contracts.ErrorTypeClientCancel
+	ErrorTypeNoHealthyEndpoints = contracts.ErrorTypeNoHealthyEndpoints
 )
 
 // StreamIncompleteErrorInterface 流不完整错误接口
@@ -160,19 +148,8 @@ type StreamProcessorFactory interface {
 		w http.ResponseWriter, flusher http.Flusher, requestID, endpoint string) StreamProcessor
 }
 
-// ErrorRecoveryFactory 错误恢复管理器工厂接口
-type ErrorRecoveryFactory interface {
-	NewErrorRecoveryManager(usageTracker *tracking.UsageTracker) ErrorRecoveryManager
-}
-
-// RetryHandlerFactory 重试处理器工厂接口
-type RetryHandlerFactory interface {
-	NewRetryHandler(config interface{}) RetryHandler
-}
-
 // TokenAnalyzer Token分析器接口
 type TokenAnalyzer interface {
-	AnalyzeResponseForTokens(ctx context.Context, responseBody, endpointName string, r *http.Request)
 	AnalyzeResponseForTokensUnified(responseBytes []byte, connID, endpointName string) (*tracking.TokenUsage, string)
 }
 
@@ -181,16 +158,6 @@ type ResponseProcessor interface {
 	CopyResponseHeaders(resp *http.Response, w http.ResponseWriter)
 	ProcessResponseBody(resp *http.Response) ([]byte, error)
 	ReadAndDecompressResponse(ctx context.Context, resp *http.Response, endpointName string) ([]byte, error)
-}
-
-// TokenAnalyzerFactory Token分析器工厂接口
-type TokenAnalyzerFactory interface {
-	NewTokenAnalyzer(usageTracker *tracking.UsageTracker) TokenAnalyzer
-}
-
-// ResponseProcessorFactory 响应处理器工厂接口
-type ResponseProcessorFactory interface {
-	NewResponseProcessor() ResponseProcessor
 }
 
 // RetryManagerFactory 重试管理器工厂接口
