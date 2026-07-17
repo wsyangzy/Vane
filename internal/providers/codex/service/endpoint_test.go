@@ -845,6 +845,7 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			name TEXT NOT NULL,
 			api_key TEXT NOT NULL DEFAULT '',
 			is_default INTEGER NOT NULL DEFAULT 0,
+			daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
 			cost_multiplier REAL NOT NULL DEFAULT 1,
 			input_cost_multiplier REAL NOT NULL DEFAULT 1,
 			output_cost_multiplier REAL NOT NULL DEFAULT 1,

@@ -44,6 +44,16 @@ test('credential-group billing separates standard and conditional long-context m
   assert.match(source, /setLongContextSettingsOpen\(true\)/);
 });
 
+test('Claude credential groups preserve single-click switching and use double-click details', () => {
+  assert.match(source, /dailyCostLimitUSD/);
+  assert.match(source, /每日成本限额（USD）/);
+  assert.match(source, /onClick=\{\(\) => setSelectedCredentialGroupID/);
+  assert.match(source, /onDoubleClick=\{\(\) => onOpenCredentialGroup/);
+  assert.match(source, /单击切换，双击查看详情/);
+  assert.match(source, /CredentialGroupDetailModal/);
+  assert.match(source, /onDoubleClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+});
+
 test('new credential groups disable long-context pricing and endpoint details show enabled multipliers', () => {
   assert.match(source, /disableLongContextPricing:\s*group\s*\?\s*Boolean\([\s\S]*?\)\s*:\s*true/);
   assert.match(source, /Long context 分组倍率/);

@@ -212,6 +212,7 @@ type EndpointConfig struct {
 	CredentialGroupID    int64             `yaml:"-"`                 // SQLite Claude 凭证分组 ID
 	CredentialGroupName  string            `yaml:"-"`                 // SQLite Claude 凭证分组显示名
 	CredentialGroupOrder int               `yaml:"-"`                 // SQLite Claude 凭证分组运行时顺序
+	DailyCostLimitUSD    float64           `yaml:"-"`                 // SQLite Claude 凭证分组每日成本限额，0 表示不限额
 	Priority             int               `yaml:"priority"`
 	Group                string            `yaml:"group,omitempty"`             // DEPRECATED in
 	GroupPriority        int               `yaml:"group-priority,omitempty"`    // DEPRECATED in use Priority instead

@@ -145,6 +145,7 @@ INSERT INTO model_pricing (
 		t.Fatalf("expected channels.failover_enabled to exist after InitSchema")
 	}
 	for _, c := range []string{
+		"daily_cost_limit_usd",
 		"long_context_cost_multiplier",
 		"long_context_input_cost_multiplier",
 		"long_context_output_cost_multiplier",
@@ -155,6 +156,9 @@ INSERT INTO model_pricing (
 		if !sqliteColumnExists(t, adapter.GetReadDB(), "claude_credential_groups", c) {
 			t.Fatalf("expected claude_credential_groups.%s to exist after InitSchema", c)
 		}
+	}
+	if !sqliteColumnExists(t, adapter.GetReadDB(), "codex_credential_groups", "daily_cost_limit_usd") {
+		t.Fatalf("expected codex_credential_groups.daily_cost_limit_usd to exist after InitSchema")
 	}
 
 	longContextColumns := []string{

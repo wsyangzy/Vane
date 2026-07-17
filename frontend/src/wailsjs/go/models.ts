@@ -462,6 +462,7 @@ export class UpdateSettingInput {
 	    token_masked: string;
 	    api_key_masked: string;
 	    is_default: boolean;
+	    daily_cost_limit_usd: number;
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -487,6 +488,7 @@ export class UpdateSettingInput {
 	        this.token_masked = source["token_masked"];
 	        this.api_key_masked = source["api_key_masked"];
 	        this.is_default = source["is_default"];
+	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];
@@ -525,6 +527,32 @@ export class UpdateSettingInput {
 	        this.max = source["max"];
 	        this.value = source["value"];
 	        this.timestamp = source["timestamp"];
+	    }
+	}
+	export class CredentialGroupDailyUsage {
+	    provider: string;
+	    channel: string;
+	    group_name: string;
+	    used_usd: number;
+	    limit_usd: number;
+	    remaining_usd: number;
+	    reached: boolean;
+	    reset_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CredentialGroupDailyUsage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.provider = source["provider"];
+	        this.channel = source["channel"];
+	        this.group_name = source["group_name"];
+	        this.used_usd = source["used_usd"];
+	        this.limit_usd = source["limit_usd"];
+	        this.remaining_usd = source["remaining_usd"];
+	        this.reached = source["reached"];
+	        this.reset_at = source["reset_at"];
 	    }
 	}
 	export class ConfigInfo {
@@ -703,6 +731,7 @@ export class UpdateSettingInput {
 	    api_key: string;
 	    api_key_masked: string;
 	    is_default: boolean;
+	    daily_cost_limit_usd: number;
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
@@ -724,6 +753,7 @@ export class UpdateSettingInput {
 	        this.api_key = source["api_key"];
 	        this.api_key_masked = source["api_key_masked"];
 	        this.is_default = source["is_default"];
+	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
@@ -829,6 +859,7 @@ export class UpdateSettingInput {
 	    name: string;
 	    api_key: string;
 	    is_default: boolean;
+	    daily_cost_limit_usd: number;
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
@@ -846,6 +877,7 @@ export class UpdateSettingInput {
 	        this.name = source["name"];
 	        this.api_key = source["api_key"];
 	        this.is_default = source["is_default"];
+	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
@@ -858,6 +890,7 @@ export class UpdateSettingInput {
 	    name: string;
 	    api_key: string;
 	    is_default: boolean;
+	    daily_cost_limit_usd: number;
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
@@ -874,6 +907,7 @@ export class UpdateSettingInput {
 	        this.name = source["name"];
 	        this.api_key = source["api_key"];
 	        this.is_default = source["is_default"];
+	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
@@ -966,6 +1000,7 @@ export class UpdateSettingInput {
 	    token: string;
 	    api_key: string;
 	    is_default: boolean;
+	    daily_cost_limit_usd: number;
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -985,6 +1020,7 @@ export class UpdateSettingInput {
 	        this.token = source["token"];
 	        this.api_key = source["api_key"];
 	        this.is_default = source["is_default"];
+	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];

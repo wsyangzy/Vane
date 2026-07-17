@@ -789,6 +789,19 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := s.migrateLongContextPricingDefault(ctx); err != nil {
 		return err
 	}
+	if err := runMigrations("codex_credential_groups", []struct {
+		checkColumn string
+		alterSQL    string
+		description string
+	}{
+		{
+			checkColumn: "daily_cost_limit_usd",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0",
+			description: "Codex 凭证分组每日成本限额字段",
+		},
+	}); err != nil {
+		return err
+	}
 	if err := runMigrations("codex_endpoints", codexEndpointMigrations); err != nil {
 		return err
 	}
@@ -1274,6 +1287,7 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     token TEXT NOT NULL DEFAULT '',
     api_key TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,
+    daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
     cost_multiplier REAL NOT NULL DEFAULT 1.0,
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
@@ -1317,6 +1331,7 @@ END;`
 		column string
 		ddl    string
 	}{
+		{"daily_cost_limit_usd", `ALTER TABLE claude_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0`},
 		{"long_context_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_input_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_input_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_output_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},

@@ -19,6 +19,12 @@ test('generated App binding exposes the data directory action', () => {
   assert.match(source, /Call\.ByName\("main\.App\.OpenDataDir"\)/);
 });
 
+test('generated App binding exposes credential-group daily usage', () => {
+  const source = readFileSync(new URL('../wailsjs/go/main/App.js', import.meta.url), 'utf8');
+  assert.match(source, /export function GetCredentialGroupDailyUsage\(arg1, arg2, arg3, arg4\)/);
+  assert.match(source, /Call\.ByName\("main\.App\.GetCredentialGroupDailyUsage"/);
+});
+
 test('request network bridge maps snake and camel case fields without losing zero retries', () => {
   const mapped = wailsApi.mapRequestNetworkFields({
     httpStatus: 204,
@@ -107,6 +113,7 @@ test('Codex credential-group bridge preserves cache-write and long-context billi
   assert.equal(typeof wailsApi.buildCodexCredentialGroupPayload, 'function');
 
   const mapped = wailsApi.mapCodexCredentialGroup({
+	 daily_cost_limit_usd: 12.5,
     cacheCreationCostMultiplier: 1.2,
     longContextCostMultiplier: 1.5,
     longContextInputCostMultiplier: 1.1,
@@ -116,6 +123,7 @@ test('Codex credential-group bridge preserves cache-write and long-context billi
     disableLongContextPricing: true
   });
   assert.equal(mapped.cacheCreationCostMultiplier, 1.2);
+	assert.equal(mapped.dailyCostLimitUSD, 12.5);
   assert.equal(mapped.longContextCostMultiplier, 1.5);
   assert.equal(mapped.longContextInputCostMultiplier, 1.1);
   assert.equal(mapped.longContextOutputCostMultiplier, 1.2);
@@ -124,6 +132,7 @@ test('Codex credential-group bridge preserves cache-write and long-context billi
   assert.equal(mapped.disableLongContextPricing, true);
 
   const payload = wailsApi.buildCodexCredentialGroupPayload({
+	 dailyCostLimitUSD: '20.25',
     cacheCreationCostMultiplier: '6/5',
     longContextCostMultiplier: '3/2',
     longContextInputCostMultiplier: '11/10',
@@ -133,6 +142,7 @@ test('Codex credential-group bridge preserves cache-write and long-context billi
     disableLongContextPricing: true
   });
   assert.equal(payload.cacheCreationCostMultiplier, 1.2);
+	assert.equal(payload.daily_cost_limit_usd, 20.25);
   assert.equal(payload.longContextCostMultiplier, 1.5);
   assert.equal(payload.longContextInputCostMultiplier, 1.1);
   assert.equal(payload.longContextOutputCostMultiplier, 1.2);
@@ -143,6 +153,7 @@ test('Codex credential-group bridge preserves cache-write and long-context billi
 
 test('Claude credential-group bridge preserves long-context billing fields', () => {
   const mapped = wailsApi.mapClaudeCredentialGroup({
+	 daily_cost_limit_usd: 8.75,
     long_context_cost_multiplier: 1.25,
     long_context_input_cost_multiplier: 1.1,
     long_context_output_cost_multiplier: 1.2,
@@ -151,6 +162,7 @@ test('Claude credential-group bridge preserves long-context billing fields', () 
     disable_long_context_pricing: true
   });
   assert.equal(mapped.longContextCostMultiplier, 1.25);
+	assert.equal(mapped.dailyCostLimitUSD, 8.75);
   assert.equal(mapped.longContextInputCostMultiplier, 1.1);
   assert.equal(mapped.longContextOutputCostMultiplier, 1.2);
   assert.equal(mapped.longContextCacheCreationCostMultiplier, 1.3);
@@ -158,6 +170,7 @@ test('Claude credential-group bridge preserves long-context billing fields', () 
   assert.equal(mapped.disableLongContextPricing, true);
 
   const payload = wailsApi.buildClaudeCredentialGroupPayload({
+	 dailyCostLimitUSD: '15.5',
     longContextCostMultiplier: '5/4',
     longContextInputCostMultiplier: '11/10',
     longContextOutputCostMultiplier: '6/5',
@@ -166,6 +179,7 @@ test('Claude credential-group bridge preserves long-context billing fields', () 
     disableLongContextPricing: true
   });
   assert.equal(payload.long_context_cost_multiplier, 1.25);
+	assert.equal(payload.daily_cost_limit_usd, 15.5);
   assert.equal(payload.long_context_input_cost_multiplier, 1.1);
   assert.equal(payload.long_context_output_cost_multiplier, 1.2);
   assert.equal(payload.long_context_cache_creation_cost_multiplier, 1.3);

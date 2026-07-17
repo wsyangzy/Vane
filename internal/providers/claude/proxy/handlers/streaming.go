@@ -282,8 +282,35 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			slog.Info(fmt.Sprintf("🔄 [严格优先级转移] [%s] 排除已尝试端点后剩余 %d 个候选端点", connID, len(endpoints)))
 		}
 	}
+	rawEndpoints := endpoints
+	var quotaBlocked bool
+	endpoints, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, sh.usageTracker, endpoints)
 
 	if len(endpoints) == 0 {
+		if quotaBlocked && len(rawEndpoints) > 0 {
+			currentChannel = endpointRouteName(rawEndpoints[0])
+			if triedChannels != nil && currentChannel != "" {
+				triedChannels[currentChannel] = struct{}{}
+			}
+			newChannel, failoverErr := sh.endpointManager.TriggerCredentialGroupLimitFailover(
+				currentChannel,
+				stringSetKeys(triedChannels),
+			)
+			if failoverErr == nil && newChannel != "" {
+				slog.Info("[Claude 分组限额触发渠道间故障转移]",
+					"request_id", connID,
+					"from_channel", currentChannel,
+					"to_channel", newChannel,
+				)
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount)
+				return
+			}
+			message := "All available Claude credential groups reached their daily cost limit"
+			lifecycleManager.FailRequest("daily_cost_limit_exceeded", message, http.StatusTooManyRequests)
+			w.WriteHeader(http.StatusTooManyRequests)
+			terminateSSEStreamWithError(w, flusher, message)
+			return
+		}
 		noHealthyErr := fmt.Errorf("no healthy endpoints available")
 		lifecycleManager.HandleError(noHealthyErr)
 		// 使用 422 (Unprocessable Entity) 而非 503，防止 Claude Code 客户端自动重试
@@ -842,6 +869,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			// 获取渠道内已恢复的端点（之前因冷却被跳过，现在已恢复）
 			recoveredEndpoints := retryMgr.GetRecoveredEndpointsInChannel(triedKeys)
+			recoveredEndpoints, _ = filterCredentialGroupDailyCostLimits(ctx, sh.usageTracker, recoveredEndpoints)
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级重试一次",
 					connID, len(recoveredEndpoints)))

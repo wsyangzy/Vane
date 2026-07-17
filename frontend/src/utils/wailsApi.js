@@ -11,6 +11,12 @@ const parseEndpointMultiplier = (value, fallback = 1.0) => {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
+const parseNonNegativeNumber = (value, fallback = 0) => {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+
 export const parseEndpointPriority = (value, fallback = 0) => {
   if (typeof value === 'string' && value.trim() === '') return fallback;
   if (value === null || value === undefined) return fallback;
@@ -66,6 +72,7 @@ export const mapClaudeCredentialGroup = (group = {}) => ({
   tokenMasked: group.token_masked || group.tokenMasked || '',
   apiKeyMasked: group.api_key_masked || group.apiKeyMasked || '',
   isDefault: Boolean(group.is_default ?? group.isDefault),
+  dailyCostLimitUSD: parseNonNegativeNumber(group.daily_cost_limit_usd ?? group.dailyCostLimitUSD),
   costMultiplier: group.cost_multiplier ?? group.costMultiplier ?? 1.0,
   inputCostMultiplier: group.input_cost_multiplier ?? group.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: group.output_cost_multiplier ?? group.outputCostMultiplier ?? 1.0,
@@ -91,6 +98,7 @@ export const buildClaudeCredentialGroupPayload = (input = {}) => {
     token: (input.token || '').trim(),
     api_key: (input.apiKey || input.api_key || '').trim(),
     is_default: Boolean(input.isDefault || input.is_default),
+    daily_cost_limit_usd: parseNonNegativeNumber(input.dailyCostLimitUSD ?? input.daily_cost_limit_usd),
     cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
     input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
@@ -1957,6 +1965,7 @@ export const mapCodexCredentialGroup = (group) => ({
   apiKeyMasked: group.api_key_masked || group.apiKeyMasked || '',
   isDefault: Boolean(group.is_default ?? group.isDefault),
   is_default: Boolean(group.is_default ?? group.isDefault),
+  dailyCostLimitUSD: parseNonNegativeNumber(group.daily_cost_limit_usd ?? group.dailyCostLimitUSD),
   costMultiplier: group.costMultiplier ?? 1.0,
   inputCostMultiplier: group.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: group.outputCostMultiplier ?? 1.0,
@@ -2012,6 +2021,7 @@ export const buildCodexCredentialGroupPayload = (input) => {
     name: (input?.name || '').trim(),
     api_key: (input?.apiKey || input?.api_key || '').trim(),
     is_default: Boolean(input?.isDefault || input?.is_default),
+    daily_cost_limit_usd: parseNonNegativeNumber(input?.dailyCostLimitUSD ?? input?.daily_cost_limit_usd),
     costMultiplier: parseEndpointMultiplier(input?.costMultiplier),
     inputCostMultiplier: parseEndpointMultiplier(input?.inputCostMultiplier),
     outputCostMultiplier: parseEndpointMultiplier(input?.outputCostMultiplier),
@@ -2143,6 +2153,27 @@ export const setDefaultCodexCredentialGroup = async (id) => {
   if (!WailsApp) throw new Error('Wails not available');
   await WailsApp.SetDefaultCodexCredentialGroup(id);
   return { success: true };
+};
+
+export const getCredentialGroupDailyUsage = async (provider, channel, groupName, limitUSD = 0) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const usage = await WailsApp.GetCredentialGroupDailyUsage(
+    provider,
+    channel,
+    groupName,
+    parseNonNegativeNumber(limitUSD)
+  );
+  return {
+    provider: usage?.provider || provider,
+    channel: usage?.channel || channel,
+    groupName: usage?.group_name || usage?.groupName || groupName,
+    usedUSD: parseNonNegativeNumber(usage?.used_usd ?? usage?.usedUSD),
+    limitUSD: parseNonNegativeNumber(usage?.limit_usd ?? usage?.limitUSD ?? limitUSD),
+    remainingUSD: parseNonNegativeNumber(usage?.remaining_usd ?? usage?.remainingUSD),
+    reached: Boolean(usage?.reached),
+    resetAt: usage?.reset_at || usage?.resetAt || ''
+  };
 };
 
 /**

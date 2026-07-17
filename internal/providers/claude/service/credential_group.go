@@ -195,6 +195,9 @@ func (s *ClaudeCredentialGroupService) normalizeAndValidate(ctx context.Context,
 	record.Name = strings.TrimSpace(record.Name)
 	record.Token = strings.TrimSpace(record.Token)
 	record.ApiKey = strings.TrimSpace(record.ApiKey)
+	if record.DailyCostLimitUSD < 0 {
+		return fmt.Errorf("每日成本限额不能小于 0")
+	}
 	record.CostMultiplier = normalizePositiveMultiplier(record.CostMultiplier)
 	record.InputCostMultiplier = normalizePositiveMultiplier(record.InputCostMultiplier)
 	record.OutputCostMultiplier = normalizePositiveMultiplier(record.OutputCostMultiplier)

@@ -50,6 +50,7 @@ import {
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import LongContextMultiplierSettings from '@pages/management/shared/LongContextMultiplierSettings.jsx';
+import CredentialGroupDetailModal from '@pages/management/shared/CredentialGroupDetailModal.jsx';
 import {
   EndpointHealthBadge as HealthBadge,
   EndpointLatencyBadge as LatencyBadge,
@@ -222,6 +223,7 @@ const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
   token: group?.token || '',
   apiKey: group?.apiKey || group?.api_key || '',
   isDefault: Boolean(group?.isDefault ?? group?.is_default ?? false),
+  dailyCostLimitUSD: String(group?.dailyCostLimitUSD ?? group?.daily_cost_limit_usd ?? 0),
   costMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? group?.cost_multiplier ?? 1.0),
   inputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? group?.input_cost_multiplier ?? 1.0),
   outputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? group?.output_cost_multiplier ?? 1.0),
@@ -1449,6 +1451,14 @@ const ClaudeCredentialGroupFormModal = ({
       return null;
     }
 
+	const dailyCostLimitUSD = Number(formData.dailyCostLimitUSD);
+	if (!Number.isFinite(dailyCostLimitUSD) || dailyCostLimitUSD < 0) {
+	  setError('每日成本限额必须是大于或等于 0 的数字');
+	  setFormStep('details');
+	  setActiveTab('billing');
+	  return null;
+	}
+
     const multiplierError = validateClaudeCredentialGroupMultipliers(formData);
     if (multiplierError) {
       setError(multiplierError);
@@ -1471,6 +1481,7 @@ const ClaudeCredentialGroupFormModal = ({
       name,
       token,
       apiKey,
+	  dailyCostLimitUSD,
       copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
       modelMultipliers: modelMultiplierResult.payload
     };
@@ -1702,6 +1713,19 @@ const ClaudeCredentialGroupFormModal = ({
 
             {activeTab === 'billing' && (
               <div className="space-y-4">
+				<div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+				  <label className="mb-1.5 block text-sm font-medium text-slate-700">每日成本限额（USD）</label>
+				  <input
+					type="number"
+					min="0"
+					step="0.01"
+					value={formData.dailyCostLimitUSD}
+					onChange={(event) => updateField('dailyCostLimitUSD', event.target.value)}
+					className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+					disabled={loading}
+				  />
+				  <p className="mt-1 text-xs text-slate-500">0 表示不限额；达到限额后自动切换到其他凭证分组。</p>
+				</div>
                 <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-700">普通成本倍率</label>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1826,6 +1850,7 @@ const ChannelCard = ({
   onResume,
   onAddEndpoint,
   onAddCredentialGroup,
+	onOpenCredentialGroup,
   onEditCredentialGroup,
   onDeleteCredentialGroup,
   onSetDefaultCredentialGroup,
@@ -2172,6 +2197,8 @@ const ChannelCard = ({
                   return (
                     <span
                       key={group.id}
+					  onDoubleClick={() => onOpenCredentialGroup?.(channelName, group)}
+					  title="单击切换，双击查看详情"
                       className={`inline-flex h-6 max-w-[13rem] flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[11px] transition-colors ${
                         groupIsSelected
                           ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
@@ -2181,7 +2208,7 @@ const ChannelCard = ({
                       <button
                         type="button"
                         onClick={() => setSelectedCredentialGroupID(Number(group.id) || 0)}
-                        title={group.name}
+						title="单击切换，双击查看详情"
                         className="inline-flex min-w-0 items-center gap-1 rounded-sm px-0.5 text-left focus:outline-none focus-visible:outline-none"
                         disabled={loading}
                       >
@@ -2203,6 +2230,7 @@ const ChannelCard = ({
                           <button
                             type="button"
                             onClick={() => onSetDefaultCredentialGroup?.(channelName, group)}
+							onDoubleClick={(event) => event.stopPropagation()}
                             className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-emerald-600 focus:outline-none focus-visible:outline-none"
                             disabled={loading}
                             aria-label="设为默认分组"
@@ -2215,6 +2243,7 @@ const ChannelCard = ({
                         <button
                           type="button"
                           onClick={() => onEditCredentialGroup?.(channelName, group)}
+						  onDoubleClick={(event) => event.stopPropagation()}
                           className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-indigo-600 focus:outline-none focus-visible:outline-none"
                           disabled={loading}
                           aria-label="编辑分组"
@@ -2227,6 +2256,7 @@ const ChannelCard = ({
                           <button
                             type="button"
                             onClick={() => onDeleteCredentialGroup?.(channelName, group)}
+							onDoubleClick={(event) => event.stopPropagation()}
                             className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-rose-600 focus:outline-none focus-visible:outline-none"
                             disabled={loading}
                             aria-label="删除分组"
@@ -2420,6 +2450,7 @@ const ChannelsPage = () => {
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormLoading, setCredentialGroupFormLoading] = useState(false);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
+	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
   // 删除确认状态
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -2805,6 +2836,12 @@ const ChannelsPage = () => {
     });
     return map;
   }, [channelsMeta]);
+	const selectedCredentialGroupDetail = credentialGroupDetailTarget ? {
+	  channelName: credentialGroupDetailTarget.channelName,
+	  group: (credentialGroupsByChannel[credentialGroupDetailTarget.channelName] || []).find(
+		(group) => Number(group.id) === Number(credentialGroupDetailTarget.group?.id)
+	  ) || credentialGroupDetailTarget.group
+	} : null;
   const detailChannelName = detailTarget?.channel || detailTarget?.group || '';
   const detailChannelMeta = channelsMeta.find((item) => item?.name === detailChannelName) || null;
   const detailCredentialGroup = getCredentialGroupForEndpoint(
@@ -3545,6 +3582,7 @@ const ChannelsPage = () => {
                 }
               }}
               onAddCredentialGroup={openCreateCredentialGroupForm}
+			  onOpenCredentialGroup={(channelName, group) => setCredentialGroupDetailTarget({ channelName, group })}
               onEditCredentialGroup={openEditCredentialGroupForm}
               onDeleteCredentialGroup={handleDeleteCredentialGroup}
               onSetDefaultCredentialGroup={handleSetDefaultCredentialGroup}
@@ -3632,6 +3670,19 @@ const ChannelsPage = () => {
           onSubmit={handleSaveCredentialGroup}
         />
       )}
+
+	  {selectedCredentialGroupDetail?.group && (
+		<CredentialGroupDetailModal
+		  provider="claude"
+		  channelName={selectedCredentialGroupDetail.channelName}
+		  group={selectedCredentialGroupDetail.group}
+		  onClose={() => setCredentialGroupDetailTarget(null)}
+		  onEdit={(group) => {
+			setCredentialGroupDetailTarget(null);
+			openEditCredentialGroupForm(selectedCredentialGroupDetail.channelName, group);
+		  }}
+		/>
+	  )}
 
       {/* 删除确认弹窗 */}
       {deleteTarget && (

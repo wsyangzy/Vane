@@ -71,11 +71,11 @@ export const DetailChip = ({ children, tone = 'slate', mono = false, variant = '
   </span>
 );
 
-export const DetailPill = ({ children, icon: Icon, tone = 'slate', mono = false, variant = 'default' }) => (
+export const DetailPill = ({ children, icon: Icon, tone = 'slate', mono = false, variant = 'default', className = '' }) => (
   <span
     className={`inline-flex h-6 max-w-full items-center justify-center gap-1 rounded-full border px-1.5 text-[10px] font-medium leading-none whitespace-nowrap align-middle ${
       mono ? 'font-mono' : ''
-    } ${getToneClass(tone, variant)}`}
+    } ${getToneClass(tone, variant)} ${className}`}
   >
     {Icon && <Icon size={10} className="shrink-0" />}
     <span className="inline-flex min-w-0 items-center justify-center gap-1 leading-none">

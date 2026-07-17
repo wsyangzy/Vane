@@ -100,6 +100,7 @@ type CodexCredentialGroupInfo struct {
 	ApiKey                                 string                                  `json:"api_key"`
 	ApiKeyMasked                           string                                  `json:"api_key_masked"`
 	IsDefault                              bool                                    `json:"is_default"`
+	DailyCostLimitUSD                      float64                                 `json:"daily_cost_limit_usd"`
 	CostMultiplier                         float64                                 `json:"costMultiplier"`
 	InputCostMultiplier                    float64                                 `json:"inputCostMultiplier"`
 	OutputCostMultiplier                   float64                                 `json:"outputCostMultiplier"`
@@ -188,6 +189,7 @@ type CreateCodexCredentialGroupInput struct {
 	Name                                   string                                  `json:"name"`
 	ApiKey                                 string                                  `json:"api_key"`
 	IsDefault                              bool                                    `json:"is_default"`
+	DailyCostLimitUSD                      float64                                 `json:"daily_cost_limit_usd"`
 	CostMultiplier                         float64                                 `json:"costMultiplier"`
 	InputCostMultiplier                    float64                                 `json:"inputCostMultiplier"`
 	OutputCostMultiplier                   float64                                 `json:"outputCostMultiplier"`
@@ -207,6 +209,7 @@ type UpdateCodexCredentialGroupInput struct {
 	Name                                   string                                  `json:"name"`
 	ApiKey                                 string                                  `json:"api_key"`
 	IsDefault                              bool                                    `json:"is_default"`
+	DailyCostLimitUSD                      float64                                 `json:"daily_cost_limit_usd"`
 	CostMultiplier                         float64                                 `json:"costMultiplier"`
 	InputCostMultiplier                    float64                                 `json:"inputCostMultiplier"`
 	OutputCostMultiplier                   float64                                 `json:"outputCostMultiplier"`
@@ -714,7 +717,7 @@ func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	created, err := credentialGroupService.CreateGroup(ctx, codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers))
+	created, err := credentialGroupService.CreateGroup(ctx, codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers))
 	if err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("创建 Codex 凭证分组失败: %w", err)
 	}
@@ -747,7 +750,7 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 	if existing == nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组不存在: %d", id)
 	}
-	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers)
+	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers)
 	if record.ApiKey == "" {
 		record.ApiKey = existing.ApiKey
 	}
@@ -1255,12 +1258,13 @@ func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMa
 	}
 }
 
-func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheCreationCostMultiplier, cacheReadCostMultiplier, longContextCostMultiplier, longContextInputCostMultiplier, longContextOutputCostMultiplier, longContextCacheCreationCostMultiplier, longContextCacheReadCostMultiplier float64, disableLongContextPricing bool, billingOutputTokenSource string, modelMultipliers []codexstore.CodexModelMultiplierRecord) *codexstore.CodexCredentialGroupRecord {
+func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, dailyCostLimitUSD, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheCreationCostMultiplier, cacheReadCostMultiplier, longContextCostMultiplier, longContextInputCostMultiplier, longContextOutputCostMultiplier, longContextCacheCreationCostMultiplier, longContextCacheReadCostMultiplier float64, disableLongContextPricing bool, billingOutputTokenSource string, modelMultipliers []codexstore.CodexModelMultiplierRecord) *codexstore.CodexCredentialGroupRecord {
 	return &codexstore.CodexCredentialGroupRecord{
 		ChannelID:                              channelID,
 		Name:                                   name,
 		ApiKey:                                 apiKey,
 		IsDefault:                              isDefault,
+		DailyCostLimitUSD:                      dailyCostLimitUSD,
 		CostMultiplier:                         costMultiplier,
 		InputCostMultiplier:                    inputCostMultiplier,
 		OutputCostMultiplier:                   outputCostMultiplier,
@@ -1288,6 +1292,7 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		ApiKey:                                 record.ApiKey,
 		ApiKeyMasked:                           maskToken(record.ApiKey),
 		IsDefault:                              record.IsDefault,
+		DailyCostLimitUSD:                      record.DailyCostLimitUSD,
 		CostMultiplier:                         record.CostMultiplier,
 		InputCostMultiplier:                    record.InputCostMultiplier,
 		OutputCostMultiplier:                   record.OutputCostMultiplier,

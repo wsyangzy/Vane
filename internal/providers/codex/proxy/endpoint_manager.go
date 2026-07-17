@@ -26,6 +26,7 @@ type CodexEndpoint struct {
 	CredentialGroupID    int64
 	CredentialGroupName  string
 	CredentialGroupOrder int
+	DailyCostLimitUSD    float64
 	Name                 string
 	BaseURL              string
 	APIKey               string
@@ -256,8 +257,10 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 		}
 		groupName := ""
 		groupOrder := len(groupOrderByID)
+		dailyCostLimitUSD := 0.0
 		if group != nil {
 			groupName = group.Name
+			dailyCostLimitUSD = group.DailyCostLimitUSD
 			if order, ok := groupOrderByID[group.ID]; ok {
 				groupOrder = order
 			}
@@ -268,6 +271,7 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 			CredentialGroupID:    record.CredentialGroupID,
 			CredentialGroupName:  groupName,
 			CredentialGroupOrder: groupOrder,
+			DailyCostLimitUSD:    dailyCostLimitUSD,
 			Name:                 record.Name,
 			BaseURL:              record.BaseURL,
 			APIKey:               apiKey,
