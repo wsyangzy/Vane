@@ -792,6 +792,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 	credentialGroupName := record.CredentialGroupName
 	credentialGroupID := record.CredentialGroupID
 	credentialGroupOrder := 0
+	dailyCostLimitUSD := 0.0
 	if s.credentialGroupStore != nil {
 		var group *store.ClaudeCredentialGroupRecord
 		if record.CredentialGroupID > 0 {
@@ -804,6 +805,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 			credentialGroupID = group.ID
 			credentialGroupName = group.Name
 			credentialGroupOrder = s.credentialGroupOrder(context.Background(), record.Channel, group.ID)
+			dailyCostLimitUSD = group.DailyCostLimitUSD
 			if token == "" {
 				token = group.Token
 			}
@@ -821,6 +823,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		CredentialGroupID:    credentialGroupID,
 		CredentialGroupName:  credentialGroupName,
 		CredentialGroupOrder: credentialGroupOrder,
+		DailyCostLimitUSD:    dailyCostLimitUSD,
 		Priority:             record.Priority,
 		Token:                token,
 		ApiKey:               apiKey,

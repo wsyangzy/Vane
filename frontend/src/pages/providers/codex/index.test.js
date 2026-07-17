@@ -45,6 +45,16 @@ test('credential-group long-context billing uses a switch and detailed multiplie
   assert.match(source, /Long context 缓存读取/);
 });
 
+test('Codex credential groups preserve single-click switching and use double-click details', () => {
+  assert.match(source, /dailyCostLimitUSD/);
+  assert.match(source, /每日成本限额（USD）/);
+  assert.match(source, /onClick=\{\(\) => setSelectedCredentialGroupID/);
+  assert.match(source, /onDoubleClick=\{\(\) => onOpenCredentialGroup/);
+  assert.match(source, /单击切换，双击查看详情/);
+  assert.match(source, /CredentialGroupDetailModal/);
+  assert.match(source, /onDoubleClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+});
+
 test('new credential groups disable long-context pricing and endpoint details show enabled multipliers', () => {
   assert.match(source, /disableLongContextPricing:\s*group\s*\?\s*Boolean\([\s\S]*?\)\s*:\s*true/);
   assert.match(source, /Long context 分组倍率/);
@@ -64,6 +74,15 @@ test('Codex channel priority follows the Claude create and edit flow', () => {
   assert.match(source, /数字越小越优先，相同则交换/);
   assert.match(wailsApiSource, /priority:\s*Number\.parseInt\(input\?\.priority, 10\) \|\| 0/);
   assert.doesNotMatch(wailsApiSource, /priority:\s*Math\.max\(0, Number\.parseInt\(input\?\.priority/);
+});
+
+test('Codex channel creation keeps credentials out of the channel modal', () => {
+  const channelTabs = source.match(/const CODEX_CHANNEL_FORM_TABS = \[([\s\S]*?)\];/)?.[1] || '';
+  assert.match(channelTabs, /基础信息/);
+  assert.match(channelTabs, /模型映射/);
+  assert.doesNotMatch(channelTabs, /凭证分组/);
+  assert.doesNotMatch(source, /activeTab === 'credential'/);
+  assert.match(source, /apiKey: ''/);
 });
 
 test('credential group bulk controls and endpoint rows use current-state repeat and shield icons', () => {

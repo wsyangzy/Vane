@@ -38,6 +38,9 @@ func (s *CodexCredentialGroupService) EnsureDefaultGroup(ctx context.Context, ch
 	if channel == nil {
 		return nil, fmt.Errorf("Codex 渠道为空")
 	}
+	if strings.TrimSpace(channel.ApiKey) == "" {
+		return nil, nil
+	}
 	existing, err := s.groupStore.GetDefaultByChannelID(ctx, channel.ID)
 	if err != nil {
 		return nil, err
@@ -141,6 +144,9 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	}
 	record.Name = strings.TrimSpace(record.Name)
 	record.ApiKey = strings.TrimSpace(record.ApiKey)
+	if record.DailyCostLimitUSD < 0 {
+		return fmt.Errorf("每日成本限额不能小于 0")
+	}
 	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
 	record.CostMultiplier = defaultCodexMultiplier(record.CostMultiplier)
 	record.InputCostMultiplier = defaultCodexMultiplier(record.InputCostMultiplier)

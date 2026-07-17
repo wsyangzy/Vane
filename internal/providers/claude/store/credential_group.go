@@ -17,7 +17,8 @@ type ClaudeCredentialGroupRecord struct {
 	Token   string `json:"token,omitempty"`
 	ApiKey  string `json:"api_key,omitempty"`
 
-	IsDefault bool `json:"is_default"`
+	IsDefault         bool    `json:"is_default"`
+	DailyCostLimitUSD float64 `json:"daily_cost_limit_usd"`
 
 	CostMultiplier                         float64                         `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                         `json:"input_cost_multiplier"`
@@ -80,6 +81,7 @@ func (s *SQLiteClaudeCredentialGroupStore) getQuerier() interface {
 }
 
 const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), COALESCE(api_key, ''), COALESCE(is_default, 0),
+	COALESCE(daily_cost_limit_usd, 0),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
 	COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_creation_cost_multiplier, 1.0),
 	COALESCE(cache_creation_cost_multiplier_1h, 1.0), COALESCE(cache_read_cost_multiplier, 1.0),
@@ -112,15 +114,15 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 
 	result, err := s.getQuerier().ExecContext(ctx, `
 		INSERT INTO claude_credential_groups (
-			channel, name, token, api_key, is_default, cost_multiplier,
+			channel, name, token, api_key, is_default, daily_cost_limit_usd, cost_multiplier,
 			input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h,
 			cache_read_cost_multiplier, long_context_cost_multiplier,
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
 			disable_long_context_pricing, model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.Channel, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.Channel, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.InputCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.OutputCostMultiplier),
@@ -220,7 +222,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 
 	result, err := s.getQuerier().ExecContext(ctx, `
 		UPDATE claude_credential_groups
-		SET name = ?, token = ?, api_key = ?, is_default = ?, cost_multiplier = ?,
+		SET name = ?, token = ?, api_key = ?, is_default = ?, daily_cost_limit_usd = ?, cost_multiplier = ?,
 			input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?,
 			cache_read_cost_multiplier = ?, long_context_cost_multiplier = ?,
@@ -228,7 +230,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 			long_context_cache_creation_cost_multiplier = ?, long_context_cache_read_cost_multiplier = ?,
 			disable_long_context_pricing = ?, model_multipliers = ?
 		WHERE id = ?
-	`, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault),
+	`, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.InputCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.OutputCostMultiplier),
@@ -315,6 +317,7 @@ func scanClaudeCredentialGroupRow(scanner interface {
 	var (
 		record                             ClaudeCredentialGroupRecord
 		isDefault                          int
+		dailyCostLimitUSD                  float64
 		costMultiplier                     float64
 		inputCostMultiplier                float64
 		outputCostMultiplier               float64
@@ -338,6 +341,7 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		&record.Token,
 		&record.ApiKey,
 		&isDefault,
+		&dailyCostLimitUSD,
 		&costMultiplier,
 		&inputCostMultiplier,
 		&outputCostMultiplier,
@@ -360,6 +364,7 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		return nil, fmt.Errorf("读取 Claude 凭证分组失败: %w", err)
 	}
 	record.IsDefault = isDefault != 0
+	record.DailyCostLimitUSD = dailyCostLimitUSD
 	record.CostMultiplier = defaultClaudeGroupStoreMultiplier(costMultiplier)
 	record.InputCostMultiplier = defaultClaudeGroupStoreMultiplier(inputCostMultiplier)
 	record.OutputCostMultiplier = defaultClaudeGroupStoreMultiplier(outputCostMultiplier)

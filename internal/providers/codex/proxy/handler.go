@@ -557,10 +557,14 @@ outerLoop:
 				failedIDs = failedIDs[:0]
 				h.logger.Info("[Codex 渠道间故障转移]", "request_id", requestID, "channel", channelName, "round", loopRound+1)
 			}
+			if errors.Is(lastErr, errCredentialGroupDailyCostLimitExceeded) {
+				break rounds
+			}
 		}
 
 		// loop_retry 全部耗尽 → 尝试挂起等待运维干预（最多挂起一次）
-		canSuspend := !suspendedOnce && h.suspensionMgr != nil &&
+		canSuspend := !errors.Is(lastErr, errCredentialGroupDailyCostLimitExceeded) &&
+			!suspendedOnce && h.suspensionMgr != nil &&
 			h.failoverCfg.LoopRetrySuspendTimeout > 0
 		if !canSuspend {
 			break outerLoop
@@ -612,21 +616,26 @@ outerLoop:
 
 	// 8. 所有循环耗尽 + 挂起也失败
 	statusCode := http.StatusServiceUnavailable
-	if lastStatus >= 400 {
+	failureReason := "endpoint_exhausted"
+	detail := h.buildExhaustedDetail(maxLoops, endpointChain, lastErr, lastStatus, lastSummary)
+	if errors.Is(lastErr, errCredentialGroupDailyCostLimitExceeded) {
+		statusCode = http.StatusTooManyRequests
+		failureReason = "daily_cost_limit_exceeded"
+		detail = "所有可用 Codex 凭证分组均已达到每日成本限额"
+	} else if lastStatus >= 400 {
 		statusCode = lastStatus
 	}
-	detail := h.buildExhaustedDetail(maxLoops, endpointChain, lastErr, lastStatus, lastSummary)
 	h.logger.Error("[Codex 请求失败]",
 		"provider", "codex",
 		"request_id", requestID,
-		"failure_reason", "endpoint_exhausted",
+		"failure_reason", failureReason,
 		"detail", detail,
 		"duration_ms", time.Since(startTime).Milliseconds(),
 		"endpoints_tried", len(endpointChain),
 		"loops_tried", maxLoops,
 		"channel", channelName,
 	)
-	h.recordFailure(requestID, startTime, "endpoint_exhausted", detail, statusCode, nil, requestModel)
+	h.recordFailure(requestID, startTime, failureReason, detail, statusCode, nil, requestModel)
 	h.writeError(w, statusCode, detail)
 }
 
@@ -656,12 +665,17 @@ func (h *Handler) tryEndpointCycle(
 ) cycleResult {
 	// 选择起始端点
 	skippedGroups := h.failedCredentialGroupsForTurn(turnFailureKey)
-	endpoint, err := h.manager.GetPrimaryEndpoint(skippedGroups...)
-	if err != nil && len(*endpointChain) == 0 {
+	var quotaSkippedGroups []credentialGroupRef
+	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpoint(
+		r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+	)
+	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && len(*endpointChain) == 0 {
 		// 新请求不能被上一请求留下的全局 unhealthy 状态直接挡在选路之前。
 		// 仅在尚未产生真实链路时重置一次；凭证分组跳过状态仍然保留。
 		h.manager.ResetUnhealthy()
-		endpoint, err = h.manager.GetPrimaryEndpoint(skippedGroups...)
+		endpoint, quotaSkippedGroups, err = h.selectQuotaEligibleEndpoint(
+			r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+		)
 	}
 	if err != nil {
 		h.logger.Warn("[Codex 当前轮无可用端点]",
@@ -672,7 +686,11 @@ func (h *Handler) tryEndpointCycle(
 			"channel", channelName,
 		)
 		// 交给外层 loop_retry；下一轮会重置历史 unhealthy 状态后重新选路。
-		return cycleResult{completed: false, lastErr: err}
+		status := 0
+		if errors.Is(err, errCredentialGroupDailyCostLimitExceeded) {
+			status = http.StatusTooManyRequests
+		}
+		return cycleResult{completed: false, lastErr: err, lastStatus: status}
 	}
 
 	// 遍历当前轮可用端点
@@ -871,13 +889,16 @@ func (h *Handler) tryEndpointCycle(
 
 		// 选下个端点
 		skippedGroups = h.failedCredentialGroupsForTurn(turnFailureKey)
-		next, nextErr := h.manager.GetNextEndpoint(*failedIDs, skippedGroups...)
+		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpoint(
+			r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, false,
+		)
+		quotaSkippedGroups = updatedQuotaSkippedGroups
 		if nextErr != nil {
 			// 当前轮端点列表耗尽，返回让外层 loop 决定是否再来一轮
 			return cycleResult{
 				completed:   false,
-				lastErr:     fwdErr,
-				lastStatus:  status,
+				lastErr:     endpointCycleLastError(nextErr, fwdErr, status),
+				lastStatus:  quotaAwareStatus(nextErr, status),
 				lastSummary: errSummary,
 			}
 		}

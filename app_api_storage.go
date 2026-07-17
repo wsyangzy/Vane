@@ -98,6 +98,7 @@ type ClaudeCredentialGroupInfo struct {
 	TokenMasked                            string                                      `json:"token_masked"`
 	ApiKeyMasked                           string                                      `json:"api_key_masked"`
 	IsDefault                              bool                                        `json:"is_default"`
+	DailyCostLimitUSD                      float64                                     `json:"daily_cost_limit_usd"`
 	CostMultiplier                         float64                                     `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                                     `json:"input_cost_multiplier"`
 	OutputCostMultiplier                   float64                                     `json:"output_cost_multiplier"`
@@ -122,6 +123,7 @@ type CreateClaudeCredentialGroupInput struct {
 	Token                                  string                                      `json:"token"`
 	ApiKey                                 string                                      `json:"api_key"`
 	IsDefault                              bool                                        `json:"is_default"`
+	DailyCostLimitUSD                      float64                                     `json:"daily_cost_limit_usd"`
 	CostMultiplier                         float64                                     `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                                     `json:"input_cost_multiplier"`
 	OutputCostMultiplier                   float64                                     `json:"output_cost_multiplier"`
@@ -1204,6 +1206,7 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		TokenMasked:                            maskToken(group.Token),
 		ApiKeyMasked:                           maskToken(group.ApiKey),
 		IsDefault:                              group.IsDefault,
+		DailyCostLimitUSD:                      group.DailyCostLimitUSD,
 		CostMultiplier:                         group.CostMultiplier,
 		InputCostMultiplier:                    group.InputCostMultiplier,
 		OutputCostMultiplier:                   group.OutputCostMultiplier,
@@ -1239,6 +1242,7 @@ func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) 
 		Token:                                  input.Token,
 		ApiKey:                                 input.ApiKey,
 		IsDefault:                              input.IsDefault,
+		DailyCostLimitUSD:                      input.DailyCostLimitUSD,
 		CostMultiplier:                         input.CostMultiplier,
 		InputCostMultiplier:                    input.InputCostMultiplier,
 		OutputCostMultiplier:                   input.OutputCostMultiplier,

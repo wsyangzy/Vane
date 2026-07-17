@@ -11,11 +11,12 @@ import (
 // CodexCredentialGroupRecord 表示 Codex 渠道下可复用的凭证分组。
 // 端点引用分组后，可共享 API Key 与默认成本倍率。
 type CodexCredentialGroupRecord struct {
-	ID        int64  `json:"id"`
-	ChannelID int64  `json:"channel_id"`
-	Name      string `json:"name"`
-	ApiKey    string `json:"api_key,omitempty"`
-	IsDefault bool   `json:"is_default"`
+	ID                int64   `json:"id"`
+	ChannelID         int64   `json:"channel_id"`
+	Name              string  `json:"name"`
+	ApiKey            string  `json:"api_key,omitempty"`
+	IsDefault         bool    `json:"is_default"`
+	DailyCostLimitUSD float64 `json:"daily_cost_limit_usd"`
 
 	CostMultiplier                         float64                      `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                      `json:"input_cost_multiplier"`
@@ -77,6 +78,7 @@ func (s *SQLiteCodexCredentialGroupStore) getQuerier() interface {
 }
 
 const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0),
+	COALESCE(daily_cost_limit_usd, 0),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
 	COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_creation_cost_multiplier, 1.0),
 	COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(long_context_cost_multiplier, 1.0),
@@ -108,15 +110,15 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 
 	result, err := s.getQuerier().ExecContext(ctx, `
 		INSERT INTO codex_credential_groups (
-			channel_id, name, api_key, is_default, cost_multiplier,
+			channel_id, name, api_key, is_default, daily_cost_limit_usd, cost_multiplier,
 			input_cost_multiplier, output_cost_multiplier, cache_creation_cost_multiplier,
 			cache_read_cost_multiplier, long_context_cost_multiplier,
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
 			disable_long_context_pricing,
 			billing_output_token_source, model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.ChannelID, record.Name, record.ApiKey, boolToInt(record.IsDefault),
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.ChannelID, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
 		defaultCodexStoreMultiplier(record.OutputCostMultiplier),
@@ -216,7 +218,7 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 
 	result, err := s.getQuerier().ExecContext(ctx, `
 		UPDATE codex_credential_groups
-		SET name = ?, api_key = ?, is_default = ?, cost_multiplier = ?,
+		SET name = ?, api_key = ?, is_default = ?, daily_cost_limit_usd = ?, cost_multiplier = ?,
 			input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_read_cost_multiplier = ?,
 			long_context_cost_multiplier = ?, long_context_input_cost_multiplier = ?,
@@ -224,7 +226,7 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 			long_context_cache_read_cost_multiplier = ?, disable_long_context_pricing = ?,
 			billing_output_token_source = ?, model_multipliers = ?
 		WHERE id = ?
-	`, record.Name, record.ApiKey, boolToInt(record.IsDefault),
+	`, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
 		defaultCodexStoreMultiplier(record.OutputCostMultiplier),
@@ -301,6 +303,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 	var (
 		record                             CodexCredentialGroupRecord
 		isDefault                          int
+		dailyCostLimitUSD                  float64
 		costMultiplier                     float64
 		inputCostMultiplier                float64
 		outputCostMultiplier               float64
@@ -323,6 +326,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&record.Name,
 		&record.ApiKey,
 		&isDefault,
+		&dailyCostLimitUSD,
 		&costMultiplier,
 		&inputCostMultiplier,
 		&outputCostMultiplier,
@@ -345,6 +349,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 		return nil, fmt.Errorf("读取 Codex 凭证分组失败: %w", err)
 	}
 	record.IsDefault = isDefault != 0
+	record.DailyCostLimitUSD = dailyCostLimitUSD
 	record.CostMultiplier = defaultCodexStoreMultiplier(costMultiplier)
 	record.InputCostMultiplier = defaultCodexStoreMultiplier(inputCostMultiplier)
 	record.OutputCostMultiplier = defaultCodexStoreMultiplier(outputCostMultiplier)

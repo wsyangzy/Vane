@@ -191,6 +191,28 @@ func (m *Manager) SelectNextAvailableChannelExcluding(excludeChannels []string) 
 	return m.SelectNextAvailableChannelExcludingWithLoopCount(excludeChannels, 0)
 }
 
+func (m *Manager) selectNextAvailableChannelExcludingWithoutLoop(excludeChannels []string) (string, error) {
+	if m == nil || m.groupManager == nil || m.config == nil {
+		return "", fmt.Errorf("配置未初始化")
+	}
+	exclude := make(map[string]struct{}, len(excludeChannels))
+	for _, name := range excludeChannels {
+		if name != "" {
+			exclude[name] = struct{}{}
+		}
+	}
+	candidates := m.collectFailoverCandidatesExcluding(exclude)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("没有可用的故障转移渠道")
+	}
+	if startPriority, ok := m.getFailoverStartPriority(); ok {
+		sortFailoverCandidatesWithStart(candidates, startPriority)
+	} else {
+		sortFailoverCandidates("priority", candidates)
+	}
+	return candidates[0].name, nil
+}
+
 // SelectNextAvailableChannelExcludingWithLoopCount 选择下一个可用渠道（带循环计数限制）。
 // loopCount: 当前已完成的循环轮数（从 0 开始）。当所有渠道耗尽时，如果启用循环重试且未达到 MaxLoops，将开始新一轮。
 // 返回值: (新渠道名, 是否开始新循环, 错误)
@@ -391,6 +413,42 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 	// 5) 使用防抖机制触发前端刷新
 	m.triggerHealthCheckCompleteDebounced()
 
+	return newChannel, nil
+}
+
+// TriggerCredentialGroupLimitFailover switches channels without changing endpoint health/request-failure state.
+// Daily limits recover automatically, so quota exhaustion must not be persisted as an endpoint failure.
+func (m *Manager) TriggerCredentialGroupLimitFailover(currentChannel string, excludeChannels []string) (string, error) {
+	if m == nil || m.config == nil {
+		return "", fmt.Errorf("配置未初始化")
+	}
+	if !m.config.Failover.Enabled {
+		return "", fmt.Errorf("故障转移未启用")
+	}
+	found := false
+	for _, channel := range excludeChannels {
+		if channel == currentChannel {
+			found = true
+			break
+		}
+	}
+	if currentChannel != "" && !found {
+		excludeChannels = append(excludeChannels, currentChannel)
+	}
+
+	newChannel, err := m.selectNextAvailableChannelExcludingWithoutLoop(excludeChannels)
+	if err != nil {
+		return "", err
+	}
+	if err := m.groupManager.ActivateGroupForFailover(newChannel, false); err != nil {
+		if forceErr := m.groupManager.ActivateGroupForFailover(newChannel, true); forceErr != nil {
+			return "", fmt.Errorf("激活新渠道失败: %w", forceErr)
+		}
+	}
+	if m.onFailoverTriggered != nil {
+		go m.onFailoverTriggered(currentChannel, newChannel)
+	}
+	m.triggerHealthCheckCompleteDebounced()
 	return newChannel, nil
 }
 

@@ -127,6 +127,8 @@ export function GetSettingsByScope(arg1:main.ScopedSettingsInput):Promise<Array<
 
 export function GetSettingsStorageStatus():Promise<main.SettingsStorageStatus>;
 
+export function GetCredentialGroupDailyUsage(arg1:string,arg2:string,arg3:string,arg4:number):Promise<main.CredentialGroupDailyUsage>;
+
 export function GetSuspendedEndpointCounts():Promise<Record<string, number>>;
 
 export function GetSuspendedRequestsCount():Promise<number>;

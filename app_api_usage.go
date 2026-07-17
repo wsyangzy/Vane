@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -43,6 +44,56 @@ type UsageSummary struct {
 	AllTimeTotalCost     float64 `json:"all_time_total_cost"`   // 全部历史成本（数据库）
 	TodayTokens          int64   `json:"today_tokens"`          // 今日 tokens（数据库）
 	AllTimeTotalTokens   int64   `json:"all_time_total_tokens"` // 全部历史 tokens（数据库）
+}
+
+type CredentialGroupDailyUsage struct {
+	Provider     string  `json:"provider"`
+	Channel      string  `json:"channel"`
+	GroupName    string  `json:"group_name"`
+	UsedUSD      float64 `json:"used_usd"`
+	LimitUSD     float64 `json:"limit_usd"`
+	RemainingUSD float64 `json:"remaining_usd"`
+	Reached      bool    `json:"reached"`
+	ResetAt      string  `json:"reset_at"`
+}
+
+func (a *App) GetCredentialGroupDailyUsage(provider, channel, groupName string, limitUSD float64) (CredentialGroupDailyUsage, error) {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	channel = strings.TrimSpace(channel)
+	groupName = strings.TrimSpace(groupName)
+	if provider != "claude" && provider != "codex" {
+		return CredentialGroupDailyUsage{}, fmt.Errorf("不支持的 provider: %s", provider)
+	}
+	if channel == "" || groupName == "" {
+		return CredentialGroupDailyUsage{}, fmt.Errorf("渠道和凭证分组不能为空")
+	}
+	if limitUSD < 0 {
+		return CredentialGroupDailyUsage{}, fmt.Errorf("每日成本限额不能小于 0")
+	}
+
+	a.mu.RLock()
+	usageTracker := a.usageTracker
+	a.mu.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+	defer cancel()
+	usedUSD, resetAt, err := usageTracker.CredentialGroupDailyCost(ctx, provider, channel, groupName)
+	if err != nil {
+		return CredentialGroupDailyUsage{}, fmt.Errorf("查询凭证分组当日成本失败: %w", err)
+	}
+	remainingUSD := 0.0
+	if limitUSD > 0 {
+		remainingUSD = math.Max(limitUSD-usedUSD, 0)
+	}
+	return CredentialGroupDailyUsage{
+		Provider:     provider,
+		Channel:      channel,
+		GroupName:    groupName,
+		UsedUSD:      usedUSD,
+		LimitUSD:     limitUSD,
+		RemainingUSD: remainingUSD,
+		Reached:      limitUSD > 0 && usedUSD >= limitUSD,
+		ResetAt:      resetAt.Format(time.RFC3339),
+	}, nil
 }
 
 // GetUsageSummary 获取使用统计摘要

@@ -252,6 +252,10 @@ export function GetSettingsStorageStatus() {
   return Call.ByName("main.App.GetSettingsStorageStatus");
 }
 
+export function GetCredentialGroupDailyUsage(arg1, arg2, arg3, arg4) {
+  return Call.ByName("main.App.GetCredentialGroupDailyUsage", arg1, arg2, arg3, arg4);
+}
+
 export function GetSuspendedEndpointCounts() {
   return Call.ByName("main.App.GetSuspendedEndpointCounts");
 }

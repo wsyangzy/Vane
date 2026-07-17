@@ -145,7 +145,32 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			// 后续获取，排除已尝试的端点
 			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpointsExcluding(ctx, stringSetKeys(triedEndpoints)))
 		}
+		rawEndpoints := endpoints
+		var quotaBlocked bool
+		endpoints, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, endpoints)
 		if len(endpoints) == 0 {
+			if quotaBlocked && len(rawEndpoints) > 0 {
+				currentChannel := endpointRouteName(rawEndpoints[0])
+				if currentChannel != "" {
+					triedChannels[currentChannel] = struct{}{}
+				}
+				newChannel, failoverErr := rh.endpointManager.TriggerCredentialGroupLimitFailover(
+					currentChannel,
+					stringSetKeys(triedChannels),
+				)
+				if failoverErr == nil && newChannel != "" {
+					slog.Info("[Claude 分组限额触发渠道间故障转移]",
+						"request_id", connID,
+						"from_channel", currentChannel,
+						"to_channel", newChannel,
+					)
+					continue
+				}
+				message := "All available Claude credential groups reached their daily cost limit"
+				lifecycleManager.FailRequest("daily_cost_limit_exceeded", message, http.StatusTooManyRequests)
+				http.Error(w, message, http.StatusTooManyRequests)
+				return
+			}
 			noHealthyErr := fmt.Errorf("no healthy endpoints available")
 			lifecycleManager.HandleError(noHealthyErr)
 			lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
@@ -405,6 +430,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 			// 检查是否有已恢复的端点
 			recoveredEndpoints := retryMgr.GetRecoveredEndpointsInChannel(triedKeys)
+			recoveredEndpoints, _ = filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, recoveredEndpoints)
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级顺序重试",
 					connID, len(recoveredEndpoints)))

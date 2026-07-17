@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
 	token TEXT,
 	api_key TEXT,
 	is_default INTEGER DEFAULT 0,
+	daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
 	cost_multiplier REAL DEFAULT 1.0,
 	input_cost_multiplier REAL DEFAULT 1.0,
 	output_cost_multiplier REAL DEFAULT 1.0,

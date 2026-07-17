@@ -67,6 +67,7 @@ import {
 } from '@pages/management/shared/formatters.js';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import LongContextMultiplierSettings from '@pages/management/shared/LongContextMultiplierSettings.jsx';
+import CredentialGroupDetailModal from '@pages/management/shared/CredentialGroupDetailModal.jsx';
 import {
   EndpointHealthBadge as CodexHealthBadge,
   EndpointLatencyBadge as CodexLatencyBadge,
@@ -141,41 +142,20 @@ const sortEndpointsByPriority = (endpoints = []) => (
   })
 );
 
-const buildChannelCredentialGroupFields = (group, channel) => ({
-  credentialGroupId: group?.id || 0,
-  credentialGroupName: group?.name || '默认分组',
-  credentialGroupApiKey: group?.apiKey || (!group ? channel?.apiKey || '' : ''),
-  credentialGroupCostMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? 1.0),
-  credentialGroupInputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? 1.0),
-  credentialGroupOutputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? 1.0),
-  credentialGroupCacheCreationCostMultiplier: formatMultiplierInputValue(group?.cacheCreationCostMultiplier ?? 1.0),
-  credentialGroupCacheReadCostMultiplier: formatMultiplierInputValue(group?.cacheReadCostMultiplier ?? 1.0),
-  credentialGroupLongContextCostMultiplier: formatMultiplierInputValue(group?.longContextCostMultiplier ?? 1.0),
-  credentialGroupLongContextInputCostMultiplier: formatMultiplierInputValue(group?.longContextInputCostMultiplier ?? 1.0),
-  credentialGroupLongContextOutputCostMultiplier: formatMultiplierInputValue(group?.longContextOutputCostMultiplier ?? 1.0),
-  credentialGroupLongContextCacheCreationCostMultiplier: formatMultiplierInputValue(group?.longContextCacheCreationCostMultiplier ?? 1.0),
-  credentialGroupLongContextCacheReadCostMultiplier: formatMultiplierInputValue(group?.longContextCacheReadCostMultiplier ?? 1.0),
-  credentialGroupDisableLongContextPricing: group ? Boolean(group.disableLongContextPricing) : true,
-  credentialGroupBillingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens'
+const buildInitialChannelForm = (channel) => ({
+  name: channel?.name || '',
+  website: channel?.website || '',
+  model: channel?.model || '',
+  priority: channel ? String(channel.priority ?? 0) : '',
+  failoverEnabled: channel?.failoverEnabled !== false,
+  modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
 });
-
-const buildInitialChannelForm = (channel) => {
-  const defaultGroup = getDefaultCredentialGroup(channel);
-  return {
-    name: channel?.name || '',
-    website: channel?.website || '',
-    model: channel?.model || '',
-    priority: channel ? String(channel.priority ?? 0) : '',
-    failoverEnabled: channel?.failoverEnabled !== false,
-    ...buildChannelCredentialGroupFields(defaultGroup, channel),
-    modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
-  };
-};
 
 const buildInitialCredentialGroupForm = (group, channel) => ({
   name: group?.name || '',
   apiKey: group?.apiKey || '',
   isDefault: Boolean(group?.isDefault || group?.is_default || (!group && getCredentialGroups(channel).length === 0)),
+  dailyCostLimitUSD: String(group?.dailyCostLimitUSD ?? group?.daily_cost_limit_usd ?? 0),
   costMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? 1.0),
   inputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? 1.0),
   outputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? 1.0),
@@ -194,7 +174,6 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
 
 const CODEX_CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
-  { key: 'credential', label: '凭证分组' },
   { key: 'mapping', label: '模型映射' }
 ];
 
@@ -360,18 +339,14 @@ const CodexLogo = ({ className = 'w-6 h-6' }) => (
 );
 
 // ============================================================================
-// 渠道编辑弹窗（渠道信息 + 创建时的默认凭证分组；model/reasoning/1M 已迁移到全局设置）
+// 渠道编辑弹窗（凭证分组在渠道卡片中独立维护）
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
   const isWails = isWailsEnvironment();
   const isEdit = mode === 'edit';
-  const channelFormTabs = isEdit
-    ? CODEX_CHANNEL_FORM_TABS.filter((tab) => tab.key !== 'credential')
-    : CODEX_CHANNEL_FORM_TABS;
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
@@ -415,47 +390,17 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
     });
   };
 
-  const buildCredentialGroupPayload = () => {
-    const multiplierResult = parseEndpointMultiplierPayload({
-      costMultiplier: formData.credentialGroupCostMultiplier,
-      inputCostMultiplier: formData.credentialGroupInputCostMultiplier,
-      outputCostMultiplier: formData.credentialGroupOutputCostMultiplier,
-      cacheCreationCostMultiplier: formData.credentialGroupCacheCreationCostMultiplier,
-      cacheReadCostMultiplier: formData.credentialGroupCacheReadCostMultiplier,
-      longContextCostMultiplier: formData.credentialGroupLongContextCostMultiplier,
-      longContextInputCostMultiplier: formData.credentialGroupLongContextInputCostMultiplier,
-      longContextOutputCostMultiplier: formData.credentialGroupLongContextOutputCostMultiplier,
-      longContextCacheCreationCostMultiplier: formData.credentialGroupLongContextCacheCreationCostMultiplier,
-      longContextCacheReadCostMultiplier: formData.credentialGroupLongContextCacheReadCostMultiplier
-    });
-    if (multiplierResult.error) {
-      return { error: multiplierResult.error };
-    }
-    return {
-      payload: {
-        id: formData.credentialGroupId || 0,
-        name: formData.credentialGroupName.trim(),
-        apiKey: formData.credentialGroupApiKey.trim(),
-        isDefault: true,
-        ...multiplierResult.payload,
-        disableLongContextPricing: formData.credentialGroupDisableLongContextPricing,
-        billingOutputTokenSource: formData.credentialGroupBillingOutputTokenSource
-      }
-    };
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
 
     const payload = {
       name: formData.name.trim(),
-      apiKey: isEdit ? '' : formData.credentialGroupApiKey.trim(),
+      apiKey: '',
       website: formData.website.trim(),
       model: formData.model.trim(),
       modelMapping: buildModelMappingPayload(formData.modelMappingRows),
       priority: isEdit ? Math.max(0, Number.parseInt(formData.priority, 10) || 0) : -1,
-      failoverEnabled: formData.failoverEnabled,
-      credentialGroup: null
+      failoverEnabled: formData.failoverEnabled
     };
 
     if (!payload.name) {
@@ -464,25 +409,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       return;
     }
 
-    if (!isEdit) {
-      const credentialGroupResult = buildCredentialGroupPayload();
-      if (credentialGroupResult.error) {
-        setActiveTab('credential');
-        setFieldError(credentialGroupResult.error);
-        return;
-      }
-      payload.credentialGroup = credentialGroupResult.payload;
-      if (!payload.credentialGroup.name || !payload.credentialGroup.apiKey) {
-        setActiveTab('credential');
-        setFieldError('请填写默认凭证分组名称和 API Key');
-        return;
-      }
-    }
-
     await onSave?.(payload);
   };
-
-  const apiKeyInputType = showApiKey ? 'text' : 'password';
 
   return renderModalPortal(
     <div
@@ -517,11 +445,11 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={channelFormTabs}
+              tabs={CODEX_CHANNEL_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
-              className={isEdit ? 'grid-cols-2' : 'grid-cols-3'}
+              className="grid-cols-2"
               buttonPaddingClass="px-2"
             />
           </div>
@@ -598,81 +526,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               </p>
             </div>
               </>
-            ) : activeTab === 'credential' ? (
-              <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-900">默认凭证分组</h3>
-                  <p className="mt-0.5 text-xs text-slate-500">创建渠道时会同时创建默认分组；多个服务商分组可在渠道卡片中继续添加和编辑。</p>
-                </div>
-                <Input
-                  label="默认凭证分组名称"
-                  value={formData.credentialGroupName}
-                  onChange={(event) => updateField('credentialGroupName', event.target.value)}
-                  placeholder="例如：默认分组 / 高倍率组"
-                  disabled={loading}
-                />
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">默认凭证分组 API Key</label>
-              <div className="relative">
-                <input
-                  type={apiKeyInputType}
-                  value={formData.credentialGroupApiKey}
-                  onChange={(event) => updateField('credentialGroupApiKey', event.target.value)}
-                  placeholder="sk-..."
-                  autoComplete="new-password"
-                  data-form-type="other"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-11 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-credentials-auto-fill-button]:hidden"
-                />
-                <Tooltip
-                  content={showApiKey ? '隐藏 API Key' : '显示 API Key'}
-                  className="absolute right-2 top-1/2 -translate-y-1/2"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((prev) => !prev)}
-                    className="rounded-md p-1 text-slate-400 transition-colors hover:text-slate-600"
-                  >
-                    {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </Tooltip>
-              </div>
-            </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">成本倍率</label>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {[
-                      ['credentialGroupCostMultiplier', '总倍率'],
-                      ['credentialGroupInputCostMultiplier', '输入'],
-                      ['credentialGroupOutputCostMultiplier', '输出'],
-                      ['credentialGroupCacheReadCostMultiplier', '缓存']
-                    ].map(([key, label]) => (
-                      <div key={key}>
-                        <label className="mb-1 block text-xs text-slate-500">{label}</label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={formData[key]}
-                          onChange={(event) => updateField(key, event.target.value)}
-                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                          placeholder="1.0"
-                          disabled={loading}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-1 text-xs text-slate-400">成本倍率直接作为该分组下 Codex 端点的计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">输出计费口径</label>
-                  <CustomSelect
-                    options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
-                    value={formData.credentialGroupBillingOutputTokenSource}
-                    onChange={(value) => updateField('credentialGroupBillingOutputTokenSource', value)}
-                    size="md"
-                    fullWidth
-                  />
-                </div>
-              </div>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
@@ -824,6 +677,13 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
       setActiveTab('basic');
       return null;
     }
+	const dailyCostLimitUSD = Number(formData.dailyCostLimitUSD);
+	if (!Number.isFinite(dailyCostLimitUSD) || dailyCostLimitUSD < 0) {
+	  setFieldError('每日成本限额必须是大于或等于 0 的数字');
+	  setFormStep('details');
+	  setActiveTab('billing');
+	  return null;
+	}
     const multiplierResult = parseEndpointMultiplierPayload({
       costMultiplier: formData.costMultiplier,
       inputCostMultiplier: formData.inputCostMultiplier,
@@ -853,6 +713,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
       name,
       apiKey,
       isDefault: formData.isDefault,
+	  dailyCostLimitUSD,
       copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
       ...multiplierResult.payload,
       disableLongContextPricing: formData.disableLongContextPricing,
@@ -1051,6 +912,19 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
 
             {activeTab === 'billing' && (
               <div className="space-y-4">
+				<div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+				  <label className="mb-1.5 block text-sm font-medium text-slate-700">每日成本限额（USD）</label>
+				  <input
+					type="number"
+					min="0"
+					step="0.01"
+					value={formData.dailyCostLimitUSD}
+					onChange={(event) => updateField('dailyCostLimitUSD', event.target.value)}
+					className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+					disabled={loading}
+				  />
+				  <p className="mt-1 text-xs text-slate-500">0 表示不限额；达到限额后自动切换到其他凭证分组。</p>
+				</div>
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">普通成本倍率</label>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -2305,6 +2179,7 @@ const ChannelCard = ({
   onEditChannel,
   onDeleteChannel,
   onAddCredentialGroup,
+	onOpenCredentialGroup,
   onEditCredentialGroup,
   onSetDefaultCredentialGroup,
   onDeleteCredentialGroup,
@@ -2627,6 +2502,8 @@ const ChannelCard = ({
                 return (
                   <span
                     key={group.id}
+					onDoubleClick={() => onOpenCredentialGroup?.(channel, group)}
+					title="单击切换，双击查看详情"
                     className={`inline-flex h-6 max-w-[13rem] flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[11px] transition-colors ${
                       groupIsSelected
                         ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
@@ -2636,7 +2513,7 @@ const ChannelCard = ({
                     <button
                       type="button"
                       onClick={() => setSelectedCredentialGroupID(Number(group.id) || 0)}
-                      title={group.name}
+					  title="单击切换，双击查看详情"
                       className="inline-flex min-w-0 items-center gap-1 rounded-sm px-0.5 text-left focus:outline-none focus-visible:outline-none"
                     >
                       <KeyRound
@@ -2657,6 +2534,7 @@ const ChannelCard = ({
                         <button
                           type="button"
                           onClick={() => onSetDefaultCredentialGroup?.(channel, group)}
+						  onDoubleClick={(event) => event.stopPropagation()}
                           disabled={isDefaultingGroup}
                           className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-emerald-600 focus:outline-none focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
                           aria-label="设为默认分组"
@@ -2668,6 +2546,7 @@ const ChannelCard = ({
                     <button
                       type="button"
                       onClick={() => onEditCredentialGroup?.(channel, group)}
+					  onDoubleClick={(event) => event.stopPropagation()}
                       className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-indigo-600 focus:outline-none focus-visible:outline-none"
                     >
                       <Pencil size={10} />
@@ -2676,6 +2555,7 @@ const ChannelCard = ({
                       <button
                         type="button"
                         onClick={() => onDeleteCredentialGroup?.(channel, group)}
+						onDoubleClick={(event) => event.stopPropagation()}
                         className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-rose-600 focus:outline-none focus-visible:outline-none"
                       >
                         <Trash2 size={10} />
@@ -2858,6 +2738,7 @@ const CodexPage = () => {
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
   const [deleteCredentialGroupTarget, setDeleteCredentialGroupTarget] = useState(null);
+	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
   // 端点弹窗（创建 + 编辑共用 EndpointFormModal）
   const [showEndpointForm, setShowEndpointForm] = useState(false);
@@ -2877,6 +2758,14 @@ const CodexPage = () => {
       endpointDetailTarget.endpoint;
     return { channelOwner: latestChannel, endpoint: latestEndpoint };
   })() : null;
+	const selectedCredentialGroupDetail = credentialGroupDetailTarget ? (() => {
+	  const latestChannel = channels.find((channel) => channel.id === credentialGroupDetailTarget.channel?.id) ||
+		credentialGroupDetailTarget.channel;
+	  const latestGroup = getCredentialGroups(latestChannel).find(
+		(group) => Number(group.id) === Number(credentialGroupDetailTarget.group?.id)
+	  ) || credentialGroupDetailTarget.group;
+	  return { channel: latestChannel, group: latestGroup };
+	})() : null;
   const allEndpoints = channels.flatMap((channel) =>
     (channel.endpoints || []).map((endpoint) => ({ channel, endpoint }))
   );
@@ -3114,32 +3003,10 @@ const CodexPage = () => {
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
-      const { credentialGroup, ...channelPayload } = payload;
       if (channelFormMode === 'edit' && editingChannel) {
-        await updateCodexChannelByID(editingChannel.id, channelPayload);
-        if (credentialGroup?.id) {
-          await updateCodexCredentialGroupByID(credentialGroup.id, credentialGroup);
-        } else if (credentialGroup) {
-          await createCodexCredentialGroup({
-            ...credentialGroup,
-            channelId: editingChannel.id
-          });
-        }
+        await updateCodexChannelByID(editingChannel.id, payload);
       } else {
-        await createCodexChannel(channelPayload);
-        if (credentialGroup) {
-          const latestChannels = await getCodexChannels();
-          const createdChannel = latestChannels.find((channel) => channel.name === channelPayload.name);
-          const defaultGroup = getDefaultCredentialGroup(createdChannel);
-          if (defaultGroup?.id) {
-            await updateCodexCredentialGroupByID(defaultGroup.id, credentialGroup);
-          } else if (createdChannel?.id) {
-            await createCodexCredentialGroup({
-              ...credentialGroup,
-              channelId: createdChannel.id
-            });
-          }
-        }
+        await createCodexChannel(payload);
       }
       await fetchData({ silent: true });
       closeChannelForm();
@@ -3531,6 +3398,7 @@ const CodexPage = () => {
               onEditChannel={openEditChannelForm}
               onDeleteChannel={(c) => setDeleteChannelTarget(c)}
               onAddCredentialGroup={openCreateCredentialGroupForm}
+			  onOpenCredentialGroup={(channelOwner, group) => setCredentialGroupDetailTarget({ channel: channelOwner, group })}
               onEditCredentialGroup={openEditCredentialGroupForm}
               onSetDefaultCredentialGroup={handleSetDefaultCredentialGroup}
               onDeleteCredentialGroup={(channelOwner, group) =>
@@ -3582,6 +3450,19 @@ const CodexPage = () => {
           onSave={handleSaveCredentialGroup}
         />
       )}
+
+	  {selectedCredentialGroupDetail?.group && (
+		<CredentialGroupDetailModal
+		  provider="codex"
+		  channel={selectedCredentialGroupDetail.channel}
+		  group={selectedCredentialGroupDetail.group}
+		  onClose={() => setCredentialGroupDetailTarget(null)}
+		  onEdit={(group) => {
+			setCredentialGroupDetailTarget(null);
+			openEditCredentialGroupForm(selectedCredentialGroupDetail.channel, group);
+		  }}
+		/>
+	  )}
 
       {showEndpointForm && (
         <EndpointFormModal
