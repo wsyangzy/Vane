@@ -129,7 +129,7 @@ func (m *Manager) performHealthChecks() {
 	// 健康检查覆盖范围（与 TODO.md 的资源优化要求对齐）：
 	// - 启用“渠道间故障转移”时：检查所有“参与故障转移”的渠道，且仅检查其中参与故障转移的端点
 	// - 未启用时：只检查当前活跃渠道中参与故障转移的端点
-	if m.config.Failover.Enabled {
+	if m.IsFailoverEnabled() {
 		for _, ep := range snapshot {
 			if ep == nil {
 				continue
@@ -598,7 +598,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	// 根据渠道间故障转移状态筛选需要检测的端点
 	var endpointsToCheck []*Endpoint
 
-	if m.config.Failover.Enabled {
+	if m.IsFailoverEnabled() {
 		// 开启渠道间转移：检测所有参与的渠道中参与转移的端点
 		for _, ep := range snapshot {
 			if ep == nil {

@@ -86,8 +86,7 @@ func (a *App) GetNextAvailableChannel(excludeChannel string) (string, error) {
 	if manager == nil {
 		return "", fmt.Errorf("端点管理器未初始化")
 	}
-	cfg := manager.GetConfig()
-	if cfg == nil || !cfg.Failover.Enabled {
+	if !manager.IsFailoverEnabled() {
 		return "", fmt.Errorf("渠道间故障转移未启用")
 	}
 
@@ -113,9 +112,6 @@ func (a *App) ActivateGroup(name string) error {
 		return fmt.Errorf("端点管理器未初始化")
 	}
 
-	// 🛑 [手动重试] 记录故障转移排序起点（用户选择的渠道）
-	manager.SetFailoverStartChannel(name)
-
 	// 如果有 endpointService，同步到数据库
 	if endpointService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -126,7 +122,10 @@ func (a *App) ActivateGroup(name string) error {
 			if logger != nil {
 				logger.Warn("激活渠道失败", "channel", name, "error", err)
 			}
+			return err
 		} else {
+			// 🛑 [手动重试] 仅在激活成功后更新故障转移排序起点。
+			manager.SetFailoverStartChannel(name)
 			if logger != nil {
 				logger.Info("✅ 渠道已同步到数据库", "channel", name, "enabled", true)
 			}
@@ -135,6 +134,7 @@ func (a *App) ActivateGroup(name string) error {
 	}
 
 	// 内存中激活组（兼容 YAML 模式）
+	manager.SetFailoverStartChannel(name)
 	return manager.ManualActivateGroup(name)
 }
 
@@ -160,10 +160,7 @@ func (a *App) PauseGroup(name string) error {
 			}
 		}
 	}
-	autoSwitchEnabled := false
-	if cfg := manager.GetConfig(); cfg != nil {
-		autoSwitchEnabled = cfg.Failover.Enabled
-	}
+	autoSwitchEnabled := manager.IsFailoverEnabled()
 
 	// 暂停/恢复为"无限期直到手动恢复"，且在 SQLite 模式下持久化到 channels.failover_enabled
 	if channelService != nil {
@@ -222,8 +219,7 @@ func (a *App) IsInterChannelFailoverEnabled() bool {
 		return false
 	}
 
-	cfg := manager.GetConfig()
-	return cfg != nil && cfg.Failover.Enabled
+	return manager.IsFailoverEnabled()
 }
 
 // ResumeGroup 恢复指定组

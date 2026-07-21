@@ -496,7 +496,7 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 	}()
 
 	// 根据渠道间转移配置决定等待模式
-	isChannelFailoverEnabled := sm.config.Failover.Enabled
+	isChannelFailoverEnabled := sm.endpointManager != nil && sm.endpointManager.IsFailoverEnabled()
 	allowEndpointRecovery := isChannelFailoverEnabled && !manualOnly
 	if manualOnly {
 		slog.InfoContext(ctx, fmt.Sprintf("⏸️ [循环终止等待] 连接 %s 请求已挂起，等待用户操作 (当前挂起数: %d)",

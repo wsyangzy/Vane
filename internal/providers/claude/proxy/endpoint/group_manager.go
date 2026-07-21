@@ -33,6 +33,8 @@ type GroupManager struct {
 	mutex                  sync.RWMutex
 	channelPriorities      map[string]int
 	channelFailoverEnabled map[string]bool
+	activationRevision     uint64
+	failoverEnabled        bool
 	// Group change notification subscribers
 	groupChangeSubscribers []chan string
 	subscriberMutex        sync.RWMutex
@@ -46,6 +48,7 @@ func NewGroupManager(cfg *config.Config) *GroupManager {
 		config:                 cfg,
 		channelPriorities:      make(map[string]int),
 		channelFailoverEnabled: make(map[string]bool),
+		failoverEnabled:        cfg != nil && cfg.Failover.Enabled,
 		groupChangeSubscribers: make([]chan string, 0),
 	}
 }
@@ -56,6 +59,13 @@ func (gm *GroupManager) UpdateConfig(cfg *config.Config) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 	gm.config = cfg
+	gm.failoverEnabled = cfg != nil && cfg.Failover.Enabled
+}
+
+func (gm *GroupManager) SetFailoverEnabled(enabled bool) {
+	gm.mutex.Lock()
+	gm.failoverEnabled = enabled
+	gm.mutex.Unlock()
 }
 
 // UpdateChannelPriorities 更新“渠道(channel)”的优先级映射。
@@ -267,7 +277,7 @@ func (gm *GroupManager) updateActiveGroups() {
 	// SQLite 模式下，禁用自动激活逻辑（由 enabled 字段控制）
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
 	// Failover.Enabled 仅控制"渠道间"故障转移/自动切换行为
-	autoSwitchEnabled := gm.config.Failover.Enabled
+	autoSwitchEnabled := gm.failoverEnabled
 
 	var newlyActivatedGroup string
 
@@ -341,19 +351,11 @@ func (gm *GroupManager) updateActiveGroups() {
 			}
 
 			// Determine activation strategy based on startup vs runtime context
-			var shouldAutoActivate bool
+			shouldAutoActivate := isActualStartup
 			if isActualStartup {
-				shouldAutoActivate = true
 				slog.Debug("🚀 [组管理] 检测到系统启动 - 尝试激活最高优先级可用组")
 			} else {
-				autoSwitchEnabled := gm.config.Failover.Enabled
-				if !autoSwitchEnabled && gm.config.Failover.SuspendOnExhausted {
-					shouldAutoActivate = false
-					slog.Debug("⏸️ [组管理] 运行时故障且启用挂起 - 不激活其他组，等待挂起处理")
-				} else {
-					shouldAutoActivate = true
-					slog.Debug("🔄 [组管理] 运行时故障但未启用挂起 - 尝试激活可用组")
-				}
+				slog.Debug("⏸️ [组管理] 渠道间故障转移已关闭 - 运行时不自动激活其他渠道")
 			}
 
 			if shouldAutoActivate {
@@ -370,7 +372,6 @@ func (gm *GroupManager) updateActiveGroups() {
 						if hasHealthyEndpoints {
 							wasActive := group.IsActive
 							group.IsActive = true
-							autoSwitchEnabled := gm.config.Failover.Enabled
 							if isActualStartup {
 								if autoSwitchEnabled {
 									slog.Info(fmt.Sprintf("🚀 [自动模式] 启动时激活最高优先级可用组: %s (有健康端点)", group.Name))
@@ -391,6 +392,25 @@ func (gm *GroupManager) updateActiveGroups() {
 				}
 			}
 		}
+	}
+	activationChanged := false
+	for name, wasActive := range previousActiveGroups {
+		group := gm.groups[name]
+		if wasActive != (group != nil && group.IsActive) {
+			activationChanged = true
+			break
+		}
+	}
+	if !activationChanged {
+		for name, group := range gm.groups {
+			if group != nil && group.IsActive != previousActiveGroups[name] {
+				activationChanged = true
+				break
+			}
+		}
+	}
+	if activationChanged {
+		gm.activationRevision++
 	}
 
 	// Notify subscribers if a group was newly activated
@@ -484,8 +504,12 @@ func (gm *GroupManager) SetGroupCooldown(groupName string) {
 	defer gm.mutex.Unlock()
 
 	if group, exists := gm.groups[groupName]; exists {
+		wasActive := group.IsActive
 		group.IsActive = false
 		group.ManuallyPaused = true
+		if wasActive {
+			gm.activationRevision++
+		}
 		slog.Warn(fmt.Sprintf("⏸️ [渠道暂停] 渠道 %s 已停用，需要手动点击\"重试\"按钮重新激活", groupName))
 
 		// Update active groups after state change
@@ -518,11 +542,21 @@ func (gm *GroupManager) ManualActivateGroup(groupName string) error {
 	return gm.ManualActivateGroupWithForce(groupName, false)
 }
 
-// ActivateGroupForFailover 渠道间故障转移激活组（不记录手动激活时间）
-// force: 当为true时，即使组内没有健康端点也强制激活
-// 冷却机制已移除
-func (gm *GroupManager) ActivateGroupForFailover(groupName string, force bool) error {
-	return gm.activateGroupInternal(groupName, force, false)
+// ActivateGroupForFailover 渠道间故障转移激活组（不记录手动激活时间）。
+// expectedActiveGroup 是自动决策开始时的活跃渠道；如果用户已切换到其他渠道，
+// 则返回当前渠道并拒绝过期激活，避免旧请求覆盖较新的手动选择。
+func (gm *GroupManager) ActivateGroupForFailover(groupName, expectedActiveGroup string, expectedRevision uint64, force bool) (string, uint64, bool, error) {
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+
+	currentActiveGroup := gm.activeGroupNameLocked()
+	if expectedActiveGroup != "" && (currentActiveGroup != expectedActiveGroup || gm.activationRevision != expectedRevision) {
+		return currentActiveGroup, gm.activationRevision, false, nil
+	}
+	if err := gm.activateGroupInternalLocked(groupName, force, false); err != nil {
+		return currentActiveGroup, gm.activationRevision, false, err
+	}
+	return groupName, gm.activationRevision, true, nil
 }
 
 // ManualActivateGroupWithForce manually activates a specific group and deactivates others
@@ -535,7 +569,10 @@ func (gm *GroupManager) ManualActivateGroupWithForce(groupName string, force boo
 func (gm *GroupManager) activateGroupInternal(groupName string, force bool, recordManual bool) error {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
+	return gm.activateGroupInternalLocked(groupName, force, recordManual)
+}
 
+func (gm *GroupManager) activateGroupInternalLocked(groupName string, force bool, recordManual bool) error {
 	targetGroup, exists := gm.groups[groupName]
 	if !exists {
 		return fmt.Errorf("组不存在: %s", groupName)
@@ -603,6 +640,7 @@ func (gm *GroupManager) activateGroupInternal(groupName string, force bool, reco
 
 	// 激活目标组
 	targetGroup.IsActive = true
+	gm.activationRevision++
 	if recordManual {
 		targetGroup.ManualActivationTime = time.Now()
 	}
@@ -636,6 +674,29 @@ func (gm *GroupManager) activateGroupInternal(groupName string, force bool, reco
 	return nil
 }
 
+func (gm *GroupManager) activeGroupNameLocked() string {
+	for _, group := range gm.groups {
+		if group != nil && group.IsActive {
+			return group.Name
+		}
+	}
+	return ""
+}
+
+// ActiveGroupSnapshot 返回当前活跃渠道及激活版本，用于自动故障转移的 CAS。
+func (gm *GroupManager) ActiveGroupSnapshot() (string, uint64) {
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+	return gm.activeGroupNameLocked(), gm.activationRevision
+}
+
+// IsActivationCurrent 判断自动激活结果是否仍是当前状态。
+func (gm *GroupManager) IsActivationCurrent(groupName string, revision uint64) bool {
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+	return gm.activeGroupNameLocked() == groupName && gm.activationRevision == revision
+}
+
 // WasGroupManuallyActivatedSince 判断组是否在指定时间之后被手动激活
 func (gm *GroupManager) WasGroupManuallyActivatedSince(groupName string, since time.Time) bool {
 	if gm == nil {
@@ -664,6 +725,7 @@ func (gm *GroupManager) DeactivateGroup(groupName string) error {
 
 	if targetGroup.IsActive {
 		targetGroup.IsActive = false
+		gm.activationRevision++
 		slog.Info(fmt.Sprintf("🔴 [组管理] 组已停用: %s", groupName))
 	}
 
@@ -689,6 +751,7 @@ func (gm *GroupManager) ManualPauseGroup(groupName string, duration time.Duratio
 	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
 	if !isSQLiteMode && targetGroup.IsActive {
 		targetGroup.IsActive = false
+		gm.activationRevision++
 	}
 	// 重新评估活跃组（非 SQLite 模式下可即时切换到其他可用渠道）
 	gm.updateActiveGroups()

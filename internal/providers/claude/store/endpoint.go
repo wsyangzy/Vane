@@ -88,6 +88,9 @@ type EndpointStore interface {
 	ListByChannel(ctx context.Context, channel string) ([]*EndpointRecord, error)
 	ListByCredentialGroupID(ctx context.Context, credentialGroupID int64) ([]*EndpointRecord, error)
 	ListEnabled(ctx context.Context) ([]*EndpointRecord, error)
+	SetActiveChannel(ctx context.Context, channel string) error
+	SetActiveEndpoint(ctx context.Context, id int64) error
+	SetChannelEnabled(ctx context.Context, channel string, enabled bool) error
 
 	// 优先级管理
 	GetMaxPriorityByChannelCredentialGroup(ctx context.Context, channel string, credentialGroupID int64) (int, error)
@@ -608,6 +611,61 @@ func (s *SQLiteEndpointStore) ListEnabled(ctx context.Context) ([]*EndpointRecor
 	`
 
 	return s.scanEndpoints(ctx, query)
+}
+
+// SetActiveChannel 原子切换当前活跃渠道，避免逐条 disable/enable 产生双活或半完成状态。
+func (s *SQLiteEndpointStore) SetActiveChannel(ctx context.Context, channel string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		UPDATE endpoints
+		SET enabled = CASE WHEN channel = ? THEN 1 ELSE 0 END,
+			updated_at = (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+		WHERE enabled != CASE WHEN channel = ? THEN 1 ELSE 0 END
+	`
+	if _, err := s.getQuerier().ExecContext(ctx, query, channel, channel); err != nil {
+		return fmt.Errorf("切换活跃渠道失败: %w", err)
+	}
+	return nil
+}
+
+// SetActiveEndpoint 原子切换当前路由端点，并同步其所属渠道为活跃渠道。
+func (s *SQLiteEndpointStore) SetActiveEndpoint(ctx context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `
+		UPDATE endpoints
+		SET enabled = CASE WHEN id = ? THEN 1 ELSE 0 END,
+			updated_at = (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+		WHERE enabled != CASE WHEN id = ? THEN 1 ELSE 0 END
+	`
+	if _, err := s.getQuerier().ExecContext(ctx, query, id, id); err != nil {
+		return fmt.Errorf("切换活跃端点失败: %w", err)
+	}
+	return nil
+}
+
+// SetChannelEnabled 原子更新指定渠道下所有端点的启用状态。
+func (s *SQLiteEndpointStore) SetChannelEnabled(ctx context.Context, channel string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	value := 0
+	if enabled {
+		value = 1
+	}
+	query := `
+		UPDATE endpoints
+		SET enabled = ?,
+			updated_at = (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+		WHERE channel = ? AND enabled != ?
+	`
+	if _, err := s.getQuerier().ExecContext(ctx, query, value, channel, value); err != nil {
+		return fmt.Errorf("更新渠道启用状态失败: %w", err)
+	}
+	return nil
 }
 
 // Count 获取端点总数

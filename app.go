@@ -258,19 +258,26 @@ func (a *App) startup() {
 	})
 
 	// 设置故障转移回调：以“渠道(channel)”为单位同步数据库状态
-	a.endpointManager.SetOnFailoverTriggered(func(failedChannel, newChannel string) {
+	a.endpointManager.SetOnFailoverTriggered(func(failedChannel, newChannel string, activationRevision uint64) (bool, error) {
 		if a.endpointService != nil {
 			ctx := context.Background()
 			if newChannel != "" {
-				if err := a.endpointService.ActivateChannel(ctx, newChannel); err != nil {
+				applied, err := a.endpointService.ActivateChannelForFailover(ctx, newChannel, failedChannel, activationRevision)
+				if err != nil {
 					slog.Warn(fmt.Sprintf("⚠️ [故障转移回调] 激活新渠道失败: %s - %v", newChannel, err))
+					return false, err
+				} else if !applied {
+					slog.Info(fmt.Sprintf("⏭️ [故障转移回调] 活跃渠道已由其他操作更新，跳过过期同步: %s → %s", failedChannel, newChannel))
+					return false, nil
+				} else {
+					slog.Info(fmt.Sprintf("✅ [故障转移回调] 渠道已切换并同步数据库: %s → %s", failedChannel, newChannel))
 				}
 			}
-			slog.Info(fmt.Sprintf("✅ [故障转移回调] 渠道已切换并同步数据库: %s → %s", failedChannel, newChannel))
 		}
 
 		// 推送事件到前端
 		a.emitEndpointUpdate()
+		return true, nil
 	})
 
 	// 7. 初始化端点存储 (SQLite, 需要在创建 Manager 之后)
@@ -2046,6 +2053,9 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
 	// 记录旧值用于检测状态变化
 	oldFailoverEnabled := a.config.Failover.Enabled
 	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
+	if a.endpointManager != nil {
+		a.endpointManager.SetFailoverEnabled(a.config.Failover.Enabled)
+	}
 	// 当渠道间转移从禁用变为启用时，重置所有渠道的暂停状态
 	// 同时更新数据库，避免后续从数据库同步时恢复旧的暂停状态
 	if !oldFailoverEnabled && a.config.Failover.Enabled && a.endpointManager != nil {

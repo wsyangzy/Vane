@@ -217,11 +217,10 @@ func (a *App) GetEndpointHealthChart() EndpointHealthData {
 	}
 
 	endpoints := endpointManager.GetAllEndpoints()
-	cfg := endpointManager.GetConfig()
 	gm := endpointManager.GetGroupManager()
 
 	// 确定检测范围
-	autoSwitchEnabled := cfg != nil && cfg.Failover.Enabled
+	autoSwitchEnabled := endpointManager.IsFailoverEnabled()
 	activeGroups := map[string]bool{}
 	if !autoSwitchEnabled && gm != nil {
 		for _, g := range gm.GetActiveGroups() {

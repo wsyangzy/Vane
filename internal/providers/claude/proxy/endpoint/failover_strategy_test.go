@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -157,5 +158,120 @@ func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown
 	}
 	if newChannel != "B" {
 		t.Fatalf("newChannel mismatch: got %q, want %q", newChannel, "B")
+	}
+}
+
+func TestActivateGroupForFailover_RejectsStaleAutomaticSwitch(t *testing.T) {
+	cfg := &config.Config{
+		Failover: config.FailoverConfig{Enabled: true},
+		EndpointsStorage: config.EndpointsStorageConfig{
+			Type: "sqlite",
+		},
+		Endpoints: []config.EndpointConfig{
+			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1},
+			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 1},
+			{Name: "c1", URL: "http://example.invalid/c1", Channel: "C", Priority: 1},
+		},
+	}
+
+	mgr := NewManager(cfg)
+	gm := mgr.GetGroupManager()
+	if err := gm.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("activate A: %v", err)
+	}
+	_, revisionA := gm.ActiveGroupSnapshot()
+	if err := gm.ManualActivateGroup("C"); err != nil {
+		t.Fatalf("manual activate C: %v", err)
+	}
+
+	activeChannel, _, activated, err := gm.ActivateGroupForFailover("B", "A", revisionA, false)
+	if err != nil {
+		t.Fatalf("stale failover activation: %v", err)
+	}
+	if activated {
+		t.Fatal("stale automatic activation must not replace the newer manual channel")
+	}
+	if activeChannel != "C" {
+		t.Fatalf("active channel = %q, want C", activeChannel)
+	}
+
+	activeGroups := gm.GetActiveGroups()
+	if len(activeGroups) != 1 || activeGroups[0].Name != "C" {
+		t.Fatalf("active groups = %#v, want only C", activeGroups)
+	}
+
+	// 即使渠道名称经过 A -> C -> A 回到原值，旧请求携带的版本也必须失效。
+	if err := gm.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("manual reactivate A: %v", err)
+	}
+	activeChannel, _, activated, err = gm.ActivateGroupForFailover("B", "A", revisionA, false)
+	if err != nil {
+		t.Fatalf("ABA stale failover activation: %v", err)
+	}
+	if activated || activeChannel != "A" {
+		t.Fatalf("ABA stale activation result = channel %q, activated %v; want A,false", activeChannel, activated)
+	}
+}
+
+func TestTriggerRequestFailover_RollsBackRuntimeWhenPersistenceFails(t *testing.T) {
+	cfg := &config.Config{
+		Failover:         config.FailoverConfig{Enabled: true},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+		Endpoints: []config.EndpointConfig{
+			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1},
+			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 1},
+		},
+	}
+	mgr := NewManager(cfg)
+	gm := mgr.GetGroupManager()
+	if err := gm.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("activate A: %v", err)
+	}
+	mgr.SetOnFailoverTriggered(func(_, _ string, _ uint64) (bool, error) {
+		return false, errors.New("database unavailable")
+	})
+
+	if _, err := mgr.TriggerRequestFailoverWithFailedEndpoints([]string{"a1"}, "test"); err == nil {
+		t.Fatal("expected persistence failure")
+	}
+	activeGroups := gm.GetActiveGroups()
+	if len(activeGroups) != 1 || activeGroups[0].Name != "A" {
+		t.Fatalf("active groups = %#v, want rolled back A", activeGroups)
+	}
+}
+
+func TestTriggerRequestFailover_DisabledLoopRetryNeverSwitchesChannel(t *testing.T) {
+	cfg := &config.Config{
+		Failover: config.FailoverConfig{
+			Enabled:   false,
+			LoopRetry: true,
+			MaxLoops:  3,
+		},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+		Endpoints: []config.EndpointConfig{
+			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1},
+			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 1},
+		},
+	}
+	mgr := NewManager(cfg)
+	gm := mgr.GetGroupManager()
+	if err := gm.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("activate A: %v", err)
+	}
+	callbackCount := 0
+	mgr.SetOnFailoverTriggered(func(_, _ string, _ uint64) (bool, error) {
+		callbackCount++
+		return true, nil
+	})
+
+	if _, err := mgr.TriggerRequestFailoverWithLoopCount([]string{"a1"}, []string{"A"}, "test", 1); err == nil {
+		t.Fatal("expected failover-disabled error")
+	}
+	if callbackCount != 0 {
+		t.Fatalf("callback count = %d, want 0", callbackCount)
+	}
+	activeGroups := gm.GetActiveGroups()
+	if len(activeGroups) != 1 || activeGroups[0].Name != "A" {
+		t.Fatalf("active groups = %#v, want only A", activeGroups)
 	}
 }

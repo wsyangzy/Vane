@@ -292,7 +292,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 
 		// After trying all endpoints in current iteration, pause failed groups
 		// 冷却机制已移除，SetGroupCooldown 现在只是暂停渠道
-		if rh.endpointManager.GetConfig().Failover.Enabled {
+		if rh.endpointManager.IsFailoverEnabled() {
 			for groupName := range groupsFailedThisIteration {
 				if !groupsPausedThisRequest[groupName] {
 					slog.WarnContext(ctx, fmt.Sprintf("⏸️ [渠道暂停] 渠道 %s 中所有端点均已失败，暂停该渠道", groupName))
@@ -303,7 +303,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 		}
 
 		// Check if automatic switching between channels is enabled
-		if rh.endpointManager.GetConfig().Failover.Enabled {
+		if rh.endpointManager.IsFailoverEnabled() {
 			// Auto mode: Check if there are still active groups available
 			// Get fresh endpoint list to see if any new groups became active
 			var newEndpoints []*endpoint.Endpoint
@@ -359,7 +359,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 	}
 
 	// Check if automatic switching is enabled and provide appropriate error message
-	if rh.endpointManager.GetConfig().Failover.Enabled {
+	if rh.endpointManager.IsFailoverEnabled() {
 		// Auto mode error message
 		slog.ErrorContext(ctx, fmt.Sprintf("💥 [全部失败] 所有活跃组均不可用 - 总共尝试了 %d 个端点 - 最后错误: %v",
 			totalEndpointsAttempted, lastErr))

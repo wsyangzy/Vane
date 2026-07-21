@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ai-relay-forwarder/config"
@@ -67,8 +68,8 @@ type Manager struct {
 	// 健康检查完成回调（用于推送 Wails 事件）
 	onHealthCheckComplete func()
 	// 故障转移回调（用于同步数据库）
-	// 参数: failedChannel 失败的渠道名, newChannel 新激活的渠道名
-	onFailoverTriggered func(failedChannel, newChannel string)
+	// 参数: failedChannel 失败的渠道名, newChannel 新激活的渠道名, activationRevision 激活版本
+	onFailoverTriggered func(failedChannel, newChannel string, activationRevision uint64) (bool, error)
 	// 健康检查回调防抖机制，避免并发健康检查触发多次回调
 	healthCheckDebounceMu    sync.Mutex
 	healthCheckDebounceTimer *time.Timer
@@ -91,6 +92,7 @@ type Manager struct {
 	turnFailureCacheKey      string
 	turnFailureCacheTouched  time.Time
 	turnFailedCredentialRefs map[credentialGroupRef]struct{}
+	failoverEnabled          atomic.Bool
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
@@ -223,6 +225,7 @@ func NewManager(cfg *config.Config) *Manager {
 		healthThrottleLastTime: make(map[string]time.Time),
 		healthThrottleInterval: 5 * time.Second,
 	}
+	manager.failoverEnabled.Store(cfg != nil && cfg.Failover.Enabled)
 
 	// Initialize endpoints
 	for _, endpointCfg := range cfg.Endpoints {
@@ -276,6 +279,7 @@ func (m *Manager) Stop() {
 // 旧实现：无锁直接写，与健康检查 goroutine 读 m.config/m.client 形成 race
 // 新实现：使用 endpointsMu 写锁（既有锁），保护配置字段的更新
 func (m *Manager) UpdateConfig(cfg *config.Config) {
+	m.failoverEnabled.Store(cfg != nil && cfg.Failover.Enabled)
 	m.endpointsMu.Lock()
 	m.config = cfg
 	// Recreate transport with new proxy configuration
@@ -299,6 +303,22 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	// Update fast tester with new config（fastTester 内部自己处理并发）
 	if m.fastTester != nil {
 		m.fastTester.UpdateConfig(cfg)
+	}
+}
+
+// IsFailoverEnabled 返回线程安全的渠道间故障转移开关快照。
+func (m *Manager) IsFailoverEnabled() bool {
+	return m != nil && m.failoverEnabled.Load()
+}
+
+// SetFailoverEnabled 在设置保存边界立即发布渠道间故障转移开关。
+func (m *Manager) SetFailoverEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.failoverEnabled.Store(enabled)
+	if m.groupManager != nil {
+		m.groupManager.SetFailoverEnabled(enabled)
 	}
 }
 

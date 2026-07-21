@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,6 +150,118 @@ func TestEndpointService_UpdateEndpoint_ConflictSameChannelSameName(t *testing.T
 		t.Fatalf("预期同渠道同名更新失败，但实际成功")
 	} else if !strings.Contains(err.Error(), "同一凭证分组内端点名称必须唯一") {
 		t.Fatalf("错误原因不够明确: %v", err)
+	}
+}
+
+func TestEndpointService_FailoverActivationPreservesNewerManualChannel(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			Timeout: 20 * time.Millisecond,
+		},
+		Failover:         config.FailoverConfig{Enabled: true},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	storeImpl := store.NewSQLiteEndpointStore(db)
+	svc := NewEndpointService(storeImpl, manager, cfg)
+	ctx := context.Background()
+
+	createdByChannel := make(map[string]*store.EndpointRecord)
+	for i, channel := range []string{"A", "B", "C"} {
+		created, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+			Channel:         channel,
+			Name:            strings.ToLower(channel) + "1",
+			URL:             "http://127.0.0.1:" + fmt.Sprint(61000+i),
+			Priority:        0,
+			FailoverEnabled: true,
+			TimeoutSeconds:  1,
+		})
+		if err != nil {
+			t.Fatalf("create channel %s endpoint: %v", channel, err)
+		}
+		createdByChannel[channel] = created
+	}
+
+	if err := svc.ActivateChannel(ctx, "A"); err != nil {
+		t.Fatalf("activate A: %v", err)
+	}
+	decisionStarted := time.Now()
+	_, revisionA := manager.GetGroupManager().ActiveGroupSnapshot()
+	_, revisionB, activated, err := manager.GetGroupManager().ActivateGroupForFailover("B", "A", revisionA, false)
+	if err != nil {
+		t.Fatalf("activate runtime failover B: %v", err)
+	} else if !activated {
+		t.Fatal("expected runtime failover activation to B")
+	}
+	applied, err := svc.ActivateChannelForFailover(ctx, "B", "A", revisionB)
+	if err != nil {
+		t.Fatalf("persist failover B: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected current failover activation to be persisted")
+	}
+	if manager.GetGroupManager().WasGroupManuallyActivatedSince("B", decisionStarted) {
+		t.Fatal("automatic failover must not be recorded as a manual activation")
+	}
+
+	if err := svc.ActivateChannel(ctx, "C"); err != nil {
+		t.Fatalf("manual activate C: %v", err)
+	}
+	applied, err = svc.ActivateChannelForFailover(ctx, "A", "B", revisionB)
+	if err != nil {
+		t.Fatalf("persist stale failover A: %v", err)
+	}
+	if applied {
+		t.Fatal("stale automatic persistence must not replace the newer manual channel")
+	}
+
+	enabled, err := storeImpl.ListEnabled(ctx)
+	if err != nil {
+		t.Fatalf("list enabled endpoints: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].Channel != "C" {
+		t.Fatalf("enabled endpoints = %#v, want only channel C", enabled)
+	}
+	activeGroups := manager.GetGroupManager().GetActiveGroups()
+	if len(activeGroups) != 1 || activeGroups[0].Name != "C" {
+		t.Fatalf("active groups = %#v, want only C", activeGroups)
+	}
+
+	for i := 0; i < 10; i++ {
+		errCh := make(chan error, 2)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			errCh <- svc.ActivateChannel(ctx, "A")
+		}()
+		go func() {
+			defer wg.Done()
+			_, err := svc.ActivateEndpointByID(ctx, createdByChannel["B"].ID)
+			errCh <- err
+		}()
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				t.Fatalf("concurrent activation: %v", err)
+			}
+		}
+
+		enabled, err = storeImpl.ListEnabled(ctx)
+		if err != nil {
+			t.Fatalf("list enabled endpoints after concurrent activation: %v", err)
+		}
+		if len(enabled) != 1 {
+			t.Fatalf("enabled endpoint count = %d, want 1", len(enabled))
+		}
+		activeGroups = manager.GetGroupManager().GetActiveGroups()
+		if len(activeGroups) != 1 || activeGroups[0].Name != enabled[0].Channel {
+			t.Fatalf("runtime active = %#v, persisted active = %s", activeGroups, enabled[0].Channel)
+		}
 	}
 }
 

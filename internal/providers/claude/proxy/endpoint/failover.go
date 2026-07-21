@@ -284,7 +284,7 @@ func (m *Manager) SelectNextAvailableChannelExcludingWithLoopCount(excludeChanne
 
 // SetOnFailoverTriggered 设置故障转移回调
 // 当请求失败触发“跨渠道”故障转移时调用，用于同步数据库
-func (m *Manager) SetOnFailoverTriggered(fn func(failedChannel, newChannel string)) {
+func (m *Manager) SetOnFailoverTriggered(fn func(failedChannel, newChannel string, activationRevision uint64) (bool, error)) {
 	m.onFailoverTriggered = fn
 }
 
@@ -318,7 +318,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 	if m.config == nil {
 		return "", fmt.Errorf("配置未初始化")
 	}
-	if !m.config.Failover.Enabled {
+	if !m.IsFailoverEnabled() {
 		return "", fmt.Errorf("故障转移未启用")
 	}
 
@@ -350,6 +350,17 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 	}
 	if failedChannel == "" {
 		return "", fmt.Errorf("无法解析失败渠道（端点不存在或未初始化）")
+	}
+	activeChannel, expectedRevision := m.groupManager.ActiveGroupSnapshot()
+	if activeChannel != failedChannel {
+		if activeChannel == "" {
+			return "", fmt.Errorf("当前没有活跃渠道")
+		}
+		slog.Info("⏭️ [渠道间故障转移] 请求渠道已不是当前活跃渠道，改用最新渠道",
+			"request_channel", failedChannel,
+			"active_channel", activeChannel,
+		)
+		return activeChannel, nil
 	}
 
 	// 方案B：确保失败渠道被纳入"已尝试渠道"集合（不回访）
@@ -393,22 +404,33 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 		return "", err
 	}
 
-	if err := m.groupManager.ActivateGroupForFailover(newChannel, false); err != nil {
-		// 兼容：新渠道端点可能处于 neverChecked（尚未健康检查），但请求级故障转移应允许先切过去尝试。
-		// 这里回退到强制激活，避免因"尚未健康检查"而无法完成跨渠道切换。
-		slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
-		if err2 := m.groupManager.ActivateGroupForFailover(newChannel, true); err2 != nil {
-			slog.Error(fmt.Sprintf("❌ [渠道间故障转移] 强制激活新渠道失败: %v", err2))
-			return "", fmt.Errorf("激活新渠道失败: %w", err2)
+	if !m.IsFailoverEnabled() {
+		return "", fmt.Errorf("故障转移已关闭")
+	}
+	activeChannel, activationRevision, activated, err := m.activateChannelForFailover(newChannel, failedChannel, expectedRevision)
+	if err != nil {
+		return "", err
+	}
+	if !activated {
+		if activeChannel == "" {
+			return "", fmt.Errorf("活跃渠道已变化，无法继续故障转移")
 		}
+		slog.Info("⏭️ [渠道间故障转移] 活跃渠道已变化，旧请求改用最新渠道",
+			"expected_channel", failedChannel,
+			"active_channel", activeChannel,
+			"candidate_channel", newChannel,
+		)
+		return activeChannel, nil
 	}
 
+	committedChannel, err := m.commitFailoverActivation(failedChannel, newChannel, activationRevision)
+	if err != nil {
+		return "", err
+	}
+	if committedChannel != newChannel {
+		return committedChannel, nil
+	}
 	slog.Info(fmt.Sprintf("✅ [渠道间故障转移] 已切换到渠道: %s", newChannel))
-
-	// 4) 调用回调通知 App 层同步数据库
-	if m.onFailoverTriggered != nil {
-		go m.onFailoverTriggered(failedChannel, newChannel)
-	}
 
 	// 5) 使用防抖机制触发前端刷新
 	m.triggerHealthCheckCompleteDebounced()
@@ -422,8 +444,15 @@ func (m *Manager) TriggerCredentialGroupLimitFailover(currentChannel string, exc
 	if m == nil || m.config == nil {
 		return "", fmt.Errorf("配置未初始化")
 	}
-	if !m.config.Failover.Enabled {
+	if !m.IsFailoverEnabled() {
 		return "", fmt.Errorf("故障转移未启用")
+	}
+	activeChannel, expectedRevision := m.groupManager.ActiveGroupSnapshot()
+	if activeChannel != currentChannel {
+		if activeChannel == "" {
+			return "", fmt.Errorf("当前没有活跃渠道")
+		}
+		return activeChannel, nil
 	}
 	found := false
 	for _, channel := range excludeChannels {
@@ -440,16 +469,82 @@ func (m *Manager) TriggerCredentialGroupLimitFailover(currentChannel string, exc
 	if err != nil {
 		return "", err
 	}
-	if err := m.groupManager.ActivateGroupForFailover(newChannel, false); err != nil {
-		if forceErr := m.groupManager.ActivateGroupForFailover(newChannel, true); forceErr != nil {
-			return "", fmt.Errorf("激活新渠道失败: %w", forceErr)
-		}
+	if !m.IsFailoverEnabled() {
+		return "", fmt.Errorf("故障转移已关闭")
 	}
-	if m.onFailoverTriggered != nil {
-		go m.onFailoverTriggered(currentChannel, newChannel)
+	activeChannel, activationRevision, activated, err := m.activateChannelForFailover(newChannel, currentChannel, expectedRevision)
+	if err != nil {
+		return "", err
+	}
+	if !activated {
+		if activeChannel == "" {
+			return "", fmt.Errorf("活跃渠道已变化，无法继续故障转移")
+		}
+		return activeChannel, nil
+	}
+	committedChannel, err := m.commitFailoverActivation(currentChannel, newChannel, activationRevision)
+	if err != nil {
+		return "", err
+	}
+	if committedChannel != newChannel {
+		return committedChannel, nil
 	}
 	m.triggerHealthCheckCompleteDebounced()
 	return newChannel, nil
+}
+
+func (m *Manager) activateChannelForFailover(newChannel, expectedActiveChannel string, expectedRevision uint64) (string, uint64, bool, error) {
+	activeChannel, activationRevision, activated, err := m.groupManager.ActivateGroupForFailover(newChannel, expectedActiveChannel, expectedRevision, false)
+	if err == nil {
+		return activeChannel, activationRevision, activated, err
+	}
+
+	// 新渠道端点可能尚未完成健康检查，请求级故障转移允许先切过去实测。
+	slog.Warn(fmt.Sprintf("⚠️ [渠道间故障转移] 常规激活新渠道失败，回退强制激活: %s, 错误: %v", newChannel, err))
+	activeChannel, activationRevision, activated, forceErr := m.groupManager.ActivateGroupForFailover(newChannel, expectedActiveChannel, expectedRevision, true)
+	if forceErr != nil {
+		slog.Error(fmt.Sprintf("❌ [渠道间故障转移] 强制激活新渠道失败: %v", forceErr))
+		return activeChannel, activationRevision, false, fmt.Errorf("激活新渠道失败: %w", forceErr)
+	}
+	return activeChannel, activationRevision, activated, nil
+}
+
+func (m *Manager) commitFailoverActivation(failedChannel, newChannel string, activationRevision uint64) (string, error) {
+	if m.onFailoverTriggered == nil {
+		return newChannel, nil
+	}
+
+	applied, err := m.onFailoverTriggered(failedChannel, newChannel, activationRevision)
+	if err == nil && applied {
+		return newChannel, nil
+	}
+	if err == nil {
+		activeChannel, _ := m.groupManager.ActiveGroupSnapshot()
+		if activeChannel == "" {
+			return "", fmt.Errorf("故障转移持久化已被更新的激活状态取代")
+		}
+		return activeChannel, nil
+	}
+
+	// SQLite 同步失败时，仅在自动激活仍是当前版本的情况下回滚运行时状态。
+	// 如果用户已经手动切换，版本检查会拒绝回滚，避免再次覆盖用户选择。
+	_, _, rolledBack, rollbackErr := m.groupManager.ActivateGroupForFailover(
+		failedChannel,
+		newChannel,
+		activationRevision,
+		true,
+	)
+	if rollbackErr != nil {
+		return "", fmt.Errorf("同步故障转移渠道失败: %w；运行时回滚失败: %v", err, rollbackErr)
+	}
+	if !rolledBack {
+		activeChannel, _ := m.groupManager.ActiveGroupSnapshot()
+		if activeChannel != "" {
+			return activeChannel, nil
+		}
+	}
+	m.triggerHealthCheckCompleteDebounced()
+	return "", fmt.Errorf("同步故障转移渠道失败，已恢复原渠道: %w", err)
 }
 
 // TriggerRequestFailover 兼容旧签名：仅传入最后失败的端点。
