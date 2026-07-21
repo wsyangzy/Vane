@@ -5,6 +5,7 @@ package codexproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -47,6 +48,8 @@ type credentialGroupRef struct {
 	Name string
 }
 
+var errCodexActiveChannelChanged = errors.New("Codex 活跃渠道已被其他操作更改")
+
 func (g credentialGroupRef) valid() bool {
 	return g.ID > 0 || g.Name != ""
 }
@@ -60,7 +63,7 @@ type EndpointManager struct {
 
 	// 运行时状态
 	mu             sync.RWMutex
-	failoverMu     sync.Mutex
+	activationMu   *sync.Mutex
 	endpoints      []*CodexEndpoint // 按凭证分组顺序、priority ASC 排序；请求时可按策略临时排序候选
 	activeChannel  *store.CodexChannelRecord
 	unhealthyMap   map[int64]bool // endpoint ID -> 是否标记为不健康（仅靠健康检查恢复）
@@ -75,12 +78,16 @@ type EndpointManager struct {
 }
 
 // ActivateNextChannelForFailover 激活下一个参与故障转移且拥有可用端点的渠道。
-func (m *EndpointManager) ActivateNextChannelForFailover(ctx context.Context, tried map[int64]struct{}) (*store.CodexChannelRecord, error) {
-	m.failoverMu.Lock()
-	defer m.failoverMu.Unlock()
+// expectedActiveID 用于阻止旧请求覆盖更新后的手动/自动渠道选择。
+func (m *EndpointManager) ActivateNextChannelForFailover(ctx context.Context, tried map[int64]struct{}, expectedActiveID int64) (*store.CodexChannelRecord, error) {
+	m.activationMu.Lock()
+	defer m.activationMu.Unlock()
 	previous, err := m.channelStore.GetActive(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if expectedActiveID > 0 && (previous == nil || previous.ID != expectedActiveID) {
+		return nil, fmt.Errorf("%w: 期望渠道 ID=%d，当前渠道 ID=%d", errCodexActiveChannelChanged, expectedActiveID, codexChannelID(previous))
 	}
 
 	channels, err := m.channelStore.List(ctx)
@@ -149,8 +156,23 @@ func NewEndpointManager(
 		unhealthyMap:         make(map[int64]bool),
 		failureDetails:       make(map[int64]EndpointFailureDetail),
 		latencies:            make(map[int64]int64),
+		activationMu:         &sync.Mutex{},
 		logger:               logger,
 	}
+}
+
+// SetActivationMutex 让运行时自动切换与 App 手动激活共享同一个仲裁边界。
+func (m *EndpointManager) SetActivationMutex(mu *sync.Mutex) {
+	if mu != nil {
+		m.activationMu = mu
+	}
+}
+
+func codexChannelID(channel *store.CodexChannelRecord) int64 {
+	if channel == nil {
+		return 0
+	}
+	return channel.ID
 }
 
 // SetConfig 注入运行时配置，供 Codex 端点选择复用全局路由策略。

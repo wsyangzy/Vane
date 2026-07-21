@@ -75,6 +75,18 @@ func (h *Handler) UpdateConfig(retryCfg config.RetryConfig, failoverCfg config.F
 	h.configMu.Unlock()
 }
 
+func (h *Handler) retryConfig() config.RetryConfig {
+	h.configMu.RLock()
+	defer h.configMu.RUnlock()
+	return h.retryCfg
+}
+
+func (h *Handler) failoverConfig() config.FailoverConfig {
+	h.configMu.RLock()
+	defer h.configMu.RUnlock()
+	return h.failoverCfg
+}
+
 func normalizeCodexLogger(logger *slog.Logger) *slog.Logger {
 	if logger == nil {
 		logger = slog.Default()
@@ -426,8 +438,6 @@ func hashTurnCacheKey(prefix, value string) string {
 //  2. 中层 endpoint cycle: 按优先级遍历当前轮可用端点
 //  3. 内层 same-endpoint retry: 单端点的瞬时错误指数退避重试（受 retry.* 控制）
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.configMu.RLock()
-	defer h.configMu.RUnlock()
 	startTime := time.Now()
 	requestID := generateRequestID()
 
@@ -503,8 +513,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1
-	if h.failoverCfg.LoopRetry {
-		maxLoops = h.failoverCfg.GetMaxLoops()
+	if failoverCfg := h.failoverConfig(); failoverCfg.LoopRetry {
+		maxLoops = failoverCfg.GetMaxLoops()
 		if maxLoops <= 0 {
 			maxLoops = 1
 		}
@@ -518,6 +528,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var lastStatus int
 	var lastSummary string
 	suspendedOnce := false
+	activeChannelID := int64(0)
 
 outerLoop:
 	for {
@@ -525,19 +536,36 @@ outerLoop:
 		for loopRound := 0; loopRound < maxLoops; loopRound++ {
 			triedChannels := make(map[int64]struct{})
 			if loopRound > 0 {
-				// 新一轮始终从最高优先级参与渠道开始，避免重复上一轮的末尾渠道。
 				h.manager.ResetUnhealthy()
 				failedIDs = failedIDs[:0]
-				first, switchErr := h.manager.ActivateNextChannelForFailover(r.Context(), triedChannels)
-				if switchErr != nil {
-					lastErr = switchErr
+				if h.failoverConfig().Enabled {
+					// 渠道间转移开启时，新一轮从最高优先级参与渠道开始。
+					first, switchErr := h.manager.ActivateNextChannelForFailover(r.Context(), triedChannels, activeChannelID)
+					if errors.Is(switchErr, errCodexActiveChannelChanged) {
+						continue outerLoop
+					}
+					if switchErr != nil {
+						lastErr = switchErr
+						break rounds
+					}
+					triedChannels[first.ID] = struct{}{}
+					activeChannelID = first.ID
+					channelName = first.Name
+					channelRewrite := rewriteModelWithMappingDetails(originalBody, first.ModelMapping, strings.TrimSpace(first.Model), h.logger, requestID)
+					body = channelRewrite.Body
+					requestModel = h.tokenParser.ParseModelFromBody(body)
+				} else if active := h.manager.GetActiveChannel(); active != nil {
+					// 渠道间转移关闭时，只重试当前活跃渠道，不写全局激活状态。
+					triedChannels[active.ID] = struct{}{}
+					activeChannelID = active.ID
+					channelName = active.Name
+					channelRewrite := rewriteModelWithMappingDetails(originalBody, active.ModelMapping, strings.TrimSpace(active.Model), h.logger, requestID)
+					body = channelRewrite.Body
+					requestModel = h.tokenParser.ParseModelFromBody(body)
+				} else {
+					lastErr = fmt.Errorf("无活跃 Codex 渠道")
 					break rounds
 				}
-				triedChannels[first.ID] = struct{}{}
-				channelName = first.Name
-				channelRewrite := rewriteModelWithMappingDetails(originalBody, first.ModelMapping, strings.TrimSpace(first.Model), h.logger, requestID)
-				body = channelRewrite.Body
-				requestModel = h.tokenParser.ParseModelFromBody(body)
 				h.logger.Info("[Codex 循环重试]",
 					"provider", "codex",
 					"request_id", requestID,
@@ -547,6 +575,7 @@ outerLoop:
 			} else if active := h.manager.GetActiveChannel(); active != nil {
 				// 首轮从当前接管渠道开始；挂起恢复后也重新建立本轮状态。
 				triedChannels[active.ID] = struct{}{}
+				activeChannelID = active.ID
 				channelName = active.Name
 				channelRewrite := rewriteModelWithMappingDetails(originalBody, active.ModelMapping, strings.TrimSpace(active.Model), h.logger, requestID)
 				body = channelRewrite.Body
@@ -559,20 +588,29 @@ outerLoop:
 					isStreaming, channelName, requestModel,
 					&failedIDs, &endpointChain, &attemptCount, turnFailureKey,
 				)
+				if result.routeChanged {
+					failedIDs = failedIDs[:0]
+					continue outerLoop
+				}
 				if result.completed {
 					return
 				}
 				lastErr = result.lastErr
 				lastStatus = result.lastStatus
 				lastSummary = result.lastSummary
-				if !h.failoverCfg.Enabled {
+				if !h.failoverConfig().Enabled {
 					break
 				}
-				next, switchErr := h.manager.ActivateNextChannelForFailover(r.Context(), triedChannels)
+				next, switchErr := h.manager.ActivateNextChannelForFailover(r.Context(), triedChannels, activeChannelID)
+				if errors.Is(switchErr, errCodexActiveChannelChanged) {
+					failedIDs = failedIDs[:0]
+					continue outerLoop
+				}
 				if switchErr != nil {
 					break
 				}
 				triedChannels[next.ID] = struct{}{}
+				activeChannelID = next.ID
 				channelName = next.Name
 				channelRewrite := rewriteModelWithMappingDetails(originalBody, next.ModelMapping, strings.TrimSpace(next.Model), h.logger, requestID)
 				body = channelRewrite.Body
@@ -586,15 +624,16 @@ outerLoop:
 		}
 
 		// loop_retry 全部耗尽 → 尝试挂起等待运维干预（最多挂起一次）
+		failoverCfg := h.failoverConfig()
 		canSuspend := !errors.Is(lastErr, errCredentialGroupDailyCostLimitExceeded) &&
 			!suspendedOnce && h.suspensionMgr != nil &&
-			h.failoverCfg.LoopRetrySuspendTimeout > 0
+			failoverCfg.LoopRetrySuspendTimeout > 0
 		if !canSuspend {
 			break outerLoop
 		}
 		suspendedOnce = true
 
-		suspendRes := h.suspensionMgr.Suspend(r.Context(), requestID, h.failoverCfg.LoopRetrySuspendTimeout)
+		suspendRes := h.suspensionMgr.Suspend(r.Context(), requestID, failoverCfg.LoopRetrySuspendTimeout)
 		switch suspendRes {
 		case SuspendRecovered:
 			// 重置状态再来一轮 loop_retry
@@ -623,7 +662,7 @@ outerLoop:
 			h.logger.Warn("[Codex 挂起超时] 运维未在超时前激活渠道/端点",
 				"provider", "codex",
 				"request_id", requestID,
-				"timeout", h.failoverCfg.LoopRetrySuspendTimeout.String(),
+				"timeout", failoverCfg.LoopRetrySuspendTimeout.String(),
 			)
 			break outerLoop
 
@@ -664,10 +703,11 @@ outerLoop:
 
 // cycleResult 端点循环结果
 type cycleResult struct {
-	completed   bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
-	lastErr     error  // 最后一次端点失败的错误
-	lastStatus  int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
-	lastSummary string // 最后一次上游错误响应摘要
+	completed    bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
+	routeChanged bool   // true: 共享活跃渠道已变化，外层应按新渠道重建请求路由
+	lastErr      error  // 最后一次端点失败的错误
+	lastStatus   int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
+	lastSummary  string // 最后一次上游错误响应摘要
 }
 
 // tryEndpointCycle 单轮端点列表遍历（含每个端点的同端点重试）
@@ -686,6 +726,9 @@ func (h *Handler) tryEndpointCycle(
 	attemptCount *int,
 	turnFailureKey string,
 ) cycleResult {
+	if h.activeChannelChanged(channelName) {
+		return cycleResult{routeChanged: true}
+	}
 	// 选择起始端点
 	skippedGroups := h.failedCredentialGroupsForTurn(turnFailureKey)
 	var quotaSkippedGroups []credentialGroupRef
@@ -718,6 +761,9 @@ func (h *Handler) tryEndpointCycle(
 
 	// 遍历当前轮可用端点
 	for {
+		if h.activeChannelChanged(channelName) {
+			return cycleResult{routeChanged: true}
+		}
 		// 追加链路节点（按 channel+credential_group+endpoint 切换去重）
 		n := len(*endpointChain)
 		previousAttemptFailed := n > 0 && ((*endpointChain)[n-1].StatusCode != 0 || (*endpointChain)[n-1].Error != "")
@@ -787,7 +833,7 @@ func (h *Handler) tryEndpointCycle(
 				} else {
 					h.manager.MarkHealthy(endpoint.ID)
 					// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
-					if len(*failedIDs) > 0 {
+					if len(*failedIDs) > 0 && !h.activeChannelChanged(channelName) {
 						if err := h.manager.PromoteActive(endpoint.ID); err != nil {
 							h.logger.Warn("故障转移后提升活跃端点失败",
 								"request_id", requestID,
@@ -802,7 +848,7 @@ func (h *Handler) tryEndpointCycle(
 			} else {
 				h.manager.MarkHealthy(endpoint.ID)
 				// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
-				if len(*failedIDs) > 0 {
+				if len(*failedIDs) > 0 && !h.activeChannelChanged(channelName) {
 					if err := h.manager.PromoteActive(endpoint.ID); err != nil {
 						h.logger.Warn("故障转移后提升活跃端点失败",
 							"request_id", requestID,
@@ -953,7 +999,8 @@ func (h *Handler) forwardWithRetry(
 		fwd = h.streamFwd
 	}
 
-	maxAttempts := h.retryCfg.MaxAttempts
+	retryCfg := h.retryConfig()
+	maxAttempts := retryCfg.MaxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 1
 	}
@@ -969,7 +1016,7 @@ func (h *Handler) forwardWithRetry(
 				lastResp.Body.Close()
 				lastResp = nil
 			}
-			delay := computeBackoff(attempt-1, h.retryCfg.BaseDelay, h.retryCfg.MaxDelay, h.retryCfg.Multiplier)
+			delay := computeBackoff(attempt-1, retryCfg.BaseDelay, retryCfg.MaxDelay, retryCfg.Multiplier)
 			h.logger.Info("[Codex 同端点重试]",
 				"provider", "codex",
 				"request_id", requestID,
@@ -1440,6 +1487,14 @@ func (h *Handler) activeChannelName() string {
 		return ""
 	}
 	return ch.Name
+}
+
+func (h *Handler) activeChannelChanged(expectedName string) bool {
+	if h.manager == nil || expectedName == "" {
+		return false
+	}
+	active := h.manager.GetActiveChannel()
+	return active != nil && active.Name != expectedName
 }
 
 // recordStart 记录请求开始

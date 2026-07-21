@@ -3,6 +3,8 @@ package codexproxy
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -25,7 +27,7 @@ func TestEndpointManagerActivatesNextEligibleChannel(t *testing.T) {
 	if active == nil {
 		t.Fatal("expected active channel")
 	}
-	next, err := manager.ActivateNextChannelForFailover(ctx, map[int64]struct{}{active.ID: {}})
+	next, err := manager.ActivateNextChannelForFailover(ctx, map[int64]struct{}{active.ID: {}}, active.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestEndpointManagerRestoresPreviousChannelWhenReloadFails(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE codex_endpoints`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.ActivateNextChannelForFailover(context.Background(), map[int64]struct{}{active.ID: {}}); err == nil {
+	if _, err := manager.ActivateNextChannelForFailover(context.Background(), map[int64]struct{}{active.ID: {}}, active.ID); err == nil {
 		t.Fatal("expected reload failure")
 	}
 	var activeName string
@@ -158,6 +160,260 @@ func TestHandlerStartsEveryRetryRoundFromHighestPriorityChannel(t *testing.T) {
 	mu.Unlock()
 	if want := "primary,backup,primary,backup,primary,backup"; got != want {
 		t.Fatalf("channel sequence = %q, want %q", got, want)
+	}
+}
+
+func TestHandlerDisabledFailoverRetriesOnlyManuallyActiveChannel(t *testing.T) {
+	var mu sync.Mutex
+	primaryHits := 0
+	backupHits := 0
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		primaryHits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		backupHits++
+		mu.Unlock()
+		http.Error(w, `{"error":{"message":"temporary failure"}}`, http.StatusServiceUnavailable)
+	}))
+	defer backup.Close()
+
+	manager, db, cleanup := newChannelFailoverTestManager(t)
+	defer cleanup()
+	if _, err := db.Exec(`
+		UPDATE codex_endpoints SET base_url = CASE
+			WHEN name = 'primary-endpoint' THEN ?
+			WHEN name = 'backup-endpoint' THEN ?
+			ELSE base_url END;
+		UPDATE codex_channels SET is_active = 0;
+		UPDATE codex_channels SET is_active = 1 WHERE name = 'backup';
+	`, primary.URL, backup.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(
+		manager,
+		time.Second,
+		config.RetryConfig{MaxAttempts: 1},
+		config.FailoverConfig{Enabled: false, LoopRetry: true, MaxLoops: 3},
+		nil,
+		newTestLogger(),
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":false}`)))
+
+	mu.Lock()
+	gotPrimaryHits := primaryHits
+	gotBackupHits := backupHits
+	mu.Unlock()
+	if gotPrimaryHits != 0 {
+		t.Fatalf("disabled channel failover reached primary %d times", gotPrimaryHits)
+	}
+	if gotBackupHits != 3 {
+		t.Fatalf("backup hits = %d, want 3 current-channel loop retries", gotBackupHits)
+	}
+	active := manager.GetActiveChannel()
+	if active == nil || active.Name != "backup" {
+		t.Fatalf("active channel = %#v, want backup", active)
+	}
+}
+
+func TestHandlerHotDisableStopsInFlightCrossChannelFailover(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce sync.Once
+	var mu sync.Mutex
+	primaryHits := 0
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		primaryHits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+		http.Error(w, `{"error":{"message":"temporary failure"}}`, http.StatusServiceUnavailable)
+	}))
+	defer backup.Close()
+
+	manager, db, cleanup := newChannelFailoverTestManager(t)
+	defer cleanup()
+	if _, err := db.Exec(`
+		UPDATE codex_endpoints SET base_url = CASE
+			WHEN name = 'primary-endpoint' THEN ?
+			WHEN name = 'backup-endpoint' THEN ?
+			ELSE base_url END;
+		UPDATE codex_channels SET is_active = 0;
+		UPDATE codex_channels SET is_active = 1 WHERE name = 'backup';
+	`, primary.URL, backup.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(
+		manager,
+		time.Second,
+		config.RetryConfig{MaxAttempts: 1},
+		config.FailoverConfig{Enabled: true},
+		nil,
+		newTestLogger(),
+		nil,
+	)
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":false}`)))
+	}()
+	<-entered
+
+	updateDone := make(chan struct{})
+	go func() {
+		handler.UpdateConfig(config.RetryConfig{MaxAttempts: 1}, config.FailoverConfig{Enabled: false})
+		close(updateDone)
+	}()
+	select {
+	case <-updateDone:
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		<-requestDone
+		t.Fatal("UpdateConfig blocked behind an in-flight request")
+	}
+	close(release)
+	<-requestDone
+
+	mu.Lock()
+	gotPrimaryHits := primaryHits
+	mu.Unlock()
+	if gotPrimaryHits != 0 {
+		t.Fatalf("hot-disabled channel failover reached primary %d times", gotPrimaryHits)
+	}
+	active := manager.GetActiveChannel()
+	if active == nil || active.Name != "backup" {
+		t.Fatalf("active channel = %#v, want backup", active)
+	}
+}
+
+func TestHandlerRebuildsRouteAfterManualChannelChange(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	primaryBody := make(chan string, 1)
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		primaryBody <- string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"primary-model","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		http.Error(w, `{"error":{"message":"temporary failure"}}`, http.StatusServiceUnavailable)
+	}))
+	defer backup.Close()
+
+	manager, db, cleanup := newChannelFailoverTestManager(t)
+	defer cleanup()
+	if _, err := db.Exec(`
+		UPDATE codex_endpoints SET base_url = CASE
+			WHEN name = 'primary-endpoint' THEN ?
+			WHEN name = 'backup-endpoint' THEN ?
+			ELSE base_url END;
+		UPDATE codex_channels SET model = CASE
+			WHEN name = 'primary' THEN 'primary-model'
+			WHEN name = 'backup' THEN 'backup-model'
+			ELSE model END;
+		UPDATE codex_channels SET is_active = 0;
+		UPDATE codex_channels SET is_active = 1 WHERE name = 'backup';
+	`, primary.URL, backup.URL); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(
+		manager,
+		time.Second,
+		config.RetryConfig{MaxAttempts: 1},
+		config.FailoverConfig{Enabled: true},
+		nil,
+		newTestLogger(),
+		nil,
+	)
+	recorder := httptest.NewRecorder()
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"client-model","stream":false}`)))
+	}()
+	<-entered
+
+	if _, err := db.Exec(`
+		UPDATE codex_channels SET is_active = 0;
+		UPDATE codex_channels SET is_active = 1 WHERE name = 'primary';
+	`); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	<-requestDone
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%q", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case body := <-primaryBody:
+		if !strings.Contains(body, `"model":"primary-model"`) {
+			t.Fatalf("primary request body = %q, want rebuilt primary model", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("primary channel was not reached after manual activation")
+	}
+}
+
+func TestEndpointManagerRejectsStaleChannelActivation(t *testing.T) {
+	manager, db, cleanup := newChannelFailoverTestManager(t)
+	defer cleanup()
+
+	previous := manager.GetActiveChannel()
+	if previous == nil {
+		t.Fatal("expected active channel")
+	}
+	if _, err := db.Exec(`
+		UPDATE codex_channels SET is_active = 0;
+		UPDATE codex_channels SET is_active = 1 WHERE name = 'backup';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.ActivateNextChannelForFailover(context.Background(), map[int64]struct{}{}, previous.ID)
+	if !errors.Is(err, errCodexActiveChannelChanged) {
+		t.Fatalf("expected stale activation error, got %v", err)
+	}
+	active := manager.GetActiveChannel()
+	if active == nil || active.Name != "backup" {
+		t.Fatalf("active channel = %#v, want backup", active)
 	}
 }
 

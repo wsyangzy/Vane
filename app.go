@@ -1624,6 +1624,7 @@ func (a *App) initCodexProxy() {
 
 	// 创建 EndpointManager
 	mgr := codexproxy.NewEndpointManager(a.codexChannelStore, a.codexEndpointStore, a.codexCredentialGroupStore, a.logger)
+	mgr.SetActivationMutex(&a.codexActivationMu)
 	mgr.SetConfig(a.config)
 	if err := mgr.Reload(); err != nil {
 		a.logger.Error("Codex 端点管理器加载失败", "error", err)
