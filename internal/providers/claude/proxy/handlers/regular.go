@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"ai-relay-forwarder/config"
@@ -100,6 +99,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	connID := lifecycleManager.GetRequestID()
 	turnFailureKey := requestTurnFailureCacheKey(r, bodyBytes)
 	ctx = endpoint.ContextWithTurnFailureKey(ctx, turnFailureKey)
+	protectedBody, err := redactBodyBeforeForwardContext(ctx, rh.privacyRedactor, bodyBytes, lifecycleManager, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"))
+	if err != nil {
+		lifecycleManager.FailRequest("privacy_redaction_failed", err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Privacy protection failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	bodyBytes = protectedBody
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
 
@@ -555,11 +561,6 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 // executeRequest 执行单个请求
 func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, bodyBytes []byte, endpoint *endpoint.Endpoint, lifecycleManager RequestLifecycleManager) (*http.Response, error) {
 	bodyBytes = rewriteBodyForEndpoint(rh.forwarder, lifecycleManager, bodyBytes, endpoint)
-	var err error
-	bodyBytes, err = redactBodyBeforeForward(rh.privacyRedactor, bodyBytes, lifecycleManager)
-	if err != nil {
-		return nil, err
-	}
 
 	// 创建目标请求
 	targetURL := endpoint.Config.URL + r.URL.Path
@@ -657,127 +658,6 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		lifecycleManager.HandleNonTokenResponse(string(responseBytes))
 		slog.Info(fmt.Sprintf("✅ [常规请求完成] [%s] 端点: %s, 响应类型: %s",
 			connID, endpointName, modelName))
-	}
-}
-
-// HandleRegularRequest handles non-streaming requests
-func (rh *RegularHandler) HandleRegularRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
-	var selectedEndpointName string
-
-	// Get connection ID from request context (set by logging middleware)
-	connID := ""
-	if connIDValue, ok := r.Context().Value("conn_id").(string); ok {
-		connID = connIDValue
-	}
-
-	// TODO: 创建重试处理器
-
-	operation := func(ep *endpoint.Endpoint, connectionID string) (*http.Response, error) {
-		// Store the selected endpoint name for logging
-		selectedEndpointName = ep.Config.Name
-
-		// 🔧 [端点上下文修复] 立即设置端点信息到请求上下文，确保所有分支的日志都能正确记录端点
-		*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", ep.Config.Name))
-
-		// TODO: Update connection endpoint in monitoring (if we have a monitoring middleware)
-
-		// Create request to target endpoint
-		targetURL := ep.Config.URL + r.URL.Path
-		if r.URL.RawQuery != "" {
-			targetURL += "?" + r.URL.RawQuery
-		}
-
-		req, err := http.NewRequestWithContext(ctx, r.Method, targetURL, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
-
-		// Copy headers from original request
-		rh.forwarder.CopyHeaders(r, req, ep)
-
-		client, err := rh.forwarder.NewClient(ep.Config.Timeout)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create transport: %w", err)
-		}
-
-		// Make the request
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("request failed: %w", err)
-		}
-
-		// Return the response - retry logic will check status code
-		return resp, nil
-	}
-
-	// Execute with retry logic - 使用retryHandler
-	finalResp, lastErr := rh.retryHandler.ExecuteWithContext(ctx, operation, connID)
-
-	if lastErr != nil {
-		// 使用 422 状态码，防止客户端自动重试
-		// Check if the error is due to no healthy endpoints
-		if strings.Contains(lastErr.Error(), "no healthy endpoints") {
-			http.Error(w, "Service Unavailable: No healthy endpoints available", http.StatusUnprocessableEntity)
-		} else {
-			// If all retries failed, return error
-			http.Error(w, "All endpoints failed: "+lastErr.Error(), http.StatusUnprocessableEntity)
-		}
-		return
-	}
-
-	if finalResp == nil {
-		http.Error(w, "No response received from any endpoint", http.StatusUnprocessableEntity)
-		return
-	}
-
-	defer finalResp.Body.Close()
-
-	// 🔧 [P0-R1 修复] 先完整读取上游响应体，再写响应头与状态码
-	// 旧顺序（WriteHeader → ReadAll）在上游中断时会导致客户端收到
-	// "200 OK + 半截 body"，触发 "JSON Parse error: Unterminated string"
-	slog.DebugContext(ctx, fmt.Sprintf("🔄 [开始读取响应] [%s] 端点: %s, Content-Encoding: %s",
-		connID, selectedEndpointName, finalResp.Header.Get("Content-Encoding")))
-
-	bodyBytes, err := io.ReadAll(finalResp.Body)
-	if err != nil {
-		slog.ErrorContext(ctx, fmt.Sprintf("❌ [响应读取失败] [%s] 端点: %s, 错误: %v", connID, selectedEndpointName, err))
-		http.Error(w, "Failed to read response: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	slog.DebugContext(ctx, fmt.Sprintf("✅ [响应读取成功] [%s] 端点: %s, 长度: %d字节",
-		connID, selectedEndpointName, len(bodyBytes)))
-
-	// Body 读取成功后再复制响应头
-	for key, values := range finalResp.Header {
-		// Skip Content-Encoding header as we handle gzip decompression ourselves
-		if strings.ToLower(key) == "content-encoding" {
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-
-	// Set status code
-	w.WriteHeader(finalResp.StatusCode)
-
-	bodyContent := string(bodyBytes)
-	slog.DebugContext(ctx, fmt.Sprintf("🐛 [调试响应头] 端点: %s, 响应头: %v", selectedEndpointName, finalResp.Header))
-
-	// Pass the complete response content to logger - let the logger decide how to handle truncation
-	slog.DebugContext(ctx, fmt.Sprintf("🐛 [调试响应] 端点: %s, 状态码: %d, 长度: %d字节, 响应内容: %s",
-		selectedEndpointName, finalResp.StatusCode, len(bodyContent), bodyContent))
-
-	// TODO: Analyze the complete response for token usage
-	slog.DebugContext(ctx, fmt.Sprintf("🔍 [开始Token分析] [%s] 端点: %s", connID, selectedEndpointName))
-	slog.DebugContext(ctx, fmt.Sprintf("✅ [Token分析完成] [%s] 端点: %s", connID, selectedEndpointName))
-
-	// Write the body to client
-	_, writeErr := w.Write(bodyBytes)
-	if writeErr != nil {
-		// Log error but don't return error response as headers are already sent
-		slog.Error("Failed to write response to client", "request_id", connID, "error", writeErr)
 	}
 }
 

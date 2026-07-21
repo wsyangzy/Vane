@@ -5,16 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"mime"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Service struct {
-	store       *Store
-	enabledFunc func(context.Context) bool
-	logger      *slog.Logger
+	store        *Store
+	enabledFunc  func(context.Context) bool
+	logger       *slog.Logger
+	rulesMu      sync.RWMutex
+	rulesCache   []runtimeRule
+	rulesCached  bool
+	allocationMu sync.Mutex
 }
 
 func NewService(store *Store, enabledFunc func(context.Context) bool, logger ...*slog.Logger) *Service {
@@ -30,6 +36,9 @@ func NewService(store *Store, enabledFunc func(context.Context) bool, logger ...
 }
 
 func (s *Service) ListRules(ctx context.Context) ([]PrivacyRule, error) {
+	if err := s.readyError(); err != nil {
+		return nil, err
+	}
 	return s.store.ListRules(ctx)
 }
 
@@ -55,14 +64,24 @@ func (s *Service) DeleteSyntheticValue(ctx context.Context, kind, rawHash string
 }
 
 func (s *Service) CreateRule(ctx context.Context, input PrivacyRuleInput) (PrivacyRule, error) {
+	if err := s.readyError(); err != nil {
+		return PrivacyRule{}, err
+	}
 	normalized, err := NormalizeInput(input)
 	if err != nil {
 		return PrivacyRule{}, err
 	}
-	return s.store.CreateRule(ctx, normalized)
+	rule, err := s.store.CreateRule(ctx, normalized)
+	if err == nil {
+		s.invalidateRuleCache()
+	}
+	return rule, err
 }
 
 func (s *Service) UpdateRule(ctx context.Context, id int64, input PrivacyRuleInput) (PrivacyRule, error) {
+	if err := s.readyError(); err != nil {
+		return PrivacyRule{}, err
+	}
 	normalized, err := NormalizeInputForUpdate(input)
 	if err != nil {
 		return PrivacyRule{}, err
@@ -79,37 +98,63 @@ func (s *Service) UpdateRule(ctx context.Context, id int64, input PrivacyRuleInp
 			return PrivacyRule{}, fmt.Errorf("正则表达式无效: %w", err)
 		}
 	}
-	return s.store.UpdateRule(ctx, id, normalized)
+	rule, err := s.store.UpdateRule(ctx, id, normalized)
+	if err == nil {
+		s.invalidateRuleCache()
+	}
+	return rule, err
 }
 
 func (s *Service) DeleteRule(ctx context.Context, id int64) error {
-	return s.store.DeleteRule(ctx, id)
+	if err := s.readyError(); err != nil {
+		return err
+	}
+	err := s.store.DeleteRule(ctx, id)
+	if err == nil {
+		s.invalidateRuleCache()
+	}
+	return err
 }
 
 func (s *Service) Redact(body []byte) ([]byte, RedactionSummary, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return s.RedactContext(context.Background(), body)
+}
+
+func (s *Service) RedactContext(parent context.Context, body []byte) ([]byte, RedactionSummary, bool, error) {
+	return s.redactContext(parent, body, "", "")
+}
+
+func (s *Service) RedactRequestContext(parent context.Context, body []byte, contentType, contentEncoding string) ([]byte, RedactionSummary, bool, error) {
+	return s.redactContext(parent, body, contentType, contentEncoding)
+}
+
+func (s *Service) redactContext(parent context.Context, body []byte, contentType, contentEncoding string) ([]byte, RedactionSummary, bool, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
-	if s == nil || s.store == nil {
-		return body, RedactionSummary{}, false, nil
-	}
-
-	rules, err := s.store.ListEnabledRules(ctx)
-	if err != nil {
+	if err := s.readyError(); err != nil {
 		return nil, RedactionSummary{}, false, err
 	}
-	compiled, err := compileRuntimeRules(rules)
+
+	compiled, err := s.ruleSnapshot(ctx)
 	if err != nil {
 		return nil, RedactionSummary{}, false, err
 	}
 	if len(compiled) == 0 {
 		return body, RedactionSummary{}, false, nil
 	}
+	if err := validateRedactionMedia(body, contentType, contentEncoding); err != nil {
+		return nil, RedactionSummary{}, false, err
+	}
 
 	tracker := &serviceSyntheticReplacementTracker{
-		ctx:    ctx,
-		store:  s.store,
-		logger: s.logger,
+		ctx:          ctx,
+		store:        s.store,
+		logger:       s.logger,
+		allocationMu: &s.allocationMu,
 	}
 	redacted, summary, changed, err := redactWithRules(body, compiled, tracker)
 	if err != nil {
@@ -118,15 +163,34 @@ func (s *Service) Redact(body []byte) ([]byte, RedactionSummary, bool, error) {
 	return redacted, summary, changed, nil
 }
 
-func (s *Service) Preview(ctx context.Context, input string) (PreviewResult, error) {
-	if s == nil || s.store == nil {
-		return PreviewResult{Output: input}, nil
+func validateRedactionMedia(body []byte, contentType, contentEncoding string) error {
+	if len(body) == 0 {
+		return nil
 	}
-	rules, err := s.store.ListEnabledRules(ctx)
+	encoding := strings.ToLower(strings.TrimSpace(contentEncoding))
+	if encoding != "" && encoding != "identity" {
+		return fmt.Errorf("隐私防护不支持 Content-Encoding %q，请发送未压缩请求体", contentEncoding)
+	}
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		return nil
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
+		return fmt.Errorf("隐私防护无法解析 Content-Type %q: %w", contentType, err)
+	}
+	mediaType = strings.ToLower(mediaType)
+	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") || strings.HasPrefix(mediaType, "text/") || mediaType == "application/x-www-form-urlencoded" || mediaType == "application/x-ndjson" {
+		return nil
+	}
+	return fmt.Errorf("隐私防护不支持请求媒体类型 %q", mediaType)
+}
+
+func (s *Service) Preview(ctx context.Context, input string) (PreviewResult, error) {
+	if err := s.readyError(); err != nil {
 		return PreviewResult{}, err
 	}
-	compiled, err := compileRuntimeRules(rules)
+	compiled, err := s.ruleSnapshot(ctx)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -135,6 +199,48 @@ func (s *Service) Preview(ctx context.Context, input string) (PreviewResult, err
 		return PreviewResult{}, err
 	}
 	return PreviewResult{Output: string(output), Changed: changed, Hits: summary.Hits}, nil
+}
+
+func (s *Service) readyError() error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("privacy store not initialized")
+	}
+	return nil
+}
+
+func (s *Service) ruleSnapshot(ctx context.Context) ([]runtimeRule, error) {
+	// ponytail: rule writes are service-owned; add revision polling only if external writers are introduced.
+	s.rulesMu.RLock()
+	if s.rulesCached {
+		rules := s.rulesCache
+		s.rulesMu.RUnlock()
+		return rules, nil
+	}
+	s.rulesMu.RUnlock()
+
+	s.rulesMu.Lock()
+	defer s.rulesMu.Unlock()
+	if s.rulesCached {
+		return s.rulesCache, nil
+	}
+	rules, err := s.store.ListEnabledRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := compileRuntimeRules(rules)
+	if err != nil {
+		return nil, err
+	}
+	s.rulesCache = compiled
+	s.rulesCached = true
+	return s.rulesCache, nil
+}
+
+func (s *Service) invalidateRuleCache() {
+	s.rulesMu.Lock()
+	s.rulesCache = nil
+	s.rulesCached = false
+	s.rulesMu.Unlock()
 }
 
 func NormalizeInput(input PrivacyRuleInput) (PrivacyRuleInput, error) {
@@ -225,9 +331,22 @@ func DebugMatchesToJSON(summary RedactionSummary) string {
 }
 
 type serviceSyntheticReplacementTracker struct {
-	ctx    context.Context
-	store  *Store
-	logger *slog.Logger
+	ctx          context.Context
+	store        *Store
+	logger       *slog.Logger
+	allocationMu *sync.Mutex
+}
+
+func (t *serviceSyntheticReplacementTracker) LockSyntheticAllocation() {
+	if t != nil && t.allocationMu != nil {
+		t.allocationMu.Lock()
+	}
+}
+
+func (t *serviceSyntheticReplacementTracker) UnlockSyntheticAllocation() {
+	if t != nil && t.allocationMu != nil {
+		t.allocationMu.Unlock()
+	}
 }
 
 func (t *serviceSyntheticReplacementTracker) LookupSyntheticMapping(raw, kind string) (string, bool) {

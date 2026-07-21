@@ -440,6 +440,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
 	turnFailureKey := requestTurnFailureCacheKey(r, body)
+	var privacySummary privacy.RedactionSummary
+	privacyChanged := false
+	if h.privacyService != nil {
+		protectedBody, summary, changed, redactErr := h.privacyService.RedactRequestContext(
+			r.Context(), originalBody, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"),
+		)
+		if redactErr != nil {
+			h.logger.Error("隐私防护预检失败，已阻止上游发送", "request_id", requestID, "error", redactErr)
+			h.writeError(w, http.StatusInternalServerError, "隐私防护处理失败")
+			return
+		}
+		originalBody = protectedBody
+		privacySummary = summary
+		privacyChanged = changed
+	}
 
 	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
 	channelName := ""
@@ -452,7 +467,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			channelModelMapping = ch.ModelMapping
 		}
 	}
-	modelRewrite := rewriteModelWithMappingDetails(body, channelModelMapping, channelModel, h.logger, requestID)
+	modelRewrite := rewriteModelWithMappingDetails(originalBody, channelModelMapping, channelModel, h.logger, requestID)
 	body = modelRewrite.Body
 
 	// 2. 检测是否流式请求
@@ -477,6 +492,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewrite)
+	if privacyChanged {
+		h.recordPrivacyRedaction(
+			requestID,
+			privacy.SummaryToJSON(privacySummary),
+			body,
+			privacy.DebugMatchesToJSON(privacySummary),
+		)
+	}
 
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1
@@ -962,24 +985,7 @@ func (h *Handler) forwardWithRetry(
 			}
 		}
 
-		requestBody := body
-		if h.privacyService != nil {
-			redacted, summary, changed, redactErr := h.privacyService.Redact(body)
-			if redactErr != nil {
-				return nil, fmt.Errorf("privacy redaction failed: %w", redactErr), attempts
-			}
-			if changed {
-				requestBody = redacted
-				h.recordPrivacyRedaction(
-					requestID,
-					privacy.SummaryToJSON(summary),
-					redacted,
-					privacy.DebugMatchesToJSON(summary),
-				)
-			}
-		}
-
-		resp, err := fwd.Forward(r, requestBody, endpoint)
+		resp, err := fwd.Forward(r, body, endpoint)
 		attempts++
 		lastResp = resp
 		lastErr = err

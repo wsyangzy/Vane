@@ -281,9 +281,9 @@ func TestNonJSONTextRedaction(t *testing.T) {
 	}
 }
 
-func TestOverlappingExactRulesUseLongValueFirst(t *testing.T) {
+func TestOverlappingExactRulesRespectPriority(t *testing.T) {
 	svc := newTestService(t, true)
-	mustCreateRule(t, svc, PrivacyRuleInput{Name: "short", Type: RuleTypeExact, Category: CategoryToken, PatternOrValue: "abc", Enabled: true, Priority: 1})
+	shortRule := mustCreateRule(t, svc, PrivacyRuleInput{Name: "short", Type: RuleTypeExact, Category: CategoryToken, PatternOrValue: "abc", Enabled: true, Priority: 1})
 	longRule := mustCreateRule(t, svc, PrivacyRuleInput{Name: "long", Type: RuleTypeExact, Category: CategorySecret, PatternOrValue: "abcdef", Enabled: true, Priority: 999})
 
 	redacted, summary, changed, err := svc.Redact([]byte("abcdef abc"))
@@ -293,13 +293,20 @@ func TestOverlappingExactRulesUseLongValueFirst(t *testing.T) {
 	if !changed {
 		t.Fatalf("expected redaction")
 	}
-	if string(redacted) != "fake_secret_0001 fake_token_0001" {
+	if string(redacted) != "fake_token_0001def fake_token_0001" {
 		t.Fatalf("unexpected order result: %s", redacted)
 	}
+	shortHit := false
 	for _, hit := range summary.Hits {
-		if hit.RuleID == longRule.ID && hit.Count != 1 {
-			t.Fatalf("expected long rule one hit, got %+v", hit)
+		if hit.RuleID == shortRule.ID && hit.Count == 2 {
+			shortHit = true
 		}
+		if hit.RuleID == longRule.ID {
+			t.Fatalf("lower-priority long rule should not consume overlap: %+v", summary.Hits)
+		}
+	}
+	if !shortHit {
+		t.Fatalf("expected higher-priority short rule to run first, got %+v", summary.Hits)
 	}
 }
 
@@ -330,7 +337,7 @@ func TestInvalidRegexValidationAndDisabledGlobal(t *testing.T) {
 	}
 }
 
-func TestReplacementModePlaceholderStillUsesSyntheticAssociatedValues(t *testing.T) {
+func TestReplacementModePlaceholderDoesNotCreateCrossRequestMapping(t *testing.T) {
 	svc := newTestService(t, true)
 	mustCreateRule(t, svc, PrivacyRuleInput{Name: "token a", Type: RuleTypeExact, Category: CategoryToken, PatternOrValue: "token-a", ReplacementMode: ReplacementModePlaceholder, Enabled: true})
 	mustCreateRule(t, svc, PrivacyRuleInput{Name: "token b", Type: RuleTypeExact, Category: CategoryToken, PatternOrValue: "token-b", ReplacementMode: ReplacementModePlaceholder, Enabled: true})
@@ -340,13 +347,20 @@ func TestReplacementModePlaceholderStillUsesSyntheticAssociatedValues(t *testing
 		t.Fatalf("redact: %v", err)
 	}
 	if !changed {
-		t.Fatalf("expected synthetic redaction")
+		t.Fatalf("expected placeholder redaction")
 	}
-	if string(redacted) != "fake_token_0001 fake_token_0002 fake_token_0001" {
-		t.Fatalf("unexpected synthetic mapping: %s", redacted)
+	if string(redacted) != "REDACTED_TOKEN REDACTED_TOKEN REDACTED_TOKEN" {
+		t.Fatalf("unexpected placeholder output: %s", redacted)
 	}
 	if len(summary.Hits) != 2 || summary.Hits[0].Count+summary.Hits[1].Count != 3 {
-		t.Fatalf("expected 3 synthetic hits, got %+v", summary.Hits)
+		t.Fatalf("expected 3 placeholder hits, got %+v", summary.Hits)
+	}
+	records, err := svc.ListSyntheticValues(context.Background())
+	if err != nil {
+		t.Fatalf("list synthetic values: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("placeholder mode should not persist mappings: %+v", records)
 	}
 }
 
@@ -459,7 +473,7 @@ func TestFieldRuleRedactsJSONFieldValues(t *testing.T) {
 	}
 }
 
-func TestJSONRedactionSkipsProviderProtocolFields(t *testing.T) {
+func TestJSONRedactionPreservesProtocolFieldsAndRedactsToolDescriptions(t *testing.T) {
 	svc := newTestService(t, true)
 	mustCreateRule(t, svc, PrivacyRuleInput{
 		Name:           "validator",
@@ -472,7 +486,7 @@ func TestJSONRedactionSkipsProviderProtocolFields(t *testing.T) {
 	jwt := testJWT()
 	input := []byte(`{
 		"client_metadata":{"trace_token":"` + jwt + `"},
-		"tools":[{"description":"` + jwt + `"}],
+		"tools":[{"name":"` + jwt + `","description":"` + jwt + `","input_schema":{"type":"object","default":{"name":"` + jwt + `"}}}],
 		"input":[
 			{"content":[{"type":"input_text","text":"context ` + jwt + `"}]},
 			{"type":"reasoning","encrypted_content":"` + jwt + `"}
@@ -488,20 +502,20 @@ func TestJSONRedactionSkipsProviderProtocolFields(t *testing.T) {
 	}
 	output := string(redacted)
 	if strings.Count(output, jwt) != 3 {
-		t.Fatalf("expected provider protocol jwt values to remain and context jwt to be redacted: %s", output)
+		t.Fatalf("expected metadata, encrypted content, and tool name to remain: %s", output)
 	}
 	if !strings.Contains(output, "fake_token_0001") {
 		t.Fatalf("expected context jwt replacement in %s", output)
 	}
-	if len(summary.Hits) != 1 || summary.Hits[0].Count != 1 {
-		t.Fatalf("expected one context hit, got %+v", summary.Hits)
+	if len(summary.Hits) != 1 || summary.Hits[0].Count != 3 {
+		t.Fatalf("expected tool description, nested default, and context hits, got %+v", summary.Hits)
 	}
-	if len(summary.Matches) != 1 || summary.Matches[0].RawBase64 == "" {
-		t.Fatalf("expected one debug match with raw_base64, got %+v", summary.Matches)
+	if len(summary.Matches) != 3 || summary.Matches[0].RawBase64 == "" {
+		t.Fatalf("expected three debug matches with raw_base64, got %+v", summary.Matches)
 	}
 }
 
-func TestJSONRedactionSkipsSystemAndInstructionsRoots(t *testing.T) {
+func TestJSONRedactionIncludesSystemAndInstructionsRoots(t *testing.T) {
 	svc := newTestService(t, true)
 	mustCreateRule(t, svc, PrivacyRuleInput{
 		Name:           "body secret",
@@ -527,19 +541,166 @@ func TestJSONRedactionSkipsSystemAndInstructionsRoots(t *testing.T) {
 		t.Fatalf("expected context json redaction")
 	}
 	output := string(redacted)
-	if !strings.Contains(output, `"system":"system ctx-secret-value"`) {
-		t.Fatalf("system root should remain unchanged: %s", output)
-	}
-	if !strings.Contains(output, `"instructions":"instructions ctx-secret-value"`) {
-		t.Fatalf("instructions root should remain unchanged: %s", output)
-	}
-	if strings.Contains(output, `"input ctx-secret-value"`) ||
+	if strings.Contains(output, `"system ctx-secret-value"`) ||
+		strings.Contains(output, `"instructions ctx-secret-value"`) ||
+		strings.Contains(output, `"input ctx-secret-value"`) ||
 		strings.Contains(output, `"message ctx-secret-value"`) ||
 		strings.Contains(output, `"prompt":"prompt ctx-secret-value"`) {
 		t.Fatalf("model context roots should be redacted: %s", output)
 	}
-	if len(summary.Hits) != 1 || summary.Hits[0].Count != 3 {
-		t.Fatalf("expected 3 context hits, got %+v", summary.Hits)
+	if len(summary.Hits) != 1 || summary.Hits[0].Count != 5 {
+		t.Fatalf("expected 5 context hits, got %+v", summary.Hits)
+	}
+}
+
+func TestJSONRedactionTreatsToolInputAsFreeformWithoutMutatingProtocolFields(t *testing.T) {
+	svc := newTestService(t, true)
+	mustCreateRule(t, svc, PrivacyRuleInput{
+		Name:           "tool input secret",
+		Type:           RuleTypeExact,
+		Category:       CategorySecret,
+		PatternOrValue: "secret-value",
+		Enabled:        true,
+	})
+
+	input := []byte(`{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"secret-value","name":"secret-value","input":{"command":"echo secret-value","name":"secret-value","metadata":{"token":"secret-value"},"tools":{"token":"secret-value"}}}]}]}`)
+	redacted, summary, changed, err := svc.Redact(input)
+	if err != nil {
+		t.Fatalf("redact: %v", err)
+	}
+	output := string(redacted)
+	if !changed || strings.Count(output, "secret-value") != 2 {
+		t.Fatalf("tool protocol fields should remain while freeform input is redacted: %s", output)
+	}
+	if len(summary.Hits) != 1 || summary.Hits[0].Count != 4 {
+		t.Fatalf("expected all freeform tool input fields to be redacted, got %+v", summary.Hits)
+	}
+}
+
+func TestJSONRedactionPreservesLargeNumbers(t *testing.T) {
+	svc := newTestService(t, true)
+	mustCreateRule(t, svc, PrivacyRuleInput{
+		Name:           "body secret",
+		Type:           RuleTypeExact,
+		Category:       CategorySecret,
+		PatternOrValue: "secret-value",
+		Enabled:        true,
+	})
+
+	redacted, _, changed, err := svc.Redact([]byte(`{"messages":[{"role":"user","content":"secret-value"}],"database_id":9007199254740993}`))
+	if err != nil {
+		t.Fatalf("redact: %v", err)
+	}
+	if !changed || !strings.Contains(string(redacted), `"database_id":9007199254740993`) {
+		t.Fatalf("large integer changed during redaction: %s", redacted)
+	}
+}
+
+func TestJSONRedactionSkipsTypedBinaryPayloads(t *testing.T) {
+	svc := newTestService(t, true)
+	mustCreateRule(t, svc, PrivacyRuleInput{
+		Name:           "entropy",
+		Type:           RuleTypeEntropy,
+		Category:       CategorySecret,
+		PatternOrValue: "16",
+		Enabled:        true,
+	})
+	payload := "AbCdEf0123456789+/AbCdEf0123456789+/"
+	input := []byte(`{"input":[{"type":"input_image","image_url":"data:image/png;base64,` + payload + `"},{"type":"input_text","text":"` + payload + `"}],"messages":[{"content":[{"type":"image","source":{"type":"base64","data":"` + payload + `"}}]}]}`)
+
+	redacted, summary, changed, err := svc.Redact(input)
+	if err != nil {
+		t.Fatalf("redact: %v", err)
+	}
+	output := string(redacted)
+	if !changed || strings.Count(output, payload) != 2 {
+		t.Fatalf("binary payloads should remain while text is redacted: %s", output)
+	}
+	if len(summary.Hits) != 1 || summary.Hits[0].Count != 1 {
+		t.Fatalf("expected one text entropy hit, got %+v", summary.Hits)
+	}
+}
+
+func TestJSONRedactionScansRemoteMediaURLsButPreservesInlineData(t *testing.T) {
+	svc := newTestService(t, true)
+	mustCreateRule(t, svc, PrivacyRuleInput{
+		Name:           "signed url token",
+		Type:           RuleTypeExact,
+		Category:       CategoryToken,
+		PatternOrValue: "signed-secret-value",
+		Enabled:        true,
+	})
+
+	inlineData := "data:image/png;base64,AbCdEf0123456789+/AbCdEf0123456789+/"
+	input := []byte(`{"input":[{"type":"input_image","image_url":"` + inlineData + `"},{"type":"input_image","image_url":"https://images.example.test/private.png?token=signed-secret-value"}]}`)
+	redacted, summary, changed, err := svc.Redact(input)
+	if err != nil {
+		t.Fatalf("redact: %v", err)
+	}
+	output := string(redacted)
+	if !changed || !strings.Contains(output, inlineData) || strings.Contains(output, "signed-secret-value") {
+		t.Fatalf("inline data should remain and remote URL token should be redacted: %s", output)
+	}
+	if len(summary.Hits) != 1 || summary.Hits[0].Count != 1 {
+		t.Fatalf("expected one remote URL hit, got %+v", summary.Hits)
+	}
+}
+
+func TestNonUTF8BodyFailsClosedWhenRulesAreEnabled(t *testing.T) {
+	svc := newTestService(t, true)
+	mustCreateRule(t, svc, PrivacyRuleInput{Name: "secret", Type: RuleTypeExact, Category: CategorySecret, PatternOrValue: "secret", Enabled: true})
+
+	if _, _, _, err := svc.Redact([]byte{0xff, 0xfe, 0x00, 0x01}); err == nil {
+		t.Fatal("expected binary body to be rejected")
+	}
+}
+
+func TestRequestMediaValidationOnlyAppliesWhenRulesAreEnabled(t *testing.T) {
+	svc := newTestService(t, true)
+	body := []byte{0x1f, 0x8b, 0x08}
+	if output, _, changed, err := svc.RedactRequestContext(context.Background(), body, "application/json", "gzip"); err != nil || changed || string(output) != string(body) {
+		t.Fatalf("zero-rule request should pass through: output=%v changed=%v err=%v", output, changed, err)
+	}
+	mustCreateRule(t, svc, PrivacyRuleInput{Name: "secret", Type: RuleTypeExact, Category: CategorySecret, PatternOrValue: "secret", Enabled: true})
+	if _, _, _, err := svc.RedactRequestContext(context.Background(), body, "application/json", "gzip"); err == nil {
+		t.Fatal("expected compressed request to fail closed")
+	}
+	if _, _, _, err := svc.RedactRequestContext(context.Background(), []byte("binary"), "application/octet-stream", ""); err == nil {
+		t.Fatal("expected unsupported media type to fail closed")
+	}
+}
+
+func TestRuleCacheInvalidatesAfterCreate(t *testing.T) {
+	svc := newTestService(t, true)
+	if output, _, changed, err := svc.Redact([]byte("secret-value")); err != nil || changed || string(output) != "secret-value" {
+		t.Fatalf("unexpected initial redaction: %q changed=%v err=%v", output, changed, err)
+	}
+	mustCreateRule(t, svc, PrivacyRuleInput{Name: "secret", Type: RuleTypeExact, Category: CategorySecret, PatternOrValue: "secret-value", Enabled: true})
+	if output, _, changed, err := svc.Redact([]byte("secret-value")); err != nil || !changed || string(output) == "secret-value" {
+		t.Fatalf("rule cache was not refreshed: %q changed=%v err=%v", output, changed, err)
+	}
+}
+
+func TestRedactionMatchDetailsAreCapped(t *testing.T) {
+	svc := newTestService(t, true)
+	mustCreateRule(t, svc, PrivacyRuleInput{Name: "secret", Type: RuleTypeExact, Category: CategorySecret, PatternOrValue: "secret", Enabled: true})
+
+	_, summary, changed, err := svc.Redact([]byte(strings.Repeat("secret ", 200)))
+	if err != nil {
+		t.Fatalf("redact: %v", err)
+	}
+	if !changed || len(summary.Hits) != 1 || summary.Hits[0].Count != 200 {
+		t.Fatalf("expected full hit count, got %+v", summary.Hits)
+	}
+	if len(summary.Matches) != maxRedactionMatchDetails {
+		t.Fatalf("match details = %d, want %d", len(summary.Matches), maxRedactionMatchDetails)
+	}
+}
+
+func TestUnavailablePrivacyServiceFailsClosed(t *testing.T) {
+	svc := NewService(nil, nil)
+	if _, _, _, err := svc.Redact([]byte(`{"messages":[{"content":"secret"}]}`)); err == nil {
+		t.Fatal("expected unavailable privacy service to reject forwarding")
 	}
 }
 

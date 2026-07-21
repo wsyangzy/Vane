@@ -5,12 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 type runtimeRule struct {
@@ -19,8 +21,18 @@ type runtimeRule struct {
 	regex          *regexp.Regexp
 	patterns       []string
 	keywordRegexes []*regexp.Regexp
+	structuredREs  []*regexp.Regexp
+	entropyRegex   *regexp.Regexp
 	minEntropyLen  int
 }
+
+const maxRedactionMatchDetails = 100
+
+var (
+	bankCardValidatorRegex = regexp.MustCompile(`\b\d{13,19}\b`)
+	cnIDCardValidatorRegex = regexp.MustCompile(`\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b`)
+	jwtValidatorRegex      = regexp.MustCompile(`\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
+)
 
 type redactionSession struct {
 	values    map[string]string
@@ -41,6 +53,11 @@ type syntheticReplacementTracker interface {
 	SyntheticReplacementInUse(kind, replacement string) bool
 	TouchSyntheticValue(value string) bool
 	LogSyntheticValueSkip(value string)
+}
+
+type syntheticAllocationLocker interface {
+	LockSyntheticAllocation()
+	UnlockSyntheticAllocation()
 }
 
 func newRedactionSession(tracker syntheticReplacementTracker) *redactionSession {
@@ -85,6 +102,11 @@ func compileRuntimeRules(rules []PrivacyRule) ([]runtimeRule, error) {
 			if len(rt.patterns) == 0 {
 				return nil, fmt.Errorf("隐私规则 %q 缺少字段名", rule.Name)
 			}
+			if rule.Type == RuleTypeStructured {
+				for _, key := range rt.patterns {
+					rt.structuredREs = append(rt.structuredREs, regexp.MustCompile(`(?i)(^|[?&;\s])(`+regexp.QuoteMeta(key)+`)(\s*[=:]\s*)([^&;\s,，;；]+)`))
+				}
+			}
 		case RuleTypeKeyword:
 			rt.patterns = parseRuleList(raw)
 			if len(rt.patterns) == 0 {
@@ -99,6 +121,7 @@ func compileRuntimeRules(rules []PrivacyRule) ([]runtimeRule, error) {
 				return nil, fmt.Errorf("隐私规则 %q 高熵最小长度无效", rule.Name)
 			}
 			rt.minEntropyLen = minLength
+			rt.entropyRegex = regexp.MustCompile(`[A-Za-z0-9_\-+/=]{` + strconv.Itoa(minLength) + `,}`)
 		case RuleTypeValidator:
 			rt.patterns = parseRuleList(raw)
 			if len(rt.patterns) == 0 {
@@ -129,6 +152,9 @@ func parseRuleList(raw string) []string {
 func sortRuntimeRules(rules []runtimeRule) {
 	sort.SliceStable(rules, func(i, j int) bool {
 		left, right := rules[i], rules[j]
+		if left.Priority != right.Priority {
+			return left.Priority < right.Priority
+		}
 		if left.Type == RuleTypeExact && right.Type == RuleTypeExact {
 			if len([]rune(left.rawPattern)) != len([]rune(right.rawPattern)) {
 				return len([]rune(left.rawPattern)) > len([]rune(right.rawPattern))
@@ -149,11 +175,7 @@ func redactWithRules(body []byte, rules []runtimeRule, tracker syntheticReplacem
 
 	session := newRedactionSession(tracker)
 	trimmed := bytes.TrimSpace(body)
-	if json.Valid(trimmed) {
-		var value any
-		if err := json.Unmarshal(body, &value); err != nil {
-			return nil, RedactionSummary{}, false, err
-		}
+	if value, ok := decodeJSONValue(trimmed); ok {
 		collector := newRedactionCollector()
 		changedValue, changed := redactJSONValue(value, nil, false, rules, collector, session)
 		if !changed {
@@ -166,6 +188,9 @@ func redactWithRules(body []byte, rules []runtimeRule, tracker syntheticReplacem
 		summary := collector.summary()
 		return redacted, summary, true, nil
 	}
+	if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
+		return nil, RedactionSummary{}, false, fmt.Errorf("隐私防护不支持非 UTF-8 或二进制请求体")
+	}
 
 	collector := newRedactionCollector()
 	output, changed := redactString(string(body), rules, collector, session)
@@ -176,12 +201,29 @@ func redactWithRules(body []byte, rules []runtimeRule, tracker syntheticReplacem
 	return []byte(output), summary, true, nil
 }
 
+func decodeJSONValue(body []byte) (any, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, false
+	}
+	return value, true
+}
+
 func redactJSONValue(value any, path []string, inContext bool, rules []runtimeRule, collector *redactionCollector, session *redactionSession) (any, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
 		changed := false
 		for key, child := range typed {
 			nextPath := appendPath(path, key)
+			if shouldSkipBinaryPayloadField(typed, key, child, nextPath) {
+				continue
+			}
 			nextContext := nextJSONContextState(nextPath, inContext)
 			if text, ok := child.(string); ok && nextContext {
 				replaced := false
@@ -236,8 +278,15 @@ func nextJSONContextState(path []string, parentInContext bool) bool {
 		return parentInContext
 	}
 	key := strings.ToLower(path[len(path)-1])
-	if isJSONProtocolKey(key) || pathContainsJSONProtocolRoot(path) {
+	freeformPayload := pathContainsJSONFreeformPayload(path)
+	if !freeformPayload && pathContainsKey(path, "tools") {
+		return pathContainsToolTextPayload(path)
+	}
+	if !freeformPayload && (isJSONProtocolKey(key) || pathContainsJSONProtocolRoot(path)) {
 		return false
+	}
+	if freeformPayload {
+		return true
 	}
 	if isJSONContextRoot(path[0]) {
 		return true
@@ -247,7 +296,7 @@ func nextJSONContextState(path []string, parentInContext bool) bool {
 
 func isJSONContextRoot(key string) bool {
 	switch strings.ToLower(key) {
-	case "input", "messages", "prompt":
+	case "input", "instructions", "messages", "prompt", "system":
 		return true
 	default:
 		return false
@@ -265,7 +314,7 @@ func isJSONContextTextKey(key string) bool {
 
 func isJSONProtocolKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "call_id", "client_metadata", "encrypted_content", "id", "include", "instructions", "metadata", "model", "name", "previous_response_id", "reasoning", "response_id", "role", "status", "stream", "system", "tools", "type":
+	case "call_id", "client_metadata", "encrypted_content", "id", "include", "metadata", "model", "name", "previous_response_id", "reasoning", "response_id", "role", "status", "stream", "tools", "type":
 		return true
 	default:
 		return false
@@ -278,11 +327,96 @@ func pathContainsJSONProtocolRoot(path []string) bool {
 	}
 	for _, part := range path {
 		key := strings.ToLower(part)
-		if key == "tools" || key == "client_metadata" || key == "metadata" || key == "encrypted_content" || key == "reasoning" || key == "instructions" || key == "system" {
+		if key == "client_metadata" || key == "metadata" || key == "encrypted_content" || key == "reasoning" {
 			return true
 		}
 	}
 	return false
+}
+
+func pathContainsKey(path []string, expected string) bool {
+	for _, part := range path {
+		if strings.EqualFold(part, expected) {
+			return true
+		}
+	}
+	return false
+}
+
+func pathContainsJSONFreeformPayload(path []string) bool {
+	for index, part := range path {
+		switch strings.ToLower(part) {
+		case "arguments", "output":
+			return true
+		case "input":
+			if index > 0 && strings.EqualFold(path[index-1], "content") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pathContainsToolTextPayload(path []string) bool {
+	insideTools := false
+	for _, part := range path {
+		key := strings.ToLower(part)
+		if key == "tools" {
+			insideTools = true
+			continue
+		}
+		if insideTools && (key == "description" || key == "default" || key == "example" || key == "examples") {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSkipBinaryPayloadField(object map[string]any, key string, child any, path []string) bool {
+	// ponytail: binary payloads stay opaque; add typed text-attachment decoding only when provider formats require it.
+	typeName, _ := object["type"].(string)
+	typeName = strings.ToLower(strings.TrimSpace(typeName))
+	key = strings.ToLower(key)
+	switch typeName {
+	case "image", "image_url", "input_image", "computer_screenshot":
+		if key == "data" {
+			return true
+		}
+		if key == "source" || key == "image_url" || key == "url" {
+			return isInlineBinaryPayload(child)
+		}
+	case "audio", "input_audio":
+		if key == "data" {
+			return true
+		}
+		if key == "audio" || key == "input_audio" {
+			return isInlineBinaryPayload(child)
+		}
+	case "document", "file", "input_file":
+		if key == "data" || key == "file_data" {
+			return true
+		}
+		if key == "source" {
+			return isInlineBinaryPayload(child)
+		}
+	case "base64":
+		return key == "data"
+	}
+	if key == "data" && (pathContainsKey(path, "audio") || pathContainsKey(path, "input_audio")) {
+		return true
+	}
+	if key == "image_url" || key == "url" {
+		return isInlineBinaryPayload(child)
+	}
+	return false
+}
+
+func isInlineBinaryPayload(value any) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(text)), "data:")
 }
 
 func appendPath(path []string, key string) []string {
@@ -467,8 +601,7 @@ func redactKeywordString(input string, rule runtimeRule, collector *redactionCol
 func redactStructuredString(input string, rule runtimeRule, collector *redactionCollector, session *redactionSession) (string, int) {
 	output := input
 	total := 0
-	for _, key := range rule.patterns {
-		re := regexp.MustCompile(`(?i)(^|[?&;\s])(` + regexp.QuoteMeta(key) + `)(\s*[=:]\s*)([^&;\s,，;；]+)`)
+	for _, re := range rule.structuredREs {
 		next, count := replaceGroupMatches(output, re, 4, func(raw string) string {
 			replacement := session.replacementFor(rule, raw)
 			if replacement != raw {
@@ -487,7 +620,10 @@ func redactEntropyString(input string, rule runtimeRule, collector *redactionCol
 	if minLength <= 0 {
 		minLength = 32
 	}
-	re := regexp.MustCompile(`[A-Za-z0-9_\-+/=]{` + strconv.Itoa(minLength) + `,}`)
+	re := rule.entropyRegex
+	if re == nil {
+		re = regexp.MustCompile(`[A-Za-z0-9_\-+/=]{` + strconv.Itoa(minLength) + `,}`)
+	}
 	return replaceFullMatches(input, re, func(raw string) string {
 		if !isHighEntropyToken(raw, minLength) {
 			return raw
@@ -536,8 +672,7 @@ func redactValidatorString(input string, rule runtimeRule, collector *redactionC
 	for _, validator := range rule.patterns {
 		switch strings.ToLower(validator) {
 		case "bank_card_luhn":
-			re := regexp.MustCompile(`\b\d{13,19}\b`)
-			next, count := replaceFullMatches(output, re, func(raw string) string {
+			next, count := replaceFullMatches(output, bankCardValidatorRegex, func(raw string) string {
 				if !luhnValid(raw) {
 					return raw
 				}
@@ -550,8 +685,7 @@ func redactValidatorString(input string, rule runtimeRule, collector *redactionC
 			output = next
 			total += count
 		case "cn_id_card":
-			re := regexp.MustCompile(`\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b`)
-			next, count := replaceFullMatches(output, re, func(raw string) string {
+			next, count := replaceFullMatches(output, cnIDCardValidatorRegex, func(raw string) string {
 				if !cnIDCardValid(raw) {
 					return raw
 				}
@@ -564,8 +698,7 @@ func redactValidatorString(input string, rule runtimeRule, collector *redactionC
 			output = next
 			total += count
 		case "jwt":
-			re := regexp.MustCompile(`\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
-			next, count := replaceFullMatches(output, re, func(raw string) string {
+			next, count := replaceFullMatches(output, jwtValidatorRegex, func(raw string) string {
 				if !jwtStructureValid(raw) {
 					return raw
 				}
@@ -765,8 +898,24 @@ func (s *redactionSession) replacementForCategory(rule runtimeRule, category str
 		return existing
 	}
 	kind := syntheticKindForRule(rule, category)
+	if rule.ReplacementMode == ReplacementModePlaceholder {
+		replacement := placeholderValueForKind(kind)
+		s.values[raw] = replacement
+		s.generated[replacement] = struct{}{}
+		return replacement
+	}
 	if s.tracker != nil {
 		if existing, ok := s.tracker.LookupSyntheticMapping(raw, kind); ok {
+			s.values[raw] = existing
+			s.generated[existing] = struct{}{}
+			rememberSyntheticReplacementValue(existing)
+			return existing
+		}
+	}
+	if locker, ok := s.tracker.(syntheticAllocationLocker); ok {
+		locker.LockSyntheticAllocation()
+		defer locker.UnlockSyntheticAllocation()
+		if existing, found := s.tracker.LookupSyntheticMapping(raw, kind); found {
 			s.values[raw] = existing
 			s.generated[existing] = struct{}{}
 			rememberSyntheticReplacementValue(existing)
@@ -917,6 +1066,27 @@ func syntheticValueForKind(kind string, index int, raw string) string {
 	}
 }
 
+func placeholderValueForKind(kind string) string {
+	switch kind {
+	case syntheticKindAPIKey:
+		return "REDACTED_API_KEY"
+	case syntheticKindBankCard:
+		return "REDACTED_BANK_CARD"
+	case syntheticKindIDCard:
+		return "REDACTED_ID_CARD"
+	case syntheticKindName:
+		return "REDACTED_NAME"
+	case syntheticKindPhone:
+		return "REDACTED_PHONE"
+	case syntheticKindSecret:
+		return "REDACTED_SECRET"
+	case syntheticKindToken:
+		return "REDACTED_TOKEN"
+	default:
+		return "REDACTED_VALUE"
+	}
+}
+
 func maxSyntheticGenerationAttempts(kind string) int {
 	switch kind {
 	case syntheticKindIDCard:
@@ -931,6 +1101,9 @@ func maxSyntheticGenerationAttempts(kind string) int {
 func isSyntheticReplacementValue(value string) bool {
 	if value == "" {
 		return false
+	}
+	if strings.HasPrefix(value, "REDACTED_") {
+		return true
 	}
 	if isRememberedSyntheticReplacementValue(value) {
 		return true
@@ -1131,13 +1304,17 @@ func (c *redactionCollector) addMatches(rule runtimeRule, raw, replacement strin
 	if c == nil || count <= 0 {
 		return
 	}
+	remaining := maxRedactionMatchDetails - len(c.matches)
+	if count > remaining {
+		count = remaining
+	}
 	for i := 0; i < count; i++ {
 		c.addMatch(rule, raw, replacement)
 	}
 }
 
 func (c *redactionCollector) addMatchWithCategory(rule runtimeRule, category, raw, replacement string) {
-	if c == nil || raw == "" || replacement == "" || raw == replacement {
+	if c == nil || len(c.matches) >= maxRedactionMatchDetails || raw == "" || replacement == "" || raw == replacement {
 		return
 	}
 	c.matches = append(c.matches, RedactionMatch{

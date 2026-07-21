@@ -98,13 +98,12 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 
 // tryForward 尝试转发到支持的端点
 func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string, lifecycleManager RequestLifecycleManager) ([]byte, bool, error) {
+	protectedBody, err := redactBodyBeforeForwardContext(ctx, h.privacyRedactor, bodyBytes, lifecycleManager, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"))
+	if err != nil {
+		return nil, false, err
+	}
 	for _, ep := range endpoints {
-		requestBody := h.forwarder.RewriteModelForEndpoint(bodyBytes, ep, connID).Body
-		var err error
-		requestBody, err = redactBodyBeforeForward(h.privacyRedactor, requestBody, lifecycleManager)
-		if err != nil {
-			return nil, false, err
-		}
+		requestBody := h.forwarder.RewriteModelForEndpoint(protectedBody, ep, connID).Body
 		targetURL := ep.Config.URL + "/v1/messages/count_tokens"
 		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(requestBody))
 		if err != nil {

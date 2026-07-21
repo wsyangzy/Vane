@@ -202,6 +202,14 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		http.Error(w, "Streaming not supported by this proxy chain", http.StatusServiceUnavailable)
 		return
 	}
+	protectedBody, err := redactBodyBeforeForwardContext(ctx, sh.privacyRedactor, bodyBytes, lifecycleManager, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"))
+	if err != nil {
+		lifecycleManager.FailRequest("privacy_redaction_failed", err.Error(), http.StatusInternalServerError)
+		sh.setStreamingHeaders(w)
+		terminateSSEStreamWithError(w, flusher, "隐私防护处理失败: "+err.Error())
+		return
+	}
+	bodyBytes = protectedBody
 
 	// 设置流式响应头
 	sh.setStreamingHeaders(w)
@@ -375,11 +383,6 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			// 尝试连接端点
 			requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
-			requestBody, err := redactBodyBeforeForward(sh.privacyRedactor, requestBody, lifecycleManager)
-			if err != nil {
-				lastErr = err
-				break
-			}
 			resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 			// 🔧 [修复] 保存最后的响应，用于获取真实HTTP状态码
 			lastResp = resp
@@ -901,13 +904,6 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 					// 尝试转发请求
 					requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
-					requestBody, err := redactBodyBeforeForward(sh.privacyRedactor, requestBody, lifecycleManager)
-					if err != nil {
-						slog.Error("隐私脱敏失败，终止恢复重试发送", "request_id", connID, "endpoint", ep.Config.Name, "error", err)
-						lifecycleManager.FailRequest("privacy_redaction_failed", err.Error(), http.StatusInternalServerError)
-						*r = *r.WithContext(context.WithValue(r.Context(), "final_status_code", http.StatusInternalServerError))
-						return
-					}
 					resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 					if err != nil && ctx.Err() != nil {
 						slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复重试期间检测到客户端取消，立即停止重试", connID))

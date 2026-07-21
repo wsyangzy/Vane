@@ -1992,6 +1992,9 @@ func (a *App) setupSettingsStore() {
 }
 
 func (a *App) setupPrivacyService() {
+	// Keep a non-nil faulted service so proxy handlers fail closed if privacy
+	// initialization breaks. A ready service with zero rules still passes through.
+	a.privacyService = privacy.NewService(nil, nil, a.logger)
 	db := a.storeDB
 	if db == nil && a.usageTracker != nil {
 		db = a.usageTracker.GetDB()
