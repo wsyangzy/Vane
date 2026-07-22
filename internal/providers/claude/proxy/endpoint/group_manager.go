@@ -789,30 +789,6 @@ func (gm *GroupManager) ManualPauseGroup(groupName string, duration time.Duratio
 	return nil
 }
 
-// ResetAllPausedGroups 重置所有渠道的暂停状态
-// 当启用渠道间转移时调用，确保所有渠道回到初始状态（显示"激活"而非"重试"）
-func (gm *GroupManager) ResetAllPausedGroups() {
-	gm.mutex.Lock()
-	defer gm.mutex.Unlock()
-
-	resetCount := 0
-	for name, group := range gm.groups {
-		if group == nil {
-			continue
-		}
-		if group.ManuallyPaused {
-			group.ManuallyPaused = false
-			gm.channelFailoverEnabled[name] = true
-			resetCount++
-		}
-	}
-
-	if resetCount > 0 {
-		slog.Info(fmt.Sprintf("🔄 [组管理] 已重置 %d 个渠道的暂停状态", resetCount))
-		gm.updateActiveGroups()
-	}
-}
-
 // ManualResumeGroup manually resumes a paused group
 func (gm *GroupManager) ManualResumeGroup(groupName string) error {
 	gm.mutex.Lock()

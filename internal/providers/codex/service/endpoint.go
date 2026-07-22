@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/tracking"
@@ -21,6 +24,20 @@ type CodexEndpointService struct {
 	channelStore         store.CodexChannelStore
 	credentialGroupStore store.CodexCredentialGroupStore
 }
+
+type codexEndpointTransactionStarter interface {
+	BeginTx(context.Context) (*sql.Tx, error)
+}
+
+type codexEndpointActiveClearer interface {
+	ClearActiveByChannel(context.Context, int64) error
+}
+
+type codexEndpointRecordRestorer interface {
+	Restore(context.Context, *store.CodexEndpointRecord) error
+}
+
+var codexEndpointPriorityMu sync.Mutex
 
 func NewCodexEndpointService(endpointStore store.CodexEndpointStore, channelStore store.CodexChannelStore, credentialGroupStore ...store.CodexCredentialGroupStore) *CodexEndpointService {
 	var groupStore store.CodexCredentialGroupStore
@@ -75,64 +92,76 @@ func (s *CodexEndpointService) CreateEndpoint(ctx context.Context, record *store
 		return nil, fmt.Errorf("该凭证分组下已存在相同的端点名 '%s'", record.Name)
 	}
 
-	explicitPriority := record.Priority >= 0
-	if record.Priority < 0 {
-		maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
+	working := *record
+	var created *store.CodexEndpointRecord
+	err = s.withPriorityTransaction(ctx, func(endpointStore store.CodexEndpointStore) error {
+		active, err := endpointStore.GetActiveByChannelID(ctx, working.ChannelID)
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("查询 Codex 当前激活端点失败: %w", err)
 		}
-		record.Priority = maxPriority + 1
-	}
-	if explicitPriority {
-		conflicting, err := s.endpointStore.GetByChannelCredentialGroupAndPriority(ctx, record.ChannelID, record.CredentialGroupID, record.Priority)
-		if err != nil {
-			return nil, fmt.Errorf("检查 Codex 端点优先级冲突失败: %w", err)
-		}
-		if conflicting != nil {
-			maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
+		working.IsActive = active == nil
+		if working.Priority < 0 {
+			maxPriority, err := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, working.ChannelID, working.CredentialGroupID)
 			if err != nil {
-				return nil, fmt.Errorf("获取 Codex 凭证分组最大优先级失败: %w", err)
+				return fmt.Errorf("获取 Codex 凭证分组最大优先级失败: %w", err)
 			}
-			if err := s.endpointStore.Update(
-				ctx,
-				conflicting.ID,
-				conflicting.Name,
-				conflicting.BaseURL,
-				conflicting.CredentialGroupID,
-				conflicting.ApiKey,
-				conflicting.FailoverEnabled,
-				conflicting.SkipHealthCheck,
-				maxPriority+1,
-				conflicting.TimeoutSeconds,
-				conflicting.CostMultiplier,
-				conflicting.InputCostMultiplier,
-				conflicting.OutputCostMultiplier,
-				conflicting.CacheReadCostMultiplier,
-				conflicting.BillingOutputTokenSource,
-				conflicting.ModelMultipliers,
-			); err != nil {
-				return nil, fmt.Errorf("Codex 端点优先级替换失败: %w", err)
+			working.Priority = maxPriority + 1
+		}
+		if working.Priority >= 0 {
+			conflicting, err := endpointStore.GetByChannelCredentialGroupAndPriority(ctx, working.ChannelID, working.CredentialGroupID, working.Priority)
+			if err != nil {
+				return fmt.Errorf("检查 Codex 端点优先级冲突失败: %w", err)
+			}
+			if conflicting != nil {
+				maxPriority, err := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, working.ChannelID, working.CredentialGroupID)
+				if err != nil {
+					return fmt.Errorf("获取 Codex 凭证分组最大优先级失败: %w", err)
+				}
+				if err := updateCodexEndpointStoreRecord(ctx, endpointStore, conflicting, maxPriority+1); err != nil {
+					return fmt.Errorf("Codex 端点优先级替换失败: %w", err)
+				}
 			}
 		}
-	}
-
-	record.IsActive = false
-	created, err := s.endpointStore.Create(ctx, record)
+		created, err = endpointStore.Create(ctx, &working)
+		if err != nil {
+			return err
+		}
+		if !working.IsActive {
+			return nil
+		}
+		if err := endpointStore.SetActive(ctx, created.ID); err != nil {
+			return fmt.Errorf("设置 Codex 首个激活端点失败: %w", err)
+		}
+		created, err = endpointStore.GetByID(ctx, created.ID)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
+	*record = working
 
-	active, err := s.endpointStore.GetActiveByChannelID(ctx, record.ChannelID)
-	if err != nil {
-		return nil, err
-	}
-	if active == nil {
-		if err := s.endpointStore.SetActive(ctx, created.ID); err != nil {
-			return nil, err
-		}
-		return s.endpointStore.GetByID(ctx, created.ID)
-	}
 	return created, nil
+}
+
+func updateCodexEndpointStoreRecord(ctx context.Context, endpointStore store.CodexEndpointStore, record *store.CodexEndpointRecord, priority int) error {
+	return endpointStore.Update(
+		ctx,
+		record.ID,
+		record.Name,
+		record.BaseURL,
+		record.CredentialGroupID,
+		record.ApiKey,
+		record.FailoverEnabled,
+		record.SkipHealthCheck,
+		priority,
+		record.TimeoutSeconds,
+		record.CostMultiplier,
+		record.InputCostMultiplier,
+		record.OutputCostMultiplier,
+		record.CacheReadCostMultiplier,
+		record.BillingOutputTokenSource,
+		record.ModelMultipliers,
+	)
 }
 
 func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
@@ -164,19 +193,12 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	if credentialGroupID <= 0 {
 		credentialGroupID = existing.CredentialGroupID
 	}
-	if err := s.validateCredentialGroup(ctx, existing.ChannelID, credentialGroupID); err != nil {
+	if err := s.validateCredentialGroupWithOverride(ctx, existing.ChannelID, credentialGroupID, apiKey); err != nil {
 		return err
 	}
 	groupChanged := existing.CredentialGroupID != credentialGroupID
-	if groupChanged {
-		maxPriority, err := s.endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, existing.ChannelID, credentialGroupID)
-		if err != nil {
-			return fmt.Errorf("获取 Codex 目标凭证分组最大优先级失败: %w", err)
-		}
-		priority = maxPriority + 1
-	}
 
-	if existing.Name == name && existing.BaseURL == baseURL && existing.CredentialGroupID == credentialGroupID && existing.ApiKey == apiKey && existing.FailoverEnabled == failoverEnabled && existing.SkipHealthCheck == skipHealthCheck && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
+	if !groupChanged && existing.Name == name && existing.BaseURL == baseURL && existing.CredentialGroupID == credentialGroupID && existing.ApiKey == apiKey && existing.FailoverEnabled == failoverEnabled && existing.SkipHealthCheck == skipHealthCheck && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
 		return nil
 	}
 
@@ -200,6 +222,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		}
 	}
 
+	switchedActiveEndpoint := false
 	if existing.IsActive && !failoverEnabled {
 		nextEndpoint, err := s.findNextFailoverEndpoint(ctx, existing.ChannelID, existing.ID)
 		if err != nil {
@@ -211,45 +234,99 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 		if err := s.endpointStore.SetActive(ctx, nextEndpoint.ID); err != nil {
 			return fmt.Errorf("切换 Codex 激活端点失败: %w", err)
 		}
+		switchedActiveEndpoint = true
 	}
 
-	if !groupChanged && existing.Priority != priority {
-		conflicting, err := s.endpointStore.GetByChannelCredentialGroupAndPriority(ctx, existing.ChannelID, credentialGroupID, priority)
-		if err != nil {
-			return fmt.Errorf("检查 Codex 端点优先级冲突失败: %w", err)
+	if err := s.withPriorityTransaction(ctx, func(endpointStore store.CodexEndpointStore) error {
+		if groupChanged {
+			maxPriority, err := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, existing.ChannelID, credentialGroupID)
+			if err != nil {
+				return fmt.Errorf("获取 Codex 目标凭证分组最大优先级失败: %w", err)
+			}
+			priority = maxPriority + 1
 		}
-		if conflicting != nil && conflicting.ID != id {
-			if err := s.endpointStore.Update(
-				ctx,
-				conflicting.ID,
-				conflicting.Name,
-				conflicting.BaseURL,
-				conflicting.CredentialGroupID,
-				conflicting.ApiKey,
-				conflicting.FailoverEnabled,
-				conflicting.SkipHealthCheck,
-				existing.Priority,
-				conflicting.TimeoutSeconds,
-				conflicting.CostMultiplier,
-				conflicting.InputCostMultiplier,
-				conflicting.OutputCostMultiplier,
-				conflicting.CacheReadCostMultiplier,
-				conflicting.BillingOutputTokenSource,
-				conflicting.ModelMultipliers,
-			); err != nil {
-				return fmt.Errorf("Codex 端点优先级对调失败: %w", err)
+		if !groupChanged && existing.Priority != priority {
+			conflicting, err := endpointStore.GetByChannelCredentialGroupAndPriority(ctx, existing.ChannelID, credentialGroupID, priority)
+			if err != nil {
+				return fmt.Errorf("检查 Codex 端点优先级冲突失败: %w", err)
+			}
+			if conflicting != nil && conflicting.ID != id {
+				if err := updateCodexEndpointStoreRecord(ctx, endpointStore, conflicting, existing.Priority); err != nil {
+					return fmt.Errorf("Codex 端点优先级对调失败: %w", err)
+				}
 			}
 		}
+
+		return endpointStore.Update(ctx, id, name, baseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
+	}); err != nil {
+		if switchedActiveEndpoint {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer rollbackCancel()
+			if restoreErr := s.endpointStore.SetActive(rollbackCtx, existing.ID); restoreErr != nil {
+				return fmt.Errorf("%w；恢复原激活端点失败: %v", err, restoreErr)
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+// RestoreEndpoint restores a previously persisted endpoint snapshot exactly.
+// It is intentionally separate from UpdateEndpointByID: rollback must preserve
+// the original credential group and priority instead of applying edit-time
+// append/swap semantics again.
+func (s *CodexEndpointService) RestoreEndpoint(ctx context.Context, record *store.CodexEndpointRecord) error {
+	if s == nil || s.endpointStore == nil {
+		return fmt.Errorf("Codex 端点存储服务未启用")
+	}
+	if record == nil || record.ID <= 0 {
+		return fmt.Errorf("恢复 Codex 端点记录无效")
 	}
 
-	return s.endpointStore.Update(ctx, id, name, baseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
+	return s.withPriorityTransaction(ctx, func(endpointStore store.CodexEndpointStore) error {
+		current, err := endpointStore.GetByID(ctx, record.ID)
+		if err != nil {
+			return fmt.Errorf("读取待恢复 Codex 端点失败: %w", err)
+		}
+		if current == nil {
+			return fmt.Errorf("待恢复 Codex 端点不存在: %d", record.ID)
+		}
+
+		conflicting, err := endpointStore.GetByChannelCredentialGroupAndPriority(ctx, record.ChannelID, record.CredentialGroupID, record.Priority)
+		if err != nil {
+			return fmt.Errorf("检查恢复后的 Codex 端点优先级失败: %w", err)
+		}
+		if conflicting != nil && conflicting.ID != record.ID {
+			maxPriority, maxErr := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
+			if maxErr != nil {
+				return fmt.Errorf("为恢复优先级腾挪 Codex 端点失败: %w", maxErr)
+			}
+			if err := updateCodexEndpointStoreRecord(ctx, endpointStore, conflicting, maxPriority+1); err != nil {
+				return fmt.Errorf("为恢复优先级腾挪 Codex 冲突端点失败: %w", err)
+			}
+		}
+
+		if err := endpointStore.Update(ctx, record.ID, record.Name, record.BaseURL, record.CredentialGroupID, record.ApiKey, record.FailoverEnabled, record.SkipHealthCheck, record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, record.BillingOutputTokenSource, record.ModelMultipliers); err != nil {
+			return fmt.Errorf("恢复 Codex 端点记录失败: %w", err)
+		}
+		if record.IsActive {
+			if err := endpointStore.SetActive(ctx, record.ID); err != nil {
+				return fmt.Errorf("恢复 Codex 激活端点失败: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func (s *CodexEndpointService) findNextFailoverEndpoint(ctx context.Context, channelID int64, currentID int64) (*store.CodexEndpointRecord, error) {
 	if s == nil || s.endpointStore == nil {
 		return nil, fmt.Errorf("Codex 端点存储服务未启用")
 	}
-	candidates, err := s.endpointStore.ListByChannelID(ctx, channelID)
+	return selectCodexFailoverEndpoint(ctx, s.endpointStore, channelID, currentID)
+}
+
+func selectCodexFailoverEndpoint(ctx context.Context, endpointStore store.CodexEndpointStore, channelID, currentID int64) (*store.CodexEndpointRecord, error) {
+	candidates, err := endpointStore.ListByChannelID(ctx, channelID)
 	if err != nil {
 		return nil, fmt.Errorf("获取 Codex 端点列表失败: %w", err)
 	}
@@ -275,33 +352,172 @@ func (s *CodexEndpointService) findNextFailoverEndpoint(ctx context.Context, cha
 	return filtered[0], nil
 }
 
-// DeleteEndpoint 删除端点。若被删除的是当前激活端点：
-//   - 该渠道下还有其他端点 → 自动激活第一个（按创建时间）
-//   - 该渠道下无其他端点 → 不再有激活端点（调用方负责清理 config.toml）
-func (s *CodexEndpointService) DeleteEndpointByID(ctx context.Context, id int64) error {
+// GetEndpointDeletionSuccessor returns the same eligible, priority-ordered
+// endpoint that DeleteEndpointByID will activate for an active target.
+func (s *CodexEndpointService) GetEndpointDeletionSuccessor(ctx context.Context, id int64) (*store.CodexEndpointRecord, error) {
+	if s == nil || s.endpointStore == nil {
+		return nil, fmt.Errorf("Codex 端点存储服务未启用")
+	}
 	existing, err := s.endpointStore.GetByID(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if existing == nil {
-		return fmt.Errorf("Codex 端点不存在: %d", id)
-	}
-
-	if err := s.endpointStore.DeleteByID(ctx, id); err != nil {
-		return err
+		return nil, fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 	if !existing.IsActive {
-		return nil
+		return nil, nil
 	}
+	return selectCodexFailoverEndpoint(ctx, s.endpointStore, existing.ChannelID, existing.ID)
+}
 
-	siblings, err := s.endpointStore.ListByChannelID(ctx, existing.ChannelID)
+func (s *CodexEndpointService) withPriorityTransaction(ctx context.Context, fn func(store.CodexEndpointStore) error) error {
+	if s == nil || s.endpointStore == nil {
+		return fmt.Errorf("Codex 端点存储服务未启用")
+	}
+	codexEndpointPriorityMu.Lock()
+	defer codexEndpointPriorityMu.Unlock()
+
+	starter, ok := s.endpointStore.(codexEndpointTransactionStarter)
+	if !ok {
+		return fn(s.endpointStore)
+	}
+	tx, err := starter.BeginTx(ctx)
 	if err != nil {
+		return fmt.Errorf("开启 Codex 端点优先级事务失败: %w", err)
+	}
+	txStore := s.endpointStore.WithTx(tx)
+	if err := fn(txStore); err != nil {
+		_ = tx.Rollback()
 		return err
 	}
-	if len(siblings) == 0 {
-		return nil
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("提交 Codex 端点优先级事务失败: %w", err)
 	}
-	return s.endpointStore.SetActive(ctx, siblings[0].ID)
+	return nil
+}
+
+// PrepareEndpointDeletion makes an endpoint inert before the runtime reload.
+// The expected successor keeps API pre-sync and persisted activation on the
+// same eligible, priority-ordered candidate.
+func (s *CodexEndpointService) PrepareEndpointDeletion(ctx context.Context, id, expectedSuccessorID int64) error {
+	return s.withPriorityTransaction(ctx, func(endpointStore store.CodexEndpointStore) error {
+		existing, err := endpointStore.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("Codex 端点不存在: %d", id)
+		}
+		if existing.IsActive {
+			next, err := selectCodexFailoverEndpoint(ctx, endpointStore, existing.ChannelID, existing.ID)
+			if err != nil {
+				return err
+			}
+			if endpointRecordID(next) != expectedSuccessorID {
+				return fmt.Errorf("Codex 删除端点候选已变化，请重试")
+			}
+			if next != nil {
+				if err := endpointStore.SetActive(ctx, next.ID); err != nil {
+					return fmt.Errorf("切换 Codex 后续激活端点失败: %w", err)
+				}
+			} else if err := clearCodexActiveEndpoints(ctx, endpointStore, existing.ChannelID); err != nil {
+				return err
+			}
+		} else if expectedSuccessorID != 0 {
+			return fmt.Errorf("Codex 删除端点候选已变化，请重试")
+		}
+
+		staged := *existing
+		staged.FailoverEnabled = false
+		return updateCodexEndpointStoreRecord(ctx, endpointStore, &staged, staged.Priority)
+	})
+}
+
+// RestoreDeletedEndpoint recreates a deleted snapshot, including its active
+// marker, inside one transaction.
+func (s *CodexEndpointService) RestoreDeletedEndpoint(ctx context.Context, record *store.CodexEndpointRecord) error {
+	if record == nil || record.ID <= 0 {
+		return fmt.Errorf("恢复已删除 Codex 端点记录无效")
+	}
+	return s.withPriorityTransaction(ctx, func(endpointStore store.CodexEndpointStore) error {
+		restorer, ok := endpointStore.(codexEndpointRecordRestorer)
+		if !ok {
+			return fmt.Errorf("Codex 端点存储不支持恢复已删除记录")
+		}
+		copy := *record
+		copy.IsActive = false
+		if err := restorer.Restore(ctx, &copy); err != nil {
+			return err
+		}
+		if record.IsActive {
+			if err := endpointStore.SetActive(ctx, record.ID); err != nil {
+				return fmt.Errorf("恢复 Codex 激活端点失败: %w", err)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *CodexEndpointService) ClearActiveByChannel(ctx context.Context, channelID int64) error {
+	if s == nil || s.endpointStore == nil {
+		return fmt.Errorf("Codex 端点存储服务未启用")
+	}
+	return clearCodexActiveEndpoints(ctx, s.endpointStore, channelID)
+}
+
+func clearCodexActiveEndpoints(ctx context.Context, endpointStore store.CodexEndpointStore, channelID int64) error {
+	clearer, ok := endpointStore.(codexEndpointActiveClearer)
+	if !ok {
+		return fmt.Errorf("Codex 端点存储不支持清空激活端点")
+	}
+	return clearer.ClearActiveByChannel(ctx, channelID)
+}
+
+func endpointRecordID(record *store.CodexEndpointRecord) int64 {
+	if record == nil {
+		return 0
+	}
+	return record.ID
+}
+
+// DeleteEndpoint 删除端点。若被删除的是当前激活端点，在同一事务中按
+// failover_enabled + priority 选择并激活后续端点。
+func (s *CodexEndpointService) DeleteEndpointByID(ctx context.Context, id int64) error {
+	return s.withPriorityTransaction(ctx, func(endpointStore store.CodexEndpointStore) error {
+		existing, err := endpointStore.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("Codex 端点不存在: %d", id)
+		}
+		var switched bool
+		if existing.IsActive {
+			next, err := selectCodexFailoverEndpoint(ctx, endpointStore, existing.ChannelID, existing.ID)
+			if err != nil {
+				return err
+			}
+			if next != nil {
+				if err := endpointStore.SetActive(ctx, next.ID); err != nil {
+					return fmt.Errorf("切换 Codex 后续激活端点失败: %w", err)
+				}
+				switched = true
+			}
+		}
+		if err := endpointStore.DeleteByID(ctx, id); err != nil {
+			if switched {
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer rollbackCancel()
+				if restoreErr := endpointStore.SetActive(rollbackCtx, existing.ID); restoreErr != nil {
+					return fmt.Errorf("%w；恢复原激活端点失败: %v", err, restoreErr)
+				}
+			}
+			return err
+		}
+		return nil
+	})
 }
 
 func (s *CodexEndpointService) ActivateEndpoint(ctx context.Context, id int64) error {
@@ -348,15 +564,32 @@ func (s *CodexEndpointService) ensureEndpointCredentialGroup(ctx context.Context
 		return nil
 	}
 	if record.CredentialGroupID > 0 {
-		return s.validateCredentialGroup(ctx, record.ChannelID, record.CredentialGroupID)
+		group, err := s.credentialGroupStore.GetByID(ctx, record.CredentialGroupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return fmt.Errorf("Codex 凭证分组不存在: %d", record.CredentialGroupID)
+		}
+		if group.ChannelID != record.ChannelID {
+			return fmt.Errorf("凭证分组不属于当前渠道")
+		}
+		if !s.codexCredentialAvailable(ctx, record.ChannelID, record.ApiKey, group.ApiKey) {
+			return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能创建端点", group.Name)
+		}
+		return nil
 	}
 	group, err := s.credentialGroupStore.GetDefaultByChannelID(ctx, record.ChannelID)
 	if err != nil {
 		return err
 	}
-	if group != nil {
-		record.CredentialGroupID = group.ID
+	if group == nil {
+		return fmt.Errorf("Codex 渠道 %d 尚未配置凭证分组，不能创建端点", record.ChannelID)
 	}
+	if strings.TrimSpace(group.ApiKey) == "" {
+		return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能创建端点", group.Name)
+	}
+	record.CredentialGroupID = group.ID
 	return nil
 }
 
@@ -374,7 +607,41 @@ func (s *CodexEndpointService) validateCredentialGroup(ctx context.Context, chan
 	if group.ChannelID != channelID {
 		return fmt.Errorf("凭证分组不属于当前渠道")
 	}
+	if !s.codexCredentialAvailable(ctx, channelID, "", group.ApiKey) {
+		return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能使用该分组创建端点", group.Name)
+	}
 	return nil
+}
+
+func (s *CodexEndpointService) validateCredentialGroupWithOverride(ctx context.Context, channelID, credentialGroupID int64, endpointApiKey string) error {
+	if s.credentialGroupStore == nil || credentialGroupID <= 0 {
+		return nil
+	}
+	group, err := s.credentialGroupStore.GetByID(ctx, credentialGroupID)
+	if err != nil {
+		return err
+	}
+	if group == nil {
+		return fmt.Errorf("Codex 凭证分组不存在: %d", credentialGroupID)
+	}
+	if group.ChannelID != channelID {
+		return fmt.Errorf("凭证分组不属于当前渠道")
+	}
+	if !s.codexCredentialAvailable(ctx, channelID, endpointApiKey, group.ApiKey) {
+		return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能使用该分组创建端点", group.Name)
+	}
+	return nil
+}
+
+func (s *CodexEndpointService) codexCredentialAvailable(ctx context.Context, channelID int64, endpointApiKey, groupApiKey string) bool {
+	if strings.TrimSpace(endpointApiKey) != "" || strings.TrimSpace(groupApiKey) != "" {
+		return true
+	}
+	if s.channelStore == nil {
+		return false
+	}
+	channel, err := s.channelStore.GetByID(ctx, channelID)
+	return err == nil && channel != nil && strings.TrimSpace(channel.ApiKey) != ""
 }
 
 func (s *CodexEndpointService) findEndpointURLConflict(ctx context.Context, channelID, credentialGroupID int64, baseURL string) (*store.CodexEndpointRecord, error) {

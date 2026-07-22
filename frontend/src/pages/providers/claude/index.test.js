@@ -90,8 +90,11 @@ test('Claude failover action hover targets keep a fixed square size', () => {
 
 test('Claude channel priority and failover control match Codex status styling', () => {
   assert.match(source, /Number\.isFinite\(channelPriority\) && channelPriority >= 0/);
-  assert.match(source, /initialValue\?\.priority \?\? 0/);
-  assert.match(source, /min=\{0\}/);
+  assert.match(source, /const showPriority = isEdit \|\| channelFailoverEnabled/);
+  assert.match(source, /isEdit \? String\(initialValue\?\.priority \?\? 1\) : ''/);
+  assert.match(source, /min=\{1\}/);
+  assert.doesNotMatch(source, /留空按现有顺序自动分配；填写已有优先级时交换/);
+  assert.match(source, /channelFailoverEnabled=\{channelFailoverEnabled\}/);
   assert.match(source, /meta\?\.priority \?\? 0/);
   assert.doesNotMatch(source, /转移 \{priorityLabel\}/);
   assert.match(source, /当前接管/);
@@ -101,6 +104,58 @@ test('Claude channel priority and failover control match Codex status styling', 
   assert.match(source, /当前渠道已暂停渠道间转移，点击恢复/);
   const channelStateButtons = source.match(/inline-flex size-\[26px\]/g) || [];
   assert.equal(channelStateButtons.length, 2);
+});
+
+test('new Claude channels continue through the default credential group and endpoint setup', () => {
+  assert.match(source, /const createdChannel = refreshedChannels\.find\(\(channel\) => channel\?\.name === payload\.name\)/);
+  assert.match(source, /const defaultCredentialGroup = getDefaultClaudeCredentialGroup\(createdChannel\)/);
+  assert.match(source, /setCredentialGroupFormMode\(defaultCredentialGroup \? 'edit' : 'create'\)/);
+  assert.match(source, /const shouldContinueInitialSetup = initialSetupChannelName === credentialGroupFormChannel/);
+  assert.match(source, /copyEndpoints\.length === 0/);
+  assert.match(source, /openCreateEndpointForm\(targetChannelName, savedGroup\)/);
+  assert.match(source, /continueToEndpoint=\{initialSetupChannelName === credentialGroupFormChannel\}/);
+  assert.match(source, /\{isEdit \? '保存修改' : '下一步'\}/);
+  assert.match(source, /icon=\{isEdit \? CheckCircle2 : undefined\}/);
+});
+
+test('Claude credential group save closes or advances before refreshing the page data', () => {
+  const start = source.indexOf('const handleSaveCredentialGroup = useCallback');
+  const end = source.indexOf('const handleSetDefaultCredentialGroup', start);
+  const handler = source.slice(start, end);
+  const closeIndex = handler.indexOf('closeCredentialGroupForm();');
+  const endpointIndex = handler.indexOf('openCreateEndpointForm(targetChannelName, savedGroup);');
+  const refreshIndex = handler.indexOf('await loadStorageStatus({ throwOnError: true });');
+
+  assert.ok(closeIndex >= 0 && endpointIndex > closeIndex && refreshIndex > endpointIndex);
+  assert.match(handler, /setCredentialGroupFormError\(getErrorMessage\(err, '保存凭证分组失败'\)\);\s*return;/);
+  assert.match(handler, /loadStorageStatus\(\{ throwOnError: true \}\)/);
+  assert.match(handler, /loadGroups\(\{ throwOnError: true \}\)/);
+  assert.match(handler, /setActionError\(`凭证分组已保存，但列表刷新失败/);
+});
+
+test('Claude creation flow does not silently stop when channel refresh fails', () => {
+  assert.match(source, /let channelCreated = false/);
+  assert.match(source, /channelCreated = true/);
+  assert.match(source, /loadChannelsMeta\(\{ throwOnError: true \}\)/);
+  assert.match(source, /if \(!createdChannel\) \{\s*throw new Error\('渠道已创建，但刷新后未找到该渠道/);
+  assert.match(source, /if \(throwOnError\) throw err/);
+  assert.match(source, /if \(channelCreated\) \{[\s\S]*?setShowCreateChannel\(false\)[\s\S]*?setActionError\(/);
+});
+
+test('Claude credential groups without a usable secret do not expose endpoint actions', () => {
+  assert.match(source, /const hasClaudeCredential = \(group\) => \[/);
+  assert.match(source, /group\?\.tokenMasked/);
+  assert.match(source, /group\?\.token_masked/);
+  assert.match(source, /group\?\.apiKeyMasked/);
+  assert.match(source, /group\?\.api_key_masked/);
+  assert.match(source, /const channelHasCredential = credentialGroups\.some/);
+  assert.match(source, /hasEndpoints && channelHasCredential &&/);
+  assert.match(source, /showRetryButton && channelHasCredential &&/);
+  assert.match(source, /hasGroupInfo && channelHasCredential && !isPaused/);
+  assert.match(source, /hasGroupInfo && channelHasCredential && isPaused && !isActive/);
+  assert.match(source, /isSqliteMode && selectedCredentialGroupHasCredential &&/);
+  assert.match(source, /if \(!name \|\| !hasClaudeCredential\(credentialGroup\)\) return false/);
+  assert.match(source, /请先配置凭证分组的 Token 或 API Key，再添加端点。/);
 });
 
 test('Claude channel cards keep the paused badge in the credentials header', () => {

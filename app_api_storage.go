@@ -1424,7 +1424,18 @@ func (a *App) CreateChannel(input CreateChannelInput) error {
 	}
 
 	// 同步渠道优先级到运行时（用于渠道间故障转移顺序）
-	a.syncChannelRuntimeState(ctx)
+	if syncErr := a.syncChannelRuntimeState(ctx); syncErr != nil {
+		retryCtx, retryCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		retryErr := a.syncChannelRuntimeState(retryCtx)
+		retryCancel()
+		if retryErr != nil && logger != nil {
+			logger.Warn("⚠️ 渠道已创建，但运行时状态同步失败；将在后续更新或重启时重试",
+				"channel", input.Name,
+				"error", syncErr,
+				"retry_error", retryErr,
+			)
+		}
+	}
 	return nil
 }
 
@@ -1464,7 +1475,9 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 		return err
 	}
 
-	a.syncChannelRuntimeState(ctx)
+	if err := a.syncChannelRuntimeState(ctx); err != nil {
+		return fmt.Errorf("渠道已更新，但同步运行时状态失败: %w", err)
+	}
 
 	// 推送前端刷新（channelsMeta & groups）
 	a.emitEndpointUpdate()
@@ -1475,28 +1488,36 @@ func (a *App) UpdateChannel(input UpdateChannelInput) error {
 	return nil
 }
 
-func (a *App) syncChannelRuntimeState(ctx context.Context) {
+func (a *App) syncChannelRuntimeState(ctx context.Context) error {
 	a.mu.RLock()
 	endpointManager := a.endpointManager
 	a.mu.RUnlock()
 	if endpointManager == nil {
-		return
+		return fmt.Errorf("端点管理器未初始化")
 	}
 
-	a.syncChannelPrioritiesToEndpointManager(ctx)
-	a.syncChannelFailoverEnabledToEndpointManager(ctx)
+	if err := a.syncChannelPrioritiesToEndpointManager(ctx); err != nil {
+		return err
+	}
+	if err := a.syncChannelFailoverEnabledToEndpointManager(ctx); err != nil {
+		return err
+	}
 	a.syncChannelModelMappingsToEndpointManager(ctx)
+	return nil
 }
 
-func (a *App) syncChannelPrioritiesToEndpointManager(ctx context.Context) {
+func (a *App) syncChannelPrioritiesToEndpointManager(ctx context.Context) error {
 	a.mu.RLock()
 	channelStore := a.channelStore
 	endpointManager := a.endpointManager
 	logger := a.logger
 	a.mu.RUnlock()
 
-	if channelStore == nil || endpointManager == nil {
-		return
+	if channelStore == nil {
+		return fmt.Errorf("渠道存储服务未启用")
+	}
+	if endpointManager == nil {
+		return fmt.Errorf("端点管理器未初始化")
 	}
 
 	baseCtx := ctx
@@ -1512,7 +1533,7 @@ func (a *App) syncChannelPrioritiesToEndpointManager(ctx context.Context) {
 		if logger != nil {
 			logger.Warn("⚠️ 同步渠道优先级失败", "error", err)
 		}
-		return
+		return fmt.Errorf("同步渠道优先级失败: %w", err)
 	}
 
 	priorities := make(map[string]int, len(records))
@@ -1527,17 +1548,21 @@ func (a *App) syncChannelPrioritiesToEndpointManager(ctx context.Context) {
 		priorities[r.Name] = p
 	}
 	endpointManager.UpdateChannelPriorities(priorities)
+	return nil
 }
 
-func (a *App) syncChannelFailoverEnabledToEndpointManager(ctx context.Context) {
+func (a *App) syncChannelFailoverEnabledToEndpointManager(ctx context.Context) error {
 	a.mu.RLock()
 	channelStore := a.channelStore
 	endpointManager := a.endpointManager
 	logger := a.logger
 	a.mu.RUnlock()
 
-	if channelStore == nil || endpointManager == nil {
-		return
+	if channelStore == nil {
+		return fmt.Errorf("渠道存储服务未启用")
+	}
+	if endpointManager == nil {
+		return fmt.Errorf("端点管理器未初始化")
 	}
 
 	baseCtx := ctx
@@ -1553,7 +1578,7 @@ func (a *App) syncChannelFailoverEnabledToEndpointManager(ctx context.Context) {
 		if logger != nil {
 			logger.Warn("⚠️ 同步渠道故障转移开关失败", "error", err)
 		}
-		return
+		return fmt.Errorf("同步渠道故障转移开关失败: %w", err)
 	}
 
 	enabled := make(map[string]bool, len(records))
@@ -1564,6 +1589,7 @@ func (a *App) syncChannelFailoverEnabledToEndpointManager(ctx context.Context) {
 		enabled[r.Name] = r.FailoverEnabled
 	}
 	endpointManager.UpdateChannelFailoverEnabled(enabled)
+	return nil
 }
 
 func (a *App) syncChannelModelMappingsToEndpointManager(ctx context.Context) {

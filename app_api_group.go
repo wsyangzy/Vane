@@ -93,8 +93,10 @@ func (a *App) GetNextAvailableChannel(excludeChannel string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	// best-effort: 确保运行时的“渠道暂停状态”是最新的（SQLite 模式下来自 channels 表）
-	a.syncChannelFailoverEnabledToEndpointManager(ctx)
+	// 候选选择必须基于完整的持久化参与状态，读取失败时拒绝使用陈旧映射。
+	if err := a.syncChannelFailoverEnabledToEndpointManager(ctx); err != nil {
+		return "", err
+	}
 
 	return manager.SelectNextAvailableChannel(excludeChannel)
 }
@@ -169,6 +171,9 @@ func (a *App) PauseGroup(name string) error {
 
 		var next string
 		if wasActive && autoSwitchEnabled {
+			if endpointService == nil {
+				return fmt.Errorf("无法自动切换渠道：端点服务未启用")
+			}
 			// 移除全量同步，运行时状态应该已经是准确的
 			var err error
 			next, err = manager.SelectNextAvailableChannel(name)
@@ -186,11 +191,18 @@ func (a *App) PauseGroup(name string) error {
 
 		// SQLite 模式：暂停活跃渠道后，按路由策略自动切换到下一个可用渠道。
 		if wasActive && autoSwitchEnabled && next != "" {
-			if endpointService == nil {
-				return fmt.Errorf("无法自动切换渠道：端点服务未启用")
-			}
 			if err := endpointService.ActivateChannel(ctx, next); err != nil {
-				return fmt.Errorf("暂停成功但自动切换失败: %w", err)
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				rollbackErr := channelService.SetFailoverEnabled(rollbackCtx, name, true)
+				rollbackCancel()
+				if rollbackErr == nil {
+					manager.SetSingleChannelFailoverEnabled(name, true)
+				}
+				a.emitEndpointUpdate()
+				if rollbackErr != nil {
+					return fmt.Errorf("暂停渠道失败：自动切换失败: %w；恢复原渠道参与状态失败: %v", err, rollbackErr)
+				}
+				return fmt.Errorf("暂停渠道失败：自动切换失败，已恢复原渠道参与状态: %w", err)
 			}
 			a.emitEndpointUpdate()
 		}

@@ -148,6 +148,16 @@ const getInitialClaudeCredentialSecretType = (group) => {
   return !hasToken && hasApiKey ? 'apiKey' : 'token';
 };
 
+const hasClaudeCredential = (group) => [
+  group?.token,
+  group?.tokenMasked,
+  group?.token_masked,
+  group?.apiKey,
+  group?.api_key,
+  group?.apiKeyMasked,
+  group?.api_key_masked
+].some((value) => (typeof value === 'string' ? value.trim() !== '' : Boolean(value)));
+
 const STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   { name: 'costMultiplier', label: '总倍率' },
   { name: 'inputCostMultiplier', label: '输入倍率' },
@@ -1117,13 +1127,14 @@ const CreateChannelModal = ({
   loading = false,
   serverError = '',
   mode = 'create',
-  initialValue = null
+  initialValue = null,
+  channelFailoverEnabled = false
 }) => {
   const isEdit = mode === 'edit';
+  const showPriority = isEdit || channelFailoverEnabled;
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
-  // 新建时传 0，让后端自动递增；编辑时使用原有优先级
-  const [priority, setPriority] = useState(() => String(isEdit ? (initialValue?.priority ?? 0) : 0));
+  const [priority, setPriority] = useState(() => (isEdit ? String(initialValue?.priority ?? 1) : ''));
   const [modelMappingRows, setModelMappingRows] = useState(() => buildInitialModelMappingRows(initialValue?.modelMapping));
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
@@ -1162,7 +1173,7 @@ const CreateChannelModal = ({
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '新建渠道'}</h2>
             <p className="text-xs text-slate-500 mt-1">
-              {isEdit ? '修改渠道官网与优先级' : '先创建渠道，再在渠道卡片里添加端点'}
+              {isEdit ? '修改渠道官网与优先级' : '创建渠道后继续配置凭证分组与端点'}
             </p>
           </div>
           <Tooltip content="关闭">
@@ -1186,11 +1197,19 @@ const CreateChannelModal = ({
               setError('请输入渠道名称');
               return;
             }
+            const priorityValue = priority.trim();
+            const hasPriority = priorityValue !== '';
+            const parsedPriority = Number(priorityValue);
+            if ((isEdit && !hasPriority) || (hasPriority && (!Number.isInteger(parsedPriority) || parsedPriority < 1))) {
+              setActiveTab('basic');
+              setError('优先级必须是 1 或更大的整数');
+              return;
+            }
             setError('');
             onSubmit?.({
               name: trimmedName,
               website: website.trim(),
-              priority,
+              priority: priorityValue,
               modelMapping: buildModelMappingPayload(modelMappingRows)
             });
           }}
@@ -1215,8 +1234,8 @@ const CreateChannelModal = ({
 
             {activeTab === 'basic' && (
           <div className="space-y-4">
-            <div className={isEdit ? 'grid grid-cols-1 sm:grid-cols-3 gap-4' : ''}>
-              <div className={isEdit ? 'sm:col-span-2' : ''}>
+            <div className={showPriority ? 'grid grid-cols-1 gap-4 sm:grid-cols-3' : ''}>
+              <div className={showPriority ? 'sm:col-span-2' : ''}>
                 <label className="block text-sm font-medium text-slate-700">
                   渠道名称 <span className="text-rose-500">*</span>
                 </label>
@@ -1236,21 +1255,21 @@ const CreateChannelModal = ({
                 )}
               </div>
 
-              {/* 优先级字段仅在编辑模式显示，新建时自动递增 */}
-              {isEdit && (
+              {showPriority && (
                 <div>
                   <label className="block text-sm font-medium text-slate-700">优先级</label>
                   <input
                     type="number"
-                    min={0}
+                    min={1}
+                    step={1}
                     value={priority}
                     onChange={(e) => setPriority(e.target.value)}
+                    placeholder={isEdit ? undefined : '留空自动分配'}
                     autoComplete="off"
                     data-form-type="other"
                     className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                     disabled={loading}
                   />
-                  <p className="text-xs text-slate-400 mt-1">数字越小越优先，相同则交换</p>
                 </div>
               )}
             </div>
@@ -1338,8 +1357,8 @@ const CreateChannelModal = ({
             <Button variant="ghost" type="button" onClick={onClose} disabled={loading}>
               取消
             </Button>
-            <Button icon={CheckCircle2} type="submit" loading={loading}>
-              {isEdit ? '保存修改' : '创建渠道'}
+            <Button icon={isEdit ? CheckCircle2 : undefined} type="submit" loading={loading}>
+              {isEdit ? '保存修改' : '下一步'}
             </Button>
           </div>
         </form>
@@ -1353,6 +1372,7 @@ const ClaudeCredentialGroupFormModal = ({
   mode = 'create',
   channelName = '',
   group = null,
+  continueToEndpoint = false,
   loading = false,
   serverError = '',
   endpointCopyOptions = [],
@@ -1817,7 +1837,7 @@ const ClaudeCredentialGroupFormModal = ({
                 取消
               </Button>
               <Button type="submit" variant="primary" loading={loading}>
-                {isEdit ? '保存分组' : copyEndpointsEnabled ? '下一步' : '添加分组'}
+                {continueToEndpoint ? '下一步' : isEdit ? '保存分组' : copyEndpointsEnabled ? '下一步' : '添加分组'}
               </Button>
             </div>
               </div>
@@ -1891,6 +1911,9 @@ const ChannelCard = ({
     defaultCredentialGroup ||
     credentialGroups[0] ||
     null;
+  const selectedCredentialGroupHasCredential = hasClaudeCredential(selectedCredentialGroup);
+  const channelHasCredential = credentialGroups.some((group) => hasClaudeCredential(group)) ||
+    endpoints.some((endpoint) => hasClaudeCredential(endpoint));
   const selectedCredentialGroupIDResolved = Number(selectedCredentialGroup?.id || 0);
   const groupEndpointFilter = (endpoint) => {
     if (credentialGroups.length === 0) return true;
@@ -2060,7 +2083,7 @@ const ChannelCard = ({
           {/* 渠道操作 */}
           <div className="flex flex-shrink-0 items-center gap-0.5">
             {/* 非激活渠道可手动设为当前；渠道间转移暂停态需先恢复 */}
-            {!isActive && isSqliteMode && hasEndpoints && (
+            {!isActive && isSqliteMode && hasEndpoints && channelHasCredential && (
               <Tooltip content={
                 channelFailoverEnabled && isPaused
                   ? '请先点击"恢复"按钮取消暂停状态'
@@ -2077,7 +2100,7 @@ const ChannelCard = ({
                 </button>
               </Tooltip>
             )}
-            {isActive && isSqliteMode && showRetryButton && (
+            {isActive && isSqliteMode && showRetryButton && channelHasCredential && (
                 <Tooltip content="重试当前渠道">
                   <button
                     type="button"
@@ -2091,7 +2114,7 @@ const ChannelCard = ({
                 </Tooltip>
             )}
             {/* 暂停/恢复按钮 - 控制渠道是否参与渠道间转移 */}
-            {channelFailoverEnabled && hasGroupInfo && !isPaused && (
+            {channelFailoverEnabled && hasGroupInfo && channelHasCredential && !isPaused && (
               <Tooltip content="暂停此渠道，使其不参与渠道间转移">
                 <button
                   type="button"
@@ -2105,7 +2128,7 @@ const ChannelCard = ({
               </Tooltip>
             )}
             {/* 恢复按钮仅在非活跃且已暂停时显示（活跃渠道一定是未暂停的） */}
-            {channelFailoverEnabled && hasGroupInfo && isPaused && !isActive && (
+            {channelFailoverEnabled && hasGroupInfo && channelHasCredential && isPaused && !isActive && (
               <Tooltip content="恢复此渠道，使其重新参与渠道间转移">
                 <button
                   type="button"
@@ -2308,7 +2331,7 @@ const ChannelCard = ({
               </button>
             )}
           </div>
-          {isSqliteMode && (
+          {isSqliteMode && selectedCredentialGroupHasCredential && (
             <div className="flex flex-shrink-0 items-center gap-1">
               <Tooltip content={groupFailoverActionTip}>
                 <button
@@ -2355,7 +2378,9 @@ const ChannelCard = ({
 
         {visibleEndpoints.length === 0 ? (
           <div className="border-t border-slate-100 bg-white px-4 py-6 text-center text-[11px] text-slate-400">
-            {selectedCredentialGroup ? '当前凭证分组暂无端点' : '暂无端点'}
+            {selectedCredentialGroupHasCredential
+              ? '当前凭证分组暂无端点'
+              : '请先配置凭证分组的 Token 或 API Key，再添加端点。'}
           </div>
         ) : (
           <div className="border-t border-slate-100 bg-white">
@@ -2450,6 +2475,7 @@ const ChannelsPage = () => {
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormLoading, setCredentialGroupFormLoading] = useState(false);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
+  const [initialSetupChannelName, setInitialSetupChannelName] = useState('');
 	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
   // 删除确认状态
@@ -2482,7 +2508,7 @@ const ChannelsPage = () => {
   }, []);
 
   // 加载存储状态
-  const loadStorageStatus = useCallback(async () => {
+  const loadStorageStatus = useCallback(async ({ throwOnError = false } = {}) => {
     const seq = ++storageLoadSeqRef.current;
     setStorageLoading(true);
     try {
@@ -2502,6 +2528,7 @@ const ChannelsPage = () => {
       if (seq !== storageLoadSeqRef.current) return;
       // 默认使用 YAML 模式
       setStorageStatus({ enabled: false, storageType: 'yaml' });
+      if (throwOnError) throw err;
     } finally {
       if (seq === storageLoadSeqRef.current) {
         setStorageLoading(false);
@@ -2515,7 +2542,7 @@ const ChannelsPage = () => {
   }, [loadStorageStatus]);
 
   // 加载渠道（组）状态
-  const loadGroups = useCallback(async () => {
+  const loadGroups = useCallback(async ({ throwOnError = false } = {}) => {
     const seq = ++groupsLoadSeqRef.current;
     try {
       const data = await getGroupsRaw();
@@ -2525,10 +2552,11 @@ const ChannelsPage = () => {
       console.error('获取渠道状态失败:', err);
       if (seq !== groupsLoadSeqRef.current) return;
       setGroups([]);
+      if (throwOnError) throw err;
     }
   }, []);
 
-  const loadChannelsMeta = useCallback(async () => {
+  const loadChannelsMeta = useCallback(async ({ throwOnError = false } = {}) => {
     const seq = ++channelsMetaLoadSeqRef.current;
     // 只检查 storageType
     const sqliteEnabled = storageStatus?.storageType === 'sqlite';
@@ -2537,16 +2565,24 @@ const ChannelsPage = () => {
         setChannelsMeta([]);
         setChannelsLastUpdate('');
       }
-      return;
+      if (throwOnError) {
+        throw new Error('SQLite 渠道存储尚未就绪');
+      }
+      return [];
     }
     try {
       const list = await getChannels();
-      if (seq !== channelsMetaLoadSeqRef.current) return;
-      setChannelsMeta(Array.isArray(list) ? list : []);
-      setChannelsLastUpdate(new Date().toLocaleTimeString());
+      const normalizedList = Array.isArray(list) ? list : [];
+      if (seq === channelsMetaLoadSeqRef.current) {
+        setChannelsMeta(normalizedList);
+        setChannelsLastUpdate(new Date().toLocaleTimeString());
+      }
+      return normalizedList;
     } catch (err) {
       console.error('获取渠道列表失败:', err);
       // 避免瞬时失败导致 UI “清空”，保留上一次结果
+      if (throwOnError) throw err;
+      return [];
     }
   }, [storageStatus]);
 
@@ -3099,24 +3135,49 @@ const ChannelsPage = () => {
   // CRUD 操作处理
   // ============================================
 
-  // 新建端点
-  const handleCreate = () => {
+  const openCreateEndpointForm = useCallback((channelName, credentialGroup = null) => {
+    const name = String(channelName || '').trim();
+    if (!name || !hasClaudeCredential(credentialGroup)) return false;
     setEditingEndpoint(null);
+    setDefaultChannel(name);
+    setDefaultCredentialGroupId(Number(credentialGroup?.id || 0) || 0);
+    setLockChannel(true);
     setShowForm(true);
-  };
+    return true;
+  }, []);
 
   const handleCreateChannel = useCallback(async (payload) => {
+    let channelCreated = false;
     try {
       setChannelFormLoading(true);
       setCreateChannelError('');
 
       await createChannel(payload);
+      channelCreated = true;
 
+      const refreshedChannels = await loadChannelsMeta({ throwOnError: true });
+      const createdChannel = refreshedChannels.find((channel) => channel?.name === payload.name) || null;
+      if (!createdChannel) {
+        throw new Error('渠道已创建，但刷新后未找到该渠道，请刷新列表后继续配置');
+      }
       setShowCreateChannel(false);
-      await loadChannelsMeta();
+      const defaultCredentialGroup = getDefaultClaudeCredentialGroup(createdChannel);
+      setInitialSetupChannelName(createdChannel.name);
+      setCredentialGroupFormMode(defaultCredentialGroup ? 'edit' : 'create');
+      setCredentialGroupFormChannel(createdChannel.name);
+      setEditingCredentialGroup(defaultCredentialGroup);
+      setCredentialGroupFormError('');
+      setShowCredentialGroupForm(true);
     } catch (err) {
       console.error('创建渠道失败:', err);
-      setCreateChannelError(getErrorMessage(err, '创建渠道失败'));
+      const message = getErrorMessage(err, '创建渠道失败');
+      if (channelCreated) {
+        setShowCreateChannel(false);
+        setCreateChannelError('');
+        setActionError(`渠道已创建，但刷新列表失败，请关闭此提示后点击页面刷新，再继续配置凭证分组和端点。\n${message}`);
+      } else {
+        setCreateChannelError(message);
+      }
     } finally {
       setChannelFormLoading(false);
     }
@@ -3157,6 +3218,7 @@ const ChannelsPage = () => {
   const openCreateCredentialGroupForm = useCallback((channelName) => {
     const name = String(channelName || '').trim();
     if (!name) return;
+    setInitialSetupChannelName('');
     setCredentialGroupFormMode('create');
     setCredentialGroupFormChannel(name);
     setEditingCredentialGroup(null);
@@ -3167,6 +3229,7 @@ const ChannelsPage = () => {
   const openEditCredentialGroupForm = useCallback((channelName, group) => {
     const name = String(channelName || group?.channel || '').trim();
     if (!name || !group) return;
+    setInitialSetupChannelName('');
     setCredentialGroupFormMode('edit');
     setCredentialGroupFormChannel(name);
     setEditingCredentialGroup(group);
@@ -3179,45 +3242,62 @@ const ChannelsPage = () => {
     setCredentialGroupFormChannel('');
     setEditingCredentialGroup(null);
     setCredentialGroupFormError('');
+    setInitialSetupChannelName('');
   }, []);
 
   const handleSaveCredentialGroup = useCallback(async (payload) => {
     const { copyEndpoints = [], ...groupPayload } = payload || {};
+    const shouldContinueInitialSetup = initialSetupChannelName === credentialGroupFormChannel;
+    const targetChannelName = credentialGroupFormChannel;
+    let savedGroup = null;
     try {
       setCredentialGroupFormLoading(true);
       setCredentialGroupFormError('');
       if (credentialGroupFormMode === 'edit' && editingCredentialGroup?.id) {
-        await updateClaudeCredentialGroupByID(editingCredentialGroup.id, groupPayload);
+        savedGroup = await updateClaudeCredentialGroupByID(editingCredentialGroup.id, groupPayload);
       } else {
-        const createdGroup = await createClaudeCredentialGroup({
+        savedGroup = await createClaudeCredentialGroup({
           ...groupPayload,
           channel: credentialGroupFormChannel
         });
-        const targetGroupID = Number(createdGroup?.id || 0);
+        const targetGroupID = Number(savedGroup?.id || 0);
         if (targetGroupID > 0) {
           for (const endpoint of copyEndpoints) {
             await createEndpointRecord(buildClaudeEndpointCopyPayload(endpoint, credentialGroupFormChannel, targetGroupID));
           }
         }
       }
-      closeCredentialGroupForm();
-      await loadStorageStatus();
-      await loadChannelsMeta();
-      await loadGroups();
     } catch (err) {
       console.error('保存凭证分组失败:', err);
       setCredentialGroupFormError(getErrorMessage(err, '保存凭证分组失败'));
+      return;
     } finally {
       setCredentialGroupFormLoading(false);
+    }
+
+    closeCredentialGroupForm();
+    if (shouldContinueInitialSetup && savedGroup?.id && copyEndpoints.length === 0) {
+      openCreateEndpointForm(targetChannelName, savedGroup);
+    }
+
+    try {
+      await loadStorageStatus({ throwOnError: true });
+      await loadChannelsMeta({ throwOnError: true });
+      await loadGroups({ throwOnError: true });
+    } catch (err) {
+      console.error('刷新凭证分组列表失败:', err);
+      setActionError(`凭证分组已保存，但列表刷新失败，请点击页面刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
     }
   }, [
     closeCredentialGroupForm,
     credentialGroupFormChannel,
     credentialGroupFormMode,
     editingCredentialGroup,
+    initialSetupChannelName,
     loadChannelsMeta,
     loadGroups,
-    loadStorageStatus
+    loadStorageStatus,
+    openCreateEndpointForm
   ]);
 
   const handleSetDefaultCredentialGroup = useCallback(async (_channelName, group) => {
@@ -3586,12 +3666,7 @@ const ChannelsPage = () => {
               onEditCredentialGroup={openEditCredentialGroupForm}
               onDeleteCredentialGroup={handleDeleteCredentialGroup}
               onSetDefaultCredentialGroup={handleSetDefaultCredentialGroup}
-              onAddEndpoint={(channelName, credentialGroup = null) => {
-                setDefaultChannel(channelName);
-                setDefaultCredentialGroupId(Number(credentialGroup?.id || 0) || 0);
-                setLockChannel(true);
-                handleCreate();
-              }}
+              onAddEndpoint={openCreateEndpointForm}
               onEditChannel={handleOpenEditChannel}
               onDeleteChannel={handleDeleteChannel}
               onEditEndpoint={(ep) => {
@@ -3637,6 +3712,7 @@ const ChannelsPage = () => {
           open
           loading={channelFormLoading}
           serverError={createChannelError}
+          channelFailoverEnabled={channelFailoverEnabled}
           onClose={() => setShowCreateChannel(false)}
           onSubmit={handleCreateChannel}
         />
@@ -3649,6 +3725,7 @@ const ChannelsPage = () => {
           serverError={editChannelError}
           mode="edit"
           initialValue={editingChannel}
+          channelFailoverEnabled={channelFailoverEnabled}
           onClose={() => {
             setShowEditChannel(false);
             setEditingChannel(null);
@@ -3663,6 +3740,7 @@ const ChannelsPage = () => {
           mode={credentialGroupFormMode}
           channelName={credentialGroupFormChannel}
           group={editingCredentialGroup}
+          continueToEndpoint={initialSetupChannelName === credentialGroupFormChannel}
           loading={credentialGroupFormLoading}
           serverError={credentialGroupFormError}
           endpointCopyOptions={credentialGroupEndpointCopyOptions}

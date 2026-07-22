@@ -107,6 +107,31 @@ func TestSetFailoverEnabledRejectsPausingActiveChannel(t *testing.T) {
 	}
 }
 
+func TestEnsureActiveChannelParticipatesResumesOnlyActiveChannel(t *testing.T) {
+	channelStore := &channelFailoverStore{channels: []*store.CodexChannelRecord{
+		{ID: 1, Name: "active", Priority: 0, FailoverEnabled: false, IsActive: true},
+		// A paused channel may temporarily retain the active channel's priority.
+		// Enabling global failover must still resume the active channel only.
+		{ID: 2, Name: "paused-backup", Priority: 0, FailoverEnabled: false},
+	}}
+	service := NewCodexChannelService(channelStore, nil)
+
+	resumed, err := service.EnsureActiveChannelParticipates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resumed || !channelStore.channels[0].FailoverEnabled {
+		t.Fatal("expected the active channel to resume failover participation")
+	}
+	if channelStore.channels[1].FailoverEnabled {
+		t.Fatal("expected an inactive paused channel to remain paused")
+	}
+	resumed, err = service.EnsureActiveChannelParticipates(context.Background())
+	if err != nil || resumed {
+		t.Fatalf("expected an idempotent no-op, resumed=%v err=%v", resumed, err)
+	}
+}
+
 func TestCreateChannelAutoAssignsPriorityAfterPausedChannels(t *testing.T) {
 	channelStore := &channelFailoverStore{channels: []*store.CodexChannelRecord{
 		{ID: 1, Name: "active", Priority: 0, FailoverEnabled: true, IsActive: true},
@@ -124,6 +149,26 @@ func TestCreateChannelAutoAssignsPriorityAfterPausedChannels(t *testing.T) {
 	}
 	if created.Priority != 4 {
 		t.Fatalf("expected new channel priority P4 after every existing channel, got P%d", created.Priority)
+	}
+}
+
+func TestCreateChannelMovesOccupiedPriorityToDefaultTail(t *testing.T) {
+	channelStore := &channelFailoverStore{channels: []*store.CodexChannelRecord{
+		{ID: 1, Name: "active", Priority: 0, FailoverEnabled: true, IsActive: true},
+		{ID: 2, Name: "occupied", Priority: 1, FailoverEnabled: true},
+	}}
+	service := NewCodexChannelService(channelStore, nil)
+
+	created, err := service.CreateChannel(context.Background(), &store.CodexChannelRecord{
+		Name:            "inserted",
+		Priority:        1,
+		FailoverEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create channel at occupied priority: %v", err)
+	}
+	if created.Priority != 1 || channelStore.channels[1].Priority != 2 {
+		t.Fatalf("expected inserted=P1 and occupied=P2, got inserted=P%d occupied=P%d", created.Priority, channelStore.channels[1].Priority)
 	}
 }
 

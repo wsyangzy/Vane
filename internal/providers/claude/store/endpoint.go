@@ -117,6 +117,14 @@ func NewSQLiteEndpointStore(db *sql.DB) *SQLiteEndpointStore {
 	return &SQLiteEndpointStore{db: db}
 }
 
+// BeginTx starts a transaction for service-level atomic priority updates.
+func (s *SQLiteEndpointStore) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("端点数据库未初始化")
+	}
+	return s.db.BeginTx(ctx, nil)
+}
+
 const endpointRecordColumns = `id, channel, COALESCE(credential_group_id, 0), name, url, token, api_key, headers,
 	priority, failover_enabled, cooldown_seconds, timeout_seconds,
 	skip_health_check, supports_count_tokens,

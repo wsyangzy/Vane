@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -764,13 +765,40 @@ func (a *App) setupEndpointStore() {
 
 	if err := a.endpointService.SyncFromDatabase(ctx); err != nil {
 		a.logger.Warn("⚠️ 从数据库同步端点失败，使用 YAML 配置", "error", err)
+		if a.config != nil && a.config.Failover.Enabled {
+			if rollbackErr := a.rollbackFailoverSetting(service.ProviderClaude, "Claude 渠道间转移已关闭：启动时从数据库同步端点失败", err); rollbackErr != nil {
+				a.logger.Error("启动时回滚 Claude 渠道间转移失败", "error", rollbackErr)
+			}
+		}
 	} else {
 		// 同步渠道优先级到运行时，用于渠道间故障转移顺序
-		a.syncChannelPrioritiesToEndpointManager(ctx)
-		// 同步渠道“参与故障转移”开关（暂停/恢复持久化）
-		a.syncChannelFailoverEnabledToEndpointManager(ctx)
+		if err := a.syncChannelPrioritiesToEndpointManager(ctx); err != nil {
+			a.logger.Warn("⚠️ 启动时同步渠道优先级失败", "error", err)
+		}
+		// 同步渠道“参与故障转移”开关（暂停/恢复持久化）。开启全局
+		// failover 前必须拿到完整映射，避免读取失败时以空映射放行。
+		participationReady := true
+		if err := a.syncChannelFailoverEnabledToEndpointManager(ctx); err != nil {
+			participationReady = false
+			a.logger.Warn("⚠️ 启动时同步渠道故障转移开关失败", "error", err)
+			if a.config != nil && a.config.Failover.Enabled {
+				if rollbackErr := a.rollbackFailoverSetting(service.ProviderClaude, "Claude 渠道间转移已关闭：启动时无法同步渠道参与状态", err); rollbackErr != nil {
+					a.logger.Error("启动时回滚 Claude 渠道间转移失败", "error", rollbackErr)
+				}
+			}
+		}
 		// 同步渠道模型映射到运行时转发层
 		a.syncChannelModelMappingsToEndpointManager(ctx)
+		if participationReady && a.config != nil && a.config.Failover.Enabled {
+			resumed, resumeErr := a.endpointService.EnsureActiveChannelParticipates(ctx, a.channelService)
+			if resumeErr != nil {
+				if rollbackErr := a.rollbackFailoverSetting(service.ProviderClaude, "Claude 渠道间转移未启用：启动时无法恢复当前接管渠道参与", resumeErr); rollbackErr != nil {
+					a.logger.Error("启动时回滚 Claude 渠道间转移失败", "error", rollbackErr)
+				}
+			} else if resumed {
+				a.logger.Info("✅ Claude 当前接管渠道已自动恢复参与渠道间转移")
+			}
+		}
 		a.logger.Info("✅ 端点存储已启用 (SQLite)")
 	}
 }
@@ -854,12 +882,22 @@ func (a *App) setupCodexProviderStore() {
 
 	if err := a.ensureCodexProviderSchema(ctx); err != nil {
 		a.logger.Warn("⚠️ 初始化 Codex Provider 数据表结构失败", "error", err)
+		if a.config != nil && a.config.CodexFailover.Enabled {
+			if rollbackErr := a.rollbackFailoverSetting(service.ProviderCodex, "Codex 渠道间转移已关闭：启动时初始化数据表失败", err); rollbackErr != nil {
+				a.logger.Error("启动时回滚 Codex 渠道间转移失败", "error", rollbackErr)
+			}
+		}
 		return
 	}
 
 	channels, err := a.codexChannelService.ListChannels(ctx)
 	if err != nil {
 		a.logger.Warn("⚠️ 加载 Codex 渠道列表失败", "error", err)
+		if a.config != nil && a.config.CodexFailover.Enabled {
+			if rollbackErr := a.rollbackFailoverSetting(service.ProviderCodex, "Codex 渠道间转移已关闭：启动时加载渠道失败", err); rollbackErr != nil {
+				a.logger.Error("启动时回滚 Codex 渠道间转移失败", "error", rollbackErr)
+			}
+		}
 		return
 	}
 
@@ -1626,9 +1664,49 @@ func (a *App) initCodexProxy() {
 	mgr := codexproxy.NewEndpointManager(a.codexChannelStore, a.codexEndpointStore, a.codexCredentialGroupStore, a.logger)
 	mgr.SetActivationMutex(&a.codexActivationMu)
 	mgr.SetConfig(a.config)
-	if err := mgr.Reload(); err != nil {
-		a.logger.Error("Codex 端点管理器加载失败", "error", err)
+
+	// 启动时恢复活跃渠道参与状态与首次 Reload 必须处于同一补偿边界。
+	// Reload 成功前不发布 manager，避免请求观察到未验证的运行时状态。
+	a.codexActivationMu.Lock()
+	var (
+		activeSnapshot *codexstore.CodexChannelRecord
+		resumed        bool
+		prepareErr     error
+	)
+	if a.config.CodexFailover.Enabled {
+		if a.codexChannelService == nil {
+			prepareErr = fmt.Errorf("Codex 渠道服务未初始化")
+		} else {
+			prepareCtx, prepareCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			activeSnapshot, prepareErr = a.codexChannelService.GetActiveChannel(prepareCtx)
+			if prepareErr == nil {
+				resumed, prepareErr = a.codexChannelService.EnsureActiveChannelParticipates(prepareCtx)
+			}
+			prepareCancel()
+		}
+	}
+	if prepareErr == nil {
+		prepareErr = mgr.Reload()
+	}
+	if prepareErr != nil && activeSnapshot != nil {
+		if restoreErr := a.restoreCodexActiveParticipation(activeSnapshot); restoreErr != nil {
+			prepareErr = fmt.Errorf("%w；恢复原活跃渠道参与状态失败: %v", prepareErr, restoreErr)
+		}
+	}
+	a.codexActivationMu.Unlock()
+
+	if prepareErr != nil {
+		if a.config.CodexFailover.Enabled {
+			if rollbackErr := a.rollbackFailoverSetting(service.ProviderCodex, "Codex 渠道间转移已关闭：启动时运行时加载失败", prepareErr); rollbackErr != nil {
+				a.logger.Error("启动时回滚 Codex 渠道间转移失败", "error", rollbackErr)
+			}
+		} else {
+			a.logger.Error("Codex 端点管理器加载失败", "error", prepareErr)
+		}
 		return
+	}
+	if resumed {
+		a.logger.Info("✅ Codex 当前接管渠道已自动恢复参与渠道间转移")
 	}
 	// 注册活跃端点变更回调：故障转移成功提升端点后，刷新前端 UI
 	mgr.SetOnActiveChanged(func() {
@@ -1969,8 +2047,8 @@ func (a *App) setupSettingsStore() {
 	a.settingsService = service.NewSettingsService(a.settingsStore)
 
 	// 设置配置变更回调 - 热更新
-	a.settingsService.SetOnChangeCallback(func() {
-		a.applySettingsToConfig(true)
+	a.settingsService.SetOnChangeCallback(func() error {
+		return a.applySettingsToConfig(true)
 	})
 
 	// 初始化默认设置（如果表为空）
@@ -1983,7 +2061,16 @@ func (a *App) setupSettingsStore() {
 	}
 
 	// 从数据库加载设置并应用到配置
-	a.applySettingsToConfig(false)
+	if err := a.applySettingsToConfig(false); err != nil {
+		var failoverErr *failoverApplyError
+		if errors.As(err, &failoverErr) {
+			if rollbackErr := a.rollbackFailoverSetting(failoverErr.provider, "启动时无法启用渠道间转移", failoverErr.err); rollbackErr != nil {
+				a.logger.Error("启动时回滚渠道间转移失败", "error", rollbackErr)
+			}
+		} else {
+			a.logger.Error("从数据库应用设置失败", "error", err)
+		}
+	}
 
 	// 初始化端口管理器
 	preferredPort := a.settingsService.GetInt(ctx, service.CategoryServer, "preferred_port", a.config.Server.Port)
@@ -2023,10 +2110,95 @@ func (a *App) setupPrivacyService() {
 	a.logger.Info("✅ 隐私防护服务已启用 (SQLite)")
 }
 
+type failoverApplyError struct {
+	provider service.SettingsProvider
+	err      error
+}
+
+func (e *failoverApplyError) Error() string { return e.err.Error() }
+func (e *failoverApplyError) Unwrap() error { return e.err }
+
+const failoverRollbackTimeout = 5 * time.Second
+
+// rollbackFailoverSetting disables a setting directly when the corresponding
+// active-channel repair cannot be completed. Calling the store directly avoids
+// recursively triggering the hot-reload callback with a state that is known to
+// be invalid.
+func (a *App) rollbackFailoverSetting(provider service.SettingsProvider, title string, cause error) error {
+	if a.config != nil {
+		switch provider {
+		case service.ProviderClaude:
+			a.config.Failover.Enabled = false
+			if a.endpointManager != nil {
+				a.endpointManager.SetFailoverEnabled(false)
+			}
+		case service.ProviderCodex:
+			a.config.CodexFailover.Enabled = false
+			if a.codexHTTPHandler != nil {
+				a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+			}
+		}
+	}
+	var rollbackErr error
+	if a.settingsStore != nil {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), failoverRollbackTimeout)
+		defer rollbackCancel()
+		if err := a.settingsStore.SetScoped(rollbackCtx, string(provider), service.CategoryFailover, "enabled", "false"); err != nil {
+			rollbackErr = err
+			if a.logger != nil {
+				a.logger.Error("回滚渠道间转移设置失败", "provider", provider, "error", err)
+			}
+		}
+	}
+	if a.logger != nil {
+		a.logger.Error(title, "error", cause)
+	}
+	a.emitNotification("error", title, cause.Error())
+	if rollbackErr != nil {
+		return fmt.Errorf("%w；持久化回滚失败: %v", cause, rollbackErr)
+	}
+	return nil
+}
+
+func (a *App) restoreCodexActiveParticipation(snapshot *codexstore.CodexChannelRecord) error {
+	if snapshot == nil {
+		return nil
+	}
+	if a.codexChannelService == nil {
+		return fmt.Errorf("Codex 渠道服务未初始化")
+	}
+	restoreCtx, restoreCancel := context.WithTimeout(context.Background(), failoverRollbackTimeout)
+	defer restoreCancel()
+	return a.codexChannelService.SetActiveChannelParticipation(restoreCtx, snapshot.ID, snapshot.FailoverEnabled)
+}
+
 // applySettingsToConfig 从数据库加载设置并应用到运行时配置。
-func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
+func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	if a.settingsService == nil {
-		return
+		return nil
+	}
+	if a.config == nil {
+		return fmt.Errorf("运行时配置未初始化")
+	}
+	previousConfig := *a.config
+	restoreRuntimeConfig := func() {
+		*a.config = previousConfig
+		if a.endpointManager != nil {
+			a.endpointManager.UpdateConfig(a.config)
+			a.endpointManager.SetFailoverEnabled(a.config.Failover.Enabled)
+		}
+		if a.codexEndpointMgr != nil {
+			a.codexEndpointMgr.SetConfig(a.config)
+		}
+		if a.proxyHandler != nil {
+			a.proxyHandler.UpdateConfig(a.config)
+		}
+		if a.authMiddleware != nil {
+			a.authMiddleware.UpdateConfig(a.config.Auth)
+		}
+		if a.codexHTTPHandler != nil {
+			a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -2051,30 +2223,34 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
 	a.config.Health.HealthPath = a.getSettingString(ctx, service.CategoryHealth, "health_path", a.config.Health.HealthPath)
 
 	// 故障转移配置
-	// 记录旧值用于检测状态变化
-	oldFailoverEnabled := a.config.Failover.Enabled
-	a.config.Failover.Enabled = a.settingsService.GetBool(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
-	if a.endpointManager != nil {
-		a.endpointManager.SetFailoverEnabled(a.config.Failover.Enabled)
+	requestedFailoverEnabled, err := a.settingsService.GetBoolStrict(ctx, service.CategoryFailover, "enabled", a.config.Failover.Enabled)
+	if err != nil {
+		restoreRuntimeConfig()
+		return &failoverApplyError{provider: service.ProviderClaude, err: fmt.Errorf("读取 Claude 渠道间转移设置失败: %w", err)}
 	}
-	// 当渠道间转移从禁用变为启用时，重置所有渠道的暂停状态
-	// 同时更新数据库，避免后续从数据库同步时恢复旧的暂停状态
-	if !oldFailoverEnabled && a.config.Failover.Enabled && a.endpointManager != nil {
-		gm := a.endpointManager.GetGroupManager()
-		if gm != nil {
-			gm.ResetAllPausedGroups()
+	if requestedFailoverEnabled && a.endpointService != nil && a.channelService != nil {
+		if err := a.syncChannelFailoverEnabledToEndpointManager(ctx); err != nil {
+			restoreRuntimeConfig()
+			return &failoverApplyError{provider: service.ProviderClaude, err: fmt.Errorf("Claude 渠道间转移未启用：无法同步渠道参与状态: %w", err)}
 		}
-		// 同步更新数据库中的 failover_enabled 字段
-		if a.channelService != nil {
-			if resetCount, err := a.channelService.ResetAllFailoverEnabled(ctx); err != nil {
-				a.logger.Warn("⚠️ 重置数据库渠道状态失败", "error", err)
-			} else if resetCount > 0 {
-				a.logger.Info(fmt.Sprintf("✅ 渠道间转移已启用，已重置 %d 个渠道的暂停状态（内存+数据库）", resetCount))
-			} else {
-				a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置")
-			}
+		resumed, err := a.endpointService.EnsureActiveChannelParticipates(ctx, a.channelService)
+		if err != nil {
+			restoreRuntimeConfig()
+			return &failoverApplyError{provider: service.ProviderClaude, err: fmt.Errorf("Claude 渠道间转移未启用：当前接管渠道无法恢复参与: %w", err)}
 		} else {
-			a.logger.Info("✅ 渠道间转移已启用，所有渠道暂停状态已重置（仅内存）")
+			a.config.Failover.Enabled = true
+			if a.endpointManager != nil {
+				a.endpointManager.SetFailoverEnabled(true)
+			}
+			if resumed {
+				a.logger.Info("✅ Claude 渠道间转移已启用，当前接管渠道已自动恢复参与")
+				a.emitEndpointUpdate()
+			}
+		}
+	} else {
+		a.config.Failover.Enabled = requestedFailoverEnabled
+		if a.endpointManager != nil {
+			a.endpointManager.SetFailoverEnabled(requestedFailoverEnabled)
 		}
 	}
 	// 从数据库加载 loop_retry、max_loops、skip_health_check 到 Failover
@@ -2085,13 +2261,55 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
 	a.config.Failover.LoopRetrySuspendTimeout = a.settingsService.GetDuration(ctx, service.CategoryFailover, "loop_retry_wait_timeout", a.config.Failover.LoopRetrySuspendTimeout)
 
 	// Codex 独立故障转移配置
-	a.config.CodexFailover.Enabled = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "enabled", false)
+	requestedCodexFailoverEnabled, err := a.settingsService.GetBoolScopedStrict(ctx, service.ProviderCodex, service.CategoryFailover, "enabled", false)
+	if err != nil {
+		restoreRuntimeConfig()
+		return &failoverApplyError{provider: service.ProviderCodex, err: fmt.Errorf("读取 Codex 渠道间转移设置失败: %w", err)}
+	}
 	a.config.CodexFailover.LoopRetry = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "loop_retry", true)
 	a.config.CodexFailover.MaxLoops = a.settingsService.GetIntScoped(ctx, service.ProviderCodex, service.CategoryFailover, "max_loops", 3)
 	a.config.CodexFailover.SkipHealthCheck = a.settingsService.GetBoolScoped(ctx, service.ProviderCodex, service.CategoryFailover, "skip_health_check", false)
 	a.config.CodexFailover.LoopRetrySuspendTimeout = a.settingsService.GetDurationScoped(ctx, service.ProviderCodex, service.CategoryFailover, "loop_retry_wait_timeout", 120*time.Second)
-	if a.codexHTTPHandler != nil {
-		a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+	if requestedCodexFailoverEnabled && a.codexChannelService != nil {
+		a.codexActivationMu.Lock()
+		activeSnapshot, err := a.codexChannelService.GetActiveChannel(ctx)
+		resumed := false
+		if err == nil {
+			resumed, err = a.codexChannelService.EnsureActiveChannelParticipates(ctx)
+		}
+		if err == nil {
+			if a.codexEndpointMgr == nil {
+				err = fmt.Errorf("Codex 端点管理器未初始化")
+			} else if reloadErr := a.reloadCodexEndpointManager(); reloadErr != nil {
+				err = fmt.Errorf("重新加载 Codex 运行时失败: %w", reloadErr)
+			}
+		}
+		if err != nil && activeSnapshot != nil && !activeSnapshot.FailoverEnabled {
+			if rollbackErr := a.restoreCodexActiveParticipation(activeSnapshot); rollbackErr != nil {
+				err = fmt.Errorf("%w；恢复原活跃渠道参与状态失败: %v", err, rollbackErr)
+			}
+		}
+		a.codexActivationMu.Unlock()
+		if err != nil {
+			restoreRuntimeConfig()
+			return &failoverApplyError{provider: service.ProviderCodex, err: fmt.Errorf("Codex 渠道间转移未启用：当前接管渠道无法恢复参与: %w", err)}
+		} else {
+			a.config.CodexFailover.Enabled = true
+			if a.codexHTTPHandler != nil {
+				a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+			}
+			if resumed {
+				a.logger.Info("✅ Codex 渠道间转移已启用，当前接管渠道已自动恢复参与")
+			}
+			// Runtime reload above already refreshed the manager; only publish the
+			// resulting state here to avoid a second reload with a swallowed error.
+			a.emitCodexProviderStateUpdate()
+		}
+	} else {
+		a.config.CodexFailover.Enabled = requestedCodexFailoverEnabled
+		if a.codexHTTPHandler != nil {
+			a.codexHTTPHandler.UpdateConfig(a.config.Retry, a.config.CodexFailover)
+		}
 	}
 
 	// 请求控制配置
@@ -2165,6 +2383,7 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) {
 	}
 
 	a.applyCacheSettings(ctx)
+	return nil
 }
 
 // getSettingString 获取字符串设置值（带默认值）

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"strings"
 	"testing"
 
 	"ai-relay-forwarder/internal/store"
@@ -99,5 +101,140 @@ func TestSettingsServiceDefaultsKeepCodexFailoverDisabled(t *testing.T) {
 	}
 	if values[string(ProviderCodex)+"/enabled"] != "false" {
 		t.Fatalf("Codex enabled default = %q", values[string(ProviderCodex)+"/enabled"])
+	}
+}
+
+func TestSettingsServiceSetScopedRestoresDatabaseWhenApplyFails(t *testing.T) {
+	svc, _ := newSettingsServiceTestStore(t)
+	if err := svc.SetScoped(context.Background(), ProviderCodex, CategoryFailover, "enabled", "false"); err != nil {
+		t.Fatalf("seed setting: %v", err)
+	}
+
+	var cancelApply context.CancelFunc
+	svc.SetOnChangeCallback(func() error {
+		cancelApply()
+		return errors.New("forced apply failure")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelApply = cancel
+	err := svc.SetScoped(ctx, ProviderCodex, CategoryFailover, "enabled", "true")
+	if err == nil || !strings.Contains(err.Error(), "forced apply failure") {
+		t.Fatalf("expected apply failure, got %v", err)
+	}
+	if svc.GetBoolScoped(context.Background(), ProviderCodex, CategoryFailover, "enabled", true) {
+		t.Fatal("failed hot apply must restore the previous persisted value")
+	}
+
+	ctx, cancel = context.WithCancel(context.Background())
+	cancelApply = cancel
+	err = svc.SetScoped(ctx, ProviderCodex, CategoryFailover, "temporary_test_key", "true")
+	if err == nil {
+		t.Fatal("expected apply failure for a newly inserted setting")
+	}
+	record, getErr := svc.GetScoped(context.Background(), ProviderCodex, CategoryFailover, "temporary_test_key")
+	if getErr != nil {
+		t.Fatalf("read rolled-back setting: %v", getErr)
+	}
+	if record != nil {
+		t.Fatalf("failed hot apply must delete a previously absent setting, got %#v", record)
+	}
+}
+
+func TestSettingsServiceGetBoolStrict(t *testing.T) {
+	svc, db := newSettingsServiceTestStore(t)
+	if _, err := db.Exec(`INSERT INTO settings (provider, category, key, value) VALUES
+		('claude', 'failover', 'strict_true', 'true'),
+		('claude', 'failover', 'strict_false', 'false'),
+		('claude', 'failover', 'strict_empty', ''),
+		('claude', 'failover', 'strict_invalid', 'not-a-bool'),
+		('global', 'failover', 'strict_lookup', 'true'),
+		('claude', 'failover', 'strict_lookup', 'false')`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name       string
+		key        string
+		defaultVal bool
+		want       bool
+	}{
+		{name: "missing uses default", key: "strict_missing", defaultVal: true, want: true},
+		{name: "empty uses default", key: "strict_empty", defaultVal: true, want: true},
+		{name: "true", key: "strict_true", want: true},
+		{name: "false", key: "strict_false", defaultVal: true, want: false},
+		{name: "failover uses Claude scope", key: "strict_lookup", defaultVal: true, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := svc.GetBoolStrict(context.Background(), CategoryFailover, tt.key, tt.defaultVal)
+			if err != nil {
+				t.Fatalf("GetBoolStrict() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("GetBoolStrict() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	if _, err := svc.GetBoolStrict(context.Background(), CategoryFailover, "strict_invalid", false); err == nil {
+		t.Fatal("invalid bool must return an error")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := svc.GetBoolStrict(canceled, CategoryFailover, "strict_true", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v, want context.Canceled", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetBoolStrict(context.Background(), CategoryFailover, "strict_true", false); err == nil {
+		t.Fatal("store read failure must return an error")
+	}
+}
+
+func TestSettingsServiceGetBoolScopedStrict(t *testing.T) {
+	svc, db := newSettingsServiceTestStore(t)
+	if _, err := db.Exec(`INSERT INTO settings (provider, category, key, value) VALUES
+		('codex', 'failover', 'strict_true', 'true'),
+		('codex', 'failover', 'strict_false', 'false'),
+		('codex', 'failover', 'strict_empty', ''),
+		('codex', 'failover', 'strict_invalid', 'not-a-bool')`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name       string
+		key        string
+		defaultVal bool
+		want       bool
+	}{
+		{name: "missing uses default", key: "strict_missing", defaultVal: true, want: true},
+		{name: "empty uses default", key: "strict_empty", defaultVal: true, want: true},
+		{name: "true", key: "strict_true", want: true},
+		{name: "false", key: "strict_false", defaultVal: true, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := svc.GetBoolScopedStrict(context.Background(), ProviderCodex, CategoryFailover, tt.key, tt.defaultVal)
+			if err != nil {
+				t.Fatalf("GetBoolScopedStrict() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("GetBoolScopedStrict() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	if _, err := svc.GetBoolScopedStrict(context.Background(), ProviderCodex, CategoryFailover, "strict_invalid", false); err == nil {
+		t.Fatal("invalid bool must return an error")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := svc.GetBoolScopedStrict(canceled, ProviderCodex, CategoryFailover, "strict_true", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v, want context.Canceled", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GetBoolScopedStrict(context.Background(), ProviderCodex, CategoryFailover, "strict_true", false); err == nil {
+		t.Fatal("store read failure must return an error")
 	}
 }

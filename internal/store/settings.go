@@ -168,6 +168,15 @@ func (s *SQLiteSettingsStore) SetScoped(ctx context.Context, provider, category,
 	return nil
 }
 
+func (s *SQLiteSettingsStore) DeleteScoped(ctx context.Context, provider, category, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE provider = ? AND category = ? AND key = ?`, provider, category, key); err != nil {
+		return fmt.Errorf("删除设置失败: %w", err)
+	}
+	return nil
+}
+
 // Get 获取单个设置
 func (s *SQLiteSettingsStore) Get(ctx context.Context, category, key string) (*SettingRecord, error) {
 	return s.GetScoped(ctx, defaultSettingsProvider(category), category, key)

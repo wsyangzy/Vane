@@ -51,6 +51,14 @@ func NewSQLiteChannelStore(db *sql.DB) *SQLiteChannelStore {
 	return &SQLiteChannelStore{db: db}
 }
 
+// BeginTx starts a transaction for service-level atomic priority updates.
+func (s *SQLiteChannelStore) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("渠道数据库未初始化")
+	}
+	return s.db.BeginTx(ctx, nil)
+}
+
 func (s *SQLiteChannelStore) WithTx(tx *sql.Tx) ChannelStore {
 	return &SQLiteChannelStore{db: s.db, tx: tx}
 }

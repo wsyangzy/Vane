@@ -196,6 +196,218 @@ func TestCodexEndpointCreateKeepsExplicitZeroPriority(t *testing.T) {
 	}
 }
 
+func TestCodexEndpointRestoreRevertsPrioritySwap(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{Name: "restore-endpoint", ProviderType: "openai-compatible"})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	group, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{ChannelID: channel.ID, Name: "default", ApiKey: "sk-test", IsDefault: true})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	first, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "first", BaseURL: "https://first.example.invalid/v1", FailoverEnabled: true, Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("create first endpoint: %v", err)
+	}
+	second, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "second", BaseURL: "https://second.example.invalid/v1", FailoverEnabled: true, Priority: 1,
+	})
+	if err != nil {
+		t.Fatalf("create second endpoint: %v", err)
+	}
+	firstSnapshot := *first
+	secondSnapshot := *second
+
+	if err := endpointService.UpdateEndpointByID(ctx, first.ID, first.Name, first.BaseURL, first.CredentialGroupID, first.ApiKey, first.FailoverEnabled, first.SkipHealthCheck, 1, first.TimeoutSeconds, first.CostMultiplier, first.InputCostMultiplier, first.OutputCostMultiplier, first.CacheReadCostMultiplier, first.BillingOutputTokenSource, first.ModelMultipliers); err != nil {
+		t.Fatalf("swap endpoint priorities: %v", err)
+	}
+	if err := endpointService.RestoreEndpoint(ctx, &firstSnapshot); err != nil {
+		t.Fatalf("restore first endpoint: %v", err)
+	}
+	if err := endpointService.RestoreEndpoint(ctx, &secondSnapshot); err != nil {
+		t.Fatalf("restore second endpoint: %v", err)
+	}
+
+	restoredFirst, err := endpointStore.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("reload first endpoint: %v", err)
+	}
+	restoredSecond, err := endpointStore.GetByID(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("reload second endpoint: %v", err)
+	}
+	if restoredFirst.Priority != 0 || restoredSecond.Priority != 1 {
+		t.Fatalf("restored priorities = %d/%d, want 0/1", restoredFirst.Priority, restoredSecond.Priority)
+	}
+	if !restoredFirst.IsActive || restoredSecond.IsActive {
+		t.Fatalf("restored active state = %v/%v, want true/false", restoredFirst.IsActive, restoredSecond.IsActive)
+	}
+}
+
+func TestCodexChannelRestoreRevertsPrioritySwapAndParticipation(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	channelService := NewCodexChannelService(channelStore, endpointStore)
+
+	first, err := channelService.CreateChannel(ctx, &store.CodexChannelRecord{Name: "first-channel", ProviderType: "openai-compatible", Priority: 0, FailoverEnabled: true})
+	if err != nil {
+		t.Fatalf("create first channel: %v", err)
+	}
+	second, err := channelService.CreateChannel(ctx, &store.CodexChannelRecord{Name: "second-channel", ProviderType: "openai-compatible", Priority: 1, FailoverEnabled: false})
+	if err != nil {
+		t.Fatalf("create second channel: %v", err)
+	}
+	firstSnapshot := *first
+	secondSnapshot := *second
+
+	updatedSecond := secondSnapshot
+	updatedSecond.Priority = first.Priority
+	updatedSecond.FailoverEnabled = true
+	if err := channelService.UpdateChannelByID(ctx, second.ID, &updatedSecond); err != nil {
+		t.Fatalf("swap channel priorities: %v", err)
+	}
+	if err := channelService.RestoreChannel(ctx, &secondSnapshot); err != nil {
+		t.Fatalf("restore second channel: %v", err)
+	}
+	if err := channelService.RestoreChannel(ctx, &firstSnapshot); err != nil {
+		t.Fatalf("restore first channel: %v", err)
+	}
+
+	restoredFirst, err := channelStore.GetByID(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("reload first channel: %v", err)
+	}
+	restoredSecond, err := channelStore.GetByID(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("reload second channel: %v", err)
+	}
+	if restoredFirst.Priority != 0 || restoredSecond.Priority != 1 {
+		t.Fatalf("restored channel priorities = %d/%d, want 0/1", restoredFirst.Priority, restoredSecond.Priority)
+	}
+	if !restoredFirst.FailoverEnabled || restoredSecond.FailoverEnabled {
+		t.Fatalf("restored participation = %v/%v, want true/false", restoredFirst.FailoverEnabled, restoredSecond.FailoverEnabled)
+	}
+}
+
+func TestCodexEndpointCreateRequiresUsableCredentialGroup(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name: "no-credential-channel", ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	_, err = endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, Name: "without-group", BaseURL: "https://without-group.example.invalid/v1", FailoverEnabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "尚未配置凭证分组") {
+		t.Fatalf("expected missing-group error, got %v", err)
+	}
+
+	group, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID, Name: "default", IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create empty credential group: %v", err)
+	}
+	_, err = endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "empty-group", BaseURL: "https://empty-group.example.invalid/v1", FailoverEnabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "API Key") {
+		t.Fatalf("expected empty-api-key error, got %v", err)
+	}
+	if _, err = endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "endpoint-override", BaseURL: "https://endpoint-override.example.invalid/v1", ApiKey: "sk-endpoint", FailoverEnabled: true,
+	}); err != nil {
+		t.Fatalf("endpoint-level API key should allow an empty group: %v", err)
+	}
+	if err := channelStore.UpdateByID(ctx, channel.ID, &store.CodexChannelRecord{
+		ID: channel.ID, Name: channel.Name, ProviderType: channel.ProviderType, ApiKey: "sk-legacy", Priority: channel.Priority, FailoverEnabled: channel.FailoverEnabled,
+	}); err != nil {
+		t.Fatalf("set legacy channel API key: %v", err)
+	}
+	if _, err = endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "channel-override", BaseURL: "https://channel-override.example.invalid/v1", FailoverEnabled: true,
+	}); err != nil {
+		t.Fatalf("legacy channel API key should allow an empty group: %v", err)
+	}
+
+	endpoints, err := endpointStore.ListByChannelID(ctx, channel.ID)
+	if err != nil {
+		t.Fatalf("list endpoints: %v", err)
+	}
+	if len(endpoints) != 2 {
+		t.Fatalf("only endpoint/channel credential fallbacks should create records, count=%d", len(endpoints))
+	}
+}
+
+func TestCodexEndpointCreatePriorityConflictRollsBackOnInsertFailure(t *testing.T) {
+	ctx := context.Background()
+	db := newCodexEndpointTestDB(t)
+	if _, err := db.Exec(`CREATE TRIGGER fail_target_codex_endpoint_insert BEFORE INSERT ON codex_endpoints WHEN NEW.name = 'target' BEGIN SELECT RAISE(ABORT, 'forced endpoint insert failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	channelStore := store.NewSQLiteCodexChannelStore(db)
+	groupStore := store.NewSQLiteCodexCredentialGroupStore(db)
+	endpointStore := store.NewSQLiteCodexEndpointStore(db)
+	endpointService := NewCodexEndpointService(endpointStore, channelStore, groupStore)
+	channel, err := channelStore.Create(ctx, &store.CodexChannelRecord{
+		Name: "rollback-channel", ProviderType: "openai-compatible",
+	})
+	if err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	group, err := groupStore.Create(ctx, &store.CodexCredentialGroupRecord{
+		ChannelID: channel.ID, Name: "default", ApiKey: "sk-test", IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create credential group: %v", err)
+	}
+	conflicting, err := endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "existing", BaseURL: "https://existing.example.invalid/v1", FailoverEnabled: true, Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("create existing endpoint: %v", err)
+	}
+	_, err = endpointService.CreateEndpoint(ctx, &store.CodexEndpointRecord{
+		ChannelID: channel.ID, CredentialGroupID: group.ID, Name: "target", BaseURL: "https://target.example.invalid/v1", FailoverEnabled: true, Priority: 0,
+	})
+	if err == nil || !strings.Contains(err.Error(), "创建 Codex 端点失败") {
+		t.Fatalf("expected insert failure, got %v", err)
+	}
+	reloaded, err := endpointStore.GetByID(ctx, conflicting.ID)
+	if err != nil {
+		t.Fatalf("reload conflicting endpoint: %v", err)
+	}
+	if reloaded == nil || reloaded.Priority != 0 {
+		t.Fatalf("priority move must roll back, got %#v", reloaded)
+	}
+	endpoints, err := endpointStore.ListByChannelID(ctx, channel.ID)
+	if err != nil {
+		t.Fatalf("list endpoints: %v", err)
+	}
+	if len(endpoints) != 1 {
+		t.Fatalf("failed create must not leave target endpoint, count=%d", len(endpoints))
+	}
+}
+
 func TestCodexEndpointCreateMovesExplicitPriorityConflictToNextPriority(t *testing.T) {
 	ctx := context.Background()
 	db := newCodexEndpointTestDB(t)

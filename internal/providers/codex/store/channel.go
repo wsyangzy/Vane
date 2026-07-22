@@ -57,6 +57,14 @@ func NewSQLiteCodexChannelStore(db *sql.DB) *SQLiteCodexChannelStore {
 	return &SQLiteCodexChannelStore{db: db}
 }
 
+// BeginTx starts a transaction for service-level atomic priority updates.
+func (s *SQLiteCodexChannelStore) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("Codex 渠道数据库未初始化")
+	}
+	return s.db.BeginTx(ctx, nil)
+}
+
 func (s *SQLiteCodexChannelStore) WithTx(tx *sql.Tx) CodexChannelStore {
 	return &SQLiteCodexChannelStore{db: s.db, tx: tx}
 }
@@ -238,24 +246,60 @@ func (s *SQLiteCodexChannelStore) DeleteByID(ctx context.Context, id int64) erro
 	return nil
 }
 
-// SetActive 通过先清空再置位的方式确保全局单活。
+// SetActive 通过事务内先清空再置位确保全局单活。
 // 注意：部分唯一索引 idx_codex_channels_single_active 强制约束，必须先清空再设置。
 func (s *SQLiteCodexChannelStore) SetActive(ctx context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET is_active = 0`); err != nil {
-		return fmt.Errorf("清空激活渠道失败: %w", err)
+	if s.tx != nil {
+		return setActiveCodexChannel(ctx, s.tx, id)
 	}
 
-	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET is_active = 1 WHERE id = ?`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启 Codex 渠道激活事务失败: %w", err)
+	}
+	if err := setActiveCodexChannel(ctx, tx, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("提交 Codex 渠道激活事务失败: %w", err)
+	}
+	return nil
+}
+
+func setActiveCodexChannel(ctx context.Context, executor interface {
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}, id int64) error {
+	if _, err := executor.ExecContext(ctx, `UPDATE codex_channels SET is_active = 0`); err != nil {
+		return fmt.Errorf("清空激活渠道失败: %w", err)
+	}
+	result, err := executor.ExecContext(ctx, `UPDATE codex_channels SET is_active = 1 WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("设置激活渠道失败: %w", err)
 	}
-
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	return nil
+}
+
+// ClearActive clears a known active channel without deleting it. Deletion uses
+// this to make an empty runtime state observable before the record is removed.
+func (s *SQLiteCodexChannelStore) ClearActive(ctx context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET is_active = 0 WHERE id = ? AND is_active = 1`, id)
+	if err != nil {
+		return fmt.Errorf("清空 Codex 激活渠道失败: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("Codex 渠道不存在或未激活: %d", id)
 	}
 	return nil
 }

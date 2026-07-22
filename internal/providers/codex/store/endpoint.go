@@ -76,6 +76,14 @@ func NewSQLiteCodexEndpointStore(db *sql.DB) *SQLiteCodexEndpointStore {
 	return &SQLiteCodexEndpointStore{db: db}
 }
 
+// BeginTx starts a transaction for service-level atomic priority updates.
+func (s *SQLiteCodexEndpointStore) BeginTx(ctx context.Context) (*sql.Tx, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("Codex 端点数据库未初始化")
+	}
+	return s.db.BeginTx(ctx, nil)
+}
+
 func (s *SQLiteCodexEndpointStore) WithTx(tx *sql.Tx) CodexEndpointStore {
 	return &SQLiteCodexEndpointStore{db: s.db, tx: tx}
 }
@@ -286,14 +294,57 @@ func (s *SQLiteCodexEndpointStore) DeleteByID(ctx context.Context, id int64) err
 	return nil
 }
 
-// SetActive 在端点所属渠道内单活：先把同 channel_id 下其他端点置 0，再把目标置 1。
+// Restore inserts an exact endpoint snapshot after a failed post-delete reload.
+func (s *SQLiteCodexEndpointStore) Restore(ctx context.Context, record *CodexEndpointRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if record == nil || record.ID <= 0 {
+		return fmt.Errorf("恢复 Codex 端点记录无效")
+	}
+	createdAt := ""
+	if !record.CreatedAt.IsZero() {
+		createdAt = record.CreatedAt.Format(time.RFC3339Nano)
+	}
+	updatedAt := ""
+	if !record.UpdatedAt.IsZero() {
+		updatedAt = record.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	_, err := s.getQuerier().ExecContext(ctx, `INSERT INTO codex_endpoints (id, channel_id, credential_group_id, api_key, name, base_url, is_active, failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier, billing_output_token_source, model_multipliers, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.ChannelID, nullInt64IfZero(record.CredentialGroupID), record.ApiKey, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), boolToInt(record.SkipHealthCheck), record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, defaultBillingOutputTokenSource(record.BillingOutputTokenSource), encodeCodexModelMultipliers(record.ModelMultipliers), createdAt, updatedAt)
+	if err != nil {
+		return fmt.Errorf("恢复已删除 Codex 端点失败: %w", err)
+	}
+	return nil
+}
+
+// SetActive 在端点所属渠道内通过事务保持单活。
 func (s *SQLiteCodexEndpointStore) SetActive(ctx context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 先查到 channel_id
+	if s.tx != nil {
+		return setActiveCodexEndpoint(ctx, s.tx, id)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启 Codex 端点激活事务失败: %w", err)
+	}
+	if err := setActiveCodexEndpoint(ctx, tx, id); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("提交 Codex 端点激活事务失败: %w", err)
+	}
+	return nil
+}
+
+func setActiveCodexEndpoint(ctx context.Context, executor interface {
+	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+	ExecContext(context.Context, string, ...interface{}) (sql.Result, error)
+}, id int64) error {
 	var channelID int64
-	if err := s.getQuerier().QueryRowContext(ctx, `SELECT channel_id FROM codex_endpoints WHERE id = ?`, id).Scan(&channelID); err != nil {
+	if err := executor.QueryRowContext(ctx, `SELECT channel_id FROM codex_endpoints WHERE id = ?`, id).Scan(&channelID); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("Codex 端点不存在: %d", id)
 		}
@@ -301,15 +352,30 @@ func (s *SQLiteCodexEndpointStore) SetActive(ctx context.Context, id int64) erro
 	}
 
 	if _, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
-		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 0 WHERE channel_id = ?`, channelID)
+		return executor.ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 0 WHERE channel_id = ?`, channelID)
 	}); err != nil {
 		return fmt.Errorf("清空渠道激活端点失败: %w", err)
 	}
 
-	if _, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
-		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 1 WHERE id = ?`, id)
-	}); err != nil {
+	result, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
+		return executor.ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 1 WHERE id = ?`, id)
+	})
+	if err != nil {
 		return fmt.Errorf("设置激活端点失败: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("Codex 端点不存在: %d", id)
+	}
+	return nil
+}
+
+// ClearActiveByChannel clears the active marker while preserving every row.
+func (s *SQLiteCodexEndpointStore) ClearActiveByChannel(ctx context.Context, channelID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET is_active = 0 WHERE channel_id = ?`, channelID); err != nil {
+		return fmt.Errorf("清空 Codex 渠道激活端点失败: %w", err)
 	}
 	return nil
 }

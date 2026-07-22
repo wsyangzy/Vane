@@ -4,9 +4,11 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"ai-relay-forwarder/internal/providers/claude/store"
 )
@@ -14,6 +16,12 @@ import (
 type ChannelService struct {
 	store store.ChannelStore
 }
+
+type channelTransactionStarter interface {
+	BeginTx(context.Context) (*sql.Tx, error)
+}
+
+var channelPriorityMu sync.Mutex
 
 func NewChannelService(store store.ChannelStore) *ChannelService {
 	return &ChannelService{store: store}
@@ -23,33 +31,58 @@ func (s *ChannelService) CreateChannel(ctx context.Context, record *store.Channe
 	if record == nil {
 		return nil, fmt.Errorf("record 不能为空")
 	}
+	working := *record
+	working.ModelMapping = record.ModelMapping
+	var created *store.ChannelRecord
+	err := s.withPriorityTransaction(ctx, func(channelStore store.ChannelStore) error {
+		var err error
+		created, err = createChannelWithStore(ctx, channelStore, &working)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	*record = working
+	return created, nil
+}
+
+func createChannelWithStore(ctx context.Context, channelStore store.ChannelStore, record *store.ChannelRecord) (*store.ChannelRecord, error) {
 	if record.Name == "" {
 		return nil, fmt.Errorf("渠道名称不能为空")
 	}
-	record.ModelMapping = normalizeChannelModelMapping(record.ModelMapping)
-
-	// 优先级自动递增（仅当 Priority <= 0 时触发）
-	if record.Priority <= 0 {
-		maxPriority, err := s.store.GetMaxPriority(ctx)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [ChannelService] 获取最大优先级失败: %v，使用默认值1", err))
-			record.Priority = 1
-		} else {
-			record.Priority = maxPriority + 1
-		}
-		slog.Info(fmt.Sprintf("🔢 [ChannelService] 自动分配优先级: %s -> %d", record.Name, record.Priority))
-	}
-
-	// 默认参与渠道间故障转移
-	record.FailoverEnabled = true
-	existing, err := s.store.Get(ctx, record.Name)
+	existing, err := channelStore.Get(ctx, record.Name)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
 		return nil, fmt.Errorf("渠道 '%s' 已存在", record.Name)
 	}
-	return s.store.Create(ctx, record)
+	record.ModelMapping = normalizeChannelModelMapping(record.ModelMapping)
+
+	maxPriority, err := channelStore.GetMaxPriority(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取渠道最大优先级失败: %w", err)
+	}
+	if record.Priority <= 0 {
+		record.Priority = maxPriority + 1
+		slog.Info(fmt.Sprintf("🔢 [ChannelService] 自动分配优先级: %s -> %d", record.Name, record.Priority))
+	} else {
+		conflicting, err := channelStore.GetByPriority(ctx, record.Priority)
+		if err != nil {
+			return nil, fmt.Errorf("查询渠道优先级冲突失败: %w", err)
+		}
+		if conflicting != nil {
+			conflicting.Priority = maxPriority + 1
+			if err := channelStore.Update(ctx, conflicting); err != nil {
+				return nil, fmt.Errorf("渠道优先级顺延失败: %w", err)
+			}
+			slog.Info(fmt.Sprintf("🔄 [ChannelService] 创建优先级交换: %s 使用 %d，%s 顺延至 %d",
+				record.Name, record.Priority, conflicting.Name, conflicting.Priority))
+		}
+	}
+
+	record.FailoverEnabled = true
+	return channelStore.Create(ctx, record)
 }
 
 func (s *ChannelService) EnsureChannel(ctx context.Context, name string) error {
@@ -75,13 +108,26 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, record *store.Channe
 	if record == nil {
 		return fmt.Errorf("record 不能为空")
 	}
+	working := *record
+	working.ModelMapping = record.ModelMapping
+	err := s.withPriorityTransaction(ctx, func(channelStore store.ChannelStore) error {
+		return updateChannelWithStore(ctx, channelStore, &working)
+	})
+	if err != nil {
+		return err
+	}
+	*record = working
+	return nil
+}
+
+func updateChannelWithStore(ctx context.Context, channelStore store.ChannelStore, record *store.ChannelRecord) error {
 	if record.Name == "" {
 		return fmt.Errorf("渠道名称不能为空")
 	}
 	if record.Priority <= 0 {
 		record.Priority = 1
 	}
-	existing, err := s.store.Get(ctx, record.Name)
+	existing, err := channelStore.Get(ctx, record.Name)
 	if err != nil {
 		return err
 	}
@@ -93,28 +139,52 @@ func (s *ChannelService) UpdateChannel(ctx context.Context, record *store.Channe
 	}
 	record.ModelMapping = normalizeChannelModelMapping(record.ModelMapping)
 
-	// 优先级冲突交换
 	if record.Priority != existing.Priority {
-		conflicting, err := s.store.GetByPriority(ctx, record.Priority)
+		conflicting, err := channelStore.GetByPriority(ctx, record.Priority)
 		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [ChannelService] 查询优先级冲突失败: %v", err))
-		} else if conflicting != nil && conflicting.Name != record.Name {
-			// 将冲突渠道的优先级设为当前渠道的旧优先级（交换）
+			return fmt.Errorf("查询渠道优先级冲突失败: %w", err)
+		}
+		if conflicting != nil && conflicting.Name != record.Name {
 			conflicting.Priority = existing.Priority
-			if err := s.store.Update(ctx, conflicting); err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [ChannelService] 交换优先级失败: %v", err))
-			} else {
-				slog.Info(fmt.Sprintf("🔄 [ChannelService] 优先级交换: %s(%d) ↔ %s(%d)",
-					record.Name, record.Priority, conflicting.Name, conflicting.Priority))
+			if err := channelStore.Update(ctx, conflicting); err != nil {
+				return fmt.Errorf("渠道优先级交换失败: %w", err)
 			}
+			slog.Info(fmt.Sprintf("🔄 [ChannelService] 优先级交换: %s(%d) ↔ %s(%d)",
+				record.Name, record.Priority, conflicting.Name, conflicting.Priority))
 		}
 	}
 
-	// 保留 failover_enabled（该字段由暂停/恢复单独控制，不应被普通更新覆盖）
 	if !record.FailoverEnabled {
 		record.FailoverEnabled = existing.FailoverEnabled
 	}
-	return s.store.Update(ctx, record)
+	return channelStore.Update(ctx, record)
+}
+
+func (s *ChannelService) withPriorityTransaction(ctx context.Context, fn func(store.ChannelStore) error) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("渠道存储服务未启用")
+	}
+	channelPriorityMu.Lock()
+	defer channelPriorityMu.Unlock()
+
+	starter, ok := s.store.(channelTransactionStarter)
+	if !ok {
+		return fn(s.store)
+	}
+	tx, err := starter.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("开启渠道优先级事务失败: %w", err)
+	}
+	txStore := s.store.WithTx(tx)
+	if err := fn(txStore); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("提交渠道优先级事务失败: %w", err)
+	}
+	return nil
 }
 
 func normalizeChannelModelMapping(modelMapping map[string]string) map[string]string {
@@ -161,35 +231,25 @@ func (s *ChannelService) SetFailoverEnabled(ctx context.Context, name string, en
 	return s.store.Update(ctx, existing)
 }
 
-// ResetAllFailoverEnabled 重置所有渠道的 failover_enabled 为 true
-// 用于开启渠道间故障转移时，确保所有渠道都可参与故障转移。
-// 修复开启渠道间转移后，暂停状态从数据库重新加载导致状态不一致的问题。
-func (s *ChannelService) ResetAllFailoverEnabled(ctx context.Context) (int, error) {
-	if s == nil || s.store == nil {
-		return 0, nil
+// EnsureActiveChannelParticipates 恢复当前接管渠道参与渠道间转移，保留其他渠道的暂停状态。
+func (s *ChannelService) EnsureActiveChannelParticipates(ctx context.Context, name string) (bool, error) {
+	if s == nil || s.store == nil || name == "" {
+		return false, nil
 	}
 
-	channels, err := s.store.List(ctx)
+	channel, err := s.store.Get(ctx, name)
 	if err != nil {
-		return 0, fmt.Errorf("获取渠道列表失败: %w", err)
+		return false, err
+	}
+	if channel == nil || channel.FailoverEnabled {
+		return false, nil
 	}
 
-	resetCount := 0
-	for _, ch := range channels {
-		if ch == nil {
-			continue
-		}
-		if !ch.FailoverEnabled {
-			ch.FailoverEnabled = true
-			if err := s.store.Update(ctx, ch); err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ 重置渠道 failover_enabled 失败: %s - %v", ch.Name, err))
-				continue
-			}
-			resetCount++
-		}
+	channel.FailoverEnabled = true
+	if err := s.store.Update(ctx, channel); err != nil {
+		return false, err
 	}
-
-	return resetCount, nil
+	return true, nil
 }
 
 // BackfillChannelsFromEndpoints 将历史 endpoints.channel 反写到 channels 表，确保"端点删光后渠道仍存在"。

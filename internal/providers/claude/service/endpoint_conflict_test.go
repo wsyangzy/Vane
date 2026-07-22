@@ -469,6 +469,91 @@ func TestEndpointService_CreateEndpointKeepsExplicitZeroPriority(t *testing.T) {
 	}
 }
 
+func TestEndpointService_CreateEndpointRequiresUsableCredentialGroup(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	cfg := &config.Config{EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"}}
+	endpointStore := store.NewSQLiteEndpointStore(db)
+	groupStore := store.NewSQLiteClaudeCredentialGroupStore(db)
+	svc := NewEndpointService(endpointStore, endpoint.NewManager(cfg), cfg, groupStore)
+	ctx := context.Background()
+
+	_, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel: "ch-a", Name: "without-group", URL: "https://without-group.example.invalid", FailoverEnabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "尚未配置凭证分组") {
+		t.Fatalf("expected missing-group error, got %v", err)
+	}
+
+	group, err := groupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
+		Channel: "ch-a", Name: "default", IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create empty credential group: %v", err)
+	}
+	_, err = svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel: "ch-a", CredentialGroupID: group.ID, Name: "empty-group", URL: "https://empty-group.example.invalid", FailoverEnabled: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Token 或 API Key") {
+		t.Fatalf("expected empty-credential error, got %v", err)
+	}
+	_, err = svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel: "ch-a", CredentialGroupID: group.ID, Name: "endpoint-override", URL: "https://endpoint-override.example.invalid", Token: "legacy-token", FailoverEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("endpoint-level credential override should allow an empty group: %v", err)
+	}
+
+	count, err := endpointStore.Count(ctx)
+	if err != nil {
+		t.Fatalf("count endpoints: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("only the endpoint-level credential override should create a record, count=%d", count)
+	}
+}
+
+func TestEndpointService_CreateEndpointPriorityConflictRollsBackOnInsertFailure(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+
+	if _, err := db.Exec(`CREATE TRIGGER fail_target_endpoint_insert BEFORE INSERT ON endpoints WHEN NEW.name = 'target' BEGIN SELECT RAISE(ABORT, 'forced endpoint insert failure'); END`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	cfg := &config.Config{EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"}}
+	endpointStore := store.NewSQLiteEndpointStore(db)
+	svc := NewEndpointService(endpointStore, endpoint.NewManager(cfg), cfg)
+	ctx := context.Background()
+
+	conflicting, err := svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel: "ch-a", Name: "existing", URL: "https://existing.example.invalid", FailoverEnabled: true, Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("create existing endpoint: %v", err)
+	}
+	_, err = svc.CreateEndpoint(ctx, &store.EndpointRecord{
+		Channel: "ch-a", Name: "target", URL: "https://target.example.invalid", FailoverEnabled: true, Priority: 0,
+	})
+	if err == nil || !strings.Contains(err.Error(), "保存端点到数据库失败") {
+		t.Fatalf("expected insert failure, got %v", err)
+	}
+	reloaded, err := endpointStore.GetByID(ctx, conflicting.ID)
+	if err != nil {
+		t.Fatalf("reload conflicting endpoint: %v", err)
+	}
+	if reloaded == nil || reloaded.Priority != 0 {
+		t.Fatalf("priority move must roll back, got %#v", reloaded)
+	}
+	count, err := endpointStore.Count(ctx)
+	if err != nil {
+		t.Fatalf("count endpoints: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("failed create must not leave target endpoint, count=%d", count)
+	}
+}
+
 func TestEndpointService_CreateEndpointMovesExplicitPriorityConflictToNextPriority(t *testing.T) {
 	db, cleanup := createEndpointServiceTestDB(t)
 	defer cleanup()
@@ -840,5 +925,336 @@ func TestEndpointService_UpdateEndpointDisablingActiveFailoverRequiresCandidate(
 	}
 	if !updatedActive.FailoverEnabled || !updatedActive.Enabled {
 		t.Fatalf("预期当前端点保持活跃并参与转移，got enabled=%v failover=%v", updatedActive.Enabled, updatedActive.FailoverEnabled)
+	}
+}
+
+type endpointFailureStore struct {
+	store.EndpointStore
+
+	mu                    sync.Mutex
+	failUpdateID          int64
+	failDelete            bool
+	failList              bool
+	failListAfterUpdate   bool
+	failListAfterActiveID int64
+	cancelAfterActiveID   int64
+	cancelActive          context.CancelFunc
+	activeContexts        []context.Context
+	activeContextErrors   []error
+}
+
+func (s *endpointFailureStore) UpdateByID(ctx context.Context, record *store.EndpointRecord) error {
+	s.mu.Lock()
+	fail := record != nil && record.ID == s.failUpdateID
+	failListAfterUpdate := s.failListAfterUpdate
+	s.mu.Unlock()
+	if fail {
+		return fmt.Errorf("forced endpoint update failure")
+	}
+	if err := s.EndpointStore.UpdateByID(ctx, record); err != nil {
+		return err
+	}
+	if failListAfterUpdate {
+		s.mu.Lock()
+		s.failList = true
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *endpointFailureStore) DeleteByID(ctx context.Context, id int64) error {
+	s.mu.Lock()
+	fail := s.failDelete
+	s.mu.Unlock()
+	if fail {
+		return fmt.Errorf("forced endpoint delete failure")
+	}
+	return s.EndpointStore.DeleteByID(ctx, id)
+}
+
+func (s *endpointFailureStore) List(ctx context.Context) ([]*store.EndpointRecord, error) {
+	s.mu.Lock()
+	fail := s.failList
+	s.mu.Unlock()
+	if fail {
+		return nil, fmt.Errorf("forced endpoint list failure")
+	}
+	return s.EndpointStore.List(ctx)
+}
+
+func (s *endpointFailureStore) SetActiveEndpoint(ctx context.Context, id int64) error {
+	s.mu.Lock()
+	s.activeContexts = append(s.activeContexts, ctx)
+	s.activeContextErrors = append(s.activeContextErrors, ctx.Err())
+	s.mu.Unlock()
+	if err := s.EndpointStore.SetActiveEndpoint(ctx, id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if id == s.failListAfterActiveID {
+		s.failList = true
+	}
+	var cancel context.CancelFunc
+	if id == s.cancelAfterActiveID {
+		cancel = s.cancelActive
+	}
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+func newEndpointRecoveryTestService(t *testing.T) (*EndpointService, *store.SQLiteEndpointStore, *endpointFailureStore, *endpoint.Manager) {
+	t.Helper()
+	db, cleanup := createEndpointServiceTestDB(t)
+	t.Cleanup(cleanup)
+
+	cfg := &config.Config{
+		Health:           config.HealthConfig{Timeout: 20 * time.Millisecond},
+		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+	}
+	manager := endpoint.NewManager(cfg)
+	t.Cleanup(manager.Stop)
+	baseStore := store.NewSQLiteEndpointStore(db)
+	failureStore := &endpointFailureStore{EndpointStore: baseStore}
+	return NewEndpointService(failureStore, manager, cfg), baseStore, failureStore, manager
+}
+
+func createEndpointForRecoveryTest(t *testing.T, svc *EndpointService, name string, priority int, enabled bool) *store.EndpointRecord {
+	t.Helper()
+	record, err := svc.CreateEndpoint(context.Background(), &store.EndpointRecord{
+		Channel:         "ch-a",
+		Name:            name,
+		URL:             "https://" + name + ".example.invalid",
+		Priority:        priority,
+		FailoverEnabled: true,
+		SkipHealthCheck: true,
+		TimeoutSeconds:  1,
+		Enabled:         enabled,
+	})
+	if err != nil {
+		t.Fatalf("创建测试端点 %s 失败: %v", name, err)
+	}
+	return record
+}
+
+func TestEndpointService_UpdateEndpointRestoresActiveEndpointWhenTransactionFails(t *testing.T) {
+	svc, baseStore, failureStore, _ := newEndpointRecoveryTestService(t)
+	active := createEndpointForRecoveryTest(t, svc, "active-rollback", 1, true)
+	standby := createEndpointForRecoveryTest(t, svc, "standby-rollback", 2, false)
+
+	failureStore.mu.Lock()
+	failureStore.failUpdateID = active.ID
+	failureStore.mu.Unlock()
+	active.FailoverEnabled = false
+	err := svc.UpdateEndpoint(context.Background(), active)
+	if err == nil || !strings.Contains(err.Error(), "forced endpoint update failure") {
+		t.Fatalf("预期事务更新失败，got: %v", err)
+	}
+
+	enabled, err := baseStore.ListEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("读取活跃端点失败: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].ID != active.ID {
+		t.Fatalf("预期恢复原活跃端点 %d，got: %+v", active.ID, enabled)
+	}
+	updatedStandby, err := baseStore.GetByID(context.Background(), standby.ID)
+	if err != nil {
+		t.Fatalf("读取备用端点失败: %v", err)
+	}
+	if updatedStandby.Enabled {
+		t.Fatal("事务失败后备用端点不应保持活跃")
+	}
+
+	failureStore.mu.Lock()
+	defer failureStore.mu.Unlock()
+	if len(failureStore.activeContexts) != 2 {
+		t.Fatalf("预期切换和回滚各写入一次 active，got %d", len(failureStore.activeContexts))
+	}
+	if failureStore.activeContexts[0] == failureStore.activeContexts[1] {
+		t.Fatal("回滚必须使用独立 context")
+	}
+	if failureStore.activeContextErrors[1] != nil {
+		t.Fatalf("回滚 context 在写入时已失效: %v", failureStore.activeContextErrors[1])
+	}
+}
+
+func TestEndpointService_UpdateEndpointReloadsRuntimeAfterIncrementalFailure(t *testing.T) {
+	svc, _, _, manager := newEndpointRecoveryTestService(t)
+	record := createEndpointForRecoveryTest(t, svc, "reload-success", 1, true)
+	key := EndpointRuntimeKey(record)
+	if err := manager.RemoveEndpoint(key); err != nil {
+		t.Fatalf("移除测试运行时端点失败: %v", err)
+	}
+
+	record.TimeoutSeconds = 2
+	if err := svc.UpdateEndpoint(context.Background(), record); err != nil {
+		t.Fatalf("全量重载可恢复时更新不应失败: %v", err)
+	}
+	runtimeEndpoint := manager.GetEndpointByNameAny(key)
+	if runtimeEndpoint == nil || runtimeEndpoint.Config.Timeout != 2*time.Second {
+		t.Fatalf("预期全量重载恢复端点及超时配置，got: %+v", runtimeEndpoint)
+	}
+}
+
+func TestEndpointService_UpdateEndpointReturnsReloadFailure(t *testing.T) {
+	svc, baseStore, failureStore, manager := newEndpointRecoveryTestService(t)
+	record := createEndpointForRecoveryTest(t, svc, "reload-failure", 1, true)
+	key := EndpointRuntimeKey(record)
+	if err := manager.RemoveEndpoint(key); err != nil {
+		t.Fatalf("移除测试运行时端点失败: %v", err)
+	}
+
+	failureStore.mu.Lock()
+	failureStore.failListAfterUpdate = true
+	failureStore.mu.Unlock()
+	record.TimeoutSeconds = 3
+	err := svc.UpdateEndpoint(context.Background(), record)
+	if err == nil || !strings.Contains(err.Error(), "从数据库重新同步运行时失败") {
+		t.Fatalf("预期全量重载失败向上传播，got: %v", err)
+	}
+	failureStore.mu.Lock()
+	failureStore.failList = false
+	failureStore.mu.Unlock()
+
+	persisted, readErr := baseStore.GetByID(context.Background(), record.ID)
+	if readErr != nil {
+		t.Fatalf("读取已提交端点失败: %v", readErr)
+	}
+	if persisted.TimeoutSeconds != 3 {
+		t.Fatalf("预期数据库更新已提交，got timeout=%d", persisted.TimeoutSeconds)
+	}
+}
+
+func TestEndpointService_ActivateEndpointReloadsRuntimeAfterIncrementalFailure(t *testing.T) {
+	svc, baseStore, _, manager := newEndpointRecoveryTestService(t)
+	active := createEndpointForRecoveryTest(t, svc, "activate-current", 1, true)
+	target := createEndpointForRecoveryTest(t, svc, "activate-target", 2, false)
+	if err := manager.RemoveEndpoint(EndpointRuntimeKey(target)); err != nil {
+		t.Fatalf("移除目标运行时端点失败: %v", err)
+	}
+
+	activated, err := svc.ActivateEndpointByID(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("全量重载可恢复时激活不应失败: %v", err)
+	}
+	if activated == nil || activated.ID != target.ID {
+		t.Fatalf("预期激活目标端点 %d，got: %+v", target.ID, activated)
+	}
+	if manager.GetEndpointByNameAny(EndpointRuntimeKey(target)) == nil {
+		t.Fatal("预期全量重载恢复目标运行时端点")
+	}
+	enabled, err := baseStore.ListEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("读取活跃端点失败: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].ID != target.ID {
+		t.Fatalf("预期数据库只激活目标端点 %d，got: %+v", target.ID, enabled)
+	}
+	persistedActive, err := baseStore.GetByID(context.Background(), active.ID)
+	if err != nil || persistedActive.Enabled {
+		t.Fatalf("原端点不应继续激活: record=%+v err=%v", persistedActive, err)
+	}
+}
+
+func TestEndpointService_ActivateEndpointRestoresWithIndependentContextWhenReloadFails(t *testing.T) {
+	svc, baseStore, failureStore, manager := newEndpointRecoveryTestService(t)
+	active := createEndpointForRecoveryTest(t, svc, "activate-rollback-current", 1, true)
+	target := createEndpointForRecoveryTest(t, svc, "activate-rollback-target", 2, false)
+	if err := manager.RemoveEndpoint(EndpointRuntimeKey(target)); err != nil {
+		t.Fatalf("移除目标运行时端点失败: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	failureStore.mu.Lock()
+	failureStore.failListAfterActiveID = target.ID
+	failureStore.cancelAfterActiveID = target.ID
+	failureStore.cancelActive = cancel
+	failureStore.mu.Unlock()
+	_, err := svc.ActivateEndpointByID(ctx, target.ID)
+	if err == nil || !strings.Contains(err.Error(), "从数据库重新同步运行时失败") {
+		t.Fatalf("预期全量重载失败向上传播，got: %v", err)
+	}
+
+	enabled, readErr := baseStore.ListEnabled(context.Background())
+	if readErr != nil {
+		t.Fatalf("读取补偿后的活跃端点失败: %v", readErr)
+	}
+	if len(enabled) != 1 || enabled[0].ID != active.ID {
+		t.Fatalf("预期恢复原活跃端点 %d，got: %+v", active.ID, enabled)
+	}
+	failureStore.mu.Lock()
+	defer failureStore.mu.Unlock()
+	if len(failureStore.activeContexts) != 2 {
+		t.Fatalf("预期激活和补偿各写入一次 active，got %d", len(failureStore.activeContexts))
+	}
+	if failureStore.activeContexts[0] == failureStore.activeContexts[1] {
+		t.Fatal("激活补偿必须使用独立 context")
+	}
+	if failureStore.activeContextErrors[1] != nil {
+		t.Fatalf("补偿 context 在写入时已失效: %v", failureStore.activeContextErrors[1])
+	}
+}
+
+func TestEndpointService_DeleteActiveEndpointSelectsEligibleSuccessor(t *testing.T) {
+	svc, baseStore, _, manager := newEndpointRecoveryTestService(t)
+	active := createEndpointForRecoveryTest(t, svc, "delete-active", 1, true)
+	paused := createEndpointForRecoveryTest(t, svc, "delete-paused", 2, false)
+	eligible := createEndpointForRecoveryTest(t, svc, "delete-eligible", 3, false)
+	paused.FailoverEnabled = false
+	if err := svc.UpdateEndpoint(context.Background(), paused); err != nil {
+		t.Fatalf("暂停候选端点失败: %v", err)
+	}
+
+	if err := svc.DeleteEndpointByID(context.Background(), active.ID); err != nil {
+		t.Fatalf("删除当前路由端点失败: %v", err)
+	}
+	enabled, err := baseStore.ListEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("读取后续活跃端点失败: %v", err)
+	}
+	if len(enabled) != 1 || enabled[0].ID != eligible.ID {
+		t.Fatalf("预期跳过暂停端点并激活 %d，got: %+v", eligible.ID, enabled)
+	}
+	if manager.GetEndpointByNameAny(EndpointRuntimeKey(active)) != nil {
+		t.Fatal("已删除端点不应保留在运行时")
+	}
+}
+
+func TestEndpointService_DeleteKeepsRuntimeWhenDatabaseDeleteFails(t *testing.T) {
+	svc, baseStore, failureStore, manager := newEndpointRecoveryTestService(t)
+	record := createEndpointForRecoveryTest(t, svc, "delete-rollback", 1, true)
+	_ = createEndpointForRecoveryTest(t, svc, "delete-rollback-standby", 2, false)
+	key := EndpointRuntimeKey(record)
+	failureStore.mu.Lock()
+	failureStore.failDelete = true
+	failureStore.mu.Unlock()
+
+	for _, deleteEndpoint := range []struct {
+		name string
+		call func() error
+	}{
+		{name: "name", call: func() error { return svc.DeleteEndpoint(context.Background(), record.Name) }},
+		{name: "id", call: func() error { return svc.DeleteEndpointByID(context.Background(), record.ID) }},
+	} {
+		t.Run(deleteEndpoint.name, func(t *testing.T) {
+			err := deleteEndpoint.call()
+			if err == nil || !strings.Contains(err.Error(), "forced endpoint delete failure") {
+				t.Fatalf("预期数据库删除失败，got: %v", err)
+			}
+			if manager.GetEndpointByNameAny(key) == nil {
+				t.Fatal("数据库删除失败时运行时端点必须保留")
+			}
+			persisted, readErr := baseStore.GetByID(context.Background(), record.ID)
+			if readErr != nil || persisted == nil {
+				t.Fatalf("数据库删除失败时记录必须保留: record=%+v err=%v", persisted, readErr)
+			}
+			enabled, readErr := baseStore.ListEnabled(context.Background())
+			if readErr != nil || len(enabled) != 1 || enabled[0].ID != record.ID {
+				t.Fatalf("数据库删除失败时必须恢复原活跃端点: enabled=%+v err=%v", enabled, readErr)
+			}
+		})
 	}
 }

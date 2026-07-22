@@ -69,11 +69,19 @@ test('Codex global configuration leaves reasoning effort to the client', () => {
 });
 
 test('Codex channel priority follows the Claude create and edit flow', () => {
-  assert.match(source, /priority:\s*isEdit\s*\?\s*Math\.max\(0, Number\.parseInt\(formData\.priority, 10\) \|\| 0\)\s*:\s*-1/);
-  assert.match(source, /channelFailoverEnabled && isEdit &&/);
-  assert.match(source, /数字越小越优先，相同则交换/);
+  assert.match(source, /const priorityValue = String\(formData\.priority \?\? ''\)\.trim\(\)/);
+  assert.match(source, /priority:\s*!isEdit && !hasPriority \? -1 : parsedPriority/);
+  assert.match(source, /channelFailoverEnabled && \(/);
+  assert.match(source, /留空按现有顺序自动分配；填写已有优先级时交换/);
   assert.match(wailsApiSource, /priority:\s*Number\.parseInt\(input\?\.priority, 10\) \|\| 0/);
   assert.doesNotMatch(wailsApiSource, /priority:\s*Math\.max\(0, Number\.parseInt\(input\?\.priority/);
+});
+
+test('Codex failover channel form places model before priority in equal columns', () => {
+  assert.match(source, /className=\{channelFailoverEnabled \? 'grid grid-cols-1 gap-4 sm:grid-cols-2' : 'grid grid-cols-1 gap-4'\}/);
+  const modelIndex = source.indexOf('模型（可选）');
+  const priorityIndex = source.indexOf('>优先级</span>');
+  assert.ok(modelIndex >= 0 && priorityIndex > modelIndex, 'model should be rendered before priority');
 });
 
 test('Codex channel creation keeps credentials out of the channel modal', () => {
@@ -83,6 +91,68 @@ test('Codex channel creation keeps credentials out of the channel modal', () => 
   assert.doesNotMatch(channelTabs, /凭证分组/);
   assert.doesNotMatch(source, /activeTab === 'credential'/);
   assert.match(source, /apiKey: ''/);
+});
+
+test('new Codex channels continue through credential group and endpoint setup', () => {
+  assert.match(source, /const createdChannel = refreshedChannels\.find\(\(channel\) => channel\?\.name === payload\.name\)/);
+  assert.match(source, /if \(isCreating\) \{[\s\S]*?openCreateCredentialGroupForm\(createdChannel, true\)/);
+  assert.match(source, /const \[initialSetupChannelID, setInitialSetupChannelID\] = useState\(null\)/);
+  assert.match(source, /const shouldContinueInitialSetup = initialSetupChannelID === targetChannel\.id/);
+  assert.match(source, /shouldContinueInitialSetup && savedGroup\?\.id && copyEndpoints\.length === 0/);
+  assert.match(source, /openCreateEndpointForm\(targetChannel, savedGroup\)/);
+  assert.match(source, /continueToEndpoint=\{initialSetupChannelID === credentialGroupFormChannel\?\.id\}/);
+  assert.match(source, /\{isEdit \? '保存修改' : '下一步'\}/);
+  assert.match(source, /<Button variant="primary" icon=\{isEdit \? Pencil : undefined\}/);
+  assert.match(source, /\{isEdit \? '保存分组' : \(continueToEndpoint \|\| copyEndpointsEnabled \? '下一步' : '添加分组'\)\}/);
+});
+
+test('Codex ordinary credential group creation does not enter endpoint setup', () => {
+  assert.match(source, /const openCreateCredentialGroupForm = \(channel, isInitialSetup = false\) => \{\s*setInitialSetupChannelID\(isInitialSetup \? channel\?\.id \?\? null : null\)/);
+  assert.match(source, /const openEditCredentialGroupForm = \(channel, group\) => \{\s*setInitialSetupChannelID\(null\)/);
+  assert.match(source, /const closeCredentialGroupForm = \(\) => \{[\s\S]*?setInitialSetupChannelID\(null\)/);
+});
+
+test('Codex credential group and endpoint saves separate mutation errors from refresh errors', () => {
+  const groupStart = source.indexOf('const handleSaveCredentialGroup = async');
+  const groupEnd = source.indexOf('const handleDeleteCredentialGroup', groupStart);
+  const groupHandler = source.slice(groupStart, groupEnd);
+  assert.ok(groupHandler.indexOf('closeCredentialGroupForm();') < groupHandler.indexOf('await fetchData({ silent: true, throwOnError: true });'));
+  assert.match(groupHandler, /setCredentialGroupFormError\(getErrorMessage\(err, '保存凭证分组失败'\)\);\s*return;/);
+  assert.match(groupHandler, /setError\(`凭证分组已保存，但列表刷新失败/);
+
+  const endpointStart = source.indexOf('const handleSaveEndpoint = async');
+  const endpointEnd = source.indexOf('const handleActivateEndpoint', endpointStart);
+  const endpointHandler = source.slice(endpointStart, endpointEnd);
+  assert.equal((endpointHandler.match(/await fetchData\(\{ silent: true, throwOnError: true \}\);/g) || []).length, 2);
+  assert.equal((endpointHandler.match(/setError\(`端点已保存，但列表刷新失败/g) || []).length, 2);
+  assert.match(endpointHandler, /setEndpointFormError\(getErrorMessage\(err, '更新端点失败'\)\);\s*return;/);
+  assert.match(endpointHandler, /setEndpointFormError\(getErrorMessage\(err, '保存端点失败'\)\);\s*return;/);
+});
+
+test('Codex creation flow does not silently stop when channel refresh fails', () => {
+  assert.match(source, /let channelCreated = false/);
+  assert.match(source, /channelCreated = true/);
+  assert.match(source, /fetchData\(\{ silent: true, throwOnError: true \}\)/);
+  assert.match(source, /if \(!createdChannel\) \{\s*throw new Error\('渠道已创建，但刷新后未找到该渠道/);
+  assert.match(source, /if \(throwOnError\) throw err/);
+  assert.match(source, /if \(channelCreated\) \{[\s\S]*?closeChannelForm\(\)[\s\S]*?setError\(/);
+});
+
+test('Codex channels without credential groups do not expose endpoint actions', () => {
+  assert.match(source, /<div hidden=\{!selectedCredentialHasCredential\} className="flex flex-shrink-0 items-center gap-1">[\s\S]*?添加端点[\s\S]*?<\/div>/);
+  assert.match(source, /const selectedCredentialHasCredential = Boolean\(selectedCredentialGroup\) &&[\s\S]*?hasCodexCredential\(selectedCredentialGroup, channel\)/);
+  assert.match(source, /const targetCredentialGroup = credentialGroup \|\| getDefaultCredentialGroup\(channel\);[\s\S]*?if \(!channel \|\| !targetCredentialGroup \|\| !hasCodexCredential\(targetCredentialGroup, channel\)\) return;/);
+  assert.match(source, /请先添加凭证分组并配置 API Key，再添加端点。/);
+});
+
+test('Codex credential gating covers mapped and legacy API key fields', () => {
+  assert.match(source, /const hasCodexCredential = \(\.\.\.sources\)/);
+  assert.match(source, /source\?\.apiKey/);
+  assert.match(source, /source\?\.api_key/);
+  assert.match(source, /source\?\.apiKeyMasked/);
+  assert.match(source, /source\?\.api_key_masked/);
+  assert.match(source, /hasCodexCredential\(channel\)/);
+  assert.match(source, /const selectedCredentialHasCredential/);
 });
 
 test('credential group bulk controls and endpoint rows use current-state repeat and shield icons', () => {

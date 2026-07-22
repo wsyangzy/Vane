@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -25,6 +26,14 @@ type EndpointService struct {
 	credentialGroupStore store.ClaudeCredentialGroupStore
 	activationMu         sync.Mutex
 }
+
+type endpointTransactionStarter interface {
+	BeginTx(context.Context) (*sql.Tx, error)
+}
+
+var endpointPriorityMu sync.Mutex
+
+const endpointRecoveryTimeout = 3 * time.Second
 
 // NewEndpointService 创建端点服务实例
 func NewEndpointService(
@@ -74,56 +83,90 @@ func (s *EndpointService) CreateEndpoint(ctx context.Context, record *store.Endp
 		return nil, fmt.Errorf("同一凭证分组内已存在相同的端点 URL，请修改 URL 或选择其他凭证分组")
 	}
 
-	explicitPriority := record.Priority >= 0
-	// 优先级自动递增
-	if record.Priority < 0 {
-		maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取凭证分组最大优先级失败: %v，使用默认值0", err))
-			record.Priority = 0
-		} else {
-			record.Priority = maxPriority + 1
-		}
-		slog.Info(fmt.Sprintf("🔢 [EndpointService] 自动分配优先级: %s -> %d", record.Name, record.Priority))
-	}
-	if explicitPriority {
-		conflicting, err := s.store.GetByChannelCredentialGroupAndPriority(ctx, record.Channel, record.CredentialGroupID, record.Priority)
-		if err != nil {
-			return nil, fmt.Errorf("检查端点优先级冲突失败: %w", err)
-		}
-		if conflicting != nil {
-			maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
+	working := *record
+	var created *store.EndpointRecord
+	var moved *store.EndpointRecord
+	var movedPreviousPriority int
+	err := s.withPriorityTransaction(ctx, func(endpointStore store.EndpointStore) error {
+		if working.Priority < 0 {
+			maxPriority, err := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, working.Channel, working.CredentialGroupID)
 			if err != nil {
-				return nil, fmt.Errorf("获取凭证分组最大优先级失败: %w", err)
+				return fmt.Errorf("获取凭证分组最大优先级失败: %w", err)
 			}
-			conflicting.Priority = maxPriority + 1
-			if err := s.store.UpdateByID(ctx, conflicting); err != nil {
-				return nil, fmt.Errorf("端点优先级替换失败: %w", err)
+			working.Priority = maxPriority + 1
+			slog.Info(fmt.Sprintf("🔢 [EndpointService] 自动分配优先级: %s -> %d", working.Name, working.Priority))
+		}
+		if working.Priority >= 0 {
+			conflicting, err := endpointStore.GetByChannelCredentialGroupAndPriority(ctx, working.Channel, working.CredentialGroupID, working.Priority)
+			if err != nil {
+				return fmt.Errorf("检查端点优先级冲突失败: %w", err)
 			}
-			conflictingCfg := s.recordToConfig(conflicting)
-			conflictingKey := EndpointRuntimeKey(conflicting)
-			if err := s.manager.UpdateEndpointConfig(conflictingKey, conflictingCfg); err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新冲突端点运行时配置失败: %v", err))
+			if conflicting != nil {
+				maxPriority, err := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, working.Channel, working.CredentialGroupID)
+				if err != nil {
+					return fmt.Errorf("获取凭证分组最大优先级失败: %w", err)
+				}
+				movedCopy := *conflicting
+				movedPreviousPriority = movedCopy.Priority
+				movedCopy.Priority = maxPriority + 1
+				if err := endpointStore.UpdateByID(ctx, &movedCopy); err != nil {
+					return fmt.Errorf("端点优先级替换失败: %w", err)
+				}
+				moved = &movedCopy
 			}
 		}
-	}
-
-	// 保存到数据库
-	created, err := s.store.Create(ctx, record)
+		var err error
+		created, err = endpointStore.Create(ctx, &working)
+		if err != nil {
+			return fmt.Errorf("保存端点到数据库失败: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("保存端点到数据库失败: %w", err)
+		return nil, err
 	}
+	*record = working
 
 	// 转换为配置并添加到管理器
 	cfg := s.recordToConfig(created)
+	if s.manager == nil {
+		return nil, s.rollbackCreatedEndpoint(ctx, created, moved, movedPreviousPriority, fmt.Errorf("端点管理器未初始化"))
+	}
 	if err := s.manager.AddEndpoint(cfg); err != nil {
-		// 回滚数据库操作
-		_ = s.store.DeleteByID(ctx, created.ID)
-		return nil, fmt.Errorf("添加端点到管理器失败: %w", err)
+		return nil, s.rollbackCreatedEndpoint(ctx, created, moved, movedPreviousPriority, fmt.Errorf("添加端点到管理器失败: %w", err))
+	}
+	if moved != nil {
+		conflictingCfg := s.recordToConfig(moved)
+		if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(moved), conflictingCfg); err != nil {
+			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新冲突端点运行时配置失败: %v", err))
+		}
 	}
 
 	slog.Info(fmt.Sprintf("✅ [EndpointService] 创建端点成功: %s (优先级: %d)", record.Name, record.Priority))
 	return created, nil
+}
+
+// rollbackCreatedEndpoint restores the database state after the runtime manager
+// rejected a newly-created endpoint. Priority movement and endpoint creation
+// are committed together, so both records must be compensated together here.
+func (s *EndpointService) rollbackCreatedEndpoint(ctx context.Context, created, moved *store.EndpointRecord, movedPreviousPriority int, cause error) error {
+	rollbackErrors := make([]string, 0, 2)
+	if created != nil && s.store != nil {
+		if err := s.store.DeleteByID(ctx, created.ID); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Sprintf("删除已创建端点失败: %v", err))
+		}
+	}
+	if moved != nil && s.store != nil {
+		restored := *moved
+		restored.Priority = movedPreviousPriority
+		if err := s.store.UpdateByID(ctx, &restored); err != nil {
+			rollbackErrors = append(rollbackErrors, fmt.Sprintf("恢复冲突端点优先级失败: %v", err))
+		}
+	}
+	if len(rollbackErrors) > 0 {
+		return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrors, "; "))
+	}
+	return cause
 }
 
 // GetEndpoint 获取端点详情
@@ -212,49 +255,7 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 	}
 
 	scopeChanged := record.Channel != existing.Channel || record.CredentialGroupID != existing.CredentialGroupID
-	// 渠道或凭证分组变更时，自动调整优先级为目标分组的下一个可用值。
-	if scopeChanged {
-		maxPriority, err := s.store.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 获取目标凭证分组最大优先级失败: %v", err))
-			maxPriority = 0
-		}
-		newPriority := maxPriority + 1
-		slog.Info(fmt.Sprintf("🔄 [EndpointService] 端点归属变更: %s/%d -> %s/%d，优先级自动调整: %d -> %d",
-			existing.Channel, existing.CredentialGroupID, record.Channel, record.CredentialGroupID, record.Priority, newPriority))
-		record.Priority = newPriority
-	}
-
-	// 优先级冲突检测与对调
-	// 仅当优先级发生变化且仍在同一凭证分组内时触发
-	if record.Priority != existing.Priority && !scopeChanged {
-		conflicting, err := s.store.GetByChannelCredentialGroupAndPriority(ctx, record.Channel, record.CredentialGroupID, record.Priority)
-		if err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 检查优先级冲突失败: %v", err))
-		} else if conflicting != nil && conflicting.ID != record.ID {
-			// 存在冲突，执行优先级对调
-			oldPriority := existing.Priority
-			slog.Info(fmt.Sprintf("🔄 [EndpointService] 优先级冲突检测: %s(ID:%d, 新优先级:%d) 与 %s(ID:%d, 当前优先级:%d)，执行对调",
-				record.Name, record.ID, record.Priority,
-				conflicting.Name, conflicting.ID, conflicting.Priority))
-
-			// 先更新冲突端点的优先级为原端点的旧优先级
-			conflicting.Priority = oldPriority
-			if err := s.store.UpdateByID(ctx, conflicting); err != nil {
-				return fmt.Errorf("优先级对调失败（更新冲突端点）: %w", err)
-			}
-
-			// 同步冲突端点到运行时管理器
-			conflictingCfg := s.recordToConfig(conflicting)
-			conflictingKey := EndpointRuntimeKey(conflicting)
-			if err := s.manager.UpdateEndpointConfig(conflictingKey, conflictingCfg); err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新冲突端点运行时配置失败: %v", err))
-			}
-
-			slog.Info(fmt.Sprintf("✅ [EndpointService] 优先级对调完成: %s -> %d, %s -> %d",
-				conflicting.Name, conflicting.Priority, record.Name, record.Priority))
-		}
-	}
+	activeEndpointSwitched := false
 
 	if existing.Enabled && !record.FailoverEnabled {
 		nextEndpoint, err := s.findNextFailoverEndpoint(ctx, existing.Channel, existing.ID)
@@ -267,20 +268,75 @@ func (s *EndpointService) UpdateEndpoint(ctx context.Context, record *store.Endp
 		if _, err := s.ActivateEndpointByID(ctx, nextEndpoint.ID); err != nil {
 			return fmt.Errorf("切换当前路由端点失败: %w", err)
 		}
+		activeEndpointSwitched = true
 		record.Enabled = false
 	}
 
-	// 更新数据库（按 ID）
-	if err := s.store.UpdateByID(ctx, record); err != nil {
-		return fmt.Errorf("更新数据库失败: %w", err)
+	var moved *store.EndpointRecord
+	err = s.withPriorityTransaction(ctx, func(endpointStore store.EndpointStore) error {
+		// 目标分组的尾部优先级必须和移动写入处于同一事务，避免并发移动读取到同一个尾部值。
+		if scopeChanged {
+			maxPriority, err := endpointStore.GetMaxPriorityByChannelCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
+			if err != nil {
+				return fmt.Errorf("获取目标凭证分组最大优先级失败: %w", err)
+			}
+			newPriority := maxPriority + 1
+			slog.Info(fmt.Sprintf("🔄 [EndpointService] 端点归属变更: %s/%d -> %s/%d，优先级自动调整: %d -> %d",
+				existing.Channel, existing.CredentialGroupID, record.Channel, record.CredentialGroupID, record.Priority, newPriority))
+			record.Priority = newPriority
+		}
+		if record.Priority != existing.Priority && !scopeChanged {
+			conflicting, err := endpointStore.GetByChannelCredentialGroupAndPriority(ctx, record.Channel, record.CredentialGroupID, record.Priority)
+			if err != nil {
+				return fmt.Errorf("检查优先级冲突失败: %w", err)
+			}
+			if conflicting != nil && conflicting.ID != record.ID {
+				oldPriority := existing.Priority
+				movedCopy := *conflicting
+				movedCopy.Priority = oldPriority
+				if err := endpointStore.UpdateByID(ctx, &movedCopy); err != nil {
+					return fmt.Errorf("优先级对调失败（更新冲突端点）: %w", err)
+				}
+				moved = &movedCopy
+			}
+		}
+		if err := endpointStore.UpdateByID(ctx, record); err != nil {
+			return fmt.Errorf("更新数据库失败: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		if activeEndpointSwitched {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), endpointRecoveryTimeout)
+			_, rollbackErr := s.ActivateEndpointByID(rollbackCtx, existing.ID)
+			cancel()
+			if rollbackErr != nil {
+				return fmt.Errorf("%w；恢复原当前路由端点失败: %v", err, rollbackErr)
+			}
+		}
+		return err
 	}
 
-	// 更新运行时管理器
-	cfg := s.recordToConfig(record)
-	oldKey := EndpointRuntimeKey(existing)
-	if err := s.manager.UpdateEndpointConfig(oldKey, cfg); err != nil {
-		slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %v", err))
-		// 不回滚数据库，下次重启会同步
+	runtimeErrors := make([]string, 0, 2)
+	if moved != nil && s.manager != nil {
+		conflictingCfg := s.recordToConfig(moved)
+		if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(moved), conflictingCfg); err != nil {
+			runtimeErrors = append(runtimeErrors, fmt.Sprintf("更新冲突端点运行时配置失败: %v", err))
+		}
+	}
+
+	// 更新运行时管理器（单元测试/降级模式可能暂时没有管理器）
+	if s.manager != nil {
+		cfg := s.recordToConfig(record)
+		oldKey := EndpointRuntimeKey(existing)
+		if err := s.manager.UpdateEndpointConfig(oldKey, cfg); err != nil {
+			runtimeErrors = append(runtimeErrors, fmt.Sprintf("更新端点运行时配置失败: %v", err))
+		}
+	}
+	if len(runtimeErrors) > 0 {
+		if err := s.recoverRuntimeFromDatabase(fmt.Errorf("%s", strings.Join(runtimeErrors, "; "))); err != nil {
+			return err
+		}
 	}
 
 	slog.Info(fmt.Sprintf("✅ [EndpointService] 更新端点成功: %s (优先级: %d)", record.Name, record.Priority))
@@ -317,9 +373,34 @@ func (s *EndpointService) findNextFailoverEndpoint(ctx context.Context, channel 
 	return filtered[0], nil
 }
 
+func (s *EndpointService) withPriorityTransaction(ctx context.Context, fn func(store.EndpointStore) error) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("端点存储服务未启用")
+	}
+	endpointPriorityMu.Lock()
+	defer endpointPriorityMu.Unlock()
+
+	starter, ok := s.store.(endpointTransactionStarter)
+	if !ok {
+		return fn(s.store)
+	}
+	tx, err := starter.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("开启端点优先级事务失败: %w", err)
+	}
+	txStore := s.store.WithTx(tx)
+	if err := fn(txStore); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("提交端点优先级事务失败: %w", err)
+	}
+	return nil
+}
+
 // DeleteEndpoint 删除端点
-// 1. 从运行时管理器移除
-// 2. 从数据库删除
 func (s *EndpointService) DeleteEndpoint(ctx context.Context, name string) error {
 	// 验证端点存在
 	existing, err := s.store.Get(ctx, name)
@@ -330,19 +411,7 @@ func (s *EndpointService) DeleteEndpoint(ctx context.Context, name string) error
 		return fmt.Errorf("端点 '%s' 不存在", name)
 	}
 
-	// 先从运行时管理器移除
-	if err := s.manager.RemoveEndpoint(EndpointRuntimeKey(existing)); err != nil {
-		slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 从管理器移除端点失败: %v", err))
-		// 继续删除数据库记录
-	}
-
-	// 从数据库删除
-	if err := s.store.DeleteByID(ctx, existing.ID); err != nil {
-		return fmt.Errorf("从数据库删除失败: %w", err)
-	}
-
-	slog.Info(fmt.Sprintf("✅ [EndpointService] 删除端点成功: %s", name))
-	return nil
+	return s.deleteEndpointRecord(ctx, existing)
 }
 
 // DeleteEndpointByID 删除端点（按ID，避免同名歧义）
@@ -358,16 +427,65 @@ func (s *EndpointService) DeleteEndpointByID(ctx context.Context, id int64) erro
 		return fmt.Errorf("端点不存在: %d", id)
 	}
 
-	// 先从运行时管理器移除
-	if err := s.manager.RemoveEndpoint(EndpointRuntimeKey(existing)); err != nil {
-		slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 从管理器移除端点失败: %v", err))
+	return s.deleteEndpointRecord(ctx, existing)
+}
+
+func (s *EndpointService) deleteEndpointRecord(ctx context.Context, existing *store.EndpointRecord) error {
+	s.activationMu.Lock()
+	defer s.activationMu.Unlock()
+
+	current, err := s.store.GetByID(ctx, existing.ID)
+	if err != nil {
+		return fmt.Errorf("查询端点失败: %w", err)
+	}
+	if current == nil {
+		return fmt.Errorf("端点不存在: %d", existing.ID)
 	}
 
-	if err := s.store.DeleteByID(ctx, id); err != nil {
+	previousActive, err := s.store.ListEnabled(ctx)
+	if err != nil {
+		return fmt.Errorf("获取当前活跃端点失败: %w", err)
+	}
+	activeSwitched := false
+	if current.Enabled && len(previousActive) == 1 {
+		nextEndpoint, err := s.findNextFailoverEndpoint(ctx, current.Channel, current.ID)
+		if err != nil {
+			return err
+		}
+		if nextEndpoint != nil {
+			if _, err := s.activateEndpointByIDLocked(ctx, nextEndpoint.ID); err != nil {
+				return fmt.Errorf("删除当前路由端点前切换后续端点失败: %w", err)
+			}
+			activeSwitched = true
+		}
+	}
+
+	if err := s.store.DeleteByID(ctx, existing.ID); err != nil {
+		if activeSwitched {
+			if restoreErr := s.restoreActiveSelectionLocked(previousActive); restoreErr != nil {
+				return fmt.Errorf("从数据库删除失败: %w；恢复原当前路由端点失败: %v", err, restoreErr)
+			}
+		}
 		return fmt.Errorf("从数据库删除失败: %w", err)
 	}
-
+	if s.manager != nil {
+		if err := s.manager.RemoveEndpoint(EndpointRuntimeKey(current)); err != nil {
+			if recoveryErr := s.recoverRuntimeFromDatabase(fmt.Errorf("从管理器移除端点失败: %w", err)); recoveryErr != nil {
+				return recoveryErr
+			}
+		}
+	}
 	slog.Info(fmt.Sprintf("✅ [EndpointService] 删除端点成功: %s", existing.Name))
+	return nil
+}
+
+func (s *EndpointService) recoverRuntimeFromDatabase(cause error) error {
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), endpointRecoveryTimeout)
+	defer cancel()
+	if err := s.SyncFromDatabase(recoveryCtx); err != nil {
+		return fmt.Errorf("%w；从数据库重新同步运行时失败: %v", cause, err)
+	}
+	slog.Warn("⚠️ [EndpointService] 增量更新运行时失败，已从数据库重新同步", "error", cause)
 	return nil
 }
 
@@ -391,8 +509,11 @@ func (s *EndpointService) ActivateChannel(ctx context.Context, channel string) e
 	s.activationMu.Lock()
 	defer s.activationMu.Unlock()
 
-	previousChannel, err := s.getPersistedActiveChannelLocked(ctx)
+	previousActive, err := s.store.ListEnabled(ctx)
 	if err != nil {
+		return fmt.Errorf("获取当前活跃渠道失败: %w", err)
+	}
+	if _, err := activeChannelFromRecords(previousActive); err != nil {
 		return err
 	}
 	if err := s.syncActiveChannelLocked(ctx, channel); err != nil {
@@ -401,10 +522,11 @@ func (s *EndpointService) ActivateChannel(ctx context.Context, channel string) e
 
 	// 手动激活必须记录手动操作时间，供挂起请求只响应真实用户操作。
 	if err := s.manager.ManualActivateGroup(channel); err != nil {
-		if previousChannel != "" {
-			_ = s.syncActiveChannelLocked(ctx, previousChannel)
+		cause := fmt.Errorf("激活渠道失败: %w", err)
+		if restoreErr := s.restoreActiveSelectionLocked(previousActive); restoreErr != nil {
+			return fmt.Errorf("%w；恢复原活跃渠道失败: %v", cause, restoreErr)
 		}
-		return fmt.Errorf("激活渠道失败: %w", err)
+		return cause
 	}
 
 	slog.Info(fmt.Sprintf("✅ [EndpointService] 已激活渠道: %s", channel))
@@ -449,12 +571,51 @@ func (s *EndpointService) ActivateChannelForFailover(ctx context.Context, channe
 	return true, nil
 }
 
+// EnsureActiveChannelParticipates keeps the active runtime channel eligible when cross-channel failover is enabled.
+func (s *EndpointService) EnsureActiveChannelParticipates(ctx context.Context, channelService *ChannelService) (bool, error) {
+	if s == nil || s.manager == nil || channelService == nil {
+		return false, nil
+	}
+
+	s.activationMu.Lock()
+	defer s.activationMu.Unlock()
+
+	groupManager := s.manager.GetGroupManager()
+	if groupManager == nil {
+		return false, nil
+	}
+	activeChannel, _ := groupManager.ActiveGroupSnapshot()
+	if activeChannel == "" {
+		var err error
+		activeChannel, err = s.getPersistedActiveChannelLocked(ctx)
+		if err != nil {
+			return false, err
+		}
+	}
+	if activeChannel == "" {
+		return false, nil
+	}
+
+	runtimeResumed := !groupManager.IsChannelFailoverEnabled(activeChannel)
+	persistedResumed, err := channelService.EnsureActiveChannelParticipates(ctx, activeChannel)
+	if err != nil {
+		return false, err
+	}
+	if runtimeResumed || persistedResumed {
+		s.manager.SetSingleChannelFailoverEnabled(activeChannel, true)
+	}
+	return runtimeResumed || persistedResumed, nil
+}
+
 func (s *EndpointService) getPersistedActiveChannelLocked(ctx context.Context) (string, error) {
 	records, err := s.store.ListEnabled(ctx)
 	if err != nil {
 		return "", fmt.Errorf("获取当前活跃渠道失败: %w", err)
 	}
+	return activeChannelFromRecords(records)
+}
 
+func activeChannelFromRecords(records []*store.EndpointRecord) (string, error) {
 	activeChannel := ""
 	for _, record := range records {
 		if record == nil || record.Channel == "" {
@@ -469,6 +630,34 @@ func (s *EndpointService) getPersistedActiveChannelLocked(ctx context.Context) (
 		}
 	}
 	return activeChannel, nil
+}
+
+func (s *EndpointService) restoreActiveSelectionLocked(records []*store.EndpointRecord) error {
+	recoveryCtx, cancel := context.WithTimeout(context.Background(), endpointRecoveryTimeout)
+	defer cancel()
+
+	if len(records) == 0 {
+		return fmt.Errorf("没有可恢复的原活跃端点")
+	}
+	channel, err := activeChannelFromRecords(records)
+	if err != nil {
+		return err
+	}
+	if len(records) == 1 {
+		if err := s.store.SetActiveEndpoint(recoveryCtx, records[0].ID); err != nil {
+			return fmt.Errorf("恢复原当前路由端点失败: %w", err)
+		}
+	} else {
+		if err := s.store.SetActiveChannel(recoveryCtx, channel); err != nil {
+			return fmt.Errorf("恢复原活跃渠道失败: %w", err)
+		}
+	}
+	if s.manager != nil {
+		if err := s.SyncFromDatabase(recoveryCtx); err != nil {
+			return fmt.Errorf("恢复原活跃状态后同步运行时失败: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *EndpointService) syncActiveChannelLocked(ctx context.Context, channel string) error {
@@ -512,7 +701,10 @@ func (s *EndpointService) syncActiveChannelLocked(ctx context.Context, channel s
 func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*store.EndpointRecord, error) {
 	s.activationMu.Lock()
 	defer s.activationMu.Unlock()
+	return s.activateEndpointByIDLocked(ctx, id)
+}
 
+func (s *EndpointService) activateEndpointByIDLocked(ctx context.Context, id int64) (*store.EndpointRecord, error) {
 	if id <= 0 {
 		return nil, fmt.Errorf("端点ID不能为空")
 	}
@@ -527,8 +719,11 @@ func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*
 	if !target.FailoverEnabled {
 		return nil, fmt.Errorf("端点未参与渠道内故障转移，不能设为当前路由端点")
 	}
-	previousChannel, err := s.getPersistedActiveChannelLocked(ctx)
+	previousActive, err := s.store.ListEnabled(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("获取当前活跃端点失败: %w", err)
+	}
+	if _, err := activeChannelFromRecords(previousActive); err != nil {
 		return nil, err
 	}
 
@@ -540,6 +735,7 @@ func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*
 		return nil, err
 	}
 
+	runtimeErrors := make([]string, 0)
 	for _, record := range records {
 		if record == nil {
 			continue
@@ -549,7 +745,7 @@ func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*
 		if s.manager != nil {
 			cfg := s.recordToConfig(record)
 			if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(record), cfg); err != nil {
-				slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %s - %v", record.Name, err))
+				runtimeErrors = append(runtimeErrors, fmt.Sprintf("更新运行时管理器失败 %s: %v", record.Name, err))
 			}
 		}
 
@@ -557,13 +753,22 @@ func (s *EndpointService) ActivateEndpointByID(ctx context.Context, id int64) (*
 			target = record
 		}
 	}
+	if len(runtimeErrors) > 0 {
+		if recoveryErr := s.recoverRuntimeFromDatabase(fmt.Errorf("%s", strings.Join(runtimeErrors, "; "))); recoveryErr != nil {
+			if restoreErr := s.restoreActiveSelectionLocked(previousActive); restoreErr != nil {
+				return nil, fmt.Errorf("%w；恢复原活跃状态失败: %v", recoveryErr, restoreErr)
+			}
+			return nil, recoveryErr
+		}
+	}
 
 	if s.manager != nil {
 		if err := s.manager.ManualActivateGroup(target.Channel); err != nil {
-			if previousChannel != "" {
-				_ = s.syncActiveChannelLocked(ctx, previousChannel)
+			cause := fmt.Errorf("激活渠道失败: %w", err)
+			if restoreErr := s.restoreActiveSelectionLocked(previousActive); restoreErr != nil {
+				return nil, fmt.Errorf("%w；恢复原活跃状态失败: %v", cause, restoreErr)
 			}
-			return nil, fmt.Errorf("激活渠道失败: %w", err)
+			return nil, cause
 		}
 	}
 
@@ -706,6 +911,12 @@ func (s *EndpointService) ImportFromYAML(ctx context.Context, endpoints []config
 // SyncFromDatabase 从数据库同步端点到管理器
 // Desktop: 加载所有端点参与健康检查，并同步 enabled=true 的端点到组激活状态
 func (s *EndpointService) SyncFromDatabase(ctx context.Context) error {
+	if s == nil || s.store == nil {
+		return fmt.Errorf("端点存储服务未启用")
+	}
+	if s.manager == nil {
+		return fmt.Errorf("端点管理器未初始化")
+	}
 	// 获取所有端点（包括 enabled=false 的）
 	records, err := s.store.List(ctx)
 	if err != nil {
@@ -747,19 +958,18 @@ func (s *EndpointService) SyncFromDatabase(ctx context.Context) error {
 				if record.Enabled && record.Channel != selectedChannel {
 					record.Enabled = false
 					if err := s.store.Update(ctx, record); err != nil {
-						slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 修正禁用端点失败: %s - %v", record.Name, err))
-						continue
+						return fmt.Errorf("修正禁用端点失败 %s: %w", record.Name, err)
 					}
 					cfg := s.recordToConfig(record)
 					if err := s.manager.UpdateEndpointConfig(EndpointRuntimeKey(record), cfg); err != nil {
-						slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 更新运行时管理器失败: %s - %v", record.Name, err))
+						return fmt.Errorf("更新运行时管理器失败 %s: %w", record.Name, err)
 					}
 				}
 			}
 		}
 
 		if err := s.manager.ManualActivateGroup(selectedChannel); err != nil {
-			slog.Warn(fmt.Sprintf("⚠️ [EndpointService] 激活渠道失败: %s - %v", selectedChannel, err))
+			return fmt.Errorf("激活渠道失败 %s: %w", selectedChannel, err)
 		} else {
 			slog.Info(fmt.Sprintf("✅ [EndpointService] 已激活渠道: %s", selectedChannel))
 		}
@@ -961,30 +1171,32 @@ func (s *EndpointService) ensureEndpointCredentialGroup(ctx context.Context, rec
 	if s.credentialGroupStore == nil || record == nil {
 		return nil
 	}
+	var group *store.ClaudeCredentialGroupRecord
 	if record.CredentialGroupID > 0 {
-		return s.validateCredentialGroup(ctx, record.Channel, record.CredentialGroupID)
-	}
-	group, err := s.credentialGroupStore.GetDefaultByChannel(ctx, record.Channel)
-	if err != nil {
-		return err
-	}
-	if group == nil {
-		group, err = s.credentialGroupStore.Create(ctx, &store.ClaudeCredentialGroupRecord{
-			Channel:                       record.Channel,
-			Name:                          DefaultClaudeCredentialGroupName,
-			Token:                         record.Token,
-			ApiKey:                        record.ApiKey,
-			IsDefault:                     true,
-			CostMultiplier:                normalizePositiveMultiplier(record.CostMultiplier),
-			InputCostMultiplier:           normalizePositiveMultiplier(record.InputCostMultiplier),
-			OutputCostMultiplier:          normalizePositiveMultiplier(record.OutputCostMultiplier),
-			CacheCreationCostMultiplier:   normalizePositiveMultiplier(record.CacheCreationCostMultiplier),
-			CacheCreationCostMultiplier1h: normalizePositiveMultiplier(record.CacheCreationCostMultiplier1h),
-			CacheReadCostMultiplier:       normalizePositiveMultiplier(record.CacheReadCostMultiplier),
-		})
+		var err error
+		group, err = s.credentialGroupStore.GetByID(ctx, record.CredentialGroupID)
 		if err != nil {
 			return err
 		}
+		if group == nil {
+			return fmt.Errorf("Claude 凭证分组不存在: %d", record.CredentialGroupID)
+		}
+		if group.Channel != record.Channel {
+			return fmt.Errorf("凭证分组不属于当前渠道")
+		}
+	} else {
+		var err error
+		group, err = s.credentialGroupStore.GetDefaultByChannel(ctx, record.Channel)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return fmt.Errorf("Claude 渠道 '%s' 尚未配置凭证分组，不能创建端点", record.Channel)
+		}
+	}
+	if strings.TrimSpace(group.Token) == "" && strings.TrimSpace(group.ApiKey) == "" &&
+		strings.TrimSpace(record.Token) == "" && strings.TrimSpace(record.ApiKey) == "" {
+		return fmt.Errorf("Claude 凭证分组 '%s' 尚未配置 Token 或 API Key，不能创建端点", group.Name)
 	}
 	record.CredentialGroupID = group.ID
 	record.CredentialGroupName = group.Name

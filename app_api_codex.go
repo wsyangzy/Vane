@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"ai-relay-forwarder/internal/providers/codex/proxy"
@@ -364,6 +365,8 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 	if channelService == nil {
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
 	}
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
 
 	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model, input.ModelMapping,
 		input.ReasoningEffort, input.Website, input.Enable1MContext)
@@ -372,15 +375,49 @@ func (a *App) CreateCodexChannel(input CreateCodexChannelInput) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	previousChannels, err := channelService.ListChannels(ctx)
+	if err != nil {
+		return fmt.Errorf("创建 Codex 渠道失败: 读取原渠道状态失败: %w", err)
+	}
+	channelSnapshots := make([]codexstore.CodexChannelRecord, 0, len(previousChannels))
+	for _, channel := range previousChannels {
+		if channel != nil {
+			channelSnapshots = append(channelSnapshots, *channel)
+		}
+	}
 
 	created, err := channelService.CreateChannel(ctx, record)
 	if err != nil {
 		return fmt.Errorf("创建 Codex 渠道失败: %w", err)
 	}
+	rollbackCreated := func(cause error) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		if err := channelService.DeleteChannelByID(rollbackCtx, created.ID); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("删除已创建渠道失败: %v", err))
+		} else {
+			for index := range channelSnapshots {
+				if err := channelService.RestoreChannel(rollbackCtx, &channelSnapshots[index]); err != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原渠道状态失败: %v", err))
+				}
+			}
+		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
+	}
 	if credentialGroupService != nil {
 		if _, err := credentialGroupService.EnsureDefaultGroup(ctx, created); err != nil {
-			return fmt.Errorf("创建 Codex 默认凭证分组失败: %w", err)
+			return rollbackCreated(fmt.Errorf("创建 Codex 默认凭证分组失败: %w", err))
 		}
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return rollbackCreated(fmt.Errorf("创建 Codex 渠道失败: 运行时未生效: %w", err))
 	}
 
 	if logger != nil {
@@ -402,6 +439,8 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 	if channelService == nil || endpointService == nil {
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
 	}
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
 
 	record := codexChannelInputToRecord(input.Name, input.ProviderType, input.ApiKey, input.Model, input.ModelMapping,
 		input.ReasoningEffort, input.Website, input.Enable1MContext)
@@ -422,36 +461,86 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 	} else {
 		record.FailoverEnabled = *input.FailoverEnabled
 	}
+	var previousDefaultGroup *codexstore.CodexCredentialGroupRecord
+	var previousPriorityConflict *codexstore.CodexChannelRecord
+	if record.Priority != previous.Priority {
+		channels, listErr := channelService.ListChannels(ctx)
+		if listErr != nil {
+			return fmt.Errorf("更新 Codex 渠道失败: 读取原渠道优先级失败: %w", listErr)
+		}
+		for _, channel := range channels {
+			if channel != nil && channel.ID != id && channel.Priority == record.Priority {
+				copy := *channel
+				previousPriorityConflict = &copy
+				break
+			}
+		}
+	}
+
+	rollbackChannel := func(cause error) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		if previousDefaultGroup != nil && credentialGroupService != nil {
+			if err := credentialGroupService.UpdateGroup(rollbackCtx, previousDefaultGroup.ID, previousDefaultGroup); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复默认凭证分组失败: %v", err))
+			}
+		}
+		if err := channelService.RestoreChannel(rollbackCtx, previous); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复渠道记录失败: %v", err))
+		}
+		if previousPriorityConflict != nil {
+			if err := channelService.RestoreChannel(rollbackCtx, previousPriorityConflict); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复冲突渠道优先级失败: %v", err))
+			}
+		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
+	}
 
 	if err := channelService.UpdateChannelByID(ctx, id, record); err != nil {
 		return fmt.Errorf("更新 Codex 渠道失败: %w", err)
 	}
 	if credentialGroupService != nil && record.ApiKey != "" {
-		if defaultGroup, groupErr := credentialGroupService.GetDefaultByChannelID(ctx, id); groupErr == nil && defaultGroup != nil && defaultGroup.ApiKey == previous.ApiKey {
+		defaultGroup, groupErr := credentialGroupService.GetDefaultByChannelID(ctx, id)
+		if groupErr != nil {
+			return rollbackChannel(fmt.Errorf("读取 Codex 默认凭证分组失败: %w", groupErr))
+		}
+		if defaultGroup != nil && defaultGroup.ApiKey == previous.ApiKey {
+			groupCopy := *defaultGroup
+			previousDefaultGroup = &groupCopy
 			defaultGroup.ApiKey = record.ApiKey
 			if err := credentialGroupService.UpdateGroup(ctx, defaultGroup.ID, defaultGroup); err != nil {
-				return fmt.Errorf("同步默认凭证分组失败: %w", err)
+				return rollbackChannel(fmt.Errorf("同步默认凭证分组失败: %w", err))
 			}
 		}
 	}
 
 	updated, err := channelService.GetChannelByID(ctx, id)
 	if err != nil {
-		return fmt.Errorf("读取更新后的 Codex 渠道失败: %w", err)
+		return rollbackChannel(fmt.Errorf("读取更新后的 Codex 渠道失败: %w", err))
+	}
+	if updated == nil {
+		return rollbackChannel(fmt.Errorf("读取更新后的 Codex 渠道失败: 渠道不存在: %d", id))
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return rollbackChannel(fmt.Errorf("更新 Codex 渠道失败: 运行时未生效: %w", err))
 	}
 
-	if updated != nil && updated.IsActive {
+	if updated.IsActive {
 		// 配置同步：把更新后的渠道+激活端点写回 config.toml
 		activeEndpoint, endpointErr := endpointService.GetActiveByChannelID(ctx, updated.ID)
 		if endpointErr != nil {
-			return fmt.Errorf("读取激活端点失败: %w", endpointErr)
+			return rollbackChannel(fmt.Errorf("读取激活端点失败: %w", endpointErr))
 		}
 		if activeEndpoint != nil {
 			if syncErr := a.syncActiveCodexChannelToConfig(updated, activeEndpoint, previous.Name); syncErr != nil {
-				rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer rollbackCancel()
-				_ = channelService.UpdateChannelByID(rollbackCtx, id, previous)
-				return fmt.Errorf("更新 Codex 渠道失败: 配置接管未生效: %w", syncErr)
+				return rollbackChannel(fmt.Errorf("更新 Codex 渠道失败: 配置接管未生效: %w", syncErr))
 			}
 		}
 	}
@@ -486,6 +575,10 @@ func (a *App) SetCodexChannelFailoverEnabled(id int64, enabled bool) error {
 	if target == nil {
 		return fmt.Errorf("Codex 渠道不存在: %d", id)
 	}
+	previousEndpoint, err := endpointService.GetActiveByChannelID(ctx, target.ID)
+	if err != nil {
+		return fmt.Errorf("读取当前 Codex 激活端点失败: %w", err)
+	}
 	if enabled || !target.IsActive {
 		if err := channelService.SetFailoverEnabled(ctx, id, enabled); err != nil {
 			return fmt.Errorf("更新 Codex 渠道故障转移状态失败: %w", err)
@@ -505,15 +598,26 @@ func (a *App) SetCodexChannelFailoverEnabled(id int64, enabled bool) error {
 	if nextEndpoint == nil {
 		return fmt.Errorf("暂停当前接管渠道失败: 候选渠道 '%s' 没有参与故障转移的端点", next.Name)
 	}
-	previousEndpoint, _ := endpointService.GetActiveByChannelID(ctx, target.ID)
 	rollback := func(cause error) error {
 		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer rollbackCancel()
-		_ = channelService.SetFailoverEnabled(rollbackCtx, target.ID, true)
-		_ = channelService.ActivateChannel(rollbackCtx, target.ID, false)
-		_ = a.reloadCodexEndpointManager()
+		var rollbackErrs []string
+		if err := channelService.SetFailoverEnabled(rollbackCtx, target.ID, true); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原渠道参与状态失败: %v", err))
+		}
+		if err := channelService.ActivateChannel(rollbackCtx, target.ID, false); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原激活渠道失败: %v", err))
+		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+		}
 		if previousEndpoint != nil {
-			_ = a.syncActiveCodexChannelToConfig(target, previousEndpoint, next.Name)
+			if err := a.syncActiveCodexChannelToConfig(target, previousEndpoint, next.Name); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原 Codex 配置失败: %v", err))
+			}
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
 		}
 		return cause
 	}
@@ -549,6 +653,8 @@ func (a *App) DeleteCodexChannelByID(id int64) error {
 	if channelService == nil || endpointService == nil {
 		return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
 	}
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -561,27 +667,94 @@ func (a *App) DeleteCodexChannelByID(id int64) error {
 		return fmt.Errorf("Codex 渠道不存在: %d", id)
 	}
 
-	if err := channelService.DeleteChannelByID(ctx, id); err != nil {
-		return fmt.Errorf("删除 Codex 渠道失败: %w", err)
-	}
-
-	if target.IsActive {
-		nextChannel, _ := channelService.GetActiveChannel(ctx)
-		var nextEndpoint *codexstore.CodexEndpointRecord
-		if nextChannel != nil {
-			nextEndpoint, err = endpointService.GetActiveByChannelID(ctx, nextChannel.ID)
-			if err != nil {
-				if logger != nil {
-					logger.Warn("⚠️ 读取后续激活端点失败", "error", err)
+	var previousEndpoint *codexstore.CodexEndpointRecord
+	var nextChannel *codexstore.CodexChannelRecord
+	var nextEndpoint *codexstore.CodexEndpointRecord
+	var nextPreviousEndpoint *codexstore.CodexEndpointRecord
+	configSynced := false
+	prepared := false
+	rollbackPrepared := func(cause error) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		routeRestored := !prepared
+		if prepared {
+			routeRestored = true
+			if err := channelService.SetFailoverEnabled(rollbackCtx, target.ID, target.FailoverEnabled); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原渠道参与状态失败: %v", err))
+				routeRestored = false
+			}
+			if routeRestored {
+				if err := channelService.ActivateChannel(rollbackCtx, target.ID, false); err != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原激活渠道失败: %v", err))
+					routeRestored = false
 				}
 			}
-		}
-
-		if syncErr := a.removeCodexChannelConfig(target.Name, nextChannel, nextEndpoint); syncErr != nil {
-			if logger != nil {
-				logger.Warn("⚠️ 同步 Codex 配置失败", "error", syncErr, "deleted_channel", target.Name)
+			if routeRestored && nextChannel != nil {
+				if nextPreviousEndpoint != nil {
+					if err := endpointService.RestoreEndpoint(rollbackCtx, nextPreviousEndpoint); err != nil {
+						rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复后续渠道原激活端点失败: %v", err))
+					}
+				} else if err := endpointService.ClearActiveByChannel(rollbackCtx, nextChannel.ID); err != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("清空后续渠道临时激活端点失败: %v", err))
+				}
+			}
+			if err := a.reloadCodexEndpointManager(); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+				routeRestored = false
 			}
 		}
+		if configSynced && previousEndpoint != nil && routeRestored {
+			if err := a.syncActiveCodexChannelToConfig(target, previousEndpoint, ""); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原 Codex 配置失败: %v", err))
+			}
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
+	}
+	if target.IsActive {
+		previousEndpoint, err = endpointService.GetActiveByChannelID(ctx, target.ID)
+		if err != nil {
+			return fmt.Errorf("读取当前 Codex 激活端点失败: %w", err)
+		}
+		nextChannel, nextEndpoint, err = channelService.GetChannelDeletionSuccessor(ctx, id)
+		if err != nil {
+			return fmt.Errorf("读取删除后的候选 Codex 渠道失败: %w", err)
+		}
+		if nextChannel != nil {
+			nextPreviousEndpoint, err = endpointService.GetActiveByChannelID(ctx, nextChannel.ID)
+			if err != nil {
+				return fmt.Errorf("读取后续 Codex 原激活端点失败: %w", err)
+			}
+		}
+		if err := a.removeCodexChannelConfig(target.Name, nextChannel, nextEndpoint); err != nil {
+			return fmt.Errorf("删除 Codex 渠道失败: 配置同步未生效: %w", err)
+		}
+		configSynced = true
+		nextChannelID := int64(0)
+		nextEndpointID := int64(0)
+		if nextChannel != nil {
+			nextChannelID = nextChannel.ID
+		}
+		if nextEndpoint != nil {
+			nextEndpointID = nextEndpoint.ID
+		}
+		if err := channelService.PrepareChannelDeletion(ctx, id, nextChannelID, nextEndpointID); err != nil {
+			return rollbackPrepared(fmt.Errorf("删除 Codex 渠道失败: 准备后续接管状态失败: %w", err))
+		}
+		prepared = true
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			return rollbackPrepared(fmt.Errorf("删除 Codex 渠道失败: 后续运行时未生效: %w", err))
+		}
+	}
+
+	if err := channelService.DeleteChannelByID(ctx, id); err != nil {
+		return rollbackPrepared(fmt.Errorf("删除 Codex 渠道失败: %w", err))
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil && logger != nil {
+		logger.Warn("⚠️ Codex 渠道删除后重新加载运行时失败", "id", id, "error", err)
 	}
 
 	if logger != nil {
@@ -614,6 +787,13 @@ func (a *App) ActivateCodexChannel(id int64) error {
 	if err != nil {
 		return fmt.Errorf("读取当前激活渠道失败: %w", err)
 	}
+	var previousEndpoint *codexstore.CodexEndpointRecord
+	if previousActive != nil && previousActive.ID != id {
+		previousEndpoint, err = endpointService.GetActiveByChannelID(ctx, previousActive.ID)
+		if err != nil {
+			return fmt.Errorf("读取当前 Codex 激活端点失败: %w", err)
+		}
+	}
 
 	activated := previousActive
 	if previousActive == nil || previousActive.ID != id {
@@ -639,7 +819,9 @@ func (a *App) ActivateCodexChannel(id int64) error {
 	}
 	if endpoint == nil && requireFailoverEnabled {
 		if previousActive != nil && previousActive.ID != id {
-			_ = channelService.ActivateChannel(ctx, previousActive.ID, false)
+			if restoreErr := channelService.ActivateChannel(ctx, previousActive.ID, false); restoreErr != nil {
+				return fmt.Errorf("切换 Codex 渠道失败: 渠道 '%s' 没有参与故障转移的端点；恢复原激活渠道失败: %v", activated.Name, restoreErr)
+			}
 		}
 		return fmt.Errorf("切换 Codex 渠道失败: 渠道 '%s' 没有参与故障转移的端点", activated.Name)
 	}
@@ -657,18 +839,24 @@ func (a *App) ActivateCodexChannel(id int64) error {
 		previousName = previousActive.Name
 	}
 
-	previousEndpoint := (*codexstore.CodexEndpointRecord)(nil)
-	if previousActive != nil && previousActive.ID != id {
-		previousEndpoint, _ = endpointService.GetActiveByChannelID(ctx, previousActive.ID)
-	}
 	rollback := func(cause error) error {
 		if previousActive != nil && previousActive.ID != id {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer rollbackCancel()
-			_ = channelService.ActivateChannel(rollbackCtx, previousActive.ID, false)
-			_ = a.reloadCodexEndpointManager()
+			var rollbackErrs []string
+			if err := channelService.ActivateChannel(rollbackCtx, previousActive.ID, false); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原激活渠道失败: %v", err))
+			}
+			if err := a.reloadCodexEndpointManager(); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+			}
 			if previousEndpoint != nil {
-				_ = a.syncActiveCodexChannelToConfig(previousActive, previousEndpoint, activated.Name)
+				if err := a.syncActiveCodexChannelToConfig(previousActive, previousEndpoint, activated.Name); err != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原 Codex 配置失败: %v", err))
+				}
+			}
+			if len(rollbackErrs) > 0 {
+				return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
 			}
 		}
 		return cause
@@ -876,19 +1064,72 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		record.CacheReadCostMultiplier = 1.0
 	}
 
+	// Keep the pre-create priority occupant so a later config/runtime failure
+	// can restore the exact ordering after the service has moved it aside.
+	var prioritySnapshots []*codexstore.CodexEndpointRecord
+	if input.Priority != nil && *input.Priority >= 0 {
+		snapshots, snapshotErr := endpointService.ListByChannelID(ctx, input.ChannelID)
+		if snapshotErr != nil {
+			return fmt.Errorf("创建 Codex 端点失败: 读取原端点优先级失败: %w", snapshotErr)
+		}
+		for _, snapshot := range snapshots {
+			if snapshot == nil {
+				continue
+			}
+			copy := *snapshot
+			prioritySnapshots = append(prioritySnapshots, &copy)
+		}
+	}
+
 	created, err := endpointService.CreateEndpoint(ctx, record)
 	if err != nil {
 		return fmt.Errorf("创建 Codex 端点失败: %w", err)
 	}
 
-	// 若该渠道当前激活 + 新端点被自动激活（首端点） → 同步 config.toml
-	channel, _ := channelService.GetChannelByID(ctx, input.ChannelID)
-	if created != nil && created.IsActive && channel != nil && channel.IsActive {
-		if syncErr := a.syncActiveCodexChannelToConfig(channel, created, ""); syncErr != nil {
-			if logger != nil {
-				logger.Warn("⚠️ 同步 Codex 配置失败", "error", syncErr)
+	rollbackCreated := func(cause error) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		createdDeleted := false
+		if created != nil {
+			if err := endpointService.DeleteEndpointByID(rollbackCtx, created.ID); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("删除已创建端点失败: %v", err))
+			} else {
+				createdDeleted = true
 			}
 		}
+		if createdDeleted {
+			for _, snapshot := range prioritySnapshots {
+				if snapshot.ChannelID != created.ChannelID || snapshot.CredentialGroupID != created.CredentialGroupID || snapshot.Priority != created.Priority {
+					continue
+				}
+				if err := endpointService.RestoreEndpoint(rollbackCtx, snapshot); err != nil {
+					rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原端点优先级失败: %v", err))
+				}
+				break
+			}
+		}
+		if reloadErr := a.reloadCodexEndpointManager(); reloadErr != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 端点失败: %v", reloadErr))
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
+	}
+
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return rollbackCreated(fmt.Errorf("创建 Codex 端点失败: 运行时未生效: %w", err))
+	}
+
+	// 若该渠道当前激活 + 新端点被自动激活（首端点） → 同步 config.toml
+	channel, channelErr := channelService.GetChannelByID(ctx, input.ChannelID)
+	if created != nil && created.IsActive && channel != nil && channel.IsActive {
+		if syncErr := a.syncActiveCodexChannelToConfig(channel, created, ""); syncErr != nil {
+			return rollbackCreated(fmt.Errorf("创建 Codex 端点失败: 配置同步未生效: %w", syncErr))
+		}
+	} else if created != nil && created.IsActive && channelErr != nil {
+		return rollbackCreated(fmt.Errorf("创建 Codex 端点失败: 读取渠道失败: %w", channelErr))
 	}
 
 	if logger != nil {
@@ -910,6 +1151,8 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if channelService == nil || endpointService == nil {
 		return fmt.Errorf("Codex 端点服务未就绪，请稍后重试")
 	}
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -971,8 +1214,50 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		apiKey = *input.ApiKey
 	}
 
+	// Snapshot a same-group priority occupant before the service performs its
+	// swap. If config/runtime synchronization fails, both records can be put
+	// back exactly as they were.
+	var priorityConflict *codexstore.CodexEndpointRecord
+	if input.Priority != nil && *input.Priority >= 0 && *input.Priority != previous.Priority && credentialGroupID == previous.CredentialGroupID {
+		siblings, listErr := endpointService.ListByChannelID(ctx, previous.ChannelID)
+		if listErr != nil {
+			return fmt.Errorf("更新 Codex 端点失败: 读取原端点优先级失败: %w", listErr)
+		}
+		for _, sibling := range siblings {
+			if sibling != nil && sibling.ID != id && sibling.CredentialGroupID == credentialGroupID && sibling.Priority == *input.Priority {
+				copy := *sibling
+				priorityConflict = &copy
+				break
+			}
+		}
+	}
+
+	restoreUpdated := func(cause error) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		if err := endpointService.RestoreEndpoint(rollbackCtx, previous); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原端点记录失败: %v", err))
+		}
+		if priorityConflict != nil {
+			if err := endpointService.RestoreEndpoint(rollbackCtx, priorityConflict); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复冲突端点优先级失败: %v", err))
+			}
+		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 端点失败: %v", err))
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
+	}
+
 	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
-		return fmt.Errorf("更新 Codex 端点失败: %w", err)
+		return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: %w", err))
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: 运行时未生效: %w", err))
 	}
 
 	// 配置同步策略（2026-05-14 扩大同步范围）：
@@ -982,22 +1267,17 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	// - 编辑端点 name → 不影响 toml（name 不出现在 toml 中），但同步动作幂等无害
 	channel, err := channelService.GetChannelByID(ctx, previous.ChannelID)
 	if err != nil {
-		// 读取渠道失败不应阻塞写入成功，仅记录告警；DB 已更新
-		if logger != nil {
-			logger.Warn("⚠️ 读取所属 Codex 渠道失败，跳过 config.toml 同步", "endpoint_id", id, "error", err)
-		}
-		a.emitCodexProviderUpdate()
-		return nil
+		return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: 读取所属渠道失败: %w", err))
 	}
 	if channel != nil && channel.IsActive {
 		// 取该渠道下的当前激活端点（可能就是刚编辑的，也可能是另一个）
 		activeEndpoint, epErr := endpointService.GetActiveByChannelID(ctx, channel.ID)
 		if epErr != nil {
-			return fmt.Errorf("更新 Codex 端点失败: 读取激活端点失败: %w", epErr)
+			return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: 读取激活端点失败: %w", epErr))
 		}
 		if activeEndpoint != nil {
 			if syncErr := a.syncActiveCodexChannelToConfig(channel, activeEndpoint, ""); syncErr != nil {
-				return fmt.Errorf("更新 Codex 端点失败: 配置同步未生效: %w", syncErr)
+				return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: 配置同步未生效: %w", syncErr))
 			}
 			if logger != nil {
 				logger.Info("✅ Codex 端点已更新并同步 config.toml",
@@ -1028,6 +1308,8 @@ func (a *App) DeleteCodexEndpointByID(id int64) error {
 	if channelService == nil || endpointService == nil {
 		return fmt.Errorf("Codex 端点服务未就绪，请稍后重试")
 	}
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1042,23 +1324,91 @@ func (a *App) DeleteCodexEndpointByID(id int64) error {
 
 	wasActive := target.IsActive
 	channelID := target.ChannelID
-
-	if err := endpointService.DeleteEndpointByID(ctx, id); err != nil {
-		return fmt.Errorf("删除 Codex 端点失败: %w", err)
+	channel, err := channelService.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("读取所属 Codex 渠道失败: %w", err)
+	}
+	if channel == nil {
+		return fmt.Errorf("所属 Codex 渠道不存在: %d", channelID)
+	}
+	runtimeAffected := channel.IsActive
+	var nextEndpoint *codexstore.CodexEndpointRecord
+	if wasActive {
+		nextEndpoint, err = endpointService.GetEndpointDeletionSuccessor(ctx, id)
+		if err != nil {
+			return fmt.Errorf("读取删除后的候选 Codex 端点失败: %w", err)
+		}
+	}
+	configSynced := false
+	prepared := false
+	rollbackState := func(cause error, restoreRecord bool, deleted bool) error {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		routeRestored := !restoreRecord
+		if restoreRecord {
+			var restoreErr error
+			if deleted {
+				restoreErr = endpointService.RestoreDeletedEndpoint(rollbackCtx, target)
+			} else {
+				restoreErr = endpointService.RestoreEndpoint(rollbackCtx, target)
+			}
+			if restoreErr != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原端点记录失败: %v", restoreErr))
+			} else {
+				routeRestored = true
+			}
+		}
+		if prepared {
+			if err := a.reloadCodexEndpointManager(); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+				routeRestored = false
+			}
+		}
+		if configSynced && routeRestored {
+			if err := a.syncActiveCodexChannelToConfig(channel, target, ""); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原 Codex 配置失败: %v", err))
+			}
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
 	}
 
-	// 若被删的是激活渠道下的激活端点，同步 config.toml（service 层会自动激活下一个端点）
-	if wasActive {
-		channel, _ := channelService.GetChannelByID(ctx, channelID)
-		if channel != nil && channel.IsActive {
-			nextEndpoint, _ := endpointService.GetActiveByChannelID(ctx, channelID)
-			if nextEndpoint != nil {
-				if syncErr := a.syncActiveCodexChannelToConfig(channel, nextEndpoint, ""); syncErr != nil && logger != nil {
-					logger.Warn("⚠️ 同步 Codex 配置失败", "error", syncErr)
-				}
-			} else if logger != nil {
-				logger.Warn("⚠️ 删除最后一个激活端点，config.toml 中 base_url 未更新", "channel", channel.Name)
-			}
+	if runtimeAffected && wasActive {
+		var syncErr error
+		if nextEndpoint != nil {
+			syncErr = a.syncActiveCodexChannelToConfig(channel, nextEndpoint, "")
+		} else {
+			syncErr = a.removeCodexChannelConfig(channel.Name, nil, nil)
+		}
+		if syncErr != nil {
+			return fmt.Errorf("删除 Codex 端点失败: 配置同步未生效: %w", syncErr)
+		}
+		configSynced = true
+	}
+
+	if runtimeAffected {
+		nextEndpointID := int64(0)
+		if nextEndpoint != nil {
+			nextEndpointID = nextEndpoint.ID
+		}
+		if err := endpointService.PrepareEndpointDeletion(ctx, id, nextEndpointID); err != nil {
+			return rollbackState(fmt.Errorf("删除 Codex 端点失败: 准备运行时状态失败: %w", err), false, false)
+		}
+		prepared = true
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			return rollbackState(fmt.Errorf("删除 Codex 端点失败: 排除待删除端点未生效: %w", err), true, false)
+		}
+	}
+
+	if err := endpointService.DeleteEndpointByID(ctx, id); err != nil {
+		return rollbackState(fmt.Errorf("删除 Codex 端点失败: %w", err), prepared, false)
+	}
+	if runtimeAffected {
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			return rollbackState(fmt.Errorf("删除 Codex 端点失败: 运行时未生效: %w", err), true, true)
 		}
 	}
 
@@ -1096,17 +1446,46 @@ func (a *App) ActivateCodexEndpoint(id int64) error {
 		return fmt.Errorf("Codex 端点不存在: %d", id)
 	}
 
+	wasActive := target.IsActive
+	previousActive, err := endpointService.GetActiveByChannelID(ctx, target.ChannelID)
+	if err != nil {
+		return fmt.Errorf("读取当前激活端点失败: %w", err)
+	}
+	restoreEndpoint := func(cause error) error {
+		if wasActive || previousActive == nil {
+			return cause
+		}
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer rollbackCancel()
+		var rollbackErrs []string
+		if err := endpointService.ActivateEndpoint(rollbackCtx, previousActive.ID); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("恢复原激活端点失败: %v", err))
+		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Sprintf("重新加载 Codex 运行时失败: %v", err))
+		}
+		if len(rollbackErrs) > 0 {
+			return fmt.Errorf("%w；回滚失败: %s", cause, strings.Join(rollbackErrs, "; "))
+		}
+		return cause
+	}
 	if !target.IsActive {
 		if err := endpointService.ActivateEndpoint(ctx, id); err != nil {
 			return fmt.Errorf("激活 Codex 端点失败: %w", err)
 		}
+		if err := a.reloadCodexEndpointManager(); err != nil {
+			return restoreEndpoint(fmt.Errorf("激活 Codex 端点失败: 运行时未生效: %w", err))
+		}
 	}
 
 	// 仅当端点所属渠道为当前激活渠道时才改写 config.toml（KISS：核心规则之一）
-	channel, _ := channelService.GetChannelByID(ctx, target.ChannelID)
+	channel, err := channelService.GetChannelByID(ctx, target.ChannelID)
+	if err != nil {
+		return restoreEndpoint(fmt.Errorf("激活 Codex 端点失败: 读取所属渠道失败: %w", err))
+	}
 	if channel != nil && channel.IsActive {
 		if syncErr := a.syncActiveCodexChannelToConfig(channel, target, ""); syncErr != nil {
-			return fmt.Errorf("激活 Codex 端点失败: 配置同步未生效: %w", syncErr)
+			return restoreEndpoint(fmt.Errorf("激活 Codex 端点失败: 配置同步未生效: %w", syncErr))
 		}
 		if logger != nil {
 			logger.Info("✅ Codex 端点已激活并同步", "id", id, "base_url", target.BaseURL)

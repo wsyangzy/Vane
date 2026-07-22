@@ -121,6 +121,13 @@ const getCredentialGroups = (channel) => {
   return Array.isArray(groups) ? groups : [];
 };
 
+const hasCodexCredential = (...sources) => sources.some((source) => [
+  source?.apiKey,
+  source?.api_key,
+  source?.apiKeyMasked,
+  source?.api_key_masked
+].some((value) => (typeof value === 'string' ? value.trim() !== '' : Boolean(value))));
+
 const getDefaultCredentialGroup = (channel) => {
   const groups = getCredentialGroups(channel);
   return groups.find((group) => group.isDefault || group.is_default) || groups[0] || null;
@@ -393,21 +400,31 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
   const handleSubmit = async (event) => {
     event.preventDefault();
 
-    const payload = {
-      name: formData.name.trim(),
-      apiKey: '',
-      website: formData.website.trim(),
-      model: formData.model.trim(),
-      modelMapping: buildModelMappingPayload(formData.modelMappingRows),
-      priority: isEdit ? Math.max(0, Number.parseInt(formData.priority, 10) || 0) : -1,
-      failoverEnabled: formData.failoverEnabled
-    };
-
-    if (!payload.name) {
+    const name = formData.name.trim();
+    if (!name) {
       setActiveTab('basic');
       setFieldError('请填写渠道名');
       return;
     }
+
+    const priorityValue = String(formData.priority ?? '').trim();
+    const hasPriority = priorityValue !== '';
+    const parsedPriority = Number(priorityValue);
+    if ((isEdit && !hasPriority) || (hasPriority && (!Number.isInteger(parsedPriority) || parsedPriority < 0))) {
+      setActiveTab('basic');
+      setFieldError('优先级必须是 0 或更大的整数');
+      return;
+    }
+
+    const payload = {
+      name,
+      apiKey: '',
+      website: formData.website.trim(),
+      model: formData.model.trim(),
+      modelMapping: buildModelMappingPayload(formData.modelMappingRows),
+      priority: !isEdit && !hasPriority ? -1 : parsedPriority,
+      failoverEnabled: formData.failoverEnabled
+    };
 
     await onSave?.(payload);
   };
@@ -479,51 +496,58 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
             </div>
 
             {channelFailoverEnabled && isEdit && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="block">
-                  <span className="mb-1.5 block text-sm font-medium text-slate-700">参与渠道间故障转移</span>
-                  <div className="flex h-[42px] min-w-0 items-center justify-between gap-4 rounded-lg border border-slate-200 px-3">
-                    <span className="truncate text-xs text-slate-400">
-                      {channel?.isActive ? '活跃渠道请在卡片中暂停' : '关闭后自动转移会跳过此渠道'}
-                    </span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={formData.failoverEnabled}
-                      onClick={() => updateField('failoverEnabled', !formData.failoverEnabled)}
-                      disabled={Boolean(channel?.isActive)}
-                      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${formData.failoverEnabled ? 'bg-indigo-600' : 'bg-slate-200'}`}
-                    >
-                      <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${formData.failoverEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
+              <div className="block">
+                <span className="mb-1.5 block text-sm font-medium text-slate-700">参与渠道间故障转移</span>
+                <div className="flex h-[42px] min-w-0 items-center justify-between gap-4 rounded-lg border border-slate-200 px-3">
+                  <span className="truncate text-xs text-slate-400">
+                    {channel?.isActive ? '活跃渠道请在卡片中暂停' : '关闭后自动转移会跳过此渠道'}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={formData.failoverEnabled}
+                    onClick={() => updateField('failoverEnabled', !formData.failoverEnabled)}
+                    disabled={Boolean(channel?.isActive)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${formData.failoverEnabled ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                  >
+                    <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${formData.failoverEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                  </button>
                 </div>
+              </div>
+            )}
+
+            <div className={channelFailoverEnabled ? 'grid grid-cols-1 gap-4 sm:grid-cols-2' : 'grid grid-cols-1 gap-4'}>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700">模型（可选）</label>
+                <input
+                  type="text"
+                  value={formData.model}
+                  onChange={(event) => updateField('model', event.target.value)}
+                  placeholder="留空 = 使用 Codex 全局配置中的默认模型"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="mt-1 text-xs text-slate-400">
+                  填入后该渠道将覆盖全局 model；不同渠道支持的模型可能不同
+                </p>
+              </div>
+
+              {channelFailoverEnabled && (
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium text-slate-700">优先级</span>
                   <input
                     type="number"
                     min="0"
+                    step="1"
                     value={formData.priority}
                     onChange={(event) => updateField('priority', event.target.value)}
+                    placeholder={isEdit ? undefined : '留空自动分配'}
                     className="h-[42px] w-full rounded-lg border border-slate-200 px-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                  <p className="mt-1 text-xs text-slate-400">数字越小越优先，相同则交换</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {isEdit ? '数字越小越优先，相同则交换' : '留空按现有顺序自动分配；填写已有优先级时交换'}
+                  </p>
                 </label>
-              </div>
-            )}
-
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-700">模型（可选）</label>
-              <input
-                type="text"
-                value={formData.model}
-                onChange={(event) => updateField('model', event.target.value)}
-                placeholder="留空 = 使用 Codex 全局配置中的默认模型"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <p className="mt-1 text-xs text-slate-400">
-                填入后该渠道将覆盖全局 model；不同渠道支持的模型可能不同
-              </p>
+              )}
             </div>
               </>
             ) : (
@@ -585,8 +609,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
             <Button variant="secondary" onClick={onCancel} disabled={loading}>
               取消
             </Button>
-            <Button variant="primary" icon={isEdit ? Pencil : Plus} loading={loading} type="submit">
-              {isEdit ? '保存修改' : '创建渠道'}
+            <Button variant="primary" icon={isEdit ? Pencil : undefined} loading={loading} type="submit">
+              {isEdit ? '保存修改' : '下一步'}
             </Button>
           </div>
         </form>
@@ -598,7 +622,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
 // ============================================================================
 // 凭证分组编辑弹窗
 // ============================================================================
-const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
+const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
   const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('basic');
@@ -1025,7 +1049,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, loading, serverError, 
             <div className="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
               <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>取消</Button>
               <Button type="submit" variant="primary" loading={loading}>
-                {isEdit ? '保存分组' : copyEndpointsEnabled ? '下一步' : '添加分组'}
+                {isEdit ? '保存分组' : (continueToEndpoint || copyEndpointsEnabled ? '下一步' : '添加分组')}
               </Button>
             </div>
               </div>
@@ -2205,7 +2229,7 @@ const ChannelCard = ({
   const isTogglingChannelFailover = actionLoading === `toggle-channel-failover-${channel.id}`;
   const channelActivationDisabled = channelFailoverEnabled && channel.failoverEnabled === false;
   const endpoints = channel.endpoints || [];
-  const credentialGroups = channel.credentialGroups || [];
+  const credentialGroups = getCredentialGroups(channel);
   const defaultCredentialGroup = getDefaultCredentialGroup(channel);
   const activeEndpointInChannel = endpoints.find((ep) => ep.isActive) || null;
   const activeEndpointGroupID = Number(activeEndpointInChannel?.credentialGroupId || activeEndpointInChannel?.credential_group_id || 0);
@@ -2235,6 +2259,11 @@ const ChannelCard = ({
     return defaultCredentialGroup || selectedCredentialGroup || null;
   };
   const groupEndpoints = sortEndpointsByPriority(endpoints.filter(groupEndpointFilter));
+  const selectedCredentialHasCredential = Boolean(selectedCredentialGroup) &&
+    hasCodexCredential(selectedCredentialGroup, channel);
+  const channelHasCredential = hasCodexCredential(channel) ||
+    credentialGroups.some((group) => hasCodexCredential(group)) ||
+    endpoints.some((endpoint) => hasCodexCredential(endpoint));
   const fallbackApiKeyMasked = defaultCredentialGroup?.apiKeyMasked || channel.apiKeyMasked || '';
   const extraCredentialGroupCount = Math.max(
     credentialGroups.length - (defaultCredentialGroup ? 1 : 0),
@@ -2391,7 +2420,7 @@ const ChannelCard = ({
               </button>
             </Tooltip>
           )}
-          {channelFailoverEnabled && (
+          {channelFailoverEnabled && channelHasCredential && (
             <Tooltip content={channel.failoverEnabled !== false ? '暂停此渠道，使其不参与渠道间转移' : '恢复此渠道，使其重新参与渠道间转移'}>
               <button type="button" onClick={() => onToggleChannelFailover?.(channel, channel.failoverEnabled === false)} disabled={isTogglingChannelFailover} className={`inline-flex size-[26px] flex-shrink-0 items-center justify-center rounded-md transition-colors disabled:cursor-wait disabled:text-indigo-400 disabled:opacity-70 ${channel.failoverEnabled !== false ? 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100' : 'text-slate-400 hover:bg-slate-100 hover:text-indigo-600'}`}>
                 {isTogglingChannelFailover ? <Loader2 size={14} className="animate-spin" /> : channel.failoverEnabled !== false ? <Route size={14} /> : <RouteOff size={14} />}
@@ -2604,7 +2633,7 @@ const ChannelCard = ({
               </button>
             )}
           </div>
-          <div className="flex flex-shrink-0 items-center gap-1">
+          <div hidden={!selectedCredentialHasCredential} className="flex flex-shrink-0 items-center gap-1">
             <Tooltip content={groupFailoverActionTip}>
               <button
                 type="button"
@@ -2652,7 +2681,9 @@ const ChannelCard = ({
 
         {groupEndpoints.length === 0 ? (
           <div className="border-t border-slate-100 bg-white px-4 py-6 text-center text-[11px] text-slate-400">
-            当前分组暂无端点。请为该凭证分组添加至少一个 base_url。
+             {selectedCredentialHasCredential
+               ? '当前分组暂无端点。请为该凭证分组添加至少一个 base_url。'
+              : '请先添加凭证分组并配置 API Key，再添加端点。'}
           </div>
         ) : (
           <div className="border-t border-slate-100 bg-white">
@@ -2737,6 +2768,7 @@ const CodexPage = () => {
   const [credentialGroupFormChannel, setCredentialGroupFormChannel] = useState(null);
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
+  const [initialSetupChannelID, setInitialSetupChannelID] = useState(null);
   const [deleteCredentialGroupTarget, setDeleteCredentialGroupTarget] = useState(null);
 	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
@@ -2879,7 +2911,7 @@ const CodexPage = () => {
   ];
   const overviewCards = channelFailoverEnabled ? failoverOverviewCards : activeChannelOverviewCards;
 
-  const fetchData = useCallback(async ({ silent = false } = {}) => {
+  const fetchData = useCallback(async ({ silent = false, throwOnError = false } = {}) => {
     if (!silent) setLoading(true);
     setError('');
     try {
@@ -2887,11 +2919,15 @@ const CodexPage = () => {
         getCodexChannels(),
         getSettingsByScope('codex', 'failover').catch(() => [])
       ]);
-      setChannels(list);
+      const normalizedList = Array.isArray(list) ? list : [];
+      setChannels(normalizedList);
       setChannelFailoverEnabled((failoverSettings || []).find((setting) => setting.key === 'enabled')?.value === 'true');
       setLastUpdate(new Date().toLocaleTimeString());
+      return normalizedList;
     } catch (err) {
       setError(getErrorMessage(err, '加载 Codex 渠道失败'));
+      if (throwOnError) throw err;
+      return [];
     } finally {
       if (!silent) setLoading(false);
     }
@@ -3000,18 +3036,37 @@ const CodexPage = () => {
   };
 
   const handleSaveChannel = async (payload) => {
+    const isCreating = channelFormMode !== 'edit' || !editingChannel;
+    let channelCreated = false;
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
-      if (channelFormMode === 'edit' && editingChannel) {
+      if (!isCreating) {
         await updateCodexChannelByID(editingChannel.id, payload);
       } else {
         await createCodexChannel(payload);
+        channelCreated = true;
       }
-      await fetchData({ silent: true });
-      closeChannelForm();
+      const refreshedChannels = await fetchData({ silent: true, throwOnError: true });
+      if (isCreating) {
+        const createdChannel = refreshedChannels.find((channel) => channel?.name === payload.name);
+        if (!createdChannel) {
+          throw new Error('渠道已创建，但刷新后未找到该渠道，请刷新列表后继续配置');
+        }
+        closeChannelForm();
+        openCreateCredentialGroupForm(createdChannel, true);
+      } else {
+        closeChannelForm();
+      }
     } catch (err) {
-      toast.error(getFailoverToggleErrorMessage(err, '保存渠道失败'), '保存失败');
+      const message = getFailoverToggleErrorMessage(err, '保存渠道失败');
+      if (channelCreated) {
+        closeChannelForm();
+        setError(`渠道已创建，但刷新列表失败，请点击刷新后继续配置凭证分组和端点。\n${message}`);
+      } else {
+        setChannelFormError(message);
+        toast.error(message, '保存失败');
+      }
     } finally {
       setActionLoading('');
     }
@@ -3032,7 +3087,8 @@ const CodexPage = () => {
   };
 
   // ===== 凭证分组动作 =====
-  const openCreateCredentialGroupForm = (channel) => {
+  const openCreateCredentialGroupForm = (channel, isInitialSetup = false) => {
+    setInitialSetupChannelID(isInitialSetup ? channel?.id ?? null : null);
     setCredentialGroupFormMode('create');
     setCredentialGroupFormChannel(channel);
     setEditingCredentialGroup(null);
@@ -3041,6 +3097,7 @@ const CodexPage = () => {
   };
 
   const openEditCredentialGroupForm = (channel, group) => {
+    setInitialSetupChannelID(null);
     setCredentialGroupFormMode('edit');
     setCredentialGroupFormChannel(channel);
     setEditingCredentialGroup(group);
@@ -3053,12 +3110,16 @@ const CodexPage = () => {
     setCredentialGroupFormChannel(null);
     setEditingCredentialGroup(null);
     setCredentialGroupFormError('');
+    setInitialSetupChannelID(null);
   };
 
   const handleSaveCredentialGroup = async (payload) => {
     if (!credentialGroupFormChannel) return;
     const { copyEndpoints = [], ...groupPayload } = payload || {};
     delete groupPayload.copyEndpointsFromGroupId;
+    const targetChannel = credentialGroupFormChannel;
+    const shouldContinueInitialSetup = initialSetupChannelID === targetChannel.id;
+    let savedGroup = null;
     const loadingKey = credentialGroupFormMode === 'edit'
       ? `save-credential-group-${editingCredentialGroup?.id}`
       : 'create-credential-group';
@@ -3066,29 +3127,39 @@ const CodexPage = () => {
     setCredentialGroupFormError('');
     try {
       if (credentialGroupFormMode === 'edit' && editingCredentialGroup) {
-        await updateCodexCredentialGroupByID(editingCredentialGroup.id, groupPayload);
+        savedGroup = await updateCodexCredentialGroupByID(editingCredentialGroup.id, groupPayload);
       } else {
-        const createdGroup = await createCodexCredentialGroup({
+        savedGroup = await createCodexCredentialGroup({
           ...groupPayload,
-          channelId: credentialGroupFormChannel.id
+          channelId: targetChannel.id
         });
-        const targetGroupID = Number(createdGroup?.id || 0);
+        const targetGroupID = Number(savedGroup?.id || 0);
         if (targetGroupID > 0) {
           for (const endpoint of copyEndpoints) {
             await createCodexEndpoint(buildCodexEndpointCopyPayload(
               endpoint,
-              credentialGroupFormChannel.id,
+              targetChannel.id,
               targetGroupID
             ));
           }
         }
       }
-      await fetchData({ silent: true });
-      closeCredentialGroupForm();
     } catch (err) {
       setCredentialGroupFormError(getErrorMessage(err, '保存凭证分组失败'));
+      return;
     } finally {
       setActionLoading('');
+    }
+
+    closeCredentialGroupForm();
+    if (shouldContinueInitialSetup && savedGroup?.id && copyEndpoints.length === 0) {
+      openCreateEndpointForm(targetChannel, savedGroup);
+    }
+
+    try {
+      await fetchData({ silent: true, throwOnError: true });
+    } catch (err) {
+      setError(`凭证分组已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
     }
   };
 
@@ -3122,9 +3193,11 @@ const CodexPage = () => {
 
   // ===== 端点动作 =====
   const openCreateEndpointForm = (channel, credentialGroup = null) => {
+    const targetCredentialGroup = credentialGroup || getDefaultCredentialGroup(channel);
+    if (!channel || !targetCredentialGroup || !hasCodexCredential(targetCredentialGroup, channel)) return;
     setEndpointFormMode('create');
     setEndpointFormChannel(channel);
-    setEndpointFormCredentialGroup(credentialGroup || getDefaultCredentialGroup(channel));
+    setEndpointFormCredentialGroup(targetCredentialGroup);
     setEditingEndpoint(null);
     setEndpointFormError('');
     setShowEndpointForm(true);
@@ -3166,12 +3239,17 @@ const CodexPage = () => {
           priority,
           timeoutSeconds
         });
-        await fetchData({ silent: true });
-        closeEndpointForm();
       } catch (err) {
         setEndpointFormError(getErrorMessage(err, '更新端点失败'));
+        return;
       } finally {
         setActionLoading('');
+      }
+      closeEndpointForm();
+      try {
+        await fetchData({ silent: true, throwOnError: true });
+      } catch (err) {
+        setError(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
       }
       return;
     }
@@ -3190,12 +3268,17 @@ const CodexPage = () => {
         priority,
         timeoutSeconds
       });
-      await fetchData({ silent: true });
-      closeEndpointForm();
     } catch (err) {
       setEndpointFormError(getErrorMessage(err, '保存端点失败'));
+      return;
     } finally {
       setActionLoading('');
+    }
+    closeEndpointForm();
+    try {
+      await fetchData({ silent: true, throwOnError: true });
+    } catch (err) {
+      setError(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
     }
   };
 
@@ -3439,6 +3522,7 @@ const CodexPage = () => {
           mode={credentialGroupFormMode}
           channel={credentialGroupFormChannel}
           group={editingCredentialGroup}
+          continueToEndpoint={initialSetupChannelID === credentialGroupFormChannel?.id}
           loading={
             credentialGroupFormMode === 'edit'
               ? actionLoading === `save-credential-group-${editingCredentialGroup?.id}`
