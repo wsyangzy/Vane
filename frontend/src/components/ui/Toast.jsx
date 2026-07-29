@@ -97,7 +97,7 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
           <p className={`text-sm font-semibold ${variant.titleColor}`}>{title}</p>
         )}
         {message && (
-          <p className="text-sm text-slate-600 mt-0.5 break-words">{message}</p>
+          <p className="mt-0.5 whitespace-pre-line text-sm leading-5 text-slate-600 [overflow-wrap:anywhere]">{message}</p>
         )}
       </div>
       {/* 倒计时圆圈关闭按钮 */}

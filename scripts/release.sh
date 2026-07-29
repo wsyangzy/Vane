@@ -123,10 +123,10 @@ fi
 # ============================================
 # 2. 更新文档类文件 (README.md / CLAUDE.md)
 # ============================================
-echo "📝 [1/12] 更新 README.md ..."
+echo "📝 [1/13] 更新 README.md ..."
 sed "${SED_INPLACE[@]}" "s/version-${CURRENT_VERSION}-blue/version-${NEW_VERSION}-blue/g" README.md
 
-echo "📝 [2/12] 更新 CLAUDE.md ..."
+echo "📝 [2/13] 更新 CLAUDE.md ..."
 sed "${SED_INPLACE[@]}" "s/🏗️ \*\*架构版本\*\*: v${CURRENT_VERSION}/🏗️ **架构版本**: v${NEW_VERSION}/g" CLAUDE.md
 sed "${SED_INPLACE[@]}" "s/- \*\*当前版本\*\*: v${CURRENT_VERSION}/- **当前版本**: v${NEW_VERSION}/g" CLAUDE.md
 
@@ -141,7 +141,7 @@ awk -v new_line="${NEW_HISTORY_LINE}" '
 # 3. 更新 Windows 资源版本 (versioninfo.json)
 #    数字版本用 MAJOR/MINOR/PATCH，字符串版本用完整 NEW_VERSION
 # ============================================
-echo "📝 [3/12] 更新 versioninfo.json ..."
+echo "📝 [3/13] 更新 versioninfo.json ..."
 python3 - <<PYEOF
 import json
 with open('versioninfo.json', 'r', encoding='utf-8') as f:
@@ -169,7 +169,7 @@ PYEOF
 # ============================================
 # 4. 更新 Wails 构建版本 (build/windows/info.json)
 # ============================================
-echo "📝 [4/12] 更新 build/windows/info.json ..."
+echo "📝 [4/13] 更新 build/windows/info.json ..."
 python3 - <<PYEOF
 import json
 with open('build/windows/info.json', 'r', encoding='utf-8') as f:
@@ -188,45 +188,55 @@ PYEOF
 # ============================================
 # 5. 更新 Wails 主配置 (wails.json)
 # ============================================
-echo "📝 [5/12] 更新 wails.json ..."
+echo "📝 [5/13] 更新 wails.json ..."
 sed "${SED_INPLACE[@]}" "s/\"productVersion\": \"${CURRENT_VERSION}\"/\"productVersion\": \"${NEW_VERSION}\"/g" wails.json
 
 # ============================================
 # 6. 更新 Wails Dev 配置 (build/config.yml)
 # ============================================
-echo "📝 [6/12] 更新 build/config.yml ..."
+echo "📝 [6/13] 更新 build/config.yml ..."
 sed "${SED_INPLACE[@]}" "s/version: \"${CURRENT_VERSION}\"/version: \"${NEW_VERSION}\"/g" build/config.yml
 
 # ============================================
 # 7. 更新跨平台 Taskfile VERSION (darwin/linux/windows)
 # ============================================
-echo "📝 [7/12] 更新 build/darwin/Taskfile.yml ..."
+echo "📝 [7/13] 更新 build/darwin/Taskfile.yml ..."
 sed "${SED_INPLACE[@]}" "s/{{default \"${CURRENT_VERSION}\" .VERSION}}/{{default \"${NEW_VERSION}\" .VERSION}}/g" build/darwin/Taskfile.yml
 
-echo "📝 [8/12] 更新 build/linux/Taskfile.yml ..."
+echo "📝 [8/13] 更新 build/linux/Taskfile.yml ..."
 sed "${SED_INPLACE[@]}" "s/{{default \"${CURRENT_VERSION}\" .VERSION}}/{{default \"${NEW_VERSION}\" .VERSION}}/g" build/linux/Taskfile.yml
 
-echo "📝 [9/12] 更新 build/windows/Taskfile.yml ..."
+echo "📝 [9/13] 更新 build/windows/Taskfile.yml ..."
 sed "${SED_INPLACE[@]}" "s/{{default \"${CURRENT_VERSION}\" .VERSION}}/{{default \"${NEW_VERSION}\" .VERSION}}/g" build/windows/Taskfile.yml
 
 # ============================================
 # 8. 更新 Windows app.manifest（恰好 4 段纯数字）
 # ============================================
-echo "📝 [10/12] 更新 build/windows/app.manifest ..."
+echo "📝 [10/13] 更新 build/windows/app.manifest ..."
 sed "${SED_INPLACE[@]}" "s/version=\"${CUR_WIN_VERSION}\"/version=\"${WIN_VERSION}\"/g" build/windows/app.manifest
 
 # ============================================
 # 9. 更新 Go 全局变量 (globals.go)
 # ============================================
-echo "📝 [11/12] 更新 globals.go ..."
+echo "📝 [11/13] 更新 globals.go ..."
 sed "${SED_INPLACE[@]}" "s/Version   = \"${CURRENT_VERSION}\"/Version   = \"${NEW_VERSION}\"/g" globals.go
 
 # ============================================
 # 10. 更新 Windows 打包脚本 (scripts/package-windows.sh)
 # ============================================
-echo "📝 [12/12] 更新 scripts/package-windows.sh ..."
+echo "📝 [12/13] 更新 scripts/package-windows.sh ..."
 sed "${SED_INPLACE[@]}" "s/VERSION=\"${CURRENT_VERSION}\"/VERSION=\"${NEW_VERSION}\"/g" scripts/package-windows.sh
 sed "${SED_INPLACE[@]}" "s/AI Relay Forwarder v${CURRENT_VERSION}/AI Relay Forwarder v${NEW_VERSION}/g" scripts/package-windows.sh
+
+# ============================================
+# 11. 根据上一个发布节点后的提交生成新版功能提示
+# ============================================
+echo "📝 [13/13] 生成 frontend/src/release-notes.json ..."
+python3 scripts/generate_release_notes.py \
+    --version "$NEW_VERSION" \
+    --previous-version "$CURRENT_VERSION" \
+    --release-note "$RELEASE_NOTE" \
+    --output frontend/src/release-notes.json
 
 # 清理可能产生的 .bak 备份文件（部分 sed 实现会创建）
 find . -maxdepth 3 -name "*.bak" -type f -delete 2>/dev/null || true
@@ -237,7 +247,7 @@ find . -maxdepth 3 -name "*.bak" -type f -delete 2>/dev/null || true
 echo ""
 echo "✅ 版本号已更新到 v${NEW_VERSION}"
 echo ""
-echo "已修改的 12 个文件:"
+echo "已修改的 13 个文件:"
 echo "  📄 README.md                       (badge: ${CURRENT_VERSION} → ${NEW_VERSION})"
 echo "  📄 CLAUDE.md                       (架构版本 + 当前版本 + 版本历史表)"
 echo "  📄 versioninfo.json                (Windows 资源: ${WIN_VERSION})"
@@ -250,6 +260,7 @@ echo "  📄 build/windows/Taskfile.yml      (windows VERSION 默认值)"
 echo "  📄 build/windows/app.manifest      (manifest: ${WIN_VERSION})"
 echo "  📄 globals.go                      (Go 全局变量 Version: ${NEW_VERSION})"
 echo "  📄 scripts/package-windows.sh      (打包脚本 VERSION)"
+echo "  📄 frontend/src/release-notes.json      (新版功能 Toast 内容)"
 echo ""
 echo "💡 后续步骤:"
 echo "  1. git diff 检查改动是否正确"

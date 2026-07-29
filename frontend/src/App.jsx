@@ -7,8 +7,10 @@ import { useState, Suspense, lazy, useCallback, useEffect, useRef } from 'react'
 import Header from '@components/layout/Header.jsx';
 import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
-import { fetchRequests, isWailsEnvironment } from '@utils/api.js';
+import { fetchRequests, fetchStatus, isWailsEnvironment } from '@utils/api.js';
 import { getSuspendedRequestsCount, getManualRetryRequestsCount, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
+import releaseNotes from './release-notes.json';
+import { consumeReleaseAnnouncement, formatReleaseHighlights } from '@utils/releaseAnnouncement.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -81,6 +83,44 @@ const buildFailoverFailureMessage = (failureReason) => {
 
   const trimmed = failureReason.trim();
   return trimmed.length > 120 ? `${trimmed.slice(0, 120)}...` : trimmed;
+};
+
+const ReleaseAnnouncement = () => {
+  const toast = useToast();
+
+  useEffect(() => {
+    if (!isWailsEnvironment()) return undefined;
+
+    let cancelled = false;
+    fetchStatus()
+      .then((status) => {
+        if (cancelled) return;
+
+        const announcement = consumeReleaseAnnouncement({
+          runtimeVersion: status?.version,
+          releaseNotes,
+          storage: import.meta.env.DEV ? window.sessionStorage : undefined
+        });
+        if (!announcement) return;
+
+        toast.show(formatReleaseHighlights(announcement.highlights), {
+          type: 'info',
+          title: `v${announcement.version} 新版本功能`,
+          duration: 12000
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn('加载新版功能提示失败:', error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [toast]);
+
+  return null;
 };
 
 const GlobalAlerts = () => {
@@ -306,6 +346,7 @@ function App() {
 
   return (
     <ToastProvider>
+      <ReleaseAnnouncement />
       <GlobalAlerts />
 
       {/* 端口冲突对话框 - 使用独立的显示状态，避免成功后被自动关闭 */}
