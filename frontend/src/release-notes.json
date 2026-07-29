@@ -1,8 +1,17 @@
 {
   "version": "8.4",
-  "highlights": [
-    "增加数据目录入口并稳定 Wails dev 生命周期",
-    "按月归档请求历史并统一数据保留策略",
-    "完成 Codex 渠道间故障转移与 Provider 配置隔离"
+  "sections": [
+    {
+      "title": "桌面与数据",
+      "items": [
+        "增加数据目录入口并稳定 Wails dev 生命周期；按月归档请求历史并统一数据保留策略。"
+      ]
+    },
+    {
+      "title": "渠道与故障转移",
+      "items": [
+        "完成 Codex 渠道间故障转移与 Provider 配置隔离，统一端点状态展示与 Long context 默认行为。"
+      ]
+    }
   ]
 }

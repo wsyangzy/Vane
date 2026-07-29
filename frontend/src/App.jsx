@@ -10,7 +10,7 @@ import useSSE from '@hooks/useSSE.js';
 import { fetchRequests, fetchStatus, isWailsEnvironment } from '@utils/api.js';
 import { getSuspendedRequestsCount, getManualRetryRequestsCount, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
 import releaseNotes from './release-notes.json';
-import { consumeReleaseAnnouncement, formatReleaseHighlights } from '@utils/releaseAnnouncement.js';
+import { consumeReleaseAnnouncement, formatReleaseSections } from '@utils/releaseAnnouncement.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -103,10 +103,10 @@ const ReleaseAnnouncement = () => {
         });
         if (!announcement) return;
 
-        toast.show(formatReleaseHighlights(announcement.highlights), {
+        toast.show(formatReleaseSections(announcement.sections), {
           type: 'info',
           title: `v${announcement.version} 新版本功能`,
-          duration: 12000
+          duration: 18000
         });
       })
       .catch((error) => {

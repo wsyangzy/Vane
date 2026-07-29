@@ -6,26 +6,47 @@ export const normalizeReleaseVersion = (value) => String(value ?? '')
   .replace(/^v/i, '')
   .replace(/-dev(?:[-.][\w.-]+)?$/i, '');
 
-const normalizeHighlights = (highlights) => {
-  if (!Array.isArray(highlights)) return [];
+const normalizeItems = (items) => {
+  if (!Array.isArray(items)) return [];
 
-  return highlights
-    .map((highlight) => String(highlight ?? '').trim())
+  return items
+    .map((item) => String(item ?? '').trim())
     .filter(Boolean);
+};
+
+const normalizeSections = (sections) => {
+  if (!Array.isArray(sections)) return [];
+
+  return sections
+    .map((section) => ({
+      title: String(section?.title ?? '').trim() || '其他更新',
+      items: normalizeItems(section?.items)
+    }))
+    .filter((section) => section.items.length > 0);
+};
+
+const getReleaseSections = (releaseNotes) => {
+  const sections = normalizeSections(releaseNotes?.sections);
+  if (sections.length > 0) return sections;
+
+  const legacyHighlights = normalizeItems(releaseNotes?.highlights);
+  return legacyHighlights.length > 0
+    ? [{ title: '本次更新', items: legacyHighlights }]
+    : [];
 };
 
 export const getReleaseAnnouncement = (runtimeVersion, releaseNotes) => {
   const normalizedRuntimeVersion = normalizeReleaseVersion(runtimeVersion);
   const normalizedNotesVersion = normalizeReleaseVersion(releaseNotes?.version);
-  const highlights = normalizeHighlights(releaseNotes?.highlights);
+  const sections = getReleaseSections(releaseNotes);
 
-  if (!normalizedRuntimeVersion || normalizedRuntimeVersion !== normalizedNotesVersion || highlights.length === 0) {
+  if (!normalizedRuntimeVersion || normalizedRuntimeVersion !== normalizedNotesVersion || sections.length === 0) {
     return null;
   }
 
   return {
     version: normalizedNotesVersion,
-    highlights
+    sections
   };
 };
 
@@ -59,6 +80,6 @@ export const consumeReleaseAnnouncement = ({ runtimeVersion, releaseNotes, stora
   return announcement;
 };
 
-export const formatReleaseHighlights = (highlights) => normalizeHighlights(highlights)
-  .map((highlight, index) => `${index + 1}. ${highlight}`)
+export const formatReleaseSections = (sections) => normalizeSections(sections)
+  .map((section) => `${section.title}：${section.items.join('；')}`)
   .join('\n');

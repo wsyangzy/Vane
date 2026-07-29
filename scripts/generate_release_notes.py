@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the in-app release announcement from commits since the last release."""
+"""Generate categorized in-app release notes from commits since the last release."""
 
 from __future__ import annotations
 
@@ -15,11 +15,20 @@ RELEASE_SUBJECT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CONVENTIONAL_SUBJECT_PATTERN = re.compile(
-    r"^(?P<type>[a-z]+)(?:\([^)]*\))?!?:\s*(?P<description>.+)$",
+    r"^(?P<type>[a-z]+)(?:\((?P<scope>[^)]+)\))?!?:\s*(?P<description>.+)$",
     re.IGNORECASE,
 )
 VISIBLE_CHANGE_TYPES = {"feat", "fix", "perf", "refactor"}
 DEFAULT_RELEASE_NOTE = "未提供发布说明"
+
+SECTION_RULES = (
+    ("渠道与故障转移", ("claude", "codex", "provider", "failover", "endpoint", "management")),
+    ("凭证与成本", ("credentials", "credential", "billing", "pricing", "usage", "cost")),
+    ("隐私防护", ("privacy", "security")),
+    ("架构与界面", ("architecture", "core", "tracking", "store", "cache", "database", "desktop")),
+    ("版本体验", ("release", "build", "frontend", "ui")),
+)
+FALLBACK_SECTION = "稳定性与兼容性"
 
 
 def run_git(*args: str) -> str:
@@ -63,7 +72,7 @@ def find_release_boundary(
     )
 
 
-def parse_change_subject(subject: str) -> tuple[str, str] | None:
+def parse_change_subject(subject: str) -> tuple[str, str, str] | None:
     match = CONVENTIONAL_SUBJECT_PATTERN.match(subject.strip())
     if not match:
         return None
@@ -71,7 +80,18 @@ def parse_change_subject(subject: str) -> tuple[str, str] | None:
     change_type = match.group("type").lower()
     if change_type not in VISIBLE_CHANGE_TYPES:
         return None
-    return change_type, match.group("description").strip()
+    return (
+        change_type,
+        (match.group("scope") or "").strip().lower(),
+        match.group("description").strip(),
+    )
+
+
+def section_for_change(scope: str) -> str:
+    for title, prefixes in SECTION_RULES:
+        if any(scope == prefix or scope.startswith(f"{prefix}-") for prefix in prefixes):
+            return title
+    return FALLBACK_SECTION
 
 
 def unique_non_empty(values: Iterable[str]) -> list[str]:
@@ -86,22 +106,29 @@ def unique_non_empty(values: Iterable[str]) -> list[str]:
     return result
 
 
-def build_highlights(commit_subjects: Iterable[str], release_note: str = "") -> list[str]:
-    parsed_changes = [
-        parsed
-        for subject in commit_subjects
-        if (parsed := parse_change_subject(subject)) is not None
+def build_sections(commit_subjects: Iterable[str], release_note: str = "") -> list[dict[str, object]]:
+    section_order = [title for title, _ in SECTION_RULES] + [FALLBACK_SECTION]
+    grouped: dict[str, list[str]] = {title: [] for title in section_order}
+
+    for subject in commit_subjects:
+        parsed = parse_change_subject(subject)
+        if parsed is None:
+            continue
+        _, scope, description = parsed
+        grouped[section_for_change(scope)].append(description)
+
+    sections = [
+        {"title": title, "items": unique_non_empty(grouped[title])}
+        for title in section_order
+        if grouped[title]
     ]
-    feature_descriptions = [description for change_type, description in parsed_changes if change_type == "feat"]
-    fallback_descriptions = [description for _, description in parsed_changes]
+    if sections:
+        return sections
 
-    candidates: list[str] = []
-    if release_note.strip() and release_note.strip() != DEFAULT_RELEASE_NOTE:
-        candidates.append(release_note.strip())
-    candidates.extend(feature_descriptions or fallback_descriptions)
-
-    highlights = unique_non_empty(candidates)
-    return highlights or ["包含稳定性与体验优化"]
+    summary = release_note.strip()
+    if summary and summary != DEFAULT_RELEASE_NOTE:
+        return [{"title": "重点更新", "items": [summary]}]
+    return [{"title": FALLBACK_SECTION, "items": ["包含稳定性与体验优化"]}]
 
 
 def generate_release_notes(
@@ -121,7 +148,7 @@ def generate_release_notes(
     )
     data: dict[str, object] = {
         "version": normalize_version(version),
-        "highlights": build_highlights(commit_output.splitlines(), release_note),
+        "sections": build_sections(commit_output.splitlines(), release_note),
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +163,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="new release version")
     parser.add_argument("--previous-version", required=True, help="current release version")
-    parser.add_argument("--release-note", default="", help="optional curated release summary")
+    parser.add_argument("--release-note", default="", help="fallback release summary")
     parser.add_argument("--output", required=True, type=Path, help="generated JSON path")
     args = parser.parse_args()
 
@@ -146,7 +173,11 @@ def main() -> None:
         release_note=args.release_note,
         output_path=args.output,
     )
-    print(f"已生成 v{data['version']} 新版功能提示，共 {len(data['highlights'])} 项")
+    change_count = sum(len(section["items"]) for section in data["sections"])
+    print(
+        f"已生成 v{data['version']} 新版功能提示，"
+        f"共 {len(data['sections'])} 类 {change_count} 项"
+    )
 
 
 if __name__ == "__main__":
