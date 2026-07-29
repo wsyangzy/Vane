@@ -1,16 +1,56 @@
 {
-  "version": "8.4",
-  "sections": [
+  "currentVersion": "8.5",
+  "releases": [
     {
-      "title": "桌面与数据",
-      "items": [
-        "增加数据目录入口并稳定 Wails dev 生命周期；按月归档请求历史并统一数据保留策略。"
+      "version": "8.5",
+      "sections": [
+        {
+          "title": "渠道与故障转移",
+          "items": [
+            "统一首次配置，提升并发切换与路由恢复稳定性。"
+          ]
+        },
+        {
+          "title": "凭证与成本",
+          "items": [
+            "新增凭证分组每日限额与当日用量详情。"
+          ]
+        },
+        {
+          "title": "隐私防护",
+          "items": [
+            "扩大请求脱敏范围，异常时阻止敏感原文出站。"
+          ]
+        },
+        {
+          "title": "架构与界面",
+          "items": [
+            "完成 Claude Provider 化并优化渠道状态展示。"
+          ]
+        },
+        {
+          "title": "版本体验",
+          "items": [
+            "新增每版首次提示并修复 Windows 发布链路。"
+          ]
+        }
       ]
     },
     {
-      "title": "渠道与故障转移",
-      "items": [
-        "完成 Codex 渠道间故障转移与 Provider 配置隔离，统一端点状态展示与 Long context 默认行为。"
+      "version": "8.4",
+      "sections": [
+        {
+          "title": "桌面与数据",
+          "items": [
+            "增加数据目录入口并稳定 Wails dev 生命周期；按月归档请求历史并统一数据保留策略。"
+          ]
+        },
+        {
+          "title": "渠道与故障转移",
+          "items": [
+            "完成 Codex 渠道间故障转移与 Provider 配置隔离，统一端点状态展示与 Long context 默认行为。"
+          ]
+        }
       ]
     }
   ]

@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-VERSION="8.4"
+VERSION="8.5"
 APP_NAME="AI Relay Forwarder"
 PACKAGE_NAME="AI-Relay-Forwarder-Windows-v${VERSION}"
 DIST_ROOT="build/dist"

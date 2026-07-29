@@ -17,6 +17,8 @@ class ReleasePipelineTests(unittest.TestCase):
         self.assertIn("wails3 task build", workflow)
         self.assertIn("build/bin/AI Relay Forwarder.exe", workflow)
         self.assertIn("frontend/src/release-notes.json", workflow)
+        self.assertIn("$catalog.releases", workflow)
+        self.assertIn('throw "Release notes not found for $tag"', workflow)
         self.assertIn("AI-Relay-Forwarder-windows-amd64.zip", workflow)
         self.assertNotIn("github.com/wailsapp/wails/v2", workflow)
         self.assertNotIn("Claude Request Forwarder", workflow)

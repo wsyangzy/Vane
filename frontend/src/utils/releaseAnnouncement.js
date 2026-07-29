@@ -25,11 +25,18 @@ const normalizeSections = (sections) => {
     .filter((section) => section.items.length > 0);
 };
 
-const getReleaseSections = (releaseNotes) => {
-  const sections = normalizeSections(releaseNotes?.sections);
+const getReleaseRecords = (releaseNotes) => {
+  if (Array.isArray(releaseNotes?.releases)) {
+    return releaseNotes.releases;
+  }
+  return releaseNotes?.version ? [releaseNotes] : [];
+};
+
+const getReleaseSections = (releaseRecord) => {
+  const sections = normalizeSections(releaseRecord?.sections);
   if (sections.length > 0) return sections;
 
-  const legacyHighlights = normalizeItems(releaseNotes?.highlights);
+  const legacyHighlights = normalizeItems(releaseRecord?.highlights);
   return legacyHighlights.length > 0
     ? [{ title: '本次更新', items: legacyHighlights }]
     : [];
@@ -37,15 +44,16 @@ const getReleaseSections = (releaseNotes) => {
 
 export const getReleaseAnnouncement = (runtimeVersion, releaseNotes) => {
   const normalizedRuntimeVersion = normalizeReleaseVersion(runtimeVersion);
-  const normalizedNotesVersion = normalizeReleaseVersion(releaseNotes?.version);
-  const sections = getReleaseSections(releaseNotes);
+  if (!normalizedRuntimeVersion) return null;
 
-  if (!normalizedRuntimeVersion || normalizedRuntimeVersion !== normalizedNotesVersion || sections.length === 0) {
-    return null;
-  }
+  const releaseRecord = getReleaseRecords(releaseNotes).find(
+    (record) => normalizeReleaseVersion(record?.version) === normalizedRuntimeVersion
+  );
+  const sections = getReleaseSections(releaseRecord);
+  if (!releaseRecord || sections.length === 0) return null;
 
   return {
-    version: normalizedNotesVersion,
+    version: normalizedRuntimeVersion,
     sections
   };
 };
@@ -80,6 +88,14 @@ export const consumeReleaseAnnouncement = ({ runtimeVersion, releaseNotes, stora
   return announcement;
 };
 
-export const formatReleaseSections = (sections) => normalizeSections(sections)
-  .map((section) => `${section.title}：${section.items.join('；')}`)
-  .join('\n');
+export const buildReleaseToastEntries = (announcement) => {
+  const version = normalizeReleaseVersion(announcement?.version);
+  if (!version) return [];
+
+  return normalizeSections(announcement?.sections).flatMap((section) => (
+    section.items.map((message) => ({
+      title: `v${version} · ${section.title}`,
+      message
+    }))
+  ));
+};

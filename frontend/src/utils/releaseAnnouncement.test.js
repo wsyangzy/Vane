@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
+  buildReleaseToastEntries,
   consumeReleaseAnnouncement,
-  formatReleaseSections,
   getReleaseAnnouncement,
   normalizeReleaseVersion
 } from './releaseAnnouncement.js';
@@ -17,85 +17,105 @@ const createStorage = () => {
   };
 };
 
-const sampleReleaseNotes = {
-  version: '8.5',
-  sections: [
-    { title: '凭证与成本', items: ['新增渠道成本限额'] },
-    { title: '渠道与故障转移', items: ['优化故障转移一致性'] }
+const sampleReleaseCatalog = {
+  currentVersion: '8.5',
+  releases: [
+    {
+      version: '8.5',
+      sections: [
+        { title: '凭证与成本', items: ['新增渠道成本限额'] },
+        { title: '渠道与故障转移', items: ['优化故障转移一致性'] }
+      ]
+    },
+    {
+      version: '8.4',
+      sections: [{ title: '数据管理', items: ['增加数据目录入口'] }]
+    }
   ]
 };
 
 const sampleAnnouncement = {
   version: '8.5',
-  sections: sampleReleaseNotes.sections
+  sections: sampleReleaseCatalog.releases[0].sections
 };
 
-test('release announcement normalizes packaged version prefixes and dev suffixes', () => {
+test('release announcement selects the running version from the archive', () => {
   assert.equal(normalizeReleaseVersion('v8.5'), '8.5');
   assert.equal(normalizeReleaseVersion('8.5-dev'), '8.5');
-  assert.deepEqual(getReleaseAnnouncement('v8.5', sampleReleaseNotes), sampleAnnouncement);
+  assert.deepEqual(getReleaseAnnouncement('v8.5', sampleReleaseCatalog), sampleAnnouncement);
+  assert.deepEqual(getReleaseAnnouncement('8.4', sampleReleaseCatalog), {
+    version: '8.4',
+    sections: sampleReleaseCatalog.releases[1].sections
+  });
+  assert.equal(getReleaseAnnouncement('8.3', sampleReleaseCatalog), null);
 });
 
-test('release announcement is consumed only once for each version', () => {
+test('release announcement is consumed only once for each archived version', () => {
   const storage = createStorage();
 
   assert.deepEqual(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.5', releaseNotes: sampleReleaseNotes, storage }),
+    consumeReleaseAnnouncement({ runtimeVersion: '8.5', releaseNotes: sampleReleaseCatalog, storage }),
     sampleAnnouncement
   );
   assert.equal(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.5', releaseNotes: sampleReleaseNotes, storage }),
+    consumeReleaseAnnouncement({ runtimeVersion: '8.5', releaseNotes: sampleReleaseCatalog, storage }),
     null
   );
-
-  const nextRelease = {
-    version: '8.6',
-    sections: [{ title: '版本体验', items: ['新增请求分析视图'] }]
-  };
   assert.deepEqual(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.6', releaseNotes: nextRelease, storage }),
-    nextRelease
+    consumeReleaseAnnouncement({ runtimeVersion: '8.4', releaseNotes: sampleReleaseCatalog, storage }),
+    { version: '8.4', sections: sampleReleaseCatalog.releases[1].sections }
   );
 });
 
-test('release announcement accepts legacy highlights while rejecting stale or empty notes', () => {
-  const storage = createStorage();
+test('release announcement accepts the legacy single-version shape', () => {
   const legacyNotes = { version: '8.5', highlights: ['兼容旧版发布说明'] };
 
   assert.deepEqual(getReleaseAnnouncement('8.5', legacyNotes), {
     version: '8.5',
     sections: [{ title: '本次更新', items: ['兼容旧版发布说明'] }]
   });
-  assert.equal(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.6', releaseNotes: sampleReleaseNotes, storage }),
-    null
-  );
-  assert.equal(consumeReleaseAnnouncement({
-    runtimeVersion: '8.5',
-    releaseNotes: { version: '8.5', sections: [] },
-    storage
-  }), null);
+  assert.equal(getReleaseAnnouncement('8.6', legacyNotes), null);
 });
 
-test('release sections are formatted as categorized toast lines', () => {
-  assert.equal(
-    formatReleaseSections([
+test('release toast entries preserve category and item order', () => {
+  assert.deepEqual(buildReleaseToastEntries({
+    version: '8.5',
+    sections: [
       { title: '渠道与故障转移', items: ['完善初次配置', '优化并发切换'] },
       { title: '隐私防护', items: ['强化请求级脱敏'] }
-    ]),
-    '渠道与故障转移：完善初次配置；优化并发切换\n隐私防护：强化请求级脱敏'
-  );
+    ]
+  }), [
+    { title: 'v8.5 · 渠道与故障转移', message: '完善初次配置' },
+    { title: 'v8.5 · 渠道与故障转移', message: '优化并发切换' },
+    { title: 'v8.5 · 隐私防护', message: '强化请求级脱敏' }
+  ]);
 });
 
-test('bundled release notes stay aligned with the Go application version', () => {
-  const bundledReleaseNotes = JSON.parse(
+test('app schedules release entries one at a time instead of stacking one long toast', () => {
+  const appSource = readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
+
+  assert.match(appSource, /RELEASE_TOAST_DURATION_MS = 4000/);
+  assert.match(appSource, /RELEASE_TOAST_INTERVAL_MS = 4300/);
+  assert.match(appSource, /buildReleaseToastEntries\(announcement\)\.forEach/);
+  assert.match(appSource, /index === 0/);
+  assert.match(appSource, /window\.setTimeout\(showEntry, index \* RELEASE_TOAST_INTERVAL_MS\)/);
+  assert.match(appSource, /timerIds\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
+});
+
+test('bundled release catalog archives old versions and keeps current entries concise', () => {
+  const catalog = JSON.parse(
     readFileSync(new URL('../release-notes.json', import.meta.url), 'utf8')
   );
   const globalsSource = readFileSync(new URL('../../../globals.go', import.meta.url), 'utf8');
   const versionMatch = globalsSource.match(/\bVersion\s*=\s*"([^"]+)"/);
+  const versions = catalog.releases.map((release) => normalizeReleaseVersion(release.version));
+  const currentAnnouncement = getReleaseAnnouncement(catalog.currentVersion, catalog);
+  const entries = buildReleaseToastEntries(currentAnnouncement);
 
   assert.ok(versionMatch, 'globals.go must define Version');
-  assert.equal(normalizeReleaseVersion(bundledReleaseNotes.version), normalizeReleaseVersion(versionMatch[1]));
-  assert.ok(bundledReleaseNotes.sections.length > 0);
-  assert.ok(bundledReleaseNotes.sections.every((section) => section.title && section.items.length > 0));
+  assert.equal(normalizeReleaseVersion(catalog.currentVersion), normalizeReleaseVersion(versionMatch[1]));
+  assert.equal(new Set(versions).size, versions.length);
+  assert.deepEqual(versions.slice(0, 2), ['8.5', '8.4']);
+  assert.equal(entries.length, 5);
+  assert.ok(entries.every((entry) => entry.title.length <= 24 && entry.message.length <= 32));
 });

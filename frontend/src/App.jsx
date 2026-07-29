@@ -10,7 +10,7 @@ import useSSE from '@hooks/useSSE.js';
 import { fetchRequests, fetchStatus, isWailsEnvironment } from '@utils/api.js';
 import { getSuspendedRequestsCount, getManualRetryRequestsCount, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
 import releaseNotes from './release-notes.json';
-import { consumeReleaseAnnouncement, formatReleaseSections } from '@utils/releaseAnnouncement.js';
+import { buildReleaseToastEntries, consumeReleaseAnnouncement } from '@utils/releaseAnnouncement.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -85,6 +85,9 @@ const buildFailoverFailureMessage = (failureReason) => {
   return trimmed.length > 120 ? `${trimmed.slice(0, 120)}...` : trimmed;
 };
 
+const RELEASE_TOAST_DURATION_MS = 4000;
+const RELEASE_TOAST_INTERVAL_MS = 4300;
+
 const ReleaseAnnouncement = () => {
   const toast = useToast();
 
@@ -92,6 +95,7 @@ const ReleaseAnnouncement = () => {
     if (!isWailsEnvironment()) return undefined;
 
     let cancelled = false;
+    const timerIds = [];
     fetchStatus()
       .then((status) => {
         if (cancelled) return;
@@ -103,10 +107,21 @@ const ReleaseAnnouncement = () => {
         });
         if (!announcement) return;
 
-        toast.show(formatReleaseSections(announcement.sections), {
-          type: 'info',
-          title: `v${announcement.version} 新版本功能`,
-          duration: 18000
+        buildReleaseToastEntries(announcement).forEach((entry, index) => {
+          const showEntry = () => {
+            if (cancelled) return;
+            toast.show(entry.message, {
+              type: 'info',
+              title: entry.title,
+              duration: RELEASE_TOAST_DURATION_MS
+            });
+          };
+
+          if (index === 0) {
+            showEntry();
+          } else {
+            timerIds.push(window.setTimeout(showEntry, index * RELEASE_TOAST_INTERVAL_MS));
+          }
         });
       })
       .catch((error) => {
@@ -117,6 +132,7 @@ const ReleaseAnnouncement = () => {
 
     return () => {
       cancelled = true;
+      timerIds.forEach((timerId) => window.clearTimeout(timerId));
     };
   }, [toast]);
 

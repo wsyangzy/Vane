@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate categorized in-app release notes from commits since the last release."""
+"""Generate categorized in-app release notes while preserving older versions."""
 
 from __future__ import annotations
 
@@ -131,6 +131,61 @@ def build_sections(commit_subjects: Iterable[str], release_note: str = "") -> li
     return [{"title": FALLBACK_SECTION, "items": ["包含稳定性与体验优化"]}]
 
 
+def normalize_release_record(record: object) -> dict[str, object] | None:
+    if not isinstance(record, dict):
+        return None
+    version = normalize_version(str(record.get("version", "")))
+    if not version:
+        return None
+
+    normalized: dict[str, object] = {"version": version}
+    if isinstance(record.get("sections"), list):
+        normalized["sections"] = record["sections"]
+    elif isinstance(record.get("highlights"), list):
+        normalized["highlights"] = record["highlights"]
+    else:
+        return None
+    return normalized
+
+
+def get_archived_releases(catalog: object) -> list[dict[str, object]]:
+    if not isinstance(catalog, dict):
+        return []
+    raw_releases = catalog.get("releases")
+    if not isinstance(raw_releases, list):
+        raw_releases = [catalog] if catalog.get("version") else []
+
+    releases: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for raw_release in raw_releases:
+        release = normalize_release_record(raw_release)
+        if release is None or release["version"] in seen:
+            continue
+        seen.add(str(release["version"]))
+        releases.append(release)
+    return releases
+
+
+def merge_release_catalog(
+    existing_catalog: object,
+    new_release: dict[str, object],
+) -> dict[str, object]:
+    normalized_new_release = normalize_release_record(new_release)
+    if normalized_new_release is None:
+        raise ValueError("new release notes must include a version and content")
+
+    new_version = str(normalized_new_release["version"])
+    archived = [
+        release
+        for release in get_archived_releases(existing_catalog)
+        if release["version"] != new_version
+    ]
+    return {
+        "currentVersion": new_version,
+        "releases": [normalized_new_release, *archived],
+    }
+
+
 def generate_release_notes(
     version: str,
     previous_version: str,
@@ -146,17 +201,22 @@ def generate_release_notes(
         "--reverse",
         "--format=%s",
     )
-    data: dict[str, object] = {
+    release_record: dict[str, object] = {
         "version": normalize_version(version),
         "sections": build_sections(commit_output.splitlines(), release_note),
     }
 
+    existing_catalog: object = {}
+    if output_path.exists():
+        existing_catalog = json.loads(output_path.read_text(encoding="utf-8"))
+    catalog = merge_release_catalog(existing_catalog, release_record)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(catalog, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    return data
+    return catalog
 
 
 def main() -> None:
@@ -164,19 +224,21 @@ def main() -> None:
     parser.add_argument("--version", required=True, help="new release version")
     parser.add_argument("--previous-version", required=True, help="current release version")
     parser.add_argument("--release-note", default="", help="fallback release summary")
-    parser.add_argument("--output", required=True, type=Path, help="generated JSON path")
+    parser.add_argument("--output", required=True, type=Path, help="release catalog JSON path")
     args = parser.parse_args()
 
-    data = generate_release_notes(
+    catalog = generate_release_notes(
         version=args.version,
         previous_version=args.previous_version,
         release_note=args.release_note,
         output_path=args.output,
     )
-    change_count = sum(len(section["items"]) for section in data["sections"])
+    current_release = catalog["releases"][0]
+    change_count = sum(len(section["items"]) for section in current_release["sections"])
     print(
-        f"已生成 v{data['version']} 新版功能提示，"
-        f"共 {len(data['sections'])} 类 {change_count} 项"
+        f"已归档 v{catalog['currentVersion']} 新版功能提示，"
+        f"共 {len(current_release['sections'])} 类 {change_count} 项；"
+        f"目录保留 {len(catalog['releases'])} 个版本"
     )
 
 

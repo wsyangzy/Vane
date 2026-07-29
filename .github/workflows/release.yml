@@ -122,7 +122,14 @@ jobs:
             Accept = "application/json"
           }
 
-          $notes = Get-Content -LiteralPath "frontend/src/release-notes.json" -Raw | ConvertFrom-Json
+          $catalog = Get-Content -LiteralPath "frontend/src/release-notes.json" -Raw | ConvertFrom-Json
+          $releaseVersion = $tag.TrimStart("v")
+          $notes = @($catalog.releases | Where-Object {
+            "$($_.version)" -eq $releaseVersion
+          }) | Select-Object -First 1
+          if (-not $notes) {
+            throw "Release notes not found for $tag"
+          }
           $sectionLines = @($notes.sections | ForEach-Object {
             $items = @($_.items) -join "；"
             "- **$($_.title)**：$items"
