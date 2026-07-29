@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
-  buildReleaseToastEntries,
+  buildReleaseToastSummary,
   consumeReleaseAnnouncement,
   getReleaseAnnouncement,
-  normalizeReleaseVersion
+  normalizeReleaseVersion,
+  RELEASE_SUMMARY_TOAST_DURATION_MS,
+  showReleaseToastSummary
 } from './releaseAnnouncement.js';
 
 const createStorage = () => {
@@ -77,29 +79,50 @@ test('release announcement accepts the legacy single-version shape', () => {
   assert.equal(getReleaseAnnouncement('8.6', legacyNotes), null);
 });
 
-test('release toast entries preserve category and item order', () => {
-  assert.deepEqual(buildReleaseToastEntries({
+test('manual release summary displays all categories in one toast', () => {
+  const announcement = {
     version: '8.5',
     sections: [
       { title: '渠道与故障转移', items: ['完善初次配置', '优化并发切换'] },
       { title: '隐私防护', items: ['强化请求级脱敏'] }
     ]
-  }), [
-    { title: 'v8.5 · 渠道与故障转移', message: '完善初次配置' },
-    { title: 'v8.5 · 渠道与故障转移', message: '优化并发切换' },
-    { title: 'v8.5 · 隐私防护', message: '强化请求级脱敏' }
-  ]);
+  };
+  assert.deepEqual(buildReleaseToastSummary(announcement), {
+    title: 'v8.5 更新内容',
+    message: [
+      '渠道与故障转移：完善初次配置',
+      '渠道与故障转移：优化并发切换',
+      '隐私防护：强化请求级脱敏'
+    ]
+  });
+
+  const toastSource = readFileSync(new URL('../components/ui/Toast.jsx', import.meta.url), 'utf8');
+  assert.match(toastSource, /Array\.isArray\(message\)/);
+  assert.match(toastSource, /list-disc/);
+
+  const shown = [];
+  const dismissed = [];
+  const stop = showReleaseToastSummary({
+    announcement,
+    showToast: (message, options) => shown.push({ message, options }),
+    dismissToast: (toastId) => dismissed.push(toastId)
+  });
+
+  assert.equal(shown.length, 1);
+  assert.equal(shown[0].options.duration, RELEASE_SUMMARY_TOAST_DURATION_MS);
+  assert.equal(RELEASE_SUMMARY_TOAST_DURATION_MS, 12000);
+  stop();
+  assert.deepEqual(dismissed, [1]);
 });
 
-test('app schedules release entries one at a time instead of stacking one long toast', () => {
+test('app startup uses the same release summary as manual replay', () => {
   const appSource = readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
 
-  assert.match(appSource, /RELEASE_TOAST_DURATION_MS = 4000/);
-  assert.match(appSource, /RELEASE_TOAST_INTERVAL_MS = 4300/);
-  assert.match(appSource, /buildReleaseToastEntries\(announcement\)\.forEach/);
-  assert.match(appSource, /index === 0/);
-  assert.match(appSource, /window\.setTimeout\(showEntry, index \* RELEASE_TOAST_INTERVAL_MS\)/);
-  assert.match(appSource, /timerIds\.forEach\(\(timerId\) => window\.clearTimeout\(timerId\)\)/);
+  assert.match(appSource, /showReleaseToastSummary\(\{/);
+  assert.match(appSource, /showToast: toast\.show/);
+  assert.match(appSource, /dismissToast: toast\.dismiss/);
+  assert.match(appSource, /stopAnnouncement\(\)/);
+  assert.doesNotMatch(appSource, /playReleaseToastSequence/);
 });
 
 test('bundled release catalog archives old versions and keeps current entries concise', () => {
@@ -110,12 +133,12 @@ test('bundled release catalog archives old versions and keeps current entries co
   const versionMatch = globalsSource.match(/\bVersion\s*=\s*"([^"]+)"/);
   const versions = catalog.releases.map((release) => normalizeReleaseVersion(release.version));
   const currentAnnouncement = getReleaseAnnouncement(catalog.currentVersion, catalog);
-  const entries = buildReleaseToastEntries(currentAnnouncement);
+  const summary = buildReleaseToastSummary(currentAnnouncement);
 
   assert.ok(versionMatch, 'globals.go must define Version');
   assert.equal(normalizeReleaseVersion(catalog.currentVersion), normalizeReleaseVersion(versionMatch[1]));
   assert.equal(new Set(versions).size, versions.length);
   assert.deepEqual(versions.slice(0, 2), ['8.5', '8.4']);
-  assert.equal(entries.length, 5);
-  assert.ok(entries.every((entry) => entry.title.length <= 24 && entry.message.length <= 32));
+  assert.equal(summary.message.length, 5);
+  assert.ok(summary.message.every((item) => item.length <= 48));
 });

@@ -1,5 +1,8 @@
 const RELEASE_ANNOUNCEMENT_STORAGE_PREFIX = 'ai-relay-forwarder:release-announcement:';
+export const RELEASE_SUMMARY_TOAST_DURATION_MS = 12000;
+
 const fallbackSeenVersions = new Set();
+let stopActiveReleaseToastDisplay = null;
 
 export const normalizeReleaseVersion = (value) => String(value ?? '')
   .trim()
@@ -88,14 +91,42 @@ export const consumeReleaseAnnouncement = ({ runtimeVersion, releaseNotes, stora
   return announcement;
 };
 
-export const buildReleaseToastEntries = (announcement) => {
+export const buildReleaseToastSummary = (announcement) => {
   const version = normalizeReleaseVersion(announcement?.version);
-  if (!version) return [];
+  const sections = normalizeSections(announcement?.sections);
+  if (!version || sections.length === 0) return null;
 
-  return normalizeSections(announcement?.sections).flatMap((section) => (
-    section.items.map((message) => ({
-      title: `v${version} · ${section.title}`,
-      message
-    }))
-  ));
+  return {
+    title: `v${version} 更新内容`,
+    message: sections.flatMap((section) => (
+      section.items.map((item) => `${section.title}：${item}`)
+    ))
+  };
+};
+
+export const showReleaseToastSummary = ({ announcement, showToast, dismissToast }) => {
+  stopActiveReleaseToastDisplay?.();
+
+  const summary = buildReleaseToastSummary(announcement);
+  if (!summary || typeof showToast !== 'function') {
+    stopActiveReleaseToastDisplay = null;
+    return () => {};
+  }
+
+  let toastId = showToast(summary.message, {
+    type: 'info',
+    title: summary.title,
+    duration: RELEASE_SUMMARY_TOAST_DURATION_MS
+  });
+  const stop = () => {
+    if (toastId !== null && toastId !== undefined && typeof dismissToast === 'function') {
+      dismissToast(toastId);
+      toastId = null;
+    }
+    if (stopActiveReleaseToastDisplay === stop) {
+      stopActiveReleaseToastDisplay = null;
+    }
+  };
+  stopActiveReleaseToastDisplay = stop;
+  return stop;
 };

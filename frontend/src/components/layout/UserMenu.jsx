@@ -14,7 +14,8 @@ import {
   Cpu,
   Database,
   Terminal,
-  RefreshCw
+  RefreshCw,
+  ChevronRight
 } from 'lucide-react';
 import {
   isWailsEnvironment,
@@ -30,9 +31,23 @@ import {
   copyToClipboard
 } from '@utils/wailsApi.js';
 import { useToast } from '@components/ui';
+import releaseNotes from '@/release-notes.json';
+import { getReleaseAnnouncement, showReleaseToastSummary } from '@utils/releaseAnnouncement.js';
 
 // 信息卡片项目组件（移到外部避免 lint 警告）
-const InfoItem = ({ icon: Icon, iconBg, iconColor, label, value, delay, isLoaded, extra, valueClass }) => (
+const InfoItem = ({
+  icon: Icon,
+  iconBg,
+  iconColor,
+  label,
+  value,
+  delay,
+  isLoaded,
+  extra,
+  valueClass,
+  onValueClick,
+  valueAriaLabel
+}) => (
   <div
     className="flex items-center justify-between transition-all duration-300 ease-out"
     style={{
@@ -48,7 +63,20 @@ const InfoItem = ({ icon: Icon, iconBg, iconColor, label, value, delay, isLoaded
       <span className="text-xs font-medium text-slate-500">{label}</span>
     </div>
     <div className="flex items-center gap-2">
-      <span className={`text-sm font-semibold ${valueClass || 'text-slate-800'}`}>{value}</span>
+      {onValueClick ? (
+        <button
+          type="button"
+          onClick={onValueClick}
+          className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-sm font-semibold transition-colors hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${valueClass || 'text-slate-800'}`}
+          aria-label={valueAriaLabel}
+          title="查看当前版本更新内容"
+        >
+          {value}
+          <ChevronRight size={12} aria-hidden="true" />
+        </button>
+      ) : (
+        <span className={`text-sm font-semibold ${valueClass || 'text-slate-800'}`}>{value}</span>
+      )}
       {extra}
     </div>
   </div>
@@ -67,6 +95,7 @@ const UserMenu = () => {
   const [copied, setCopied] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   const menuRef = useRef(null);
+  const releaseToastCleanupRef = useRef(null);
   const isWails = isWailsEnvironment();
   const toast = useToast();
 
@@ -84,6 +113,22 @@ const UserMenu = () => {
       console.warn('Failed to load system info:', error);
     }
   }, [isWails]);
+
+  const handleShowReleaseNotes = useCallback(() => {
+    const announcement = getReleaseAnnouncement(systemInfo?.version, releaseNotes);
+    if (!announcement) {
+      toast.info('当前版本暂无更新说明', '版本更新');
+      return;
+    }
+
+    setIsOpen(false);
+    releaseToastCleanupRef.current?.();
+    releaseToastCleanupRef.current = showReleaseToastSummary({
+      announcement,
+      showToast: toast.show,
+      dismissToast: toast.dismiss
+    });
+  }, [systemInfo?.version, toast]);
 
   // 手动检查 Claude Code 版本
   const checkClaudeVersion = useCallback(async () => {
@@ -144,6 +189,10 @@ const UserMenu = () => {
     const timer = setInterval(loadSystemInfo, 1000);
     return () => clearInterval(timer);
   }, [isOpen, loadSystemInfo]);
+
+  useEffect(() => () => {
+    releaseToastCleanupRef.current?.();
+  }, []);
 
   // 点击外部关闭菜单
   useEffect(() => {
@@ -289,6 +338,8 @@ const UserMenu = () => {
               valueClass="text-indigo-600 font-mono"
               delay={0}
               isLoaded={isLoaded}
+              onValueClick={systemInfo?.version ? handleShowReleaseNotes : undefined}
+              valueAriaLabel={systemInfo?.version ? `查看 v${systemInfo.version} 更新内容` : undefined}
             />
 
             {/* Claude Code 版本（带刷新按钮） */}

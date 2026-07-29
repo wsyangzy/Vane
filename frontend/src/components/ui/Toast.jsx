@@ -96,7 +96,13 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
         {title && (
           <p className={`text-sm font-semibold ${variant.titleColor}`}>{title}</p>
         )}
-        {message && (
+        {Array.isArray(message) ? (
+          <ul className="mt-1.5 list-disc space-y-1 pl-4 text-sm leading-5 text-slate-600 marker:text-blue-400">
+            {message.map((item, index) => (
+              <li key={index} className="pl-0.5 [overflow-wrap:anywhere]">{item}</li>
+            ))}
+          </ul>
+        ) : message && (
           <p className="mt-0.5 whitespace-pre-line text-sm leading-5 text-slate-600 [overflow-wrap:anywhere]">{message}</p>
         )}
       </div>
@@ -198,11 +204,12 @@ export const ToastProvider = ({ children }) => {
   // 便捷方法
   const toast = useMemo(() => ({
     show: (message, options = {}) => addToast({ message, ...options }),
+    dismiss: removeToast,
     success: (message, title) => addToast({ type: 'success', message, title: title || '成功' }),
     error: (message, title) => addToast({ type: 'error', message, title: title || '错误', duration: 6000 }),
     warning: (message, title) => addToast({ type: 'warning', message, title: title || '警告', duration: 5000 }),
     info: (message, title) => addToast({ type: 'info', message, title: title || '提示' })
-  }), [addToast]);
+  }), [addToast, removeToast]);
 
   return (
     <ToastContext.Provider value={toast}>
