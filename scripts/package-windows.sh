@@ -1,83 +1,68 @@
-#!/bin/bash
-# 打包 Windows 发布版本（包含所有必需文件）
+#!/usr/bin/env bash
+# Package the Windows release build with the files needed for distribution.
+
+set -euo pipefail
 
 VERSION="8.4"
-DIST_DIR="build/dist/Claude-Request-Forwarder-Windows-v${VERSION}"
+APP_NAME="AI Relay Forwarder"
+PACKAGE_NAME="AI-Relay-Forwarder-Windows-v${VERSION}"
+DIST_ROOT="build/dist"
+DIST_DIR="${DIST_ROOT}/${PACKAGE_NAME}"
+ZIP_PATH="${DIST_ROOT}/${PACKAGE_NAME}.zip"
+EXE_PATH="build/bin/${APP_NAME}.exe"
 
-echo "📦 打包 Windows 发布版本..."
+if [ ! -f "$EXE_PATH" ]; then
+    echo "错误: 找不到 Windows 可执行文件: $EXE_PATH" >&2
+    echo "请先运行: wails3 task build VERSION=${VERSION}" >&2
+    exit 1
+fi
 
-# 1. 创建发布目录
-rm -rf "$DIST_DIR"
-mkdir -p "$DIST_DIR"
+echo "正在打包 ${APP_NAME} v${VERSION} Windows 版本..."
+rm -rf "$DIST_DIR" "$ZIP_PATH" "${ZIP_PATH}.sha256"
+mkdir -p "$DIST_DIR/config" "$DIST_DIR/data" "$DIST_DIR/logs"
 
-# 2. 复制可执行文件
-cp build/bin/Claude Request Forwarder.exe "$DIST_DIR/"
-echo "  ✅ 复制可执行文件"
-
-# 3. 创建配置目录和示例配置
-mkdir -p "$DIST_DIR/config"
+cp "$EXE_PATH" "$DIST_DIR/${APP_NAME}.exe"
 cp config/example.yaml "$DIST_DIR/config/config.yaml"
-echo "  ✅ 复制配置文件"
 
-# 4. 创建数据目录（用于数据库）
-mkdir -p "$DIST_DIR/data"
-echo "  ✅ 创建数据目录"
+cat > "$DIST_DIR/README.txt" <<EOF
+AI Relay Forwarder v${VERSION} - Windows x64
+============================================
 
-# 5. 创建日志目录
-mkdir -p "$DIST_DIR/logs"
-echo "  ✅ 创建日志目录"
+快速开始
 
-# 6. 创建 README
-cat > "$DIST_DIR/README.txt" << 'EOT'
-Claude Request Forwarder v7.3 - Windows 版本
-====================================
+1. 双击 AI Relay Forwarder.exe 启动应用。
+2. 应用数据、配置和日志默认保存在用户 AppData 目录。
+3. 在应用内配置 Claude 或 Codex 渠道、凭证分组和端点。
 
-## 快速开始
+系统要求
 
-1. 双击 Claude Request Forwarder.exe 启动应用
-2. 首次启动会自动创建数据库和日志文件
-3. 打开设置页面配置端点信息
+- Windows 10/11 x64
+- Microsoft Edge WebView2 Runtime
 
-## 配置文件
+目录说明
 
-配置文件位于: config/config.yaml
-请根据需要修改端点配置
+- config/config.yaml: 示例配置
+- data/: 便携数据目录预留
+- logs/: 便携日志目录预留
+EOF
 
-## 数据文件
+python3 - "$DIST_DIR" "$ZIP_PATH" <<'PYEOF'
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
+import sys
 
-- 数据库: data/usage.db (自动创建)
-- 日志文件: logs/app.log (自动创建)
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+with ZipFile(target, "w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
+    for path in sorted(source.rglob("*")):
+        if path.is_file():
+            archive.write(path, Path(source.name) / path.relative_to(source))
+PYEOF
 
-## 系统要求
+sha256sum "$ZIP_PATH" > "${ZIP_PATH}.sha256"
 
-- Windows 10/11 (64位)
-- WebView2 运行时 (Windows 11自带)
-  如果提示缺少 WebView2，请访问:
-  https://developer.microsoft.com/microsoft-edge/webview2/
-
-## 故障排查
-
-如果双击没反应:
-1. 右键 Claude Request Forwarder.exe → 属性 → 解除锁定
-2. 在 cmd 中运行查看错误信息:
-   .\Claude Request Forwarder.exe
-
-## 支持
-
-GitHub: https://github.com/xiaozhaodong/claude-request-forwarder-desktop
-EOT
-echo "  ✅ 创建 README"
-
-# 7. 压缩为 ZIP
-cd build/dist
-zip -r "Claude-Request-Forwarder-Windows-v${VERSION}.zip" "Claude-Request-Forwarder-Windows-v${VERSION}"
-cd ../..
-
-echo ""
-echo "✅ Windows 发布包创建完成！"
-echo "📍 位置: $DIST_DIR"
-echo "📦 压缩包: build/dist/Claude-Request-Forwarder-Windows-v${VERSION}.zip"
-echo ""
-ls -lh "$DIST_DIR"
-echo ""
-ls -lh "build/dist/Claude-Request-Forwarder-Windows-v${VERSION}.zip"
+echo "Windows 发布包创建完成:"
+echo "  目录: $DIST_DIR"
+echo "  压缩包: $ZIP_PATH"
+echo "  校验: ${ZIP_PATH}.sha256"
+ls -lh "$ZIP_PATH" "${ZIP_PATH}.sha256"

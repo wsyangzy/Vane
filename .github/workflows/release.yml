@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.25.0'
   NODE_VERSION: '20'
-  ASSET_NAME: Claude-Request-Forwarder-windows-amd64.zip
+  ASSET_NAME: AI-Relay-Forwarder-windows-amd64.zip
 
 permissions:
   contents: write
@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -31,43 +33,51 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+      - name: Install build tools
+        shell: powershell
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.96
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0
 
       - name: Install frontend dependencies
-        run: |
-          cd frontend
-          npm install
+        working-directory: frontend
+        run: npm ci
 
-      - name: Get version
+      - name: Resolve build metadata
         shell: powershell
         run: |
           if ("${{ github.ref }}".StartsWith("refs/tags/")) {
-            "VERSION=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            $version = "${{ github.ref_name }}".TrimStart("v")
           } else {
-            $shortSha = (git rev-parse --short HEAD).Trim()
-            "VERSION=dev-$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            $source = Get-Content -LiteralPath "globals.go" -Raw
+            $match = [regex]::Match($source, 'Version\s*=\s*"([^"]+)"')
+            if (-not $match.Success) {
+              throw "Unable to resolve Version from globals.go"
+            }
+            $version = $match.Groups[1].Value
           }
+          $commit = (git rev-parse --short HEAD).Trim()
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build Windows
-        run: wails build -platform windows/amd64 -ldflags "-X main.version=${{ env.VERSION }}"
+        shell: powershell
+        run: wails3 task build VERSION="$env:VERSION" COMMIT="$env:COMMIT"
 
       - name: Package Windows
         shell: powershell
         run: |
-          $exePath = "build/bin/Claude Request Forwarder.exe"
+          $exePath = "build/bin/AI Relay Forwarder.exe"
           $assetPath = "build/bin/${{ env.ASSET_NAME }}"
 
           if (-not (Test-Path -LiteralPath $exePath)) {
             throw "Windows executable not found: $exePath"
           }
-
-          if (Test-Path -LiteralPath $assetPath) {
-            Remove-Item -LiteralPath $assetPath -Force
-          }
-
-          Compress-Archive -Path $exePath -DestinationPath $assetPath
+          Remove-Item -LiteralPath $assetPath -Force -ErrorAction SilentlyContinue
+          Compress-Archive -LiteralPath $exePath -DestinationPath $assetPath -Force
           Get-FileHash -Algorithm SHA256 -LiteralPath $assetPath |
             ForEach-Object { "$($_.Hash.ToLower())  ${{ env.ASSET_NAME }}" } |
             Set-Content -Path "build/bin/checksums.txt" -Encoding UTF8
@@ -75,7 +85,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: claude-request-forwarder-windows-amd64
+          name: ai-relay-forwarder-windows-amd64
           path: |
             build/bin/${{ env.ASSET_NAME }}
             build/bin/checksums.txt
@@ -112,21 +122,33 @@ jobs:
             Accept = "application/json"
           }
 
+          $notes = Get-Content -LiteralPath "frontend/src/release-notes.json" -Raw | ConvertFrom-Json
+          $sectionLines = @($notes.sections | ForEach-Object {
+            $items = @($_.items) -join "；"
+            "- **$($_.title)**：$items"
+          })
+          if ($sectionLines.Count -eq 0) {
+            $sectionLines = @("- 稳定性与体验优化")
+          }
           $releaseBody = @"
-## Claude Request Forwarder $tag
+          ## AI Relay Forwarder $tag
 
-### 下载
+          ### 本次更新
 
-- Windows x64: ${{ env.ASSET_NAME }}
+          $($sectionLines -join "`n")
 
-### 校验
+          ### 下载
 
-同目录提供 checksums.txt。
-"@
+          - Windows x64: ${{ env.ASSET_NAME }}
+
+          ### 校验
+
+          同目录提供 checksums.txt。
+          "@
 
           $releasePayload = @{
             tag_name = $tag
-            name = "Claude Request Forwarder $tag"
+            name = "AI Relay Forwarder $tag"
             body = $releaseBody
             draft = $false
             prerelease = $false
@@ -163,7 +185,6 @@ jobs:
             if (-not $Release.assets) {
               return
             }
-
             foreach ($asset in $Release.assets) {
               if ($asset.name -eq $Name) {
                 Invoke-RestMethod `
