@@ -67,7 +67,7 @@ const DurationInput = ({
   }, [onChange, parsed.number]);
 
   return (
-    <div className={`flex items-center gap-1.5 ${className}`}>
+    <div className={`flex h-9 w-[152px] items-center overflow-visible rounded-lg border border-slate-200 bg-slate-50 transition-[border-color,box-shadow] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 ${disabled ? 'opacity-50' : ''} ${className}`}>
       <input
         type="number"
         min="0"
@@ -76,20 +76,19 @@ const DurationInput = ({
         onChange={handleNumberChange}
         disabled={disabled}
         placeholder="0"
-        className={`
-          w-20 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
-          font-mono text-right
-          focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
-          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-        `}
+        aria-label="时长数值"
+        className={`min-w-0 flex-1 bg-transparent px-3 text-right font-mono text-sm text-slate-700 outline-none ${disabled ? 'cursor-not-allowed' : ''}`}
       />
+      <span className="h-5 w-px flex-shrink-0 bg-slate-200" aria-hidden="true" />
       <CustomSelect
         options={DURATION_UNITS}
         value={parsed.unit}
         onChange={handleUnitChange}
         disabled={disabled}
         size="sm"
-        minWidth={56}
+        minWidth={70}
+        embedded
+        ariaLabel="时间单位"
       />
     </div>
   );

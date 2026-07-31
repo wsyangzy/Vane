@@ -1,293 +1,476 @@
 // ============================================
-// DateTimePicker - 自定义日期时间选择器（替代原生 datetime-local，以便美化日历弹层）
-// 2025-12-29
+// DateTimeRangePicker - 单次提交的日期时间范围选择器
 // ============================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Clock, X } from 'lucide-react';
+import { CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { CustomSelect } from '@components/ui';
+import {
+  formatDateTimeLocal,
+  formatDisplayDate,
+  formatDisplayDateTime,
+  isDayWithinRange,
+  isSameDay,
+  isValidDateTimeRange,
+  parseDateTimeLocal
+} from '../utils/dateTimeRange.js';
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
+const VIEWPORT_MARGIN = 16;
 
 const pad2 = (value) => String(value).padStart(2, '0');
-
-const parseDateTimeLocal = (value) => {
-  if (!value || typeof value !== 'string') return null;
-  const [datePart, timePart] = value.split('T');
-  if (!datePart || !timePart) return null;
-
-  const [year, month, day] = datePart.split('-').map(Number);
-  const [hour, minute] = timePart.split(':').slice(0, 2).map(Number);
-  if (!year || !month || !day) return null;
-
-  return new Date(year, month - 1, day, hour || 0, minute || 0, 0);
-};
-
-const formatDateTimeLocal = (date) => {
-  const year = date.getFullYear();
-  const month = pad2(date.getMonth() + 1);
-  const day = pad2(date.getDate());
-  const hour = pad2(date.getHours());
-  const minute = pad2(date.getMinutes());
-  return `${year}-${month}-${day}T${hour}:${minute}`;
-};
-
-const formatDisplayDateTime = (date) => {
-  const year = date.getFullYear();
-  const month = pad2(date.getMonth() + 1);
-  const day = pad2(date.getDate());
-  const hour = pad2(date.getHours());
-  const minute = pad2(date.getMinutes());
-  return `${year}-${month}-${day} ${hour}:${minute}`;
-};
-
 const monthLabel = (date) => `${date.getFullYear()}年${date.getMonth() + 1}月`;
+const startOfMonth = (date) => new Date(date.getFullYear(), date.getMonth(), 1);
+const addMonths = (date, amount) => new Date(date.getFullYear(), date.getMonth() + amount, 1);
 
-const isSameDay = (a, b) =>
-  a &&
-  b &&
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate();
+const createDefaultDate = (hour, minute) => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0);
+};
+
+const copyDateWithTime = (pickedDate, sourceDate) => new Date(
+  pickedDate.getFullYear(),
+  pickedDate.getMonth(),
+  pickedDate.getDate(),
+  sourceDate.getHours(),
+  sourceDate.getMinutes(),
+  0
+);
+
+const createDraftRange = (startValue, endValue) => {
+  const parsedStart = parseDateTimeLocal(startValue);
+  const parsedEnd = parseDateTimeLocal(endValue);
+  const start = parsedStart || (parsedEnd
+    ? new Date(parsedEnd.getFullYear(), parsedEnd.getMonth(), parsedEnd.getDate(), 0, 0, 0)
+    : createDefaultDate(0, 0));
+  const end = parsedEnd || (parsedStart
+    ? new Date(parsedStart.getFullYear(), parsedStart.getMonth(), parsedStart.getDate(), 23, 59, 0)
+    : createDefaultDate(23, 59));
+
+  return { start, end };
+};
 
 const buildMonthGrid = (viewDate) => {
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth();
-  const firstOfMonth = new Date(year, month, 1);
-
+  const firstOfMonth = startOfMonth(viewDate);
   const mondayBasedIndex = (firstOfMonth.getDay() + 6) % 7;
-  const startDate = new Date(year, month, 1 - mondayBasedIndex);
+  const startDate = new Date(
+    firstOfMonth.getFullYear(),
+    firstOfMonth.getMonth(),
+    1 - mondayBasedIndex
+  );
 
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(startDate);
-    d.setDate(startDate.getDate() + i);
-    const inCurrentMonth = d.getMonth() === month && d.getFullYear() === year;
-    cells.push({
-      date: d,
-      inCurrentMonth,
-      day: d.getDate(),
-      isOutside: !inCurrentMonth,
-      isToday: isSameDay(d, new Date())
-    });
-  }
-
-  return cells;
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(startDate);
+    date.setDate(startDate.getDate() + index);
+    return {
+      date,
+      day: date.getDate(),
+      isOutside: date.getMonth() !== viewDate.getMonth(),
+      isToday: isSameDay(date, new Date())
+    };
+  });
 };
 
-/**
- * DateTimePicker
- * @param {Object} props
- * @param {string} props.value - datetime-local 格式：YYYY-MM-DDTHH:mm（可选带秒）
- * @param {(value: string) => void} props.onChange - 值变更回调
- * @param {boolean} props.disabled - 禁用
- * @param {{hour:number, minute:number}} props.defaultTime - value 为空时的默认时间
- * @param {string} props.inputClassName - 触发输入框样式（复用现有样式，避免影响布局）
- */
-const DateTimePicker = ({
+const BoundaryControl = ({
+  label,
   value,
+  isActive,
+  onActivate,
+  onTimeChange,
+  hourOptions,
+  minuteOptions
+}) => (
+  <div
+    className={`min-w-0 p-3 transition-colors ${
+      isActive ? 'bg-indigo-50/60' : 'bg-white hover:bg-slate-50/70'
+    }`}
+  >
+    <div className="mb-2 flex items-center justify-between gap-2">
+      <span className={`text-[11px] font-semibold ${isActive ? 'text-indigo-600' : 'text-slate-400'}`}>
+        {label}
+      </span>
+      <span className="text-[10px] text-slate-400">{isActive ? '正在选择' : ''}</span>
+    </div>
+    <div className="flex min-w-0 items-center gap-2">
+      <button
+        type="button"
+        onClick={onActivate}
+        className={`h-8 min-w-0 flex-1 rounded-md border px-2 text-left font-mono text-xs tabular-nums transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 ${
+          isActive
+            ? 'border-indigo-300 bg-white text-indigo-700'
+            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+        }`}
+      >
+        {formatDisplayDate(value)}
+      </button>
+      <Clock className="size-3.5 flex-shrink-0 text-slate-400" />
+      <CustomSelect
+        options={hourOptions}
+        value={String(value.getHours())}
+        onChange={(hour) => onTimeChange(Number(hour), value.getMinutes())}
+        size="xs"
+        minWidth={48}
+        ariaLabel={`${label}小时`}
+      />
+      <span className="text-xs text-slate-400">:</span>
+      <CustomSelect
+        options={minuteOptions}
+        value={String(value.getMinutes())}
+        onChange={(minute) => onTimeChange(value.getHours(), Number(minute))}
+        size="xs"
+        minWidth={48}
+        ariaLabel={`${label}分钟`}
+      />
+    </div>
+  </div>
+);
+
+const CalendarMonth = ({
+  viewDate,
+  draftStart,
+  draftEnd,
+  onSelect,
+  onPrevious,
+  onNext,
+  showPrevious,
+  showNext
+}) => {
+  const cells = useMemo(() => buildMonthGrid(viewDate), [viewDate]);
+
+  return (
+    <div className="min-w-0 p-3 sm:p-4">
+      <div className="mb-3 grid h-8 grid-cols-[32px_minmax(0,1fr)_32px] items-center">
+        {showPrevious ? (
+          <button
+            type="button"
+            className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+            onClick={onPrevious}
+            aria-label="上个月"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+        ) : <span />}
+        <div className="text-center text-sm font-semibold text-slate-800">{monthLabel(viewDate)}</div>
+        {showNext ? (
+          <button
+            type="button"
+            className="inline-flex size-8 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+            onClick={onNext}
+            aria-label="下个月"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+        ) : <span />}
+      </div>
+
+      <div className="mb-1 grid grid-cols-7 gap-0.5">
+        {WEEKDAY_LABELS.map((label) => (
+          <div key={label} className="py-1 text-center text-[11px] font-medium text-slate-400">
+            {label}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((cell) => {
+          const isStart = !cell.isOutside && isSameDay(cell.date, draftStart);
+          const isEnd = !cell.isOutside && isSameDay(cell.date, draftEnd);
+          const isBoundary = isStart || isEnd;
+          const isWithinRange = !cell.isOutside && isDayWithinRange(cell.date, draftStart, draftEnd);
+          const dateLabel = `${formatDisplayDate(cell.date)}${isStart ? '，开始时间' : ''}${isEnd ? '，结束时间' : ''}`;
+          const colorClass = isBoundary
+            ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+            : isWithinRange
+              ? 'bg-indigo-50 text-indigo-700'
+              : cell.isOutside
+                ? 'text-slate-300 hover:bg-slate-50'
+                : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700';
+          const todayClass = cell.isToday && !isBoundary ? 'ring-1 ring-inset ring-indigo-200' : '';
+
+          return (
+            <button
+              key={formatDisplayDate(cell.date)}
+              type="button"
+              onClick={() => onSelect(cell.date)}
+              className={`h-8 rounded-md text-xs tabular-nums transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 ${colorClass} ${todayClass}`}
+              aria-label={dateLabel}
+              aria-pressed={isBoundary}
+            >
+              {cell.day}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const DateTimeRangePicker = ({
+  startValue,
+  endValue,
   onChange,
   disabled = false,
-  defaultTime = { hour: 0, minute: 0 },
   inputClassName = ''
 }) => {
   const containerRef = useRef(null);
+  const panelRef = useRef(null);
+  const closeTimerRef = useRef(null);
+  const initialRange = createDraftRange(startValue, endValue);
+  const [draftStart, setDraftStart] = useState(initialRange.start);
+  const [draftEnd, setDraftEnd] = useState(initialRange.end);
+  const [baseMonth, setBaseMonth] = useState(() => startOfMonth(initialRange.start));
+  const [activeBoundary, setActiveBoundary] = useState('start');
   const [isOpen, setIsOpen] = useState(false);
+  const [isRendered, setIsRendered] = useState(false);
+  const [dropdownState, setDropdownState] = useState('');
 
-  const selectedDate = useMemo(() => parseDateTimeLocal(value), [value]);
-  const [viewDate, setViewDate] = useState(() => selectedDate || new Date());
-
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (!isOpen) return;
-      if (e.key === 'Escape') setIsOpen(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen]);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (containerRef.current && !containerRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const cells = useMemo(() => buildMonthGrid(viewDate), [viewDate]);
-
-  const safeBaseDate = useMemo(() => {
-    if (selectedDate) return selectedDate;
-    const now = new Date();
-    return new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      defaultTime.hour || 0,
-      defaultTime.minute || 0,
-      0
-    );
-  }, [defaultTime.hour, defaultTime.minute, selectedDate]);
-
-  const setDatePart = useCallback(
-    (pickedDate) => {
-      const next = new Date(
-        pickedDate.getFullYear(),
-        pickedDate.getMonth(),
-        pickedDate.getDate(),
-        safeBaseDate.getHours(),
-        safeBaseDate.getMinutes(),
-        0
-      );
-      onChange?.(formatDateTimeLocal(next));
-    },
-    [onChange, safeBaseDate]
-  );
-
-  const setTimePart = useCallback(
-    (hour, minute) => {
-      const base = safeBaseDate;
-      const next = new Date(
-        base.getFullYear(),
-        base.getMonth(),
-        base.getDate(),
-        hour,
-        minute,
-        0
-      );
-      onChange?.(formatDateTimeLocal(next));
-    },
-    [onChange, safeBaseDate]
-  );
-
-  const hourValue = selectedDate ? selectedDate.getHours() : defaultTime.hour || 0;
-  const minuteValue = selectedDate ? selectedDate.getMinutes() : defaultTime.minute || 0;
-  const displayValue = selectedDate ? formatDisplayDateTime(selectedDate) : '';
+  const selectedStart = useMemo(() => parseDateTimeLocal(startValue), [startValue]);
+  const selectedEnd = useMemo(() => parseDateTimeLocal(endValue), [endValue]);
+  const displayStart = selectedStart ? formatDisplayDateTime(selectedStart) : '开始时间';
+  const displayEnd = selectedEnd ? formatDisplayDateTime(selectedEnd) : '结束时间';
+  const isValidRange = isValidDateTimeRange(draftStart, draftEnd);
+  const visibleMonths = useMemo(() => [baseMonth, addMonths(baseMonth, 1)], [baseMonth]);
   const hourOptions = useMemo(
-    () => Array.from({ length: 24 }).map((_, i) => ({ value: String(i), label: pad2(i) })),
+    () => Array.from({ length: 24 }, (_, hour) => ({ value: String(hour), label: pad2(hour) })),
     []
   );
   const minuteOptions = useMemo(
-    () => Array.from({ length: 60 }).map((_, i) => ({ value: String(i), label: pad2(i) })),
+    () => Array.from({ length: 60 }, (_, minute) => ({ value: String(minute), label: pad2(minute) })),
     []
   );
 
+  const closePanel = useCallback(() => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    setIsOpen(false);
+    setDropdownState('is-closing');
+    const closeDuration = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--dropdown-close-dur')
+    ) || 150;
+    closeTimerRef.current = window.setTimeout(() => {
+      setIsRendered(false);
+      setDropdownState('');
+    }, closeDuration);
+  }, []);
+
+  const openPanel = useCallback(() => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    const nextRange = createDraftRange(startValue, endValue);
+    setDraftStart(nextRange.start);
+    setDraftEnd(nextRange.end);
+    setBaseMonth(startOfMonth(nextRange.start));
+    setActiveBoundary('start');
+    setDropdownState('');
+    setIsRendered(true);
+    setIsOpen(true);
+  }, [endValue, startValue]);
+
+  useEffect(() => {
+    if (!isOpen || !isRendered) return undefined;
+
+    const frameId = window.requestAnimationFrame(() => setDropdownState('is-open'));
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isOpen, isRendered]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+
+    const handleMouseDown = (event) => {
+      if (containerRef.current && !containerRef.current.contains(event.target)) closePanel();
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') closePanel();
+    };
+
+    document.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closePanel, isOpen]);
+
+  useEffect(() => {
+    if (!isRendered) return undefined;
+
+    const updatePosition = () => {
+      const panel = panelRef.current;
+      const anchor = panel?.offsetParent;
+      if (!panel || !anchor) return;
+
+      const anchorLeft = anchor.getBoundingClientRect().left;
+      const panelRight = anchorLeft + panel.offsetWidth;
+      const nextOffset = anchorLeft < VIEWPORT_MARGIN
+        ? VIEWPORT_MARGIN - anchorLeft
+        : Math.min(window.innerWidth - VIEWPORT_MARGIN - panelRight, 0);
+      panel.style.translate = `${nextOffset}px 0`;
+    };
+
+    let frameId;
+    const refreshPosition = () => {
+      updatePosition();
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updatePosition);
+    };
+    const animatedAncestor = containerRef.current?.closest('.animate-in');
+    refreshPosition();
+    window.addEventListener('resize', refreshPosition);
+    window.addEventListener('scroll', refreshPosition, true);
+    animatedAncestor?.addEventListener('animationend', refreshPosition);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', refreshPosition);
+      window.removeEventListener('scroll', refreshPosition, true);
+      animatedAncestor?.removeEventListener('animationend', refreshPosition);
+    };
+  }, [isRendered]);
+
+  const handleDateSelect = useCallback((pickedDate) => {
+    if (activeBoundary === 'start') {
+      const nextStart = copyDateWithTime(pickedDate, draftStart);
+      setDraftStart(nextStart);
+      if (nextStart > draftEnd) setDraftEnd(copyDateWithTime(pickedDate, draftEnd));
+      setActiveBoundary('end');
+      return;
+    }
+
+    const nextEnd = copyDateWithTime(pickedDate, draftEnd);
+    if (nextEnd < draftStart) {
+      setDraftEnd(copyDateWithTime(draftStart, draftEnd));
+      setDraftStart(copyDateWithTime(pickedDate, draftStart));
+    } else {
+      setDraftEnd(nextEnd);
+    }
+    setActiveBoundary('start');
+  }, [activeBoundary, draftEnd, draftStart]);
+
+  const updateTime = useCallback((boundary, hour, minute) => {
+    const source = boundary === 'start' ? draftStart : draftEnd;
+    const next = new Date(
+      source.getFullYear(),
+      source.getMonth(),
+      source.getDate(),
+      hour,
+      minute,
+      0
+    );
+    if (boundary === 'start') setDraftStart(next);
+    else setDraftEnd(next);
+    setActiveBoundary(boundary);
+  }, [draftEnd, draftStart]);
+
+  const handleConfirm = () => {
+    if (!isValidRange) return;
+    onChange?.({
+      startValue: formatDateTimeLocal(draftStart),
+      endValue: formatDateTimeLocal(draftEnd)
+    });
+    closePanel();
+  };
+
+  const handleClear = () => {
+    onChange?.({ startValue: '', endValue: '' });
+    closePanel();
+  };
+
   return (
-    <div className="relative" ref={containerRef}>
-      <Calendar className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-      <input
-        type="text"
-        readOnly
+    <div className="relative min-w-0" ref={containerRef}>
+      <button
+        type="button"
         disabled={disabled}
-        value={displayValue}
         onClick={() => {
           if (disabled) return;
-          if (!isOpen) setViewDate(selectedDate || new Date());
-          setIsOpen(!isOpen);
+          if (isOpen) closePanel();
+          else openPanel();
         }}
-        className={`${inputClassName} pr-9 text-center tabular-nums`}
+        className={`${inputClassName} group inline-flex min-w-0 items-center gap-2 text-left tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-50`}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
-      />
+      >
+        <CalendarRange className="size-4 flex-shrink-0 text-slate-400 transition-colors group-hover:text-indigo-500" />
+        <span className="min-w-0 flex-1 truncate text-center font-mono text-xs sm:text-sm">{displayStart}</span>
+        <span className="flex-shrink-0 text-xs text-slate-400">至</span>
+        <span className="min-w-0 flex-1 truncate text-center font-mono text-xs sm:text-sm">{displayEnd}</span>
+        <ChevronDown className={`size-4 flex-shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
 
-      {isOpen && (
-        <div className="absolute top-full left-0 mt-2 z-50 w-[320px] bg-white border border-gray-200 rounded-xl shadow-xl ring-1 ring-black/5 p-3">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="p-1.5 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
-                onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <div className="text-sm font-semibold text-gray-900 min-w-[110px] text-center">
-                {monthLabel(viewDate)}
-              </div>
-              <button
-                type="button"
-                className="p-1.5 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
-                onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+      {isRendered && (
+        <div
+          ref={panelRef}
+          data-origin="top-left"
+          className={`t-dropdown ${dropdownState} absolute left-0 top-full z-[80] mt-2 w-[min(680px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl ring-1 ring-black/5`}
+          role="dialog"
+          aria-label="选择时间范围"
+        >
+          <div className="grid grid-cols-1 divide-y divide-slate-100 border-b border-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+            <BoundaryControl
+              label="开始时间"
+              value={draftStart}
+              isActive={activeBoundary === 'start'}
+              onActivate={() => setActiveBoundary('start')}
+              onTimeChange={(hour, minute) => updateTime('start', hour, minute)}
+              hourOptions={hourOptions}
+              minuteOptions={minuteOptions}
+            />
+            <BoundaryControl
+              label="结束时间"
+              value={draftEnd}
+              isActive={activeBoundary === 'end'}
+              onActivate={() => setActiveBoundary('end')}
+              onTimeChange={(hour, minute) => updateTime('end', hour, minute)}
+              hourOptions={hourOptions}
+              minuteOptions={minuteOptions}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+            <CalendarMonth
+              viewDate={visibleMonths[0]}
+              draftStart={draftStart}
+              draftEnd={draftEnd}
+              onSelect={handleDateSelect}
+              onPrevious={() => setBaseMonth((month) => addMonths(month, -1))}
+              showPrevious
+            />
+            <CalendarMonth
+              viewDate={visibleMonths[1]}
+              draftStart={draftStart}
+              draftEnd={draftEnd}
+              onSelect={handleDateSelect}
+              onNext={() => setBaseMonth((month) => addMonths(month, 1))}
+              showNext
+            />
+          </div>
+
+          <div className="flex min-h-14 items-center justify-between gap-3 border-t border-slate-100 px-4 py-2.5">
+            <div className="min-w-0 text-xs text-rose-600" role="status" aria-live="polite">
+              {isValidRange ? '' : '开始时间不能晚于结束时间'}
             </div>
-            <button
-              type="button"
-              className="p-1.5 rounded-lg hover:bg-gray-50 text-gray-500 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
-              onClick={() => setIsOpen(false)}
-              aria-label="关闭"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-7 gap-1 mb-2">
-            {WEEKDAY_LABELS.map((label) => (
-              <div key={label} className="text-[11px] text-gray-400 font-medium text-center py-1">
-                {label}
-              </div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7 gap-1">
-            {cells.map((cell) => {
-              const isSelected = selectedDate ? isSameDay(cell.date, selectedDate) : false;
-              const baseClasses = 'h-9 w-9 rounded-lg text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100';
-              const todayRing = cell.isToday && !isSelected ? 'ring-1 ring-indigo-200' : '';
-              const selectedClasses = isSelected
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : cell.isOutside
-                  ? 'text-gray-300 hover:bg-gray-50'
-                  : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-700';
-
-              return (
-                <button
-                  key={`${cell.date.toISOString()}-${cell.day}`}
-                  type="button"
-                  className={`${baseClasses} ${selectedClasses} ${todayRing}`}
-                  onClick={() => setDatePart(cell.date)}
-                >
-                  {cell.day}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Clock className="w-4 h-4 text-gray-400" />
-              <CustomSelect
-                options={hourOptions}
-                value={String(hourValue)}
-                onChange={(nextValue) => setTimePart(Number(nextValue), minuteValue)}
-                size="xs"
-                minWidth={58}
-              />
-              <span className="text-gray-400 text-sm">:</span>
-              <CustomSelect
-                options={minuteOptions}
-                value={String(minuteValue)}
-                onChange={(nextValue) => setTimePart(hourValue, Number(nextValue))}
-                size="xs"
-                minWidth={58}
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
+            <div className="flex flex-shrink-0 items-center gap-2">
               <button
                 type="button"
-                className="h-9 px-3 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-                onClick={() => onChange?.('')}
+                className="h-8 px-3 text-xs text-slate-500 transition-colors hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                onClick={handleClear}
               >
                 清空
               </button>
               <button
                 type="button"
-                className="h-9 px-3 text-sm text-white bg-slate-900 rounded-lg hover:bg-slate-800 shadow-sm shadow-slate-200 transition-colors"
-                onClick={() => setIsOpen(false)}
+                className="h-8 rounded-md border border-slate-200 bg-white px-3 text-xs text-slate-600 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+                onClick={closePanel}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!isValidRange}
+                className="h-8 rounded-md bg-slate-900 px-4 text-xs font-medium text-white shadow-sm transition-colors hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={handleConfirm}
               >
                 确定
               </button>
@@ -299,4 +482,4 @@ const DateTimePicker = ({
   );
 };
 
-export default DateTimePicker;
+export default DateTimeRangePicker;

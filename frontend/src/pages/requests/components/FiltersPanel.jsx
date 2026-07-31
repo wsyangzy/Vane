@@ -8,7 +8,7 @@ import { Filter, X, Check, ChevronDown } from 'lucide-react';
 import { CustomSelect } from '@components/ui';
 import { DEFAULT_FILTERS, STATUS_SELECT_OPTIONS } from '../utils/constants.js';
 import { getTodayTimeRange } from '../hooks/useFilters.js';
-import DateTimePicker from './DateTimePicker.jsx';
+import DateTimeRangePicker from './DateTimePicker.jsx';
 
 const createDefaultDraftFilters = () => ({
   ...DEFAULT_FILTERS,
@@ -200,6 +200,7 @@ const FiltersPanelContent = ({
 }) => {
   const panelRef = useRef(null);
   const [draftFilters, setDraftFilters] = useState(filters);
+  const [horizontalOffset, setHorizontalOffset] = useState(0);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -211,6 +212,29 @@ const FiltersPanelContent = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [onClose]);
+
+  useEffect(() => {
+    const updatePosition = () => {
+      const panel = panelRef.current;
+      const anchor = panel?.offsetParent;
+      if (!panel || !anchor) return;
+
+      const viewportMargin = 16;
+      const anchorRight = anchor.getBoundingClientRect().right;
+      const panelLeft = anchorRight - panel.offsetWidth;
+      const nextOffset = panelLeft < viewportMargin
+        ? viewportMargin - panelLeft
+        : Math.min(window.innerWidth - viewportMargin - anchorRight, 0);
+      setHorizontalOffset(nextOffset);
+    };
+
+    const frameId = window.requestAnimationFrame(updatePosition);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, []);
 
   const updateDraftFilter = (key, value) => {
     setDraftFilters(prev => ({ ...prev, [key]: value }));
@@ -269,6 +293,7 @@ const FiltersPanelContent = ({
     <div
       ref={panelRef}
       className="absolute right-0 top-12 z-50 w-[920px] max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white p-5 shadow-xl ring-1 ring-black/5 animate-in fade-in slide-in-from-top-2 duration-200 origin-top-right"
+      style={{ translate: `${horizontalOffset}px 0` }}
     >
       {/* 头部 */}
       <div className="flex justify-between items-start mb-5">
@@ -285,21 +310,18 @@ const FiltersPanelContent = ({
         {/* 时间范围 */}
         <div className="grid grid-cols-[72px_auto] items-center gap-3">
           <label className="text-sm font-medium text-gray-700">时间范围:</label>
-          <div className="flex min-w-0 items-center gap-2">
-            <DateTimePicker
-              value={draftFilters.startDate}
-              onChange={(value) => updateDraftFilter('startDate', value)}
-              defaultTime={{ hour: 0, minute: 0 }}
-              inputClassName="w-[200px] pl-9 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-gray-600"
-            />
-            <span className="text-gray-400 text-sm">至</span>
-            <DateTimePicker
-              value={draftFilters.endDate}
-              onChange={(value) => updateDraftFilter('endDate', value)}
-              defaultTime={{ hour: 23, minute: 59 }}
-              inputClassName="w-[200px] pl-9 pr-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-gray-600"
-            />
-          </div>
+          <DateTimeRangePicker
+            startValue={draftFilters.startDate}
+            endValue={draftFilters.endDate}
+            onChange={({ startValue, endValue }) => {
+              setDraftFilters((previous) => ({
+                ...previous,
+                startDate: startValue,
+                endDate: endValue
+              }));
+            }}
+            inputClassName="h-9 w-[440px] max-w-full rounded-lg border border-gray-200 bg-white px-3 text-gray-600 hover:border-gray-300 focus:outline-none focus-visible:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500/20"
+          />
         </div>
 
         {/* 筛选条件 */}
