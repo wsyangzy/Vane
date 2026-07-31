@@ -107,7 +107,7 @@ const StatsOverview = ({ stats, claudeStats, codexStats, total = 0, isBlurred = 
   ];
 
   return (
-    <div className={`grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 transition-all duration-300 ${isBlurred ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
+    <div className={`motion-content-dim grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 ${isBlurred ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
       {kpis.map((kpi, idx) => (
         <KPICard
           key={idx}

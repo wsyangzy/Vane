@@ -63,14 +63,24 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
 
   // 退出动画
   const [exiting, setExiting] = useState(false);
+  const [entered, setEntered] = useState(false);
   const timerRef = useRef(null);
 
   const handleClose = useCallback(() => {
     if (exiting) return;
     setExiting(true);
+    setEntered(false);
     // 等退出动画完成再移除 DOM
-    setTimeout(() => onClose(id), 250);
+    const closeDuration = parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue('--toast-close')
+    ) || 250;
+    window.setTimeout(() => onClose(id), closeDuration);
   }, [id, onClose, exiting]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => setEntered(true));
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
 
   useEffect(() => {
     if (duration > 0) {
@@ -81,14 +91,12 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
 
   return (
     <div
+      role={type === 'error' ? 'alert' : 'status'}
+      data-open={entered && !exiting}
       className={`
-        flex items-start gap-3 p-4 rounded-xl border shadow-lg
+        t-toast flex items-start gap-3 p-4 rounded-xl border shadow-lg
         ${variant.bgColor} ${variant.borderColor}
-        max-w-sm w-full transition-all duration-250
-        ${exiting
-          ? 'opacity-0 translate-x-4'
-          : 'animate-in slide-in-from-right-full duration-300'
-        }
+        max-w-sm w-full ${entered && !exiting ? 'is-open' : ''}
       `}
     >
       <IconComponent size={20} className={`flex-shrink-0 mt-0.5 ${variant.iconColor}`} />
@@ -108,8 +116,9 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
       </div>
       {/* 倒计时圆圈关闭按钮 */}
       <button
+        type="button"
         onClick={handleClose}
-        className="relative flex-shrink-0 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-600 transition-colors"
+        className="motion-control relative flex-shrink-0 w-6 h-6 flex items-center justify-center text-slate-400 hover:text-slate-600"
         aria-label="关闭"
       >
         {/* 倒计时 SVG 圈 */}
@@ -123,6 +132,7 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
             </defs>
             {/* 背景圆圈 */}
             <circle
+              className="toast-countdown-ring"
               cx="10" cy="10" r={RING_R}
               stroke="currentColor"
               strokeWidth="1.5"

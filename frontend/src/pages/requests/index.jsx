@@ -408,7 +408,7 @@ const RequestsPage = () => {
       </div>
 
       {/* 请求列表表格 - 面板打开时blur */}
-      <div className={`flex-1 min-h-0 transition-all duration-300 ${isFilterOpen || isViewConfigOpen || isHeatmapOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
+      <div className={`motion-content-dim flex-1 min-h-0 ${isFilterOpen || isViewConfigOpen || isHeatmapOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
         <RequestsTable
           requests={requests}
           loading={loading}

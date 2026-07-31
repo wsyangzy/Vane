@@ -1,5 +1,39 @@
 @import "tailwindcss";
 
+:root {
+  --duration-quick: 150ms;
+  --duration-fast: 250ms;
+  --duration-medium: 350ms;
+  --duration-slow: 400ms;
+  --duration-very-slow: 500ms;
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: ease-in-out;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --scale-large: 0.96;
+  --blur-small: 2px;
+
+  --dropdown-open-dur: var(--duration-fast);
+  --dropdown-close-dur: var(--duration-quick);
+  --dropdown-pre-scale: 0.97;
+  --dropdown-closing-scale: 0.99;
+  --dropdown-ease: var(--ease-smooth-out);
+
+  --pulse-dur: 1000ms;
+  --pulse-count: 1;
+  --pulse-min: 0.5;
+  --reveal-dur: var(--duration-slow);
+  --reveal-blur: var(--blur-small);
+  --reveal-ease: var(--ease-in-out);
+
+  --toast-open: var(--duration-medium);
+  --toast-close: var(--duration-fast);
+  --toast-distance: 16px;
+  --toast-blur: var(--blur-small);
+  --toast-scale: 0.97;
+  --toast-ease: var(--ease-smooth-out);
+}
+
 /* 避免内容高度变化导致滚动条出现/消失引起的页面抖动（Windows 下尤为明显） */
 html {
   overflow-y: scroll;
@@ -13,8 +47,21 @@ html {
 }
 
 @keyframes slide-in-from-bottom {
-  from { transform: translateY(16px); opacity: 0; }
+  from { transform: translateY(var(--distance-medium)); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes motion-enter {
+  from {
+    opacity: var(--motion-enter-opacity, 1);
+    transform:
+      translate3d(
+        var(--motion-enter-x, 0),
+        var(--motion-enter-y, 0),
+        0
+      )
+      scale(var(--motion-enter-scale, 1));
+  }
 }
 
 @keyframes pulse-slow {
@@ -24,15 +71,255 @@ html {
 
 /* 基础动画类 */
 .animate-fade-in {
-  animation: fade-in 0.5s ease-out;
+  animation: fade-in var(--duration-very-slow) ease-out;
 }
 
 .animate-slide-up {
-  animation: slide-in-from-bottom 0.5s ease-out;
+  animation: slide-in-from-bottom var(--duration-very-slow) var(--ease-smooth-out);
 }
 
 .animate-pulse-slow {
   animation: pulse-slow 2s infinite;
+}
+
+/* Compatibility for the animate-in classes already used throughout the app. */
+.animate-in {
+  --motion-enter-duration: var(--duration-fast);
+  animation: motion-enter var(--motion-enter-duration) var(--ease-smooth-out) both;
+}
+
+.animate-in.duration-200,
+.animate-in.duration-300 {
+  --motion-enter-duration: var(--duration-fast);
+}
+
+.animate-in.duration-500 {
+  --motion-enter-duration: var(--duration-very-slow);
+}
+
+.fade-in {
+  --motion-enter-opacity: 0;
+}
+
+.zoom-in-95 {
+  --motion-enter-scale: var(--scale-large);
+}
+
+.slide-in-from-top-2 {
+  --motion-enter-y: calc(var(--distance-base) * -1);
+}
+
+.slide-in-from-bottom-2 {
+  --motion-enter-y: var(--distance-base);
+}
+
+/* transitions.dev: menu dropdown */
+.t-dropdown {
+  transform-origin: top left;
+  transform: scale(var(--dropdown-pre-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-open-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-open-dur) var(--dropdown-ease);
+  will-change: transform, opacity;
+}
+.t-dropdown[data-origin="top-right"]     { transform-origin: top right; }
+.t-dropdown[data-origin="top-center"]    { transform-origin: top center; }
+.t-dropdown[data-origin="bottom-left"]   { transform-origin: bottom left; }
+.t-dropdown[data-origin="bottom-center"] { transform-origin: bottom center; }
+.t-dropdown[data-origin="bottom-right"]  { transform-origin: bottom right; }
+
+.t-dropdown.is-open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+.t-dropdown.is-closing {
+  transform: scale(var(--dropdown-closing-scale));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform var(--dropdown-close-dur) var(--dropdown-ease),
+    opacity   var(--dropdown-close-dur) var(--dropdown-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-dropdown { transition: none !important; }
+}
+
+/* transitions.dev: skeleton loader and reveal */
+.t-skel { position: relative; }
+.t-skel-skeleton,
+.t-skel-content {
+  position: absolute;
+  inset: 0;
+}
+
+.t-skel-skeleton {
+  z-index: 1;
+  opacity: 1;
+  filter: blur(0);
+  transition:
+    opacity var(--reveal-dur) var(--reveal-ease),
+    filter  var(--reveal-dur) var(--reveal-ease);
+}
+.t-skel-content {
+  z-index: 2;
+  opacity: 0;
+  filter: blur(var(--reveal-blur));
+  transition:
+    opacity var(--reveal-dur) var(--reveal-ease),
+    filter  var(--reveal-dur) var(--reveal-ease);
+}
+.t-skel.is-revealed .t-skel-skeleton {
+  opacity: 0;
+  filter: blur(var(--reveal-blur));
+}
+.t-skel.is-revealed .t-skel-content {
+  opacity: 1;
+  filter: blur(0);
+}
+.t-skel.is-resetting .t-skel-skeleton,
+.t-skel.is-resetting .t-skel-content {
+  transition: none !important;
+}
+
+.t-skel-skeleton.is-pulsing > * {
+  animation: t-skel-pulse var(--pulse-dur) ease-in-out var(--pulse-count);
+}
+@keyframes t-skel-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: var(--pulse-min); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-skel-skeleton, .t-skel-content {
+    transition: none !important;
+  }
+  .t-skel-skeleton.is-pulsing > * { animation: none !important; }
+}
+
+/* transitions.dev: toast open / close */
+.t-toast {
+  opacity: 0;
+  transform: translateY(var(--toast-distance)) scale(var(--toast-scale));
+  filter: blur(var(--toast-blur));
+  will-change: transform, opacity, filter;
+  transition:
+    opacity var(--toast-close) var(--toast-ease),
+    transform var(--toast-close) var(--toast-ease),
+    filter var(--toast-close) var(--toast-ease);
+}
+.t-toast.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  transition:
+    opacity var(--toast-open) var(--toast-ease),
+    transform var(--toast-open) var(--toast-ease),
+    filter var(--toast-open) var(--toast-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-toast { transition: none !important; }
+}
+
+.motion-tabs-slider {
+  transition:
+    transform var(--duration-fast) var(--ease-smooth-out),
+    width var(--duration-fast) var(--ease-smooth-out);
+  will-change: transform, width;
+}
+
+.motion-tabs-label {
+  transition: color var(--duration-fast) var(--ease-smooth-out);
+}
+
+.motion-kpi-card {
+  transition:
+    transform var(--duration-fast) var(--ease-smooth-out),
+    border-color var(--duration-fast) var(--ease-smooth-out),
+    box-shadow var(--duration-fast) var(--ease-smooth-out);
+}
+
+.motion-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: rgb(203 213 225 / 0.9);
+  box-shadow: 0 12px 28px -20px rgb(15 23 42 / 0.55);
+}
+
+.motion-kpi-icon {
+  transition: transform var(--duration-fast) var(--ease-smooth-out);
+}
+
+.motion-kpi-card:hover .motion-kpi-icon {
+  transform: scale(1.04);
+}
+
+.motion-control {
+  transition:
+    color var(--duration-quick) var(--ease-smooth-out),
+    background-color var(--duration-quick) var(--ease-smooth-out),
+    border-color var(--duration-quick) var(--ease-smooth-out),
+    box-shadow var(--duration-quick) var(--ease-smooth-out),
+    transform var(--duration-quick) var(--ease-smooth-out);
+}
+
+.motion-control:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.motion-content-dim {
+  transition:
+    opacity var(--duration-fast) var(--ease-smooth-out),
+    filter var(--duration-fast) var(--ease-smooth-out);
+}
+
+.heatmap-cell {
+  position: relative;
+  transform: scale(1);
+  transform-origin: center;
+  transition:
+    transform var(--duration-quick) var(--ease-smooth-out),
+    box-shadow var(--duration-quick) var(--ease-smooth-out);
+  will-change: transform;
+}
+
+.heatmap-cell:hover {
+  z-index: 2;
+  transform: scale(1.3);
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.95), 0 4px 10px rgb(15 23 42 / 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .animate-fade-in,
+  .animate-slide-up,
+  .animate-pulse-slow {
+    animation: none !important;
+  }
+
+  .toast-countdown-ring {
+    animation: none !important;
+  }
+
+  .motion-tabs-slider,
+  .motion-tabs-label,
+  .motion-kpi-card,
+  .motion-kpi-icon,
+  .motion-control,
+  .motion-content-dim,
+  .heatmap-cell {
+    transition: none !important;
+  }
+
+  .motion-kpi-card:hover,
+  .motion-kpi-card:hover .motion-kpi-icon,
+  .motion-control:active:not(:disabled),
+  .heatmap-cell:hover {
+    transform: none;
+  }
 }
 
 /* 自定义滚动条 */

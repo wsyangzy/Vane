@@ -49,7 +49,7 @@ export const SegmentedTabs = ({
   return (
     <div className={`relative grid gap-1 rounded-xl bg-slate-100 p-1 ${className}`}>
       <span
-        className="pointer-events-none absolute inset-y-1 rounded-lg bg-white shadow-sm ring-1 ring-indigo-100 transition-transform duration-200 ease-out"
+        className="motion-tabs-slider pointer-events-none absolute inset-y-1 rounded-lg bg-white shadow-sm ring-1 ring-indigo-100"
         style={getSegmentedTabsSliderStyle(activeIndex, tabs.length)}
       />
       {tabs.map((tab) => {
@@ -61,7 +61,7 @@ export const SegmentedTabs = ({
             onClick={() => onChange?.(tab.key)}
             className={`
               relative z-10 inline-flex h-8 items-center justify-center rounded-lg ${buttonPaddingClass}
-              text-xs font-semibold transition-colors duration-200
+              motion-tabs-label text-xs font-semibold
               ${active ? 'text-indigo-700' : 'text-slate-500 hover:text-slate-700'}
             `}
             disabled={disabled}
@@ -98,10 +98,10 @@ export const KPICard = ({
     const isLarge = size === 'lg';
     const resolvedIconSize = iconSize ?? (isLarge ? 19 : 18);
     return (
-      <div className={`h-full bg-white rounded-2xl border border-slate-200/60 shadow-sm hover:shadow-md transition-shadow flex flex-col ${isLarge ? 'p-5' : 'p-4'}`}>
+      <div className={`motion-kpi-card h-full bg-white rounded-2xl border border-slate-200/60 shadow-sm flex flex-col ${isLarge ? 'p-5' : 'p-4'}`}>
         <div className={`flex items-center justify-between ${isLarge ? 'gap-3' : 'gap-2.5'}`}>
           <div className={`flex flex-shrink-0 items-center ${isLarge ? 'gap-3.5' : 'gap-3'}`}>
-            <div className={`rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor} ${iconContainerClassName}`}>
+            <div className={`motion-kpi-icon rounded-lg flex-shrink-0 ${isLarge ? 'p-2.5' : 'p-2'} ${statusColor} ${iconContainerClassName}`}>
               <Icon size={resolvedIconSize} className={iconClassName} />
             </div>
             <h3 className={`${wrapTitle ? 'whitespace-normal break-words leading-snug' : 'whitespace-nowrap'} text-slate-500 font-semibold uppercase tracking-wider ${isLarge ? 'text-[11px]' : 'text-xs'} ${titleClassName}`}>{title}</h3>
@@ -124,9 +124,9 @@ export const KPICard = ({
   }
 
   return (
-    <div className="bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col justify-between hover:shadow-md transition-shadow h-full group relative">
+    <div className="motion-kpi-card bg-white p-5 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col justify-between h-full group relative">
       <div className="flex justify-between items-start mb-2">
-        <div className={`p-2 rounded-lg ${statusColor}`}>
+        <div className={`motion-kpi-icon p-2 rounded-lg ${statusColor}`}>
           <Icon size={20} />
         </div>
       </div>

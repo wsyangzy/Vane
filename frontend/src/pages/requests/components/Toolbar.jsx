@@ -6,10 +6,16 @@
 
 import { useEffect, useRef } from 'react';
 import { Activity, Filter, Settings2, ChevronDown } from 'lucide-react';
+import { SegmentedTabs } from '@components/ui';
 import { TIME_RANGE_OPTIONS } from '../utils/constants.js';
 import ViewConfigPanel from './ViewConfigPanel.jsx';
 import AutoRefreshControl from './AutoRefreshControl.jsx';
 import ActiveGroupSwitcher from './ActiveGroupSwitcher.jsx';
+
+const TIME_RANGE_TABS = TIME_RANGE_OPTIONS.map(({ value, label }) => ({
+  key: value,
+  label
+}));
 
 /**
  * Toolbar - 请求追踪页面工具栏
@@ -94,20 +100,14 @@ const Toolbar = ({
       <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
 
       {/* 快捷时间范围选择 */}
-      <div className="hidden sm:flex items-center bg-white border border-gray-200 rounded-lg p-1 shadow-sm">
-        {TIME_RANGE_OPTIONS.map((range) => (
-          <button
-            key={range.value}
-            onClick={() => onTimeRangeChange?.(range.value)}
-            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
-              activeTimeRange === range.value
-                ? 'bg-indigo-50 text-indigo-700 shadow-sm'
-                : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
-            }`}
-          >
-            {range.label}
-          </button>
-        ))}
+      <div className="hidden sm:block">
+        <SegmentedTabs
+          tabs={TIME_RANGE_TABS}
+          activeTab={activeTimeRange}
+          onChange={onTimeRangeChange}
+          className="min-w-[168px] grid-cols-3 border border-slate-200 bg-slate-100/80 shadow-sm"
+          buttonPaddingClass="px-2.5"
+        />
       </div>
 
       <div className="h-6 w-px bg-gray-300 mx-1 hidden sm:block"></div>
@@ -115,12 +115,14 @@ const Toolbar = ({
       {/* 筛选按钮 */}
       <div className="relative">
         <button
+          type="button"
           onClick={onFilterToggle}
-          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all shadow-sm border ${
+          className={`motion-control flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium shadow-sm border ${
             isFilterOpen
               ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
               : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
           }`}
+          aria-expanded={isFilterOpen}
         >
           <Filter className="w-4 h-4" /> 筛选
           <ChevronDown
@@ -135,12 +137,16 @@ const Toolbar = ({
       {/* Token 分布按钮 */}
       <div ref={heatmapRef} className="relative">
         <button
+          type="button"
           onClick={() => onHeatmapToggle?.()}
-          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all shadow-sm border ${
+          className={`motion-control flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium shadow-sm border ${
             isHeatmapOpen
               ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
               : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300 hover:text-indigo-600'
           }`}
+          aria-expanded={isHeatmapOpen}
+          aria-controls="token-usage-heatmap-panel"
+          aria-label="Token 活动分布"
         >
           <Activity className="w-4 h-4" />
           <span className="hidden sm:inline">分布</span>
@@ -153,12 +159,15 @@ const Toolbar = ({
       {/* 列配置按钮 */}
       <div ref={viewConfigRef} className="relative">
         <button
+          type="button"
           onClick={onViewConfigToggle}
-          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all shadow-sm border ${
+          className={`motion-control flex items-center gap-2 px-3 py-2 rounded-lg text-sm shadow-sm border ${
             isViewConfigOpen
               ? 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-2 ring-indigo-100'
               : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:text-indigo-600 hover:border-indigo-200'
           }`}
+          aria-expanded={isViewConfigOpen}
+          aria-label="显示列配置"
         >
           <Settings2 className="w-4 h-4" />
           <span className="hidden sm:inline font-medium">显示</span>
