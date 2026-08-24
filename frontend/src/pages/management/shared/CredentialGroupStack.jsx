@@ -1,14 +1,15 @@
 // ============================================
 // CredentialGroupStack - 凭证分组堆叠卡片选择器
 // ============================================
-// 替代原先的横向滚动胶囊条。折叠态最多露出 3 层，选中分组始终排在最前——
-// 后层卡片的内容不可读，若不置顶会出现「露出的不是用户选中的那个」。
+// 折叠态是一叠卡片，最上层始终是当前选中的分组——后层卡片内容淡出不可读，
+// 若不置顶就会出现「露出的不是用户选中的那个」。
+//
+// 交互：单击卡片浮出全部分组（卡片从堆叠位置散开），在浮层里选中某个分组后
+// 收起，被选中的那张即成为新的最上层。折叠态只有选中项可见，对它「单击切换」
+// 没有意义，所以单击留给展开。
 //
 // 展开走 portal 浮层而不是就地撑开：ChannelCard 根元素带 overflow-hidden
 // （为了让子元素不越出圆角），就地展开会被裁剪，而撑开又会改变渠道卡片高度。
-//
-// 视觉层级由行内的 --stack-i 驱动，DOM 顺序始终与传入顺序一致，
-// 避免读屏朗读顺序和 Tab 顺序随选中项来回跳动。
 //
 // Claude 与 Codex 的回调签名不同（前者传 channelName，后者传 channel 对象），
 // 由各自调用方用闭包适配，本组件内统一只回传 group。
@@ -25,8 +26,13 @@ const SCROLL_THRESHOLD = 6;
 const STACK_OFFSET_PX = 5;
 const STACK_SCALE_STEP = 0.05;
 const CARD_HEIGHT_PX = 36;
+const CARD_GAP_PX = 6;
+// 浮层里每行的步进，用于把卡片从展开位置反推回堆叠位置做散开动画
+const ROW_STRIDE_PX = CARD_HEIGHT_PX + CARD_GAP_PX;
 // 浮层向下展开所需的最小空间，不足则改为向上浮出
 const MIN_DROP_DOWN_SPACE_PX = 140;
+// 收起动画时长，与 --duration-quick 对齐；结束后才卸载 portal
+const CLOSE_ANIMATION_MS = 150;
 
 const isDefaultGroup = (group) => Boolean(group?.isDefault ?? group?.is_default);
 
@@ -43,12 +49,14 @@ const CredentialGroupStack = ({
   loadingGroupId = null,
   emptyHint = '暂无分组'
 }) => {
-  const [expanded, setExpanded] = useState(false);
   const [anchor, setAnchor] = useState(null);
+  const [entered, setEntered] = useState(false);
+  const [interactive, setInteractive] = useState(false);
   const listId = useId();
   const containerRef = useRef(null);
   const stackRef = useRef(null);
   const popoverRef = useRef(null);
+  const closeTimerRef = useRef(null);
 
   // 选中卡置顶，其余保持原有相对顺序
   const orderedGroups = useMemo(() => {
@@ -59,22 +67,25 @@ const CredentialGroupStack = ({
 
   const hiddenCount = Math.max(0, groups.length - 1);
   const canExpand = hiddenCount > 0;
-  // 派生而非同步：分组减少到 1 个时展开态自动失效，不需要 effect 回写 state
-  const isExpanded = expanded && canExpand && !!anchor;
+  const isOpen = !!anchor && canExpand;
 
   const closeExpanded = useCallback(() => {
-    setExpanded(false);
-    setAnchor(null);
+    setEntered(false);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    // 先播收起动画再卸载 portal，否则浮层会直接消失
+    closeTimerRef.current = setTimeout(() => setAnchor(null), CLOSE_ANIMATION_MS);
   }, []);
 
   const openExpanded = useCallback(() => {
     const element = stackRef.current;
     if (!element) return;
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
     const rect = element.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.top - 12;
     const spaceAbove = rect.bottom - 12;
     // 渠道卡片可能靠近视口底部，此时向上浮出，避免浮层被截断
     const dropUp = spaceBelow < MIN_DROP_DOWN_SPACE_PX && spaceAbove > spaceBelow;
+    setInteractive(false);
     setAnchor({
       left: rect.left,
       width: rect.width,
@@ -82,17 +93,35 @@ const CredentialGroupStack = ({
       bottom: dropUp ? window.innerHeight - rect.bottom : undefined,
       maxHeight: Math.max(120, Math.floor(dropUp ? spaceAbove : spaceBelow))
     });
-    setExpanded(true);
   }, []);
 
   const toggleExpanded = useCallback(() => {
-    if (isExpanded) closeExpanded();
+    if (isOpen) closeExpanded();
     else openExpanded();
-  }, [isExpanded, closeExpanded, openExpanded]);
+  }, [isOpen, closeExpanded, openExpanded]);
+
+  // 挂载后下一帧再切到展开态，让卡片从堆叠位置过渡出去
+  useEffect(() => {
+    if (!anchor) return undefined;
+    const frame = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(frame);
+  }, [anchor]);
+
+  // 展开动画期间浮层不吃点击：否则双击折叠卡片时，第二次点击会落在刚浮出的
+  // 浮层上误触选中。此时点击穿透到下方，而下方堆叠已 inert，不会有反应。
+  useEffect(() => {
+    if (!anchor) return undefined;
+    const timer = setTimeout(() => setInteractive(true), 220);
+    return () => clearTimeout(timer);
+  }, [anchor]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  }, []);
 
   // 点击浮层与堆叠之外收起
   useEffect(() => {
-    if (!isExpanded) return undefined;
+    if (!isOpen) return undefined;
     const handlePointerDown = (event) => {
       if (containerRef.current?.contains(event.target)) return;
       if (popoverRef.current?.contains(event.target)) return;
@@ -100,11 +129,11 @@ const CredentialGroupStack = ({
     };
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [isExpanded, closeExpanded]);
+  }, [isOpen, closeExpanded]);
 
   // 浮层用视口坐标定位，页面滚动或缩放后锚点失效，直接收起（与 Tooltip 一致）
   useEffect(() => {
-    if (!isExpanded) return undefined;
+    if (!isOpen) return undefined;
     const handleEscape = (event) => {
       if (event.key === 'Escape') closeExpanded();
     };
@@ -116,22 +145,12 @@ const CredentialGroupStack = ({
       window.removeEventListener('resize', closeExpanded);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [isExpanded, closeExpanded]);
+  }, [isOpen, closeExpanded]);
 
   const handleSelect = useCallback((group) => {
     onSelect?.(Number(group.id) || 0);
     closeExpanded();
   }, [onSelect, closeExpanded]);
-
-  // 折叠态双击直接展开全部；展开态（或只有一个分组时）双击才是查看详情
-  const handleCardDoubleClick = useCallback((group) => {
-    if (!isExpanded && canExpand) {
-      openExpanded();
-      return;
-    }
-    closeExpanded();
-    onOpen?.(group);
-  }, [isExpanded, canExpand, openExpanded, closeExpanded, onOpen]);
 
   const withClose = useCallback((handler) => (group) => {
     closeExpanded();
@@ -149,23 +168,6 @@ const CredentialGroupStack = ({
 
   const collapsedLayers = Math.min(groups.length, MAX_STACK_LAYERS);
   const collapsedHeight = CARD_HEIGHT_PX + (collapsedLayers - 1) * STACK_OFFSET_PX;
-  const doubleClickHint = canExpand && !isExpanded ? '单击切换，双击展开全部' : '单击切换，双击查看详情';
-
-  const renderCard = (group, { decorative = false } = {}) => (
-    <GroupCard
-      group={group}
-      selected={Number(group.id) === Number(selectedId)}
-      contentHidden={decorative}
-      disabled={disabled}
-      loading={loadingGroupId != null && Number(loadingGroupId) === Number(group.id)}
-      hint={doubleClickHint}
-      onSelect={handleSelect}
-      onDoubleClickCard={handleCardDoubleClick}
-      onSetDefault={withClose(onSetDefault)}
-      onEdit={withClose(onEdit)}
-      onDelete={withClose(onDelete)}
-    />
-  );
 
   return (
     <div ref={containerRef} className="flex min-w-0 flex-col gap-1">
@@ -174,15 +176,14 @@ const CredentialGroupStack = ({
         ref={stackRef}
         className="relative"
         style={{ height: `${collapsedHeight}px` }}
-        inert={isExpanded}
-        aria-hidden={isExpanded || undefined}
+        inert={isOpen}
+        aria-hidden={isOpen || undefined}
       >
         {orderedGroups.map((group, visualIndex) => {
           const isFront = visualIndex === 0;
           // 折叠时只有最前一张可交互，后层是纯视觉暗示：
           // 单靠 opacity:0 仍可被 Tab 聚焦，必须用 inert 同时移出焦点顺序与无障碍树
           const isDecorative = !isFront;
-          const isBuried = visualIndex >= MAX_STACK_LAYERS;
 
           return (
             <div
@@ -192,11 +193,24 @@ const CredentialGroupStack = ({
               className="absolute inset-x-0 top-0 origin-top transition-[transform,opacity] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none"
               style={{
                 zIndex: groups.length - visualIndex,
-                opacity: isBuried ? 0 : 1,
+                opacity: visualIndex >= MAX_STACK_LAYERS ? 0 : 1,
                 transform: `translateY(${visualIndex * STACK_OFFSET_PX}px) scale(${1 - visualIndex * STACK_SCALE_STEP})`
               }}
             >
-              {renderCard(group, { decorative: isDecorative })}
+              <GroupCard
+                group={group}
+                selected={Number(group.id) === Number(selectedId)}
+                contentHidden={isDecorative}
+                disabled={disabled}
+                loading={loadingGroupId != null && Number(loadingGroupId) === Number(group.id)}
+                hint={canExpand ? '单击展开全部分组' : '双击查看详情'}
+                // 折叠态整卡单击即展开：此时可见的只有选中项，「切换」无从谈起
+                onActivate={canExpand ? openExpanded : undefined}
+                onDoubleClickCard={canExpand ? undefined : onOpen}
+                onSetDefault={onSetDefault}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
             </div>
           );
         })}
@@ -207,14 +221,14 @@ const CredentialGroupStack = ({
           <button
             type="button"
             onClick={toggleExpanded}
-            aria-expanded={isExpanded}
+            aria-expanded={isOpen}
             aria-controls={listId}
             className="inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-[10px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
           >
-            {isExpanded ? '收起' : `展开 ${hiddenCount} 个`}
+            {isOpen ? '收起' : `展开 ${hiddenCount} 个`}
             <ChevronDown
               size={11}
-              className={`transition-transform duration-200 ease-out motion-reduce:transition-none ${isExpanded ? 'rotate-180' : ''}`}
+              className={`transition-transform duration-200 ease-out motion-reduce:transition-none ${isOpen ? 'rotate-180' : ''}`}
             />
           </button>
         ) : (
@@ -223,15 +237,15 @@ const CredentialGroupStack = ({
         <AddGroupButton onAdd={onAdd} disabled={disabled} />
       </div>
 
-      {isExpanded && createPortal(
+      {isOpen && createPortal(
         <div
           ref={popoverRef}
           id={listId}
           role="group"
           aria-label="凭证分组列表"
-          className={`fixed z-[80] flex flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_12px_32px_-8px_rgba(15,23,42,0.28)] animate-fade-in ${
-            groups.length > SCROLL_THRESHOLD ? 'overflow-y-auto' : ''
-          }`}
+          className={`fixed z-[80] flex flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_12px_32px_-8px_rgba(15,23,42,0.28)] transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none ${
+            entered ? 'opacity-100' : 'opacity-0'
+          } ${interactive ? '' : 'pointer-events-none'} ${groups.length > SCROLL_THRESHOLD ? 'overflow-y-auto' : ''}`}
           style={{
             left: `${anchor.left}px`,
             width: `${anchor.width}px`,
@@ -240,9 +254,31 @@ const CredentialGroupStack = ({
             maxHeight: `min(15rem, ${anchor.maxHeight}px)`
           }}
         >
-          {orderedGroups.map((group) => (
-            <div key={group.id} className="flex-shrink-0">
-              {renderCard(group)}
+          {orderedGroups.map((group, index) => (
+            <div
+              key={group.id}
+              className="flex-shrink-0 origin-top transition-[transform,opacity] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none"
+              style={{
+                // 未进入时把每张卡反推回堆叠位置，进入后归位，形成散开动画
+                transform: entered
+                  ? 'translateY(0) scale(1)'
+                  : `translateY(${index * STACK_OFFSET_PX - index * ROW_STRIDE_PX}px) scale(${1 - Math.min(index, MAX_STACK_LAYERS) * STACK_SCALE_STEP})`,
+                opacity: entered ? 1 : (index < MAX_STACK_LAYERS ? 1 : 0),
+                transitionDelay: entered ? `${Math.min(index, 6) * 15}ms` : '0ms'
+              }}
+            >
+              <GroupCard
+                group={group}
+                selected={Number(group.id) === Number(selectedId)}
+                disabled={disabled}
+                loading={loadingGroupId != null && Number(loadingGroupId) === Number(group.id)}
+                hint="单击选择，双击查看详情"
+                onActivate={handleSelect}
+                onDoubleClickCard={onOpen}
+                onSetDefault={withClose(onSetDefault)}
+                onEdit={withClose(onEdit)}
+                onDelete={withClose(onDelete)}
+              />
             </div>
           ))}
         </div>,
@@ -271,25 +307,31 @@ const ACTION_BUTTON_CLASS =
 const GroupCard = ({
   group,
   selected,
-  contentHidden,
+  contentHidden = false,
   disabled,
   loading,
   hint,
-  onSelect,
+  onActivate,
   onDoubleClickCard,
   onSetDefault,
   onEdit,
   onDelete
 }) => {
   const groupIsDefault = isDefaultGroup(group);
+  // 操作按钮嵌在整卡点击区里，必须阻止冒泡，否则编辑/删除会顺带触发展开或选中
+  const stopBubble = (handler) => (event) => {
+    event.stopPropagation();
+    handler?.(group);
+  };
 
   return (
     <div
-      onDoubleClick={() => onDoubleClickCard?.(group)}
+      onClick={() => onActivate?.(group)}
+      onDoubleClick={onDoubleClickCard ? () => onDoubleClickCard(group) : undefined}
       title={hint}
       className={`flex h-9 min-w-0 items-center gap-1.5 rounded-lg border bg-white px-2 shadow-[0_1px_2px_rgba(15,23,42,0.06)] transition-colors ${
-        selected ? 'border-indigo-200 bg-indigo-50/60' : 'border-slate-200 hover:border-slate-300'
-      }`}
+        onActivate ? 'cursor-pointer' : ''
+      } ${selected ? 'border-indigo-200 bg-indigo-50/60' : 'border-slate-200 hover:border-slate-300'}`}
     >
       {/* 后层卡片只保留外壳轮廓，内容淡出，避免堆叠处文字互相重叠 */}
       <div
@@ -299,7 +341,7 @@ const GroupCard = ({
       >
         <button
           type="button"
-          onClick={() => onSelect?.(group)}
+          onClick={stopBubble(onActivate)}
           disabled={disabled}
           aria-pressed={selected}
           className="inline-flex min-w-0 flex-1 items-center gap-1.5 rounded-md text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 disabled:cursor-not-allowed"
@@ -329,7 +371,7 @@ const GroupCard = ({
             <Tooltip content="设为默认分组">
               <button
                 type="button"
-                onClick={() => onSetDefault?.(group)}
+                onClick={stopBubble(onSetDefault)}
                 onDoubleClick={(event) => event.stopPropagation()}
                 disabled={disabled || loading}
                 className={`${ACTION_BUTTON_CLASS} hover:bg-emerald-50 hover:text-emerald-600`}
@@ -342,7 +384,7 @@ const GroupCard = ({
           <Tooltip content="编辑分组">
             <button
               type="button"
-              onClick={() => onEdit?.(group)}
+              onClick={stopBubble(onEdit)}
               onDoubleClick={(event) => event.stopPropagation()}
               disabled={disabled}
               className={`${ACTION_BUTTON_CLASS} hover:bg-indigo-50 hover:text-indigo-600`}
@@ -355,7 +397,7 @@ const GroupCard = ({
             <Tooltip content="删除分组">
               <button
                 type="button"
-                onClick={() => onDelete?.(group)}
+                onClick={stopBubble(onDelete)}
                 onDoubleClick={(event) => event.stopPropagation()}
                 disabled={disabled}
                 className={`${ACTION_BUTTON_CLASS} hover:bg-rose-50 hover:text-rose-600`}
