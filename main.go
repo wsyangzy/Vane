@@ -79,6 +79,19 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
+		// 阻止 WebView2 在窗口隐藏/最小化后进入 efficiency mode。
+		// Wails v3 alpha.96 原本的修复（chromium.PutIsVisible(true)）因 go-webview2 缺少该方法
+		// 而被注释掉（webview_window_windows.go 中的 TODO），窗口长时间隐藏后渲染进程会被系统
+		// 回收，重新显示时只剩空白控件。这里改用 Chromium 启动参数从源头抑制后台降级。
+		// 注意：这些参数无法覆盖 Windows 系统级内存压力回收，故仍需 registerWebviewRecovery 兜底。
+		Windows: application.WindowsOptions{
+			DisabledFeatures: []string{"CalculateNativeWinOcclusion"},
+			AdditionalBrowserArgs: []string{
+				"--disable-background-timer-throttling",
+				"--disable-backgrounding-occluded-windows",
+				"--disable-renderer-backgrounding",
+			},
+		},
 		// 单实例锁
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: singleInstanceID,
@@ -160,6 +173,9 @@ func main() {
 
 	// 创建系统托盘
 	setupSystemTray(wailsApp, window, appInstance)
+
+	// 注册 WebView2 白屏自愈钩子（长时间隐藏后渲染进程可能已被系统回收）
+	registerWebviewRecovery(window)
 
 	// 启动应用初始化
 	appInstance.startup()
