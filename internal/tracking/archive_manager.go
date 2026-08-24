@@ -581,12 +581,12 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			request_id, client_ip, user_agent, method, path,
 			start_time, end_time, duration_ms, output_sent_at,
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
-			original_model_name, model_rewrite_source, model_rewrite_target,
+			original_model_name, model_rewrite_source, model_rewrite_target, model_reasoning_effort, service_tier,
 			status, http_status_code, retry_count,
 			failure_reason, cancel_reason,
 			is_streaming, provider, privacy_redacted, privacy_redaction_summary, privacy_redaction_matches,
 			input_tokens, output_tokens,
-			reasoning_tokens, billable_output_tokens, billing_output_token_source,
+			reasoning_tokens, billable_output_tokens, billing_output_token_source, billing_rule_snapshot,
 			cache_creation_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens,
 			cache_read_tokens,
 			input_cost_usd, output_cost_usd,
@@ -595,7 +595,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
 			model_cost_multiplier, model_input_cost_multiplier, model_output_cost_multiplier, model_cache_read_cost_multiplier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(request_id) DO UPDATE SET
 			end_time = excluded.end_time,
 			duration_ms = excluded.duration_ms,
@@ -606,6 +606,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			original_model_name = excluded.original_model_name,
 			model_rewrite_source = excluded.model_rewrite_source,
 			model_rewrite_target = excluded.model_rewrite_target,
+			model_reasoning_effort = excluded.model_reasoning_effort,
+			service_tier = excluded.service_tier,
 			status = excluded.status,
 			http_status_code = excluded.http_status_code,
 			retry_count = excluded.retry_count,
@@ -621,6 +623,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			reasoning_tokens = excluded.reasoning_tokens,
 			billable_output_tokens = excluded.billable_output_tokens,
 			billing_output_token_source = excluded.billing_output_token_source,
+			billing_rule_snapshot = excluded.billing_rule_snapshot,
 			cache_creation_tokens = excluded.cache_creation_tokens,
 			cache_creation_5m_tokens = excluded.cache_creation_5m_tokens,
 			cache_creation_1h_tokens = excluded.cache_creation_1h_tokens,
@@ -691,6 +694,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			nullString(req.OriginalModelName),
 			nullString(req.ModelRewriteSource),
 			nullString(req.ModelRewriteTarget),
+			nullString(req.ReasoningEffort),
+			nullString(req.ServiceTier),
 			req.Status,
 			req.HTTPStatus,
 			req.RetryCount,
@@ -706,6 +711,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			req.ReasoningTokens,
 			req.BillableOutputTokens,
 			NormalizeBillingOutputTokenSource(req.BillingOutputTokenSource),
+			nullString(req.BillingRuleSnapshot),
 			req.CacheCreationTokens,
 			req.CacheCreation5mTokens,
 			req.CacheCreation1hTokens,
@@ -770,24 +776,37 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 		return CostBreakdown{}
 	}
 
-	// 查找模型定价，不存在则回退到 _default 定价
+	// 查找模型定价；Codex 未知模型使用自己的默认价格，避免回退到 Claude 默认值。
 	pricing, exists := pricingMap[req.ModelName]
 	if !exists {
-		pricing, exists = pricingMap["_default"]
+		defaultPricingKey := "_default"
+		if defaultProvider(req.Provider) == "codex" {
+			defaultPricingKey = "_codex_default"
+		}
+		pricing, exists = pricingMap[defaultPricingKey]
 		if !exists {
 			return CostBreakdown{}
 		}
 	}
 
-	// 获取端点倍率
-	var multiplier *EndpointMultiplier
+	// 获取请求绑定端点时的计费配置。组合规则在热池中有独立副本，
+	// 避免请求处理中修改分组配置改变本次账单。
+	multiplierValue := DefaultEndpointMultiplier()
+	hasMultiplier := false
 	if endpointMuMap != nil {
 		for _, key := range endpointMultiplierLookupKeys(req.Channel, req.GroupName, req.EndpointName) {
 			if m, ok := endpointMuMap[key]; ok {
-				resolved := ResolveEndpointMultiplierForModel(m, req.ModelName)
-				multiplier = &resolved
+				multiplierValue = m
+				hasMultiplier = true
 				break
 			}
+		}
+	}
+	if req.BillingRulesCaptured {
+		multiplierValue.BillingRules = append([]BillingRule(nil), req.BillingRules...)
+		if len(req.BillingRules) > 0 {
+			multiplierValue.BillingOutputTokenSource = req.BillingOutputTokenSource
+			hasMultiplier = true
 		}
 	}
 
@@ -805,8 +824,24 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 		InputIncludesCacheRead:   req.InputIncludesCacheRead,
 	}
 
-	// 调用公共成本计算函数
-	return CalculateCost(usage, &pricing, multiplier)
+	if !hasMultiplier {
+		multiplierValue = DefaultEndpointMultiplier()
+	}
+	cost, effectiveMultiplier, snapshot := calculateRequestCost(usage, pricing, multiplierValue, req.ModelName, req.ServiceTier)
+	if snapshot != "" {
+		req.BillingRuleSnapshot = snapshot
+		req.CostMultiplier = effectiveMultiplier.CostMultiplier
+		req.InputCostMultiplier = effectiveMultiplier.InputCostMultiplier
+		req.OutputCostMultiplier = effectiveMultiplier.OutputCostMultiplier
+		req.CacheCreationCostMultiplier = effectiveMultiplier.CacheCreationCostMultiplier
+		req.CacheCreationCostMultiplier1h = effectiveMultiplier.CacheCreationCostMultiplier1h
+		req.CacheReadCostMultiplier = effectiveMultiplier.CacheReadCostMultiplier
+		req.ModelCostMultiplier = effectiveMultiplier.ModelCostMultiplier
+		req.ModelInputCostMultiplier = effectiveMultiplier.ModelInputCostMultiplier
+		req.ModelOutputCostMultiplier = effectiveMultiplier.ModelOutputCostMultiplier
+		req.ModelCacheReadCostMultiplier = effectiveMultiplier.ModelCacheReadCostMultiplier
+	}
+	return cost
 }
 
 // formatTime 格式化时间为易读格式（使用配置的时区）

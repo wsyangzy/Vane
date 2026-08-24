@@ -735,9 +735,19 @@ export class UpdateSettingInput {
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
+	    cacheCreationCostMultiplier: number;
 	    cacheReadCostMultiplier: number;
+	    longContextCostMultiplier: number;
+	    longContextInputCostMultiplier: number;
+	    longContextOutputCostMultiplier: number;
+	    longContextCacheCreationCostMultiplier: number;
+	    longContextCacheReadCostMultiplier: number;
+	    disableLongContextPricing: boolean;
+	    disableServiceTierPricing: boolean;
+	    serviceTierMultipliers: any[];
 	    billingOutputTokenSource: string;
 	    modelMultipliers: any[];
+	    billingRules: any[];
 	    created_at: string;
 	    updated_at: string;
 
@@ -757,9 +767,19 @@ export class UpdateSettingInput {
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheCreationCostMultiplier = source["cacheCreationCostMultiplier"];
 	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.longContextCostMultiplier = source["longContextCostMultiplier"];
+	        this.longContextInputCostMultiplier = source["longContextInputCostMultiplier"];
+	        this.longContextOutputCostMultiplier = source["longContextOutputCostMultiplier"];
+	        this.longContextCacheCreationCostMultiplier = source["longContextCacheCreationCostMultiplier"];
+	        this.longContextCacheReadCostMultiplier = source["longContextCacheReadCostMultiplier"];
+	        this.disableLongContextPricing = source["disableLongContextPricing"];
+	        this.disableServiceTierPricing = source["disableServiceTierPricing"];
+	        this.serviceTierMultipliers = source["serviceTierMultipliers"];
 	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
 	        this.modelMultipliers = source["modelMultipliers"];
+	        this.billingRules = source["billingRules"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -863,9 +883,19 @@ export class UpdateSettingInput {
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
+	    cacheCreationCostMultiplier: number;
 	    cacheReadCostMultiplier: number;
+	    longContextCostMultiplier: number;
+	    longContextInputCostMultiplier: number;
+	    longContextOutputCostMultiplier: number;
+	    longContextCacheCreationCostMultiplier: number;
+	    longContextCacheReadCostMultiplier: number;
+	    disableLongContextPricing: boolean;
+	    disableServiceTierPricing: boolean;
+	    serviceTierMultipliers: any[];
 	    billingOutputTokenSource: string;
 	    modelMultipliers: any[];
+	    billingRules: any[];
 
 	    static createFrom(source: any = {}) {
 	        return new CreateCodexCredentialGroupInput(source);
@@ -881,9 +911,19 @@ export class UpdateSettingInput {
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheCreationCostMultiplier = source["cacheCreationCostMultiplier"];
 	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.longContextCostMultiplier = source["longContextCostMultiplier"];
+	        this.longContextInputCostMultiplier = source["longContextInputCostMultiplier"];
+	        this.longContextOutputCostMultiplier = source["longContextOutputCostMultiplier"];
+	        this.longContextCacheCreationCostMultiplier = source["longContextCacheCreationCostMultiplier"];
+	        this.longContextCacheReadCostMultiplier = source["longContextCacheReadCostMultiplier"];
+	        this.disableLongContextPricing = source["disableLongContextPricing"];
+	        this.disableServiceTierPricing = source["disableServiceTierPricing"];
+	        this.serviceTierMultipliers = source["serviceTierMultipliers"];
 	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
 	        this.modelMultipliers = source["modelMultipliers"];
+	        this.billingRules = source["billingRules"];
 	    }
 }
 	export class UpdateCodexCredentialGroupInput {
@@ -894,9 +934,19 @@ export class UpdateSettingInput {
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
+	    cacheCreationCostMultiplier: number;
 	    cacheReadCostMultiplier: number;
+	    longContextCostMultiplier: number;
+	    longContextInputCostMultiplier: number;
+	    longContextOutputCostMultiplier: number;
+	    longContextCacheCreationCostMultiplier: number;
+	    longContextCacheReadCostMultiplier: number;
+	    disableLongContextPricing: boolean;
+	    disableServiceTierPricing: boolean;
+	    serviceTierMultipliers: any[];
 	    billingOutputTokenSource: string;
 	    modelMultipliers: any[];
+	    billingRules: any[];
 
 	    static createFrom(source: any = {}) {
 	        return new UpdateCodexCredentialGroupInput(source);
@@ -911,9 +961,19 @@ export class UpdateSettingInput {
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
+	        this.cacheCreationCostMultiplier = source["cacheCreationCostMultiplier"];
 	        this.cacheReadCostMultiplier = source["cacheReadCostMultiplier"];
+	        this.longContextCostMultiplier = source["longContextCostMultiplier"];
+	        this.longContextInputCostMultiplier = source["longContextInputCostMultiplier"];
+	        this.longContextOutputCostMultiplier = source["longContextOutputCostMultiplier"];
+	        this.longContextCacheCreationCostMultiplier = source["longContextCacheCreationCostMultiplier"];
+	        this.longContextCacheReadCostMultiplier = source["longContextCacheReadCostMultiplier"];
+	        this.disableLongContextPricing = source["disableLongContextPricing"];
+	        this.disableServiceTierPricing = source["disableServiceTierPricing"];
+	        this.serviceTierMultipliers = source["serviceTierMultipliers"];
 	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
 	        this.modelMultipliers = source["modelMultipliers"];
+	        this.billingRules = source["billingRules"];
 	    }
 }
 	export class CreateCodexEndpointInput {
@@ -1565,6 +1625,7 @@ export class UpdateSettingInput {
 	    cache_creation_5m_cost_usd: number;
 	    cache_creation_1h_cost_usd: number;
 	    cache_read_cost_usd: number;
+	    billing_rule_snapshot: string;
 
 	    static createFrom(source: any = {}) {
 	        return new RequestRecord(source);
@@ -1610,6 +1671,7 @@ export class UpdateSettingInput {
 	        this.cache_creation_5m_cost_usd = source["cache_creation_5m_cost_usd"];
 	        this.cache_creation_1h_cost_usd = source["cache_creation_1h_cost_usd"];
 	        this.cache_read_cost_usd = source["cache_read_cost_usd"];
+	        this.billing_rule_snapshot = source["billing_rule_snapshot"];
 	    }
 	}
 	export class RequestListResult {

@@ -185,22 +185,24 @@ func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testi
 	var cacheCreationMultiplier, longContextMultiplier float64
 	var longContextInputMultiplier, longContextOutputMultiplier float64
 	var longContextCacheCreationMultiplier, longContextCacheReadMultiplier float64
-	var disableLongContext int
+	var disableLongContext, disableServiceTier int
+	var serviceTierMultipliers string
 	if err := db.QueryRowContext(ctx, `
 		SELECT cache_creation_cost_multiplier, long_context_cost_multiplier,
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
-			disable_long_context_pricing
+			disable_long_context_pricing, disable_service_tier_pricing, service_tier_multipliers
 		FROM codex_credential_groups WHERE id = ?
 	`, groupID).Scan(&cacheCreationMultiplier, &longContextMultiplier,
 		&longContextInputMultiplier, &longContextOutputMultiplier,
 		&longContextCacheCreationMultiplier, &longContextCacheReadMultiplier,
-		&disableLongContext); err != nil {
+		&disableLongContext, &disableServiceTier, &serviceTierMultipliers); err != nil {
 		t.Fatalf("read credential-group billing defaults: %v", err)
 	}
 	if cacheCreationMultiplier != 1 || longContextMultiplier != 1 ||
 		longContextInputMultiplier != 1 || longContextOutputMultiplier != 1 ||
-		longContextCacheCreationMultiplier != 1 || longContextCacheReadMultiplier != 1 || disableLongContext != 1 {
+		longContextCacheCreationMultiplier != 1 || longContextCacheReadMultiplier != 1 ||
+		disableLongContext != 1 || disableServiceTier != 1 || serviceTierMultipliers != "[]" {
 		t.Fatalf("unexpected billing defaults: cache=%v long=%v disabled=%v", cacheCreationMultiplier, longContextMultiplier, disableLongContext)
 	}
 
@@ -216,6 +218,14 @@ func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testi
 	group.LongContextCacheCreationCostMultiplier = 1.3
 	group.LongContextCacheReadCostMultiplier = 1.4
 	group.DisableLongContextPricing = true
+	group.DisableServiceTierPricing = false
+	group.ServiceTierMultipliers = []codexstore.CodexServiceTierMultiplierRecord{{
+		ServiceTier: "fast", CostMultiplier: 1.5, InputCostMultiplier: 1.1,
+		OutputCostMultiplier: 1.2, CacheCreationCostMultiplier: 1.3, CacheReadCostMultiplier: 1.4,
+	}}
+	group.BillingRules = []codexstore.CodexBillingRuleRecord{{
+		Mode: "fixed", InputPrice: 2, OutputPrice: 4, CacheCreationPrice: 1, CacheReadPrice: 0.5,
+	}}
 	if err := groupStore.Update(ctx, group); err != nil {
 		t.Fatalf("update credential-group billing fields: %v", err)
 	}
@@ -226,7 +236,9 @@ func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testi
 	if updated.CacheCreationCostMultiplier != 1.2 || updated.LongContextCostMultiplier != 1.5 ||
 		updated.LongContextInputCostMultiplier != 1.1 || updated.LongContextOutputCostMultiplier != 1.2 ||
 		updated.LongContextCacheCreationCostMultiplier != 1.3 || updated.LongContextCacheReadCostMultiplier != 1.4 ||
-		!updated.DisableLongContextPricing {
+		!updated.DisableLongContextPricing || updated.DisableServiceTierPricing ||
+		len(updated.ServiceTierMultipliers) != 1 || updated.ServiceTierMultipliers[0].ServiceTier != "fast" ||
+		len(updated.BillingRules) != 1 || updated.BillingRules[0].InputPrice != 2 {
 		t.Fatalf("billing fields did not survive round trip: %+v", updated)
 	}
 }

@@ -2,6 +2,7 @@ package tracking
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -37,6 +38,49 @@ func TestCalculateCost_Basic(t *testing.T) {
 	// Total: $3.00 + $1.50 = $4.50
 	if math.Abs(result.TotalCost-4.5) > 0.001 {
 		t.Errorf("Expected TotalCost $4.50, got $%f", result.TotalCost)
+	}
+}
+
+func TestResolveCodexBillingRuleUsesSpecificityThenSelectorPriority(t *testing.T) {
+	pricing := ModelPricing{
+		Input:                  10,
+		Output:                 20,
+		LongContextThreshold:   100,
+		LongContextInputPrice:  30,
+		LongContextOutputPrice: 40,
+	}
+	multiplier := DefaultEndpointMultiplier()
+	multiplier.CostMultiplier = 9
+	multiplier.InputCostMultiplier = 8
+	multiplier.DisableServiceTierPricing = false
+	multiplier.ServiceTierMultipliers = map[string]ServiceTierMultiplier{
+		ServiceTierFast: {CostMultiplier: 7, InputCostMultiplier: 6, OutputCostMultiplier: 5, CacheCreationMultiplier: 4, CacheReadMultiplier: 3},
+	}
+	multiplier.ModelMultipliers = []ModelMultiplier{{Model: "gpt-test", CostMultiplier: 10, InputCostMultiplier: 10, OutputCostMultiplier: 10, CacheReadCostMultiplier: 10}}
+	multiplier.BillingRules = []BillingRule{
+		{Mode: BillingRuleModeMultiplier, CostMultiplier: 1, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
+		{Model: "gpt-test", Mode: BillingRuleModeMultiplier, CostMultiplier: 2, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
+		{ServiceTier: ServiceTierFast, Mode: BillingRuleModeMultiplier, CostMultiplier: 3, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
+		{Model: "gpt-test", ServiceTier: ServiceTierFast, Context: BillingContextLong, Mode: BillingRuleModeFixed, InputPrice: 7, OutputPrice: 11, CacheCreationPrice: 2, CacheReadPrice: 0.5},
+	}
+
+	_, normalMultiplier, normalSnapshot := resolveBillingForRequest(pricing, multiplier, &TokenUsage{InputTokens: 100}, "gpt-test", "priority")
+	if normalSnapshot == nil || normalSnapshot.SelectorModel != "gpt-test" || normalMultiplier.CostMultiplier != 2 {
+		t.Fatalf("expected model selector to win equal-specificity tie, snapshot=%+v multiplier=%+v", normalSnapshot, normalMultiplier)
+	}
+
+	cost, _, snapshotJSON := calculateRequestCost(&TokenUsage{
+		InputTokens:            3_000_000,
+		OutputTokens:           1_000_000,
+		CacheCreationTokens:    1_000_000,
+		CacheReadTokens:        1_000_000,
+		InputIncludesCacheRead: true,
+	}, pricing, multiplier, "gpt-test", "priority")
+	if math.Abs(cost.TotalCost-20.5) > 1e-9 {
+		t.Fatalf("expected one fixed tier+context rule to replace all multipliers, got %f", cost.TotalCost)
+	}
+	if !strings.Contains(snapshotJSON, `"mode":"fixed"`) || !strings.Contains(snapshotJSON, `"selector_context":"long"`) {
+		t.Fatalf("expected fixed long-context audit snapshot, got %s", snapshotJSON)
 	}
 }
 
@@ -550,6 +594,37 @@ func TestCalculateCost_WithModelMultiplier(t *testing.T) {
 	}
 	if math.Abs(result.CacheReadCost-expectedCacheRead) > 0.0001 {
 		t.Errorf("Model multiplier: Expected CacheReadCost $%f, got $%f", expectedCacheRead, result.CacheReadCost)
+	}
+}
+
+func TestResolveEndpointMultiplierForServiceTier(t *testing.T) {
+	base := EndpointMultiplier{
+		CostMultiplier:                0.5,
+		InputCostMultiplier:           2,
+		OutputCostMultiplier:          3,
+		CacheCreationCostMultiplier:   4,
+		CacheCreationCostMultiplier1h: 5,
+		CacheReadCostMultiplier:       6,
+		ServiceTierMultipliers: map[string]ServiceTierMultiplier{
+			ServiceTierFast: {
+				CostMultiplier:          1.5,
+				InputCostMultiplier:     2,
+				OutputCostMultiplier:    2.5,
+				CacheCreationMultiplier: 3,
+				CacheReadMultiplier:     4,
+			},
+		},
+	}
+	resolved := ResolveEndpointMultiplierForServiceTier(base, "priority")
+	if resolved.CostMultiplier != 0.75 || resolved.InputCostMultiplier != 4 || resolved.OutputCostMultiplier != 7.5 {
+		t.Fatalf("fast tier did not compose with ordinary multipliers: %#v", resolved)
+	}
+	if resolved.CacheCreationCostMultiplier != 12 || resolved.CacheCreationCostMultiplier1h != 15 || resolved.CacheReadCostMultiplier != 24 {
+		t.Fatalf("fast tier cache multipliers were not composed: %#v", resolved)
+	}
+	auto := ResolveEndpointMultiplierForServiceTier(base, "auto")
+	if auto.CostMultiplier != base.CostMultiplier || auto.InputCostMultiplier != base.InputCostMultiplier {
+		t.Fatalf("auto tier must stay unresolved: %#v", auto)
 	}
 }
 

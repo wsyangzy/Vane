@@ -23,8 +23,8 @@ type ModelPricingService struct {
 	cache   map[string]*store.ModelPricingRecord
 	cacheMu sync.RWMutex
 
-	// 默认定价缓存
-	defaultPricing *store.ModelPricingRecord
+	// 默认定价缓存（按 provider 区分）
+	defaultPricingCache map[string]*store.ModelPricingRecord
 
 	cacheHits          atomic.Uint64
 	cacheMisses        atomic.Uint64
@@ -36,8 +36,9 @@ type ModelPricingService struct {
 // NewModelPricingService 创建模型定价服务实例
 func NewModelPricingService(st store.ModelPricingStore) *ModelPricingService {
 	return &ModelPricingService{
-		store: st,
-		cache: make(map[string]*store.ModelPricingRecord),
+		store:               st,
+		cache:               make(map[string]*store.ModelPricingRecord),
+		defaultPricingCache: make(map[string]*store.ModelPricingRecord),
 	}
 }
 
@@ -102,46 +103,58 @@ func (s *ModelPricingService) GetPricing(ctx context.Context, modelName string) 
 	return record, nil
 }
 
-// GetPricingOrDefault 获取模型定价，如果不存在则返回默认定价
-func (s *ModelPricingService) GetPricingOrDefault(ctx context.Context, modelName string) *store.ModelPricingRecord {
+// GetPricingOrDefault 获取模型定价（provider-aware），如果不存在则返回该 provider 的默认定价
+func (s *ModelPricingService) GetPricingOrDefault(ctx context.Context, modelName, provider string) *store.ModelPricingRecord {
+	if provider == "" {
+		provider = "claude"
+	}
 	// 先尝试获取指定模型的定价
 	record, err := s.GetPricing(ctx, modelName)
 	if err == nil && record != nil {
 		return record
 	}
 
-	// 返回默认定价
-	return s.GetDefaultPricing(ctx)
+	// 返回对应 provider 的默认定价
+	return s.GetDefaultPricing(ctx, provider)
 }
 
-// GetDefaultPricing 获取默认定价
-func (s *ModelPricingService) GetDefaultPricing(ctx context.Context) *store.ModelPricingRecord {
+// GetDefaultPricing 获取指定 provider 的默认定价
+func (s *ModelPricingService) GetDefaultPricing(ctx context.Context, provider string) *store.ModelPricingRecord {
+	if provider == "" {
+		provider = "claude"
+	}
 	s.cacheMu.RLock()
-	if s.defaultPricing != nil {
+	cacheKey := provider + "::default"
+	if cached, ok := s.defaultPricingCache[cacheKey]; ok && cached != nil {
 		s.cacheMu.RUnlock()
 		s.cacheHits.Add(1)
-		return s.defaultPricing
+		return cached
 	}
 	s.cacheMu.RUnlock()
 	s.cacheMisses.Add(1)
 
-	// 从数据库获取
-	record, err := s.store.GetDefault(ctx)
+	// 从数据库获取指定 provider 的默认
+	record, err := s.store.GetDefaultByProvider(ctx, provider)
 	if err != nil || record == nil {
 		// 返回硬编码的默认值
-		return &store.ModelPricingRecord{
-			ModelName:            "_default",
+		modelName := "_default"
+		if provider == "codex" {
+			modelName = "_codex_default"
+		}
+		record = &store.ModelPricingRecord{
+			ModelName:            modelName,
+			Provider:             provider,
 			InputPrice:           3.0,
 			OutputPrice:          15.0,
-			CacheCreationPrice5m: 3.75, // input * 1.25
-			CacheCreationPrice1h: 6.0,  // input * 2.0
-			CacheReadPrice:       0.30, // input * 0.1
+			CacheCreationPrice5m: 3.75,
+			CacheCreationPrice1h: 6.0,
+			CacheReadPrice:       0.30,
 			IsDefault:            true,
 		}
 	}
 
 	s.cacheMu.Lock()
-	s.defaultPricing = record
+	s.defaultPricingCache[cacheKey] = record
 	s.cacheMu.Unlock()
 
 	return record
@@ -310,10 +323,15 @@ func (s *ModelPricingService) LoadCache(ctx context.Context) error {
 	defer s.cacheMu.Unlock()
 
 	s.cache = make(map[string]*store.ModelPricingRecord)
+	s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
 	for _, record := range records {
 		s.cache[record.ModelName] = record
 		if record.IsDefault {
-			s.defaultPricing = record
+			provider := record.Provider
+			if provider == "" {
+				provider = "claude"
+			}
+			s.defaultPricingCache[provider+"::default"] = record
 		}
 	}
 	s.lastUpdatedAt = time.Now()
@@ -398,7 +416,14 @@ func (s *ModelPricingService) updateCache(record *store.ModelPricingRecord) {
 
 	s.cache[record.ModelName] = record
 	if record.IsDefault {
-		s.defaultPricing = record
+		if s.defaultPricingCache == nil {
+			s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
+		}
+		provider := record.Provider
+		if provider == "" {
+			provider = "claude"
+		}
+		s.defaultPricingCache[provider+"::default"] = record
 	}
 	s.lastUpdatedAt = time.Now()
 }
@@ -409,11 +434,8 @@ func (s *ModelPricingService) clearCache() int {
 	defer s.cacheMu.Unlock()
 
 	removed := len(s.cache)
-	if s.defaultPricing != nil && removed == 0 {
-		removed = 1
-	}
 	s.cache = make(map[string]*store.ModelPricingRecord)
-	s.defaultPricing = nil
+	s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
 	s.cacheInvalidations.Add(1)
 	s.lastInvalidatedAt = time.Now()
 	return removed

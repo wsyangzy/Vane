@@ -92,14 +92,18 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
     if (formData.outputPrice < 0) {
       newErrors.outputPrice = '输出价格不能为负数';
     }
-    if (!Number.isInteger(formData.longContextThreshold) || formData.longContextThreshold < 0) {
-      newErrors.longContextThreshold = 'Long context 阈值必须是非负整数';
-    }
-    LONG_CONTEXT_PRICE_FIELDS.forEach(([field, label]) => {
-      if (formData[field] < 0) {
-        newErrors[field] = `Long context ${label}不能为负数`;
+    // Long context 定价仅 Codex 适用，Claude 下该 tab 不可见，跳过校验
+    // 否则历史脏数据会把 activeTab 切到一个不存在的 tab，表单卡死无法提交
+    if (formData.provider === 'codex') {
+      if (!Number.isInteger(formData.longContextThreshold) || formData.longContextThreshold < 0) {
+        newErrors.longContextThreshold = 'Long context 阈值必须是非负整数';
       }
-    });
+      LONG_CONTEXT_PRICE_FIELDS.forEach(([field, label]) => {
+        if (formData[field] < 0) {
+          newErrors[field] = `Long context ${label}不能为负数`;
+        }
+      });
+    }
     setErrors(newErrors);
     if (Object.keys(newErrors).some((field) => field.startsWith('longContext'))) {
       setActiveTab('longContext');
@@ -136,6 +140,20 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
 
   const longContextEnabled = formData.longContextThreshold > 0;
 
+  // Long context 定价仅 Codex 适用
+  const showLongContextTab = formData.provider === 'codex';
+  const visibleFormTabs = showLongContextTab
+    ? PRICING_FORM_TABS
+    : PRICING_FORM_TABS.filter((tab) => tab.key !== 'longContext');
+
+  // 切到 Claude 时若正停留在 Long context tab，回落到普通定价，避免停在已隐藏的 tab 上
+  const handleProviderChange = (provider) => {
+    handleChange('provider', provider);
+    if (provider !== 'codex' && activeTab === 'longContext') {
+      setActiveTab('standard');
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/50 p-4 animate-fade-in">
       <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
@@ -167,7 +185,7 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
                 <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
                   <button
                     type="button"
-                    onClick={() => handleChange('provider', 'claude')}
+                    onClick={() => handleProviderChange('claude')}
                     className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                       formData.provider === 'claude'
                         ? 'bg-white text-indigo-700 shadow-sm'
@@ -178,7 +196,7 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleChange('provider', 'codex')}
+                    onClick={() => handleProviderChange('codex')}
                     className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                       formData.provider === 'codex'
                         ? 'bg-white text-emerald-700 shadow-sm'
@@ -193,8 +211,8 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
           </div>
 
           <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
-            <div className="grid grid-cols-3 rounded-xl bg-slate-100 p-1">
-              {PRICING_FORM_TABS.map((tab) => (
+            <div className={`grid ${showLongContextTab ? 'grid-cols-3' : 'grid-cols-2'} rounded-xl bg-slate-100 p-1`}>
+              {visibleFormTabs.map((tab) => (
                 <button
                   key={tab.key}
                   type="button"
@@ -991,14 +1009,14 @@ const PricingPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid grid-cols-1 gap-4 mb-6 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid auto-rows-fr grid-cols-1 gap-4 mb-6 md:grid-cols-3 xl:grid-cols-5">
         {pricingSummaryCards.map((card) => (
           <Tooltip
             key={card.title}
             content={card.tooltip || card.value}
-            className="block"
+            className="block h-full"
           >
-            <div className="bg-white rounded-2xl border border-slate-200/60 p-4 shadow-sm transition-shadow hover:shadow-md">
+            <div className="h-full bg-white rounded-2xl border border-slate-200/60 p-4 shadow-sm transition-shadow hover:shadow-md">
               <div className="mb-3 flex items-center gap-2.5">
                 <div className={`rounded-lg p-2 ${card.statusColor}`}>
                   <card.icon size={18} />

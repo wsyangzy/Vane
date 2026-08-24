@@ -76,3 +76,14 @@ test('request channel selectors hide paused channels only while provider failove
   assert.match(pageSource, /visibleClaudeGroups\.map\(g => \(\{ \.\.\.g, provider: 'claude' \}\)\)/);
   assert.match(pageSource, /const codexNames = visibleCodexChannels/);
 });
+
+test('request detail modal portals the full-screen backdrop and preserves page positioning', () => {
+  assert.match(detailSource, /renderModalPortal\(/);
+  assert.match(detailSource, /className="fixed inset-0 z-\[10000\]"/);
+  assert.match(detailSource, /className="absolute inset-0 bg-slate-900\/20 backdrop-blur-sm/);
+  assert.match(detailSource, /getBoundingClientRect\(\)/);
+  assert.match(detailSource, /document\.documentElement\.clientWidth/);
+  assert.match(pageSource, /ref=\{requestPageRef\}/);
+  assert.match(pageSource, /positioningRef=\{requestPageRef\}/);
+  assert.doesNotMatch(detailSource, /absolute inset-x-0 -top-6 bottom-0 z-\[10000\]/);
+});

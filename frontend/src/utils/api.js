@@ -12,6 +12,17 @@ export const isWailsEnvironment = WailsApi.isWailsEnvironment;
 // 请求超时配置
 const DEFAULT_TIMEOUT = 30000;
 
+const parseJSONObject = (value) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
 // 带超时的 fetch 包装器
 const fetchWithTimeout = async (url, options = {}, timeout = DEFAULT_TIMEOUT) => {
   const controller = new AbortController();
@@ -380,6 +391,7 @@ export const fetchRequests = async (params = {}) => {
       reasoningTokens: request.reasoning_tokens ?? request.reasoningTokens ?? 0,
       billableOutputTokens: request.billable_output_tokens ?? request.billableOutputTokens ?? request.output_tokens ?? request.outputTokens ?? 0,
       billingOutputTokenSource: request.billing_output_token_source || request.billingOutputTokenSource || 'output_tokens',
+	  billingRuleSnapshot: parseJSONObject(request.billing_rule_snapshot ?? request.billingRuleSnapshot),
       cacheCreationTokens: request.cache_creation_tokens || request.cacheCreationTokens || 0,
       cacheCreation5mTokens: request.cache_creation_5m_tokens || request.cacheCreation5mTokens || 0,
       cacheCreation1hTokens: request.cache_creation_1h_tokens || request.cacheCreation1hTokens || 0,

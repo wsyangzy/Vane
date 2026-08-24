@@ -32,6 +32,11 @@ type ClaudeCredentialGroupRecord struct {
 	LongContextCacheCreationCostMultiplier float64                         `json:"long_context_cache_creation_cost_multiplier"`
 	LongContextCacheReadCostMultiplier     float64                         `json:"long_context_cache_read_cost_multiplier"`
 	DisableLongContextPricing              bool                            `json:"disable_long_context_pricing"`
+	DisableServiceTierPricing              bool                            `json:"disable_service_tier_pricing"`
+	ServiceTierCostMultiplier              float64                         `json:"service_tier_cost_multiplier"`
+	ServiceTierInputCostMultiplier         float64                         `json:"service_tier_input_cost_multiplier"`
+	ServiceTierOutputCostMultiplier        float64                         `json:"service_tier_output_cost_multiplier"`
+	ServiceTierCacheReadCostMultiplier     float64                         `json:"service_tier_cache_read_cost_multiplier"`
 	ModelMultipliers                       []EndpointModelMultiplierRecord `json:"model_multipliers"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -89,6 +94,11 @@ const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), CO
 	COALESCE(long_context_input_cost_multiplier, 1.0), COALESCE(long_context_output_cost_multiplier, 1.0),
 	COALESCE(long_context_cache_creation_cost_multiplier, 1.0), COALESCE(long_context_cache_read_cost_multiplier, 1.0),
 	COALESCE(disable_long_context_pricing, 0),
+	COALESCE(disable_service_tier_pricing, 1),
+	COALESCE(service_tier_cost_multiplier, 1.0),
+	COALESCE(service_tier_input_cost_multiplier, 1.0),
+	COALESCE(service_tier_output_cost_multiplier, 1.0),
+	COALESCE(service_tier_cache_read_cost_multiplier, 1.0),
 	COALESCE(model_multipliers, '[]'),
 	COALESCE(created_at, ''), COALESCE(updated_at, '')`
 
@@ -120,8 +130,10 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 			cache_read_cost_multiplier, long_context_cost_multiplier,
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
-			disable_long_context_pricing, model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			disable_long_context_pricing, disable_service_tier_pricing,
+			service_tier_cost_multiplier, service_tier_input_cost_multiplier, service_tier_output_cost_multiplier, service_tier_cache_read_cost_multiplier,
+			model_multipliers
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.Channel, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.InputCostMultiplier),
@@ -135,6 +147,11 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 		defaultClaudeGroupStoreMultiplier(record.LongContextCacheCreationCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.LongContextCacheReadCostMultiplier),
 		boolToInt(record.DisableLongContextPricing),
+		boolToInt(record.DisableServiceTierPricing),
+		record.ServiceTierCostMultiplier,
+		record.ServiceTierInputCostMultiplier,
+		record.ServiceTierOutputCostMultiplier,
+		record.ServiceTierCacheReadCostMultiplier,
 		encodeEndpointModelMultipliers(record.ModelMultipliers))
 	if err != nil {
 		return nil, fmt.Errorf("创建 Claude 凭证分组失败: %w", err)
@@ -228,7 +245,9 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 			cache_read_cost_multiplier = ?, long_context_cost_multiplier = ?,
 			long_context_input_cost_multiplier = ?, long_context_output_cost_multiplier = ?,
 			long_context_cache_creation_cost_multiplier = ?, long_context_cache_read_cost_multiplier = ?,
-			disable_long_context_pricing = ?, model_multipliers = ?
+			disable_long_context_pricing = ?, disable_service_tier_pricing = ?,
+			service_tier_cost_multiplier = ?, service_tier_input_cost_multiplier = ?, service_tier_output_cost_multiplier = ?, service_tier_cache_read_cost_multiplier = ?,
+			model_multipliers = ?
 		WHERE id = ?
 	`, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
@@ -243,6 +262,11 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 		defaultClaudeGroupStoreMultiplier(record.LongContextCacheCreationCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.LongContextCacheReadCostMultiplier),
 		boolToInt(record.DisableLongContextPricing),
+		boolToInt(record.DisableServiceTierPricing),
+		record.ServiceTierCostMultiplier,
+		record.ServiceTierInputCostMultiplier,
+		record.ServiceTierOutputCostMultiplier,
+		record.ServiceTierCacheReadCostMultiplier,
 		encodeEndpointModelMultipliers(record.ModelMultipliers),
 		record.ID)
 	if err != nil {
@@ -330,6 +354,11 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		longContextCacheCreationMultiplier float64
 		longContextCacheReadMultiplier     float64
 		disableLongContext                 int
+		disableServiceTier                 int
+		serviceTierCostMultiplier          float64
+		serviceTierInputCostMultiplier     float64
+		serviceTierOutputCostMultiplier    float64
+		serviceTierCacheReadCostMultiplier float64
 		modelMultipliersJSON               string
 		createdAt                          string
 		updatedAt                          string
@@ -354,6 +383,11 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		&longContextCacheCreationMultiplier,
 		&longContextCacheReadMultiplier,
 		&disableLongContext,
+		&disableServiceTier,
+		&serviceTierCostMultiplier,
+		&serviceTierInputCostMultiplier,
+		&serviceTierOutputCostMultiplier,
+		&serviceTierCacheReadCostMultiplier,
 		&modelMultipliersJSON,
 		&createdAt,
 		&updatedAt,
@@ -377,6 +411,11 @@ func scanClaudeCredentialGroupRow(scanner interface {
 	record.LongContextCacheCreationCostMultiplier = defaultClaudeGroupStoreMultiplier(longContextCacheCreationMultiplier)
 	record.LongContextCacheReadCostMultiplier = defaultClaudeGroupStoreMultiplier(longContextCacheReadMultiplier)
 	record.DisableLongContextPricing = disableLongContext != 0
+	record.DisableServiceTierPricing = disableServiceTier != 0
+	record.ServiceTierCostMultiplier = defaultClaudeGroupStoreMultiplier(serviceTierCostMultiplier)
+	record.ServiceTierInputCostMultiplier = defaultClaudeGroupStoreMultiplier(serviceTierInputCostMultiplier)
+	record.ServiceTierOutputCostMultiplier = defaultClaudeGroupStoreMultiplier(serviceTierOutputCostMultiplier)
+	record.ServiceTierCacheReadCostMultiplier = defaultClaudeGroupStoreMultiplier(serviceTierCacheReadCostMultiplier)
 	record.ModelMultipliers = decodeEndpointModelMultipliers(modelMultipliersJSON)
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)

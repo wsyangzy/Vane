@@ -67,6 +67,16 @@ import {
 } from '@pages/management/shared/formatters.js';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import LongContextMultiplierSettings from '@pages/management/shared/LongContextMultiplierSettings.jsx';
+import ServiceTierMultiplierSettings, {
+  buildInitialServiceTierMultipliers,
+  CODEX_SERVICE_TIERS,
+  parseServiceTierMultipliers
+} from './ServiceTierMultiplierSettings.jsx';
+import BillingRuleEditor, {
+  buildInitialBillingRuleRows,
+  createDefaultBillingRuleRow,
+  parseBillingRuleRows
+} from './BillingRuleEditor.jsx';
 import CredentialGroupDetailModal from '@pages/management/shared/CredentialGroupDetailModal.jsx';
 import {
   EndpointHealthBadge as CodexHealthBadge,
@@ -174,7 +184,11 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
   longContextCacheCreationCostMultiplier: formatMultiplierInputValue(group?.longContextCacheCreationCostMultiplier ?? 1.0),
   longContextCacheReadCostMultiplier: formatMultiplierInputValue(group?.longContextCacheReadCostMultiplier ?? 1.0),
   disableLongContextPricing: group ? Boolean(group.disableLongContextPricing) : true,
+  disableServiceTierPricing: group ? Boolean(group.disableServiceTierPricing ?? group.disable_service_tier_pricing ?? true) : true,
+  serviceTierMultipliers: buildInitialServiceTierMultipliers(group?.serviceTierMultipliers || group?.service_tier_multipliers),
   billingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens',
+	 billingMode: Array.isArray(group?.billingRules || group?.billing_rules) && (group?.billingRules || group?.billing_rules).length > 0 ? 'rules' : 'legacy',
+	 billingRuleRows: buildInitialBillingRuleRows(group?.billingRules || group?.billing_rules),
   copyEndpointsFromGroupId: '',
   modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
 });
@@ -192,6 +206,13 @@ const CODEX_CREDENTIAL_GROUP_FORM_TABS = [
 const CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS = [
   ...CODEX_CREDENTIAL_GROUP_FORM_TABS,
   { key: 'copy', label: '配置端点' }
+];
+
+// 计费模式是二选一而非视图切换，故用单选卡片而非 SegmentedTabs——
+// 后者与弹窗顶部的视图标签视觉一致，会让用户误以为两种模式的配置都会生效。
+const CODEX_BILLING_MODES = [
+  { key: 'legacy', label: '传统倍率', description: '五项成本倍率直接相乘' },
+  { key: 'rules', label: '组合规则', description: '按模型 / 档位 / 上下文匹配规则' }
 ];
 
 const CODEX_ENDPOINT_FORM_TABS = [
@@ -625,6 +646,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
 const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
   const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);
+  const [serviceTierSettingsOpen, setServiceTierSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -666,6 +688,21 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
     if (fieldError) setFieldError('');
   };
 
+  const handleServiceTierToggle = () => {
+    if (loading) return;
+    if (formData.disableServiceTierPricing) {
+      setServiceTierSettingsOpen(true);
+      return;
+    }
+    updateField('disableServiceTierPricing', true);
+  };
+
+  const handleServiceTierSave = (values) => {
+    setFormData((current) => ({ ...current, serviceTierMultipliers: values, disableServiceTierPricing: false }));
+    setServiceTierSettingsOpen(false);
+    if (fieldError) setFieldError('');
+  };
+
   const updateCopyEndpointsEnabled = (enabled) => {
     setCopyEndpointsEnabled(enabled);
     if (enabled) {
@@ -685,6 +722,22 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
     setFormData((prev) => ({ ...prev, modelMultiplierRows: rows }));
     if (fieldError) setFieldError('');
   };
+
+	const updateBillingMode = (billingMode) => {
+	  setFormData((prev) => ({
+		...prev,
+		billingMode,
+		billingRuleRows: billingMode === 'rules' && prev.billingRuleRows.length === 0
+		  ? [createDefaultBillingRuleRow(prev)]
+		  : prev.billingRuleRows
+	  }));
+	  if (fieldError) setFieldError('');
+	};
+
+	const updateBillingRuleRows = (billingRuleRows) => {
+	  setFormData((prev) => ({ ...prev, billingRuleRows }));
+	  if (fieldError) setFieldError('');
+	};
 
   const buildSubmitPayload = () => {
     const name = formData.name.trim();
@@ -726,6 +779,13 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       setActiveTab('billing');
       return null;
     }
+    const serviceTierResult = parseServiceTierMultipliers(formData.serviceTierMultipliers);
+    if (serviceTierResult.error) {
+      setFieldError(serviceTierResult.error);
+      setFormStep('details');
+      setActiveTab('billing');
+      return null;
+    }
     const modelMultiplierResult = parseModelMultiplierRows(formData.modelMultiplierRows);
     if (modelMultiplierResult.error) {
       setFieldError(modelMultiplierResult.error);
@@ -733,6 +793,17 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       setActiveTab('billing');
       return null;
     }
+	let billingRules = [];
+	if (formData.billingMode === 'rules') {
+	  const billingRuleResult = parseBillingRuleRows(formData.billingRuleRows);
+	  if (billingRuleResult.error) {
+		setFieldError(billingRuleResult.error);
+		setFormStep('details');
+		setActiveTab('billing');
+		return null;
+	  }
+	  billingRules = billingRuleResult.payload;
+	}
     return {
       name,
       apiKey,
@@ -741,8 +812,11 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
       ...multiplierResult.payload,
       disableLongContextPricing: formData.disableLongContextPricing,
+      disableServiceTierPricing: formData.disableServiceTierPricing,
+      serviceTierMultipliers: serviceTierResult.payload,
       billingOutputTokenSource: formData.billingOutputTokenSource,
-      modelMultipliers: modelMultiplierResult.payload
+	  modelMultipliers: modelMultiplierResult.payload,
+	  billingRules
     };
   };
 
@@ -949,6 +1023,54 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 				  />
 				  <p className="mt-1 text-xs text-slate-500">0 表示不限额；达到限额后自动切换到其他凭证分组。</p>
 				</div>
+				<div>
+				  <div className="mb-1.5 flex items-baseline justify-between gap-2">
+					<label className="text-sm font-medium text-slate-700">计费模式</label>
+					<span className="text-xs text-slate-400">仅所选模式生效</span>
+				  </div>
+				  <div role="radiogroup" aria-label="计费模式" className="grid grid-cols-2 gap-2">
+					{CODEX_BILLING_MODES.map((mode) => {
+					  const selected = formData.billingMode === mode.key;
+					  return (
+						<button
+						  key={mode.key}
+						  type="button"
+						  role="radio"
+						  aria-checked={selected}
+						  onClick={() => updateBillingMode(mode.key)}
+						  disabled={loading}
+						  className={`flex items-start gap-2.5 rounded-xl border p-3 text-left transition-colors ${
+							selected ? 'border-indigo-300 bg-indigo-50/60' : 'border-slate-200 bg-white'
+						  } ${loading ? 'cursor-not-allowed opacity-70' : 'hover:border-indigo-300'}`}
+						>
+						  <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+							selected ? 'border-indigo-600' : 'border-slate-300'
+						  }`}>
+							{selected && <span className="h-2 w-2 rounded-full bg-indigo-600" />}
+						  </span>
+						  <span className="min-w-0">
+							<span className={`block text-sm font-medium ${selected ? 'text-indigo-700' : 'text-slate-700'}`}>{mode.label}</span>
+							<span className="mt-0.5 block text-xs text-slate-500">{mode.description}</span>
+						  </span>
+						</button>
+					  );
+					})}
+				  </div>
+				</div>
+
+				<div>
+				  <label className="mb-1.5 block text-sm font-medium text-slate-700">默认输出计费口径</label>
+				  <CustomSelect
+					options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
+					value={formData.billingOutputTokenSource}
+					onChange={(value) => updateField('billingOutputTokenSource', value)}
+					size="md"
+					fullWidth
+				  />
+				</div>
+
+				{formData.billingMode === 'legacy' ? (
+				  <>
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">普通成本倍率</label>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -1027,22 +1149,79 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   />
                 )}
 
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">默认输出计费口径</label>
-                  <CustomSelect
-                    options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
-                    value={formData.billingOutputTokenSource}
-                    onChange={(value) => updateField('billingOutputTokenSource', value)}
-                    size="md"
-                    fullWidth
+                {/* 服务档位计费 */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={!formData.disableServiceTierPricing}
+                  onClick={handleServiceTierToggle}
+                  className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
+                    formData.disableServiceTierPricing
+                      ? 'border-slate-200 bg-slate-50'
+                      : 'border-indigo-200 bg-indigo-50/60'
+                  } ${loading ? 'cursor-not-allowed opacity-70' : 'hover:border-indigo-300'}`}
+                  disabled={loading}
+                >
+                  <div>
+                    <div className="text-sm font-medium text-slate-700">服务档位计费</div>
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      {formData.disableServiceTierPricing ? '不启用，四档均使用分组基础倍率' : '按请求档位叠加 Standard、Batch、Flex 或 Fast mode 倍率'}
+                    </div>
+                  </div>
+                  <span className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    formData.disableServiceTierPricing ? 'bg-slate-300' : 'bg-indigo-600'
+                  }`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                      formData.disableServiceTierPricing ? 'translate-x-0.5' : 'translate-x-[1.375rem]'
+                    }`} />
+                  </span>
+                </button>
+
+                {!formData.disableServiceTierPricing && (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-700">服务档位倍率已配置</div>
+                        <div className="mt-0.5 text-xs text-slate-500">当前显示每档总倍率，弹窗内可配置五个成本分项</div>
+                      </div>
+                      <Button type="button" variant="secondary" size="sm" onClick={() => setServiceTierSettingsOpen(true)} disabled={loading}>编辑</Button>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {CODEX_SERVICE_TIERS.map((tier) => {
+                        const record = formData.serviceTierMultipliers.find((item) => item.serviceTier === tier.key);
+                        return (
+                          <div key={tier.key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                            <div className="truncate text-[11px] text-slate-400">{tier.label}</div>
+                            <div className="mt-0.5 truncate text-sm font-medium text-slate-700">x{record?.costMultiplier ?? 1}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {serviceTierSettingsOpen && (
+                  <ServiceTierMultiplierSettings
+                    values={formData.serviceTierMultipliers}
+                    disabled={loading}
+                    onCancel={() => setServiceTierSettingsOpen(false)}
+                    onSave={handleServiceTierSave}
                   />
-                </div>
+                )}
 
                 <ModelMultiplierEditor
                   rows={formData.modelMultiplierRows}
                   onChange={updateModelMultiplierRows}
                   disabled={loading}
                 />
+				  </>
+				) : (
+				  <BillingRuleEditor
+					rows={formData.billingRuleRows}
+					onChange={updateBillingRuleRows}
+					disabled={loading}
+				  />
+				)}
               </div>
             )}
 

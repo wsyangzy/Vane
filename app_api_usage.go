@@ -299,6 +299,8 @@ type RequestRecord struct {
 	OriginalModelName        string      `json:"original_model_name"`
 	ModelRewriteSource       string      `json:"model_rewrite_source"`
 	ModelRewriteTarget       string      `json:"model_rewrite_target"`
+	ReasoningEffort          string      `json:"reasoning_effort"`
+	ServiceTier              string      `json:"service_tier"`
 	PrivacyRedacted          bool        `json:"privacy_redacted"`
 	PrivacyRedactionSummary  string      `json:"privacy_redaction_summary,omitempty"`
 	PrivacyRedactionMatches  string      `json:"privacy_redaction_matches,omitempty"`
@@ -313,6 +315,7 @@ type RequestRecord struct {
 	ReasoningTokens          int64       `json:"reasoning_tokens"`
 	BillableOutputTokens     int64       `json:"billable_output_tokens"`
 	BillingOutputTokenSource string      `json:"billing_output_token_source"`
+	BillingRuleSnapshot      string      `json:"billing_rule_snapshot"`
 	CacheCreationTokens      int64       `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
 	CacheCreation5mTokens    int64       `json:"cache_creation_5m_tokens"` // 5分钟缓存
 	CacheCreation1hTokens    int64       `json:"cache_creation_1h_tokens"` // 1小时缓存
@@ -486,6 +489,8 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		OriginalModelName:             r.OriginalModelName,
 		ModelRewriteSource:            r.ModelRewriteSource,
 		ModelRewriteTarget:            r.ModelRewriteTarget,
+		ReasoningEffort:               r.ReasoningEffort,
+		ServiceTier:                   r.ServiceTier,
 		PrivacyRedacted:               r.PrivacyRedacted,
 		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
 		PrivacyRedactionMatches:       r.PrivacyRedactionMatches,
@@ -499,6 +504,7 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		ReasoningTokens:               r.ReasoningTokens,
 		BillableOutputTokens:          r.BillableOutputTokens,
 		BillingOutputTokenSource:      r.BillingOutputTokenSource,
+		BillingRuleSnapshot:           r.BillingRuleSnapshot,
 		CacheCreationTokens:           r.CacheCreationTokens,
 		CacheCreation5mTokens:         r.CacheCreation5mTokens,
 		CacheCreation1hTokens:         r.CacheCreation1hTokens,

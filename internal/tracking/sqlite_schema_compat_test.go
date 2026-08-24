@@ -128,7 +128,7 @@ INSERT INTO model_pricing (
 	}
 
 	// 3) 验证关键列已存在（由 migrateSchema 补齐）
-	for _, c := range []string{"endpoint_chain", "cache_creation_5m_tokens", "cache_creation_1h_tokens", "cache_creation_5m_cost_usd", "cache_creation_1h_cost_usd"} {
+	for _, c := range []string{"endpoint_chain", "cache_creation_5m_tokens", "cache_creation_1h_tokens", "cache_creation_5m_cost_usd", "cache_creation_1h_cost_usd", "billing_rule_snapshot"} {
 		if !sqliteColumnExists(t, adapter.GetReadDB(), "request_logs", c) {
 			t.Fatalf("expected request_logs.%s to exist after InitSchema", c)
 		}
@@ -192,6 +192,45 @@ INSERT INTO model_pricing (
 	}
 	if threshold != 0 || longInput != 0 || longCacheRead != 0 || longCacheWrite != 0 || longOutputPrice != 0 {
 		t.Fatalf("expected migrated long-context pricing to default to zero")
+	}
+}
+
+func TestEmbeddedSchemaCredentialGroupServiceTierColumns(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	schema, err := sqliteSchemaFS.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	if _, err := db.Exec(string(schema)); err != nil {
+		t.Fatalf("execute schema: %v", err)
+	}
+
+	for _, column := range []string{
+		"disable_service_tier_pricing",
+		"service_tier_multipliers",
+		"billing_rules",
+	} {
+		if !sqliteColumnExists(t, db, "codex_credential_groups", column) {
+			t.Fatalf("expected codex_credential_groups.%s in embedded schema", column)
+		}
+	}
+	for _, column := range []string{
+		"disable_service_tier_pricing",
+		"service_tier_cost_multiplier",
+		"service_tier_input_cost_multiplier",
+		"service_tier_output_cost_multiplier",
+		"service_tier_cache_read_cost_multiplier",
+	} {
+		if !sqliteColumnExists(t, db, "claude_credential_groups", column) {
+			t.Fatalf("expected claude_credential_groups.%s in embedded schema", column)
+		}
 	}
 }
 
@@ -274,6 +313,90 @@ func TestSQLiteAdapter_InitSchema_DisablesLegacyLongContextPricingOnce(t *testin
 		if disabled != 0 {
 			t.Fatalf("expected repeated InitSchema to preserve explicit %s state, got %d", table, disabled)
 		}
+	}
+}
+
+// TestSQLiteAdapter_InitSchema_RemovesClaudeLongContextPricing 验证 Claude 侧移除 Long context 后，
+// 历史上被显式开启的分组会被强制关闭，且不得波及仍保留该能力的 Codex 分组。
+func TestSQLiteAdapter_InitSchema_RemovesClaudeLongContextPricing(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "claude-long-context-removal.db")
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{
+		DatabasePath: dbPath,
+		Timezone:     "Asia/Shanghai",
+	})
+	if err != nil {
+		t.Fatalf("NewSQLiteAdapter: %v", err)
+	}
+	if err := adapter.Open(); err != nil {
+		t.Fatalf("adapter.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("initial InitSchema: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	db := adapter.GetWriteDB()
+
+	// 模拟用户在 20260712 迁移之后手动开启了 Long context 的旧库。
+	// 只删除本次迁移的版本记录，保证 20260712 不会重跑而把 Codex 也一并关掉，
+	// 这样才能验证新迁移确实只作用于 Claude。
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO claude_credential_groups (channel, name, disable_long_context_pricing)
+		VALUES ('legacy-claude', 'default', 0);
+		INSERT INTO codex_channels (name, provider_type, api_key, model)
+		VALUES ('legacy-codex', 'openai-compatible', '', 'gpt-5');
+		INSERT INTO codex_credential_groups (channel_id, name, disable_long_context_pricing)
+		SELECT id, 'default', 0 FROM codex_channels WHERE name = 'legacy-codex';
+		DELETE FROM schema_versions WHERE version = '20260821_remove_claude_long_context_pricing';
+	`); err != nil {
+		t.Fatalf("seed credential groups: %v", err)
+	}
+
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("migrating InitSchema: %v", err)
+	}
+
+	readDisabled := func(table string) int {
+		t.Helper()
+		var disabled int
+		if err := adapter.GetReadDB().QueryRowContext(ctx,
+			"SELECT disable_long_context_pricing FROM "+table+" LIMIT 1").Scan(&disabled); err != nil {
+			t.Fatalf("query %s: %v", table, err)
+		}
+		return disabled
+	}
+
+	if got := readDisabled("claude_credential_groups"); got != 1 {
+		t.Fatalf("expected Claude group Long context forced off, got %d", got)
+	}
+	if got := readDisabled("codex_credential_groups"); got != 0 {
+		t.Fatalf("Codex group must not be touched by the Claude-only migration, got %d", got)
+	}
+
+	var migrationCount int
+	if err := adapter.GetReadDB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM schema_versions
+		WHERE version = '20260821_remove_claude_long_context_pricing'
+	`).Scan(&migrationCount); err != nil {
+		t.Fatalf("query migration version: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("expected exactly one migration record, got %d", migrationCount)
+	}
+
+	// 迁移是一次性的：重复 InitSchema 不应再次改写数据。
+	if _, err := db.ExecContext(ctx,
+		"UPDATE claude_credential_groups SET disable_long_context_pricing = 0"); err != nil {
+		t.Fatalf("reset claude group: %v", err)
+	}
+	if err := adapter.InitSchema(); err != nil {
+		t.Fatalf("idempotent InitSchema: %v", err)
+	}
+	if got := readDisabled("claude_credential_groups"); got != 0 {
+		t.Fatalf("expected one-shot migration not to rerun, got %d", got)
 	}
 }
 

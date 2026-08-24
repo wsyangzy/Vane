@@ -32,6 +32,8 @@ type ActiveRequest struct {
 	OriginalModelName  string `json:"original_model_name"`  // 改写前的原始请求模型
 	ModelRewriteSource string `json:"model_rewrite_source"` // 模型改写来源：mapping/channel_model
 	ModelRewriteTarget string `json:"model_rewrite_target"` // 改写后的目标模型
+	ReasoningEffort    string `json:"reasoning_effort"`     // Codex reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
+	ServiceTier        string `json:"service_tier"`         // 服务档位: auto/default/batch/flex/priority/fast
 	PrivacyRedacted    bool   `json:"privacy_redacted"`     // 请求体发送上游前是否已脱敏
 	PrivacySummary     string `json:"privacy_redaction_summary"`
 	PrivacyMatches     string `json:"privacy_redaction_matches"` // 本机展示用命中明细（含原文与替换值）
@@ -52,16 +54,19 @@ type ActiveRequest struct {
 
 	// 端点倍率快照（请求开始时由生命周期管理器写入，归档时持久化）
 	// 默认 1.0 = 不影响成本；用于详情页面展示计费过程
-	CostMultiplier                float64 `json:"cost_multiplier"`
-	InputCostMultiplier           float64 `json:"input_cost_multiplier"`
-	OutputCostMultiplier          float64 `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier   float64 `json:"cache_creation_cost_multiplier"`
-	CacheCreationCostMultiplier1h float64 `json:"cache_creation_cost_multiplier_1h"`
-	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
-	ModelCostMultiplier           float64 `json:"model_cost_multiplier"`
-	ModelInputCostMultiplier      float64 `json:"model_input_cost_multiplier"`
-	ModelOutputCostMultiplier     float64 `json:"model_output_cost_multiplier"`
-	ModelCacheReadCostMultiplier  float64 `json:"model_cache_read_cost_multiplier"`
+	CostMultiplier                float64       `json:"cost_multiplier"`
+	InputCostMultiplier           float64       `json:"input_cost_multiplier"`
+	OutputCostMultiplier          float64       `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier   float64       `json:"cache_creation_cost_multiplier"`
+	CacheCreationCostMultiplier1h float64       `json:"cache_creation_cost_multiplier_1h"`
+	CacheReadCostMultiplier       float64       `json:"cache_read_cost_multiplier"`
+	ModelCostMultiplier           float64       `json:"model_cost_multiplier"`
+	ModelInputCostMultiplier      float64       `json:"model_input_cost_multiplier"`
+	ModelOutputCostMultiplier     float64       `json:"model_output_cost_multiplier"`
+	ModelCacheReadCostMultiplier  float64       `json:"model_cache_read_cost_multiplier"`
+	BillingRuleSnapshot           string        `json:"billing_rule_snapshot"`
+	BillingRules                  []BillingRule `json:"-"`
+	BillingRulesCaptured          bool          `json:"-"`
 
 	// 完成信息（只在结束时填充）
 	EndTime      *time.Time `json:"end_time,omitempty"`

@@ -606,6 +606,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			description: "输出计费口径字段",
 		},
 		{
+			checkColumn: "billing_rule_snapshot",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN billing_rule_snapshot TEXT",
+			description: "组合计费规则命中快照",
+		},
+		{
 			checkColumn: "original_model_name",
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN original_model_name TEXT",
 			description: "模型改写前原始模型字段",
@@ -619,6 +624,16 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			checkColumn: "model_rewrite_target",
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_rewrite_target TEXT",
 			description: "模型改写目标模型字段",
+		},
+		{
+			checkColumn: "model_reasoning_effort",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN model_reasoning_effort TEXT",
+			description: "推理强度字段 (Codex reasoning.effort)",
+		},
+		{
+			checkColumn: "service_tier",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN service_tier TEXT",
+			description: "服务等级字段 (Codex fast mode)",
 		},
 	}
 
@@ -789,6 +804,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := s.migrateLongContextPricingDefault(ctx); err != nil {
 		return err
 	}
+	if err := s.migrateClaudeLongContextRemoval(ctx); err != nil {
+		return err
+	}
 	if err := runMigrations("codex_credential_groups", []struct {
 		checkColumn string
 		alterSQL    string
@@ -798,6 +816,21 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			checkColumn: "daily_cost_limit_usd",
 			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0",
 			description: "Codex 凭证分组每日成本限额字段",
+		},
+		{
+			checkColumn: "disable_service_tier_pricing",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1",
+			description: "Codex 凭证分组服务等级计费开关",
+		},
+		{
+			checkColumn: "service_tier_multipliers",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN service_tier_multipliers TEXT NOT NULL DEFAULT '[]'",
+			description: "Codex 凭证分组四档服务等级倍率",
+		},
+		{
+			checkColumn: "billing_rules",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN billing_rules TEXT NOT NULL DEFAULT '[]'",
+			description: "Codex 凭证分组组合计费规则",
 		},
 	}); err != nil {
 		return err
@@ -1048,6 +1081,43 @@ func (s *SQLiteAdapter) migrateLongContextPricingDefault(ctx context.Context) er
 	}
 
 	return s.recordSchemaVersion(ctx, longContextPricingDefaultMigrationVersion, "凭证分组 Long context 计费默认关闭")
+}
+
+const claudeLongContextRemovalMigrationVersion = "20260821_remove_claude_long_context_pricing"
+
+// migrateClaudeLongContextRemoval 强制关闭全部 Claude 凭证分组的 Long context 计费。
+//
+// Claude 侧已移除该功能的配置入口，但 20260712 那次「默认关闭」迁移是一次性的，
+// 在它之后被用户手动开启过的分组仍为 0。若不补这一刀，前端看不到开关、
+// tracker.go:557 的闸门却仍然打开，会形成看不见却在生效的隐蔽计费。
+// 仅处理 claude_credential_groups；Codex 仍保留该能力，不得波及。
+func (s *SQLiteAdapter) migrateClaudeLongContextRemoval(ctx context.Context) error {
+	applied, err := s.isSchemaVersionApplied(ctx, claudeLongContextRemovalMigrationVersion)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
+	exists, err := s.tableExists(ctx, "claude_credential_groups")
+	if err != nil {
+		return fmt.Errorf("failed to check claude_credential_groups for Long context removal: %w", err)
+	}
+	if exists {
+		hasColumn, err := s.columnExists(ctx, "claude_credential_groups", "disable_long_context_pricing")
+		if err != nil {
+			return fmt.Errorf("failed to check claude_credential_groups.disable_long_context_pricing: %w", err)
+		}
+		if hasColumn {
+			if _, err := s.GetWriteDB().ExecContext(ctx,
+				"UPDATE claude_credential_groups SET disable_long_context_pricing = 1 WHERE disable_long_context_pricing != 1"); err != nil {
+				return fmt.Errorf("failed to disable Long context pricing for Claude credential groups: %w", err)
+			}
+		}
+	}
+
+	return s.recordSchemaVersion(ctx, claudeLongContextRemovalMigrationVersion, "Claude 凭证分组移除 Long context 计费")
 }
 
 func (s *SQLiteAdapter) ensureEndpointsUniqueByCredentialGroup(ctx context.Context) error {
@@ -1338,6 +1408,11 @@ END;`
 		{"long_context_cache_creation_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_cache_read_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"disable_long_context_pricing", `ALTER TABLE claude_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 1`},
+		{"disable_service_tier_pricing", `ALTER TABLE claude_credential_groups ADD COLUMN disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1`},
+		{"service_tier_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN service_tier_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"service_tier_input_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN service_tier_input_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"service_tier_output_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN service_tier_output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
+		{"service_tier_cache_read_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN service_tier_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 	} {
 		exists, err := s.columnExists(ctx, "claude_credential_groups", migration.column)
 		if err != nil {

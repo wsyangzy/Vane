@@ -88,6 +88,24 @@ func TestTokenParserCarriesResponsesCacheWriteTokensToBilling(t *testing.T) {
 	}
 }
 
+func TestTokenParserCarriesResolvedServiceTier(t *testing.T) {
+	body := []byte(`{
+		"response": {
+			"model": "gpt-5.6-sol",
+			"service_tier": "priority",
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}
+	}`)
+
+	result := NewTokenParser().ParseNonStreaming(body)
+	if result == nil {
+		t.Fatal("expected usage to be parsed")
+	}
+	if result.ServiceTier != "priority" {
+		t.Fatalf("expected response service tier priority, got %q", result.ServiceTier)
+	}
+}
+
 func TestTokenParserCarriesChatCacheWriteTokenStringsToBilling(t *testing.T) {
 	body := []byte(`{
 		"model": "gpt-5.6-terra",

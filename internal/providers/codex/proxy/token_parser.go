@@ -25,6 +25,7 @@ type TokenResult struct {
 	CacheReadTokens  int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
 	CacheWriteTokens int64 // GPT-5.6+ cache_write_tokens（写入缓存的输入部分）
 	Model            string
+	ServiceTier      string
 }
 
 // UpstreamStreamError 表示 OpenAI/Codex 以 HTTP 200 SSE 流返回的错误事件。
@@ -151,15 +152,17 @@ type openAIUsage struct {
 // openAIResponseWrapper Responses API SSE 事件中嵌套的响应对象
 // 例如：response.completed 事件 → data: {"type":"response.completed","response":{...,"usage":{...}}}
 type openAIResponseWrapper struct {
-	Model string       `json:"model"`
-	Usage *openAIUsage `json:"usage,omitempty"`
+	Model       string       `json:"model"`
+	ServiceTier string       `json:"service_tier"`
+	Usage       *openAIUsage `json:"usage,omitempty"`
 }
 
 // openAIResponse 统一响应结构（同时支持顶层 usage 和嵌套在 response 中的 usage）
 type openAIResponse struct {
-	Model    string                 `json:"model"`
-	Usage    *openAIUsage           `json:"usage,omitempty"`    // Chat Completions API / Responses 非流式
-	Response *openAIResponseWrapper `json:"response,omitempty"` // Responses API SSE 事件包装
+	Model       string                 `json:"model"`
+	ServiceTier string                 `json:"service_tier"`
+	Usage       *openAIUsage           `json:"usage,omitempty"`    // Chat Completions API / Responses 非流式
+	Response    *openAIResponseWrapper `json:"response,omitempty"` // Responses API SSE 事件包装
 }
 
 type openAIStreamErrorEnvelope struct {
@@ -281,7 +284,7 @@ func resolveUsage(u *openAIUsage) (input, output, cacheRead, cacheWrite, reasoni
 }
 
 // buildResult 根据 model + usage 构造 TokenResult；如果 usage 为空返回 nil
-func buildResult(model string, usage *openAIUsage) *TokenResult {
+func buildResult(model, serviceTier string, usage *openAIUsage) *TokenResult {
 	if usage == nil {
 		return nil
 	}
@@ -302,6 +305,7 @@ func buildResult(model string, usage *openAIUsage) *TokenResult {
 		CacheReadTokens:  cacheRead,
 		CacheWriteTokens: cacheWrite,
 		Model:            model,
+		ServiceTier:      strings.ToLower(strings.TrimSpace(serviceTier)),
 	}
 }
 
@@ -314,14 +318,20 @@ func (p *TokenParser) ParseNonStreaming(body []byte) *TokenResult {
 	}
 	usage := resp.Usage
 	model := resp.Model
-	// 如果顶层 usage 缺失，尝试从嵌套 response 中读取（极少见，但保持一致性）
-	if usage == nil && resp.Response != nil {
-		usage = resp.Response.Usage
+	serviceTier := resp.ServiceTier
+	// 嵌套 response 也可能补充顶层未返回的 model/service_tier。
+	if resp.Response != nil {
+		if usage == nil {
+			usage = resp.Response.Usage
+		}
 		if model == "" {
 			model = resp.Response.Model
 		}
+		if serviceTier == "" {
+			serviceTier = resp.Response.ServiceTier
+		}
 	}
-	return buildResult(model, usage)
+	return buildResult(model, serviceTier, usage)
 }
 
 // requestModelOnly 仅提取请求/响应中的 model 字段（用于早期识别）
@@ -382,14 +392,20 @@ func (p *TokenParser) ParseStreamingLine(line []byte) (result *TokenResult, isDo
 	// 优先使用顶层 usage（Chat Completions），其次尝试嵌套 response.usage（Responses API）
 	usage := resp.Usage
 	model := resp.Model
-	if usage == nil && resp.Response != nil {
-		usage = resp.Response.Usage
+	serviceTier := resp.ServiceTier
+	if resp.Response != nil {
+		if usage == nil {
+			usage = resp.Response.Usage
+		}
 		if model == "" {
 			model = resp.Response.Model
 		}
+		if serviceTier == "" {
+			serviceTier = resp.Response.ServiceTier
+		}
 	}
 
-	return buildResult(model, usage), false
+	return buildResult(model, serviceTier, usage), false
 }
 
 // ParseStreamingErrorLine 从 SSE data 行中提取 OpenAI/Codex 错误事件。

@@ -104,7 +104,7 @@ func TestRecordForwardingStoresCredentialGroupName(t *testing.T) {
 	})
 	requestID := "req-forwarding-group"
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true}`))
-	handler.recordStart(requestID, req, true, "CCTQ", "gpt-5.5", modelRewriteResult{})
+	handler.recordStart(requestID, req, true, "CCTQ", "gpt-5.5", modelRewriteResult{}, "", "")
 	handler.recordForwarding(requestID, "国内", "CCTQ", "gpt-5.5", []chainNode{
 		{Hop: 1, Channel: "CCTQ", CredentialGroup: "轮询", Endpoint: "国内"},
 	})
@@ -128,6 +128,19 @@ func TestRecordForwardingStoresCredentialGroupName(t *testing.T) {
 	}
 	if active.BillingOutputTokenSource != tracking.BillingOutputTokenSourceReasoning {
 		t.Fatalf("expected group-scoped billing output source %q, got %q", tracking.BillingOutputTokenSourceReasoning, active.BillingOutputTokenSource)
+	}
+}
+
+func TestExtractCodexRequestMetadata(t *testing.T) {
+	body := []byte(`{"reasoning":{"effort":"xhigh","summary":"concise"},"service_tier":"Priority"}`)
+	if got := extractReasoning(body); got != `{"effort":"xhigh","summary":"concise"}` {
+		t.Fatalf("unexpected reasoning metadata: %q", got)
+	}
+	if got := extractServiceTier(body); got != "priority" {
+		t.Fatalf("unexpected service tier: %q", got)
+	}
+	if got := extractReasoning([]byte(`{"reasoning":null}`)); got != "" {
+		t.Fatalf("null reasoning must be omitted, got %q", got)
 	}
 }
 
@@ -235,7 +248,7 @@ func TestTryEndpointCyclePersistsRetryCountAcrossEndpointsAndLoops(t *testing.T)
 	requestID := "req-retry-across-loops"
 	body := []byte(`{"model":"gpt-5.5","stream":false}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
-	handler.recordStart(requestID, req, false, "CCTQ", "gpt-5.5", modelRewriteResult{})
+	handler.recordStart(requestID, req, false, "CCTQ", "gpt-5.5", modelRewriteResult{}, "", "")
 	var failedIDs []int64
 	var endpointChain []chainNode
 	attemptCount := 0
@@ -795,7 +808,7 @@ func TestHandleStreamingRecordsSuccessWhenContextCanceledAfterCompletion(t *test
 	requestID := "req-stream-completed-cancel"
 	startTime := time.Now().Add(-time.Second)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true}`))
-	handler.recordStart(requestID, req, true, "anyrouter", "gpt-5.5", modelRewriteResult{})
+	handler.recordStart(requestID, req, true, "anyrouter", "gpt-5.5", modelRewriteResult{}, "", "")
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,

@@ -1308,7 +1308,10 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					groupLongContextCacheCreationMultiplier := 1.0
 					groupLongContextCacheReadMultiplier := 1.0
 					groupDisableLongContextPricing := false
+					groupDisableServiceTierPricing := true
+					var groupServiceTierMultipliers map[string]tracking.ServiceTierMultiplier
 					groupModelMultipliers := []tracking.ModelMultiplier(nil)
+					groupBillingRules := []tracking.BillingRule(nil)
 					billingOutputTokenSource := "output_tokens"
 					if group != nil {
 						groupName = group.Name
@@ -1323,7 +1326,10 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						groupLongContextCacheCreationMultiplier = defaultPositiveMultiplier(group.LongContextCacheCreationCostMultiplier)
 						groupLongContextCacheReadMultiplier = defaultPositiveMultiplier(group.LongContextCacheReadCostMultiplier)
 						groupDisableLongContextPricing = group.DisableLongContextPricing
+						groupDisableServiceTierPricing = group.DisableServiceTierPricing
+						groupServiceTierMultipliers = codexServiceTierMultipliersToTracking(group.ServiceTierMultipliers)
 						groupModelMultipliers = codexModelMultipliersToTracking(group.ModelMultipliers)
+						groupBillingRules = codexBillingRulesToTracking(group.BillingRules)
 						billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(group.BillingOutputTokenSource)
 					}
 					if groupName == "" && ep.CredentialGroupID > 0 {
@@ -1344,8 +1350,11 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						LongContextCacheCreationCostMultiplier: groupLongContextCacheCreationMultiplier,
 						LongContextCacheReadCostMultiplier:     groupLongContextCacheReadMultiplier,
 						DisableLongContextPricing:              groupDisableLongContextPricing,
+						DisableServiceTierPricing:              groupDisableServiceTierPricing,
+						ServiceTierMultipliers:                 groupServiceTierMultipliers,
 						BillingOutputTokenSource:               billingOutputTokenSource,
 						ModelMultipliers:                       mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
+						BillingRules:                           groupBillingRules,
 					}
 					legacyKey := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
 					groupKey := tracking.EndpointMultiplierGroupKey(ch.Name, groupName, ep.Name)
@@ -1406,6 +1415,52 @@ func codexModelMultipliersToTracking(rules []codexstore.CodexModelMultiplierReco
 			InputCostMultiplier:     rule.InputCostMultiplier,
 			OutputCostMultiplier:    rule.OutputCostMultiplier,
 			CacheReadCostMultiplier: rule.CacheReadCostMultiplier,
+		})
+	}
+	return result
+}
+
+func codexServiceTierMultipliersToTracking(records []codexstore.CodexServiceTierMultiplierRecord) map[string]tracking.ServiceTierMultiplier {
+	if len(records) == 0 {
+		return nil
+	}
+	result := make(map[string]tracking.ServiceTierMultiplier, len(records))
+	for _, record := range records {
+		tier := tracking.NormalizeServiceTierForBilling(record.ServiceTier)
+		if tier == "" {
+			continue
+		}
+		result[tier] = tracking.ServiceTierMultiplier{
+			CostMultiplier:          defaultPositiveMultiplier(record.CostMultiplier),
+			InputCostMultiplier:     defaultPositiveMultiplier(record.InputCostMultiplier),
+			OutputCostMultiplier:    defaultPositiveMultiplier(record.OutputCostMultiplier),
+			CacheCreationMultiplier: defaultPositiveMultiplier(record.CacheCreationCostMultiplier),
+			CacheReadMultiplier:     defaultPositiveMultiplier(record.CacheReadCostMultiplier),
+		}
+	}
+	return result
+}
+
+func codexBillingRulesToTracking(records []codexstore.CodexBillingRuleRecord) []tracking.BillingRule {
+	if len(records) == 0 {
+		return nil
+	}
+	result := make([]tracking.BillingRule, 0, len(records))
+	for _, record := range records {
+		result = append(result, tracking.BillingRule{
+			Model:                       record.Model,
+			ServiceTier:                 record.ServiceTier,
+			Context:                     record.Context,
+			Mode:                        record.Mode,
+			CostMultiplier:              record.CostMultiplier,
+			InputCostMultiplier:         record.InputCostMultiplier,
+			OutputCostMultiplier:        record.OutputCostMultiplier,
+			CacheCreationCostMultiplier: record.CacheCreationCostMultiplier,
+			CacheReadCostMultiplier:     record.CacheReadCostMultiplier,
+			InputPrice:                  record.InputPrice,
+			OutputPrice:                 record.OutputPrice,
+			CacheCreationPrice:          record.CacheCreationPrice,
+			CacheReadPrice:              record.CacheReadPrice,
 		})
 	}
 	return result

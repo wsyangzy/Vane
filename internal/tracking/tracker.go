@@ -185,6 +185,69 @@ type ModelMultiplier struct {
 	CacheReadCostMultiplier float64
 }
 
+const (
+	ServiceTierStandard = "standard"
+	ServiceTierBatch    = "batch"
+	ServiceTierFlex     = "flex"
+	ServiceTierFast     = "fast"
+)
+
+// ServiceTierMultiplier is a credential-group multiplier for one Codex
+// processing tier. It composes with the normal, model, and Long context
+// multipliers instead of replacing them.
+type ServiceTierMultiplier struct {
+	CostMultiplier          float64
+	InputCostMultiplier     float64
+	OutputCostMultiplier    float64
+	CacheCreationMultiplier float64
+	CacheReadMultiplier     float64
+}
+
+const (
+	BillingRuleModeMultiplier = "multiplier"
+	BillingRuleModeFixed      = "fixed"
+	BillingContextNormal      = "normal"
+	BillingContextLong        = "long"
+)
+
+// BillingRule is a Codex credential-group billing policy. Empty selectors
+// match any value; validation guarantees one catch-all rule when rules exist.
+type BillingRule struct {
+	Model                       string
+	ServiceTier                 string
+	Context                     string
+	Mode                        string
+	CostMultiplier              float64
+	InputCostMultiplier         float64
+	OutputCostMultiplier        float64
+	CacheCreationCostMultiplier float64
+	CacheReadCostMultiplier     float64
+	InputPrice                  float64
+	OutputPrice                 float64
+	CacheCreationPrice          float64
+	CacheReadPrice              float64
+}
+
+type BillingRuleSnapshot struct {
+	RuleKey                     string  `json:"rule_key"`
+	Mode                        string  `json:"mode"`
+	SelectorModel               string  `json:"selector_model"`
+	SelectorServiceTier         string  `json:"selector_service_tier"`
+	SelectorContext             string  `json:"selector_context"`
+	EffectiveModel              string  `json:"effective_model"`
+	EffectiveServiceTier        string  `json:"effective_service_tier"`
+	EffectiveContext            string  `json:"effective_context"`
+	CostMultiplier              float64 `json:"cost_multiplier"`
+	InputCostMultiplier         float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier        float64 `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier float64 `json:"cache_creation_cost_multiplier"`
+	CacheReadCostMultiplier     float64 `json:"cache_read_cost_multiplier"`
+	InputPrice                  float64 `json:"input_price"`
+	OutputPrice                 float64 `json:"output_price"`
+	CacheCreationPrice          float64 `json:"cache_creation_price"`
+	CacheReadPrice              float64 `json:"cache_read_price"`
+}
+
 // EndpointMultiplier 端点成本倍率（支持端点级别的成本调整）
 // 成本计算公式：模型基础定价 * 细分倍率 * 总倍率
 // 倍率叠加模式（不再是 either-or）：
@@ -202,13 +265,16 @@ type EndpointMultiplier struct {
 	LongContextOutputCostMultiplier        float64
 	LongContextCacheCreationCostMultiplier float64
 	LongContextCacheReadCostMultiplier     float64
-	DisableLongContextPricing              bool    // 禁用 Long context 定价，默认 false（跟随模型）
+	DisableLongContextPricing              bool // 禁用 Long context 定价，默认 false（跟随模型）
+	DisableServiceTierPricing              bool // 禁用 Codex 服务档位计费，默认 true（不启用）
+	ServiceTierMultipliers                 map[string]ServiceTierMultiplier
 	BillingOutputTokenSource               string  // Codex 输出计费口径，默认 output_tokens
 	ModelCostMultiplier                    float64 // 命中模型附加总倍率（默认 1.0）
 	ModelInputCostMultiplier               float64 // 命中模型附加输入倍率（默认 1.0）
 	ModelOutputCostMultiplier              float64 // 命中模型附加输出倍率（默认 1.0）
 	ModelCacheReadCostMultiplier           float64 // 命中模型附加缓存读取倍率（默认 1.0）
 	ModelMultipliers                       []ModelMultiplier
+	BillingRules                           []BillingRule
 }
 
 // DefaultEndpointMultiplier 返回默认端点倍率（全部为 1.0）
@@ -225,12 +291,57 @@ func DefaultEndpointMultiplier() EndpointMultiplier {
 		LongContextOutputCostMultiplier:        1.0,
 		LongContextCacheCreationCostMultiplier: 1.0,
 		LongContextCacheReadCostMultiplier:     1.0,
+		DisableServiceTierPricing:              true,
 		BillingOutputTokenSource:               BillingOutputTokenSourceOutput,
 		ModelCostMultiplier:                    1.0,
 		ModelInputCostMultiplier:               1.0,
 		ModelOutputCostMultiplier:              1.0,
 		ModelCacheReadCostMultiplier:           1.0,
 	}
+}
+
+// NormalizeServiceTierForBilling maps request/response aliases to the four
+// configurable billing tiers. "auto" intentionally stays unresolved because
+// the request alone does not identify the tier selected by the upstream.
+func NormalizeServiceTierForBilling(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default", "standard", "standard_only":
+		return ServiceTierStandard
+	case "batch":
+		return ServiceTierBatch
+	case "flex":
+		return ServiceTierFlex
+	case "fast", "priority":
+		return ServiceTierFast
+	default:
+		return ""
+	}
+}
+
+// ResolveEndpointMultiplierForServiceTier folds the selected tier into the
+// ordinary endpoint multiplier fields so existing cost and snapshot paths stay
+// authoritative. Unknown and auto tiers do not receive a guessed multiplier.
+func ResolveEndpointMultiplierForServiceTier(mult EndpointMultiplier, serviceTier string) EndpointMultiplier {
+	if mult.DisableServiceTierPricing || len(mult.ServiceTierMultipliers) == 0 {
+		mult.ServiceTierMultipliers = nil
+		return mult
+	}
+
+	tier := NormalizeServiceTierForBilling(serviceTier)
+	tierMultiplier, ok := mult.ServiceTierMultipliers[tier]
+	if !ok {
+		mult.ServiceTierMultipliers = nil
+		return mult
+	}
+
+	mult.CostMultiplier = ensurePositiveMultiplier(mult.CostMultiplier) * ensurePositiveMultiplier(tierMultiplier.CostMultiplier)
+	mult.InputCostMultiplier = ensurePositiveMultiplier(mult.InputCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.InputCostMultiplier)
+	mult.OutputCostMultiplier = ensurePositiveMultiplier(mult.OutputCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.OutputCostMultiplier)
+	mult.CacheCreationCostMultiplier = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.CacheCreationMultiplier)
+	mult.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier1h) * ensurePositiveMultiplier(tierMultiplier.CacheCreationMultiplier)
+	mult.CacheReadCostMultiplier = ensurePositiveMultiplier(mult.CacheReadCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.CacheReadMultiplier)
+	mult.ServiceTierMultipliers = nil
+	return mult
 }
 
 func ResolveEndpointMultiplierForModel(mult EndpointMultiplier, modelName string) EndpointMultiplier {
@@ -257,6 +368,147 @@ func ResolveEndpointMultiplierForModel(mult EndpointMultiplier, modelName string
 	}
 	mult.ModelMultipliers = nil
 	return mult
+}
+
+func resolveBillingRule(rules []BillingRule, modelName, serviceTier, contextMode string) *BillingRule {
+	modelName = strings.TrimSpace(modelName)
+	serviceTier = NormalizeServiceTierForBilling(serviceTier)
+	bestSelectorCount := -1
+	bestSelectorPriority := -1
+	var selected *BillingRule
+	for i := range rules {
+		rule := &rules[i]
+		if rule.Model != "" && rule.Model != modelName {
+			continue
+		}
+		if rule.ServiceTier != "" && rule.ServiceTier != serviceTier {
+			continue
+		}
+		if rule.Context != "" && rule.Context != contextMode {
+			continue
+		}
+		selectorCount := 0
+		selectorPriority := 0
+		if rule.Model != "" {
+			selectorCount++
+			selectorPriority += 4
+		}
+		if rule.ServiceTier != "" {
+			selectorCount++
+			selectorPriority += 2
+		}
+		if rule.Context != "" {
+			selectorCount++
+			selectorPriority++
+		}
+		if selectorCount > bestSelectorCount || (selectorCount == bestSelectorCount && selectorPriority > bestSelectorPriority) {
+			selected = rule
+			bestSelectorCount = selectorCount
+			bestSelectorPriority = selectorPriority
+		}
+	}
+	return selected
+}
+
+func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usage *TokenUsage, modelName, serviceTier string) (ModelPricing, EndpointMultiplier, *BillingRuleSnapshot) {
+	if len(mult.BillingRules) == 0 {
+		resolved := ResolveEndpointMultiplierForModel(mult, modelName)
+		resolved = ResolveEndpointMultiplierForServiceTier(resolved, serviceTier)
+		return pricing, resolved, nil
+	}
+
+	contextMode := BillingContextNormal
+	if usage != nil && pricing.LongContextThreshold > 0 && usage.InputTokens > pricing.LongContextThreshold {
+		contextMode = BillingContextLong
+	}
+	rule := resolveBillingRule(mult.BillingRules, modelName, serviceTier, contextMode)
+	effectiveMultiplier := DefaultEndpointMultiplier()
+	effectiveMultiplier.BillingOutputTokenSource = NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
+	if rule == nil {
+		return pricing, effectiveMultiplier, nil
+	}
+
+	if rule.Mode == BillingRuleModeFixed {
+		pricing.Input = rule.InputPrice
+		pricing.Output = rule.OutputPrice
+		pricing.CacheCreation = rule.CacheCreationPrice
+		pricing.CacheCreation1h = rule.CacheCreationPrice
+		pricing.CacheRead = rule.CacheReadPrice
+		pricing.LongContextThreshold = 0
+		pricing.LongContextInputPrice = 0
+		pricing.LongContextOutputPrice = 0
+		pricing.LongContextCacheWritePrice = 0
+		pricing.LongContextCacheReadPrice = 0
+	} else {
+		effectiveMultiplier.CostMultiplier = ensurePositiveMultiplier(rule.CostMultiplier)
+		effectiveMultiplier.InputCostMultiplier = ensurePositiveMultiplier(rule.InputCostMultiplier)
+		effectiveMultiplier.OutputCostMultiplier = ensurePositiveMultiplier(rule.OutputCostMultiplier)
+		effectiveMultiplier.CacheCreationCostMultiplier = ensurePositiveMultiplier(rule.CacheCreationCostMultiplier)
+		effectiveMultiplier.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(rule.CacheCreationCostMultiplier)
+		effectiveMultiplier.CacheReadCostMultiplier = ensurePositiveMultiplier(rule.CacheReadCostMultiplier)
+	}
+
+	resolvedTier := NormalizeServiceTierForBilling(serviceTier)
+	snapshotInputPrice := pricing.Input
+	snapshotOutputPrice := pricing.Output
+	snapshotCacheCreationPrice := pricing.CacheCreation
+	snapshotCacheReadPrice := pricing.CacheRead
+	if rule.Mode == BillingRuleModeMultiplier && contextMode == BillingContextLong && pricing.LongContextInputPrice > 0 && pricing.LongContextOutputPrice > 0 {
+		snapshotInputPrice = pricing.LongContextInputPrice
+		snapshotOutputPrice = pricing.LongContextOutputPrice
+		if pricing.LongContextCacheWritePrice > 0 {
+			snapshotCacheCreationPrice = pricing.LongContextCacheWritePrice
+		}
+		if pricing.LongContextCacheReadPrice > 0 {
+			snapshotCacheReadPrice = pricing.LongContextCacheReadPrice
+		}
+	}
+	snapshot := &BillingRuleSnapshot{
+		RuleKey:                     billingRuleKey(*rule),
+		Mode:                        rule.Mode,
+		SelectorModel:               rule.Model,
+		SelectorServiceTier:         rule.ServiceTier,
+		SelectorContext:             rule.Context,
+		EffectiveModel:              strings.TrimSpace(modelName),
+		EffectiveServiceTier:        resolvedTier,
+		EffectiveContext:            contextMode,
+		CostMultiplier:              effectiveMultiplier.CostMultiplier,
+		InputCostMultiplier:         effectiveMultiplier.InputCostMultiplier,
+		OutputCostMultiplier:        effectiveMultiplier.OutputCostMultiplier,
+		CacheCreationCostMultiplier: effectiveMultiplier.CacheCreationCostMultiplier,
+		CacheReadCostMultiplier:     effectiveMultiplier.CacheReadCostMultiplier,
+		InputPrice:                  snapshotInputPrice,
+		OutputPrice:                 snapshotOutputPrice,
+		CacheCreationPrice:          snapshotCacheCreationPrice,
+		CacheReadPrice:              snapshotCacheReadPrice,
+	}
+	return pricing, effectiveMultiplier, snapshot
+}
+
+func billingRuleKey(rule BillingRule) string {
+	value := func(value string) string {
+		if value == "" {
+			return "*"
+		}
+		return value
+	}
+	return "model=" + value(rule.Model) + ";tier=" + value(rule.ServiceTier) + ";context=" + value(rule.Context)
+}
+
+func billingRuleSnapshotJSON(snapshot *BillingRuleSnapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func calculateRequestCost(usage *TokenUsage, pricing ModelPricing, multiplier EndpointMultiplier, modelName, serviceTier string) (CostBreakdown, EndpointMultiplier, string) {
+	effectivePricing, effectiveMultiplier, snapshot := resolveBillingForRequest(pricing, multiplier, usage, modelName, serviceTier)
+	return CalculateCost(usage, &effectivePricing, &effectiveMultiplier), effectiveMultiplier, billingRuleSnapshotJSON(snapshot)
 }
 
 // CostBreakdown 成本分解结构
@@ -475,6 +727,8 @@ type UpdateOptions struct {
 	Duration           *time.Duration // 持续时间
 	FailureReason      *string        // 失败原因（用于中间过程记录）
 	Provider           *string        // 提供商标识: claude/codex
+	ReasoningEffort    *string        // reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
+	ServiceTier        *string        // 服务档位: auto/default/batch/flex/priority/fast
 }
 
 // UsageTracker 使用跟踪器
@@ -1323,6 +1577,12 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 			if opts.Provider != nil {
 				req.Provider = *opts.Provider
+			}
+			if opts.ReasoningEffort != nil {
+				req.ReasoningEffort = *opts.ReasoningEffort
+			}
+			if opts.ServiceTier != nil {
+				req.ServiceTier = *opts.ServiceTier
 			}
 		})
 		if err != nil {
@@ -2490,6 +2750,16 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 	}
 
 	return ut.hotPool.Update(requestID, func(req *ActiveRequest) {
+		req.BillingRules = append([]BillingRule(nil), mult.BillingRules...)
+		req.BillingRulesCaptured = true
+		req.BillingRuleSnapshot = ""
+		if len(mult.BillingRules) > 0 {
+			billingOutputTokenSource := mult.BillingOutputTokenSource
+			mult = DefaultEndpointMultiplier()
+			mult.BillingOutputTokenSource = billingOutputTokenSource
+		} else {
+			mult = ResolveEndpointMultiplierForServiceTier(mult, req.ServiceTier)
+		}
 		req.CostMultiplier = ensurePositiveMultiplier(mult.CostMultiplier)
 		req.InputCostMultiplier = ensurePositiveMultiplier(mult.InputCostMultiplier)
 		req.OutputCostMultiplier = ensurePositiveMultiplier(mult.OutputCostMultiplier)
@@ -2575,6 +2845,8 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	originalModelName := req.OriginalModelName
 	modelRewriteSource := req.ModelRewriteSource
 	modelRewriteTarget := req.ModelRewriteTarget
+	reasoningEffort := req.ReasoningEffort
+	serviceTier := req.ServiceTier
 	privacyRedacted := req.PrivacyRedacted
 	privacySummary := req.PrivacySummary
 	privacyMatches := req.PrivacyMatches
@@ -2606,6 +2878,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	modelInputCostMultSnap := req.ModelInputCostMultiplier
 	modelOutputCostMultSnap := req.ModelOutputCostMultiplier
 	modelCacheReadCostMultSnap := req.ModelCacheReadCostMultiplier
+	billingRuleSnapshot := req.BillingRuleSnapshot
+	billingRules := append([]BillingRule(nil), req.BillingRules...)
+	billingRulesCaptured := req.BillingRulesCaptured
 	req.mu.RUnlock()
 
 	var endTime *time.Time
@@ -2647,7 +2922,11 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	if ut.pricing != nil {
 		p, exists := ut.pricing[modelName]
 		if !exists {
-			p, exists = ut.pricing["_default"]
+			defaultPricingKey := "_default"
+			if defaultProvider(provider) == "codex" {
+				defaultPricingKey = "_codex_default"
+			}
+			p, exists = ut.pricing[defaultPricingKey]
 		}
 		if exists {
 			pricing = p
@@ -2657,13 +2936,23 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	if hasPricing && ut.endpointMu != nil {
 		for _, key := range endpointMultiplierLookupKeys(channel, groupName, endpointName) {
 			if m, ok := ut.endpointMu[key]; ok {
-				multiplierValue = ResolveEndpointMultiplierForModel(m, modelName)
+				multiplierValue = m
 				multiplier = &multiplierValue
 				break
 			}
 		}
 	}
 	ut.mu.RUnlock()
+	if multiplier == nil {
+		multiplierValue = DefaultEndpointMultiplier()
+		multiplier = &multiplierValue
+	}
+	if billingRulesCaptured {
+		multiplierValue.BillingRules = billingRules
+		if len(billingRules) > 0 {
+			multiplierValue.BillingOutputTokenSource = billingOutputTokenSource
+		}
+	}
 
 	if hasPricing {
 		usage := &TokenUsage{
@@ -2678,7 +2967,22 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 			CacheReadTokens:          cacheReadTokens,
 			InputIncludesCacheRead:   inputIncludesCacheRead,
 		}
-		cost = CalculateCost(usage, &pricing, multiplier)
+		var resolvedSnapshot string
+		cost, multiplierValue, resolvedSnapshot = calculateRequestCost(usage, pricing, multiplierValue, modelName, serviceTier)
+		multiplier = &multiplierValue
+		if resolvedSnapshot != "" {
+			billingRuleSnapshot = resolvedSnapshot
+			costMultSnap = multiplierValue.CostMultiplier
+			inputCostMultSnap = multiplierValue.InputCostMultiplier
+			outputCostMultSnap = multiplierValue.OutputCostMultiplier
+			cacheCreationCostMultSnap = multiplierValue.CacheCreationCostMultiplier
+			cacheCreationCostMult1hSnap = multiplierValue.CacheCreationCostMultiplier1h
+			cacheReadCostMultSnap = multiplierValue.CacheReadCostMultiplier
+			modelCostMultSnap = multiplierValue.ModelCostMultiplier
+			modelInputCostMultSnap = multiplierValue.ModelInputCostMultiplier
+			modelOutputCostMultSnap = multiplierValue.ModelOutputCostMultiplier
+			modelCacheReadCostMultSnap = multiplierValue.ModelCacheReadCostMultiplier
+		}
 	}
 
 	return RequestDetail{
@@ -2701,6 +3005,8 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		OriginalModelName:             originalModelName,
 		ModelRewriteSource:            modelRewriteSource,
 		ModelRewriteTarget:            modelRewriteTarget,
+		ReasoningEffort:               reasoningEffort,
+		ServiceTier:                   serviceTier,
 		PrivacyRedacted:               privacyRedacted,
 		PrivacyRedactionSummary:       privacySummary,
 		PrivacyRedactionMatches:       privacyMatches,
@@ -2717,6 +3023,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		ReasoningTokens:               reasoningTokens,
 		BillableOutputTokens:          billableOutputTokens,
 		BillingOutputTokenSource:      billingOutputTokenSource,
+		BillingRuleSnapshot:           billingRuleSnapshot,
 		CacheCreationTokens:           cacheCreationTokens,
 		CacheCreation5mTokens:         cacheCreation5mTokens,
 		CacheCreation1hTokens:         cacheCreation1hTokens,

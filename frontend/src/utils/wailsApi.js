@@ -748,6 +748,10 @@ export const getRequests = async (params = {}) => {
     originalModelName: r.original_model_name || '',
     modelRewriteSource: r.model_rewrite_source || '',
     modelRewriteTarget: r.model_rewrite_target || '',
+    reasoning_effort: r.reasoning_effort || '',
+    reasoningEffort: r.reasoning_effort || '',
+    service_tier: r.service_tier || '',
+    serviceTier: r.service_tier || '',
     privacy_redacted: Boolean(r.privacy_redacted),
     privacy_redaction_summary: r.privacy_redaction_summary || '',
     privacy_redaction_matches: r.privacy_redaction_matches || '',
@@ -762,6 +766,7 @@ export const getRequests = async (params = {}) => {
     reasoning_tokens: r.reasoning_tokens ?? 0,
     billable_output_tokens: r.billable_output_tokens ?? r.output_tokens ?? 0,
     billing_output_token_source: r.billing_output_token_source || 'output_tokens',
+	 billing_rule_snapshot: r.billing_rule_snapshot || '',
     cache_creation_tokens: r.cache_creation_tokens,
     cache_creation_5m_tokens: r.cache_creation_5m_tokens,
     cache_creation_1h_tokens: r.cache_creation_1h_tokens,
@@ -1914,6 +1919,83 @@ export const activateCodexProvider = async (id) => {
 
 const normalizeCodexModelMapping = normalizeModelMapping;
 const normalizeCodexModelMultipliers = normalizeModelMultipliers;
+const CODEX_SERVICE_TIERS = ['standard', 'batch', 'flex', 'fast'];
+
+const normalizeCodexServiceTier = (value) => {
+  const tier = String(value || '').trim().toLowerCase();
+  if (tier === 'priority') return 'fast';
+  if (tier === 'default' || tier === 'standard_only') return 'standard';
+  return tier;
+};
+
+const normalizeCodexServiceTierMultipliers = (records) => {
+  const configured = new Map((Array.isArray(records) ? records : []).map((record) => [
+    normalizeCodexServiceTier(record?.serviceTier ?? record?.service_tier),
+    record
+  ]));
+  const value = (record, camel, snake) => {
+    const parsed = parseEndpointMultiplier(record?.[camel] ?? record?.[snake], 1);
+    return parsed > 0 ? parsed : 1;
+  };
+  return CODEX_SERVICE_TIERS.map((serviceTier) => {
+    const record = configured.get(serviceTier) || {};
+    return {
+      serviceTier,
+      costMultiplier: value(record, 'costMultiplier', 'cost_multiplier'),
+      inputCostMultiplier: value(record, 'inputCostMultiplier', 'input_cost_multiplier'),
+      outputCostMultiplier: value(record, 'outputCostMultiplier', 'output_cost_multiplier'),
+      cacheCreationCostMultiplier: value(record, 'cacheCreationCostMultiplier', 'cache_creation_cost_multiplier'),
+      cacheReadCostMultiplier: value(record, 'cacheReadCostMultiplier', 'cache_read_cost_multiplier')
+    };
+  });
+};
+
+const buildCodexServiceTierMultiplierPayload = (records) => normalizeCodexServiceTierMultipliers(records).map((record) => ({
+  service_tier: record.serviceTier,
+  cost_multiplier: record.costMultiplier,
+  input_cost_multiplier: record.inputCostMultiplier,
+  output_cost_multiplier: record.outputCostMultiplier,
+  cache_creation_cost_multiplier: record.cacheCreationCostMultiplier,
+  cache_read_cost_multiplier: record.cacheReadCostMultiplier
+}));
+
+const normalizeCodexBillingRules = (records) => (Array.isArray(records) ? records : []).map((record) => {
+  const multiplier = (camel, snake) => {
+    const value = parseEndpointMultiplier(record?.[camel] ?? record?.[snake], 1);
+    return value > 0 ? value : 1;
+  };
+  return {
+    model: String(record?.model || '').trim(),
+    serviceTier: normalizeCodexServiceTier(record?.serviceTier ?? record?.service_tier),
+    context: String(record?.context || '').trim().toLowerCase(),
+    mode: record?.mode === 'fixed' ? 'fixed' : 'multiplier',
+    costMultiplier: multiplier('costMultiplier', 'cost_multiplier'),
+    inputCostMultiplier: multiplier('inputCostMultiplier', 'input_cost_multiplier'),
+    outputCostMultiplier: multiplier('outputCostMultiplier', 'output_cost_multiplier'),
+    cacheCreationCostMultiplier: multiplier('cacheCreationCostMultiplier', 'cache_creation_cost_multiplier'),
+    cacheReadCostMultiplier: multiplier('cacheReadCostMultiplier', 'cache_read_cost_multiplier'),
+    inputPrice: parseNonNegativeNumber(record?.inputPrice ?? record?.input_price),
+    outputPrice: parseNonNegativeNumber(record?.outputPrice ?? record?.output_price),
+    cacheCreationPrice: parseNonNegativeNumber(record?.cacheCreationPrice ?? record?.cache_creation_price),
+    cacheReadPrice: parseNonNegativeNumber(record?.cacheReadPrice ?? record?.cache_read_price)
+  };
+});
+
+const buildCodexBillingRulePayload = (records) => normalizeCodexBillingRules(records).map((record) => ({
+  model: record.model,
+  service_tier: record.serviceTier,
+  context: record.context,
+  mode: record.mode,
+  cost_multiplier: record.costMultiplier,
+  input_cost_multiplier: record.inputCostMultiplier,
+  output_cost_multiplier: record.outputCostMultiplier,
+  cache_creation_cost_multiplier: record.cacheCreationCostMultiplier,
+  cache_read_cost_multiplier: record.cacheReadCostMultiplier,
+  input_price: record.inputPrice,
+  output_price: record.outputPrice,
+  cache_creation_price: record.cacheCreationPrice,
+  cache_read_price: record.cacheReadPrice
+}));
 
 const mapCodexEndpoint = (endpoint) => ({
   id: endpoint.id,
@@ -1977,8 +2059,11 @@ export const mapCodexCredentialGroup = (group) => ({
   longContextCacheCreationCostMultiplier: group.longContextCacheCreationCostMultiplier ?? 1.0,
   longContextCacheReadCostMultiplier: group.longContextCacheReadCostMultiplier ?? 1.0,
   disableLongContextPricing: Boolean(group.disableLongContextPricing),
+  disableServiceTierPricing: Boolean(group.disableServiceTierPricing ?? group.disable_service_tier_pricing ?? true),
+  serviceTierMultipliers: normalizeCodexServiceTierMultipliers(group.serviceTierMultipliers || group.service_tier_multipliers),
   billingOutputTokenSource: group.billingOutputTokenSource || group.billing_output_token_source || 'output_tokens',
   modelMultipliers: normalizeCodexModelMultipliers(group.modelMultipliers || group.model_multipliers),
+	 billingRules: normalizeCodexBillingRules(group.billingRules || group.billing_rules),
   createdAt: group.created_at || group.createdAt || '',
   updatedAt: group.updated_at || group.updatedAt || ''
 });
@@ -2033,12 +2118,19 @@ export const buildCodexCredentialGroupPayload = (input) => {
     longContextCacheCreationCostMultiplier: parseEndpointMultiplier(input?.longContextCacheCreationCostMultiplier),
     longContextCacheReadCostMultiplier: parseEndpointMultiplier(input?.longContextCacheReadCostMultiplier),
     disableLongContextPricing: Boolean(input?.disableLongContextPricing),
+    disableServiceTierPricing: Boolean(input?.disableServiceTierPricing ?? input?.disable_service_tier_pricing),
     billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
   };
+  if (hasOwn(input, 'serviceTierMultipliers') || hasOwn(input, 'service_tier_multipliers')) {
+    payload.serviceTierMultipliers = buildCodexServiceTierMultiplierPayload(input?.serviceTierMultipliers || input?.service_tier_multipliers);
+  }
   const modelMultipliers = getExplicitModelMultipliers(input, normalizeCodexModelMultipliers);
   if (modelMultipliers !== undefined) {
     payload.modelMultipliers = modelMultipliers;
   }
+	if (hasOwn(input, 'billingRules') || hasOwn(input, 'billing_rules')) {
+	  payload.billingRules = buildCodexBillingRulePayload(input?.billingRules || input?.billing_rules);
+	}
   return payload;
 };
 

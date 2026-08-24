@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"ai-relay-forwarder/internal/providers/codex/store"
@@ -63,6 +64,8 @@ func (s *CodexCredentialGroupService) EnsureDefaultGroup(ctx context.Context, ch
 		LongContextOutputCostMultiplier:        1.0,
 		LongContextCacheCreationCostMultiplier: 1.0,
 		LongContextCacheReadCostMultiplier:     1.0,
+		DisableServiceTierPricing:              true,
+		ServiceTierMultipliers:                 defaultCodexServiceTierMultipliers(),
 	}
 	if s.endpointStore != nil {
 		endpoints, err := s.endpointStore.ListByChannelID(ctx, channel.ID)
@@ -158,11 +161,21 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	record.LongContextOutputCostMultiplier = defaultCodexMultiplier(record.LongContextOutputCostMultiplier)
 	record.LongContextCacheCreationCostMultiplier = defaultCodexMultiplier(record.LongContextCacheCreationCostMultiplier)
 	record.LongContextCacheReadCostMultiplier = defaultCodexMultiplier(record.LongContextCacheReadCostMultiplier)
+	serviceTierMultipliers, err := normalizeCodexServiceTierMultipliers(record.ServiceTierMultipliers)
+	if err != nil {
+		return err
+	}
+	record.ServiceTierMultipliers = serviceTierMultipliers
 	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)
 	if err != nil {
 		return err
 	}
 	record.ModelMultipliers = modelMultipliers
+	billingRules, err := normalizeCodexBillingRules(record.BillingRules)
+	if err != nil {
+		return err
+	}
+	record.BillingRules = billingRules
 
 	if record.ChannelID <= 0 {
 		return fmt.Errorf("channel_id 无效")
@@ -188,4 +201,126 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 		return fmt.Errorf("该渠道下已存在相同的凭证分组名 '%s'", record.Name)
 	}
 	return nil
+}
+
+func defaultCodexServiceTierMultipliers() []store.CodexServiceTierMultiplierRecord {
+	result := make([]store.CodexServiceTierMultiplierRecord, 0, 4)
+	for _, tier := range []string{
+		tracking.ServiceTierStandard,
+		tracking.ServiceTierBatch,
+		tracking.ServiceTierFlex,
+		tracking.ServiceTierFast,
+	} {
+		result = append(result, store.CodexServiceTierMultiplierRecord{
+			ServiceTier:                 tier,
+			CostMultiplier:              1.0,
+			InputCostMultiplier:         1.0,
+			OutputCostMultiplier:        1.0,
+			CacheCreationCostMultiplier: 1.0,
+			CacheReadCostMultiplier:     1.0,
+		})
+	}
+	return result
+}
+
+func normalizeCodexServiceTierMultipliers(records []store.CodexServiceTierMultiplierRecord) ([]store.CodexServiceTierMultiplierRecord, error) {
+	byTier := make(map[string]store.CodexServiceTierMultiplierRecord, len(records))
+	for _, record := range records {
+		tier := tracking.NormalizeServiceTierForBilling(record.ServiceTier)
+		if tier == "" {
+			return nil, fmt.Errorf("未知的 Codex 服务档位: %q", record.ServiceTier)
+		}
+		if _, exists := byTier[tier]; exists {
+			return nil, fmt.Errorf("Codex 服务档位重复: %s", tier)
+		}
+		values := []float64{
+			record.CostMultiplier,
+			record.InputCostMultiplier,
+			record.OutputCostMultiplier,
+			record.CacheCreationCostMultiplier,
+			record.CacheReadCostMultiplier,
+		}
+		for _, value := range values {
+			if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, fmt.Errorf("Codex %s 服务档位倍率必须是大于 0 的有限数值", tier)
+			}
+		}
+		record.ServiceTier = tier
+		byTier[tier] = record
+	}
+
+	result := defaultCodexServiceTierMultipliers()
+	for i, record := range result {
+		if configured, ok := byTier[record.ServiceTier]; ok {
+			result[i] = configured
+		}
+	}
+	return result, nil
+}
+
+func normalizeCodexBillingRules(rules []store.CodexBillingRuleRecord) ([]store.CodexBillingRuleRecord, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]struct{}, len(rules))
+	normalized := make([]store.CodexBillingRuleRecord, 0, len(rules))
+	catchAllCount := 0
+	for _, rule := range rules {
+		rule.Model = strings.TrimSpace(rule.Model)
+		rule.ServiceTier = strings.ToLower(strings.TrimSpace(rule.ServiceTier))
+		if rule.ServiceTier != "" {
+			rule.ServiceTier = tracking.NormalizeServiceTierForBilling(rule.ServiceTier)
+			if rule.ServiceTier == "" {
+				return nil, fmt.Errorf("未知的 Codex 计费规则服务档位")
+			}
+		}
+		rule.Context = strings.ToLower(strings.TrimSpace(rule.Context))
+		if rule.Context != "" && rule.Context != tracking.BillingContextNormal && rule.Context != tracking.BillingContextLong {
+			return nil, fmt.Errorf("未知的 Codex 计费规则上下文: %q", rule.Context)
+		}
+		rule.Mode = strings.ToLower(strings.TrimSpace(rule.Mode))
+		if rule.Mode != tracking.BillingRuleModeMultiplier && rule.Mode != tracking.BillingRuleModeFixed {
+			return nil, fmt.Errorf("未知的 Codex 计费规则模式: %q", rule.Mode)
+		}
+
+		selectorKey := rule.Model + "\x00" + rule.ServiceTier + "\x00" + rule.Context
+		if _, exists := seen[selectorKey]; exists {
+			return nil, fmt.Errorf("Codex 计费规则选择器重复")
+		}
+		seen[selectorKey] = struct{}{}
+		if rule.Model == "" && rule.ServiceTier == "" && rule.Context == "" {
+			catchAllCount++
+		}
+
+		if rule.Mode == tracking.BillingRuleModeMultiplier {
+			values := []float64{rule.CostMultiplier, rule.InputCostMultiplier, rule.OutputCostMultiplier, rule.CacheCreationCostMultiplier, rule.CacheReadCostMultiplier}
+			for _, value := range values {
+				if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+					return nil, fmt.Errorf("Codex 计费规则倍率必须是大于 0 的有限数值")
+				}
+			}
+			rule.InputPrice = 0
+			rule.OutputPrice = 0
+			rule.CacheCreationPrice = 0
+			rule.CacheReadPrice = 0
+		} else {
+			values := []float64{rule.InputPrice, rule.OutputPrice, rule.CacheCreationPrice, rule.CacheReadPrice}
+			for _, value := range values {
+				if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+					return nil, fmt.Errorf("Codex 计费规则固定单价必须是大于或等于 0 的有限数值")
+				}
+			}
+			rule.CostMultiplier = 1
+			rule.InputCostMultiplier = 1
+			rule.OutputCostMultiplier = 1
+			rule.CacheCreationCostMultiplier = 1
+			rule.CacheReadCostMultiplier = 1
+		}
+		normalized = append(normalized, rule)
+	}
+	if catchAllCount != 1 {
+		return nil, fmt.Errorf("Codex 组合计费规则必须且只能包含一条默认规则")
+	}
+	return normalized, nil
 }

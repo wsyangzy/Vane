@@ -487,6 +487,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 3. 从请求体提取模型名（用于在响应未携带 model 时填充）
 	requestModel := h.tokenParser.ParseModelFromBody(body)
 
+	// 3b. 从请求体提取 reasoning 配置（Codex 请求体 reasoning: {effort, mode, summary}）
+	reasoningJSON := extractReasoning(body)
+
+	// 3c. 从请求体提取 service_tier（fast mode: auto/fast/priority）
+	serviceTier := extractServiceTier(body)
+
 	// 🆕 [Codex 生命周期] 请求开始日志
 	h.logger.Info("[Codex 请求开始]",
 		"provider", "codex",
@@ -498,10 +504,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"channel", channelName,
 		"model", requestModel,
 		"model_rewrite_source", modelRewrite.Source,
+		"reasoning", reasoningJSON,
+		"service_tier", serviceTier,
 	)
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
-	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewrite)
+	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewrite, reasoningJSON, serviceTier)
 	if privacyChanged {
 		h.recordPrivacyRedaction(
 			requestID,
@@ -1499,7 +1507,7 @@ func (h *Handler) activeChannelChanged(expectedName string) bool {
 
 // recordStart 记录请求开始
 // 一次性写入 Provider/Channel/Model（来自请求体），减少与归档之间的字段缺失风险
-func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming bool, channelName, requestModel string, modelRewrite modelRewriteResult) {
+func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming bool, channelName, requestModel string, modelRewrite modelRewriteResult, reasoningJSON, serviceTier string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -1518,6 +1526,12 @@ func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming boo
 		opts.OriginalModelName = strPtr(modelRewrite.OriginalModel)
 		opts.ModelRewriteSource = strPtr(modelRewrite.Source)
 		opts.ModelRewriteTarget = strPtr(modelRewrite.NewModel)
+	}
+	if reasoningJSON != "" {
+		opts.ReasoningEffort = &reasoningJSON
+	}
+	if serviceTier != "" {
+		opts.ServiceTier = &serviceTier
 	}
 	h.usageTracker.RecordRequestUpdate(requestID, opts)
 }
@@ -1671,6 +1685,10 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
 		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, groupName, endpointName))
+		if tokenResult.ServiceTier != "" {
+			serviceTier := tokenResult.ServiceTier
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ServiceTier: &serviceTier})
+		}
 	} else {
 		modelName = requestModel
 	}
@@ -1705,6 +1723,10 @@ func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason 
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
 		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, groupName, endpointName))
+		if tokenResult.ServiceTier != "" {
+			serviceTier := tokenResult.ServiceTier
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ServiceTier: &serviceTier})
+		}
 	}
 	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
 	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", reason, "", duration, httpStatus, tokens)
@@ -1759,6 +1781,37 @@ func (h *Handler) readErrorBody(resp *http.Response) (body []byte, summary strin
 		summary = summary[:500] + "..."
 	}
 	return body, summary
+}
+
+// extractReasoning 从 Codex 请求体 JSON 中提取完整的 reasoning 配置并序列化为 JSON
+// 请求体格式: {"reasoning":{"effort":"xhigh","mode":"auto","summary":"concise"},...}
+// 返回 "" 表示请求体未设置 reasoning（将使用 Codex CLI 默认值）
+func extractReasoning(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var partial struct {
+		Reasoning json.RawMessage `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &partial); err != nil || len(partial.Reasoning) == 0 || bytes.Equal(bytes.TrimSpace(partial.Reasoning), []byte("null")) {
+		return ""
+	}
+	return string(partial.Reasoning)
+}
+
+// extractServiceTier 从 Codex 请求体 JSON 中提取 service_tier
+// 常见取值: auto/default/batch/flex/priority；部分兼容服务商使用 fast。
+func extractServiceTier(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var partial struct {
+		ServiceTier string `json:"service_tier"`
+	}
+	if err := json.Unmarshal(body, &partial); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(partial.ServiceTier))
 }
 
 // writeError 写入 JSON 错误响应

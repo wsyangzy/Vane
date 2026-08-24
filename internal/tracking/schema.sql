@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
     original_model_name TEXT,               -- 模型改写前的原始请求模型
     model_rewrite_source TEXT,              -- 模型改写来源：mapping/channel_model
     model_rewrite_target TEXT,              -- 模型改写后的目标模型
+    model_reasoning_effort TEXT,             -- 推理强度/thinking 完整 JSON
+    service_tier TEXT,                       -- 服务档位: auto/default/batch/flex/priority/fast
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
     provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
     privacy_redacted BOOLEAN DEFAULT 0,        -- 发送上游前是否命中隐私脱敏
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     reasoning_tokens INTEGER DEFAULT 0,    -- 输出中的推理 token（OpenAI/Codex output_tokens_details.reasoning_tokens）
     billable_output_tokens INTEGER DEFAULT 0, -- 实际用于输出计费的 token 数
     billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens', -- 输出计费口径
+    billing_rule_snapshot TEXT,             -- 命中的组合计费规则与最终倍率/单价 JSON
     cache_creation_tokens INTEGER DEFAULT 0, -- 缓存创建token数（总计，向后兼容）
     cache_creation_5m_tokens INTEGER DEFAULT 0, -- 5分钟缓存创建token数
     cache_creation_1h_tokens INTEGER DEFAULT 0, -- 1小时缓存创建token数
@@ -315,6 +318,11 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
+    disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1,
+    service_tier_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    service_tier_input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    service_tier_output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
+    service_tier_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     UNIQUE(channel, name)
@@ -421,8 +429,11 @@ CREATE TABLE IF NOT EXISTS codex_credential_groups (
     long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
+    disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1,
+    service_tier_multipliers TEXT NOT NULL DEFAULT '[]', -- Standard/Batch/Flex/Fast mode 倍率 JSON
     billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
     model_multipliers TEXT NOT NULL DEFAULT '[]', -- 按模型附加倍率 JSON
+    billing_rules TEXT NOT NULL DEFAULT '[]', -- 模型/档位/上下文组合计费规则 JSON
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     UNIQUE(channel_id, name)
@@ -511,7 +522,6 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     display_name TEXT,                              -- 显示名称（用于前端展示）
     description TEXT,                               -- 模型描述
     is_default INTEGER DEFAULT 0,                   -- 是否为默认定价 (1=是)
-
     -- ========== 审计字段 ==========
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')

@@ -88,7 +88,7 @@ func (a *App) GetModelPricingStorageStatus() ModelPricingStorageStatus {
 		status.TotalCount = count
 	}
 
-	defaultPricing := modelPricingService.GetDefaultPricing(ctx)
+	defaultPricing := modelPricingService.GetDefaultPricing(ctx, "")
 	status.HasDefault = defaultPricing != nil
 
 	return status

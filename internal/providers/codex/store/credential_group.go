@@ -3,10 +3,36 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 )
+
+type CodexServiceTierMultiplierRecord struct {
+	ServiceTier                 string  `json:"service_tier"`
+	CostMultiplier              float64 `json:"cost_multiplier"`
+	InputCostMultiplier         float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier        float64 `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier float64 `json:"cache_creation_cost_multiplier"`
+	CacheReadCostMultiplier     float64 `json:"cache_read_cost_multiplier"`
+}
+
+type CodexBillingRuleRecord struct {
+	Model                       string  `json:"model"`
+	ServiceTier                 string  `json:"service_tier"`
+	Context                     string  `json:"context"`
+	Mode                        string  `json:"mode"`
+	CostMultiplier              float64 `json:"cost_multiplier"`
+	InputCostMultiplier         float64 `json:"input_cost_multiplier"`
+	OutputCostMultiplier        float64 `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier float64 `json:"cache_creation_cost_multiplier"`
+	CacheReadCostMultiplier     float64 `json:"cache_read_cost_multiplier"`
+	InputPrice                  float64 `json:"input_price"`
+	OutputPrice                 float64 `json:"output_price"`
+	CacheCreationPrice          float64 `json:"cache_creation_price"`
+	CacheReadPrice              float64 `json:"cache_read_price"`
+}
 
 // CodexCredentialGroupRecord 表示 Codex 渠道下可复用的凭证分组。
 // 端点引用分组后，可共享 API Key 与默认成本倍率。
@@ -18,19 +44,22 @@ type CodexCredentialGroupRecord struct {
 	IsDefault         bool    `json:"is_default"`
 	DailyCostLimitUSD float64 `json:"daily_cost_limit_usd"`
 
-	CostMultiplier                         float64                      `json:"cost_multiplier"`
-	InputCostMultiplier                    float64                      `json:"input_cost_multiplier"`
-	OutputCostMultiplier                   float64                      `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier            float64                      `json:"cache_creation_cost_multiplier"`
-	CacheReadCostMultiplier                float64                      `json:"cache_read_cost_multiplier"`
-	LongContextCostMultiplier              float64                      `json:"long_context_cost_multiplier"`
-	LongContextInputCostMultiplier         float64                      `json:"long_context_input_cost_multiplier"`
-	LongContextOutputCostMultiplier        float64                      `json:"long_context_output_cost_multiplier"`
-	LongContextCacheCreationCostMultiplier float64                      `json:"long_context_cache_creation_cost_multiplier"`
-	LongContextCacheReadCostMultiplier     float64                      `json:"long_context_cache_read_cost_multiplier"`
-	DisableLongContextPricing              bool                         `json:"disable_long_context_pricing"`
-	BillingOutputTokenSource               string                       `json:"billing_output_token_source"`
-	ModelMultipliers                       []CodexModelMultiplierRecord `json:"model_multipliers"`
+	CostMultiplier                         float64                            `json:"cost_multiplier"`
+	InputCostMultiplier                    float64                            `json:"input_cost_multiplier"`
+	OutputCostMultiplier                   float64                            `json:"output_cost_multiplier"`
+	CacheCreationCostMultiplier            float64                            `json:"cache_creation_cost_multiplier"`
+	CacheReadCostMultiplier                float64                            `json:"cache_read_cost_multiplier"`
+	LongContextCostMultiplier              float64                            `json:"long_context_cost_multiplier"`
+	LongContextInputCostMultiplier         float64                            `json:"long_context_input_cost_multiplier"`
+	LongContextOutputCostMultiplier        float64                            `json:"long_context_output_cost_multiplier"`
+	LongContextCacheCreationCostMultiplier float64                            `json:"long_context_cache_creation_cost_multiplier"`
+	LongContextCacheReadCostMultiplier     float64                            `json:"long_context_cache_read_cost_multiplier"`
+	DisableLongContextPricing              bool                               `json:"disable_long_context_pricing"`
+	DisableServiceTierPricing              bool                               `json:"disable_service_tier_pricing"`
+	ServiceTierMultipliers                 []CodexServiceTierMultiplierRecord `json:"service_tier_multipliers"`
+	BillingOutputTokenSource               string                             `json:"billing_output_token_source"`
+	ModelMultipliers                       []CodexModelMultiplierRecord       `json:"model_multipliers"`
+	BillingRules                           []CodexBillingRuleRecord           `json:"billing_rules"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -85,7 +114,9 @@ const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_
 	COALESCE(long_context_input_cost_multiplier, 1.0), COALESCE(long_context_output_cost_multiplier, 1.0),
 	COALESCE(long_context_cache_creation_cost_multiplier, 1.0), COALESCE(long_context_cache_read_cost_multiplier, 1.0),
 	COALESCE(disable_long_context_pricing, 0),
+	COALESCE(disable_service_tier_pricing, 1), COALESCE(service_tier_multipliers, '[]'),
 	COALESCE(billing_output_token_source, 'output_tokens'), COALESCE(model_multipliers, '[]'),
+	COALESCE(billing_rules, '[]'),
 	COALESCE(created_at, ''), COALESCE(updated_at, '')`
 
 func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *CodexCredentialGroupRecord) (*CodexCredentialGroupRecord, error) {
@@ -116,8 +147,9 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
 			disable_long_context_pricing,
-			billing_output_token_source, model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			disable_service_tier_pricing, service_tier_multipliers,
+			billing_output_token_source, model_multipliers, billing_rules
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.ChannelID, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
@@ -130,8 +162,11 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 		defaultCodexStoreMultiplier(record.LongContextCacheCreationCostMultiplier),
 		defaultCodexStoreMultiplier(record.LongContextCacheReadCostMultiplier),
 		boolToInt(record.DisableLongContextPricing),
+		boolToInt(record.DisableServiceTierPricing),
+		encodeCodexServiceTierMultipliers(record.ServiceTierMultipliers),
 		defaultBillingOutputTokenSource(record.BillingOutputTokenSource),
-		encodeCodexModelMultipliers(record.ModelMultipliers))
+		encodeCodexModelMultipliers(record.ModelMultipliers),
+		encodeCodexBillingRules(record.BillingRules))
 	if err != nil {
 		return nil, fmt.Errorf("创建 Codex 凭证分组失败: %w", err)
 	}
@@ -224,7 +259,8 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 			long_context_cost_multiplier = ?, long_context_input_cost_multiplier = ?,
 			long_context_output_cost_multiplier = ?, long_context_cache_creation_cost_multiplier = ?,
 			long_context_cache_read_cost_multiplier = ?, disable_long_context_pricing = ?,
-			billing_output_token_source = ?, model_multipliers = ?
+			disable_service_tier_pricing = ?, service_tier_multipliers = ?,
+			billing_output_token_source = ?, model_multipliers = ?, billing_rules = ?
 		WHERE id = ?
 	`, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultCodexStoreMultiplier(record.CostMultiplier),
@@ -238,8 +274,11 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 		defaultCodexStoreMultiplier(record.LongContextCacheCreationCostMultiplier),
 		defaultCodexStoreMultiplier(record.LongContextCacheReadCostMultiplier),
 		boolToInt(record.DisableLongContextPricing),
+		boolToInt(record.DisableServiceTierPricing),
+		encodeCodexServiceTierMultipliers(record.ServiceTierMultipliers),
 		defaultBillingOutputTokenSource(record.BillingOutputTokenSource),
 		encodeCodexModelMultipliers(record.ModelMultipliers),
+		encodeCodexBillingRules(record.BillingRules),
 		record.ID)
 	if err != nil {
 		return fmt.Errorf("更新 Codex 凭证分组失败: %w", err)
@@ -315,8 +354,11 @@ func scanCodexCredentialGroupRow(scanner interface {
 		longContextCacheCreationMultiplier float64
 		longContextCacheReadMultiplier     float64
 		disableLongContextPricing          int
+		disableServiceTierPricing          int
+		serviceTierMultipliersJSON         string
 		billingOutputTokenSource           string
 		modelMultipliersJSON               string
+		billingRulesJSON                   string
 		createdAt                          string
 		updatedAt                          string
 	)
@@ -338,8 +380,11 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&longContextCacheCreationMultiplier,
 		&longContextCacheReadMultiplier,
 		&disableLongContextPricing,
+		&disableServiceTierPricing,
+		&serviceTierMultipliersJSON,
 		&billingOutputTokenSource,
 		&modelMultipliersJSON,
+		&billingRulesJSON,
 		&createdAt,
 		&updatedAt,
 	); err != nil {
@@ -361,8 +406,11 @@ func scanCodexCredentialGroupRow(scanner interface {
 	record.LongContextCacheCreationCostMultiplier = defaultCodexStoreMultiplier(longContextCacheCreationMultiplier)
 	record.LongContextCacheReadCostMultiplier = defaultCodexStoreMultiplier(longContextCacheReadMultiplier)
 	record.DisableLongContextPricing = disableLongContextPricing != 0
+	record.DisableServiceTierPricing = disableServiceTierPricing != 0
+	record.ServiceTierMultipliers = decodeCodexServiceTierMultipliers(serviceTierMultipliersJSON)
 	record.BillingOutputTokenSource = defaultBillingOutputTokenSource(billingOutputTokenSource)
 	record.ModelMultipliers = decodeCodexModelMultipliers(modelMultipliersJSON)
+	record.BillingRules = decodeCodexBillingRules(billingRulesJSON)
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	return &record, nil
@@ -373,4 +421,48 @@ func defaultCodexStoreMultiplier(value float64) float64 {
 		return 1.0
 	}
 	return value
+}
+
+func encodeCodexServiceTierMultipliers(multipliers []CodexServiceTierMultiplierRecord) string {
+	if len(multipliers) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(multipliers)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeCodexServiceTierMultipliers(raw string) []CodexServiceTierMultiplierRecord {
+	if raw == "" {
+		return nil
+	}
+	var multipliers []CodexServiceTierMultiplierRecord
+	if err := json.Unmarshal([]byte(raw), &multipliers); err != nil {
+		return nil
+	}
+	return multipliers
+}
+
+func encodeCodexBillingRules(rules []CodexBillingRuleRecord) string {
+	if len(rules) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(rules)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeCodexBillingRules(raw string) []CodexBillingRuleRecord {
+	if raw == "" {
+		return nil
+	}
+	var rules []CodexBillingRuleRecord
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return nil
+	}
+	return rules
 }

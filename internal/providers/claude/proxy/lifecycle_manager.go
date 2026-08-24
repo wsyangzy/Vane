@@ -639,6 +639,35 @@ func (rlm *RequestLifecycleManager) SetModelName(modelName string) {
 	rlm.SetModel(modelName)
 }
 
+// SetThinking 将 Claude thinking 配置写入请求追踪
+// thinkingJSON 格式: {"type":"enabled","budget_tokens":16000}
+func (rlm *RequestLifecycleManager) SetThinking(thinkingJSON string) {
+	if rlm.usageTracker == nil || thinkingJSON == "" {
+		return
+	}
+	requestID := rlm.stateManager.GetRequestID()
+	if requestID == "" {
+		return
+	}
+	rlm.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{
+		ReasoningEffort: &thinkingJSON,
+	})
+}
+
+// SetServiceTier 将 Claude service_tier 写入请求追踪
+func (rlm *RequestLifecycleManager) SetServiceTier(serviceTier string) {
+	if rlm.usageTracker == nil || serviceTier == "" {
+		return
+	}
+	requestID := rlm.stateManager.GetRequestID()
+	if requestID == "" {
+		return
+	}
+	rlm.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{
+		ServiceTier: &serviceTier,
+	})
+}
+
 // GetModelName 获取当前模型名称（线程安全）
 func (rlm *RequestLifecycleManager) GetModelName() string {
 	rlm.stateMu.RLock()

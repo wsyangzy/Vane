@@ -45,6 +45,15 @@ test('credential-group long-context billing uses a switch and detailed multiplie
   assert.match(source, /Long context 缓存读取/);
 });
 
+test('credential-group service-tier billing configures four independent multiplier sets', () => {
+  assert.match(source, /ServiceTierMultiplierSettings/);
+  assert.match(source, /disableServiceTierPricing/);
+  assert.match(source, /serviceTierMultipliers/);
+  assert.match(source, /Standard、Batch、Flex 或 Fast mode/);
+  assert.match(source, /handleServiceTierToggle/);
+  assert.match(source, /handleServiceTierSave/);
+});
+
 test('Codex credential groups preserve single-click switching and use double-click details', () => {
   assert.match(source, /dailyCostLimitUSD/);
   assert.match(source, /每日成本限额（USD）/);
@@ -245,4 +254,17 @@ test('Codex active-channel pause uses candidate preflight and confirmation', () 
   assert.match(source, /handleConfirmActiveChannelPause/);
   assert.match(source, /channelActivationDisabled = channelFailoverEnabled && channel\.failoverEnabled === false/);
   assert.match(wailsApiSource, /WailsApp\.GetNextAvailableCodexChannel/);
+});
+
+test('Codex billing mode uses radio cards instead of view tabs', () => {
+  // 计费模式是二选一，必须是单选语义；沿用 SegmentedTabs 会与弹窗顶部的视图标签混淆
+  assert.match(source, /const CODEX_BILLING_MODES/);
+  assert.doesNotMatch(source, /CODEX_BILLING_MODE_TABS/);
+  assert.match(source, /role="radiogroup"/);
+  assert.match(source, /role="radio"/);
+  assert.match(source, /aria-checked=\{selected\}/);
+  assert.match(source, /仅所选模式生效/);
+  // 两种模式各自带说明，避免用户不清楚切换的后果
+  assert.match(source, /五项成本倍率直接相乘/);
+  assert.match(source, /按模型 \/ 档位 \/ 上下文匹配规则/);
 });

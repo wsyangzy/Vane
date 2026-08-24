@@ -198,6 +198,46 @@ func TestRecordPrivacyRedactionPersistsMatchesInRequestDetail(t *testing.T) {
 	}
 }
 
+func TestActiveRequestToDetailUsesCodexServiceTier(t *testing.T) {
+	const (
+		channel  = "codex-channel"
+		group    = "default"
+		endpoint = "primary"
+	)
+	tracker := &UsageTracker{
+		pricing: map[string]ModelPricing{
+			"_codex_default": {Input: 1},
+		},
+		endpointMu: map[string]EndpointMultiplier{
+			EndpointMultiplierGroupKey(channel, group, endpoint): {
+				ServiceTierMultipliers: map[string]ServiceTierMultiplier{
+					ServiceTierFast: {CostMultiplier: 2, InputCostMultiplier: 3},
+				},
+			},
+		},
+	}
+	req := &ActiveRequest{
+		RequestID:       "req-codex-fast",
+		StartTime:       time.Now(),
+		Provider:        "codex",
+		Channel:         channel,
+		GroupName:       group,
+		EndpointName:    endpoint,
+		ModelName:       "unknown-codex-model",
+		ReasoningEffort: `{"effort":"high"}`,
+		ServiceTier:     "priority",
+		InputTokens:     1_000_000,
+	}
+
+	detail := tracker.ActiveRequestToDetail(req)
+	if detail.InputCostUSD != 6 {
+		t.Fatalf("expected Fast mode input cost 6, got %f", detail.InputCostUSD)
+	}
+	if detail.ReasoningEffort != req.ReasoningEffort || detail.ServiceTier != req.ServiceTier {
+		t.Fatalf("request metadata missing from hot-pool detail: %#v", detail)
+	}
+}
+
 func TestBatchProcessing(t *testing.T) {
 	// 🔧 [P5.1] 此测试依赖已废弃的 traditional eventChan 批处理路径
 	// P5.1 改造后 HotPool 单路径：start 状态只在内存中，不再走批处理事件队列

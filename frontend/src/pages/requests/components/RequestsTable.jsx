@@ -21,6 +21,29 @@ import {
   parseEndpointName,
   requestHasInterChannelTransfer,
 } from '../utils/endpointChain.js';
+import {
+  formatReasoningFieldValue,
+  getReasoningEffortMeta,
+  parseReasoningConfig
+} from '../utils/requestMetadata.js';
+
+const getReasoningDisplay = (raw) => {
+  const reasoning = parseReasoningConfig(raw);
+  const value = reasoning.effort || reasoning.type || '';
+  if (!value) return <span className="text-gray-400 text-xs">-</span>;
+  const meta = reasoning.effort ? getReasoningEffortMeta(value) : {
+    label: formatReasoningFieldValue('type', value),
+    description: '扩展思考类型。',
+    className: value === 'enabled' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'
+  };
+  return (
+    <Tooltip content={meta.description}>
+      <span className={`inline-flex items-center whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${meta.className}`}>
+        {meta.label}
+      </span>
+    </Tooltip>
+  );
+};
 
 const ChainTooltipBadge = ({ label, value }) => (
   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-700/80 text-[9px] font-medium text-slate-100 ring-1 ring-white/10 shrink-0">
@@ -340,6 +363,8 @@ const renderCell = (columnId, request) => {
       return <span className="text-gray-700 font-mono text-xs">{getDisplayInputTokens(request)}</span>;
     case 'outputTokens':
       return <span className="text-gray-700 font-mono text-xs">{request.outputTokens}</span>;
+    case 'reasoningEffort':
+      return getReasoningDisplay(request.reasoningEffort || request.reasoning_effort);
     case 'cacheCreationTokens':
       return <span className="text-gray-500 font-mono text-xs">{request.cacheCreationTokens}</span>;
     case 'cacheReadTokens':

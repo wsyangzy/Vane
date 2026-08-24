@@ -122,8 +122,11 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 					long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0,
 					long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0,
 					disable_long_context_pricing INTEGER NOT NULL DEFAULT 1,
+					disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1,
+					service_tier_multipliers TEXT NOT NULL DEFAULT '[]',
 					billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens',
 					model_multipliers TEXT NOT NULL DEFAULT '[]',
+					billing_rules TEXT NOT NULL DEFAULT '[]',
 					created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 				updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 				UNIQUE(channel_id, name)
@@ -269,8 +272,11 @@ func (a *App) ensureCodexCredentialGroupSchema(ctx context.Context, db *sql.DB) 
 		{"codex_credential_groups", "long_context_cache_creation_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN long_context_cache_creation_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"codex_credential_groups", "long_context_cache_read_cost_multiplier", `ALTER TABLE codex_credential_groups ADD COLUMN long_context_cache_read_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"codex_credential_groups", "disable_long_context_pricing", `ALTER TABLE codex_credential_groups ADD COLUMN disable_long_context_pricing INTEGER NOT NULL DEFAULT 1`},
+		{"codex_credential_groups", "disable_service_tier_pricing", `ALTER TABLE codex_credential_groups ADD COLUMN disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1`},
+		{"codex_credential_groups", "service_tier_multipliers", `ALTER TABLE codex_credential_groups ADD COLUMN service_tier_multipliers TEXT NOT NULL DEFAULT '[]'`},
 		{"codex_credential_groups", "billing_output_token_source", `ALTER TABLE codex_credential_groups ADD COLUMN billing_output_token_source TEXT NOT NULL DEFAULT 'output_tokens'`},
 		{"codex_credential_groups", "model_multipliers", `ALTER TABLE codex_credential_groups ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'`},
+		{"codex_credential_groups", "billing_rules", `ALTER TABLE codex_credential_groups ADD COLUMN billing_rules TEXT NOT NULL DEFAULT '[]'`},
 	}
 	for _, col := range columns {
 		exists, err := sqliteColumnExists(ctx, db, col.table, col.name)

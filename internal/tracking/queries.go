@@ -150,6 +150,8 @@ type RequestDetail struct {
 	OriginalModelName       string `json:"original_model_name"`
 	ModelRewriteSource      string `json:"model_rewrite_source"`
 	ModelRewriteTarget      string `json:"model_rewrite_target"`
+	ReasoningEffort         string `json:"reasoning_effort"`
+	ServiceTier             string `json:"service_tier"`
 	PrivacyRedacted         bool   `json:"privacy_redacted"`
 	PrivacyRedactionSummary string `json:"privacy_redaction_summary"`
 	PrivacyRedactionMatches string `json:"privacy_redaction_matches"`
@@ -170,6 +172,7 @@ type RequestDetail struct {
 	ReasoningTokens          int64  `json:"reasoning_tokens"`
 	BillableOutputTokens     int64  `json:"billable_output_tokens"`
 	BillingOutputTokenSource string `json:"billing_output_token_source"`
+	BillingRuleSnapshot      string `json:"billing_rule_snapshot"`
 	CacheCreationTokens      int64  `json:"cache_creation_tokens"`    // 总缓存创建（向后兼容）
 	CacheCreation5mTokens    int64  `json:"cache_creation_5m_tokens"` // 5分钟缓存
 	CacheCreation1hTokens    int64  `json:"cache_creation_1h_tokens"` // 1小时缓存
@@ -487,6 +490,33 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 	if db == nil {
 		return nil, fmt.Errorf("read database not initialized")
 	}
+	optionalColumns := make(map[string]bool, 3)
+	columnRows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')
+		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot')`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
+	}
+	for columnRows.Next() {
+		var name string
+		if err := columnRows.Scan(&name); err != nil {
+			_ = columnRows.Close()
+			return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
+		}
+		optionalColumns[name] = true
+	}
+	if err := columnRows.Err(); err != nil {
+		_ = columnRows.Close()
+		return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
+	}
+	if err := columnRows.Close(); err != nil {
+		return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
+	}
+	optionalTextExpr := func(column string) string {
+		if optionalColumns[column] {
+			return "COALESCE(" + column + ", '')"
+		}
+		return "''"
+	}
 
 	query := `SELECT id, request_id,
 		COALESCE(client_ip, '') as client_ip,
@@ -500,6 +530,8 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		COALESCE(original_model_name, '') as original_model_name,
 		COALESCE(model_rewrite_source, '') as model_rewrite_source,
 		COALESCE(model_rewrite_target, '') as model_rewrite_target,
+		` + optionalTextExpr("model_reasoning_effort") + ` as model_reasoning_effort,
+		` + optionalTextExpr("service_tier") + ` as service_tier,
 		COALESCE(privacy_redacted, false) as privacy_redacted,
 		COALESCE(privacy_redaction_summary, '') as privacy_redaction_summary,
 		COALESCE(privacy_redaction_matches, '') as privacy_redaction_matches,
@@ -518,6 +550,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 			ELSE output_tokens
 		END as billable_output_tokens,
 		COALESCE(billing_output_token_source, 'output_tokens') as billing_output_token_source,
+		` + optionalTextExpr("billing_rule_snapshot") + ` as billing_rule_snapshot,
 		cache_creation_tokens, COALESCE(cache_creation_5m_tokens, 0) as cache_creation_5m_tokens, COALESCE(cache_creation_1h_tokens, 0) as cache_creation_1h_tokens,
 		cache_read_tokens,
 		input_cost_usd, output_cost_usd, cache_creation_cost_usd,
@@ -634,13 +667,15 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 			&detail.StartTime, &detail.EndTime, &detail.DurationMs, &detail.OutputSentAt,
 			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
 			&detail.OriginalModelName, &detail.ModelRewriteSource, &detail.ModelRewriteTarget,
+			&detail.ReasoningEffort,
+			&detail.ServiceTier,
 			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary, &detail.PrivacyRedactionMatches,
 			&detail.IsStreaming,
 			&detail.Provider,
 			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,
 			&detail.FailureReason, &detail.LastFailureReason, &detail.CancelReason,
 			&detail.InputTokens, &detail.OutputTokens,
-			&detail.ReasoningTokens, &detail.BillableOutputTokens, &detail.BillingOutputTokenSource,
+			&detail.ReasoningTokens, &detail.BillableOutputTokens, &detail.BillingOutputTokenSource, &detail.BillingRuleSnapshot,
 			&detail.CacheCreationTokens, &detail.CacheCreation5mTokens, &detail.CacheCreation1hTokens, &detail.CacheReadTokens,
 			&detail.InputCostUSD, &detail.OutputCostUSD,
 			&detail.CacheCreationCostUSD,

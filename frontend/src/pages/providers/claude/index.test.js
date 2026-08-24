@@ -36,12 +36,9 @@ test('Claude multiplier form state preserves fractional expressions', () => {
   assert.equal(formatMultiplierInputValue('40/30'), '40/30');
 });
 
-test('credential-group billing separates standard and conditional long-context multipliers', () => {
-  assert.match(source, /role="switch"/);
+test('credential-group billing keeps the standard multiplier section', () => {
   assert.match(source, /普通成本倍率/);
-  assert.match(source, /LongContextMultiplierSettings/);
-  assert.match(source, /Long context 倍率已配置/);
-  assert.match(source, /setLongContextSettingsOpen\(true\)/);
+  assert.match(source, /STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS\.map/);
 });
 
 test('Claude credential groups preserve single-click switching and use double-click details', () => {
@@ -54,10 +51,17 @@ test('Claude credential groups preserve single-click switching and use double-cl
   assert.match(source, /onDoubleClick=\{\(event\) => event\.stopPropagation\(\)\}/);
 });
 
-test('new credential groups disable long-context pricing and endpoint details show enabled multipliers', () => {
-  assert.match(source, /disableLongContextPricing:\s*group\s*\?\s*Boolean\([\s\S]*?\)\s*:\s*true/);
-  assert.match(source, /Long context 分组倍率/);
-  assert.match(source, /longContextPricingEnabled\s*&&/);
+test('Claude credential groups no longer expose long-context pricing', () => {
+  // 入口已移除：表单开关、倍率概览、编辑弹窗与详情卡片都不应残留
+  assert.doesNotMatch(source, /LongContextMultiplierSettings/);
+  assert.doesNotMatch(source, /handleLongContextToggle/);
+  assert.doesNotMatch(source, /longContextSettingsOpen/);
+  assert.doesNotMatch(source, /longContextPricingEnabled/);
+  // 匹配 JSX 中的可见文案而非注释，避免代码注释里提及 Long context 时误报
+  assert.doesNotMatch(source, /label="Long context 分组倍率"/);
+  assert.doesNotMatch(source, />Long context 计费</);
+  // 计费闸门恒关：倍率字段仍原样回传以免抹掉历史值，但禁用标志固定为 true
+  assert.match(source, /disableLongContextPricing:\s*true/);
 });
 
 test('Claude credential group and endpoint controls match Codex current-state icons', () => {

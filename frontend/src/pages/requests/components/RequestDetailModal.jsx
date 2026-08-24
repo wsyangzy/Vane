@@ -4,7 +4,7 @@
 // 2025-12-01
 // ============================================
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   X,
   Copy,
@@ -35,6 +35,7 @@ import DurationBadge from './DurationBadge.jsx';
 import { formatCost, formatDuration, formatTimestamp } from '@utils/api.js';
 import { formatMultiplierDisplayValue } from '@utils/multiplier.js';
 import { Tooltip } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal.js';
 import {
   getBillableInputTokens,
   getDisplayInputTokens,
@@ -51,6 +52,14 @@ import {
   requestHasInterChannelTransfer,
   summarizeEndpointAttempts,
 } from '../utils/endpointChain.js';
+import {
+  formatReasoningFieldValue,
+  getReasoningEffortMeta,
+  getServiceTierMeta,
+  isThinkingTypeActive,
+  parseReasoningConfig,
+  REASONING_FIELD_LABELS
+} from '../utils/requestMetadata.js';
 
 const privacyRuleTypeLabels = {
   exact: '精准',
@@ -245,12 +254,41 @@ const FirstByteDetailBadge = ({ ms, status }) => {
 /**
  * 请求详情模态框主组件
  */
-const RequestDetailModal = ({ isOpen, onClose, request }) => {
+const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
   const [endpointErrorDisplayMode, setEndpointErrorDisplayMode] = useState('compact');
   const requestIdCopyTimerRef = useRef(null);
+  const modalPositionRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return undefined;
+
+    const target = positioningRef?.current;
+    const layer = modalPositionRef.current;
+    if (!target || !layer) return undefined;
+
+    const updateModalPosition = () => {
+      const rect = target.getBoundingClientRect();
+      layer.style.top = `${Math.max(0, rect.top - 24)}px`;
+      layer.style.right = `${Math.max(0, document.documentElement.clientWidth - rect.right)}px`;
+      layer.style.bottom = `${Math.max(0, window.innerHeight - rect.bottom)}px`;
+      layer.style.left = `${Math.max(0, rect.left)}px`;
+    };
+
+    updateModalPosition();
+    window.addEventListener('resize', updateModalPosition);
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateModalPosition)
+      : null;
+    resizeObserver?.observe(target);
+
+    return () => {
+      window.removeEventListener('resize', updateModalPosition);
+      resizeObserver?.disconnect();
+    };
+  }, [isOpen, positioningRef]);
 
   // ESC 键关闭 & 阻止滚动
   useEffect(() => {
@@ -300,6 +338,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   const reasoningTokenCount = request.reasoningTokens || 0;
   const visibleOutputTokenCount = Math.max(0, outputTokenCount - reasoningTokenCount);
   const billingOutputTokenSource = request.billingOutputTokenSource || 'output_tokens';
+  const billingRuleSnapshot = request.billingRuleSnapshot || null;
   const billableOutputTokenCount = request.billableOutputTokens ?? outputTokenCount;
   const totalTokens = getDisplayTotalTokens(request);
   const inputPercent = totalTokens > 0 ? Math.round((inputTokenCount / totalTokens) * 100) : 0;
@@ -381,20 +420,33 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
   };
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
+  const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
+  const reasoning = parseReasoningConfig(reasoningRaw);
+  const reasoningEffort = reasoning.effort || '';
+  const reasoningEffortMeta = getReasoningEffortMeta(reasoningEffort);
+  const hasReasoning = Object.keys(reasoning).length > 0;
+  const serviceTier = request.serviceTier || request.service_tier || '';
+  const serviceTierMeta = getServiceTierMeta(serviceTier);
   const privacySummary = parsePrivacySummary(request.privacyRedactionSummary || request.privacy_redaction_summary);
   const privacyRedacted = Boolean(request.privacyRedacted || request.privacy_redacted || privacySummary.changed);
   const privacyHits = Array.isArray(privacySummary.hits) ? privacySummary.hits : [];
   const privacyMatches = parsePrivacyMatches(request.privacyRedactionMatches || request.privacy_redaction_matches);
 
-  return (
-    <div className="absolute inset-x-0 -top-6 bottom-0 z-[10000] flex items-center justify-center p-4">
+  return renderModalPortal(
+    <div className="fixed inset-0 z-[10000]">
       {/* 背景遮罩 */}
       <div
-        className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200"
+        className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200"
         onClick={onClose}
       />
-
-      {/* 模态框内容 - 固定高度，内容区域滚动 */}
+      <div
+        ref={modalPositionRef}
+        className="absolute inset-0 flex items-center justify-center p-4"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+      >
+        {/* 模态框内容 - 固定高度，内容区域滚动 */}
       <div className="relative flex h-[80vh] max-h-[48rem] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200">
         {/* 头部 - 固定不滚动 */}
         <div className="flex flex-shrink-0 items-center justify-between rounded-t-2xl border-b border-slate-100 bg-white px-6 py-4">
@@ -535,6 +587,54 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     <span className="text-sm font-medium text-slate-500">模型名称</span>
                     <ModelTag model={request.model} />
                   </div>
+                  {hasReasoning && (
+                    <div className="border-t border-slate-100 pt-3 mt-1 space-y-2">
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Reasoning / Thinking</div>
+                      {reasoningEffort && (
+                        <div className="flex items-center justify-between py-1.5">
+                          <span className="text-sm font-medium text-slate-500">{REASONING_FIELD_LABELS.effort}</span>
+                          <Tooltip content={reasoningEffortMeta.description}>
+                            <span className={`inline-flex items-center whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${reasoningEffortMeta.className}`}>
+                              {reasoningEffortMeta.label}
+                            </span>
+                          </Tooltip>
+                        </div>
+                      )}
+                      {Object.entries(reasoning)
+                        .filter(([k]) => k !== 'effort')
+                        .map(([key, value]) => {
+                          if (value == null || value === '') return null;
+                          const label = REASONING_FIELD_LABELS[key] || key;
+                          const rawValue = String(value);
+                          const isType = key === 'type';
+                          const mappedValue = formatReasoningFieldValue(key, value);
+                          return (
+                            <div key={key} className="flex items-start justify-between gap-4 py-1.5">
+                              <span className="shrink-0 text-sm font-medium text-slate-500">{label}</span>
+                              {isType ? (
+                                <span className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${
+                                  isThinkingTypeActive(rawValue) ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'
+                                }`}>
+                                  {mappedValue}
+                                </span>
+                              ) : (
+                                <span className="min-w-0 text-right text-sm text-slate-700 [overflow-wrap:anywhere]">{mappedValue}</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                  {serviceTierMeta && (
+                    <div className="flex items-center justify-between py-3 border-t border-slate-100">
+                      <span className="text-sm font-medium text-slate-500">服务档位</span>
+                      <Tooltip content={serviceTierMeta.description}>
+                        <span className={`inline-flex items-center whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium ${serviceTierMeta.className}`}>
+                          {serviceTierMeta.label}
+                        </span>
+                      </Tooltip>
+                    </div>
+                  )}
                   {hasModelRewrite && (
                     <div className="flex items-center justify-between gap-4 py-3 border-t border-slate-100">
                       <span className="text-sm font-medium text-slate-500">{modelRewriteLabel}</span>
@@ -550,7 +650,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
               </div>
 
               {/* 计费详情 */}
-              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0) && (() => {
+              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0 || billingRuleSnapshot) && (() => {
                 const calcUnitPrice = (cost, tokens) => {
                   if (!tokens || tokens <= 0) return 0
                   return (cost / tokens) * 1_000_000
@@ -721,6 +821,19 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
                     </div>
 
                     <div className="p-4 space-y-4">
+					  {billingRuleSnapshot && (
+						<div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 pb-3 text-xs text-slate-600">
+						  <span className="font-semibold text-indigo-700">
+							组合规则 · {billingRuleSnapshot.mode === 'fixed' ? '固定单价' : '倍率'}
+						  </span>
+						  <span>模型 {billingRuleSnapshot.selector_model || '全部'}</span>
+						  <span>档位 {billingRuleSnapshot.selector_service_tier || '全部'}</span>
+						  <span>上下文 {billingRuleSnapshot.selector_context || '全部'}</span>
+						  <span className="min-w-0 break-all text-slate-400">
+							命中 {billingRuleSnapshot.effective_model || '-'} / {billingRuleSnapshot.effective_service_tier || 'auto'} / {billingRuleSnapshot.effective_context || 'normal'}
+						  </span>
+						</div>
+					  )}
                       {/* 单价摘要 - 横向徽章 */}
                       {(priceBadges.length > 0 || multiplierBadges.length > 0) && (
                         <div className="space-y-2">
@@ -1323,6 +1436,7 @@ const RequestDetailModal = ({ isOpen, onClose, request }) => {
         </div>
       </div>
     </div>
+  </div>
   );
 };
 

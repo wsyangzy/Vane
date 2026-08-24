@@ -260,6 +260,22 @@ func (h *Handler) extractModelFromRequestBody(bodyBytes []byte, path string) str
 	return ""
 }
 
+// extractThinking 从 Claude 请求体中提取 thinking 配置并序列化为 JSON
+// 请求体格式: {"thinking":{"type":"enabled","budget_tokens":16000},...}
+// 返回 "" 表示请求体未设置 thinking（模型默认行为）
+func (h *Handler) extractThinking(bodyBytes []byte) string {
+	if len(bodyBytes) == 0 {
+		return ""
+	}
+	var partial struct {
+		Thinking json.RawMessage `json:"thinking"`
+	}
+	if err := json.Unmarshal(bodyBytes, &partial); err != nil || len(partial.Thinking) == 0 {
+		return ""
+	}
+	return string(partial.Thinking)
+}
+
 // ServeHTTP implements the http.Handler interface
 // 统一请求分发逻辑 - 整合流式处理、错误恢复和生命周期管理
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -352,6 +368,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userAgent := r.Header.Get("User-Agent")
 	lifecycleManager.StartRequest(clientIP, userAgent, r.Method, r.URL.Path, isSSE)
 
+	// 提取并追踪 thinking 配置（Anthropic extended thinking: type + budget_tokens）
+	if thinkingJSON := h.extractThinking(bodyBytes); thinkingJSON != "" {
+		lifecycleManager.SetThinking(thinkingJSON)
+	}
+
+	// 提取并追踪 service_tier（auto / standard_only）
+	if serviceTier := h.extractServiceTier(bodyBytes); serviceTier != "" {
+		lifecycleManager.SetServiceTier(serviceTier)
+	}
+
 	// 统一请求处理
 	if isSSE {
 		// 流式请求处理 - 使用StreamingHandler
@@ -401,6 +427,21 @@ func (h *Handler) detectSSERequest(r *http.Request, bodyBytes []byte) bool {
 	}
 
 	return false
+}
+
+// extractServiceTier 从 Claude 请求体 JSON 中提取 service_tier
+// 取值: auto（默认）/ standard_only（仅标准容量）
+func (h *Handler) extractServiceTier(bodyBytes []byte) string {
+	if len(bodyBytes) == 0 {
+		return ""
+	}
+	var partial struct {
+		ServiceTier string `json:"service_tier"`
+	}
+	if err := json.Unmarshal(bodyBytes, &partial); err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(partial.ServiceTier))
 }
 
 // UpdateConfig updates the handler configuration

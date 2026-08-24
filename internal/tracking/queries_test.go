@@ -2,9 +2,43 @@ package tracking
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 )
+
+func TestQueryRequestDetailsSupportsLegacyArchiveColumns(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	schema, err := sqliteSchemaFS.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	if _, err := db.Exec(string(schema)); err != nil {
+		t.Fatalf("execute schema: %v", err)
+	}
+	for _, column := range []string{"model_reasoning_effort", "service_tier", "billing_rule_snapshot"} {
+		if _, err := db.Exec("ALTER TABLE request_logs DROP COLUMN " + column); err != nil {
+			t.Fatalf("drop legacy-missing column %s: %v", column, err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO request_logs (request_id, method, path, start_time, status)
+		VALUES ('legacy-request', 'POST', '/v1/responses', '2026-07-01 12:00:00', 'completed')`); err != nil {
+		t.Fatalf("insert legacy request: %v", err)
+	}
+
+	details, err := (&UsageTracker{}).queryRequestDetailsFromSource(context.Background(), db, &QueryOptions{})
+	if err != nil {
+		t.Fatalf("query legacy request details: %v", err)
+	}
+	if len(details) != 1 || details[0].ReasoningEffort != "" || details[0].ServiceTier != "" || details[0].BillingRuleSnapshot != "" {
+		t.Fatalf("unexpected legacy request details: %#v", details)
+	}
+}
 
 func TestQueryOperations(t *testing.T) {
 	config := &Config{

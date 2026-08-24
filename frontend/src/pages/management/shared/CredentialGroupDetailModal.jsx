@@ -75,6 +75,8 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
   const createdAt = getDetailTimestamp(group?.createdAt, group?.created_at, group?.CreatedAt);
   const updatedAt = getDetailTimestamp(group?.updatedAt, group?.updated_at, group?.UpdatedAt);
   const modelMultipliers = group?.modelMultipliers || group?.model_multipliers || [];
+	const billingRules = group?.billingRules || group?.billing_rules || [];
+	const combinationBillingEnabled = provider === 'codex' && billingRules.length > 0;
   const longContextEnabled = !Boolean(group?.disableLongContextPricing ?? group?.disable_long_context_pricing);
 
   useEffect(() => {
@@ -182,7 +184,27 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
               )}
             </DetailMetricCard>
 
-            <DetailMetricCard label="普通计费倍率" icon={Calculator} density="compact" wide>
+			{combinationBillingEnabled ? (
+			  <DetailMetricCard label="组合计费规则" icon={Calculator} density="compact" wide>
+				<div className="divide-y divide-slate-100">
+				  {billingRules.map((rule, index) => {
+					const fixed = rule.mode === 'fixed';
+					const selector = [rule.model || '全部模型', rule.serviceTier || rule.service_tier || '全部档位', rule.context || '全部上下文'].join(' / ');
+					const values = fixed
+					  ? `输入 $${rule.inputPrice ?? rule.input_price ?? 0} · 输出 $${rule.outputPrice ?? rule.output_price ?? 0} · 写入 $${rule.cacheCreationPrice ?? rule.cache_creation_price ?? 0} · 读取 $${rule.cacheReadPrice ?? rule.cache_read_price ?? 0}`
+					  : `总 ${formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)} · 输入 ${formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)} · 输出 ${formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}`;
+					return (
+					  <div key={`${selector}-${index}`} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0">
+						<span className="min-w-0 break-all text-xs font-medium text-slate-700">{selector}</span>
+						<span className="min-w-0 break-all font-mono text-[11px] text-slate-500">{fixed ? '固定单价' : '倍率'} · {values}</span>
+					  </div>
+					);
+				  })}
+				</div>
+			  </DetailMetricCard>
+			) : (
+			  <>
+			<DetailMetricCard label="普通计费倍率" icon={Calculator} density="compact" wide>
               <div className="flex flex-wrap gap-1.5">
                 {standardMultiplierItems(provider, group).map(([label, value]) => (
                   <DetailChip key={label} mono variant={variant}>
@@ -193,18 +215,21 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
               </div>
             </DetailMetricCard>
 
-            <DetailMetricCard label="Long context 倍率" icon={Layers3} density="compact" wide>
-              {longContextEnabled ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {longContextMultiplierItems(group).map(([label, value]) => (
-                    <DetailChip key={label} mono tone="indigo" variant={variant}>
-                      <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{label}</span>
-                      {formatDetailMultiplier(value ?? 1)}
-                    </DetailChip>
-                  ))}
-                </div>
-              ) : <span className="text-sm text-slate-500">未启用，始终使用普通模型价格。</span>}
-            </DetailMetricCard>
+            {/* Long context 计费为 Codex 独有，Claude 侧不提供该入口 */}
+            {provider === 'codex' && (
+              <DetailMetricCard label="Long context 倍率" icon={Layers3} density="compact" wide>
+                {longContextEnabled ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {longContextMultiplierItems(group).map(([label, value]) => (
+                      <DetailChip key={label} mono tone="indigo" variant={variant}>
+                        <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{label}</span>
+                        {formatDetailMultiplier(value ?? 1)}
+                      </DetailChip>
+                    ))}
+                  </div>
+                ) : <span className="text-sm text-slate-500">未启用，始终使用普通模型价格。</span>}
+              </DetailMetricCard>
+            )}
 
             <DetailMetricCard label="模型倍率" icon={KeyRound} density="compact" wide>
               {modelMultipliers.length > 0 ? (
@@ -218,6 +243,8 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
                 </div>
               ) : <span className="text-sm text-slate-500">未配置模型专属倍率。</span>}
             </DetailMetricCard>
+			  </>
+			)}
 
             {provider === 'codex' && (
               <DetailMetricCard label="输出计费口径" icon={Clock} density="compact" wide>

@@ -48,8 +48,8 @@ import {
   DeleteConfirmDialog
 } from './components';
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
+import { ClaudeIcon } from '@pages/requests/components/ModelTag.jsx';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
-import LongContextMultiplierSettings from '@pages/management/shared/LongContextMultiplierSettings.jsx';
 import CredentialGroupDetailModal from '@pages/management/shared/CredentialGroupDetailModal.jsx';
 import {
   EndpointHealthBadge as HealthBadge,
@@ -167,17 +167,10 @@ const STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
 ];
 
-const LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
-  { name: 'longContextCostMultiplier', label: 'Long context 总倍率' },
-  { name: 'longContextInputCostMultiplier', label: 'Long context 输入倍率' },
-  { name: 'longContextOutputCostMultiplier', label: 'Long context 输出倍率' },
-  { name: 'longContextCacheCreationCostMultiplier', label: 'Long context 缓存创建倍率' },
-  { name: 'longContextCacheReadCostMultiplier', label: 'Long context 缓存读取倍率' }
-];
-
+// Claude 侧不提供 Long context 计费：分组倍率仅覆盖普通定价。
+// 后端字段与历史值仍保留（见 createFormState 中的原样回传），仅关闭入口与计费闸门。
 const CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
-  ...STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS,
-  ...LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS
+  ...STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS
 ];
 
 const isValidMultiplierExpression = (value) => {
@@ -240,14 +233,23 @@ const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
   cacheCreationCostMultiplier: formatMultiplierInputValue(group?.cacheCreationCostMultiplier ?? group?.cache_creation_cost_multiplier ?? 1.0),
   cacheCreationCostMultiplier1h: formatMultiplierInputValue(group?.cacheCreationCostMultiplier1h ?? group?.cache_creation_cost_multiplier_1h ?? 1.0),
   cacheReadCostMultiplier: formatMultiplierInputValue(group?.cacheReadCostMultiplier ?? group?.cache_read_cost_multiplier ?? 1.0),
+  // Claude 已移除 Long context 计费入口：倍率原样回传避免抹掉历史值，
+  // 但 disableLongContextPricing 恒为 true，确保 tracker.go 的计费闸门始终关闭。
   longContextCostMultiplier: formatMultiplierInputValue(group?.longContextCostMultiplier ?? group?.long_context_cost_multiplier ?? 1.0),
   longContextInputCostMultiplier: formatMultiplierInputValue(group?.longContextInputCostMultiplier ?? group?.long_context_input_cost_multiplier ?? 1.0),
   longContextOutputCostMultiplier: formatMultiplierInputValue(group?.longContextOutputCostMultiplier ?? group?.long_context_output_cost_multiplier ?? 1.0),
   longContextCacheCreationCostMultiplier: formatMultiplierInputValue(group?.longContextCacheCreationCostMultiplier ?? group?.long_context_cache_creation_cost_multiplier ?? 1.0),
   longContextCacheReadCostMultiplier: formatMultiplierInputValue(group?.longContextCacheReadCostMultiplier ?? group?.long_context_cache_read_cost_multiplier ?? 1.0),
-  disableLongContextPricing: group
-    ? Boolean(group.disableLongContextPricing ?? group.disable_long_context_pricing)
-    : true,
+  disableLongContextPricing: true,
+  // Claude 已移除服务等级计费入口：该能力从未接入计费链路
+  //（app.go 构造 EndpointMultiplier 时未填 ServiceTierMultipliers，tracker.go:325 恒 early return），
+  // 且 Anthropic 请求体的 service_tier 是意图（auto / standard_only）而非实际档位，与 Codex 四档不同构。
+  // 倍率原样回传避免抹掉历史值，禁用标志固定为 true。
+  disableServiceTierPricing: true,
+  serviceTierCostMultiplier: formatMultiplierInputValue(group?.serviceTierCostMultiplier ?? group?.service_tier_cost_multiplier ?? 1.0),
+  serviceTierInputCostMultiplier: formatMultiplierInputValue(group?.serviceTierInputCostMultiplier ?? group?.service_tier_input_cost_multiplier ?? 1.0),
+  serviceTierOutputCostMultiplier: formatMultiplierInputValue(group?.serviceTierOutputCostMultiplier ?? group?.service_tier_output_cost_multiplier ?? 1.0),
+  serviceTierCacheReadCostMultiplier: formatMultiplierInputValue(group?.serviceTierCacheReadCostMultiplier ?? group?.service_tier_cache_read_cost_multiplier ?? 1.0),
   copyEndpointsFromGroupId: '',
   modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
 });
@@ -762,16 +764,6 @@ const EndpointDetailModal = ({
     { label: '5分钟写入', value: credentialGroup?.cacheCreationCostMultiplier ?? credentialGroup?.cache_creation_cost_multiplier ?? endpoint.cacheCreationCostMultiplier ?? endpoint.cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
     { label: '1小时写入', value: credentialGroup?.cacheCreationCostMultiplier1h ?? credentialGroup?.cache_creation_cost_multiplier_1h ?? endpoint.cacheCreationCostMultiplier1h ?? endpoint.cache_creation_cost_multiplier_1h ?? 1, tone: 'emerald' }
   ];
-  const longContextPricingEnabled = Boolean(credentialGroup) && !Boolean(
-    credentialGroup.disableLongContextPricing ?? credentialGroup.disable_long_context_pricing
-  );
-  const longContextMultiplierItems = [
-    { label: '总', value: credentialGroup?.longContextCostMultiplier ?? credentialGroup?.long_context_cost_multiplier ?? 1, tone: 'indigo' },
-    { label: '输入', value: credentialGroup?.longContextInputCostMultiplier ?? credentialGroup?.long_context_input_cost_multiplier ?? 1, tone: 'slate' },
-    { label: '输出', value: credentialGroup?.longContextOutputCostMultiplier ?? credentialGroup?.long_context_output_cost_multiplier ?? 1, tone: 'sky' },
-    { label: '缓存创建', value: credentialGroup?.longContextCacheCreationCostMultiplier ?? credentialGroup?.long_context_cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
-    { label: '缓存读取', value: credentialGroup?.longContextCacheReadCostMultiplier ?? credentialGroup?.long_context_cache_read_cost_multiplier ?? 1, tone: 'amber' }
-  ];
   const modelMultiplierValueKeys = [
     ['costMultiplier', 'cost_multiplier'],
     ['inputCostMultiplier', 'input_cost_multiplier'],
@@ -1011,18 +1003,6 @@ const EndpointDetailModal = ({
                 )}
               </div>
             </DetailMetricCard>
-            {longContextPricingEnabled && (
-              <DetailMetricCard label="Long context 分组倍率" icon={Database} wide>
-                <div className="flex flex-wrap gap-2">
-                  {longContextMultiplierItems.map((item) => (
-                    <DetailChip key={item.label} tone={item.tone} mono>
-                      <span className="mr-1 font-sans text-[10px] font-medium text-slate-500">{item.label}</span>
-                      {formatDetailMultiplier(item.value)}
-                    </DetailChip>
-                  ))}
-                </div>
-              </DetailMetricCard>
-            )}
           </div>
 
           {hasModelMapping && (
@@ -1381,7 +1361,6 @@ const ClaudeCredentialGroupFormModal = ({
 }) => {
   const isEdit = mode === 'edit';
   const [formData, setFormData] = useState(() => buildInitialClaudeCredentialGroupForm(group, channelName));
-  const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
   const [showToken, setShowToken] = useState(false);
@@ -1404,21 +1383,6 @@ const ClaudeCredentialGroupFormModal = ({
 
   const updateField = (key, value) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
-    if (error) setError('');
-  };
-
-  const handleLongContextToggle = () => {
-    if (loading) return;
-    if (formData.disableLongContextPricing) {
-      setLongContextSettingsOpen(true);
-      return;
-    }
-    updateField('disableLongContextPricing', true);
-  };
-
-  const handleLongContextSave = (values) => {
-    setFormData((current) => ({ ...current, ...values, disableLongContextPricing: false }));
-    setLongContextSettingsOpen(false);
     if (error) setError('');
   };
 
@@ -1766,63 +1730,6 @@ const ClaudeCredentialGroupFormModal = ({
                 </div>
                 <p className="mt-1 text-xs text-slate-400">成本倍率会作为该分组下 Claude 端点的默认计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
                 </div>
-
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={!formData.disableLongContextPricing}
-                  onClick={handleLongContextToggle}
-                  className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
-                    formData.disableLongContextPricing
-                      ? 'border-slate-200 bg-slate-50'
-                      : 'border-indigo-200 bg-indigo-50/60'
-                  } ${loading ? 'cursor-not-allowed opacity-70' : 'hover:border-indigo-300'}`}
-                  disabled={loading}
-                >
-                  <div>
-                    <div className="text-sm font-medium text-slate-700">Long context 计费</div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {formData.disableLongContextPricing ? '不启用，始终使用普通模型价格' : '跟随模型定价，命中阈值后应用 Long context 倍率'}
-                    </div>
-                  </div>
-                  <span className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    formData.disableLongContextPricing ? 'bg-slate-300' : 'bg-indigo-600'
-                  }`}>
-                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                      formData.disableLongContextPricing ? 'translate-x-0.5' : 'translate-x-[1.375rem]'
-                    }`} />
-                  </span>
-                </button>
-
-                {!formData.disableLongContextPricing && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-slate-700">Long context 倍率已配置</div>
-                        <div className="mt-0.5 text-xs text-slate-500">命中阈值后使用以下倍率</div>
-                      </div>
-                      <Button type="button" variant="secondary" size="sm" onClick={() => setLongContextSettingsOpen(true)} disabled={loading}>编辑</Button>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                      {LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
-                        <div key={field.name} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                          <div className="truncate text-[11px] text-slate-400">{field.label.replace('Long context ', '')}</div>
-                          <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{formData[field.name]}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {longContextSettingsOpen && (
-                  <LongContextMultiplierSettings
-                    fields={LONG_CONTEXT_CREDENTIAL_GROUP_MULTIPLIER_FIELDS}
-                    values={formData}
-                    disabled={loading}
-                    onCancel={() => setLongContextSettingsOpen(false)}
-                    onSave={handleLongContextSave}
-                  />
-                )}
 
                 <ModelMultiplierEditor
                   rows={formData.modelMultiplierRows}
@@ -3433,7 +3340,7 @@ const ChannelsPage = () => {
       <div className="flex justify-between items-end mb-8">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-            <ArrowRightLeft className="w-6 h-6" />
+            <ClaudeIcon className="w-6 h-6" />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Claude 管理</h1>

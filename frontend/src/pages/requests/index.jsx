@@ -4,7 +4,7 @@
 // 获取渠道间故障转移状态，控制渠道切换器显示
 // ============================================
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { useToast } from '@components/ui';
 import { fetchRequests, fetchModels, fetchUsageStats, fetchEndpoints, fetchGroups, activateGroup, fetchInterChannelFailoverEnabled } from '@utils/api.js';
@@ -46,6 +46,7 @@ const RequestsPage = () => {
   // 详情模态框状态
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const requestPageRef = useRef(null);
 
   // 筛选器 Hook
   const {
@@ -341,7 +342,7 @@ const RequestsPage = () => {
   // ==================== 渲染 ====================
 
   return (
-    <div className="h-full flex flex-col gap-6 pb-4 animate-in fade-in slide-in-from-bottom-2 duration-500 relative min-h-0">
+    <div ref={requestPageRef} className="h-full flex flex-col gap-6 pb-4 animate-in fade-in slide-in-from-bottom-2 duration-500 relative min-h-0">
       {/* 页面标题 & 工具栏 */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-30">
         {/* 页面标题 */}
@@ -427,6 +428,7 @@ const RequestsPage = () => {
         isOpen={isDetailModalOpen}
         onClose={handleCloseDetailModal}
         request={selectedRequest}
+        positioningRef={requestPageRef}
         interChannelFailoverEnabled={interChannelFailoverEnabled}
       />
     </div>
