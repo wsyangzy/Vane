@@ -98,3 +98,9 @@ CLAUDE.md
 
 # Local research snapshots
 tmp_research
+
+*.toml
+
+.mcp.json
+
+.reasonix/
