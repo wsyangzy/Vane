@@ -165,7 +165,10 @@ test('Claude credential groups without a usable secret do not expose endpoint ac
 test('Claude channel cards keep the paused badge in the credentials header', () => {
   assert.doesNotMatch(source, /按请求模型/);
   assert.doesNotMatch(source, /modelMappingCount/);
-  assert.match(source, /Credentials · \{credentialGroups\.length\}[\s\S]*?channelFailoverEnabled && isPaused/);
+  // header 由 CredentialGroupStack 统一渲染（添加分组按钮已移到该行右侧），
+  // 页面只负责把标题和暂停标签传进去
+  assert.match(source, /label=\{`Credentials · \$\{credentialGroups\.length\}`\}/);
+  assert.match(source, /headerExtra=\{channelFailoverEnabled && isPaused/);
   assert.match(source, /inline-flex h-4 flex-shrink-0 items-center rounded bg-amber-50/);
 });
 

@@ -2098,20 +2098,16 @@ const ChannelCard = ({
       </div>
 
       {isSqliteMode && (
-        <div className="flex flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
-          <div className="flex h-4 items-center gap-2">
-            <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Credentials · {credentialGroups.length}
-            </span>
-            {channelFailoverEnabled && isPaused && (
-              <span className="inline-flex h-4 flex-shrink-0 items-center rounded bg-amber-50 px-1.5 text-[9px] font-medium leading-none text-amber-700">
-                已暂停
-              </span>
-            )}
-          </div>
+        <div className="border-t border-slate-100 bg-white px-4 py-2">
           <CredentialGroupStack
             groups={credentialGroups}
             selectedId={selectedCredentialGroupIDResolved}
+            label={`Credentials · ${credentialGroups.length}`}
+            headerExtra={channelFailoverEnabled && isPaused ? (
+              <span className="inline-flex h-4 flex-shrink-0 items-center rounded bg-amber-50 px-1.5 text-[9px] font-medium leading-none text-amber-700">
+                已暂停
+              </span>
+            ) : null}
             onSelect={setSelectedCredentialGroupID}
             onOpen={(group) => onOpenCredentialGroup?.(channelName, group)}
             onSetDefault={(group) => onSetDefaultCredentialGroup?.(channelName, group)}

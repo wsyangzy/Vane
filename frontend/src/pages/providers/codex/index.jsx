@@ -2687,15 +2687,11 @@ const ChannelCard = ({
       </div>
 
       {/* 凭证分组 */}
-      <div className="flex flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
-        <div className="flex h-4 items-center">
-          <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            Credentials · {credentialGroups.length}
-          </span>
-        </div>
+      <div className="border-t border-slate-100 bg-white px-4 py-2">
         <CredentialGroupStack
           groups={credentialGroups}
           selectedId={selectedCredentialGroupIDResolved}
+          label={`Credentials · ${credentialGroups.length}`}
           onSelect={setSelectedCredentialGroupID}
           onOpen={(group) => onOpenCredentialGroup?.(channel, group)}
           onSetDefault={(group) => onSetDefaultCredentialGroup?.(channel, group)}
