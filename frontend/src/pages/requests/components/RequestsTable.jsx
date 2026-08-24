@@ -22,19 +22,27 @@ import {
   requestHasInterChannelTransfer,
 } from '../utils/endpointChain.js';
 import {
-  formatReasoningFieldValue,
   getReasoningEffortMeta,
+  isThinkingTypeActive,
   parseReasoningConfig
 } from '../utils/requestMetadata.js';
 
 const getReasoningDisplay = (raw) => {
   const reasoning = parseReasoningConfig(raw);
-  const value = reasoning.effort || reasoning.type || '';
+  // output_config.effort 才是推理强度；thinking.type 只是扩展思考的开关模式
+  // （adaptive 表示由模型自行决定思考量，与强度档位无关）。
+  // 没有 effort 时如实展示模式本身，并在 tooltip 里说明，不让它冒充强度。
+  const effort = reasoning.effort || '';
+  const thinkingType = reasoning.type || '';
+  const value = effort || thinkingType;
   if (!value) return <span className="text-gray-400 text-xs">-</span>;
-  const meta = reasoning.effort ? getReasoningEffortMeta(value) : {
-    label: formatReasoningFieldValue('type', value),
-    description: '扩展思考类型。',
-    className: value === 'enabled' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'
+
+  const meta = effort ? getReasoningEffortMeta(effort) : {
+    label: thinkingType,
+    description: `扩展思考模式 ${thinkingType}，不是推理强度；该请求未指定 effort。`,
+    className: isThinkingTypeActive(thinkingType)
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : 'border-slate-200 bg-slate-50 text-slate-600'
   };
   return (
     <Tooltip content={meta.description}>

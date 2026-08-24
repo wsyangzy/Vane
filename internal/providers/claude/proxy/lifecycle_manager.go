@@ -639,10 +639,11 @@ func (rlm *RequestLifecycleManager) SetModelName(modelName string) {
 	rlm.SetModel(modelName)
 }
 
-// SetThinking 将 Claude thinking 配置写入请求追踪
-// thinkingJSON 格式: {"type":"enabled","budget_tokens":16000}
-func (rlm *RequestLifecycleManager) SetThinking(thinkingJSON string) {
-	if rlm.usageTracker == nil || thinkingJSON == "" {
+// SetReasoningConfig 将 Claude 的推理配置写入请求追踪
+// reasoningJSON 形如 {"type":"adaptive","effort":"high"}：
+// type 是扩展思考的开关模式，effort 才是推理强度，两者可各自缺省
+func (rlm *RequestLifecycleManager) SetReasoningConfig(reasoningJSON string) {
+	if rlm.usageTracker == nil || reasoningJSON == "" {
 		return
 	}
 	requestID := rlm.stateManager.GetRequestID()
@@ -650,7 +651,7 @@ func (rlm *RequestLifecycleManager) SetThinking(thinkingJSON string) {
 		return
 	}
 	rlm.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{
-		ReasoningEffort: &thinkingJSON,
+		ReasoningEffort: &reasoningJSON,
 	})
 }
 

@@ -260,20 +260,52 @@ func (h *Handler) extractModelFromRequestBody(bodyBytes []byte, path string) str
 	return ""
 }
 
-// extractThinking 从 Claude 请求体中提取 thinking 配置并序列化为 JSON
-// 请求体格式: {"thinking":{"type":"enabled","budget_tokens":16000},...}
-// 返回 "" 表示请求体未设置 thinking（模型默认行为）
-func (h *Handler) extractThinking(bodyBytes []byte) string {
+// extractReasoningConfig 从 Claude 请求体提取推理相关配置并合并序列化为 JSON
+//
+// 这里是两个语义不同的参数，Anthropic 放在请求体的不同位置：
+//   - thinking.type        扩展思考的开关模式：adaptive / enabled / disabled
+//   - output_config.effort 推理强度：low / medium / high / xhigh / max
+//
+// 合并成一个对象存入 model_reasoning_effort，供前端按 effort 优先展示。
+// 只有 thinking 而没有 effort 时不能把 adaptive 当成推理强度——它只是「让模型
+// 自行决定思考量」，与强度档位无关。
+//
+// 返回 "" 表示两者都未设置（模型默认行为）
+func (h *Handler) extractReasoningConfig(bodyBytes []byte) string {
 	if len(bodyBytes) == 0 {
 		return ""
 	}
 	var partial struct {
-		Thinking json.RawMessage `json:"thinking"`
+		Thinking     json.RawMessage `json:"thinking"`
+		OutputConfig struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
 	}
-	if err := json.Unmarshal(bodyBytes, &partial); err != nil || len(partial.Thinking) == 0 {
+	if err := json.Unmarshal(bodyBytes, &partial); err != nil {
 		return ""
 	}
-	return string(partial.Thinking)
+
+	merged := make(map[string]any, 3)
+	if len(partial.Thinking) > 0 {
+		var thinking map[string]any
+		if err := json.Unmarshal(partial.Thinking, &thinking); err == nil {
+			for key, value := range thinking {
+				merged[key] = value
+			}
+		}
+	}
+	if effort := strings.TrimSpace(partial.OutputConfig.Effort); effort != "" {
+		merged["effort"] = effort
+	}
+	if len(merged) == 0 {
+		return ""
+	}
+
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 // ServeHTTP implements the http.Handler interface
@@ -368,9 +400,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userAgent := r.Header.Get("User-Agent")
 	lifecycleManager.StartRequest(clientIP, userAgent, r.Method, r.URL.Path, isSSE)
 
-	// 提取并追踪 thinking 配置（Anthropic extended thinking: type + budget_tokens）
-	if thinkingJSON := h.extractThinking(bodyBytes); thinkingJSON != "" {
-		lifecycleManager.SetThinking(thinkingJSON)
+	// 提取并追踪推理配置（thinking 开关模式 + output_config.effort 推理强度）
+	if reasoningJSON := h.extractReasoningConfig(bodyBytes); reasoningJSON != "" {
+		lifecycleManager.SetReasoningConfig(reasoningJSON)
 	}
 
 	// 提取并追踪 service_tier（auto / standard_only）

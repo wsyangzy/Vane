@@ -87,3 +87,20 @@ test('request detail modal portals the full-screen backdrop and preserves page p
   assert.match(pageSource, /positioningRef=\{requestPageRef\}/);
   assert.doesNotMatch(detailSource, /absolute inset-x-0 -top-6 bottom-0 z-\[10000\]/);
 });
+
+test('reasoning column keeps thinking mode distinct from effort', () => {
+  // output_config.effort 是推理强度档位；thinking.type（adaptive / enabled / disabled）
+  // 只是扩展思考的开关模式。两者语义不同，不能让 adaptive 冒充强度。
+  assert.match(source, /const effort = reasoning\.effort \|\| '';/);
+  assert.match(source, /const thinkingType = reasoning\.type \|\| '';/);
+  assert.match(source, /不是推理强度/);
+  // adaptive 同属开启态，配色要走 isThinkingTypeActive 而不是只判断 enabled
+  assert.match(source, /isThinkingTypeActive\(thinkingType\)/);
+});
+
+test('reasoning column renders raw values without bilingual labels', () => {
+  // 列表里 effort 显示 low/high，thinking 也应显示 adaptive 原值，
+  // 中文解释留在 tooltip；双语拼接只保留在详情弹窗
+  assert.doesNotMatch(source, /formatReasoningFieldValue/);
+  assert.match(source, /label: thinkingType,/);
+});
