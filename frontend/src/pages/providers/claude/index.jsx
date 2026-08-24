@@ -51,6 +51,7 @@ import { ClaudeIcon } from '@pages/requests/components/ModelTag.jsx';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import CredentialGroupDetailModal from '@pages/management/shared/CredentialGroupDetailModal.jsx';
 import CredentialGroupStack from '@pages/management/shared/CredentialGroupStack.jsx';
+import EndpointAvailabilityBar from '@pages/management/shared/EndpointAvailabilityBar.jsx';
 import {
   EndpointHealthBadge as HealthBadge,
   EndpointLatencyBadge as LatencyBadge,
@@ -945,7 +946,13 @@ const EndpointDetailModal = ({
         </div>
 
         <div className="overflow-y-auto p-6">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <EndpointAvailabilityBar
+            provider="claude"
+            channel={endpoint.channel || ''}
+            endpointName={endpoint.name || ''}
+          />
+
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             {rows.map((row) => (
               <DetailMetricCard
                 key={row.label}

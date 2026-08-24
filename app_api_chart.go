@@ -468,3 +468,136 @@ func cloneEndpointCostItems(items []EndpointCostItem) []EndpointCostItem {
 	copy(cloned, items)
 	return cloned
 }
+
+// ============================================================
+// 端点可用性时间条 API
+// ============================================================
+
+// EndpointAvailabilitySlice 可用性时间条上的一格
+type EndpointAvailabilitySlice struct {
+	Key            string  `json:"key"`               // 分桶键 "2006-01-02 15"
+	Label          string  `json:"label"`             // 展示用 "08/24 10:00"
+	HasData        bool    `json:"has_data"`          // 该时间片内是否有已完结的请求
+	Total          int     `json:"total"`             // 有结论的请求数
+	Success        int     `json:"success"`
+	Failed         int     `json:"failed"`
+	Availability   float64 `json:"availability"`       // 成功率百分比，无数据时为 0
+	AvgFirstByteMs float64 `json:"avg_first_byte_ms"`
+}
+
+// EndpointAvailabilityData 端点可用性时间条数据（含窗口汇总）
+type EndpointAvailabilityData struct {
+	Slices         []EndpointAvailabilitySlice `json:"slices"`
+	HasData        bool                        `json:"has_data"`
+	Total          int                         `json:"total"`
+	Success        int                         `json:"success"`
+	Failed         int                         `json:"failed"`
+	Availability   float64                     `json:"availability"`
+	AvgFirstByteMs float64                     `json:"avg_first_byte_ms"`
+}
+
+const (
+	endpointAvailabilityDefaultHours = 24
+	endpointAvailabilityMaxHours     = 24 * 7
+)
+
+// GetEndpointAvailability 返回指定端点最近 N 小时的逐小时可用性。
+//
+// 数据取自真实请求记录而非健康探测：探测通但转发失败的端点并不少见。
+// 没有流量的小时以空档返回（HasData=false）而不是省略 —— 省略会让时间轴
+// 不再等距，读起来像是那段时间一切正常。
+func (a *App) GetEndpointAvailability(provider, channel, endpointName string, hours int) (EndpointAvailabilityData, error) {
+	a.mu.RLock()
+	usageTracker := a.usageTracker
+	cfg := a.config
+	a.mu.RUnlock()
+
+	empty := EndpointAvailabilityData{Slices: []EndpointAvailabilitySlice{}}
+	if usageTracker == nil || endpointName == "" {
+		return empty, nil
+	}
+
+	if hours <= 0 {
+		hours = endpointAvailabilityDefaultHours
+	}
+	if hours > endpointAvailabilityMaxHours {
+		hours = endpointAvailabilityMaxHours
+	}
+
+	loc := time.Local
+	if cfg != nil && cfg.Timezone != "" {
+		if parsedLoc, err := time.LoadLocation(cfg.Timezone); err == nil {
+			loc = parsedLoc
+		}
+	}
+	now := time.Now().In(loc)
+	// 对齐到整点，使每一格都是完整的小时刻度
+	lastSlice := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, loc)
+	firstSlice := lastSlice.Add(-time.Duration(hours-1) * time.Hour)
+	queryEnd := lastSlice.Add(time.Hour - time.Nanosecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
+	defer cancel()
+
+	buckets, err := usageTracker.QueryEndpointAvailabilityBuckets(ctx, &tracking.QueryOptions{
+		StartDate:    &firstSlice,
+		EndDate:      &queryEnd,
+		EndpointName: endpointName,
+		Channel:      channel,
+		Provider:     provider,
+	}, "hour")
+	if err != nil {
+		return empty, err
+	}
+
+	byKey := make(map[string]tracking.EndpointAvailabilityBucket, len(buckets))
+	for _, bucket := range buckets {
+		byKey[bucket.Key] = bucket
+	}
+
+	return buildEndpointAvailabilityData(byKey, firstSlice, hours), nil
+}
+
+// buildEndpointAvailabilityData 把稀疏的分桶结果摊平成连续的时间片并汇总。
+// 查询只会返回有请求的小时，中间的空洞必须补齐，否则时间轴会被压缩。
+func buildEndpointAvailabilityData(byKey map[string]tracking.EndpointAvailabilityBucket, firstSlice time.Time, hours int) EndpointAvailabilityData {
+	slices := make([]EndpointAvailabilitySlice, 0, hours)
+	var totalAll, successAll, failedAll int
+	var latencySum float64
+	for i := 0; i < hours; i++ {
+		at := firstSlice.Add(time.Duration(i) * time.Hour)
+		key := at.Format("2006-01-02 15")
+		slice := EndpointAvailabilitySlice{
+			Key:   key,
+			Label: at.Format("01/02 15:04"),
+		}
+		if bucket, ok := byKey[key]; ok && bucket.Total > 0 {
+			slice.HasData = true
+			slice.Total = bucket.Total
+			slice.Success = bucket.Success
+			slice.Failed = bucket.Failed
+			slice.Availability = float64(bucket.Success) / float64(bucket.Total) * 100
+			slice.AvgFirstByteMs = bucket.AvgFirstByteMs
+
+			totalAll += bucket.Total
+			successAll += bucket.Success
+			failedAll += bucket.Failed
+			// 各时间片请求数不同，窗口均值要按请求数加权，不能对分片均值再求平均
+			latencySum += bucket.AvgFirstByteMs * float64(bucket.Total)
+		}
+		slices = append(slices, slice)
+	}
+
+	data := EndpointAvailabilityData{
+		Slices:  slices,
+		HasData: totalAll > 0,
+		Total:   totalAll,
+		Success: successAll,
+		Failed:  failedAll,
+	}
+	if totalAll > 0 {
+		data.Availability = float64(successAll) / float64(totalAll) * 100
+		data.AvgFirstByteMs = latencySum / float64(totalAll)
+	}
+	return data
+}

@@ -599,3 +599,91 @@ func findSubstring(s, substr string) int {
 	}
 	return -1
 }
+
+func TestQueryEndpointAvailabilityBucketsAggregatesByHour(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       10,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: 24 * time.Hour,
+		RetentionDays:   30,
+		HotPool:         &HotPoolSettings{Enabled: false},
+	})
+	if err != nil {
+		t.Fatalf("NewUsageTracker failed: %v", err)
+	}
+	defer tracker.Close()
+
+	rows := []struct {
+		requestID    string
+		endpoint     string
+		startTime    string
+		outputSentAt any
+		durationMs   int
+		status       string
+	}{
+		// 流式：首字节取 output_sent_at 与 start_time 的差，而非总耗时
+		{"avail-1", "主端点", "2026-07-08 10:00:00", "2026-07-08 10:00:01", 5000, "completed"},
+		// 非流式：回退为总耗时
+		{"avail-2", "主端点", "2026-07-08 10:30:00", nil, 2000, "completed"},
+		{"avail-3", "主端点", "2026-07-08 10:45:00", nil, 300, "failed"},
+		// 客户端主动取消，不该拉低端点可用率
+		{"avail-4", "主端点", "2026-07-08 10:50:00", nil, 100, "cancelled"},
+		// 尚无结论的请求同样不计入
+		{"avail-5", "主端点", "2026-07-08 10:55:00", nil, 0, "streaming"},
+		{"avail-6", "主端点", "2026-07-08 11:00:00", "2026-07-08 11:00:02", 9000, "completed"},
+		// 其他端点不应污染统计
+		{"avail-7", "备用端点", "2026-07-08 10:10:00", nil, 8888, "failed"},
+	}
+	for _, row := range rows {
+		if _, err := tracker.db.Exec(`
+			INSERT INTO request_logs (
+				request_id, start_time, output_sent_at, duration_ms, status,
+				provider, channel, endpoint_name, group_name
+			) VALUES (?, ?, ?, ?, ?, 'claude', '渠道A', ?, 'default')
+		`, row.requestID, row.startTime, row.outputSentAt, row.durationMs, row.status, row.endpoint); err != nil {
+			t.Fatalf("insert request log failed: %v", err)
+		}
+	}
+
+	start := time.Date(2026, 7, 8, 0, 0, 0, 0, time.Local)
+	end := time.Date(2026, 7, 8, 23, 59, 59, 0, time.Local)
+	buckets, err := tracker.QueryEndpointAvailabilityBuckets(context.Background(), &QueryOptions{
+		StartDate:    &start,
+		EndDate:      &end,
+		EndpointName: "主端点",
+	}, "hour")
+	if err != nil {
+		t.Fatalf("QueryEndpointAvailabilityBuckets failed: %v", err)
+	}
+
+	if len(buckets) != 2 {
+		t.Fatalf("buckets len = %d, want 2: %#v", len(buckets), buckets)
+	}
+
+	first := buckets[0]
+	if first.Key != "2026-07-08 10" {
+		t.Fatalf("first bucket key = %q, want 2026-07-08 10", first.Key)
+	}
+	if first.Success != 2 || first.Failed != 1 || first.Total != 3 {
+		t.Fatalf("first bucket = %+v, want success=2 failed=1 total=3", first)
+	}
+	// (1000 流式首字节 + 2000 回退总耗时 + 300 回退总耗时) / 3
+	if diff := first.AvgFirstByteMs - 1100; diff > 1 || diff < -1 {
+		t.Fatalf("first bucket AvgFirstByteMs = %v, want ~1100", first.AvgFirstByteMs)
+	}
+
+	second := buckets[1]
+	if second.Key != "2026-07-08 11" {
+		t.Fatalf("second bucket key = %q, want 2026-07-08 11", second.Key)
+	}
+	if second.Success != 1 || second.Failed != 0 || second.Total != 1 {
+		t.Fatalf("second bucket = %+v, want success=1 failed=0 total=1", second)
+	}
+	if diff := second.AvgFirstByteMs - 2000; diff > 1 || diff < -1 {
+		t.Fatalf("second bucket AvgFirstByteMs = %v, want ~2000", second.AvgFirstByteMs)
+	}
+}

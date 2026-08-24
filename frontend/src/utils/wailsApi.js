@@ -1090,6 +1090,42 @@ export const getEndpointHealthChart = async () => {
 };
 
 /**
+ * 获取端点最近 N 小时的可用性时间条数据
+ * 数据来自真实请求记录；没有流量的小时以 hasData=false 的空档返回，不能省略
+ * @returns {Promise<Object>} {slices, hasData, total, success, failed, availability, avgFirstByteMs}
+ */
+export const getEndpointAvailability = async ({
+  provider = '',
+  channel = '',
+  endpointName = '',
+  hours = 24
+} = {}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  const data = await WailsApp.GetEndpointAvailability(provider, channel, endpointName, hours);
+  const slices = Array.isArray(data?.slices) ? data.slices : [];
+  return {
+    slices: slices.map((slice) => ({
+      key: slice.key || '',
+      label: slice.label || '',
+      hasData: Boolean(slice.has_data ?? slice.hasData),
+      total: slice.total || 0,
+      success: slice.success || 0,
+      failed: slice.failed || 0,
+      availability: slice.availability || 0,
+      avgFirstByteMs: slice.avg_first_byte_ms ?? slice.avgFirstByteMs ?? 0
+    })),
+    hasData: Boolean(data?.has_data ?? data?.hasData),
+    total: data?.total || 0,
+    success: data?.success || 0,
+    failed: data?.failed || 0,
+    availability: data?.availability || 0,
+    avgFirstByteMs: data?.avg_first_byte_ms ?? data?.avgFirstByteMs ?? 0
+  };
+};
+
+/**
  * 获取 Codex 端点健康状态数据（仅当前激活渠道下的端点）
  * @returns {Promise<Object>} - 健康状态数据 {healthy, unhealthy, skipped, excluded, total}
  */

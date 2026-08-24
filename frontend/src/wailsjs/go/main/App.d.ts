@@ -66,6 +66,8 @@ export function GetConnectionActivityChart(arg1:number,arg2:string):Promise<Arra
 
 export function GetEndpointCosts(arg1:string):Promise<Array<main.EndpointCostItem>>;
 
+export function GetEndpointAvailability(arg1:string,arg2:string,arg3:string,arg4:number):Promise<main.EndpointAvailabilityData>;
+
 export function GetEndpointHealthChart():Promise<main.EndpointHealthData>;
 
 export function GetCodexEndpointHealthChart():Promise<main.EndpointHealthData>;

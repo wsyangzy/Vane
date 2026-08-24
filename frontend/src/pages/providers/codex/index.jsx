@@ -48,6 +48,7 @@ import {
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import CredentialGroupStack from '@pages/management/shared/CredentialGroupStack.jsx';
+import EndpointAvailabilityBar from '@pages/management/shared/EndpointAvailabilityBar.jsx';
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import {
   DetailChip as BaseDetailChip,
@@ -2062,7 +2063,13 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
         </div>
 
         <div className="overflow-y-auto p-6">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <EndpointAvailabilityBar
+            provider="codex"
+            channel={channel?.name || ''}
+            endpointName={endpoint.name || ''}
+          />
+
+          <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
             {rows.map((row) => (
               <DetailMetricCard
                 key={row.label}

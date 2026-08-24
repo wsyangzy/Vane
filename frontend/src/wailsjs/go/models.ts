@@ -1229,6 +1229,74 @@ export class UpdateSettingInput {
 	        this.provider = source["provider"];
 	    }
 	}
+	export class EndpointAvailabilitySlice {
+	    key: string;
+	    label: string;
+	    has_data: boolean;
+	    total: number;
+	    success: number;
+	    failed: number;
+	    availability: number;
+	    avg_first_byte_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new EndpointAvailabilitySlice(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.has_data = source["has_data"];
+	        this.total = source["total"];
+	        this.success = source["success"];
+	        this.failed = source["failed"];
+	        this.availability = source["availability"];
+	        this.avg_first_byte_ms = source["avg_first_byte_ms"];
+	    }
+	}
+	export class EndpointAvailabilityData {
+	    slices: EndpointAvailabilitySlice[];
+	    has_data: boolean;
+	    total: number;
+	    success: number;
+	    failed: number;
+	    availability: number;
+	    avg_first_byte_ms: number;
+
+	    static createFrom(source: any = {}) {
+	        return new EndpointAvailabilityData(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slices = this.convertValues(source["slices"], EndpointAvailabilitySlice);
+	        this.has_data = source["has_data"];
+	        this.total = source["total"];
+	        this.success = source["success"];
+	        this.failed = source["failed"];
+	        this.availability = source["availability"];
+	        this.avg_first_byte_ms = source["avg_first_byte_ms"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class EndpointHealthData {
 	    healthy: number;
 	    unhealthy: number;

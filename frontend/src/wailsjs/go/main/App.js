@@ -128,6 +128,10 @@ export function GetEndpointCosts(arg1) {
   return Call.ByName("main.App.GetEndpointCosts", arg1);
 }
 
+export function GetEndpointAvailability(arg1, arg2, arg3, arg4) {
+  return Call.ByName("main.App.GetEndpointAvailability", arg1, arg2, arg3, arg4);
+}
+
 export function GetEndpointHealthChart() {
   return Call.ByName("main.App.GetEndpointHealthChart");
 }
