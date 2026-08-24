@@ -19,7 +19,7 @@
 // 由各自调用方用闭包适配，本组件内统一只回传 group。
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
-import { CheckCircle2, KeyRound, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { CheckCircle2, KeyRound, Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
 import { Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 
@@ -28,6 +28,9 @@ const MAX_STACK_LAYERS = 3;
 const STACK_OFFSET_PX = 5;
 const STACK_SCALE_STEP = 0.05;
 const CARD_HEIGHT_PX = 36;
+const CARD_GAP_PX = 6;
+// 弹窗里每行的步进，用于把卡片从展开位置反推回堆叠位置做散开动画
+const ROW_STRIDE_PX = CARD_HEIGHT_PX + CARD_GAP_PX;
 // 堆叠区固定高度：始终按最大露出层数预留，与实际分组数无关
 const STACK_AREA_HEIGHT_PX = CARD_HEIGHT_PX + (MAX_STACK_LAYERS - 1) * STACK_OFFSET_PX;
 // 弹窗打开后的静默期，避开「展开那一下」的第二次点击
@@ -54,7 +57,6 @@ const CredentialGroupStack = ({
   const [entered, setEntered] = useState(false);
   const [interactive, setInteractive] = useState(false);
   const dialogId = useId();
-  const titleId = useId();
 
   // 选中卡置顶，其余保持原有相对顺序
   const orderedGroups = useMemo(() => {
@@ -195,56 +197,42 @@ const CredentialGroupStack = ({
             if (event.target === event.currentTarget) closeDialog();
           }}
         >
+          {/* 无标题栏无关闭按钮，就是一叠散开的卡片；遮罩与 Esc 负责关闭 */}
           <div
             id={dialogId}
             role="dialog"
             aria-modal="true"
-            aria-labelledby={titleId}
-            className="flex max-h-[calc(100vh-2rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+            aria-label="选择凭证分组"
+            className="flex max-h-[70vh] w-full max-w-sm flex-col gap-1.5 overflow-y-auto rounded-2xl bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.4)]"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
-              <h2 id={titleId} className="truncate text-sm font-semibold text-slate-900">
-                选择凭证分组
-                <span className="ml-2 text-[11px] font-normal text-slate-400">共 {groups.length} 个</span>
-              </h2>
-              <button
-                type="button"
-                onClick={closeDialog}
-                className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
-                aria-label="关闭"
+            {orderedGroups.map((group, index) => (
+              <div
+                key={group.id}
+                className="flex-shrink-0 origin-top transition-[transform,opacity] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none"
+                style={{
+                  // 未进入时按行距把每张卡反推回堆叠位置，进入后归位，形成散开动画
+                  transform: entered
+                    ? 'translateY(0) scale(1)'
+                    : `translateY(${index * STACK_OFFSET_PX - index * ROW_STRIDE_PX}px) scale(${1 - Math.min(index, MAX_STACK_LAYERS) * STACK_SCALE_STEP})`,
+                  opacity: entered ? 1 : (index < MAX_STACK_LAYERS ? 1 : 0),
+                  transitionDelay: entered ? `${Math.min(index, 8) * 20}ms` : '0ms'
+                }}
               >
-                <X size={14} />
-              </button>
-            </div>
-
-            <div className="flex flex-col gap-1.5 overflow-y-auto p-3">
-              {orderedGroups.map((group, index) => (
-                <div
-                  key={group.id}
-                  className="flex-shrink-0 transition-[transform,opacity] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)] motion-reduce:transition-none"
-                  style={{
-                    // 逐张淡入并轻微下沉到位，保留堆叠散开的层次感
-                    opacity: entered ? 1 : 0,
-                    transform: entered ? 'translateY(0)' : 'translateY(-6px)',
-                    transitionDelay: entered ? `${Math.min(index, 8) * 20}ms` : '0ms'
-                  }}
-                >
-                  <GroupCard
-                    group={group}
-                    selected={Number(group.id) === Number(selectedId)}
-                    disabled={disabled}
-                    loading={loadingGroupId != null && Number(loadingGroupId) === Number(group.id)}
-                    hint="单击选择，双击查看详情"
-                    onActivate={handleSelect}
-                    onDoubleClickCard={onOpen}
-                    onSetDefault={withClose(onSetDefault)}
-                    onEdit={withClose(onEdit)}
-                    onDelete={withClose(onDelete)}
-                  />
-                </div>
-              ))}
-            </div>
+                <GroupCard
+                  group={group}
+                  selected={Number(group.id) === Number(selectedId)}
+                  disabled={disabled}
+                  loading={loadingGroupId != null && Number(loadingGroupId) === Number(group.id)}
+                  hint="单击选择，双击查看详情"
+                  onActivate={handleSelect}
+                  onDoubleClickCard={onOpen}
+                  onSetDefault={withClose(onSetDefault)}
+                  onEdit={withClose(onEdit)}
+                  onDelete={withClose(onDelete)}
+                />
+              </div>
+            ))}
           </div>
         </div>
       )}

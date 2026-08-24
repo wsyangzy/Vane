@@ -52,10 +52,18 @@ test('groups are listed in a centred modal, not an anchored popover', () => {
   assert.match(source, /fixed inset-0 z-\[100\] flex items-center justify-center/);
   assert.match(source, /role="dialog"/);
   assert.match(source, /aria-modal="true"/);
-  assert.match(source, /aria-labelledby=\{titleId\}/);
+  // 简化后没有可见标题，改用 aria-label 承担 dialog 的可访问名称
+  assert.match(source, /aria-label="选择凭证分组"/);
   // 定位相关的锚点计算已随之删除
   assert.doesNotMatch(source, /getBoundingClientRect/);
   assert.doesNotMatch(source, /dropUp/);
+});
+
+test('dialog is bare: no title bar, no close button', () => {
+  // 弹窗就是一叠散开的卡片，关闭交给遮罩与 Esc
+  assert.doesNotMatch(source, /<h2/);
+  assert.doesNotMatch(source, /aria-label="关闭"/);
+  assert.match(source, /无标题栏无关闭按钮/);
 });
 
 test('picking a group inside the dialog selects it and closes', () => {
@@ -65,9 +73,12 @@ test('picking a group inside the dialog selects it and closes', () => {
   assert.match(source, /onDoubleClickCard=\{onOpen\}/);
 });
 
-test('dialog cards fade in one after another', () => {
+test('dialog cards fan out from a stacked position', () => {
   // 挂载后下一帧才切到进入态，否则没有起始状态可过渡
   assert.match(source, /requestAnimationFrame\(\(\) => setEntered\(true\)\)/);
+  // 未进入时按行距把每张卡反推回堆叠位置，进入后归位
+  assert.match(source, /translateY\(\$\{index \* STACK_OFFSET_PX - index \* ROW_STRIDE_PX\}px\)/);
+  assert.match(source, /const ROW_STRIDE_PX = CARD_HEIGHT_PX \+ CARD_GAP_PX;/);
   assert.match(source, /transitionDelay: entered \? `\$\{Math\.min\(index, 8\) \* 20\}ms` : '0ms'/);
 });
 
@@ -79,12 +90,11 @@ test('dialog ignores clicks while it is still animating in', () => {
   assert.match(source, /\$\{\s*interactive \? '' : 'pointer-events-none'\s*\}/);
 });
 
-test('dialog can be dismissed by keyboard, backdrop and close button', () => {
+test('dialog can be dismissed by keyboard and backdrop', () => {
   assert.match(source, /event\.key === 'Escape'/);
   // 只有点在遮罩本身上才关闭，点弹窗内部不应关
   assert.match(source, /event\.target === event\.currentTarget\) closeDialog\(\)/);
   assert.match(source, /onMouseDown=\{\(event\) => event\.stopPropagation\(\)\}/);
-  assert.match(source, /aria-label="关闭"/);
 });
 
 test('group action buttons meet the minimum touch target size', () => {
@@ -101,6 +111,6 @@ test('action buttons never bubble into the card-wide click target', () => {
 });
 
 test('dialog body scrolls instead of growing past the viewport', () => {
-  assert.match(source, /max-h-\[calc\(100vh-2rem\)\]/);
+  assert.match(source, /max-h-\[70vh\]/);
   assert.match(source, /overflow-y-auto/);
 });
