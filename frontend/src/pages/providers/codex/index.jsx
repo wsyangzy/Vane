@@ -47,7 +47,7 @@ import {
   useToast
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
-import useHorizontalScroll from '@hooks/useHorizontalScroll.js';
+import CredentialGroupStack from '@pages/management/shared/CredentialGroupStack.jsx';
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import {
   DetailChip as BaseDetailChip,
@@ -2397,11 +2397,8 @@ const ChannelCard = ({
   onDeleteEndpoint
 }) => {
   const [isEndpointListExpanded, setIsEndpointListExpanded] = useState(false);
-  const {
-    scrollRef: credentialGroupScrollRef,
-    isDragging: isCredentialGroupDragging,
-    scrollHandlers: credentialGroupScrollHandlers
-  } = useHorizontalScroll();
+  // actionLoading 形如 default-credential-group-<id>，仅在「设为默认」进行中出现
+  const defaultingCredentialGroupId = /^default-credential-group-(\d+)$/.exec(actionLoading || '')?.[1] ?? null;
   const channelCardRef = useRef(null);
   const isSwitchingChannel = actionLoading === `activate-channel-${channel.id}`;
   const isDeletingChannel = actionLoading === `delete-channel-${channel.id}`;
@@ -2683,107 +2680,24 @@ const ChannelCard = ({
       </div>
 
       {/* 凭证分组 */}
-      <div className="flex h-[64px] flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
+      <div className="flex flex-col gap-1.5 border-t border-slate-100 bg-white px-4 py-2">
         <div className="flex h-4 items-center">
           <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
             Credentials · {credentialGroups.length}
           </span>
         </div>
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
-          <div className="relative min-w-0 flex-1">
-            {credentialGroups.length > 1 && (
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-5 bg-gradient-to-l from-white to-transparent" />
-            )}
-            <div
-              ref={credentialGroupScrollRef}
-              {...credentialGroupScrollHandlers}
-              className={`flex min-w-0 items-center gap-1.5 overflow-x-auto overflow-y-hidden pl-0.5 pr-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
-                isCredentialGroupDragging ? 'cursor-grabbing select-none' : 'cursor-grab'
-              }`}
-            >
-              {credentialGroups.length === 0 ? (
-                <span className="truncate text-[11px] text-slate-400">暂无分组，将回退旧渠道 Key。</span>
-              ) : credentialGroups.map((group) => {
-                const groupIsDefault = group.isDefault || group.is_default;
-                const groupIsSelected = Number(group.id) === selectedCredentialGroupIDResolved;
-                const isDefaultingGroup = actionLoading === `default-credential-group-${group.id}`;
-                return (
-                  <span
-                    key={group.id}
-					onDoubleClick={() => onOpenCredentialGroup?.(channel, group)}
-					title="单击切换，双击查看详情"
-                    className={`inline-flex h-6 max-w-[13rem] flex-shrink-0 items-center gap-1 rounded-md border px-1.5 text-[11px] transition-colors ${
-                      groupIsSelected
-                        ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
-                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setSelectedCredentialGroupID(Number(group.id) || 0)}
-					  title="单击切换，双击查看详情"
-                      className="inline-flex min-w-0 items-center gap-1 rounded-sm px-0.5 text-left focus:outline-none focus-visible:outline-none"
-                    >
-                      <KeyRound
-                        size={11}
-                        className={
-                          groupIsSelected
-                            ? 'flex-shrink-0 text-indigo-500'
-                            : groupIsDefault
-                              ? 'flex-shrink-0 text-emerald-500'
-                              : 'flex-shrink-0 text-slate-400'
-                        }
-                      />
-                      <span className="max-w-[8rem] truncate font-medium">{group.name}</span>
-                      {groupIsDefault && <span className="flex-shrink-0 text-[10px] text-emerald-600">默认</span>}
-                    </button>
-                    {!groupIsDefault && (
-                      <Tooltip content="设为默认分组">
-                        <button
-                          type="button"
-                          onClick={() => onSetDefaultCredentialGroup?.(channel, group)}
-						  onDoubleClick={(event) => event.stopPropagation()}
-                          disabled={isDefaultingGroup}
-                          className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-emerald-600 focus:outline-none focus-visible:outline-none disabled:cursor-wait disabled:opacity-60"
-                          aria-label="设为默认分组"
-                        >
-                          {isDefaultingGroup ? <Loader2 size={10} className="animate-spin" /> : <CheckCircle2 size={10} />}
-                        </button>
-                      </Tooltip>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => onEditCredentialGroup?.(channel, group)}
-					  onDoubleClick={(event) => event.stopPropagation()}
-                      className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-indigo-600 focus:outline-none focus-visible:outline-none"
-                    >
-                      <Pencil size={10} />
-                    </button>
-                    {!groupIsDefault && (
-                      <button
-                        type="button"
-                        onClick={() => onDeleteCredentialGroup?.(channel, group)}
-						onDoubleClick={(event) => event.stopPropagation()}
-                        className="flex-shrink-0 rounded p-0.5 text-slate-400 hover:bg-white hover:text-rose-600 focus:outline-none focus-visible:outline-none"
-                      >
-                        <Trash2 size={10} />
-                      </button>
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-          <div className="h-5 w-px flex-shrink-0 bg-slate-200/80" />
-          <button
-            type="button"
-            onClick={() => onAddCredentialGroup?.(channel)}
-            className="inline-flex h-6 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-slate-500 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus-visible:outline-none"
-          >
-            <Plus size={12} />
-            添加分组
-          </button>
-        </div>
+        <CredentialGroupStack
+          groups={credentialGroups}
+          selectedId={selectedCredentialGroupIDResolved}
+          onSelect={setSelectedCredentialGroupID}
+          onOpen={(group) => onOpenCredentialGroup?.(channel, group)}
+          onSetDefault={(group) => onSetDefaultCredentialGroup?.(channel, group)}
+          onEdit={(group) => onEditCredentialGroup?.(channel, group)}
+          onDelete={(group) => onDeleteCredentialGroup?.(channel, group)}
+          onAdd={() => onAddCredentialGroup?.(channel)}
+          loadingGroupId={defaultingCredentialGroupId}
+          emptyHint="暂无分组，将回退旧渠道 Key。"
+        />
       </div>
 
       {/* 端点子列表 */}

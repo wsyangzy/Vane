@@ -44,11 +44,11 @@ test('credential-group billing keeps the standard multiplier section', () => {
 test('Claude credential groups preserve single-click switching and use double-click details', () => {
   assert.match(source, /dailyCostLimitUSD/);
   assert.match(source, /每日成本限额（USD）/);
-  assert.match(source, /onClick=\{\(\) => setSelectedCredentialGroupID/);
-  assert.match(source, /onDoubleClick=\{\(\) => onOpenCredentialGroup/);
-  assert.match(source, /单击切换，双击查看详情/);
   assert.match(source, /CredentialGroupDetailModal/);
-  assert.match(source, /onDoubleClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+  // 分组选择器已提取为共享堆叠卡片，页面只负责接线；
+  // 单击/双击的交互契约由 management/shared/CredentialGroupStack.test.js 保证
+  assert.match(source, /onSelect=\{setSelectedCredentialGroupID\}/);
+  assert.match(source, /onOpen=\{\(group\) => onOpenCredentialGroup\?\.\(channelName, group\)\}/);
 });
 
 test('Claude credential groups no longer expose long-context pricing', () => {
