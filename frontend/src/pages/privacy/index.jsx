@@ -5,6 +5,7 @@ import {
   Eye,
   FlaskConical,
   History,
+  Minus,
   Package,
   PencilLine,
   Plus,
@@ -171,6 +172,35 @@ const Toggle = ({ checked, onChange, disabled = false, label }) => (
       }`}
     />
   </button>
+);
+
+// 自绘勾选框：原生 input 用 peer sr-only 隐藏，继续承担键盘操作与读屏语义，
+// 视觉交给 span，避免各平台原生控件样式不一致。与 ViewConfigPanel 的做法一致。
+const Checkbox = ({ checked, indeterminate = false, onChange, label, disabled = false }) => (
+  <label className={`group inline-flex items-center ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.checked)}
+      aria-label={label}
+      ref={(node) => { if (node) node.indeterminate = indeterminate; }}
+      className="peer sr-only"
+    />
+    <span
+      aria-hidden="true"
+      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-md border transition-all
+        peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-200 peer-focus-visible:ring-offset-1 ${
+        checked || indeterminate
+          ? 'border-indigo-500 bg-indigo-600 text-white shadow-sm shadow-indigo-500/20'
+          : 'border-slate-300 bg-white text-transparent group-hover:border-indigo-300'
+      }`}
+    >
+      {indeterminate
+        ? <Minus className="h-3 w-3" strokeWidth={3} />
+        : checked && <Check className="h-3 w-3" strokeWidth={3} />}
+    </span>
+  </label>
 );
 
 const Badge = ({ children, className = '' }) => (
@@ -377,12 +407,10 @@ const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy, selected, onSelect })
   return (
     <tr className={`border-b border-slate-50 last:border-0 ${selected ? 'bg-indigo-50/40' : ''}`}>
       <td className="py-2.5 pr-2">
-        <input
-          type="checkbox"
+        <Checkbox
           checked={selected}
-          onChange={(event) => onSelect(rule.id, event.target.checked)}
-          aria-label={`选择 ${rule.name}`}
-          className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+          onChange={(value) => onSelect(rule.id, value)}
+          label={`选择 ${rule.name}`}
         />
       </td>
       <td className="py-2.5 pr-3">
@@ -1005,18 +1033,16 @@ const PrivacyPage = () => {
           <p className="px-4 py-8 text-center text-sm text-slate-500">当前筛选下没有规则。</p>
         ) : (
           // 限高滚动而非无限增高：规则可以到几十条，页面不该跟着一直变长
-          <div className="max-h-[26rem] overflow-auto px-4">
+          <div className="max-h-[38rem] overflow-auto px-4">
             <table className="w-full text-left">
               <thead className="sticky top-0 z-10 bg-white text-xs text-slate-500">
                 <tr className="border-b border-slate-100">
                   <th className="w-8 py-2 pr-2 font-medium">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={allVisibleSelected}
-                      ref={(node) => { if (node) node.indeterminate = someVisibleSelected && !allVisibleSelected; }}
-                      onChange={(event) => toggleSelectAll(event.target.checked)}
-                      aria-label="全选当前筛选下的规则"
-                      className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      indeterminate={someVisibleSelected && !allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      label="全选当前筛选下的规则"
                     />
                   </th>
                   <th className="w-12 py-2 pr-3 font-medium">启用</th>
