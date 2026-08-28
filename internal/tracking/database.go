@@ -391,8 +391,8 @@ func (ut *UsageTracker) buildStartQuery(event RequestEvent) (string, []interface
 	}
 
 	// 使用适配器构建INSERT OR REPLACE查询
-	columns := []string{"request_id", "client_ip", "user_agent", "method", "path", "start_time", "status", "is_streaming", "updated_at"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "'pending'", "?", ut.adapter.BuildDateTimeNow()}
+	columns := []string{"request_id", "client_ip", "user_agent", "method", "path", "start_time", "status", "is_streaming", "environment", "updated_at"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "'pending'", "?", "?", ut.adapter.BuildDateTimeNow()}
 
 	query := ut.adapter.BuildInsertOrReplaceQuery("request_logs", columns, placeholders)
 
@@ -404,6 +404,7 @@ func (ut *UsageTracker) buildStartQuery(event RequestEvent) (string, []interface
 		data.Path,
 		event.Timestamp,
 		data.IsStreaming,
+		ut.environment,
 	}
 
 	return query, args, nil
@@ -800,8 +801,8 @@ func (ut *UsageTracker) insertRequestStart(ctx context.Context, tx *sql.Tx, even
 	}
 
 	// 使用适配器构建INSERT OR REPLACE查询
-	columns := []string{"request_id", "client_ip", "user_agent", "method", "path", "start_time", "status", "is_streaming", "updated_at"}
-	placeholders := []string{"?", "?", "?", "?", "?", "?", "'pending'", "?", ut.adapter.BuildDateTimeNow()}
+	columns := []string{"request_id", "client_ip", "user_agent", "method", "path", "start_time", "status", "is_streaming", "environment", "updated_at"}
+	placeholders := []string{"?", "?", "?", "?", "?", "?", "'pending'", "?", "?", ut.adapter.BuildDateTimeNow()}
 	query := ut.adapter.BuildInsertOrReplaceQuery("request_logs", columns, placeholders)
 
 	_, err := tx.ExecContext(ctx, query,
@@ -811,7 +812,8 @@ func (ut *UsageTracker) insertRequestStart(ctx context.Context, tx *sql.Tx, even
 		data.Method,
 		data.Path,
 		event.Timestamp,
-		data.IsStreaming)
+		data.IsStreaming,
+		ut.environment)
 
 	return err
 }
@@ -897,8 +899,8 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 
 	if rowsAffected == 0 {
 		// 记录不存在，使用适配器构建INSERT OR REPLACE查询
-		columns := []string{"request_id", "endpoint_name", "group_name", "status", "retry_count", "http_status_code", "start_time", "updated_at"}
-		placeholders := []string{"?", "?", "?", "?", "?", "?", "?", ut.adapter.BuildDateTimeNow()}
+		columns := []string{"request_id", "endpoint_name", "group_name", "status", "retry_count", "http_status_code", "start_time", "environment", "updated_at"}
+		placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", ut.adapter.BuildDateTimeNow()}
 		insertQuery := ut.adapter.BuildInsertOrReplaceQuery("request_logs", columns, placeholders)
 
 		_, err = tx.ExecContext(ctx, insertQuery,
@@ -908,7 +910,8 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 			data.Status,
 			data.RetryCount,
 			data.HTTPStatus,
-			event.Timestamp)
+			event.Timestamp,
+			ut.environment)
 	}
 
 	return err
@@ -999,9 +1002,9 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 			request_id, start_time, end_time, duration_ms, model_name,
 			input_tokens, output_tokens, reasoning_tokens, billable_output_tokens, billing_output_token_source,
 			cache_creation_tokens, cache_read_tokens,
-			input_cost_usd, output_cost_usd, cache_creation_cost_usd, 
-			cache_read_cost_usd, total_cost_usd, status
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')`
+			input_cost_usd, output_cost_usd, cache_creation_cost_usd,
+			cache_read_cost_usd, total_cost_usd, environment, status
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed')`
 
 		// 使用已计算的 startTime 和 durationMs
 		_, err = tx.ExecContext(ctx, insertQuery,
@@ -1021,7 +1024,8 @@ func (ut *UsageTracker) completeRequest(ctx context.Context, tx *sql.Tx, event R
 			outputCost,
 			cacheCost,
 			readCost,
-			totalCost)
+			totalCost,
+			ut.environment)
 	}
 
 	return err
@@ -1149,11 +1153,13 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 		// 注意：SQLite 的 DELETE...LIMIT 需要编译时启用 SQLITE_ENABLE_UPDATE_DELETE_LIMIT
 		// 这里用 WHERE id IN (SELECT id ... LIMIT N) 兼容标准 SQLite
 		requestQuery := `DELETE FROM request_logs WHERE id IN (
-			SELECT id FROM request_logs WHERE start_time < ? LIMIT ?
+			SELECT id FROM request_logs
+			WHERE start_time < ? AND COALESCE(environment, 'release') = ?
+			LIMIT ?
 		)`
 		requestWriteReq := WriteRequest{
 			Query:     requestQuery,
-			Args:      []interface{}{cutoffTime, batchSize},
+			Args:      []interface{}{cutoffTime, ut.environment, batchSize},
 			Response:  make(chan error, 1),
 			Context:   context.Background(),
 			EventType: "cleanup_requests_batch",
@@ -1172,8 +1178,8 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 		// 查询本批是否还有数据可删（用 SELECT COUNT 而非依赖 RowsAffected）
 		var remaining int
 		err := ut.readDB.QueryRow(
-			"SELECT COUNT(*) FROM request_logs WHERE start_time < ? LIMIT 1",
-			cutoffTime).Scan(&remaining)
+			"SELECT COUNT(*) FROM request_logs WHERE start_time < ? AND COALESCE(environment, 'release') = ? LIMIT 1",
+			cutoffTime, ut.environment).Scan(&remaining)
 		if err != nil {
 			slog.Warn("cleanup: failed to check remaining rows, stopping early", "error", err)
 			break
@@ -1200,7 +1206,7 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 		// 直接重新 Init 是 KISS 的合理选择。
 		if ut.dbCounter != nil && ut.readDB != nil {
 			resyncCtx, resyncCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := ut.dbCounter.Init(resyncCtx, ut.readDB); err != nil {
+			if err := ut.dbCounter.Init(resyncCtx, ut.readDB, ut.environment); err != nil {
 				slog.Warn("清理后重新同步内存计数器失败（计数可能存在漂移）", "error", err)
 			}
 			resyncCancel()
@@ -1208,10 +1214,10 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 	}
 
 	// 清理过期的汇总数据（通过写队列，汇总表小得多，单次足够）
-	summaryQuery := "DELETE FROM usage_summary WHERE date < ?"
+	summaryQuery := "DELETE FROM usage_summary WHERE date < ? AND COALESCE(environment, 'release') = ?"
 	summaryWriteReq := WriteRequest{
 		Query:     summaryQuery,
-		Args:      []interface{}{cutoffTime.Format("2006-01-02")},
+		Args:      []interface{}{cutoffTime.Format("2006-01-02"), ut.environment},
 		Response:  make(chan error, 1),
 		Context:   context.Background(),
 		EventType: "cleanup_summaries",
@@ -1289,7 +1295,7 @@ func (ut *UsageTracker) updateUsageSummary() {
 	updatedSince := endDate.Add(-30 * time.Minute)
 
 	columns := []string{
-		"date", "model_name", "endpoint_name", "group_name", "provider",
+		"date", "model_name", "endpoint_name", "group_name", "provider", "environment",
 		"request_count", "success_count", "error_count",
 		"total_input_tokens", "total_output_tokens",
 		"total_cache_creation_tokens", "total_cache_read_tokens",
@@ -1313,6 +1319,7 @@ SELECT
 	COALESCE(endpoint_name, '') as endpoint_name,
 	COALESCE(group_name, '') as group_name,
 	COALESCE(provider, 'claude') as provider,
+	COALESCE(environment, 'release') as environment,
 	COUNT(*) as request_count,
 	SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END) as success_count,
 	SUM(CASE WHEN status IN ('failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END) as error_count,
@@ -1327,17 +1334,19 @@ SELECT
 FROM request_logs
 WHERE start_time >= ? AND start_time < ?
 	AND (model_name IS NOT NULL OR endpoint_name IS NOT NULL)
+	AND COALESCE(environment, 'release') = ?
 	AND DATE(start_time) IN (
 		SELECT DISTINCT DATE(start_time) FROM request_logs
 		WHERE updated_at >= ? AND start_time >= ?
+			AND COALESCE(environment, 'release') = ?
 	)
-GROUP BY DATE(start_time), model_name, endpoint_name, group_name, provider
+GROUP BY DATE(start_time), model_name, endpoint_name, group_name, provider, environment
 `, ut.adapter.BuildDateTimeNow(), ut.adapter.BuildDateTimeNow())
 
 	// usage_summary 的唯一约束是 (date, model_name, endpoint_name, group_name, provider)，不能复用 request_id 的 upsert 模板。
 	query := fmt.Sprintf(`INSERT INTO usage_summary (%s)
 %s
-ON CONFLICT(date, model_name, endpoint_name, group_name, provider) DO UPDATE SET
+ON CONFLICT(date, model_name, endpoint_name, group_name, provider, environment) DO UPDATE SET
 	request_count = EXCLUDED.request_count,
 	success_count = EXCLUDED.success_count,
 	error_count = EXCLUDED.error_count,
@@ -1352,7 +1361,7 @@ ON CONFLICT(date, model_name, endpoint_name, group_name, provider) DO UPDATE SET
 
 	summaryWriteReq := WriteRequest{
 		Query:     query,
-		Args:      []interface{}{startDate, endDate.AddDate(0, 0, 1), updatedSince, startDate},
+		Args:      []interface{}{startDate, endDate.AddDate(0, 0, 1), ut.environment, updatedSince, startDate, ut.environment},
 		Response:  make(chan error, 1),
 		Context:   context.Background(),
 		EventType: "update_summary",
@@ -1386,20 +1395,24 @@ func (ut *UsageTracker) getDatabaseStatsInternal(ctx context.Context) (*Database
 	stats := &DatabaseStats{}
 
 	// 获取请求记录总数（使用读连接）
-	err := ut.readDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM request_logs").Scan(&stats.TotalRequests)
+	err := ut.readDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM request_logs WHERE COALESCE(environment, 'release') = ?", ut.environment).Scan(&stats.TotalRequests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total requests count: %w", err)
 	}
 
 	// 获取汇总记录总数（使用读连接）
-	err = ut.readDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM usage_summary").Scan(&stats.TotalSummaries)
+	err = ut.readDB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM usage_summary WHERE COALESCE(environment, 'release') = ?", ut.environment).Scan(&stats.TotalSummaries)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total summaries count: %w", err)
 	}
 
 	// 获取最早和最新的记录时间（使用读连接）
 	var earliestStr, latestStr sql.NullString
-	err = ut.readDB.QueryRowContext(ctx, "SELECT MIN(start_time), MAX(start_time) FROM request_logs").Scan(&earliestStr, &latestStr)
+	err = ut.readDB.QueryRowContext(ctx,
+		"SELECT MIN(start_time), MAX(start_time) FROM request_logs WHERE COALESCE(environment, 'release') = ?",
+		ut.environment).Scan(&earliestStr, &latestStr)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get record time range: %w", err)
 	}
@@ -1426,7 +1439,9 @@ func (ut *UsageTracker) getDatabaseStatsInternal(ctx context.Context) (*Database
 	}
 
 	// 获取总成本（使用读连接）
-	err = ut.readDB.QueryRowContext(ctx, "SELECT COALESCE(SUM(total_cost_usd), 0) FROM request_logs WHERE total_cost_usd > 0").Scan(&stats.TotalCostUSD)
+	err = ut.readDB.QueryRowContext(ctx,
+		"SELECT COALESCE(SUM(total_cost_usd), 0) FROM request_logs WHERE total_cost_usd > 0 AND COALESCE(environment, 'release') = ?",
+		ut.environment).Scan(&stats.TotalCostUSD)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get total cost: %w", err)
 	}

@@ -102,8 +102,27 @@ type QueryOptions struct {
 	GroupName    string
 	Status       string
 	Provider     string // 提供商过滤: claude/codex，空字符串表示不过滤
+	Environment  string // 运行环境过滤: dev/release；空字符串由 UsageTracker 自动填充
 	Limit        int
 	Offset       int
+}
+
+func (ut *UsageTracker) scopedQueryOptions(opts *QueryOptions) *QueryOptions {
+	if opts == nil {
+		opts = &QueryOptions{}
+	}
+	scoped := *opts
+	if scoped.Environment == "" {
+		scoped.Environment = normalizeTrackingEnvironment(ut.environment)
+	}
+	return &scoped
+}
+
+func queryEnvironment(opts *QueryOptions) string {
+	if opts == nil {
+		return "release"
+	}
+	return normalizeTrackingEnvironment(opts.Environment)
 }
 
 // UsageSummary represents a summary of usage data
@@ -308,9 +327,7 @@ func (ut *UsageTracker) GetWriteDB() *sql.DB {
 
 // QueryUsageSummary queries usage summary data
 func (ut *UsageTracker) QueryUsageSummary(ctx context.Context, opts *QueryOptions) ([]UsageSummary, error) {
-	if opts == nil {
-		opts = &QueryOptions{}
-	}
+	opts = ut.scopedQueryOptions(opts)
 	sourceOpts := *opts
 	sourceOpts.Offset = 0
 	if opts.Limit > 0 {
@@ -367,9 +384,10 @@ func queryUsageSummaryFromSource(ctx context.Context, db *sql.DB, opts *QueryOpt
 		total_input_tokens, total_output_tokens, 
 		total_cache_creation_tokens, total_cache_read_tokens,
 		total_cost_usd, COALESCE(avg_duration_ms, 0.0) as avg_duration_ms, created_at, updated_at
-		FROM usage_summary WHERE 1=1`
+		FROM usage_summary WHERE 1=1
+			AND COALESCE(environment, 'release') = ?`
 
-	var args []interface{}
+	args := []interface{}{queryEnvironment(opts)}
 
 	if opts.StartDate != nil {
 		query += " AND date >= ?"
@@ -439,9 +457,7 @@ func queryUsageSummaryFromSource(ctx context.Context, db *sql.DB, opts *QueryOpt
 
 // QueryRequestDetails queries detailed request records
 func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOptions) ([]RequestDetail, error) {
-	if opts == nil {
-		opts = &QueryOptions{}
-	}
+	opts = ut.scopedQueryOptions(opts)
 	sourceOpts := *opts
 	sourceOpts.Offset = 0
 	if opts.Limit > 0 {
@@ -568,9 +584,10 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		COALESCE(model_output_cost_multiplier, 1.0) as model_output_cost_multiplier,
 		COALESCE(model_cache_read_cost_multiplier, 1.0) as model_cache_read_cost_multiplier,
 		created_at, updated_at
-		FROM request_logs WHERE 1=1`
+		FROM request_logs WHERE 1=1
+			AND COALESCE(environment, 'release') = ?`
 
-	var args []interface{}
+	args := []interface{}{queryEnvironment(opts)}
 
 	if opts.StartDate != nil {
 		query += " AND start_time >= ?"
@@ -754,6 +771,7 @@ func (ut *UsageTracker) QueryUsageStats(ctx context.Context, period string) (*Us
 // QueryUsageStatsTotals 查询聚合统计（数据库部分）。
 // 该方法只做聚合，不返回明细，适用于前端统计卡片/图表的快速刷新。
 func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {
+	opts = ut.scopedQueryOptions(opts)
 	var combined UsageStatsTotals
 	var startTime, endTime *time.Time
 	if opts != nil {
@@ -787,9 +805,10 @@ func (ut *UsageTracker) queryUsageStatsTotalsFromSource(ctx context.Context, db 
 		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
 		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN duration_ms ELSE 0 END), 0) as duration_sum_ms,
 		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 ELSE 0 END), 0) as duration_count
-		FROM request_logs WHERE 1=1`
+		FROM request_logs WHERE 1=1
+			AND COALESCE(environment, 'release') = ?`
 
-	var args []interface{}
+	args := []interface{}{queryEnvironment(opts)}
 
 	if opts != nil {
 		if opts.StartDate != nil {
@@ -944,6 +963,7 @@ func (ut *UsageTracker) queryUsageStatsTotalsCached(ctx context.Context, opts *Q
 // QueryUsageStatsTotalsWithHotPool 双源聚合：热池 + 数据库。
 // 相比 QueryRequestDetailsWithHotPool：不拉取大量明细，避免大数据量时拖慢 UI。
 func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {
+	opts = ut.scopedQueryOptions(opts)
 	dbTotals, err := ut.queryUsageStatsTotalsCached(ctx, opts)
 	if err != nil {
 		return nil, err
@@ -980,9 +1000,7 @@ func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, op
 
 // CountRequestDetails returns the total count of request details matching the query options
 func (ut *UsageTracker) CountRequestDetails(ctx context.Context, opts *QueryOptions) (int, error) {
-	if opts == nil {
-		opts = &QueryOptions{}
-	}
+	opts = ut.scopedQueryOptions(opts)
 	total := 0
 	err := ut.forEachHistorySource(ctx, opts.StartDate, opts.EndDate, func(source historyQuerySource) error {
 		count, err := ut.countRequestDetailsFromSource(ctx, source.db, opts)
@@ -1000,8 +1018,8 @@ func (ut *UsageTracker) countRequestDetailsFromSource(ctx context.Context, db *s
 		return 0, fmt.Errorf("read database not initialized")
 	}
 
-	query := "SELECT COUNT(*) FROM request_logs WHERE 1=1"
-	var args []interface{}
+	query := "SELECT COUNT(*) FROM request_logs WHERE 1=1 AND COALESCE(environment, 'release') = ?"
+	args := []interface{}{queryEnvironment(opts)}
 
 	if opts.StartDate != nil {
 		query += " AND start_time >= ?"
@@ -1097,7 +1115,8 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		COALESCE(cache_creation_cost_usd, 0.0) as cache_creation_cost_usd,
 		COALESCE(cache_read_cost_usd, 0.0) as cache_read_cost_usd
 		FROM request_logs
-		WHERE start_time >= ? AND start_time <= ?`
+		WHERE start_time >= ? AND start_time <= ?
+		  AND COALESCE(environment, 'release') = ?`
 
 	type endpointCostKey struct {
 		Channel      string
@@ -1126,7 +1145,8 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 
 	grouped := make(map[endpointCostKey]*EndpointCostSummary)
 	err = ut.forEachHistorySource(ctx, &startOfDay, &endOfDay, func(source historyQuerySource) error {
-		rows, err := source.db.QueryContext(ctx, query, ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay))
+		rows, err := source.db.QueryContext(ctx, query,
+			ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay), normalizeTrackingEnvironment(ut.environment))
 		if err != nil {
 			return err
 		}
@@ -1218,8 +1238,9 @@ func (ut *UsageTracker) QueryTokenUsageTotals(ctx context.Context, startTime, en
 		COALESCE(SUM(cache_read_tokens), 0),
 		COALESCE(SUM(` + totalTokensSQLExpression + `), 0)
 		FROM request_logs
-		WHERE start_time >= ? AND start_time < ?`
-	args := []any{ut.formatStartTimeQueryBound(startTime), ut.formatStartTimeQueryBound(endTime)}
+		WHERE start_time >= ? AND start_time < ?
+		  AND COALESCE(environment, 'release') = ?`
+	args := []any{ut.formatStartTimeQueryBound(startTime), ut.formatStartTimeQueryBound(endTime), normalizeTrackingEnvironment(ut.environment)}
 	if provider != "" {
 		query += " AND provider = ?"
 		args = append(args, provider)
@@ -1248,6 +1269,7 @@ func (ut *UsageTracker) QueryTokenUsageTotals(ctx context.Context, startTime, en
 }
 
 func (ut *UsageTracker) QueryTokenUsageBuckets(ctx context.Context, opts *QueryOptions, bucket string) ([]TokenUsageBucket, error) {
+	opts = ut.scopedQueryOptions(opts)
 	if opts == nil || opts.StartDate == nil || opts.EndDate == nil {
 		return []TokenUsageBucket{}, nil
 	}
@@ -1339,6 +1361,7 @@ const endpointFirstByteMsSQLExpression = `COALESCE(
 // 仅统计已有结论的请求：cancelled 是客户端主动放弃、进行中的请求尚无结果，
 // 都不该计入可用率的分母。
 func (ut *UsageTracker) QueryEndpointAvailabilityBuckets(ctx context.Context, opts *QueryOptions, bucket string) ([]EndpointAvailabilityBucket, error) {
+	opts = ut.scopedQueryOptions(opts)
 	if opts == nil || opts.StartDate == nil || opts.EndDate == nil {
 		return []EndpointAvailabilityBucket{}, nil
 	}
@@ -1414,6 +1437,8 @@ func (ut *UsageTracker) appendRequestQueryFilters(query string, args []any, opts
 	if opts == nil {
 		return query, args
 	}
+	query += " AND COALESCE(environment, 'release') = ?"
+	args = append(args, queryEnvironment(opts))
 	if opts.StartDate != nil {
 		query += " AND start_time >= ?"
 		args = append(args, ut.formatStartTimeQueryBound(*opts.StartDate))

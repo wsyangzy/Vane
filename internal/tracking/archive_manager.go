@@ -28,6 +28,7 @@ type ArchiveManagerConfig struct {
 	BatchSize     int           // 批次大小（默认100）
 	FlushInterval time.Duration // 刷新间隔（默认5秒）
 	MaxRetry      int           // 最大重试次数（默认3）
+	Environment   string        // dev/release 请求追踪作用域
 }
 
 // DefaultArchiveManagerConfig 返回默认配置

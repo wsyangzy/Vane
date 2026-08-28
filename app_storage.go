@@ -49,6 +49,7 @@ func (a *App) setupUsageTracker() {
 	}
 	trackingConfig := &tracking.Config{
 		Enabled:          a.config.UsageTracking.Enabled,
+		Environment:      archiveEnvironment,
 		DatabasePath:     dbPath,
 		Database:         a.config.UsageTracking.Database,
 		BufferSize:       a.config.UsageTracking.BufferSize,

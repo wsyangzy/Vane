@@ -53,7 +53,8 @@ func (ut *UsageTracker) reconcileHistoryArchives() error {
 			if _, err := tx.ExecContext(context.Background(), `
 				DELETE FROM history_archive.request_logs
 				WHERE request_id IN (SELECT request_id FROM main.request_logs)
-			`); err != nil {
+				  AND COALESCE(environment, 'release') = ?
+			`, ut.environment); err != nil {
 				return fmt.Errorf("清理活动库重复记录失败: %w", err)
 			}
 			if err := rebuildAttachedUsageSummary(context.Background(), tx); err != nil {
@@ -118,11 +119,13 @@ func (ut *UsageTracker) archiveOldestClosedMonth(ctx context.Context) (string, b
 	err = conn.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT substr(start_time, 1, 7)
 		FROM request_logs
-		WHERE substr(start_time, 1, 7) < ? AND %s
+		WHERE substr(start_time, 1, 7) < ?
+		  AND COALESCE(environment, 'release') = ?
+		  AND %s
 		GROUP BY substr(start_time, 1, 7)
 		ORDER BY substr(start_time, 1, 7) ASC
 		LIMIT 1
-	`, archivableRequestStatusSQL), currentMonth).Scan(&month)
+	`, archivableRequestStatusSQL), currentMonth, ut.environment).Scan(&month)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
@@ -160,9 +163,11 @@ func (ut *UsageTracker) archiveOldestClosedMonth(ctx context.Context) (string, b
 	copyQuery := fmt.Sprintf(`
 		INSERT OR IGNORE INTO history_archive.request_logs (%s)
 		SELECT %s FROM main.request_logs
-		WHERE substr(start_time, 1, 7) = ? AND %s
+		WHERE substr(start_time, 1, 7) = ?
+		  AND COALESCE(environment, 'release') = ?
+		  AND %s
 	`, columnList, columnList, archivableRequestStatusSQL)
-	if _, err := tx.ExecContext(ctx, copyQuery, month); err != nil {
+	if _, err := tx.ExecContext(ctx, copyQuery, month, ut.environment); err != nil {
 		return "", false, fmt.Errorf("写入月度归档失败: %w", err)
 	}
 	if err := rebuildAttachedUsageSummary(ctx, tx); err != nil {
@@ -176,13 +181,16 @@ func (ut *UsageTracker) archiveOldestClosedMonth(ctx context.Context) (string, b
 	verifyQuery := fmt.Sprintf(`
 		SELECT COUNT(*)
 		FROM main.request_logs AS active
-		WHERE substr(active.start_time, 1, 7) = ? AND %s
+		WHERE substr(active.start_time, 1, 7) = ?
+		  AND COALESCE(active.environment, 'release') = ?
+		  AND %s
 		  AND NOT EXISTS (
 			SELECT 1 FROM history_archive.request_logs AS archived
 			WHERE archived.request_id = active.request_id
+			  AND COALESCE(archived.environment, 'release') = ?
 		  )
 	`, archivableRequestStatusSQL)
-	if err := conn.QueryRowContext(ctx, verifyQuery, month).Scan(&missing); err != nil {
+	if err := conn.QueryRowContext(ctx, verifyQuery, month, ut.environment, ut.environment).Scan(&missing); err != nil {
 		return "", false, fmt.Errorf("校验月度归档失败: %w", err)
 	}
 	if missing != 0 {
@@ -193,11 +201,13 @@ func (ut *UsageTracker) archiveOldestClosedMonth(ctx context.Context) (string, b
 		deleteQuery := fmt.Sprintf(`
 			DELETE FROM main.request_logs WHERE id IN (
 				SELECT id FROM main.request_logs
-				WHERE substr(start_time, 1, 7) = ? AND %s
+				WHERE substr(start_time, 1, 7) = ?
+				  AND COALESCE(environment, 'release') = ?
+				  AND %s
 				LIMIT 1000
 			)
 		`, archivableRequestStatusSQL)
-		result, err := conn.ExecContext(ctx, deleteQuery, month)
+		result, err := conn.ExecContext(ctx, deleteQuery, month, ut.environment)
 		if err != nil {
 			return "", false, fmt.Errorf("清理已归档活动记录失败: %w", err)
 		}
@@ -209,7 +219,9 @@ func (ut *UsageTracker) archiveOldestClosedMonth(ctx context.Context) (string, b
 			break
 		}
 	}
-	if _, err := conn.ExecContext(ctx, `DELETE FROM main.usage_summary WHERE substr(date, 1, 7) = ?`, month); err != nil {
+	if _, err := conn.ExecContext(ctx,
+		`DELETE FROM main.usage_summary WHERE substr(date, 1, 7) = ? AND COALESCE(environment, 'release') = ?`,
+		month, ut.environment); err != nil {
 		return "", false, fmt.Errorf("清理已归档汇总失败: %w", err)
 	}
 
@@ -235,7 +247,9 @@ func (ut *UsageTracker) cleanupHistoryArchivesBefore(ctx context.Context, cutoff
 				return err
 			}
 			defer tx.Rollback()
-			if _, err := tx.ExecContext(ctx, `DELETE FROM history_archive.request_logs WHERE start_time < ?`, cutoffBound); err != nil {
+			if _, err := tx.ExecContext(ctx,
+				`DELETE FROM history_archive.request_logs WHERE start_time < ? AND COALESCE(environment, 'release') = ?`,
+				cutoffBound, ut.environment); err != nil {
 				return err
 			}
 			if err := rebuildAttachedUsageSummary(ctx, tx); err != nil {
@@ -275,7 +289,7 @@ func (ut *UsageTracker) resyncRequestCounter() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := ut.dbCounter.Init(ctx, ut.readDB); err != nil {
+	if err := ut.dbCounter.Init(ctx, ut.readDB, ut.environment); err != nil {
 		return
 	}
 }
@@ -351,6 +365,7 @@ func ensureAttachedHistorySchema(ctx context.Context, conn *sql.Conn) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS history_archive.idx_history_request_id ON request_logs(request_id)`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_start ON request_logs(start_time)`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_provider ON request_logs(provider)`,
+		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_environment_start ON request_logs(environment, start_time)`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_summary_date ON usage_summary(date)`,
 	}
 	for _, statement := range statements {
@@ -437,7 +452,7 @@ func rebuildAttachedUsageSummary(ctx context.Context, execer historyExecer) erro
 
 	query := fmt.Sprintf(`
 		INSERT INTO history_archive.usage_summary (
-			date, model_name, endpoint_name, group_name, provider,
+			date, model_name, endpoint_name, group_name, provider, environment,
 			request_count, success_count, error_count,
 			total_input_tokens, total_output_tokens,
 			total_cache_creation_tokens, total_cache_read_tokens,
@@ -447,6 +462,7 @@ func rebuildAttachedUsageSummary(ctx context.Context, execer historyExecer) erro
 			substr(start_time, 1, 10),
 			COALESCE(model_name, ''), COALESCE(endpoint_name, ''), group_name,
 			COALESCE(provider, 'claude'),
+			COALESCE(environment, 'release'),
 			COUNT(*),
 			SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END),
 			SUM(CASE WHEN status IN ('failed', 'cancelled') THEN 1 ELSE 0 END),
@@ -455,7 +471,7 @@ func rebuildAttachedUsageSummary(ctx context.Context, execer historyExecer) erro
 			COALESCE(SUM(total_cost_usd), 0), COALESCE(AVG(duration_ms), 0),
 			CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		FROM history_archive.request_logs
-		GROUP BY substr(start_time, 1, 10), model_name, endpoint_name, group_name, provider
+		GROUP BY substr(start_time, 1, 10), model_name, endpoint_name, group_name, provider, environment
 	`)
 	if _, err := execer.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("重建归档汇总失败: %w", err)

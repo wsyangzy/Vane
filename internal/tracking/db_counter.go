@@ -22,6 +22,7 @@ import (
 type DBRequestCounter struct {
 	mu          sync.RWMutex
 	initialized bool
+	environment string
 	total       int64
 	byProvider  map[string]int64
 }
@@ -35,12 +36,23 @@ func NewDBRequestCounter() *DBRequestCounter {
 
 // Init 从数据库初始化计数器（应用启动时调用）
 // 初始化失败应不阻塞启动，调用方应在外部记录日志并接受降级（保持未初始化状态）。
-func (c *DBRequestCounter) Init(ctx context.Context, db *sql.DB) error {
+func (c *DBRequestCounter) Init(ctx context.Context, db *sql.DB, environments ...string) error {
 	if db == nil {
 		return nil
 	}
 
-	rows, err := db.QueryContext(ctx, "SELECT COALESCE(provider, 'claude') as provider, COUNT(*) FROM request_logs GROUP BY provider")
+	environment := ""
+	if len(environments) > 0 {
+		environment = normalizeTrackingEnvironment(environments[0])
+	}
+	query := "SELECT COALESCE(provider, 'claude') as provider, COUNT(*) FROM request_logs"
+	args := []any{}
+	if environment != "" {
+		query += " WHERE COALESCE(environment, 'release') = ?"
+		args = append(args, environment)
+	}
+	query += " GROUP BY provider"
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -69,6 +81,7 @@ func (c *DBRequestCounter) Init(ctx context.Context, db *sql.DB) error {
 
 	c.total = total
 	c.byProvider = byProvider
+	c.environment = environment
 	c.initialized = true
 	return nil
 }
@@ -153,6 +166,9 @@ func (c *DBRequestCounter) Get(opts *QueryOptions) (int64, bool) {
 			opts.GroupName != "" || opts.Status != "" ||
 			opts.StartDate != nil || opts.EndDate != nil {
 			return 0, false // 复杂过滤，无法使用内存计数
+		}
+		if opts.Environment != "" && c.environment != "" && opts.Environment != c.environment {
+			return 0, false
 		}
 	}
 

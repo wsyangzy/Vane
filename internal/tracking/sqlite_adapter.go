@@ -525,6 +525,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			description: "提供商标识字段（claude/codex）",
 		},
 		{
+			checkColumn: "environment",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN environment TEXT NOT NULL DEFAULT 'release'",
+			description: "运行环境字段（dev/release）",
+		},
+		{
 			checkColumn: "privacy_redacted",
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redacted BOOLEAN DEFAULT 0",
 			description: "隐私脱敏命中标记字段",
@@ -801,6 +806,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := s.backfillClaudeCredentialGroups(ctx); err != nil {
 		return err
 	}
+	if err := s.repairClaudeCredentialGroupOwnership(ctx); err != nil {
+		return err
+	}
 	if err := s.migrateLongContextPricingDefault(ctx); err != nil {
 		return err
 	}
@@ -864,8 +872,16 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE usage_summary ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'",
 			description: "使用统计提供商标识字段（claude/codex）",
 		},
+		{
+			checkColumn: "environment",
+			alterSQL:    "ALTER TABLE usage_summary ADD COLUMN environment TEXT NOT NULL DEFAULT 'release'",
+			description: "使用统计运行环境字段（dev/release）",
+		},
 	}
 	if err := runMigrations("usage_summary", usageSummaryMigrations); err != nil {
+		return err
+	}
+	if err := s.ensureUsageSummaryEnvironmentScope(ctx); err != nil {
 		return err
 	}
 
@@ -910,6 +926,168 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		return err
 	}
 
+	return nil
+}
+
+// ensureUsageSummaryEnvironmentScope upgrades legacy usage_summary tables whose
+// UNIQUE constraint predates provider/environment scoping. SQLite cannot alter
+// a table constraint in place, so rebuild only when the desired unique key is
+// missing; clean databases take the cheap metadata-check path.
+func (s *SQLiteAdapter) ensureUsageSummaryEnvironmentScope(ctx context.Context) error {
+	exists, err := s.tableExists(ctx, "usage_summary")
+	if err != nil || !exists {
+		return err
+	}
+	hasDesiredUnique, err := s.usageSummaryHasEnvironmentUnique(ctx)
+	if err != nil {
+		return err
+	}
+	if hasDesiredUnique {
+		return nil
+	}
+	s.logger.Info("🔧 [数据库迁移] usage_summary：重建包含 provider/environment 的唯一约束")
+	return s.rebuildUsageSummaryForEnvironment(ctx)
+}
+
+func (s *SQLiteAdapter) usageSummaryHasEnvironmentUnique(ctx context.Context) (bool, error) {
+	rows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_list(usage_summary)")
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect usage_summary indexes: %w", err)
+	}
+	type indexInfo struct {
+		name   string
+		unique int
+	}
+	var indexes []indexInfo
+	for rows.Next() {
+		var seq, unique, partial int
+		var origin string
+		var name string
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			_ = rows.Close()
+			return false, fmt.Errorf("failed to scan usage_summary indexes: %w", err)
+		}
+		if unique != 0 {
+			indexes = append(indexes, indexInfo{name: name, unique: unique})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, fmt.Errorf("failed to iterate usage_summary indexes: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	want := []string{"date", "model_name", "endpoint_name", "group_name", "provider", "environment"}
+	for _, index := range indexes {
+		escaped := strings.ReplaceAll(index.name, "'", "''")
+		columnRows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_info('"+escaped+"')")
+		if err != nil {
+			return false, fmt.Errorf("failed to inspect usage_summary index %s: %w", index.name, err)
+		}
+		columns := make([]string, 0, len(want))
+		for columnRows.Next() {
+			var seqno, cid int
+			var name string
+			if err := columnRows.Scan(&seqno, &cid, &name); err != nil {
+				_ = columnRows.Close()
+				return false, fmt.Errorf("failed to scan usage_summary index %s: %w", index.name, err)
+			}
+			columns = append(columns, name)
+		}
+		if err := columnRows.Close(); err != nil {
+			return false, err
+		}
+		if len(columns) == len(want) {
+			match := true
+			for i := range want {
+				if columns[i] != want[i] {
+					match = false
+					break
+				}
+			}
+			if match {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (s *SQLiteAdapter) rebuildUsageSummaryForEnvironment(ctx context.Context) error {
+	tx, err := s.GetWriteDB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin usage_summary rebuild: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	statements := []string{
+		`DROP INDEX IF EXISTS idx_usage_summary_date`,
+		`DROP INDEX IF EXISTS idx_usage_summary_model`,
+		`DROP INDEX IF EXISTS idx_usage_summary_endpoint`,
+		`DROP INDEX IF EXISTS idx_usage_summary_group`,
+		`DROP INDEX IF EXISTS idx_usage_summary_provider`,
+		`DROP INDEX IF EXISTS idx_usage_summary_environment_date`,
+		`DROP TRIGGER IF EXISTS update_usage_summary_timestamp`,
+		`ALTER TABLE usage_summary RENAME TO usage_summary_legacy_environment`,
+		`CREATE TABLE usage_summary (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			date TEXT NOT NULL,
+			model_name TEXT NOT NULL,
+			endpoint_name TEXT NOT NULL,
+			group_name TEXT,
+			provider TEXT NOT NULL DEFAULT 'claude',
+			environment TEXT NOT NULL DEFAULT 'release',
+			request_count INTEGER DEFAULT 0,
+			success_count INTEGER DEFAULT 0,
+			error_count INTEGER DEFAULT 0,
+			total_input_tokens INTEGER DEFAULT 0,
+			total_output_tokens INTEGER DEFAULT 0,
+			total_cache_creation_tokens INTEGER DEFAULT 0,
+			total_cache_read_tokens INTEGER DEFAULT 0,
+			total_cost_usd REAL DEFAULT 0,
+			avg_duration_ms REAL DEFAULT 0,
+			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			UNIQUE(date, model_name, endpoint_name, group_name, provider, environment)
+		)`,
+		`INSERT INTO usage_summary (
+			id, date, model_name, endpoint_name, group_name, provider, environment,
+			request_count, success_count, error_count,
+			total_input_tokens, total_output_tokens,
+			total_cache_creation_tokens, total_cache_read_tokens,
+			total_cost_usd, avg_duration_ms, created_at, updated_at
+		)
+		SELECT id, date, model_name, endpoint_name, group_name,
+			COALESCE(provider, 'claude'), COALESCE(environment, 'release'),
+			request_count, success_count, error_count,
+			total_input_tokens, total_output_tokens,
+			total_cache_creation_tokens, total_cache_read_tokens,
+			total_cost_usd, avg_duration_ms, created_at, updated_at
+		FROM usage_summary_legacy_environment`,
+		`DROP TABLE usage_summary_legacy_environment`,
+		`CREATE INDEX idx_usage_summary_date ON usage_summary(date)`,
+		`CREATE INDEX idx_usage_summary_model ON usage_summary(model_name)`,
+		`CREATE INDEX idx_usage_summary_endpoint ON usage_summary(endpoint_name)`,
+		`CREATE INDEX idx_usage_summary_group ON usage_summary(group_name)`,
+		`CREATE INDEX idx_usage_summary_provider ON usage_summary(provider)`,
+		`CREATE INDEX idx_usage_summary_environment_date ON usage_summary(environment, date)`,
+		`CREATE TRIGGER update_usage_summary_timestamp
+			AFTER UPDATE ON usage_summary
+			FOR EACH ROW
+			WHEN NEW.updated_at = OLD.updated_at
+		BEGIN
+				UPDATE usage_summary SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+			END`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("rebuild usage_summary: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit usage_summary rebuild: %w", err)
+	}
 	return nil
 }
 
@@ -1587,6 +1765,148 @@ func defaultSQLiteMigrationMultiplier(value float64) float64 {
 		return 1.0
 	}
 	return value
+}
+
+const schemaVersionRepairClaudeCredentialGroupOwnership = "20260825_repair_claude_credential_group_ownership"
+
+// repairClaudeCredentialGroupOwnership 修复历史迁移残留：endpoints.credential_group_id 指向了其它渠道的凭证分组。
+//
+// 这种归属是非法状态（EndpointService 的创建/更新路径都会拒绝跨渠道分组），后果是端点游离在所有分组之外：
+// UI 按 ListByChannel 渲染分组卡片时碰不到它，「关闭本分组所有端点参与转移」的批量操作漏掉它；
+// credentialGroupOrder 又把它排到全部分组之后，于是它总在渠道内端点耗尽后被当作最后一批重试，
+// 表现为「参与转移开关关不掉」。
+//
+// 处理策略：孤儿端点归回本渠道默认分组；若默认分组内已存在同名或同 URL 的端点，说明它只是历史重影，直接删除。
+// 每次启动检测，但只在命中非法数据时写入 —— 合法行永远不被触碰，因此不违反「不得覆盖用户显式保存值」的约定。
+func (s *SQLiteAdapter) repairClaudeCredentialGroupOwnership(ctx context.Context) error {
+	for _, table := range []string{"endpoints", "claude_credential_groups"} {
+		exists, err := s.tableExists(ctx, table)
+		if err != nil {
+			return fmt.Errorf("failed to check %s for Claude credential group ownership repair: %w", table, err)
+		}
+		if !exists {
+			return nil
+		}
+	}
+
+	type orphanEndpoint struct {
+		id           int64
+		channel      string
+		name         string
+		url          string
+		groupID      int64
+		groupChannel string
+	}
+
+	rows, err := s.GetReadDB().QueryContext(ctx, `
+		SELECT e.id, e.channel, e.name, e.url, e.credential_group_id, g.channel
+		FROM endpoints e
+		JOIN claude_credential_groups g ON g.id = e.credential_group_id
+		WHERE g.channel <> e.channel
+		ORDER BY e.id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query Claude endpoints with foreign credential groups: %w", err)
+	}
+	orphans := make([]orphanEndpoint, 0)
+	for rows.Next() {
+		var orphan orphanEndpoint
+		if err := rows.Scan(&orphan.id, &orphan.channel, &orphan.name, &orphan.url, &orphan.groupID, &orphan.groupChannel); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan Claude endpoint with foreign credential group: %w", err)
+		}
+		orphans = append(orphans, orphan)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate Claude endpoints with foreign credential groups: %w", err)
+	}
+	rows.Close()
+
+	if len(orphans) == 0 {
+		return nil
+	}
+
+	s.logger.Warn(fmt.Sprintf("🔧 [数据库迁移] 检测到 %d 个 Claude 端点的凭证分组归属跨渠道错配，开始修复", len(orphans)))
+	backupPath, err := s.backupDatabaseFile(ctx, "pre-credential-group-repair")
+	if err != nil {
+		return fmt.Errorf("failed to back up database before Claude credential group ownership repair: %w", err)
+	}
+	if backupPath != "" {
+		s.logger.Info(fmt.Sprintf("💾 [数据库迁移] 修复前已备份数据库: %s", backupPath))
+	}
+
+	var repaired, removed, skipped int
+	for _, orphan := range orphans {
+		var defaultGroupID int64
+		err := s.GetReadDB().QueryRowContext(ctx, `
+			SELECT id FROM claude_credential_groups
+			WHERE channel = ? AND is_default = 1
+			LIMIT 1
+		`, orphan.channel).Scan(&defaultGroupID)
+		if err == sql.ErrNoRows {
+			skipped++
+			s.logger.Warn(fmt.Sprintf("⚠️ [数据库迁移] 渠道 %s 没有默认凭证分组，端点 %s (id=%d) 的错配归属保持原样",
+				orphan.channel, orphan.name, orphan.id))
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to load default Claude credential group for channel %s: %w", orphan.channel, err)
+		}
+
+		var conflictID int64
+		var conflictName string
+		err = s.GetReadDB().QueryRowContext(ctx, `
+			SELECT id, name FROM endpoints
+			WHERE channel = ? AND credential_group_id = ? AND (name = ? OR url = ?)
+			LIMIT 1
+		`, orphan.channel, defaultGroupID, orphan.name, orphan.url).Scan(&conflictID, &conflictName)
+		switch {
+		case err == nil:
+			// 默认分组里已经有同名或同上游地址的端点，孤儿只是历史重影，删除它保留正主。
+			if _, execErr := s.GetWriteDB().ExecContext(ctx, `DELETE FROM endpoints WHERE id = ?`, orphan.id); execErr != nil {
+				return fmt.Errorf("failed to delete duplicated Claude endpoint %s (id=%d): %w", orphan.name, orphan.id, execErr)
+			}
+			removed++
+			s.logger.Info(fmt.Sprintf("🗑️ [数据库迁移] 删除重影端点: 渠道=%s 端点=%s (id=%d, url=%s, 原分组=%d 属于 %s)，默认分组内已有 %s (id=%d)",
+				orphan.channel, orphan.name, orphan.id, orphan.url, orphan.groupID, orphan.groupChannel, conflictName, conflictID))
+		case err == sql.ErrNoRows:
+			if _, execErr := s.GetWriteDB().ExecContext(ctx,
+				`UPDATE endpoints SET credential_group_id = ? WHERE id = ?`, defaultGroupID, orphan.id); execErr != nil {
+				return fmt.Errorf("failed to reassign Claude endpoint %s (id=%d) to its default credential group: %w", orphan.name, orphan.id, execErr)
+			}
+			repaired++
+			s.logger.Info(fmt.Sprintf("🔁 [数据库迁移] 端点归位默认分组: 渠道=%s 端点=%s (id=%d)，分组 %d (属于 %s) → %d",
+				orphan.channel, orphan.name, orphan.id, orphan.groupID, orphan.groupChannel, defaultGroupID))
+		default:
+			return fmt.Errorf("failed to check duplicated Claude endpoint %s in channel %s: %w", orphan.name, orphan.channel, err)
+		}
+	}
+
+	s.logger.Info(fmt.Sprintf("✅ [数据库迁移] Claude 凭证分组归属修复完成：归位 %d 个，删除重影 %d 个，跳过 %d 个",
+		repaired, removed, skipped))
+
+	if err := s.recordSchemaVersion(ctx, schemaVersionRepairClaudeCredentialGroupOwnership,
+		"repair Claude endpoints whose credential group belongs to another channel"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// backupDatabaseFile 用 VACUUM INTO 生成当前库的一致快照，返回备份路径。
+// 内存库或路径未配置时返回空字符串，表示无需备份。
+func (s *SQLiteAdapter) backupDatabaseFile(ctx context.Context, tag string) (string, error) {
+	dbPath := strings.TrimSpace(s.config.DatabasePath)
+	if dbPath == "" || dbPath == ":memory:" {
+		return "", nil
+	}
+	backupPath := fmt.Sprintf("%s.%s-%s.db", dbPath, tag, time.Now().Format("20060102-150405"))
+	// VACUUM INTO 不支持占位符，路径需按 SQL 字符串字面量转义。
+	quoted := strings.ReplaceAll(backupPath, "'", "''")
+	if _, err := s.GetWriteDB().ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", quoted)); err != nil {
+		return "", err
+	}
+	return backupPath, nil
 }
 
 func (s *SQLiteAdapter) tableExists(ctx context.Context, table string) (bool, error) {

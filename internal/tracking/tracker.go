@@ -667,6 +667,9 @@ func CalculateCostFromTokens(inputTokens, outputTokens, cacheCreationTokens, cac
 // Config 使用跟踪配置
 type Config struct {
 	Enabled bool `yaml:"enabled"`
+	// Environment scopes request tracking when dev and release share usage.db.
+	// Empty values are normalized to release for backwards compatibility.
+	Environment string `yaml:"-"`
 
 	// 向后兼容：保留原有的 database_path 配置
 	DatabasePath string `yaml:"database_path"`
@@ -686,6 +689,13 @@ type Config struct {
 
 	// 🔥 新增：热池配置
 	HotPool *HotPoolSettings `yaml:"hot_pool,omitempty"`
+}
+
+func normalizeTrackingEnvironment(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "dev") {
+		return "dev"
+	}
+	return "release"
 }
 
 // HotPoolSettings 热池配置
@@ -737,6 +747,7 @@ type UsageTracker struct {
 	db           *sql.DB
 	eventChan    chan RequestEvent
 	config       *Config
+	environment  string                        // dev/release scope for request logs and archives
 	pricing      map[string]ModelPricing       // 模型定价缓存
 	endpointMu   map[string]EndpointMultiplier // 端点倍率缓存
 	ctx          context.Context
@@ -813,6 +824,7 @@ func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, erro
 	if cfg.MaxRetry <= 0 {
 		cfg.MaxRetry = 3
 	}
+	cfg.Environment = normalizeTrackingEnvironment(cfg.Environment)
 	if cfg.CleanupInterval <= 0 {
 		cfg.CleanupInterval = 24 * time.Hour // 默认24小时清理一次
 	}
@@ -868,6 +880,7 @@ func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, erro
 		db:               db, // 兼容性：指向readDB
 		eventChan:        make(chan RequestEvent, cfg.BufferSize),
 		config:           cfg,
+		environment:      cfg.Environment,
 		pricing:          cfg.ModelPricing,
 		ctx:              ctx,
 		cancel:           cancel,
@@ -932,7 +945,7 @@ func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, erro
 	ut.dbCounter = NewDBRequestCounter()
 	{
 		initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := ut.dbCounter.Init(initCtx, ut.readDB); err != nil {
+		if err := ut.dbCounter.Init(initCtx, ut.readDB, ut.environment); err != nil {
 			slog.Warn("初始化数据库请求计数器失败（将降级到 DB count 查询）", "error", err)
 		}
 		initCancel()
@@ -1006,6 +1019,7 @@ func (ut *UsageTracker) initHotPool() {
 		BatchSize:     ut.config.BatchSize,
 		FlushInterval: ut.config.FlushInterval,
 		MaxRetry:      ut.config.MaxRetry,
+		Environment:   ut.environment,
 	}
 	ut.archiveManager = NewArchiveManager(ut.adapter, archiveConfig, ut.pricing, ut.location)
 	ut.archiveManager.SetWriteLocker(&ut.writeMu)
@@ -1261,9 +1275,10 @@ func (ut *UsageTracker) cleanupCrashedRequests() error {
 		    end_time = COALESCE(end_time, ?)
 		WHERE status IN ('pending', 'forwarding', 'streaming', 'processing', 'retry', 'suspended')
 		  AND updated_at < ?
+		  AND COALESCE(environment, 'release') = ?
 		  AND output_sent_at IS NOT NULL
 	`
-	result1, err1 := ut.writeDB.ExecContext(ctx, query1, now, cutoffTime)
+	result1, err1 := ut.writeDB.ExecContext(ctx, query1, now, cutoffTime, ut.environment)
 	if err1 != nil {
 		// output_sent_at 字段可能在旧库不存在，降级到原始 query
 		slog.Warn("output_sent_at 列可能不存在，降级到统一清理", "error", err1)
@@ -1285,8 +1300,9 @@ func (ut *UsageTracker) cleanupCrashedRequests() error {
 		    end_time = COALESCE(end_time, ?)
 		WHERE status IN ('pending', 'forwarding', 'streaming', 'processing', 'retry', 'suspended')
 		  AND updated_at < ?
+		  AND COALESCE(environment, 'release') = ?
 	`
-	result, err := ut.writeDB.ExecContext(ctx, query2, now, cutoffTime)
+	result, err := ut.writeDB.ExecContext(ctx, query2, now, cutoffTime, ut.environment)
 	if err != nil {
 		return fmt.Errorf("failed to cleanup crashed requests: %w", err)
 	}
@@ -2377,9 +2393,11 @@ func (ut *UsageTracker) GetUsageStats(ctx context.Context, startTime, endTime ti
 		for _, groupedQuery := range queries {
 			query := fmt.Sprintf(`SELECT %s, COUNT(*), COALESCE(SUM(total_cost_usd), 0)
 				FROM request_logs
-				WHERE start_time >= ? AND start_time <= ? AND %s IS NOT NULL AND %s != ''
+				WHERE start_time >= ? AND start_time <= ?
+				  AND COALESCE(environment, 'release') = ?
+				  AND %s IS NOT NULL AND %s != ''
 				GROUP BY %s`, groupedQuery.column, groupedQuery.column, groupedQuery.column, groupedQuery.column)
-			rows, err := source.db.QueryContext(ctx, query, startBound, endBound)
+			rows, err := source.db.QueryContext(ctx, query, startBound, endBound, ut.environment)
 			if err != nil {
 				return err
 			}
@@ -3068,6 +3086,7 @@ func normalizeMultiplierSnapshot(snapshot float64, current *EndpointMultiplier, 
 // 返回合并后的请求列表，热池中的活跃请求排在前面
 // 🔧 [修复] 2025-12-11: 正确处理分页，确保返回数量不超过 limit
 func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts *QueryOptions) ([]RequestDetail, int64, error) {
+	opts = ut.scopedQueryOptions(opts)
 	var results []RequestDetail
 
 	// 获取分页参数
@@ -3202,9 +3221,9 @@ func queryOptsCacheKey(opts *QueryOptions) string {
 		return ""
 	}
 	// 仅使用影响 count 结果的过滤字段（不包含 limit/offset/sort）
-	return fmt.Sprintf("p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|sd=%v|ed=%v",
+	return fmt.Sprintf("p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|env=%s|sd=%v|ed=%v",
 		opts.Provider, opts.Channel, opts.ModelName, opts.EndpointName,
-		opts.GroupName, opts.Status, opts.StartDate, opts.EndDate)
+		opts.GroupName, opts.Status, opts.Environment, opts.StartDate, opts.EndDate)
 }
 
 // getCachedDBCount 获取上次成功的 count（无缓存时返回 0）
@@ -3237,6 +3256,9 @@ func (ut *UsageTracker) setCachedDBCount(opts *QueryOptions, count int) {
 // getFilteredHotPoolRequests 获取过滤后的热池请求
 func (ut *UsageTracker) getFilteredHotPoolRequests(opts *QueryOptions) []RequestDetail {
 	if ut.hotPool == nil {
+		return nil
+	}
+	if opts != nil && opts.Environment != "" && opts.Environment != normalizeTrackingEnvironment(ut.environment) {
 		return nil
 	}
 

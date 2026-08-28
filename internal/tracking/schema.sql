@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     service_tier TEXT,                       -- 服务档位: auto/default/batch/flex/priority/fast
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
     provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
+    environment TEXT NOT NULL DEFAULT 'release', -- 运行环境: dev/release（两版共享本库，靠此列隔离追踪视图）
     privacy_redacted BOOLEAN DEFAULT 0,        -- 发送上游前是否命中隐私脱敏
     privacy_redaction_summary TEXT,            -- 隐私脱敏命中摘要（不含原文/片段）
     privacy_redaction_matches TEXT,            -- 本机展示用命中明细（含原文与替换值）
@@ -100,6 +101,8 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_channel ON request_logs(channel);
 CREATE INDEX IF NOT EXISTS idx_request_logs_endpoint ON request_logs(endpoint_name);
 CREATE INDEX IF NOT EXISTS idx_request_logs_group ON request_logs(group_name);
 CREATE INDEX IF NOT EXISTS idx_request_logs_failure_reason ON request_logs(failure_reason);
+-- dev/release 共享同一个 usage.db，追踪视图查询一律带 environment，故建复合索引
+CREATE INDEX IF NOT EXISTS idx_request_logs_environment_start ON request_logs(environment, start_time);
 
 -- 使用统计汇总表 (可选，用于快速查询)
 CREATE TABLE IF NOT EXISTS usage_summary (
@@ -109,6 +112,7 @@ CREATE TABLE IF NOT EXISTS usage_summary (
     endpoint_name TEXT NOT NULL,
     group_name TEXT,
     provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
+    environment TEXT NOT NULL DEFAULT 'release', -- 运行环境: dev/release
 
     request_count INTEGER DEFAULT 0,       -- 请求总数
     success_count INTEGER DEFAULT 0,       -- 成功请求数
@@ -125,7 +129,7 @@ CREATE TABLE IF NOT EXISTS usage_summary (
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     
-    UNIQUE(date, model_name, endpoint_name, group_name, provider)
+    UNIQUE(date, model_name, endpoint_name, group_name, provider, environment)
 );
 
 -- 汇总表索引
@@ -135,6 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_summary_endpoint ON usage_summary(endpoint_
 CREATE INDEX IF NOT EXISTS idx_usage_summary_group ON usage_summary(group_name);
 CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON request_logs(provider);
 CREATE INDEX IF NOT EXISTS idx_usage_summary_provider ON usage_summary(provider);
+CREATE INDEX IF NOT EXISTS idx_usage_summary_environment_date ON usage_summary(environment, date);
 
 
 -- 触发器：自动更新 updated_at 时间戳（统一使用带时区格式，微秒精度）
