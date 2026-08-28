@@ -75,6 +75,33 @@ const PSEUDONYM_KIND_LABELS = {
   custom: '通用'
 };
 
+// 内置匹配器的人类可读说明。
+// pattern 字段存的是 builtin:xxx 内部标识，直接展示给用户没有意义。
+const BUILTIN_MATCHERS = {
+  'builtin:cn_mobile': {
+    label: '中国大陆手机号',
+    detail: '匹配运营商号段，支持 +86 前缀。命中区间前后紧邻数字时判为更长数字串的一部分，不计命中。'
+  },
+  'builtin:cn_id_card': {
+    label: '中国身份证号',
+    detail: '18 位格式 + 省级地址码白名单 + 合法出生日期 + 校验位验算，四项全过才算命中。'
+  },
+  'builtin:bank_card_luhn': {
+    label: '银行卡号',
+    detail: '13–19 位 + Luhn 校验 + 主流卡组织（Visa / 万事达 / 运通 / 大来 / Discover / JCB / 银联）的前缀与长度画像。'
+  },
+  'builtin:email': {
+    label: '邮箱地址',
+    detail: '排除 git@host 形式的仓库地址与 logo@2x.png 一类资源名。'
+  }
+};
+
+// 内置匹配器带校验位与卡组织画像，误报率远低于同类正则，因此不提供正则版本。
+const describePattern = (rule) => {
+  if (rule.matchType !== 'builtin') return rule.pattern;
+  return BUILTIN_MATCHERS[rule.pattern]?.label || rule.pattern;
+};
+
 const SOURCE_LABELS = {
   builtin: '内置',
   preset: '预设',
@@ -332,9 +359,15 @@ const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy }) => {
         {rule.description && <div className="mt-0.5 text-xs text-slate-500">{rule.description}</div>}
       </td>
       <td className="max-w-xs py-2.5 pr-3">
-        <code className="block truncate font-mono text-xs text-slate-600" title={rule.pattern}>
-          {rule.pattern}
-        </code>
+        {rule.matchType === 'builtin' ? (
+          <span className="block truncate text-xs text-slate-600" title={BUILTIN_MATCHERS[rule.pattern]?.detail || rule.pattern}>
+            {describePattern(rule)}
+          </span>
+        ) : (
+          <code className="block truncate font-mono text-xs text-slate-600" title={rule.pattern}>
+            {rule.pattern}
+          </code>
+        )}
       </td>
       <td className="py-2.5 pr-3">
         <Badge className={SOURCE_TONES[rule.source] || SOURCE_TONES.custom}>
@@ -445,18 +478,31 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
             </label>
           </div>
 
+          {rule.matchType === 'builtin' ? (
+            <div className="block text-sm">
+              <span className="font-medium text-slate-700">内置匹配器</span>
+              <div className="mt-1.5 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
+                <div className="text-sm font-medium text-indigo-900">{describePattern(rule)}</div>
+                <p className="mt-1 text-xs leading-relaxed text-indigo-700">
+                  {BUILTIN_MATCHERS[rule.pattern]?.detail || rule.pattern}
+                </p>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                判定逻辑在程序内实现，带校验位与结构画像，不可编辑。需要不同口径请另建一条正则规则。
+              </p>
+            </div>
+          ) : (
           <label className="block text-sm">
             <span className="font-medium text-slate-700">
-              {rule.matchType === 'literal' ? '匹配文本' : rule.matchType === 'builtin' ? '内置匹配器' : '正则表达式'}
+              {rule.matchType === 'literal' ? '匹配文本' : '正则表达式'}
             </span>
             <textarea
-              disabled={isBuiltin}
               value={rule.pattern}
               onChange={(event) => onChange({ ...rule, pattern: event.target.value })}
               rows={3}
-              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs disabled:bg-slate-50 disabled:text-slate-500"
+              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
             />
-            {rule.matchType === 'regex' && !isBuiltin && (
+            {rule.matchType === 'regex' && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {REGEX_TEMPLATES.map((template) => (
                   <button
@@ -471,6 +517,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
               </div>
             )}
           </label>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="block text-sm">
@@ -546,11 +593,24 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
 };
 
 // 测试面板的输入与结果都停留在本机，不落库、不上报。
-const TestPanel = () => {
+// 规则测试弹窗。按需打开，不常驻占位。
+// 输入与结果都停留在本机：不落库、不进日志、不发往任何服务商。
+const TestModal = ({ open, onClose }) => {
   const [input, setInput] = useState('');
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
   const toast = useToast();
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
 
   const run = async () => {
     if (!input.trim()) return;
@@ -565,47 +625,61 @@ const TestPanel = () => {
   };
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-        <FlaskConical className="h-4 w-4 text-slate-400" />
-        规则测试
-      </h3>
-      <p className="mt-1 text-xs text-slate-500">
-        试跑当前全部启用规则。输入与结果只停留在本机，不会写入数据库或发往任何服务商。
-      </p>
-      <textarea
-        value={input}
-        onChange={(event) => setInput(event.target.value)}
-        rows={3}
-        placeholder="粘贴一段文本，检查规则会命中什么"
-        className="mt-3 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
-      />
-      <div className="mt-2 flex items-center gap-2">
-        <Button size="sm" onClick={run} disabled={running || !input.trim()}>
-          {running ? '测试中…' : '运行'}
-        </Button>
-        {result && (
-          <span className="text-xs text-slate-500">
-            命中 {result.hitCount} 处{result.changed ? '，已替换' : '，无替换'}
-          </span>
-        )}
-      </div>
-      {result && (
-        <div className="mt-3 space-y-2">
-          {result.ruleHits.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {result.ruleHits.map((hit) => (
-                <Badge key={hit.ruleId} className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                  {hit.ruleName} × {hit.count}
-                </Badge>
-              ))}
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+            <FlaskConical className="h-4 w-4 text-slate-400" />
+            规则测试
+          </h3>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+          <p className="text-xs text-slate-500">
+            试跑当前全部启用规则。输入与结果只停留在本机，不会写入数据库或发往任何服务商。
+          </p>
+          <textarea
+            autoFocus
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            rows={5}
+            placeholder="粘贴一段文本，检查规则会命中什么"
+            className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+          />
+          {result && (
+            <div className="space-y-2">
+              <div className="text-xs text-slate-500">
+                命中 {result.hitCount} 处{result.changed ? '，已替换' : '，无替换'}
+              </div>
+              {result.ruleHits.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {result.ruleHits.map((hit) => (
+                    <Badge key={hit.ruleId} className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                      {hit.ruleName} × {hit.count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-800">
+                {result.output}
+              </pre>
             </div>
           )}
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-800">
-            {result.output}
-          </pre>
         </div>
-      )}
+
+        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3">
+          <Button variant="secondary" size="sm" onClick={onClose}>关闭</Button>
+          <Button size="sm" onClick={run} disabled={running || !input.trim()}>
+            {running ? '测试中…' : '运行'}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -621,6 +695,7 @@ const PrivacyPage = () => {
   const [modalError, setModalError] = useState('');
   const [modalSaving, setModalSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [testOpen, setTestOpen] = useState(false);
 
   const toast = useToast();
 
@@ -773,6 +848,10 @@ const PrivacyPage = () => {
                 导入{preset.name}（{preset.ruleCount}）
               </Button>
             ))}
+            <Button variant="secondary" size="sm" onClick={() => setTestOpen(true)}>
+              <FlaskConical className="mr-1.5 h-3.5 w-3.5" />
+              规则测试
+            </Button>
             <Button size="sm" onClick={() => { setModalRule(emptyRule()); setModalError(''); }}>
               <Plus className="mr-1.5 h-3.5 w-3.5" />
               新建规则
@@ -815,7 +894,7 @@ const PrivacyPage = () => {
         )}
       </div>
 
-      <TestPanel />
+      <TestModal open={testOpen} onClose={() => setTestOpen(false)} />
 
       <RuleModal
         open={Boolean(modalRule)}
