@@ -4,6 +4,7 @@
 // ============================================
 
 import { AlertTriangle, X } from 'lucide-react';
+import { renderModalPortal } from './modalPortal';
 
 const ConfirmDialog = ({
   isOpen,
@@ -37,8 +38,10 @@ const ConfirmDialog = ({
 
   const style = variants[variant] || variants.warning;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+  // 走 portal 渲染到 body：祖先一旦有 transform/filter/backdrop-filter 就会新建
+  // stacking context，届时无论 z-index 多大都翻不出去（顶栏 sticky z-50 即为一例）。
+  return renderModalPortal(
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"

@@ -72,8 +72,8 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			placeholder TEXT NOT NULL DEFAULT '[已脱敏]',
 			pseudonym_kind TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL DEFAULT 'custom',
-			created_at DATETIME DEFAULT ` + sqlNowExpr + `,
-			updated_at DATETIME DEFAULT ` + sqlNowExpr + `
+			created_at DATETIME DEFAULT `+sqlNowExpr+`,
+			updated_at DATETIME DEFAULT `+sqlNowExpr+`
 		)
 	`); err != nil {
 		return fmt.Errorf("create privacy_rules: %w", err)
@@ -91,7 +91,7 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			over_limit_action TEXT NOT NULL DEFAULT 'scan_prefix',
 			on_error TEXT NOT NULL DEFAULT 'fail_open',
 			unsupported_path_action TEXT NOT NULL DEFAULT 'warn',
-			updated_at DATETIME DEFAULT ` + sqlNowExpr + `
+			updated_at DATETIME DEFAULT `+sqlNowExpr+`
 		)
 	`); err != nil {
 		return fmt.Errorf("create privacy_settings: %w", err)
@@ -120,6 +120,11 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 
 // migrateLegacyRulesTable 旧结构（有 type 列、无 match_type 列）整表改名保留。
 // 返回是否发生了迁移。
+//
+// 一次性迁移代码，有明确终点：只在 v8.5 及更早版本的库上触发一次，
+// 之后 privacy_rules 已是新结构，本函数恒走 isNew 分支直接返回。
+// 移除条件：确认在网用户不再有 v8.5 及更早版本时，可连同
+// ListLegacyRules / DiscardLegacyRules 与前端 LegacyRulesPanel 一并删除。
 func (s *Store) migrateLegacyRulesTable(ctx context.Context) (bool, error) {
 	exists, err := s.tableExists(ctx, "privacy_rules")
 	if err != nil {
@@ -338,8 +343,72 @@ func (s *Store) DeleteRule(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeleteRules 批量删除。内置规则不允许删除（只能停用），
+// 因此这里显式排除，避免前端误传把内置 PII 防护整组抹掉。
+// 返回实际删除条数。
+func (s *Store) DeleteRules(ctx context.Context, ids []int64) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("privacy store not initialized")
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	query := `DELETE FROM privacy_rules WHERE source != ? AND id IN (` + sqlPlaceholders(len(ids)) + `)`
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, SourceBuiltin)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch delete privacy rules: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	return affected, nil
+}
+
+// SetRulesEnabled 批量启用/停用。返回实际影响条数。
+func (s *Store) SetRulesEnabled(ctx context.Context, ids []int64, enabled bool) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("privacy store not initialized")
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	query := `UPDATE privacy_rules SET enabled = ?, updated_at = ` + sqlNowExpr +
+		` WHERE id IN (` + sqlPlaceholders(len(ids)) + `)`
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, boolToInt(enabled))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	result, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("batch toggle privacy rules: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	return affected, nil
+}
+
+func sqlPlaceholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	buf := make([]byte, 0, n*2-1)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, '?')
+	}
+	return string(buf)
+}
+
 // ListLegacyRules 列出旧版规则只读清单。
 // exact 类旧规则的 pattern 本身就是用户登记的敏感值，一律掩码后返回。
+//
+// 一次性迁移代码：表不存在（全新安装，或用户已确认重建并清除）时返回空。
+// 移除条件见 migrateLegacyRulesTable 的说明。
 func (s *Store) ListLegacyRules(ctx context.Context) ([]LegacyRule, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("privacy store not initialized")

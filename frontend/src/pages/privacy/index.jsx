@@ -15,14 +15,17 @@ import {
   X
 } from 'lucide-react';
 import { Button, ConfirmDialog, CustomSelect, ErrorMessage, LoadingSpinner, useToast } from '@components/ui';
+import { renderModalPortal } from '@components/ui/modalPortal';
 import {
   applyPrivacyPreset,
   clearPrivacyUnscannedPaths,
   createPrivacyRule,
   deletePrivacyRule,
+  deletePrivacyRules,
   discardLegacyPrivacyRules,
   fetchPrivacyOverview,
   previewPrivacyRedaction,
+  setPrivacyRulesEnabled,
   updatePrivacyRule,
   updatePrivacySettings
 } from '@utils/api.js';
@@ -127,6 +130,13 @@ const OVERLAY_CLASS = 'absolute inset-0 bg-slate-900/20 backdrop-blur-sm animate
 const PANEL_CLASS =
   'relative flex w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 ' +
   'animate-in zoom-in-95 fade-in duration-200';
+
+const SOURCE_FILTERS = [
+  { value: 'all', label: '全部' },
+  { value: 'builtin', label: '内置' },
+  { value: 'preset', label: '预设' },
+  { value: 'custom', label: '自定义' }
+];
 
 const emptyRule = () => ({
   id: 0,
@@ -299,6 +309,12 @@ const UnscannedPathsBanner = ({ paths, onClear }) => {
 };
 
 // 旧版规则不自动转换：转换出错在隐私场景是静默失败——规则看似还在、实际已不匹配。
+//
+// 一次性迁移代码，有明确终点：仅对从 v8.5 及更早版本升级上来的用户显示一次，
+// 用户点「我已重建完毕」后 privacy_legacy_rules 表被 DROP，此后永不再现。
+// 全新安装根本不会产生该表。
+// 移除条件：确认在网用户不再有 v8.5 及更早版本时，可连同后端
+// Store.ListLegacyRules / DiscardLegacyRules / migrateLegacyRulesTable 一并删除。
 const LegacyRulesPanel = ({ rules, onDiscard }) => {
   const [expanded, setExpanded] = useState(false);
   if (!rules.length) return null;
@@ -356,10 +372,19 @@ const LegacyRulesPanel = ({ rules, onDiscard }) => {
   );
 };
 
-const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy }) => {
+const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy, selected, onSelect }) => {
   const isBuiltin = rule.source === 'builtin';
   return (
-    <tr className="border-b border-slate-50 last:border-0">
+    <tr className={`border-b border-slate-50 last:border-0 ${selected ? 'bg-indigo-50/40' : ''}`}>
+      <td className="py-2.5 pr-2">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={(event) => onSelect(rule.id, event.target.checked)}
+          aria-label={`选择 ${rule.name}`}
+          className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+        />
+      </td>
       <td className="py-2.5 pr-3">
         <Toggle
           checked={rule.enabled}
@@ -432,7 +457,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
   const matchMeta = MATCH_TYPES.find((item) => item.value === rule.matchType);
   const replacementMeta = REPLACEMENT_MODES.find((item) => item.value === rule.replacementMode);
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
       <div className={OVERLAY_CLASS} />
       <div className={`${PANEL_CLASS} max-h-[90vh] max-w-2xl`}>
@@ -639,7 +664,7 @@ const TestModal = ({ open, onClose }) => {
     }
   };
 
-  return (
+  return renderModalPortal(
     <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
       <div className={OVERLAY_CLASS} onClick={onClose} />
       <div className={`${PANEL_CLASS} max-h-[85vh] max-w-2xl`}>
@@ -709,6 +734,10 @@ const PrivacyPage = () => {
   const [modalSaving, setModalSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [testOpen, setTestOpen] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   const toast = useToast();
 
@@ -728,6 +757,57 @@ const PrivacyPage = () => {
   const settings = overview?.settings;
   const rules = useMemo(() => overview?.rules || [], [overview]);
   const enabledCount = useMemo(() => rules.filter((rule) => rule.enabled).length, [rules]);
+  const visibleRules = useMemo(
+    () => (sourceFilter === 'all' ? rules : rules.filter((rule) => rule.source === sourceFilter)),
+    [rules, sourceFilter]
+  );
+  const visibleIds = useMemo(() => visibleRules.map((rule) => rule.id), [visibleRules]);
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.includes(id));
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+  // 内置规则不可删除（只能停用），批量删除时先剔除，避免弹窗数字与实际结果对不上
+  const deletableSelectedCount = useMemo(
+    () => rules.filter((rule) => selectedIds.includes(rule.id) && rule.source !== 'builtin').length,
+    [rules, selectedIds]
+  );
+
+  const toggleSelectOne = (id, checked) => {
+    setSelectedIds((prev) => (checked ? [...new Set([...prev, id])] : prev.filter((item) => item !== id)));
+  };
+
+  const toggleSelectAll = (checked) => {
+    setSelectedIds((prev) => (checked
+      ? [...new Set([...prev, ...visibleIds])]
+      : prev.filter((id) => !visibleIds.includes(id))));
+  };
+
+  const bulkToggle = async (enabled) => {
+    setBulkBusy(true);
+    try {
+      const affected = await setPrivacyRulesEnabled(selectedIds, enabled);
+      setSelectedIds([]);
+      await load();
+      toast.success(`已${enabled ? '启用' : '停用'} ${affected} 条规则`);
+    } catch (error) {
+      toast.error(`批量更新失败: ${error.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkDelete = async () => {
+    setBulkBusy(true);
+    try {
+      const affected = await deletePrivacyRules(selectedIds);
+      setBulkDeleteOpen(false);
+      setSelectedIds([]);
+      await load();
+      toast.success(`已删除 ${affected} 条规则`);
+    } catch (error) {
+      toast.error(`批量删除失败: ${error.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const saveSettings = async (next) => {
     setSavingSettings(true);
@@ -872,15 +952,73 @@ const PrivacyPage = () => {
           </div>
         </div>
 
+        {/* 来源筛选：规则会随预设导入快速增长，按来源收窄是最省事的定位方式 */}
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-2">
+          {SOURCE_FILTERS.map((item) => {
+            const count = item.value === 'all'
+              ? rules.length
+              : rules.filter((rule) => rule.source === item.value).length;
+            const active = sourceFilter === item.value;
+            return (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => setSourceFilter(item.value)}
+                className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                  active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                {item.label}
+                <span className={`ml-1 ${active ? 'text-white/60' : 'text-slate-400'}`}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 批量操作条：导入预设是一次性加十几条，逐条清理太痛苦 */}
+        {selectedIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100 bg-indigo-50/60 px-4 py-2">
+            <span className="text-xs font-medium text-indigo-900">已选 {selectedIds.length} 条</span>
+            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+              <Button variant="secondary" size="sm" onClick={() => bulkToggle(true)} disabled={bulkBusy}>
+                批量启用
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => bulkToggle(false)} disabled={bulkBusy}>
+                批量停用
+              </Button>
+              <Button variant="dangerSoft" size="sm" onClick={() => setBulkDeleteOpen(true)} disabled={bulkBusy}>
+                <Trash className="mr-1.5 h-3.5 w-3.5" />
+                批量删除
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])} disabled={bulkBusy}>
+                取消选择
+              </Button>
+            </div>
+          </div>
+        )}
+
         {rules.length === 0 ? (
           <p className="px-4 py-8 text-center text-sm text-slate-500">
             还没有任何规则。先导入一套预设，或新建自定义规则。
           </p>
+        ) : visibleRules.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-slate-500">当前筛选下没有规则。</p>
         ) : (
-          <div className="overflow-x-auto px-4">
+          // 限高滚动而非无限增高：规则可以到几十条，页面不该跟着一直变长
+          <div className="max-h-[26rem] overflow-auto px-4">
             <table className="w-full text-left">
-              <thead className="text-xs text-slate-500">
+              <thead className="sticky top-0 z-10 bg-white text-xs text-slate-500">
                 <tr className="border-b border-slate-100">
+                  <th className="w-8 py-2 pr-2 font-medium">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      ref={(node) => { if (node) node.indeterminate = someVisibleSelected && !allVisibleSelected; }}
+                      onChange={(event) => toggleSelectAll(event.target.checked)}
+                      aria-label="全选当前筛选下的规则"
+                      className="h-3.5 w-3.5 cursor-pointer rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                  </th>
                   <th className="w-12 py-2 pr-3 font-medium">启用</th>
                   <th className="py-2 pr-3 font-medium">名称</th>
                   <th className="py-2 pr-3 font-medium">匹配内容</th>
@@ -891,11 +1029,13 @@ const PrivacyPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {rules.map((rule) => (
+                {visibleRules.map((rule) => (
                   <RuleRow
                     key={rule.id}
                     rule={rule}
                     busy={busyRuleId === rule.id}
+                    selected={selectedIds.includes(rule.id)}
+                    onSelect={toggleSelectOne}
                     onToggle={toggleRule}
                     onEdit={(item) => { setModalRule({ ...item }); setModalError(''); }}
                     onDelete={setPendingDelete}
@@ -917,6 +1057,20 @@ const PrivacyPage = () => {
         onChange={setModalRule}
         onClose={() => setModalRule(null)}
         onSubmit={submitRule}
+      />
+
+      <ConfirmDialog
+        isOpen={bulkDeleteOpen}
+        variant="danger"
+        title="批量删除隐私规则"
+        message={
+          deletableSelectedCount === selectedIds.length
+            ? `确定删除选中的 ${selectedIds.length} 条规则？删除后这些内容将不再被脱敏。`
+            : `选中 ${selectedIds.length} 条，其中 ${selectedIds.length - deletableSelectedCount} 条是内置规则不可删除（可改为停用）。将删除其余 ${deletableSelectedCount} 条。`
+        }
+        confirmText="删除"
+        onConfirm={bulkDelete}
+        onCancel={() => setBulkDeleteOpen(false)}
       />
 
       <ConfirmDialog

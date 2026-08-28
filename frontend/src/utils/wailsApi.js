@@ -886,6 +886,18 @@ export const deletePrivacyRule = async (id) => {
   return await WailsApp.DeletePrivacyRule(Number(id));
 };
 
+export const deletePrivacyRules = async (ids) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.DeletePrivacyRules((ids || []).map(Number));
+};
+
+export const setPrivacyRulesEnabled = async (ids, enabled) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.SetPrivacyRulesEnabled((ids || []).map(Number), Boolean(enabled));
+};
+
 export const applyPrivacyPreset = async (presetId) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');

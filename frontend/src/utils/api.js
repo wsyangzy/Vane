@@ -885,6 +885,16 @@ export const deletePrivacyRule = async (id) => {
   return await WailsApi.deletePrivacyRule(id);
 };
 
+export const deletePrivacyRules = async (ids) => {
+  requirePrivacyWails();
+  return await WailsApi.deletePrivacyRules(ids);
+};
+
+export const setPrivacyRulesEnabled = async (ids, enabled) => {
+  requirePrivacyWails();
+  return await WailsApi.setPrivacyRulesEnabled(ids, enabled);
+};
+
 export const applyPrivacyPreset = async (presetId) => {
   requirePrivacyWails();
   return await WailsApi.applyPrivacyPreset(presetId);

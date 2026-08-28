@@ -102,6 +102,38 @@ func (a *App) DeletePrivacyRule(id int64) error {
 	return nil
 }
 
+// DeletePrivacyRules 批量删除规则，返回实际删除条数。内置规则会被跳过（只能停用）。
+func (a *App) DeletePrivacyRules(ids []int64) (int64, error) {
+	svc, err := a.privacySvc()
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := privacyCtx()
+	defer cancel()
+
+	affected, err := svc.DeleteRules(ctx, ids)
+	if err != nil {
+		return 0, fmt.Errorf("批量删除隐私规则失败: %w", err)
+	}
+	return affected, nil
+}
+
+// SetPrivacyRulesEnabled 批量启用/停用规则，返回实际影响条数
+func (a *App) SetPrivacyRulesEnabled(ids []int64, enabled bool) (int64, error) {
+	svc, err := a.privacySvc()
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := privacyCtx()
+	defer cancel()
+
+	affected, err := svc.SetRulesEnabled(ctx, ids, enabled)
+	if err != nil {
+		return 0, fmt.Errorf("批量更新隐私规则失败: %w", err)
+	}
+	return affected, nil
+}
+
 // ApplyPrivacyPreset 导入内置预设规则集，返回新增条数
 func (a *App) ApplyPrivacyPreset(presetID string) (int, error) {
 	svc, err := a.privacySvc()

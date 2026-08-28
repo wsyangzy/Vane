@@ -48,6 +48,14 @@ export function CreateModelPricing(arg1) {
   return Call.ByName("main.App.CreateModelPricing", arg1);
 }
 
+export function DeletePrivacyRules(arg1) {
+  return Call.ByName("main.App.DeletePrivacyRules", arg1);
+}
+
+export function SetPrivacyRulesEnabled(arg1, arg2) {
+  return Call.ByName("main.App.SetPrivacyRulesEnabled", arg1, arg2);
+}
+
 export function GetPrivacyOverview() {
   return Call.ByName("main.App.GetPrivacyOverview");
 }

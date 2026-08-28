@@ -26,6 +26,8 @@ export function CreateEndpointRecord(arg1:main.CreateEndpointInput):Promise<void
 
 export function CreateModelPricing(arg1:main.CreateModelPricingInput):Promise<void>;
 
+export function DeletePrivacyRules(arg1:Array<number>):Promise<number>;
+export function SetPrivacyRulesEnabled(arg1:Array<number>,arg2:boolean):Promise<number>;
 export function GetPrivacyOverview():Promise<privacy.Overview>;
 export function UpdatePrivacySettings(arg1:privacy.Settings):Promise<void>;
 export function ApplyPrivacyPreset(arg1:string):Promise<number>;

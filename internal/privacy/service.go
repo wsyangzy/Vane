@@ -288,6 +288,43 @@ func (s *Service) DeleteRule(ctx context.Context, id int64) error {
 	return s.Reload(ctx)
 }
 
+// DeleteRules 批量删除规则，只重编译一次快照。
+// 逐条删除会让每删一条都触发一次全量规则重编译，规则多时明显拖慢界面。
+func (s *Service) DeleteRules(ctx context.Context, ids []int64) (int64, error) {
+	if err := s.ready(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	affected, err := s.store.DeleteRules(ctx, ids)
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		return 0, nil
+	}
+	return affected, s.Reload(ctx)
+}
+
+// SetRulesEnabled 批量启用/停用规则，只重编译一次快照。
+func (s *Service) SetRulesEnabled(ctx context.Context, ids []int64, enabled bool) (int64, error) {
+	if err := s.ready(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	affected, err := s.store.SetRulesEnabled(ctx, ids, enabled)
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		return 0, nil
+	}
+	return affected, s.Reload(ctx)
+}
+
 // ApplyPreset 导入预设规则集，返回新增条数。已存在同名规则的跳过。
 func (s *Service) ApplyPreset(ctx context.Context, presetID string) (int, error) {
 	if err := s.ready(); err != nil {
