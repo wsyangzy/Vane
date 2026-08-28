@@ -911,166 +911,173 @@ const PrivacyPage = () => {
   if (!settings) return <ErrorMessage message="隐私防护服务未就绪" onRetry={load} />;
 
   return (
-    <div className="space-y-5 p-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
-            <ShieldCheck className="h-5 w-5 text-emerald-600" />
-            隐私防护
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            请求发往服务商前先在本机扫描。未命中的字节与原始请求完全一致，命中的原文不写入数据库、日志或本页面。
-          </p>
+    <div className="animate-fade-in">
+      {/* 页面标题 */}
+      <div className="flex justify-between items-end mb-8">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
+            <ShieldCheck className="w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">隐私防护</h1>
+            <p className="text-slate-500 text-sm mt-1">
+              请求发往服务商前先在本机扫描。未命中的字节与原始请求完全一致，命中的原文不写入数据库、日志或本页面。
+            </p>
+          </div>
         </div>
-        <Button variant="secondary" size="sm" onClick={load}>
-          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-          刷新
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" size="sm" onClick={load}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            刷新
+          </Button>
+        </div>
       </div>
 
-      <UnscannedPathsBanner
-        paths={overview.unscannedPaths}
-        onClear={async () => {
-          await clearPrivacyUnscannedPaths();
-          await load();
-        }}
-      />
-
-      <div className="rounded-xl border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-900">运行模式</h2>
-        <ModeSelector
-          mode={settings.mode}
-          saving={savingSettings}
-          onChange={(mode) => saveSettings({ ...settings, mode })}
+      <div className="space-y-5">
+        <UnscannedPathsBanner
+          paths={overview.unscannedPaths}
+          onClear={async () => {
+            await clearPrivacyUnscannedPaths();
+            await load();
+          }}
         />
-        <div className="mt-4 border-t border-slate-100 pt-4">
-          <PolicyPanel settings={settings} saving={savingSettings} onChange={saveSettings} />
-        </div>
-      </div>
 
-      <LegacyRulesPanel
-        rules={overview.legacyRules}
-        onDiscard={async () => {
-          await discardLegacyPrivacyRules();
-          await load();
-          toast.success('旧版规则清单已清除');
-        }}
-      />
-
-      <div className="rounded-xl border border-slate-200 bg-white">
-        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">
-            规则（{enabledCount}/{rules.length} 启用）
-          </h2>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            {overview.presets.map((preset) => (
-              <Button key={preset.id} variant="secondary" size="sm" onClick={() => importPreset(preset.id)}>
-                <Package className="mr-1.5 h-3.5 w-3.5" />
-                导入{preset.name}（{preset.ruleCount}）
-              </Button>
-            ))}
-            <Button variant="secondary" size="sm" onClick={() => setTestOpen(true)}>
-              <FlaskConical className="mr-1.5 h-3.5 w-3.5" />
-              规则测试
-            </Button>
-            <Button size="sm" onClick={() => { setModalRule(emptyRule()); setModalError(''); }}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              新建规则
-            </Button>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <h2 className="mb-3 text-sm font-semibold text-slate-900">运行模式</h2>
+          <ModeSelector
+            mode={settings.mode}
+            saving={savingSettings}
+            onChange={(mode) => saveSettings({ ...settings, mode })}
+          />
+          <div className="mt-4 border-t border-slate-100 pt-4">
+            <PolicyPanel settings={settings} saving={savingSettings} onChange={saveSettings} />
           </div>
         </div>
 
-        {/* 来源筛选：规则会随预设导入快速增长，按来源收窄是最省事的定位方式 */}
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-2">
-          {SOURCE_FILTERS.map((item) => {
-            const count = item.value === 'all'
-              ? rules.length
-              : rules.filter((rule) => rule.source === item.value).length;
-            const active = sourceFilter === item.value;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                onClick={() => setSourceFilter(item.value)}
-                className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                  active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'
-                }`}
-              >
-                {item.label}
-                <span className={`ml-1 ${active ? 'text-white/60' : 'text-slate-400'}`}>{count}</span>
-              </button>
-            );
-          })}
-        </div>
+        <LegacyRulesPanel
+          rules={overview.legacyRules}
+          onDiscard={async () => {
+            await discardLegacyPrivacyRules();
+            await load();
+            toast.success('旧版规则清单已清除');
+          }}
+        />
 
-        {/* 批量操作条：导入预设是一次性加十几条，逐条清理太痛苦 */}
-        {selectedIds.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100 bg-indigo-50/60 px-4 py-2">
-            <span className="text-xs font-medium text-indigo-900">已选 {selectedIds.length} 条</span>
-            <div className="ml-auto flex flex-wrap items-center gap-1.5">
-              <Button variant="secondary" size="sm" onClick={() => bulkToggle(true)} disabled={bulkBusy}>
-                批量启用
+        <div className="rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-slate-900">
+              规则（{enabledCount}/{rules.length} 启用）
+            </h2>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              {overview.presets.map((preset) => (
+                <Button key={preset.id} variant="secondary" size="sm" onClick={() => importPreset(preset.id)}>
+                  <Package className="mr-1.5 h-3.5 w-3.5" />
+                  导入{preset.name}（{preset.ruleCount}）
+                </Button>
+              ))}
+              <Button variant="secondary" size="sm" onClick={() => setTestOpen(true)}>
+                <FlaskConical className="mr-1.5 h-3.5 w-3.5" />
+                规则测试
               </Button>
-              <Button variant="secondary" size="sm" onClick={() => bulkToggle(false)} disabled={bulkBusy}>
-                批量停用
-              </Button>
-              <Button variant="dangerSoft" size="sm" onClick={() => setBulkDeleteOpen(true)} disabled={bulkBusy}>
-                <Trash className="mr-1.5 h-3.5 w-3.5" />
-                批量删除
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])} disabled={bulkBusy}>
-                取消选择
+              <Button size="sm" onClick={() => { setModalRule(emptyRule()); setModalError(''); }}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                新建规则
               </Button>
             </div>
           </div>
-        )}
 
-        {rules.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-slate-500">
-            还没有任何规则。先导入一套预设，或新建自定义规则。
-          </p>
-        ) : visibleRules.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-slate-500">当前筛选下没有规则。</p>
-        ) : (
-          // 限高滚动而非无限增高：规则可以到几十条，页面不该跟着一直变长
-          <div className="max-h-[38rem] overflow-auto px-4">
-            <table className="w-full text-left">
-              <thead className="sticky top-0 z-10 bg-white text-xs text-slate-500">
-                <tr className="border-b border-slate-100">
-                  <th className="w-8 py-2 pr-2 font-medium">
-                    <Checkbox
-                      checked={allVisibleSelected}
-                      indeterminate={someVisibleSelected && !allVisibleSelected}
-                      onChange={toggleSelectAll}
-                      label="全选当前筛选下的规则"
-                    />
-                  </th>
-                  <th className="w-12 py-2 pr-3 font-medium">启用</th>
-                  <th className="py-2 pr-3 font-medium">名称</th>
-                  <th className="py-2 pr-3 font-medium">匹配内容</th>
-                  <th className="py-2 pr-3 font-medium">来源</th>
-                  <th className="py-2 pr-3 font-medium">替换为</th>
-                  <th className="py-2 pr-3 font-medium">优先级</th>
-                  <th className="py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRules.map((rule) => (
-                  <RuleRow
-                    key={rule.id}
-                    rule={rule}
-                    busy={busyRuleId === rule.id}
-                    selected={selectedIds.includes(rule.id)}
-                    onSelect={toggleSelectOne}
-                    onToggle={toggleRule}
-                    onEdit={(item) => { setModalRule({ ...item }); setModalError(''); }}
-                    onDelete={setPendingDelete}
-                  />
-                ))}
-              </tbody>
-            </table>
+          {/* 来源筛选：规则会随预设导入快速增长，按来源收窄是最省事的定位方式 */}
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-2">
+            {SOURCE_FILTERS.map((item) => {
+              const count = item.value === 'all'
+                ? rules.length
+                : rules.filter((rule) => rule.source === item.value).length;
+              const active = sourceFilter === item.value;
+              return (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setSourceFilter(item.value)}
+                  className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                    active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'
+                  }`}
+                >
+                  {item.label}
+                  <span className={`ml-1 ${active ? 'text-white/60' : 'text-slate-400'}`}>{count}</span>
+                </button>
+              );
+            })}
           </div>
-        )}
+
+          {/* 批量操作条：导入预设是一次性加十几条，逐条清理太痛苦 */}
+          {selectedIds.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100 bg-indigo-50/60 px-4 py-2">
+              <span className="text-xs font-medium text-indigo-900">已选 {selectedIds.length} 条</span>
+              <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                <Button variant="secondary" size="sm" onClick={() => bulkToggle(true)} disabled={bulkBusy}>
+                  批量启用
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => bulkToggle(false)} disabled={bulkBusy}>
+                  批量停用
+                </Button>
+                <Button variant="dangerSoft" size="sm" onClick={() => setBulkDeleteOpen(true)} disabled={bulkBusy}>
+                  <Trash className="mr-1.5 h-3.5 w-3.5" />
+                  批量删除
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])} disabled={bulkBusy}>
+                  取消选择
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {rules.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-slate-500">
+              还没有任何规则。先导入一套预设，或新建自定义规则。
+            </p>
+          ) : visibleRules.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-slate-500">当前筛选下没有规则。</p>
+          ) : (
+            // 限高滚动而非无限增高：规则可以到几十条，页面不该跟着一直变长
+            <div className="max-h-[38rem] overflow-auto px-4">
+              <table className="w-full text-left">
+                <thead className="sticky top-0 z-10 bg-white text-xs text-slate-500">
+                  <tr className="border-b border-slate-100">
+                    <th className="w-8 py-2 pr-2 font-medium">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        indeterminate={someVisibleSelected && !allVisibleSelected}
+                        onChange={toggleSelectAll}
+                        label="全选当前筛选下的规则"
+                      />
+                    </th>
+                    <th className="w-12 py-2 pr-3 font-medium">启用</th>
+                    <th className="py-2 pr-3 font-medium">名称</th>
+                    <th className="py-2 pr-3 font-medium">匹配内容</th>
+                    <th className="py-2 pr-3 font-medium">来源</th>
+                    <th className="py-2 pr-3 font-medium">替换为</th>
+                    <th className="py-2 pr-3 font-medium">优先级</th>
+                    <th className="py-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRules.map((rule) => (
+                    <RuleRow
+                      key={rule.id}
+                      rule={rule}
+                      busy={busyRuleId === rule.id}
+                      selected={selectedIds.includes(rule.id)}
+                      onSelect={toggleSelectOne}
+                      onToggle={toggleRule}
+                      onEdit={(item) => { setModalRule({ ...item }); setModalError(''); }}
+                      onDelete={setPendingDelete}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
       <TestModal open={testOpen} onClose={() => setTestOpen(false)} />
