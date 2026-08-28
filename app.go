@@ -2128,7 +2128,7 @@ func (a *App) setupSettingsStore() {
 	}
 
 	// 初始化端口管理器
-	preferredPort := a.settingsService.GetInt(ctx, service.CategoryServer, "preferred_port", a.config.Server.Port)
+	preferredPort := a.settingsService.GetInt(ctx, service.CategoryServer, preferredPortSettingKey(), a.config.Server.Port)
 
 	// Dev 模式：端口偏移 +10，允许与 release 版本同时运行
 	if BuildMode == "dev" {

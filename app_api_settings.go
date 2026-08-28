@@ -18,6 +18,67 @@ import (
 // 系统设置管理 API (SQLite)
 // ============================================================
 
+func preferredPortSettingKey() string {
+	if BuildMode == "dev" {
+		return "preferred_port_dev"
+	}
+	return "preferred_port"
+}
+
+func scopedSettingKey(category, key string) string {
+	if category == service.CategoryServer && key == "preferred_port" {
+		return preferredPortSettingKey()
+	}
+	return key
+}
+
+func visibleSettingRecords(records []*store.SettingRecord) []*store.SettingRecord {
+	if len(records) == 0 {
+		return records
+	}
+	var basePort, scopedPort *store.SettingRecord
+	visible := make([]*store.SettingRecord, 0, len(records))
+	for _, record := range records {
+		if record != nil && record.Category == service.CategoryServer {
+			switch record.Key {
+			case "preferred_port":
+				basePort = record
+				continue
+			case "preferred_port_dev":
+				scopedPort = record
+				continue
+			}
+		}
+		visible = append(visible, record)
+	}
+
+	selected := basePort
+	if BuildMode == "dev" && scopedPort != nil {
+		selected = scopedPort
+	}
+	if selected != nil {
+		clone := *selected
+		clone.Key = "preferred_port"
+		if selected == scopedPort && basePort != nil {
+			if clone.Label == "" {
+				clone.Label = basePort.Label
+			}
+			if clone.Description == "" {
+				clone.Description = basePort.Description
+			}
+			if clone.ValueType == "" {
+				clone.ValueType = basePort.ValueType
+			}
+			if clone.DisplayOrder == 0 {
+				clone.DisplayOrder = basePort.DisplayOrder
+			}
+			clone.RequiresRestart = basePort.RequiresRestart
+		}
+		visible = append(visible, &clone)
+	}
+	return visible
+}
+
 // SettingInfo 设置信息（给前端用的结构体）
 type SettingInfo struct {
 	ID              int64              `json:"id"`
@@ -111,7 +172,7 @@ func (a *App) GetSettingsStorageStatus() SettingsStorageStatus {
 
 	records, err := settingsService.GetAll(ctx)
 	if err == nil {
-		status.TotalCount = len(records)
+		status.TotalCount = len(visibleSettingRecords(records))
 	}
 
 	categories := settingsService.GetCategories()
@@ -163,6 +224,7 @@ func (a *App) GetAllSettings() ([]SettingInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("获取设置列表失败: %w", err)
 	}
+	records = visibleSettingRecords(records)
 
 	result := make([]SettingInfo, 0, len(records))
 	for _, r := range records {
@@ -189,6 +251,7 @@ func (a *App) GetSettingsByCategory(category string) ([]SettingInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("获取分类设置失败: %w", err)
 	}
+	records = visibleSettingRecords(records)
 
 	result := make([]SettingInfo, 0, len(records))
 	for _, r := range records {
@@ -231,12 +294,18 @@ func (a *App) GetSetting(category, key string) (SettingInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	record, err := settingsService.Get(ctx, category, key)
+	physicalKey := scopedSettingKey(category, key)
+	record, err := settingsService.Get(ctx, category, physicalKey)
 	if err != nil {
 		return SettingInfo{}, fmt.Errorf("获取设置失败: %w", err)
 	}
 	if record == nil {
 		return SettingInfo{}, fmt.Errorf("设置 '%s.%s' 不存在", category, key)
+	}
+	if physicalKey != key {
+		recordCopy := *record
+		recordCopy.Key = key
+		record = &recordCopy
 	}
 
 	return a.settingRecordToInfo(record), nil
@@ -263,12 +332,13 @@ func (a *App) UpdateSetting(input UpdateSettingInput) error {
 			provider = string(service.ProviderClaude)
 		}
 	}
-	if err := settingsService.SetScoped(ctx, service.SettingsProvider(provider), input.Category, input.Key, input.Value); err != nil {
+	key := scopedSettingKey(input.Category, input.Key)
+	if err := settingsService.SetScoped(ctx, service.SettingsProvider(provider), input.Category, key, input.Value); err != nil {
 		return fmt.Errorf("更新设置失败: %w", err)
 	}
 
 	if logger != nil {
-		logger.Info("✅ 设置已更新", "category", input.Category, "key", input.Key)
+		logger.Info("✅ 设置已更新", "category", input.Category, "key", key)
 	}
 
 	a.emitEndpointUpdate()
@@ -279,6 +349,7 @@ func (a *App) UpdateSetting(input UpdateSettingInput) error {
 func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 	a.mu.RLock()
 	settingsService := a.settingsService
+	settingsStore := a.settingsStore
 	logger := a.logger
 	a.mu.RUnlock()
 
@@ -292,10 +363,26 @@ func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 	// 转换为 store.SettingRecord
 	records := make([]*store.SettingRecord, 0, len(input.Settings))
 	for _, s := range input.Settings {
+		key := scopedSettingKey(s.Category, s.Key)
+		if key == "preferred_port_dev" && settingsStore != nil {
+			provider := s.Provider
+			if provider == "" {
+				provider = string(service.ProviderGlobal)
+			}
+			existing, err := settingsStore.GetScoped(ctx, provider, s.Category, key)
+			if err != nil {
+				return fmt.Errorf("检查 dev 首选端口设置失败: %w", err)
+			}
+			if existing == nil {
+				if err := settingsStore.SetScoped(ctx, provider, s.Category, key, s.Value); err != nil {
+					return fmt.Errorf("初始化 dev 首选端口设置失败: %w", err)
+				}
+			}
+		}
 		records = append(records, &store.SettingRecord{
 			Provider: s.Provider,
 			Category: s.Category,
-			Key:      s.Key,
+			Key:      key,
 			Value:    s.Value,
 		})
 	}
@@ -401,7 +488,7 @@ func (a *App) UpdatePreferredPort(port int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := settingsService.Set(ctx, service.CategoryServer, "preferred_port", fmt.Sprintf("%d", port)); err != nil {
+	if err := settingsService.Set(ctx, service.CategoryServer, preferredPortSettingKey(), fmt.Sprintf("%d", port)); err != nil {
 		return fmt.Errorf("更新首选端口失败: %w", err)
 	}
 
@@ -486,6 +573,7 @@ func (a *App) GetConfigSourceInfo() ([]ConfigSourceInfo, error) {
 		defer cancel()
 		dbSettings, err := settingsService.GetAll(ctx)
 		if err == nil {
+			dbSettings = visibleSettingRecords(dbSettings)
 			for _, s := range dbSettings {
 				source := string(service.ConfigSourceDatabase)
 				notes := ""
