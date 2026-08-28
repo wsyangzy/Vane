@@ -122,41 +122,76 @@ export const buildClaudeCredentialGroupPayload = (input = {}) => {
 const normalizePrivacyRule = (rule = {}) => ({
   id: rule.id,
   name: rule.name || '',
-  type: rule.type || 'exact',
-  category: rule.category || 'custom',
-  pattern_or_value: rule.pattern_or_value || '',
-  replacement_mode: rule.replacement_mode || rule.replacementMode || 'placeholder',
+  description: rule.description || '',
+  matchType: rule.match_type || rule.matchType || 'literal',
+  pattern: rule.pattern || '',
+  action: rule.action || 'redact',
   replacementMode: rule.replacement_mode || rule.replacementMode || 'placeholder',
-  patternMasked: rule.pattern_masked || rule.patternMasked || '',
-  pattern_masked: rule.pattern_masked || rule.patternMasked || '',
-  valueLength: rule.value_length ?? rule.valueLength ?? 0,
-  value_length: rule.value_length ?? rule.valueLength ?? 0,
+  placeholder: rule.placeholder || '',
+  pseudonymKind: rule.pseudonym_kind || rule.pseudonymKind || '',
+  source: rule.source || 'custom',
   enabled: Boolean(rule.enabled),
   priority: Number(rule.priority ?? 100),
-  created_at: rule.created_at || rule.createdAt || '',
-  updated_at: rule.updated_at || rule.updatedAt || ''
+  createdAt: rule.created_at || rule.createdAt || '',
+  updatedAt: rule.updated_at || rule.updatedAt || ''
 });
 
-const normalizePrivacySyntheticValue = (record = {}) => ({
-  raw_hash: record.raw_hash || record.rawHash || '',
-  rawHash: record.raw_hash || record.rawHash || '',
-  raw_value: record.raw_value || record.rawValue || '',
-  rawValue: record.raw_value || record.rawValue || '',
-  replacement: record.replacement || record.value || '',
-  value: record.replacement || record.value || '',
-  kind: record.kind || 'custom',
-  created_at: record.created_at || record.createdAt || '',
-  createdAt: record.created_at || record.createdAt || '',
-  last_seen_at: record.last_seen_at || record.lastSeenAt || '',
-  lastSeenAt: record.last_seen_at || record.lastSeenAt || '',
-  last_skip_at: record.last_skip_at || record.lastSkipAt || '',
-  lastSkipAt: record.last_skip_at || record.lastSkipAt || '',
-  reuse_count: Number(record.reuse_count ?? record.reuseCount ?? 0),
-  reuseCount: Number(record.reuse_count ?? record.reuseCount ?? 0),
-  skip_count: Number(record.skip_count ?? record.skipCount ?? 0),
-  skipCount: Number(record.skip_count ?? record.skipCount ?? 0),
-  hit_count: Number(record.hit_count ?? record.hitCount ?? 0),
-  hitCount: Number(record.hit_count ?? record.hitCount ?? 0)
+// 旧版规则只读快照。pattern 已由后端掩码，前端永远拿不到敏感原值。
+const normalizeLegacyPrivacyRule = (rule = {}) => ({
+  id: rule.id,
+  name: rule.name || '',
+  type: rule.type || '',
+  category: rule.category || '',
+  patternMasked: rule.pattern_masked || rule.patternMasked || '',
+  valueLength: Number(rule.value_length ?? rule.valueLength ?? 0),
+  replacementMode: rule.replacement_mode || rule.replacementMode || '',
+  enabled: Boolean(rule.enabled),
+  priority: Number(rule.priority ?? 100)
+});
+
+const normalizePrivacySettings = (settings = {}) => ({
+  mode: settings.mode || 'detect',
+  scanMaxBytes: Number(settings.scan_max_bytes ?? settings.scanMaxBytes ?? 4194304),
+  overLimitAction: settings.over_limit_action || settings.overLimitAction || 'scan_prefix',
+  onError: settings.on_error || settings.onError || 'fail_open',
+  unsupportedPathAction: settings.unsupported_path_action || settings.unsupportedPathAction || 'warn'
+});
+
+const denormalizePrivacySettings = (settings = {}) => ({
+  mode: settings.mode || 'detect',
+  scan_max_bytes: Number(settings.scanMaxBytes ?? 4194304),
+  over_limit_action: settings.overLimitAction || 'scan_prefix',
+  on_error: settings.onError || 'fail_open',
+  unsupported_path_action: settings.unsupportedPathAction || 'warn'
+});
+
+const denormalizePrivacyRule = (rule = {}) => ({
+  id: Number(rule.id ?? 0),
+  enabled: Boolean(rule.enabled),
+  name: rule.name || '',
+  description: rule.description || '',
+  priority: Number(rule.priority ?? 100),
+  match_type: rule.matchType || 'literal',
+  pattern: rule.pattern || '',
+  action: rule.action || 'redact',
+  replacement_mode: rule.replacementMode || 'placeholder',
+  placeholder: rule.placeholder || '',
+  pseudonym_kind: rule.pseudonymKind || '',
+  source: rule.source || 'custom'
+});
+
+const normalizePrivacyRuleHit = (hit = {}) => ({
+  ruleId: hit.rule_id ?? hit.ruleId ?? 0,
+  ruleName: hit.rule_name || hit.ruleName || '',
+  source: hit.source || '',
+  action: hit.action || '',
+  count: Number(hit.count ?? 0)
+});
+
+const normalizeUnscannedPath = (stat = {}) => ({
+  path: stat.path || '',
+  count: Number(stat.count ?? 0),
+  lastSeenAt: stat.last_seen_at || stat.lastSeenAt || ''
 });
 
 // 检测是否在 Wails 环境中运行
@@ -754,10 +789,8 @@ export const getRequests = async (params = {}) => {
     serviceTier: r.service_tier || '',
     privacy_redacted: Boolean(r.privacy_redacted),
     privacy_redaction_summary: r.privacy_redaction_summary || '',
-    privacy_redaction_matches: r.privacy_redaction_matches || '',
     privacyRedacted: Boolean(r.privacy_redacted),
     privacyRedactionSummary: r.privacy_redaction_summary || '',
-    privacyRedactionMatches: r.privacy_redaction_matches || '',
     provider: r.provider || '',
     status: r.status,
     ...mapRequestNetworkFields(r),
@@ -809,41 +842,60 @@ export const getRequests = async (params = {}) => {
   };
 };
 
-export const getPrivacyConfig = async () => {
+export const getPrivacyOverview = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  const config = await WailsApp.GetPrivacyConfig();
+  const overview = await WailsApp.GetPrivacyOverview();
   return {
-    enabled: Boolean(config?.enabled),
-    rules: (config?.rules || []).map(normalizePrivacyRule)
+    settings: normalizePrivacySettings(overview?.settings),
+    rules: (overview?.rules || []).map(normalizePrivacyRule),
+    legacyRules: (overview?.legacy_rules || []).map(normalizeLegacyPrivacyRule),
+    unscannedPaths: (overview?.unscanned_paths || []).map(normalizeUnscannedPath),
+    presets: (overview?.presets || []).map((preset) => ({
+      id: preset.id,
+      name: preset.name || '',
+      description: preset.description || '',
+      ruleCount: Array.isArray(preset.rules) ? preset.rules.length : 0
+    })),
+    pseudonymKinds: overview?.pseudonym_kinds || []
   };
 };
 
-export const setPrivacyEnabled = async (enabled) => {
+export const updatePrivacySettings = async (settings) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  return await WailsApp.SetPrivacyEnabled(Boolean(enabled));
+  return await WailsApp.UpdatePrivacySettings(denormalizePrivacySettings(settings));
 };
 
-export const createPrivacyRule = async (input) => {
+export const createPrivacyRule = async (rule) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  const rule = await WailsApp.CreatePrivacyRule(input);
-  return normalizePrivacyRule(rule);
+  return normalizePrivacyRule(await WailsApp.CreatePrivacyRule(denormalizePrivacyRule(rule)));
 };
 
-export const updatePrivacyRule = async (id, input) => {
+export const updatePrivacyRule = async (id, rule) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  const rule = await WailsApp.UpdatePrivacyRule(Number(id), input);
-  return normalizePrivacyRule(rule);
+  return normalizePrivacyRule(await WailsApp.UpdatePrivacyRule(Number(id), denormalizePrivacyRule(rule)));
 };
 
 export const deletePrivacyRule = async (id) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   return await WailsApp.DeletePrivacyRule(Number(id));
+};
+
+export const applyPrivacyPreset = async (presetId) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.ApplyPrivacyPreset(String(presetId));
+};
+
+export const discardLegacyPrivacyRules = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return await WailsApp.DiscardLegacyPrivacyRules();
 };
 
 export const previewPrivacyRedaction = async (input) => {
@@ -853,28 +905,21 @@ export const previewPrivacyRedaction = async (input) => {
   return {
     output: result?.output || '',
     changed: Boolean(result?.changed),
-    hits: result?.hits || []
+    hitCount: Number(result?.hit_count ?? 0),
+    ruleHits: (result?.rule_hits || []).map(normalizePrivacyRuleHit)
   };
 };
 
-export const getPrivacySyntheticValues = async () => {
+export const getPrivacyUnscannedPaths = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  const records = await WailsApp.GetPrivacySyntheticValues();
-  return (records || []).map(normalizePrivacySyntheticValue);
+  return ((await WailsApp.GetPrivacyUnscannedPaths()) || []).map(normalizeUnscannedPath);
 };
 
-export const clearPrivacySyntheticValues = async () => {
+export const clearPrivacyUnscannedPaths = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
-  return await WailsApp.ClearPrivacySyntheticValues();
-};
-
-export const deletePrivacySyntheticValue = async (kind, rawHash) => {
-  await initWails();
-  if (!WailsApp) throw new Error('Wails not available');
-  await WailsApp.DeletePrivacySyntheticValue(kind, rawHash);
-  return { success: true };
+  return await WailsApp.ClearPrivacyUnscannedPaths();
 };
 
 // ============================================

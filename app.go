@@ -2142,9 +2142,9 @@ func (a *App) setupSettingsStore() {
 }
 
 func (a *App) setupPrivacyService() {
-	// Keep a non-nil faulted service so proxy handlers fail closed if privacy
+	// Keep a non-nil faulted service so proxy handlers keep working if privacy
 	// initialization breaks. A ready service with zero rules still passes through.
-	a.privacyService = privacy.NewService(nil, nil, a.logger)
+	a.privacyService = privacy.NewService(nil, a.logger)
 	db := a.storeDB
 	if db == nil && a.usageTracker != nil {
 		db = a.usageTracker.GetDB()
@@ -2161,7 +2161,13 @@ func (a *App) setupPrivacyService() {
 		a.logger.Warn("隐私防护规则表兼容升级失败", "error", err)
 		return
 	}
-	a.privacyService = privacy.NewService(a.privacyStore, nil, a.logger)
+	service := privacy.NewService(a.privacyStore, a.logger)
+	if err := service.Reload(ctx); err != nil {
+		// 规则编译失败时服务保持空快照（放行），由日志暴露问题，
+		// 不因隐私模块自身故障中断全部转发。
+		a.logger.Warn("隐私防护规则加载失败，本次启动将不执行任何隐私规则", "error", err)
+	}
+	a.privacyService = service
 	a.logger.Info("✅ 隐私防护服务已启用 (SQLite)")
 }
 

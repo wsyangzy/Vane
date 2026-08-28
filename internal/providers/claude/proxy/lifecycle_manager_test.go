@@ -24,29 +24,35 @@ func TestRequestLifecycleManager_NewRequestLifecycleManager(t *testing.T) {
 	}
 }
 
-func TestRequestLifecycleManager_RecordPrivacyRedactionLogsDebugSummary(t *testing.T) {
+// 隐私日志只允许输出命中摘要。命中原文与请求正文都不得出现：
+// 日志会广播到前端日志查看器并落盘，正文进来等于把整段客户对话又存了一份。
+func TestRequestLifecycleManager_RecordPrivacyRedactionLogsSummaryWithoutPlaintext(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	rlm := NewRequestLifecycleManager(nil, nil, "test-privacy-log", nil)
 	rlm.logger = logger.With("provider", "claude")
 
-	summary := `{"changed":true,"hits":[{"rule_name":"token rule","category":"token","count":1}]}`
-	matches := `[{"rule_name":"token rule","category":"token","raw":"sk-body-token","replacement":"fake_token_0001"}]`
-	rlm.RecordPrivacyRedaction(summary, []byte(`{"message":"fake_token_0001"}`), matches)
+	summary := `{"changed":true,"action":"redact","hit_count":1,"hits":[{"rule_name":"token rule","count":1}]}`
+	rlm.RecordPrivacyRedaction(summary)
 
 	output := logs.String()
 	for _, expected := range []string{
 		"[隐私防护] 请求正文已脱敏",
 		"test-privacy-log",
 		"privacy_redaction_summary",
-		"privacy_redaction_matches",
-		"privacy_redacted_body",
-		"sk-body-token",
-		"fake_token_0001",
 		"token rule",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected debug log to contain %q, got %s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{
+		"sk-body-token",             // 命中原文
+		"privacy_redaction_matches", // 明细通道
+		"privacy_redacted_body",     // 请求正文
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("privacy log must never contain %q, got %s", forbidden, output)
 		}
 	}
 }

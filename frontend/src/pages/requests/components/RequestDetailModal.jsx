@@ -57,50 +57,12 @@ import {
   getReasoningEffortMeta,
   getServiceTierMeta,
   isThinkingTypeActive,
+  getPrivacyDisplay,
   parseReasoningConfig,
+  PRIVACY_RULE_SOURCE_LABELS,
+  PRIVACY_STATE_STYLES,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
-
-const privacyRuleTypeLabels = {
-  exact: '精准',
-  regex: '正则',
-  field: '字段',
-  keyword: '关键词',
-  validator: '校验',
-  entropy: '高熵',
-  structured: '结构'
-};
-
-const parsePrivacySummary = (value) => {
-  if (!value) return { changed: false, hits: [] };
-  if (typeof value === 'object') {
-    return {
-      changed: Boolean(value.changed),
-      hits: Array.isArray(value.hits) ? value.hits : []
-    };
-  }
-  if (typeof value !== 'string') return { changed: false, hits: [] };
-  try {
-    const parsed = JSON.parse(value);
-    return {
-      changed: Boolean(parsed?.changed),
-      hits: Array.isArray(parsed?.hits) ? parsed.hits : []
-    };
-  } catch {
-    return { changed: false, hits: [] };
-  }
-};
-
-const decodeBase64Utf8 = (value) => {
-  if (!value || typeof value !== 'string') return '';
-  try {
-    const binary = window.atob(value);
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    return new TextDecoder().decode(bytes);
-  } catch {
-    return '';
-  }
-};
 
 const pickEndpointErrorValue = (errorObject, key) => {
   if (!errorObject || typeof errorObject !== 'object') return '';
@@ -174,23 +136,6 @@ const EndpointErrorTooltipContent = ({ summary }) => (
     <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{summary}</div>
   </div>
 );
-
-const parsePrivacyMatches = (value) => {
-  if (!value) return [];
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-};
-
-const getPrivacyMatchRaw = (match) => {
-  if (!match || typeof match !== 'object') return '';
-  return match.raw || match.raw_value || decodeBase64Utf8(match.raw_base64 || match.rawBase64);
-};
 
 /**
  * 信息行组件
@@ -441,10 +386,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const hasReasoning = Object.keys(reasoning).length > 0;
   const serviceTier = request.serviceTier || request.service_tier || '';
   const serviceTierMeta = getServiceTierMeta(serviceTier);
-  const privacySummary = parsePrivacySummary(request.privacyRedactionSummary || request.privacy_redaction_summary);
-  const privacyRedacted = Boolean(request.privacyRedacted || request.privacy_redacted || privacySummary.changed);
-  const privacyHits = Array.isArray(privacySummary.hits) ? privacySummary.hits : [];
-  const privacyMatches = parsePrivacyMatches(request.privacyRedactionMatches || request.privacy_redaction_matches);
+  const privacy = getPrivacyDisplay(request);
+  const privacyRedacted = privacy.state !== 'none';
+  const privacyHits = privacy.hits;
+  const privacyDetectOnly = privacy.detectOnly;
 
   return renderModalPortal(
     <div className="fixed inset-0 z-[10000]">
@@ -1364,70 +1309,34 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 <div className="p-4">
                   <div className="flex items-center justify-between gap-4">
                     <span className="text-sm font-medium text-slate-500">处理结果</span>
-                    <span className={`inline-flex items-center rounded-md border px-2 py-1 text-xs font-semibold ${
-                      privacyRedacted
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                        : 'border-slate-200 bg-slate-50 text-slate-500'
-                    }`}>
-                      {privacyRedacted ? '已脱敏' : '未命中'}
+                    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${PRIVACY_STATE_STYLES[privacy.state]}`}>
+                      {privacy.label}
+                      {privacy.hitCount > 0 && <span className="opacity-70">· {privacy.hitCount} 处</span>}
                     </span>
                   </div>
+                  {privacyDetectOnly && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      当前为「仅检测」模式，命中已统计但请求正文未被改写。
+                    </p>
+                  )}
                   {privacyHits.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">
                       {privacyHits.map((hit, index) => (
                         <span
-                          key={`${hit.rule_id || index}-${hit.type}`}
+                          key={`${hit.rule_id || index}-${hit.rule_name || ''}`}
                           className="min-w-0 max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 break-words [overflow-wrap:anywhere]"
                         >
-                          {(hit.rule_name || '规则')} · {privacyRuleTypeLabels[hit.type] || hit.type || '规则'} × {hit.count || 0}
+                          {(hit.rule_name || '规则')}
+                          {hit.source ? ` · ${PRIVACY_RULE_SOURCE_LABELS[hit.source] || hit.source}` : ''}
+                          {` × ${hit.count || 0}`}
                         </span>
                       ))}
                     </div>
                   )}
-                  {privacyMatches.length > 0 && (
-                    <div className="mt-4 overflow-hidden rounded-lg border border-emerald-100 bg-emerald-50/40">
-                      <div className="border-b border-emerald-100 bg-white/70 px-3 py-2">
-                        <span className="text-xs font-semibold text-emerald-800">具体处理内容</span>
-                      </div>
-                      <div className="divide-y divide-emerald-100">
-                        {privacyMatches.map((match, index) => {
-                          const raw = getPrivacyMatchRaw(match);
-                          const replacement = match.replacement || match.replacement_value || '';
-                          const typeLabel = privacyRuleTypeLabels[match.type] || match.type || '规则';
-                          return (
-                            <div
-                              key={`${match.rule_id || 'rule'}-${index}-${replacement}`}
-                              className="grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-center"
-                            >
-                              <div className="min-w-0">
-                                <div className="mb-1 flex items-center gap-2">
-                                  <span className="rounded border border-emerald-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
-                                    原文
-                                  </span>
-                                  <span className="min-w-0 truncate text-[11px] text-slate-500">
-                                    {match.rule_name || '规则'} · {typeLabel}
-                                  </span>
-                                </div>
-                                <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs leading-relaxed text-slate-800 break-words [overflow-wrap:anywhere]">
-                                  {raw || '-'}
-                                </div>
-                              </div>
-                              <div className="hidden text-xs font-semibold text-emerald-600 sm:block">-&gt;</div>
-                              <div className="min-w-0">
-                                <div className="mb-1">
-                                  <span className="rounded border border-emerald-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-emerald-700">
-                                    替换值
-                                  </span>
-                                </div>
-                                <div className="rounded-md border border-emerald-200 bg-white px-2 py-1.5 font-mono text-xs leading-relaxed text-emerald-800 break-words [overflow-wrap:anywhere]">
-                                  {replacement || '-'}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
+                  {privacyRedacted && (
+                    <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
+                      仅展示命中的规则与次数。命中的原文不会写入数据库、日志或本页面 —— 否则隐私防护本身就会变成一份客户信息的集中副本。
+                    </p>
                   )}
                 </div>
               </div>

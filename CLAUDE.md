@@ -354,6 +354,20 @@ go test -race ./internal/...
 - `internal/codexproxy/model_rewriter.go` → `rewriteModelIfNeeded` 纯函数
 - `internal/codexproxy/handler.go` → `ServeHTTP` 接入点
 
+### 隐私脱敏的字节级约束（v8.6+）
+
+隐私脱敏是唯一被允许改写请求体内容的环节，因此它必须比其他环节更严格地遵守透传约束。
+
+**硬性要求：**
+- ✅ 未命中任何规则时，转发的 body 与客户端原始请求 **byte-identical**
+- ✅ 命中时**只替换命中字段的字节区间**，其余字节（含对象键序、转义形式、数字精度）保持原样
+- ❌ 严禁把 body 解析成 `map[string]any` 再 `json.Marshal` 回去 —— 该往返会重排键序、把 `< > &` 转成 Unicode 转义、改变大数字精度，等于伪造客户端请求，属于会触发提供商指纹检测的改动
+- ❌ 严禁对替换值做 HTML escape
+
+**实现方式：** `internal/privacy/json_walker.go` 用 `json.Decoder.InputOffset()` 定位字符串 token 的原始字节区间，只重写命中区间。扫描字段由 API path 白名单锁定，协议字段（`model`/`stream`/`tools`/`metadata`/`reasoning`）天然不参与匹配。
+
+**隐私数据红线：** 命中原文只允许出现在本地 `slog` 输出。禁止落库、禁止经 Wails API 回传前端 —— 否则隐私防护功能自身会变成一份客户信息的集中副本。`privacy.RuleHit.Matches` 用 `json:"-"` 在类型层面阻断序列化。
+
 ### `stream_only` 端点配置
 
 ```yaml

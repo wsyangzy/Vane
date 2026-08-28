@@ -27,7 +27,7 @@ type RegularHandler struct {
 	errorRecovery            ErrorRecoveryManager
 	retryManagerFactory      RetryManagerFactory
 	suspensionManagerFactory SuspensionManagerFactory
-	privacyRedactor          PrivacyRedactor
+	privacyFilter            PrivacyFilter
 	// 🔧 [修复] 共享SuspensionManager实例，确保全局挂起限制生效
 	sharedSuspensionManager SuspensionManager
 }
@@ -64,8 +64,8 @@ func NewRegularHandler(
 	}
 }
 
-func (rh *RegularHandler) SetPrivacyRedactor(redactor PrivacyRedactor) {
-	rh.privacyRedactor = redactor
+func (rh *RegularHandler) SetPrivacyFilter(filter PrivacyFilter) {
+	rh.privacyFilter = filter
 }
 
 // getDefaultStatusCodeForFinalStatus 根据最终状态获取默认HTTP状态码
@@ -99,9 +99,15 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	connID := lifecycleManager.GetRequestID()
 	turnFailureKey := requestTurnFailureCacheKey(r, bodyBytes)
 	ctx = endpoint.ContextWithTurnFailureKey(ctx, turnFailureKey)
-	protectedBody, err := redactBodyBeforeForwardContext(ctx, rh.privacyRedactor, bodyBytes, lifecycleManager, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"))
+	protectedBody, err := applyPrivacyFilter(ctx, rh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
-		lifecycleManager.FailRequest("privacy_redaction_failed", err.Error(), http.StatusInternalServerError)
+		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环
+		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
+			lifecycleManager.FailRequest(PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode)
+			WritePrivacyPolicyErrorResponse(w, policyErr)
+			return
+		}
+		lifecycleManager.FailRequest("privacy_filter_failed", err.Error(), http.StatusInternalServerError)
 		http.Error(w, "Privacy protection failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

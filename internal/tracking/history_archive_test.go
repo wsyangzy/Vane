@@ -357,3 +357,57 @@ func TestHistoryQueryReportsCorruptArchiveOnlyWhenRangeIntersects(t *testing.T) 
 		t.Fatalf("expected month-specific corrupt archive error, got %v", err)
 	}
 }
+
+// 归档是独立文件，活动库的止血迁移够不到它；历史归档中的隐私明文必须在启动时一并清除。
+func TestReconcileHistoryArchivesPurgesLegacyPrivacyPlaintext(t *testing.T) {
+	tracker, archiveDir := newHistoryArchiveTestTracker(t)
+	if err := os.MkdirAll(archiveDir, 0755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	archivePath := filepath.Join(archiveDir, "2020-01.db")
+
+	archiveDB, err := sql.Open("sqlite", archivePath)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	if _, err := archiveDB.Exec(`
+		CREATE TABLE request_logs (
+			request_id TEXT,
+			start_time TEXT,
+			status TEXT,
+			environment TEXT,
+			privacy_redaction_matches TEXT
+		);
+		INSERT INTO request_logs VALUES ('legacy-1', '2020-01-05 00:00:00+08:00', 'completed', 'dev', '[{"raw":"13800138000"}]');
+	`); err != nil {
+		t.Fatalf("seed legacy archive: %v", err)
+	}
+	_ = archiveDB.Close()
+
+	if err := tracker.reconcileHistoryArchives(); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	archiveDB, err = sql.Open("sqlite", archivePath)
+	if err != nil {
+		t.Fatalf("reopen archive: %v", err)
+	}
+	defer archiveDB.Close()
+
+	var leaked int
+	err = archiveDB.QueryRow(`SELECT COUNT(*) FROM request_logs WHERE privacy_redaction_matches IS NOT NULL`).Scan(&leaked)
+	if err == nil && leaked != 0 {
+		t.Fatalf("归档仍残留 %d 行隐私明文", leaked)
+	}
+	if err != nil && !strings.Contains(err.Error(), "no such column") {
+		t.Fatalf("query archive: %v", err)
+	}
+
+	var rows int
+	if err := archiveDB.QueryRow(`SELECT COUNT(*) FROM request_logs`).Scan(&rows); err != nil {
+		t.Fatalf("count archive rows: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("归档行数应保持 1，实际 %d", rows)
+	}
+}

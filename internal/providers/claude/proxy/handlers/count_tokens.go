@@ -21,16 +21,16 @@ type CountTokensHandler struct {
 	config          *config.Config
 	endpointManager *endpoint.Manager
 	forwarder       *Forwarder
-	privacyRedactor PrivacyRedactor
+	privacyFilter   PrivacyFilter
 }
 
 // NewCountTokensHandler 创建 CountTokensHandler
-func NewCountTokensHandler(cfg *config.Config, em *endpoint.Manager, f *Forwarder, redactor PrivacyRedactor) *CountTokensHandler {
+func NewCountTokensHandler(cfg *config.Config, em *endpoint.Manager, f *Forwarder, filter PrivacyFilter) *CountTokensHandler {
 	return &CountTokensHandler{
 		config:          cfg,
 		endpointManager: em,
 		forwarder:       f,
-		privacyRedactor: redactor,
+		privacyFilter:   filter,
 	}
 }
 
@@ -58,10 +58,18 @@ func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, 
 	if len(supportedEndpoints) > 0 {
 		result, ok, redactionErr := h.tryForward(ctx, r, bodyBytes, supportedEndpoints, connID, lifecycleManager)
 		if redactionErr != nil {
-			if lifecycleManager != nil {
-				lifecycleManager.FailRequest("privacy_redaction_failed", redactionErr.Error(), http.StatusInternalServerError)
+			// 隐私策略拒绝：短路返回，既不重试也不降级到本地估算
+			if policyErr := AsPrivacyPolicyError(redactionErr); policyErr != nil {
+				if lifecycleManager != nil {
+					lifecycleManager.FailRequest(PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode)
+				}
+				WritePrivacyPolicyErrorResponse(w, policyErr)
+				return
 			}
-			http.Error(w, fmt.Sprintf("隐私脱敏失败: %v", redactionErr), http.StatusInternalServerError)
+			if lifecycleManager != nil {
+				lifecycleManager.FailRequest("privacy_filter_failed", redactionErr.Error(), http.StatusInternalServerError)
+			}
+			http.Error(w, fmt.Sprintf("隐私防护处理失败: %v", redactionErr), http.StatusInternalServerError)
 			return
 		}
 		if ok {
@@ -98,7 +106,7 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 
 // tryForward 尝试转发到支持的端点
 func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string, lifecycleManager RequestLifecycleManager) ([]byte, bool, error) {
-	protectedBody, err := redactBodyBeforeForwardContext(ctx, h.privacyRedactor, bodyBytes, lifecycleManager, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"))
+	protectedBody, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
 		return nil, false, err
 	}

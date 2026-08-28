@@ -48,13 +48,34 @@ export function CreateModelPricing(arg1) {
   return Call.ByName("main.App.CreateModelPricing", arg1);
 }
 
+export function GetPrivacyOverview() {
+  return Call.ByName("main.App.GetPrivacyOverview");
+}
+
+export function UpdatePrivacySettings(arg1) {
+  return Call.ByName("main.App.UpdatePrivacySettings", arg1);
+}
+
+export function ApplyPrivacyPreset(arg1) {
+  return Call.ByName("main.App.ApplyPrivacyPreset", arg1);
+}
+
+export function DiscardLegacyPrivacyRules() {
+  return Call.ByName("main.App.DiscardLegacyPrivacyRules");
+}
+
+export function GetPrivacyUnscannedPaths() {
+  return Call.ByName("main.App.GetPrivacyUnscannedPaths");
+}
+
+export function ClearPrivacyUnscannedPaths() {
+  return Call.ByName("main.App.ClearPrivacyUnscannedPaths");
+}
+
 export function CreatePrivacyRule(arg1) {
   return Call.ByName("main.App.CreatePrivacyRule", arg1);
 }
 
-export function ClearPrivacySyntheticValues() {
-  return Call.ByName("main.App.ClearPrivacySyntheticValues");
-}
 
 export function DeleteChannel(arg1, arg2) {
   return Call.ByName("main.App.DeleteChannel", arg1, arg2);
@@ -84,9 +105,6 @@ export function DeletePrivacyRule(arg1) {
   return Call.ByName("main.App.DeletePrivacyRule", arg1);
 }
 
-export function DeletePrivacySyntheticValue(arg1, arg2) {
-  return Call.ByName("main.App.DeletePrivacySyntheticValue", arg1, arg2);
-}
 
 export function GetAllSettings() {
   return Call.ByName("main.App.GetAllSettings");
@@ -212,13 +230,7 @@ export function GetProxyURL() {
   return Call.ByName("main.App.GetProxyURL");
 }
 
-export function GetPrivacyConfig() {
-  return Call.ByName("main.App.GetPrivacyConfig");
-}
 
-export function GetPrivacySyntheticValues() {
-  return Call.ByName("main.App.GetPrivacySyntheticValues");
-}
 
 export function GetRecentLogs(arg1) {
   return Call.ByName("main.App.GetRecentLogs", arg1);
@@ -356,9 +368,6 @@ export function SetDefaultClaudeCredentialGroup(arg1) {
   return Call.ByName("main.App.SetDefaultClaudeCredentialGroup", arg1);
 }
 
-export function SetPrivacyEnabled(arg1) {
-  return Call.ByName("main.App.SetPrivacyEnabled", arg1);
-}
 
 export function SetEndpointFailoverEnabled(arg1, arg2) {
   return Call.ByName("main.App.SetEndpointFailoverEnabled", arg1, arg2);

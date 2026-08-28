@@ -173,7 +173,6 @@ type RequestDetail struct {
 	ServiceTier             string `json:"service_tier"`
 	PrivacyRedacted         bool   `json:"privacy_redacted"`
 	PrivacyRedactionSummary string `json:"privacy_redaction_summary"`
-	PrivacyRedactionMatches string `json:"privacy_redaction_matches"`
 	IsStreaming             bool   `json:"is_streaming"` // 是否为流式请求
 	Provider                string `json:"provider"`     // 提供商标识: claude/codex
 
@@ -550,7 +549,6 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		` + optionalTextExpr("service_tier") + ` as service_tier,
 		COALESCE(privacy_redacted, false) as privacy_redacted,
 		COALESCE(privacy_redaction_summary, '') as privacy_redaction_summary,
-		COALESCE(privacy_redaction_matches, '') as privacy_redaction_matches,
 		COALESCE(is_streaming, false) as is_streaming,
 		COALESCE(provider, 'claude') as provider,
 		status, http_status_code, retry_count,
@@ -686,7 +684,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 			&detail.OriginalModelName, &detail.ModelRewriteSource, &detail.ModelRewriteTarget,
 			&detail.ReasoningEffort,
 			&detail.ServiceTier,
-			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary, &detail.PrivacyRedactionMatches,
+			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary,
 			&detail.IsStreaming,
 			&detail.Provider,
 			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,

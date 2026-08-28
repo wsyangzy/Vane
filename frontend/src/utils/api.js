@@ -362,10 +362,8 @@ export const fetchRequests = async (params = {}) => {
       modelRewriteTarget: request.model_rewrite_target || request.modelRewriteTarget || '',
       privacy_redacted: Boolean(request.privacy_redacted ?? request.privacyRedacted),
       privacy_redaction_summary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
-      privacy_redaction_matches: request.privacy_redaction_matches || request.privacyRedactionMatches || '',
       privacyRedacted: Boolean(request.privacy_redacted ?? request.privacyRedacted),
       privacyRedactionSummary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
-      privacyRedactionMatches: request.privacy_redaction_matches || request.privacyRedactionMatches || '',
       provider: request.provider || '',
       http_status_code: httpStatusCode,
       httpStatusCode,
@@ -856,65 +854,58 @@ export const fetchPortInfo = async () => {
   return data;
 };
 
-export const fetchPrivacyConfig = async () => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.getPrivacyConfig();
+const requirePrivacyWails = () => {
+  if (!isWailsEnvironment()) {
+    throw new Error('HTTP 环境暂不支持隐私防护功能');
   }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
 };
 
-export const setPrivacyEnabled = async (enabled) => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.setPrivacyEnabled(enabled);
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+export const fetchPrivacyOverview = async () => {
+  requirePrivacyWails();
+  return await WailsApi.getPrivacyOverview();
 };
 
-export const createPrivacyRule = async (input) => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.createPrivacyRule(input);
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+export const updatePrivacySettings = async (settings) => {
+  requirePrivacyWails();
+  return await WailsApi.updatePrivacySettings(settings);
 };
 
-export const updatePrivacyRule = async (id, input) => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.updatePrivacyRule(id, input);
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+export const createPrivacyRule = async (rule) => {
+  requirePrivacyWails();
+  return await WailsApi.createPrivacyRule(rule);
+};
+
+export const updatePrivacyRule = async (id, rule) => {
+  requirePrivacyWails();
+  return await WailsApi.updatePrivacyRule(id, rule);
 };
 
 export const deletePrivacyRule = async (id) => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.deletePrivacyRule(id);
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+  requirePrivacyWails();
+  return await WailsApi.deletePrivacyRule(id);
+};
+
+export const applyPrivacyPreset = async (presetId) => {
+  requirePrivacyWails();
+  return await WailsApi.applyPrivacyPreset(presetId);
+};
+
+export const discardLegacyPrivacyRules = async () => {
+  requirePrivacyWails();
+  return await WailsApi.discardLegacyPrivacyRules();
 };
 
 export const previewPrivacyRedaction = async (input) => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.previewPrivacyRedaction(input);
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+  requirePrivacyWails();
+  return await WailsApi.previewPrivacyRedaction(input);
 };
 
-export const fetchPrivacySyntheticValues = async () => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.getPrivacySyntheticValues();
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+export const fetchPrivacyUnscannedPaths = async () => {
+  requirePrivacyWails();
+  return await WailsApi.getPrivacyUnscannedPaths();
 };
 
-export const clearPrivacySyntheticValues = async () => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.clearPrivacySyntheticValues();
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
-};
-
-export const deletePrivacySyntheticValue = async (kind, rawHash) => {
-  if (isWailsEnvironment()) {
-    return await WailsApi.deletePrivacySyntheticValue(kind, rawHash);
-  }
-  throw new Error('HTTP 环境暂不支持隐私防护功能');
+export const clearPrivacyUnscannedPaths = async () => {
+  requirePrivacyWails();
+  return await WailsApi.clearPrivacyUnscannedPaths();
 };

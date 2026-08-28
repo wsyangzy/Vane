@@ -539,11 +539,6 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redaction_summary TEXT",
 			description: "隐私脱敏摘要字段",
 		},
-		{
-			checkColumn: "privacy_redaction_matches",
-			alterSQL:    "ALTER TABLE request_logs ADD COLUMN privacy_redaction_matches TEXT",
-			description: "隐私脱敏命中明细字段",
-		},
 		// 端点倍率快照字段（用于详情页计费过程展示）
 		{
 			checkColumn: "cost_multiplier",
@@ -795,6 +790,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	}
 
 	if err := runMigrations("request_logs", requestLogMigrations); err != nil {
+		return err
+	}
+	if err := s.purgePrivacyPlaintextMatches(ctx); err != nil {
 		return err
 	}
 	if err := runMigrations("endpoints", endpointsMigrations); err != nil {
@@ -1224,6 +1222,36 @@ func (s *SQLiteAdapter) ensureSettingsProviderScope(ctx context.Context) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit settings provider migration: %w", err)
 	}
+	return nil
+}
+
+// purgePrivacyPlaintextMatches 清除历史遗留的 privacy_redaction_matches 列。
+//
+// 该列曾存放隐私命中的原文与替换值——隐私防护功能反而把客户明文集中落进了
+// 本地库。停止写入不足以止血，已存在的明文必须主动清除：
+// 先 UPDATE 置空（即便后续 DROP 不被支持，明文也已不可读），再尝试 DROP COLUMN
+// （SQLite 3.35+ 才支持，失败不阻断启动）。
+func (s *SQLiteAdapter) purgePrivacyPlaintextMatches(ctx context.Context) error {
+	exists, err := s.columnExists(ctx, "request_logs", "privacy_redaction_matches")
+	if err != nil {
+		return fmt.Errorf("failed to check column request_logs.privacy_redaction_matches: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	s.logger.Info("🔒 [隐私止血] 清除 request_logs.privacy_redaction_matches 中的历史明文")
+	if _, err := s.GetWriteDB().ExecContext(ctx,
+		`UPDATE request_logs SET privacy_redaction_matches = NULL WHERE privacy_redaction_matches IS NOT NULL`); err != nil {
+		return fmt.Errorf("failed to clear privacy_redaction_matches: %w", err)
+	}
+	if _, err := s.GetWriteDB().ExecContext(ctx,
+		`ALTER TABLE request_logs DROP COLUMN privacy_redaction_matches`); err != nil {
+		// 旧版 SQLite 不支持 DROP COLUMN。内容已置空，留列不影响隐私。
+		s.logger.Warn("隐私明文列内容已清空，但当前 SQLite 不支持删除该列", "error", err)
+		return nil
+	}
+	s.logger.Info("✅ [隐私止血] privacy_redaction_matches 列已删除")
 	return nil
 }
 

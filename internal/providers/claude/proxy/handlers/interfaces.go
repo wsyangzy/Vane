@@ -54,7 +54,7 @@ type RequestLifecycleManager interface {
 	// 🆕 [流完整性追踪] 2025-12-11: 带数据质量标记的请求完成
 	CompleteRequestWithQuality(tokens *tracking.TokenUsage, failureReason string)
 	HandleNonTokenResponse(responseContent string)
-	RecordPrivacyRedaction(summaryJSON string, redactedBody []byte, matchDetailsJSON string)
+	RecordPrivacyRedaction(summaryJSON string)
 	// 失败请求Token记录方法：只记录Token统计，不改变请求状态
 	RecordTokensForFailedRequest(tokens *tracking.TokenUsage, failureReason string)
 	// 🔢 [语义修复] 新增尝试计数管理方法

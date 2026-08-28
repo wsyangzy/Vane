@@ -5,467 +5,401 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"mime"
-	"regexp"
-	"strconv"
-	"strings"
+	"sort"
 	"sync"
 	"time"
 )
 
+// PreviewResult 规则测试面板的结果。
+// RuleHits 中的 Matches 由 json:"-" 阻断，不会随响应回传。
+type PreviewResult struct {
+	Output   string    `json:"output"`
+	Changed  bool      `json:"changed"`
+	HitCount int       `json:"hit_count"`
+	RuleHits []RuleHit `json:"rule_hits"`
+}
+
+// UnscannedPathStat 未被隐私规则扫描的请求路径统计。
+//
+// 白名单之外的路径不做扫描，但绝不静默：漏扫是静默失败，
+// 用户必须能在界面上看见「有请求没被扫过」，否则会误以为已全面受保护。
+type UnscannedPathStat struct {
+	Path       string    `json:"path"`
+	Count      int64     `json:"count"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+}
+
+// Service 隐私规则的业务编排：持久化 + 快照编译缓存 + 热路径过滤入口。
 type Service struct {
-	store        *Store
-	enabledFunc  func(context.Context) bool
-	logger       *slog.Logger
-	rulesMu      sync.RWMutex
-	rulesCache   []runtimeRule
-	rulesCached  bool
-	allocationMu sync.Mutex
+	store  *Store
+	logger *slog.Logger
+
+	mu       sync.RWMutex
+	snapshot *Snapshot
+
+	unscannedMu sync.Mutex
+	unscanned   map[string]*UnscannedPathStat
+
+	now func() time.Time
 }
 
-func NewService(store *Store, enabledFunc func(context.Context) bool, logger ...*slog.Logger) *Service {
-	var selectedLogger *slog.Logger
+func NewService(store *Store, logger ...*slog.Logger) *Service {
+	svc := &Service{
+		store:     store,
+		unscanned: make(map[string]*UnscannedPathStat),
+		now:       time.Now,
+	}
 	if len(logger) > 0 {
-		selectedLogger = logger[0]
+		svc.logger = logger[0]
 	}
-	return &Service{
-		store:       store,
-		enabledFunc: enabledFunc,
-		logger:      selectedLogger,
-	}
+	return svc
 }
 
-func (s *Service) ListRules(ctx context.Context) ([]PrivacyRule, error) {
-	if err := s.readyError(); err != nil {
-		return nil, err
-	}
-	return s.store.ListRules(ctx)
-}
-
-func (s *Service) ListSyntheticValues(ctx context.Context) ([]SyntheticValueRecord, error) {
-	if s == nil || s.store == nil {
-		return nil, fmt.Errorf("privacy store not initialized")
-	}
-	return s.store.ListSyntheticValues(ctx)
-}
-
-func (s *Service) ClearSyntheticValues(ctx context.Context) error {
-	if s == nil || s.store == nil {
-		return fmt.Errorf("privacy store not initialized")
-	}
-	return s.store.ClearSyntheticValues(ctx)
-}
-
-func (s *Service) DeleteSyntheticValue(ctx context.Context, kind, rawHash string) error {
-	if s == nil || s.store == nil {
-		return fmt.Errorf("privacy store not initialized")
-	}
-	return s.store.DeleteSyntheticValue(ctx, kind, rawHash)
-}
-
-func (s *Service) CreateRule(ctx context.Context, input PrivacyRuleInput) (PrivacyRule, error) {
-	if err := s.readyError(); err != nil {
-		return PrivacyRule{}, err
-	}
-	normalized, err := NormalizeInput(input)
-	if err != nil {
-		return PrivacyRule{}, err
-	}
-	rule, err := s.store.CreateRule(ctx, normalized)
-	if err == nil {
-		s.invalidateRuleCache()
-	}
-	return rule, err
-}
-
-func (s *Service) UpdateRule(ctx context.Context, id int64, input PrivacyRuleInput) (PrivacyRule, error) {
-	if err := s.readyError(); err != nil {
-		return PrivacyRule{}, err
-	}
-	normalized, err := NormalizeInputForUpdate(input)
-	if err != nil {
-		return PrivacyRule{}, err
-	}
-	if strings.TrimSpace(normalized.PatternOrValue) == "" {
-		existing, err := s.store.GetRuleRaw(ctx, id)
-		if err != nil {
-			return PrivacyRule{}, err
-		}
-		normalized.PatternOrValue = existing.PatternOrValue
-	}
-	if normalized.Type == RuleTypeRegex && normalized.Enabled {
-		if _, err := regexp.Compile(normalized.PatternOrValue); err != nil {
-			return PrivacyRule{}, fmt.Errorf("正则表达式无效: %w", err)
-		}
-	}
-	rule, err := s.store.UpdateRule(ctx, id, normalized)
-	if err == nil {
-		s.invalidateRuleCache()
-	}
-	return rule, err
-}
-
-func (s *Service) DeleteRule(ctx context.Context, id int64) error {
-	if err := s.readyError(); err != nil {
-		return err
-	}
-	err := s.store.DeleteRule(ctx, id)
-	if err == nil {
-		s.invalidateRuleCache()
-	}
-	return err
-}
-
-func (s *Service) Redact(body []byte) ([]byte, RedactionSummary, bool, error) {
-	return s.RedactContext(context.Background(), body)
-}
-
-func (s *Service) RedactContext(parent context.Context, body []byte) ([]byte, RedactionSummary, bool, error) {
-	return s.redactContext(parent, body, "", "")
-}
-
-func (s *Service) RedactRequestContext(parent context.Context, body []byte, contentType, contentEncoding string) ([]byte, RedactionSummary, bool, error) {
-	return s.redactContext(parent, body, contentType, contentEncoding)
-}
-
-func (s *Service) redactContext(parent context.Context, body []byte, contentType, contentEncoding string) ([]byte, RedactionSummary, bool, error) {
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-	defer cancel()
-
-	if err := s.readyError(); err != nil {
-		return nil, RedactionSummary{}, false, err
-	}
-
-	compiled, err := s.ruleSnapshot(ctx)
-	if err != nil {
-		return nil, RedactionSummary{}, false, err
-	}
-	if len(compiled) == 0 {
-		return body, RedactionSummary{}, false, nil
-	}
-	if err := validateRedactionMedia(body, contentType, contentEncoding); err != nil {
-		return nil, RedactionSummary{}, false, err
-	}
-
-	tracker := &serviceSyntheticReplacementTracker{
-		ctx:          ctx,
-		store:        s.store,
-		logger:       s.logger,
-		allocationMu: &s.allocationMu,
-	}
-	redacted, summary, changed, err := redactWithRules(body, compiled, tracker)
-	if err != nil {
-		return nil, RedactionSummary{}, false, err
-	}
-	return redacted, summary, changed, nil
-}
-
-func validateRedactionMedia(body []byte, contentType, contentEncoding string) error {
-	if len(body) == 0 {
-		return nil
-	}
-	encoding := strings.ToLower(strings.TrimSpace(contentEncoding))
-	if encoding != "" && encoding != "identity" {
-		return fmt.Errorf("隐私防护不支持 Content-Encoding %q，请发送未压缩请求体", contentEncoding)
-	}
-	contentType = strings.TrimSpace(contentType)
-	if contentType == "" {
-		return nil
-	}
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return fmt.Errorf("隐私防护无法解析 Content-Type %q: %w", contentType, err)
-	}
-	mediaType = strings.ToLower(mediaType)
-	if mediaType == "application/json" || strings.HasSuffix(mediaType, "+json") || strings.HasPrefix(mediaType, "text/") || mediaType == "application/x-www-form-urlencoded" || mediaType == "application/x-ndjson" {
-		return nil
-	}
-	return fmt.Errorf("隐私防护不支持请求媒体类型 %q", mediaType)
-}
-
-func (s *Service) Preview(ctx context.Context, input string) (PreviewResult, error) {
-	if err := s.readyError(); err != nil {
-		return PreviewResult{}, err
-	}
-	compiled, err := s.ruleSnapshot(ctx)
-	if err != nil {
-		return PreviewResult{}, err
-	}
-	output, summary, changed, err := RedactWithRules([]byte(input), compiled)
-	if err != nil {
-		return PreviewResult{}, err
-	}
-	return PreviewResult{Output: string(output), Changed: changed, Hits: summary.Hits}, nil
-}
-
-func (s *Service) readyError() error {
+func (s *Service) ready() error {
 	if s == nil || s.store == nil {
 		return fmt.Errorf("privacy store not initialized")
 	}
 	return nil
 }
 
-func (s *Service) ruleSnapshot(ctx context.Context) ([]runtimeRule, error) {
-	// ponytail: rule writes are service-owned; add revision polling only if external writers are introduced.
-	s.rulesMu.RLock()
-	if s.rulesCached {
-		rules := s.rulesCache
-		s.rulesMu.RUnlock()
-		return rules, nil
+// Reload 从库中重新加载并编译规则快照。
+// 编译失败时保留当前快照不变——半可用的规则集会让用户误以为受保护。
+func (s *Service) Reload(ctx context.Context) error {
+	if err := s.ready(); err != nil {
+		return err
 	}
-	s.rulesMu.RUnlock()
-
-	s.rulesMu.Lock()
-	defer s.rulesMu.Unlock()
-	if s.rulesCached {
-		return s.rulesCache, nil
-	}
-	rules, err := s.store.ListEnabledRules(ctx)
+	settings, err := s.store.LoadSettings(ctx)
 	if err != nil {
+		return err
+	}
+	stored, err := s.store.ListEnabledRules(ctx)
+	if err != nil {
+		return err
+	}
+	rules := make([]Rule, 0, len(stored))
+	for _, item := range stored {
+		rules = append(rules, item.Rule)
+	}
+	compiled, err := CompileRules(rules)
+	if err != nil {
+		return fmt.Errorf("编译隐私规则失败，已保留上一份规则快照: %w", err)
+	}
+
+	s.mu.Lock()
+	version := int64(1)
+	if s.snapshot != nil {
+		version = s.snapshot.Version + 1
+	}
+	s.snapshot = &Snapshot{
+		Version:  version,
+		Settings: settings,
+		Rules:    compiled,
+		LoadedAt: s.now(),
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Service) currentSnapshot() *Snapshot {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.snapshot
+}
+
+// SnapshotVersion 当前生效快照版本，规则每次变更递增
+func (s *Service) SnapshotVersion() int64 {
+	snapshot := s.currentSnapshot()
+	if snapshot == nil {
+		return 0
+	}
+	return snapshot.Version
+}
+
+// Apply 热路径入口：对出站请求体执行隐私过滤。
+//
+// 返回的 error 只会是 *PolicyError，调用方必须 errors.As 识别并短路返回，
+// 不得进入重试 / 故障转移 / 端点冷却。
+func (s *Service) Apply(ctx context.Context, req Request, body []byte) (ApplyResult, error) {
+	if s == nil {
+		return ApplyResult{Body: body, Action: ModeDisabled}, nil
+	}
+	snapshot := s.currentSnapshot()
+	if snapshot == nil {
+		// 尚未加载成功时放行：隐私模块自身不可用不应打断全部转发，
+		// 该情况由 Reload 的错误日志暴露。
+		return ApplyResult{Body: body, Action: ModeDisabled}, nil
+	}
+	result, err := snapshot.Apply(req, body)
+	if result.SkippedReason == SkippedUnsupportedPath {
+		s.recordUnscannedPath(req.Path)
+	}
+	return result, err
+}
+
+func (s *Service) recordUnscannedPath(path string) {
+	if path == "" {
+		return
+	}
+	s.unscannedMu.Lock()
+	defer s.unscannedMu.Unlock()
+	stat := s.unscanned[path]
+	if stat == nil {
+		stat = &UnscannedPathStat{Path: path}
+		s.unscanned[path] = stat
+	}
+	stat.Count++
+	stat.LastSeenAt = s.now()
+}
+
+// UnscannedPaths 返回未被扫描的路径统计（进程内计数，重启清零）
+func (s *Service) UnscannedPaths() []UnscannedPathStat {
+	if s == nil {
+		return nil
+	}
+	s.unscannedMu.Lock()
+	defer s.unscannedMu.Unlock()
+	out := make([]UnscannedPathStat, 0, len(s.unscanned))
+	for _, stat := range s.unscanned {
+		out = append(out, *stat)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Count > out[j].Count })
+	return out
+}
+
+func (s *Service) ClearUnscannedPaths() {
+	if s == nil {
+		return
+	}
+	s.unscannedMu.Lock()
+	s.unscanned = make(map[string]*UnscannedPathStat)
+	s.unscannedMu.Unlock()
+}
+
+// Overview 隐私页所需的完整视图。
+// 全部字段都不含命中原文或规则敏感原值（legacy 规则已掩码）。
+type Overview struct {
+	Settings       Settings            `json:"settings"`
+	Rules          []StoredRule        `json:"rules"`
+	LegacyRules    []LegacyRule        `json:"legacy_rules"`
+	UnscannedPaths []UnscannedPathStat `json:"unscanned_paths"`
+	Presets        []Preset            `json:"presets"`
+	PseudonymKinds []string            `json:"pseudonym_kinds"`
+}
+
+func (s *Service) GetOverview(ctx context.Context) (Overview, error) {
+	if err := s.ready(); err != nil {
+		return Overview{}, err
+	}
+	settings, err := s.store.LoadSettings(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	rules, err := s.store.ListRules(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	legacy, err := s.store.ListLegacyRules(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	return Overview{
+		Settings:       settings,
+		Rules:          rules,
+		LegacyRules:    legacy,
+		UnscannedPaths: s.UnscannedPaths(),
+		Presets:        Presets(),
+		PseudonymKinds: PseudonymKinds(),
+	}, nil
+}
+
+func (s *Service) GetSettings(ctx context.Context) (Settings, error) {
+	if err := s.ready(); err != nil {
+		return Settings{}, err
+	}
+	return s.store.LoadSettings(ctx)
+}
+
+func (s *Service) UpdateSettings(ctx context.Context, settings Settings) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if err := s.store.SaveSettings(ctx, settings); err != nil {
+		return err
+	}
+	return s.Reload(ctx)
+}
+
+func (s *Service) ListRules(ctx context.Context) ([]StoredRule, error) {
+	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	compiled, err := compileRuntimeRules(rules)
+	return s.store.ListRules(ctx)
+}
+
+func (s *Service) CreateRule(ctx context.Context, rule Rule) (StoredRule, error) {
+	if err := s.ready(); err != nil {
+		return StoredRule{}, err
+	}
+	normalized, err := normalizeRule(rule)
 	if err != nil {
+		return StoredRule{}, err
+	}
+	created, err := s.store.CreateRule(ctx, normalized)
+	if err != nil {
+		return StoredRule{}, err
+	}
+	return created, s.Reload(ctx)
+}
+
+func (s *Service) UpdateRule(ctx context.Context, id int64, rule Rule) (StoredRule, error) {
+	if err := s.ready(); err != nil {
+		return StoredRule{}, err
+	}
+	existing, err := s.store.GetRule(ctx, id)
+	if err != nil {
+		return StoredRule{}, err
+	}
+	// 内置规则的匹配逻辑不可改写，只允许调整启用状态与替换方式
+	if existing.Source == SourceBuiltin {
+		rule.MatchType = existing.MatchType
+		rule.Pattern = existing.Pattern
+	}
+	normalized, err := normalizeRule(rule)
+	if err != nil {
+		return StoredRule{}, err
+	}
+	updated, err := s.store.UpdateRule(ctx, id, normalized)
+	if err != nil {
+		return StoredRule{}, err
+	}
+	return updated, s.Reload(ctx)
+}
+
+func (s *Service) DeleteRule(ctx context.Context, id int64) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if err := s.store.DeleteRule(ctx, id); err != nil {
+		return err
+	}
+	return s.Reload(ctx)
+}
+
+// ApplyPreset 导入预设规则集，返回新增条数。已存在同名规则的跳过。
+func (s *Service) ApplyPreset(ctx context.Context, presetID string) (int, error) {
+	if err := s.ready(); err != nil {
+		return 0, err
+	}
+	preset, ok := FindPreset(presetID)
+	if !ok {
+		return 0, fmt.Errorf("预设不存在: %s", presetID)
+	}
+	existing, err := s.store.ListRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	known := make(map[string]struct{}, len(existing))
+	for _, rule := range existing {
+		known[rule.Name] = struct{}{}
+	}
+
+	added := 0
+	for _, rule := range preset.Rules {
+		if _, exists := known[rule.Name]; exists {
+			continue
+		}
+		if _, err := s.store.CreateRule(ctx, rule); err != nil {
+			return added, err
+		}
+		added++
+	}
+	if added == 0 {
+		return 0, nil
+	}
+	return added, s.Reload(ctx)
+}
+
+func (s *Service) ListLegacyRules(ctx context.Context) ([]LegacyRule, error) {
+	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	s.rulesCache = compiled
-	s.rulesCached = true
-	return s.rulesCache, nil
+	return s.store.ListLegacyRules(ctx)
 }
 
-func (s *Service) invalidateRuleCache() {
-	s.rulesMu.Lock()
-	s.rulesCache = nil
-	s.rulesCached = false
-	s.rulesMu.Unlock()
+func (s *Service) DiscardLegacyRules(ctx context.Context) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	return s.store.DiscardLegacyRules(ctx)
 }
 
-func NormalizeInput(input PrivacyRuleInput) (PrivacyRuleInput, error) {
-	return normalizeInput(input, false)
+// PreviewText 对一段文本试跑当前规则（规则测试面板）。
+// 输入与输出都停留在本机，不落库。
+func (s *Service) PreviewText(text string) PreviewResult {
+	snapshot := s.currentSnapshot()
+	if snapshot == nil {
+		return PreviewResult{Output: text}
+	}
+	result := snapshot.ApplyToText(text)
+	return PreviewResult{
+		Output:   string(result.Body),
+		Changed:  result.Changed,
+		HitCount: result.HitCount,
+		RuleHits: result.RuleHits,
+	}
 }
 
-func NormalizeInputForUpdate(input PrivacyRuleInput) (PrivacyRuleInput, error) {
-	return normalizeInput(input, true)
+// normalizeRule 补齐默认值并校验
+func normalizeRule(rule Rule) (Rule, error) {
+	if rule.Action == "" {
+		rule.Action = ActionRedact
+	}
+	if rule.ReplacementMode == "" {
+		rule.ReplacementMode = ReplacementPlaceholder
+	}
+	if rule.ReplacementMode == ReplacementPlaceholder && rule.Placeholder == "" {
+		rule.Placeholder = DefaultPlaceholder
+	}
+	if rule.Source == "" {
+		rule.Source = SourceCustom
+	}
+	if rule.Priority == 0 {
+		rule.Priority = 100
+	}
+	if err := ValidateRule(rule); err != nil {
+		return Rule{}, err
+	}
+	// 编译校验前置，避免把无法编译的正则写进库
+	if _, err := CompileRule(rule); err != nil {
+		return Rule{}, err
+	}
+	return rule, nil
 }
 
-func normalizeInput(input PrivacyRuleInput, allowEmptyPattern bool) (PrivacyRuleInput, error) {
-	input.Name = strings.TrimSpace(input.Name)
-	input.Type = strings.TrimSpace(strings.ToLower(input.Type))
-	input.Category = strings.TrimSpace(strings.ToLower(input.Category))
-	input.ReplacementMode = strings.TrimSpace(strings.ToLower(input.ReplacementMode))
-
-	if input.Name == "" {
-		return PrivacyRuleInput{}, fmt.Errorf("规则名称不能为空")
-	}
-	if !isValidRuleType(input.Type) {
-		return PrivacyRuleInput{}, fmt.Errorf("规则类型无效")
-	}
-	if input.Category == "" {
-		input.Category = CategoryCustom
-	}
-	if input.ReplacementMode == "" {
-		input.ReplacementMode = ReplacementModePseudonym
-	}
-	if !isValidReplacementMode(input.ReplacementMode) {
-		return PrivacyRuleInput{}, fmt.Errorf("替换方式无效")
-	}
-	if !isValidCategory(input.Category) {
-		return PrivacyRuleInput{}, fmt.Errorf("规则类别无效")
-	}
-	if input.Priority <= 0 {
-		input.Priority = 100
-	}
-	if !allowEmptyPattern && strings.TrimSpace(input.PatternOrValue) == "" {
-		return PrivacyRuleInput{}, fmt.Errorf("匹配内容不能为空")
-	}
-	if strings.TrimSpace(input.PatternOrValue) != "" && input.Type == RuleTypeRegex && input.Enabled {
-		if _, err := regexp.Compile(input.PatternOrValue); err != nil {
-			return PrivacyRuleInput{}, fmt.Errorf("正则表达式无效: %w", err)
-		}
-	}
-	if strings.TrimSpace(input.PatternOrValue) != "" && input.Type == RuleTypeEntropy {
-		minLength, err := strconv.Atoi(strings.TrimSpace(input.PatternOrValue))
-		if err != nil || minLength < 8 {
-			return PrivacyRuleInput{}, fmt.Errorf("高熵识别最小长度必须是不小于 8 的数字")
-		}
-	}
-	if strings.TrimSpace(input.PatternOrValue) != "" && input.Type == RuleTypeValidator {
-		for _, validator := range parseRuleList(input.PatternOrValue) {
-			if !isValidValidator(validator) {
-				return PrivacyRuleInput{}, fmt.Errorf("校验算法无效: %s", validator)
-			}
-		}
-	}
-	return input, nil
-}
-
-func SummaryToJSON(summary RedactionSummary) string {
-	if !summary.Changed || len(summary.Hits) == 0 {
+// SummaryToJSON 序列化命中摘要用于落库与前端展示。
+//
+// 只输出规则名、来源、动作与命中数。RuleHit.Matches 带 json:"-"，
+// 命中原文不可能经由此处泄漏——这是本次重构的核心红线。
+func SummaryToJSON(result ApplyResult) string {
+	if len(result.RuleHits) == 0 {
 		return ""
 	}
 	data, err := json.Marshal(struct {
-		Changed bool           `json:"changed"`
-		Hits    []RedactionHit `json:"hits"`
+		Changed  bool      `json:"changed"`
+		Action   string    `json:"action"`
+		HitCount int       `json:"hit_count"`
+		Hits     []RuleHit `json:"hits"`
 	}{
-		Changed: summary.Changed,
-		Hits:    summary.Hits,
+		Changed:  result.Changed,
+		Action:   result.Action,
+		HitCount: result.HitCount,
+		Hits:     result.RuleHits,
 	})
 	if err != nil {
 		return ""
 	}
 	return string(data)
-}
-
-func DebugMatchesToJSON(summary RedactionSummary) string {
-	if !summary.Changed || len(summary.Matches) == 0 {
-		return ""
-	}
-	data, err := json.Marshal(summary.Matches)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-type serviceSyntheticReplacementTracker struct {
-	ctx          context.Context
-	store        *Store
-	logger       *slog.Logger
-	allocationMu *sync.Mutex
-}
-
-func (t *serviceSyntheticReplacementTracker) LockSyntheticAllocation() {
-	if t != nil && t.allocationMu != nil {
-		t.allocationMu.Lock()
-	}
-}
-
-func (t *serviceSyntheticReplacementTracker) UnlockSyntheticAllocation() {
-	if t != nil && t.allocationMu != nil {
-		t.allocationMu.Unlock()
-	}
-}
-
-func (t *serviceSyntheticReplacementTracker) LookupSyntheticMapping(raw, kind string) (string, bool) {
-	if t == nil || t.store == nil || raw == "" {
-		return "", false
-	}
-	replacement, found, err := t.store.LookupSyntheticMapping(t.ctx, raw, kind)
-	if err != nil {
-		if t.logger != nil {
-			t.logger.Debug("[隐私防护] 查询模拟值映射失败", "kind", kind, "error", err)
-		}
-		return "", false
-	}
-	if found && t.logger != nil {
-		t.logger.Debug("[隐私防护] 命中模拟值映射", "kind", kind, "replacement", replacement)
-	}
-	return replacement, found
-}
-
-func (t *serviceSyntheticReplacementTracker) RegisterSyntheticMapping(raw, kind, replacement string) {
-	if t == nil || t.store == nil || raw == "" || replacement == "" {
-		return
-	}
-	if err := t.store.RegisterSyntheticMapping(t.ctx, raw, kind, replacement); err != nil {
-		if t.logger != nil {
-			t.logger.Debug("[隐私防护] 模拟值映射登记失败", "kind", kind, "replacement", replacement, "error", err)
-		}
-		return
-	}
-	if t.logger != nil {
-		t.logger.Debug("[隐私防护] 已登记模拟值映射", "kind", kind, "replacement", replacement)
-	}
-}
-
-func (t *serviceSyntheticReplacementTracker) RegisterSyntheticValue(value, kind string) {
-	if t == nil || t.store == nil || value == "" {
-		return
-	}
-	if err := t.store.RegisterSyntheticValue(t.ctx, value, kind); err != nil {
-		if t.logger != nil {
-			t.logger.Debug("[隐私防护] 模拟值登记失败", "kind", kind, "value", value, "error", err)
-		}
-		return
-	}
-	if t.logger != nil {
-		t.logger.Debug("[隐私防护] 已登记模拟值", "kind", kind, "value", value)
-	}
-}
-
-func (t *serviceSyntheticReplacementTracker) SyntheticReplacementInUse(kind, replacement string) bool {
-	if t == nil || t.store == nil || replacement == "" {
-		return false
-	}
-	found, err := t.store.SyntheticReplacementInUse(t.ctx, kind, replacement)
-	if err != nil {
-		if t.logger != nil {
-			t.logger.Debug("[隐私防护] 查询模拟值占用失败", "kind", kind, "replacement", replacement, "error", err)
-		}
-		return false
-	}
-	return found
-}
-
-func (t *serviceSyntheticReplacementTracker) TouchSyntheticValue(value string) bool {
-	if t == nil || t.store == nil || value == "" {
-		return false
-	}
-	found, err := t.store.TouchSyntheticValue(t.ctx, value)
-	if err != nil {
-		if t.logger != nil {
-			t.logger.Debug("[隐私防护] 查询模拟值失败", "value", value, "error", err)
-		}
-		return false
-	}
-	if found {
-		t.LogSyntheticValueSkip(value)
-	}
-	return found
-}
-
-func (t *serviceSyntheticReplacementTracker) LogSyntheticValueSkip(value string) {
-	if t == nil || t.logger == nil || value == "" {
-		return
-	}
-	t.logger.Debug("[隐私防护] 跳过已登记模拟值", "value", value)
-}
-
-func isValidRuleType(value string) bool {
-	switch value {
-	case RuleTypeExact, RuleTypeRegex, RuleTypeField, RuleTypeKeyword, RuleTypeValidator, RuleTypeEntropy, RuleTypeStructured:
-		return true
-	default:
-		return false
-	}
-}
-
-func isValidReplacementMode(value string) bool {
-	switch value {
-	case ReplacementModePlaceholder, ReplacementModePseudonym:
-		return true
-	default:
-		return false
-	}
-}
-
-func isValidValidator(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "bank_card_luhn", "cn_id_card", "jwt":
-		return true
-	default:
-		return false
-	}
-}
-
-func isValidCategory(value string) bool {
-	switch value {
-	case CategorySecret, CategoryToken, CategoryName, CategoryPhone, CategoryBankCard, CategoryIDCard, CategoryCustom:
-		return true
-	default:
-		return false
-	}
 }

@@ -2,12 +2,34 @@ package privacy
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"time"
 )
+
+// LegacyRule 旧版（v8.5 及以前）隐私规则的只读快照。
+//
+// 旧规则刻意不自动转换为新模型：转换出错在隐私场景是静默失败——
+// 规则看似还在列表里、实际已不匹配，用户以为受保护实则裸奔。
+// 保留原样供用户逐条确认重建，确认后才生效。
+type LegacyRule struct {
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	Type            string `json:"type"`
+	Category        string `json:"category"`
+	PatternMasked   string `json:"pattern_masked"`
+	ValueLength     int    `json:"value_length"`
+	ReplacementMode string `json:"replacement_mode"`
+	Enabled         bool   `json:"enabled"`
+	Priority        int    `json:"priority"`
+}
+
+// StoredRule 带持久化元数据的规则
+type StoredRule struct {
+	Rule
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
 type Store struct {
 	db *sql.DB
@@ -17,338 +39,369 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+const sqlNowExpr = `(strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')`
+
+// EnsureSchema 建立新版隐私表，并完成一次性的破坏性迁移。
+//
+// 迁移做三件事，均围绕「隐私防护自身不得成为隐私集中池」：
+//  1. 旧 privacy_rules 整表改名保留为 privacy_legacy_rules（零拷贝，供用户手工重建）；
+//  2. 删除 privacy_synthetic_values / privacy_synthetic_mappings——后者的 raw_value 列
+//     直接存放客户真实姓名与号码，是本次重构要根除的明文存储；
+//  3. 种子化内置 PII 规则，避免新装用户面对一份空规则表却以为已受保护。
 func (s *Store) EnsureSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("privacy store not initialized")
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS privacy_synthetic_values (
-			value TEXT PRIMARY KEY,
-			kind TEXT NOT NULL,
-			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-			last_seen_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-			hit_count INTEGER NOT NULL DEFAULT 0
-		)
-	`); err != nil {
-		return fmt.Errorf("create privacy_synthetic_values: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_privacy_synthetic_values_kind ON privacy_synthetic_values(kind)`); err != nil {
-		return fmt.Errorf("create idx_privacy_synthetic_values_kind: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `
-			CREATE TABLE IF NOT EXISTS privacy_synthetic_mappings (
-				kind TEXT NOT NULL,
-				raw_hash TEXT NOT NULL,
-				raw_value TEXT NOT NULL DEFAULT '',
-				replacement TEXT NOT NULL,
-				created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-				last_seen_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-				hit_count INTEGER NOT NULL DEFAULT 0,
-			PRIMARY KEY (kind, raw_hash),
-			UNIQUE (kind, replacement)
-		)
-	`); err != nil {
-		return fmt.Errorf("create privacy_synthetic_mappings: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_privacy_synthetic_mappings_replacement ON privacy_synthetic_mappings(kind, replacement)`); err != nil {
-		return fmt.Errorf("create idx_privacy_synthetic_mappings_replacement: %w", err)
-	}
-	hasRawValue, err := s.hasColumn(ctx, "privacy_synthetic_mappings", "raw_value")
+
+	migrated, err := s.migrateLegacyRulesTable(ctx)
 	if err != nil {
 		return err
 	}
-	if !hasRawValue {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE privacy_synthetic_mappings ADD COLUMN raw_value TEXT NOT NULL DEFAULT ''`); err != nil {
-			return fmt.Errorf("add privacy_synthetic_mappings.raw_value: %w", err)
-		}
+
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS privacy_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			priority INTEGER NOT NULL DEFAULT 100,
+			match_type TEXT NOT NULL,
+			pattern TEXT NOT NULL,
+			action TEXT NOT NULL DEFAULT 'redact',
+			replacement_mode TEXT NOT NULL DEFAULT 'placeholder',
+			placeholder TEXT NOT NULL DEFAULT '[已脱敏]',
+			pseudonym_kind TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT 'custom',
+			created_at DATETIME DEFAULT ` + sqlNowExpr + `,
+			updated_at DATETIME DEFAULT ` + sqlNowExpr + `
+		)
+	`); err != nil {
+		return fmt.Errorf("create privacy_rules: %w", err)
 	}
-	hasReplacementMode, err := s.hasColumn(ctx, "privacy_rules", "replacement_mode")
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_privacy_rules_enabled_priority ON privacy_rules(enabled, priority)`); err != nil {
+		return fmt.Errorf("create idx_privacy_rules_enabled_priority: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS privacy_settings (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			mode TEXT NOT NULL DEFAULT 'detect',
+			scan_max_bytes INTEGER NOT NULL DEFAULT 4194304,
+			over_limit_action TEXT NOT NULL DEFAULT 'scan_prefix',
+			on_error TEXT NOT NULL DEFAULT 'fail_open',
+			unsupported_path_action TEXT NOT NULL DEFAULT 'warn',
+			updated_at DATETIME DEFAULT ` + sqlNowExpr + `
+		)
+	`); err != nil {
+		return fmt.Errorf("create privacy_settings: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO privacy_settings (id) VALUES (1)`); err != nil {
+		return fmt.Errorf("seed privacy_settings: %w", err)
+	}
+
+	if err := s.dropPlaintextSyntheticTables(ctx); err != nil {
 		return err
 	}
-	if !hasReplacementMode {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE privacy_rules ADD COLUMN replacement_mode TEXT NOT NULL DEFAULT 'pseudonym'`); err != nil {
-			return fmt.Errorf("add privacy_rules.replacement_mode: %w", err)
+	if err := s.seedBuiltinRules(ctx); err != nil {
+		return err
+	}
+
+	if migrated {
+		// 规则集已整体更换，沿用旧的「有启用规则即脱敏」语义会让全新规则集
+		// 未经验证就改写生产流量。统一降到 detect，由用户看过命中统计后再开 redact。
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE privacy_settings SET mode = ?, updated_at = `+sqlNowExpr+` WHERE id = 1`, ModeDetect); err != nil {
+			return fmt.Errorf("reset mode after legacy migration: %w", err)
 		}
 	}
 	return nil
 }
 
-func (s *Store) ListSyntheticValues(ctx context.Context) ([]SyntheticValueRecord, error) {
+// migrateLegacyRulesTable 旧结构（有 type 列、无 match_type 列）整表改名保留。
+// 返回是否发生了迁移。
+func (s *Store) migrateLegacyRulesTable(ctx context.Context) (bool, error) {
+	exists, err := s.tableExists(ctx, "privacy_rules")
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	isNew, err := s.hasColumn(ctx, "privacy_rules", "match_type")
+	if err != nil {
+		return false, err
+	}
+	if isNew {
+		return false, nil
+	}
+
+	legacyExists, err := s.tableExists(ctx, "privacy_legacy_rules")
+	if err != nil {
+		return false, err
+	}
+	if legacyExists {
+		// 已经迁移过一次却仍有旧结构表，说明是异常中断的残留，直接丢弃残留
+		if _, err := s.db.ExecContext(ctx, `DROP TABLE privacy_rules`); err != nil {
+			return false, fmt.Errorf("drop stale legacy privacy_rules: %w", err)
+		}
+		return true, nil
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE privacy_rules RENAME TO privacy_legacy_rules`); err != nil {
+		return false, fmt.Errorf("rename legacy privacy_rules: %w", err)
+	}
+	return true, nil
+}
+
+// dropPlaintextSyntheticTables 删除伪名化映射表。
+// privacy_synthetic_mappings.raw_value 存放客户真实值，是明文泄漏面；
+// 新的伪名化实现无状态，不需要任何持久化映射。
+func (s *Store) dropPlaintextSyntheticTables(ctx context.Context) error {
+	for _, table := range []string{"privacy_synthetic_mappings", "privacy_synthetic_values"} {
+		if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS `+table); err != nil {
+			return fmt.Errorf("drop %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// seedBuiltinRules 幂等种子化内置 PII 规则（按 source+pattern 判重）
+func (s *Store) seedBuiltinRules(ctx context.Context) error {
+	for _, rule := range BuiltinPIIRules() {
+		var count int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM privacy_rules WHERE source = ? AND pattern = ?`,
+			SourceBuiltin, rule.Pattern).Scan(&count); err != nil {
+			return fmt.Errorf("check builtin rule %q: %w", rule.Pattern, err)
+		}
+		if count > 0 {
+			continue
+		}
+		if _, err := s.insertRule(ctx, rule); err != nil {
+			return fmt.Errorf("seed builtin rule %q: %w", rule.Pattern, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) LoadSettings(ctx context.Context) (Settings, error) {
+	if s == nil || s.db == nil {
+		return Settings{}, fmt.Errorf("privacy store not initialized")
+	}
+	var settings Settings
+	err := s.db.QueryRowContext(ctx, `
+		SELECT mode, scan_max_bytes, over_limit_action, on_error, unsupported_path_action
+		FROM privacy_settings WHERE id = 1
+	`).Scan(&settings.Mode, &settings.ScanMaxBytes, &settings.OverLimitAction,
+		&settings.OnError, &settings.UnsupportedPathAction)
+	if err == sql.ErrNoRows {
+		return DefaultSettings(), nil
+	}
+	if err != nil {
+		return Settings{}, fmt.Errorf("load privacy settings: %w", err)
+	}
+	return settings, nil
+}
+
+func (s *Store) SaveSettings(ctx context.Context, settings Settings) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("privacy store not initialized")
+	}
+	if err := ValidateSettings(settings); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE privacy_settings
+		SET mode = ?, scan_max_bytes = ?, over_limit_action = ?, on_error = ?,
+		    unsupported_path_action = ?, updated_at = `+sqlNowExpr+`
+		WHERE id = 1
+	`, settings.Mode, settings.ScanMaxBytes, settings.OverLimitAction,
+		settings.OnError, settings.UnsupportedPathAction)
+	if err != nil {
+		return fmt.Errorf("save privacy settings: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListRules(ctx context.Context) ([]StoredRule, error) {
+	return s.queryRules(ctx, "")
+}
+
+func (s *Store) ListEnabledRules(ctx context.Context) ([]StoredRule, error) {
+	return s.queryRules(ctx, "WHERE enabled = 1")
+}
+
+func (s *Store) queryRules(ctx context.Context, where string) ([]StoredRule, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("privacy store not initialized")
 	}
-
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT
-			m.raw_hash,
-			m.raw_value,
-			m.replacement,
-			m.kind,
-			m.created_at,
-			m.last_seen_at,
-			m.hit_count,
-			COALESCE(v.last_seen_at, ''),
-			COALESCE(v.hit_count, 0)
-		FROM privacy_synthetic_mappings m
-		LEFT JOIN privacy_synthetic_values v
-			ON v.kind = m.kind AND v.value = m.replacement
-		ORDER BY m.created_at DESC, m.raw_hash ASC
-	`)
+		SELECT id, enabled, name, description, priority, match_type, pattern,
+		       action, replacement_mode, placeholder, pseudonym_kind, source, created_at, updated_at
+		FROM privacy_rules `+where+` ORDER BY priority ASC, id ASC`)
 	if err != nil {
-		return nil, fmt.Errorf("query privacy synthetic mappings: %w", err)
+		return nil, fmt.Errorf("query privacy rules: %w", err)
 	}
 	defer rows.Close()
 
-	var records []SyntheticValueRecord
+	var rules []StoredRule
 	for rows.Next() {
-		var record SyntheticValueRecord
-		var createdAt, lastSeenAt, lastSkipAt string
-		if err := rows.Scan(
-			&record.RawHash,
-			&record.RawValue,
-			&record.Replacement,
-			&record.Kind,
-			&createdAt,
-			&lastSeenAt,
-			&record.ReuseCount,
-			&lastSkipAt,
-			&record.SkipCount,
-		); err != nil {
+		rule, err := scanStoredRule(rows)
+		if err != nil {
 			return nil, err
 		}
-		record.Value = record.Replacement
-		record.CreatedAt = parseTime(createdAt)
-		record.LastSeenAt = parseTime(lastSeenAt)
-		record.LastSkipAt = parseTime(lastSkipAt)
-		record.HitCount = record.ReuseCount + record.SkipCount
-		records = append(records, record)
+		rules = append(rules, rule)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate privacy synthetic mappings: %w", err)
+		return nil, fmt.Errorf("iterate privacy rules: %w", err)
 	}
-	return records, nil
+	return rules, nil
 }
 
-func (s *Store) ClearSyntheticValues(ctx context.Context) error {
+func (s *Store) GetRule(ctx context.Context, id int64) (StoredRule, error) {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("privacy store not initialized")
+		return StoredRule{}, fmt.Errorf("privacy store not initialized")
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM privacy_synthetic_mappings`); err != nil {
-		return fmt.Errorf("clear privacy synthetic mappings: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM privacy_synthetic_values`); err != nil {
-		return fmt.Errorf("clear privacy synthetic values: %w", err)
-	}
-	clearSyntheticReplacementRegistry()
-	return nil
-}
-
-func (s *Store) DeleteSyntheticValue(ctx context.Context, kind, rawHash string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("privacy store not initialized")
-	}
-	if rawHash == "" {
-		return fmt.Errorf("模拟值记录标识不能为空")
-	}
-	if kind == "" {
-		kind = syntheticKindCustom
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin delete privacy synthetic mapping: %w", err)
-	}
-	defer tx.Rollback()
-
-	var replacement string
-	err = tx.QueryRowContext(ctx, `
-		SELECT replacement
-		FROM privacy_synthetic_mappings
-		WHERE kind = ? AND raw_hash = ?
-	`, kind, rawHash).Scan(&replacement)
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, enabled, name, description, priority, match_type, pattern,
+		       action, replacement_mode, placeholder, pseudonym_kind, source, created_at, updated_at
+		FROM privacy_rules WHERE id = ?`, id)
+	rule, err := scanStoredRule(row)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("模拟值记录不存在")
+		return StoredRule{}, fmt.Errorf("隐私规则不存在: %d", id)
 	}
 	if err != nil {
-		return fmt.Errorf("query privacy synthetic mapping for delete: %w", err)
+		return StoredRule{}, err
 	}
-
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM privacy_synthetic_mappings
-		WHERE kind = ? AND raw_hash = ?
-	`, kind, rawHash); err != nil {
-		return fmt.Errorf("delete privacy synthetic mapping: %w", err)
-	}
-
-	var mappingRefs int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		FROM privacy_synthetic_mappings
-		WHERE kind = ? AND replacement = ?
-	`, kind, replacement).Scan(&mappingRefs); err != nil {
-		return fmt.Errorf("query privacy synthetic mapping refs: %w", err)
-	}
-	if mappingRefs == 0 {
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM privacy_synthetic_values
-			WHERE kind = ? AND value = ?
-		`, kind, replacement); err != nil {
-			return fmt.Errorf("delete privacy synthetic value: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit delete privacy synthetic mapping: %w", err)
-	}
-	clearSyntheticReplacementRegistry()
-	return nil
+	return rule, nil
 }
 
-func (s *Store) RegisterSyntheticValue(ctx context.Context, value, kind string) error {
+func (s *Store) CreateRule(ctx context.Context, rule Rule) (StoredRule, error) {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("privacy store not initialized")
+		return StoredRule{}, fmt.Errorf("privacy store not initialized")
 	}
-	if value == "" {
-		return nil
-	}
-	if kind == "" {
-		kind = syntheticKindCustom
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO privacy_synthetic_values (value, kind, created_at, last_seen_at, hit_count)
-		VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00', strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00', 0)
-		ON CONFLICT(value) DO UPDATE SET
-			kind = excluded.kind,
-			last_seen_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'
-	`, value, kind); err != nil {
-		return fmt.Errorf("register privacy synthetic value: %w", err)
-	}
-	rememberSyntheticReplacementValue(value)
-	return nil
-}
-
-func (s *Store) LookupSyntheticMapping(ctx context.Context, raw, kind string) (string, bool, error) {
-	if s == nil || s.db == nil {
-		return "", false, fmt.Errorf("privacy store not initialized")
-	}
-	if raw == "" {
-		return "", false, nil
-	}
-	if kind == "" {
-		kind = syntheticKindCustom
-	}
-	rawHash := syntheticRawHash(raw)
-	var replacement string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT replacement
-		FROM privacy_synthetic_mappings
-		WHERE kind = ? AND raw_hash = ?
-	`, kind, rawHash).Scan(&replacement)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
+	id, err := s.insertRule(ctx, rule)
 	if err != nil {
-		return "", false, fmt.Errorf("lookup privacy synthetic mapping: %w", err)
+		return StoredRule{}, fmt.Errorf("create privacy rule: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE privacy_synthetic_mappings
-		SET last_seen_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00',
-			hit_count = hit_count + 1
-		WHERE kind = ? AND raw_hash = ?
-	`, kind, rawHash); err != nil {
-		return "", false, fmt.Errorf("touch privacy synthetic mapping: %w", err)
-	}
-	rememberSyntheticReplacementValue(replacement)
-	return replacement, true, nil
+	return s.GetRule(ctx, id)
 }
 
-func (s *Store) RegisterSyntheticMapping(ctx context.Context, raw, kind, replacement string) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("privacy store not initialized")
-	}
-	if raw == "" || replacement == "" {
-		return nil
-	}
-	if kind == "" {
-		kind = syntheticKindCustom
-	}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO privacy_synthetic_mappings (kind, raw_hash, raw_value, replacement, created_at, last_seen_at, hit_count)
-		VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00', strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00', 0)
-		ON CONFLICT(kind, raw_hash) DO UPDATE SET
-			raw_value = CASE
-				WHEN privacy_synthetic_mappings.raw_value = '' THEN excluded.raw_value
-				ELSE privacy_synthetic_mappings.raw_value
-			END,
-			last_seen_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'
-	`, kind, syntheticRawHash(raw), raw, replacement); err != nil {
-		return fmt.Errorf("register privacy synthetic mapping: %w", err)
-	}
-	rememberSyntheticReplacementValue(replacement)
-	return nil
-}
-
-func (s *Store) SyntheticReplacementInUse(ctx context.Context, kind, replacement string) (bool, error) {
-	if s == nil || s.db == nil {
-		return false, fmt.Errorf("privacy store not initialized")
-	}
-	if replacement == "" {
-		return false, nil
-	}
-	if kind == "" {
-		kind = syntheticKindCustom
-	}
-	var exists int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT 1
-		FROM (
-			SELECT replacement
-			FROM privacy_synthetic_mappings
-			WHERE kind = ? AND replacement = ?
-			UNION ALL
-			SELECT value AS replacement
-			FROM privacy_synthetic_values
-			WHERE kind = ? AND value = ?
-		)
-		LIMIT 1
-	`, kind, replacement, kind, replacement).Scan(&exists)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
+func (s *Store) insertRule(ctx context.Context, rule Rule) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO privacy_rules
+			(enabled, name, description, priority, match_type, pattern, action,
+			 replacement_mode, placeholder, pseudonym_kind, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, boolToInt(rule.Enabled), rule.Name, rule.Description, rule.Priority,
+		rule.MatchType, rule.Pattern, rule.Action,
+		rule.ReplacementMode, rule.Placeholder, rule.PseudonymKind, rule.Source)
 	if err != nil {
-		return false, fmt.Errorf("query privacy synthetic mapping replacement: %w", err)
+		return 0, err
 	}
-	return exists == 1, nil
+	return result.LastInsertId()
 }
 
-func (s *Store) TouchSyntheticValue(ctx context.Context, value string) (bool, error) {
+func (s *Store) UpdateRule(ctx context.Context, id int64, rule Rule) (StoredRule, error) {
 	if s == nil || s.db == nil {
-		return false, fmt.Errorf("privacy store not initialized")
-	}
-	if value == "" {
-		return false, nil
+		return StoredRule{}, fmt.Errorf("privacy store not initialized")
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE privacy_synthetic_values
-		SET last_seen_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00',
-			hit_count = hit_count + 1
-		WHERE value = ?
-	`, value)
+		UPDATE privacy_rules
+		SET enabled = ?, name = ?, description = ?, priority = ?, match_type = ?, pattern = ?,
+		    action = ?, replacement_mode = ?, placeholder = ?, pseudonym_kind = ?,
+		    updated_at = `+sqlNowExpr+`
+		WHERE id = ?
+	`, boolToInt(rule.Enabled), rule.Name, rule.Description, rule.Priority,
+		rule.MatchType, rule.Pattern, rule.Action,
+		rule.ReplacementMode, rule.Placeholder, rule.PseudonymKind, id)
 	if err != nil {
-		return false, fmt.Errorf("touch privacy synthetic value: %w", err)
+		return StoredRule{}, fmt.Errorf("update privacy rule: %w", err)
 	}
-	rows, _ := result.RowsAffected()
-	if rows > 0 {
-		rememberSyntheticReplacementValue(value)
-		return true, nil
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return StoredRule{}, fmt.Errorf("隐私规则不存在: %d", id)
 	}
-	return false, nil
+	return s.GetRule(ctx, id)
 }
 
-func syntheticRawHash(raw string) string {
-	sum := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(sum[:])
+func (s *Store) DeleteRule(ctx context.Context, id int64) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("privacy store not initialized")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM privacy_rules WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete privacy rule: %w", err)
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		return fmt.Errorf("隐私规则不存在: %d", id)
+	}
+	return nil
+}
+
+// ListLegacyRules 列出旧版规则只读清单。
+// exact 类旧规则的 pattern 本身就是用户登记的敏感值，一律掩码后返回。
+func (s *Store) ListLegacyRules(ctx context.Context) ([]LegacyRule, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("privacy store not initialized")
+	}
+	exists, err := s.tableExists(ctx, "privacy_legacy_rules")
+	if err != nil || !exists {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, type, category, pattern_or_value, replacement_mode, enabled, priority
+		FROM privacy_legacy_rules ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query legacy privacy rules: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LegacyRule
+	for rows.Next() {
+		var rule LegacyRule
+		var pattern string
+		var enabled int
+		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Type, &rule.Category,
+			&pattern, &rule.ReplacementMode, &enabled, &rule.Priority); err != nil {
+			return nil, err
+		}
+		rule.Enabled = enabled == 1
+		rule.ValueLength = len([]rune(pattern))
+		if rule.Type == "exact" {
+			rule.PatternMasked = maskValue(pattern)
+		} else {
+			rule.PatternMasked = pattern
+		}
+		out = append(out, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy privacy rules: %w", err)
+	}
+	return out, nil
+}
+
+// DiscardLegacyRules 用户确认重建完毕后清除旧清单
+func (s *Store) DiscardLegacyRules(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("privacy store not initialized")
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS privacy_legacy_rules`); err != nil {
+		return fmt.Errorf("drop privacy_legacy_rules: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) tableExists(ctx context.Context, name string) (bool, error) {
+	var found string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect table %s: %w", name, err)
+	}
+	return true, nil
 }
 
 func (s *Store) hasColumn(ctx context.Context, tableName, columnName string) (bool, error) {
@@ -371,161 +424,24 @@ func (s *Store) hasColumn(ctx context.Context, tableName, columnName string) (bo
 			return true, nil
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-func (s *Store) ListRules(ctx context.Context) ([]PrivacyRule, error) {
-	return s.listRules(ctx, "", true)
-}
-
-func (s *Store) ListEnabledRules(ctx context.Context) ([]PrivacyRule, error) {
-	return s.listRules(ctx, "WHERE enabled = 1", false)
-}
-
-func (s *Store) listRules(ctx context.Context, where string, mask bool) ([]PrivacyRule, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("privacy store not initialized")
-	}
-
-	query := `SELECT id, name, type, category, pattern_or_value, replacement_mode, enabled, priority, created_at, updated_at
-		FROM privacy_rules ` + where + ` ORDER BY id ASC`
-
-	rows, err := s.db.QueryContext(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("query privacy rules: %w", err)
-	}
-	defer rows.Close()
-
-	var rules []PrivacyRule
-	for rows.Next() {
-		rule, err := scanRule(rows)
-		if err != nil {
-			return nil, err
-		}
-		if mask {
-			rule = maskRule(rule)
-		}
-		rules = append(rules, rule)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate privacy rules: %w", err)
-	}
-	return rules, nil
-}
-
-func (s *Store) CreateRule(ctx context.Context, input PrivacyRuleInput) (PrivacyRule, error) {
-	if s == nil || s.db == nil {
-		return PrivacyRule{}, fmt.Errorf("privacy store not initialized")
-	}
-
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO privacy_rules (name, type, category, pattern_or_value, replacement_mode, enabled, priority)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, input.Name, input.Type, input.Category, input.PatternOrValue, input.ReplacementMode, boolToInt(input.Enabled), input.Priority)
-	if err != nil {
-		return PrivacyRule{}, fmt.Errorf("create privacy rule: %w", err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return PrivacyRule{}, fmt.Errorf("get privacy rule id: %w", err)
-	}
-	return s.GetRule(ctx, id)
-}
-
-func (s *Store) UpdateRule(ctx context.Context, id int64, input PrivacyRuleInput) (PrivacyRule, error) {
-	if s == nil || s.db == nil {
-		return PrivacyRule{}, fmt.Errorf("privacy store not initialized")
-	}
-
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE privacy_rules
-		SET name = ?, type = ?, category = ?, pattern_or_value = ?, replacement_mode = ?, enabled = ?, priority = ?
-		WHERE id = ?
-	`, input.Name, input.Type, input.Category, input.PatternOrValue, input.ReplacementMode, boolToInt(input.Enabled), input.Priority, id)
-	if err != nil {
-		return PrivacyRule{}, fmt.Errorf("update privacy rule: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows == 0 {
-		return PrivacyRule{}, fmt.Errorf("隐私规则不存在: %d", id)
-	}
-	return s.GetRule(ctx, id)
-}
-
-func (s *Store) DeleteRule(ctx context.Context, id int64) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("privacy store not initialized")
-	}
-
-	result, err := s.db.ExecContext(ctx, `DELETE FROM privacy_rules WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete privacy rule: %w", err)
-	}
-	if rows, _ := result.RowsAffected(); rows == 0 {
-		return fmt.Errorf("隐私规则不存在: %d", id)
-	}
-	return nil
-}
-
-func (s *Store) GetRule(ctx context.Context, id int64) (PrivacyRule, error) {
-	rule, err := s.getRule(ctx, id)
-	if err != nil {
-		return PrivacyRule{}, err
-	}
-	return maskRule(rule), nil
-}
-
-func (s *Store) GetRuleRaw(ctx context.Context, id int64) (PrivacyRule, error) {
-	return s.getRule(ctx, id)
-}
-
-func (s *Store) getRule(ctx context.Context, id int64) (PrivacyRule, error) {
-	if s == nil || s.db == nil {
-		return PrivacyRule{}, fmt.Errorf("privacy store not initialized")
-	}
-
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, type, category, pattern_or_value, replacement_mode, enabled, priority, created_at, updated_at
-		FROM privacy_rules WHERE id = ?
-	`, id)
-
-	rule, err := scanRule(row)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return PrivacyRule{}, fmt.Errorf("隐私规则不存在: %d", id)
-		}
-		return PrivacyRule{}, err
-	}
-	return rule, nil
+	return false, rows.Err()
 }
 
 type ruleScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanRule(scanner ruleScanner) (PrivacyRule, error) {
-	var rule PrivacyRule
+func scanStoredRule(scanner ruleScanner) (StoredRule, error) {
+	var rule StoredRule
 	var enabled int
 	var createdAt, updatedAt string
 	if err := scanner.Scan(
-		&rule.ID,
-		&rule.Name,
-		&rule.Type,
-		&rule.Category,
-		&rule.PatternOrValue,
-		&rule.ReplacementMode,
-		&enabled,
-		&rule.Priority,
-		&createdAt,
-		&updatedAt,
+		&rule.ID, &enabled, &rule.Name, &rule.Description, &rule.Priority,
+		&rule.MatchType, &rule.Pattern, &rule.Action,
+		&rule.ReplacementMode, &rule.Placeholder, &rule.PseudonymKind, &rule.Source,
+		&createdAt, &updatedAt,
 	); err != nil {
-		return PrivacyRule{}, err
-	}
-	if rule.ReplacementMode == "" {
-		rule.ReplacementMode = ReplacementModePseudonym
+		return StoredRule{}, err
 	}
 	rule.Enabled = enabled == 1
 	rule.CreatedAt = parseTime(createdAt)
@@ -533,31 +449,15 @@ func scanRule(scanner ruleScanner) (PrivacyRule, error) {
 	return rule, nil
 }
 
-func maskRule(rule PrivacyRule) PrivacyRule {
-	rule.ValueLength = len([]rune(rule.PatternOrValue))
-	if rule.PatternOrValue == "" {
-		return rule
-	}
-	if rule.Type == RuleTypeExact {
-		rule.PatternMasked = maskValue(rule.PatternOrValue)
-		rule.PatternOrValue = ""
-		return rule
-	}
-	rule.PatternMasked = rule.PatternOrValue
-	return rule
-}
-
+// maskValue 掩码敏感值。短值不暴露任何片段。
 func maskValue(value string) string {
-	length := len([]rune(value))
-	switch {
+	runes := []rune(value)
+	switch length := len(runes); {
 	case length <= 0:
 		return ""
-	case length <= 4:
-		return "****"
 	case length <= 8:
-		return "****" + string([]rune(value)[length-2:])
+		return "****"
 	default:
-		runes := []rune(value)
 		return string(runes[:2]) + "******" + string(runes[length-2:])
 	}
 }

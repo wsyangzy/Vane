@@ -2,6 +2,7 @@ package tracking
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,7 +157,7 @@ func TestRecordRequestSuccessPersistsHTTPStatus(t *testing.T) {
 	}
 }
 
-func TestRecordPrivacyRedactionPersistsMatchesInRequestDetail(t *testing.T) {
+func TestRecordPrivacyRedactionPersistsSummaryOnlyWithoutPlaintext(t *testing.T) {
 	config := &Config{
 		Enabled:         true,
 		DatabasePath:    ":memory:",
@@ -174,12 +175,13 @@ func TestRecordPrivacyRedactionPersistsMatchesInRequestDetail(t *testing.T) {
 	}
 	defer tracker.Close()
 
-	const requestID = "req-privacy-matches"
-	const summary = `{"changed":true,"hits":[{"rule_id":3,"rule_name":"手机号","type":"regex","category":"phone","count":1}]}`
-	const matches = `[{"rule_id":3,"rule_name":"手机号","type":"regex","category":"phone","raw":"13411110001","replacement":"fake_phone_0001"}]`
+	const requestID = "req-privacy-summary"
+	// 摘要只含规则名与命中数。命中原文没有任何落库通道——
+	// RecordPrivacyRedaction 不再接受原文参数，RequestDetail 也不再有对应字段。
+	const summary = `{"changed":true,"action":"redact","hit_count":1,"hits":[{"rule_id":3,"rule_name":"手机号","count":1}]}`
 
 	tracker.RecordRequestStart(requestID, "127.0.0.1", "test-agent", "POST", "/v1/messages", false)
-	tracker.RecordPrivacyRedaction(requestID, summary, matches)
+	tracker.RecordPrivacyRedaction(requestID, summary)
 
 	req, ok := tracker.hotPool.Get(requestID)
 	if !ok {
@@ -193,8 +195,8 @@ func TestRecordPrivacyRedactionPersistsMatchesInRequestDetail(t *testing.T) {
 	if detail.PrivacyRedactionSummary != summary {
 		t.Fatalf("privacy summary mismatch: got %q want %q", detail.PrivacyRedactionSummary, summary)
 	}
-	if detail.PrivacyRedactionMatches != matches {
-		t.Fatalf("privacy matches mismatch: got %q want %q", detail.PrivacyRedactionMatches, matches)
+	if strings.Contains(detail.PrivacyRedactionSummary, "13411110001") {
+		t.Fatalf("summary must never carry raw matched values: %s", detail.PrivacyRedactionSummary)
 	}
 }
 

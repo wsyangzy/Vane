@@ -33,8 +33,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     provider TEXT NOT NULL DEFAULT 'claude',   -- 提供商标识: claude/codex
     environment TEXT NOT NULL DEFAULT 'release', -- 运行环境: dev/release（两版共享本库，靠此列隔离追踪视图）
     privacy_redacted BOOLEAN DEFAULT 0,        -- 发送上游前是否命中隐私脱敏
-    privacy_redaction_summary TEXT,            -- 隐私脱敏命中摘要（不含原文/片段）
-    privacy_redaction_matches TEXT,            -- 本机展示用命中明细（含原文与替换值）
+    privacy_redaction_summary TEXT,            -- 隐私脱敏命中摘要（仅规则名与命中数，绝不含原文）
 
     -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled
@@ -160,56 +159,16 @@ BEGIN
 END;
 
 -- ============================================================================
--- 隐私防护规则表
--- 发送给上游服务商前按用户配置对请求正文做脱敏。仅保存规则和值，不保存请求正文。
+-- 隐私防护表
+-- 结构由 internal/privacy.Store.EnsureSchema 单独持有，此处刻意不定义。
+--
+-- 原因有二：
+--   1. 隐私表经历过破坏性重构（旧 privacy_rules 需整表改名保留、
+--      privacy_synthetic_* 含明文列需删除）。若此处再用
+--      CREATE TABLE IF NOT EXISTS 建一份旧结构，全新安装会先建旧表、
+--      再被迁移逻辑改名成「旧版规则」，凭空产生一个空的历史清单。
+--   2. 两处定义必然漂移，而隐私表的漂移意味着明文列可能被悄悄重建。
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS privacy_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL,                         -- exact | regex | field | keyword | validator | entropy | structured
-    category TEXT NOT NULL,                     -- secret/token/name/phone/bank_card/id_card/custom
-    pattern_or_value TEXT NOT NULL,
-    replacement_mode TEXT NOT NULL DEFAULT 'placeholder', -- placeholder | pseudonym
-    enabled INTEGER NOT NULL DEFAULT 1,
-    priority INTEGER NOT NULL DEFAULT 100,
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
-);
-
-CREATE INDEX IF NOT EXISTS idx_privacy_rules_enabled ON privacy_rules(enabled);
-CREATE INDEX IF NOT EXISTS idx_privacy_rules_type_priority ON privacy_rules(type, priority);
-
-CREATE TABLE IF NOT EXISTS privacy_synthetic_values (
-    value TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    last_seen_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    hit_count INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_privacy_synthetic_values_kind ON privacy_synthetic_values(kind);
-
-CREATE TABLE IF NOT EXISTS privacy_synthetic_mappings (
-    kind TEXT NOT NULL,
-    raw_hash TEXT NOT NULL,
-    raw_value TEXT NOT NULL DEFAULT '',
-    replacement TEXT NOT NULL,
-    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    last_seen_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    hit_count INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (kind, raw_hash),
-    UNIQUE (kind, replacement)
-);
-
-CREATE INDEX IF NOT EXISTS idx_privacy_synthetic_mappings_replacement ON privacy_synthetic_mappings(kind, replacement);
-
-CREATE TRIGGER IF NOT EXISTS update_privacy_rules_timestamp
-    AFTER UPDATE ON privacy_rules
-    FOR EACH ROW
-    WHEN NEW.updated_at = OLD.updated_at
-BEGIN
-    UPDATE privacy_rules SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
-END;
 
 -- ============================================================================
 -- 端点配置表 (新增 - 2025-12-05)

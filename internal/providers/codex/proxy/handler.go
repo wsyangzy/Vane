@@ -450,20 +450,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
 	turnFailureKey := requestTurnFailureCacheKey(r, body)
-	var privacySummary privacy.RedactionSummary
-	privacyChanged := false
+	var privacySummaryJSON string
 	if h.privacyService != nil {
-		protectedBody, summary, changed, redactErr := h.privacyService.RedactRequestContext(
-			r.Context(), originalBody, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"),
-		)
-		if redactErr != nil {
-			h.logger.Error("隐私防护预检失败，已阻止上游发送", "request_id", requestID, "error", redactErr)
+		result, privacyErr := h.privacyService.Apply(r.Context(), privacy.Request{
+			RequestID:    requestID,
+			Path:         r.URL.Path,
+			Method:       r.Method,
+			ProviderType: "codex",
+			ContentType:  r.Header.Get("Content-Type"),
+		}, originalBody)
+		if privacyErr != nil {
+			// 隐私策略拒绝：必须短路返回，不得进入重试 / 故障转移 / 端点冷却
+			var policyErr *privacy.PolicyError
+			if errors.As(privacyErr, &policyErr) {
+				h.logger.Warn("隐私策略拒绝请求，已阻止上游发送",
+					"request_id", requestID, "code", policyErr.Code, "path", r.URL.Path)
+				h.writeError(w, policyErr.StatusCode, policyErr.Message)
+				return
+			}
+			h.logger.Error("隐私防护预检失败，已阻止上游发送", "request_id", requestID, "error", privacyErr)
 			h.writeError(w, http.StatusInternalServerError, "隐私防护处理失败")
 			return
 		}
-		originalBody = protectedBody
-		privacySummary = summary
-		privacyChanged = changed
+		originalBody = result.Body
+		if result.Changed {
+			privacySummaryJSON = privacy.SummaryToJSON(result)
+		}
 	}
 
 	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
@@ -510,13 +522,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewrite, reasoningJSON, serviceTier)
-	if privacyChanged {
-		h.recordPrivacyRedaction(
-			requestID,
-			privacy.SummaryToJSON(privacySummary),
-			body,
-			privacy.DebugMatchesToJSON(privacySummary),
-		)
+	if privacySummaryJSON != "" {
+		h.recordPrivacyRedaction(requestID, privacySummaryJSON)
 	}
 
 	// 6. 决定外层循环轮数（loop_retry）
@@ -1582,7 +1589,11 @@ func (h *Handler) recordForwarding(requestID string, endpointName, channelName, 
 	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
 }
 
-func (h *Handler) recordPrivacyRedaction(requestID string, summaryJSON string, redactedBody []byte, matchDetailsJSON string) {
+// recordPrivacyRedaction 记录隐私脱敏摘要。
+//
+// summaryJSON 只含规则名与命中数。命中原文与请求正文一律不得进入日志或数据库：
+// 日志会广播到前端日志查看器并落盘，正文进来就等于把整段客户对话又存了一份。
+func (h *Handler) recordPrivacyRedaction(requestID string, summaryJSON string) {
 	if requestID == "" || summaryJSON == "" {
 		return
 	}
@@ -1593,12 +1604,9 @@ func (h *Handler) recordPrivacyRedaction(requestID string, summaryJSON string, r
 	logger.Debug("[隐私防护] 请求正文已脱敏",
 		"request_id", requestID,
 		"privacy_redaction_summary", summaryJSON,
-		"privacy_redaction_matches", matchDetailsJSON,
-		"privacy_redacted_body_bytes", len(redactedBody),
-		"privacy_redacted_body", string(redactedBody),
 	)
 	if h.usageTracker != nil {
-		h.usageTracker.RecordPrivacyRedaction(requestID, summaryJSON, matchDetailsJSON)
+		h.usageTracker.RecordPrivacyRedaction(requestID, summaryJSON)
 	}
 }
 

@@ -23,98 +23,89 @@ export namespace logging {
 
 export namespace privacy {
 
-	export class RedactionHit {
-	    rule_id: number;
-	    rule_name: string;
-	    type: string;
-	    category: string;
-	    count: number;
+	export class Settings {
+	    mode: string;
+	    scan_max_bytes: number;
+	    over_limit_action: string;
+	    on_error: string;
+	    unsupported_path_action: string;
 
 	    static createFrom(source: any = {}) {
-	        return new RedactionHit(source);
+	        return new Settings(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.rule_id = source["rule_id"];
-	        this.rule_name = source["rule_name"];
-	        this.type = source["type"];
-	        this.category = source["category"];
-	        this.count = source["count"];
+	        this.mode = source["mode"];
+	        this.scan_max_bytes = source["scan_max_bytes"];
+	        this.over_limit_action = source["over_limit_action"];
+	        this.on_error = source["on_error"];
+	        this.unsupported_path_action = source["unsupported_path_action"];
 	    }
 	}
-	export class RedactionSummary {
-	    changed: boolean;
-	    hits: RedactionHit[];
-
-	    static createFrom(source: any = {}) {
-	        return new RedactionSummary(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.changed = source["changed"];
-	        this.hits = this.convertValues(source["hits"], RedactionHit);
-	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class PrivacyRuleInput {
-	    name: string;
-	    type: string;
-	    category: string;
-	    pattern_or_value: string;
-	    replacement_mode: string;
-	    enabled: boolean;
-	    priority: number;
-
-	    static createFrom(source: any = {}) {
-	        return new PrivacyRuleInput(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.type = source["type"];
-	        this.category = source["category"];
-	        this.pattern_or_value = source["pattern_or_value"];
-	        this.replacement_mode = source["replacement_mode"];
-	        this.enabled = source["enabled"];
-	        this.priority = source["priority"];
-	    }
-	}
-	export class PrivacyRule {
+	export class Rule {
 	    id: number;
-	    name: string;
-	    type: string;
-	    category: string;
-	    pattern_or_value?: string;
-	    pattern_masked?: string;
-	    value_length?: number;
-	    replacement_mode: string;
 	    enabled: boolean;
+	    name: string;
+	    description: string;
 	    priority: number;
+	    match_type: string;
+	    pattern: string;
+	    action: string;
+	    replacement_mode: string;
+	    placeholder: string;
+	    pseudonym_kind: string;
+	    source: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Rule(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.enabled = source["enabled"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.priority = source["priority"];
+	        this.match_type = source["match_type"];
+	        this.pattern = source["pattern"];
+	        this.action = source["action"];
+	        this.replacement_mode = source["replacement_mode"];
+	        this.placeholder = source["placeholder"];
+	        this.pseudonym_kind = source["pseudonym_kind"];
+	        this.source = source["source"];
+	    }
+	}
+	export class StoredRule extends Rule {
 	    created_at: string;
 	    updated_at: string;
 
 	    static createFrom(source: any = {}) {
-	        return new PrivacyRule(source);
+	        return new StoredRule(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        super(source);
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	// 旧版规则只读快照。pattern_masked 已由后端掩码，前端拿不到敏感原值。
+	export class LegacyRule {
+	    id: number;
+	    name: string;
+	    type: string;
+	    category: string;
+	    pattern_masked: string;
+	    value_length: number;
+	    replacement_mode: string;
+	    enabled: boolean;
+	    priority: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LegacyRule(source);
 	    }
 
 	    constructor(source: any = {}) {
@@ -123,84 +114,73 @@ export namespace privacy {
 	        this.name = source["name"];
 	        this.type = source["type"];
 	        this.category = source["category"];
-	        this.pattern_or_value = source["pattern_or_value"];
 	        this.pattern_masked = source["pattern_masked"];
 	        this.value_length = source["value_length"];
 	        this.replacement_mode = source["replacement_mode"];
 	        this.enabled = source["enabled"];
 	        this.priority = source["priority"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
 	    }
 	}
-	export class PrivacyConfig {
-	    enabled: boolean;
-	    rules: PrivacyRule[];
+	// 命中统计。命中原文在 Go 侧带 json:"-"，不会出现在这里。
+	export class RuleHit {
+	    rule_id: number;
+	    rule_name: string;
+	    source: string;
+	    action: string;
+	    count: number;
 
 	    static createFrom(source: any = {}) {
-	        return new PrivacyConfig(source);
+	        return new RuleHit(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enabled = source["enabled"];
-	        this.rules = this.convertValues(source["rules"], PrivacyRule);
+	        this.rule_id = source["rule_id"];
+	        this.rule_name = source["rule_name"];
+	        this.source = source["source"];
+	        this.action = source["action"];
+	        this.count = source["count"];
 	    }
-
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
-	export class SyntheticValueRecord {
-	    raw_hash: string;
-	    raw_value: string;
-	    replacement: string;
-	    value: string;
-	    kind: string;
-	    created_at: string;
+	export class UnscannedPathStat {
+	    path: string;
+	    count: number;
 	    last_seen_at: string;
-	    last_skip_at: string;
-	    reuse_count: number;
-	    skip_count: number;
-	    hit_count: number;
 
 	    static createFrom(source: any = {}) {
-	        return new SyntheticValueRecord(source);
+	        return new UnscannedPathStat(source);
 	    }
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.raw_hash = source["raw_hash"];
-	        this.raw_value = source["raw_value"];
-	        this.replacement = source["replacement"];
-	        this.value = source["value"];
-	        this.kind = source["kind"];
-	        this.created_at = source["created_at"];
+	        this.path = source["path"];
+	        this.count = source["count"];
 	        this.last_seen_at = source["last_seen_at"];
-	        this.last_skip_at = source["last_skip_at"];
-	        this.reuse_count = source["reuse_count"];
-	        this.skip_count = source["skip_count"];
-	        this.hit_count = source["hit_count"];
+	    }
+	}
+	export class Preset {
+	    id: string;
+	    name: string;
+	    description: string;
+	    rules: Rule[];
+
+	    static createFrom(source: any = {}) {
+	        return new Preset(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.rules = source["rules"];
 	    }
 	}
 	export class PreviewResult {
 	    output: string;
 	    changed: boolean;
-	    hits: RedactionHit[];
+	    hit_count: number;
+	    rule_hits: RuleHit[];
 
 	    static createFrom(source: any = {}) {
 	        return new PreviewResult(source);
@@ -210,26 +190,31 @@ export namespace privacy {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.output = source["output"];
 	        this.changed = source["changed"];
-	        this.hits = this.convertValues(source["hits"], RedactionHit);
+	        this.hit_count = source["hit_count"];
+	        this.rule_hits = source["rule_hits"];
+	    }
+	}
+	export class Overview {
+	    settings: Settings;
+	    rules: StoredRule[];
+	    legacy_rules: LegacyRule[];
+	    unscanned_paths: UnscannedPathStat[];
+	    presets: Preset[];
+	    pseudonym_kinds: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new Overview(source);
 	    }
 
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings = source["settings"];
+	        this.rules = source["rules"];
+	        this.legacy_rules = source["legacy_rules"];
+	        this.unscanned_paths = source["unscanned_paths"];
+	        this.presets = source["presets"];
+	        this.pseudonym_kinds = source["pseudonym_kinds"];
+	    }
 	}
 
 }
@@ -1677,7 +1662,6 @@ export class UpdateSettingInput {
 	    cancel_reason?: string;
 	    privacy_redacted: boolean;
 	    privacy_redaction_summary?: string;
-	    privacy_redaction_matches?: string;
 	    input_tokens: number;
 	    output_tokens: number;
 	    cache_creation_tokens: number;
@@ -1723,7 +1707,6 @@ export class UpdateSettingInput {
 	        this.cancel_reason = source["cancel_reason"];
 	        this.privacy_redacted = source["privacy_redacted"];
 	        this.privacy_redaction_summary = source["privacy_redaction_summary"];
-	        this.privacy_redaction_matches = source["privacy_redaction_matches"];
 	        this.input_tokens = source["input_tokens"];
 	        this.output_tokens = source["output_tokens"];
 	        this.cache_creation_tokens = source["cache_creation_tokens"];

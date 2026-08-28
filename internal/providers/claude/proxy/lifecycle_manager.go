@@ -128,7 +128,11 @@ func (rlm *RequestLifecycleManager) StartRequest(clientIP, userAgent, method, pa
 	})
 }
 
-func (rlm *RequestLifecycleManager) RecordPrivacyRedaction(summaryJSON string, redactedBody []byte, matchDetailsJSON string) {
+// RecordPrivacyRedaction 记录隐私脱敏摘要。
+//
+// summaryJSON 只含规则名与命中数。命中原文与请求正文一律不得进入日志或数据库：
+// 日志会广播到前端日志查看器并落盘，正文进来就等于把整段客户对话又存了一份。
+func (rlm *RequestLifecycleManager) RecordPrivacyRedaction(summaryJSON string) {
 	if summaryJSON == "" {
 		return
 	}
@@ -140,12 +144,9 @@ func (rlm *RequestLifecycleManager) RecordPrivacyRedaction(summaryJSON string, r
 	logger.Debug("[隐私防护] 请求正文已脱敏",
 		"request_id", requestID,
 		"privacy_redaction_summary", summaryJSON,
-		"privacy_redaction_matches", matchDetailsJSON,
-		"privacy_redacted_body_bytes", len(redactedBody),
-		"privacy_redacted_body", string(redactedBody),
 	)
 	if rlm.usageTracker != nil && requestID != "" {
-		rlm.usageTracker.RecordPrivacyRedaction(requestID, summaryJSON, matchDetailsJSON)
+		rlm.usageTracker.RecordPrivacyRedaction(requestID, summaryJSON)
 	}
 }
 

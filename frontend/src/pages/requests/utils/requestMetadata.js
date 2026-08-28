@@ -97,3 +97,65 @@ export const formatReasoningFieldValue = (key, value) => {
     return String(value);
   }
 };
+
+// ============================================
+// 隐私防护
+// 摘要只含规则名与命中数。命中原文不落库、不回传，此处永远拿不到原文。
+// ============================================
+
+export const PRIVACY_RULE_SOURCE_LABELS = {
+  builtin: '内置',
+  preset: '预设',
+  custom: '自定义'
+};
+
+const normalizePrivacySummary = (value) => ({
+  changed: Boolean(value?.changed),
+  action: typeof value?.action === 'string' ? value.action : '',
+  hitCount: Number(value?.hit_count ?? 0),
+  hits: Array.isArray(value?.hits) ? value.hits : []
+});
+
+export const parsePrivacySummary = (value) => {
+  const empty = { changed: false, action: '', hitCount: 0, hits: [] };
+  if (!value) return empty;
+  if (typeof value === 'object') return normalizePrivacySummary(value);
+  if (typeof value !== 'string') return empty;
+  try {
+    return normalizePrivacySummary(JSON.parse(value));
+  } catch {
+    return empty;
+  }
+};
+
+/**
+ * 计算隐私防护的展示状态。
+ *
+ * 刻意区分「已脱敏」与「仅检测到」：detect 模式下命中会被统计但请求原样发出，
+ * 若两者共用同一个绿色徽章，用户会误以为内容已经被保护。
+ */
+export const getPrivacyDisplay = (request) => {
+  const summary = parsePrivacySummary(
+    request?.privacyRedactionSummary || request?.privacy_redaction_summary
+  );
+  const flagged = Boolean(request?.privacyRedacted ?? request?.privacy_redacted);
+  const hitCount = summary.hitCount || summary.hits.reduce((sum, hit) => sum + (hit.count || 0), 0);
+
+  if (!flagged && hitCount === 0) {
+    return { state: 'none', label: '未命中', hitCount: 0, hits: [], detectOnly: false };
+  }
+  const detectOnly = summary.action === 'detect' || !summary.changed;
+  return {
+    state: detectOnly ? 'detected' : 'redacted',
+    label: detectOnly ? '仅检测到' : '已脱敏',
+    hitCount,
+    hits: summary.hits,
+    detectOnly
+  };
+};
+
+export const PRIVACY_STATE_STYLES = {
+  redacted: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  detected: 'border-amber-200 bg-amber-50 text-amber-700',
+  none: 'border-slate-200 bg-slate-50 text-slate-400'
+};

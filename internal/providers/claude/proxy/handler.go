@@ -139,10 +139,10 @@ func NewHandler(endpointManager *endpoint.Manager, cfg *config.Config) *Handler 
 func (h *Handler) SetPrivacyService(service *privacy.Service) {
 	h.privacyService = service
 	if h.regularHandler != nil {
-		h.regularHandler.SetPrivacyRedactor(service)
+		h.regularHandler.SetPrivacyFilter(service)
 	}
 	if h.streamingHandler != nil {
-		h.streamingHandler.SetPrivacyRedactor(service)
+		h.streamingHandler.SetPrivacyFilter(service)
 	}
 }
 
@@ -199,7 +199,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 			// 🔧 [Critical修复] 使用保存的共享SuspensionManager实例
 			h.sharedSuspensionManager,
 		)
-		h.regularHandler.SetPrivacyRedactor(h.privacyService)
+		h.regularHandler.SetPrivacyFilter(h.privacyService)
 	}
 
 	// 重新创建streamingHandler以包含usageTracker
@@ -220,7 +220,7 @@ func (h *Handler) SetUsageTracker(ut *tracking.UsageTracker) {
 			// 🔧 [Critical修复] 使用保存的共享SuspensionManager实例
 			h.sharedSuspensionManager,
 		)
-		h.streamingHandler.SetPrivacyRedactor(h.privacyService)
+		h.streamingHandler.SetPrivacyFilter(h.privacyService)
 	}
 
 	// 注意：h.tokenAnalyzer 已经在方法开头更新

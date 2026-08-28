@@ -6,7 +6,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Waves, RefreshCw, Route, ChevronRight } from 'lucide-react';
+import { Waves, RefreshCw, Route, ChevronRight, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { LoadingSpinner, Tooltip } from '@components/ui';
 import { formatCost, formatTimestamp } from '@utils/api.js';
 import DurationBadge from './DurationBadge.jsx';
@@ -22,9 +22,12 @@ import {
   requestHasInterChannelTransfer,
 } from '../utils/endpointChain.js';
 import {
+  getPrivacyDisplay,
   getReasoningEffortMeta,
   isThinkingTypeActive,
-  parseReasoningConfig
+  parseReasoningConfig,
+  PRIVACY_RULE_SOURCE_LABELS,
+  PRIVACY_STATE_STYLES
 } from '../utils/requestMetadata.js';
 
 const getReasoningDisplay = (raw) => {
@@ -340,6 +343,35 @@ const renderCell = (columnId, request) => {
           {isCodex ? 'Codex' : 'Claude'}
         </span>
       );
+    case 'privacy': {
+      const privacy = getPrivacyDisplay(request);
+      if (privacy.state === 'none') {
+        return <span className="text-xs text-slate-300">-</span>;
+      }
+      // 只展示规则名与命中数。命中原文不落库也不回传，这里拿不到、也不该展示。
+      const ruleSummary = privacy.hits.length > 0
+        ? privacy.hits
+            .map((hit) => {
+              const source = PRIVACY_RULE_SOURCE_LABELS[hit.source] || hit.source || '';
+              return `${hit.rule_name || '规则'}${source ? ` · ${source}` : ''} × ${hit.count || 0}`;
+            })
+            .join('\n')
+        : privacy.label;
+      const tooltip = privacy.detectOnly
+        ? `仅检测模式：命中已统计，请求未被改写\n${ruleSummary}`
+        : ruleSummary;
+      return (
+        <Tooltip content={tooltip}>
+          <span
+            className={`inline-flex items-center justify-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${PRIVACY_STATE_STYLES[privacy.state]}`}
+          >
+            {privacy.detectOnly ? <ShieldAlert className="h-3 w-3" /> : <ShieldCheck className="h-3 w-3" />}
+            {privacy.hitCount}
+          </span>
+        </Tooltip>
+      );
+    }
+
     case 'requestType':
       return (
         <span className={`inline-flex items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ${

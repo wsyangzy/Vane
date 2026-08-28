@@ -26,9 +26,14 @@ export function CreateEndpointRecord(arg1:main.CreateEndpointInput):Promise<void
 
 export function CreateModelPricing(arg1:main.CreateModelPricingInput):Promise<void>;
 
-export function CreatePrivacyRule(arg1:privacy.PrivacyRuleInput):Promise<privacy.PrivacyRule>;
+export function GetPrivacyOverview():Promise<privacy.Overview>;
+export function UpdatePrivacySettings(arg1:privacy.Settings):Promise<void>;
+export function ApplyPrivacyPreset(arg1:string):Promise<number>;
+export function DiscardLegacyPrivacyRules():Promise<void>;
+export function GetPrivacyUnscannedPaths():Promise<Array<privacy.UnscannedPathStat>>;
+export function ClearPrivacyUnscannedPaths():Promise<void>;
+export function CreatePrivacyRule(arg1:privacy.Rule):Promise<privacy.StoredRule>;
 
-export function ClearPrivacySyntheticValues():Promise<void>;
 
 export function DeleteChannel(arg1:string,arg2:boolean):Promise<void>;
 
@@ -44,7 +49,6 @@ export function DeleteModelPricing(arg1:string):Promise<void>;
 
 export function DeletePrivacyRule(arg1:number):Promise<void>;
 
-export function DeletePrivacySyntheticValue(arg1:string,arg2:string):Promise<void>;
 
 export function GetAllSettings():Promise<Array<main.SettingInfo>>;
 
@@ -108,9 +112,7 @@ export function GetPortInfo():Promise<main.PortInfo>;
 
 export function GetProxyURL():Promise<string>;
 
-export function GetPrivacyConfig():Promise<privacy.PrivacyConfig>;
 
-export function GetPrivacySyntheticValues():Promise<Array<privacy.SyntheticValueRecord>>;
 
 export function GetRecentLogs(arg1:number):Promise<Array<logging.LogEntry>>;
 
@@ -178,7 +180,6 @@ export function SetDefaultModelPricing(arg1:string):Promise<void>;
 
 export function SetDefaultClaudeCredentialGroup(arg1:number):Promise<void>;
 
-export function SetPrivacyEnabled(arg1:boolean):Promise<void>;
 
 export function SetEndpointFailoverEnabled(arg1:string,arg2:boolean):Promise<void>;
 
@@ -238,7 +239,7 @@ export function UpdateEndpointRecordByID(arg1:number,arg2:main.CreateEndpointInp
 
 export function UpdateModelPricing(arg1:string,arg2:main.CreateModelPricingInput):Promise<void>;
 
-export function UpdatePrivacyRule(arg1:number,arg2:privacy.PrivacyRuleInput):Promise<privacy.PrivacyRule>;
+export function UpdatePrivacyRule(arg1:number,arg2:privacy.Rule):Promise<privacy.StoredRule>;
 
 export function UpdatePreferredPort(arg1:number):Promise<void>;
 

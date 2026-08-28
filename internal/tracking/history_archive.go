@@ -44,6 +44,9 @@ func (ut *UsageTracker) reconcileHistoryArchives() error {
 	for _, file := range files {
 		requestCount := 0
 		err := ut.withAttachedHistoryArchive(context.Background(), file.path, func(conn *sql.Conn) error {
+			if err := purgeAttachedPrivacyPlaintext(context.Background(), conn); err != nil {
+				return err
+			}
 			tx, err := conn.BeginTx(context.Background(), nil)
 			if err != nil {
 				return err
@@ -372,6 +375,39 @@ func ensureAttachedHistorySchema(ctx context.Context, conn *sql.Conn) error {
 		if _, err := conn.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("创建归档索引失败: %w", err)
 		}
+	}
+	return nil
+}
+
+// purgeAttachedPrivacyPlaintext 清除历史归档中遗留的 privacy_redaction_matches 明文。
+//
+// 活动库的同名列由 SQLiteAdapter.purgePrivacyPlaintextMatches 处理，但月度归档是
+// 独立文件，归档表结构复制自当时的活动表——停止写入并不会让已归档的明文消失。
+// 归档在启动时逐个 ATTACH 做一致性修复，这里顺带完成同一次止血。
+func purgeAttachedPrivacyPlaintext(ctx context.Context, conn *sql.Conn) error {
+	columns, err := sqliteTableColumns(ctx, conn, "history_archive", "request_logs")
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, column := range columns {
+		if column.name == "privacy_redaction_matches" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx,
+		`UPDATE history_archive.request_logs SET privacy_redaction_matches = NULL
+		 WHERE privacy_redaction_matches IS NOT NULL`); err != nil {
+		return fmt.Errorf("清除归档隐私明文失败: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		`ALTER TABLE history_archive.request_logs DROP COLUMN privacy_redaction_matches`); err != nil {
+		// 旧版 SQLite 不支持 DROP COLUMN。内容已置空，留列不影响隐私。
+		slog.Warn("归档隐私明文列内容已清空，但当前 SQLite 不支持删除该列", "error", err)
 	}
 	return nil
 }

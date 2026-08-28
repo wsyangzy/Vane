@@ -1,1201 +1,839 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertCircle,
-  Braces,
-  ChevronDown,
+  AlertTriangle,
   Check,
-  Database,
-  Eraser,
-  Fingerprint,
+  Eye,
+  FlaskConical,
   History,
-  KeyRound,
-  ListFilter,
+  Package,
   PencilLine,
   Plus,
   RefreshCw,
-  Regex,
-  Save,
-  Search,
   ShieldCheck,
+  ShieldOff,
   Trash,
   X
 } from 'lucide-react';
-import { Button, ConfirmDialog, ErrorMessage, KPICard, LoadingSpinner, useToast } from '@components/ui';
+import { Button, ConfirmDialog, CustomSelect, ErrorMessage, LoadingSpinner, useToast } from '@components/ui';
 import {
-  clearPrivacySyntheticValues,
+  applyPrivacyPreset,
+  clearPrivacyUnscannedPaths,
   createPrivacyRule,
-  deletePrivacySyntheticValue,
   deletePrivacyRule,
-  fetchPrivacySyntheticValues,
-  fetchPrivacyConfig,
-  updatePrivacyRule
+  discardLegacyPrivacyRules,
+  fetchPrivacyOverview,
+  previewPrivacyRedaction,
+  updatePrivacyRule,
+  updatePrivacySettings
 } from '@utils/api.js';
 import { REGEX_TEMPLATES } from './regexTemplates.js';
 
-const RULE_TYPES = [
+const MODES = [
   {
-    value: 'exact',
-    label: '精准匹配',
-    shortLabel: '精准',
-    icon: KeyRound,
-    tone: 'indigo',
-    inputLabel: '精准值',
-    placeholder: '输入需要精确替换的敏感值',
-    helper: '只替换用户配置的具体值，大小写敏感。'
+    value: 'disabled',
+    label: '关闭',
+    icon: ShieldOff,
+    description: '不扫描、不改写。请求原样发往服务商。'
   },
   {
-    value: 'regex',
-    label: '正则匹配',
-    shortLabel: '正则',
-    icon: Regex,
-    tone: 'amber',
-    inputLabel: '正则表达式',
-    placeholder: String.raw`\b(?:\+?86[-\s]?)?1[3-9]\d{9}\b`,
-    helper: '使用 Go RE2 语法。内置识别以正则模板方式提供，可一键填入后按普通正则保存。'
+    value: 'detect',
+    label: '仅检测',
+    icon: Eye,
+    description: '统计命中但不改写请求。用它先量清规则的误伤面，再决定是否开启脱敏。'
   },
   {
-    value: 'field',
-    label: '字段匹配',
-    shortLabel: '字段',
-    icon: Braces,
-    tone: 'sky',
-    inputLabel: '字段名 / JSON Path',
-    placeholder: 'password, access_token, $.auth.refresh_token',
-    helper: '仅处理 JSON 请求体中的字符串字段值；不修改 key、数字、布尔或 null。'
-  },
-  {
-    value: 'keyword',
-    label: '关键词上下文',
-    shortLabel: '关键词',
-    icon: Search,
-    tone: 'violet',
-    inputLabel: '关键词',
-    placeholder: '姓名, token, 联系人',
-    helper: '匹配“关键词: 值”“关键词=值”这类文本上下文，只替换后面的值。'
-  },
-  {
-    value: 'validator',
-    label: '校验算法',
-    shortLabel: '校验',
-    icon: Fingerprint,
-    tone: 'rose',
-    inputLabel: '校验算法',
-    placeholder: 'cn_id_card, bank_card_luhn, jwt',
-    helper: '用格式候选 + 校验函数降低误伤，适合身份证、银行卡、JWT。'
-  },
-  {
-    value: 'entropy',
-    label: '高熵识别',
-    shortLabel: '高熵',
+    value: 'redact',
+    label: '脱敏',
     icon: ShieldCheck,
-    tone: 'emerald',
-    inputLabel: '最小长度',
-    placeholder: '32',
-    helper: '识别高随机性的长 token/secret，建议谨慎启用。'
-  },
-  {
-    value: 'structured',
-    label: '结构解析',
-    shortLabel: '结构',
-    icon: Database,
-    tone: 'slate',
-    inputLabel: '参数名 / Cookie 名',
-    placeholder: 'access_token, sessionid, api_key',
-    helper: '解析 URL query、form-urlencoded、Cookie 风格 key/value 文本，只替换 value。'
+    description: '命中内容在发往服务商前被替换。未命中的字节与原始请求完全一致。'
   }
 ];
 
-const RULE_TYPE_MAP = RULE_TYPES.reduce((acc, item) => {
-  acc[item.value] = item;
-  return acc;
-}, {});
-
-const CREATABLE_RULE_TYPES = RULE_TYPES.filter((item) => item.value !== 'validator');
-
-const RULE_TONE_ICON_CLASSES = {
-  amber: 'bg-amber-50 text-amber-600',
-  emerald: 'bg-emerald-50 text-emerald-600',
-  indigo: 'bg-indigo-50 text-indigo-600',
-  rose: 'bg-rose-50 text-rose-600',
-  sky: 'bg-sky-50 text-sky-600',
-  slate: 'bg-slate-100 text-slate-600',
-  violet: 'bg-violet-50 text-violet-600'
-};
-
-const VALIDATOR_OPTIONS = [
-  { value: 'cn_id_card', label: '身份证校验位', description: '识别 18 位中国大陆身份证号，并验证最后一位校验码。' },
-  { value: 'bank_card_luhn', label: '银行卡 Luhn', description: '识别 13-19 位连续数字，并通过 Luhn 校验位后脱敏。' },
-  { value: 'jwt', label: 'JWT 结构', description: '识别三段式 JWT，并校验 header 与 payload 可 Base64URL 解码。' }
+const MATCH_TYPES = [
+  { value: 'literal', label: '字面量', helper: '按原样查找这段文本，不做任何模式解释。' },
+  { value: 'regex', label: '正则', helper: 'Go RE2 语法。可用 (?P<redact>...) 命名捕获组只替换其中一段，保留字段名。' },
+  { value: 'builtin', label: '内置', helper: '带校验位与卡组织画像的确定型 PII 匹配器，误报率远低于纯正则。' }
 ];
 
-const PSEUDONYM_REPLACEMENT_MODE = 'pseudonym';
-const DEFAULT_RULE_CATEGORY = 'custom';
-
-const PAGE_SECTIONS = [
-  { value: 'rules', label: '规则配置', icon: ShieldCheck },
-  { value: 'synthetic', label: '模拟值记录', icon: History }
+const REPLACEMENT_MODES = [
+  { value: 'placeholder', label: '占位符', helper: '统一替换成固定文本，如 [手机号]。' },
+  {
+    value: 'pseudonym',
+    label: '假名',
+    helper: '替换成格式合法但虚构的值。同一请求内同值同假名，AI 仍能区分多个客户；不留任何映射记录。'
+  }
 ];
 
-const SYNTHETIC_KIND_LABELS = {
-  api_key: 'API Key',
-  bank_card: '银行卡',
-  custom: '自定义',
-  id_card: '身份证',
+const PSEUDONYM_KIND_LABELS = {
   name: '姓名',
   phone: '手机号',
+  id_card: '身份证',
+  bank_card: '银行卡',
   secret: '密钥',
-  token: 'Token'
+  token: '令牌',
+  api_key: 'API Key',
+  custom: '通用'
 };
 
-const createEmptyForm = (type = 'exact') => ({
+const SOURCE_LABELS = {
+  builtin: '内置',
+  preset: '预设',
+  custom: '自定义'
+};
+
+const SOURCE_TONES = {
+  builtin: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+  preset: 'border-sky-200 bg-sky-50 text-sky-700',
+  custom: 'border-slate-200 bg-slate-50 text-slate-600'
+};
+
+const emptyRule = () => ({
+  id: 0,
   name: '',
-  type,
-  pattern_or_value: type === 'entropy' ? '32' : '',
-  enabled: true
+  description: '',
+  matchType: 'regex',
+  pattern: '',
+  action: 'redact',
+  replacementMode: 'placeholder',
+  placeholder: '[已脱敏]',
+  pseudonymKind: 'custom',
+  source: 'custom',
+  enabled: true,
+  priority: 100
 });
-
-const getCategoryForForm = (sourceForm) => {
-  if (sourceForm.type !== 'regex') {
-    return DEFAULT_RULE_CATEGORY;
-  }
-  return REGEX_TEMPLATES.find((template) => template.pattern === sourceForm.pattern_or_value)?.category || DEFAULT_RULE_CATEGORY;
-};
-
-const splitRuleList = (value = '') => value
-  .split(/[,，\n\r]+/)
-  .map((item) => item.trim())
-  .filter(Boolean);
 
 const Toggle = ({ checked, onChange, disabled = false, label }) => (
   <button
     type="button"
-    onClick={() => !disabled && onChange?.(!checked)}
-    disabled={disabled}
-    aria-pressed={checked}
+    role="switch"
+    aria-checked={checked}
     aria-label={label}
-    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ${
-      checked ? 'border-emerald-500 bg-emerald-500' : 'border-slate-300 bg-slate-200'
-    } ${disabled ? 'cursor-not-allowed opacity-50' : 'hover:shadow-sm'}`}
+    disabled={disabled}
+    onClick={() => !disabled && onChange(!checked)}
+    className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
+      checked ? 'bg-emerald-500' : 'bg-slate-300'
+    } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
   >
     <span
-      className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-        checked ? 'translate-x-4' : 'translate-x-0.5'
+      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+        checked ? 'translate-x-[18px]' : 'translate-x-[3px]'
       }`}
     />
   </button>
 );
 
-const RuleBadge = ({ children, tone = 'slate', dot = false }) => {
-  const tones = {
-    slate: 'bg-slate-100/70 text-slate-500 ring-slate-200',
-    indigo: 'bg-indigo-50/80 text-indigo-600 ring-indigo-100',
-    amber: 'bg-amber-50/80 text-amber-700 ring-amber-100',
-    emerald: 'bg-emerald-50/80 text-emerald-700 ring-emerald-100',
-    sky: 'bg-sky-50/80 text-sky-700 ring-sky-100',
-    violet: 'bg-violet-50/80 text-violet-700 ring-violet-100',
-    rose: 'bg-rose-50/80 text-rose-700 ring-rose-100'
-  };
-  const dotTones = {
-    slate: 'bg-slate-400',
-    indigo: 'bg-indigo-500',
-    amber: 'bg-amber-500',
-    emerald: 'bg-emerald-500',
-    sky: 'bg-sky-500',
-    violet: 'bg-violet-500',
-    rose: 'bg-rose-500'
-  };
-
-  return (
-    <span className={`inline-flex h-5 items-center gap-1 rounded-full px-2 text-[11px] font-medium leading-none ring-1 ring-inset ${tones[tone] || tones.slate}`}>
-      {dot ? <span className={`h-1.5 w-1.5 rounded-full ${dotTones[tone] || dotTones.slate}`} /> : null}
-      {children}
-    </span>
-  );
-};
-
-const getPatternDisplay = (rule) => {
-  if (rule.type === 'exact') {
-    return `${rule.pattern_masked || rule.patternMasked || '****'} (${rule.value_length ?? rule.valueLength ?? 0})`;
-  }
-  if (rule.type === 'entropy') {
-    return `最小长度 ${rule.pattern_or_value || rule.pattern_masked || rule.patternMasked || '32'}`;
-  }
-  if (rule.type === 'validator') {
-    const labels = splitRuleList(rule.pattern_or_value || rule.pattern_masked || rule.patternMasked)
-      .map((value) => VALIDATOR_OPTIONS.find((item) => item.value === value)?.label || value);
-    return labels.join('、') || '-';
-  }
-  return rule.pattern_or_value || rule.pattern_masked || rule.patternMasked || '-';
-};
-
-const RuleTypeTabs = ({ activeType, rules, onChange }) => (
-  <div className="rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
-    <div className="grid grid-cols-2 gap-1 md:grid-cols-4 xl:grid-cols-7">
-      {RULE_TYPES.map((item) => {
-        const Icon = item.icon;
-        const count = item.value === 'validator'
-          ? new Set(
-            rules
-              .filter((rule) => rule.type === 'validator' && rule.enabled)
-              .flatMap((rule) => splitRuleList(rule.pattern_or_value || rule.pattern_masked || rule.patternMasked))
-          ).size
-          : rules.filter((rule) => rule.type === item.value).length;
-        const active = activeType === item.value;
-        return (
-          <button
-            key={item.value}
-            type="button"
-            onClick={() => onChange(item.value)}
-            className={`flex min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
-              active ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-            }`}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-xs font-semibold">{item.shortLabel}</span>
-            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${active ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'}`}>
-              {count}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  </div>
+const Badge = ({ children, className = '' }) => (
+  <span className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${className}`}>
+    {children}
+  </span>
 );
 
-const SectionTabs = ({ activeSection, onChange, syntheticCount }) => (
-  <div className="mb-4 inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
-    {PAGE_SECTIONS.map((section) => {
-      const Icon = section.icon;
-      const active = activeSection === section.value;
+const ModeSelector = ({ mode, onChange, saving }) => (
+  <div className="grid gap-2 sm:grid-cols-3">
+    {MODES.map((item) => {
+      const Icon = item.icon;
+      const active = mode === item.value;
       return (
         <button
-          key={section.value}
+          key={item.value}
           type="button"
-          onClick={() => onChange(section.value)}
-          className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
-            active ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-          }`}
+          disabled={saving}
+          onClick={() => onChange(item.value)}
+          className={`rounded-xl border p-3 text-left transition-colors ${
+            active
+              ? 'border-emerald-300 bg-emerald-50 ring-1 ring-emerald-200'
+              : 'border-slate-200 bg-white hover:border-slate-300'
+          } ${saving ? 'cursor-not-allowed opacity-60' : ''}`}
         >
-          <Icon className="h-4 w-4" />
-          {section.label}
-          {section.value === 'synthetic' && (
-            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${active ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-500'}`}>
-              {syntheticCount}
+          <div className="flex items-center gap-2">
+            <Icon className={`h-4 w-4 ${active ? 'text-emerald-600' : 'text-slate-400'}`} />
+            <span className={`text-sm font-semibold ${active ? 'text-emerald-800' : 'text-slate-700'}`}>
+              {item.label}
             </span>
-          )}
+            {active && <Check className="ml-auto h-4 w-4 text-emerald-600" />}
+          </div>
+          <p className="mt-1.5 text-xs leading-relaxed text-slate-500">{item.description}</p>
         </button>
       );
     })}
   </div>
 );
 
-const RuleTypeDropdown = ({ value, onChange }) => {
-  const [open, setOpen] = useState(false);
-  const dropdownRef = useRef(null);
-  const selected = RULE_TYPE_MAP[value] || RULE_TYPES[0];
-  const SelectedIcon = selected.icon;
-
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const handlePointerDown = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setOpen(false);
-      }
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open]);
-
-  const handleSelect = (type) => {
-    onChange(type);
-    setOpen(false);
-  };
-
-  return (
-    <div ref={dropdownRef} className="relative">
-      <div className="mb-1.5 flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold text-slate-600">规则类型</span>
-        <span className="text-xs text-slate-400">选择本次新增规则的匹配方式</span>
+const PolicyPanel = ({ settings, onChange, saving }) => (
+  <div className="grid gap-4 sm:grid-cols-3">
+    <div className="text-sm">
+      <span className="font-medium text-slate-700">扫描出错时</span>
+      <div className="mt-1.5">
+        <CustomSelect
+          fullWidth
+          disabled={saving}
+          ariaLabel="扫描出错时的处理方式"
+          value={settings.onError}
+          onChange={(value) => onChange({ ...settings, onError: value })}
+          options={[
+            { value: 'fail_open', label: '放行请求' },
+            { value: 'fail_closed', label: '拒发请求' }
+          ]}
+        />
       </div>
-      <button
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left shadow-sm transition focus:border-indigo-300 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-      >
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${RULE_TONE_ICON_CLASSES[selected.tone] || RULE_TONE_ICON_CLASSES.indigo}`}>
-          <SelectedIcon className="h-4 w-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold text-slate-900">{selected.label}</span>
-          <span className="block truncate text-xs text-slate-500">{selected.helper}</span>
-        </span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-
-      {open && (
-        <div
-          role="listbox"
-          className="absolute left-0 right-0 top-full z-20 mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl shadow-slate-900/10"
-        >
-          {CREATABLE_RULE_TYPES.map((item) => {
-            const Icon = item.icon;
-            const active = item.value === value;
-            return (
-              <button
-                key={item.value}
-                type="button"
-                role="option"
-                aria-selected={active}
-                onClick={() => handleSelect(item.value)}
-                className={`flex w-full items-start gap-3 rounded-lg px-3 py-2 text-left transition-colors ${
-                  active ? 'bg-indigo-50 text-slate-900' : 'text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${RULE_TONE_ICON_CLASSES[item.tone] || RULE_TONE_ICON_CLASSES.indigo}`}>
-                  <Icon className="h-4 w-4" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2 text-sm font-semibold">
-                    {item.label}
-                    {active && <Check className="h-3.5 w-3.5 text-indigo-600" />}
-                  </span>
-                  <span className="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-500">{item.helper}</span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const formatRecordTime = (value) => {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return String(value);
-  }
-  const pad = (part) => String(part).padStart(2, '0');
-  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-};
-
-const getSyntheticRecordKey = (record) => `${record.kind || 'custom'}-${record.raw_hash || record.rawHash || record.replacement || record.value}`;
-
-const SyntheticValuesPanel = ({ records, loading, deletingKey, onRefresh, onClear, onDelete }) => (
-  <section className="space-y-3">
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
-      <div className="flex min-w-0 items-center gap-2">
-        <History className="h-4 w-4 shrink-0 text-slate-500" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">模拟值记录</h2>
-            <RuleBadge tone="indigo">{records.length}</RuleBadge>
-          </div>
-          <p className="mt-0.5 truncate text-xs text-slate-500">记录原值与模拟值映射，用于跨会话复用和二次跳过。</p>
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <Button variant="secondary" icon={RefreshCw} onClick={onRefresh} disabled={loading}>
-          刷新
-        </Button>
-        <Button variant="danger" icon={Eraser} onClick={onClear} disabled={loading || records.length === 0}>
-          清空记录
-        </Button>
-      </div>
+      <p className="mt-1 text-xs text-slate-500">选「拒发」表示宁可请求失败，也不冒未经扫描就外发的风险。</p>
     </div>
 
-    {loading ? (
-      <div className="rounded-xl border border-slate-200 bg-white py-10 shadow-sm">
-        <LoadingSpinner text="加载模拟值记录..." />
+    <div className="text-sm">
+      <span className="font-medium text-slate-700">路径未被覆盖时</span>
+      <div className="mt-1.5">
+        <CustomSelect
+          fullWidth
+          disabled={saving}
+          ariaLabel="未覆盖路径的处理方式"
+          value={settings.unsupportedPathAction}
+          onChange={(value) => onChange({ ...settings, unsupportedPathAction: value })}
+          options={[
+            { value: 'warn', label: '放行并告警' },
+            { value: 'fail_closed', label: '拒发请求' }
+          ]}
+        />
       </div>
-    ) : records.length === 0 ? (
-      <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex min-h-32 flex-col items-center justify-center gap-3 px-4 py-8 text-center">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400">
-            <History className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="text-sm font-semibold text-slate-500">暂无模拟值记录</div>
-            <div className="mt-1 text-xs text-slate-400">请求命中规则并生成模拟值后会显示在这里</div>
-          </div>
-        </div>
+      <p className="mt-1 text-xs text-slate-500">扫描按 API 路径的字段白名单进行，白名单外的路径不扫描。</p>
+    </div>
+
+    <div className="text-sm">
+      <span className="font-medium text-slate-700">超出扫描上限时</span>
+      <div className="mt-1.5">
+        <CustomSelect
+          fullWidth
+          disabled={saving}
+          ariaLabel="超出扫描上限的处理方式"
+          value={settings.overLimitAction}
+          onChange={(value) => onChange({ ...settings, overLimitAction: value })}
+          options={[
+            { value: 'scan_prefix', label: `只扫描前 ${Math.round(settings.scanMaxBytes / 1024 / 1024)} MB` },
+            { value: 'fail_closed', label: '拒发请求' }
+          ]}
+        />
       </div>
-    ) : (
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <div className="min-w-[1080px]">
-            <div className="grid grid-cols-[minmax(180px,1.1fr)_minmax(180px,1.1fr)_110px_145px_145px_120px_72px] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-500">
-              <span>原值</span>
-              <span>模拟值</span>
-              <span>类型</span>
-              <span>创建时间</span>
-              <span>最近复用</span>
-              <span className="text-right">复用 / 跳过</span>
-              <span className="text-right">操作</span>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {records.map((record) => {
-                const recordKey = getSyntheticRecordKey(record);
-                const rawValue = record.raw_value || record.rawValue || '-';
-                const replacement = record.replacement || record.value || '-';
-                const reuseCount = record.reuse_count ?? record.reuseCount ?? 0;
-                const skipCount = record.skip_count ?? record.skipCount ?? 0;
-                const deleting = deletingKey === recordKey;
-                return (
-                  <div
-                    key={recordKey}
-                    className="grid grid-cols-[minmax(180px,1.1fr)_minmax(180px,1.1fr)_110px_145px_145px_120px_72px] items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-slate-50"
-                  >
-                    <div className="min-w-0 truncate rounded-md bg-slate-50 px-2 py-1 font-mono text-xs text-slate-700" title={rawValue}>
-                      {rawValue}
-                    </div>
-                    <div className="min-w-0 truncate rounded-md bg-indigo-50 px-2 py-1 font-mono text-xs text-indigo-700" title={replacement}>
-                      {replacement}
-                    </div>
-                    <div>
-                      <RuleBadge tone="indigo">{SYNTHETIC_KIND_LABELS[record.kind] || record.kind || '自定义'}</RuleBadge>
-                    </div>
-                    <div className="text-xs text-slate-500">{formatRecordTime(record.created_at || record.createdAt)}</div>
-                    <div className="text-xs text-slate-500">{formatRecordTime(record.last_seen_at || record.lastSeenAt)}</div>
-                    <div className="text-right text-xs font-semibold text-slate-700">{reuseCount} / {skipCount}</div>
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => onDelete(record)}
-                        disabled={loading || deleting}
-                        className="inline-flex h-7 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label="删除模拟值记录"
-                      >
-                        <Trash className="h-4 w-4" strokeWidth={1.8} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      </div>
-    )}
-  </section>
+      <p className="mt-1 text-xs text-slate-500">超长上下文下，未扫描的尾部会原样发出。</p>
+    </div>
+  </div>
 );
 
-
-const RuleGrid = ({ rules, typeMeta, onEdit, onDelete, onToggle }) => {
-  const EmptyIcon = typeMeta.icon;
-  const TypeIcon = typeMeta.icon;
+// 白名单之外的路径不扫描。这里把它显式呈现出来：漏扫是静默失败，
+// 用户必须能看见「有请求没被扫过」，否则会误以为已全面受保护。
+const UnscannedPathsBanner = ({ paths, onClear }) => {
+  if (!paths.length) return null;
+  const total = paths.reduce((sum, item) => sum + item.count, 0);
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
-        <div className="flex min-w-0 items-center gap-2">
-          <TypeIcon className="h-4 w-4 shrink-0 text-slate-500" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900">{typeMeta.label}</h2>
-              <RuleBadge tone={typeMeta.tone}>{rules.length}</RuleBadge>
-            </div>
-            <p className="mt-0.5 truncate text-xs text-slate-500">{typeMeta.helper}</p>
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-amber-900">
+            有 {total} 个请求未经隐私扫描
+          </h3>
+          <p className="mt-1 text-xs leading-relaxed text-amber-800">
+            以下路径不在字段白名单内，隐私规则未对其生效。若这些路径会携带客户信息，请改用「拒发请求」策略，或反馈该路径以便补充白名单。
+          </p>
+          <div className="mt-2.5 space-y-1">
+            {paths.map((item) => (
+              <div key={item.path} className="flex items-center justify-between gap-3 text-xs">
+                <code className="min-w-0 truncate rounded bg-white/70 px-1.5 py-0.5 font-mono text-amber-900">
+                  {item.path}
+                </code>
+                <span className="flex-shrink-0 font-medium text-amber-700">{item.count} 次</span>
+              </div>
+            ))}
           </div>
         </div>
+        <button
+          type="button"
+          onClick={onClear}
+          className="flex-shrink-0 rounded-md p-1 text-amber-600 transition-colors hover:bg-amber-100"
+          aria-label="清除未扫描路径统计"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
+    </div>
+  );
+};
 
-      {rules.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex min-h-32 flex-col items-center justify-center gap-3 px-4 py-8 text-center">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400">
-              <EmptyIcon className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-slate-500">暂无{typeMeta.shortLabel}规则</div>
-              <div className="mt-1 text-xs text-slate-400">点击右上角添加规则并选择类型</div>
-            </div>
+// 旧版规则不自动转换：转换出错在隐私场景是静默失败——规则看似还在、实际已不匹配。
+const LegacyRulesPanel = ({ rules, onDiscard }) => {
+  const [expanded, setExpanded] = useState(false);
+  if (!rules.length) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left"
+      >
+        <History className="h-4 w-4 text-slate-400" />
+        <span className="text-sm font-semibold text-slate-800">旧版规则 · 需手工重建（{rules.length}）</span>
+        <span className="ml-auto text-xs text-slate-400">{expanded ? '收起' : '展开'}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-slate-100 px-4 py-3">
+          <p className="mb-3 text-xs leading-relaxed text-slate-500">
+            规则引擎已更换，旧规则刻意未自动转换 —— 转换一旦出错，规则看起来还在、实际已不再匹配，
+            你会以为受保护而实际在裸奔。请对照下表重建，确认无误后清除本清单。
+            精准匹配类规则的值已掩码，不会明文展示。
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-slate-500">
+                <tr className="border-b border-slate-100">
+                  <th className="py-1.5 pr-3 font-medium">名称</th>
+                  <th className="py-1.5 pr-3 font-medium">类型</th>
+                  <th className="py-1.5 pr-3 font-medium">内容</th>
+                  <th className="py-1.5 font-medium">状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rules.map((rule) => (
+                  <tr key={rule.id} className="border-b border-slate-50 last:border-0">
+                    <td className="py-1.5 pr-3 text-slate-800">{rule.name}</td>
+                    <td className="py-1.5 pr-3 text-slate-500">{rule.type}</td>
+                    <td className="max-w-md py-1.5 pr-3">
+                      <code className="block truncate font-mono text-slate-600">{rule.patternMasked || '-'}</code>
+                    </td>
+                    <td className="py-1.5 text-slate-500">{rule.enabled ? '曾启用' : '曾停用'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {rules.map((rule) => (
-            <div key={rule.id} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-sm transition-colors hover:border-slate-300">
-              <div className="flex items-center gap-3">
-                <Toggle checked={rule.enabled} onChange={(checked) => onToggle(rule, checked)} label={`${rule.name} 启用状态`} />
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="min-w-0 truncate text-[13px] font-medium leading-5 text-slate-800">{rule.name}</span>
-                  <RuleBadge tone={rule.enabled ? 'emerald' : 'slate'} dot>{rule.enabled ? '启用' : '停用'}</RuleBadge>
-                  <RuleBadge tone={typeMeta.tone}>{typeMeta.shortLabel}</RuleBadge>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => onEdit(rule)}
-                    className="inline-flex h-7 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-100"
-                    aria-label="编辑规则"
-                  >
-                    <PencilLine className="h-4 w-4" strokeWidth={1.8} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(rule)}
-                    className="inline-flex h-7 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-100"
-                    aria-label="删除规则"
-                  >
-                    <Trash className="h-4 w-4" strokeWidth={1.8} />
-                  </button>
-                </div>
-              </div>
-              <div className="mt-2 min-w-0 rounded-md bg-slate-50 px-2 py-1 font-mono text-[11px] leading-4 text-slate-600">
-                <div className="truncate">{getPatternDisplay(rule)}</div>
-              </div>
-            </div>
-          ))}
+          <div className="mt-3 flex justify-end">
+            <Button variant="secondary" size="sm" onClick={onDiscard}>
+              我已重建完毕，清除清单
+            </Button>
+          </div>
         </div>
       )}
-    </section>
+    </div>
   );
 };
 
-const ValidatorRulePanel = ({ typeMeta, enabledValues, updatingValue, onToggle }) => {
-  const TypeIcon = typeMeta.icon;
+const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy }) => {
+  const isBuiltin = rule.source === 'builtin';
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 shadow-sm">
-        <div className="flex min-w-0 items-center gap-2">
-          <TypeIcon className="h-4 w-4 shrink-0 text-slate-500" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-slate-900">校验算法</h2>
-              <RuleBadge tone={typeMeta.tone}>{enabledValues.size}</RuleBadge>
-            </div>
-            <p className="mt-0.5 truncate text-xs text-slate-500">固定算法能力，只需要控制是否启用。</p>
-          </div>
+    <tr className="border-b border-slate-50 last:border-0">
+      <td className="py-2.5 pr-3">
+        <Toggle
+          checked={rule.enabled}
+          disabled={busy}
+          onChange={(value) => onToggle(rule, value)}
+          label={`启用 ${rule.name}`}
+        />
+      </td>
+      <td className="py-2.5 pr-3">
+        <div className="text-sm font-medium text-slate-800">{rule.name}</div>
+        {rule.description && <div className="mt-0.5 text-xs text-slate-500">{rule.description}</div>}
+      </td>
+      <td className="max-w-xs py-2.5 pr-3">
+        <code className="block truncate font-mono text-xs text-slate-600" title={rule.pattern}>
+          {rule.pattern}
+        </code>
+      </td>
+      <td className="py-2.5 pr-3">
+        <Badge className={SOURCE_TONES[rule.source] || SOURCE_TONES.custom}>
+          {SOURCE_LABELS[rule.source] || rule.source}
+        </Badge>
+      </td>
+      <td className="py-2.5 pr-3 text-xs text-slate-600">
+        {rule.action === 'detect'
+          ? '仅记录'
+          : rule.replacementMode === 'pseudonym'
+            ? `假名 · ${PSEUDONYM_KIND_LABELS[rule.pseudonymKind] || rule.pseudonymKind}`
+            : rule.placeholder}
+      </td>
+      <td className="py-2.5 pr-3 text-xs text-slate-500">{rule.priority}</td>
+      <td className="py-2.5">
+        <div className="flex items-center justify-end gap-1">
+          <button
+            type="button"
+            onClick={() => onEdit(rule)}
+            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            aria-label={`编辑 ${rule.name}`}
+          >
+            <PencilLine className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            disabled={isBuiltin}
+            onClick={() => onDelete(rule)}
+            title={isBuiltin ? '内置规则不可删除，可停用' : '删除'}
+            className={`rounded-md p-1.5 transition-colors ${
+              isBuiltin
+                ? 'cursor-not-allowed text-slate-200'
+                : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
+            }`}
+            aria-label={`删除 ${rule.name}`}
+          >
+            <Trash className="h-4 w-4" />
+          </button>
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        {VALIDATOR_OPTIONS.map((option) => {
-          const checked = enabledValues.has(option.value);
-          const disabled = Boolean(updatingValue);
-          return (
-            <div key={option.value} className="rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm transition-colors hover:border-slate-300">
-              <div className="flex items-start gap-3">
-                <Toggle
-                  checked={checked}
-                  disabled={disabled}
-                  onChange={(nextChecked) => onToggle(option.value, nextChecked)}
-                  label={`${option.label} 启用状态`}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-[13px] font-semibold leading-5 text-slate-800">{option.label}</span>
-                    <RuleBadge tone={checked ? 'emerald' : 'slate'} dot>{checked ? '启用' : '停用'}</RuleBadge>
-                  </div>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">{option.description}</p>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
+      </td>
+    </tr>
   );
 };
 
-const RuleModal = ({ open, mode, typeMeta, form, saving, error, onClose, onChange, onSubmit }) => {
+const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) => {
   if (!open) return null;
-  const isEdit = mode === 'edit';
-  const TypeIcon = typeMeta.icon;
-  const validatorValues = splitRuleList(form.pattern_or_value);
-  const activeRegexTemplate = REGEX_TEMPLATES.find((template) => template.pattern === form.pattern_or_value);
+  const isBuiltin = rule.source === 'builtin';
+  const matchMeta = MATCH_TYPES.find((item) => item.value === rule.matchType);
+  const replacementMeta = REPLACEMENT_MODES.find((item) => item.value === rule.replacementMode);
 
-  const updatePattern = (value) => onChange({ ...form, pattern_or_value: value });
-  const applyRegexTemplate = (template) => {
-    onChange({
-      ...form,
-      name: template.name,
-      pattern_or_value: template.pattern
-    });
-  };
-  const toggleValidator = (value) => {
-    const values = new Set(validatorValues);
-    if (values.has(value)) {
-      values.delete(value);
-    } else {
-      values.add(value);
-    }
-    updatePattern(Array.from(values).join(','));
-  };
-  const changeRuleType = (type) => {
-    if (isEdit || type === form.type) return;
-    onChange({
-      ...createEmptyForm(type),
-      name: form.name,
-      enabled: form.enabled
-    });
-  };
-
-  return createPortal(
-    <div className="fixed inset-0 z-[2147483647] flex items-start justify-center overflow-y-auto px-4 py-6 sm:items-center sm:py-8">
-      <div className="fixed inset-0 bg-slate-900/35 backdrop-blur-sm" onClick={onClose} />
-      <form
-        onSubmit={onSubmit}
-        className="relative flex max-h-[calc(100vh-3rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
-      >
-        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
-              <TypeIcon className="h-5 w-5" />
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-slate-900">{isEdit ? '编辑规则' : '添加规则'}</h2>
-              <p className="text-xs text-slate-500">{typeMeta.helper}</p>
-            </div>
-          </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700">
-            <X className="h-5 w-5" />
+  return (
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/40 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
+          <h3 className="text-sm font-semibold text-slate-900">{rule.id ? '编辑规则' : '新建规则'}</h3>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100">
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="space-y-4 overflow-y-auto p-5">
-          {error && (
-            <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span className="min-w-0 break-words">{error}</span>
-            </div>
-          )}
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          {error && <ErrorMessage message={error} />}
 
-          {!isEdit && <RuleTypeDropdown value={form.type} onChange={changeRuleType} />}
-
-          <label className="block">
-            <span className="text-xs font-semibold text-slate-600">规则名称</span>
+          <label className="block text-sm">
+            <span className="font-medium text-slate-700">规则名称</span>
             <input
-              value={form.name}
-              onChange={(event) => onChange({ ...form, name: event.target.value })}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-              placeholder="例如：主账号 Token"
-              required
+              value={rule.name}
+              onChange={(event) => onChange({ ...rule, name: event.target.value })}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              placeholder="例如：客户手机号"
             />
           </label>
 
-          {form.type === 'regex' && (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="text-xs font-semibold text-slate-600">内置正则模板</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {REGEX_TEMPLATES.map((template) => {
-                  const active = activeRegexTemplate?.name === template.name;
-                  return (
-                    <button
-                      key={template.name}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => applyRegexTemplate(template)}
-                      className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                        active
-                          ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700'
-                      }`}
-                    >
-                      {template.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          <label className="block text-sm">
+            <span className="font-medium text-slate-700">说明（可选）</span>
+            <input
+              value={rule.description}
+              onChange={(event) => onChange({ ...rule, description: event.target.value })}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+            />
+          </label>
 
-          {form.type === 'validator' ? (
-            <div className="block">
-              <span className="text-xs font-semibold text-slate-600">{typeMeta.inputLabel}</span>
-              <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {VALIDATOR_OPTIONS.map((option) => {
-                  const active = validatorValues.includes(option.value);
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => toggleValidator(option.value)}
-                      className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
-                        active ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {active && <Check className="h-3.5 w-3.5" />}
-                      {option.label}
-                    </button>
-                  );
-                })}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="block text-sm">
+              <span className="font-medium text-slate-700">匹配方式</span>
+              <div className="mt-1.5">
+                <CustomSelect
+                  fullWidth
+                  disabled={isBuiltin}
+                  ariaLabel="匹配方式"
+                  value={rule.matchType}
+                  onChange={(value) => onChange({ ...rule, matchType: value })}
+                  options={MATCH_TYPES.map((item) => ({ value: item.value, label: item.label }))}
+                />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">{matchMeta?.helper}</p>
+            </div>
+
+            <label className="block text-sm">
+              <span className="font-medium text-slate-700">优先级（数字越小越先生效）</span>
+              <input
+                type="number"
+                value={rule.priority}
+                onChange={(event) => onChange({ ...rule, priority: Number(event.target.value) })}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              />
+              <p className="mt-1 text-xs text-slate-500">与高优先级规则命中区间重叠时，本规则的命中会被丢弃。</p>
+            </label>
+          </div>
+
+          <label className="block text-sm">
+            <span className="font-medium text-slate-700">
+              {rule.matchType === 'literal' ? '匹配文本' : rule.matchType === 'builtin' ? '内置匹配器' : '正则表达式'}
+            </span>
+            <textarea
+              disabled={isBuiltin}
+              value={rule.pattern}
+              onChange={(event) => onChange({ ...rule, pattern: event.target.value })}
+              rows={3}
+              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs disabled:bg-slate-50 disabled:text-slate-500"
+            />
+            {rule.matchType === 'regex' && !isBuiltin && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {REGEX_TEMPLATES.map((template) => (
+                  <button
+                    key={template.name}
+                    type="button"
+                    onClick={() => onChange({ ...rule, pattern: template.pattern, name: rule.name || template.name })}
+                    className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-600 hover:border-slate-300"
+                  >
+                    {template.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </label>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="block text-sm">
+              <span className="font-medium text-slate-700">动作</span>
+              <div className="mt-1.5">
+                <CustomSelect
+                  fullWidth
+                  ariaLabel="规则动作"
+                  value={rule.action}
+                  onChange={(value) => onChange({ ...rule, action: value })}
+                  options={[
+                    { value: 'redact', label: '替换' },
+                    { value: 'detect', label: '仅记录命中' }
+                  ]}
+                />
               </div>
             </div>
-          ) : (
-            <label className="block">
-              <span className="text-xs font-semibold text-slate-600">{typeMeta.inputLabel}</span>
-              {form.type === 'exact' || form.type === 'entropy' ? (
-                <input
-                  type={form.type === 'exact' ? 'password' : 'number'}
-                  min={form.type === 'entropy' ? 8 : undefined}
-                  value={form.pattern_or_value}
-                  onChange={(event) => updatePattern(event.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                  placeholder={isEdit && form.type === 'exact' ? '留空保留原值' : typeMeta.placeholder}
-                  required={!isEdit}
-                />
-              ) : (
-                <textarea
-                  value={form.pattern_or_value}
-                  onChange={(event) => updatePattern(event.target.value)}
-                  className="mt-1 min-h-24 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                  placeholder={typeMeta.placeholder}
-                  required={!isEdit}
-                />
-              )}
+
+            {rule.action === 'redact' && (
+              <div className="block text-sm">
+                <span className="font-medium text-slate-700">替换方式</span>
+                <div className="mt-1.5">
+                  <CustomSelect
+                    fullWidth
+                    ariaLabel="替换方式"
+                    value={rule.replacementMode}
+                    onChange={(value) => onChange({ ...rule, replacementMode: value })}
+                    options={REPLACEMENT_MODES.map((item) => ({ value: item.value, label: item.label }))}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{replacementMeta?.helper}</p>
+              </div>
+            )}
+          </div>
+
+          {rule.action === 'redact' && rule.replacementMode === 'placeholder' && (
+            <label className="block text-sm">
+              <span className="font-medium text-slate-700">占位符</span>
+              <input
+                value={rule.placeholder}
+                onChange={(event) => onChange({ ...rule, placeholder: event.target.value })}
+                className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              />
             </label>
           )}
 
-          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-            <span className="text-sm font-medium text-slate-700">启用规则</span>
-            <Toggle checked={form.enabled} onChange={(checked) => onChange({ ...form, enabled: checked })} label="启用规则" />
-          </div>
+          {rule.action === 'redact' && rule.replacementMode === 'pseudonym' && (
+            <div className="block text-sm">
+              <span className="font-medium text-slate-700">假名类别</span>
+              <div className="mt-1.5">
+                <CustomSelect
+                  fullWidth
+                  ariaLabel="假名类别"
+                  value={rule.pseudonymKind}
+                  onChange={(value) => onChange({ ...rule, pseudonymKind: value })}
+                  options={Object.entries(PSEUDONYM_KIND_LABELS).map(([value, label]) => ({ value, label }))}
+                />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                生成格式合法的虚构值（身份证、银行卡带正确校验位），避免上游因格式校验拒绝请求。
+              </p>
+            </div>
+          )}
         </div>
 
-        <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 bg-slate-50 px-5 py-4">
-          <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">
-            取消
-          </button>
-          <Button type="submit" icon={Save} loading={saving}>
-            保存
-          </Button>
+        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3">
+          <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>取消</Button>
+          <Button size="sm" onClick={onSubmit} disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
         </div>
-      </form>
-    </div>,
-    document.body
+      </div>
+    </div>
+  );
+};
+
+// 测试面板的输入与结果都停留在本机，不落库、不上报。
+const TestPanel = () => {
+  const [input, setInput] = useState('');
+  const [result, setResult] = useState(null);
+  const [running, setRunning] = useState(false);
+  const toast = useToast();
+
+  const run = async () => {
+    if (!input.trim()) return;
+    setRunning(true);
+    try {
+      setResult(await previewPrivacyRedaction(input));
+    } catch (error) {
+      toast.error(`测试失败: ${error.message}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+        <FlaskConical className="h-4 w-4 text-slate-400" />
+        规则测试
+      </h3>
+      <p className="mt-1 text-xs text-slate-500">
+        试跑当前全部启用规则。输入与结果只停留在本机，不会写入数据库或发往任何服务商。
+      </p>
+      <textarea
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        rows={3}
+        placeholder="粘贴一段文本，检查规则会命中什么"
+        className="mt-3 w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+      />
+      <div className="mt-2 flex items-center gap-2">
+        <Button size="sm" onClick={run} disabled={running || !input.trim()}>
+          {running ? '测试中…' : '运行'}
+        </Button>
+        {result && (
+          <span className="text-xs text-slate-500">
+            命中 {result.hitCount} 处{result.changed ? '，已替换' : '，无替换'}
+          </span>
+        )}
+      </div>
+      {result && (
+        <div className="mt-3 space-y-2">
+          {result.ruleHits.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {result.ruleHits.map((hit) => (
+                <Badge key={hit.ruleId} className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                  {hit.ruleName} × {hit.count}
+                </Badge>
+              ))}
+            </div>
+          )}
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-800">
+            {result.output}
+          </pre>
+        </div>
+      )}
+    </div>
   );
 };
 
 const PrivacyPage = () => {
-  const toast = useToast();
-  const [rules, setRules] = useState([]);
-  const [syntheticValues, setSyntheticValues] = useState([]);
+  const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [syntheticLoading, setSyntheticLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [activeType, setActiveType] = useState('exact');
-  const [modal, setModal] = useState({ open: false, mode: 'create', rule: null });
-  const [form, setForm] = useState(createEmptyForm('exact'));
-  const [formError, setFormError] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [clearSyntheticConfirm, setClearSyntheticConfirm] = useState(false);
-  const [syntheticDeleteTarget, setSyntheticDeleteTarget] = useState(null);
-  const [syntheticDeletingKey, setSyntheticDeletingKey] = useState('');
-  const [validatorUpdating, setValidatorUpdating] = useState('');
-  const [activeSection, setActiveSection] = useState('rules');
+  const [loadError, setLoadError] = useState('');
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [busyRuleId, setBusyRuleId] = useState(0);
 
-  const loadConfig = useCallback(async () => {
+  const [modalRule, setModalRule] = useState(null);
+  const [modalError, setModalError] = useState('');
+  const [modalSaving, setModalSaving] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState(null);
+
+  const toast = useToast();
+
+  const load = useCallback(async () => {
     try {
-      setLoading(true);
-      setError('');
-      const config = await fetchPrivacyConfig();
-      setRules(config.rules || []);
-    } catch (err) {
-      setError(err?.message || '加载隐私防护配置失败');
+      setLoadError('');
+      setOverview(await fetchPrivacyOverview());
+    } catch (error) {
+      setLoadError(error.message);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadConfig();
-  }, [loadConfig]);
+  useEffect(() => { load(); }, [load]);
 
-  const loadSyntheticValues = useCallback(async () => {
+  const settings = overview?.settings;
+  const rules = useMemo(() => overview?.rules || [], [overview]);
+  const enabledCount = useMemo(() => rules.filter((rule) => rule.enabled).length, [rules]);
+
+  const saveSettings = async (next) => {
+    setSavingSettings(true);
     try {
-      setSyntheticLoading(true);
-      const records = await fetchPrivacySyntheticValues();
-      setSyntheticValues(records || []);
-    } catch (err) {
-      toast.error(err?.message || '加载模拟值记录失败');
+      await updatePrivacySettings(next);
+      await load();
+      toast.success('隐私防护设置已生效');
+    } catch (error) {
+      toast.error(`保存失败: ${error.message}`);
     } finally {
-      setSyntheticLoading(false);
-    }
-  }, [toast]);
-
-  useEffect(() => {
-    if (activeSection === 'synthetic') {
-      loadSyntheticValues();
-    }
-  }, [activeSection, loadSyntheticValues]);
-
-  const activeMeta = RULE_TYPE_MAP[activeType] || RULE_TYPES[0];
-  const visibleRules = useMemo(
-    () => rules.filter((rule) => rule.type === activeType),
-    [activeType, rules]
-  );
-  const validatorRules = useMemo(
-    () => rules.filter((rule) => rule.type === 'validator'),
-    [rules]
-  );
-  const enabledValidatorValues = useMemo(() => {
-    const values = new Set();
-    validatorRules
-      .filter((rule) => rule.enabled)
-      .forEach((rule) => {
-        splitRuleList(rule.pattern_or_value || rule.pattern_masked || rule.patternMasked)
-          .forEach((value) => values.add(value));
-      });
-    return values;
-  }, [validatorRules]);
-
-  const stats = useMemo(() => {
-    const extended = rules.filter((rule) => !['exact', 'regex'].includes(rule.type)).length;
-    return {
-      total: rules.length,
-      enabled: rules.filter((rule) => rule.enabled).length,
-      regex: rules.filter((rule) => rule.type === 'regex').length,
-      extended
-    };
-  }, [rules]);
-
-  const overviewCards = useMemo(() => ([
-    {
-      title: '规则总数',
-      value: stats.total,
-      subText: '全部脱敏规则',
-      icon: ListFilter,
-      statusColor: 'bg-slate-100 text-slate-600'
-    },
-    {
-      title: '已启用',
-      value: stats.enabled,
-      subText: '当前参与发送前处理',
-      icon: ShieldCheck,
-      statusColor: 'bg-emerald-50 text-emerald-600'
-    },
-    {
-      title: '正则规则',
-      value: stats.regex,
-      subText: '含内置模板创建的规则',
-      icon: Regex,
-      statusColor: 'bg-amber-50 text-amber-600'
-    },
-    {
-      title: '扩展策略',
-      value: stats.extended,
-      subText: '字段/关键词/校验/结构等',
-      icon: Braces,
-      statusColor: 'bg-sky-50 text-sky-600'
-    }
-  ]), [stats]);
-
-  const openCreate = () => {
-    const nextType = RULE_TYPE_MAP[activeType] && activeType !== 'validator' ? activeType : 'exact';
-    setActiveType(nextType);
-    setForm(createEmptyForm(nextType));
-    setFormError('');
-    setModal({ open: true, mode: 'create', rule: null });
-  };
-
-  const openEdit = (rule) => {
-    setForm({
-      name: rule.name || '',
-      type: rule.type || 'exact',
-      pattern_or_value: rule.type === 'exact' ? '' : (rule.pattern_or_value || rule.pattern_masked || rule.patternMasked || ''),
-      enabled: Boolean(rule.enabled)
-    });
-    setFormError('');
-    setModal({ open: true, mode: 'edit', rule });
-  };
-
-  const closeModal = () => {
-    if (!saving) {
-      setModal({ open: false, mode: 'create', rule: null });
-      setFormError('');
+      setSavingSettings(false);
     }
   };
 
-  const buildInput = (sourceForm) => ({
-    name: sourceForm.name.trim(),
-    type: sourceForm.type,
-    category: getCategoryForForm(sourceForm),
-    pattern_or_value: sourceForm.pattern_or_value,
-    replacement_mode: PSEUDONYM_REPLACEMENT_MODE,
-    enabled: Boolean(sourceForm.enabled),
-    priority: 100
-  });
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    setSaving(true);
-    setFormError('');
+  const toggleRule = async (rule, enabled) => {
+    setBusyRuleId(rule.id);
     try {
-      const input = buildInput(form);
-      if (modal.mode === 'edit' && modal.rule?.id) {
-        await updatePrivacyRule(modal.rule.id, input);
-        toast.success('隐私规则已更新');
+      await updatePrivacyRule(rule.id, { ...rule, enabled });
+      await load();
+    } catch (error) {
+      toast.error(`更新失败: ${error.message}`);
+    } finally {
+      setBusyRuleId(0);
+    }
+  };
+
+  const submitRule = async () => {
+    setModalSaving(true);
+    setModalError('');
+    try {
+      if (modalRule.id) {
+        await updatePrivacyRule(modalRule.id, modalRule);
       } else {
-        await createPrivacyRule(input);
-        toast.success('隐私规则已创建');
-        setActiveType(input.type);
+        await createPrivacyRule(modalRule);
       }
-      setModal({ open: false, mode: 'create', rule: null });
-      setFormError('');
-      await loadConfig();
-    } catch (err) {
-      setFormError(err?.message || '保存规则失败');
+      setModalRule(null);
+      await load();
+      toast.success('规则已保存');
+    } catch (error) {
+      setModalError(error.message);
     } finally {
-      setSaving(false);
+      setModalSaving(false);
     }
   };
 
-  const handleToggleRule = async (rule, checked) => {
+  const confirmDelete = async () => {
     try {
-      await updatePrivacyRule(rule.id, {
-        name: rule.name,
-        type: rule.type,
-        category: rule.category || DEFAULT_RULE_CATEGORY,
-        pattern_or_value: rule.type === 'exact' ? '' : (rule.pattern_or_value || rule.pattern_masked || rule.patternMasked || ''),
-        replacement_mode: PSEUDONYM_REPLACEMENT_MODE,
-        enabled: checked,
-        priority: 100
-      });
-      setRules((prev) => prev.map((item) => item.id === rule.id ? { ...item, enabled: checked } : item));
-    } catch (err) {
-      toast.error(err?.message || '更新规则状态失败');
+      await deletePrivacyRule(pendingDelete.id);
+      setPendingDelete(null);
+      await load();
+      toast.success('规则已删除');
+    } catch (error) {
+      toast.error(`删除失败: ${error.message}`);
     }
   };
 
-  const handleToggleValidatorAlgorithm = async (value, checked) => {
-    const nextValues = new Set(enabledValidatorValues);
-    if (checked) {
-      nextValues.add(value);
-    } else {
-      nextValues.delete(value);
-    }
-    const orderedValues = VALIDATOR_OPTIONS
-      .map((option) => option.value)
-      .filter((optionValue) => nextValues.has(optionValue));
-    const primaryRule = validatorRules.find((rule) => rule.name === '校验算法') || validatorRules[0];
-
+  const importPreset = async (presetId) => {
     try {
-      setValidatorUpdating(value);
-      if (primaryRule) {
-        await updatePrivacyRule(primaryRule.id, {
-          name: '校验算法',
-          type: 'validator',
-          category: primaryRule.category || DEFAULT_RULE_CATEGORY,
-          pattern_or_value: orderedValues.join(','),
-          replacement_mode: PSEUDONYM_REPLACEMENT_MODE,
-          enabled: orderedValues.length > 0,
-          priority: primaryRule.priority || 100
-        });
-      } else if (orderedValues.length > 0) {
-        await createPrivacyRule({
-          name: '校验算法',
-          type: 'validator',
-          category: DEFAULT_RULE_CATEGORY,
-          pattern_or_value: orderedValues.join(','),
-          replacement_mode: PSEUDONYM_REPLACEMENT_MODE,
-          enabled: true,
-          priority: 100
-        });
+      const added = await applyPrivacyPreset(presetId);
+      await load();
+      if (added > 0) {
+        toast.success(`已导入 ${added} 条规则`);
+      } else {
+        toast.info('预设规则均已存在');
       }
-
-      await Promise.all(
-        validatorRules
-          .filter((rule) => primaryRule && rule.id !== primaryRule.id && rule.enabled)
-          .map((rule) => updatePrivacyRule(rule.id, {
-            name: rule.name || '校验算法',
-            type: 'validator',
-            category: rule.category || DEFAULT_RULE_CATEGORY,
-            pattern_or_value: rule.pattern_or_value || rule.pattern_masked || rule.patternMasked || '',
-            replacement_mode: PSEUDONYM_REPLACEMENT_MODE,
-            enabled: false,
-            priority: rule.priority || 100
-          }))
-      );
-
-      await loadConfig();
-    } catch (err) {
-      toast.error(err?.message || '更新校验算法状态失败');
-    } finally {
-      setValidatorUpdating('');
+    } catch (error) {
+      toast.error(`导入失败: ${error.message}`);
     }
   };
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    try {
-      await deletePrivacyRule(deleteTarget.id);
-      toast.success('隐私规则已删除');
-      setDeleteTarget(null);
-      await loadConfig();
-    } catch (err) {
-      toast.error(err?.message || '删除规则失败');
-    }
-  };
-
-  const handleClearSyntheticValues = async () => {
-    try {
-      await clearPrivacySyntheticValues();
-      toast.success('模拟值记录已清空');
-      setClearSyntheticConfirm(false);
-      await loadSyntheticValues();
-    } catch (err) {
-      toast.error(err?.message || '清空模拟值记录失败');
-    }
-  };
-
-  const handleDeleteSyntheticValue = async () => {
-    if (!syntheticDeleteTarget) return;
-    const rawHash = syntheticDeleteTarget.raw_hash || syntheticDeleteTarget.rawHash || '';
-    const kind = syntheticDeleteTarget.kind || DEFAULT_RULE_CATEGORY;
-    const recordKey = getSyntheticRecordKey(syntheticDeleteTarget);
-    try {
-      setSyntheticDeletingKey(recordKey);
-      await deletePrivacySyntheticValue(kind, rawHash);
-      toast.success('模拟值记录已删除');
-      setSyntheticDeleteTarget(null);
-      await loadSyntheticValues();
-    } catch (err) {
-      toast.error(err?.message || '删除模拟值记录失败');
-    } finally {
-      setSyntheticDeletingKey('');
-    }
-  };
-
-  if (loading) {
-    return <LoadingSpinner text="加载隐私防护配置..." />;
-  }
-
-  if (error) {
-    return <ErrorMessage message={error} onRetry={loadConfig} />;
-  }
+  if (loading) return <LoadingSpinner />;
+  if (loadError) return <ErrorMessage message={loadError} onRetry={load} />;
+  if (!settings) return <ErrorMessage message="隐私防护服务未就绪" onRetry={load} />;
 
   return (
-    <div className="animate-fade-in">
-      <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-slate-900 p-2 text-white shadow-lg">
-            <ShieldCheck className="h-6 w-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">隐私防护</h1>
-            <p className="mt-1 text-sm text-slate-500">发送上游前按已启用规则处理请求正文</p>
-          </div>
+    <div className="space-y-5 p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2 text-lg font-semibold text-slate-900">
+            <ShieldCheck className="h-5 w-5 text-emerald-600" />
+            隐私防护
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            请求发往服务商前先在本机扫描。未命中的字节与原始请求完全一致，命中的原文不写入数据库、日志或本页面。
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            variant="secondary"
-            icon={RefreshCw}
-            onClick={activeSection === 'synthetic' ? loadSyntheticValues : loadConfig}
-          >
-            刷新
-          </Button>
-          {activeSection === 'rules' && <Button icon={Plus} onClick={openCreate}>添加规则</Button>}
-        </div>
+        <Button variant="secondary" size="sm" onClick={load}>
+          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+          刷新
+        </Button>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {overviewCards.map((card) => (
-          <KPICard
-            key={card.title}
-            title={card.title}
-            value={card.value}
-            subText={card.subText}
-            icon={card.icon}
-            statusColor={card.statusColor}
-            layout="side"
-            size="lg"
-          />
-        ))}
-      </div>
+      <UnscannedPathsBanner
+        paths={overview.unscannedPaths}
+        onClear={async () => {
+          await clearPrivacyUnscannedPaths();
+          await load();
+        }}
+      />
 
-      <SectionTabs activeSection={activeSection} onChange={setActiveSection} syntheticCount={syntheticValues.length} />
-
-      {activeSection === 'synthetic' ? (
-        <SyntheticValuesPanel
-          records={syntheticValues}
-          loading={syntheticLoading}
-          deletingKey={syntheticDeletingKey}
-          onRefresh={loadSyntheticValues}
-          onClear={() => setClearSyntheticConfirm(true)}
-          onDelete={setSyntheticDeleteTarget}
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-sm font-semibold text-slate-900">运行模式</h2>
+        <ModeSelector
+          mode={settings.mode}
+          saving={savingSettings}
+          onChange={(mode) => saveSettings({ ...settings, mode })}
         />
-      ) : (
-        <>
-          <div className="mb-4">
-            <RuleTypeTabs activeType={activeType} rules={rules} onChange={setActiveType} />
-          </div>
+        <div className="mt-4 border-t border-slate-100 pt-4">
+          <PolicyPanel settings={settings} saving={savingSettings} onChange={saveSettings} />
+        </div>
+      </div>
 
-          {activeType === 'validator' ? (
-            <ValidatorRulePanel
-              typeMeta={activeMeta}
-              enabledValues={enabledValidatorValues}
-              updatingValue={validatorUpdating}
-              onToggle={handleToggleValidatorAlgorithm}
-            />
-          ) : (
-            <RuleGrid
-              rules={visibleRules}
-              typeMeta={activeMeta}
-              onEdit={openEdit}
-              onDelete={setDeleteTarget}
-              onToggle={handleToggleRule}
-            />
-          )}
-        </>
-      )}
+      <LegacyRulesPanel
+        rules={overview.legacyRules}
+        onDiscard={async () => {
+          await discardLegacyPrivacyRules();
+          await load();
+          toast.success('旧版规则清单已清除');
+        }}
+      />
+
+      <div className="rounded-xl border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
+          <h2 className="text-sm font-semibold text-slate-900">
+            规则（{enabledCount}/{rules.length} 启用）
+          </h2>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {overview.presets.map((preset) => (
+              <Button key={preset.id} variant="secondary" size="sm" onClick={() => importPreset(preset.id)}>
+                <Package className="mr-1.5 h-3.5 w-3.5" />
+                导入{preset.name}（{preset.ruleCount}）
+              </Button>
+            ))}
+            <Button size="sm" onClick={() => { setModalRule(emptyRule()); setModalError(''); }}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              新建规则
+            </Button>
+          </div>
+        </div>
+
+        {rules.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-slate-500">
+            还没有任何规则。先导入一套预设，或新建自定义规则。
+          </p>
+        ) : (
+          <div className="overflow-x-auto px-4">
+            <table className="w-full text-left">
+              <thead className="text-xs text-slate-500">
+                <tr className="border-b border-slate-100">
+                  <th className="w-12 py-2 pr-3 font-medium">启用</th>
+                  <th className="py-2 pr-3 font-medium">名称</th>
+                  <th className="py-2 pr-3 font-medium">匹配内容</th>
+                  <th className="py-2 pr-3 font-medium">来源</th>
+                  <th className="py-2 pr-3 font-medium">替换为</th>
+                  <th className="py-2 pr-3 font-medium">优先级</th>
+                  <th className="py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {rules.map((rule) => (
+                  <RuleRow
+                    key={rule.id}
+                    rule={rule}
+                    busy={busyRuleId === rule.id}
+                    onToggle={toggleRule}
+                    onEdit={(item) => { setModalRule({ ...item }); setModalError(''); }}
+                    onDelete={setPendingDelete}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <TestPanel />
 
       <RuleModal
-        open={modal.open}
-        mode={modal.mode}
-        typeMeta={RULE_TYPE_MAP[form.type] || activeMeta}
-        form={form}
-        saving={saving}
-        error={formError}
-        onClose={closeModal}
-        onChange={setForm}
-        onSubmit={handleSubmit}
+        open={Boolean(modalRule)}
+        rule={modalRule || emptyRule()}
+        saving={modalSaving}
+        error={modalError}
+        onChange={setModalRule}
+        onClose={() => setModalRule(null)}
+        onSubmit={submitRule}
       />
 
       <ConfirmDialog
-        isOpen={Boolean(deleteTarget)}
+        isOpen={Boolean(pendingDelete)}
         title="删除隐私规则"
-        message={`确定删除规则「${deleteTarget?.name || ''}」？`}
+        message={`确定删除规则「${pendingDelete?.name || ''}」？删除后该类内容将不再被脱敏。`}
         confirmText="删除"
-        variant="danger"
-        onConfirm={handleDelete}
-        onCancel={() => setDeleteTarget(null)}
-      />
-
-      <ConfirmDialog
-        isOpen={clearSyntheticConfirm}
-        title="清空模拟值记录"
-        message="确定清空所有已登记的模拟值记录？清空后后续请求会重新生成新的同值关联映射。"
-        confirmText="清空"
-        variant="danger"
-        onConfirm={handleClearSyntheticValues}
-        onCancel={() => setClearSyntheticConfirm(false)}
-      />
-
-      <ConfirmDialog
-        isOpen={Boolean(syntheticDeleteTarget)}
-        title="删除模拟值记录"
-        message={`确定删除「${syntheticDeleteTarget?.raw_value || syntheticDeleteTarget?.rawValue || ''} → ${syntheticDeleteTarget?.replacement || syntheticDeleteTarget?.value || ''}」？删除后该原值会在下次命中时重新生成映射。`}
-        confirmText="删除"
-        variant="danger"
-        onConfirm={handleDeleteSyntheticValue}
-        onCancel={() => setSyntheticDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
       />
     </div>
   );

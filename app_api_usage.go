@@ -303,7 +303,6 @@ type RequestRecord struct {
 	ServiceTier              string      `json:"service_tier"`
 	PrivacyRedacted          bool        `json:"privacy_redacted"`
 	PrivacyRedactionSummary  string      `json:"privacy_redaction_summary,omitempty"`
-	PrivacyRedactionMatches  string      `json:"privacy_redaction_matches,omitempty"`
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
 	HTTPStatus               int         `json:"http_status"`
@@ -493,7 +492,6 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		ServiceTier:                   r.ServiceTier,
 		PrivacyRedacted:               r.PrivacyRedacted,
 		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
-		PrivacyRedactionMatches:       r.PrivacyRedactionMatches,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
 		RetryCount:                    retryCount,

@@ -731,8 +731,7 @@ type UpdateOptions struct {
 	ModelRewriteSource *string        // 模型改写来源：mapping/channel_model
 	ModelRewriteTarget *string        // 改写后的目标模型
 	PrivacyRedacted    *bool          // 是否命中隐私脱敏
-	PrivacySummary     *string        // 隐私脱敏摘要（不含正文）
-	PrivacyMatches     *string        // 隐私脱敏命中明细（本机展示用）
+	PrivacySummary     *string        // 隐私脱敏摘要（仅规则名与命中数，绝不含原文）
 	EndTime            *time.Time     // 结束时间
 	Duration           *time.Duration // 持续时间
 	FailureReason      *string        // 失败原因（用于中间过程记录）
@@ -1585,9 +1584,6 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			if opts.PrivacySummary != nil {
 				req.PrivacySummary = *opts.PrivacySummary
 			}
-			if opts.PrivacyMatches != nil {
-				req.PrivacyMatches = *opts.PrivacyMatches
-			}
 			if opts.FailureReason != nil {
 				req.FailureReason = *opts.FailureReason
 			}
@@ -1615,19 +1611,17 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 	slog.Debug("HotPool 未启用，跳过 update", "request_id", requestID)
 }
 
-func (ut *UsageTracker) RecordPrivacyRedaction(requestID string, summary string, matches ...string) {
+// RecordPrivacyRedaction 记录隐私脱敏命中摘要。
+// summary 只含规则名与命中数；命中原文不得落库，故此处不接受任何原文参数。
+func (ut *UsageTracker) RecordPrivacyRedaction(requestID string, summary string) {
 	if requestID == "" || summary == "" {
 		return
 	}
 	redacted := true
-	opts := UpdateOptions{
+	ut.RecordRequestUpdate(requestID, UpdateOptions{
 		PrivacyRedacted: &redacted,
 		PrivacySummary:  &summary,
-	}
-	if len(matches) > 0 && matches[0] != "" {
-		opts.PrivacyMatches = &matches[0]
-	}
-	ut.RecordRequestUpdate(requestID, opts)
+	})
 }
 
 // RecordOutputSent records when the first response bytes were sent to the client.
@@ -2867,7 +2861,6 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	serviceTier := req.ServiceTier
 	privacyRedacted := req.PrivacyRedacted
 	privacySummary := req.PrivacySummary
-	privacyMatches := req.PrivacyMatches
 	isStreaming := req.IsStreaming
 	provider := req.Provider
 	status := req.Status
@@ -3027,7 +3020,6 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		ServiceTier:                   serviceTier,
 		PrivacyRedacted:               privacyRedacted,
 		PrivacyRedactionSummary:       privacySummary,
-		PrivacyRedactionMatches:       privacyMatches,
 		IsStreaming:                   isStreaming,
 		Provider:                      provider, // 提供商标识
 		Status:                        status,

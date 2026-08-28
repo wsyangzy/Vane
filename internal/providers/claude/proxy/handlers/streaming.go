@@ -26,7 +26,7 @@ type StreamingHandler struct {
 	errorRecovery            ErrorRecoveryManager
 	retryManagerFactory      RetryManagerFactory
 	suspensionManagerFactory SuspensionManagerFactory
-	privacyRedactor          PrivacyRedactor
+	privacyFilter            PrivacyFilter
 	// 🔧 [修复] 共享SuspensionManager实例，确保全局挂起限制生效
 	sharedSuspensionManager SuspensionManager
 }
@@ -61,8 +61,8 @@ func NewStreamingHandler(
 	}
 }
 
-func (sh *StreamingHandler) SetPrivacyRedactor(redactor PrivacyRedactor) {
-	sh.privacyRedactor = redactor
+func (sh *StreamingHandler) SetPrivacyFilter(filter PrivacyFilter) {
+	sh.privacyFilter = filter
 }
 
 // noOpFlusher 是一个不执行实际flush操作的flusher实现
@@ -202,11 +202,18 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		http.Error(w, "Streaming not supported by this proxy chain", http.StatusServiceUnavailable)
 		return
 	}
-	protectedBody, err := redactBodyBeforeForwardContext(ctx, sh.privacyRedactor, bodyBytes, lifecycleManager, r.Header.Get("Content-Type"), r.Header.Get("Content-Encoding"))
+	protectedBody, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
-		lifecycleManager.FailRequest("privacy_redaction_failed", err.Error(), http.StatusInternalServerError)
+		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环。
+		// 流式请求统一用 SSE 终止，避免客户端把 HTTP 状态码误判为认证失败。
+		reason, message := "privacy_filter_failed", err.Error()
+		status := http.StatusInternalServerError
+		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
+			reason, message, status = PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode
+		}
+		lifecycleManager.FailRequest(reason, message, status)
 		sh.setStreamingHeaders(w)
-		terminateSSEStreamWithError(w, flusher, "隐私防护处理失败: "+err.Error())
+		terminateSSEStreamWithError(w, flusher, "隐私防护处理失败: "+message)
 		return
 	}
 	bodyBytes = protectedBody
