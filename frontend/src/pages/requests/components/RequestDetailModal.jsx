@@ -157,6 +157,17 @@ const parseEndpointErrorInfo = (errorText, statusCode) => {
   };
 };
 
+// failure_reason 的存储格式为 "<分类>: <详情>"（tracker.go RecordRequestFinalFailure 拼接），
+// 拆开后分类做标签、详情交给 parseEndpointErrorInfo 结构化，便于快速判断错误原因。
+const splitFailureReason = (raw) => {
+  const text = String(raw || '').trim();
+  if (!text) return { category: '', detail: '' };
+  const withDetail = text.match(/^([a-z][a-z0-9_]*):\s([\s\S]+)$/);
+  if (withDetail) return { category: withDetail[1], detail: withDetail[2] };
+  if (/^[a-z][a-z0-9_]*$/.test(text)) return { category: text, detail: '' };
+  return { category: '', detail: text };
+};
+
 const EndpointErrorTooltipContent = ({ summary }) => (
   <div className="max-w-[28rem] space-y-1 text-left">
     <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-200">错误摘要</div>
@@ -403,7 +414,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
     if (index === total - 1) return '最终';
     return '中转';
   };
+  const failureParts = splitFailureReason(request.failure_reason);
+  const failureErrorInfo = parseEndpointErrorInfo(failureParts.detail, networkHTTPStatus);
   const errorText = [
+    networkHTTPStatus ? `HTTP 状态码: ${networkHTTPStatus}` : null,
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
     request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
   ].filter(Boolean).join('\n');
@@ -951,10 +965,29 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
-                    {request.failure_reason && (
+                    {(networkHTTPStatus || failureParts.category) && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {networkHTTPStatus && (
+                          <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
+                            HTTP {networkHTTPStatus}
+                          </span>
+                        )}
+                        {failureParts.category && (
+                          <span className="inline-flex items-center rounded-md border border-rose-200 bg-white px-2 py-0.5 font-mono text-xs text-rose-700">
+                            {failureParts.category}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {failureErrorInfo.message && (
+                      <div className="w-full min-w-0 whitespace-pre-wrap break-all text-sm font-medium leading-6 text-rose-800 [overflow-wrap:anywhere]">
+                        {failureErrorInfo.message}
+                      </div>
+                    )}
+                    {failureParts.detail && (
                       <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
-                        <span className="shrink-0 font-medium text-slate-600">失败原因：</span>
-                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{request.failure_reason}</span>
+                        <span className="shrink-0 font-medium text-slate-600">原始信息：</span>
+                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureParts.detail}</span>
                       </div>
                     )}
                     {request.cancel_reason && (
