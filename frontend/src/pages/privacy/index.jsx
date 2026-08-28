@@ -114,6 +114,20 @@ const SOURCE_TONES = {
   custom: 'border-slate-200 bg-slate-50 text-slate-600'
 };
 
+// 与 @components/ui 的 Input 保持一致的输入控件样式（含 focus ring）。
+// 原生控件默认没有聚焦态，混在自定义组件之间会很突兀。
+const FIELD_CLASS =
+  'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm transition-colors ' +
+  'focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+
+const FIELD_MONO_CLASS = FIELD_CLASS + ' font-mono text-xs';
+
+// 弹窗动效对齐 RequestDetailModal：遮罩淡入，面板 zoom-in-95 + 淡入。
+const OVERLAY_CLASS = 'absolute inset-0 bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200';
+const PANEL_CLASS =
+  'relative flex w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 ' +
+  'animate-in zoom-in-95 fade-in duration-200';
+
 const emptyRule = () => ({
   id: 0,
   name: '',
@@ -419,8 +433,9 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
   const replacementMeta = REPLACEMENT_MODES.find((item) => item.value === rule.replacementMode);
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+      <div className={OVERLAY_CLASS} />
+      <div className={`${PANEL_CLASS} max-h-[90vh] max-w-2xl`}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
           <h3 className="text-sm font-semibold text-slate-900">{rule.id ? '编辑规则' : '新建规则'}</h3>
           <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100">
@@ -436,7 +451,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
             <input
               value={rule.name}
               onChange={(event) => onChange({ ...rule, name: event.target.value })}
-              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              className={`mt-1.5 ${FIELD_CLASS}`}
               placeholder="例如：客户手机号"
             />
           </label>
@@ -446,7 +461,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
             <input
               value={rule.description}
               onChange={(event) => onChange({ ...rule, description: event.target.value })}
-              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+              className={`mt-1.5 ${FIELD_CLASS}`}
             />
           </label>
 
@@ -472,7 +487,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
                 type="number"
                 value={rule.priority}
                 onChange={(event) => onChange({ ...rule, priority: Number(event.target.value) })}
-                className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                className={`mt-1.5 ${FIELD_CLASS}`}
               />
               <p className="mt-1 text-xs text-slate-500">与高优先级规则命中区间重叠时，本规则的命中会被丢弃。</p>
             </label>
@@ -500,7 +515,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
               value={rule.pattern}
               onChange={(event) => onChange({ ...rule, pattern: event.target.value })}
               rows={3}
-              className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
+              className={`mt-1.5 ${FIELD_MONO_CLASS}`}
             />
             {rule.matchType === 'regex' && (
               <div className="mt-2 flex flex-wrap gap-1.5">
@@ -559,7 +574,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
               <input
                 value={rule.placeholder}
                 onChange={(event) => onChange({ ...rule, placeholder: event.target.value })}
-                className="mt-1.5 w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm"
+                className={`mt-1.5 ${FIELD_CLASS}`}
               />
             </label>
           )}
@@ -625,11 +640,9 @@ const TestModal = ({ open, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
-      <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+      <div className={OVERLAY_CLASS} onClick={onClose} />
+      <div className={`${PANEL_CLASS} max-h-[85vh] max-w-2xl`}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
           <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             <FlaskConical className="h-4 w-4 text-slate-400" />
@@ -650,7 +663,7 @@ const TestModal = ({ open, onClose }) => {
             onChange={(event) => setInput(event.target.value)}
             rows={5}
             placeholder="粘贴一段文本，检查规则会命中什么"
-            className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-sm"
+            className={FIELD_CLASS}
           />
           {result && (
             <div className="space-y-2">
