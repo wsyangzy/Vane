@@ -5,6 +5,63 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## v8.6 (2026-08-29)
+
+### 隐私防护重建（破坏性变更）
+
+原实现存在两个方向性缺陷，本版重建 `internal/privacy` 予以根治。
+
+**缺陷一：隐私防护自身成了客户明文的集中副本**
+
+- 命中原文经 `DebugMatchesToJSON` 落入 `request_logs.privacy_redaction_matches`，并经 Wails API 回传前端渲染
+- `privacy_synthetic_mappings.raw_value` 长期保存客户真实姓名与号码
+- Debug 日志输出完整请求正文，并广播到前端日志查看器
+
+**缺陷二：脱敏破坏了请求透传**
+
+- 旧实现把 body 解析成 `map[string]any` 再 `json.Marshal` 回去，会重排对象键序、把尖括号与和号转成 Unicode 转义、改变大数字精度，违反「忠实透传客户端原始请求意图」的硬约束
+
+#### 引擎
+
+- **字节级替换**：用 `json.Decoder.InputOffset()` 定位字符串 token 的原始字节区间，只重写命中段；未命中字节与原始请求 byte-identical，且不做 HTML escape
+- **白名单扫描**：按 API path 锁定可扫描文本字段，协议字段（`model`/`stream`/`tools`/`metadata`/`reasoning`）天然不参与匹配；白名单外的路径不静默跳过，计入告警并可配置为拒发
+- **三态模式**：`disabled` / `detect` / `redact`，新增 `on_error`、`scan_max_bytes`、`over_limit_action`、`unsupported_path_action` 兜底策略
+- **策略短路**：`PolicyError` 拒绝的请求不进入 retry / failover / 端点冷却
+- **匹配类型收敛**：`literal` / `regex` / `builtin` 三类，砍掉误报偏高的 `field` / `entropy` / `structured`；内置 PII 带 Luhn 校验、卡组织 BIN 画像、身份证校验位与省份码白名单
+- **无状态伪名化**：假名在请求内一致，不再写任何映射表
+
+#### 止血
+
+- 删除 `privacy_redaction_matches` 列与两张 `privacy_synthetic_*` 表，并主动清除已存在的历史明文（`usage.db` 与 `data/archive` 下的月度归档均覆盖）
+- `RuleHit.Matches` 用 `json:"-"` 在类型层面阻断序列化，原文只进本地 `slog`
+- 日志与策略错误响应均不含原文或请求正文
+
+#### 数据迁移
+
+- 旧 `privacy_rules` 整表改名为 `privacy_legacy_rules` 只读保留，**不自动转换**——转换出错在隐私场景是静默失败，规则看似还在实则不再匹配
+- 升级用户统一落 `detect`，避免全新规则集未经验证就改写生产流量
+- 隐私表结构改由 `privacy.Store.EnsureSchema` 单一持有，`schema.sql` 不再定义
+
+#### 界面
+
+- 隐私页重写：运行模式、兜底策略、未扫描路径告警、旧版规则清单、预设导入、规则测试弹窗
+- 规则支持多选批量启停/删除、按来源筛选、列表限高滚动
+- 请求详情区分「已脱敏 / 仅检测到 / 未命中」，移除全部原文渲染
+
+### 其他
+
+- 凭证分组改为单行分段条，转移情况移入悬浮气泡
+- Codex 多维计费规则与服务档位定价
+- 上游返回 429 不再导致整个凭证分组被跳过
+- dev/release 追踪数据隔离与凭证分组归属自愈
+- 修复窗口长时间隐藏后 WebView2 白屏
+- 端点详情新增可用性时间条；请求详情拆出失败分类与 HTTP 状态码
+
+### 破坏性变更
+
+- `privacy_rules` 表重建，旧规则需按只读清单手工重建
+- `GetPrivacyConfig` / `SetPrivacyEnabled` / `GetPrivacySyntheticValues` 等 Wails API 由 `GetPrivacyOverview` / `UpdatePrivacySettings` 等取代
+
 ## v7.3 (2026-05-27)
 
 ### 品牌升级

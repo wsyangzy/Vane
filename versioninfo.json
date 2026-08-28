@@ -2,13 +2,13 @@
   "FixedFileInfo": {
     "FileVersion": {
       "Major": 8,
-      "Minor": 5,
+      "Minor": 6,
       "Patch": 0,
       "Build": 0
     },
     "ProductVersion": {
       "Major": 8,
-      "Minor": 5,
+      "Minor": 6,
       "Patch": 0,
       "Build": 0
     },
@@ -22,13 +22,13 @@
     "Comments": "AI Relay Forwarding Service",
     "CompanyName": "AI Relay Forwarder",
     "FileDescription": "AI Relay Forwarder",
-    "FileVersion": "8.5.0.0",
+    "FileVersion": "8.6.0.0",
     "InternalName": "ai-relay-forwarder",
     "LegalCopyright": "Copyright © 2024-2026",
     "OriginalFilename": "AI Relay Forwarder.exe",
     "PrivateBuild": "",
     "ProductName": "AI Relay Forwarder",
-    "ProductVersion": "8.5",
+    "ProductVersion": "8.6",
     "SpecialBuild": ""
   },
   "VarFileInfo": {
