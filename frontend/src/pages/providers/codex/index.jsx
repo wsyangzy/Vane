@@ -47,7 +47,8 @@ import {
   useToast
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
-import CredentialGroupStack from '@pages/management/shared/CredentialGroupStack.jsx';
+import CredentialGroupStrip from '@pages/management/shared/CredentialGroupStrip.jsx';
+import { buildCredentialGroupStats } from '@pages/management/shared/credentialGroupStats.js';
 import EndpointAvailabilityBar from '@pages/management/shared/EndpointAvailabilityBar.jsx';
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import {
@@ -2442,6 +2443,8 @@ const ChannelCard = ({
     return defaultCredentialGroup || selectedCredentialGroup || null;
   };
   const groupEndpoints = sortEndpointsByPriority(endpoints.filter(groupEndpointFilter));
+  // 分段条上的转移指示器，按分组统计端点归属（与 groupEndpointFilter 同规则）
+  const credentialGroupStats = buildCredentialGroupStats(credentialGroups, endpoints);
   const selectedCredentialHasCredential = Boolean(selectedCredentialGroup) &&
     hasCodexCredential(selectedCredentialGroup, channel);
   const channelHasCredential = hasCodexCredential(channel) ||
@@ -2688,9 +2691,10 @@ const ChannelCard = ({
 
       {/* 凭证分组 */}
       <div className="border-t border-slate-100 bg-white px-4 py-2">
-        <CredentialGroupStack
+        <CredentialGroupStrip
           groups={credentialGroups}
           selectedId={selectedCredentialGroupIDResolved}
+          stats={credentialGroupStats}
           label={`Credentials · ${credentialGroups.length}`}
           onSelect={setSelectedCredentialGroupID}
           onOpen={(group) => onOpenCredentialGroup?.(channel, group)}

@@ -46,7 +46,7 @@ test('Claude credential groups preserve single-click switching and use double-cl
   assert.match(source, /每日成本限额（USD）/);
   assert.match(source, /CredentialGroupDetailModal/);
   // 分组选择器已提取为共享堆叠卡片，页面只负责接线；
-  // 单击/双击的交互契约由 management/shared/CredentialGroupStack.test.js 保证
+  // 单击/双击的交互契约由 management/shared/CredentialGroupStrip.test.js 保证
   assert.match(source, /onSelect=\{setSelectedCredentialGroupID\}/);
   assert.match(source, /onOpen=\{\(group\) => onOpenCredentialGroup\?\.\(channelName, group\)\}/);
 });
@@ -165,7 +165,7 @@ test('Claude credential groups without a usable secret do not expose endpoint ac
 test('Claude channel cards keep the paused badge in the credentials header', () => {
   assert.doesNotMatch(source, /按请求模型/);
   assert.doesNotMatch(source, /modelMappingCount/);
-  // header 由 CredentialGroupStack 统一渲染（添加分组按钮已移到该行右侧），
+  // header 由 CredentialGroupStrip 统一渲染（添加分组按钮已移到该行右侧），
   // 页面只负责把标题和暂停标签传进去
   assert.match(source, /label=\{`Credentials · \$\{credentialGroups\.length\}`\}/);
   assert.match(source, /headerExtra=\{channelFailoverEnabled && isPaused/);

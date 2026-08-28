@@ -342,6 +342,16 @@ html {
   background: #94a3b8;
 }
 
+/* 定高的横向滚动区：滚动条会从内容高度里扣掉几像素，导致同类卡片高度不一，
+   所以整条隐藏，用最后一项被裁切来暗示「右边还有」 */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* 确保 root 元素填满视口 */
 #root {
   min-height: 100vh;

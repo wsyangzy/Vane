@@ -59,7 +59,7 @@ test('Codex credential groups preserve single-click switching and use double-cli
   assert.match(source, /每日成本限额（USD）/);
   assert.match(source, /CredentialGroupDetailModal/);
   // 分组选择器已提取为共享堆叠卡片，页面只负责接线；
-  // 单击/双击的交互契约由 management/shared/CredentialGroupStack.test.js 保证
+  // 单击/双击的交互契约由 management/shared/CredentialGroupStrip.test.js 保证
   assert.match(source, /onSelect=\{setSelectedCredentialGroupID\}/);
   assert.match(source, /onOpen=\{\(group\) => onOpenCredentialGroup\?\.\(channel, group\)\}/);
 });

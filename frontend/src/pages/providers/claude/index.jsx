@@ -50,7 +50,8 @@ import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import { ClaudeIcon } from '@pages/requests/components/ModelTag.jsx';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import CredentialGroupDetailModal from '@pages/management/shared/CredentialGroupDetailModal.jsx';
-import CredentialGroupStack from '@pages/management/shared/CredentialGroupStack.jsx';
+import CredentialGroupStrip from '@pages/management/shared/CredentialGroupStrip.jsx';
+import { buildCredentialGroupStats } from '@pages/management/shared/credentialGroupStats.js';
 import EndpointAvailabilityBar from '@pages/management/shared/EndpointAvailabilityBar.jsx';
 import {
   EndpointHealthBadge as HealthBadge,
@@ -1848,6 +1849,8 @@ const ChannelCard = ({
     if (createdAtDiff !== 0) return createdAtDiff;
     return Number(a?.id || 0) - Number(b?.id || 0);
   });
+  // 分段条上的转移指示器，按分组统计端点归属（与 groupEndpointFilter 同规则）
+  const credentialGroupStats = buildCredentialGroupStats(credentialGroups, endpoints);
 
   const isPaused = !!groupInfo?.paused;
 
@@ -2099,9 +2102,10 @@ const ChannelCard = ({
 
       {isSqliteMode && (
         <div className="border-t border-slate-100 bg-white px-4 py-2">
-          <CredentialGroupStack
+          <CredentialGroupStrip
             groups={credentialGroups}
             selectedId={selectedCredentialGroupIDResolved}
+            stats={credentialGroupStats}
             label={`Credentials · ${credentialGroups.length}`}
             headerExtra={channelFailoverEnabled && isPaused ? (
               <span className="inline-flex h-4 flex-shrink-0 items-center rounded bg-amber-50 px-1.5 text-[9px] font-medium leading-none text-amber-700">
