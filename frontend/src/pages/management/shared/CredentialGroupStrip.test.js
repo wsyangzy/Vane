@@ -27,7 +27,7 @@ test('the segment stays one line and the name gets a line box tall enough for CJ
   // leading-none 下 11px 的中文会被裁掉底部笔画，行盒必须显式给足
   assert.match(source, /const SEGMENT_AREA_HEIGHT_PX = 32;/);
   assert.match(source, /flex h-full w-full items-center gap-1 rounded-lg border px-2/);
-  assert.match(source, /truncate text-\[11px\] font-medium leading-\[16px\]/);
+  assert.match(source, /whitespace-nowrap text-\[11px\] font-medium leading-\[16px\]/);
   assert.match(source, /text-\[9px\] font-medium leading-\[14px\]/);
   assert.doesNotMatch(source, /className=[^\n]*leading-none/);
 });
@@ -103,12 +103,17 @@ test('the strip area height never depends on the group count', () => {
   assert.match(source, /空态也占满分段区高度/);
 });
 
-test('too many groups overflow sideways instead of wrapping or growing', () => {
+test('too many groups overflow sideways instead of wrapping, growing or squeezing names', () => {
   // 换行会改变高度；滚动条也会从定高里扣掉几像素，所以整条隐藏
   assert.match(source, /no-scrollbar flex min-w-0 items-stretch gap-1 overflow-x-auto/);
   assert.doesNotMatch(source, /flex-wrap/);
   assert.match(source, /const SEGMENT_MIN_WIDTH_PX = 76;/);
   assert.match(source, /minWidth: `\$\{SEGMENT_MIN_WIDTH_PX\}px`/);
+  // 裸 flex-1 是 basis:0 + shrink:1：分段会被压到名字以下，带「默认」徽章的分组
+  // 先被截断，其他分组却完整。配上 min-w-max 后两种情形都对——宽度够时仍是等宽
+  // 平分，不够时每段退回名字所需宽度、由上面的 overflow-x-auto 横向滚动。
+  assert.match(source, /className="flex min-w-max flex-1"/);
+  assert.doesNotMatch(source, /className="flex flex-1"/);
 });
 
 test('the dot strip has a text equivalent for screen readers', () => {

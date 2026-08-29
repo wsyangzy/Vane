@@ -25,7 +25,9 @@ import { getGroupID, isDefaultGroup } from './credentialGroupStats.js';
 
 // 单行分段：11px 文字的行盒 16px + 上下 6px 内边距 + 1px 边框
 const SEGMENT_AREA_HEIGHT_PX = 32;
-// 名字至少要能看出几个字；再窄就只剩省略号，不如让它溢出滚动
+// 分段用 flex-1 等宽平分，再用 min-w-max 兜住名字：宽度够时每段一样宽，不够时
+// 各自退回名字所需宽度、由容器横向滚动。名字因此任何时候都完整，不出省略号。
+// 这里的最小宽度只兜底短名字，避免单字分组窄成一条。
 const SEGMENT_MIN_WIDTH_PX = 76;
 // 气泡里逐个列出的端点上限，再多只报剩余个数
 const BUBBLE_ENDPOINT_LIMIT = 8;
@@ -164,7 +166,7 @@ const GroupSegment = ({ group, selected, stat, disabled, onSelect, onOpen }) => 
 
   return (
     <Tooltip
-      className="flex flex-1"
+      className="flex min-w-max flex-1"
       content={
         <span className="flex flex-col gap-1">
           <span className="font-semibold">{name}</span>
@@ -220,7 +222,8 @@ const GroupSegment = ({ group, selected, stat, disabled, onSelect, onOpen }) => 
           }
         />
         {/* 行盒固定 16px：11px 的中文在 leading-none 下会被裁掉底部笔画 */}
-        <span className={`min-w-0 truncate text-[11px] font-medium leading-[16px] ${selected ? 'text-indigo-700' : 'text-slate-600'}`}>
+        {/* 不截断：分组名要完整可读，宽度不够由分段区横向滚动解决 */}
+        <span className={`whitespace-nowrap text-[11px] font-medium leading-[16px] ${selected ? 'text-indigo-700' : 'text-slate-600'}`}>
           {name}
         </span>
         {groupIsDefault && (
