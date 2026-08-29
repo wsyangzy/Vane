@@ -698,6 +698,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE endpoints ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'",
 			description: "端点模型附加倍率字段",
 		},
+		{
+			checkColumn: "stream_only",
+			alterSQL:    "ALTER TABLE endpoints ADD COLUMN stream_only INTEGER DEFAULT 0",
+			description: "端点仅支持流式请求字段 (v8.7)",
+		},
 	}
 
 	// channels 迁移：早期可能只有 name，后续新增 website

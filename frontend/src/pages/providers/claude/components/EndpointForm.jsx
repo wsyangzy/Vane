@@ -184,6 +184,7 @@ const EndpointForm = ({
         cooldownSeconds: endpoint.cooldownSeconds || '',
         timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
+        streamOnly: endpoint.streamOnly || endpoint.stream_only || false,
         costMultiplier: endpoint.costMultiplier || 1.0,
         inputCostMultiplier: endpoint.inputCostMultiplier || 1.0,
         outputCostMultiplier: endpoint.outputCostMultiplier || 1.0,
@@ -204,6 +205,7 @@ const EndpointForm = ({
       cooldownSeconds: '',
       timeoutSeconds: 0, // 新建时传0，使用全局默认超时
       supportsCountTokens: false,
+      streamOnly: false, // 默认允许非流式请求路由到此端点
       costMultiplier: '1',
       inputCostMultiplier: '1',
       outputCostMultiplier: '1',
@@ -586,7 +588,7 @@ const EndpointForm = ({
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <FormCheckbox
                 label="参与渠道内故障转移"
                 name="failoverEnabled"
@@ -615,6 +617,16 @@ const EndpointForm = ({
                 disabled={loading}
                 compact
                 help="端点是否支持 Token 计数 API"
+              />
+
+              <FormCheckbox
+                label="仅支持流式"
+                name="streamOnly"
+                checked={formData.streamOnly}
+                onChange={handleChange}
+                disabled={loading}
+                compact
+                help="部分中转商仅支持 SSE 流式，勾选后非流式请求不会路由到此端点"
               />
             </div>
           </div>

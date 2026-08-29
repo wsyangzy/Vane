@@ -1089,6 +1089,7 @@ export class UpdateSettingInput {
 	    cooldown_seconds?: number;
 	    timeout_seconds: number;
 	    supports_count_tokens: boolean;
+	    stream_only: boolean;
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -1116,6 +1117,7 @@ export class UpdateSettingInput {
 	        this.cooldown_seconds = source["cooldown_seconds"];
 	        this.timeout_seconds = source["timeout_seconds"];
 	        this.supports_count_tokens = source["supports_count_tokens"];
+	        this.stream_only = source["stream_only"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];
@@ -1416,6 +1418,7 @@ export class UpdateSettingInput {
 	    cooldown_seconds?: number;
 	    timeout_seconds: number;
 	    supports_count_tokens: boolean;
+	    stream_only: boolean;
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -1460,6 +1463,7 @@ export class UpdateSettingInput {
 	        this.cooldown_seconds = source["cooldown_seconds"];
 	        this.timeout_seconds = source["timeout_seconds"];
 	        this.supports_count_tokens = source["supports_count_tokens"];
+	        this.stream_only = source["stream_only"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];

@@ -197,6 +197,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- ========== 功能支持 ==========
     supports_count_tokens INTEGER DEFAULT 0,        -- 是否支持 count_tokens 端点
     skip_health_check INTEGER DEFAULT 0,            -- 跳过健康检查 (, 1=跳过, 0=正常检查)
+    stream_only INTEGER DEFAULT 0,                  -- 仅支持流式请求 (1=非流请求不路由到此端点, 0=正常)
 
     -- ========== 成本倍率 ==========
     cost_multiplier REAL DEFAULT 1.0,               -- 总成本倍率

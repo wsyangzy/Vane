@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS endpoints (
 	timeout_seconds INTEGER DEFAULT 300,
 	skip_health_check INTEGER DEFAULT 0,
 	supports_count_tokens INTEGER DEFAULT 0,
+	stream_only INTEGER DEFAULT 0,
 	cost_multiplier REAL DEFAULT 1.0,
 	input_cost_multiplier REAL DEFAULT 1.0,
 	output_cost_multiplier REAL DEFAULT 1.0,

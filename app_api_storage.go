@@ -40,6 +40,7 @@ type EndpointRecordInfo struct {
 	CooldownSeconds               *int                                        `json:"cooldown_seconds"`
 	TimeoutSeconds                int                                         `json:"timeout_seconds"`
 	SupportsCountTokens           bool                                        `json:"supports_count_tokens"`
+	StreamOnly                    bool                                        `json:"stream_only"` // 仅支持流式请求（非流请求不会路由到此端点）
 	CostMultiplier                float64                                     `json:"cost_multiplier"`
 	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
 	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
@@ -80,6 +81,7 @@ type CreateEndpointInput struct {
 	CooldownSeconds               *int                                        `json:"cooldown_seconds"`
 	TimeoutSeconds                int                                         `json:"timeout_seconds"`
 	SupportsCountTokens           bool                                        `json:"supports_count_tokens"`
+	StreamOnly                    bool                                        `json:"stream_only"` // 仅支持流式请求（非流请求不会路由到此端点）
 	CostMultiplier                float64                                     `json:"cost_multiplier"`
 	InputCostMultiplier           float64                                     `json:"input_cost_multiplier"`
 	OutputCostMultiplier          float64                                     `json:"output_cost_multiplier"`
@@ -406,6 +408,7 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
+		StreamOnly:                    input.StreamOnly,
 		CostMultiplier:                input.CostMultiplier,
 		InputCostMultiplier:           input.InputCostMultiplier,
 		OutputCostMultiplier:          input.OutputCostMultiplier,
@@ -535,6 +538,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
+		StreamOnly:                    input.StreamOnly,
 		CostMultiplier:                input.CostMultiplier,
 		InputCostMultiplier:           input.InputCostMultiplier,
 		OutputCostMultiplier:          input.OutputCostMultiplier,
@@ -673,6 +677,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 		CooldownSeconds:               input.CooldownSeconds,
 		TimeoutSeconds:                input.TimeoutSeconds,
 		SupportsCountTokens:           input.SupportsCountTokens,
+		StreamOnly:                    input.StreamOnly,
 		CostMultiplier:                input.CostMultiplier,
 		InputCostMultiplier:           input.InputCostMultiplier,
 		OutputCostMultiplier:          input.OutputCostMultiplier,
@@ -1802,6 +1807,7 @@ func (a *App) recordToInfo(r *claudestore.EndpointRecord) EndpointRecordInfo {
 		CooldownSeconds:               r.CooldownSeconds,
 		TimeoutSeconds:                r.TimeoutSeconds,
 		SupportsCountTokens:           r.SupportsCountTokens,
+		StreamOnly:                    r.StreamOnly,
 		CostMultiplier:                r.CostMultiplier,
 		InputCostMultiplier:           r.InputCostMultiplier,
 		OutputCostMultiplier:          r.OutputCostMultiplier,
