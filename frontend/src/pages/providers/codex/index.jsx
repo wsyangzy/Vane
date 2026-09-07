@@ -68,12 +68,7 @@ import {
   getFailoverToggleErrorMessage
 } from '@pages/management/shared/formatters.js';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
-import LongContextMultiplierSettings from '@pages/management/shared/LongContextMultiplierSettings.jsx';
-import ServiceTierMultiplierSettings, {
-  buildInitialServiceTierMultipliers,
-  CODEX_SERVICE_TIERS,
-  parseServiceTierMultipliers
-} from './ServiceTierMultiplierSettings.jsx';
+import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
 import BillingRuleEditor, {
   buildInitialBillingRuleRows,
   createDefaultBillingRuleRow,
@@ -185,10 +180,7 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
   longContextOutputCostMultiplier: formatMultiplierInputValue(group?.longContextOutputCostMultiplier ?? 1.0),
   longContextCacheCreationCostMultiplier: formatMultiplierInputValue(group?.longContextCacheCreationCostMultiplier ?? 1.0),
   longContextCacheReadCostMultiplier: formatMultiplierInputValue(group?.longContextCacheReadCostMultiplier ?? 1.0),
-  disableLongContextPricing: group ? Boolean(group.disableLongContextPricing) : true,
-  disableServiceTierPricing: group ? Boolean(group.disableServiceTierPricing ?? group.disable_service_tier_pricing ?? true) : true,
-  serviceTierMultipliers: buildInitialServiceTierMultipliers(group?.serviceTierMultipliers || group?.service_tier_multipliers),
-  billingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens',
+  disableLongContextPricing: group ? Boolean(group.disableLongContextPricing) : true,  billingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens',
 	 billingMode: Array.isArray(group?.billingRules || group?.billing_rules) && (group?.billingRules || group?.billing_rules).length > 0 ? 'rules' : 'legacy',
 	 billingRuleRows: buildInitialBillingRuleRows(group?.billingRules || group?.billing_rules),
   copyEndpointsFromGroupId: '',
@@ -280,20 +272,22 @@ const BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS = [
   { value: 'visible_output_tokens', label: '可见补全 output - reasoning' }
 ];
 
+// priceKey 指向模型定价中对应的单价字段，供倍率弹窗展示「基础单价 → 实际单价」对照。
+// 无 priceKey 的是总倍率，作用于全部分项。
 const STANDARD_ENDPOINT_MULTIPLIER_FIELDS = [
   { label: '总成本倍率', key: 'costMultiplier' },
-  { label: '输入成本倍率', key: 'inputCostMultiplier' },
-  { label: '输出成本倍率', key: 'outputCostMultiplier' },
-  { label: '缓存创建倍率', key: 'cacheCreationCostMultiplier' },
-  { label: '缓存读取倍率', key: 'cacheReadCostMultiplier' }
+  { label: '输入成本倍率', key: 'inputCostMultiplier', priceKey: 'inputPrice' },
+  { label: '输出成本倍率', key: 'outputCostMultiplier', priceKey: 'outputPrice' },
+  { label: '缓存创建倍率', key: 'cacheCreationCostMultiplier', priceKey: 'cacheCreationPrice5m' },
+  { label: '缓存读取倍率', key: 'cacheReadCostMultiplier', priceKey: 'cacheReadPrice' }
 ];
 
 const LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS = [
   { label: 'Long context 总倍率', key: 'longContextCostMultiplier' },
-  { label: 'Long context 输入倍率', key: 'longContextInputCostMultiplier' },
-  { label: 'Long context 输出倍率', key: 'longContextOutputCostMultiplier' },
-  { label: 'Long context 缓存创建倍率', key: 'longContextCacheCreationCostMultiplier' },
-  { label: 'Long context 缓存读取倍率', key: 'longContextCacheReadCostMultiplier' }
+  { label: 'Long context 输入倍率', key: 'longContextInputCostMultiplier', priceKey: 'longContextInputPrice' },
+  { label: 'Long context 输出倍率', key: 'longContextOutputCostMultiplier', priceKey: 'longContextOutputPrice' },
+  { label: 'Long context 缓存创建倍率', key: 'longContextCacheCreationCostMultiplier', priceKey: 'longContextCacheWritePrice' },
+  { label: 'Long context 缓存读取倍率', key: 'longContextCacheReadCostMultiplier', priceKey: 'longContextCacheReadPrice' }
 ];
 
 const ENDPOINT_MULTIPLIER_FIELDS = [
@@ -647,9 +641,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
 // ============================================================================
 const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
-  const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);
-  const [serviceTierSettingsOpen, setServiceTierSettingsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('basic');
+  const [standardMultiplierSettingsOpen, setStandardMultiplierSettingsOpen] = useState(false);
+  const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);  const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
   const isWails = isWailsEnvironment();
@@ -675,6 +668,12 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
     if (fieldError) setFieldError('');
   };
 
+  const handleStandardMultiplierSave = (values) => {
+    setFormData((current) => ({ ...current, ...values }));
+    setStandardMultiplierSettingsOpen(false);
+    if (fieldError) setFieldError('');
+  };
+
   const handleLongContextToggle = () => {
     if (loading) return;
     if (formData.disableLongContextPricing) {
@@ -687,21 +686,6 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
   const handleLongContextSave = (values) => {
     setFormData((current) => ({ ...current, ...values, disableLongContextPricing: false }));
     setLongContextSettingsOpen(false);
-    if (fieldError) setFieldError('');
-  };
-
-  const handleServiceTierToggle = () => {
-    if (loading) return;
-    if (formData.disableServiceTierPricing) {
-      setServiceTierSettingsOpen(true);
-      return;
-    }
-    updateField('disableServiceTierPricing', true);
-  };
-
-  const handleServiceTierSave = (values) => {
-    setFormData((current) => ({ ...current, serviceTierMultipliers: values, disableServiceTierPricing: false }));
-    setServiceTierSettingsOpen(false);
     if (fieldError) setFieldError('');
   };
 
@@ -781,13 +765,6 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       setActiveTab('billing');
       return null;
     }
-    const serviceTierResult = parseServiceTierMultipliers(formData.serviceTierMultipliers);
-    if (serviceTierResult.error) {
-      setFieldError(serviceTierResult.error);
-      setFormStep('details');
-      setActiveTab('billing');
-      return null;
-    }
     const modelMultiplierResult = parseModelMultiplierRows(formData.modelMultiplierRows);
     if (modelMultiplierResult.error) {
       setFieldError(modelMultiplierResult.error);
@@ -813,10 +790,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 	  dailyCostLimitUSD,
       copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
       ...multiplierResult.payload,
-      disableLongContextPricing: formData.disableLongContextPricing,
-      disableServiceTierPricing: formData.disableServiceTierPricing,
-      serviceTierMultipliers: serviceTierResult.payload,
-      billingOutputTokenSource: formData.billingOutputTokenSource,
+      disableLongContextPricing: formData.disableLongContextPricing,billingOutputTokenSource: formData.billingOutputTokenSource,
 	  modelMultipliers: modelMultiplierResult.payload,
 	  billingRules
     };
@@ -1073,26 +1047,36 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 
 				{formData.billingMode === 'legacy' ? (
 				  <>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">普通成本倍率</label>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-slate-700">普通成本倍率</div>
+                      <div className="mt-0.5 text-xs text-slate-500">未命中 Long context 阈值时使用以下倍率</div>
+                    </div>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setStandardMultiplierSettingsOpen(true)} disabled={loading}>编辑</Button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
                     {STANDARD_ENDPOINT_MULTIPLIER_FIELDS.map(({ key, label }) => (
-                      <div key={key}>
-                        <label className="mb-1 block text-xs text-slate-500">{label}</label>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={formData[key]}
-                          onChange={(event) => updateField(key, event.target.value)}
-                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                          placeholder="1.0"
-                          disabled={loading}
-                        />
+                      <div key={key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                        <div className="truncate text-[11px] text-slate-400">{label.replace(/成本倍率|倍率/, '') || '总'}</div>
+                        <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{formData[key]}</div>
                       </div>
                     ))}
                   </div>
-                  <p className="mt-1 text-xs text-slate-400">成本倍率直接作为该分组下 Codex 端点的计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
+                  <p className="mt-2 text-xs text-slate-400">成本倍率直接作为该分组下 Codex 端点的计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
                 </div>
+
+                {standardMultiplierSettingsOpen && (
+                  <MultiplierSettingsModal
+                    title="普通成本倍率"
+                    description="未命中 Long context 阈值时应用以下倍率。"
+                    fields={STANDARD_ENDPOINT_MULTIPLIER_FIELDS}
+                    values={formData}
+                    disabled={loading}
+                    onCancel={() => setStandardMultiplierSettingsOpen(false)}
+                    onSave={handleStandardMultiplierSave}
+                  />
+                )}
 
                 <button
                   type="button"
@@ -1142,7 +1126,9 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                 )}
 
                 {longContextSettingsOpen && (
-                  <LongContextMultiplierSettings
+                  <MultiplierSettingsModal
+                    title="Long context 成本倍率"
+                    description="命中模型 Long context 阈值后应用以下倍率。"
                     fields={LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS}
                     values={formData}
                     disabled={loading}
@@ -1151,65 +1137,6 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   />
                 )}
 
-                {/* 服务档位计费 */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={!formData.disableServiceTierPricing}
-                  onClick={handleServiceTierToggle}
-                  className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
-                    formData.disableServiceTierPricing
-                      ? 'border-slate-200 bg-slate-50'
-                      : 'border-indigo-200 bg-indigo-50/60'
-                  } ${loading ? 'cursor-not-allowed opacity-70' : 'hover:border-indigo-300'}`}
-                  disabled={loading}
-                >
-                  <div>
-                    <div className="text-sm font-medium text-slate-700">服务档位计费</div>
-                    <div className="mt-0.5 text-xs text-slate-500">
-                      {formData.disableServiceTierPricing ? '不启用，四档均使用分组基础倍率' : '按请求档位叠加 Standard、Batch、Flex 或 Fast mode 倍率'}
-                    </div>
-                  </div>
-                  <span className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition-colors ${
-                    formData.disableServiceTierPricing ? 'bg-slate-300' : 'bg-indigo-600'
-                  }`}>
-                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-                      formData.disableServiceTierPricing ? 'translate-x-0.5' : 'translate-x-[1.375rem]'
-                    }`} />
-                  </span>
-                </button>
-
-                {!formData.disableServiceTierPricing && (
-                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-medium text-slate-700">服务档位倍率已配置</div>
-                        <div className="mt-0.5 text-xs text-slate-500">当前显示每档总倍率，弹窗内可配置五个成本分项</div>
-                      </div>
-                      <Button type="button" variant="secondary" size="sm" onClick={() => setServiceTierSettingsOpen(true)} disabled={loading}>编辑</Button>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {CODEX_SERVICE_TIERS.map((tier) => {
-                        const record = formData.serviceTierMultipliers.find((item) => item.serviceTier === tier.key);
-                        return (
-                          <div key={tier.key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                            <div className="truncate text-[11px] text-slate-400">{tier.label}</div>
-                            <div className="mt-0.5 truncate text-sm font-medium text-slate-700">x{record?.costMultiplier ?? 1}</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {serviceTierSettingsOpen && (
-                  <ServiceTierMultiplierSettings
-                    values={formData.serviceTierMultipliers}
-                    disabled={loading}
-                    onCancel={() => setServiceTierSettingsOpen(false)}
-                    onSave={handleServiceTierSave}
-                  />
-                )}
 
                 <ModelMultiplierEditor
                   rows={formData.modelMultiplierRows}

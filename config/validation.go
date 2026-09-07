@@ -2,13 +2,6 @@ package config
 
 import "fmt"
 
-func (c *Config) validateEndpointSource() error {
-	if len(c.Endpoints) == 0 && c.EndpointsStorage.Type != "sqlite" {
-		return fmt.Errorf("at least one endpoint must be configured (or set endpoints_storage.type: sqlite)")
-	}
-	return nil
-}
-
 func (c *Config) validateStrategy() error {
 	if c.Strategy.Type != "priority" && c.Strategy.Type != "fastest" {
 		return fmt.Errorf("strategy type must be 'priority' or 'fastest'")

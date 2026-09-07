@@ -49,8 +49,8 @@ func (s *ModelPricingService) CreatePricing(ctx context.Context, record *store.M
 		return nil, err
 	}
 
-	// 检查是否已存在
-	existing, err := s.store.Get(ctx, record.ModelName)
+	// 检查是否已存在：按三元组定位，否则新建档位子行时会被标准档主行误判为重复
+	existing, err := s.findExistingRecord(ctx, record)
 	if err != nil {
 		return nil, fmt.Errorf("检查定价是否存在失败: %w", err)
 	}
@@ -105,9 +105,7 @@ func (s *ModelPricingService) GetPricing(ctx context.Context, modelName string) 
 
 // GetPricingOrDefault 获取模型定价（provider-aware），如果不存在则返回该 provider 的默认定价
 func (s *ModelPricingService) GetPricingOrDefault(ctx context.Context, modelName, provider string) *store.ModelPricingRecord {
-	if provider == "" {
-		provider = "claude"
-	}
+	provider = normalizeProvider(provider)
 	// 先尝试获取指定模型的定价
 	record, err := s.GetPricing(ctx, modelName)
 	if err == nil && record != nil {
@@ -120,9 +118,7 @@ func (s *ModelPricingService) GetPricingOrDefault(ctx context.Context, modelName
 
 // GetDefaultPricing 获取指定 provider 的默认定价
 func (s *ModelPricingService) GetDefaultPricing(ctx context.Context, provider string) *store.ModelPricingRecord {
-	if provider == "" {
-		provider = "claude"
-	}
+	provider = normalizeProvider(provider)
 	s.cacheMu.RLock()
 	cacheKey := provider + "::default"
 	if cached, ok := s.defaultPricingCache[cacheKey]; ok && cached != nil {
@@ -171,9 +167,7 @@ func (s *ModelPricingService) ListPricings(ctx context.Context) ([]*store.ModelP
 
 // ListPricingsByProvider 按 provider 列出模型定价
 func (s *ModelPricingService) ListPricingsByProvider(ctx context.Context, provider string) ([]*store.ModelPricingRecord, error) {
-	if provider == "" {
-		provider = "claude"
-	}
+	provider = normalizeProvider(provider)
 	records, err := s.store.ListByProvider(ctx, provider)
 	if err != nil {
 		return nil, fmt.Errorf("列出模型定价失败 (provider=%s): %w", provider, err)
@@ -188,8 +182,8 @@ func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *store.M
 		return err
 	}
 
-	// 验证存在
-	existing, err := s.store.Get(ctx, record.ModelName)
+	// 验证存在：档位子行必须按三元组定位，用 Get 只会查到标准档主行
+	existing, err := s.findExistingRecord(ctx, record)
 	if err != nil {
 		return fmt.Errorf("查询模型定价失败: %w", err)
 	}
@@ -216,10 +210,12 @@ func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *store.M
 	return nil
 }
 
-// DeletePricing 删除模型定价
-func (s *ModelPricingService) DeletePricing(ctx context.Context, modelName string) error {
-	// 验证存在
-	existing, err := s.store.Get(ctx, modelName)
+// DeletePricing 删除模型定价（含该模型在该 provider 下的全部档位子行）
+func (s *ModelPricingService) DeletePricing(ctx context.Context, provider, modelName string) error {
+	provider = normalizeProvider(provider)
+
+	// 验证存在（标准档主行）
+	existing, err := s.store.GetTier(ctx, provider, modelName, "")
 	if err != nil {
 		return fmt.Errorf("查询模型定价失败: %w", err)
 	}
@@ -233,14 +229,28 @@ func (s *ModelPricingService) DeletePricing(ctx context.Context, modelName strin
 	}
 
 	// 删除数据库记录
-	if err := s.store.Delete(ctx, modelName); err != nil {
+	if err := s.store.Delete(ctx, provider, modelName); err != nil {
 		return fmt.Errorf("删除模型定价失败: %w", err)
 	}
 
 	// 从缓存移除
 	s.clearCache()
 
-	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 删除模型定价: %s", modelName))
+	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 删除模型定价: %s/%s", provider, modelName))
+	return nil
+}
+
+// DeleteTierPricing 删除单个档位子行，标准档主行不受影响
+func (s *ModelPricingService) DeleteTierPricing(ctx context.Context, provider, modelName, serviceTier string) error {
+	provider = normalizeProvider(provider)
+
+	if err := s.store.DeleteTier(ctx, provider, modelName, serviceTier); err != nil {
+		return fmt.Errorf("删除档位定价失败: %w", err)
+	}
+
+	s.clearCache()
+
+	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 删除档位定价: %s/%s/%s", provider, modelName, serviceTier))
 	return nil
 }
 
@@ -255,61 +265,6 @@ func (s *ModelPricingService) SetDefaultPricing(ctx context.Context, modelName s
 
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 设置默认定价: %s", modelName))
 	return nil
-}
-
-// ImportFromYAML 从 YAML 配置导入模型定价
-// clearExisting: 是否清除现有定价
-func (s *ModelPricingService) ImportFromYAML(ctx context.Context, modelPricing map[string]tracking.ModelPricing, defaultPricing tracking.ModelPricing, clearExisting bool) (int, error) {
-	records := make([]*store.ModelPricingRecord, 0, len(modelPricing)+1)
-
-	// 转换模型定价
-	for modelName, pricing := range modelPricing {
-		record := &store.ModelPricingRecord{
-			ModelName:                  modelName,
-			InputPrice:                 pricing.Input,
-			OutputPrice:                pricing.Output,
-			CacheCreationPrice5m:       pricing.CacheCreation, // YAML 中的 CacheCreation 默认为 5m
-			CacheCreationPrice1h:       pricing.Input * 2.0,   // 1h 价格自动计算
-			CacheReadPrice:             pricing.CacheRead,
-			LongContextThreshold:       pricing.LongContextThreshold,
-			LongContextInputPrice:      pricing.LongContextInputPrice,
-			LongContextCacheReadPrice:  pricing.LongContextCacheReadPrice,
-			LongContextCacheWritePrice: pricing.LongContextCacheWritePrice,
-			LongContextOutputPrice:     pricing.LongContextOutputPrice,
-			IsDefault:                  false,
-		}
-		records = append(records, record)
-	}
-
-	// 添加默认定价
-	defaultRecord := &store.ModelPricingRecord{
-		ModelName:                  "_default",
-		DisplayName:                "默认定价",
-		Description:                "未知模型使用的默认定价",
-		InputPrice:                 defaultPricing.Input,
-		OutputPrice:                defaultPricing.Output,
-		CacheCreationPrice5m:       defaultPricing.CacheCreation,
-		CacheCreationPrice1h:       defaultPricing.Input * 2.0,
-		CacheReadPrice:             defaultPricing.CacheRead,
-		LongContextThreshold:       defaultPricing.LongContextThreshold,
-		LongContextInputPrice:      defaultPricing.LongContextInputPrice,
-		LongContextCacheReadPrice:  defaultPricing.LongContextCacheReadPrice,
-		LongContextCacheWritePrice: defaultPricing.LongContextCacheWritePrice,
-		LongContextOutputPrice:     defaultPricing.LongContextOutputPrice,
-		IsDefault:                  true,
-	}
-	records = append(records, defaultRecord)
-
-	// 使用 upsert 批量导入（会更新已存在的记录）
-	if err := s.store.BatchUpsert(ctx, records); err != nil {
-		return 0, fmt.Errorf("批量导入失败: %w", err)
-	}
-
-	// 清除缓存，强制重新加载
-	s.clearCache()
-
-	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 从 YAML 导入 %d 个模型定价", len(records)))
-	return len(records), nil
 }
 
 // LoadCache 加载所有定价到缓存
@@ -327,10 +282,7 @@ func (s *ModelPricingService) LoadCache(ctx context.Context) error {
 	for _, record := range records {
 		s.cache[record.ModelName] = record
 		if record.IsDefault {
-			provider := record.Provider
-			if provider == "" {
-				provider = "claude"
-			}
+			provider := normalizeProvider(record.Provider)
 			s.defaultPricingCache[provider+"::default"] = record
 		}
 	}
@@ -359,6 +311,25 @@ func (s *ModelPricingService) ToTrackingPricing(record *store.ModelPricingRecord
 		LongContextCacheWritePrice: record.LongContextCacheWritePrice,
 		LongContextOutputPrice:     record.LongContextOutputPrice,
 	}
+}
+
+// normalizeProvider 空 provider 归一化为 claude，与 DB 的 COALESCE(provider,'claude') 口径一致
+func normalizeProvider(provider string) string {
+	if provider == "" {
+		return "claude"
+	}
+	return provider
+}
+
+// findExistingRecord 定位一条已存在的定价行。
+// ID 优先：ID 跨 provider 唯一，编辑时把 provider 从 claude 改成 codex 也能命中原行；
+// 无 ID（新建校验）时按 (provider, model_name, service_tier) 三元组定位，
+// 用 Get 只会查到标准档主行，会把新建档位子行误判成重复。
+func (s *ModelPricingService) findExistingRecord(ctx context.Context, record *store.ModelPricingRecord) (*store.ModelPricingRecord, error) {
+	if record.ID > 0 {
+		return s.store.GetByID(ctx, record.ID)
+	}
+	return s.store.GetTier(ctx, normalizeProvider(record.Provider), record.ModelName, record.ServiceTier)
 }
 
 // validateRecord 验证模型定价记录
@@ -419,10 +390,7 @@ func (s *ModelPricingService) updateCache(record *store.ModelPricingRecord) {
 		if s.defaultPricingCache == nil {
 			s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
 		}
-		provider := record.Provider
-		if provider == "" {
-			provider = "claude"
-		}
+		provider := normalizeProvider(record.Provider)
 		s.defaultPricingCache[provider+"::default"] = record
 	}
 	s.lastUpdatedAt = time.Now()

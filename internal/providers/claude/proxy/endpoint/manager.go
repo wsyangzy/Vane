@@ -93,6 +93,9 @@ type Manager struct {
 	turnFailureCacheTouched  time.Time
 	turnFailedCredentialRefs map[credentialGroupRef]struct{}
 	failoverEnabled          atomic.Bool
+	// 最近一次成功的端点按渠道保存，用于后续请求直接复用成功线路。
+	preferredEndpointMu   sync.RWMutex
+	preferredEndpointKeys map[string]string
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。
@@ -224,6 +227,7 @@ func NewManager(cfg *config.Config) *Manager {
 		// 同时不会过度延迟健康状态更新
 		healthThrottleLastTime: make(map[string]time.Time),
 		healthThrottleInterval: 5 * time.Second,
+		preferredEndpointKeys:  make(map[string]string),
 	}
 	manager.failoverEnabled.Store(cfg != nil && cfg.Failover.Enabled)
 
@@ -304,6 +308,8 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	if m.fastTester != nil {
 		m.fastTester.UpdateConfig(cfg)
 	}
+	// 配置热更新后，旧的成功端点提示可能已经不再适用。
+	m.clearPreferredEndpoints()
 }
 
 // IsFailoverEnabled 返回线程安全的渠道间故障转移开关快照。

@@ -78,6 +78,9 @@ func (m *Manager) failedCredentialGroupsForTurn(turnKey string) map[credentialGr
 	if m == nil {
 		return nil
 	}
+	if strings.TrimSpace(turnKey) == "" {
+		return nil
+	}
 	now := time.Now()
 
 	m.turnFailureCacheMu.Lock()
@@ -100,6 +103,9 @@ func (m *Manager) RememberFailedCredentialGroupForTurn(turnKey string, ep *Endpo
 	}
 	group := credentialGroupRefFromEndpoint(ep)
 	if !group.valid() {
+		return false
+	}
+	if strings.TrimSpace(turnKey) == "" {
 		return false
 	}
 	now := time.Now()

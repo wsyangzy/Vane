@@ -176,8 +176,10 @@ func (sp *StreamProcessor) forwardToClient(data []byte) error {
 	if _, err := sp.responseWriter.Write(data); err != nil {
 		return err
 	}
-	if !sp.outputSentRecorded && sp.usageTracker != nil {
-		sp.usageTracker.RecordOutputSent(sp.requestID)
+	if !sp.outputSentRecorded {
+		if sp.usageTracker != nil {
+			sp.usageTracker.RecordOutputSent(sp.requestID)
+		}
 		sp.outputSentRecorded = true
 	}
 
@@ -343,27 +345,8 @@ func (sp *StreamProcessor) ProcessStreamWithRetry(ctx context.Context, resp *htt
 			if modelName == "" {
 				modelName = "unknown"
 			}
-
-			// 智能错误包装：检查API错误是否已被包装，避免重复包装
-			if strings.HasPrefix(sp.lastAPIError.Error(), "stream_status:") {
-				return finalTokenUsage, modelName, sp.lastAPIError
-			}
-
-			// 根据API错误内容智能确定状态
-			status := "stream_error"
-			errorMsg := sp.lastAPIError.Error()
-			if strings.Contains(errorMsg, "rate") || strings.Contains(errorMsg, "429") {
-				status = "rate_limited"
-			} else if strings.Contains(errorMsg, "timeout") || strings.Contains(errorMsg, "deadline") {
-				status = "timeout"
-			} else if strings.Contains(errorMsg, "cancel") {
-				status = "cancelled"
-			} else if strings.Contains(errorMsg, "auth") || strings.Contains(errorMsg, "401") {
-				status = "auth_error"
-			}
-
-			wrappedErr := fmt.Errorf("stream_status:%s:model:%s: %w", status, modelName, sp.lastAPIError)
-			return finalTokenUsage, modelName, wrappedErr
+			// 保留解析到的服务商错误，不根据错误文本重新包装状态或模型。
+			return finalTokenUsage, modelName, sp.lastAPIError
 		}
 
 		// 🆕 [流完整性检测] 2025-12-11
@@ -391,31 +374,14 @@ func (sp *StreamProcessor) ProcessStreamWithRetry(ctx context.Context, resp *htt
 		return finalTokenUsage, modelName, nil
 	}
 
-	// 流式处理失败，进行错误包装
+	// 流式处理失败，保留原始错误；状态/模型由调用方和结构化解析结果记录。
 	tokenUsage := sp.getFinalTokenUsage()
 	modelName := sp.tokenParser.GetModelName()
 	if modelName == "" {
 		modelName = "unknown"
 	}
 
-	// 智能错误包装：检查错误是否已被包装，避免重复包装
-	if strings.HasPrefix(err.Error(), "stream_status:") {
-		return tokenUsage, modelName, err
-	}
-
-	// 根据错误内容智能确定状态
-	status := "error"
-	errStr := err.Error()
-	if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline") {
-		status = "timeout"
-	} else if strings.Contains(errStr, "cancel") {
-		status = "cancelled"
-	} else if strings.Contains(errStr, "network") || strings.Contains(errStr, "connection") {
-		status = "network_error"
-	}
-
-	wrappedErr := fmt.Errorf("stream_status:%s:model:%s: %w", status, modelName, err)
-	return tokenUsage, modelName, wrappedErr
+	return tokenUsage, modelName, err
 }
 
 // finalizeParsing 处理剩余缓冲数据并刷新待处理事件
@@ -614,8 +580,8 @@ func (sp *StreamProcessor) handlePartialStream(err error) (*tracking.TokenUsage,
 		}
 	}
 
-	// ✅ 返回包含状态和模型信息的错误，供上层处理
-	return partialTokenUsage, fmt.Errorf("stream_status:%s:model:%s: %w", status, modelName, err)
+	// 状态和模型已通过结构化返回值/解析器记录，错误本身保持原样。
+	return partialTokenUsage, err
 }
 
 // handleCancellation 处理客户端取消请求（返回Token信息版本）
@@ -663,8 +629,7 @@ func (sp *StreamProcessor) collectAvailableInfo(cancelErr error) (*tracking.Toke
 			sp.requestID, statusClassified, modelName))
 	}
 
-	// ✅ 返回包含完整信息的错误
-	return tokenUsage, fmt.Errorf("stream_status:%s:model:%s: %w", statusClassified, modelName, cancelErr)
+	return tokenUsage, cancelErr
 }
 
 // HasSentContent 检查是否已向客户端发送实际模型输出内容
@@ -673,4 +638,9 @@ func (sp *StreamProcessor) HasSentContent() bool {
 	sp.contentSentMutex.Lock()
 	defer sp.contentSentMutex.Unlock()
 	return sp.hasContentSent
+}
+
+// HasWrittenResponse reports whether any upstream stream bytes reached the client.
+func (sp *StreamProcessor) HasWrittenResponse() bool {
+	return sp.outputSentRecorded
 }

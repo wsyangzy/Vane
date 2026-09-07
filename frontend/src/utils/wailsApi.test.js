@@ -25,13 +25,14 @@ test('generated App binding exposes credential-group daily usage', () => {
   assert.match(source, /Call\.ByName\("main\.App\.GetCredentialGroupDailyUsage"/);
 });
 
-test('generated Codex credential-group models include service-tier billing fields', () => {
+test('generated Codex credential-group models keep combination billing rules', () => {
   const source = readFileSync(new URL('../wailsjs/go/models.ts', import.meta.url), 'utf8');
   for (const model of ['CodexCredentialGroupInfo', 'CreateCodexCredentialGroupInput', 'UpdateCodexCredentialGroupInput']) {
     const body = source.match(new RegExp(`export class ${model} \\{([\\s\\S]*?)static createFrom`))?.[1] || '';
-    assert.match(body, /disableServiceTierPricing: boolean;/);
-    assert.match(body, /serviceTierMultipliers: any\[\];/);
-	 assert.match(body, /billingRules: any\[\];/);
+    assert.match(body, /billingRules: any\[\];/);
+    // 档位倍率已由 model_pricing 的 service_tier 维度取代，绑定里不应再出现
+    assert.doesNotMatch(body, /serviceTierMultipliers/);
+    assert.doesNotMatch(body, /disableServiceTierPricing/);
   }
 });
 
@@ -118,6 +119,50 @@ test('model pricing bridge preserves long-context fields', () => {
   });
 });
 
+test('model pricing bridge carries provider and service tier end to end', () => {
+  const mapped = wailsApi.mapModelPricingRecord({
+    id: 42,
+    model_name: 'gpt-5.6-sol',
+    provider: 'codex',
+    service_tier: 'flex'
+  });
+  assert.equal(mapped.id, 42);
+  assert.equal(mapped.provider, 'codex');
+  assert.equal(mapped.serviceTier, 'flex');
+  // 标准档主行的档位是空串，不能被 undefined 污染成「未知档」
+  assert.equal(wailsApi.mapModelPricingRecord({ model_name: 'm' }).serviceTier, '');
+
+  const tierRow = wailsApi.buildModelPricingPayload({
+    id: 42,
+    modelName: 'gpt-5.6-sol',
+    provider: 'codex',
+    serviceTier: 'flex'
+  });
+  assert.equal(tierRow.id, 42);
+  assert.equal(tierRow.provider, 'codex');
+  assert.equal(tierRow.service_tier, 'flex');
+  // 新建时无 id，后端按 (provider, model_name, service_tier) 三元组定位
+  const created = wailsApi.buildModelPricingPayload({ modelName: 'm' });
+  assert.equal(created.id, 0);
+  assert.equal(created.service_tier, '');
+});
+
+test('generated model pricing bindings expose provider and service tier', () => {
+  const models = readFileSync(new URL('../wailsjs/go/models.ts', import.meta.url), 'utf8');
+  for (const model of ['ModelPricingInfo', 'CreateModelPricingInput']) {
+    const body = models.match(new RegExp(`export class ${model} \\{([\\s\\S]*?)static createFrom`))?.[1] || '';
+    // 缺任一维度，同名模型就会跨 provider 串味或档位行无法定位
+    assert.match(body, /provider: string;/);
+    assert.match(body, /service_tier: string;/);
+  }
+  assert.match(models.match(/export class CreateModelPricingInput \{([\s\S]*?)static createFrom/)?.[1] || '', /id: number;/);
+
+  const app = readFileSync(new URL('../wailsjs/go/main/App.js', import.meta.url), 'utf8');
+  // 删除必须带 provider，否则是跨 provider 误删
+  assert.match(app, /export function DeleteModelPricing\(arg1, arg2\)/);
+  assert.match(app, /export function DeleteModelPricingTier\(arg1, arg2, arg3\)/);
+});
+
 test('Codex credential-group bridge preserves cache-write and long-context billing fields', () => {
   assert.equal(typeof wailsApi.mapCodexCredentialGroup, 'function');
   assert.equal(typeof wailsApi.buildCodexCredentialGroupPayload, 'function');
@@ -159,31 +204,6 @@ test('Codex credential-group bridge preserves cache-write and long-context billi
   assert.equal(payload.longContextCacheCreationCostMultiplier, 1.3);
   assert.equal(payload.longContextCacheReadCostMultiplier, 1.4);
   assert.equal(payload.disableLongContextPricing, true);
-});
-
-test('Codex credential-group bridge preserves all four service-tier multiplier sets', () => {
-  const mapped = wailsApi.mapCodexCredentialGroup({
-    disable_service_tier_pricing: false,
-    service_tier_multipliers: [{
-      service_tier: 'priority',
-      cost_multiplier: 1.5,
-      input_cost_multiplier: 2,
-      output_cost_multiplier: 3,
-      cache_creation_cost_multiplier: 4,
-      cache_read_cost_multiplier: 5
-    }]
-  });
-  assert.equal(mapped.disableServiceTierPricing, false);
-  assert.deepEqual(mapped.serviceTierMultipliers.map((record) => record.serviceTier), ['standard', 'batch', 'flex', 'fast']);
-  assert.equal(mapped.serviceTierMultipliers[3].cacheCreationCostMultiplier, 4);
-
-  const payload = wailsApi.buildCodexCredentialGroupPayload({
-    disableServiceTierPricing: false,
-    serviceTierMultipliers: mapped.serviceTierMultipliers
-  });
-  assert.equal(payload.serviceTierMultipliers.length, 4);
-  assert.equal(payload.serviceTierMultipliers[3].service_tier, 'fast');
-  assert.equal(payload.serviceTierMultipliers[3].cache_read_cost_multiplier, 5);
 });
 
 test('Codex credential-group bridge preserves sparse combination billing rules', () => {

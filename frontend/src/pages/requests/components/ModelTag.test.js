@@ -34,3 +34,13 @@ test('gpt-5.6 codename variants get distinct colors', () => {
   });
   assert.equal(new Set(styleLines).size, 3, 'sol / terra / luna must not share a color');
 });
+
+test('gpt-6-astra uses an OpenAI icon and a dedicated model style', () => {
+  assert.match(source, /GPT6_CODENAME_COLOR_MAP/);
+  assert.match(source, /astra:\s*createModelStyle\([^\n]*'openai'\)/);
+
+  const gpt6Index = source.indexOf('const gpt6ColorClasses = getGpt6ColorClasses(lowerName)');
+  const gpt5Index = source.indexOf('const gpt5ColorClasses = getGpt5ColorClasses(lowerName)');
+  assert.ok(gpt6Index > 0, 'gpt-6 lookup must exist');
+  assert.ok(gpt5Index > gpt6Index, 'gpt-6 lookup must precede the gpt-5 fallback');
+});

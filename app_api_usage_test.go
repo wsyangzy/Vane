@@ -562,17 +562,112 @@ func TestSyncEndpointMultipliersKeepsCodexCredentialGroupDimension(t *testing.T)
 	}
 	app.syncEndpointMultipliersToTracker(ctx)
 
-	subsidyMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("快跑API", "补贴", "国内")
+	subsidyMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("codex", "快跑API", "补贴", "国内")
 	if subsidyMultiplier.CostMultiplier != 0.4 {
 		t.Fatalf("subsidy multiplier = %.2f, want 0.40", subsidyMultiplier.CostMultiplier)
 	}
-	fullPriceMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("快跑API", "正价", "国内")
+	fullPriceMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("codex", "快跑API", "正价", "国内")
 	if fullPriceMultiplier.CostMultiplier != 1.5 {
 		t.Fatalf("full price multiplier = %.2f, want 1.50", fullPriceMultiplier.CostMultiplier)
 	}
-	legacyMultiplier := tracker.GetEndpointMultiplierForEndpoint("快跑API", "国内")
+	legacyMultiplier := tracker.GetEndpointMultiplierForEndpoint("codex", "快跑API", "国内")
 	if legacyMultiplier.CostMultiplier != 1.0 {
 		t.Fatalf("duplicate-name legacy multiplier = %.2f, want default 1.00", legacyMultiplier.CostMultiplier)
+	}
+}
+
+// Claude 与 Codex 允许各自配置同名的渠道 / 凭证分组 / 端点。倍率缓存是两者共用的
+// 一张 map，若 key 不含 provider，后写入的 Codex 条目会覆盖 Claude 条目，导致
+// Claude 请求按 Codex 的倍率计费（实测 anyrouter 渠道 685 条 Claude 请求被按 0.4 计价）。
+func TestSyncEndpointMultipliersIsolatesProvidersOnIdenticalNames(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+
+	ctx := context.Background()
+	db := tracker.GetDB()
+
+	const (
+		channelName  = "anyrouter"
+		groupName    = "默认分组"
+		endpointName = "主站直连"
+	)
+
+	claudeGroupStore := claudestore.NewSQLiteClaudeCredentialGroupStore(db)
+	claudeEndpointStore := claudestore.NewSQLiteEndpointStore(db)
+	claudeGroup, err := claudeGroupStore.Create(ctx, &claudestore.ClaudeCredentialGroupRecord{
+		Channel:        channelName,
+		Name:           groupName,
+		Token:          "claude-token",
+		IsDefault:      true,
+		CostMultiplier: 1.0,
+	})
+	if err != nil {
+		t.Fatalf("create claude group: %v", err)
+	}
+	if _, err := claudeEndpointStore.Create(ctx, &claudestore.EndpointRecord{
+		Channel:           channelName,
+		CredentialGroupID: claudeGroup.ID,
+		Name:              endpointName,
+		URL:               "https://claude.example.test",
+		FailoverEnabled:   true,
+		// 端点级倍率已停用：即使 DB 里残留非 1 的历史值，也不得参与运行时计费。
+		CostMultiplier: 2.0,
+	}); err != nil {
+		t.Fatalf("create claude endpoint: %v", err)
+	}
+
+	codexChannelStore := codexstore.NewSQLiteCodexChannelStore(db)
+	codexGroupStore := codexstore.NewSQLiteCodexCredentialGroupStore(db)
+	codexEndpointStore := codexstore.NewSQLiteCodexEndpointStore(db)
+	codexChannel, err := codexChannelStore.Create(ctx, &codexstore.CodexChannelRecord{
+		Name:         channelName,
+		ProviderType: "openai-compatible",
+		ApiKey:       "codex-key",
+		Model:        "gpt-5.6-sol",
+	})
+	if err != nil {
+		t.Fatalf("create codex channel: %v", err)
+	}
+	codexGroup, err := codexGroupStore.Create(ctx, &codexstore.CodexCredentialGroupRecord{
+		ChannelID:      codexChannel.ID,
+		Name:           groupName,
+		ApiKey:         "codex-group-key",
+		IsDefault:      true,
+		CostMultiplier: 0.4,
+	})
+	if err != nil {
+		t.Fatalf("create codex group: %v", err)
+	}
+	if _, err := codexEndpointStore.Create(ctx, &codexstore.CodexEndpointRecord{
+		ChannelID:         codexChannel.ID,
+		CredentialGroupID: codexGroup.ID,
+		Name:              endpointName,
+		BaseURL:           "https://codex.example.test/v1",
+		FailoverEnabled:   true,
+		CostMultiplier:    1,
+	}); err != nil {
+		t.Fatalf("create codex endpoint: %v", err)
+	}
+
+	app := &App{
+		logger:                     slog.Default(),
+		usageTracker:               tracker,
+		endpointStore:              claudeEndpointStore,
+		claudeCredentialGroupStore: claudeGroupStore,
+		codexChannelStore:          codexChannelStore,
+		codexEndpointStore:         codexEndpointStore,
+		codexCredentialGroupStore:  codexGroupStore,
+	}
+	app.syncEndpointMultipliersToTracker(ctx)
+
+	claudeMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("claude", channelName, groupName, endpointName)
+	if claudeMultiplier.CostMultiplier != 1.0 {
+		t.Fatalf("claude multiplier = %.2f, want 1.00 (端点倍率已停用，且不得取到 Codex 的 0.40)", claudeMultiplier.CostMultiplier)
+	}
+
+	codexMultiplier := tracker.GetEndpointMultiplierForEndpointWithGroup("codex", channelName, groupName, endpointName)
+	if codexMultiplier.CostMultiplier != 0.4 {
+		t.Fatalf("codex multiplier = %.2f, want 0.40", codexMultiplier.CostMultiplier)
 	}
 }
 

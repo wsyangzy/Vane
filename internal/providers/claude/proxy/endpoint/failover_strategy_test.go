@@ -16,9 +16,6 @@ func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(
 		Failover: config.FailoverConfig{
 			Enabled: true,
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{
-			Type: "yaml",
-		},
 		Endpoints: []config.EndpointConfig{
 			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1, Timeout: 2 * time.Second},
 			{Name: "a2", URL: "http://example.invalid/a2", Channel: "A", Priority: 2, Timeout: 2 * time.Second},
@@ -61,9 +58,6 @@ func TestTriggerRequestFailoverWithFailedEndpoints_UsesChannelPriorityAndSkipHea
 		},
 		Failover: config.FailoverConfig{
 			Enabled: true,
-		},
-		EndpointsStorage: config.EndpointsStorageConfig{
-			Type: "yaml",
 		},
 		Endpoints: []config.EndpointConfig{
 			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1, Timeout: 2 * time.Second},
@@ -110,9 +104,6 @@ func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown
 		},
 		Failover: config.FailoverConfig{
 			Enabled: true,
-		},
-		EndpointsStorage: config.EndpointsStorageConfig{
-			Type: "yaml",
 		},
 		Endpoints: []config.EndpointConfig{
 			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1, Timeout: 2 * time.Second},
@@ -164,9 +155,6 @@ func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown
 func TestActivateGroupForFailover_RejectsStaleAutomaticSwitch(t *testing.T) {
 	cfg := &config.Config{
 		Failover: config.FailoverConfig{Enabled: true},
-		EndpointsStorage: config.EndpointsStorageConfig{
-			Type: "sqlite",
-		},
 		Endpoints: []config.EndpointConfig{
 			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1},
 			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 1},
@@ -215,8 +203,7 @@ func TestActivateGroupForFailover_RejectsStaleAutomaticSwitch(t *testing.T) {
 
 func TestTriggerRequestFailover_RollsBackRuntimeWhenPersistenceFails(t *testing.T) {
 	cfg := &config.Config{
-		Failover:         config.FailoverConfig{Enabled: true},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+		Failover: config.FailoverConfig{Enabled: true},
 		Endpoints: []config.EndpointConfig{
 			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1},
 			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 1},
@@ -247,7 +234,6 @@ func TestTriggerRequestFailover_DisabledLoopRetryNeverSwitchesChannel(t *testing
 			LoopRetry: true,
 			MaxLoops:  3,
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 		Endpoints: []config.EndpointConfig{
 			{Name: "a1", URL: "http://example.invalid/a1", Channel: "A", Priority: 1},
 			{Name: "b1", URL: "http://example.invalid/b1", Channel: "B", Priority: 1},

@@ -28,11 +28,6 @@ var (
 	BuildMode = "dev" // 构建模式: "dev" 或 "release"（生产构建通过 ldflags 注入 "release"）
 )
 
-// 嵌入默认配置文件
-//
-//go:embed config/config.yaml
-var defaultConfigContent []byte
-
 // 嵌入前端资源
 //
 //go:embed all:frontend/dist

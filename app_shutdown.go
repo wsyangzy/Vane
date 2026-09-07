@@ -14,7 +14,6 @@ func (a *App) shutdown() {
 	storeDB := a.storeDB
 	endpointManager := a.endpointManager
 	eventBus := a.eventBus
-	configWatcher := a.configWatcher
 	logEmitter := a.logEmitter
 	a.isRunning = false
 	a.mu.Unlock()
@@ -87,14 +86,7 @@ func (a *App) shutdown() {
 		}
 	}
 
-	// 5. 关闭配置监听
-	if configWatcher != nil {
-		if err := configWatcher.Close(); err != nil && logger != nil {
-			logger.Error("配置监听关闭失败", "error", err)
-		}
-	}
-
-	// 6. 停止日志事件发射器
+	// 5. 停止日志事件发射器
 	if logEmitter != nil {
 		logEmitter.Stop()
 	}

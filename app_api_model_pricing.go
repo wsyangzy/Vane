@@ -20,7 +20,8 @@ import (
 type ModelPricingInfo struct {
 	ID                         int64   `json:"id"`
 	ModelName                  string  `json:"model_name"`
-	Provider                   string  `json:"provider"` // 提供商: claude/codex
+	Provider                   string  `json:"provider"`     // 提供商: claude/codex
+	ServiceTier                string  `json:"service_tier"` // 服务档位: 空串=标准档/兜底, flex/batch/priority=档位子行
 	DisplayName                string  `json:"display_name"`
 	Description                string  `json:"description"`
 	InputPrice                 float64 `json:"input_price"`             // USD per 1M tokens
@@ -40,8 +41,12 @@ type ModelPricingInfo struct {
 
 // CreateModelPricingInput 创建模型定价的输入参数
 type CreateModelPricingInput struct {
+	// ID 仅更新时使用。带 ID 时按 ID 精确定位，因此编辑中改 provider 或改档位都能命中原行；
+	// 不带则按 (provider, model_name, service_tier) 三元组定位。
+	ID                         int64   `json:"id"`
 	ModelName                  string  `json:"model_name"`
 	Provider                   string  `json:"provider"`
+	ServiceTier                string  `json:"service_tier"`
 	DisplayName                string  `json:"display_name"`
 	Description                string  `json:"description"`
 	InputPrice                 float64 `json:"input_price"`
@@ -215,6 +220,7 @@ func (a *App) CreateModelPricing(input CreateModelPricingInput) error {
 	record := &store.ModelPricingRecord{
 		ModelName:                  input.ModelName,
 		Provider:                   provider,
+		ServiceTier:                input.ServiceTier,
 		DisplayName:                input.DisplayName,
 		Description:                input.Description,
 		InputPrice:                 input.InputPrice,
@@ -264,8 +270,10 @@ func (a *App) UpdateModelPricing(modelName string, input CreateModelPricingInput
 	}
 
 	record := &store.ModelPricingRecord{
+		ID:                         input.ID,
 		ModelName:                  modelName, // 使用参数中的 modelName
 		Provider:                   provider,
+		ServiceTier:                input.ServiceTier,
 		DisplayName:                input.DisplayName,
 		Description:                input.Description,
 		InputPrice:                 input.InputPrice,
@@ -296,8 +304,9 @@ func (a *App) UpdateModelPricing(modelName string, input CreateModelPricingInput
 	return nil
 }
 
-// DeleteModelPricing 删除模型定价
-func (a *App) DeleteModelPricing(modelName string) error {
+// DeleteModelPricing 删除模型定价（含该模型在该 provider 下的全部档位子行）。
+// 必须带 provider：两个 provider 的模型名空间会重叠，不带就是跨 provider 误删。
+func (a *App) DeleteModelPricing(provider, modelName string) error {
 	a.ensureModelPricingService()
 	a.mu.RLock()
 	modelPricingService := a.modelPricingService
@@ -311,13 +320,40 @@ func (a *App) DeleteModelPricing(modelName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := modelPricingService.DeletePricing(ctx, modelName); err != nil {
+	if err := modelPricingService.DeletePricing(ctx, provider, modelName); err != nil {
 		return fmt.Errorf("删除模型定价失败: %w", err)
 	}
 	a.syncPricingToTracker(ctx)
 
 	if logger != nil {
-		logger.Info("✅ 模型定价已删除", "model", modelName)
+		logger.Info("✅ 模型定价已删除", "provider", provider, "model", modelName)
+	}
+
+	return nil
+}
+
+// DeleteModelPricingTier 删除单个档位子行，标准档主行不受影响
+func (a *App) DeleteModelPricingTier(provider, modelName, serviceTier string) error {
+	a.ensureModelPricingService()
+	a.mu.RLock()
+	modelPricingService := a.modelPricingService
+	logger := a.logger
+	a.mu.RUnlock()
+
+	if modelPricingService == nil {
+		return fmt.Errorf("模型定价服务未就绪，请稍后重试")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := modelPricingService.DeleteTierPricing(ctx, provider, modelName, serviceTier); err != nil {
+		return fmt.Errorf("删除档位定价失败: %w", err)
+	}
+	a.syncPricingToTracker(ctx)
+
+	if logger != nil {
+		logger.Info("✅ 档位定价已删除", "provider", provider, "model", modelName, "tier", serviceTier)
 	}
 
 	return nil
@@ -361,6 +397,7 @@ func (a *App) pricingRecordToInfo(r *store.ModelPricingRecord) ModelPricingInfo 
 		ID:                         r.ID,
 		ModelName:                  r.ModelName,
 		Provider:                   provider,
+		ServiceTier:                r.ServiceTier,
 		DisplayName:                r.DisplayName,
 		Description:                r.Description,
 		InputPrice:                 r.InputPrice,

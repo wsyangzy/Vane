@@ -1285,7 +1285,7 @@ export const getEndpointStorageStatus = async () => {
   const status = await WailsApp.GetEndpointStorageStatus();
   return {
     enabled: status.enabled || false,
-    storageType: status.storage_type || 'yaml',
+    storageType: status.storage_type || 'sqlite',
     totalCount: status.total_count || 0,
     enabledCount: status.enabled_count || 0
   };
@@ -1743,6 +1743,7 @@ export const mapModelPricingRecord = (record = {}) => ({
   id: record.id,
   modelName: record.model_name,
   provider: record.provider || 'claude',
+  serviceTier: record.service_tier || '',
   displayName: record.display_name,
   description: record.description,
   inputPrice: record.input_price,
@@ -1763,8 +1764,11 @@ export const mapModelPricingRecord = (record = {}) => ({
 export const buildModelPricingPayload = (input = {}, fallbackModelName = '') => {
   const threshold = Number(input.longContextThreshold);
   return {
+    // id 仅更新时有值；后端带 id 时按 id 精确定位，改 provider 或改档位也能命中原行
+    id: Number(input.id) || 0,
     model_name: input.modelName || fallbackModelName,
     provider: input.provider || 'claude',
+    service_tier: input.serviceTier || '',
     display_name: input.displayName || '',
     description: input.description || '',
     input_price: parseFloat(input.inputPrice) || 3.0,
@@ -1867,15 +1871,31 @@ export const updateModelPricing = async (modelName, input) => {
 };
 
 /**
- * 删除模型定价
+ * 删除模型定价（含该模型在该 provider 下的全部档位子行）
+ * @param {string} provider - 提供商标识 (claude/codex)，两侧模型名空间会重叠，必须带
  * @param {string} modelName - 模型名称
  * @returns {Promise<Object>} - {success: true}
  */
-export const deleteModelPricing = async (modelName) => {
+export const deleteModelPricing = async (provider, modelName) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
 
-  await WailsApp.DeleteModelPricing(modelName);
+  await WailsApp.DeleteModelPricing(provider || 'claude', modelName);
+  return { success: true };
+};
+
+/**
+ * 删除单个档位子行，标准档主行不受影响
+ * @param {string} provider - 提供商标识 (claude/codex)
+ * @param {string} modelName - 模型名称
+ * @param {string} serviceTier - 服务档位 (flex/batch/priority)
+ * @returns {Promise<Object>} - {success: true}
+ */
+export const deleteModelPricingTier = async (provider, modelName, serviceTier) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+
+  await WailsApp.DeleteModelPricingTier(provider || 'claude', modelName, serviceTier);
   return { success: true };
 };
 
@@ -2030,37 +2050,6 @@ const normalizeCodexServiceTier = (value) => {
   return tier;
 };
 
-const normalizeCodexServiceTierMultipliers = (records) => {
-  const configured = new Map((Array.isArray(records) ? records : []).map((record) => [
-    normalizeCodexServiceTier(record?.serviceTier ?? record?.service_tier),
-    record
-  ]));
-  const value = (record, camel, snake) => {
-    const parsed = parseEndpointMultiplier(record?.[camel] ?? record?.[snake], 1);
-    return parsed > 0 ? parsed : 1;
-  };
-  return CODEX_SERVICE_TIERS.map((serviceTier) => {
-    const record = configured.get(serviceTier) || {};
-    return {
-      serviceTier,
-      costMultiplier: value(record, 'costMultiplier', 'cost_multiplier'),
-      inputCostMultiplier: value(record, 'inputCostMultiplier', 'input_cost_multiplier'),
-      outputCostMultiplier: value(record, 'outputCostMultiplier', 'output_cost_multiplier'),
-      cacheCreationCostMultiplier: value(record, 'cacheCreationCostMultiplier', 'cache_creation_cost_multiplier'),
-      cacheReadCostMultiplier: value(record, 'cacheReadCostMultiplier', 'cache_read_cost_multiplier')
-    };
-  });
-};
-
-const buildCodexServiceTierMultiplierPayload = (records) => normalizeCodexServiceTierMultipliers(records).map((record) => ({
-  service_tier: record.serviceTier,
-  cost_multiplier: record.costMultiplier,
-  input_cost_multiplier: record.inputCostMultiplier,
-  output_cost_multiplier: record.outputCostMultiplier,
-  cache_creation_cost_multiplier: record.cacheCreationCostMultiplier,
-  cache_read_cost_multiplier: record.cacheReadCostMultiplier
-}));
-
 const normalizeCodexBillingRules = (records) => (Array.isArray(records) ? records : []).map((record) => {
   const multiplier = (camel, snake) => {
     const value = parseEndpointMultiplier(record?.[camel] ?? record?.[snake], 1);
@@ -2161,8 +2150,6 @@ export const mapCodexCredentialGroup = (group) => ({
   longContextCacheCreationCostMultiplier: group.longContextCacheCreationCostMultiplier ?? 1.0,
   longContextCacheReadCostMultiplier: group.longContextCacheReadCostMultiplier ?? 1.0,
   disableLongContextPricing: Boolean(group.disableLongContextPricing),
-  disableServiceTierPricing: Boolean(group.disableServiceTierPricing ?? group.disable_service_tier_pricing ?? true),
-  serviceTierMultipliers: normalizeCodexServiceTierMultipliers(group.serviceTierMultipliers || group.service_tier_multipliers),
   billingOutputTokenSource: group.billingOutputTokenSource || group.billing_output_token_source || 'output_tokens',
   modelMultipliers: normalizeCodexModelMultipliers(group.modelMultipliers || group.model_multipliers),
 	 billingRules: normalizeCodexBillingRules(group.billingRules || group.billing_rules),
@@ -2220,12 +2207,8 @@ export const buildCodexCredentialGroupPayload = (input) => {
     longContextCacheCreationCostMultiplier: parseEndpointMultiplier(input?.longContextCacheCreationCostMultiplier),
     longContextCacheReadCostMultiplier: parseEndpointMultiplier(input?.longContextCacheReadCostMultiplier),
     disableLongContextPricing: Boolean(input?.disableLongContextPricing),
-    disableServiceTierPricing: Boolean(input?.disableServiceTierPricing ?? input?.disable_service_tier_pricing),
     billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
   };
-  if (hasOwn(input, 'serviceTierMultipliers') || hasOwn(input, 'service_tier_multipliers')) {
-    payload.serviceTierMultipliers = buildCodexServiceTierMultiplierPayload(input?.serviceTierMultipliers || input?.service_tier_multipliers);
-  }
   const modelMultipliers = getExplicitModelMultipliers(input, normalizeCodexModelMultipliers);
   if (modelMultipliers !== undefined) {
     payload.modelMultipliers = modelMultipliers;

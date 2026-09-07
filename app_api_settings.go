@@ -541,7 +541,7 @@ type ConfigSourceInfo struct {
 	Category     string `json:"category"`
 	Key          string `json:"key"`
 	CurrentValue string `json:"current_value"`
-	Source       string `json:"source"`        // default / yaml / database / environment
+	Source       string `json:"source"`        // default / database / environment
 	DefaultValue string `json:"default_value"` // 代码常量默认值
 	Notes        string `json:"notes,omitempty"`
 }
@@ -550,7 +550,7 @@ type ConfigSourceInfo struct {
 //
 // 🔧 [P5.5 新增] 用户可以通过此 API 查看：
 //   - 每个配置项的"当前值"
-//   - 来源是什么（默认/YAML/数据库）
+//   - 来源是什么（默认值/数据库）
 //   - 与默认值的差异
 //
 // 用途：解决"我现在用的是哪个值？"的困惑
@@ -593,36 +593,6 @@ func (a *App) GetConfigSourceInfo() ([]ConfigSourceInfo, error) {
 			}
 		}
 	}
-
-	// 未纳入 SettingsService 管理的配置（来源：YAML 或代码常量）
-	// 这些是 5.5 后续要迁移的目标
-	yamlOnlyConfigs := []ConfigSourceInfo{
-		{
-			Category: service.CategoryLogging, Key: "level",
-			CurrentValue: cfg.Logging.Level,
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "P5.5 待迁移",
-		},
-		{
-			Category: service.CategoryLogging, Key: "format",
-			CurrentValue: cfg.Logging.Format,
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "P5.5 待迁移",
-		},
-		{
-			Category: service.CategoryTimezone, Key: "global",
-			CurrentValue: cfg.Timezone,
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "P5.5 待迁移",
-		},
-		{
-			Category: service.CategoryEndpointsStore, Key: "type",
-			CurrentValue: cfg.EndpointsStorage.Type,
-			Source:       string(service.ConfigSourceYAML),
-			Notes:        "P5.5 待迁移",
-		},
-	}
-	infos = append(infos, yamlOnlyConfigs...)
 
 	return infos, nil
 }

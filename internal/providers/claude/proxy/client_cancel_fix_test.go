@@ -191,7 +191,7 @@ func TestShouldSwitchEndpoint(t *testing.T) {
 		},
 		{
 			name:         "Stream truncated - 允许切换",
-			err:          errors.New("stream_status:error: unexpected EOF"),
+			err:          errors.New("stream_error: unexpected EOF"),
 			shouldSwitch: true,
 			reason:       "流错误允许切换（切换不会重复计费）",
 		},

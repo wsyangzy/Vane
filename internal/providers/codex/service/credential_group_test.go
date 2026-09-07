@@ -37,24 +37,3 @@ func TestEnsureDefaultGroupSkipsChannelWithoutAPIKey(t *testing.T) {
 		t.Fatalf("group = %#v, want nil", group)
 	}
 }
-
-func TestNormalizeCodexServiceTierMultipliersBuildsFourCanonicalTiers(t *testing.T) {
-	records, err := normalizeCodexServiceTierMultipliers([]store.CodexServiceTierMultiplierRecord{
-		{ServiceTier: "priority", CostMultiplier: 2, InputCostMultiplier: 1.5, OutputCostMultiplier: 3, CacheCreationCostMultiplier: 4, CacheReadCostMultiplier: 0.5},
-	})
-	if err != nil {
-		t.Fatalf("normalizeCodexServiceTierMultipliers returned error: %v", err)
-	}
-	if len(records) != 4 {
-		t.Fatalf("got %d tiers, want 4", len(records))
-	}
-	if records[0].ServiceTier != "standard" || records[3].ServiceTier != "fast" {
-		t.Fatalf("unexpected tier order: %#v", records)
-	}
-	if records[3].CostMultiplier != 2 || records[3].CacheCreationCostMultiplier != 4 {
-		t.Fatalf("fast aliases were not normalized: %#v", records[3])
-	}
-	if records[1].CostMultiplier != 1 || records[2].CostMultiplier != 1 {
-		t.Fatalf("missing tiers should default to 1.0: %#v", records)
-	}
-}

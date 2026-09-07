@@ -775,17 +775,11 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 		return CostBreakdown{}
 	}
 
-	// 查找模型定价；Codex 未知模型使用自己的默认价格，避免回退到 Claude 默认值。
-	pricing, exists := pricingMap[req.ModelName]
+	// 查找模型定价：先命中 provider + 档位专属定价，回退到标准档/兜底行，
+	// 最后才用 provider 自己的默认价（Codex 未知模型不得回退到 Claude 默认值）。
+	pricing, pricingModel, pricingTier, exists := lookupModelPricing(pricingMap, req.Provider, req.ModelName, req.ServiceTier)
 	if !exists {
-		defaultPricingKey := "_default"
-		if defaultProvider(req.Provider) == "codex" {
-			defaultPricingKey = "_codex_default"
-		}
-		pricing, exists = pricingMap[defaultPricingKey]
-		if !exists {
-			return CostBreakdown{}
-		}
+		return CostBreakdown{}
 	}
 
 	// 获取请求绑定端点时的计费配置。组合规则在热池中有独立副本，
@@ -793,7 +787,7 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 	multiplierValue := DefaultEndpointMultiplier()
 	hasMultiplier := false
 	if endpointMuMap != nil {
-		for _, key := range endpointMultiplierLookupKeys(req.Channel, req.GroupName, req.EndpointName) {
+		for _, key := range endpointMultiplierLookupKeys(req.Provider, req.Channel, req.GroupName, req.EndpointName) {
 			if m, ok := endpointMuMap[key]; ok {
 				multiplierValue = m
 				hasMultiplier = true
@@ -826,9 +820,18 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 	if !hasMultiplier {
 		multiplierValue = DefaultEndpointMultiplier()
 	}
-	cost, effectiveMultiplier, snapshot := calculateRequestCost(usage, pricing, multiplierValue, req.ModelName, req.ServiceTier)
-	if snapshot != "" {
-		req.BillingRuleSnapshot = snapshot
+	cost, effectiveMultiplier, snapshot := calculateRequestCost(usage, pricing, multiplierValue, billingIdentity{
+		provider:     req.Provider,
+		requestModel: req.ModelName,
+		serviceTier:  req.ServiceTier,
+		pricingModel: pricingModel,
+		pricingTier:  pricingTier,
+	})
+	if snapshotJSON := billingDecisionSnapshotJSON(snapshot); snapshotJSON != "" {
+		req.BillingRuleSnapshot = snapshotJSON
+	}
+	// 组合规则模式下倍率被规则整体接管，落库的倍率快照需同步为规则的最终值
+	if snapshot != nil && snapshot.RuleKey != "" {
 		req.CostMultiplier = effectiveMultiplier.CostMultiplier
 		req.InputCostMultiplier = effectiveMultiplier.InputCostMultiplier
 		req.OutputCostMultiplier = effectiveMultiplier.OutputCostMultiplier

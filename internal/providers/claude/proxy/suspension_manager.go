@@ -439,16 +439,29 @@ func (sm *SuspensionManager) WaitForEndpointRecovery(ctx context.Context, connID
 // 功能与WaitForEndpointRecovery相同，但返回详细的结果类型以区分成功、超时、取消
 // 这是对现有方法的增强版本，保持向后兼容性
 // 当渠道间转移禁用时，仅监听用户点击"重试"按钮的组切换通知，不监听端点自愈信号
-func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) handlers.SuspensionResult {
-	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, false)
+func (sm *SuspensionManager) WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string, requireNonStream bool) handlers.SuspensionResult {
+	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, false, requireNonStream)
 }
 
 // WaitForEndpointRecoveryWithResultManual 🛑 [循环终止] 仅等待用户操作的挂起
-func (sm *SuspensionManager) WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string) handlers.SuspensionResult {
-	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, true)
+func (sm *SuspensionManager) WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string, requireNonStream bool) handlers.SuspensionResult {
+	return sm.waitForEndpointRecoveryWithResult(ctx, connID, failedEndpoint, true, requireNonStream)
 }
 
-func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string, manualOnly bool) handlers.SuspensionResult {
+// hasResumableEndpoint 判断当前是否存在能承接该挂起请求的健康端点。
+// requireNonStream=true 时跳过 stream_only 端点：否则唯一健康端点是 stream_only 时
+// 会把挂起的非流请求错误唤醒，醒来后拿到空端点列表，白跑一轮渠道转移。
+func (sm *SuspensionManager) hasResumableEndpoint(requireNonStream bool) bool {
+	for _, ep := range sm.endpointManager.GetHealthyEndpoints() {
+		if requireNonStream && ep.Config.StreamOnly {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string, manualOnly, requireNonStream bool) handlers.SuspensionResult {
 	// 检查配置和管理器是否存在
 	if sm.config == nil {
 		slog.InfoContext(ctx, "🔍 [端点恢复等待] 配置为空，无法挂起请求")
@@ -561,14 +574,13 @@ func (sm *SuspensionManager) waitForEndpointRecoveryWithResult(ctx context.Conte
 			slog.InfoContext(ctx, fmt.Sprintf("📡 [组切换通知] 连接 %s 收到组切换通知: %s，验证新组可用性",
 				connID, newGroupName))
 
-			// 验证新激活的组是否有健康端点
-			newEndpoints := sm.endpointManager.GetHealthyEndpoints()
-			if len(newEndpoints) > 0 {
-				slog.InfoContext(ctx, fmt.Sprintf("✅ [切换成功] 连接 %s 新组 %s 有 %d 个健康端点，恢复请求处理",
-					connID, newGroupName, len(newEndpoints)))
+			// 验证新激活的组是否有能承接本请求的健康端点
+			if sm.hasResumableEndpoint(requireNonStream) {
+				slog.InfoContext(ctx, fmt.Sprintf("✅ [切换成功] 连接 %s 新组 %s 有可用端点，恢复请求处理",
+					connID, newGroupName))
 				return handlers.SuspensionSuccess
 			} else {
-				slog.WarnContext(ctx, fmt.Sprintf("⚠️ [切换无效] 连接 %s 新组 %s 暂无健康端点，继续等待",
+				slog.WarnContext(ctx, fmt.Sprintf("⚠️ [切换无效] 连接 %s 新组 %s 暂无可承接该请求的端点，继续等待",
 					connID, newGroupName))
 				// 继续等待其他恢复信号
 			}

@@ -4,8 +4,6 @@ import (
 	"math"
 	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
 // TestCalculateCost_Basic 测试基础成本计算
@@ -52,10 +50,6 @@ func TestResolveCodexBillingRuleUsesSpecificityThenSelectorPriority(t *testing.T
 	multiplier := DefaultEndpointMultiplier()
 	multiplier.CostMultiplier = 9
 	multiplier.InputCostMultiplier = 8
-	multiplier.DisableServiceTierPricing = false
-	multiplier.ServiceTierMultipliers = map[string]ServiceTierMultiplier{
-		ServiceTierFast: {CostMultiplier: 7, InputCostMultiplier: 6, OutputCostMultiplier: 5, CacheCreationMultiplier: 4, CacheReadMultiplier: 3},
-	}
 	multiplier.ModelMultipliers = []ModelMultiplier{{Model: "gpt-test", CostMultiplier: 10, InputCostMultiplier: 10, OutputCostMultiplier: 10, CacheReadCostMultiplier: 10}}
 	multiplier.BillingRules = []BillingRule{
 		{Mode: BillingRuleModeMultiplier, CostMultiplier: 1, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
@@ -64,23 +58,123 @@ func TestResolveCodexBillingRuleUsesSpecificityThenSelectorPriority(t *testing.T
 		{Model: "gpt-test", ServiceTier: ServiceTierFast, Context: BillingContextLong, Mode: BillingRuleModeFixed, InputPrice: 7, OutputPrice: 11, CacheCreationPrice: 2, CacheReadPrice: 0.5},
 	}
 
-	_, normalMultiplier, normalSnapshot := resolveBillingForRequest(pricing, multiplier, &TokenUsage{InputTokens: 100}, "gpt-test", "priority")
-	if normalSnapshot == nil || normalSnapshot.SelectorModel != "gpt-test" || normalMultiplier.CostMultiplier != 2 {
-		t.Fatalf("expected model selector to win equal-specificity tie, snapshot=%+v multiplier=%+v", normalSnapshot, normalMultiplier)
+	_, normalMultiplier, normalRule := resolveBillingForRequest(pricing, multiplier, &TokenUsage{InputTokens: 100}, "gpt-test", "priority")
+	if normalRule == nil || normalRule.Model != "gpt-test" || normalMultiplier.CostMultiplier != 2 {
+		t.Fatalf("expected model selector to win equal-specificity tie, rule=%+v multiplier=%+v", normalRule, normalMultiplier)
 	}
 
-	cost, _, snapshotJSON := calculateRequestCost(&TokenUsage{
+	cost, _, snapshot := calculateRequestCost(&TokenUsage{
 		InputTokens:            3_000_000,
 		OutputTokens:           1_000_000,
 		CacheCreationTokens:    1_000_000,
 		CacheReadTokens:        1_000_000,
 		InputIncludesCacheRead: true,
-	}, pricing, multiplier, "gpt-test", "priority")
+	}, pricing, multiplier, billingIdentity{provider: "codex", requestModel: "gpt-test", serviceTier: "priority", pricingModel: "gpt-test"})
 	if math.Abs(cost.TotalCost-20.5) > 1e-9 {
 		t.Fatalf("expected one fixed tier+context rule to replace all multipliers, got %f", cost.TotalCost)
 	}
-	if !strings.Contains(snapshotJSON, `"mode":"fixed"`) || !strings.Contains(snapshotJSON, `"selector_context":"long"`) {
+	snapshotJSON := billingDecisionSnapshotJSON(snapshot)
+	if !strings.Contains(snapshotJSON, `"rule_mode":"fixed"`) || !strings.Contains(snapshotJSON, `"rule_key":"model=gpt-test;tier=fast;context=long"`) {
 		t.Fatalf("expected fixed long-context audit snapshot, got %s", snapshotJSON)
+	}
+	// fixed 模式清零 long context 单价，因此快照记录的是标准上下文与规则固定价
+	if snapshot.ContextMode != BillingContextNormal || snapshot.InputPrice != 7 || snapshot.OutputPrice != 11 {
+		t.Fatalf("expected fixed rule prices in snapshot, got %+v", snapshot)
+	}
+}
+
+// TestBillingDecisionSnapshotIsUnconditional 覆盖未配置组合规则的普通路径：
+// 快照仍需如实记录命中的定价行、long context 判定与各层倍率，前端才能不做除法反推。
+func TestBillingDecisionSnapshotIsUnconditional(t *testing.T) {
+	pricing := ModelPricing{
+		Input:                      5,
+		Output:                     20,
+		CacheCreation:              6.25,
+		CacheRead:                  0.5,
+		LongContextThreshold:       272_000,
+		LongContextInputPrice:      10,
+		LongContextOutputPrice:     40,
+		LongContextCacheReadPrice:  1,
+		LongContextCacheWritePrice: 12.5,
+	}
+	multiplier := DefaultEndpointMultiplier()
+	multiplier.CostMultiplier = 0.4
+	multiplier.LongContextCostMultiplier = 2
+
+	id := billingIdentity{provider: "codex", requestModel: "gpt-5.6-sol", serviceTier: "flex", pricingModel: "gpt-5.6-sol", pricingTier: ServiceTierFlex}
+
+	// 阈值判定是严格 >：等于阈值走标准单价
+	_, _, boundary := calculateRequestCost(&TokenUsage{InputTokens: 272_000, OutputTokens: 10}, pricing, multiplier, id)
+	if boundary == nil || boundary.ContextMode != BillingContextNormal || boundary.InputPrice != 5 {
+		t.Fatalf("expected standard pricing at exactly the threshold, got %+v", boundary)
+	}
+	if boundary.RuleKey != "" || boundary.RuleMode != "" {
+		t.Fatalf("expected no rule metadata without billing rules, got %+v", boundary)
+	}
+	if boundary.PricingProvider != "codex" || boundary.PricingModel != "gpt-5.6-sol" || boundary.PricingServiceTier != ServiceTierFlex {
+		t.Fatalf("expected the matched pricing row identity in snapshot, got %+v", boundary)
+	}
+	if boundary.LongContextCostMultiplier != 0 {
+		t.Fatalf("expected long-context multiplier omitted while inactive, got %+v", boundary)
+	}
+
+	// 超过阈值时快照记录 long context 单价，并把 long context 倍率折进分项倍率
+	usage := &TokenUsage{InputTokens: 315_420, OutputTokens: 1_000, CacheReadTokens: 100, CacheCreationTokens: 200}
+	cost, _, snapshot := calculateRequestCost(usage, pricing, multiplier, id)
+	if snapshot.ContextMode != BillingContextLong || snapshot.LongContextThreshold != 272_000 || snapshot.EffectiveInputTokens != 315_420 {
+		t.Fatalf("expected long-context snapshot, got %+v", snapshot)
+	}
+	if snapshot.InputPrice != 10 || snapshot.OutputPrice != 40 || snapshot.CacheCreationPrice != 12.5 || snapshot.CacheReadPrice != 1 {
+		t.Fatalf("expected long-context prices in snapshot, got %+v", snapshot)
+	}
+	if snapshot.GroupCostMultiplier != 0.4 || snapshot.TotalCostMultiplier != 0.4 || snapshot.LongContextCostMultiplier != 2 {
+		t.Fatalf("expected layered multipliers in snapshot, got %+v", snapshot)
+	}
+	if snapshot.InputCostMultiplier != 2 {
+		t.Fatalf("expected long-context multiplier folded into the input category, got %+v", snapshot)
+	}
+
+	// 前端正向复现：tokens × 单价 ÷ 1e6 × 分项倍率 × 总倍率 == 落库成本
+	forwardInput := float64(usage.InputTokens) * snapshot.InputPrice / 1_000_000 * snapshot.InputCostMultiplier * snapshot.TotalCostMultiplier
+	if math.Abs(forwardInput-cost.InputCost) > 1e-9 {
+		t.Fatalf("snapshot must reproduce input cost without division: %f vs %f", forwardInput, cost.InputCost)
+	}
+	forwardOutput := float64(usage.OutputTokens) * snapshot.OutputPrice / 1_000_000 * snapshot.OutputCostMultiplier * snapshot.TotalCostMultiplier
+	if math.Abs(forwardOutput-cost.OutputCost) > 1e-9 {
+		t.Fatalf("snapshot must reproduce output cost without division: %f vs %f", forwardOutput, cost.OutputCost)
+	}
+}
+
+// TestLookupModelPricingRecordsMatchedRow 兜底价本身也是 model_pricing 的普通记录，
+// 快照必须如实记录命中的是兜底行而不是请求模型名。
+func TestLookupModelPricingRecordsMatchedRow(t *testing.T) {
+	pricingMap := map[string]ModelPricing{
+		ModelPricingKey("codex", "gpt-5.6-sol", ServiceTierFlex): {Input: 1},
+		ModelPricingKey("codex", "gpt-5.6-sol", ""):              {Input: 2},
+		ModelPricingKey("codex", "_codex_default", ""):           {Input: 3},
+		"legacy-bare-name": {Input: 4},
+	}
+
+	for _, tc := range []struct {
+		model, tier  string
+		wantPrice    float64
+		wantRowModel string
+		wantRowTier  string
+	}{
+		{"gpt-5.6-sol", "flex", 1, "gpt-5.6-sol", ServiceTierFlex},
+		{"gpt-5.6-sol", "batch", 2, "gpt-5.6-sol", ""},
+		{"gpt-5.6-sol", "", 2, "gpt-5.6-sol", ""},
+		{"legacy-bare-name", "flex", 4, "legacy-bare-name", ""},
+		{"never-configured", "flex", 3, "_codex_default", ""},
+	} {
+		pricing, rowModel, rowTier, ok := lookupModelPricing(pricingMap, "codex", tc.model, tc.tier)
+		if !ok || pricing.Input != tc.wantPrice || rowModel != tc.wantRowModel || rowTier != tc.wantRowTier {
+			t.Fatalf("model=%s tier=%s: got price=%v row=%s/%s ok=%v", tc.model, tc.tier, pricing.Input, rowModel, rowTier, ok)
+		}
+	}
+
+	if _, _, _, ok := lookupModelPricing(pricingMap, "claude", "gpt-5.6-sol", "flex"); ok {
+		t.Fatal("codex pricing rows must not leak into claude lookups")
 	}
 }
 
@@ -137,19 +231,16 @@ func TestCalculateCost_InputIncludesCacheReadAndWrite(t *testing.T) {
 }
 
 func TestCalculateCost_LongContextThreshold(t *testing.T) {
-	var pricing ModelPricing
-	if err := yaml.Unmarshal([]byte(`
-input: 2
-output: 4
-cache_creation: 2.5
-cache_read: 0.2
-long_context_threshold: 1000000
-long_context_input_price: 10
-long_context_output_price: 20
-long_context_cache_write_price: 12.5
-long_context_cache_read_price: 1
-`), &pricing); err != nil {
-		t.Fatalf("decode long-context pricing: %v", err)
+	pricing := ModelPricing{
+		Input:                      2,
+		Output:                     4,
+		CacheCreation:              2.5,
+		CacheRead:                  0.2,
+		LongContextThreshold:       1_000_000,
+		LongContextInputPrice:      10,
+		LongContextOutputPrice:     20,
+		LongContextCacheWritePrice: 12.5,
+		LongContextCacheReadPrice:  1,
 	}
 
 	t.Run("below threshold uses standard prices", func(t *testing.T) {
@@ -594,37 +685,6 @@ func TestCalculateCost_WithModelMultiplier(t *testing.T) {
 	}
 	if math.Abs(result.CacheReadCost-expectedCacheRead) > 0.0001 {
 		t.Errorf("Model multiplier: Expected CacheReadCost $%f, got $%f", expectedCacheRead, result.CacheReadCost)
-	}
-}
-
-func TestResolveEndpointMultiplierForServiceTier(t *testing.T) {
-	base := EndpointMultiplier{
-		CostMultiplier:                0.5,
-		InputCostMultiplier:           2,
-		OutputCostMultiplier:          3,
-		CacheCreationCostMultiplier:   4,
-		CacheCreationCostMultiplier1h: 5,
-		CacheReadCostMultiplier:       6,
-		ServiceTierMultipliers: map[string]ServiceTierMultiplier{
-			ServiceTierFast: {
-				CostMultiplier:          1.5,
-				InputCostMultiplier:     2,
-				OutputCostMultiplier:    2.5,
-				CacheCreationMultiplier: 3,
-				CacheReadMultiplier:     4,
-			},
-		},
-	}
-	resolved := ResolveEndpointMultiplierForServiceTier(base, "priority")
-	if resolved.CostMultiplier != 0.75 || resolved.InputCostMultiplier != 4 || resolved.OutputCostMultiplier != 7.5 {
-		t.Fatalf("fast tier did not compose with ordinary multipliers: %#v", resolved)
-	}
-	if resolved.CacheCreationCostMultiplier != 12 || resolved.CacheCreationCostMultiplier1h != 15 || resolved.CacheReadCostMultiplier != 24 {
-		t.Fatalf("fast tier cache multipliers were not composed: %#v", resolved)
-	}
-	auto := ResolveEndpointMultiplierForServiceTier(base, "auto")
-	if auto.CostMultiplier != base.CostMultiplier || auto.InputCostMultiplier != base.InputCostMultiplier {
-		t.Fatalf("auto tier must stay unresolved: %#v", auto)
 	}
 }
 

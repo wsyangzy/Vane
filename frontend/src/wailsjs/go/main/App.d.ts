@@ -47,7 +47,9 @@ export function DeleteEndpointRecord(arg1:string):Promise<void>;
 
 export function DeleteEndpointRecordByID(arg1:number):Promise<void>;
 
-export function DeleteModelPricing(arg1:string):Promise<void>;
+export function DeleteModelPricing(arg1:string,arg2:string):Promise<void>;
+
+export function DeleteModelPricingTier(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function DeletePrivacyRule(arg1:number):Promise<void>;
 

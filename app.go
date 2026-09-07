@@ -52,7 +52,6 @@ type App struct {
 
 	// 核心组件
 	config               *config.Config
-	configWatcher        *config.ConfigWatcher
 	logger               *slog.Logger
 	endpointManager      *endpoint.Manager
 	eventBus             events.EventBus // 接口类型，不是指针
@@ -119,8 +118,7 @@ type App struct {
 	codexActivationMu  sync.Mutex // 串行化 Codex 激活写库/写配置，避免快捷切换并发
 
 	// 应用状态
-	startTime  time.Time
-	configPath string
+	startTime time.Time
 
 	// 端口冲突状态
 	portConflict     bool   // 是否存在端口冲突
@@ -224,7 +222,7 @@ func (a *App) startup() {
 	// 1. 加载配置
 	a.loadConfig()
 
-	// 1.5. 在日志系统初始化前应用 SQLite 中的日志设置，避免先按 YAML 默认 debug 写入启动日志
+	// 1.5. 在日志系统初始化前应用 SQLite 中的日志设置，避免先按代码默认值写入启动日志
 	a.applyPersistedLoggingConfigBeforeLogger()
 
 	// 2. 初始化日志
@@ -233,7 +231,7 @@ func (a *App) startup() {
 	// 3. 显示启动信息
 	a.logger.Info("🚀 AI Relay Forwarder 桌面版启动中...",
 		"version", Version,
-		"config_file", a.configPath)
+		"config_source", "sqlite+defaults")
 
 	// 4. 初始化事件总线
 	a.setupEventBus()
@@ -283,9 +281,7 @@ func (a *App) startup() {
 
 	// 7. 初始化端点存储 (SQLite, 需要在创建 Manager 之后)
 	// 从数据库同步端点到 Manager
-	if a.config.EndpointsStorage.Type == "sqlite" {
-		a.setupEndpointStore()
-	}
+	a.setupEndpointStore()
 
 	// 7.5 初始化模型定价存储 (SQLite)
 	a.setupModelPricingStore()
@@ -335,13 +331,10 @@ func (a *App) startup() {
 		a.setAppState(AppStateRunning, "")
 	}
 
-	// 11. 设置配置热重载（仅 Running/Degraded 状态启动）
-	a.setupConfigReload()
-
-	// 12. 设置事件桥接
+	// 11. 设置事件桥接
 	a.setupEventBridges()
 
-	// 13. 启动历史数据收集器
+	// 12. 启动历史数据收集器
 	a.startHistoryCollector()
 
 	a.isRunning = proxyStarted
@@ -526,7 +519,6 @@ func (a *App) GetProxyAddress() string {
 
 // loadConfig 加载配置
 func (a *App) loadConfig() {
-	// 创建临时 logger 用于初始化
 	tempLogger := slog.Default()
 
 	// 确保应用目录存在
@@ -539,47 +531,17 @@ func (a *App) loadConfig() {
 			"logs", utils.GetLogDir())
 	}
 
-	// 直接从嵌入的配置加载（不写文件）
-	tempLogger.Info("📝 从嵌入配置加载")
-
-	// 将嵌入的配置写入临时文件进行解析
-	tmpConfigPath := filepath.Join(os.TempDir(), "ai-relay-forwarder-config.yaml")
-
-	// 先修改配置内容，替换路径为用户目录
-	configContent := string(defaultConfigContent)
-	// 注意：不修改配置内容，而是加载后再覆盖路径
-
-	if err := os.WriteFile(tmpConfigPath, []byte(configContent), 0644); err != nil {
-		panic(fmt.Sprintf("无法创建临时配置文件: %v", err))
-	}
-	defer os.Remove(tmpConfigPath)
-
-	// 创建配置监听器（此时会调用 SetDefaults 设置默认路径）
-	configWatcher, err := config.NewConfigWatcher(tmpConfigPath, tempLogger)
-	if err != nil {
-		panic(fmt.Sprintf("无法加载配置: %v", err))
-	}
-
-	a.configWatcher = configWatcher
-	cfg := configWatcher.GetConfig()
-
-	// 立即覆盖所有运行时路径为用户目录；环境只用于归档分层。
+	// 配置基线来自代码，端点、渠道和可调设置随后从 SQLite 加载。
+	cfg := config.NewDefaultConfig()
 	cfg.Logging.FilePath = filepath.Join(utils.GetLogDir(), "app.log")
 	cfg.UsageTracking.DatabasePath = filepath.Join(utils.GetDataDir(), "usage.db")
 
-	// 同时设置 Database 配置（如果存在）
-	if cfg.UsageTracking.Database != nil {
-		// Database 配置中没有 DatabasePath 字段，UsageTracking.DatabasePath 是统一路径
-	}
-
 	a.config = cfg
 
-	tempLogger.Info("✅ 配置加载完成",
+	tempLogger.Info("✅ 代码默认配置已加载",
 		"log_path", a.config.Logging.FilePath,
 		"db_path", a.config.UsageTracking.DatabasePath,
 		"appdir", utils.GetAppDataDir())
-
-	a.configPath = tmpConfigPath
 }
 
 // setupLogger 设置日志
@@ -697,9 +659,6 @@ func (a *App) applyRuntimeLoggingConfig() {
 	a.logEmitter = broadcastHandler.Emitter
 
 	utils.SetDebugConfig(a.config)
-	if a.configWatcher != nil {
-		a.configWatcher.UpdateLogger(logger)
-	}
 	if a.codexHTTPHandler != nil {
 		a.codexHTTPHandler.UpdateLogger(logger)
 	}
@@ -764,7 +723,7 @@ func (a *App) setupEndpointStore() {
 	}
 
 	if err := a.endpointService.SyncFromDatabase(ctx); err != nil {
-		a.logger.Warn("⚠️ 从数据库同步端点失败，使用 YAML 配置", "error", err)
+		a.logger.Warn("⚠️ 从数据库同步端点失败，端点管理不可用", "error", err)
 		if a.config != nil && a.config.Failover.Enabled {
 			if rollbackErr := a.rollbackFailoverSetting(service.ProviderClaude, "Claude 渠道间转移已关闭：启动时从数据库同步端点失败", err); rollbackErr != nil {
 				a.logger.Error("启动时回滚 Claude 渠道间转移失败", "error", rollbackErr)
@@ -1128,9 +1087,11 @@ func (a *App) syncPricingToTracker(ctx context.Context) {
 	}
 
 	// 转换为 tracking.ModelPricing 格式
+	// key 必须带 provider 与档位：ListPricings 返回两个 provider 的全部记录，
+	// 若仅以模型名为 key，同名模型会静默互相覆盖（详见 tracking.ModelPricingKey）。
 	pricing := make(map[string]tracking.ModelPricing)
 	for _, r := range records {
-		pricing[r.ModelName] = a.modelPricingService.ToTrackingPricing(r)
+		pricing[tracking.ModelPricingKey(r.Provider, r.ModelName, r.ServiceTier)] = a.modelPricingService.ToTrackingPricing(r)
 	}
 
 	// 更新 UsageTracker 的定价缓存
@@ -1159,7 +1120,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 				if ep == nil {
 					continue
 				}
-				legacyKeyCounts[tracking.EndpointMultiplierKey(ep.Channel, ep.Name)]++
+				legacyKeyCounts[tracking.EndpointMultiplierKey("claude", ep.Channel, ep.Name)]++
 			}
 			claudeGroupsByID := make(map[int64]*claudestore.ClaudeCredentialGroupRecord)
 			claudeDefaultGroupByChannel := make(map[string]*claudestore.ClaudeCredentialGroupRecord)
@@ -1225,13 +1186,15 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 				if groupName == "" && ep.CredentialGroupID > 0 {
 					groupName = fmt.Sprintf("g%d", ep.CredentialGroupID)
 				}
+				// Claude 的 API Key 与计费配置归属凭证分组；端点只表示线路配置。
+				// 历史端点倍率字段保留为兼容存储，但不再参与运行时计费（与 Codex 一致）。
 				multiplier := tracking.EndpointMultiplier{
-					CostMultiplier:                         groupCostMultiplier * defaultPositiveMultiplier(ep.CostMultiplier),
-					InputCostMultiplier:                    groupInputMultiplier * defaultPositiveMultiplier(ep.InputCostMultiplier),
-					OutputCostMultiplier:                   groupOutputMultiplier * defaultPositiveMultiplier(ep.OutputCostMultiplier),
-					CacheCreationCostMultiplier:            groupCacheCreationMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier),
-					CacheCreationCostMultiplier1h:          groupCacheCreation1hMultiplier * defaultPositiveMultiplier(ep.CacheCreationCostMultiplier1h),
-					CacheReadCostMultiplier:                groupCacheReadMultiplier * defaultPositiveMultiplier(ep.CacheReadCostMultiplier),
+					CostMultiplier:                         groupCostMultiplier,
+					InputCostMultiplier:                    groupInputMultiplier,
+					OutputCostMultiplier:                   groupOutputMultiplier,
+					CacheCreationCostMultiplier:            groupCacheCreationMultiplier,
+					CacheCreationCostMultiplier1h:          groupCacheCreation1hMultiplier,
+					CacheReadCostMultiplier:                groupCacheReadMultiplier,
 					LongContextCostMultiplier:              groupLongContextMultiplier,
 					LongContextInputCostMultiplier:         groupLongContextInputMultiplier,
 					LongContextOutputCostMultiplier:        groupLongContextOutputMultiplier,
@@ -1241,10 +1204,10 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					ModelMultipliers:                       mergeTrackingModelMultipliers(endpointModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
 				}
 				keys := []string{
-					tracking.EndpointMultiplierGroupKey(ep.Channel, groupName, ep.Name),
-					claudeservice.EndpointRuntimeKey(ep),
+					tracking.EndpointMultiplierGroupKey("claude", ep.Channel, groupName, ep.Name),
+					tracking.ScopeEndpointMultiplierKey("claude", claudeservice.EndpointRuntimeKey(ep)),
 				}
-				legacyKey := tracking.EndpointMultiplierKey(ep.Channel, ep.Name)
+				legacyKey := tracking.EndpointMultiplierKey("claude", ep.Channel, ep.Name)
 				if legacyKeyCounts[legacyKey] <= 1 {
 					keys = append(keys, legacyKey)
 				}
@@ -1284,7 +1247,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					if ep == nil {
 						continue
 					}
-					legacyKeyCounts[tracking.EndpointMultiplierKey(ch.Name, ep.Name)]++
+					legacyKeyCounts[tracking.EndpointMultiplierKey("codex", ch.Name, ep.Name)]++
 				}
 				for _, ep := range codexEndpoints {
 					if ep == nil {
@@ -1308,8 +1271,6 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					groupLongContextCacheCreationMultiplier := 1.0
 					groupLongContextCacheReadMultiplier := 1.0
 					groupDisableLongContextPricing := false
-					groupDisableServiceTierPricing := true
-					var groupServiceTierMultipliers map[string]tracking.ServiceTierMultiplier
 					groupModelMultipliers := []tracking.ModelMultiplier(nil)
 					groupBillingRules := []tracking.BillingRule(nil)
 					billingOutputTokenSource := "output_tokens"
@@ -1326,8 +1287,6 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						groupLongContextCacheCreationMultiplier = defaultPositiveMultiplier(group.LongContextCacheCreationCostMultiplier)
 						groupLongContextCacheReadMultiplier = defaultPositiveMultiplier(group.LongContextCacheReadCostMultiplier)
 						groupDisableLongContextPricing = group.DisableLongContextPricing
-						groupDisableServiceTierPricing = group.DisableServiceTierPricing
-						groupServiceTierMultipliers = codexServiceTierMultipliersToTracking(group.ServiceTierMultipliers)
 						groupModelMultipliers = codexModelMultipliersToTracking(group.ModelMultipliers)
 						groupBillingRules = codexBillingRulesToTracking(group.BillingRules)
 						billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(group.BillingOutputTokenSource)
@@ -1350,14 +1309,12 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						LongContextCacheCreationCostMultiplier: groupLongContextCacheCreationMultiplier,
 						LongContextCacheReadCostMultiplier:     groupLongContextCacheReadMultiplier,
 						DisableLongContextPricing:              groupDisableLongContextPricing,
-						DisableServiceTierPricing:              groupDisableServiceTierPricing,
-						ServiceTierMultipliers:                 groupServiceTierMultipliers,
 						BillingOutputTokenSource:               billingOutputTokenSource,
 						ModelMultipliers:                       mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
 						BillingRules:                           groupBillingRules,
 					}
-					legacyKey := tracking.EndpointMultiplierKey(ch.Name, ep.Name)
-					groupKey := tracking.EndpointMultiplierGroupKey(ch.Name, groupName, ep.Name)
+					legacyKey := tracking.EndpointMultiplierKey("codex", ch.Name, ep.Name)
+					groupKey := tracking.EndpointMultiplierGroupKey("codex", ch.Name, groupName, ep.Name)
 					keys := make([]string, 0, 2)
 					if groupKey != "" && (groupKey != legacyKey || legacyKeyCounts[legacyKey] <= 1) {
 						keys = append(keys, groupKey)
@@ -1416,27 +1373,6 @@ func codexModelMultipliersToTracking(rules []codexstore.CodexModelMultiplierReco
 			OutputCostMultiplier:    rule.OutputCostMultiplier,
 			CacheReadCostMultiplier: rule.CacheReadCostMultiplier,
 		})
-	}
-	return result
-}
-
-func codexServiceTierMultipliersToTracking(records []codexstore.CodexServiceTierMultiplierRecord) map[string]tracking.ServiceTierMultiplier {
-	if len(records) == 0 {
-		return nil
-	}
-	result := make(map[string]tracking.ServiceTierMultiplier, len(records))
-	for _, record := range records {
-		tier := tracking.NormalizeServiceTierForBilling(record.ServiceTier)
-		if tier == "" {
-			continue
-		}
-		result[tier] = tracking.ServiceTierMultiplier{
-			CostMultiplier:          defaultPositiveMultiplier(record.CostMultiplier),
-			InputCostMultiplier:     defaultPositiveMultiplier(record.InputCostMultiplier),
-			OutputCostMultiplier:    defaultPositiveMultiplier(record.OutputCostMultiplier),
-			CacheCreationMultiplier: defaultPositiveMultiplier(record.CacheCreationCostMultiplier),
-			CacheReadMultiplier:     defaultPositiveMultiplier(record.CacheReadCostMultiplier),
-		}
 	}
 	return result
 }
@@ -1863,51 +1799,6 @@ func (a *App) stopCodexProxy() {
 	a.codexHTTPHandler = nil
 }
 
-// setupConfigReload 设置配置热重载
-func (a *App) setupConfigReload() {
-	a.configWatcher.AddReloadCallback(func(newCfg *config.Config) {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-
-		// 更新配置引用
-		a.config = newCfg
-
-		// 停止旧的日志 Emitter，避免多个 Emitter 同时广播导致日志重复
-		if a.logEmitter != nil {
-			a.logEmitter.Stop()
-		}
-
-		// 更新日志
-		newLogger, newBroadcastHandler := setupLogger(newCfg.Logging)
-		slog.SetDefault(newLogger)
-		a.logger = newLogger
-		a.logHandler = newBroadcastHandler
-		a.logEmitter = newBroadcastHandler.Emitter
-		if a.codexHTTPHandler != nil {
-			a.codexHTTPHandler.UpdateLogger(newLogger)
-		}
-
-		// 更新各组件
-		a.configWatcher.UpdateLogger(newLogger)
-		a.endpointManager.UpdateConfig(newCfg)
-		if a.codexEndpointMgr != nil {
-			a.codexEndpointMgr.SetConfig(newCfg)
-		}
-		a.proxyHandler.UpdateConfig(newCfg)
-		a.authMiddleware.UpdateConfig(newCfg.Auth)
-
-		// 注意：模型定价不再从 config.yaml 热重载
-		// 定价配置通过前端「定价」页面管理，存储在 SQLite model_pricing 表中
-
-		a.logger.Info("🔄 配置已重新加载")
-
-		// 通知前端配置已更新
-		a.emitConfigReloaded()
-	})
-
-	a.logger.Info("🔄 配置热重载已启用")
-}
-
 // setupEventBridges 设置事件桥接
 // 将内部 EventBus 事件转发到 Wails 前端
 //
@@ -2076,11 +1967,6 @@ func (a *App) emitError(title, message string) {
 		"title":   title,
 		"message": message,
 	})
-}
-
-// emitConfigReloaded 通知前端配置已重载
-func (a *App) emitConfigReloaded() {
-	a.safeEmitEvent("config:reloaded", nil)
 }
 
 // setupSettingsStore 设置系统设置存储 (SQLite)

@@ -68,20 +68,17 @@ func (rh *RegularHandler) SetPrivacyFilter(filter PrivacyFilter) {
 	rh.privacyFilter = filter
 }
 
-// getDefaultStatusCodeForFinalStatus 根据最终状态获取默认HTTP状态码
+// getDefaultStatusCodeForFinalStatus 上游没给出状态码时的兜底。
+// 只有两种取值：客户端自己断开记 499（这是反代对客户端的直接观察，不是在替提供商发言），
+// 其余一律 502——上游没响应过，网关拿不到响应就是 502 的字面语义。
+//
+// 不再按本地的错误分类反推 401/429/400。那是在伪造提供商从未返回过的响应码：
+// 在请求追踪里和真实响应长得一模一样，会把人引去查根本不存在的密钥或限流问题。
 func getDefaultStatusCodeForFinalStatus(finalStatus string) int {
-	switch finalStatus {
-	case "cancelled":
-		return 499 // nginx风格的客户端取消码
-	case "auth_error":
-		return http.StatusUnauthorized
-	case "rate_limited":
-		return http.StatusTooManyRequests
-	case "error":
-		return http.StatusBadRequest
-	default:
-		return http.StatusBadGateway
+	if finalStatus == "cancelled" {
+		return 499 // nginx 风格的客户端取消码
 	}
+	return http.StatusBadGateway
 }
 
 // HandleRegularRequestUnified 统一常规请求处理
@@ -149,24 +146,28 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	// 外层循环处理组切换逻辑
 	for {
 		// 获取端点时排除已尝试的端点
-		var endpoints []*endpoint.Endpoint
+		var candidates []*endpoint.Endpoint
 		if len(triedEndpoints) == 0 {
 			// 首次获取，不排除任何端点
-			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpoints(ctx))
+			candidates = retryMgr.GetHealthyEndpoints(ctx)
 		} else {
 			// 后续获取，排除已尝试的端点
-			endpoints = filterStreamOnlyEndpoints(retryMgr.GetHealthyEndpointsExcluding(ctx, stringSetKeys(triedEndpoints)))
+			candidates = retryMgr.GetHealthyEndpointsExcluding(ctx, stringSetKeys(triedEndpoints))
 		}
-		rawEndpoints := endpoints
-		var quotaBlocked bool
-		endpoints, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, endpoints)
+		// stream_only 端点不接非流请求。过滤后为空不等于全局无端点，只说明当前渠道
+		// 全是流式专用端点——此时必须继续向下一渠道转移，否则链路会停在这里直接失败，
+		// 表现为「渠道/链路为空 + no_healthy_endpoints」，其余渠道一个都没试过。
+		rawEndpoints := filterStreamOnlyEndpoints(candidates)
+		streamOnlyBlocked := len(rawEndpoints) == 0 && len(candidates) > 0
+
+		endpoints, quotaBlocked := filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, rawEndpoints)
 		if len(endpoints) == 0 {
 			if quotaBlocked && len(rawEndpoints) > 0 {
 				currentChannel := endpointRouteName(rawEndpoints[0])
 				if currentChannel != "" {
 					triedChannels[currentChannel] = struct{}{}
 				}
-				newChannel, failoverErr := rh.endpointManager.TriggerCredentialGroupLimitFailover(
+				newChannel, failoverErr := rh.endpointManager.TriggerChannelSwitchWithoutFailure(
 					currentChannel,
 					stringSetKeys(triedChannels),
 				)
@@ -178,15 +179,40 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					)
 					continue
 				}
-				message := "All available Claude credential groups reached their daily cost limit"
-				lifecycleManager.FailRequest("daily_cost_limit_exceeded", message, http.StatusTooManyRequests)
-				http.Error(w, message, http.StatusTooManyRequests)
+				lifecycleManager.FailRequest("daily_cost_limit_exceeded", "", http.StatusTooManyRequests)
+				http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+				return
+			}
+			if streamOnlyBlocked {
+				currentChannel := endpointRouteName(candidates[0])
+				lifecycleManager.SetEndpoint(candidates[0].Config.Name, endpointDisplayGroupName(candidates[0]), candidates[0].Config.Channel)
+				*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", candidates[0].Config.Name))
+				if currentChannel != "" {
+					triedChannels[currentChannel] = struct{}{}
+				}
+				// 走「不标记失败」的切换：stream_only 是静态配置而非故障，这些端点
+				// 对并发的流式请求完全健康，标记 RequestFailed 会把它们一起拖下线。
+				// 同理不需要 loop 语义——再绕回来它们照样接不了非流请求。
+				newChannel, failoverErr := rh.endpointManager.TriggerChannelSwitchWithoutFailure(
+					currentChannel,
+					stringSetKeys(triedChannels),
+				)
+				if failoverErr == nil && newChannel != "" {
+					slog.Info("[Claude 仅流式端点触发渠道间故障转移]",
+						"request_id", connID,
+						"from_channel", currentChannel,
+						"to_channel", newChannel,
+					)
+					continue
+				}
+				lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
+				http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 				return
 			}
 			noHealthyErr := fmt.Errorf("no healthy endpoints available")
 			lifecycleManager.HandleError(noHealthyErr)
-			lifecycleManager.FailRequest("no_healthy_endpoints", "No healthy endpoints available", http.StatusUnprocessableEntity)
-			http.Error(w, "No healthy endpoints available", http.StatusUnprocessableEntity)
+			lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
+			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 			return
 		}
 
@@ -251,7 +277,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						connID, ep.Config.Name, attempt))
 
 					lifecycleManager.UpdateStatus("processing", globalAttemptCount, resp.StatusCode)
-					rh.processSuccessResponse(ctx, w, resp, lifecycleManager, ep.Config.Name, r)
+					rh.processSuccessResponse(ctx, w, resp, lifecycleManager, ep, r)
 					return
 				}
 
@@ -319,8 +345,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							connID, decision.Reason, ep.Config.Name))
 
 						// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
+						// requireNonStream=true：本处理器只服务非流式请求
 						failedEndpointKey := epKey
-						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey)
+						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey, true)
 						switch result {
 						case SuspensionSuccess:
 							slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新获取端点列表",
@@ -336,12 +363,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							http.Error(w, "Request cancelled during suspension", 499)
 							return
 						case SuspensionTimeout:
-							// 使用 422 状态码，防止客户端自动重试
-							// 挂起等待超时，记录为失败
+							// 挂起等待超时，记录为失败。504 是网关等待上游超时的标准语义。
 							slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
-							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusUnprocessableEntity)
+							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusGatewayTimeout)
 							rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
-							http.Error(w, "Request suspended but recovery timeout", http.StatusUnprocessableEntity)
+							http.Error(w, "Request suspended but recovery timeout", http.StatusGatewayTimeout)
 							return
 						}
 
@@ -363,17 +389,10 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						failReason = err.Error()
 					}
 					rh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
-					failSummary := failReason
-					if err != nil {
-						failSummary = ExtractUpstreamErrorMessage(err)
-					}
-					if rememberCredentialGroupFailureForTurn(rh.endpointManager, turnFailureKey, ep, failStatusCode, failSummary, triedEndpoints) {
-						slog.Warn(fmt.Sprintf("🔁 [凭证分组跳过] [%s] 分组 %s 在当前问答中失败，后续请求将跳过同组端点",
-							connID, endpointDisplayGroupName(ep)))
-					}
 
 					if decision.SwitchEndpoint {
 						// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
+						rh.endpointManager.ClearPreferredEndpoint(ep)
 						ep.MarkRequestFailed(err)
 						// 通知前端状态变化（使用防抖机制避免频繁刷新）
 						rh.endpointManager.NotifyEndpointStatusChange()
@@ -440,8 +459,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				triedKeys = append(triedKeys, key)
 			}
 
-			// 检查是否有已恢复的端点
-			recoveredEndpoints := retryMgr.GetRecoveredEndpointsInChannel(triedKeys)
+			// 检查是否有已恢复的端点（非流路径的第二个端点来源，同样要滤掉 stream_only）
+			recoveredEndpoints := filterStreamOnlyEndpoints(retryMgr.GetRecoveredEndpointsInChannel(triedKeys))
 			recoveredEndpoints, _ = filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, recoveredEndpoints)
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级顺序重试",
@@ -483,7 +502,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						slog.Info(fmt.Sprintf("✅ [auto_wait恢复重试成功] [%s] 端点 %s 重试成功",
 							connID, ep.Config.Name))
 						lifecycleManager.UpdateStatus("processing", globalAttemptCount, resp.StatusCode)
-						rh.processSuccessResponse(ctx, w, resp, lifecycleManager, ep.Config.Name, r)
+						rh.processSuccessResponse(ctx, w, resp, lifecycleManager, ep, r)
 						return
 					}
 
@@ -600,7 +619,11 @@ func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, b
 //     失败时通过 WriteUpstreamErrorResponse 透传上游错误信息，状态码可控
 //
 // 性能权衡：丧失 first-byte 优势，但非流式场景本就要等完整 body，影响可忽略
-func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.ResponseWriter, resp *http.Response, lifecycleManager RequestLifecycleManager, endpointName string, r *http.Request) {
+func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.ResponseWriter, resp *http.Response, lifecycleManager RequestLifecycleManager, ep *endpoint.Endpoint, r *http.Request) {
+	endpointName := ""
+	if ep != nil {
+		endpointName = ep.Config.Name
+	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			slog.Warn("Failed to close response body", "request_id", lifecycleManager.GetRequestID(), "error", err)
@@ -643,6 +666,7 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		slog.Debug(fmt.Sprintf("🔍 [路径过滤] [%s] 跳过count_tokens端点的Token解析", connID))
 		// count_tokens端点不需要Token解析，直接完成请求
 		lifecycleManager.CompleteRequest(nil)
+		rh.endpointManager.MarkEndpointRequestSuccess(ep)
 		return
 	}
 
@@ -657,11 +681,13 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 			lifecycleManager.SetModelWithComparison(modelName, "常规响应解析")
 		}
 		lifecycleManager.CompleteRequest(tokenUsage)
+		rh.endpointManager.MarkEndpointRequestSuccess(ep)
 		slog.Info(fmt.Sprintf("✅ [常规请求Token完成] [%s] 端点: %s, 模型: %s, 输入: %d, 输出: %d",
 			connID, endpointName, modelName, tokenUsage.InputTokens, tokenUsage.OutputTokens))
 	} else {
 		// 处理非Token响应
 		lifecycleManager.HandleNonTokenResponse(string(responseBytes))
+		rh.endpointManager.MarkEndpointRequestSuccess(ep)
 		slog.Info(fmt.Sprintf("✅ [常规请求完成] [%s] 端点: %s, 响应类型: %s",
 			connID, endpointName, modelName))
 	}

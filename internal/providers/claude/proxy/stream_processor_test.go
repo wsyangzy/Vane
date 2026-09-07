@@ -104,6 +104,9 @@ func TestStreamProcessor_ProcessStream_SimpleData(t *testing.T) {
 	if processor.bytesProcessed == 0 {
 		t.Error("BytesProcessed should be greater than 0")
 	}
+	if !processor.HasWrittenResponse() {
+		t.Error("HasWrittenResponse should be true after forwarding stream bytes")
+	}
 }
 
 func TestStreamProcessor_GetProcessingStats(t *testing.T) {

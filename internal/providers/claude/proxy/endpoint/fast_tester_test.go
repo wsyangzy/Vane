@@ -108,3 +108,19 @@ func TestFastTesterDisabled(t *testing.T) {
 		t.Error("Expected cache not to be used when fast testing is disabled")
 	}
 }
+
+func TestFastTesterCacheKeepsSameNamedEndpointsDistinct(t *testing.T) {
+	cfg := &config.Config{Strategy: config.StrategyConfig{FastTestEnabled: true, FastTestCacheTTL: time.Minute}}
+	tester := NewFastTester(cfg)
+	first := &Endpoint{Config: config.EndpointConfig{Name: "main", Channel: "channel-a", CredentialGroupID: 1, RuntimeKey: "channel-a::g1::main"}}
+	second := &Endpoint{Config: config.EndpointConfig{Name: "main", Channel: "channel-a", CredentialGroupID: 2, RuntimeKey: "channel-a::g2::main"}}
+	tester.updateCache([]*FastTestResult{
+		{Endpoint: first, TestTime: time.Now(), Success: true},
+		{Endpoint: second, TestTime: time.Now(), Success: true},
+	})
+
+	results := tester.getCachedResults([]*Endpoint{first, second})
+	if len(results) != 2 || results[0].Endpoint != first || results[1].Endpoint != second {
+		t.Fatalf("cache collapsed same-named endpoints: %#v", results)
+	}
+}

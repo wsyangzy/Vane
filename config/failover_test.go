@@ -1,8 +1,6 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -216,96 +214,6 @@ func TestFailoverConfig_GetLoopRetrySuspendTimeout(t *testing.T) {
 			if got := tt.cfg.GetLoopRetrySuspendTimeout(); got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}
-		})
-	}
-}
-
-// TestFailoverConfig_ConfigFileParsing 验证 YAML 解析 + 默认值应用
-func TestFailoverConfig_ConfigFileParsing(t *testing.T) {
-	tests := []struct {
-		name     string
-		yaml     string
-		validate func(t *testing.T, cfg *Config)
-	}{
-		{
-			name: "full failover config",
-			yaml: `
-endpoints:
-  - name: test
-    url: http://example.com
-    priority: 1
-failover:
-  enabled: true
-  loop_retry: true
-  max_loops: 5
-  skip_health_check: true
-  suspend_timeout: 60s
-  loop_retry_suspend_timeout: 90s
-  suspend_on_exhausted: true
-  max_suspended_requests: 200
-  eof_retry_hint: true
-`,
-			validate: func(t *testing.T, cfg *Config) {
-				if !cfg.Failover.Enabled {
-					t.Error("Enabled should be true")
-				}
-				if !cfg.Failover.LoopRetry {
-					t.Error("LoopRetry should be true")
-				}
-				if cfg.Failover.MaxLoops != 5 {
-					t.Errorf("MaxLoops: got %d, want 5", cfg.Failover.MaxLoops)
-				}
-				if cfg.Failover.SuspendTimeout != 60*time.Second {
-					t.Errorf("SuspendTimeout: got %v, want 60s", cfg.Failover.SuspendTimeout)
-				}
-				if cfg.Failover.LoopRetrySuspendTimeout != 90*time.Second {
-					t.Errorf("LoopRetrySuspendTimeout: got %v, want 90s", cfg.Failover.LoopRetrySuspendTimeout)
-				}
-				if !cfg.Failover.SuspendOnExhausted {
-					t.Error("SuspendOnExhausted should be true")
-				}
-				if cfg.Failover.MaxSuspendedRequests != 200 {
-					t.Errorf("MaxSuspendedRequests: got %d, want 200", cfg.Failover.MaxSuspendedRequests)
-				}
-				if !cfg.Failover.EOFRetryHint {
-					t.Error("EOFRetryHint should be true")
-				}
-			},
-		},
-		{
-			name: "minimal config uses defaults",
-			yaml: `
-endpoints:
-  - name: test
-    url: http://example.com
-    priority: 1
-`,
-			validate: func(t *testing.T, cfg *Config) {
-				if cfg.Failover.MaxLoops != 3 {
-					t.Errorf("MaxLoops default: got %d, want 3", cfg.Failover.MaxLoops)
-				}
-				if cfg.Failover.SuspendTimeout != 120*time.Second {
-					t.Errorf("SuspendTimeout default: got %v, want 120s", cfg.Failover.SuspendTimeout)
-				}
-				if cfg.Failover.MaxSuspendedRequests != 100 {
-					t.Errorf("MaxSuspendedRequests default: got %d, want 100", cfg.Failover.MaxSuspendedRequests)
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-			path := filepath.Join(tmpDir, "test_config.yaml")
-			if err := os.WriteFile(path, []byte(tt.yaml), 0644); err != nil {
-				t.Fatalf("write temp config: %v", err)
-			}
-			cfg, err := LoadConfig(path)
-			if err != nil {
-				t.Fatalf("LoadConfig: %v", err)
-			}
-			tt.validate(t, cfg)
 		})
 	}
 }

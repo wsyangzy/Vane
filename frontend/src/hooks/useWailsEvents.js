@@ -13,7 +13,6 @@ const WAILS_EVENTS = {
   ENDPOINT_UPDATE: 'endpoint:update',
   GROUP_UPDATE: 'group:update',
   USAGE_UPDATE: 'usage:update',
-  CONFIG_RELOADED: 'config:reloaded',
   ERROR: 'error',
   NOTIFICATION: 'notification'
 };
@@ -35,7 +34,6 @@ const EVENT_MAPPING = {
   // Wails 侧没有独立的 connection 事件，复用 usage:update 作为连接统计推送源
   'connection': WAILS_EVENTS.USAGE_UPDATE,
   'usage': WAILS_EVENTS.USAGE_UPDATE,
-  'config': WAILS_EVENTS.CONFIG_RELOADED,
   'error': WAILS_EVENTS.ERROR,
   'notification': WAILS_EVENTS.NOTIFICATION
 };

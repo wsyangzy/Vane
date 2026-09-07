@@ -217,3 +217,14 @@ func TestDetectSSERequest_FromFormattedJSONBody(t *testing.T) {
 		t.Fatal("expected detectSSERequest to parse formatted JSON body with stream=true")
 	}
 }
+
+func TestDetectSSERequest_ExplicitBodyFalseOverridesNoCacheHeader(t *testing.T) {
+	handler := &Handler{}
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewBufferString(`{"stream":false}`))
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Cache-Control", "no-cache")
+
+	if handler.detectSSERequest(req, []byte(`{"stream":false}`)) {
+		t.Fatal("explicit stream=false must not be overridden by streaming headers")
+	}
+}

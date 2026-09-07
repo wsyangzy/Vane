@@ -27,11 +27,9 @@ const (
 	CategoryCache         = "cache"
 	CategoryServer        = "server"
 
-	// 🔧 [P5.5 新增] 为未来扩展预留的分类
-	// 这些分类目前 YAML/代码常量管理，后续可逐步迁移到 SettingsService
-	CategoryLogging        = "logging"         // 日志级别/格式
-	CategoryEndpointsStore = "endpoints_store" // 端点存储类型（yaml/sqlite）
-	CategoryTimezone       = "timezone"        // 全局时区
+	// 运行配置分类
+	CategoryLogging  = "logging"  // 日志级别/格式
+	CategoryTimezone = "timezone" // 全局时区
 )
 
 type SettingsProvider string
@@ -57,7 +55,6 @@ type ConfigSource string
 
 const (
 	ConfigSourceDefault     ConfigSource = "default"     // 代码常量默认值
-	ConfigSourceYAML        ConfigSource = "yaml"        // YAML 文件
 	ConfigSourceDatabase    ConfigSource = "database"    // SQLite settings 表（用户修改）
 	ConfigSourceEnvironment ConfigSource = "environment" // 环境变量（暂未启用）
 )
@@ -149,8 +146,7 @@ func NewSettingsService(store store.SettingsStore) *SettingsService {
 				Icon:        "⏱️",
 				Order:       6,
 			},
-			// CategoryStreaming 和 CategoryHotPool 不在前端设置页面展示
-			// 这些是底层技术配置，保留在 config.yaml 中
+			// CategoryStreaming 和 CategoryHotPool 不在前端设置页面展示，使用代码默认值。
 			CategoryTokenCounting: {
 				Name:        CategoryTokenCounting,
 				Label:       "Token 计数",
@@ -804,7 +800,10 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	// Request 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryRequest)...)
 
-	// Streaming 和 HotPool 不写入数据库，保留在 config.yaml 中
+	// Streaming 默认值写入 SQLite，运行时可通过设置服务读取。
+	defaults = append(defaults, s.getDefaultsForCategory(CategoryStreaming)...)
+
+	// HotPool 由 tracking 层使用代码默认值，暂不作为用户可见设置。
 
 	// Auth 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryAuth)...)
@@ -818,7 +817,7 @@ func (s *SettingsService) GetAllDefaults() []*store.SettingRecord {
 	// Cache 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryCache)...)
 
-	// 🔧 [P5.5 新增] Logging / Timezone 设置（从 YAML 迁移到 SQLite）
+	// Logging / Timezone 设置（SQLite）
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
 
@@ -898,7 +897,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 
 	case CategoryTokenCounting:
 		return []*store.SettingRecord{
-			{Category: CategoryTokenCounting, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用 Token 计数", Description: "是否启用 count_tokens 端点支持", DisplayOrder: 1},
+			{Category: CategoryTokenCounting, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用 Token 计数", Description: "是否启用 count_tokens 上游转发；关闭时由 Relay 本地估算", DisplayOrder: 1},
 			{Category: CategoryTokenCounting, Key: "estimation_ratio", Value: "4.0", ValueType: ValueTypeFloat, Label: "估算比例", Description: "Token 估算比例 (1 token ≈ N 字符)", DisplayOrder: 2},
 		}
 

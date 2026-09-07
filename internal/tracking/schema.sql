@@ -172,7 +172,7 @@ END;
 
 -- ============================================================================
 -- 端点配置表 (新增 - 2025-12-05)
--- 将端点配置从 config.yaml 迁移到 SQLite，支持动态增删改查
+-- 端点配置持久化在 SQLite，支持动态增删改查
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS endpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -462,14 +462,21 @@ END;
 
 -- ============================================================================
 -- 模型定价表 (新增 - 2025-12-06, 更新于 2025-12-06 支持 5m/1h 缓存)
--- 将模型定价从 config.yaml 迁移到 SQLite，支持动态管理
+-- 模型定价持久化在 SQLite，支持动态管理
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS model_pricing (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- ========== 模型信息 ==========
-    model_name TEXT UNIQUE NOT NULL,                -- 模型名称（如 claude-sonnet-4-20250514）
+    -- 唯一键是 (provider, model_name, service_tier) 三元组，不是 model_name 单列：
+    --   provider    —— Claude 与 Codex 的模型名空间会重叠（同一中转商常同时提供两种协议），
+    --                  不含 provider 会让两侧无法配置同名模型的不同定价。
+    --   service_tier —— '' 表示标准档/兜底行，'flex'/'batch'/'fast' 为档位行。
+    --                  档位是模型的固有属性（OpenAI 官方定价即按 model × tier 组织），
+    --                  每行自带 long context 四价，因此「档位 × 上下文」四象限天然成立。
+    model_name TEXT NOT NULL,                       -- 模型名称（如 claude-sonnet-4-20250514）
     provider TEXT NOT NULL DEFAULT 'claude',        -- 提供商标识: claude/codex
+    service_tier TEXT NOT NULL DEFAULT '',          -- 服务档位: ''(标准/兜底) / batch / flex / fast
 
     -- ========== 定价信息 (USD per 1M tokens) ==========
     input_price REAL NOT NULL DEFAULT 3.0,          -- 输入价格
@@ -489,7 +496,9 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     is_default INTEGER DEFAULT 0,                   -- 是否为默认定价 (1=是)
     -- ========== 审计字段 ==========
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
-    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+
+    UNIQUE(provider, model_name, service_tier)
 );
 
 -- 模型定价表索引
@@ -508,7 +517,7 @@ END;
 
 -- ============================================================================
 -- 系统设置表 (新增 - 2025-12-08)
--- 将运行时可调配置从 config.yaml 迁移到 SQLite，支持动态管理和热更新
+-- 运行时可调配置持久化在 SQLite，支持动态管理和热更新
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -95,31 +95,29 @@ type CodexChannelCandidateInfo struct {
 
 // CodexCredentialGroupInfo 提供给前端展示的凭证分组信息。
 type CodexCredentialGroupInfo struct {
-	ID                                     int64                                         `json:"id"`
-	ChannelID                              int64                                         `json:"channel_id"`
-	Name                                   string                                        `json:"name"`
-	ApiKey                                 string                                        `json:"api_key"`
-	ApiKeyMasked                           string                                        `json:"api_key_masked"`
-	IsDefault                              bool                                          `json:"is_default"`
-	DailyCostLimitUSD                      float64                                       `json:"daily_cost_limit_usd"`
-	CostMultiplier                         float64                                       `json:"costMultiplier"`
-	InputCostMultiplier                    float64                                       `json:"inputCostMultiplier"`
-	OutputCostMultiplier                   float64                                       `json:"outputCostMultiplier"`
-	CacheCreationCostMultiplier            float64                                       `json:"cacheCreationCostMultiplier"`
-	CacheReadCostMultiplier                float64                                       `json:"cacheReadCostMultiplier"`
-	LongContextCostMultiplier              float64                                       `json:"longContextCostMultiplier"`
-	LongContextInputCostMultiplier         float64                                       `json:"longContextInputCostMultiplier"`
-	LongContextOutputCostMultiplier        float64                                       `json:"longContextOutputCostMultiplier"`
-	LongContextCacheCreationCostMultiplier float64                                       `json:"longContextCacheCreationCostMultiplier"`
-	LongContextCacheReadCostMultiplier     float64                                       `json:"longContextCacheReadCostMultiplier"`
-	DisableLongContextPricing              bool                                          `json:"disableLongContextPricing"`
-	DisableServiceTierPricing              bool                                          `json:"disableServiceTierPricing"`
-	ServiceTierMultipliers                 []codexstore.CodexServiceTierMultiplierRecord `json:"serviceTierMultipliers"`
-	BillingOutputTokenSource               string                                        `json:"billingOutputTokenSource"`
-	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord       `json:"modelMultipliers"`
-	BillingRules                           []codexstore.CodexBillingRuleRecord           `json:"billingRules"`
-	CreatedAt                              string                                        `json:"created_at"`
-	UpdatedAt                              string                                        `json:"updated_at"`
+	ID                                     int64                                   `json:"id"`
+	ChannelID                              int64                                   `json:"channel_id"`
+	Name                                   string                                  `json:"name"`
+	ApiKey                                 string                                  `json:"api_key"`
+	ApiKeyMasked                           string                                  `json:"api_key_masked"`
+	IsDefault                              bool                                    `json:"is_default"`
+	DailyCostLimitUSD                      float64                                 `json:"daily_cost_limit_usd"`
+	CostMultiplier                         float64                                 `json:"costMultiplier"`
+	InputCostMultiplier                    float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier                   float64                                 `json:"outputCostMultiplier"`
+	CacheCreationCostMultiplier            float64                                 `json:"cacheCreationCostMultiplier"`
+	CacheReadCostMultiplier                float64                                 `json:"cacheReadCostMultiplier"`
+	LongContextCostMultiplier              float64                                 `json:"longContextCostMultiplier"`
+	LongContextInputCostMultiplier         float64                                 `json:"longContextInputCostMultiplier"`
+	LongContextOutputCostMultiplier        float64                                 `json:"longContextOutputCostMultiplier"`
+	LongContextCacheCreationCostMultiplier float64                                 `json:"longContextCacheCreationCostMultiplier"`
+	LongContextCacheReadCostMultiplier     float64                                 `json:"longContextCacheReadCostMultiplier"`
+	DisableLongContextPricing              bool                                    `json:"disableLongContextPricing"`
+	BillingOutputTokenSource               string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	BillingRules                           []codexstore.CodexBillingRuleRecord     `json:"billingRules"`
+	CreatedAt                              string                                  `json:"created_at"`
+	UpdatedAt                              string                                  `json:"updated_at"`
 }
 
 // CodexEndpointInfo 提供给前端展示的端点信息（name + base_url）。
@@ -189,50 +187,46 @@ type UpdateCodexChannelInput struct {
 }
 
 type CreateCodexCredentialGroupInput struct {
-	ChannelID                              int64                                         `json:"channel_id"`
-	Name                                   string                                        `json:"name"`
-	ApiKey                                 string                                        `json:"api_key"`
-	IsDefault                              bool                                          `json:"is_default"`
-	DailyCostLimitUSD                      float64                                       `json:"daily_cost_limit_usd"`
-	CostMultiplier                         float64                                       `json:"costMultiplier"`
-	InputCostMultiplier                    float64                                       `json:"inputCostMultiplier"`
-	OutputCostMultiplier                   float64                                       `json:"outputCostMultiplier"`
-	CacheCreationCostMultiplier            float64                                       `json:"cacheCreationCostMultiplier"`
-	CacheReadCostMultiplier                float64                                       `json:"cacheReadCostMultiplier"`
-	LongContextCostMultiplier              float64                                       `json:"longContextCostMultiplier"`
-	LongContextInputCostMultiplier         float64                                       `json:"longContextInputCostMultiplier"`
-	LongContextOutputCostMultiplier        float64                                       `json:"longContextOutputCostMultiplier"`
-	LongContextCacheCreationCostMultiplier float64                                       `json:"longContextCacheCreationCostMultiplier"`
-	LongContextCacheReadCostMultiplier     float64                                       `json:"longContextCacheReadCostMultiplier"`
-	DisableLongContextPricing              bool                                          `json:"disableLongContextPricing"`
-	DisableServiceTierPricing              bool                                          `json:"disableServiceTierPricing"`
-	ServiceTierMultipliers                 []codexstore.CodexServiceTierMultiplierRecord `json:"serviceTierMultipliers"`
-	BillingOutputTokenSource               string                                        `json:"billingOutputTokenSource"`
-	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord       `json:"modelMultipliers"`
-	BillingRules                           []codexstore.CodexBillingRuleRecord           `json:"billingRules"`
+	ChannelID                              int64                                   `json:"channel_id"`
+	Name                                   string                                  `json:"name"`
+	ApiKey                                 string                                  `json:"api_key"`
+	IsDefault                              bool                                    `json:"is_default"`
+	DailyCostLimitUSD                      float64                                 `json:"daily_cost_limit_usd"`
+	CostMultiplier                         float64                                 `json:"costMultiplier"`
+	InputCostMultiplier                    float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier                   float64                                 `json:"outputCostMultiplier"`
+	CacheCreationCostMultiplier            float64                                 `json:"cacheCreationCostMultiplier"`
+	CacheReadCostMultiplier                float64                                 `json:"cacheReadCostMultiplier"`
+	LongContextCostMultiplier              float64                                 `json:"longContextCostMultiplier"`
+	LongContextInputCostMultiplier         float64                                 `json:"longContextInputCostMultiplier"`
+	LongContextOutputCostMultiplier        float64                                 `json:"longContextOutputCostMultiplier"`
+	LongContextCacheCreationCostMultiplier float64                                 `json:"longContextCacheCreationCostMultiplier"`
+	LongContextCacheReadCostMultiplier     float64                                 `json:"longContextCacheReadCostMultiplier"`
+	DisableLongContextPricing              bool                                    `json:"disableLongContextPricing"`
+	BillingOutputTokenSource               string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	BillingRules                           []codexstore.CodexBillingRuleRecord     `json:"billingRules"`
 }
 
 type UpdateCodexCredentialGroupInput struct {
-	Name                                   string                                        `json:"name"`
-	ApiKey                                 string                                        `json:"api_key"`
-	IsDefault                              bool                                          `json:"is_default"`
-	DailyCostLimitUSD                      float64                                       `json:"daily_cost_limit_usd"`
-	CostMultiplier                         float64                                       `json:"costMultiplier"`
-	InputCostMultiplier                    float64                                       `json:"inputCostMultiplier"`
-	OutputCostMultiplier                   float64                                       `json:"outputCostMultiplier"`
-	CacheCreationCostMultiplier            float64                                       `json:"cacheCreationCostMultiplier"`
-	CacheReadCostMultiplier                float64                                       `json:"cacheReadCostMultiplier"`
-	LongContextCostMultiplier              float64                                       `json:"longContextCostMultiplier"`
-	LongContextInputCostMultiplier         float64                                       `json:"longContextInputCostMultiplier"`
-	LongContextOutputCostMultiplier        float64                                       `json:"longContextOutputCostMultiplier"`
-	LongContextCacheCreationCostMultiplier float64                                       `json:"longContextCacheCreationCostMultiplier"`
-	LongContextCacheReadCostMultiplier     float64                                       `json:"longContextCacheReadCostMultiplier"`
-	DisableLongContextPricing              bool                                          `json:"disableLongContextPricing"`
-	DisableServiceTierPricing              bool                                          `json:"disableServiceTierPricing"`
-	ServiceTierMultipliers                 []codexstore.CodexServiceTierMultiplierRecord `json:"serviceTierMultipliers"`
-	BillingOutputTokenSource               string                                        `json:"billingOutputTokenSource"`
-	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord       `json:"modelMultipliers"`
-	BillingRules                           []codexstore.CodexBillingRuleRecord           `json:"billingRules"`
+	Name                                   string                                  `json:"name"`
+	ApiKey                                 string                                  `json:"api_key"`
+	IsDefault                              bool                                    `json:"is_default"`
+	DailyCostLimitUSD                      float64                                 `json:"daily_cost_limit_usd"`
+	CostMultiplier                         float64                                 `json:"costMultiplier"`
+	InputCostMultiplier                    float64                                 `json:"inputCostMultiplier"`
+	OutputCostMultiplier                   float64                                 `json:"outputCostMultiplier"`
+	CacheCreationCostMultiplier            float64                                 `json:"cacheCreationCostMultiplier"`
+	CacheReadCostMultiplier                float64                                 `json:"cacheReadCostMultiplier"`
+	LongContextCostMultiplier              float64                                 `json:"longContextCostMultiplier"`
+	LongContextInputCostMultiplier         float64                                 `json:"longContextInputCostMultiplier"`
+	LongContextOutputCostMultiplier        float64                                 `json:"longContextOutputCostMultiplier"`
+	LongContextCacheCreationCostMultiplier float64                                 `json:"longContextCacheCreationCostMultiplier"`
+	LongContextCacheReadCostMultiplier     float64                                 `json:"longContextCacheReadCostMultiplier"`
+	DisableLongContextPricing              bool                                    `json:"disableLongContextPricing"`
+	BillingOutputTokenSource               string                                  `json:"billingOutputTokenSource"`
+	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	BillingRules                           []codexstore.CodexBillingRuleRecord     `json:"billingRules"`
 }
 
 type CreateCodexEndpointInput struct {
@@ -914,7 +908,7 @@ func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	created, err := credentialGroupService.CreateGroup(ctx, codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.DisableServiceTierPricing, input.ServiceTierMultipliers, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules))
+	created, err := credentialGroupService.CreateGroup(ctx, codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules))
 	if err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("创建 Codex 凭证分组失败: %w", err)
 	}
@@ -947,15 +941,12 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 	if existing == nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组不存在: %d", id)
 	}
-	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.DisableServiceTierPricing, input.ServiceTierMultipliers, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules)
+	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules)
 	if record.ApiKey == "" {
 		record.ApiKey = existing.ApiKey
 	}
 	if input.ModelMultipliers == nil {
 		record.ModelMultipliers = existing.ModelMultipliers
-	}
-	if input.ServiceTierMultipliers == nil {
-		record.ServiceTierMultipliers = existing.ServiceTierMultipliers
 	}
 	if input.BillingRules == nil {
 		record.BillingRules = existing.BillingRules
@@ -1652,7 +1643,7 @@ func codexChannelInputToRecord(name, providerType, apiKey, model string, modelMa
 	}
 }
 
-func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, dailyCostLimitUSD, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheCreationCostMultiplier, cacheReadCostMultiplier, longContextCostMultiplier, longContextInputCostMultiplier, longContextOutputCostMultiplier, longContextCacheCreationCostMultiplier, longContextCacheReadCostMultiplier float64, disableLongContextPricing, disableServiceTierPricing bool, serviceTierMultipliers []codexstore.CodexServiceTierMultiplierRecord, billingOutputTokenSource string, modelMultipliers []codexstore.CodexModelMultiplierRecord, billingRules []codexstore.CodexBillingRuleRecord) *codexstore.CodexCredentialGroupRecord {
+func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isDefault bool, dailyCostLimitUSD, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheCreationCostMultiplier, cacheReadCostMultiplier, longContextCostMultiplier, longContextInputCostMultiplier, longContextOutputCostMultiplier, longContextCacheCreationCostMultiplier, longContextCacheReadCostMultiplier float64, disableLongContextPricing bool, billingOutputTokenSource string, modelMultipliers []codexstore.CodexModelMultiplierRecord, billingRules []codexstore.CodexBillingRuleRecord) *codexstore.CodexCredentialGroupRecord {
 	return &codexstore.CodexCredentialGroupRecord{
 		ChannelID:                              channelID,
 		Name:                                   name,
@@ -1670,8 +1661,6 @@ func codexCredentialGroupInputToRecord(channelID int64, name, apiKey string, isD
 		LongContextCacheCreationCostMultiplier: longContextCacheCreationCostMultiplier,
 		LongContextCacheReadCostMultiplier:     longContextCacheReadCostMultiplier,
 		DisableLongContextPricing:              disableLongContextPricing,
-		DisableServiceTierPricing:              disableServiceTierPricing,
-		ServiceTierMultipliers:                 serviceTierMultipliers,
 		BillingOutputTokenSource:               tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource),
 		ModelMultipliers:                       modelMultipliers,
 		BillingRules:                           billingRules,
@@ -1701,8 +1690,6 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		LongContextCacheCreationCostMultiplier: record.LongContextCacheCreationCostMultiplier,
 		LongContextCacheReadCostMultiplier:     record.LongContextCacheReadCostMultiplier,
 		DisableLongContextPricing:              record.DisableLongContextPricing,
-		DisableServiceTierPricing:              record.DisableServiceTierPricing,
-		ServiceTierMultipliers:                 record.ServiceTierMultipliers,
 		BillingOutputTokenSource:               tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource),
 		ModelMultipliers:                       record.ModelMultipliers,
 		BillingRules:                           record.BillingRules,

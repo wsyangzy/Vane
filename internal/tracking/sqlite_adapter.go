@@ -812,6 +812,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := s.repairClaudeCredentialGroupOwnership(ctx); err != nil {
 		return err
 	}
+	if err := s.repairCrossProviderMultiplierCost(ctx); err != nil {
+		return err
+	}
 	if err := s.migrateLongContextPricingDefault(ctx); err != nil {
 		return err
 	}
@@ -926,6 +929,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		},
 	}
 	if err := runMigrations("model_pricing", modelPricingMigrations); err != nil {
+		return err
+	}
+	if err := s.rebuildModelPricingForProviderTierUnique(ctx); err != nil {
 		return err
 	}
 
@@ -1539,6 +1545,176 @@ END;`
 	return nil
 }
 
+// modelPricingNeedsProviderTierRebuild 检测 model_pricing 是否仍是「model_name 单列唯一」
+// 的老结构。老结构有两处硬伤：
+//   - Claude 与 Codex 无法配置同名模型的不同定价，而两侧模型名空间天然会重叠
+//     （同一中转商常同时提供两种协议；Claude provider 下已存在 MiniMax-M2 这类非 Anthropic 模型）
+//   - 无法为同一模型配置多个服务档位的定价行
+func (s *SQLiteAdapter) modelPricingNeedsProviderTierRebuild(ctx context.Context) (bool, error) {
+	// 见 detectEndpointsUniqueIndexes 的说明：SQLite 连接池限制为 1 条连接，
+	// 必须先把索引名读完再逐个查 index_info，不能在遍历 rows 时嵌套查询。
+	rows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_list(model_pricing)")
+	if err != nil {
+		return false, fmt.Errorf("failed to query model_pricing indexes: %w", err)
+	}
+	uniqueIndexes := make([]string, 0, 4)
+	for rows.Next() {
+		var (
+			seq     int
+			name    string
+			unique  int
+			origin  string
+			partial int
+		)
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			rows.Close()
+			return false, fmt.Errorf("failed to scan model_pricing index: %w", err)
+		}
+		if unique == 1 {
+			uniqueIndexes = append(uniqueIndexes, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, fmt.Errorf("failed to iterate model_pricing index_list: %w", err)
+	}
+	rows.Close()
+
+	for _, name := range uniqueIndexes {
+		escaped := strings.ReplaceAll(name, "'", "''")
+		colRows, err := s.GetReadDB().QueryContext(ctx, "PRAGMA index_info('"+escaped+"')")
+		if err != nil {
+			return false, fmt.Errorf("failed to query model_pricing index_info(%s): %w", name, err)
+		}
+		cols := make([]string, 0, 3)
+		for colRows.Next() {
+			var (
+				seqno   int
+				cid     int
+				colName sql.NullString
+			)
+			if err := colRows.Scan(&seqno, &cid, &colName); err != nil {
+				colRows.Close()
+				return false, fmt.Errorf("failed to scan model_pricing index_info(%s): %w", name, err)
+			}
+			cols = append(cols, colName.String)
+		}
+		colRows.Close()
+
+		if len(cols) == 3 && cols[0] == "provider" && cols[1] == "model_name" && cols[2] == "service_tier" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// rebuildModelPricingForProviderTierUnique 把 model_pricing 的唯一约束从 model_name
+// 单列重建为 (provider, model_name, service_tier) 三元组。
+//
+// service_tier 为空串的行是标准档/兜底行，现有数据全部落入该行，因此是零数据迁移。
+// SQLite 无法直接删除列上的 UNIQUE 约束，只能重建表。
+func (s *SQLiteAdapter) rebuildModelPricingForProviderTierUnique(ctx context.Context) error {
+	exists, err := s.tableExists(ctx, "model_pricing")
+	if err != nil {
+		return fmt.Errorf("failed to check model_pricing before rebuild: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	needs, err := s.modelPricingNeedsProviderTierRebuild(ctx)
+	if err != nil {
+		return err
+	}
+	if !needs {
+		return nil
+	}
+
+	// service_tier 列由早期迁移引入，之后从 schema.sql 的建表语句里被移除，
+	// 因此老库可能有该列（值全为空）也可能没有，复制数据时要分别处理。
+	hasServiceTier, err := s.columnExists(ctx, "model_pricing", "service_tier")
+	if err != nil {
+		return fmt.Errorf("failed to check model_pricing.service_tier: %w", err)
+	}
+	serviceTierExpr := "''"
+	if hasServiceTier {
+		serviceTierExpr = "COALESCE(service_tier, '')"
+	}
+
+	tx, err := s.GetWriteDB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin model_pricing rebuild tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	statements := []string{
+		`DROP TRIGGER IF EXISTS update_model_pricing_timestamp`,
+		`DROP INDEX IF EXISTS idx_model_pricing_model_name`,
+		`DROP INDEX IF EXISTS idx_model_pricing_is_default`,
+		`DROP INDEX IF EXISTS idx_model_pricing_provider`,
+		`ALTER TABLE model_pricing RENAME TO model_pricing_old`,
+		// 与 schema.sql 保持一致
+		`CREATE TABLE model_pricing (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			model_name TEXT NOT NULL,
+			provider TEXT NOT NULL DEFAULT 'claude',
+			service_tier TEXT NOT NULL DEFAULT '',
+			input_price REAL NOT NULL DEFAULT 3.0,
+			output_price REAL NOT NULL DEFAULT 15.0,
+			cache_creation_price_5m REAL DEFAULT 3.75,
+			cache_creation_price_1h REAL DEFAULT 6.0,
+			cache_read_price REAL DEFAULT 0.30,
+			long_context_threshold INTEGER NOT NULL DEFAULT 0,
+			long_context_input_price REAL NOT NULL DEFAULT 0,
+			long_context_cache_read_price REAL NOT NULL DEFAULT 0,
+			long_context_cache_write_price REAL NOT NULL DEFAULT 0,
+			long_context_output_price REAL NOT NULL DEFAULT 0,
+			display_name TEXT,
+			description TEXT,
+			is_default INTEGER DEFAULT 0,
+			created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+			UNIQUE(provider, model_name, service_tier)
+		)`,
+		`INSERT INTO model_pricing (
+			id, model_name, provider, service_tier,
+			input_price, output_price, cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price, long_context_cache_read_price,
+			long_context_cache_write_price, long_context_output_price,
+			display_name, description, is_default, created_at, updated_at
+		)
+		SELECT
+			id, model_name, COALESCE(provider, 'claude'), ` + serviceTierExpr + `,
+			input_price, output_price, cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			long_context_threshold, long_context_input_price, long_context_cache_read_price,
+			long_context_cache_write_price, long_context_output_price,
+			display_name, description, is_default, created_at, updated_at
+		FROM model_pricing_old`,
+		`DROP TABLE model_pricing_old`,
+		`CREATE INDEX IF NOT EXISTS idx_model_pricing_model_name ON model_pricing(model_name)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_pricing_is_default ON model_pricing(is_default)`,
+		`CREATE INDEX IF NOT EXISTS idx_model_pricing_provider ON model_pricing(provider)`,
+		`CREATE TRIGGER IF NOT EXISTS update_model_pricing_timestamp
+			AFTER UPDATE ON model_pricing
+			FOR EACH ROW
+			WHEN NEW.updated_at = OLD.updated_at
+		BEGIN
+			UPDATE model_pricing SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+		END`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("failed to rebuild model_pricing: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit model_pricing rebuild: %w", err)
+	}
+
+	s.logger.Info("✅ [数据库迁移] model_pricing：唯一约束已重建为 (provider, model_name, service_tier)")
+	return nil
+}
+
 func (s *SQLiteAdapter) createEndpointCredentialGroupIndexes(ctx context.Context, executor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 }) error {
@@ -1924,6 +2100,159 @@ func (s *SQLiteAdapter) repairClaudeCredentialGroupOwnership(ctx context.Context
 		return err
 	}
 	return nil
+}
+
+const schemaVersionRepairCrossProviderMultiplierCost = "20260902_repair_cross_provider_multiplier_cost"
+
+// repairCrossProviderMultiplierCost 重算被跨 provider 倍率污染的 Claude 请求成本。
+//
+// 倍率缓存曾以 "channel::group::endpoint" 为 key，由 Claude 与 Codex 共用一张 map。
+// 两侧允许配置同名的渠道 / 凭证分组 / 端点（实际存在 anyrouter::默认分组::主站直连
+// 在两个 provider 下同时成立），而 app.go 先写 Claude 段再写 Codex 段，后者静默覆盖
+// 前者，于是 Claude 请求按 Codex 的倍率计费。实测 685 条 Claude 请求按 0.4 计价，
+// 成本少算 $551.96。key 加 provider 维度后新请求已正确，此处只清理历史数据。
+//
+// 修复口径：按当前 Claude 凭证分组配置算出每条记录应有的总倍率，与落库值不符时按比例
+// 还原各成本列并回写正确倍率。成本 = 基础单价 × 分项倍率 × 总倍率，本缺陷只污染总倍率
+// （受影响记录的六项分项倍率与模型倍率实测均为 1.0），因此比例还原是精确的，无需重查定价。
+//
+// 只执行一次（schema_versions 幂等）：历史记录必须反映请求发生时的倍率。若每次启动都
+// 比对当前配置，用户日后调整分组倍率会把历史账单一并改写。
+//
+// 汇总表无需同步：成本统计直接聚合 request_logs（queries.go 的
+// queryUsageStatsTotalsFromSource），凭证分组日成本也是实时计算的。
+func (s *SQLiteAdapter) repairCrossProviderMultiplierCost(ctx context.Context) error {
+	applied, err := s.isSchemaVersionApplied(ctx, schemaVersionRepairCrossProviderMultiplierCost)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+
+	for _, table := range []string{"request_logs", "claude_credential_groups", "codex_channels", "codex_credential_groups"} {
+		exists, err := s.tableExists(ctx, table)
+		if err != nil {
+			return fmt.Errorf("failed to check %s for cross-provider multiplier repair: %w", table, err)
+		}
+		if !exists {
+			// 表尚未建全（首次启动），不写标记，留待下次启动重判。
+			return nil
+		}
+	}
+
+	type pollutedRequest struct {
+		id       int64
+		recorded float64
+		correct  float64
+		cost     float64
+	}
+
+	// 判定由两个条件合成，缺一不可：
+	//
+	//  1. 落库倍率 ≠ 当前 Claude 分组配置 —— 必要但不充分。倍率是请求发生时的快照，
+	//     用户新建分组或调整倍率后，早于该变更的记录本就与当前配置不同。实测存在这种
+	//     记录（Right Code/aws 分组建立前的 7 条请求落库 1.0，建立后配置为 0.3），
+	//     它们的 1.0 是当时的正确值，不能按今天的配置追溯改写。
+	//
+	//  2. 落库倍率 == 同名 Codex 渠道 + 分组的倍率 —— 这才是污染的指纹。旧 key 不含
+	//     provider，Codex 段后写覆盖 Claude 段，因此被污染记录的倍率必然等于肇事方
+	//     Codex 分组的倍率。反之，Claude 的 "Right Code" 在 Codex 侧叫 "RightCode"
+	//     （无空格），渠道名对不上，那 7 条记录因此被自然排除。
+	//
+	// 该条件同时保证幂等：修正后落库倍率不再等于 Codex 侧的值。
+	//
+	// group_name 匹配不到 Claude 分组时（分组已删除），应有倍率取 1.0 —— 当时的真实
+	// 倍率已无从考证，而 1.0 是配置缺失时计费链路本身的回退值。
+	rows, err := s.GetReadDB().QueryContext(ctx, `
+		SELECT r.id, r.cost_multiplier, COALESCE(g.cost_multiplier, 1.0), COALESCE(r.total_cost_usd, 0)
+		FROM request_logs r
+		LEFT JOIN claude_credential_groups g
+			ON g.channel = r.channel AND g.name = r.group_name
+		WHERE COALESCE(r.provider, 'claude') = 'claude'
+			AND r.cost_multiplier > 0
+			AND ABS(r.cost_multiplier - COALESCE(g.cost_multiplier, 1.0)) > 0.000000001
+			AND EXISTS (
+				SELECT 1
+				FROM codex_credential_groups cg
+				JOIN codex_channels cc ON cc.id = cg.channel_id
+				WHERE cc.name = r.channel
+					AND cg.name = r.group_name
+					AND ABS(cg.cost_multiplier - r.cost_multiplier) < 0.000000001
+			)
+		ORDER BY r.id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query Claude requests with foreign multipliers: %w", err)
+	}
+	polluted := make([]pollutedRequest, 0)
+	for rows.Next() {
+		var row pollutedRequest
+		if err := rows.Scan(&row.id, &row.recorded, &row.correct, &row.cost); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan Claude request with foreign multiplier: %w", err)
+		}
+		polluted = append(polluted, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate Claude requests with foreign multipliers: %w", err)
+	}
+	rows.Close()
+
+	if len(polluted) == 0 {
+		return s.recordSchemaVersion(ctx, schemaVersionRepairCrossProviderMultiplierCost,
+			"recompute Claude request costs polluted by provider-less multiplier keys")
+	}
+
+	s.logger.Warn(fmt.Sprintf("🔧 [数据库迁移] 检测到 %d 条 Claude 请求套用了其它 provider 的倍率，开始重算成本", len(polluted)))
+	backupPath, err := s.backupDatabaseFile(ctx, "pre-multiplier-repair")
+	if err != nil {
+		return fmt.Errorf("failed to back up database before cross-provider multiplier repair: %w", err)
+	}
+	if backupPath != "" {
+		s.logger.Info(fmt.Sprintf("💾 [数据库迁移] 重算前已备份数据库: %s", backupPath))
+	}
+
+	tx, err := s.GetWriteDB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin cross-provider multiplier repair: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// cost_multiplier 同时出现在赋值右侧与左侧：SQLite 对同一条 UPDATE 的所有右侧
+	// 表达式统一取旧值求值，因此这里的比例基于污染值计算，是安全的。
+	const updateSQL = `
+		UPDATE request_logs SET
+			input_cost_usd = COALESCE(input_cost_usd, 0) * ?,
+			output_cost_usd = COALESCE(output_cost_usd, 0) * ?,
+			cache_creation_cost_usd = COALESCE(cache_creation_cost_usd, 0) * ?,
+			cache_creation_5m_cost_usd = COALESCE(cache_creation_5m_cost_usd, 0) * ?,
+			cache_creation_1h_cost_usd = COALESCE(cache_creation_1h_cost_usd, 0) * ?,
+			cache_read_cost_usd = COALESCE(cache_read_cost_usd, 0) * ?,
+			total_cost_usd = COALESCE(total_cost_usd, 0) * ?,
+			cost_multiplier = ?
+		WHERE id = ?`
+
+	var costBefore, costAfter float64
+	for _, row := range polluted {
+		ratio := row.correct / row.recorded
+		if _, err := tx.ExecContext(ctx, updateSQL,
+			ratio, ratio, ratio, ratio, ratio, ratio, ratio, row.correct, row.id); err != nil {
+			return fmt.Errorf("failed to recompute cost for request %d: %w", row.id, err)
+		}
+		costBefore += row.cost
+		costAfter += row.cost * ratio
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cross-provider multiplier repair: %w", err)
+	}
+
+	s.logger.Info(fmt.Sprintf("✅ [数据库迁移] 跨 provider 倍率污染重算完成：修正 %d 条，成本合计 $%.4f → $%.4f",
+		len(polluted), costBefore, costAfter))
+
+	return s.recordSchemaVersion(ctx, schemaVersionRepairCrossProviderMultiplierCost,
+		"recompute Claude request costs polluted by provider-less multiplier keys")
 }
 
 // backupDatabaseFile 用 VACUUM INTO 生成当前库的一致快照，返回备份路径。

@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 )
@@ -30,11 +29,14 @@ type TokenResult struct {
 
 // UpstreamStreamError 表示 OpenAI/Codex 以 HTTP 200 SSE 流返回的错误事件。
 // 这类错误不应被记录为 completed，否则会出现 token 全 0 的假成功记录。
+//
+// 刻意不带 StatusCode：这条响应上游给出的真实 HTTP 状态码就是 200，
+// 凭 message 里的关键字反推出 429/401/402 写进转移链路，
+// 与提供商真正返回过的状态码在追踪里无法区分。重试判断改用下面的 type/code 文本。
 type UpstreamStreamError struct {
-	Type       string
-	Code       string
-	Message    string
-	StatusCode int
+	Type    string
+	Code    string
+	Message string
 }
 
 func (e *UpstreamStreamError) Error() string {
@@ -205,40 +207,6 @@ func parseStreamErrorDetail(raw json.RawMessage) *openAIStreamErrorDetail {
 		return nil
 	}
 	return &detail
-}
-
-func streamErrorStatusCode(errorType, code, message, eventType string) int {
-	combined := strings.ToLower(strings.Join([]string{errorType, code, message, eventType}, " "))
-	switch {
-	case strings.Contains(combined, "capacity"),
-		strings.Contains(combined, "overload"),
-		strings.Contains(combined, "temporarily unavailable"),
-		strings.Contains(combined, "service unavailable"),
-		strings.Contains(combined, "server_error"),
-		strings.Contains(combined, "internal_error"):
-		return http.StatusServiceUnavailable
-	case strings.Contains(combined, "rate_limit"):
-		return http.StatusTooManyRequests
-	case strings.Contains(combined, "insufficient_quota"),
-		strings.Contains(combined, "billing"),
-		strings.Contains(combined, "payment"):
-		return http.StatusPaymentRequired
-	case strings.Contains(combined, "unauthorized"),
-		strings.Contains(combined, "authentication"):
-		return http.StatusUnauthorized
-	case strings.Contains(combined, "forbidden"),
-		strings.Contains(combined, "permission"):
-		return http.StatusForbidden
-	case strings.Contains(combined, "not_found"):
-		return http.StatusNotFound
-	case strings.Contains(combined, "invalid_request"),
-		strings.Contains(combined, "bad_request"):
-		return http.StatusBadRequest
-	case strings.Contains(combined, "failed"):
-		return http.StatusBadGateway
-	default:
-		return http.StatusBadGateway
-	}
 }
 
 // resolveUsage 从 usage 中提取统一的 token 字段
@@ -443,12 +411,10 @@ func (p *TokenParser) ParseStreamingErrorLine(line []byte) *UpstreamStreamError 
 		detail = &openAIStreamErrorDetail{Message: "upstream stream failed"}
 	}
 
-	statusCode := streamErrorStatusCode(detail.Type, detail.Code, detail.Message, envelope.Type)
 	return &UpstreamStreamError{
-		Type:       firstNonEmpty(detail.Type, envelope.Type),
-		Code:       detail.Code,
-		Message:    detail.Message,
-		StatusCode: statusCode,
+		Type:    firstNonEmpty(detail.Type, envelope.Type),
+		Code:    detail.Code,
+		Message: detail.Message,
 	}
 }
 

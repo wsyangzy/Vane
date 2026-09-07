@@ -19,10 +19,9 @@ fi
 
 echo "正在打包 ${APP_NAME} v${VERSION} Windows 版本..."
 rm -rf "$DIST_DIR" "$ZIP_PATH" "${ZIP_PATH}.sha256"
-mkdir -p "$DIST_DIR/config" "$DIST_DIR/data" "$DIST_DIR/logs"
+mkdir -p "$DIST_DIR/data" "$DIST_DIR/logs"
 
 cp "$EXE_PATH" "$DIST_DIR/${APP_NAME}.exe"
-cp config/example.yaml "$DIST_DIR/config/config.yaml"
 
 cat > "$DIST_DIR/README.txt" <<EOF
 AI Relay Forwarder v${VERSION} - Windows x64
@@ -31,7 +30,7 @@ AI Relay Forwarder v${VERSION} - Windows x64
 快速开始
 
 1. 双击 AI Relay Forwarder.exe 启动应用。
-2. 应用数据、配置和日志默认保存在用户 AppData 目录。
+2. 应用数据、运行配置和日志默认保存在用户 AppData 目录。
 3. 在应用内配置 Claude 或 Codex 渠道、凭证分组和端点。
 
 系统要求
@@ -41,7 +40,6 @@ AI Relay Forwarder v${VERSION} - Windows x64
 
 目录说明
 
-- config/config.yaml: 示例配置
 - data/: 便携数据目录预留
 - logs/: 便携日志目录预留
 EOF

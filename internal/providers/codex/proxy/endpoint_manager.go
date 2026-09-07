@@ -339,11 +339,11 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 	return result, nil
 }
 
-// GetNextEndpoint 获取下一个可用端点（排除当前请求已失败的端点和当前问答已失败的凭证分组）
+// GetNextEndpoint 获取下一个可用端点（排除当前请求已失败的端点和本地限额策略跳过的凭证分组）
 // 逻辑:
 // 1. 过滤 failover_enabled = true 的端点
 // 2. 排除 failedIDs 中的端点（本次请求已尝试过的）
-// 3. 排除 skippedGroups 中的凭证分组（当前问答已确认失败）
+// 3. 排除 skippedGroups 中的凭证分组（仅用于本地限额策略）
 // 4. 过滤健康检查失败的普通端点；skip_health_check=true 的端点绕过健康过滤
 // 5. 按配置的路由策略排序，返回第一个
 // 6. 全部耗尽返回 error
@@ -455,30 +455,6 @@ func (m *EndpointManager) RecordLatency(endpointID int64, ms int64) {
 // MarkUnhealthy 标记端点为不健康（仅靠健康检查恢复，不再使用冷却时间）
 func (m *EndpointManager) MarkUnhealthy(endpointID int64) {
 	m.MarkUnhealthyWithDetail(endpointID, 0, "")
-}
-
-func (m *EndpointManager) endpointIDsInCredentialGroup(groupID int64, groupName string) []int64 {
-	if groupID <= 0 && groupName == "" {
-		return nil
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	ids := make([]int64, 0)
-	for _, ep := range m.endpoints {
-		if ep == nil {
-			continue
-		}
-		if groupID > 0 && ep.CredentialGroupID == groupID {
-			ids = append(ids, ep.ID)
-			continue
-		}
-		if groupID <= 0 && groupName != "" && ep.CredentialGroupName == groupName {
-			ids = append(ids, ep.ID)
-		}
-	}
-	return ids
 }
 
 // MarkUnhealthyWithDetail 标记端点为不健康，并记录本次请求/探测的失败详情。

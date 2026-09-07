@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -87,7 +88,7 @@ func TestApplyPrivacyFilterNilFilterPassesBodyThrough(t *testing.T) {
 func TestApplyPrivacyFilterSurfacesPolicyError(t *testing.T) {
 	req := httptest.NewRequest("POST", "https://provider.example/v1/messages", nil)
 	policy := &privacy.PolicyError{
-		StatusCode: 422,
+		StatusCode: http.StatusForbidden,
 		Code:       privacy.CodeScanFailed,
 		Message:    "scan failed",
 	}
@@ -114,7 +115,7 @@ func TestApplyPrivacyFilterSurfacesPolicyError(t *testing.T) {
 	// 写给客户端的响应体不得含命中原文
 	rec := httptest.NewRecorder()
 	WritePrivacyPolicyErrorResponse(rec, got)
-	if rec.Code != 422 {
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("unexpected status: %d", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), "sk-body-token") {

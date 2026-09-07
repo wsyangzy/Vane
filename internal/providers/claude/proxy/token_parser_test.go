@@ -221,8 +221,8 @@ func TestTokenParser_ErrorEvent(t *testing.T) {
 		t.Errorf("Expected Status=%s, got %s", StatusErrorAPI, result.Status)
 	}
 
-	if result.ModelName != "error:overloaded_error" {
-		t.Errorf("Expected ModelName=error:overloaded_error, got %s", result.ModelName)
+	if result.ModelName != "" {
+		t.Errorf("Expected empty ModelName for an error event, got %s", result.ModelName)
 	}
 }
 

@@ -51,8 +51,11 @@ type CountTokensResponse struct {
 func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
 	slog.Info(fmt.Sprintf("🔢 [Token计数] [%s] 收到count_tokens请求", connID))
 
-	// 1. 找配置了 supports_count_tokens: true 的端点
-	supportedEndpoints := h.getSupportedEndpoints()
+	// 关闭 TokenCounting 时仍由 Relay 本地处理，不能把客户端发来的路径落穿到上游。
+	var supportedEndpoints []*endpoint.Endpoint
+	if h.config != nil && h.config.TokenCounting.Enabled {
+		supportedEndpoints = h.getSupportedEndpoints()
+	}
 
 	// 2. 如果有，尝试转发
 	if len(supportedEndpoints) > 0 {
@@ -111,6 +114,11 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 		return nil, false, err
 	}
 	for _, ep := range endpoints {
+		// 转发前登记端点：否则 count_tokens 请求的渠道与链路在追踪里始终是空的，
+		// 出问题时看不出这条请求到底打到了哪个端点
+		if lifecycleManager != nil {
+			lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
+		}
 		requestBody := h.forwarder.RewriteModelForEndpoint(protectedBody, ep, connID).Body
 		targetURL := ep.Config.URL + "/v1/messages/count_tokens"
 		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(requestBody))

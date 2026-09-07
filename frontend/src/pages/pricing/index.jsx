@@ -31,8 +31,17 @@ import {
   createModelPricing,
   updateModelPricing,
   deleteModelPricing,
+  deleteModelPricingTier,
   setDefaultModelPricing
 } from '@utils/wailsApi.js';
+import {
+  PRICING_SERVICE_TIERS,
+  serviceTierLabel,
+  emptyTierValues,
+  tierValuesFromRecord,
+  groupPricingsByModel,
+  buildTierPayloads
+} from './pricingGroups.js';
 
 // ============================================
 // 定价表单弹窗
@@ -45,11 +54,249 @@ const LONG_CONTEXT_PRICE_FIELDS = [
   ['longContextCacheWritePrice', '缓存写入价格']
 ];
 
-const PRICING_FORM_TABS = [
-  { key: 'basic', label: '基础信息' },
-  { key: 'standard', label: '普通定价' },
-  { key: 'longContext', label: 'Long context' }
-];
+// 表单按「基础信息 + 每个档位一页」分 tab：档位是定价的维度，不是模型的属性，
+// 一个模型可以同时配标准档 + batch + flex + fast 四份价格
+const BASIC_TAB = { key: 'basic', label: '基础信息' };
+const tierTabKey = (tier) => `tier:${tier}`;
+
+// Tailwind JIT 不解析拼接出来的类名，tab 列数只能写死映射
+const TAB_GRID_COLS = {
+  2: 'grid-cols-2',
+  3: 'grid-cols-3',
+  4: 'grid-cols-4',
+  5: 'grid-cols-5'
+};
+
+// 单个档位的价格字段。标准档与各档位子行共用同一套字段，抽出来避免每档一份重复 JSX。
+const TierPriceFields = ({ provider, values, errors, onChange, onSuggestCache }) => {
+  const longContextEnabled = values.longContextThreshold > 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-slate-50 rounded-xl p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-slate-700">价格设置</h4>
+          {provider === 'claude' && (
+            <button
+              type="button"
+              onClick={onSuggestCache}
+              className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
+            >
+              <Sparkles size={12} />
+              自动计算缓存价格
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">输入价格</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+              <input
+                type="number"
+                step="0.001"
+                min="0"
+                value={values.inputPrice}
+                onChange={(e) => onChange('inputPrice', parseFloat(e.target.value) || 0)}
+                className={`w-full pl-7 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                  errors.inputPrice ? 'border-rose-300' : 'border-slate-200'
+                }`}
+              />
+            </div>
+            {errors.inputPrice && <p className="text-xs text-rose-500 mt-1">{errors.inputPrice}</p>}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">输出价格</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+              <input
+                type="number"
+                step="0.001"
+                min="0"
+                value={values.outputPrice}
+                onChange={(e) => onChange('outputPrice', parseFloat(e.target.value) || 0)}
+                className={`w-full pl-7 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                  errors.outputPrice ? 'border-rose-300' : 'border-slate-200'
+                }`}
+              />
+            </div>
+            {errors.outputPrice && <p className="text-xs text-rose-500 mt-1">{errors.outputPrice}</p>}
+          </div>
+
+          {/* 缓存价格 - 根据 provider 显示不同字段 */}
+          {provider === 'codex' ? (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">缓存读取价格</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={values.cacheReadPrice}
+                    onChange={(e) => onChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
+                    className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">缓存写入价格</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={values.cacheCreationPrice5m}
+                    onChange={(e) => onChange('cacheCreationPrice5m', parseFloat(e.target.value) || 0)}
+                    className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">缓存创建 (5m)</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={values.cacheCreationPrice5m}
+                    onChange={(e) => onChange('cacheCreationPrice5m', parseFloat(e.target.value) || 0)}
+                    className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400">input x 1.25</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">缓存创建 (1h)</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={values.cacheCreationPrice1h}
+                    onChange={(e) => onChange('cacheCreationPrice1h', parseFloat(e.target.value) || 0)}
+                    className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400">input x 2.0</span>
+              </div>
+
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-slate-600 mb-1">缓存读取价格</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={values.cacheReadPrice}
+                    onChange={(e) => onChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
+                    className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-400">input x 0.1</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Long context 定价仅 Codex 适用，且每个档位各自持有一套四价 */}
+      {provider === 'codex' && (
+        <div className="border border-slate-200 rounded-xl p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <h4 className="text-sm font-semibold text-slate-700">Long context 定价</h4>
+            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+              longContextEnabled
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-slate-50 text-slate-500'
+            }`}>
+              {longContextEnabled ? '已启用' : '未启用'}
+            </span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              启用阈值 (tokens，超过此值后启用)
+            </label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              value={values.longContextThreshold}
+              onChange={(e) => onChange('longContextThreshold', Number(e.target.value) || 0)}
+              className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                errors.longContextThreshold ? 'border-rose-300' : 'border-slate-200'
+              }`}
+            />
+            {errors.longContextThreshold && (
+              <p className="text-xs text-rose-500 mt-1">{errors.longContextThreshold}</p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {LONG_CONTEXT_PRICE_FIELDS.map(([field, label]) => (
+              <div key={field}>
+                <label className="block text-xs font-medium text-slate-600 mb-1">{label}</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0"
+                    value={values[field]}
+                    disabled={!longContextEnabled}
+                    onChange={(e) => onChange(field, parseFloat(e.target.value) || 0)}
+                    className={`w-full pl-7 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-400 ${
+                      errors[field] ? 'border-rose-300' : 'border-slate-200'
+                    }`}
+                  />
+                </div>
+                {errors[field] && <p className="text-xs text-rose-500 mt-1">{errors[field]}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// 从已有定价行还原表单的档位映射。缺失的档位留空壳，用户勾选「启用」后再填。
+const buildTierFormState = (group) => {
+  const tiers = {};
+  for (const { value: tier } of PRICING_SERVICE_TIERS) {
+    tiers[tier] = emptyTierValues();
+  }
+  if (group?.standard) {
+    tiers[''] = tierValuesFromRecord(group.standard);
+  } else {
+    // 新建模型时标准档给一份 Claude Sonnet 量级的初值，省得四个价从 0 敲起
+    tiers[''] = {
+      ...emptyTierValues(),
+      enabled: true,
+      inputPrice: 3.0,
+      outputPrice: 15.0,
+      cacheCreationPrice5m: 3.75,
+      cacheCreationPrice1h: 6.0,
+      cacheReadPrice: 0.3
+    };
+  }
+  for (const record of group?.tiers || []) {
+    tiers[record.serviceTier] = tierValuesFromRecord(record);
+  }
+  return tiers;
+};
 
 const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
   const isEdit = !!pricing;
@@ -58,61 +305,95 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
     displayName: pricing?.displayName || '',
     description: pricing?.description || '',
     provider: pricing?.provider || 'claude',
-    inputPrice: pricing?.inputPrice ?? 3.0,
-    outputPrice: pricing?.outputPrice ?? 15.0,
-    cacheCreationPrice5m: pricing?.cacheCreationPrice5m ?? 3.75,
-    cacheCreationPrice1h: pricing?.cacheCreationPrice1h ?? 6.0,
-    cacheReadPrice: pricing?.cacheReadPrice ?? 0.30,
-    longContextThreshold: pricing?.longContextThreshold ?? 0,
-    longContextInputPrice: pricing?.longContextInputPrice ?? 0,
-    longContextCacheReadPrice: pricing?.longContextCacheReadPrice ?? 0,
-    longContextCacheWritePrice: pricing?.longContextCacheWritePrice ?? 0,
-    longContextOutputPrice: pricing?.longContextOutputPrice ?? 0,
-    isDefault: pricing?.isDefault || false
+    isDefault: pricing?.isDefault || false,
+    tiers: buildTierFormState(pricing)
   });
+  // errors: { modelName, submit, tiers: { '': { inputPrice: '...' } } }
   const [errors, setErrors] = useState({});
   const [activeTab, setActiveTab] = useState('basic');
 
   const handleChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
-    // 清除对应字段的错误
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: null }));
     }
   };
 
-  const validate = () => {
-    const newErrors = {};
-    if (!formData.modelName.trim()) {
-      newErrors.modelName = '模型名称不能为空';
+  const handleTierChange = (tier, field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      tiers: { ...prev.tiers, [tier]: { ...prev.tiers[tier], [field]: value } }
+    }));
+    if (errors.tiers?.[tier]?.[field]) {
+      setErrors(prev => ({
+        ...prev,
+        tiers: { ...prev.tiers, [tier]: { ...prev.tiers[tier], [field]: null } }
+      }));
     }
-    if (formData.inputPrice < 0) {
-      newErrors.inputPrice = '输入价格不能为负数';
-    }
-    if (formData.outputPrice < 0) {
-      newErrors.outputPrice = '输出价格不能为负数';
-    }
-    // Long context 定价仅 Codex 适用，Claude 下该 tab 不可见，跳过校验
+  };
+
+  // 首次启用某档位时，从标准档带入一份初值：档位价通常是标准价的折扣或溢价，
+  // 全 0 起步既费事又容易漏填成 $0 计费
+  const handleTierToggle = (tier) => {
+    setFormData(prev => {
+      const current = prev.tiers[tier];
+      const turningOn = !current.enabled;
+      const seeded = turningOn && current.id === 0 && current.inputPrice === 0 && current.outputPrice === 0
+        ? { ...prev.tiers[''], id: 0 }
+        : current;
+      return {
+        ...prev,
+        tiers: { ...prev.tiers, [tier]: { ...seeded, enabled: turningOn } }
+      };
+    });
+  };
+
+  const validateTier = (values, provider) => {
+    const tierErrors = {};
+    if (values.inputPrice < 0) tierErrors.inputPrice = '输入价格不能为负数';
+    if (values.outputPrice < 0) tierErrors.outputPrice = '输出价格不能为负数';
+    // Long context 定价仅 Codex 适用，Claude 下这些字段不可见，跳过校验
     // 否则历史脏数据会把 activeTab 切到一个不存在的 tab，表单卡死无法提交
-    if (formData.provider === 'codex') {
-      if (!Number.isInteger(formData.longContextThreshold) || formData.longContextThreshold < 0) {
-        newErrors.longContextThreshold = 'Long context 阈值必须是非负整数';
+    if (provider === 'codex') {
+      if (!Number.isInteger(values.longContextThreshold) || values.longContextThreshold < 0) {
+        tierErrors.longContextThreshold = 'Long context 阈值必须是非负整数';
       }
       LONG_CONTEXT_PRICE_FIELDS.forEach(([field, label]) => {
-        if (formData[field] < 0) {
-          newErrors[field] = `Long context ${label}不能为负数`;
+        if (values[field] < 0) {
+          tierErrors[field] = `Long context ${label}不能为负数`;
         }
       });
     }
-    setErrors(newErrors);
-    if (Object.keys(newErrors).some((field) => field.startsWith('longContext'))) {
-      setActiveTab('longContext');
-    } else if (Object.keys(newErrors).some((field) => field === 'inputPrice' || field === 'outputPrice')) {
-      setActiveTab('standard');
-    } else if (Object.keys(newErrors).length > 0) {
-      setActiveTab('basic');
+    return tierErrors;
+  };
+
+  const validate = () => {
+    const newErrors = {};
+    const tierErrors = {};
+
+    if (!formData.modelName.trim()) {
+      newErrors.modelName = '模型名称不能为空';
     }
-    return Object.keys(newErrors).length === 0;
+
+    for (const { value: tier } of PRICING_SERVICE_TIERS) {
+      if (tier !== '' && formData.provider !== 'codex') continue;
+      const values = formData.tiers[tier];
+      if (tier !== '' && !values.enabled) continue;
+      const found = validateTier(values, formData.provider);
+      if (Object.keys(found).length > 0) tierErrors[tier] = found;
+    }
+
+    if (Object.keys(tierErrors).length > 0) newErrors.tiers = tierErrors;
+    setErrors(newErrors);
+
+    // 把 tab 切到第一个出错的页面，否则报错落在看不见的 tab 上，用户只会看到「保存无反应」
+    const firstBadTier = PRICING_SERVICE_TIERS.find(({ value }) => tierErrors[value]);
+    if (newErrors.modelName) {
+      setActiveTab('basic');
+    } else if (firstBadTier) {
+      setActiveTab(tierTabKey(firstBadTier.value));
+    }
+    return !newErrors.modelName && Object.keys(tierErrors).length === 0;
   };
 
   const handleSubmit = async (e) => {
@@ -128,29 +409,38 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
 
   // 自动计算缓存价格建议 (按 Anthropic 官方定价规则)
   // 5分钟缓存: input × 1.25, 1小时缓存: input × 2.0, 读取: input × 0.1
-  const suggestCachePrices = () => {
-    const input = parseFloat(formData.inputPrice) || 0;
-    setFormData(prev => ({
-      ...prev,
-      cacheCreationPrice5m: parseFloat((input * 1.25).toFixed(3)),
-      cacheCreationPrice1h: parseFloat((input * 2.0).toFixed(3)),
-      cacheReadPrice: parseFloat((input * 0.1).toFixed(3))
-    }));
+  const suggestCachePrices = (tier) => {
+    setFormData(prev => {
+      const values = prev.tiers[tier];
+      const input = parseFloat(values.inputPrice) || 0;
+      return {
+        ...prev,
+        tiers: {
+          ...prev.tiers,
+          [tier]: {
+            ...values,
+            cacheCreationPrice5m: parseFloat((input * 1.25).toFixed(3)),
+            cacheCreationPrice1h: parseFloat((input * 2.0).toFixed(3)),
+            cacheReadPrice: parseFloat((input * 0.1).toFixed(3))
+          }
+        }
+      };
+    });
   };
 
-  const longContextEnabled = formData.longContextThreshold > 0;
+  // 档位子行仅 Codex 适用：Claude 只有基础信息 + 标准档两页
+  const showTierTabs = formData.provider === 'codex';
+  const visibleFormTabs = [
+    BASIC_TAB,
+    ...(showTierTabs ? PRICING_SERVICE_TIERS : PRICING_SERVICE_TIERS.filter((t) => t.value === ''))
+      .map(({ value, label }) => ({ key: tierTabKey(value), label, tier: value }))
+  ];
 
-  // Long context 定价仅 Codex 适用
-  const showLongContextTab = formData.provider === 'codex';
-  const visibleFormTabs = showLongContextTab
-    ? PRICING_FORM_TABS
-    : PRICING_FORM_TABS.filter((tab) => tab.key !== 'longContext');
-
-  // 切到 Claude 时若正停留在 Long context tab，回落到普通定价，避免停在已隐藏的 tab 上
+  // 切到 Claude 时若正停留在档位 tab，回落到标准档，避免停在已隐藏的 tab 上
   const handleProviderChange = (provider) => {
-    handleChange('provider', provider);
-    if (provider !== 'codex' && activeTab === 'longContext') {
-      setActiveTab('standard');
+    setFormData((prev) => ({ ...prev, provider }));
+    if (provider !== 'codex' && activeTab !== 'basic' && activeTab !== tierTabKey('')) {
+      setActiveTab(tierTabKey(''));
     }
   };
 
@@ -211,21 +501,28 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
           </div>
 
           <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
-            <div className={`grid ${showLongContextTab ? 'grid-cols-3' : 'grid-cols-2'} rounded-xl bg-slate-100 p-1`}>
-              {visibleFormTabs.map((tab) => (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                    activeTab === tab.key
-                      ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200'
-                      : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
+            <div className={`grid ${TAB_GRID_COLS[visibleFormTabs.length] || 'grid-cols-5'} rounded-xl bg-slate-100 p-1`}>
+              {visibleFormTabs.map((tab) => {
+                // 未启用的档位在 tab 上就能看出来，不用逐页点开确认
+                const configured = tab.tier === '' || formData.tiers[tab.tier]?.enabled;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setActiveTab(tab.key)}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                      activeTab === tab.key
+                        ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-slate-200'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                  >
+                    {tab.label}
+                    {tab.tier !== undefined && (
+                      <span className={`h-1.5 w-1.5 rounded-full ${configured ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -252,6 +549,15 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
                 <p className="text-xs text-rose-500 mt-1">{errors.modelName}</p>
               )}
             </div>
+
+            {/* 档位不是模型的属性，而是定价的维度：一个模型可同时挂标准档 + batch/flex/fast
+                四份价格，因此档位在各自的 tab 里配置，不在这里单选 */}
+            {formData.provider === 'codex' && (
+              <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                标准档为该模型的兜底定价；Batch / Flex / Fast 各有独立的一套价格，
+                在对应 tab 里勾选启用后填写，只在上游返回该档位时命中。
+              </p>
+            )}
 
             {/* 显示名称 */}
             <div>
@@ -284,225 +590,58 @@ const PricingForm = ({ pricing, onSave, onCancel, loading }) => {
               </>
             )}
 
-            {/* 普通价格设置 */}
-            {activeTab === 'standard' && (
-            <div className="bg-slate-50 rounded-xl p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <h4 className="text-sm font-semibold text-slate-700">价格设置</h4>
-                {formData.provider === 'claude' && (
-                  <button
-                    type="button"
-                    onClick={suggestCachePrices}
-                    className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1"
-                  >
-                    <Sparkles size={12} />
-                    自动计算缓存价格
-                  </button>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* 输入价格 */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    输入价格
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
-                      value={formData.inputPrice}
-                      onChange={(e) => handleChange('inputPrice', parseFloat(e.target.value) || 0)}
-                      className={`w-full pl-7 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                        errors.inputPrice ? 'border-rose-300' : 'border-slate-200'
+            {/* 每个档位一页：标准档与各档位子行各自持有一套完整价格 */}
+            {visibleFormTabs.map((tab) => {
+              if (tab.tier === undefined || activeTab !== tab.key) return null;
+              const values = formData.tiers[tab.tier];
+              const tierEnabled = tab.tier === '' || values.enabled;
+              return (
+                <div key={tab.key} className="space-y-4">
+                  {tab.tier === '' ? (
+                    <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                      标准档是该模型的兜底定价，始终生效；未单独配置的档位一律回落到这里计费。
+                    </p>
+                  ) : (
+                    <div
+                      onClick={() => handleTierToggle(tab.tier)}
+                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all duration-200 ${
+                        values.enabled
+                          ? 'border-violet-200 bg-violet-50 shadow-sm'
+                          : 'border-slate-200 bg-slate-50 hover:border-slate-300'
                       }`}
+                    >
+                      <div>
+                        <span className={`text-sm font-medium ${values.enabled ? 'text-violet-700' : 'text-slate-600'}`}>
+                          启用 {tab.label} 档位定价
+                        </span>
+                        <p className="text-[11px] text-slate-400">
+                          {values.enabled
+                            ? '上游返回该档位时按下方价格计费'
+                            : '未启用时该档位回落到标准档价格'}
+                        </p>
+                      </div>
+                      <div className={`relative h-5 w-9 rounded-full transition-colors duration-200 ${
+                        values.enabled ? 'bg-violet-500' : 'bg-slate-300'
+                      }`}>
+                        <div className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                          values.enabled ? 'translate-x-4' : 'translate-x-0.5'
+                        }`} />
+                      </div>
+                    </div>
+                  )}
+
+                  {tierEnabled && (
+                    <TierPriceFields
+                      provider={formData.provider}
+                      values={values}
+                      errors={errors.tiers?.[tab.tier] || {}}
+                      onChange={(field, value) => handleTierChange(tab.tier, field, value)}
+                      onSuggestCache={() => suggestCachePrices(tab.tier)}
                     />
-                  </div>
+                  )}
                 </div>
-
-                {/* 输出价格 */}
-                <div>
-                  <label className="block text-xs font-medium text-slate-600 mb-1">
-                    输出价格
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
-                      value={formData.outputPrice}
-                      onChange={(e) => handleChange('outputPrice', parseFloat(e.target.value) || 0)}
-                      className={`w-full pl-7 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                        errors.outputPrice ? 'border-rose-300' : 'border-slate-200'
-                      }`}
-                    />
-                  </div>
-                </div>
-
-                {/* 缓存价格 - 根据 provider 显示不同字段 */}
-                {formData.provider === 'codex' ? (
-                  <>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        缓存读取价格
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0"
-                          value={formData.cacheReadPrice}
-                          onChange={(e) => handleChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
-                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        缓存写入价格
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0"
-                          value={formData.cacheCreationPrice5m}
-                          onChange={(e) => handleChange('cacheCreationPrice5m', parseFloat(e.target.value) || 0)}
-                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {/* 5分钟缓存创建价格 */}
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        缓存创建 (5m)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0"
-                          value={formData.cacheCreationPrice5m}
-                          onChange={(e) => handleChange('cacheCreationPrice5m', parseFloat(e.target.value) || 0)}
-                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
-                      <span className="text-[10px] text-slate-400">input x 1.25</span>
-                    </div>
-
-                    {/* 1小时缓存创建价格 */}
-                    <div>
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        缓存创建 (1h)
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0"
-                          value={formData.cacheCreationPrice1h}
-                          onChange={(e) => handleChange('cacheCreationPrice1h', parseFloat(e.target.value) || 0)}
-                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
-                      <span className="text-[10px] text-slate-400">input x 2.0</span>
-                    </div>
-
-                    {/* 缓存读取价格 */}
-                    <div className="col-span-2">
-                      <label className="block text-xs font-medium text-slate-600 mb-1">
-                        缓存读取价格
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0"
-                          value={formData.cacheReadPrice}
-                          onChange={(e) => handleChange('cacheReadPrice', parseFloat(e.target.value) || 0)}
-                          className="w-full pl-7 pr-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        />
-                      </div>
-                      <span className="text-[10px] text-slate-400">input x 0.1</span>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-            )}
-
-            {/* Long context 价格设置 */}
-            {activeTab === 'longContext' && (
-            <div className="border border-slate-200 rounded-xl p-4 space-y-4">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="text-sm font-semibold text-slate-700">Long context 定价</h4>
-                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${
-                  longContextEnabled
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                    : 'border-slate-200 bg-slate-50 text-slate-500'
-                }`}>
-                  {longContextEnabled ? '已启用' : '未启用'}
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  启用阈值 (tokens，超过此值后启用)
-                </label>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  value={formData.longContextThreshold}
-                  onChange={(e) => handleChange('longContextThreshold', Number(e.target.value) || 0)}
-                  className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                    errors.longContextThreshold ? 'border-rose-300' : 'border-slate-200'
-                  }`}
-                />
-                {errors.longContextThreshold && (
-                  <p className="text-xs text-rose-500 mt-1">{errors.longContextThreshold}</p>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {LONG_CONTEXT_PRICE_FIELDS.map(([field, label]) => (
-                  <div key={field}>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">
-                      {label}
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
-                      <input
-                        type="number"
-                        step="0.001"
-                        min="0"
-                        value={formData[field]}
-                        disabled={!longContextEnabled}
-                        onChange={(e) => handleChange(field, parseFloat(e.target.value) || 0)}
-                        className={`w-full pl-7 pr-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-400 ${
-                          errors[field] ? 'border-rose-300' : 'border-slate-200'
-                        }`}
-                      />
-                    </div>
-                    {errors[field] && (
-                      <p className="text-xs text-rose-500 mt-1">{errors[field]}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-            )}
+              );
+            })}
 
             {/* 设为默认 */}
             {activeTab === 'basic' && (
@@ -575,7 +714,7 @@ const DeleteConfirmDialog = ({ pricing, onConfirm, onCancel, loading }) => (
 
       <p className="text-slate-700 mb-6">
         确定要删除模型定价 <span className="font-semibold">&ldquo;{pricing?.displayName || pricing?.modelName}&rdquo;</span> 吗？
-        删除后将无法恢复。
+        该模型在此提供商下的<span className="font-semibold">全部档位定价</span>将一并删除，删除后将无法恢复。
       </p>
 
       <div className="flex justify-end gap-3">
@@ -599,8 +738,11 @@ const DeleteConfirmDialog = ({ pricing, onConfirm, onCancel, loading }) => (
 // 定价卡片组件
 // ============================================
 
-const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
-  const isDefault = pricing.isDefault;
+const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
+  const isDefault = group.isDefault;
+  // 卡片主体展示标准档价格；标准档缺失（历史脏数据）时退到第一条档位子行，
+  // 否则这张卡会整片空白，用户只能靠改库才能收拾这些行
+  const pricing = group.standard || group.tiers[0] || {};
 
   // 计算价格等级颜色
   const getPriceLevel = (price) => {
@@ -613,7 +755,7 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
     <div className={`
       bg-white rounded-xl border shadow-sm hover:shadow-md transition-all flex flex-col
       ${isDefault
-        ? pricing.provider === 'codex'
+        ? group.provider === 'codex'
           ? 'border-blue-300 ring-2 ring-blue-100'
           : 'border-orange-300 ring-2 ring-orange-100'
         : 'border-slate-200/60'}
@@ -624,11 +766,11 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="font-bold text-slate-900 truncate">
-                {pricing.displayName || pricing.modelName}
+                {group.displayName || group.modelName}
               </h3>
               {isDefault && (
                 <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                  pricing.provider === 'codex'
+                  group.provider === 'codex'
                     ? 'bg-blue-100 text-blue-700 border-blue-200'
                     : 'bg-orange-100 text-orange-700 border-orange-200'
                 }`}>
@@ -637,22 +779,22 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
                 </span>
               )}
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
-                pricing.provider === 'codex'
+                group.provider === 'codex'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-indigo-50 text-indigo-700 border-indigo-200'
               }`}>
-                {pricing.provider === 'codex' ? 'Codex' : 'Claude'}
+                {group.provider === 'codex' ? 'Codex' : 'Claude'}
               </span>
             </div>
             <p className="text-xs text-slate-400 font-mono mt-1 truncate">
-              {pricing.modelName}
+              {group.modelName}
             </p>
           </div>
           <div className="flex items-center gap-1 ml-2">
             {!isDefault && (
               <Tooltip content="设为默认">
                 <button
-                  onClick={() => onSetDefault(pricing.modelName)}
+                  onClick={() => onSetDefault(group.modelName)}
                   className="p-1.5 text-slate-400 hover:bg-amber-50 hover:text-amber-600 rounded-md transition-colors"
                   aria-label="设为默认"
                 >
@@ -662,7 +804,7 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
             )}
             <Tooltip content="编辑">
               <button
-                onClick={() => onEdit(pricing)}
+                onClick={() => onEdit(group)}
                 className="p-1.5 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-md transition-colors"
                 aria-label="编辑"
               >
@@ -672,7 +814,7 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
             {!isDefault && (
               <Tooltip content="删除">
                 <button
-                  onClick={() => onDelete(pricing)}
+                  onClick={() => onDelete(group)}
                   className="p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 rounded-md transition-colors"
                   aria-label="删除"
                 >
@@ -682,8 +824,22 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
             )}
           </div>
         </div>
-        {pricing.description && (
-          <p className="text-xs text-slate-500 mt-2 line-clamp-2">{pricing.description}</p>
+        {group.description && (
+          <p className="text-xs text-slate-500 mt-2 line-clamp-2">{group.description}</p>
+        )}
+        {/* 已配置的档位一眼可见：一个模型可同时挂多档价格，不展开就看不出来 */}
+        {group.tiers.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] text-slate-400">附加档位</span>
+            {group.tiers.map((tier) => (
+              <span
+                key={tier.serviceTier}
+                className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700"
+              >
+                {serviceTierLabel(tier.serviceTier)} ${tier.inputPrice}/${tier.outputPrice}
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
@@ -776,7 +932,7 @@ const PricingCard = ({ pricing, onEdit, onDelete, onSetDefault }) => {
 
       {/* 底部信息 */}
       <div className="px-4 py-2 border-t border-slate-50 text-xs text-slate-400 mt-auto">
-        更新于 {pricing.updatedAt || '-'}
+        更新于 {group.updatedAt || '-'}
       </div>
     </div>
   );
@@ -856,14 +1012,24 @@ const PricingPage = () => {
     }
   };
 
-  // 保存定价
+  // 保存定价。一次保存要落多行：启用的档位按 id 走新建或更新，取消启用的档位删掉
   const handleSave = async (formData) => {
     setFormLoading(true);
     try {
-      if (editingPricing) {
-        await updateModelPricing(editingPricing.modelName, formData);
-      } else {
-        await createModelPricing(formData);
+      const { saves, deletes } = buildTierPayloads(formData);
+      for (const payload of saves) {
+        if (payload.id > 0) {
+          await updateModelPricing(payload.modelName, payload);
+        } else {
+          await createModelPricing(payload);
+        }
+      }
+      // 删除放在保存之后：任一保存失败时被停用的档位仍在，
+      // 不会留下「新价格没存上、旧档位已经删掉」的半截状态。
+      // 删除用改名前的 provider/modelName——被停用的档位行不在 saves 里，没跟着改名
+      const origin = editingPricing || formData;
+      for (const tier of deletes) {
+        await deleteModelPricingTier(origin.provider, origin.modelName, tier);
       }
       setShowForm(false);
       setEditingPricing(null);
@@ -876,13 +1042,14 @@ const PricingPage = () => {
     }
   };
 
-  // 确认删除
+  // 确认删除。卡片删除的是整个模型，连同其全部档位子行一起删——
+  // 残留的子行仍会被 provider::model::tier 命中，表现为「模型已删除但请求还在按档位计费」
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
 
     setDeleteLoading(true);
     try {
-      await deleteModelPricing(deleteTarget.modelName);
+      await deleteModelPricing(deleteTarget.provider, deleteTarget.modelName);
       setDeleteTarget(null);
       await loadData();
     } catch (err) {
@@ -926,19 +1093,24 @@ const PricingPage = () => {
     return <LoadingSpinner text="加载模型定价..." />;
   }
 
+  // 档位不是模型的属性而是定价的维度：同一模型的多档定价聚合成一张卡片
+  const pricingGroups = groupPricingsByModel(pricings);
+
   // 统计数据
   const claudeDefault = pricings.find(p => p.isDefault && p.provider === 'claude');
   const codexDefault = pricings.find(p => p.isDefault && p.provider === 'codex');
-  const avgInputPrice = pricings.length > 0
-    ? (pricings.reduce((sum, p) => sum + p.inputPrice, 0) / pricings.length).toFixed(2)
+  // 均价只按模型的标准档算：把折扣档位一起平均会得到一个没有意义的数
+  const primaryRows = pricingGroups.map((group) => group.standard || group.tiers[0]).filter(Boolean);
+  const avgInputPrice = primaryRows.length > 0
+    ? (primaryRows.reduce((sum, p) => sum + p.inputPrice, 0) / primaryRows.length).toFixed(2)
     : 0;
-  const avgOutputPrice = pricings.length > 0
-    ? (pricings.reduce((sum, p) => sum + p.outputPrice, 0) / pricings.length).toFixed(2)
+  const avgOutputPrice = primaryRows.length > 0
+    ? (primaryRows.reduce((sum, p) => sum + p.outputPrice, 0) / primaryRows.length).toFixed(2)
     : 0;
   const pricingSummaryCards = [
     {
-      title: '定价配置数',
-      value: pricings.length,
+      title: '模型数',
+      value: pricingGroups.length,
       icon: Database,
       statusColor: 'bg-slate-100 text-slate-700'
     },
@@ -1034,7 +1206,7 @@ const PricingPage = () => {
       </div>
 
       {/* 定价卡片网格 */}
-      {pricings.length === 0 ? (
+      {pricingGroups.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm p-12 text-center">
           <div className="flex flex-col items-center gap-3">
             <Calculator size={40} className="text-slate-300" />
@@ -1046,10 +1218,10 @@ const PricingPage = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {pricings.map((pricing) => (
+          {pricingGroups.map((group) => (
             <PricingCard
-              key={pricing.modelName}
-              pricing={pricing}
+              key={group.key}
+              group={group}
               onEdit={handleEdit}
               onDelete={handleDelete}
               onSetDefault={handleSetDefault}

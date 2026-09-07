@@ -5,58 +5,56 @@ import (
 	"time"
 )
 
-// FailoverConfig 故障转移与请求挂起配置
-// 合并自历史的 FailoverConfig(v1) / FailoverConfigV2 / RequestSuspendConfig 三个结构。
-// 设计原则：单一职责（故障转移行为）+ 直观字段名（不再带版本号）。
+// FailoverConfig defines channel failover and request suspension behavior.
 type FailoverConfig struct {
 	// Enabled 渠道间故障转移总开关
 	// - true:  当前渠道内所有端点均重试耗尽时，自动切换到备用渠道
 	// - false: 仅在当前渠道内端点之间转移，不切换渠道
 	// 默认: true
-	Enabled bool `yaml:"enabled"`
+	Enabled bool
 
 	// LoopRetry 所有渠道失败后是否循环重试
 	// - true:  按优先级从头开始重试，直到达到 MaxLoops 轮数
 	// - false: 遍历所有渠道一轮后停止
 	// 默认: false
-	LoopRetry bool `yaml:"loop_retry"`
+	LoopRetry bool
 
 	// MaxLoops 最大循环轮数（仅当 LoopRetry = true 时生效）
 	// - 0:    无限制（不推荐）
 	// - 1-10: 建议范围
 	// 默认: 3
-	MaxLoops int `yaml:"max_loops"`
+	MaxLoops int
 
 	// SkipHealthCheck 跳过定时健康检测
 	// - true:  不进行定时健康检测，端点状态仅通过实际请求更新（减少日志噪音）
 	// - false: 正常进行定时健康检测
 	// 默认: false（仅当 Enabled + LoopRetry + SkipHealthCheck 全 true 时实际跳过）
-	SkipHealthCheck bool `yaml:"skip_health_check"`
+	SkipHealthCheck bool
 
 	// SuspendTimeout 普通挂起等待超时
 	// 当请求进入挂起等待（端点耗尽/等待切换）时的最大等待时间
 	// 默认: 120s
-	SuspendTimeout time.Duration `yaml:"suspend_timeout,omitempty"`
+	SuspendTimeout time.Duration
 
 	// LoopRetrySuspendTimeout 达到最大循环轮数后的手动等待超时
 	// 当达到最大循环轮数时，仅等待用户操作的最大等待时间
 	// 默认: 120s
-	LoopRetrySuspendTimeout time.Duration `yaml:"loop_retry_suspend_timeout,omitempty"`
+	LoopRetrySuspendTimeout time.Duration
 
 	// SuspendOnExhausted 渠道间转移关闭时是否仍挂起请求（原 RequestSuspend.Enabled）
 	// 当 Enabled = false 时影响"端点耗尽后"行为：
 	// - true:  挂起请求等待用户手动激活渠道
 	// - false: 允许自动激活下一个可用渠道
 	// 默认: false
-	SuspendOnExhausted bool `yaml:"suspend_on_exhausted,omitempty"`
+	SuspendOnExhausted bool
 
 	// MaxSuspendedRequests 最大挂起请求数（防止内存压力）
 	// 默认: 100；上限: 10000
-	MaxSuspendedRequests int `yaml:"max_suspended_requests,omitempty"`
+	MaxSuspendedRequests int
 
 	// EOFRetryHint 流式响应 EOF 时是否返回可重试错误格式
 	// 默认: false
-	EOFRetryHint bool `yaml:"eof_retry_hint,omitempty"`
+	EOFRetryHint bool
 }
 
 // SetDefaults 设置默认值

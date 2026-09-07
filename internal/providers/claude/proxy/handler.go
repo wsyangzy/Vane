@@ -1,13 +1,10 @@
 package proxy
 
 import (
-	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/events"
@@ -311,8 +308,9 @@ func (h *Handler) extractReasoningConfig(bodyBytes []byte) string {
 // ServeHTTP implements the http.Handler interface
 // 统一请求分发逻辑 - 整合流式处理、错误恢复和生命周期管理
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// 🔢 [count_tokens拦截] 特殊处理count_tokens端点
-	if r.URL.Path == "/v1/messages/count_tokens" && h.config.TokenCounting.Enabled {
+	// 客户端可能始终发起 count_tokens。无论是否开启上游转发，都必须在这里拦截，
+	// 避免关闭开关后落入普通处理器并把该路径原样发送给服务商。
+	if r.URL.Path == "/v1/messages/count_tokens" {
 		ctx := r.Context()
 		connID, _ := r.Context().Value("conn_id").(string)
 		lifecycleManager := NewRequestLifecycleManagerWithRecoverySignal(h.usageTracker, h.monitoringMiddleware, connID, h.eventBus, h.recoverySignalManager)
@@ -323,14 +321,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			var err error
 			bodyBytes, err = io.ReadAll(r.Body)
 			if err != nil {
-				// 使用 422 状态码，避免 Claude Code 自动重试
-				http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
+				http.Error(w, "请求读取失败: 无法读取请求体", http.StatusBadRequest)
 				return
 			}
 			r.Body.Close()
 		}
 
 		lifecycleManager.StartRequest(r.RemoteAddr, r.Header.Get("User-Agent"), r.Method, r.URL.Path, false)
+		// count_tokens 与主流程共用同一套请求元数据（模型/推理配置/档位），
+		// 否则请求追踪里这些列会全空。
+		h.trackRequestMetadata(lifecycleManager, bodyBytes, r.URL.Path)
 
 		// 使用CountTokensHandler处理
 		countTokensHandler := handlers.NewCountTokensHandler(h.config, h.endpointManager, h.forwarder, h.privacyService)
@@ -357,40 +357,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, err = io.ReadAll(r.Body)
 		if err != nil {
 			lifecycleManager.HandleError(err)
-			// 使用 422 状态码，避免 Claude Code 自动重试
-			http.Error(w, "请求读取失败: 无法读取请求体", http.StatusUnprocessableEntity)
+			http.Error(w, "请求读取失败: 无法读取请求体", http.StatusBadRequest)
 			return
 		}
 		r.Body.Close()
 	}
-
-	// 异步解析请求体中的模型名称（不阻塞主转发流程，带超时保护）
-	go func(body []byte, path string) {
-		// 创建带超时的context
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		// 使用channel接收结果
-		resultChan := make(chan string, 1)
-		go func() {
-			if modelName := h.extractModelFromRequestBody(body, path); modelName != "" {
-				select {
-				case resultChan <- modelName:
-				default:
-				}
-			}
-		}()
-
-		// 等待结果或超时
-		select {
-		case modelName := <-resultChan:
-			if modelName != "" {
-				lifecycleManager.SetModel(modelName)
-			}
-		case <-ctx.Done():
-			slog.Warn("模型提取超时", "requestID", lifecycleManager.GetRequestID())
-		}
-	}(append([]byte(nil), bodyBytes...), r.URL.Path) // 传递副本避免数据竞争
 
 	// 检测是否为SSE流式请求
 	isSSE := h.detectSSERequest(r, bodyBytes)
@@ -400,15 +371,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userAgent := r.Header.Get("User-Agent")
 	lifecycleManager.StartRequest(clientIP, userAgent, r.Method, r.URL.Path, isSSE)
 
-	// 提取并追踪推理配置（thinking 开关模式 + output_config.effort 推理强度）
-	if reasoningJSON := h.extractReasoningConfig(bodyBytes); reasoningJSON != "" {
-		lifecycleManager.SetReasoningConfig(reasoningJSON)
-	}
-
-	// 提取并追踪 service_tier（auto / standard_only）
-	if serviceTier := h.extractServiceTier(bodyBytes); serviceTier != "" {
-		lifecycleManager.SetServiceTier(serviceTier)
-	}
+	h.trackRequestMetadata(lifecycleManager, bodyBytes, r.URL.Path)
 
 	// 统一请求处理
 	if isSSE {
@@ -426,29 +389,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// trackRequestMetadata 把请求体里的模型 / 推理配置 / 档位写入生命周期管理器。
+// count_tokens 与常规转发共用，两条路径的请求追踪列才不会一边有值一边全空。
+// 在请求可能终态前同步写入，避免后台解析晚于归档而丢失元数据。
+func (h *Handler) trackRequestMetadata(lifecycleManager *RequestLifecycleManager, bodyBytes []byte, path string) {
+	if modelName := h.extractModelFromRequestBody(bodyBytes, path); modelName != "" {
+		lifecycleManager.SetModel(modelName)
+	}
+
+	// 提取并追踪推理配置（thinking 开关模式 + output_config.effort 推理强度）
+	if reasoningJSON := h.extractReasoningConfig(bodyBytes); reasoningJSON != "" {
+		lifecycleManager.SetReasoningConfig(reasoningJSON)
+	}
+
+	// 提取并追踪 service_tier（auto / standard_only）
+	if serviceTier := h.extractServiceTier(bodyBytes); serviceTier != "" {
+		lifecycleManager.SetServiceTier(serviceTier)
+	}
+}
+
 // detectSSERequest 统一SSE请求检测逻辑
 func (h *Handler) detectSSERequest(r *http.Request, bodyBytes []byte) bool {
-	// 检查多种SSE请求模式:
-	acceptHeader := r.Header.Get("Accept")
-	cacheControlHeader := r.Header.Get("Cache-Control")
-	streamHeader := r.Header.Get("stream")
-
-	// 1. Accept头包含text/event-stream
-	if strings.Contains(acceptHeader, "text/event-stream") {
-		return true
-	}
-
-	// 2. Cache-Control头包含no-cache (常见于SSE)
-	if strings.Contains(cacheControlHeader, "no-cache") {
-		return true
-	}
-
-	// 3. stream头设置为true
-	if streamHeader == "true" {
-		return true
-	}
-
-	// 4. 请求体 JSON 中显式包含 stream=true
+	// 请求体中的 stream 是 Anthropic API 的明确语义，优先于 Accept/Cache-Control。
+	// CLI 的非流式请求也可能带 Cache-Control: no-cache；先看 header 会把它误判成
+	// 流式请求，从而绕过非流式端点（stream_only）过滤。
 	if len(bodyBytes) > 0 {
 		var requestBody struct {
 			Stream *bool `json:"stream"`
@@ -456,6 +420,16 @@ func (h *Handler) detectSSERequest(r *http.Request, bodyBytes []byte) bool {
 		if err := json.Unmarshal(bodyBytes, &requestBody); err == nil && requestBody.Stream != nil {
 			return *requestBody.Stream
 		}
+	}
+
+	// 请求体没有明确 stream 字段时，再使用传输层 header 作为兼容兜底。
+	acceptHeader := r.Header.Get("Accept")
+	cacheControlHeader := r.Header.Get("Cache-Control")
+	streamHeader := strings.ToLower(strings.TrimSpace(r.Header.Get("stream")))
+	if strings.Contains(strings.ToLower(acceptHeader), "text/event-stream") ||
+		strings.Contains(strings.ToLower(cacheControlHeader), "no-cache") ||
+		streamHeader == "true" {
+		return true
 	}
 
 	return false

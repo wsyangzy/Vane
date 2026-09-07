@@ -88,7 +88,6 @@ do
     # 复制资源文件
     cp README.md "dist/${ARCHIVE_NAME}/"
     cp CLAUDE.md "dist/${ARCHIVE_NAME}/"
-    cp -r config "dist/${ARCHIVE_NAME}/"
     
     # 创建数据目录和说明
     mkdir -p "dist/${ARCHIVE_NAME}/data"
@@ -106,7 +105,7 @@ do
 💡 重要提示：
    • 请确保此目录有读写权限
    • 建议定期备份数据库文件
-   • 数据库路径可在 config/config.yaml 中配置
+   • 数据库路径由应用设置和用户数据目录管理
 EOF
     
     # 创建启动脚本
@@ -114,13 +113,6 @@ EOF
         cat > "dist/${ARCHIVE_NAME}/start.bat" << 'EOF'
 @echo off
 echo 🚀 CC-Forwarder 启动检查...
-
-if not exist "config\config.yaml" (
-    echo ⚠️ 配置文件不存在，请先复制 config\example.yaml 到 config\config.yaml
-    echo 💡 快速配置命令: copy config\example.yaml config\config.yaml
-    pause
-    exit /b 1
-)
 
 if not exist "data" (
     echo 📁 创建数据目录...
@@ -133,19 +125,13 @@ echo 🌐 Web界面: http://localhost:8010 (如已启用)
 echo.
 
 echo 🚀 启动 CC-Forwarder...
-claude-request-forwarder.exe -config config\config.yaml
+claude-request-forwarder.exe
 pause
 EOF
     else
         cat > "dist/${ARCHIVE_NAME}/start.sh" << 'EOF'
 #!/bin/bash
 echo "🚀 CC-Forwarder 启动检查..."
-
-if [ ! -f "config/config.yaml" ]; then
-    echo "⚠️ 配置文件不存在，请先复制 config/example.yaml 到 config/config.yaml"
-    echo "💡 快速配置命令: cp config/example.yaml config/config.yaml"
-    exit 1
-fi
 
 if [ ! -d "data" ]; then
     echo "📁 创建数据目录..."
@@ -163,7 +149,7 @@ echo "🌐 Web界面: http://localhost:8010 (如已启用)"
 echo ""
 
 echo "🚀 启动 CC-Forwarder..."
-./claude-request-forwarder -config config/config.yaml
+./claude-request-forwarder
 EOF
         chmod +x "dist/${ARCHIVE_NAME}/start.sh"
         chmod +x "dist/${ARCHIVE_NAME}/${BINARY_NAME}"
@@ -205,7 +191,7 @@ fi
 echo ""
 echo -e "${YELLOW}💡 提示:${NC}"
 echo "  1. 测试各平台二进制文件的版本信息"
-echo "  2. 确认配置文件和启动脚本正常"
+echo "  2. 确认应用内设置和启动脚本正常"
 echo "  3. 如果测试正常，可以推送标签触发自动发布："
 echo "     git tag $VERSION"
 echo "     git push origin $VERSION"

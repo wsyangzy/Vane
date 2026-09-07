@@ -171,21 +171,27 @@ var errorClassRules = []errorClassRule{
 		logLabel: "🔐 [认证/权限错误分类]",
 		logLevel: "error",
 	},
-	// 9. 流处理错误 - 复杂子逻辑：含"streaming not supported"特殊处理和流内网络错误检测
+	// 9. 代理无法提供流式传输时的本地能力错误。
+	// 该错误来自 ResponseWriter/代理链，不是对服务商响应正文的解析。
 	{
 		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
-			return strings.HasPrefix(errMsg, "stream_status:") ||
-				strings.Contains(errMsg, "streaming not supported") ||
-				strings.Contains(errMsg, "stream_error") ||
+			return strings.Contains(errMsg, "streaming not supported")
+		},
+		classify: func(_ string, _ error, _ *ErrorRecoveryManager, _ int) (ErrorType, time.Duration) {
+			return ErrorTypeUnknown, 0
+		},
+		logLabel: "⚠️ [流式能力错误分类]",
+		logLevel: "warn",
+	},
+	// 10. 流处理错误 - 只识别代理内部的结构化流处理错误。
+	{
+		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
+			return strings.Contains(errMsg, "stream_error") ||
 				strings.Contains(errMsg, "sse") ||
 				strings.Contains(errMsg, "event-stream") ||
 				strings.Contains(errMsg, "stream parsing")
 		},
 		classify: func(errMsg string, _ error, erm *ErrorRecoveryManager, attempt int) (ErrorType, time.Duration) {
-			// 特殊处理：环境不支持流式
-			if strings.Contains(errMsg, "streaming not supported") {
-				return ErrorTypeUnknown, 0
-			}
 			// 优先识别流错误中的网络子错误
 			streamNetworkKeywords := []string{
 				"wsarecv", "wsasend", "connection reset", "connection aborted",
@@ -203,7 +209,7 @@ var errorClassRules = []errorClassRule{
 		logLabel: "🌊 [流处理错误分类]",
 		logLevel: "warn",
 	},
-	// 10. HTTP错误（非5xx，非429）
+	// 11. HTTP错误（非5xx，非429）
 	{
 		check: func(errMsg string, _ error, _ *ErrorRecoveryManager) bool {
 			return (strings.Contains(errMsg, "http ") || strings.Contains(errMsg, "http:") ||
@@ -737,65 +743,18 @@ func intPtr(i int) *int {
 	return &i
 }
 
-// GetStatusCodeFromError 从错误信息中提取 HTTP 状态码
-// 用于 ShouldSwitchEndpoint 判断
+// GetStatusCodeFromError 只读取错误类型携带的真实 HTTP 状态。
+// 普通错误文本可能包含端口、请求 ID 或服务商正文数字，不能据此伪造状态码。
 func GetStatusCodeFromError(err error) int {
 	if err == nil {
 		return 0
 	}
-	errStr := err.Error()
-
-	// 匹配 "endpoint returned error: 400" 格式
-	if idx := strings.Index(errStr, "endpoint returned error:"); idx != -1 {
-		substr := errStr[idx+24:] // 跳过 "endpoint returned error:"
-		substr = strings.TrimSpace(substr)
-		// 提取数字
-		var code int
-		for i, c := range substr {
-			if c >= '0' && c <= '9' {
-				code = code*10 + int(c-'0')
-			} else if i > 0 {
-				break
-			}
-		}
+	if statusErr, ok := err.(interface{ HTTPStatus() int }); ok {
+		code := statusErr.HTTPStatus()
 		if code >= 100 && code < 600 {
 			return code
 		}
 	}
-
-	// 匹配 "HTTP 400" 或 "HTTP 400:" 格式
-	if idx := strings.Index(errStr, "HTTP "); idx != -1 {
-		substr := errStr[idx+5:] // 跳过 "HTTP "
-		var code int
-		for i, c := range substr {
-			if c >= '0' && c <= '9' {
-				code = code*10 + int(c-'0')
-			} else if i > 0 {
-				break
-			}
-		}
-		if code >= 100 && code < 600 {
-			return code
-		}
-	}
-
-	// 匹配 "status: 400" 格式
-	if idx := strings.Index(errStr, "status:"); idx != -1 {
-		substr := errStr[idx+7:] // 跳过 "status:"
-		substr = strings.TrimSpace(substr)
-		var code int
-		for _, c := range substr {
-			if c >= '0' && c <= '9' {
-				code = code*10 + int(c-'0')
-			} else {
-				break
-			}
-		}
-		if code >= 100 && code < 600 {
-			return code
-		}
-	}
-
 	return 0
 }
 
@@ -807,25 +766,8 @@ func GetStatusCodeFromError(err error) int {
 func (erm *ErrorRecoveryManager) ShouldSwitchEndpoint(errorCtx *ErrorContext) bool {
 	switch errorCtx.ErrorType {
 	case ErrorTypeHTTP:
-		// 400/403 等非 5xx 错误允许切换端点
-		// 原因：不同中转商对同一请求可能有不同的处理逻辑
-		statusCode := GetStatusCodeFromError(errorCtx.OriginalError)
-		switch statusCode {
-		case 400:
-			// 400 Bad Request: 可能是特定中转商不支持某些参数
-			slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] HTTP 400 允许切换端点（不同中转商表现可能不同）", errorCtx.RequestID))
-			return true
-		case 403:
-			// 403 Forbidden: 可能是特定端点的权限问题
-			slog.Info(fmt.Sprintf("🔄 [端点切换判断] [%s] HTTP 403 允许切换端点", errorCtx.RequestID))
-			return true
-		case 404, 410:
-			// 404/410: 资源不存在，切换端点也没用
-			return false
-		default:
-			// 其他 4xx 错误，默认不切换
-			return false
-		}
+		// HTTP 错误始终尝试下一个参与转移的端点；响应正文不参与路由决策。
+		return true
 
 	case ErrorTypeAuth:
 		// 认证错误允许切换端点（不同端点有不同 token）

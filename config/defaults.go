@@ -6,6 +6,24 @@ import (
 	"time"
 )
 
+// NewDefaultConfig returns the runtime configuration baseline.
+// Runtime settings and provider records are loaded from SQLite after startup;
+// no filesystem configuration is required.
+func NewDefaultConfig() *Config {
+	c := &Config{
+		Logging: LoggingConfig{
+			FileEnabled:     true,
+			CompressRotated: true,
+		},
+		UsageTracking: UsageTrackingConfig{Enabled: true},
+	}
+	c.setDefaults()
+	c.Group.AutoSwitchBetweenGroups = true
+	c.Failover.Enabled = true
+	c.Failover.SetDefaults()
+	return c
+}
+
 func (c *Config) setServerDefaults() {
 	if c.Server.Host == "" {
 		c.Server.Host = "localhost"
@@ -121,12 +139,6 @@ func (c *Config) setGlobalDefaults() {
 func (c *Config) setGroupDefaults() {
 	if c.Group.Cooldown == 0 {
 		c.Group.Cooldown = 600 * time.Second
-	}
-}
-
-func (c *Config) setStorageDefaults() {
-	if c.EndpointsStorage.Type == "" {
-		c.EndpointsStorage.Type = "yaml"
 	}
 }
 

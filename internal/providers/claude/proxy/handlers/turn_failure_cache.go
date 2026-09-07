@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 )
 
 const maxTurnFingerprintTextBytes = 8192
@@ -155,45 +153,4 @@ func turnStringValue(value any) string {
 func hashTurnCacheKey(prefix, value string) string {
 	sum := sha256.Sum256([]byte(prefix + "\x00" + value))
 	return prefix + ":" + hex.EncodeToString(sum[:12])
-}
-
-// isCredentialGroupFailure 判断失败是否属于「整个凭证分组」级别。
-// 402 无条件成立：同一凭证分组共享账户余额，一个端点余额不足则同组其余端点必然同样不足。
-// 403 / 429 必须命中余额/额度/账单耗尽文本才成立：裸 429 是端点级限流或中转过载，
-// 与分组余额无关，若据此判死整组会中断渠道内逐端点转移（同组其余端点被批量塞进
-// triedEndpoints，且整组进入 turn 级黑名单）。关键词表与 Codex 侧保持一致。
-func isCredentialGroupFailure(statusCode int, summary string) bool {
-	if statusCode == http.StatusPaymentRequired {
-		return true
-	}
-	if statusCode != http.StatusForbidden && statusCode != http.StatusTooManyRequests {
-		return false
-	}
-	text := strings.ToLower(summary)
-	return strings.Contains(text, "insufficient_quota") ||
-		strings.Contains(text, "insufficient_user_quota") ||
-		strings.Contains(text, "insufficient account balance") ||
-		strings.Contains(text, "insufficient balance") ||
-		strings.Contains(text, "insufficient_balance") ||
-		strings.Contains(text, "available quota") ||
-		strings.Contains(text, "quota exhausted") ||
-		strings.Contains(text, "exceeded your current quota") ||
-		strings.Contains(text, "billing hard limit") ||
-		strings.Contains(text, "billing exhausted") ||
-		strings.Contains(text, "billing_exhausted") ||
-		strings.Contains(text, "credits exhausted") ||
-		strings.Contains(text, "balance exhausted")
-}
-
-func rememberCredentialGroupFailureForTurn(manager *endpoint.Manager, turnKey string, ep *endpoint.Endpoint, statusCode int, summary string, triedEndpoints map[string]struct{}) bool {
-	if manager == nil || ep == nil || !isCredentialGroupFailure(statusCode, summary) {
-		return false
-	}
-	for _, key := range manager.EndpointKeysInCredentialGroup(ep) {
-		if key != "" {
-			triedEndpoints[key] = struct{}{}
-		}
-	}
-	manager.RememberFailedCredentialGroupForTurn(turnKey, ep)
-	return true
 }

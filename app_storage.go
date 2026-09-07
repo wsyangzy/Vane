@@ -41,7 +41,7 @@ func (a *App) setupUsageTracker() {
 
 	a.logger.Info("📊 初始化使用追踪器", "db_path", dbPath)
 
-	// 重构：定价配置完全从 SQLite 加载，不再依赖 config.yaml
+	// 定价配置完全从 SQLite 加载。
 	// 初始化时使用空定价，后续由 syncPricingToTracker() 从数据库加载
 	archiveEnvironment := "dev"
 	if strings.EqualFold(BuildMode, "release") {

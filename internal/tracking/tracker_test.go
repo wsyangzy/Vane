@@ -208,14 +208,11 @@ func TestActiveRequestToDetailUsesCodexServiceTier(t *testing.T) {
 	)
 	tracker := &UsageTracker{
 		pricing: map[string]ModelPricing{
-			"_codex_default": {Input: 1},
+			defaultModelPricingKey("codex"):                                  {Input: 1},
+			ModelPricingKey("codex", "unknown-codex-model", ServiceTierFast): {Input: 3},
 		},
 		endpointMu: map[string]EndpointMultiplier{
-			EndpointMultiplierGroupKey(channel, group, endpoint): {
-				ServiceTierMultipliers: map[string]ServiceTierMultiplier{
-					ServiceTierFast: {CostMultiplier: 2, InputCostMultiplier: 3},
-				},
-			},
+			EndpointMultiplierGroupKey("codex", channel, group, endpoint): {},
 		},
 	}
 	req := &ActiveRequest{
@@ -232,8 +229,8 @@ func TestActiveRequestToDetailUsesCodexServiceTier(t *testing.T) {
 	}
 
 	detail := tracker.ActiveRequestToDetail(req)
-	if detail.InputCostUSD != 6 {
-		t.Fatalf("expected Fast mode input cost 6, got %f", detail.InputCostUSD)
+	if detail.InputCostUSD != 3 {
+		t.Fatalf("expected Fast mode input cost 3 (1M * $3/1M), got %f", detail.InputCostUSD)
 	}
 	if detail.ReasoningEffort != req.ReasoningEffort || detail.ServiceTier != req.ServiceTier {
 		t.Fatalf("request metadata missing from hot-pool detail: %#v", detail)

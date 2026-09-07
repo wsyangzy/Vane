@@ -104,3 +104,18 @@ test('reasoning column renders raw values without bilingual labels', () => {
   assert.doesNotMatch(source, /formatReasoningFieldValue/);
   assert.match(source, /label: thinkingType,/);
 });
+
+test('billing detail reads the persisted snapshot and only reverse-derives for legacy rows', () => {
+  // 有计费快照就正向渲染（落库单价 × 合并倍率）；除法反推会把 long context
+  // 倍率之类未单独落库的层默默吸收进「基础单价」，只能留给无快照的旧记录
+  assert.match(detailSource, /const hasSnapshot = Boolean\(snapshot\?\.context_mode\)/);
+  assert.match(detailSource, /return hasSnapshot \? snapPrice\(snapshot\[snapshotField\]\) : legacyPrice\(\)/);
+  assert.match(detailSource, /\? tokens \* price \/ 1_000_000 \* safeMultiplier\(snapshot\[snapshotField\]\)/);
+  assert.match(detailSource, /: removeTotalMultiplier\(storedCost\)/);
+  // 反推只能出现在 legacy 分支里，不得再有直接调用
+  assert.doesNotMatch(detailSource, /cost: removeTotalMultiplier\(/);
+  assert.doesNotMatch(detailSource, /const \w+BasePrice = calcBasePrice\(/);
+  // 快照字段沿用后端命名，旧的 selector_/effective_ 结构已废弃
+  assert.match(detailSource, /snapshot\.rule_mode === 'fixed'/);
+  assert.doesNotMatch(detailSource, /billingRuleSnapshot\.(mode|selector_|effective_)/);
+});

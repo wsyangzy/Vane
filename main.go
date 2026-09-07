@@ -24,7 +24,6 @@ import (
 
 // 命令行参数
 var (
-	configPath  = flag.String("config", "config/config.yaml", "配置文件路径")
 	showVersion = flag.Bool("version", false, "显示版本信息")
 )
 
@@ -57,7 +56,6 @@ func main() {
 
 	// 创建应用实例
 	appInstance := NewApp()
-	appInstance.configPath = *configPath
 
 	// 单实例锁标识：dev 和 release 使用不同的 UniqueID，允许两个版本同时运行
 	singleInstanceID := "ai-relay-forwarder-desktop"

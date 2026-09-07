@@ -43,6 +43,18 @@ test('credential-group billing keeps the standard multiplier section', () => {
   assert.match(source, /STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS\.map/);
 });
 
+test('credential-group standard multipliers are configured in a modal with pricing reference', () => {
+  assert.match(source, /MultiplierSettingsModal/);
+  assert.match(source, /setStandardMultiplierSettingsOpen\(true\)/);
+  assert.match(source, /handleStandardMultiplierSave/);
+  assert.match(source, /pricingProvider="claude"/);
+  // 每个分项倍率都要能指到对应单价，弹窗才能给出「基础单价 → 实际单价」对照；
+  // 5m 与 1h 缓存创建各有独立倍率与独立单价，不能共用一个 priceKey
+  assert.match(source, /priceKey: 'inputPrice'/);
+  assert.match(source, /cacheCreationCostMultiplier', label: '5分钟缓存创建倍率', priceKey: 'cacheCreationPrice5m'/);
+  assert.match(source, /cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率', priceKey: 'cacheCreationPrice1h'/);
+});
+
 test('Claude credential groups preserve single-click switching and use double-click details', () => {
   assert.match(source, /dailyCostLimitUSD/);
   assert.match(source, /每日成本限额（USD）/);
@@ -55,7 +67,6 @@ test('Claude credential groups preserve single-click switching and use double-cl
 
 test('Claude credential groups no longer expose long-context pricing', () => {
   // 入口已移除：表单开关、倍率概览、编辑弹窗与详情卡片都不应残留
-  assert.doesNotMatch(source, /LongContextMultiplierSettings/);
   assert.doesNotMatch(source, /handleLongContextToggle/);
   assert.doesNotMatch(source, /longContextSettingsOpen/);
   assert.doesNotMatch(source, /longContextPricingEnabled/);

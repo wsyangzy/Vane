@@ -218,11 +218,6 @@ func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testi
 	group.LongContextCacheCreationCostMultiplier = 1.3
 	group.LongContextCacheReadCostMultiplier = 1.4
 	group.DisableLongContextPricing = true
-	group.DisableServiceTierPricing = false
-	group.ServiceTierMultipliers = []codexstore.CodexServiceTierMultiplierRecord{{
-		ServiceTier: "fast", CostMultiplier: 1.5, InputCostMultiplier: 1.1,
-		OutputCostMultiplier: 1.2, CacheCreationCostMultiplier: 1.3, CacheReadCostMultiplier: 1.4,
-	}}
 	group.BillingRules = []codexstore.CodexBillingRuleRecord{{
 		Mode: "fixed", InputPrice: 2, OutputPrice: 4, CacheCreationPrice: 1, CacheReadPrice: 0.5,
 	}}
@@ -236,8 +231,7 @@ func TestEnsureCodexChannelsSchemaAddsCredentialGroupBillingMultipliers(t *testi
 	if updated.CacheCreationCostMultiplier != 1.2 || updated.LongContextCostMultiplier != 1.5 ||
 		updated.LongContextInputCostMultiplier != 1.1 || updated.LongContextOutputCostMultiplier != 1.2 ||
 		updated.LongContextCacheCreationCostMultiplier != 1.3 || updated.LongContextCacheReadCostMultiplier != 1.4 ||
-		!updated.DisableLongContextPricing || updated.DisableServiceTierPricing ||
-		len(updated.ServiceTierMultipliers) != 1 || updated.ServiceTierMultipliers[0].ServiceTier != "fast" ||
+		!updated.DisableLongContextPricing ||
 		len(updated.BillingRules) != 1 || updated.BillingRules[0].InputPrice != 2 {
 		t.Fatalf("billing fields did not survive round trip: %+v", updated)
 	}

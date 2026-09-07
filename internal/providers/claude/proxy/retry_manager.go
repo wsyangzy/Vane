@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"math"
-	"net/http"
 	"time"
 
 	"ai-relay-forwarder/config"
@@ -213,21 +212,5 @@ func (rm *RetryManager) ShouldRetryWithDecision(errorCtx *handlers.ErrorContext,
 			FinalStatus:       "",
 			Reason:            "失败后切换端点",
 		}
-	}
-}
-
-// GetDefaultStatusCodeForFinalStatus 根据最终状态获取默认HTTP状态码
-func GetDefaultStatusCodeForFinalStatus(finalStatus string) int {
-	switch finalStatus {
-	case "cancelled":
-		return 499 // nginx风格的客户端取消码
-	case "auth_error":
-		return http.StatusUnauthorized
-	case "rate_limited":
-		return http.StatusTooManyRequests
-	case "error":
-		return http.StatusBadRequest
-	default:
-		return http.StatusBadGateway
 	}
 }

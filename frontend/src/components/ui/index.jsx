@@ -511,13 +511,15 @@ export const CustomSelect = ({
     md: 'text-sm'
   };
 
+  // 下拉浮层挂在 document.body 上，层级必须高于弹窗层（弹窗统一 z-[10000]），
+  // 否则弹窗内的 CustomSelect 展开后会被弹窗面板整个盖住，表现为"点了没反应"。
   const dropdown = isRendered && createPortal(
     <div
       ref={dropdownRef}
       data-origin={dropdownPosition.isUpward ? 'bottom-left' : 'top-left'}
       onMouseDown={(event) => event.stopPropagation()}
       className={`
-        t-dropdown ${dropdownState} fixed z-[9999] overflow-hidden rounded-lg
+        t-dropdown ${dropdownState} fixed z-[10010] overflow-hidden rounded-lg
         border border-slate-200 bg-white shadow-lg ring-1 ring-black/5
         ${dropdownSizeClasses[size]}
       `}

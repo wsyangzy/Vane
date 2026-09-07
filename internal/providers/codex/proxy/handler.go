@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -39,8 +38,6 @@ type chainNode struct {
 }
 
 const maxPreOutputStreamBufferBytes = 256 * 1024
-const failedCredentialGroupCacheIdle = 30 * time.Minute
-const maxTurnFingerprintTextBytes = 8192
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
@@ -61,11 +58,6 @@ type Handler struct {
 	// suspensionMgr 请求挂起队列（loop_retry 全部耗尽后等待运维干预）
 	// 为 nil 时不启用挂起，直接返回失败
 	suspensionMgr *SuspensionManager
-
-	turnFailureCacheMu       sync.Mutex
-	turnFailureCacheKey      string
-	turnFailureCacheTouched  time.Time
-	turnFailedCredentialKeys map[credentialGroupRef]struct{}
 }
 
 func (h *Handler) UpdateConfig(retryCfg config.RetryConfig, failoverCfg config.FailoverConfig) {
@@ -203,233 +195,11 @@ func appendUniqueInt64(ids []int64, values ...int64) []int64 {
 	return ids
 }
 
-func isCredentialGroupFailure(statusCode int, summary string) bool {
-	if statusCode == http.StatusPaymentRequired {
-		return true
-	}
-	if statusCode != http.StatusForbidden && statusCode != http.StatusTooManyRequests {
-		return false
-	}
-	text := strings.ToLower(summary)
-	return strings.Contains(text, "insufficient_quota") ||
-		strings.Contains(text, "insufficient_user_quota") ||
-		strings.Contains(text, "insufficient account balance") ||
-		strings.Contains(text, "insufficient balance") ||
-		strings.Contains(text, "insufficient_balance") ||
-		strings.Contains(text, "quota exhausted") ||
-		strings.Contains(text, "exceeded your current quota") ||
-		strings.Contains(text, "billing hard limit") ||
-		strings.Contains(text, "billing exhausted") ||
-		strings.Contains(text, "billing_exhausted") ||
-		strings.Contains(text, "credits exhausted") ||
-		strings.Contains(text, "balance exhausted")
-}
-
 func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef {
 	if endpoint == nil {
 		return credentialGroupRef{}
 	}
 	return credentialGroupRef{ID: endpoint.CredentialGroupID, Name: endpoint.CredentialGroupName}
-}
-
-func (h *Handler) failedCredentialGroupsForTurn(turnKey string) []credentialGroupRef {
-	if h == nil {
-		return nil
-	}
-	now := time.Now()
-
-	h.turnFailureCacheMu.Lock()
-	defer h.turnFailureCacheMu.Unlock()
-
-	if !h.prepareTurnFailureCacheLocked(turnKey, now) || len(h.turnFailedCredentialKeys) == 0 {
-		return nil
-	}
-	groups := make([]credentialGroupRef, 0, len(h.turnFailedCredentialKeys))
-	for group := range h.turnFailedCredentialKeys {
-		groups = append(groups, group)
-	}
-	return groups
-}
-
-func (h *Handler) rememberFailedCredentialGroupForTurn(turnKey string, group credentialGroupRef) {
-	if h == nil || !group.valid() {
-		return
-	}
-	now := time.Now()
-
-	h.turnFailureCacheMu.Lock()
-	defer h.turnFailureCacheMu.Unlock()
-
-	if !h.prepareTurnFailureCacheLocked(turnKey, now) {
-		return
-	}
-	h.turnFailedCredentialKeys[group] = struct{}{}
-}
-
-func (h *Handler) prepareTurnFailureCacheLocked(turnKey string, now time.Time) bool {
-	if h.turnFailedCredentialKeys == nil {
-		h.turnFailedCredentialKeys = make(map[credentialGroupRef]struct{})
-	}
-	if turnKey != "" {
-		if h.turnFailureCacheKey != turnKey {
-			h.turnFailureCacheKey = turnKey
-			h.turnFailedCredentialKeys = make(map[credentialGroupRef]struct{})
-		}
-		h.turnFailureCacheTouched = now
-		return true
-	}
-	if h.turnFailureCacheKey == "" {
-		return false
-	}
-	if !h.turnFailureCacheTouched.IsZero() && now.Sub(h.turnFailureCacheTouched) > failedCredentialGroupCacheIdle {
-		h.turnFailureCacheKey = ""
-		h.turnFailedCredentialKeys = make(map[credentialGroupRef]struct{})
-		return false
-	}
-	h.turnFailureCacheTouched = now
-	return true
-}
-
-func requestTurnFailureCacheKey(r *http.Request, body []byte) string {
-	if r != nil {
-		for _, header := range []string{
-			"X-Codex-Turn-ID",
-			"X-Codex-Prompt-ID",
-			"X-Codex-User-Message-ID",
-			"X-OpenAI-Turn-ID",
-			"OpenAI-Turn-ID",
-		} {
-			if value := strings.TrimSpace(r.Header.Get(header)); value != "" {
-				return hashTurnCacheKey(strings.ToLower(header), value)
-			}
-		}
-	}
-
-	var payload any
-	if len(body) == 0 || json.Unmarshal(body, &payload) != nil {
-		return ""
-	}
-	obj, ok := payload.(map[string]any)
-	if !ok {
-		return ""
-	}
-	if value := explicitTurnIDFromPayload(obj); value != "" {
-		return hashTurnCacheKey("explicit", value)
-	}
-	if value := lastUserInputText(obj); value != "" {
-		return hashTurnCacheKey("user", value)
-	}
-	return ""
-}
-
-func explicitTurnIDFromPayload(obj map[string]any) string {
-	for _, key := range []string{"turn_id", "turnId", "prompt_id", "promptId", "user_message_id", "userMessageId"} {
-		if value := stringValue(obj[key]); value != "" {
-			return key + ":" + value
-		}
-	}
-	if metadata, ok := obj["metadata"].(map[string]any); ok {
-		for _, key := range []string{"turn_id", "turnId", "prompt_id", "promptId", "user_message_id", "userMessageId"} {
-			if value := stringValue(metadata[key]); value != "" {
-				return "metadata." + key + ":" + value
-			}
-		}
-	}
-	return ""
-}
-
-func lastUserInputText(obj map[string]any) string {
-	for _, key := range []string{"input", "messages"} {
-		if text := lastUserTextFromValue(obj[key]); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func lastUserTextFromValue(value any) string {
-	switch typed := value.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	case []any:
-		for i := len(typed) - 1; i >= 0; i-- {
-			item, ok := typed[i].(map[string]any)
-			if !ok {
-				continue
-			}
-			role := strings.ToLower(stringValue(item["role"]))
-			if role != "user" {
-				continue
-			}
-			if text := collectTurnContentText(item["content"]); text != "" {
-				return text
-			}
-		}
-	}
-	return ""
-}
-
-func collectTurnContentText(value any) string {
-	var builder strings.Builder
-	appendTurnContentText(&builder, value)
-	return strings.TrimSpace(builder.String())
-}
-
-func appendTurnContentText(builder *strings.Builder, value any) {
-	if builder.Len() >= maxTurnFingerprintTextBytes {
-		return
-	}
-	switch typed := value.(type) {
-	case string:
-		appendTurnText(builder, typed)
-	case []any:
-		for _, item := range typed {
-			appendTurnContentText(builder, item)
-			if builder.Len() >= maxTurnFingerprintTextBytes {
-				return
-			}
-		}
-	case map[string]any:
-		if text := stringValue(typed["text"]); text != "" {
-			appendTurnText(builder, text)
-			return
-		}
-		if text := stringValue(typed["input_text"]); text != "" {
-			appendTurnText(builder, text)
-			return
-		}
-		if content, ok := typed["content"]; ok {
-			appendTurnContentText(builder, content)
-		}
-	}
-}
-
-func appendTurnText(builder *strings.Builder, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" || builder.Len() >= maxTurnFingerprintTextBytes {
-		return
-	}
-	if builder.Len() > 0 {
-		builder.WriteByte('\n')
-	}
-	remaining := maxTurnFingerprintTextBytes - builder.Len()
-	if len(text) > remaining {
-		text = text[:remaining]
-	}
-	builder.WriteString(text)
-}
-
-func stringValue(value any) string {
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-	return strings.TrimSpace(text)
-}
-
-func hashTurnCacheKey(prefix, value string) string {
-	sum := sha256.Sum256([]byte(prefix + "\x00" + value))
-	return prefix + ":" + hex.EncodeToString(sum[:12])
 }
 
 // ServeHTTP 实现 http.Handler
@@ -449,7 +219,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
-	turnFailureKey := requestTurnFailureCacheKey(r, body)
 	var privacySummaryJSON string
 	if h.privacyService != nil {
 		result, privacyErr := h.privacyService.Apply(r.Context(), privacy.Request{
@@ -542,6 +311,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var lastErr error
 	var lastStatus int
 	var lastSummary string
+	var lastUpstreamStatus int
+	var lastUpstreamHeaders http.Header
+	var lastUpstreamBody []byte
 	suspendedOnce := false
 	activeChannelID := int64(0)
 
@@ -601,9 +373,12 @@ outerLoop:
 				result := h.tryEndpointCycle(
 					w, r, body, requestID, startTime,
 					isStreaming, channelName, requestModel,
-					&failedIDs, &endpointChain, &attemptCount, turnFailureKey,
+					&failedIDs, &endpointChain, &attemptCount,
 				)
 				if result.routeChanged {
+					lastUpstreamStatus = 0
+					lastUpstreamHeaders = nil
+					lastUpstreamBody = nil
 					failedIDs = failedIDs[:0]
 					continue outerLoop
 				}
@@ -613,6 +388,9 @@ outerLoop:
 				lastErr = result.lastErr
 				lastStatus = result.lastStatus
 				lastSummary = result.lastSummary
+				lastUpstreamStatus = result.lastUpstreamStatus
+				lastUpstreamHeaders = result.lastUpstreamHeaders
+				lastUpstreamBody = result.lastUpstreamBody
 				if !h.failoverConfig().Enabled {
 					break
 				}
@@ -702,6 +480,14 @@ outerLoop:
 	} else if lastStatus >= 400 {
 		statusCode = lastStatus
 	}
+	if lastUpstreamStatus > 0 {
+		statusCode = lastUpstreamStatus
+		if message := strings.TrimSpace(string(lastUpstreamBody)); message != "" {
+			detail = message
+		} else if strings.TrimSpace(lastSummary) != "" {
+			detail = lastSummary
+		}
+	}
 	h.logger.Error("[Codex 请求失败]",
 		"provider", "codex",
 		"request_id", requestID,
@@ -713,16 +499,28 @@ outerLoop:
 		"channel", channelName,
 	)
 	h.recordFailure(requestID, startTime, failureReason, detail, statusCode, nil, requestModel)
+	if lastUpstreamStatus > 0 {
+		response := &http.Response{
+			StatusCode: lastUpstreamStatus,
+			Header:     lastUpstreamHeaders,
+			Body:       io.NopCloser(bytes.NewReader(lastUpstreamBody)),
+		}
+		h.passthroughWithBody(w, response, lastUpstreamBody)
+		return
+	}
 	h.writeError(w, statusCode, detail)
 }
 
 // cycleResult 端点循环结果
 type cycleResult struct {
-	completed    bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
-	routeChanged bool   // true: 共享活跃渠道已变化，外层应按新渠道重建请求路由
-	lastErr      error  // 最后一次端点失败的错误
-	lastStatus   int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
-	lastSummary  string // 最后一次上游错误响应摘要
+	completed           bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
+	routeChanged        bool   // true: 共享活跃渠道已变化，外层应按新渠道重建请求路由
+	lastErr             error  // 最后一次端点失败的错误
+	lastStatus          int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
+	lastSummary         string // 最后一次上游错误响应摘要
+	lastUpstreamStatus  int
+	lastUpstreamHeaders http.Header
+	lastUpstreamBody    []byte
 }
 
 // tryEndpointCycle 单轮端点列表遍历（含每个端点的同端点重试）
@@ -739,13 +537,12 @@ func (h *Handler) tryEndpointCycle(
 	failedIDs *[]int64,
 	endpointChain *[]chainNode,
 	attemptCount *int,
-	turnFailureKey string,
 ) cycleResult {
 	if h.activeChannelChanged(channelName) {
 		return cycleResult{routeChanged: true}
 	}
 	// 选择起始端点
-	skippedGroups := h.failedCredentialGroupsForTurn(turnFailureKey)
+	var skippedGroups []credentialGroupRef
 	var quotaSkippedGroups []credentialGroupRef
 	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpoint(
 		r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, true,
@@ -886,7 +683,8 @@ func (h *Handler) tryEndpointCycle(
 			status = resp.StatusCode
 			errBody, errSummary = h.readErrorBody(resp)
 		} else if streamErr, ok := fwdErr.(*UpstreamStreamError); ok {
-			status = streamErr.StatusCode
+			// status 留 0：响应已被流式路径消费掉，这里拿不到上游的状态码。
+			// 链路里显示成空白，而不是编一个从未返回过的 429/401。
 			errSummary = streamErr.Error()
 		}
 
@@ -957,34 +755,27 @@ func (h *Handler) tryEndpointCycle(
 		}
 		annotateLastChainError(endpointChain, status, chainErrorText(fwdErr, errSummary, reason))
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
-		if isCredentialGroupFailure(status, errSummary) {
-			h.rememberFailedCredentialGroupForTurn(turnFailureKey, credentialGroupRefFromEndpoint(endpoint))
-			groupEndpointIDs := h.manager.endpointIDsInCredentialGroup(endpoint.CredentialGroupID, endpoint.CredentialGroupName)
-			*failedIDs = appendUniqueInt64(*failedIDs, groupEndpointIDs...)
-			h.logger.Warn("[Codex 凭证分组故障转移]",
-				"provider", "codex",
-				"request_id", requestID,
-				"credential_group", endpoint.CredentialGroupName,
-				"skipped_endpoint_count", len(groupEndpointIDs),
-				"status_code", status,
-			)
-		}
 		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 
 		// 选下个端点
-		skippedGroups = h.failedCredentialGroupsForTurn(turnFailureKey)
 		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpoint(
 			r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, false,
 		)
 		quotaSkippedGroups = updatedQuotaSkippedGroups
 		if nextErr != nil {
 			// 当前轮端点列表耗尽，返回让外层 loop 决定是否再来一轮
-			return cycleResult{
+			result := cycleResult{
 				completed:   false,
 				lastErr:     endpointCycleLastError(nextErr, fwdErr, status),
 				lastStatus:  quotaAwareStatus(nextErr, status),
 				lastSummary: errSummary,
 			}
+			if status > 0 && !errors.Is(nextErr, errCredentialGroupDailyCostLimitExceeded) {
+				result.lastUpstreamStatus = status
+				result.lastUpstreamHeaders = resp.Header.Clone()
+				result.lastUpstreamBody = append([]byte(nil), errBody...)
+			}
+			return result
 		}
 
 		h.logger.Warn("[Codex 故障转移]",
@@ -1276,7 +1067,6 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"provider", "codex",
 					"request_id", requestID,
 					"endpoint", endpointName,
-					"status_code", streamErr.StatusCode,
 					"error", streamErr.Error(),
 				)
 				return streamErr
@@ -1323,9 +1113,8 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 			"provider", "codex", "request_id", requestID)
 		if !headersWritten {
 			return &UpstreamStreamError{
-				Type:       "stream_read_error",
-				Message:    scanErr.Error(),
-				StatusCode: http.StatusBadGateway,
+				Type:    "stream_read_error",
+				Message: scanErr.Error(),
 			}
 		}
 		if isContextCanceledError(scanErr) {
@@ -1352,7 +1141,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 				return nil
 			}
 		}
-		h.recordFailure(requestID, startTime, "network_error", scanErr.Error(), http.StatusBadGateway, nil, requestModel)
+		// 上游 HTTP 层这次是真给过响应的（200），流是在那之后断的，就记它的真实状态码。
+		// 原先这里固定写 502，是一个提供商从未返回过的码。
+		h.recordFailure(requestID, startTime, "network_error", scanErr.Error(), resp.StatusCode, nil, requestModel)
 		return nil
 	} else {
 		h.logger.Info(fmt.Sprintf("✅ [Codex流式完成] [%s] 端点: %s, 已处理 %d 字节",
@@ -1365,10 +1156,11 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 			"provider", "codex",
 			"request_id", requestID,
 			"endpoint", endpointName,
-			"status_code", downstreamStreamErr.StatusCode,
 			"error", downstreamStreamErr.Error(),
 		)
-		h.recordFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), downstreamStreamErr.StatusCode, nil, requestModel)
+		// 记上游真实给出的状态码（这条响应 HTTP 层就是 200，错误只在 SSE 事件里）。
+		// 200 + failed 是准确的：它说明失败发生在流中途，而不是连接或鉴权阶段。
+		h.recordFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), resp.StatusCode, nil, requestModel)
 		return nil
 	}
 
@@ -1616,7 +1408,7 @@ func (h *Handler) snapshotEndpointMultiplier(requestID, channelName, groupName, 
 	if h.usageTracker == nil || requestID == "" || endpointName == "" {
 		return
 	}
-	mult := h.usageTracker.GetEndpointMultiplierForEndpointAndModelWithGroup(channelName, groupName, endpointName, modelName)
+	mult := h.usageTracker.GetEndpointMultiplierForEndpointAndModelWithGroup("codex", channelName, groupName, endpointName, modelName)
 	_ = h.usageTracker.UpdateActiveRequestMultiplier(requestID, mult)
 }
 
@@ -1662,7 +1454,7 @@ func (h *Handler) endpointBillingOutputTokenSource(channelName, groupName, endpo
 	if h.usageTracker == nil || endpointName == "" {
 		return tracking.BillingOutputTokenSourceOutput
 	}
-	mult := h.usageTracker.GetEndpointMultiplierForEndpointWithGroup(channelName, groupName, endpointName)
+	mult := h.usageTracker.GetEndpointMultiplierForEndpointWithGroup("codex", channelName, groupName, endpointName)
 	return tracking.NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
 }
 
@@ -1771,13 +1563,12 @@ func (h *Handler) passthroughWithBody(w http.ResponseWriter, resp *http.Response
 	_, _ = w.Write(body)
 }
 
-// readErrorBody 读取上游错误响应体（最大 4KB），用于错误日志和追踪
-// 返回完整 body 字节和截断后的可读字符串
+// readErrorBody 读取完整上游错误响应体；summary 仅用于日志，客户端收到原始 body。
 func (h *Handler) readErrorBody(resp *http.Response) (body []byte, summary string) {
 	if resp == nil || resp.Body == nil {
 		return nil, ""
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Sprintf("(读取响应体失败: %v)", err)
 	}

@@ -62,6 +62,7 @@ type SystemStatus struct {
 	ProxyHost     string `json:"proxy_host"`
 	ProxyRunning  bool   `json:"proxy_running"`
 	ActiveGroup   string `json:"active_group"`
+	// ConfigPath 保留以兼容既有前端绑定；运行时不再使用文件配置，始终为空。
 	ConfigPath    string `json:"config_path"`
 	AuthEnabled   bool   `json:"auth_enabled"`
 
@@ -81,8 +82,7 @@ func (a *App) GetSystemStatus() SystemStatus {
 		Uptime:        formatDuration(uptime),
 		UptimeSeconds: int64(uptime.Seconds()),
 		StartTime:     a.startTime.Format(time.RFC3339),
-		ProxyRunning:  a.isRunning && a.proxyServer != nil,
-		ConfigPath:    a.configPath,
+		ProxyRunning: a.isRunning && a.proxyServer != nil,
 	}
 
 	if a.config != nil {

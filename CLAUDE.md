@@ -76,9 +76,9 @@ claude-request-forwarder-desktop/        # 注：仓库已更名为 AI-Relay-For
 │   ├── events/            # 事件系统
 │   ├── logging/           # 日志系统
 │   └── service/           # 代理服务
-├── config/                # 配置文件
-│   ├── config.yaml        # 主配置
-│   └── example*.yaml      # 配置示例
+├── config/                # 运行时配置类型与代码默认值
+│   ├── config.go          # 配置结构
+│   └── defaults.go        # 默认值
 ├── build/                 # 构建相关资源
 │   ├── bin/               # 编译输出
 │   ├── windows/           # Windows 资源
@@ -190,7 +190,7 @@ graph TB
 
 | 类型 | 路径 | 说明 |
 |------|------|------|
-| **配置文件** | `config/` | YAML 配置管理 |
+| **运行配置** | 设置页面 + SQLite | 代码默认值初始化，设置页面修改并持久化 |
 | **构建资源** | `build/` | 图标、manifest、平台资源 |
 
 ## 核心架构
@@ -228,49 +228,7 @@ graph TB
 
 ## 配置说明
 
-主配置文件: `config/config.yaml`
-
-```yaml
-# 代理服务
-server:
-  host: "127.0.0.1"
-  port: 9090
-
-# 端点配置
-endpoints:
-  - name: "primary"
-    url: "https://api.anthropic.com"
-    channel: "official"
-    priority: 1
-    failover_enabled: true
-    token: "sk-xxx"
-
-  - name: "backup"
-    url: "https://api.example.com"
-    channel: "third-party"
-    priority: 2
-    failover_enabled: true
-    token: "sk-yyy"
-
-# 故障转移配置
-failover:
-  enabled: true
-  default_cooldown: "10m"
-
-# 请求控制
-request:
-  # 恢复策略：所有渠道耗尽后的处理方式
-  recovery_strategy: "auto_wait"  # auto_wait (推荐) | loop_retry | fail_fast
-
-  # 智能等待参数（仅 auto_wait 策略生效）
-  auto_wait_timeout: "300s"        # 最大等待时间（默认5分钟）
-  auto_wait_max_requests: 100      # 最大挂起请求数（默认100）
-
-# 内存热池（可选）
-hot_pool:
-  enabled: true
-  max_active_requests: 1000
-```
+运行配置由代码默认值初始化，并持久化到应用自己的 SQLite 数据库。服务器、故障转移、重试、请求、日志、代理、流式传输和时区等参数在应用内「设置」页面管理；端点、渠道和凭证在对应管理页面维护。仓库和发行包不再读取或提供外部文本配置文件。
 
 ### 恢复策略详解
 
@@ -281,9 +239,6 @@ hot_pool:
 | **auto_wait**<br/>（智能等待） | 挂起请求，等待端点自动恢复信号（其他请求成功、冷却期到期） | 避免循环重试，减少无效请求 | 可能等待较长时间（最多 auto_wait_timeout） | **生产环境（推荐）** |
 | **loop_retry**<br/>（循环重试） | 回到最高优先级渠道继续尝试（跳过冷却中的端点） | 持续尝试，不会超时 | 可能在渠道间循环重试，浪费资源 | 测试环境或渠道极少场景 |
 | **fail_fast**<br/>（快速失败） | 立即返回错误，不等待恢复，不循环重试 | 明确错误信号，快速反馈 | 可能错过即将恢复的端点 | 调试环境或需要明确错误的场景 |
-
-**向后兼容**：旧版本配置（v6.0.x 之前）会自动迁移到新的 `recovery_strategy` 格式。
-
 
 ## 开发命令
 
@@ -384,11 +339,80 @@ go test -race ./internal/...
 - `internal/providers/claude/proxy/handlers/regular.go` → `filterStreamOnlyEndpoints()` 过滤函数
 - `frontend/src/pages/providers/claude/components/EndpointForm.jsx` → UI 开关
 
-> ⚠️ **该配置存于 SQLite `endpoints` 表，不通过 yaml 配置。** `config/config.yaml` 是编译期 `//go:embed` 进二进制的默认值模板（`globals.go` + `app.go` 的 `loadConfig`），运行时修改磁盘上的该文件不会生效。端点、渠道、定价、设置均以 SQLite 为准。
+> ⚠️ **该配置存于 SQLite `endpoints` 表。** 所有运行配置均由代码默认值初始化，并通过设置页面和 SQLite 管理；应用不再读取或打包外部文本配置。
 >
 > 该字段曾长期是死配置：结构体、过滤函数、单测俱在，但 DB 无此列、`service` 转换未赋值，导致 `ep.Config.StreamOnly` 恒为 false、过滤函数空转。新增此类跨层字段时务必逐层核对。
 
 **不受影响：** `/v1/messages/count_tokens` 虽也是非流式，但在 `handler.go` 的 `ServeHTTP` 开头即被拦截，走独立的 `CountTokensHandler`（按 `SupportsCountTokens` 选端点），不经过本过滤。
+
+## 计费倍率解析约束（v8.7+）
+
+### 总原则：功能看齐，数据隔离
+
+Claude 与 Codex 在**功能实现上尽量统一看齐**（相同的分层、相同的配置形态、相同的 UI 交互），但在**运行时数据上必须严格隔离**，尤其是定价与计费。
+
+- 凡是两个 provider 共用的内存结构或数据表，其**键必须包含 provider 维度**
+- 凡是共用的查找入口，必须**透传 provider**
+- 判据：把两侧的渠道名 / 分组名 / 端点名 / 模型名全部设为相同，两边的计费结果必须互不影响
+
+这条原则不是洁癖。两个 provider 的名称空间天然会重叠——同一个中转商往往同时提供 Claude 与 Codex 两种协议，渠道名、分组名、端点名会被用户配成一样；模型名也会（Claude provider 下已存在 `MiniMax-M2` 这类非 Anthropic 模型）。键不含 provider 时，冲突表现为**静默覆盖**：不报错、不告警，只是账单悄悄算错。
+
+### 倍率缓存 key 必须包含 provider
+
+Claude 与 Codex 共用 `UsageTracker.endpointMu` 一张倍率 map。两侧允许配置**同名**的渠道 / 凭证分组 / 端点（用户实际存在 `anyrouter::默认分组::主站直连` 在两个 provider 下同时成立的情况）。
+
+`app.go` 的 `syncEndpointMultipliersToTracker` 先写 Claude 段再写 Codex 段。**若 key 不含 provider，后写的 Codex 条目会静默覆盖 Claude 条目**，导致 Claude 请求按 Codex 的倍率计费。该缺陷曾使 685 条 Claude 请求按 0.4 计价，成本少算 $551.96。
+
+因此 key 结构为 `provider::channel::group::endpoint`，查找回退链：
+
+```
+provider::channel::group::endpoint   ← 主 key
+provider::channel::endpoint
+provider::group::endpoint            ← channel 为空时
+provider::endpoint
+channel::group::endpoint             ← legacy，仅兼容直接构造 map 的调用点
+channel::endpoint
+group::endpoint
+endpoint
+```
+
+写入侧只写 provider 域的 key。`defaultProvider("")` 归一化为 `claude`，因此未传 provider 的旧调用点自动落到 Claude 域。
+
+**新增倍率查找入口时必须透传 provider**，否则会退化回冲突状态。相关位置：
+- `internal/tracking/endpoint_multiplier_key.go` → key 构造与回退链
+- `app.go` → 写入（Claude 段传 `"claude"`，Codex 段传 `"codex"`）
+- `internal/tracking/tracker.go` / `archive_manager.go` → 查找
+- `internal/providers/{claude,codex}/proxy/` → 快照调用点
+
+### 定价缓存 key 与 `model_pricing` 唯一键同样包含 provider
+
+原则 0 的直接推论。`model_pricing` 的唯一键是 **`(provider, model_name, service_tier)`** 三元组，不是 `model_name` 单列：
+
+- **provider** —— 两侧模型名空间会重叠。Claude provider 下已存在 `MiniMax-M2` 这类非 Anthropic 模型，说明 Claude 渠道会转发第三方模型；反向同理。旧的 `UNIQUE(model_name)` 让两侧无法配置同名模型的不同定价。
+- **service_tier** —— `''` 是标准档兼兜底行，`flex` / `batch` / `fast` 为档位行。档位是模型的固有属性（OpenAI 官方定价即按 model × tier 组织），每行自带 long context 四价，因此「档位 × 上下文」四象限天然成立，不必靠组合规则表达。
+
+定价缓存 key 为 `provider::model::tier`（`internal/tracking/model_pricing_key.go`），查找回退链：
+
+```
+provider::model::tier               档位专属定价
+provider::model::                   标准档/兜底行
+model                               legacy，仅兼容直接构造 map 的调用点
+defaultModelPricingKey(provider)    provider 自己的兜底价
+```
+
+档位归一化：标准档（含 `default` / `standard_only`）与 `auto` / 未知档一律落到空串——`auto` 意味着上游实际选用的档位无法从请求判定，套标准价是保守做法。
+
+> ⚠️ 兜底定价（`_default` 归 claude、`_codex_default` 归 codex）本身也是 `model_pricing` 的普通记录，入缓存时同样经 `ModelPricingKey` 加前缀。`defaultModelPricingKey` 必须用相同方式构造 key，否则查找会静默落空、全部退到硬编码默认价。
+>
+> `BatchUpsert` 的 `ON CONFLICT` 子句必须与唯一索引完全一致，否则 SQLite 直接报错而非静默降级。
+
+以 `modelName` 单参数定位的 store 方法（`Get` / `SetDefault`）语义为「标准档主行」；跨 provider 同名模型的精确定位需走 `GetByID` 或带 provider 的方法。
+
+### 端点级倍率已停用，倍率唯一来源是凭证分组
+
+Claude 与 Codex 均不再读取 `endpoints.cost_multiplier` 等端点级倍率字段。这些列保留为兼容存储（前端表单原样回传以免抹掉历史值），但 `app.go` 构造 `EndpointMultiplier` 时只取凭证分组的倍率。
+
+> 端点级倍率的 UI 入口在 v8.0（`67fc4915`）目录重组时被移除，但计算逻辑遗留至 v8.7 才对齐。DB 中残留 12 个非 1 的端点倍率值，因倍率落库链路直到 2026-09-01 才接通，这些值从未影响过任何一条历史成本。
 
 ## 调试技巧
 

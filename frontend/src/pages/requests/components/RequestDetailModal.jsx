@@ -25,9 +25,7 @@ import {
   TrendingDown,
   Zap,
   Calculator,
-  Replace,
-  Eye,
-  EyeOff
+  Replace
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -64,63 +62,8 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 
-const pickEndpointErrorValue = (errorObject, key) => {
-  if (!errorObject || typeof errorObject !== 'object') return '';
-  const direct = errorObject[key];
-  const nested = errorObject.error && typeof errorObject.error === 'object' ? errorObject.error[key] : '';
-  return String(direct || nested || '').trim();
-};
-
-const compactEndpointErrorReason = (type, code, message, fallback) => {
-  const text = `${type} ${code} ${message} ${fallback}`.toLowerCase();
-  if ((text.includes('负载') && text.includes('上限')) || text.includes('capacity')) return '模型负载上限';
-  if (text.includes('insufficient') || text.includes('quota') || text.includes('balance')) return '额度不足';
-  if (text.includes('invalid url')) return 'URL 无效';
-  if (text.includes('rate_limit') || text.includes('rate limit') || text.includes('限流')) return '限流';
-  if (text.includes('timeout') || text.includes('timed out') || text.includes('超时')) return '请求超时';
-  if (text.includes('unauthorized') || text.includes('forbidden') || text.includes('permission')) return '认证或权限失败';
-  return code || type || message || fallback;
-};
-
-const parseEndpointErrorInfo = (errorText, statusCode) => {
-  const raw = String(errorText || '').trim();
-  if (!raw) return { raw: '', compact: '', summary: '', message: '', type: '', code: '' };
-
-  let parsed = null;
-  const jsonStart = raw.indexOf('{');
-  if (jsonStart >= 0) {
-    try {
-      parsed = JSON.parse(raw.slice(jsonStart));
-    } catch {
-      parsed = null;
-    }
-  }
-
-  const message = pickEndpointErrorValue(parsed, 'message');
-  const type = pickEndpointErrorValue(parsed, 'type');
-  const code = pickEndpointErrorValue(parsed, 'code');
-  const fallback = raw.replace(/^HTTP\s+\d+:\s*/i, '').trim();
-  const parts = [
-    statusCode ? `HTTP ${statusCode}` : '',
-    type,
-    code && code !== type ? code : '',
-    message || fallback,
-  ].filter(Boolean);
-  const compactReason = compactEndpointErrorReason(type, code, message, fallback);
-  const compact = [statusCode ? `HTTP ${statusCode}` : '', compactReason].filter(Boolean).join(' · ');
-
-  return {
-    raw,
-    compact,
-    summary: parts.join(' · '),
-    message,
-    type,
-    code,
-  };
-};
-
 // failure_reason 的存储格式为 "<分类>: <详情>"（tracker.go RecordRequestFinalFailure 拼接），
-// 拆开后分类做标签、详情交给 parseEndpointErrorInfo 结构化，便于快速判断错误原因。
+// 只拆出 Relay 自己的分类标签；服务商详情保持原文展示。
 const splitFailureReason = (raw) => {
   const text = String(raw || '').trim();
   if (!text) return { category: '', detail: '' };
@@ -129,13 +72,6 @@ const splitFailureReason = (raw) => {
   if (/^[a-z][a-z0-9_]*$/.test(text)) return { category: text, detail: '' };
   return { category: '', detail: text };
 };
-
-const EndpointErrorTooltipContent = ({ summary }) => (
-  <div className="max-w-[28rem] space-y-1 text-left">
-    <div className="text-[10px] font-semibold uppercase tracking-wide text-rose-200">错误摘要</div>
-    <div className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{summary}</div>
-  </div>
-);
 
 /**
  * 信息行组件
@@ -214,7 +150,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
-  const [endpointErrorDisplayMode, setEndpointErrorDisplayMode] = useState('compact');
   const requestIdCopyTimerRef = useRef(null);
   const modalPositionRef = useRef(null);
 
@@ -331,7 +266,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const networkFirstByteMs = request.firstByteMs ?? request.first_byte_ms;
   const currentCredentialGroupLabel = getRequestCredentialGroupLabel(request, chainNodes);
   const showChannelInChain = requestHasInterChannelTransfer(request);
-  const hasEndpointErrors = chainNodes.some((node) => Boolean(node.error));
   const currentChannelLabel = getRequestChannelLabel(request, chainNodes);
   const hasUnknownChannel = showChannelInChain && chainNodes.some((node) => !node.channel);
   const channelTones = [
@@ -360,7 +294,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
     return '中转';
   };
   const failureParts = splitFailureReason(request.failure_reason);
-  const failureErrorInfo = parseEndpointErrorInfo(failureParts.detail, networkHTTPStatus);
   const errorText = [
     networkHTTPStatus ? `HTTP 状态码: ${networkHTTPStatus}` : null,
     request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
@@ -609,7 +542,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
               </div>
 
               {/* 计费详情 */}
-              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0 || billingRuleSnapshot) && (() => {
+              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0 || billingRuleSnapshot?.rule_key) && (() => {
                 const calcUnitPrice = (cost, tokens) => {
                   if (!tokens || tokens <= 0) return 0
                   return (cost / tokens) * 1_000_000
@@ -617,6 +550,16 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const safeMultiplier = (value) => {
                   const parsed = Number(value)
                   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.0
+                }
+
+                // 计费决策快照：后端在成本计算时无条件落库的命中定价行、生效单价与各层倍率。
+                // 有快照就正向渲染（tokens × 单价 × 倍率）；只有旧记录才回退到除法反推单价，
+                // 反推会把 long context 倍率之类未单独落库的层默默吸收进「基础单价」。
+                const snapshot = billingRuleSnapshot
+                const hasSnapshot = Boolean(snapshot?.context_mode)
+                const snapPrice = (value) => {
+                  const parsed = Number(value)
+                  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
                 }
 
                 const outputTokens = request.outputTokens || 0
@@ -639,13 +582,13 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const cacheCreationCost = request.cacheCreationCost || 0
 
                 // 端点倍率（默认 1.0）
-                const totalMultiplier = safeMultiplier(request.costMultiplier)
+                const totalMultiplier = safeMultiplier(hasSnapshot ? snapshot.group_cost_multiplier : request.costMultiplier)
                 const inputMultiplier = safeMultiplier(request.inputCostMultiplier)
                 const outputMultiplier = safeMultiplier(request.outputCostMultiplier)
                 const cacheReadMultiplier = safeMultiplier(request.cacheReadCostMultiplier)
                 const cache5mMultiplier = safeMultiplier(request.cacheCreationCostMultiplier)
                 const cache1hMultiplier = safeMultiplier(request.cacheCreationCostMultiplier1h)
-                const modelTotalMultiplier = safeMultiplier(request.modelCostMultiplier)
+                const modelTotalMultiplier = safeMultiplier(hasSnapshot ? snapshot.model_cost_multiplier : request.modelCostMultiplier)
                 const modelInputMultiplier = safeMultiplier(request.modelInputCostMultiplier)
                 const modelOutputMultiplier = safeMultiplier(request.modelOutputCostMultiplier)
                 const modelCacheReadMultiplier = safeMultiplier(request.modelCacheReadCostMultiplier)
@@ -660,21 +603,28 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const isMultiplierAdjusted = (value) => Math.abs(safeMultiplier(value) - 1.0) > 0.000001
                 const combinedTotalMultiplier = totalMultiplier * modelTotalMultiplier
                 const removeTotalMultiplier = (cost) => combinedTotalMultiplier > 0 ? cost / combinedTotalMultiplier : cost
-                const inputEffectivePrice = calcUnitPrice(inputCost, billableInputTokens)
-                const outputEffectivePrice = calcUnitPrice(outputCost, billableOutputTokens)
-                const cacheReadEffectivePrice = calcUnitPrice(cacheReadCost, cacheReadTokens)
-                const cache5mEffectivePrice = calcUnitPrice(cache5mCost, cache5mTokens)
-                const cache1hEffectivePrice = calcUnitPrice(cache1hCost, cache1hTokens)
-                const inputBasePrice = calcBasePrice(inputEffectivePrice, inputMultiplier, modelInputMultiplier)
-                const outputBasePrice = calcBasePrice(outputEffectivePrice, outputMultiplier, modelOutputMultiplier)
-                const cacheReadBasePrice = calcBasePrice(cacheReadEffectivePrice, cacheReadMultiplier, modelCacheReadMultiplier)
-                const cache5mBasePrice = calcBasePrice(cache5mEffectivePrice, cache5mMultiplier)
-                const cache1hBasePrice = calcBasePrice(cache1hEffectivePrice, cache1hMultiplier)
+                // 有快照直接取落库单价，无快照才反推。两条路径都在 token 为 0 时归零，
+                // 否则快照里的 1h 缓存兜底价会让没有 1h 用量的请求也长出一个单价徽章。
+                const resolvePrice = (tokens, snapshotField, legacyPrice) => {
+                  if (!tokens || tokens <= 0) return 0
+                  return hasSnapshot ? snapPrice(snapshot[snapshotField]) : legacyPrice()
+                }
+                const inputBasePrice = resolvePrice(billableInputTokens, 'input_price',
+                  () => calcBasePrice(calcUnitPrice(inputCost, billableInputTokens), inputMultiplier, modelInputMultiplier))
+                const outputBasePrice = resolvePrice(billableOutputTokens, 'output_price',
+                  () => calcBasePrice(calcUnitPrice(outputCost, billableOutputTokens), outputMultiplier, modelOutputMultiplier))
+                const cacheReadBasePrice = resolvePrice(cacheReadTokens, 'cache_read_price',
+                  () => calcBasePrice(calcUnitPrice(cacheReadCost, cacheReadTokens), cacheReadMultiplier, modelCacheReadMultiplier))
+                const cache5mBasePrice = resolvePrice(cache5mTokens, 'cache_creation_price',
+                  () => calcBasePrice(calcUnitPrice(cache5mCost, cache5mTokens), cache5mMultiplier))
+                const cache1hBasePrice = resolvePrice(cache1hTokens, 'cache_creation_1h_price',
+                  () => calcBasePrice(calcUnitPrice(cache1hCost, cache1hTokens), cache1hMultiplier))
                 // 兼容旧数据：无分项 5m/1h 时，展示合并的缓存创建价格（旧数据无倍率字段，默认 1.0）
                 const hasSplitCache = cache5mTokens > 0 || cache1hTokens > 0
-                const aggregateCacheCreationPrice = !hasSplitCache
-                  ? calcBasePrice(calcUnitPrice(cacheCreationCost, cacheCreationTokens), 1.0)
-                  : 0
+                const aggregateCacheCreationPrice = hasSplitCache
+                  ? 0
+                  : resolvePrice(cacheCreationTokens, 'cache_creation_price',
+                    () => calcBasePrice(calcUnitPrice(cacheCreationCost, cacheCreationTokens), 1.0))
                 const outputTokenExpression = billingSource === 'visible_output_tokens'
                   ? `${outputTokens.toLocaleString()} - ${reasoningTokens.toLocaleString()} = ${billableOutputTokens.toLocaleString()}`
                   : billableOutputTokens.toLocaleString()
@@ -684,6 +634,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     .map((value) => formatMultiplier(value))
                     .join(' ')
                 }
+                // 公式行：有快照就正向算（tokens × 落库单价 × 分项倍率），再乘「应用总倍率」行
+                // 即为落库成本。快照的分项倍率已合并端点/分组、模型、long context 三层，
+                // 所以只显示这一个数；旧记录仍从成本里除掉总倍率反推。
+                const rowMultiplierText = (snapshotField, ...legacyMultipliers) => hasSnapshot
+                  ? buildMultiplierText(safeMultiplier(snapshot[snapshotField]))
+                  : buildMultiplierText(...legacyMultipliers)
+                const rowCost = (tokens, price, snapshotField, storedCost) => hasSnapshot
+                  ? tokens * price / 1_000_000 * safeMultiplier(snapshot[snapshotField])
+                  : removeTotalMultiplier(storedCost)
 
                 const priceBadges = [
                   inputBasePrice > 0 && { key: 'input', label: '输入', value: inputBasePrice, color: 'blue' },
@@ -739,8 +698,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       ? `${displayInputTokens.toLocaleString()} - ${inputDeductionTokens.toLocaleString()} = ${billableInputTokens.toLocaleString()}`
                       : billableInputTokens.toLocaleString(),
                     price: inputBasePrice,
-                    multiplierText: buildMultiplierText(inputMultiplier, modelInputMultiplier),
-                    cost: removeTotalMultiplier(inputCost)
+                    multiplierText: rowMultiplierText('input_cost_multiplier', inputMultiplier, modelInputMultiplier),
+                    cost: rowCost(billableInputTokens, inputBasePrice, 'input_cost_multiplier', inputCost)
                   },
                   billableOutputTokens > 0 && {
                     key: 'output',
@@ -748,20 +707,20 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     tokens: billableOutputTokens,
                     tokenExpression: outputTokenExpression,
                     price: outputBasePrice,
-                    multiplierText: buildMultiplierText(outputMultiplier, modelOutputMultiplier),
-                    cost: removeTotalMultiplier(outputCost)
+                    multiplierText: rowMultiplierText('output_cost_multiplier', outputMultiplier, modelOutputMultiplier),
+                    cost: rowCost(billableOutputTokens, outputBasePrice, 'output_cost_multiplier', outputCost)
                   },
                   cacheReadTokens > 0 && {
-                    key: 'cacheRead', label: '缓存读取', tokens: cacheReadTokens, price: cacheReadBasePrice, multiplierText: buildMultiplierText(cacheReadMultiplier, modelCacheReadMultiplier), cost: removeTotalMultiplier(cacheReadCost)
+                    key: 'cacheRead', label: '缓存读取', tokens: cacheReadTokens, price: cacheReadBasePrice, multiplierText: rowMultiplierText('cache_read_cost_multiplier', cacheReadMultiplier, modelCacheReadMultiplier), cost: rowCost(cacheReadTokens, cacheReadBasePrice, 'cache_read_cost_multiplier', cacheReadCost)
                   },
                   cache5mTokens > 0 && {
-                    key: 'cache5m', label: '5m 缓存创建', tokens: cache5mTokens, price: cache5mBasePrice, multiplierText: buildMultiplierText(cache5mMultiplier), cost: removeTotalMultiplier(cache5mCost)
+                    key: 'cache5m', label: '5m 缓存创建', tokens: cache5mTokens, price: cache5mBasePrice, multiplierText: rowMultiplierText('cache_creation_cost_multiplier', cache5mMultiplier), cost: rowCost(cache5mTokens, cache5mBasePrice, 'cache_creation_cost_multiplier', cache5mCost)
                   },
                   cache1hTokens > 0 && {
-                    key: 'cache1h', label: '1h 缓存创建', tokens: cache1hTokens, price: cache1hBasePrice, multiplierText: buildMultiplierText(cache1hMultiplier), cost: removeTotalMultiplier(cache1hCost)
+                    key: 'cache1h', label: '1h 缓存创建', tokens: cache1hTokens, price: cache1hBasePrice, multiplierText: rowMultiplierText('cache_creation_1h_cost_multiplier', cache1hMultiplier), cost: rowCost(cache1hTokens, cache1hBasePrice, 'cache_creation_1h_cost_multiplier', cache1hCost)
                   },
                   !hasSplitCache && cacheCreationTokens > 0 && {
-                    key: 'cacheCreation', label: isCodexRequest ? '缓存写入' : '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, cost: removeTotalMultiplier(cacheCreationCost)
+                    key: 'cacheCreation', label: isCodexRequest ? '缓存写入' : '缓存创建', tokens: cacheCreationTokens, price: aggregateCacheCreationPrice, multiplierText: rowMultiplierText('cache_creation_cost_multiplier'), cost: rowCost(cacheCreationTokens, aggregateCacheCreationPrice, 'cache_creation_cost_multiplier', cacheCreationCost)
                   }
                 ].filter(Boolean)
 
@@ -780,19 +739,26 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     </div>
 
                     <div className="p-4 space-y-4">
-					  {billingRuleSnapshot && (
-						<div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 pb-3 text-xs text-slate-600">
-						  <span className="font-semibold text-indigo-700">
-							组合规则 · {billingRuleSnapshot.mode === 'fixed' ? '固定单价' : '倍率'}
-						  </span>
-						  <span>模型 {billingRuleSnapshot.selector_model || '全部'}</span>
-						  <span>档位 {billingRuleSnapshot.selector_service_tier || '全部'}</span>
-						  <span>上下文 {billingRuleSnapshot.selector_context || '全部'}</span>
-						  <span className="min-w-0 break-all text-slate-400">
-							命中 {billingRuleSnapshot.effective_model || '-'} / {billingRuleSnapshot.effective_service_tier || 'auto'} / {billingRuleSnapshot.effective_context || 'normal'}
-						  </span>
-						</div>
-					  )}
+                      {hasSnapshot && (
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 pb-3 text-xs text-slate-600">
+                          <span className="min-w-0 break-all font-semibold text-slate-700">
+                            定价 {snapshot.pricing_model || '-'}{snapshot.pricing_service_tier ? ` · ${snapshot.pricing_service_tier}` : ''}
+                          </span>
+                          <span className={snapshot.context_mode === 'long' ? 'font-semibold text-amber-600' : ''}>
+                            {snapshot.context_mode === 'long' ? '长上下文单价' : '标准上下文单价'}
+                          </span>
+                          {Number(snapshot.long_context_threshold) > 0 && (
+                            <span className="text-slate-400">
+                              输入 {Number(snapshot.effective_input_tokens || 0).toLocaleString()} / 阈值 {Number(snapshot.long_context_threshold).toLocaleString()}
+                            </span>
+                          )}
+                          {snapshot.rule_key && (
+                            <span className="min-w-0 break-all font-semibold text-indigo-700">
+                              组合规则 · {snapshot.rule_mode === 'fixed' ? '固定单价' : '倍率'} · {snapshot.rule_key}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {/* 单价摘要 - 横向徽章 */}
                       {(priceBadges.length > 0 || multiplierBadges.length > 0) && (
                         <div className="space-y-2">
@@ -924,11 +890,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                         )}
                       </div>
                     )}
-                    {failureErrorInfo.message && (
-                      <div className="w-full min-w-0 whitespace-pre-wrap break-all text-sm font-medium leading-6 text-rose-800 [overflow-wrap:anywhere]">
-                        {failureErrorInfo.message}
-                      </div>
-                    )}
                     {failureParts.detail && (
                       <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
                         <span className="shrink-0 font-medium text-slate-600">原始信息：</span>
@@ -993,28 +954,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     </div>
 
                     <div className="ml-auto flex items-center gap-2">
-                      {hasEndpointErrors && (
-                        <div className="inline-flex items-center rounded-lg border border-rose-100 bg-rose-50 p-0.5">
-                          {[
-                            { mode: 'compact', label: '缩略', icon: EyeOff },
-                            { mode: 'summary', label: '详细', icon: Eye },
-                          ].map((item) => (
-                            <button
-                              key={item.mode}
-                              type="button"
-                              onClick={() => setEndpointErrorDisplayMode(item.mode)}
-                              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
-                                endpointErrorDisplayMode === item.mode
-                                  ? 'bg-white text-rose-700 shadow-sm'
-                                  : 'text-rose-500 hover:bg-rose-100'
-                              }`}
-                            >
-                              <item.icon className="h-3 w-3" />
-                              {item.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
                       <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-500">
                         时间线
                       </span>
@@ -1039,11 +978,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                         const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
                         const endpointError = node.error || '';
-                        const endpointErrorInfo = parseEndpointErrorInfo(endpointError, node.statusCode);
-                        const isEndpointErrorCompact = endpointErrorDisplayMode === 'compact';
-                        const endpointErrorLabel = isEndpointErrorCompact
-                          ? endpointErrorInfo.compact
-                          : endpointErrorInfo.summary;
                         const routeLabel = [
                           showChannelInChain ? channelLabel : '',
                           groupLabel,
@@ -1104,24 +1038,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                                   </span>
                                 </div>
                                 {endpointError && (
-                                  isEndpointErrorCompact ? (
-                                    <Tooltip
-                                      content={<EndpointErrorTooltipContent summary={endpointErrorInfo.summary} />}
-                                      contentClassName="max-w-[32rem] border-rose-900/40 bg-slate-950 px-3 py-2"
-                                      className="mt-1.5 block min-w-0"
-                                    >
-                                      <div className="min-w-0 truncate rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] font-medium leading-5 text-rose-600">
-                                        错误：{endpointErrorLabel}
-                                      </div>
-                                    </Tooltip>
-                                  ) : (
-                                    <div className="mt-1.5 min-w-0 rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] leading-relaxed text-rose-700 break-words [overflow-wrap:anywhere]">
-                                      <span className="shrink-0 font-medium text-rose-600">错误：</span>
-                                      <span className="break-words [overflow-wrap:anywhere]">
-                                        {endpointErrorLabel}
-                                      </span>
-                                    </div>
-                                  )
+                                  <div className="mt-1.5 min-w-0 rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] leading-relaxed text-rose-700 break-words [overflow-wrap:anywhere]">
+                                    <span className="shrink-0 font-medium text-rose-600">错误：</span>
+                                    <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{endpointError}</span>
+                                  </div>
                                 )}
                               </div>
                             </div>

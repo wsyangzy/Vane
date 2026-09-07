@@ -728,8 +728,6 @@ export class UpdateSettingInput {
 	    longContextCacheCreationCostMultiplier: number;
 	    longContextCacheReadCostMultiplier: number;
 	    disableLongContextPricing: boolean;
-	    disableServiceTierPricing: boolean;
-	    serviceTierMultipliers: any[];
 	    billingOutputTokenSource: string;
 	    modelMultipliers: any[];
 	    billingRules: any[];
@@ -760,8 +758,6 @@ export class UpdateSettingInput {
 	        this.longContextCacheCreationCostMultiplier = source["longContextCacheCreationCostMultiplier"];
 	        this.longContextCacheReadCostMultiplier = source["longContextCacheReadCostMultiplier"];
 	        this.disableLongContextPricing = source["disableLongContextPricing"];
-	        this.disableServiceTierPricing = source["disableServiceTierPricing"];
-	        this.serviceTierMultipliers = source["serviceTierMultipliers"];
 	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
 	        this.modelMultipliers = source["modelMultipliers"];
 	        this.billingRules = source["billingRules"];
@@ -876,8 +872,6 @@ export class UpdateSettingInput {
 	    longContextCacheCreationCostMultiplier: number;
 	    longContextCacheReadCostMultiplier: number;
 	    disableLongContextPricing: boolean;
-	    disableServiceTierPricing: boolean;
-	    serviceTierMultipliers: any[];
 	    billingOutputTokenSource: string;
 	    modelMultipliers: any[];
 	    billingRules: any[];
@@ -904,8 +898,6 @@ export class UpdateSettingInput {
 	        this.longContextCacheCreationCostMultiplier = source["longContextCacheCreationCostMultiplier"];
 	        this.longContextCacheReadCostMultiplier = source["longContextCacheReadCostMultiplier"];
 	        this.disableLongContextPricing = source["disableLongContextPricing"];
-	        this.disableServiceTierPricing = source["disableServiceTierPricing"];
-	        this.serviceTierMultipliers = source["serviceTierMultipliers"];
 	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
 	        this.modelMultipliers = source["modelMultipliers"];
 	        this.billingRules = source["billingRules"];
@@ -927,8 +919,6 @@ export class UpdateSettingInput {
 	    longContextCacheCreationCostMultiplier: number;
 	    longContextCacheReadCostMultiplier: number;
 	    disableLongContextPricing: boolean;
-	    disableServiceTierPricing: boolean;
-	    serviceTierMultipliers: any[];
 	    billingOutputTokenSource: string;
 	    modelMultipliers: any[];
 	    billingRules: any[];
@@ -954,8 +944,6 @@ export class UpdateSettingInput {
 	        this.longContextCacheCreationCostMultiplier = source["longContextCacheCreationCostMultiplier"];
 	        this.longContextCacheReadCostMultiplier = source["longContextCacheReadCostMultiplier"];
 	        this.disableLongContextPricing = source["disableLongContextPricing"];
-	        this.disableServiceTierPricing = source["disableServiceTierPricing"];
-	        this.serviceTierMultipliers = source["serviceTierMultipliers"];
 	        this.billingOutputTokenSource = source["billingOutputTokenSource"];
 	        this.modelMultipliers = source["modelMultipliers"];
 	        this.billingRules = source["billingRules"];
@@ -1128,7 +1116,10 @@ export class UpdateSettingInput {
 	    }
 	}
 	export class CreateModelPricingInput {
+	    id: number;
 	    model_name: string;
+	    provider: string;
+	    service_tier: string;
 	    display_name: string;
 	    description: string;
 	    input_price: number;
@@ -1149,7 +1140,10 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.model_name = source["model_name"];
+	        this.provider = source["provider"];
+	        this.service_tier = source["service_tier"];
 	        this.display_name = source["display_name"];
 	        this.description = source["description"];
 	        this.input_price = source["input_price"];
@@ -1568,6 +1562,8 @@ export class UpdateSettingInput {
 	export class ModelPricingInfo {
 	    id: number;
 	    model_name: string;
+	    provider: string;
+	    service_tier: string;
 	    display_name: string;
 	    description: string;
 	    input_price: number;
@@ -1592,6 +1588,8 @@ export class UpdateSettingInput {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.model_name = source["model_name"];
+	        this.provider = source["provider"];
+	        this.service_tier = source["service_tier"];
 	        this.display_name = source["display_name"];
 	        this.description = source["description"];
 	        this.input_price = source["input_price"];

@@ -185,6 +185,9 @@ const EndpointForm = ({
         timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
         supportsCountTokens: endpoint.supportsCountTokens || false,
         streamOnly: endpoint.streamOnly || endpoint.stream_only || false,
+        // 端点级倍率已停用（对齐 Codex）：倍率唯一来源是凭证分组，
+        // app.go 构造 EndpointMultiplier 时不再读取这些字段。
+        // 保留原样回传仅为不抹掉 DB 中的历史值，表单不提供编辑入口。
         costMultiplier: endpoint.costMultiplier || 1.0,
         inputCostMultiplier: endpoint.inputCostMultiplier || 1.0,
         outputCostMultiplier: endpoint.outputCostMultiplier || 1.0,

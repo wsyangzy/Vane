@@ -28,6 +28,58 @@ func (m *Manager) GetHealthyEndpointsForTurn(turnKey string) []*Endpoint {
 	return m.sortHealthyEndpoints(candidates, true)
 }
 
+// MarkEndpointRequestSuccess records the last endpoint that completed a request
+// so the next request in the same channel starts on the known-good route.
+func (m *Manager) MarkEndpointRequestSuccess(ep *Endpoint) {
+	if m == nil || ep == nil {
+		return
+	}
+	channel := ChannelKey(ep)
+	key := endpointKeyFromConfig(ep.Config)
+	if channel == "" || key == "" {
+		return
+	}
+	m.preferredEndpointMu.Lock()
+	if m.preferredEndpointKeys == nil {
+		m.preferredEndpointKeys = make(map[string]string)
+	}
+	m.preferredEndpointKeys[channel] = key
+	m.preferredEndpointMu.Unlock()
+}
+
+// ClearPreferredEndpoint drops a stale successful-route hint when that endpoint fails.
+func (m *Manager) ClearPreferredEndpoint(ep *Endpoint) {
+	if m == nil || ep == nil {
+		return
+	}
+	channel := ChannelKey(ep)
+	key := endpointKeyFromConfig(ep.Config)
+	m.preferredEndpointMu.Lock()
+	if m.preferredEndpointKeys[channel] == key {
+		delete(m.preferredEndpointKeys, channel)
+	}
+	m.preferredEndpointMu.Unlock()
+}
+
+func (m *Manager) preferredEndpointKey(channel string) string {
+	if m == nil || channel == "" {
+		return ""
+	}
+	m.preferredEndpointMu.RLock()
+	key := m.preferredEndpointKeys[channel]
+	m.preferredEndpointMu.RUnlock()
+	return key
+}
+
+func (m *Manager) clearPreferredEndpoints() {
+	if m == nil {
+		return
+	}
+	m.preferredEndpointMu.Lock()
+	m.preferredEndpointKeys = make(map[string]string)
+	m.preferredEndpointMu.Unlock()
+}
+
 func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string) []*Endpoint {
 	if m == nil || m.groupManager == nil {
 		return nil
@@ -39,8 +91,6 @@ func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string)
 			excludeSet[key] = struct{}{}
 		}
 	}
-	skippedGroups := m.failedCredentialGroupsForTurn(turnKey)
-
 	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.GetAllEndpoints())
 	if len(activeEndpoints) == 0 {
 		return nil
@@ -53,9 +103,6 @@ func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string)
 		}
 		epKey := endpointKeyFromConfig(ep.Config)
 		if _, excluded := excludeSet[epKey]; excluded {
-			continue
-		}
-		if credentialGroupSkipped(ep, skippedGroups) {
 			continue
 		}
 		failoverEnabled := true
@@ -81,6 +128,9 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 	switch m.config.Strategy.Type {
 	case "priority":
 		sort.Slice(healthy, func(i, j int) bool {
+			if preferred := m.comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+				return preferred < 0
+			}
 			healthy[i].mutex.RLock()
 			healthy[j].mutex.RLock()
 			defer healthy[i].mutex.RUnlock()
@@ -91,7 +141,7 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 			if healthy[i].Config.Priority != healthy[j].Config.Priority {
 				return healthy[i].Config.Priority < healthy[j].Config.Priority
 			}
-			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+			if preferred := compareConfiguredPreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
 				return preferred < 0
 			}
 			return endpointSortKey(healthy[i]) < endpointSortKey(healthy[j])
@@ -110,6 +160,9 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 		}
 
 		sort.Slice(healthy, func(i, j int) bool {
+			if preferred := m.comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+				return preferred < 0
+			}
 			healthy[i].mutex.RLock()
 			healthy[j].mutex.RLock()
 			defer healthy[i].mutex.RUnlock()
@@ -123,7 +176,7 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 			if healthy[i].Config.Priority != healthy[j].Config.Priority {
 				return healthy[i].Config.Priority < healthy[j].Config.Priority
 			}
-			if preferred := comparePreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
+			if preferred := compareConfiguredPreferredEndpoint(healthy[i], healthy[j]); preferred != 0 {
 				return preferred < 0
 			}
 			return endpointSortKey(healthy[i]) < endpointSortKey(healthy[j])
@@ -165,9 +218,32 @@ func compareEndpointCredentialGroupOrder(left, right *Endpoint) int {
 	return 1
 }
 
-func comparePreferredEndpoint(left, right *Endpoint) int {
+func compareConfiguredPreferredEndpoint(left, right *Endpoint) int {
 	leftPreferred := left != nil && left.Config.Enabled != nil && *left.Config.Enabled
 	rightPreferred := right != nil && right.Config.Enabled != nil && *right.Config.Enabled
+	if leftPreferred == rightPreferred {
+		return 0
+	}
+	if leftPreferred {
+		return -1
+	}
+	return 1
+}
+
+func (m *Manager) comparePreferredEndpoint(left, right *Endpoint) int {
+	if left == nil || right == nil {
+		return 0
+	}
+	leftChannel := ChannelKey(left)
+	if leftChannel == "" || leftChannel != ChannelKey(right) {
+		return 0
+	}
+	preferred := m.preferredEndpointKey(leftChannel)
+	if preferred == "" {
+		return 0
+	}
+	leftPreferred := endpointKeyFromConfig(left.Config) == preferred
+	rightPreferred := endpointKeyFromConfig(right.Config) == preferred
 	if leftPreferred == rightPreferred {
 		return 0
 	}
@@ -292,6 +368,9 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	for _, result := range sortedResults {
 		endpoints = append(endpoints, result.Endpoint)
 	}
+	// Fast-test ordering is still the tie-breaker for the remaining endpoints,
+	// but a route that just succeeded should be tried first on the next request.
+	m.prioritizePreferredEndpoints(endpoints)
 
 	// Log the successful endpoint ranking
 	if len(endpoints) > 0 {
@@ -336,8 +415,31 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	return endpoints
 }
 
+func (m *Manager) prioritizePreferredEndpoints(endpoints []*Endpoint) {
+	if len(endpoints) < 2 {
+		return
+	}
+	preferred := m.preferredEndpointKey(ChannelKey(endpoints[0]))
+	if preferred == "" {
+		return
+	}
+	index := -1
+	for i, ep := range endpoints {
+		if ep != nil && endpointKeyFromConfig(ep.Config) == preferred {
+			index = i
+			break
+		}
+	}
+	if index <= 0 {
+		return
+	}
+	preferredEndpoint := endpoints[index]
+	copy(endpoints[1:index+1], endpoints[0:index])
+	endpoints[0] = preferredEndpoint
+}
+
 // GetEndpointByName returns an endpoint by key, only from active groups.
-// 兼容：YAML 模式下 key == name。
+// 兼容旧调用方仅传端点名称。
 func (m *Manager) GetEndpointByName(endpointKey string) *Endpoint {
 	// 使用快照机制
 	m.endpointsMu.RLock()
@@ -371,7 +473,7 @@ func (m *Manager) GetEndpointByName(endpointKey string) *Endpoint {
 }
 
 // GetEndpointByNameAny returns an endpoint by key from all endpoints (ignoring group status)
-// 兼容：YAML 模式下 key == name。
+// 兼容旧调用方仅传端点名称。
 func (m *Manager) GetEndpointByNameAny(endpointKey string) *Endpoint {
 	m.endpointsMu.RLock()
 	defer m.endpointsMu.RUnlock()

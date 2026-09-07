@@ -53,6 +53,10 @@ func (spa *StreamProcessorAdapter) HasSentContent() bool {
 	return spa.innerProcessor.HasSentContent()
 }
 
+func (spa *StreamProcessorAdapter) HasWrittenResponse() bool {
+	return spa.innerProcessor.HasWrittenResponse()
+}
+
 // TokenAnalyzerAdapter 适配 *response.TokenAnalyzer → handlers.TokenAnalyzer
 type TokenAnalyzerAdapter struct {
 	innerAnalyzer *response.TokenAnalyzer

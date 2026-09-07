@@ -79,6 +79,7 @@ import {
 import { buildInitialModelMappingRows, buildModelMappingPayload } from '@pages/management/shared/modelMapping.js';
 import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '@pages/management/shared/modelMultiplierRows.js';
 import { selectPersistedEndpoints } from '@pages/management/shared/endpointActions.js';
+import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
 import { getCredentialGroupCostMultiplier, getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
 import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
 import {
@@ -161,13 +162,15 @@ const hasClaudeCredential = (group) => [
   group?.api_key_masked
 ].some((value) => (typeof value === 'string' ? value.trim() !== '' : Boolean(value)));
 
+// priceKey 指向模型定价中对应的单价字段，供倍率弹窗展示「基础单价 → 实际单价」对照。
+// 无 priceKey 的是总倍率，作用于全部分项。
 const STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS = [
   { name: 'costMultiplier', label: '总倍率' },
-  { name: 'inputCostMultiplier', label: '输入倍率' },
-  { name: 'outputCostMultiplier', label: '输出倍率' },
-  { name: 'cacheReadCostMultiplier', label: '缓存读取倍率' },
-  { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率' },
-  { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率' }
+  { name: 'inputCostMultiplier', label: '输入倍率', priceKey: 'inputPrice' },
+  { name: 'outputCostMultiplier', label: '输出倍率', priceKey: 'outputPrice' },
+  { name: 'cacheReadCostMultiplier', label: '缓存读取倍率', priceKey: 'cacheReadPrice' },
+  { name: 'cacheCreationCostMultiplier', label: '5分钟缓存创建倍率', priceKey: 'cacheCreationPrice5m' },
+  { name: 'cacheCreationCostMultiplier1h', label: '1小时缓存创建倍率', priceKey: 'cacheCreationPrice1h' }
 ];
 
 // Claude 侧不提供 Long context 计费：分组倍率仅覆盖普通定价。
@@ -1384,6 +1387,7 @@ const ClaudeCredentialGroupFormModal = ({
   const isEdit = mode === 'edit';
   const [formData, setFormData] = useState(() => buildInitialClaudeCredentialGroupForm(group, channelName));
   const [activeTab, setActiveTab] = useState('basic');
+  const [standardMultiplierSettingsOpen, setStandardMultiplierSettingsOpen] = useState(false);
   const [error, setError] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -1405,6 +1409,12 @@ const ClaudeCredentialGroupFormModal = ({
 
   const updateField = (key, value) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
+    if (error) setError('');
+  };
+
+  const handleStandardMultiplierSave = (values) => {
+    setFormData((prev) => ({ ...prev, ...values }));
+    setStandardMultiplierSettingsOpen(false);
     if (error) setError('');
   };
 
@@ -1732,26 +1742,37 @@ const ClaudeCredentialGroupFormModal = ({
 				  />
 				  <p className="mt-1 text-xs text-slate-500">0 表示不限额；达到限额后自动切换到其他凭证分组。</p>
 				</div>
-                <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">普通成本倍率</label>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  {STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
-                    <div key={field.name}>
-                      <label className="mb-1 block text-xs text-slate-500">{field.label}</label>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={formData[field.name]}
-                        onChange={(event) => updateField(field.name, event.target.value)}
-                        className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                        placeholder="1.0"
-                        disabled={loading}
-                      />
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-slate-700">普通成本倍率</div>
+                      <div className="mt-0.5 text-xs text-slate-500">该分组下 Claude 端点的默认计费倍率</div>
                     </div>
-                  ))}
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setStandardMultiplierSettingsOpen(true)} disabled={loading}>编辑</Button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS.map((field) => (
+                      <div key={field.name} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
+                        <div className="truncate text-[11px] text-slate-400">{field.label.replace(/成本倍率|倍率/, '') || '总'}</div>
+                        <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{formData[field.name]}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">成本倍率会作为该分组下 Claude 端点的默认计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
                 </div>
-                <p className="mt-1 text-xs text-slate-400">成本倍率会作为该分组下 Claude 端点的默认计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
-                </div>
+
+                {standardMultiplierSettingsOpen && (
+                  <MultiplierSettingsModal
+                    title="普通成本倍率"
+                    description="该分组下 Claude 端点的默认计费倍率。"
+                    fields={STANDARD_CREDENTIAL_GROUP_MULTIPLIER_FIELDS}
+                    values={formData}
+                    pricingProvider="claude"
+                    disabled={loading}
+                    onCancel={() => setStandardMultiplierSettingsOpen(false)}
+                    onSave={handleStandardMultiplierSave}
+                  />
+                )}
 
                 <ModelMultiplierEditor
                   rows={formData.modelMultiplierRows}
@@ -2254,11 +2275,10 @@ const ChannelsPage = () => {
   const [storageEndpoints, setStorageEndpoints] = useState([]);
   const [storageLoading, setStorageLoading] = useState(false);
 
-  // 判断存储模式（用于控制 Hook 行为）
-  // 只检查 storageType，不再依赖 enabled（enabled 表示服务是否初始化，配置重载期间可能暂时为 false）
+  // 端点存储统一使用 SQLite；只检查 storageType，不依赖 enabled。
   const isSqliteMode = storageStatus?.storageType === 'sqlite';
 
-  // 使用端点数据 Hook（YAML 模式需要；SQLite 模式仅保留操作能力，避免后台自动拉取/订阅导致卡住）
+  // SQLite 端点由专用 API 加载；保留旧 Hook 仅供兼容，不自动订阅。
   const {
     endpoints,
     loading,
@@ -2347,8 +2367,7 @@ const ChannelsPage = () => {
       if (seq !== storageLoadSeqRef.current) return;
       setStorageStatus(status);
 
-      // 如果是 SQLite 模式，加载存储的端点
-      // 只检查 storageType，不再依赖 enabled
+      // SQLite 模式下加载存储的端点。
       if (status.storageType === 'sqlite') {
         const records = await getEndpointRecords();
         if (seq !== storageLoadSeqRef.current) return;
@@ -2357,8 +2376,8 @@ const ChannelsPage = () => {
     } catch (err) {
       console.error('获取存储状态失败:', err);
       if (seq !== storageLoadSeqRef.current) return;
-      // 默认使用 YAML 模式
-      setStorageStatus({ enabled: false, storageType: 'yaml' });
+      // 存储后端固定为 SQLite，即使状态接口暂时失败也不要回退到旧模式。
+      setStorageStatus({ enabled: false, storageType: 'sqlite' });
       if (throwOnError) throw err;
     } finally {
       if (seq === storageLoadSeqRef.current) {

@@ -8,10 +8,9 @@ import (
 func TestErrorClassifierFailsOverCapacityStreamError(t *testing.T) {
 	classifier := NewErrorClassifier()
 	action := classifier.Classify(nil, &UpstreamStreamError{
-		Type:       "server_error",
-		Code:       "server_error",
-		Message:    "Selected model is at capacity. Please try a different model.",
-		StatusCode: http.StatusServiceUnavailable,
+		Type:    "server_error",
+		Code:    "server_error",
+		Message: "Selected model is at capacity. Please try a different model.",
 	})
 
 	if action != ActionFailover {

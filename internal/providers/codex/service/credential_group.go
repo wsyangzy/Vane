@@ -64,8 +64,6 @@ func (s *CodexCredentialGroupService) EnsureDefaultGroup(ctx context.Context, ch
 		LongContextOutputCostMultiplier:        1.0,
 		LongContextCacheCreationCostMultiplier: 1.0,
 		LongContextCacheReadCostMultiplier:     1.0,
-		DisableServiceTierPricing:              true,
-		ServiceTierMultipliers:                 defaultCodexServiceTierMultipliers(),
 	}
 	if s.endpointStore != nil {
 		endpoints, err := s.endpointStore.ListByChannelID(ctx, channel.ID)
@@ -161,11 +159,6 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	record.LongContextOutputCostMultiplier = defaultCodexMultiplier(record.LongContextOutputCostMultiplier)
 	record.LongContextCacheCreationCostMultiplier = defaultCodexMultiplier(record.LongContextCacheCreationCostMultiplier)
 	record.LongContextCacheReadCostMultiplier = defaultCodexMultiplier(record.LongContextCacheReadCostMultiplier)
-	serviceTierMultipliers, err := normalizeCodexServiceTierMultipliers(record.ServiceTierMultipliers)
-	if err != nil {
-		return err
-	}
-	record.ServiceTierMultipliers = serviceTierMultipliers
 	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)
 	if err != nil {
 		return err
@@ -201,61 +194,6 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 		return fmt.Errorf("该渠道下已存在相同的凭证分组名 '%s'", record.Name)
 	}
 	return nil
-}
-
-func defaultCodexServiceTierMultipliers() []store.CodexServiceTierMultiplierRecord {
-	result := make([]store.CodexServiceTierMultiplierRecord, 0, 4)
-	for _, tier := range []string{
-		tracking.ServiceTierStandard,
-		tracking.ServiceTierBatch,
-		tracking.ServiceTierFlex,
-		tracking.ServiceTierFast,
-	} {
-		result = append(result, store.CodexServiceTierMultiplierRecord{
-			ServiceTier:                 tier,
-			CostMultiplier:              1.0,
-			InputCostMultiplier:         1.0,
-			OutputCostMultiplier:        1.0,
-			CacheCreationCostMultiplier: 1.0,
-			CacheReadCostMultiplier:     1.0,
-		})
-	}
-	return result
-}
-
-func normalizeCodexServiceTierMultipliers(records []store.CodexServiceTierMultiplierRecord) ([]store.CodexServiceTierMultiplierRecord, error) {
-	byTier := make(map[string]store.CodexServiceTierMultiplierRecord, len(records))
-	for _, record := range records {
-		tier := tracking.NormalizeServiceTierForBilling(record.ServiceTier)
-		if tier == "" {
-			return nil, fmt.Errorf("未知的 Codex 服务档位: %q", record.ServiceTier)
-		}
-		if _, exists := byTier[tier]; exists {
-			return nil, fmt.Errorf("Codex 服务档位重复: %s", tier)
-		}
-		values := []float64{
-			record.CostMultiplier,
-			record.InputCostMultiplier,
-			record.OutputCostMultiplier,
-			record.CacheCreationCostMultiplier,
-			record.CacheReadCostMultiplier,
-		}
-		for _, value := range values {
-			if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-				return nil, fmt.Errorf("Codex %s 服务档位倍率必须是大于 0 的有限数值", tier)
-			}
-		}
-		record.ServiceTier = tier
-		byTier[tier] = record
-	}
-
-	result := defaultCodexServiceTierMultipliers()
-	for i, record := range result {
-		if configured, ok := byTier[record.ServiceTier]; ok {
-			result[i] = configured
-		}
-	}
-	return result, nil
 }
 
 func normalizeCodexBillingRules(rules []store.CodexBillingRuleRecord) ([]store.CodexBillingRuleRecord, error) {

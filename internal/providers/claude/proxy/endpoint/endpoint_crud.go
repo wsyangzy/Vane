@@ -44,9 +44,13 @@ func (m *Manager) SyncEndpoints(configs []config.EndpointConfig) {
 	m.endpointsMu.Lock()
 	m.endpoints = endpoints
 	m.endpointsMu.Unlock()
+	m.clearPreferredEndpoints()
 
 	// 更新 GroupManager（创建组）
 	m.groupManager.UpdateGroups(endpoints)
+	if m.fastTester != nil {
+		m.fastTester.ClearCache()
+	}
 
 	slog.Info(fmt.Sprintf("🔄 [端点同步] 已同步 %d 个端点到管理器", len(configs)))
 }
@@ -97,6 +101,9 @@ func (m *Manager) AddEndpoint(cfg config.EndpointConfig) error {
 	copy(snapshot, m.endpoints)
 	m.endpointsMu.RUnlock()
 	m.groupManager.UpdateGroups(snapshot)
+	if m.fastTester != nil {
+		m.fastTester.ClearCache()
+	}
 
 	// 立即触发健康检查
 	go m.checkEndpointHealth(endpoint)
@@ -170,6 +177,9 @@ func (m *Manager) RemoveEndpoint(endpointKey string) error {
 	// 在锁外更新 GroupManager
 	go func() {
 		m.groupManager.UpdateGroups(snapshot)
+		if m.fastTester != nil {
+			m.fastTester.ClearCache()
+		}
 	}()
 
 	// 发布事件通知
@@ -247,6 +257,7 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 	targetEndpoint.mutex.Lock()
 	targetEndpoint.Config = cfg
 	targetEndpoint.mutex.Unlock()
+	m.clearPreferredEndpoints()
 
 	// 更新 Key 管理状态
 	tokenCount := len(cfg.Tokens)
@@ -268,6 +279,9 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 	copy(snapshot, m.endpoints)
 	m.endpointsMu.RUnlock()
 	m.groupManager.UpdateGroups(snapshot)
+	if m.fastTester != nil {
+		m.fastTester.ClearCache()
+	}
 
 	// 立即触发健康检查
 	go m.checkEndpointHealth(targetEndpoint)
@@ -293,8 +307,8 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 }
 
 // UpdateEndpointPriority updates the priority of an endpoint by name
-// 注意: SQLite 模式下，优先级应通过 UpdateEndpointConfig 更新
-// 此函数保留用于 YAML 配置模式的向后兼容
+// 注意: 运行时优先级应通过 UpdateEndpointConfig 更新。
+// 此函数保留用于旧调用方的向后兼容。
 func (m *Manager) UpdateEndpointPriority(name string, newPriority int) error {
 	if newPriority < 1 {
 		return fmt.Errorf("优先级必须大于等于1")

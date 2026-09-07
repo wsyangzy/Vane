@@ -2,7 +2,6 @@ package codexproxy
 
 import (
 	"math"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -215,14 +214,16 @@ func TestTokenParserParsesResponseFailedCapacityError(t *testing.T) {
 	if streamErr == nil {
 		t.Fatal("expected stream error to be parsed")
 	}
-	if streamErr.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("expected status 503, got %d", streamErr.StatusCode)
-	}
+	// 不再断言状态码：上游这条响应的 HTTP 状态码是 200，错误只在 SSE 事件里，
+	// 反代不该凭 message 关键字编一个 503 写进链路。改为断言处置动作。
 	if !strings.Contains(streamErr.Message, "Selected model is at capacity") {
 		t.Fatalf("unexpected message: %q", streamErr.Message)
 	}
 	if streamErr.Code != "server_error" {
 		t.Fatalf("expected code server_error, got %q", streamErr.Code)
+	}
+	if action := NewErrorClassifier().Classify(nil, streamErr); action != ActionFailover {
+		t.Fatalf("capacity 错误应切换端点，got %v", action)
 	}
 }
 
@@ -233,11 +234,42 @@ func TestTokenParserParsesTopLevelStreamingError(t *testing.T) {
 	if streamErr == nil {
 		t.Fatal("expected stream error to be parsed")
 	}
-	if streamErr.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("expected status 503, got %d", streamErr.StatusCode)
-	}
 	if streamErr.Type != "server_error" {
 		t.Fatalf("expected type server_error, got %q", streamErr.Type)
+	}
+	if action := NewErrorClassifier().Classify(nil, streamErr); action != ActionFailover {
+		t.Fatalf("capacity 错误应切换端点，got %v", action)
+	}
+}
+
+// TestTokenParserDoesNotInventStatusCode 锁定：上游用 HTTP 200 + SSE error 事件报错时，
+// 反代不得凭关键字造出提供商从未返回过的状态码——那会与真实的 429/401 在链路里混为一谈。
+func TestTokenParserDoesNotInventStatusCode(t *testing.T) {
+	lines := []string{
+		`data: {"error":{"type":"rate_limit_error","message":"rate_limit exceeded"}}`,
+		`data: {"error":{"type":"authentication_error","message":"unauthorized"}}`,
+		`data: {"error":{"code":"insufficient_quota","message":"billing hard limit reached"}}`,
+	}
+	classifier := NewErrorClassifier()
+	for _, line := range lines {
+		streamErr := NewTokenParser().ParseStreamingErrorLine([]byte(line))
+		if streamErr == nil {
+			t.Fatalf("expected stream error for %s", line)
+		}
+		// 换端点仍然是对的处置，但不能因此把它记成一次 429/401 响应
+		if action := classifier.Classify(nil, streamErr); action != ActionFailover {
+			t.Fatalf("%s: expected ActionFailover, got %v", line, action)
+		}
+	}
+
+	// 请求体本身不合法时换端点无意义，仍应立即失败
+	badRequest := NewTokenParser().ParseStreamingErrorLine(
+		[]byte(`data: {"error":{"type":"invalid_request_error","message":"unsupported parameter"}}`))
+	if badRequest == nil {
+		t.Fatal("expected stream error to be parsed")
+	}
+	if action := classifier.Classify(nil, badRequest); action != ActionFailFast {
+		t.Fatalf("invalid_request 应快速失败，got %v", action)
 	}
 }
 

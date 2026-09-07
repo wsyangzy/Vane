@@ -169,9 +169,8 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	gm.mutex.Lock()
 	defer gm.mutex.Unlock()
 
-	// SQLite 模式下需要保留 IsActive 状态
-	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
-	oldActiveGroups := snapshotActiveGroups(gm.groups, isSQLiteMode)
+	// Active state is persisted in the database and must survive endpoint refreshes.
+	oldActiveGroups := snapshotActiveGroups(gm.groups, true)
 	newGroups := buildGroupsFromEndpoints(endpoints, oldActiveGroups)
 	applyGroupPriorities(newGroups, gm.channelPriorities)
 	applyGroupPauseState(newGroups, gm.channelFailoverEnabled)
@@ -274,152 +273,9 @@ func allEndpointsFailoverDisabled(endpoints []*Endpoint) bool {
 // updateActiveGroups updates which groups are currently active
 // 冷却机制已移除
 func (gm *GroupManager) updateActiveGroups() {
-	// SQLite 模式下，禁用自动激活逻辑（由 enabled 字段控制）
-	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
-	// Failover.Enabled 仅控制"渠道间"故障转移/自动切换行为
-	autoSwitchEnabled := gm.failoverEnabled
+	// Group activation is explicit and persisted by the database-backed runtime.
+	return
 
-	var newlyActivatedGroup string
-
-	// Track previous active state to detect changes
-	previousActiveGroups := make(map[string]bool)
-	for _, group := range gm.groups {
-		previousActiveGroups[group.Name] = group.IsActive
-	}
-
-	// SQLite 模式下跳过自动激活逻辑（手动控制）
-	if isSQLiteMode {
-		return
-	}
-
-	// Determine which groups should be active based on priority
-	// Only auto-activate next group if auto switching is enabled
-	if autoSwitchEnabled {
-		// Auto mode: 保持"粘性"活跃渠道
-		sortedGroups := gm.getSortedGroups()
-
-		var desiredActive *GroupInfo
-		for _, group := range gm.groups {
-			if group.IsActive {
-				desiredActive = group
-				break
-			}
-		}
-
-		isAvailable := func(g *GroupInfo) bool {
-			if g == nil {
-				return false
-			}
-			return !g.ManuallyPaused
-		}
-
-		if !isAvailable(desiredActive) {
-			desiredActive = nil
-			for _, group := range sortedGroups {
-				if isAvailable(group) {
-					desiredActive = group
-					break
-				}
-			}
-		}
-
-		for _, group := range gm.groups {
-			wasActive := group.IsActive
-			group.IsActive = (desiredActive != nil && group == desiredActive)
-			if group.IsActive && !wasActive {
-				newlyActivatedGroup = group.Name
-			}
-		}
-	} else {
-		// Manual mode: Only activate priority 1 group at startup if no groups are active
-		currentActiveCount := 0
-		for _, group := range gm.groups {
-			if group.IsActive {
-				currentActiveCount++
-			}
-		}
-
-		// If no groups are active, determine if this is startup or runtime failure
-		if currentActiveCount == 0 {
-			// Check if this is truly startup (no groups have ever failed) or runtime failure
-			isActualStartup := true
-			for _, group := range gm.groups {
-				if group.ManuallyPaused {
-					isActualStartup = false
-					break
-				}
-			}
-
-			// Determine activation strategy based on startup vs runtime context
-			shouldAutoActivate := isActualStartup
-			if isActualStartup {
-				slog.Debug("🚀 [组管理] 检测到系统启动 - 尝试激活最高优先级可用组")
-			} else {
-				slog.Debug("⏸️ [组管理] 渠道间故障转移已关闭 - 运行时不自动激活其他渠道")
-			}
-
-			if shouldAutoActivate {
-				sortedGroups := gm.getSortedGroups()
-				for _, group := range sortedGroups {
-					if !group.ManuallyPaused {
-						hasHealthyEndpoints := false
-						for _, ep := range group.Endpoints {
-							if ep.IsHealthy() {
-								hasHealthyEndpoints = true
-								break
-							}
-						}
-						if hasHealthyEndpoints {
-							wasActive := group.IsActive
-							group.IsActive = true
-							if isActualStartup {
-								if autoSwitchEnabled {
-									slog.Info(fmt.Sprintf("🚀 [自动模式] 启动时激活最高优先级可用组: %s (有健康端点)", group.Name))
-								} else {
-									slog.Info(fmt.Sprintf("🚀 [手动模式] 启动时激活最高优先级可用组: %s (有健康端点) - 后续故障将启用挂起", group.Name))
-								}
-							} else {
-								slog.Info(fmt.Sprintf("🔄 [运行时] 激活可用组: %s (优先级: %d, 有健康端点)", group.Name, group.Priority))
-							}
-							if !wasActive && group.IsActive {
-								newlyActivatedGroup = group.Name
-							}
-							break
-						}
-					} else if group.ManuallyPaused {
-						slog.Debug(fmt.Sprintf("⏸️ [手动模式] 跳过已暂停组: %s (优先级: %d) - 等待手动恢复", group.Name, group.Priority))
-					}
-				}
-			}
-		}
-	}
-	activationChanged := false
-	for name, wasActive := range previousActiveGroups {
-		group := gm.groups[name]
-		if wasActive != (group != nil && group.IsActive) {
-			activationChanged = true
-			break
-		}
-	}
-	if !activationChanged {
-		for name, group := range gm.groups {
-			if group != nil && group.IsActive != previousActiveGroups[name] {
-				activationChanged = true
-				break
-			}
-		}
-	}
-	if activationChanged {
-		gm.activationRevision++
-	}
-
-	// Notify subscribers if a group was newly activated
-	if newlyActivatedGroup != "" {
-		if !previousActiveGroups[newlyActivatedGroup] {
-			slog.Debug(fmt.Sprintf("📡 [组通知] 检测到组状态变化: %s 变为活跃", newlyActivatedGroup))
-			gm.notifyGroupChange(newlyActivatedGroup)
-		}
-	}
 }
 
 // getSortedGroups returns groups sorted by priority (lower number = higher priority)
@@ -578,8 +434,6 @@ func (gm *GroupManager) activateGroupInternalLocked(groupName string, force bool
 		return fmt.Errorf("组不存在: %s", groupName)
 	}
 
-	// SQLite 模式下跳过健康检查（因为启动时健康检查还没开始）
-	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
 	activationLabel := "手动"
 	if !recordManual {
 		activationLabel = "故障转移"
@@ -594,43 +448,16 @@ func (gm *GroupManager) activateGroupInternalLocked(groupName string, force bool
 		}
 	}
 
-	// SQLite 模式下，允许激活没有健康端点的组（用户手动控制）
-	if isSQLiteMode {
-		// SQLite 模式：直接激活，不检查健康状态
-		if healthyCount == 0 {
-			slog.Info(fmt.Sprintf("🔄 [SQLite模式] 激活端点: %s (健康检查待执行)", groupName))
-		} else {
-			slog.Info(fmt.Sprintf("🔄 [SQLite模式] 激活端点: %s (健康端点: %d/%d)", groupName, healthyCount, totalCount))
-		}
+	// Activation is explicit in the database-backed runtime. Health only affects
+	// diagnostics; an unhealthy group can still be activated for a retry.
+	if healthyCount == 0 {
+		slog.Info(fmt.Sprintf("🔄 [激活] %s激活无健康端点组: %s (健康端点: %d/%d)",
+			activationLabel, groupName, healthyCount, totalCount))
 	} else {
-		// YAML 模式：保持原有的健康检查逻辑
-		// 核心逻辑：强制激活只能在完全没有健康端点时使用
-		if healthyCount == 0 {
-			// 没有健康端点的情况
-			if !force {
-				return fmt.Errorf("组 %s 中没有健康的端点，无法激活。如需强制激活请使用强制模式", groupName)
-			}
-			// 强制激活：只有在没有健康端点时才允许
-			slog.Warn(fmt.Sprintf("⚠️ [强制激活] %s激活无健康端点组: %s (健康端点: %d/%d, 操作时间: %s, 风险等级: HIGH)",
-				activationLabel, groupName, healthyCount, totalCount, time.Now().Format("2006-01-02 15:04:05")))
-			slog.Error(fmt.Sprintf("🚨 [安全警告] 强制激活可能导致请求失败! 组: %s, 建议尽快检查端点健康状态", groupName))
-
-			// 标记强制激活
-			targetGroup.ForcedActivation = true
-			targetGroup.ForcedActivationTime = time.Now()
-		} else {
-			// 有健康端点的情况
-			if force {
-				// 拒绝在有健康端点时使用强制激活
-				return fmt.Errorf("组 %s 有 %d 个健康端点，无需强制激活。请使用正常激活", groupName, healthyCount)
-			}
-			// 正常激活
-			targetGroup.ForcedActivation = false
-			targetGroup.ForcedActivationTime = time.Time{}
-
-			slog.Info(fmt.Sprintf("🔄 [正常激活] %s激活组: %s (健康端点: %d/%d)",
-				activationLabel, groupName, healthyCount, totalCount))
-		}
+		targetGroup.ForcedActivation = false
+		targetGroup.ForcedActivationTime = time.Time{}
+		slog.Info(fmt.Sprintf("🔄 [正常激活] %s激活组: %s (健康端点: %d/%d)",
+			activationLabel, groupName, healthyCount, totalCount))
 	}
 
 	// 停用所有组
@@ -746,14 +573,12 @@ func (gm *GroupManager) ManualPauseGroup(groupName string, duration time.Duratio
 	targetGroup.ManuallyPaused = true
 	gm.channelFailoverEnabled[groupName] = false
 
-	// 非 SQLite 模式下，“暂停渠道”应立即让其退出活跃状态，避免继续被选中。
-	// SQLite 模式下活跃状态由 enabled 字段/显式激活控制，这里不强制切换。
-	isSQLiteMode := gm.config.EndpointsStorage.Type == "sqlite"
-	if !isSQLiteMode && targetGroup.IsActive {
+	// Pausing a channel removes it from the active set immediately.
+	if targetGroup.IsActive {
 		targetGroup.IsActive = false
 		gm.activationRevision++
 	}
-	// 重新评估活跃组（非 SQLite 模式下可即时切换到其他可用渠道）
+	// Keep activation explicit; no automatic replacement is selected here.
 	gm.updateActiveGroups()
 
 	if duration > 0 {

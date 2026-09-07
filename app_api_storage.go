@@ -18,8 +18,7 @@ import (
 // ============================================================
 // 端点存储管理 API (SQLite)
 // ============================================================
-// 这些 API 仅在 endpoints_storage.type 为 "sqlite" 时可用
-// 提供端点的增删改查功能
+// 端点始终持久化在 SQLite，提供端点的增删改查功能。
 
 // EndpointRecordInfo 端点记录信息（给前端用的结构体）
 type EndpointRecordInfo struct {
@@ -144,7 +143,7 @@ type CreateClaudeCredentialGroupInput struct {
 // EndpointStorageStatus 端点存储状态
 type EndpointStorageStatus struct {
 	Enabled      bool   `json:"enabled"`       // 是否启用 SQLite 存储
-	StorageType  string `json:"storage_type"`  // "yaml" 或 "sqlite"
+	StorageType  string `json:"storage_type"`  // 固定为 "sqlite"
 	TotalCount   int    `json:"total_count"`   // 端点总数
 	EnabledCount int    `json:"enabled_count"` // 已启用端点数
 }
@@ -152,19 +151,13 @@ type EndpointStorageStatus struct {
 // GetEndpointStorageStatus 获取端点存储状态
 func (a *App) GetEndpointStorageStatus() EndpointStorageStatus {
 	a.mu.RLock()
-	cfg := a.config
 	endpointService := a.endpointService
 	a.mu.RUnlock()
 
 	status := EndpointStorageStatus{
-		StorageType: "yaml", // 默认
+		StorageType: "sqlite",
 	}
 
-	if cfg != nil {
-		status.StorageType = cfg.EndpointsStorage.Type
-	}
-
-	// 如果使用 SQLite 存储且服务已初始化
 	if endpointService != nil {
 		status.Enabled = true
 
@@ -193,7 +186,7 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 	a.mu.RUnlock()
 
 	if endpointService == nil {
-		return nil, fmt.Errorf("端点存储服务未启用 (需要设置 endpoints_storage.type: sqlite)")
+		return nil, fmt.Errorf("端点存储服务未初始化")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

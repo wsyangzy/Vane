@@ -48,7 +48,7 @@ test('fetchRequests normalizes request network fields in both naming styles', as
         path: '/v1/responses',
         client_ip: '192.0.2.10:1234',
         user_agent: 'Codex CLI/1.0',
-		billing_rule_snapshot: '{"mode":"fixed","rule_key":"model=*;tier=fast;context=long"}',
+		billing_rule_snapshot: '{"context_mode":"long","pricing_model":"gpt-5.6-sol","rule_mode":"fixed","rule_key":"model=*;tier=fast;context=long"}',
       }],
       total: 1,
       page: 1,
@@ -66,7 +66,8 @@ test('fetchRequests normalizes request network fields in both naming styles', as
     assert.equal(request.client_ip, '192.0.2.10:1234');
     assert.equal(request.userAgent, 'Codex CLI/1.0');
     assert.equal(request.user_agent, 'Codex CLI/1.0');
-	assert.equal(request.billingRuleSnapshot.mode, 'fixed');
+	assert.equal(request.billingRuleSnapshot.rule_mode, 'fixed');
+	assert.equal(request.billingRuleSnapshot.context_mode, 'long');
   } finally {
     globalThis.fetch = originalFetch;
   }

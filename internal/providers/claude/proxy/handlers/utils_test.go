@@ -146,58 +146,58 @@ func TestGetStatusCodeFromError(t *testing.T) {
 			expected: 200,
 		},
 
-		// 从错误信息中提取状态码
+		// 普通错误文本不携带可信的 HTTP 响应状态
 		{
 			name:     "错误信息包含404",
 			err:      errors.New("404 not found"),
 			resp:     nil,
-			expected: 404,
+			expected: 0,
 		},
 		{
 			name:     "错误信息包含500",
 			err:      errors.New("internal server error 500"),
 			resp:     nil,
-			expected: 500,
+			expected: 0,
 		},
 		{
 			name:     "错误信息包含401",
 			err:      errors.New("unauthorized 401"),
 			resp:     nil,
-			expected: 401,
+			expected: 0,
 		},
 		{
 			name:     "错误信息包含429",
 			err:      errors.New("too many requests 429"),
 			resp:     nil,
-			expected: 429,
+			expected: 0,
 		},
 
-		// HTTP状态码模式匹配
+		// 文本中的 HTTP/status 标签也不作为真实响应状态
 		{
 			name:     "HTTP status模式",
 			err:      errors.New("HTTP status 502"),
 			resp:     nil,
-			expected: 502,
+			expected: 0,
 		},
 		{
 			name:     "HTTP status模式 - 多字段",
 			err:      errors.New("request failed with HTTP status 503 bad gateway"),
 			resp:     nil,
-			expected: 503,
+			expected: 0,
 		},
 
-		// status code模式匹配
+		// status code 文本不作为真实响应状态
 		{
 			name:     "status code模式",
 			err:      errors.New("request failed with status code 504"),
 			resp:     nil,
-			expected: 504,
+			expected: 0,
 		},
 		{
 			name:     "status code模式 - 多字段",
 			err:      errors.New("error: status code 400 bad request"),
 			resp:     nil,
-			expected: 400,
+			expected: 0,
 		},
 
 		// 无法提取状态码的情况
@@ -237,11 +237,24 @@ func TestGetStatusCodeFromError(t *testing.T) {
 			name:     "错误信息包含多个状态码-取第一个",
 			err:      errors.New("error 404 then redirected with 301"),
 			resp:     nil,
-			expected: 404, // 应该匹配第一个找到的状态码
+			expected: 0,
 		},
 		{
 			name:     "错误信息包含部分匹配",
 			err:      errors.New("error code 2000"), // 不是有效的HTTP状态码
+			resp:     nil,
+			expected: 0,
+		},
+		// 纯网络错误里的数字不是状态码：反代不能凭子串编造一个提供商从未返回过的码
+		{
+			name:     "端口号 4001 不应被读成 400",
+			err:      errors.New("dial tcp 10.0.0.1:4001: connect: connection refused"),
+			resp:     nil,
+			expected: 0,
+		},
+		{
+			name:     "URL 端口 8404 不应被读成 404",
+			err:      errors.New(`Get "http://api.example.com:8404/v1/messages": context deadline exceeded`),
 			resp:     nil,
 			expected: 0,
 		},
@@ -251,37 +264,37 @@ func TestGetStatusCodeFromError(t *testing.T) {
 			name:     "状态码403",
 			err:      errors.New("forbidden 403"),
 			resp:     nil,
-			expected: 403,
+			expected: 0,
 		},
 		{
 			name:     "状态码405",
 			err:      errors.New("method not allowed 405"),
 			resp:     nil,
-			expected: 405,
+			expected: 0,
 		},
 		{
 			name:     "状态码408",
 			err:      errors.New("request timeout 408"),
 			resp:     nil,
-			expected: 408,
+			expected: 0,
 		},
 		{
 			name:     "状态码413",
 			err:      errors.New("payload too large 413"),
 			resp:     nil,
-			expected: 413,
+			expected: 0,
 		},
 		{
 			name:     "状态码501",
 			err:      errors.New("not implemented 501"),
 			resp:     nil,
-			expected: 501,
+			expected: 0,
 		},
 		{
 			name:     "状态码505",
 			err:      errors.New("HTTP version not supported 505"),
 			resp:     nil,
-			expected: 505,
+			expected: 0,
 		},
 	}
 
@@ -418,6 +431,18 @@ func TestWriteUpstreamErrorResponsePassesThroughEndpointError(t *testing.T) {
 	}
 }
 
+func TestWriteUpstreamErrorResponseKeepsStatusWhenBodyIsEmpty(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	WriteUpstreamErrorResponse(recorder, &EndpointError{StatusCode: http.StatusServiceUnavailable}, "relay fallback", http.StatusBadGateway)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+	if strings.Contains(recorder.Body.String(), "relay fallback") {
+		t.Fatalf("empty upstream body must not use relay fallback: %q", recorder.Body.String())
+	}
+}
+
 func TestWriteUpstreamErrorResponseFallsBackForNetworkError(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
@@ -463,6 +488,20 @@ func TestSendStreamInterruptedMessageUsesRetryableSSEError(t *testing.T) {
 	}
 	if decoded.Error.Message != "upstream 403 body" {
 		t.Fatalf("message = %q, want upstream 403 body", decoded.Error.Message)
+	}
+}
+
+// TestExtractUpstreamErrorMessageDoesNotTruncate 服务商的原文不得被截断改写。
+func TestExtractUpstreamErrorMessageDoesNotTruncate(t *testing.T) {
+	longBody := []byte(`{"error":{"message":"` + strings.Repeat("x", 8*1024) + `"}}`)
+
+	got := ExtractUpstreamErrorMessage(&EndpointError{StatusCode: 500, Body: longBody})
+
+	if got != string(longBody) {
+		t.Fatalf("expected provider body verbatim (len %d), got len %d", len(longBody), len(got))
+	}
+	if strings.Contains(got, "truncated") {
+		t.Fatalf("message should not carry a truncation suffix, got tail %q", got[len(got)-40:])
 	}
 }
 

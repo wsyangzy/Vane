@@ -7,9 +7,7 @@ import (
 )
 
 func TestUpdateGroupsPreservesSQLiteActiveAndAppliesChannelState(t *testing.T) {
-	cfg := &config.Config{
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
-	}
+	cfg := &config.Config{}
 	gm := NewGroupManager(cfg)
 
 	failoverDisabled := false
@@ -76,33 +74,6 @@ func TestUpdateGroupsPreservesSQLiteActiveAndAppliesChannelState(t *testing.T) {
 	}
 	if !gamma.ManuallyPaused {
 		t.Fatal("expected gamma to be paused when all endpoints disable failover")
-	}
-}
-
-func TestDisabledFailoverNeverAutoActivatesAnotherYAMLChannel(t *testing.T) {
-	cfg := &config.Config{
-		Failover: config.FailoverConfig{
-			Enabled:            false,
-			SuspendOnExhausted: false,
-		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "yaml"},
-	}
-	gm := NewGroupManager(cfg)
-	gm.UpdateGroups([]*Endpoint{
-		testGroupEndpoint("alpha-a", "alpha", 1, nil),
-		testGroupEndpoint("beta-a", "beta", 2, nil),
-	})
-
-	active := gm.GetActiveGroups()
-	if len(active) != 1 || active[0].Name != "alpha" {
-		t.Fatalf("startup active groups = %#v, want alpha", active)
-	}
-	if err := gm.ManualPauseGroup("alpha", 0); err != nil {
-		t.Fatalf("pause alpha: %v", err)
-	}
-	active = gm.GetActiveGroups()
-	if len(active) != 0 {
-		t.Fatalf("disabled failover activated another runtime channel: %#v", active)
 	}
 }
 

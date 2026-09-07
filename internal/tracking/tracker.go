@@ -165,16 +165,16 @@ type TokenUsage struct {
 
 // ModelPricing 模型定价配置
 type ModelPricing struct {
-	Input                      float64 `yaml:"input"`                          // per 1M tokens
-	Output                     float64 `yaml:"output"`                         // per 1M tokens
-	CacheCreation              float64 `yaml:"cache_creation"`                 // per 1M tokens (5分钟缓存创建，1.25x input)
-	CacheCreation1h            float64 `yaml:"cache_creation_1h"`              // per 1M tokens (1小时缓存创建，2x input)
-	CacheRead                  float64 `yaml:"cache_read"`                     // per 1M tokens (缓存读取)
-	LongContextThreshold       int64   `yaml:"long_context_threshold"`         // 原始输入 tokens 达到该值时启用，0 表示禁用
-	LongContextInputPrice      float64 `yaml:"long_context_input_price"`       // per 1M tokens
-	LongContextOutputPrice     float64 `yaml:"long_context_output_price"`      // per 1M tokens
-	LongContextCacheWritePrice float64 `yaml:"long_context_cache_write_price"` // per 1M tokens
-	LongContextCacheReadPrice  float64 `yaml:"long_context_cache_read_price"`  // per 1M tokens
+	Input                      float64 // per 1M tokens
+	Output                     float64 // per 1M tokens
+	CacheCreation              float64 // per 1M tokens (5分钟缓存创建，1.25x input)
+	CacheCreation1h            float64 // per 1M tokens (1小时缓存创建，2x input)
+	CacheRead                  float64 // per 1M tokens (缓存读取)
+	LongContextThreshold       int64   // 原始输入 tokens 达到该值时启用，0 表示禁用
+	LongContextInputPrice      float64 // per 1M tokens
+	LongContextOutputPrice     float64 // per 1M tokens
+	LongContextCacheWritePrice float64 // per 1M tokens
+	LongContextCacheReadPrice  float64 // per 1M tokens
 }
 
 type ModelMultiplier struct {
@@ -191,17 +191,6 @@ const (
 	ServiceTierFlex     = "flex"
 	ServiceTierFast     = "fast"
 )
-
-// ServiceTierMultiplier is a credential-group multiplier for one Codex
-// processing tier. It composes with the normal, model, and Long context
-// multipliers instead of replacing them.
-type ServiceTierMultiplier struct {
-	CostMultiplier          float64
-	InputCostMultiplier     float64
-	OutputCostMultiplier    float64
-	CacheCreationMultiplier float64
-	CacheReadMultiplier     float64
-}
 
 const (
 	BillingRuleModeMultiplier = "multiplier"
@@ -228,26 +217,6 @@ type BillingRule struct {
 	CacheReadPrice              float64
 }
 
-type BillingRuleSnapshot struct {
-	RuleKey                     string  `json:"rule_key"`
-	Mode                        string  `json:"mode"`
-	SelectorModel               string  `json:"selector_model"`
-	SelectorServiceTier         string  `json:"selector_service_tier"`
-	SelectorContext             string  `json:"selector_context"`
-	EffectiveModel              string  `json:"effective_model"`
-	EffectiveServiceTier        string  `json:"effective_service_tier"`
-	EffectiveContext            string  `json:"effective_context"`
-	CostMultiplier              float64 `json:"cost_multiplier"`
-	InputCostMultiplier         float64 `json:"input_cost_multiplier"`
-	OutputCostMultiplier        float64 `json:"output_cost_multiplier"`
-	CacheCreationCostMultiplier float64 `json:"cache_creation_cost_multiplier"`
-	CacheReadCostMultiplier     float64 `json:"cache_read_cost_multiplier"`
-	InputPrice                  float64 `json:"input_price"`
-	OutputPrice                 float64 `json:"output_price"`
-	CacheCreationPrice          float64 `json:"cache_creation_price"`
-	CacheReadPrice              float64 `json:"cache_read_price"`
-}
-
 // EndpointMultiplier 端点成本倍率（支持端点级别的成本调整）
 // 成本计算公式：模型基础定价 * 细分倍率 * 总倍率
 // 倍率叠加模式（不再是 either-or）：
@@ -265,9 +234,7 @@ type EndpointMultiplier struct {
 	LongContextOutputCostMultiplier        float64
 	LongContextCacheCreationCostMultiplier float64
 	LongContextCacheReadCostMultiplier     float64
-	DisableLongContextPricing              bool // 禁用 Long context 定价，默认 false（跟随模型）
-	DisableServiceTierPricing              bool // 禁用 Codex 服务档位计费，默认 true（不启用）
-	ServiceTierMultipliers                 map[string]ServiceTierMultiplier
+	DisableLongContextPricing              bool    // 禁用 Long context 定价，默认 false（跟随模型）
 	BillingOutputTokenSource               string  // Codex 输出计费口径，默认 output_tokens
 	ModelCostMultiplier                    float64 // 命中模型附加总倍率（默认 1.0）
 	ModelInputCostMultiplier               float64 // 命中模型附加输入倍率（默认 1.0）
@@ -291,7 +258,6 @@ func DefaultEndpointMultiplier() EndpointMultiplier {
 		LongContextOutputCostMultiplier:        1.0,
 		LongContextCacheCreationCostMultiplier: 1.0,
 		LongContextCacheReadCostMultiplier:     1.0,
-		DisableServiceTierPricing:              true,
 		BillingOutputTokenSource:               BillingOutputTokenSourceOutput,
 		ModelCostMultiplier:                    1.0,
 		ModelInputCostMultiplier:               1.0,
@@ -316,32 +282,6 @@ func NormalizeServiceTierForBilling(value string) string {
 	default:
 		return ""
 	}
-}
-
-// ResolveEndpointMultiplierForServiceTier folds the selected tier into the
-// ordinary endpoint multiplier fields so existing cost and snapshot paths stay
-// authoritative. Unknown and auto tiers do not receive a guessed multiplier.
-func ResolveEndpointMultiplierForServiceTier(mult EndpointMultiplier, serviceTier string) EndpointMultiplier {
-	if mult.DisableServiceTierPricing || len(mult.ServiceTierMultipliers) == 0 {
-		mult.ServiceTierMultipliers = nil
-		return mult
-	}
-
-	tier := NormalizeServiceTierForBilling(serviceTier)
-	tierMultiplier, ok := mult.ServiceTierMultipliers[tier]
-	if !ok {
-		mult.ServiceTierMultipliers = nil
-		return mult
-	}
-
-	mult.CostMultiplier = ensurePositiveMultiplier(mult.CostMultiplier) * ensurePositiveMultiplier(tierMultiplier.CostMultiplier)
-	mult.InputCostMultiplier = ensurePositiveMultiplier(mult.InputCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.InputCostMultiplier)
-	mult.OutputCostMultiplier = ensurePositiveMultiplier(mult.OutputCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.OutputCostMultiplier)
-	mult.CacheCreationCostMultiplier = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.CacheCreationMultiplier)
-	mult.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier1h) * ensurePositiveMultiplier(tierMultiplier.CacheCreationMultiplier)
-	mult.CacheReadCostMultiplier = ensurePositiveMultiplier(mult.CacheReadCostMultiplier) * ensurePositiveMultiplier(tierMultiplier.CacheReadMultiplier)
-	mult.ServiceTierMultipliers = nil
-	return mult
 }
 
 func ResolveEndpointMultiplierForModel(mult EndpointMultiplier, modelName string) EndpointMultiplier {
@@ -410,10 +350,12 @@ func resolveBillingRule(rules []BillingRule, modelName, serviceTier, contextMode
 	return selected
 }
 
-func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usage *TokenUsage, modelName, serviceTier string) (ModelPricing, EndpointMultiplier, *BillingRuleSnapshot) {
+// resolveBillingForRequest 应用凭证分组的组合计费规则。规则列表为空时走 legacy
+// 链路（模型倍率 + 分组/端点倍率）；非空时命中的单条规则对本次请求具有最终决定权，
+// 不再叠加 legacy 的模型/档位/端点倍率。返回命中的规则供快照记录。
+func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usage *TokenUsage, modelName, serviceTier string) (ModelPricing, EndpointMultiplier, *BillingRule) {
 	if len(mult.BillingRules) == 0 {
 		resolved := ResolveEndpointMultiplierForModel(mult, modelName)
-		resolved = ResolveEndpointMultiplierForServiceTier(resolved, serviceTier)
 		return pricing, resolved, nil
 	}
 
@@ -448,41 +390,7 @@ func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usa
 		effectiveMultiplier.CacheReadCostMultiplier = ensurePositiveMultiplier(rule.CacheReadCostMultiplier)
 	}
 
-	resolvedTier := NormalizeServiceTierForBilling(serviceTier)
-	snapshotInputPrice := pricing.Input
-	snapshotOutputPrice := pricing.Output
-	snapshotCacheCreationPrice := pricing.CacheCreation
-	snapshotCacheReadPrice := pricing.CacheRead
-	if rule.Mode == BillingRuleModeMultiplier && contextMode == BillingContextLong && pricing.LongContextInputPrice > 0 && pricing.LongContextOutputPrice > 0 {
-		snapshotInputPrice = pricing.LongContextInputPrice
-		snapshotOutputPrice = pricing.LongContextOutputPrice
-		if pricing.LongContextCacheWritePrice > 0 {
-			snapshotCacheCreationPrice = pricing.LongContextCacheWritePrice
-		}
-		if pricing.LongContextCacheReadPrice > 0 {
-			snapshotCacheReadPrice = pricing.LongContextCacheReadPrice
-		}
-	}
-	snapshot := &BillingRuleSnapshot{
-		RuleKey:                     billingRuleKey(*rule),
-		Mode:                        rule.Mode,
-		SelectorModel:               rule.Model,
-		SelectorServiceTier:         rule.ServiceTier,
-		SelectorContext:             rule.Context,
-		EffectiveModel:              strings.TrimSpace(modelName),
-		EffectiveServiceTier:        resolvedTier,
-		EffectiveContext:            contextMode,
-		CostMultiplier:              effectiveMultiplier.CostMultiplier,
-		InputCostMultiplier:         effectiveMultiplier.InputCostMultiplier,
-		OutputCostMultiplier:        effectiveMultiplier.OutputCostMultiplier,
-		CacheCreationCostMultiplier: effectiveMultiplier.CacheCreationCostMultiplier,
-		CacheReadCostMultiplier:     effectiveMultiplier.CacheReadCostMultiplier,
-		InputPrice:                  snapshotInputPrice,
-		OutputPrice:                 snapshotOutputPrice,
-		CacheCreationPrice:          snapshotCacheCreationPrice,
-		CacheReadPrice:              snapshotCacheReadPrice,
-	}
-	return pricing, effectiveMultiplier, snapshot
+	return pricing, effectiveMultiplier, rule
 }
 
 func billingRuleKey(rule BillingRule) string {
@@ -495,20 +403,14 @@ func billingRuleKey(rule BillingRule) string {
 	return "model=" + value(rule.Model) + ";tier=" + value(rule.ServiceTier) + ";context=" + value(rule.Context)
 }
 
-func billingRuleSnapshotJSON(snapshot *BillingRuleSnapshot) string {
-	if snapshot == nil {
-		return ""
-	}
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-func calculateRequestCost(usage *TokenUsage, pricing ModelPricing, multiplier EndpointMultiplier, modelName, serviceTier string) (CostBreakdown, EndpointMultiplier, string) {
-	effectivePricing, effectiveMultiplier, snapshot := resolveBillingForRequest(pricing, multiplier, usage, modelName, serviceTier)
-	return CalculateCost(usage, &effectivePricing, &effectiveMultiplier), effectiveMultiplier, billingRuleSnapshotJSON(snapshot)
+// calculateRequestCost 计算成本并同时产出计费决策快照。快照无条件生成——
+// 未配置组合规则的普通请求同样需要留下「命中哪行定价、走没走 long context、
+// 单价与各层倍率是多少」的证据，否则详情页只能靠除法反推。
+func calculateRequestCost(usage *TokenUsage, pricing ModelPricing, multiplier EndpointMultiplier, id billingIdentity) (CostBreakdown, EndpointMultiplier, *BillingDecisionSnapshot) {
+	effectivePricing, effectiveMultiplier, rule := resolveBillingForRequest(pricing, multiplier, usage, id.requestModel, id.serviceTier)
+	cost := CalculateCost(usage, &effectivePricing, &effectiveMultiplier)
+	snapshot := buildBillingDecisionSnapshot(usage, effectivePricing, effectiveMultiplier, id, rule)
+	return cost, effectiveMultiplier, snapshot
 }
 
 // CostBreakdown 成本分解结构
@@ -542,41 +444,9 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 		m = DefaultEndpointMultiplier()
 	}
 
-	// 确保倍率有效（0 或负数视为 1.0）
-	ensureMultiplier := func(v float64) float64 {
-		if v <= 0 {
-			return 1.0
-		}
-		return v
-	}
-
-	inputPrice := pricing.Input
-	outputPrice := pricing.Output
-	cacheCreationPrice := pricing.CacheCreation
-	cacheReadPrice := pricing.CacheRead
-	longContextActive := !m.DisableLongContextPricing &&
-		pricing.LongContextThreshold > 0 &&
-		usage.InputTokens > pricing.LongContextThreshold &&
-		pricing.LongContextInputPrice > 0 &&
-		pricing.LongContextOutputPrice > 0
-	if longContextActive {
-		inputPrice = pricing.LongContextInputPrice
-		outputPrice = pricing.LongContextOutputPrice
-		if pricing.LongContextCacheWritePrice > 0 {
-			cacheCreationPrice = pricing.LongContextCacheWritePrice
-		}
-		if pricing.LongContextCacheReadPrice > 0 {
-			cacheReadPrice = pricing.LongContextCacheReadPrice
-		}
-	}
-
-	// 获取 1h 缓存定价（如果未设置，使用当前输入价格的 2x 作为默认）
-	cacheCreation1hPrice := pricing.CacheCreation1h
-	if longContextActive && pricing.LongContextCacheWritePrice > 0 {
-		cacheCreation1hPrice = pricing.LongContextCacheWritePrice
-	} else if cacheCreation1hPrice <= 0 {
-		cacheCreation1hPrice = inputPrice * 2.0 // 默认 2x input
-	}
+	// 单价选择与分项倍率合并统一由 resolveBillingFactors 负责，计费快照复用同一份，
+	// 避免 long context 判定在两处漂移
+	f := resolveBillingFactors(usage, pricing, &m)
 
 	inputTokensForCost := usage.InputTokens
 	if usage.InputIncludesCacheRead {
@@ -584,53 +454,32 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 		inputTokensForCost -= min(inputTokensForCost, max(usage.CacheCreationTokens, int64(0)))
 	}
 
-	// 基础成本计算（每百万 token）
-	inputCost := float64(inputTokensForCost) * inputPrice / 1_000_000
+	// 基础成本计算（每百万 token）× 分项倍率
+	inputCost := float64(inputTokensForCost) * f.inputPrice / 1_000_000 * f.inputMult
 	outputTokensForCost := ResolveBillableOutputTokens(usage)
-	outputCost := float64(outputTokensForCost) * outputPrice / 1_000_000
-	cacheReadCost := float64(usage.CacheReadTokens) * cacheReadPrice / 1_000_000
+	outputCost := float64(outputTokensForCost) * f.outputPrice / 1_000_000 * f.outputMult
+	cacheReadCost := float64(usage.CacheReadTokens) * f.cacheReadPrice / 1_000_000 * f.cacheReadMult
 
 	// 分开计算 5m 和 1h 缓存成本
 	var cache5mCost, cache1hCost float64
 	if usage.CacheCreation5mTokens > 0 || usage.CacheCreation1hTokens > 0 {
 		// 有分开的缓存数据，分别计算
-		cache5mCost = float64(usage.CacheCreation5mTokens) * cacheCreationPrice / 1_000_000
-		cache1hCost = float64(usage.CacheCreation1hTokens) * cacheCreation1hPrice / 1_000_000
+		cache5mCost = float64(usage.CacheCreation5mTokens) * f.cacheCreationPrice / 1_000_000 * f.cacheCreationMult
+		cache1hCost = float64(usage.CacheCreation1hTokens) * f.cacheCreation1hPrice / 1_000_000 * f.cacheCreation1hMult
 	} else {
 		// 向后兼容：只有总数，默认使用 5m 定价
-		cache5mCost = float64(usage.CacheCreationTokens) * cacheCreationPrice / 1_000_000
-		cache1hCost = 0
+		cache5mCost = float64(usage.CacheCreationTokens) * f.cacheCreationPrice / 1_000_000 * f.cacheCreationMult
+	}
+
+	// 总倍率：分组/端点总倍率 × 模型总倍率，应用到所有分项
+	if f.totalMult != 1.0 {
+		inputCost *= f.totalMult
+		outputCost *= f.totalMult
+		cache5mCost *= f.totalMult
+		cache1hCost *= f.totalMult
+		cacheReadCost *= f.totalMult
 	}
 	cacheCreationCost := cache5mCost + cache1hCost
-
-	// 应用端点倍率（叠加模式）
-	// 1. 细分倍率：端点细分 * 模型细分，默认 1.0 = 不影响
-	inputCost *= ensureMultiplier(m.InputCostMultiplier) * ensureMultiplier(m.ModelInputCostMultiplier)
-	outputCost *= ensureMultiplier(m.OutputCostMultiplier) * ensureMultiplier(m.ModelOutputCostMultiplier)
-	cacheReadCost *= ensureMultiplier(m.CacheReadCostMultiplier) * ensureMultiplier(m.ModelCacheReadCostMultiplier)
-	cache5mCost *= ensureMultiplier(m.CacheCreationCostMultiplier)
-	cache1hCost *= ensureMultiplier(m.CacheCreationCostMultiplier1h)
-	cacheCreationCost = cache5mCost + cache1hCost
-	if longContextActive {
-		longContextMult := ensureMultiplier(m.LongContextCostMultiplier)
-		inputCost *= ensureMultiplier(m.LongContextInputCostMultiplier) * longContextMult
-		outputCost *= ensureMultiplier(m.LongContextOutputCostMultiplier) * longContextMult
-		cache5mCost *= ensureMultiplier(m.LongContextCacheCreationCostMultiplier) * longContextMult
-		cache1hCost *= ensureMultiplier(m.LongContextCacheCreationCostMultiplier) * longContextMult
-		cacheCreationCost = cache5mCost + cache1hCost
-		cacheReadCost *= ensureMultiplier(m.LongContextCacheReadCostMultiplier) * longContextMult
-	}
-
-	// 2. 总倍率：端点总倍率 * 模型总倍率，应用到所有分项
-	totalMult := ensureMultiplier(m.CostMultiplier) * ensureMultiplier(m.ModelCostMultiplier)
-	if totalMult != 1.0 {
-		inputCost *= totalMult
-		outputCost *= totalMult
-		cache5mCost *= totalMult
-		cache1hCost *= totalMult
-		cacheCreationCost *= totalMult
-		cacheReadCost *= totalMult
-	}
 
 	return CostBreakdown{
 		InputCost:           inputCost,
@@ -666,29 +515,29 @@ func CalculateCostFromTokens(inputTokens, outputTokens, cacheCreationTokens, cac
 
 // Config 使用跟踪配置
 type Config struct {
-	Enabled bool `yaml:"enabled"`
+	Enabled bool
 	// Environment scopes request tracking when dev and release share usage.db.
 	// Empty values are normalized to release for backwards compatibility.
-	Environment string `yaml:"-"`
+	Environment string
 
-	// 向后兼容：保留原有的 database_path 配置
-	DatabasePath string `yaml:"database_path"`
+	// SQLite database path.
+	DatabasePath string
 
 	// 新增：数据库配置（优先级高于 DatabasePath）
-	Database *config.DatabaseBackendConfig `yaml:"database,omitempty"`
+	Database *config.DatabaseBackendConfig
 
-	BufferSize       int                     `yaml:"buffer_size"`
-	BatchSize        int                     `yaml:"batch_size"`
-	FlushInterval    time.Duration           `yaml:"flush_interval"`
-	MaxRetry         int                     `yaml:"max_retry"`
-	RetentionDays    int                     `yaml:"retention_days"`
-	CleanupInterval  time.Duration           `yaml:"-"`
-	ArchiveDirectory string                  `yaml:"-"`
-	ModelPricing     map[string]ModelPricing `yaml:"model_pricing"`
-	DefaultPricing   ModelPricing            `yaml:"default_pricing"`
+	BufferSize       int
+	BatchSize        int
+	FlushInterval    time.Duration
+	MaxRetry         int
+	RetentionDays    int
+	CleanupInterval  time.Duration
+	ArchiveDirectory string
+	ModelPricing     map[string]ModelPricing
+	DefaultPricing   ModelPricing
 
 	// 🔥 新增：热池配置
-	HotPool *HotPoolSettings `yaml:"hot_pool,omitempty"`
+	HotPool *HotPoolSettings
 }
 
 func normalizeTrackingEnvironment(value string) string {
@@ -700,11 +549,11 @@ func normalizeTrackingEnvironment(value string) string {
 
 // HotPoolSettings 热池配置
 type HotPoolSettings struct {
-	Enabled          bool          `yaml:"enabled"`            // 是否启用热池模式（默认true）
-	MaxAge           time.Duration `yaml:"max_age"`            // 最大存活时间（默认30分钟）
-	MaxSize          int           `yaml:"max_size"`           // 最大容量（默认10000）
-	CleanupInterval  time.Duration `yaml:"cleanup_interval"`   // 清理间隔（默认1分钟）
-	ArchiveOnCleanup bool          `yaml:"archive_on_cleanup"` // 清理时是否归档（默认true）
+	Enabled          bool          // 是否启用热池模式（默认true）
+	MaxAge           time.Duration // 最大存活时间（默认30分钟）
+	MaxSize          int           // 最大容量（默认10000）
+	CleanupInterval  time.Duration // 清理间隔（默认1分钟）
+	ArchiveOnCleanup bool          // 清理时是否归档（默认true）
 }
 
 // WriteRequest 写操作请求
@@ -988,7 +837,7 @@ func (ut *UsageTracker) initHotPool() {
 	var hotPoolConfig HotPoolConfig
 
 	if ut.config.HotPool != nil {
-		// 使用配置文件中的设置
+		// 使用调用方提供的热池设置
 		if !ut.config.HotPool.Enabled {
 			hotPoolEnabled = false
 		}
@@ -1145,7 +994,7 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 
 	// 优先使用新的Database配置
 	if config.Database != nil {
-		// 兼容：配置里写了 database 但没写 path 时，回退到 DatabasePath（由上层默认填充为用户目录路径）。
+		// Use the normalized SQLite path when no backend path is supplied.
 		if config.Database.Path != "" {
 			dbConfig.DatabasePath = config.Database.Path
 		} else {
@@ -1157,7 +1006,7 @@ func buildDatabaseConfig(config *Config, globalTimezone string) (DatabaseConfig,
 			dbConfig.Timezone = globalTimezone
 		}
 	} else {
-		// 向后兼容：使用原有的DatabasePath配置
+		// Use the normalized SQLite database path.
 		dbConfig.DatabasePath = config.DatabasePath
 	}
 
@@ -2151,18 +2000,18 @@ func (ut *UsageTracker) GetEndpointMultiplier(endpointName string) EndpointMulti
 	return DefaultEndpointMultiplier()
 }
 
-func (ut *UsageTracker) GetEndpointMultiplierForEndpoint(channelName, endpointName string) EndpointMultiplier {
-	return ut.GetEndpointMultiplierForEndpointWithGroup(channelName, "", endpointName)
+func (ut *UsageTracker) GetEndpointMultiplierForEndpoint(provider, channelName, endpointName string) EndpointMultiplier {
+	return ut.GetEndpointMultiplierForEndpointWithGroup(provider, channelName, "", endpointName)
 }
 
-func (ut *UsageTracker) GetEndpointMultiplierForEndpointWithGroup(channelName, groupName, endpointName string) EndpointMultiplier {
+func (ut *UsageTracker) GetEndpointMultiplierForEndpointWithGroup(provider, channelName, groupName, endpointName string) EndpointMultiplier {
 	ut.mu.RLock()
 	defer ut.mu.RUnlock()
 
 	if ut.endpointMu == nil {
 		return DefaultEndpointMultiplier()
 	}
-	for _, key := range endpointMultiplierLookupKeys(channelName, groupName, endpointName) {
+	for _, key := range endpointMultiplierLookupKeys(provider, channelName, groupName, endpointName) {
 		if m, exists := ut.endpointMu[key]; exists {
 			return m
 		}
@@ -2170,18 +2019,18 @@ func (ut *UsageTracker) GetEndpointMultiplierForEndpointWithGroup(channelName, g
 	return DefaultEndpointMultiplier()
 }
 
-func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModel(channelName, endpointName, modelName string) EndpointMultiplier {
-	return ut.GetEndpointMultiplierForEndpointAndModelWithGroup(channelName, "", endpointName, modelName)
+func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModel(provider, channelName, endpointName, modelName string) EndpointMultiplier {
+	return ut.GetEndpointMultiplierForEndpointAndModelWithGroup(provider, channelName, "", endpointName, modelName)
 }
 
-func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModelWithGroup(channelName, groupName, endpointName, modelName string) EndpointMultiplier {
+func (ut *UsageTracker) GetEndpointMultiplierForEndpointAndModelWithGroup(provider, channelName, groupName, endpointName, modelName string) EndpointMultiplier {
 	ut.mu.RLock()
 	defer ut.mu.RUnlock()
 
 	if ut.endpointMu == nil {
 		return DefaultEndpointMultiplier()
 	}
-	for _, key := range endpointMultiplierLookupKeys(channelName, groupName, endpointName) {
+	for _, key := range endpointMultiplierLookupKeys(provider, channelName, groupName, endpointName) {
 		if m, exists := ut.endpointMu[key]; exists {
 			return ResolveEndpointMultiplierForModel(m, modelName)
 		}
@@ -2296,12 +2145,29 @@ func (ut *UsageTracker) ForceFlush() error {
 }
 
 // GetPricing 获取模型定价
+// GetPricing 按模型名获取定价（legacy 入口，不带 provider 与档位维度）。
+//
+// 仅供拿不到 provider 上下文的降级路径使用：失败请求的 token 恢复、成本兜底估算
+// （RequestCompleteData 只有 ModelName）。这些路径同样不带倍率（multiplier 传 nil），
+// 其结果会在热池归档时被 archive_manager.calculateCost 的完整计算覆盖。
+//
+// 跨 provider 同名模型在此取第一个匹配（claude 优先）。要精确定价请走
+// modelPricingLookupKeys 并透传 provider 与 service tier。
 func (ut *UsageTracker) GetPricing(modelName string) ModelPricing {
 	ut.mu.RLock()
 	defer ut.mu.RUnlock()
 
-	if pricing, exists := ut.pricing[modelName]; exists {
-		return pricing
+	for _, key := range []string{
+		ModelPricingKey("claude", modelName, ""),
+		ModelPricingKey("codex", modelName, ""),
+		strings.TrimSpace(modelName),
+	} {
+		if key == "" {
+			continue
+		}
+		if pricing, exists := ut.pricing[key]; exists {
+			return pricing
+		}
 	}
 	return ut.config.DefaultPricing
 }
@@ -2769,8 +2635,6 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 			billingOutputTokenSource := mult.BillingOutputTokenSource
 			mult = DefaultEndpointMultiplier()
 			mult.BillingOutputTokenSource = billingOutputTokenSource
-		} else {
-			mult = ResolveEndpointMultiplierForServiceTier(mult, req.ServiceTier)
 		}
 		req.CostMultiplier = ensurePositiveMultiplier(mult.CostMultiplier)
 		req.InputCostMultiplier = ensurePositiveMultiplier(mult.InputCostMultiplier)
@@ -2926,26 +2790,14 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	var cost CostBreakdown
 	var pricing ModelPricing
 	var hasPricing bool
+	var pricingModel, pricingTier string
 	var multiplier *EndpointMultiplier
 	var multiplierValue EndpointMultiplier
 
 	ut.mu.RLock()
-	if ut.pricing != nil {
-		p, exists := ut.pricing[modelName]
-		if !exists {
-			defaultPricingKey := "_default"
-			if defaultProvider(provider) == "codex" {
-				defaultPricingKey = "_codex_default"
-			}
-			p, exists = ut.pricing[defaultPricingKey]
-		}
-		if exists {
-			pricing = p
-			hasPricing = true
-		}
-	}
+	pricing, pricingModel, pricingTier, hasPricing = lookupModelPricing(ut.pricing, provider, modelName, serviceTier)
 	if hasPricing && ut.endpointMu != nil {
-		for _, key := range endpointMultiplierLookupKeys(channel, groupName, endpointName) {
+		for _, key := range endpointMultiplierLookupKeys(provider, channel, groupName, endpointName) {
 			if m, ok := ut.endpointMu[key]; ok {
 				multiplierValue = m
 				multiplier = &multiplierValue
@@ -2978,11 +2830,20 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 			CacheReadTokens:          cacheReadTokens,
 			InputIncludesCacheRead:   inputIncludesCacheRead,
 		}
-		var resolvedSnapshot string
-		cost, multiplierValue, resolvedSnapshot = calculateRequestCost(usage, pricing, multiplierValue, modelName, serviceTier)
+		var resolvedSnapshot *BillingDecisionSnapshot
+		cost, multiplierValue, resolvedSnapshot = calculateRequestCost(usage, pricing, multiplierValue, billingIdentity{
+			provider:     provider,
+			requestModel: modelName,
+			serviceTier:  serviceTier,
+			pricingModel: pricingModel,
+			pricingTier:  pricingTier,
+		})
 		multiplier = &multiplierValue
-		if resolvedSnapshot != "" {
-			billingRuleSnapshot = resolvedSnapshot
+		if snapshotJSON := billingDecisionSnapshotJSON(resolvedSnapshot); snapshotJSON != "" {
+			billingRuleSnapshot = snapshotJSON
+		}
+		// 组合规则模式下倍率被规则整体接管，落库的倍率快照需同步为规则的最终值
+		if resolvedSnapshot != nil && resolvedSnapshot.RuleKey != "" {
 			costMultSnap = multiplierValue.CostMultiplier
 			inputCostMultSnap = multiplierValue.InputCostMultiplier
 			outputCostMultSnap = multiplierValue.OutputCostMultiplier

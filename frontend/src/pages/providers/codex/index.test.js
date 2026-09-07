@@ -35,7 +35,7 @@ test('Codex multiplier form state preserves fractional expressions', () => {
 test('credential-group long-context billing uses a switch and detailed multipliers', () => {
   assert.match(source, /role="switch"/);
   assert.match(source, /普通成本倍率/);
-  assert.match(source, /LongContextMultiplierSettings/);
+  assert.match(source, /MultiplierSettingsModal/);
   assert.match(source, /Long context 倍率已配置/);
   assert.match(source, /setLongContextSettingsOpen\(true\)/);
   assert.match(source, /Long context 总倍率/);
@@ -45,14 +45,15 @@ test('credential-group long-context billing uses a switch and detailed multiplie
   assert.match(source, /Long context 缓存读取/);
 });
 
-test('credential-group service-tier billing configures four independent multiplier sets', () => {
-  assert.match(source, /ServiceTierMultiplierSettings/);
-  assert.match(source, /disableServiceTierPricing/);
-  assert.match(source, /serviceTierMultipliers/);
-  assert.match(source, /Standard、Batch、Flex 或 Fast mode/);
-  assert.match(source, /handleServiceTierToggle/);
-  assert.match(source, /handleServiceTierSave/);
+test('credential-group standard multipliers are configured in the same modal as long context', () => {
+  assert.match(source, /setStandardMultiplierSettingsOpen\(true\)/);
+  assert.match(source, /handleStandardMultiplierSave/);
+  // 每个分项倍率都要能指到对应单价，弹窗才能给出「基础单价 → 实际单价」对照
+  assert.match(source, /priceKey: 'inputPrice'/);
+  assert.match(source, /priceKey: 'cacheCreationPrice5m'/);
+  assert.match(source, /priceKey: 'longContextCacheWritePrice'/);
 });
+
 
 test('Codex credential groups preserve single-click switching and use double-click details', () => {
   assert.match(source, /dailyCostLimitUSD/);

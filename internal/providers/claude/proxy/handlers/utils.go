@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -17,11 +16,6 @@ import (
 const (
 	// 上游错误响应体最大读取长度
 	maxUpstreamErrorBodyBytes = 64 * 1024
-	// SSE 错误消息字段最大长度（注入到 message 字段前截断）
-	// 避免大段 HTML/JSON 错误体导致单条 SSE 事件过大，部分客户端有事件大小限制
-	maxErrorMessageBytes = 2 * 1024
-	// 错误消息截断后的省略提示
-	errorMessageTruncationSuffix = "...(truncated)"
 )
 
 // EndpointError 携带提供商原始响应信息的错误类型。
@@ -36,6 +30,15 @@ type EndpointError struct {
 
 func (e *EndpointError) Error() string {
 	return fmt.Sprintf("endpoint returned error: %d, url: %s", e.StatusCode, e.URL)
+}
+
+// HTTPStatus exposes the status actually returned by the upstream response.
+// Callers must not infer a provider status from arbitrary error text.
+func (e *EndpointError) HTTPStatus() int {
+	if e == nil {
+		return 0
+	}
+	return e.StatusCode
 }
 
 func newEndpointErrorFromResponse(resp *http.Response, targetURL string) *EndpointError {
@@ -131,83 +134,40 @@ func IsRetryableStatus(statusCode int) bool {
 	}
 }
 
-// GetStatusCodeFromError 从错误和响应中提取状态码
-// 优先级：
-// 1. 首先从 http.Response 获取状态码
-// 2. 然后从错误信息字符串中解析状态码
-// 3. 最后返回0表示网络错误或无法确定状态码的情况
+// GetStatusCodeFromError 只返回 HTTP 层实际提供的状态码。
+// 普通 error 文本不携带可信的提供商响应，不能从其中猜测状态码。
 func GetStatusCodeFromError(err error, resp *http.Response) int {
-	// 优先从响应对象获取状态码
 	if resp != nil {
 		return resp.StatusCode
 	}
 
-	// 从 EndpointError 提取状态码（携带提供商原始信息）
 	var epErr *EndpointError
 	if errors.As(err, &epErr) {
-		return epErr.StatusCode
+		return epErr.HTTPStatus()
 	}
-
-	// 如果没有响应对象，尝试从错误信息中提取状态码
-	if err == nil {
-		return 0
-	}
-
-	errorStr := err.Error()
-
-	// 常见的HTTP状态码提取模式
-	statusCodes := []int{400, 401, 403, 404, 405, 406, 408, 409, 410, 413, 414, 415, 416, 417, 429, 500, 501, 502, 503, 504, 505}
-
-	for _, code := range statusCodes {
-		codeStr := strconv.Itoa(code)
-		if strings.Contains(errorStr, codeStr) {
-			return code
-		}
-	}
-
-	// 尝试匹配HTTP状态码模式 "HTTP status xxx"
-	if strings.Contains(errorStr, "HTTP status") {
-		parts := strings.Fields(errorStr)
-		for i, part := range parts {
-			if part == "status" && i+1 < len(parts) {
-				if code, err := strconv.Atoi(parts[i+1]); err == nil {
-					return code
-				}
-			}
-		}
-	}
-
-	// 尝试匹配 "status code xxx" 模式
-	if strings.Contains(errorStr, "status code") {
-		parts := strings.Fields(errorStr)
-		for i, part := range parts {
-			if part == "code" && i+1 < len(parts) {
-				if code, err := strconv.Atoi(parts[i+1]); err == nil {
-					return code
-				}
-			}
-		}
-	}
-
-	// 无法提取状态码，返回0表示网络错误或其他未知错误
 	return 0
 }
 
 // WriteUpstreamErrorResponse 写入上游错误响应到客户端。
-// 如果 err 携带提供商原始响应（EndpointError），则完整透传：原始状态码、Content-Type 和响应体。
-// 对于非 EndpointError（网络超时等），回退到 http.Error 输出纯文本，使用 fallbackStatusCode。
-//
-// 注意：流式请求的 403 等问题已通过 sendStreamInterruptedMessage（SSE 包裹）解决，
-// 此函数仅用于非流式请求的最终错误响应，直接透传提供商原始信息便于调试。
+// 如果 err 携带提供商原始响应（EndpointError），完整透传状态码、Content-Type 和响应体，
+// 即使响应体为空也不能改成 Relay 自己的状态或文案。
 func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg string, fallbackStatusCode int) {
 	var epErr *EndpointError
-	if errors.As(err, &epErr) && len(epErr.Body) > 0 {
+	if errors.As(err, &epErr) {
 		if epErr.ContentType != "" {
 			w.Header().Set("Content-Type", epErr.ContentType)
 		}
 		w.WriteHeader(epErr.StatusCode)
-		w.Write(epErr.Body)
+		if len(epErr.Body) > 0 {
+			_, _ = w.Write(epErr.Body)
+		}
 		return
+	}
+	if fallbackStatusCode <= 0 {
+		fallbackStatusCode = http.StatusBadGateway
+	}
+	if fallbackMsg == "" {
+		fallbackMsg = http.StatusText(fallbackStatusCode)
 	}
 	http.Error(w, fallbackMsg, fallbackStatusCode)
 }
@@ -216,41 +176,30 @@ func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg st
 // 如果是 EndpointError 且携带原始响应体，返回响应体文本；
 // 否则返回 error.Error() 原始错误描述（如网络超时信息）。
 //
-// 🔧 [P1-S2 修复] 截断超长消息并清洗无效 UTF-8，避免：
-//   - 大段错误体导致单条 SSE 事件过大，部分客户端有事件大小限制
-//   - 无效 UTF-8 字节序列（如截断的多字节字符）导致客户端 JSON 解析失败
+// 原文一律原样返回，不截断、不改写、不加前缀——展示的就该是服务商说了什么。
+// 长度上限由读取侧的 maxUpstreamErrorBodyBytes 兜底，这里不再二次裁剪。
 func ExtractUpstreamErrorMessage(err error) string {
 	if err == nil {
 		return "unknown error"
 	}
 	var epErr *EndpointError
-	if errors.As(err, &epErr) && len(epErr.Body) > 0 {
-		return sanitizeErrorMessage(string(epErr.Body))
+	if errors.As(err, &epErr) {
+		if len(epErr.Body) == 0 {
+			return ""
+		}
+		return toStorableText(string(epErr.Body))
 	}
-	return sanitizeErrorMessage(err.Error())
+	return toStorableText(err.Error())
 }
 
-// sanitizeErrorMessage 清洗错误消息以确保安全注入 JSON 字符串字段：
-//  1. 替换无效 UTF-8 序列为 Unicode 替换字符 U+FFFD
-//  2. 超过 maxErrorMessageBytes 时按 UTF-8 边界截断并追加省略提示
+// toStorableText 只做一件事：把无效 UTF-8 字节序列换成 U+FFFD。
 //
-// 设计原则：保持调试可读性的前提下，避免污染下游 JSON/SSE 协议。
-func sanitizeErrorMessage(s string) string {
-	if s == "" {
+// 这不是对内容的加工，而是编码层的最低要求——错误原文会写进 SQLite TEXT 列
+// 并经 JSON 序列化下发，无效 UTF-8 会让写库或客户端解析直接失败。
+// 合法 UTF-8 的输入在这里原样返回，一个字节都不动。
+func toStorableText(s string) string {
+	if s == "" || utf8.ValidString(s) {
 		return s
 	}
-	// 修正无效 UTF-8：strings.ToValidUTF8 会用替换字符替换无效字节序列
-	if !utf8.ValidString(s) {
-		s = strings.ToValidUTF8(s, "�")
-	}
-	// 限长：超出阈值时按 rune 边界截断，避免再次破坏 UTF-8
-	if len(s) > maxErrorMessageBytes {
-		truncated := s[:maxErrorMessageBytes]
-		// 回退到最近的 rune 边界，避免半截多字节字符
-		for !utf8.ValidString(truncated) && len(truncated) > 0 {
-			truncated = truncated[:len(truncated)-1]
-		}
-		s = truncated + errorMessageTruncationSuffix
-	}
-	return s
+	return strings.ToValidUTF8(s, "�")
 }

@@ -102,7 +102,7 @@ func (a *App) GetNextAvailableChannel(excludeChannel string) (string, error) {
 }
 
 // ActivateGroup 激活指定组
-// 组名 = 渠道(channel)（SQLite 模式）；未配置 channel 时回退为端点名（YAML 模式兼容）
+// 组名使用渠道名；旧调用方未提供渠道名时回退为端点名。
 func (a *App) ActivateGroup(name string) error {
 	a.mu.RLock()
 	manager := a.endpointManager
@@ -135,7 +135,7 @@ func (a *App) ActivateGroup(name string) error {
 		}
 	}
 
-	// 内存中激活组（兼容 YAML 模式）
+	// 数据库不可用时的内存回退
 	manager.SetFailoverStartChannel(name)
 	return manager.ManualActivateGroup(name)
 }
@@ -210,7 +210,7 @@ func (a *App) PauseGroup(name string) error {
 		return nil
 	}
 
-	// YAML 模式：预检查是否存在可切换渠道，避免暂停活跃渠道后无可用渠道。
+	// 数据库不可用时，预检查是否存在可切换渠道。
 	if wasActive && autoSwitchEnabled {
 		if next, err := manager.SelectNextAvailableChannel(name); err != nil || next == "" {
 			return fmt.Errorf("无法暂停活跃渠道（无可切换渠道）: %w", err)

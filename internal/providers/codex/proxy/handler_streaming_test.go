@@ -52,8 +52,8 @@ func TestHandleStreamingReturnsCapacityErrorBeforeClientOutput(t *testing.T) {
 	if streamErr == nil {
 		t.Fatal("expected capacity stream error")
 	}
-	if streamErr.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("expected status 503, got %d", streamErr.StatusCode)
+	if action := NewErrorClassifier().Classify(nil, streamErr); action != ActionFailover {
+		t.Fatalf("capacity 错误应切换端点，got %v", action)
 	}
 	if recorder.Body.Len() != 0 {
 		t.Fatalf("expected no client output before failover, got %q", recorder.Body.String())
@@ -89,7 +89,7 @@ func TestRecordForwardingStoresCredentialGroupName(t *testing.T) {
 		usageTracker: tracker,
 	}
 	tracker.UpdateEndpointMultipliers(map[string]tracking.EndpointMultiplier{
-		tracking.EndpointMultiplierKey("CCTQ", "国内"): {
+		tracking.EndpointMultiplierKey("codex", "CCTQ", "国内"): {
 			CostMultiplier:              9,
 			BillingOutputTokenSource:    tracking.BillingOutputTokenSourceOutput,
 			InputCostMultiplier:         9,
@@ -97,7 +97,7 @@ func TestRecordForwardingStoresCredentialGroupName(t *testing.T) {
 			CacheReadCostMultiplier:     9,
 			CacheCreationCostMultiplier: 9,
 		},
-		tracking.EndpointMultiplierGroupKey("CCTQ", "轮询", "国内"): {
+		tracking.EndpointMultiplierGroupKey("codex", "CCTQ", "轮询", "国内"): {
 			CostMultiplier:           2.5,
 			BillingOutputTokenSource: tracking.BillingOutputTokenSourceReasoning,
 		},
@@ -253,13 +253,13 @@ func TestTryEndpointCyclePersistsRetryCountAcrossEndpointsAndLoops(t *testing.T)
 	var endpointChain []chainNode
 	attemptCount := 0
 
-	first := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount, "")
+	first := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount)
 	if first.completed {
 		t.Fatalf("expected first loop to exhaust endpoints, got %+v", first)
 	}
 	manager.ResetUnhealthy()
 	failedIDs = failedIDs[:0]
-	second := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount, "")
+	second := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount)
 	if !second.completed {
 		t.Fatalf("expected second loop to succeed, got %+v", second)
 	}
@@ -273,7 +273,7 @@ func TestTryEndpointCyclePersistsRetryCountAcrossEndpointsAndLoops(t *testing.T)
 	}
 }
 
-func TestTryEndpointCycleSkipsCredentialGroupAfterInsufficientQuota(t *testing.T) {
+func TestTryEndpointCycleTriesAllEndpointsAfterQuotaResponse(t *testing.T) {
 	var primaryBHits atomic.Int32
 	var backupHits atomic.Int32
 
@@ -353,50 +353,27 @@ func TestTryEndpointCycleSkipsCredentialGroupAfterInsufficientQuota(t *testing.T
 	var failedIDs []int64
 	var endpointChain []chainNode
 
-	result := handler.tryEndpointCycle(recorder, req, body, "req-rate-limit-group", time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, new(int), "")
+	result := handler.tryEndpointCycle(recorder, req, body, "req-rate-limit-group", time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, new(int))
 	if !result.completed {
 		t.Fatalf("expected request to complete via backup endpoint, got incomplete result: %+v", result)
 	}
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected backup endpoint 200, got %d body=%q", recorder.Code, recorder.Body.String())
 	}
-	if primaryBHits.Load() != 0 {
-		t.Fatalf("expected same credential group endpoint to be skipped, got %d hits", primaryBHits.Load())
+	if primaryBHits.Load() != 1 {
+		t.Fatalf("expected all endpoints in the credential group to be tried, got %d hits", primaryBHits.Load())
 	}
 	if backupHits.Load() != 1 {
 		t.Fatalf("expected backup endpoint to be hit once, got %d hits", backupHits.Load())
 	}
-	if len(endpointChain) != 2 {
-		t.Fatalf("expected chain to include failed primary and backup, got %#v", endpointChain)
+	if len(endpointChain) != 3 {
+		t.Fatalf("expected chain to include both failed primary endpoints and backup, got %#v", endpointChain)
 	}
-	if endpointChain[0].CredentialGroup != "主分组" || endpointChain[1].CredentialGroup != "备用分组" {
+	if endpointChain[0].CredentialGroup != "主分组" || endpointChain[1].CredentialGroup != "主分组" || endpointChain[2].CredentialGroup != "备用分组" {
 		t.Fatalf("unexpected endpoint chain groups: %#v", endpointChain)
 	}
 	if endpointChain[0].StatusCode != http.StatusForbidden || !strings.Contains(endpointChain[0].Error, "Insufficient account balance") {
 		t.Fatalf("expected failed chain node to include upstream error, got %#v", endpointChain[0])
-	}
-}
-
-func TestIsCredentialGroupFailureKeepsTransient429AtEndpointScope(t *testing.T) {
-	for _, summary := range []string{
-		`{"error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded for account, please retry later"}}`,
-		`{"error":{"code":"rate_limit_exceeded","message":"Rate limited; your available quota will reset shortly"}}`,
-	} {
-		if isCredentialGroupFailure(http.StatusTooManyRequests, summary) {
-			t.Fatalf("transient rate limit should stay at endpoint scope: %s", summary)
-		}
-	}
-}
-
-func TestIsCredentialGroupFailureTreatsExhaustedQuota429AsGroupFailure(t *testing.T) {
-	for _, summary := range []string{
-		`{"error":{"code":"insufficient_quota","message":"You exceeded your current quota, please check your plan and billing details."}}`,
-		`{"error":{"code":"billing_exhausted","message":"Billing exhausted for this account"}}`,
-		`{"error":{"code":"insufficient_balance","message":"Insufficient balance"}}`,
-	} {
-		if !isCredentialGroupFailure(http.StatusTooManyRequests, summary) {
-			t.Fatalf("account-level quota failure should skip the credential group: %s", summary)
-		}
 	}
 }
 
@@ -480,7 +457,7 @@ func TestTryEndpointCycleKeepsSameCredentialGroupAfterTransient429(t *testing.T)
 	var failedIDs []int64
 	var endpointChain []chainNode
 
-	result := handler.tryEndpointCycle(recorder, req, body, "req-transient-429", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int), "turn-transient-429")
+	result := handler.tryEndpointCycle(recorder, req, body, "req-transient-429", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int))
 	if !result.completed {
 		t.Fatalf("expected request to complete via same-group endpoint, got incomplete result: %+v", result)
 	}
@@ -546,7 +523,7 @@ func TestTryEndpointCycleKeepsRepeatedEndpointAttemptsAcrossLoops(t *testing.T) 
 	first := handler.tryEndpointCycle(
 		httptest.NewRecorder(),
 		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))),
-		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int), "",
+		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int),
 	)
 	if first.completed {
 		t.Fatalf("expected first 429 attempt to exhaust the loop, got %+v", first)
@@ -558,7 +535,7 @@ func TestTryEndpointCycleKeepsRepeatedEndpointAttemptsAcrossLoops(t *testing.T) 
 	second := handler.tryEndpointCycle(
 		recorder,
 		httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))),
-		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int), "",
+		body, "req-loop-attempt", time.Now(), false, "合租巴士", "gpt-5.5", &failedIDs, &endpointChain, new(int),
 	)
 	if !second.completed || recorder.Code != http.StatusOK {
 		t.Fatalf("expected second loop attempt to succeed, result=%+v status=%d body=%q", second, recorder.Code, recorder.Body.String())
@@ -640,7 +617,7 @@ func TestServeHTTPRecoversFromInitiallyUnhealthyEndpointsBeforeExhaustion(t *tes
 	}
 }
 
-func TestTryEndpointCycleCachesCredentialGroupFailureWithinTurn(t *testing.T) {
+func TestTryEndpointCycleDoesNotCacheCredentialGroupFailureWithinTurn(t *testing.T) {
 	var primaryAHits atomic.Int32
 	var primaryBHits atomic.Int32
 	var backupHits atomic.Int32
@@ -716,13 +693,13 @@ func TestTryEndpointCycleCachesCredentialGroupFailureWithinTurn(t *testing.T) {
 	}
 	body := []byte(`{"model":"gpt-5.5","stream":false}`)
 
-	run := func(requestID, turnKey string) []chainNode {
+	run := func(requestID string) []chainNode {
 		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
 		recorder := httptest.NewRecorder()
 		var failedIDs []int64
 		var endpointChain []chainNode
 
-		result := handler.tryEndpointCycle(recorder, req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, new(int), turnKey)
+		result := handler.tryEndpointCycle(recorder, req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, new(int))
 		if !result.completed {
 			t.Fatalf("expected request %s to complete via backup endpoint, got incomplete result: %+v", requestID, result)
 		}
@@ -732,51 +709,21 @@ func TestTryEndpointCycleCachesCredentialGroupFailureWithinTurn(t *testing.T) {
 		return endpointChain
 	}
 
-	firstChain := run("req-turn-1-a", "turn-1")
-	if primaryAHits.Load() != 1 || primaryBHits.Load() != 0 || backupHits.Load() != 1 {
+	firstChain := run("req-turn-1-a")
+	if primaryAHits.Load() != 1 || primaryBHits.Load() != 1 || backupHits.Load() != 1 {
 		t.Fatalf("unexpected first request hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
 	}
-	if len(firstChain) != 2 || firstChain[0].CredentialGroup != "主分组" || firstChain[1].CredentialGroup != "备用分组" {
+	if len(firstChain) != 3 || firstChain[0].CredentialGroup != "主分组" || firstChain[1].CredentialGroup != "主分组" || firstChain[2].CredentialGroup != "备用分组" {
 		t.Fatalf("unexpected first request chain: %#v", firstChain)
 	}
 
-	secondChain := run("req-turn-1-b", "turn-1")
-	if primaryAHits.Load() != 1 || primaryBHits.Load() != 0 || backupHits.Load() != 2 {
-		t.Fatalf("same turn should skip cached failed group, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
+	manager.ResetUnhealthy()
+	secondChain := run("req-turn-1-b")
+	if primaryAHits.Load() != 2 || primaryBHits.Load() != 2 || backupHits.Load() != 2 {
+		t.Fatalf("same turn must retry every endpoint after health state reset, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
 	}
-	if len(secondChain) != 1 || secondChain[0].CredentialGroup != "备用分组" {
-		t.Fatalf("same turn should route directly to backup group, got chain: %#v", secondChain)
-	}
-
-	thirdChain := run("req-turn-2", "turn-2")
-	if primaryAHits.Load() != 1 || primaryBHits.Load() != 1 || backupHits.Load() != 3 {
-		t.Fatalf("new turn should retry primary group, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
-	}
-	if len(thirdChain) != 2 || thirdChain[0].CredentialGroup != "主分组" || thirdChain[1].CredentialGroup != "备用分组" {
-		t.Fatalf("new turn should try primary group again before backup, got chain: %#v", thirdChain)
-	}
-}
-
-func TestRequestTurnFailureCacheKeyUsesUserInputAcrossResponseChain(t *testing.T) {
-	body := []byte(`{"previous_response_id":"resp-1","input":[{"role":"user","content":[{"type":"input_text","text":"修复这个问题"}]}]}`)
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
-
-	key := requestTurnFailureCacheKey(req, body)
-	if key == "" {
-		t.Fatal("expected key from user input")
-	}
-	if same := requestTurnFailureCacheKey(req, body); same != key {
-		t.Fatalf("expected stable key for same request, got %q and %q", key, same)
-	}
-
-	nextBody := []byte(`{"previous_response_id":"resp-2","input":[{"role":"user","content":[{"type":"input_text","text":"修复这个问题"}]}]}`)
-	if next := requestTurnFailureCacheKey(req, nextBody); next != key {
-		t.Fatalf("expected same user input to keep the turn cache across response chain, got %q and %q", key, next)
-	}
-
-	toolOnly := []byte(`{"previous_response_id":"resp-2","input":[{"type":"function_call_output","call_id":"call-1","output":"ok"}]}`)
-	if key := requestTurnFailureCacheKey(req, toolOnly); key != "" {
-		t.Fatalf("expected no new key for tool-only request, got %q", key)
+	if len(secondChain) != 3 || secondChain[0].CredentialGroup != "主分组" || secondChain[1].CredentialGroup != "主分组" || secondChain[2].CredentialGroup != "备用分组" {
+		t.Fatalf("same turn must not skip the failed credential group, got chain: %#v", secondChain)
 	}
 }
 

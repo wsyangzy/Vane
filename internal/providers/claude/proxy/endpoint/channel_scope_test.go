@@ -237,6 +237,32 @@ func TestGetHealthyEndpoints_IgnoresRequestFailedForNewRequests(t *testing.T) {
 	}
 }
 
+func TestGetHealthyEndpoints_PrefersLastSuccessfulEndpoint(t *testing.T) {
+	cfg := &config.Config{
+		Strategy: config.StrategyConfig{Type: "priority"},
+		Health:   config.HealthConfig{Timeout: time.Second},
+		Endpoints: []config.EndpointConfig{
+			{Name: "primary", URL: "http://example.invalid/primary", Channel: "A", Priority: 1, Timeout: time.Second},
+			{Name: "backup", URL: "http://example.invalid/backup", Channel: "A", Priority: 2, Timeout: time.Second},
+		},
+	}
+	m := NewManager(cfg)
+	for _, ep := range m.GetAllEndpoints() {
+		ep.mutex.Lock()
+		ep.Status.Healthy = true
+		ep.Status.NeverChecked = false
+		ep.mutex.Unlock()
+	}
+	if err := m.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("ManualActivateGroup(A) error: %v", err)
+	}
+	m.MarkEndpointRequestSuccess(m.GetAllEndpoints()[1])
+	got := m.GetHealthyEndpoints()
+	if len(got) != 2 || got[0].Config.Name != "backup" {
+		t.Fatalf("expected last successful endpoint first, got %#v", endpointNames(got))
+	}
+}
+
 func TestGetHealthyEndpoints_SkipHealthCheckBypassesHealthFilter(t *testing.T) {
 	cfg := &config.Config{
 		Strategy: config.StrategyConfig{Type: "priority"},
@@ -267,7 +293,7 @@ func TestGetHealthyEndpoints_SkipHealthCheckBypassesHealthFilter(t *testing.T) {
 	}
 }
 
-func TestTurnFailedCredentialGroupIsSkippedOnlyWithinSameTurn(t *testing.T) {
+func TestTurnFailedCredentialGroupDoesNotSkipSiblingEndpoints(t *testing.T) {
 	cfg := &config.Config{
 		Strategy: config.StrategyConfig{Type: "priority"},
 		Health:   config.HealthConfig{Timeout: 5 * time.Second},
@@ -291,19 +317,13 @@ func TestTurnFailedCredentialGroupIsSkippedOnlyWithinSameTurn(t *testing.T) {
 
 	all := m.GetAllEndpoints()
 	if !m.RememberFailedCredentialGroupForTurn("turn-1", all[0]) {
-		t.Fatalf("expected credential group failure to be remembered")
+		t.Fatalf("expected compatibility cache write to succeed")
 	}
 
-	gotSameTurn := endpointNames(m.GetHealthyEndpointsForTurn("turn-1"))
-	wantSameTurn := []string{"new-p0"}
-	if !sameStringSlice(gotSameTurn, wantSameTurn) {
-		t.Fatalf("unexpected same-turn endpoints: got %v, want %v", gotSameTurn, wantSameTurn)
-	}
-
-	gotNextTurn := endpointNames(m.GetHealthyEndpointsForTurn("turn-2"))
-	wantNextTurn := []string{"old-p0", "old-p1", "new-p0"}
-	if !sameStringSlice(gotNextTurn, wantNextTurn) {
-		t.Fatalf("unexpected next-turn endpoints: got %v, want %v", gotNextTurn, wantNextTurn)
+	got := endpointNames(m.GetHealthyEndpointsForTurn("turn-1"))
+	want := []string{"old-p0", "old-p1", "new-p0"}
+	if !sameStringSlice(got, want) {
+		t.Fatalf("credential group cache must not filter sibling endpoints: got %v, want %v", got, want)
 	}
 }
 

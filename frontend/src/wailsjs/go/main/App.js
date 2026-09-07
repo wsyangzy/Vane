@@ -105,8 +105,12 @@ export function DeleteEndpointRecordByID(arg1) {
   return Call.ByName("main.App.DeleteEndpointRecordByID", arg1);
 }
 
-export function DeleteModelPricing(arg1) {
-  return Call.ByName("main.App.DeleteModelPricing", arg1);
+export function DeleteModelPricing(arg1, arg2) {
+  return Call.ByName("main.App.DeleteModelPricing", arg1, arg2);
+}
+
+export function DeleteModelPricingTier(arg1, arg2, arg3) {
+  return Call.ByName("main.App.DeleteModelPricingTier", arg1, arg2, arg3);
 }
 
 export function DeletePrivacyRule(arg1) {

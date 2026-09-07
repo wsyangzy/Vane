@@ -124,7 +124,8 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 		result.ScanDuration = time.Since(started)
 		if s.Settings.UnsupportedPathAction == UnsupportedPathFailClosed {
 			return result, &PolicyError{
-				StatusCode: http.StatusUnprocessableEntity,
+				// 403：本地隐私策略主动拒发，与上游无关。不用 422 冒充提供商响应码。
+				StatusCode: http.StatusForbidden,
 				Code:       CodeUnsupportedPath,
 				Message:    fmt.Sprintf("path %q has no privacy field whitelist and unsupported_path_action is fail_closed", req.Path),
 				Result:     result,
@@ -354,7 +355,8 @@ func (s *Snapshot) handleScanError(result ApplyResult, started time.Time, err er
 	if s.Settings.OnError == OnErrorFailClosed {
 		result.SkippedReason = CodeScanFailed
 		return result, &PolicyError{
-			StatusCode: http.StatusUnprocessableEntity,
+			// 403：本地隐私策略主动拒发，与上游无关。
+			StatusCode: http.StatusForbidden,
 			Code:       CodeScanFailed,
 			Message:    fmt.Sprintf("privacy scan failed and on_error is fail_closed: %v", err),
 			Result:     result,

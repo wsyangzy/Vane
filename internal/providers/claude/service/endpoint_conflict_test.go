@@ -120,7 +120,6 @@ func TestEndpointService_UpdateEndpoint_ConflictSameChannelSameName(t *testing.T
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -168,7 +167,6 @@ func TestEndpointService_FailoverActivationPreservesNewerManualChannel(t *testin
 			Timeout: 20 * time.Millisecond,
 		},
 		Failover:         config.FailoverConfig{Enabled: true},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -280,7 +278,6 @@ func TestEndpointService_UpdateEndpoint_SwapsPriorityConflict(t *testing.T) {
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -337,7 +334,6 @@ func TestEndpointService_UpdateEndpoint_ChannelMoveAssignsNextPriority(t *testin
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -389,7 +385,6 @@ func TestEndpointService_CreateEndpointPriorityIsScopedToCredentialGroup(t *test
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -479,7 +474,7 @@ func TestEndpointService_CreateEndpointRequiresUsableCredentialGroup(t *testing.
 	db, cleanup := createEndpointServiceTestDB(t)
 	defer cleanup()
 
-	cfg := &config.Config{EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"}}
+	cfg := &config.Config{}
 	endpointStore := store.NewSQLiteEndpointStore(db)
 	groupStore := store.NewSQLiteClaudeCredentialGroupStore(db)
 	svc := NewEndpointService(endpointStore, endpoint.NewManager(cfg), cfg, groupStore)
@@ -527,7 +522,7 @@ func TestEndpointService_CreateEndpointPriorityConflictRollsBackOnInsertFailure(
 	if _, err := db.Exec(`CREATE TRIGGER fail_target_endpoint_insert BEFORE INSERT ON endpoints WHEN NEW.name = 'target' BEGIN SELECT RAISE(ABORT, 'forced endpoint insert failure'); END`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
 	}
-	cfg := &config.Config{EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"}}
+	cfg := &config.Config{}
 	endpointStore := store.NewSQLiteEndpointStore(db)
 	svc := NewEndpointService(endpointStore, endpoint.NewManager(cfg), cfg)
 	ctx := context.Background()
@@ -616,7 +611,6 @@ func TestEndpointService_UpdateEndpointPriorityConflictIsScopedToCredentialGroup
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -694,7 +688,6 @@ func TestEndpointService_UpdateEndpointCredentialGroupMoveAssignsNextPriority(t 
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -767,7 +760,6 @@ func TestEndpointService_RecordToConfigUsesDefaultCredentialGroup(t *testing.T) 
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -818,7 +810,6 @@ func TestEndpointService_UpdateEndpointDisablingActiveFailoverSwitchesToNextCand
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -899,7 +890,6 @@ func TestEndpointService_UpdateEndpointDisablingActiveFailoverRequiresCandidate(
 			Timeout:    50 * time.Millisecond,
 			HealthPath: "",
 		},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -1018,7 +1008,6 @@ func newEndpointRecoveryTestService(t *testing.T) (*EndpointService, *store.SQLi
 
 	cfg := &config.Config{
 		Health:           config.HealthConfig{Timeout: 20 * time.Millisecond},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 	}
 	manager := endpoint.NewManager(cfg)
 	t.Cleanup(manager.Stop)

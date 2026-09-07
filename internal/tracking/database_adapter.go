@@ -9,23 +9,10 @@ import (
 // 简化配置，仅保留 SQLite 相关字段
 type DatabaseConfig struct {
 	// SQLite配置
-	DatabasePath string `yaml:"database_path,omitempty"`
+	DatabasePath string
 
 	// 时区配置（用于时间格式化）
-	Timezone string `yaml:"timezone,omitempty"`
-
-	// ===== 以下 MySQL 相关字段已废弃，保留用于配置文件向后兼容 =====
-	// 注意：这些字段不再生效，配置这些字段会打印警告日志
-	// Host     string `yaml:"host,omitempty"`     // DEPRECATED: MySQL not supported
-	// Port     int    `yaml:"port,omitempty"`     // DEPRECATED: MySQL not supported
-	// Database string `yaml:"database,omitempty"` // DEPRECATED: MySQL not supported
-	// Username string `yaml:"username,omitempty"` // DEPRECATED: MySQL not supported
-	// Password string `yaml:"password,omitempty"` // DEPRECATED: MySQL not supported
-	// MaxOpenConns    int           `yaml:"max_open_conns,omitempty"`    // DEPRECATED
-	// MaxIdleConns    int           `yaml:"max_idle_conns,omitempty"`    // DEPRECATED
-	// ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime,omitempty"` // DEPRECATED
-	// ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time,omitempty"` // DEPRECATED
-	// Charset  string `yaml:"charset,omitempty"`  // DEPRECATED: MySQL not supported
+	Timezone string
 }
 
 // ConnectionStats 连接池统计信息

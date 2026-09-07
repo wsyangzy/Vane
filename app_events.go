@@ -11,7 +11,6 @@ const (
 	EventCodexSuspension     = "codex-provider:suspension"
 	EventGroupUpdate         = "group:update"
 	EventUsageUpdate         = "usage:update"
-	EventConfigReloaded      = "config:reloaded"
 	EventError               = "error"
 	EventNotification        = "notification"
 )

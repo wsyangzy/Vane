@@ -211,7 +211,7 @@ func (ft *FastTester) getCachedResults(endpoints []*Endpoint) []*FastTestResult 
 	results := make([]*FastTestResult, 0, len(endpoints))
 
 	for _, ep := range endpoints {
-		if cached, exists := ft.resultCache[ep.Config.Name]; exists {
+		if cached, exists := ft.resultCache[endpointKeyFromConfig(ep.Config)]; exists {
 			if now.Sub(cached.TestTime) <= ft.config.Strategy.FastTestCacheTTL {
 				results = append(results, cached)
 			} else {
@@ -233,8 +233,18 @@ func (ft *FastTester) updateCache(results []*FastTestResult) {
 	defer ft.cacheMutex.Unlock()
 
 	for _, result := range results {
-		ft.resultCache[result.Endpoint.Config.Name] = result
+		ft.resultCache[endpointKeyFromConfig(result.Endpoint.Config)] = result
 	}
+}
+
+// ClearCache invalidates results after endpoint identity/configuration changes.
+func (ft *FastTester) ClearCache() {
+	if ft == nil {
+		return
+	}
+	ft.cacheMutex.Lock()
+	ft.resultCache = make(map[string]*FastTestResult)
+	ft.cacheMutex.Unlock()
 }
 
 // countSuccessful counts successful test results
@@ -283,7 +293,5 @@ func (ft *FastTester) UpdateConfig(cfg *config.Config) {
 	}
 
 	// Clear cache when configuration changes
-	ft.cacheMutex.Lock()
-	ft.resultCache = make(map[string]*FastTestResult)
-	ft.cacheMutex.Unlock()
+	ft.ClearCache()
 }

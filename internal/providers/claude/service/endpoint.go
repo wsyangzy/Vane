@@ -865,49 +865,6 @@ func (s *EndpointService) DisableAllEndpoints(ctx context.Context) error {
 	return nil
 }
 
-// ImportFromYAML 从 YAML 配置导入端点
-// clearExisting: 是否清除现有端点
-func (s *EndpointService) ImportFromYAML(ctx context.Context, endpoints []config.EndpointConfig, clearExisting bool) (int, error) {
-	if clearExisting {
-		// 清除现有端点
-		existing, err := s.store.List(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("获取现有端点失败: %w", err)
-		}
-
-		names := make([]string, len(existing))
-		for i, ep := range existing {
-			names[i] = ep.Name
-		}
-
-		if len(names) > 0 {
-			if err := s.store.BatchDelete(ctx, names); err != nil {
-				return 0, fmt.Errorf("清除现有端点失败: %w", err)
-			}
-		}
-	}
-
-	// 转换并导入
-	records := make([]*store.EndpointRecord, 0, len(endpoints))
-	for _, ep := range endpoints {
-		record := s.configToRecord(ep)
-		records = append(records, record)
-	}
-
-	if err := s.store.BatchCreate(ctx, records); err != nil {
-		return 0, fmt.Errorf("批量导入失败: %w", err)
-	}
-
-	// 重新加载到管理器
-	// 注意：这里简化处理，实际可能需要更精细的同步
-	for _, ep := range endpoints {
-		_ = s.manager.AddEndpoint(ep)
-	}
-
-	slog.Info(fmt.Sprintf("✅ [EndpointService] 从 YAML 导入 %d 个端点", len(records)))
-	return len(records), nil
-}
-
 // SyncFromDatabase 从数据库同步端点到管理器
 // Desktop: 加载所有端点参与健康检查，并同步 enabled=true 的端点到组激活状态
 func (s *EndpointService) SyncFromDatabase(ctx context.Context) error {
@@ -1087,6 +1044,11 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		var group *store.ClaudeCredentialGroupRecord
 		if record.CredentialGroupID > 0 {
 			group, _ = s.credentialGroupStore.GetByID(context.Background(), record.CredentialGroupID)
+			if group != nil && strings.TrimSpace(group.Channel) != strings.TrimSpace(record.Channel) {
+				// Legacy rows can point at a group from another channel. Never leak
+				// that identity into routing or request tracking.
+				group = nil
+			}
 		}
 		if group == nil {
 			group, _ = s.credentialGroupStore.GetDefaultByChannel(context.Background(), record.Channel)
@@ -1102,6 +1064,12 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 			if apiKey == "" {
 				apiKey = group.ApiKey
 			}
+		}
+		if group == nil {
+			credentialGroupID = 0
+			credentialGroupName = ""
+			credentialGroupOrder = 0
+			dailyCostLimitUSD = 0
 		}
 	}
 

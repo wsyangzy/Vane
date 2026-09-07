@@ -652,17 +652,10 @@ func (tp *TokenParser) extractErrorEvent() *ParseResult {
 			errorType, errorMessage))
 	}
 
-	// 返回解析结果而不是直接记录到 usageTracker
-	errorModelName := fmt.Sprintf("error:%s", errorType)
-
+	// 错误类型属于响应元数据，不是模型名称；把它伪装成模型会覆盖请求中的真实模型。
 	return &ParseResult{
-		TokenUsage: &tracking.TokenUsage{
-			InputTokens:         0,
-			OutputTokens:        0,
-			CacheCreationTokens: 0,
-			CacheReadTokens:     0,
-		},
-		ModelName:   errorModelName,
+		TokenUsage:  nil,
+		ModelName:   "",
 		ErrorInfo:   &ErrorInfo{Type: errorType, Message: errorMessage},
 		IsCompleted: true,
 		Status:      StatusErrorAPI,

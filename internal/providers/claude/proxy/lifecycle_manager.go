@@ -537,7 +537,7 @@ func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, gro
 		return
 	}
 
-	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointWithGroup(channel, groupName, endpointName)
+	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointWithGroup("claude", channel, groupName, endpointName)
 
 	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
@@ -552,7 +552,7 @@ func (rlm *RequestLifecycleManager) snapshotEndpointMultiplierForModel(modelName
 	}
 	channel := rlm.stateManager.GetChannel()
 	groupName := rlm.stateManager.GetGroupName()
-	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointAndModelWithGroup(channel, groupName, endpointName, modelName)
+	mult := rlm.usageTracker.GetEndpointMultiplierForEndpointAndModelWithGroup("claude", channel, groupName, endpointName, modelName)
 	rlm.usageTracker.UpdateActiveRequestMultiplier(rlm.stateManager.GetRequestID(), mult)
 }
 
