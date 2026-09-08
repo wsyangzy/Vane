@@ -195,6 +195,19 @@ func (s *ClaudeCredentialGroupService) normalizeAndValidate(ctx context.Context,
 	record.Name = strings.TrimSpace(record.Name)
 	record.Token = strings.TrimSpace(record.Token)
 	record.ApiKey = strings.TrimSpace(record.ApiKey)
+	record.ModelPolicy = strings.ToLower(strings.TrimSpace(record.ModelPolicy))
+	switch record.ModelPolicy {
+	case "":
+		record.ModelPolicy = store.ClaudeModelPolicyInherit
+	case store.ClaudeModelPolicyInherit, store.ClaudeModelPolicyOverride, store.ClaudeModelPolicyPassthrough:
+	default:
+		return fmt.Errorf("未知的 Claude 模型策略: %q", record.ModelPolicy)
+	}
+	record.ModelMapping = normalizeClaudeModelMapping(record.ModelMapping)
+	record.SupportedModels = normalizeClaudeSupportedModels(record.SupportedModels)
+	if record.ModelPolicy == store.ClaudeModelPolicyPassthrough {
+		record.ModelMapping = nil
+	}
 	if record.DailyCostLimitUSD < 0 {
 		return fmt.Errorf("每日成本限额不能小于 0")
 	}
@@ -238,4 +251,44 @@ func (s *ClaudeCredentialGroupService) normalizeAndValidate(ctx context.Context,
 		return fmt.Errorf("该渠道下已存在相同的凭证分组名 '%s'", record.Name)
 	}
 	return nil
+}
+
+func normalizeClaudeModelMapping(mapping map[string]string) map[string]string {
+	if len(mapping) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(mapping))
+	for source, target := range mapping {
+		source, target = strings.TrimSpace(source), strings.TrimSpace(target)
+		if source != "" && target != "" {
+			result[source] = target
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func normalizeClaudeSupportedModels(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	result := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		result = append(result, model)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }

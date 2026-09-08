@@ -28,6 +28,9 @@ type CodexEndpoint struct {
 	CredentialGroupName  string
 	CredentialGroupOrder int
 	DailyCostLimitUSD    float64
+	ModelPolicy          string
+	ModelMapping         map[string]string
+	SupportedModels      []string
 	Name                 string
 	BaseURL              string
 	APIKey               string
@@ -280,9 +283,15 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 		groupName := ""
 		groupOrder := len(groupOrderByID)
 		dailyCostLimitUSD := 0.0
+		modelPolicy := store.CodexModelPolicyInherit
+		var modelMapping map[string]string
+		var supportedModels []string
 		if group != nil {
 			groupName = group.Name
 			dailyCostLimitUSD = group.DailyCostLimitUSD
+			modelPolicy = group.ModelPolicy
+			modelMapping = group.ModelMapping
+			supportedModels = group.SupportedModels
 			if order, ok := groupOrderByID[group.ID]; ok {
 				groupOrder = order
 			}
@@ -294,6 +303,9 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 			CredentialGroupName:  groupName,
 			CredentialGroupOrder: groupOrder,
 			DailyCostLimitUSD:    dailyCostLimitUSD,
+			ModelPolicy:          modelPolicy,
+			ModelMapping:         modelMapping,
+			SupportedModels:      supportedModels,
 			Name:                 record.Name,
 			BaseURL:              record.BaseURL,
 			APIKey:               apiKey,
@@ -348,6 +360,10 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 // 5. 按配置的路由策略排序，返回第一个
 // 6. 全部耗尽返回 error
 func (m *EndpointManager) GetNextEndpoint(failedIDs []int64, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
+	return m.GetNextEndpointForModel("", failedIDs, skippedGroups...)
+}
+
+func (m *EndpointManager) GetNextEndpointForModel(requestedModel string, failedIDs []int64, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -371,6 +387,9 @@ func (m *EndpointManager) GetNextEndpoint(failedIDs []int64, skippedGroups ...cr
 		if credentialGroupSkipped(ep, skippedGroups) {
 			continue
 		}
+		if !m.endpointSupportsModelLocked(ep, requestedModel) {
+			continue
+		}
 		if !m.endpointHealthAllowsRoutingLocked(ep) {
 			continue
 		}
@@ -388,12 +407,19 @@ func (m *EndpointManager) GetNextEndpoint(failedIDs []int64, skippedGroups ...cr
 // GetPrimaryEndpoint 获取主端点。
 // priority 驱动路由，IsActive 只在同优先级时作为兜底排序标记。
 func (m *EndpointManager) GetPrimaryEndpoint(skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
+	return m.GetPrimaryEndpointForModel("", skippedGroups...)
+}
+
+func (m *EndpointManager) GetPrimaryEndpointForModel(requestedModel string, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	candidates := make([]*CodexEndpoint, 0, len(m.endpoints))
 	for _, e := range m.endpoints {
 		if !e.FailoverEnabled || credentialGroupSkipped(e, skippedGroups) {
+			continue
+		}
+		if !m.endpointSupportsModelLocked(e, requestedModel) {
 			continue
 		}
 		if !m.endpointHealthAllowsRoutingLocked(e) {
@@ -406,6 +432,13 @@ func (m *EndpointManager) GetPrimaryEndpoint(skippedGroups ...credentialGroupRef
 		return candidates[0], nil
 	}
 	return nil, fmt.Errorf("无可用 Codex 端点")
+}
+
+func (m *EndpointManager) endpointSupportsModelLocked(endpoint *CodexEndpoint, requestedModel string) bool {
+	if endpoint == nil || len(endpoint.SupportedModels) == 0 || requestedModel == "" {
+		return true
+	}
+	return endpointSupportsCodexModel(endpoint, m.activeChannel, requestedModel)
 }
 
 func (m *EndpointManager) endpointHealthAllowsRoutingLocked(ep *CodexEndpoint) bool {

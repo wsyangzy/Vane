@@ -37,3 +37,19 @@ func TestEnsureDefaultGroupSkipsChannelWithoutAPIKey(t *testing.T) {
 		t.Fatalf("group = %#v, want nil", group)
 	}
 }
+
+func TestNormalizeCodexCredentialGroupModelPolicy(t *testing.T) {
+	record := &store.CodexCredentialGroupRecord{
+		ChannelID: 1, Name: "g", ApiKey: "key", ModelPolicy: " OVERRIDE ",
+		ModelMapping:    map[string]string{" gpt-a ": " gpt-mini ", "": "ignored"},
+		SupportedModels: []string{" gpt-a ", "gpt-a", ""},
+	}
+	// normalizeAndValidate reaches stores after policy normalization; use the
+	// standalone normalization path through a minimal record validation setup.
+	record.ModelPolicy = strings.ToLower(strings.TrimSpace(record.ModelPolicy))
+	record.ModelMapping = normalizeCodexModelMapping(record.ModelMapping)
+	record.SupportedModels = normalizeCodexSupportedModels(record.SupportedModels)
+	if record.ModelPolicy != store.CodexModelPolicyOverride || record.ModelMapping["gpt-a"] != "gpt-mini" || len(record.SupportedModels) != 1 {
+		t.Fatalf("unexpected normalized model policy: %+v", record)
+	}
+}

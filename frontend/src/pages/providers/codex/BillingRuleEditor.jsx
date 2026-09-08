@@ -158,13 +158,13 @@ const BillingRuleEditor = ({ rows, onChange, disabled = false }) => {
 
               {row.longContextEnabled && (
                 <>
-                  <div className="min-w-0 flex-1 truncate text-[11px] text-slate-500" title={longSummary}>{longSummary}</div>
+                  <div className="order-last basis-full min-w-0 break-words text-[11px] text-slate-500" title={longSummary}>{longSummary}</div>
                   <SegmentedTabs
                     tabs={MODE_OPTIONS}
                     activeTab={row.longContextMode}
                     onChange={(longContextMode) => updateRow(row.id, { longContextMode })}
                     disabled={disabled}
-                    className="w-36 grid-cols-2"
+                    className="ml-auto w-36 grid-cols-2"
                     buttonPaddingClass="px-1.5"
                   />
                   <Button type="button" variant="secondary" size="sm" onClick={() => setEditing({ rowId: row.id, context: 'long' })} disabled={disabled}>编辑</Button>
@@ -186,6 +186,7 @@ const BillingRuleEditor = ({ rows, onChange, disabled = false }) => {
           description={editingMode === 'fixed' ? '配置该规则命中后的最终单价。' : '配置该规则命中后的最终倍率。'}
           fields={getModalFields(editingFields, editingLongContext ? 'longContext' : '', editingMode)}
           values={editingRow}
+          pricingServiceTier={editingRow.serviceTier}
           showPricingReference={editingMode === 'multiplier'}
           placeholder={editingMode === 'fixed' ? '0' : '1.0'}
           disabled={disabled}

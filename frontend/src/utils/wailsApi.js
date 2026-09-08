@@ -73,6 +73,11 @@ export const mapClaudeCredentialGroup = (group = {}) => ({
   apiKeyMasked: group.api_key_masked || group.apiKeyMasked || '',
   isDefault: Boolean(group.is_default ?? group.isDefault),
   dailyCostLimitUSD: parseNonNegativeNumber(group.daily_cost_limit_usd ?? group.dailyCostLimitUSD),
+  modelPolicy: group.model_policy || group.modelPolicy || 'inherit',
+  modelMapping: normalizeModelMapping(group.model_mapping || group.modelMapping),
+  supportedModels: Array.isArray(group.supported_models || group.supportedModels)
+    ? (group.supported_models || group.supportedModels).map((model) => String(model || '').trim()).filter(Boolean)
+    : [],
   costMultiplier: group.cost_multiplier ?? group.costMultiplier ?? 1.0,
   inputCostMultiplier: group.input_cost_multiplier ?? group.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: group.output_cost_multiplier ?? group.outputCostMultiplier ?? 1.0,
@@ -99,6 +104,11 @@ export const buildClaudeCredentialGroupPayload = (input = {}) => {
     api_key: (input.apiKey || input.api_key || '').trim(),
     is_default: Boolean(input.isDefault || input.is_default),
     daily_cost_limit_usd: parseNonNegativeNumber(input.dailyCostLimitUSD ?? input.daily_cost_limit_usd),
+    model_policy: input.modelPolicy || input.model_policy || 'inherit',
+    model_mapping: normalizeModelMapping(input.modelMapping || input.model_mapping),
+    supported_models: Array.isArray(input.supportedModels || input.supported_models)
+      ? (input.supportedModels || input.supported_models).map((model) => String(model || '').trim()).filter(Boolean)
+      : String(input.supportedModelsText || '').split(',').map((model) => model.trim()).filter(Boolean),
     cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
     input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
@@ -2141,6 +2151,11 @@ export const mapCodexCredentialGroup = (group) => ({
   isDefault: Boolean(group.is_default ?? group.isDefault),
   is_default: Boolean(group.is_default ?? group.isDefault),
   dailyCostLimitUSD: parseNonNegativeNumber(group.daily_cost_limit_usd ?? group.dailyCostLimitUSD),
+  modelPolicy: group.modelPolicy || group.model_policy || 'inherit',
+  modelMapping: normalizeCodexModelMapping(group.modelMapping || group.model_mapping),
+  supportedModels: Array.isArray(group.supportedModels || group.supported_models)
+    ? (group.supportedModels || group.supported_models).map((model) => String(model || '').trim()).filter(Boolean)
+    : [],
   costMultiplier: group.costMultiplier ?? 1.0,
   inputCostMultiplier: group.inputCostMultiplier ?? 1.0,
   outputCostMultiplier: group.outputCostMultiplier ?? 1.0,
@@ -2198,6 +2213,11 @@ export const buildCodexCredentialGroupPayload = (input) => {
     api_key: (input?.apiKey || input?.api_key || '').trim(),
     is_default: Boolean(input?.isDefault || input?.is_default),
     daily_cost_limit_usd: parseNonNegativeNumber(input?.dailyCostLimitUSD ?? input?.daily_cost_limit_usd),
+    modelPolicy: input?.modelPolicy || input?.model_policy || 'inherit',
+    modelMapping: normalizeCodexModelMapping(input?.modelMapping || input?.model_mapping),
+    supportedModels: Array.isArray(input?.supportedModels || input?.supported_models)
+      ? (input?.supportedModels || input?.supported_models).map((model) => String(model || '').trim()).filter(Boolean)
+      : String(input?.supportedModelsText || '').split(',').map((model) => model.trim()).filter(Boolean),
     costMultiplier: parseEndpointMultiplier(input?.costMultiplier),
     inputCostMultiplier: parseEndpointMultiplier(input?.inputCostMultiplier),
     outputCostMultiplier: parseEndpointMultiplier(input?.outputCostMultiplier),

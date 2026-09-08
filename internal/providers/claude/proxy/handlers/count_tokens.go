@@ -55,6 +55,7 @@ func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, 
 	var supportedEndpoints []*endpoint.Endpoint
 	if h.config != nil && h.config.TokenCounting.Enabled {
 		supportedEndpoints = h.getSupportedEndpoints()
+		supportedEndpoints = filterClaudeModelEndpoints(h.forwarder, supportedEndpoints, bodyBytes)
 	}
 
 	// 2. 如果有，尝试转发

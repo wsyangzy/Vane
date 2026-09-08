@@ -100,6 +100,9 @@ type ClaudeCredentialGroupInfo struct {
 	ApiKeyMasked                           string                                      `json:"api_key_masked"`
 	IsDefault                              bool                                        `json:"is_default"`
 	DailyCostLimitUSD                      float64                                     `json:"daily_cost_limit_usd"`
+	ModelPolicy                            string                                      `json:"model_policy"`
+	ModelMapping                           map[string]string                           `json:"model_mapping"`
+	SupportedModels                        []string                                    `json:"supported_models"`
 	CostMultiplier                         float64                                     `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                                     `json:"input_cost_multiplier"`
 	OutputCostMultiplier                   float64                                     `json:"output_cost_multiplier"`
@@ -125,6 +128,9 @@ type CreateClaudeCredentialGroupInput struct {
 	ApiKey                                 string                                      `json:"api_key"`
 	IsDefault                              bool                                        `json:"is_default"`
 	DailyCostLimitUSD                      float64                                     `json:"daily_cost_limit_usd"`
+	ModelPolicy                            string                                      `json:"model_policy"`
+	ModelMapping                           map[string]string                           `json:"model_mapping"`
+	SupportedModels                        []string                                    `json:"supported_models"`
 	CostMultiplier                         float64                                     `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                                     `json:"input_cost_multiplier"`
 	OutputCostMultiplier                   float64                                     `json:"output_cost_multiplier"`
@@ -1205,6 +1211,9 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		ApiKeyMasked:                           maskToken(group.ApiKey),
 		IsDefault:                              group.IsDefault,
 		DailyCostLimitUSD:                      group.DailyCostLimitUSD,
+		ModelPolicy:                            group.ModelPolicy,
+		ModelMapping:                           group.ModelMapping,
+		SupportedModels:                        group.SupportedModels,
 		CostMultiplier:                         group.CostMultiplier,
 		InputCostMultiplier:                    group.InputCostMultiplier,
 		OutputCostMultiplier:                   group.OutputCostMultiplier,
@@ -1241,6 +1250,9 @@ func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) 
 		ApiKey:                                 input.ApiKey,
 		IsDefault:                              input.IsDefault,
 		DailyCostLimitUSD:                      input.DailyCostLimitUSD,
+		ModelPolicy:                            input.ModelPolicy,
+		ModelMapping:                           input.ModelMapping,
+		SupportedModels:                        input.SupportedModels,
 		CostMultiplier:                         input.CostMultiplier,
 		InputCostMultiplier:                    input.InputCostMultiplier,
 		OutputCostMultiplier:                   input.OutputCostMultiplier,
@@ -1309,9 +1321,20 @@ func (a *App) UpdateClaudeCredentialGroupByID(id int64, input CreateClaudeCreden
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	record := claudeCredentialGroupInputToRecord(input)
-	if input.ModelMultipliers == nil {
+	if input.ModelMultipliers == nil || input.ModelPolicy == "" || input.ModelMapping == nil || input.SupportedModels == nil {
 		if existing, err := svc.GetByID(ctx, id); err == nil && existing != nil {
-			record.ModelMultipliers = existing.ModelMultipliers
+			if input.ModelPolicy == "" {
+				record.ModelPolicy = existing.ModelPolicy
+			}
+			if input.ModelMapping == nil {
+				record.ModelMapping = existing.ModelMapping
+			}
+			if input.SupportedModels == nil {
+				record.SupportedModels = existing.SupportedModels
+			}
+			if input.ModelMultipliers == nil {
+				record.ModelMultipliers = existing.ModelMultipliers
+			}
 		}
 	}
 	if err := svc.UpdateGroup(ctx, id, record); err != nil {

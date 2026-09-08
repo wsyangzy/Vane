@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import {
   Button,
+  CustomSelect,
   KPICard,
   LoadingSpinner,
   ErrorMessage,
@@ -133,6 +134,7 @@ const CHANNEL_FORM_TABS = [
 
 const CREDENTIAL_GROUP_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
+  { key: 'model', label: '模型策略' },
   { key: 'billing', label: '成本倍率' }
 ];
 
@@ -233,6 +235,11 @@ const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
   apiKey: group?.apiKey || group?.api_key || '',
   isDefault: Boolean(group?.isDefault ?? group?.is_default ?? false),
   dailyCostLimitUSD: String(group?.dailyCostLimitUSD ?? group?.daily_cost_limit_usd ?? 0),
+  modelPolicy: group?.modelPolicy || group?.model_policy || 'inherit',
+  modelMappingRows: buildInitialModelMappingRows(group?.modelMapping || group?.model_mapping),
+  supportedModelsText: Array.isArray(group?.supportedModels || group?.supported_models)
+    ? (group?.supportedModels || group?.supported_models).join(', ')
+    : '',
   costMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? group?.cost_multiplier ?? 1.0),
   inputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? group?.input_cost_multiplier ?? 1.0),
   outputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? group?.output_cost_multiplier ?? 1.0),
@@ -1412,6 +1419,30 @@ const ClaudeCredentialGroupFormModal = ({
     if (error) setError('');
   };
 
+  const updateModelMappingRow = (index, key, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      modelMappingRows: (prev.modelMappingRows || []).map((row, rowIndex) => (
+        rowIndex === index ? { ...row, [key]: value } : row
+      ))
+    }));
+    if (error) setError('');
+  };
+
+  const addModelMappingRow = () => {
+    setFormData((prev) => ({
+      ...prev,
+      modelMappingRows: [...(prev.modelMappingRows || []), { sourceModel: '', targetModel: '' }]
+    }));
+  };
+
+  const removeModelMappingRow = (index) => {
+    setFormData((prev) => {
+      const rows = (prev.modelMappingRows || []).filter((_, rowIndex) => rowIndex !== index);
+      return { ...prev, modelMappingRows: rows.length > 0 ? rows : [{ sourceModel: '', targetModel: '' }] };
+    });
+  };
+
   const handleStandardMultiplierSave = (values) => {
     setFormData((prev) => ({ ...prev, ...values }));
     setStandardMultiplierSettingsOpen(false);
@@ -1499,6 +1530,9 @@ const ClaudeCredentialGroupFormModal = ({
       apiKey,
 	  dailyCostLimitUSD,
       copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
+      modelPolicy: ['inherit', 'override', 'passthrough'].includes(formData.modelPolicy) ? formData.modelPolicy : 'inherit',
+      modelMapping: formData.modelPolicy === 'override' ? buildModelMappingPayload(formData.modelMappingRows) : {},
+      supportedModels: String(formData.supportedModelsText || '').split(',').map((model) => model.trim()).filter(Boolean),
       modelMultipliers: modelMultiplierResult.payload
     };
   };
@@ -1606,7 +1640,7 @@ const ClaudeCredentialGroupFormModal = ({
                   activeTab={activeTab}
                   onChange={setActiveTab}
                   disabled={loading}
-                  className={credentialGroupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}
+                  className={credentialGroupTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}
                   buttonPaddingClass="px-2"
                 />
               </div>
@@ -1723,6 +1757,78 @@ const ClaudeCredentialGroupFormModal = ({
                       />
                     </div>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'model' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">模型策略</label>
+                  <CustomSelect
+                    options={[
+                      { value: 'inherit', label: '跟随渠道' },
+                      { value: 'override', label: '分组自定义映射' },
+                      { value: 'passthrough', label: '原模型直传' }
+                    ]}
+                    value={formData.modelPolicy}
+                    onChange={(value) => updateField('modelPolicy', value)}
+                    size="md"
+                    fullWidth
+                    disabled={loading}
+                  />
+                  <p className="mt-1 text-xs text-slate-400">覆盖模式只使用本分组映射；直传模式跳过模型改写。</p>
+                </div>
+
+                {formData.modelPolicy === 'override' && (
+                  <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-700">分组模型映射</div>
+                        <div className="mt-0.5 text-xs text-slate-500">请求模型命中后替换为本分组目标模型。</div>
+                      </div>
+                      <Button type="button" variant="secondary" size="sm" onClick={addModelMappingRow} disabled={loading} icon={Plus}>添加</Button>
+                    </div>
+                    {(formData.modelMappingRows || []).map((row, index) => (
+                      <div key={`claude-group-model-mapping-${index}`} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-center">
+                        <input
+                          type="text"
+                          value={row.sourceModel}
+                          onChange={(event) => updateModelMappingRow(index, 'sourceModel', event.target.value)}
+                          placeholder="claude-3-5-haiku-20241022"
+                          className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          disabled={loading}
+                        />
+                        <ArrowRight size={16} className="text-slate-400" />
+                        <input
+                          type="text"
+                          value={row.targetModel}
+                          onChange={(event) => updateModelMappingRow(index, 'targetModel', event.target.value)}
+                          placeholder="claude-sonnet-4-20250514"
+                          className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          disabled={loading}
+                        />
+                        <Tooltip content="删除映射">
+                          <button type="button" onClick={() => removeModelMappingRow(index)} className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={loading}>
+                            <Trash2 size={16} />
+                          </button>
+                        </Tooltip>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">支持的原始模型（可选）</label>
+                  <input
+                    type="text"
+                    value={formData.supportedModelsText}
+                    onChange={(event) => updateField('supportedModelsText', event.target.value)}
+                    placeholder="claude-sonnet-4, claude-haiku-4，用逗号分隔"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    disabled={loading}
+                  />
+                  <p className="mt-1 text-xs text-slate-400">留空表示不声明能力；填写后，不匹配的请求会跳过该分组。</p>
                 </div>
               </div>
             )}

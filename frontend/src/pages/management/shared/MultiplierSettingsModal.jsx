@@ -15,12 +15,39 @@ const formatPrice = (value) => {
   return `$${Number(num.toFixed(4))}`;
 };
 
+const normalizePricingTier = (value) => {
+  const tier = String(value ?? '').trim().toLowerCase();
+  if (!tier || tier === 'default' || tier === 'standard' || tier === 'standard_only') return '';
+  if (tier === 'priority') return 'fast';
+  return tier;
+};
+
+const pricingTierLabel = (value) => ({
+  '': 'Standard',
+  batch: 'Batch',
+  flex: 'Flex',
+  fast: 'Fast mode'
+}[normalizePricingTier(value)] || String(value || 'Standard'));
+
+const pricingKey = (item) => JSON.stringify([
+  item?.modelName || '',
+  normalizePricingTier(item?.serviceTier)
+]);
+
+const filterPricingsByTier = (records, serviceTier) => {
+  // 空档位是组合规则的“全部档位”，省略该 prop 则保持普通倍率弹窗的全量参考行为。
+  if (serviceTier === undefined || serviceTier === null || String(serviceTier).trim() === '') return records;
+  const normalizedTier = normalizePricingTier(serviceTier);
+  return records.filter((item) => normalizePricingTier(item?.serviceTier) === normalizedTier);
+};
+
 const MultiplierSettingsModal = ({
   title,
   description,
   fields,
   values,
   pricingProvider = 'codex',
+  pricingServiceTier,
   showPricingReference = true,
   placeholder = '1.0',
   disabled = false,
@@ -38,15 +65,19 @@ const MultiplierSettingsModal = ({
     getModelPricingsByProvider(pricingProvider)
       .then((records) => {
         if (cancelled) return;
-        setPricings(records);
-        setPricingModel(records.find((item) => item.isDefault)?.modelName || records[0]?.modelName || '');
+        const loadedPricings = records || [];
+        const visiblePricings = filterPricingsByTier(loadedPricings, pricingServiceTier);
+        setPricings(loadedPricings);
+        const defaultPricing = visiblePricings.find((item) => item.isDefault) || visiblePricings[0];
+        setPricingModel(defaultPricing ? pricingKey(defaultPricing) : '');
       })
       // 定价只是填写时的对照参考，取不到不该挡住倍率配置
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [pricingProvider, showPricingReference]);
+  }, [pricingProvider, pricingServiceTier, showPricingReference]);
 
-  const selectedPricing = pricings.find((item) => item.modelName === pricingModel) || null;
+  const visiblePricings = filterPricingsByTier(pricings, pricingServiceTier);
+  const selectedPricing = visiblePricings.find((item) => pricingKey(item) === pricingModel) || null;
 
   // 非法输入按 1.0 预览，校验交给保存时的 handleSave，避免边打字边报错
   const resolveMultiplier = (key) => {
@@ -85,12 +116,12 @@ const MultiplierSettingsModal = ({
         {showPricingReference && (
           <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/60 px-5 py-3">
             <span className="shrink-0 text-xs font-medium text-slate-600">定价对照</span>
-            {pricings.length > 0 ? (
+            {visiblePricings.length > 0 ? (
               <div className="min-w-0 flex-1">
                 <CustomSelect
-                  options={pricings.map((item) => ({
-                    value: item.modelName,
-                    label: item.displayName || item.modelName
+                  options={visiblePricings.map((item) => ({
+                    value: pricingKey(item),
+                    label: `${item.displayName || item.modelName} · ${pricingTierLabel(item.serviceTier)}`
                   }))}
                   value={pricingModel}
                   onChange={setPricingModel}
@@ -100,7 +131,9 @@ const MultiplierSettingsModal = ({
                 />
               </div>
             ) : (
-              <span className="text-xs text-slate-400">尚未配置该提供商的模型定价</span>
+              <span className="text-xs text-slate-400">
+                尚未配置{pricingServiceTier ? `${pricingTierLabel(pricingServiceTier)}档` : ''}模型定价
+              </span>
             )}
           </div>
         )}

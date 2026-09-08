@@ -198,6 +198,9 @@ type EndpointConfig struct {
 	CredentialGroupName  string  // SQLite Claude credential group display name
 	CredentialGroupOrder int     // SQLite Claude credential group order
 	DailyCostLimitUSD    float64 // SQLite Claude daily cost limit; 0 means unlimited
+	ModelPolicy          string
+	ModelMapping         map[string]string
+	SupportedModels      []string
 	Priority             int
 	Group                string         // Group label used by runtime grouping
 	GroupPriority        int            // Optional group priority override

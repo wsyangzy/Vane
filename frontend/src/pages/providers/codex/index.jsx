@@ -170,6 +170,11 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
   apiKey: group?.apiKey || '',
   isDefault: Boolean(group?.isDefault || group?.is_default || (!group && getCredentialGroups(channel).length === 0)),
   dailyCostLimitUSD: String(group?.dailyCostLimitUSD ?? group?.daily_cost_limit_usd ?? 0),
+  modelPolicy: group?.modelPolicy || group?.model_policy || 'inherit',
+  modelMappingRows: buildInitialModelMappingRows(group?.modelMapping || group?.model_mapping),
+  supportedModelsText: Array.isArray(group?.supportedModels || group?.supported_models)
+    ? (group?.supportedModels || group?.supported_models).join(', ')
+    : '',
   costMultiplier: formatMultiplierInputValue(group?.costMultiplier ?? 1.0),
   inputCostMultiplier: formatMultiplierInputValue(group?.inputCostMultiplier ?? 1.0),
   outputCostMultiplier: formatMultiplierInputValue(group?.outputCostMultiplier ?? 1.0),
@@ -194,6 +199,7 @@ const CODEX_CHANNEL_FORM_TABS = [
 
 const CODEX_CREDENTIAL_GROUP_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
+  { key: 'model', label: '模型策略' },
   { key: 'billing', label: '成本倍率' }
 ];
 
@@ -668,6 +674,30 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
     if (fieldError) setFieldError('');
   };
 
+  const updateModelMappingRow = (index, key, value) => {
+    setFormData((prev) => ({
+      ...prev,
+      modelMappingRows: (prev.modelMappingRows || []).map((row, rowIndex) => (
+        rowIndex === index ? { ...row, [key]: value } : row
+      ))
+    }));
+    if (fieldError) setFieldError('');
+  };
+
+  const addModelMappingRow = () => {
+    setFormData((prev) => ({
+      ...prev,
+      modelMappingRows: [...(prev.modelMappingRows || []), { sourceModel: '', targetModel: '' }]
+    }));
+  };
+
+  const removeModelMappingRow = (index) => {
+    setFormData((prev) => {
+      const rows = (prev.modelMappingRows || []).filter((_, rowIndex) => rowIndex !== index);
+      return { ...prev, modelMappingRows: rows.length > 0 ? rows : [{ sourceModel: '', targetModel: '' }] };
+    });
+  };
+
   const handleStandardMultiplierSave = (values) => {
     setFormData((current) => ({ ...current, ...values }));
     setStandardMultiplierSettingsOpen(false);
@@ -740,6 +770,9 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       setActiveTab('basic');
       return null;
     }
+	const modelPolicy = ['inherit', 'override', 'passthrough'].includes(formData.modelPolicy)
+	  ? formData.modelPolicy
+	  : 'inherit';
 	const dailyCostLimitUSD = Number(formData.dailyCostLimitUSD);
 	if (!Number.isFinite(dailyCostLimitUSD) || dailyCostLimitUSD < 0) {
 	  setFieldError('每日成本限额必须是大于或等于 0 的数字');
@@ -787,6 +820,9 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
       name,
       apiKey,
       isDefault: formData.isDefault,
+	  modelPolicy,
+	  modelMapping: modelPolicy === 'override' ? buildModelMappingPayload(formData.modelMappingRows) : {},
+	  supportedModels: String(formData.supportedModelsText || '').split(',').map((model) => model.trim()).filter(Boolean),
 	  dailyCostLimitUSD,
       copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
       ...multiplierResult.payload,
@@ -873,7 +909,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   activeTab={activeTab}
                   onChange={setActiveTab}
                   disabled={loading}
-                  className={credentialGroupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}
+                  className={credentialGroupTabs.length === 4 ? 'grid-cols-4' : credentialGroupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}
                   buttonPaddingClass="px-2"
                 />
               </div>
@@ -960,6 +996,82 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                       </div>
                     </button>
                   )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'model' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">模型策略</label>
+                  <CustomSelect
+                    options={[
+                      { value: 'inherit', label: '跟随渠道' },
+                      { value: 'override', label: '分组自定义映射' },
+                      { value: 'passthrough', label: '原模型直传' }
+                    ]}
+                    value={formData.modelPolicy}
+                    onChange={(value) => updateField('modelPolicy', value)}
+                    size="md"
+                    fullWidth
+                    disabled={loading}
+                  />
+                  <p className="mt-1 text-xs text-slate-400">
+                    选择“分组自定义映射”后，只使用本分组映射，不回退到渠道模型；“原模型直传”会跳过渠道级模型改写。
+                  </p>
+                </div>
+
+                {formData.modelPolicy === 'override' && (
+                  <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-slate-700">分组模型映射</div>
+                        <div className="mt-0.5 text-xs text-slate-500">请求模型精确命中后替换为本分组支持的模型。</div>
+                      </div>
+                      <Button type="button" variant="secondary" size="sm" onClick={addModelMappingRow} disabled={loading} icon={Plus}>
+                        添加
+                      </Button>
+                    </div>
+                    {(formData.modelMappingRows || []).map((row, index) => (
+                      <div key={`codex-group-model-mapping-${index}`} className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-center">
+                        <input
+                          type="text"
+                          value={row.sourceModel}
+                          onChange={(event) => updateModelMappingRow(index, 'sourceModel', event.target.value)}
+                          placeholder="gpt-5.4-mini"
+                          className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          disabled={loading}
+                        />
+                        <ArrowRight size={16} className="text-slate-400" />
+                        <input
+                          type="text"
+                          value={row.targetModel}
+                          onChange={(event) => updateModelMappingRow(index, 'targetModel', event.target.value)}
+                          placeholder="gpt-5-mini"
+                          className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                          disabled={loading}
+                        />
+                        <Tooltip content="删除映射">
+                          <button type="button" onClick={() => removeModelMappingRow(index)} className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={loading}>
+                            <Trash2 size={16} />
+                          </button>
+                        </Tooltip>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700">支持的原始模型（可选）</label>
+                  <input
+                    type="text"
+                    value={formData.supportedModelsText}
+                    onChange={(event) => updateField('supportedModelsText', event.target.value)}
+                    placeholder="gpt-5, gpt-5-mini，用逗号分隔"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    disabled={loading}
+                  />
+                  <p className="mt-1 text-xs text-slate-400">留空表示不声明能力；填写后，既未命中映射也不在列表中的请求会跳过该分组。</p>
                 </div>
               </div>
             )}

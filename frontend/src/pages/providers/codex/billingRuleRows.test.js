@@ -68,3 +68,11 @@ test('历史 Long context 单条规则仍保留为开启状态的档位卡片', 
   assert.equal(row.longContextEnabled, true);
   assert.equal(row.longContextCostMultiplier, '1.5');
 });
+
+test('倍率对照使用当前组合规则的服务档位', () => {
+  assert.match(editorSource, /pricingServiceTier=\{editingRow\.serviceTier\}/);
+});
+
+test('Long context 摘要换行但倍率编辑控件仍保持右对齐', () => {
+  assert.match(editorSource, /order-last basis-full[\s\S]*?className="ml-auto w-36 grid-cols-2"/);
+});

@@ -1040,6 +1040,9 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 	credentialGroupID := record.CredentialGroupID
 	credentialGroupOrder := 0
 	dailyCostLimitUSD := 0.0
+	modelPolicy := store.ClaudeModelPolicyInherit
+	var modelMapping map[string]string
+	var supportedModels []string
 	if s.credentialGroupStore != nil {
 		var group *store.ClaudeCredentialGroupRecord
 		if record.CredentialGroupID > 0 {
@@ -1058,6 +1061,9 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 			credentialGroupName = group.Name
 			credentialGroupOrder = s.credentialGroupOrder(context.Background(), record.Channel, group.ID)
 			dailyCostLimitUSD = group.DailyCostLimitUSD
+			modelPolicy = group.ModelPolicy
+			modelMapping = group.ModelMapping
+			supportedModels = group.SupportedModels
 			if token == "" {
 				token = group.Token
 			}
@@ -1082,6 +1088,9 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		CredentialGroupName:  credentialGroupName,
 		CredentialGroupOrder: credentialGroupOrder,
 		DailyCostLimitUSD:    dailyCostLimitUSD,
+		ModelPolicy:          modelPolicy,
+		ModelMapping:         modelMapping,
+		SupportedModels:      supportedModels,
 		Priority:             record.Priority,
 		Token:                token,
 		ApiKey:               apiKey,

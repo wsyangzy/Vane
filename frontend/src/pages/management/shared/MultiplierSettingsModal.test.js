@@ -26,3 +26,10 @@ test('multiplier settings can hide pricing reference for fixed-price editing', (
   assert.match(source, /if \(!showPricingReference\) return undefined/);
   assert.match(source, /placeholder=\{placeholder\}/);
 });
+
+test('multiplier settings distinguishes pricing tiers and filters rule references', () => {
+  assert.match(source, /pricingServiceTier/);
+  assert.match(source, /pricingKey/);
+  assert.match(source, /pricingTierLabel\(item\.serviceTier\)/);
+  assert.match(source, /filterPricingsByTier/);
+});

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+
+	"ai-relay-forwarder/internal/providers/codex/store"
 )
 
 type modelRewriteResult struct {
@@ -15,6 +17,62 @@ type modelRewriteResult struct {
 	OriginalModel string
 	NewModel      string
 	Source        string
+}
+
+// rewriteModelForEndpoint applies the effective model policy after an endpoint
+// (and therefore its credential group) has been selected. The original body is
+// always the input so failover never carries a previous group's rewrite.
+func rewriteModelForEndpoint(body []byte, endpoint *CodexEndpoint, channel *store.CodexChannelRecord, logger *slog.Logger, requestID string) modelRewriteResult {
+	if endpoint == nil {
+		return modelRewriteResult{Body: body}
+	}
+	policy := endpoint.ModelPolicy
+	if policy == "" || policy == store.CodexModelPolicyInherit {
+		if channel == nil {
+			return modelRewriteResult{Body: body}
+		}
+		return rewriteModelWithMappingDetails(body, channel.ModelMapping, strings.TrimSpace(channel.Model), logger, requestID)
+	}
+	if policy == store.CodexModelPolicyOverride {
+		return rewriteModelWithMappingDetails(body, endpoint.ModelMapping, "", logger, requestID)
+	}
+	return modelRewriteResult{Body: body}
+}
+
+func effectiveCodexModel(endpoint *CodexEndpoint, channel *store.CodexChannelRecord, requestedModel string) string {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if endpoint == nil || endpoint.ModelPolicy == store.CodexModelPolicyPassthrough {
+		return requestedModel
+	}
+	mapping := endpoint.ModelMapping
+	fallback := ""
+	if endpoint.ModelPolicy == "" || endpoint.ModelPolicy == store.CodexModelPolicyInherit {
+		if channel != nil {
+			mapping = channel.ModelMapping
+			fallback = strings.TrimSpace(channel.Model)
+		}
+	}
+	if mapped := strings.TrimSpace(mapping[requestedModel]); mapped != "" {
+		return mapped
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return requestedModel
+}
+
+func endpointSupportsCodexModel(endpoint *CodexEndpoint, channel *store.CodexChannelRecord, requestedModel string) bool {
+	if endpoint == nil || len(endpoint.SupportedModels) == 0 || strings.TrimSpace(requestedModel) == "" {
+		return true
+	}
+	effective := effectiveCodexModel(endpoint, channel, requestedModel)
+	for _, model := range endpoint.SupportedModels {
+		model = strings.TrimSpace(model)
+		if model == requestedModel || model == effective {
+			return true
+		}
+	}
+	return false
 }
 
 // rewriteModelIfNeeded 按 channelModel 决定是否改写 body 中的 model 字段。

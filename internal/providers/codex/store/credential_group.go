@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -34,15 +35,24 @@ type CodexBillingRuleRecord struct {
 	CacheReadPrice              float64 `json:"cache_read_price"`
 }
 
+const (
+	CodexModelPolicyInherit     = "inherit"
+	CodexModelPolicyOverride    = "override"
+	CodexModelPolicyPassthrough = "passthrough"
+)
+
 // CodexCredentialGroupRecord 表示 Codex 渠道下可复用的凭证分组。
 // 端点引用分组后，可共享 API Key 与默认成本倍率。
 type CodexCredentialGroupRecord struct {
-	ID                int64   `json:"id"`
-	ChannelID         int64   `json:"channel_id"`
-	Name              string  `json:"name"`
-	ApiKey            string  `json:"api_key,omitempty"`
-	IsDefault         bool    `json:"is_default"`
-	DailyCostLimitUSD float64 `json:"daily_cost_limit_usd"`
+	ID                int64             `json:"id"`
+	ChannelID         int64             `json:"channel_id"`
+	Name              string            `json:"name"`
+	ApiKey            string            `json:"api_key,omitempty"`
+	IsDefault         bool              `json:"is_default"`
+	DailyCostLimitUSD float64           `json:"daily_cost_limit_usd"`
+	ModelPolicy       string            `json:"model_policy"`
+	ModelMapping      map[string]string `json:"model_mapping"`
+	SupportedModels   []string          `json:"supported_models"`
 
 	CostMultiplier                         float64                            `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                            `json:"input_cost_multiplier"`
@@ -108,6 +118,7 @@ func (s *SQLiteCodexCredentialGroupStore) getQuerier() interface {
 
 const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0),
 	COALESCE(daily_cost_limit_usd, 0),
+	COALESCE(model_policy, 'inherit'), COALESCE(model_mapping, '{}'), COALESCE(supported_models, '[]'),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
 	COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_creation_cost_multiplier, 1.0),
 	COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(long_context_cost_multiplier, 1.0),
@@ -141,7 +152,7 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 
 	result, err := s.getQuerier().ExecContext(ctx, `
 		INSERT INTO codex_credential_groups (
-			channel_id, name, api_key, is_default, daily_cost_limit_usd, cost_multiplier,
+			channel_id, name, api_key, is_default, daily_cost_limit_usd, model_policy, model_mapping, supported_models, cost_multiplier,
 			input_cost_multiplier, output_cost_multiplier, cache_creation_cost_multiplier,
 			cache_read_cost_multiplier, long_context_cost_multiplier,
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
@@ -149,8 +160,9 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 			disable_long_context_pricing,
 			disable_service_tier_pricing, service_tier_multipliers,
 			billing_output_token_source, model_multipliers, billing_rules
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.ChannelID, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
+		defaultCodexModelPolicy(record.ModelPolicy), encodeCodexModelMapping(record.ModelMapping), encodeCodexSupportedModels(record.SupportedModels),
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
 		defaultCodexStoreMultiplier(record.OutputCostMultiplier),
@@ -253,7 +265,7 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 
 	result, err := s.getQuerier().ExecContext(ctx, `
 		UPDATE codex_credential_groups
-		SET name = ?, api_key = ?, is_default = ?, daily_cost_limit_usd = ?, cost_multiplier = ?,
+		SET name = ?, api_key = ?, is_default = ?, daily_cost_limit_usd = ?, model_policy = ?, model_mapping = ?, supported_models = ?, cost_multiplier = ?,
 			input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_read_cost_multiplier = ?,
 			long_context_cost_multiplier = ?, long_context_input_cost_multiplier = ?,
@@ -263,6 +275,7 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 			billing_output_token_source = ?, model_multipliers = ?, billing_rules = ?
 		WHERE id = ?
 	`, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
+		defaultCodexModelPolicy(record.ModelPolicy), encodeCodexModelMapping(record.ModelMapping), encodeCodexSupportedModels(record.SupportedModels),
 		defaultCodexStoreMultiplier(record.CostMultiplier),
 		defaultCodexStoreMultiplier(record.InputCostMultiplier),
 		defaultCodexStoreMultiplier(record.OutputCostMultiplier),
@@ -343,6 +356,9 @@ func scanCodexCredentialGroupRow(scanner interface {
 		record                             CodexCredentialGroupRecord
 		isDefault                          int
 		dailyCostLimitUSD                  float64
+		modelPolicy                        string
+		modelMappingJSON                   string
+		supportedModelsJSON                string
 		costMultiplier                     float64
 		inputCostMultiplier                float64
 		outputCostMultiplier               float64
@@ -369,6 +385,9 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&record.ApiKey,
 		&isDefault,
 		&dailyCostLimitUSD,
+		&modelPolicy,
+		&modelMappingJSON,
+		&supportedModelsJSON,
 		&costMultiplier,
 		&inputCostMultiplier,
 		&outputCostMultiplier,
@@ -395,6 +414,9 @@ func scanCodexCredentialGroupRow(scanner interface {
 	}
 	record.IsDefault = isDefault != 0
 	record.DailyCostLimitUSD = dailyCostLimitUSD
+	record.ModelPolicy = defaultCodexModelPolicy(modelPolicy)
+	record.ModelMapping = decodeCodexModelMapping(modelMappingJSON)
+	record.SupportedModels = decodeCodexSupportedModels(supportedModelsJSON)
 	record.CostMultiplier = defaultCodexStoreMultiplier(costMultiplier)
 	record.InputCostMultiplier = defaultCodexStoreMultiplier(inputCostMultiplier)
 	record.OutputCostMultiplier = defaultCodexStoreMultiplier(outputCostMultiplier)
@@ -421,6 +443,101 @@ func defaultCodexStoreMultiplier(value float64) float64 {
 		return 1.0
 	}
 	return value
+}
+
+func defaultCodexModelPolicy(policy string) string {
+	switch policy {
+	case CodexModelPolicyOverride, CodexModelPolicyPassthrough:
+		return policy
+	default:
+		return CodexModelPolicyInherit
+	}
+}
+
+func encodeCodexModelMapping(mapping map[string]string) string {
+	if len(mapping) == 0 {
+		return "{}"
+	}
+	normalized := make(map[string]string, len(mapping))
+	for source, target := range mapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source != "" && target != "" {
+			normalized[source] = target
+		}
+	}
+	if len(normalized) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func decodeCodexModelMapping(raw string) map[string]string {
+	var mapping map[string]string
+	if err := json.Unmarshal([]byte(raw), &mapping); err != nil || mapping == nil {
+		return map[string]string{}
+	}
+	normalized := make(map[string]string, len(mapping))
+	for source, target := range mapping {
+		source = strings.TrimSpace(source)
+		target = strings.TrimSpace(target)
+		if source != "" && target != "" {
+			normalized[source] = target
+		}
+	}
+	return normalized
+}
+
+func encodeCodexSupportedModels(models []string) string {
+	if len(models) == 0 {
+		return "[]"
+	}
+	seen := make(map[string]struct{}, len(models))
+	normalized := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		normalized = append(normalized, model)
+	}
+	if len(normalized) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeCodexSupportedModels(raw string) []string {
+	var models []string
+	if err := json.Unmarshal([]byte(raw), &models); err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	result := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		result = append(result, model)
+	}
+	return result
 }
 
 func encodeCodexServiceTierMultipliers(multipliers []CodexServiceTierMultiplierRecord) string {

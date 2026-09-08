@@ -3,9 +3,17 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	ClaudeModelPolicyInherit     = "inherit"
+	ClaudeModelPolicyOverride    = "override"
+	ClaudeModelPolicyPassthrough = "passthrough"
 )
 
 // ClaudeCredentialGroupRecord 表示 Claude 渠道下可复用的凭证分组。
@@ -17,8 +25,11 @@ type ClaudeCredentialGroupRecord struct {
 	Token   string `json:"token,omitempty"`
 	ApiKey  string `json:"api_key,omitempty"`
 
-	IsDefault         bool    `json:"is_default"`
-	DailyCostLimitUSD float64 `json:"daily_cost_limit_usd"`
+	IsDefault         bool              `json:"is_default"`
+	DailyCostLimitUSD float64           `json:"daily_cost_limit_usd"`
+	ModelPolicy       string            `json:"model_policy"`
+	ModelMapping      map[string]string `json:"model_mapping"`
+	SupportedModels   []string          `json:"supported_models"`
 
 	CostMultiplier                         float64                         `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                         `json:"input_cost_multiplier"`
@@ -87,6 +98,7 @@ func (s *SQLiteClaudeCredentialGroupStore) getQuerier() interface {
 
 const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), COALESCE(api_key, ''), COALESCE(is_default, 0),
 	COALESCE(daily_cost_limit_usd, 0),
+	COALESCE(model_policy, 'inherit'), COALESCE(model_mapping, '{}'), COALESCE(supported_models, '[]'),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
 	COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_creation_cost_multiplier, 1.0),
 	COALESCE(cache_creation_cost_multiplier_1h, 1.0), COALESCE(cache_read_cost_multiplier, 1.0),
@@ -125,7 +137,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 	result, err := s.getQuerier().ExecContext(ctx, `
 		INSERT INTO claude_credential_groups (
 			channel, name, token, api_key, is_default, daily_cost_limit_usd, cost_multiplier,
-			input_cost_multiplier, output_cost_multiplier,
+			input_cost_multiplier, output_cost_multiplier, model_policy, model_mapping, supported_models,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h,
 			cache_read_cost_multiplier, long_context_cost_multiplier,
 			long_context_input_cost_multiplier, long_context_output_cost_multiplier,
@@ -133,11 +145,12 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 			disable_long_context_pricing, disable_service_tier_pricing,
 			service_tier_cost_multiplier, service_tier_input_cost_multiplier, service_tier_output_cost_multiplier, service_tier_cache_read_cost_multiplier,
 			model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.Channel, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.InputCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.OutputCostMultiplier),
+		defaultClaudeModelPolicy(record.ModelPolicy), encodeClaudeModelMapping(record.ModelMapping), encodeClaudeSupportedModels(record.SupportedModels),
 		defaultClaudeGroupStoreMultiplier(record.CacheCreationCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.CacheCreationCostMultiplier1h),
 		defaultClaudeGroupStoreMultiplier(record.CacheReadCostMultiplier),
@@ -240,7 +253,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 	result, err := s.getQuerier().ExecContext(ctx, `
 		UPDATE claude_credential_groups
 		SET name = ?, token = ?, api_key = ?, is_default = ?, daily_cost_limit_usd = ?, cost_multiplier = ?,
-			input_cost_multiplier = ?, output_cost_multiplier = ?,
+			input_cost_multiplier = ?, output_cost_multiplier = ?, model_policy = ?, model_mapping = ?, supported_models = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?,
 			cache_read_cost_multiplier = ?, long_context_cost_multiplier = ?,
 			long_context_input_cost_multiplier = ?, long_context_output_cost_multiplier = ?,
@@ -253,6 +266,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.InputCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.OutputCostMultiplier),
+		defaultClaudeModelPolicy(record.ModelPolicy), encodeClaudeModelMapping(record.ModelMapping), encodeClaudeSupportedModels(record.SupportedModels),
 		defaultClaudeGroupStoreMultiplier(record.CacheCreationCostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.CacheCreationCostMultiplier1h),
 		defaultClaudeGroupStoreMultiplier(record.CacheReadCostMultiplier),
@@ -342,6 +356,9 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		record                             ClaudeCredentialGroupRecord
 		isDefault                          int
 		dailyCostLimitUSD                  float64
+		modelPolicy                        string
+		modelMappingJSON                   string
+		supportedModelsJSON                string
 		costMultiplier                     float64
 		inputCostMultiplier                float64
 		outputCostMultiplier               float64
@@ -371,6 +388,9 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		&record.ApiKey,
 		&isDefault,
 		&dailyCostLimitUSD,
+		&modelPolicy,
+		&modelMappingJSON,
+		&supportedModelsJSON,
 		&costMultiplier,
 		&inputCostMultiplier,
 		&outputCostMultiplier,
@@ -399,6 +419,9 @@ func scanClaudeCredentialGroupRow(scanner interface {
 	}
 	record.IsDefault = isDefault != 0
 	record.DailyCostLimitUSD = dailyCostLimitUSD
+	record.ModelPolicy = defaultClaudeModelPolicy(modelPolicy)
+	record.ModelMapping = decodeClaudeModelMapping(modelMappingJSON)
+	record.SupportedModels = decodeClaudeSupportedModels(supportedModelsJSON)
 	record.CostMultiplier = defaultClaudeGroupStoreMultiplier(costMultiplier)
 	record.InputCostMultiplier = defaultClaudeGroupStoreMultiplier(inputCostMultiplier)
 	record.OutputCostMultiplier = defaultClaudeGroupStoreMultiplier(outputCostMultiplier)
@@ -427,4 +450,99 @@ func defaultClaudeGroupStoreMultiplier(value float64) float64 {
 		return 1.0
 	}
 	return value
+}
+
+func defaultClaudeModelPolicy(policy string) string {
+	switch strings.ToLower(strings.TrimSpace(policy)) {
+	case ClaudeModelPolicyOverride:
+		return ClaudeModelPolicyOverride
+	case ClaudeModelPolicyPassthrough:
+		return ClaudeModelPolicyPassthrough
+	default:
+		return ClaudeModelPolicyInherit
+	}
+}
+
+func encodeClaudeModelMapping(mapping map[string]string) string {
+	if len(mapping) == 0 {
+		return "{}"
+	}
+	normalized := make(map[string]string, len(mapping))
+	for source, target := range mapping {
+		source, target = strings.TrimSpace(source), strings.TrimSpace(target)
+		if source != "" && target != "" {
+			normalized[source] = target
+		}
+	}
+	if len(normalized) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func decodeClaudeModelMapping(raw string) map[string]string {
+	var mapping map[string]string
+	if err := json.Unmarshal([]byte(raw), &mapping); err != nil || mapping == nil {
+		return map[string]string{}
+	}
+	result := make(map[string]string, len(mapping))
+	for source, target := range mapping {
+		source, target = strings.TrimSpace(source), strings.TrimSpace(target)
+		if source != "" && target != "" {
+			result[source] = target
+		}
+	}
+	return result
+}
+
+func encodeClaudeSupportedModels(models []string) string {
+	if len(models) == 0 {
+		return "[]"
+	}
+	seen := make(map[string]struct{}, len(models))
+	normalized := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		normalized = append(normalized, model)
+	}
+	if len(normalized) == 0 {
+		return "[]"
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func decodeClaudeSupportedModels(raw string) []string {
+	var models []string
+	if err := json.Unmarshal([]byte(raw), &models); err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	result := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		result = append(result, model)
+	}
+	return result
 }

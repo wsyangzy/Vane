@@ -271,6 +271,9 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     api_key TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,
     daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
+    model_policy TEXT NOT NULL DEFAULT 'inherit',
+    model_mapping TEXT NOT NULL DEFAULT '{}',
+    supported_models TEXT NOT NULL DEFAULT '[]',
     cost_multiplier REAL NOT NULL DEFAULT 1.0,
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
@@ -383,6 +386,9 @@ CREATE TABLE IF NOT EXISTS codex_credential_groups (
     api_key TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,
     daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
+    model_policy TEXT NOT NULL DEFAULT 'inherit', -- inherit/override/passthrough
+    model_mapping TEXT NOT NULL DEFAULT '{}', -- 分组级请求模型映射 JSON object
+    supported_models TEXT NOT NULL DEFAULT '[]', -- 分组支持的模型 JSON array；空数组表示未声明
     cost_multiplier REAL NOT NULL DEFAULT 1.0,
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,

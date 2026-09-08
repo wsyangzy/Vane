@@ -247,26 +247,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 渠道设置了专属 model 时，代理层直接改写请求体，避免依赖运行中的 Codex CLI 重读 config.toml。
+	// 模型改写必须等候选端点（及其凭证分组）选定后再执行；这里保留隐私处理后的
+	// 原始 body，故障转移时每个分组都从同一份请求重新计算自己的策略。
 	channelName := ""
-	channelModel := ""
-	var channelModelMapping map[string]string
 	if h.manager != nil {
 		if ch := h.manager.GetActiveChannel(); ch != nil {
 			channelName = ch.Name
-			channelModel = strings.TrimSpace(ch.Model)
-			channelModelMapping = ch.ModelMapping
 		}
 	}
-	modelRewrite := rewriteModelWithMappingDetails(originalBody, channelModelMapping, channelModel, h.logger, requestID)
-	body = modelRewrite.Body
+	body = originalBody
 
 	// 2. 检测是否流式请求
 	isStreaming := bytes.Contains(body, []byte(`"stream":true`)) ||
 		bytes.Contains(body, []byte(`"stream": true`))
 
 	// 3. 从请求体提取模型名（用于在响应未携带 model 时填充）
-	requestModel := h.tokenParser.ParseModelFromBody(body)
+	requestModel := h.tokenParser.ParseModelFromBody(originalBody)
 
 	// 3b. 从请求体提取 reasoning 配置（Codex 请求体 reasoning: {effort, mode, summary}）
 	reasoningJSON := extractReasoning(body)
@@ -284,13 +280,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"streaming", isStreaming,
 		"channel", channelName,
 		"model", requestModel,
-		"model_rewrite_source", modelRewrite.Source,
+		"model_rewrite_source", "",
 		"reasoning", reasoningJSON,
 		"service_tier", serviceTier,
 	)
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
-	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewrite, reasoningJSON, serviceTier)
+	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewriteResult{}, reasoningJSON, serviceTier)
 	if privacySummaryJSON != "" {
 		h.recordPrivacyRedaction(requestID, privacySummaryJSON)
 	}
@@ -338,17 +334,15 @@ outerLoop:
 					triedChannels[first.ID] = struct{}{}
 					activeChannelID = first.ID
 					channelName = first.Name
-					channelRewrite := rewriteModelWithMappingDetails(originalBody, first.ModelMapping, strings.TrimSpace(first.Model), h.logger, requestID)
-					body = channelRewrite.Body
-					requestModel = h.tokenParser.ParseModelFromBody(body)
+					body = originalBody
+					requestModel = h.tokenParser.ParseModelFromBody(originalBody)
 				} else if active := h.manager.GetActiveChannel(); active != nil {
 					// 渠道间转移关闭时，只重试当前活跃渠道，不写全局激活状态。
 					triedChannels[active.ID] = struct{}{}
 					activeChannelID = active.ID
 					channelName = active.Name
-					channelRewrite := rewriteModelWithMappingDetails(originalBody, active.ModelMapping, strings.TrimSpace(active.Model), h.logger, requestID)
-					body = channelRewrite.Body
-					requestModel = h.tokenParser.ParseModelFromBody(body)
+					body = originalBody
+					requestModel = h.tokenParser.ParseModelFromBody(originalBody)
 				} else {
 					lastErr = fmt.Errorf("无活跃 Codex 渠道")
 					break rounds
@@ -364,9 +358,8 @@ outerLoop:
 				triedChannels[active.ID] = struct{}{}
 				activeChannelID = active.ID
 				channelName = active.Name
-				channelRewrite := rewriteModelWithMappingDetails(originalBody, active.ModelMapping, strings.TrimSpace(active.Model), h.logger, requestID)
-				body = channelRewrite.Body
-				requestModel = h.tokenParser.ParseModelFromBody(body)
+				body = originalBody
+				requestModel = h.tokenParser.ParseModelFromBody(originalBody)
 			}
 
 			for {
@@ -405,9 +398,8 @@ outerLoop:
 				triedChannels[next.ID] = struct{}{}
 				activeChannelID = next.ID
 				channelName = next.Name
-				channelRewrite := rewriteModelWithMappingDetails(originalBody, next.ModelMapping, strings.TrimSpace(next.Model), h.logger, requestID)
-				body = channelRewrite.Body
-				requestModel = h.tokenParser.ParseModelFromBody(body)
+				body = originalBody
+				requestModel = h.tokenParser.ParseModelFromBody(originalBody)
 				failedIDs = failedIDs[:0]
 				h.logger.Info("[Codex 渠道间故障转移]", "request_id", requestID, "channel", channelName, "round", loopRound+1)
 			}
@@ -543,21 +535,23 @@ func (h *Handler) tryEndpointCycle(
 	endpointChain *[]chainNode,
 	attemptCount *int,
 ) cycleResult {
+	originalBody := append([]byte(nil), body...)
+	requestedModel := requestModel
 	if h.activeChannelChanged(channelName) {
 		return cycleResult{routeChanged: true}
 	}
 	// 选择起始端点
 	var skippedGroups []credentialGroupRef
 	var quotaSkippedGroups []credentialGroupRef
-	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpoint(
-		r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpointForModel(
+		r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true,
 	)
 	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && len(*endpointChain) == 0 {
 		// 新请求不能被上一请求留下的全局 unhealthy 状态直接挡在选路之前。
 		// 仅在尚未产生真实链路时重置一次；凭证分组跳过状态仍然保留。
 		h.manager.ResetUnhealthy()
-		endpoint, quotaSkippedGroups, err = h.selectQuotaEligibleEndpoint(
-			r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+		endpoint, quotaSkippedGroups, err = h.selectQuotaEligibleEndpointForModel(
+			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true,
 		)
 	}
 	if err != nil {
@@ -580,6 +574,17 @@ func (h *Handler) tryEndpointCycle(
 	for {
 		if h.activeChannelChanged(channelName) {
 			return cycleResult{routeChanged: true}
+		}
+		channel := h.manager.GetActiveChannel()
+		attemptRewrite := rewriteModelForEndpoint(originalBody, endpoint, channel, h.logger, requestID)
+		body = attemptRewrite.Body
+		requestModel = h.tokenParser.ParseModelFromBody(body)
+		if h.usageTracker != nil && attemptRewrite.Source != "" {
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{
+				OriginalModelName:  strPtr(attemptRewrite.OriginalModel),
+				ModelRewriteSource: strPtr(attemptRewrite.Source),
+				ModelRewriteTarget: strPtr(attemptRewrite.NewModel),
+			})
 		}
 		// 追加链路节点（按 channel+credential_group+endpoint 切换去重）
 		n := len(*endpointChain)
@@ -766,8 +771,8 @@ func (h *Handler) tryEndpointCycle(
 		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 
 		// 选下个端点
-		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpoint(
-			r.Context(), channelName, *failedIDs, skippedGroups, quotaSkippedGroups, false,
+		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpointForModel(
+			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, false,
 		)
 		quotaSkippedGroups = updatedQuotaSkippedGroups
 		if nextErr != nil {

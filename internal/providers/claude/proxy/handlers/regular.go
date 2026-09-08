@@ -159,6 +159,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		// 表现为「渠道/链路为空 + no_healthy_endpoints」，其余渠道一个都没试过。
 		rawEndpoints := filterStreamOnlyEndpoints(candidates)
 		streamOnlyBlocked := len(rawEndpoints) == 0 && len(candidates) > 0
+		rawEndpoints = filterClaudeModelEndpoints(rh.forwarder, rawEndpoints, bodyBytes)
+		modelBlocked := len(rawEndpoints) == 0 && len(candidates) > 0 && !streamOnlyBlocked
 
 		endpoints, quotaBlocked := filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, rawEndpoints)
 		if len(endpoints) == 0 {
@@ -206,6 +208,20 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					continue
 				}
 				lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
+				WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
+				return
+			}
+			if modelBlocked {
+				currentChannel := endpointRouteName(candidates[0])
+				if currentChannel != "" {
+					triedChannels[currentChannel] = struct{}{}
+				}
+				newChannel, failoverErr := rh.endpointManager.TriggerChannelSwitchWithoutFailure(currentChannel, stringSetKeys(triedChannels))
+				if failoverErr == nil && newChannel != "" {
+					slog.Info("[Claude 模型能力不匹配触发渠道间故障转移]", "request_id", connID, "from_channel", currentChannel, "to_channel", newChannel)
+					continue
+				}
+				lifecycleManager.FailRequest("no_supported_model_endpoint", "", http.StatusServiceUnavailable)
 				WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
 				return
 			}
@@ -461,6 +477,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 			// 检查是否有已恢复的端点（非流路径的第二个端点来源，同样要滤掉 stream_only）
 			recoveredEndpoints := filterStreamOnlyEndpoints(retryMgr.GetRecoveredEndpointsInChannel(triedKeys))
+			recoveredEndpoints = filterClaudeModelEndpoints(rh.forwarder, recoveredEndpoints, bodyBytes)
 			recoveredEndpoints, _ = filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, recoveredEndpoints)
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级顺序重试",

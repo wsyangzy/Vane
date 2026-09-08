@@ -266,3 +266,23 @@ test('Claude credential-group bridge preserves long-context billing fields', () 
   assert.equal(payload.long_context_cache_read_cost_multiplier, 1.4);
   assert.equal(payload.disable_long_context_pricing, true);
 });
+
+test('Claude credential-group bridge preserves model policy fields', () => {
+  const mapped = wailsApi.mapClaudeCredentialGroup({
+    model_policy: 'override',
+    model_mapping: { 'claude-small': 'claude-haiku' },
+    supported_models: ['claude-haiku']
+  });
+  assert.equal(mapped.modelPolicy, 'override');
+  assert.deepEqual(mapped.modelMapping, { 'claude-small': 'claude-haiku' });
+  assert.deepEqual(mapped.supportedModels, ['claude-haiku']);
+
+  const payload = wailsApi.buildClaudeCredentialGroupPayload({
+    modelPolicy: 'passthrough',
+    modelMapping: { 'claude-small': 'claude-haiku' },
+    supportedModelsText: 'claude-opus, claude-opus'
+  });
+  assert.equal(payload.model_policy, 'passthrough');
+  assert.deepEqual(payload.model_mapping, { 'claude-small': 'claude-haiku' });
+  assert.deepEqual(payload.supported_models, ['claude-opus', 'claude-opus']);
+});

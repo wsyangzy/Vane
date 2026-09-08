@@ -448,6 +448,9 @@ export class UpdateSettingInput {
 	    api_key_masked: string;
 	    is_default: boolean;
 	    daily_cost_limit_usd: number;
+	    model_policy: string;
+	    model_mapping: {[key: string]: string};
+	    supported_models: string[];
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -474,6 +477,9 @@ export class UpdateSettingInput {
 	        this.api_key_masked = source["api_key_masked"];
 	        this.is_default = source["is_default"];
 	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
+	        this.model_policy = source["model_policy"];
+	        this.model_mapping = source["model_mapping"];
+	        this.supported_models = source["supported_models"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];
@@ -717,6 +723,9 @@ export class UpdateSettingInput {
 	    api_key_masked: string;
 	    is_default: boolean;
 	    daily_cost_limit_usd: number;
+	    modelPolicy: string;
+	    modelMapping: {[key: string]: string};
+	    supportedModels: string[];
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
@@ -747,6 +756,9 @@ export class UpdateSettingInput {
 	        this.api_key_masked = source["api_key_masked"];
 	        this.is_default = source["is_default"];
 	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
+	        this.modelPolicy = source["modelPolicy"];
+	        this.modelMapping = source["modelMapping"];
+	        this.supportedModels = source["supportedModels"];
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
@@ -861,6 +873,9 @@ export class UpdateSettingInput {
 	    api_key: string;
 	    is_default: boolean;
 	    daily_cost_limit_usd: number;
+	    modelPolicy: string;
+	    modelMapping: {[key: string]: string};
+	    supportedModels: string[];
 	    costMultiplier: number;
 	    inputCostMultiplier: number;
 	    outputCostMultiplier: number;
@@ -887,6 +902,9 @@ export class UpdateSettingInput {
 	        this.api_key = source["api_key"];
 	        this.is_default = source["is_default"];
 	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
+	        this.modelPolicy = source["modelPolicy"];
+	        this.modelMapping = source["modelMapping"];
+	        this.supportedModels = source["supportedModels"];
 	        this.costMultiplier = source["costMultiplier"];
 	        this.inputCostMultiplier = source["inputCostMultiplier"];
 	        this.outputCostMultiplier = source["outputCostMultiplier"];
@@ -1034,6 +1052,9 @@ export class UpdateSettingInput {
 	    api_key: string;
 	    is_default: boolean;
 	    daily_cost_limit_usd: number;
+	    model_policy: string;
+	    model_mapping: {[key: string]: string};
+	    supported_models: string[];
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -1054,6 +1075,9 @@ export class UpdateSettingInput {
 	        this.api_key = source["api_key"];
 	        this.is_default = source["is_default"];
 	        this.daily_cost_limit_usd = source["daily_cost_limit_usd"];
+	        this.model_policy = source["model_policy"];
+	        this.model_mapping = source["model_mapping"];
+	        this.supported_models = source["supported_models"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];

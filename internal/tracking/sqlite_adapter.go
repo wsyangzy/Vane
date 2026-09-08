@@ -832,6 +832,21 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			description: "Codex 凭证分组每日成本限额字段",
 		},
 		{
+			checkColumn: "model_policy",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN model_policy TEXT NOT NULL DEFAULT 'inherit'",
+			description: "Codex 凭证分组模型策略字段",
+		},
+		{
+			checkColumn: "model_mapping",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '{}'",
+			description: "Codex 凭证分组模型映射字段",
+		},
+		{
+			checkColumn: "supported_models",
+			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN supported_models TEXT NOT NULL DEFAULT '[]'",
+			description: "Codex 凭证分组支持模型字段",
+		},
+		{
 			checkColumn: "disable_service_tier_pricing",
 			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN disable_service_tier_pricing INTEGER NOT NULL DEFAULT 1",
 			description: "Codex 凭证分组服务等级计费开关",
@@ -1745,6 +1760,9 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     api_key TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,
     daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
+    model_policy TEXT NOT NULL DEFAULT 'inherit',
+    model_mapping TEXT NOT NULL DEFAULT '{}',
+    supported_models TEXT NOT NULL DEFAULT '[]',
     cost_multiplier REAL NOT NULL DEFAULT 1.0,
     input_cost_multiplier REAL NOT NULL DEFAULT 1.0,
     output_cost_multiplier REAL NOT NULL DEFAULT 1.0,
@@ -1789,6 +1807,9 @@ END;`
 		ddl    string
 	}{
 		{"daily_cost_limit_usd", `ALTER TABLE claude_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0`},
+		{"model_policy", `ALTER TABLE claude_credential_groups ADD COLUMN model_policy TEXT NOT NULL DEFAULT 'inherit'`},
+		{"model_mapping", `ALTER TABLE claude_credential_groups ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '{}'`},
+		{"supported_models", `ALTER TABLE claude_credential_groups ADD COLUMN supported_models TEXT NOT NULL DEFAULT '[]'`},
 		{"long_context_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_input_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_input_cost_multiplier REAL NOT NULL DEFAULT 1.0`},
 		{"long_context_output_cost_multiplier", `ALTER TABLE claude_credential_groups ADD COLUMN long_context_output_cost_multiplier REAL NOT NULL DEFAULT 1.0`},

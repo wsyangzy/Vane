@@ -17,6 +17,18 @@ func (h *Handler) selectQuotaEligibleEndpoint(
 	quotaSkipped []credentialGroupRef,
 	primary bool,
 ) (*CodexEndpoint, []credentialGroupRef, error) {
+	return h.selectQuotaEligibleEndpointForModel(ctx, channelName, "", failedIDs, baseSkipped, quotaSkipped, primary)
+}
+
+func (h *Handler) selectQuotaEligibleEndpointForModel(
+	ctx context.Context,
+	channelName string,
+	requestedModel string,
+	failedIDs []int64,
+	baseSkipped []credentialGroupRef,
+	quotaSkipped []credentialGroupRef,
+	primary bool,
+) (*CodexEndpoint, []credentialGroupRef, error) {
 	blocked := false
 	for {
 		skipped := make([]credentialGroupRef, 0, len(baseSkipped)+len(quotaSkipped))
@@ -26,9 +38,9 @@ func (h *Handler) selectQuotaEligibleEndpoint(
 		var endpoint *CodexEndpoint
 		var err error
 		if primary {
-			endpoint, err = h.manager.GetPrimaryEndpoint(skipped...)
+			endpoint, err = h.manager.GetPrimaryEndpointForModel(requestedModel, skipped...)
 		} else {
-			endpoint, err = h.manager.GetNextEndpoint(failedIDs, skipped...)
+			endpoint, err = h.manager.GetNextEndpointForModel(requestedModel, failedIDs, skipped...)
 		}
 		if err != nil {
 			if blocked {

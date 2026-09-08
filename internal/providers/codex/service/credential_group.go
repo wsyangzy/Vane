@@ -54,6 +54,7 @@ func (s *CodexCredentialGroupService) EnsureDefaultGroup(ctx context.Context, ch
 		Name:                                   DefaultCodexCredentialGroupName,
 		ApiKey:                                 channel.ApiKey,
 		IsDefault:                              true,
+		ModelPolicy:                            store.CodexModelPolicyInherit,
 		CostMultiplier:                         1.0,
 		InputCostMultiplier:                    1.0,
 		OutputCostMultiplier:                   1.0,
@@ -145,6 +146,19 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	}
 	record.Name = strings.TrimSpace(record.Name)
 	record.ApiKey = strings.TrimSpace(record.ApiKey)
+	record.ModelPolicy = strings.ToLower(strings.TrimSpace(record.ModelPolicy))
+	switch record.ModelPolicy {
+	case "":
+		record.ModelPolicy = store.CodexModelPolicyInherit
+	case store.CodexModelPolicyInherit, store.CodexModelPolicyOverride, store.CodexModelPolicyPassthrough:
+	default:
+		return fmt.Errorf("未知的 Codex 模型策略: %q", record.ModelPolicy)
+	}
+	record.ModelMapping = normalizeCodexModelMapping(record.ModelMapping)
+	record.SupportedModels = normalizeCodexSupportedModels(record.SupportedModels)
+	if record.ModelPolicy == store.CodexModelPolicyPassthrough {
+		record.ModelMapping = nil
+	}
 	if record.DailyCostLimitUSD < 0 {
 		return fmt.Errorf("每日成本限额不能小于 0")
 	}
@@ -194,6 +208,29 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 		return fmt.Errorf("该渠道下已存在相同的凭证分组名 '%s'", record.Name)
 	}
 	return nil
+}
+
+func normalizeCodexSupportedModels(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(models))
+	normalized := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		normalized = append(normalized, model)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func normalizeCodexBillingRules(rules []store.CodexBillingRuleRecord) ([]store.CodexBillingRuleRecord, error) {

@@ -205,13 +205,16 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			slog.Info(fmt.Sprintf("🔄 [严格优先级转移] [%s] 排除已尝试端点后剩余 %d 个候选端点", connID, len(endpoints)))
 		}
 	}
+	candidateEndpoints := endpoints
+	endpoints = filterClaudeModelEndpoints(sh.forwarder, endpoints, bodyBytes)
+	modelBlocked := len(endpoints) == 0 && len(candidateEndpoints) > 0
 	rawEndpoints := endpoints
 	var quotaBlocked bool
 	endpoints, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, sh.usageTracker, endpoints)
 
 	if len(endpoints) == 0 {
 		if quotaBlocked && len(rawEndpoints) > 0 {
-			currentChannel = endpointRouteName(rawEndpoints[0])
+			currentChannel = endpointRouteName(candidateEndpoints[0])
 			if triedChannels != nil && currentChannel != "" {
 				triedChannels[currentChannel] = struct{}{}
 			}
@@ -229,6 +232,20 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				return
 			}
 			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "daily_cost_limit_exceeded", http.StatusTooManyRequests)
+			return
+		}
+		if modelBlocked {
+			currentChannel = endpointRouteName(candidateEndpoints[0])
+			if triedChannels != nil && currentChannel != "" {
+				triedChannels[currentChannel] = struct{}{}
+			}
+			newChannel, failoverErr := sh.endpointManager.TriggerChannelSwitchWithoutFailure(currentChannel, stringSetKeys(triedChannels))
+			if failoverErr == nil && newChannel != "" {
+				slog.Info("[Claude 模型能力不匹配触发渠道间故障转移]", "request_id", connID, "from_channel", currentChannel, "to_channel", newChannel)
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, previousErr)
+				return
+			}
+			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "no_supported_model_endpoint", http.StatusServiceUnavailable)
 			return
 		}
 		noHealthyErr := fmt.Errorf("no healthy endpoints available")
@@ -697,6 +714,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 			// 获取渠道内已恢复的端点（之前因冷却被跳过，现在已恢复）
 			recoveredEndpoints := retryMgr.GetRecoveredEndpointsInChannel(triedKeys)
+			recoveredEndpoints = filterClaudeModelEndpoints(sh.forwarder, recoveredEndpoints, bodyBytes)
 			recoveredEndpoints, _ = filterCredentialGroupDailyCostLimits(ctx, sh.usageTracker, recoveredEndpoints)
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级重试一次",

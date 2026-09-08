@@ -2,10 +2,32 @@ package codexproxy
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
+
+	"ai-relay-forwarder/internal/providers/codex/store"
 )
+
+func TestRewriteModelForEndpointUsesGroupPolicy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	channel := &store.CodexChannelRecord{Model: "channel-model", ModelMapping: map[string]string{"agent-mini": "channel-mini"}}
+	body := []byte(`{"model":"agent-mini","input":[]}`)
+
+	result := rewriteModelForEndpoint(body, &CodexEndpoint{ModelPolicy: store.CodexModelPolicyInherit}, channel, logger, "test")
+	if result.NewModel != "channel-mini" || result.Source != "mapping" {
+		t.Fatalf("inherit result = %#v", result)
+	}
+	override := rewriteModelForEndpoint(body, &CodexEndpoint{ModelPolicy: store.CodexModelPolicyOverride, ModelMapping: map[string]string{"agent-mini": "group-mini"}}, channel, logger, "test")
+	if override.NewModel != "group-mini" || override.Source != "mapping" {
+		t.Fatalf("override result = %#v", override)
+	}
+	passthrough := rewriteModelForEndpoint(body, &CodexEndpoint{ModelPolicy: store.CodexModelPolicyPassthrough}, channel, logger, "test")
+	if string(passthrough.Body) != string(body) || passthrough.Source != "" {
+		t.Fatalf("passthrough result = %#v", passthrough)
+	}
+}
 
 func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(&strings.Builder{}, nil))
