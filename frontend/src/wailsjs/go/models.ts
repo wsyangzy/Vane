@@ -1661,6 +1661,7 @@ export class UpdateSettingInput {
 	    http_status: number;
 	    retry_count: number;
 	    failure_reason?: string;
+	    last_failure_reason?: string;
 	    cancel_reason?: string;
 	    privacy_redacted: boolean;
 	    privacy_redaction_summary?: string;
@@ -1706,6 +1707,7 @@ export class UpdateSettingInput {
 	        this.http_status = source["http_status"];
 	        this.retry_count = source["retry_count"];
 	        this.failure_reason = source["failure_reason"];
+	        this.last_failure_reason = source["last_failure_reason"];
 	        this.cancel_reason = source["cancel_reason"];
 	        this.privacy_redacted = source["privacy_redacted"];
 	        this.privacy_redaction_summary = source["privacy_redaction_summary"];

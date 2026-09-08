@@ -1589,6 +1589,7 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 			// 🔧 [方案A实现] 2025-12-20: 显式覆盖 failureReason（无论是否为空）
 			// 避免之前中途错误设置的旧值残留，导致"成功但带失败原因"的误标
 			req.FailureReason = failureReason
+			req.LastFailureReason = ""
 			// 成本在归档时计算
 		})
 		if err != nil {
@@ -1696,11 +1697,10 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 				req.CancelReason = reason
 				// 取消为终态：清理可能已写入的 failure_reason，避免前端同时展示 failure_reason + cancel_reason 造成误解。
 				req.FailureReason = ""
+				req.LastFailureReason = ""
 			} else {
 				req.FailureReason = reason
-				if errorDetail != "" {
-					req.FailureReason = reason + ": " + errorDetail
-				}
+				req.LastFailureReason = errorDetail
 			}
 		})
 		if err != nil {
@@ -2731,6 +2731,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	httpStatusSnapshot := req.HTTPStatus
 	retryCount := req.RetryCount
 	failureReason := req.FailureReason
+	lastFailureReason := req.LastFailureReason
 	cancelReason := req.CancelReason
 	inputTokens := req.InputTokens
 	outputTokens := req.OutputTokens
@@ -2887,7 +2888,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		HTTPStatusCode:                httpStatus,
 		RetryCount:                    retryCount,
 		FailureReason:                 failureReason,
-		LastFailureReason:             "",
+		LastFailureReason:             lastFailureReason,
 		CancelReason:                  cancelReason,
 		InputTokens:                   inputTokens,
 		OutputTokens:                  outputTokens,

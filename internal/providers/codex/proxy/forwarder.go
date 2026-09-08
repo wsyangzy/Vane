@@ -101,7 +101,7 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("转发请求失败: %w", err)
+		return nil, err
 	}
 
 	return resp, nil

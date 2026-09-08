@@ -62,15 +62,23 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 
-// failure_reason 的存储格式为 "<分类>: <详情>"（tracker.go RecordRequestFinalFailure 拼接），
-// 只拆出 Relay 自己的分类标签；服务商详情保持原文展示。
-const splitFailureReason = (raw) => {
-  const text = String(raw || '').trim();
-  if (!text) return { category: '', detail: '' };
-  const withDetail = text.match(/^([a-z][a-z0-9_]*):\s([\s\S]+)$/);
-  if (withDetail) return { category: withDetail[1], detail: withDetail[2] };
-  if (/^[a-z][a-z0-9_]*$/.test(text)) return { category: text, detail: '' };
-  return { category: '', detail: text };
+// last_failure_reason is the provider's raw response. Keep failure_reason as a
+// compatibility fallback for records written before the fields were separated.
+const getFailureDetail = (request) => {
+  const raw = request.last_failure_reason || request.lastFailureReason || '';
+  if (raw) return String(raw);
+
+  let legacy = String(request.failure_reason || request.failureReason || '');
+  if (!legacy.includes(':')) return '';
+  let previous;
+  do {
+    previous = legacy;
+    legacy = legacy
+      .replace(/^[a-z][a-z0-9_]*:\s*/i, '')
+      .replace(/^上游 HTTP \d+:\s*/i, '')
+      .replace(/^upstream stream error(?:\s*\([^)]*\))?:\s*/i, '');
+  } while (legacy !== previous);
+  return legacy;
 };
 
 /**
@@ -293,10 +301,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
     if (index === total - 1) return '最终';
     return '中转';
   };
-  const failureParts = splitFailureReason(request.failure_reason);
+  const failureDetail = getFailureDetail(request);
   const errorText = [
     networkHTTPStatus ? `HTTP 状态码: ${networkHTTPStatus}` : null,
-    request.failure_reason ? `失败原因: ${request.failure_reason}` : null,
+    failureDetail ? `失败原因: ${failureDetail}` : null,
     request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
   ].filter(Boolean).join('\n');
   const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
@@ -849,7 +857,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
 
               {/* 错误信息（如果有） */}
               {(['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status) ||
-                request.failure_reason || request.cancel_reason) && (
+                failureDetail || request.cancel_reason) && (
                 <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">
                   <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-rose-900 flex items-center gap-2">
@@ -876,24 +884,19 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
-                    {(networkHTTPStatus || failureParts.category) && (
+                    {networkHTTPStatus && (
                       <div className="flex flex-wrap items-center gap-2">
                         {networkHTTPStatus && (
                           <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
                             HTTP {networkHTTPStatus}
                           </span>
                         )}
-                        {failureParts.category && (
-                          <span className="inline-flex items-center rounded-md border border-rose-200 bg-white px-2 py-0.5 font-mono text-xs text-rose-700">
-                            {failureParts.category}
-                          </span>
-                        )}
                       </div>
                     )}
-                    {failureParts.detail && (
+                    {failureDetail && (
                       <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
                         <span className="shrink-0 font-medium text-slate-600">原始信息：</span>
-                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureParts.detail}</span>
+                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
                       </div>
                     )}
                     {request.cancel_reason && (

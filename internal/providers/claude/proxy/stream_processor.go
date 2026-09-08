@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -245,7 +246,10 @@ func (sp *StreamProcessor) processSSELine(line string) {
 				sp.requestID, result.ErrorInfo.Type, result.ErrorInfo.Message))
 
 			// 将错误信息存储，供上层生命周期管理器处理
-			sp.lastAPIError = fmt.Errorf("API错误 %s: %s", result.ErrorInfo.Type, result.ErrorInfo.Message)
+			sp.lastAPIError = errors.New(result.RawError)
+			if result.RawError == "" {
+				sp.lastAPIError = errors.New(result.ErrorInfo.Message)
+			}
 			return
 		}
 
@@ -403,7 +407,10 @@ func (sp *StreamProcessor) finalizeParsing() {
 		if result.ErrorInfo != nil {
 			slog.Error(fmt.Sprintf("❌ [Flush错误] [%s] 类型: %s, 消息: %s",
 				sp.requestID, result.ErrorInfo.Type, result.ErrorInfo.Message))
-			sp.lastAPIError = fmt.Errorf("API错误 %s: %s", result.ErrorInfo.Type, result.ErrorInfo.Message)
+			sp.lastAPIError = errors.New(result.RawError)
+			if result.RawError == "" {
+				sp.lastAPIError = errors.New(result.ErrorInfo.Message)
+			}
 		} else if result.TokenUsage != nil {
 			slog.Debug(fmt.Sprintf("🔄 [Flush成功] [%s] 成功解析待处理事件的Token信息", sp.requestID))
 		}

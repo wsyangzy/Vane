@@ -96,15 +96,20 @@ func TestParseEndpointChain(t *testing.T) {
 
 func TestRequestDetailToRecordMapsNetworkFields(t *testing.T) {
 	record := requestDetailToRecord(tracking.RequestDetail{
-		RequestID: "req-network-fields",
-		ClientIP:  "192.0.2.10:1234",
-		UserAgent: "Codex CLI/1.0",
-		Method:    "PATCH",
-		Path:      "/v1/responses",
+		RequestID:         "req-network-fields",
+		ClientIP:          "192.0.2.10:1234",
+		UserAgent:         "Codex CLI/1.0",
+		Method:            "PATCH",
+		Path:              "/v1/responses",
+		FailureReason:     "server_error",
+		LastFailureReason: `{"error":{"code":"invalid_encrypted_content"}}`,
 	})
 
 	if record.ClientIP != "192.0.2.10:1234" || record.UserAgent != "Codex CLI/1.0" || record.Method != "PATCH" || record.Path != "/v1/responses" {
 		t.Fatalf("network fields were not mapped: %#v", record)
+	}
+	if record.FailureReason != "server_error" || record.LastFailureReason != `{"error":{"code":"invalid_encrypted_content"}}` {
+		t.Fatalf("failure fields were not mapped separately: %#v", record)
 	}
 }
 

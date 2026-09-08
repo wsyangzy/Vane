@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -390,21 +389,11 @@ func TestNewEndpointErrorFromResponse_FallsBackToRawBodyWhenDecompressFails(t *t
 
 	err := newEndpointErrorFromResponse(resp, "https://example.com/v1/messages")
 
-	// 🔧 [P1-S1 修复] 解压失败时不再回退到原始二进制字节，
-	// 改为返回明确的占位符消息，避免二进制污染下游 SSE/JSON 文本字段
-	bodyStr := string(err.Body)
-	if !strings.HasPrefix(bodyStr, "[upstream error body unreadable:") {
-		t.Fatalf("expected placeholder prefix, got %q", bodyStr)
+	if !bytes.Equal(err.Body, rawBody) {
+		t.Fatalf("body = %q, want original bytes %q", err.Body, rawBody)
 	}
-	if !strings.Contains(bodyStr, "encoding=gzip") {
-		t.Fatalf("expected placeholder to contain encoding info, got %q", bodyStr)
-	}
-	if !strings.Contains(bodyStr, "raw_bytes=23") {
-		t.Fatalf("expected placeholder to contain raw byte length, got %q", bodyStr)
-	}
-	// 占位符应通过 ExtractUpstreamErrorMessage 完整可读（不被 sanitize 破坏）
-	if !strings.Contains(ExtractUpstreamErrorMessage(err), "[upstream error body unreadable:") {
-		t.Fatalf("expected placeholder to remain readable via ExtractUpstreamErrorMessage, got %q", ExtractUpstreamErrorMessage(err))
+	if got := ExtractUpstreamErrorMessage(err); got != string(rawBody) {
+		t.Fatalf("extracted body = %q, want original %q", got, rawBody)
 	}
 }
 
@@ -415,6 +404,10 @@ func TestWriteUpstreamErrorResponsePassesThroughEndpointError(t *testing.T) {
 		StatusCode:  http.StatusTooManyRequests,
 		Body:        upstreamBody,
 		ContentType: "application/json",
+		Headers: http.Header{
+			"Retry-After":      []string{"15"},
+			"X-Upstream-Trace": []string{"trace-123"},
+		},
 		URL:         "https://upstream.example/v1/messages",
 	}
 
@@ -425,6 +418,12 @@ func TestWriteUpstreamErrorResponsePassesThroughEndpointError(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got := recorder.Header().Get("Retry-After"); got != "15" {
+		t.Fatalf("Retry-After = %q, want 15", got)
+	}
+	if got := recorder.Header().Get("X-Upstream-Trace"); got != "trace-123" {
+		t.Fatalf("X-Upstream-Trace = %q, want trace-123", got)
 	}
 	if got := recorder.Body.String(); got != string(upstreamBody) {
 		t.Fatalf("body = %q, want %q", got, upstreamBody)
@@ -443,51 +442,16 @@ func TestWriteUpstreamErrorResponseKeepsStatusWhenBodyIsEmpty(t *testing.T) {
 	}
 }
 
-func TestWriteUpstreamErrorResponseFallsBackForNetworkError(t *testing.T) {
+func TestWriteUpstreamErrorResponseWritesNetworkErrorVerbatim(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
-	WriteUpstreamErrorResponse(recorder, errors.New("connection refused"), "all endpoints failed", http.StatusBadGateway)
+	WriteUpstreamErrorResponse(recorder, errors.New("connection refused"), "connection refused", http.StatusBadGateway)
 
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadGateway)
 	}
-	if !strings.Contains(recorder.Body.String(), "all endpoints failed") {
-		t.Fatalf("body %q does not contain fallback message", recorder.Body.String())
-	}
-}
-
-func TestSendStreamInterruptedMessageUsesRetryableSSEError(t *testing.T) {
-	recorder := httptest.NewRecorder()
-
-	sendStreamInterruptedMessage(recorder, recorder, "upstream 403 body", "ignored-model")
-
-	body := recorder.Body.String()
-	if !strings.HasPrefix(body, "event: error\n") {
-		t.Fatalf("body should start with SSE error event, got %q", body)
-	}
-	if !strings.Contains(body, "\ndata: ") {
-		t.Fatalf("body should contain data line, got %q", body)
-	}
-
-	payload := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(body, "data: ", 2)[1], ""))
-	var decoded struct {
-		Type  string `json:"type"`
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
-		t.Fatalf("unmarshal SSE payload: %v, payload=%q", err, payload)
-	}
-	if decoded.Type != "error" {
-		t.Fatalf("payload type = %q, want error", decoded.Type)
-	}
-	if decoded.Error.Type != "overloaded_error" {
-		t.Fatalf("error type = %q, want overloaded_error", decoded.Error.Type)
-	}
-	if decoded.Error.Message != "upstream 403 body" {
-		t.Fatalf("message = %q, want upstream 403 body", decoded.Error.Message)
+	if got := recorder.Body.String(); got != "connection refused" {
+		t.Fatalf("body = %q, want original transport error", got)
 	}
 }
 

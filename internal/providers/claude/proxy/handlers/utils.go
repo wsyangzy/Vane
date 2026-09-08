@@ -25,6 +25,7 @@ type EndpointError struct {
 	StatusCode  int
 	Body        []byte
 	ContentType string
+	Headers     http.Header
 	URL         string
 }
 
@@ -51,6 +52,7 @@ func newEndpointErrorFromResponse(resp *http.Response, targetURL string) *Endpoi
 		StatusCode:  resp.StatusCode,
 		Body:        bodyBytes,
 		ContentType: contentType,
+		Headers:     resp.Header.Clone(),
 		URL:         targetURL,
 	}
 }
@@ -69,7 +71,7 @@ func readUpstreamErrorBody(resp *http.Response) ([]byte, string) {
 	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrorBodyBytes))
 	if err != nil {
 		slog.Warn("Failed to read upstream error response body", "status_code", resp.StatusCode, "error", err)
-		return nil, contentType
+		return rawBody, contentType
 	}
 
 	return decodeUpstreamErrorBody(rawBody, resp.Header), contentType
@@ -94,19 +96,14 @@ func decodeUpstreamErrorBody(body []byte, headers http.Header) []byte {
 	decompressedReader, err := processor.DecompressStreamReader(clonedResp)
 	if err != nil {
 		slog.Warn("Failed to create upstream error decompressor", "content_encoding", encoding, "error", err)
-		// 🔧 [P1-S1 修复] 解压失败时返回明确的占位符，
-		// 禁止把损坏的压缩字节注入后续 SSE/JSON 文本字段，避免客户端解析失败。
-		return fmt.Appendf(nil, "[upstream error body unreadable: encoding=%s, raw_bytes=%d, decode_error=%v]",
-			encoding, len(body), err)
+		return body
 	}
 	defer decompressedReader.Close()
 
 	decompressedBody, err := io.ReadAll(io.LimitReader(decompressedReader, maxUpstreamErrorBodyBytes))
 	if err != nil {
 		slog.Warn("Failed to decompress upstream error body", "content_encoding", encoding, "error", err)
-		// 🔧 [P1-S1 修复] 同上：解压过程中读取失败时也返回占位符。
-		return fmt.Appendf(nil, "[upstream error body decode failed: encoding=%s, raw_bytes=%d, read_error=%v]",
-			encoding, len(body), err)
+		return body
 	}
 
 	return decompressedBody
@@ -154,9 +151,20 @@ func GetStatusCodeFromError(err error, resp *http.Response) int {
 func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg string, fallbackStatusCode int) {
 	var epErr *EndpointError
 	if errors.As(err, &epErr) {
-		if epErr.ContentType != "" {
+		for key, values := range epErr.Headers {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		if epErr.ContentType != "" && w.Header().Get("Content-Type") == "" {
 			w.Header().Set("Content-Type", epErr.ContentType)
 		}
+		// Body may have been decoded for readable tracking; stale wire metadata
+		// must not describe different bytes. Other upstream headers are retained.
+		w.Header().Del("Content-Encoding")
+		w.Header().Del("Content-Length")
+		w.Header().Del("Transfer-Encoding")
+		w.Header().Del("Connection")
 		w.WriteHeader(epErr.StatusCode)
 		if len(epErr.Body) > 0 {
 			_, _ = w.Write(epErr.Body)
@@ -166,10 +174,10 @@ func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg st
 	if fallbackStatusCode <= 0 {
 		fallbackStatusCode = http.StatusBadGateway
 	}
-	if fallbackMsg == "" {
-		fallbackMsg = http.StatusText(fallbackStatusCode)
+	w.WriteHeader(fallbackStatusCode)
+	if fallbackMsg != "" {
+		_, _ = io.WriteString(w, fallbackMsg)
 	}
-	http.Error(w, fallbackMsg, fallbackStatusCode)
 }
 
 // ExtractUpstreamErrorMessage 从错误中提取上游提供商的原始错误信息。
@@ -180,7 +188,7 @@ func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg st
 // 长度上限由读取侧的 maxUpstreamErrorBodyBytes 兜底，这里不再二次裁剪。
 func ExtractUpstreamErrorMessage(err error) string {
 	if err == nil {
-		return "unknown error"
+		return ""
 	}
 	var epErr *EndpointError
 	if errors.As(err, &epErr) {

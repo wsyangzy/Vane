@@ -105,7 +105,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			return
 		}
 		lifecycleManager.FailRequest("privacy_filter_failed", err.Error(), http.StatusInternalServerError)
-		http.Error(w, "Privacy protection failed: "+err.Error(), http.StatusInternalServerError)
+		WriteUpstreamErrorResponse(w, nil, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	bodyBytes = protectedBody
@@ -122,8 +122,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
 	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-		lifecycleManager.FailRequest("retry_budget_exhausted", reason, http.StatusGatewayTimeout)
-		http.Error(w, fmt.Sprintf("retry budget exhausted: %s", reason), http.StatusGatewayTimeout)
+		lifecycleManager.FailRequest("retry_budget_exhausted", "", http.StatusGatewayTimeout)
+		WriteUpstreamErrorResponse(w, nil, "", http.StatusGatewayTimeout)
 		return
 	}
 
@@ -180,7 +180,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					continue
 				}
 				lifecycleManager.FailRequest("daily_cost_limit_exceeded", "", http.StatusTooManyRequests)
-				http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+				WriteUpstreamErrorResponse(w, nil, "", http.StatusTooManyRequests)
 				return
 			}
 			if streamOnlyBlocked {
@@ -206,13 +206,13 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					continue
 				}
 				lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
-				http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+				WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
 				return
 			}
 			noHealthyErr := fmt.Errorf("no healthy endpoints available")
 			lifecycleManager.HandleError(noHealthyErr)
 			lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
-			http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+			WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -411,9 +411,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						failureReason := lifecycleManager.MapErrorTypeToFailureReason(errorCtx.ErrorType)
 
 						// 使用新的FailRequest方法标记最终失败（修复：添加HTTP状态码）
-						lifecycleManager.FailRequest(failureReason, err.Error(), failStatusCode)
+						lifecycleManager.FailRequest(failureReason, ExtractUpstreamErrorMessage(err), failStatusCode)
 						rh.endpointManager.ClearEndpointsRequestFailure([]string{epKey})
-						WriteUpstreamErrorResponse(w, err, decision.Reason, failStatusCode)
+						WriteUpstreamErrorResponse(w, err, ExtractUpstreamErrorMessage(err), failStatusCode)
 						return
 					}
 				}
@@ -640,7 +640,7 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		slog.Error("Failed to process response body", "request_id", connID, "error", err)
 		// 此时尚未 WriteHeader，可以安全返回错误状态码
 		lifecycleManager.FailRequest("response_read_error", err.Error(), http.StatusBadGateway)
-		http.Error(w, "Failed to read upstream response: "+err.Error(), http.StatusBadGateway)
+		WriteUpstreamErrorResponse(w, nil, err.Error(), http.StatusBadGateway)
 		return
 	}
 

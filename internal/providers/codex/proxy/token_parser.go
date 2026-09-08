@@ -10,7 +10,6 @@ package codexproxy
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -43,21 +42,7 @@ func (e *UpstreamStreamError) Error() string {
 	if e == nil {
 		return ""
 	}
-	parts := make([]string, 0, 3)
-	if e.Type != "" {
-		parts = append(parts, "type="+e.Type)
-	}
-	if e.Code != "" {
-		parts = append(parts, "code="+e.Code)
-	}
-	prefix := "upstream stream error"
-	if len(parts) > 0 {
-		prefix += " (" + strings.Join(parts, ", ") + ")"
-	}
-	if e.Message == "" {
-		return prefix
-	}
-	return fmt.Sprintf("%s: %s", prefix, e.Message)
+	return e.Message
 }
 
 // TokenParser 解析 OpenAI 格式响应中的 token 用量
@@ -414,7 +399,7 @@ func (p *TokenParser) ParseStreamingErrorLine(line []byte) *UpstreamStreamError 
 	return &UpstreamStreamError{
 		Type:    firstNonEmpty(detail.Type, envelope.Type),
 		Code:    detail.Code,
-		Message: detail.Message,
+		Message: string(payload),
 	}
 }
 

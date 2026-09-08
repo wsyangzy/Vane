@@ -11,6 +11,9 @@ test('generated RequestRecord model includes request network fields', () => {
   for (const field of ['client_ip', 'user_agent', 'method', 'path']) {
     assert.match(requestRecord, new RegExp(`\\b${field}: string;`));
   }
+  assert.match(requestRecord, /last_failure_reason\?: string;/);
+  const bridge = readFileSync(new URL('./wailsApi.js', import.meta.url), 'utf8');
+  assert.match(bridge, /last_failure_reason: r\.last_failure_reason/);
 });
 
 test('generated App binding exposes the data directory action', () => {

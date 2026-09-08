@@ -157,6 +157,53 @@ func TestRecordRequestSuccessPersistsHTTPStatus(t *testing.T) {
 	}
 }
 
+func TestRecordRequestFinalFailureKeepsRawDetailSeparate(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       10,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: time.Hour,
+		RetentionDays:   1,
+	})
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	const requestID = "req-raw-failure-detail"
+	const reason = "endpoint_exhausted"
+	const rawDetail = `{"error":{"message":"Insufficient quota available for instant inference.","code":"deployment_disabled"}}`
+	tracker.RecordRequestStart(requestID, "127.0.0.1", "test-agent", "POST", "/v1/responses", true)
+	tracker.RecordRequestFinalFailure(requestID, "gpt-test", "failed", reason, rawDetail, 25*time.Millisecond, 503, nil)
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatalf("flush tracker: %v", err)
+	}
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &QueryOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	for _, detail := range details {
+		if detail.RequestID != requestID {
+			continue
+		}
+		if detail.FailureReason != reason {
+			t.Fatalf("failure reason = %q, want %q", detail.FailureReason, reason)
+		}
+		if detail.LastFailureReason != rawDetail {
+			t.Fatalf("raw failure detail = %q, want %q", detail.LastFailureReason, rawDetail)
+		}
+		if strings.Contains(detail.FailureReason, rawDetail) {
+			t.Fatal("failure_reason must not contain raw detail")
+		}
+		return
+	}
+	t.Fatalf("request %q not found in details", requestID)
+}
+
 func TestRecordPrivacyRedactionPersistsSummaryOnlyWithoutPlaintext(t *testing.T) {
 	config := &Config{
 		Enabled:         true,

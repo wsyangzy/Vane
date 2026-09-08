@@ -306,9 +306,10 @@ type RequestRecord struct {
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
 	HTTPStatus               int         `json:"http_status"`
-	RetryCount               int         `json:"retry_count"`              // 重试次数
-	FailureReason            string      `json:"failure_reason,omitempty"` // 失败原因
-	CancelReason             string      `json:"cancel_reason,omitempty"`  // 取消原因
+	RetryCount               int         `json:"retry_count"`                   // 重试次数
+	FailureReason            string      `json:"failure_reason,omitempty"`      // 失败原因分类
+	LastFailureReason        string      `json:"last_failure_reason,omitempty"` // 最后一次失败的原始详情
+	CancelReason             string      `json:"cancel_reason,omitempty"`       // 取消原因
 	InputTokens              int64       `json:"input_tokens"`
 	OutputTokens             int64       `json:"output_tokens"`
 	ReasoningTokens          int64       `json:"reasoning_tokens"`
@@ -496,6 +497,7 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		Status:                        r.Status,
 		RetryCount:                    retryCount,
 		FailureReason:                 r.FailureReason,
+		LastFailureReason:             r.LastFailureReason,
 		CancelReason:                  r.CancelReason,
 		InputTokens:                   r.InputTokens,
 		OutputTokens:                  r.OutputTokens,

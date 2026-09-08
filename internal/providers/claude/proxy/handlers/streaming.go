@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -78,73 +77,6 @@ func (f *noOpFlusher) Flush() {
 	// 不执行任何操作，避免panic但保持流式处理逻辑
 }
 
-// terminateSSEStreamWithError 正确终止 SSE 流，确保客户端不会自动重连
-// 修复客户端无限重连问题 - 发送完整的 SSE 结束序列
-//
-// 🔧 [P0-S2 修复] 改用 json.Marshal 构造 JSON payload，
-// 同时确保 message_stop 也走结构化构造路径。
-func terminateSSEStreamWithError(w http.ResponseWriter, flusher http.Flusher, errorMsg string) {
-	// 1. 发送 Anthropic 格式的 error 事件（让客户端识别为 API 错误而非连接中断）
-	writeSSEErrorEvent(w, flusher, "api_error", errorMsg)
-
-	// 2. 发送 message_stop 事件（关键！明确告知客户端流已正常结束）
-	writeSSEEvent(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
-}
-
-// sendStreamInterruptedMessage 发送流中断错误，触发客户端自动重试
-// 改用 Anthropic API 标准的 overloaded_error 格式
-// 之前的实现发送"假装完整"的消息，Claude Code 不会识别为需要重试
-// 现在发送 overloaded_error，这是 Anthropic 定义的可重试错误类型
-// 参考: https://docs.anthropic.com/en/api/errors
-//
-// ⚠️ 仅用于反代自身产生的中断（重试预算耗尽、已达最大重启次数、挂起超时等）。
-//
-// 🔧 [P0-S2 修复] 使用 json.Marshal 构造 payload。
-func sendStreamInterruptedMessage(w http.ResponseWriter, flusher http.Flusher, message string, modelName string) {
-	// modelName 参数保留以保持向后兼容，但不再使用
-	_ = modelName
-
-	slog.Debug("📡 发送可重试错误信号", "message", message, "error_type", "overloaded_error")
-
-	writeSSEErrorEvent(w, flusher, "overloaded_error", message)
-}
-
-// writeSSEErrorEvent 构造并发送一个 Anthropic 标准格式的 SSE error 事件
-// 格式: event: error\ndata: {"type":"error","error":{"type":"<errorType>","message":"<message>"}}\n\n
-//
-// 🔧 [P0-S2 修复] 使用 json.Marshal 而非手写字符串转义，标准库保证：
-//   - 正确转义所有控制字符（\x00-\x1F）
-//   - 正确处理无效 UTF-8 序列（替换为 U+FFFD）
-//   - 正确转义反斜杠、引号、Unicode
-//
-// 这是修复 "JSON Parse error" 类问题的核心防线。
-func writeSSEErrorEvent(w http.ResponseWriter, flusher http.Flusher, errorType, message string) {
-	payload := map[string]any{
-		"type": "error",
-		"error": map[string]any{
-			"type":    errorType,
-			"message": message,
-		},
-	}
-	writeSSEEvent(w, flusher, "error", payload)
-}
-
-// writeSSEEvent 通用 SSE 事件写入：序列化 payload 为 JSON 并按 SSE 协议输出
-// 写入失败仅记录日志（连接可能已断开），上层通过 ctx.Err() 感知客户端取消
-func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventName string, payload any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		// 兜底：json.Marshal 几乎不会失败，但万一失败时退化为静态错误消息
-		slog.Error("Failed to marshal SSE payload", "event", eventName, "error", err)
-		data = []byte(`{"type":"error","error":{"type":"api_error","message":"internal marshal error"}}`)
-	}
-	if _, werr := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, data); werr != nil {
-		slog.Debug("Failed to write SSE event to client (connection likely closed)", "event", eventName, "error", werr)
-		return
-	}
-	flusher.Flush()
-}
-
 // HandleStreamingRequest 统一流式请求处理（整合错误恢复与生命周期管理）
 func (sh *StreamingHandler) HandleStreamingRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager) {
 	connID := lifecycleManager.GetRequestID()
@@ -168,21 +100,23 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		slog.Error(fmt.Sprintf("🚨 [Flusher不支持] [%s] 当前 ResponseWriter 未实现 http.Flusher，拒绝流式请求", connID))
 		lifecycleManager.FailRequest("flusher_unsupported",
 			"ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
-		http.Error(w, "Streaming not supported by this proxy chain", http.StatusServiceUnavailable)
+		WriteUpstreamErrorResponse(w, nil, "ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
 		return
 	}
 	protectedBody, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
 		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环。
-		// 流式请求统一用 SSE 终止，避免客户端把 HTTP 状态码误判为认证失败。
 		reason, message := "privacy_filter_failed", err.Error()
 		status := http.StatusInternalServerError
 		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
 			reason, message, status = PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode
 		}
 		lifecycleManager.FailRequest(reason, message, status)
-		sh.setStreamingHeaders(w)
-		terminateSSEStreamWithError(w, flusher, "隐私防护处理失败: "+message)
+		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
+			WritePrivacyPolicyErrorResponse(w, policyErr)
+		} else {
+			WriteUpstreamErrorResponse(w, nil, message, status)
+		}
 		return
 	}
 	bodyBytes = protectedBody
@@ -202,7 +136,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 	triedEndpoints := make(map[string]struct{}, 8)
 	// 追踪循环轮数（用于 MaxLoops 限制）
 	loopCount := 0
-	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount)
+	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, nil)
 }
 
 // setStreamingHeaders 设置流式响应头
@@ -226,7 +160,7 @@ func clearStreamingHeaders(w http.ResponseWriter) {
 // triedChannels: 本次请求链路内已尝试过的渠道（方案B：渠道间故障转移不回访，避免循环）
 // triedEndpoints: 本次请求链路内已尝试过的端点（渠道内严格优先级转移，不回退）
 // loopCount: 当前循环轮数（用于 MaxLoops 限制）
-func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int) {
+func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int, previousErr error) {
 	connID := lifecycleManager.GetRequestID()
 
 	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
@@ -234,8 +168,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	// 这个检查能在递归层级累计超过预算时及时终止
 	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-		lifecycleManager.FailRequest("retry_budget_exhausted", reason, http.StatusGatewayTimeout)
-		sendStreamInterruptedMessage(w, flusher, fmt.Sprintf("重试预算耗尽: %s", reason), modelNameOrUnknown(lifecycleManager))
+		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "retry_budget_exhausted", http.StatusGatewayTimeout)
 		return
 	}
 
@@ -292,19 +225,15 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					"from_channel", currentChannel,
 					"to_channel", newChannel,
 				)
-				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount)
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, previousErr)
 				return
 			}
-			lifecycleManager.FailRequest("daily_cost_limit_exceeded", "", http.StatusTooManyRequests)
-			clearStreamingHeaders(w)
-			WriteUpstreamErrorResponse(w, nil, "", http.StatusTooManyRequests)
+			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "daily_cost_limit_exceeded", http.StatusTooManyRequests)
 			return
 		}
 		noHealthyErr := fmt.Errorf("no healthy endpoints available")
 		lifecycleManager.HandleError(noHealthyErr)
-		lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
-		clearStreamingHeaders(w)
-		WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
+		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "no_healthy_endpoints", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -320,7 +249,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 	// 🔧 [重试逻辑修复] 对每个端点进行max_attempts次重试，而不是只尝试一次
 	// 尝试端点直到成功
-	var lastErr error           // 声明在外层作用域，供最终错误处理使用
+	lastErr := previousErr      // 跨渠道/恢复递归时保留最后一次真实上游错误
 	var lastResp *http.Response // 🔧 [修复] 添加lastResp变量，用于获取真实HTTP状态码
 	// 🔢 [重构] 移除currentAttemptCount变量，统一由LifecycleManager管理计数
 	for i := 0; i < len(endpoints); i++ {
@@ -586,9 +515,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							if lifecycleManager.HasOutputContent() {
 								slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 端点恢复成功但已发送内容，禁止重试", connID))
 								lifecycleManager.FailRequest("output_sent_no_retry",
-									"Cannot retry after sending partial output to client", http.StatusBadGateway)
-								// 使用 sendStreamInterruptedMessage 触发客户端重试
-								sendStreamInterruptedMessage(w, flusher, "已发送部分内容，服务端停止重试，请客户端重试", modelNameOrUnknown(lifecycleManager))
+									ExtractUpstreamErrorMessage(lastErr), GetStatusCodeFromError(lastErr, lastResp))
 								return
 							}
 
@@ -596,15 +523,13 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							slog.Info(fmt.Sprintf("🔄 [端点恢复重启] [%s] 端点 %s 已恢复，重启次数: %d/%d",
 								connID, ep.Config.Name, restartCount, lifecycleManager.GetMaxRestarts()))
 							// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: resume:" 数据行
-							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount)
+							sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, lastErr)
 							return
 						} else {
 							slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 已达最大重启次数 (%d)，终止请求",
 								connID, lifecycleManager.GetMaxRestarts()))
-							lifecycleManager.FailRequest("max_restarts_exceeded",
-								"Exceeded maximum restart attempts", http.StatusBadGateway)
-							// 使用 sendStreamInterruptedMessage 触发客户端重试
-							sendStreamInterruptedMessage(w, flusher, "已达最大重启次数，请客户端重试", modelNameOrUnknown(lifecycleManager))
+							statusCode := failoverTerminationStatusCode(lastErr, lastResp)
+							sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "max_restarts_exceeded", statusCode)
 							return
 						}
 					case SuspensionCancelled:
@@ -621,9 +546,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						currentAttemptCount := lifecycleManager.GetAttemptCount()
 						lifecycleManager.UpdateStatus("error", currentAttemptCount, http.StatusBadGateway)
 						slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
-						sh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
-						// 使用 sendStreamInterruptedMessage 触发客户端重试
-						sendStreamInterruptedMessage(w, flusher, "挂起等待超时，请客户端重试", modelNameOrUnknown(lifecycleManager))
+						sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "suspension_timeout", http.StatusGatewayTimeout)
 						return
 					}
 				}
@@ -928,10 +851,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				if lifecycleManager.HasOutputContent() {
 					slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 故障转移成功但已发送内容，禁止重试", connID))
 					lifecycleManager.FailRequest("output_sent_no_retry",
-						"Cannot retry after sending partial output to client", http.StatusBadGateway)
+						ExtractUpstreamErrorMessage(lastErr), GetStatusCodeFromError(lastErr, lastResp))
 					sh.endpointManager.ClearEndpointsRequestFailure(failedEndpointNames)
-					// 使用 sendStreamInterruptedMessage 触发客户端重试
-					sendStreamInterruptedMessage(w, flusher, "已发送部分内容，服务端停止重试，请客户端重试", modelNameOrUnknown(lifecycleManager))
 					return
 				}
 
@@ -941,16 +862,13 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: failover:" 数据行，
 				// 避免严格 JSON 解析器（如 Claude Code CLI）误将其当 JSON 解析。
 				// 内部状态变更已通过上方 slog 记录。
-				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, newLoopCount)
+				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, newLoopCount, lastErr)
 				return
 			} else {
 				slog.Warn(fmt.Sprintf("❌ [重启限制] [%s] 故障转移成功但已达最大重启次数 (%d)，终止请求",
 					connID, lifecycleManager.GetMaxRestarts()))
-				lifecycleManager.FailRequest("max_restarts_exceeded",
-					"Exceeded maximum restart attempts after failover", http.StatusBadGateway)
-				sh.endpointManager.ClearEndpointsRequestFailure(failedEndpointNames)
-				// 使用 sendStreamInterruptedMessage 触发客户端重试
-				sendStreamInterruptedMessage(w, flusher, "已达最大重启次数，请客户端重试", modelNameOrUnknown(lifecycleManager))
+				statusCode := failoverTerminationStatusCode(lastErr, lastResp)
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, "max_restarts_exceeded", statusCode)
 				return
 			}
 		} else if err != nil {

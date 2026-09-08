@@ -36,8 +36,9 @@ type ActiveRequest struct {
 	ServiceTier        string `json:"service_tier"`         // 服务档位: auto/default/batch/flex/priority/fast
 	PrivacyRedacted    bool   `json:"privacy_redacted"`     // 请求体发送上游前是否已脱敏
 	PrivacySummary     string `json:"privacy_redaction_summary"`
-	FailureReason      string `json:"failure_reason"` // 失败原因
-	CancelReason       string `json:"cancel_reason"`  // 取消原因
+	FailureReason      string `json:"failure_reason"`      // 失败原因分类
+	LastFailureReason  string `json:"last_failure_reason"` // 最后一次失败的原始详情
+	CancelReason       string `json:"cancel_reason"`       // 取消原因
 
 	// Token 累积（流式请求实时更新）
 	InputTokens              int64  `json:"input_tokens"`

@@ -830,6 +830,8 @@ export const getRequests = async (params = {}) => {
     model_cache_read_cost_multiplier: r.model_cache_read_cost_multiplier ?? 1.0,
     // 错误信息字段
     failure_reason: r.failure_reason || '',
+    last_failure_reason: r.last_failure_reason || '',
+    lastFailureReason: r.last_failure_reason || '',
     cancel_reason: r.cancel_reason || ''
   }));
 

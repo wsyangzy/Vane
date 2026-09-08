@@ -472,11 +472,16 @@ outerLoop:
 	// 8. 所有循环耗尽 + 挂起也失败
 	statusCode := http.StatusServiceUnavailable
 	failureReason := "endpoint_exhausted"
-	detail := h.buildExhaustedDetail(maxLoops, endpointChain, lastErr, lastStatus, lastSummary)
+	detail := lastSummary
+	if strings.TrimSpace(detail) == "" && lastErr != nil {
+		detail = lastErr.Error()
+	}
 	if errors.Is(lastErr, errCredentialGroupDailyCostLimitExceeded) {
 		statusCode = http.StatusTooManyRequests
 		failureReason = "daily_cost_limit_exceeded"
-		detail = "所有可用 Codex 凭证分组均已达到每日成本限额"
+		if lastErr != nil {
+			detail = lastErr.Error()
+		}
 	} else if lastStatus >= 400 {
 		statusCode = lastStatus
 	}
@@ -694,7 +699,10 @@ func (h *Handler) tryEndpointCycle(
 		// FailFast：透传上游 4xx 错误响应，不再尝试任何重试或切换
 		if action == ActionFailFast {
 			if resp != nil {
-				detail := fmt.Sprintf("上游 HTTP %d: %s", status, errSummary)
+				detail := string(errBody)
+				if strings.TrimSpace(detail) == "" {
+					detail = errSummary
+				}
 				annotateLastChainError(endpointChain, status, errSummary)
 				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 				h.manager.SetFailureDetail(endpoint.ID, status, detail)
@@ -748,7 +756,7 @@ func (h *Handler) tryEndpointCycle(
 				requestID, failedEndpointName, len(*endpointChain), fwdErr),
 				"provider", "codex", "request_id", requestID)
 		} else {
-			reason = fmt.Sprintf("HTTP %d: %s", status, errSummary)
+			reason = errSummary
 			h.logger.Warn(fmt.Sprintf("🔁 [Codex故障转移] [%s] 端点: %s, HTTP状态: %d, 上游响应: %s",
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
@@ -864,17 +872,13 @@ func (h *Handler) forwardWithRetry(
 
 // buildExhaustedDetail 构造端点耗尽时的错误描述
 func (h *Handler) buildExhaustedDetail(maxLoops int, chain []chainNode, lastErr error, lastStatus int, lastSummary string) string {
-	base := fmt.Sprintf("endpoint_exhausted: 已尝试 %d 个端点", len(chain))
-	if maxLoops > 1 {
-		base += fmt.Sprintf("（共 %d 轮循环）", maxLoops)
+	if strings.TrimSpace(lastSummary) != "" {
+		return lastSummary
 	}
 	if lastErr != nil {
-		return base + fmt.Sprintf(", 最后错误: %v", lastErr)
+		return lastErr.Error()
 	}
-	if lastStatus >= 400 {
-		return base + fmt.Sprintf(", 最后 HTTP %d: %s", lastStatus, lastSummary)
-	}
-	return base
+	return ""
 }
 
 // handleNonStreaming 处理非流式响应：读取完整 body，解析 token，写回客户端
@@ -898,8 +902,9 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 			"endpoints_tried", hopsTried,
 			"channel", channelName,
 		)
-		h.recordFailure(requestID, startTime, "network_error", "读取上游响应失败", http.StatusBadGateway, nil, requestModel)
-		h.writeError(w, http.StatusBadGateway, "读取上游响应失败")
+		detail := err.Error()
+		h.recordFailure(requestID, startTime, "network_error", detail, http.StatusBadGateway, nil, requestModel)
+		h.writeError(w, http.StatusBadGateway, detail)
 		return
 	}
 
@@ -1613,9 +1618,12 @@ func extractServiceTier(body []byte) string {
 	return strings.ToLower(strings.TrimSpace(partial.ServiceTier))
 }
 
-// writeError 写入 JSON 错误响应
+// writeError writes only the original local/transport error text. It must not
+// manufacture a Relay JSON envelope around an error that did not come from upstream.
 func (h *Handler) writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
-	fmt.Fprintf(w, `{"error":{"message":"%s","type":"proxy_error"}}`, message)
+	if message != "" {
+		_, _ = io.WriteString(w, message)
+	}
 }

@@ -413,6 +413,10 @@ export const fetchRequests = async (params = {}) => {
       modelOutputCostMultiplier: request.model_output_cost_multiplier ?? request.modelOutputCostMultiplier ?? 1.0,
       modelCacheReadCostMultiplier: request.model_cache_read_cost_multiplier ?? request.modelCacheReadCostMultiplier ?? 1.0,
       isStreaming: request.is_streaming ?? request.isStreaming ?? false,
+      failure_reason: request.failure_reason || request.failureReason || '',
+      last_failure_reason: request.last_failure_reason || request.lastFailureReason || '',
+      failureReason: request.failure_reason || request.failureReason || '',
+      lastFailureReason: request.last_failure_reason || request.lastFailureReason || '',
       statusCode: httpStatusCode
     });
   };

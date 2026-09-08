@@ -18,6 +18,7 @@ type ParseResult struct {
 	TokenUsage  *tracking.TokenUsage
 	ModelName   string
 	ErrorInfo   *ErrorInfo
+	RawError    string // error SSE data exactly as received from the provider
 	IsCompleted bool
 	Status      string
 }
@@ -657,6 +658,7 @@ func (tp *TokenParser) extractErrorEvent() *ParseResult {
 		TokenUsage:  nil,
 		ModelName:   "",
 		ErrorInfo:   &ErrorInfo{Type: errorType, Message: errorMessage},
+		RawError:    jsonData,
 		IsCompleted: true,
 		Status:      StatusErrorAPI,
 	}
