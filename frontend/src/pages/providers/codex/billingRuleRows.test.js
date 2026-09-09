@@ -76,3 +76,8 @@ test('倍率对照使用当前组合规则的服务档位', () => {
 test('Long context 摘要换行但倍率编辑控件仍保持右对齐', () => {
   assert.match(editorSource, /order-last basis-full[\s\S]*?className="ml-auto w-36 grid-cols-2"/);
 });
+
+test('组合规则倍率摘要不使用浏览器原生悬浮提示', () => {
+  assert.doesNotMatch(editorSource, /title=\{summary\}/);
+  assert.doesNotMatch(editorSource, /title=\{longSummary\}/);
+});

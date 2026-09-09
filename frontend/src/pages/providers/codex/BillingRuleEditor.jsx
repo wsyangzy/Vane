@@ -128,7 +128,7 @@ const BillingRuleEditor = ({ rows, onChange, disabled = false }) => {
             <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-medium text-slate-700">普通上下文</div>
-                <div className="truncate text-[11px] text-slate-500" title={summary}>{summary}</div>
+                <div className="truncate text-[11px] text-slate-500">{summary}</div>
               </div>
               <SegmentedTabs
                 tabs={MODE_OPTIONS}
@@ -158,7 +158,7 @@ const BillingRuleEditor = ({ rows, onChange, disabled = false }) => {
 
               {row.longContextEnabled && (
                 <>
-                  <div className="order-last basis-full min-w-0 break-words text-[11px] text-slate-500" title={longSummary}>{longSummary}</div>
+                  <div className="order-last basis-full min-w-0 break-words text-[11px] text-slate-500">{longSummary}</div>
                   <SegmentedTabs
                     tabs={MODE_OPTIONS}
                     activeTab={row.longContextMode}

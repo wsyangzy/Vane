@@ -67,6 +67,59 @@ func TestEnvironmentScopedQueries(t *testing.T) {
 	}
 }
 
+func TestHotPoolArchivePreservesEnvironment(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		Environment:     "dev",
+		DatabasePath:    filepath.Join(t.TempDir(), "usage.db"),
+		BufferSize:      8,
+		BatchSize:       8,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: time.Hour,
+		RetentionDays:   30,
+		HotPool: &HotPoolSettings{
+			Enabled:          true,
+			MaxAge:           time.Hour,
+			MaxSize:          8,
+			CleanupInterval:  time.Hour,
+			ArchiveOnCleanup: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewUsageTracker: %v", err)
+	}
+	defer tracker.Close()
+
+	requestID := "hot-dev-environment"
+	tracker.RecordRequestStart(requestID, "127.0.0.1", "test-agent", "POST", "/v1/responses", true)
+	provider := "codex"
+	reasoning := `{"effort":"xhigh","context":"all_turns"}`
+	tracker.RecordRequestUpdate(requestID, UpdateOptions{Provider: &provider, ReasoningEffort: &reasoning})
+	tokens := &TokenUsage{InputTokens: 97_073, OutputTokens: 1_171, ReasoningTokens: 1_034, CacheReadTokens: 90_236}
+	tracker.RecordRequestSuccess(requestID, "gpt-6-astra", tokens, 10*time.Millisecond)
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatalf("ForceFlush: %v", err)
+	}
+
+	var environment, storedReasoning string
+	var inputTokens, outputTokens, reasoningTokens, cacheReadTokens int64
+	if err := tracker.GetReadDB().QueryRow(
+		`SELECT environment, model_reasoning_effort, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens FROM request_logs WHERE request_id = ?`, requestID,
+	).Scan(&environment, &storedReasoning, &inputTokens, &outputTokens, &reasoningTokens, &cacheReadTokens); err != nil {
+		t.Fatalf("query archived request: %v", err)
+	}
+	if environment != "dev" {
+		t.Fatalf("expected archived request environment dev, got %q", environment)
+	}
+	if storedReasoning != reasoning {
+		t.Fatalf("expected reasoning effort %q, got %q", reasoning, storedReasoning)
+	}
+	if inputTokens != tokens.InputTokens || outputTokens != tokens.OutputTokens || reasoningTokens != tokens.ReasoningTokens || cacheReadTokens != tokens.CacheReadTokens {
+		t.Fatalf("unexpected token usage: input=%d output=%d reasoning=%d cache_read=%d", inputTokens, outputTokens, reasoningTokens, cacheReadTokens)
+	}
+}
+
 func TestCleanupCrashedRequestsScopesEnvironment(t *testing.T) {
 	tracker := newEnvironmentTestTracker(t, "dev")
 	ctx := context.Background()

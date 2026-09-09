@@ -489,24 +489,25 @@ func (hp *HotPool) cleanup() {
 // 防止归档失败或崩溃导致的内存泄漏
 func (hp *HotPool) cleanupStaleArchiving() {
 	hp.mu.Lock()
-	defer hp.mu.Unlock()
-
 	now := time.Now()
 	timeout := hp.config.ArchivingTimeout
-	staleIDs := make([]string, 0)
+	staleCount := 0
 
-	for reqID, entry := range hp.archiving {
+	for _, entry := range hp.archiving {
 		if now.Sub(entry.ArchivedAt) > timeout {
-			staleIDs = append(staleIDs, reqID)
-			delete(hp.archiving, reqID)
+			// 归档失败时不能删除请求；刷新时间避免归档中条目被误判为泄漏。
+			// ArchiveManager 自己负责重试，不能在这里再次调用 callback，
+			// 否则同一个请求会产生重复归档事件。
+			entry.ArchivedAt = now
+			staleCount++
 		}
 	}
+	hp.mu.Unlock()
 
-	if len(staleIDs) > 0 {
+	if staleCount > 0 {
 		slog.Warn("清理超时的归档请求",
-			"count", len(staleIDs),
-			"timeout", timeout.String(),
-			"request_ids", staleIDs)
+			"count", staleCount,
+			"timeout", timeout.String())
 	}
 }
 

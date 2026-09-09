@@ -1,6 +1,7 @@
 package tracking
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -11,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,8 +20,17 @@ import (
 
 // ArchiveEvent 归档事件（请求完成时发送）
 type ArchiveEvent struct {
-	Request   *ActiveRequest
-	Timestamp time.Time
+	Request     *ActiveRequest
+	Timestamp   time.Time
+	Dumped      bool
+	Environment string
+}
+
+func eventEnvironment(event *ArchiveEvent, fallback string) string {
+	if event != nil && strings.TrimSpace(event.Environment) != "" {
+		return normalizeTrackingEnvironment(event.Environment)
+	}
+	return normalizeTrackingEnvironment(fallback)
 }
 
 // ArchiveManagerConfig 归档管理器配置
@@ -71,6 +82,7 @@ type ArchiveManager struct {
 	// Flush() 调用时向此 channel 发送一个回复 channel，
 	// archiver 收到后立即刷新当前批次并通过回复 channel 报告完成
 	flushReqChan chan chan error
+	dumpMu       sync.Mutex
 
 	// 统计信息
 	stats ArchiveStats
@@ -122,7 +134,6 @@ func NewArchiveManager(adapter *SQLiteAdapter, config ArchiveManagerConfig, pric
 		ctx:          ctx,
 		cancel:       cancel,
 	}
-
 	// 启动归档协程
 	am.wg.Add(1)
 	go am.startArchiver()
@@ -199,8 +210,9 @@ func (am *ArchiveManager) getPricingSnapshot() (map[string]ModelPricing, map[str
 // Archive 发送请求到归档通道
 func (am *ArchiveManager) Archive(req *ActiveRequest) error {
 	event := &ArchiveEvent{
-		Request:   req,
-		Timestamp: time.Now(),
+		Request:     req,
+		Timestamp:   time.Now(),
+		Environment: normalizeTrackingEnvironment(am.config.Environment),
 	}
 
 	// 优先非阻塞发送；通道满时短暂等待，降低“完成后丢归档”的概率。
@@ -213,27 +225,27 @@ func (am *ArchiveManager) Archive(req *ActiveRequest) error {
 	default:
 	}
 
-	timer := time.NewTimer(50 * time.Millisecond)
+	// 通道拥堵时施加有界背压；超时则立即转储，绝不静默丢弃。
+	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
-
 	select {
 	case am.archiveChan <- event:
 		am.stats.mu.Lock()
 		am.stats.TotalReceived++
 		am.stats.mu.Unlock()
-		slog.Debug("📦 归档通道短暂拥堵，延迟入队成功",
-			"request_id", req.RequestID,
-			"channel_length", len(am.archiveChan))
-		return nil
 	case <-timer.C:
-		am.stats.mu.Lock()
-		am.stats.TotalDropped++
-		am.stats.mu.Unlock()
-		slog.Warn("📦 归档通道已满，丢弃事件",
+		if err := am.dumpFailedBatchToFile([]*ArchiveEvent{event}, fmt.Errorf("archive channel full")); err != nil {
+			return fmt.Errorf("archive channel full and dump failed: %w", err)
+		}
+		slog.Warn("📦 归档通道持续拥堵，事件已持久化转储",
 			"request_id", req.RequestID,
 			"channel_length", len(am.archiveChan))
-		return fmt.Errorf("archive channel full, event dropped")
+	case <-am.ctx.Done():
+		if err := am.dumpFailedBatchToFile([]*ArchiveEvent{event}, am.ctx.Err()); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // startArchiver 批量归档协程
@@ -302,6 +314,9 @@ func (am *ArchiveManager) startArchiver() {
 		case <-ticker.C:
 			// 定时刷新（即使未满批次）
 			flush()
+			if err := am.ReplayFailedArchives(); err != nil {
+				slog.Warn("📦 定时回放归档失败文件失败", "error", err)
+			}
 
 		// 🔧 [P1.7 新增] 同步刷新请求：先排空 channel 再 flush，确保所有"已 Archive 但未持久化"事件都被刷掉
 		case respChan := <-am.flushReqChan:
@@ -410,17 +425,7 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 			"batch_size", len(events),
 			"original_error", lastErr,
 			"dump_error", dumpErr)
-	} else {
-		// 降级文件写入成功后，仍要从热池清理（避免热池堆积已转储数据）
-		if am.hotPool != nil {
-			requestIDs := make([]string, len(events))
-			for i, event := range events {
-				requestIDs[i] = event.Request.RequestID
-			}
-			am.hotPool.ConfirmArchived(requestIDs)
-		}
 	}
-
 	return fmt.Errorf("batch insert failed after %d retries: %w", am.config.MaxRetry, lastErr)
 }
 
@@ -442,10 +447,13 @@ func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr 
 		return fmt.Errorf("cannot determine dump file path")
 	}
 
+	am.dumpMu.Lock()
+	defer am.dumpMu.Unlock()
+
 	// 滚动策略：单文件超过 10 MB 时备份
 	const maxFileSize = 10 * 1024 * 1024
 	if info, err := os.Stat(dumpPath); err == nil && info.Size() > maxFileSize {
-		backupPath := dumpPath + "." + time.Now().Format("20060102-150405")
+		backupPath := dumpPath + "." + time.Now().Format("20060102-150405.000000000")
 		if renameErr := os.Rename(dumpPath, backupPath); renameErr != nil {
 			slog.Warn("📦 降级文件备份失败（继续追加到原文件）",
 				"path", dumpPath, "error", renameErr)
@@ -467,12 +475,16 @@ func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr 
 		if event == nil || event.Request == nil {
 			continue
 		}
+		if event.Dumped {
+			continue
+		}
 		// 构造降级记录：包含失败原因和原始事件，便于排查
 		record := map[string]any{
-			"dumped_at":  time.Now().Format(time.RFC3339Nano),
-			"reason":     "archive_failed_after_retries",
-			"last_error": lastErr.Error(),
-			"request":    event.Request,
+			"dumped_at":   time.Now().Format(time.RFC3339Nano),
+			"reason":      "archive_failed_after_retries",
+			"last_error":  lastErr.Error(),
+			"environment": event.Environment,
+			"request":     event.Request,
 		}
 		data, marshalErr := json.Marshal(record)
 		if marshalErr != nil {
@@ -482,6 +494,7 @@ func (am *ArchiveManager) dumpFailedBatchToFile(events []*ArchiveEvent, lastErr 
 		if _, writeErr := f.Write(append(data, '\n')); writeErr != nil {
 			return fmt.Errorf("write dump record: %w", writeErr)
 		}
+		event.Dumped = true
 		dumpedCount++
 	}
 
@@ -499,16 +512,173 @@ func (am *ArchiveManager) getDumpFilePath() string {
 	if am.adapter == nil {
 		return ""
 	}
-	// 简化做法：直接放在用户 home 下的子目录（与 tracker DatabasePath 同源）
-	homeDir, err := os.UserHomeDir()
+	dbPath := strings.TrimSpace(am.adapter.config.DatabasePath)
+	if dbPath == "" || dbPath == ":memory:" {
+		return ""
+	}
+	return dbPath + ".archive_failures.jsonl"
+}
+
+// ReplayFailedArchives 恢复降级文件中的完整请求。文件保留到所有批次成功，
+// 这样进程中途退出时下次启动仍可幂等重放。
+func (am *ArchiveManager) ReplayFailedArchives() error {
+	path := am.getDumpFilePath()
+	if path == "" {
+		return nil
+	}
+
+	// 回放认领采用原子重命名。进程可能在认领后崩溃，因此启动/定时回放
+	// 必须同时接管遗留的 .replaying-* 文件，不能只检查主文件。
+	am.dumpMu.Lock()
+	var backups, orphans []string
+	if entries, err := os.ReadDir(filepath.Dir(path)); err == nil {
+		prefix := filepath.Base(path) + "."
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+				continue
+			}
+			suffix := strings.TrimPrefix(entry.Name(), prefix)
+			candidate := filepath.Join(filepath.Dir(path), entry.Name())
+			switch {
+			case strings.HasPrefix(suffix, "replaying-"):
+				orphans = append(orphans, candidate)
+			case isArchiveBackupSuffix(suffix):
+				backups = append(backups, candidate)
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		slog.Warn("📦 扫描归档失败文件目录失败", "path", filepath.Dir(path), "error", err)
+	}
+	sort.Strings(backups)
+	sort.Strings(orphans)
+	// 旧轮转文件最早，遗留回放文件其次，当前主文件最新；同一 request_id
+	// 出现多份快照时，后写入的最新快照保持权威。
+	candidates := append(backups, orphans...)
+	if _, err := os.Stat(path); err == nil {
+		candidates = append(candidates, path)
+	}
+	am.dumpMu.Unlock()
+
+	for _, candidate := range candidates {
+		if err := am.replayFailedArchiveFile(path, candidate); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isArchiveBackupSuffix(suffix string) bool {
+	for _, layout := range []string{"20060102-150405", "20060102-150405.000000000"} {
+		if _, err := time.Parse(layout, suffix); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (am *ArchiveManager) replayFailedArchiveFile(path, candidate string) error {
+	am.dumpMu.Lock()
+	processingPath := path + ".replaying-" + time.Now().Format("20060102-150405.000000000")
+	err := os.Rename(candidate, processingPath)
+	am.dumpMu.Unlock()
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		return ""
+		return fmt.Errorf("claim failed archive file: %w", err)
 	}
-	dir := filepath.Join(homeDir, ".ai-relay-forwarder")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return ""
+
+	f, err := os.Open(processingPath)
+	if os.IsNotExist(err) {
+		return am.restoreReplayFile(path, processingPath, fmt.Errorf("open failed archive file: %w", err))
 	}
-	return filepath.Join(dir, "archive_failures.jsonl")
+	if err != nil {
+		return am.restoreReplayFile(path, processingPath, fmt.Errorf("open failed archive file: %w", err))
+	}
+
+	var batch []*ArchiveEvent
+	var replayedIDs []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		var record struct {
+			Environment string         `json:"environment"`
+			Request     *ActiveRequest `json:"request"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			_ = f.Close()
+			return am.restoreReplayFile(path, processingPath, fmt.Errorf("decode failed archive record: %w", err))
+		}
+		if record.Request == nil || record.Request.RequestID == "" {
+			_ = f.Close()
+			return am.restoreReplayFile(path, processingPath, fmt.Errorf("invalid failed archive record: request is missing"))
+		}
+		if record.Environment == "" {
+			record.Environment = am.config.Environment
+		}
+		batch = append(batch, &ArchiveEvent{Request: record.Request, Timestamp: time.Now(), Environment: normalizeTrackingEnvironment(record.Environment)})
+		replayedIDs = append(replayedIDs, record.Request.RequestID)
+		if len(batch) >= am.config.BatchSize {
+			if err := am.batchInsert(batch); err != nil {
+				_ = f.Close()
+				return am.restoreReplayFile(path, processingPath, err)
+			}
+			batch = batch[:0]
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		_ = f.Close()
+		return am.restoreReplayFile(path, processingPath, fmt.Errorf("read failed archive file: %w", err))
+	}
+	if len(batch) > 0 {
+		if err := am.batchInsert(batch); err != nil {
+			_ = f.Close()
+			return am.restoreReplayFile(path, processingPath, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		return am.restoreReplayFile(path, processingPath, fmt.Errorf("close replay file: %w", err))
+	}
+	am.dumpMu.Lock()
+	err = os.Rename(processingPath, path+".replayed-"+time.Now().Format("20060102-150405.000000000"))
+	am.dumpMu.Unlock()
+	if err != nil {
+		// 保留 .replaying-* 孤儿文件，下一轮会自动重新认领；数据库已成功写入，
+		// 但在文件完成改名前不能清理热池，避免“文件状态未完成”时丢恢复线索。
+		return fmt.Errorf("archive failed file after replay: %w", err)
+	}
+	if am.hotPool != nil && len(replayedIDs) > 0 {
+		am.hotPool.ConfirmArchived(replayedIDs)
+	}
+	slog.Info("📦 已回放归档失败文件", "path", path)
+	return nil
+}
+
+func (am *ArchiveManager) restoreReplayFile(path, processingPath string, replayErr error) error {
+	if processingPath == "" {
+		return replayErr
+	}
+	am.dumpMu.Lock()
+	defer am.dumpMu.Unlock()
+	f, err := os.Open(processingPath)
+	if err != nil {
+		return fmt.Errorf("%v; reopen replay file: %w", replayErr, err)
+	}
+	out, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("%v; reopen dump file: %w", replayErr, err)
+	}
+	_, copyErr := io.Copy(out, f)
+	closeErr := out.Close()
+	inputCloseErr := f.Close()
+	if copyErr != nil || closeErr != nil || inputCloseErr != nil {
+		return fmt.Errorf("%v; restore replay file failed: copy=%v close=%v input_close=%v", replayErr, copyErr, closeErr, inputCloseErr)
+	}
+	if err := os.Remove(processingPath); err != nil {
+		return fmt.Errorf("%v; remove replay file: %w", replayErr, err)
+	}
+	return replayErr
 }
 
 // batchInsert 执行批量插入
@@ -577,15 +747,13 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	// 冲突来源：HotPool 满时降级到 traditional eventChan 路径，可能先写入；
 	//          然后 HotPool 归档时再次写入相同 request_id → 旧实现整批失败。
 	// 新实现：冲突时用归档数据（含完整 token 与成本）覆盖，因为归档总是后到达的"权威"版本。
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO request_logs (
-			request_id, client_ip, user_agent, method, path,
+	const archiveColumns = `request_id, client_ip, user_agent, method, path,
 			start_time, end_time, duration_ms, output_sent_at,
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
 			original_model_name, model_rewrite_source, model_rewrite_target, model_reasoning_effort, service_tier,
 			status, http_status_code, retry_count,
 			failure_reason, last_failure_reason, cancel_reason,
-			is_streaming, provider, privacy_redacted, privacy_redaction_summary,
+			is_streaming, provider, environment, privacy_redacted, privacy_redaction_summary,
 			input_tokens, output_tokens,
 			reasoning_tokens, billable_output_tokens, billing_output_token_source, billing_rule_snapshot,
 			cache_creation_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens,
@@ -595,8 +763,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cache_read_cost_usd, total_cost_usd,
 			cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 			cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
-			model_cost_multiplier, model_input_cost_multiplier, model_output_cost_multiplier, model_cache_read_cost_multiplier
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			model_cost_multiplier, model_input_cost_multiplier, model_output_cost_multiplier, model_cache_read_cost_multiplier`
+	columns := strings.Split(strings.ReplaceAll(archiveColumns, "\n", " "), ",")
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
+	insertSQL := fmt.Sprintf(`
+		INSERT INTO request_logs (%s) VALUES (%s)
 		ON CONFLICT(request_id) DO UPDATE SET
 			end_time = excluded.end_time,
 			duration_ms = excluded.duration_ms,
@@ -617,6 +788,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			cancel_reason = excluded.cancel_reason,
 			is_streaming = excluded.is_streaming,
 			provider = excluded.provider,
+			environment = excluded.environment,
 			privacy_redacted = excluded.privacy_redacted,
 			privacy_redaction_summary = excluded.privacy_redaction_summary,
 			input_tokens = excluded.input_tokens,
@@ -646,7 +818,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			model_input_cost_multiplier = excluded.model_input_cost_multiplier,
 			model_output_cost_multiplier = excluded.model_output_cost_multiplier,
 			model_cache_read_cost_multiplier = excluded.model_cache_read_cost_multiplier
-	`)
+	`, archiveColumns, placeholders)
+	stmt, err := tx.PrepareContext(ctx, insertSQL)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
@@ -705,6 +878,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			nullString(req.CancelReason),
 			req.IsStreaming,
 			defaultProvider(req.Provider),
+			eventEnvironment(event, am.config.Environment),
 			req.PrivacyRedacted,
 			nullString(req.PrivacySummary),
 			req.InputTokens,

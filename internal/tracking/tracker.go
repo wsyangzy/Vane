@@ -880,6 +880,9 @@ func (ut *UsageTracker) initHotPool() {
 
 	// 设置双向引用：ArchiveManager 需要访问 HotPool 来清理归档缓存
 	ut.archiveManager.SetHotPool(ut.hotPool)
+	if err := ut.archiveManager.ReplayFailedArchives(); err != nil {
+		slog.Warn("📦 启动时回放归档失败记录失败（保留原文件供下次重试）", "error", err)
+	}
 
 	// 设置热池归档回调
 	ut.hotPool.SetArchiveCallback(func(req *ActiveRequest) {

@@ -269,6 +269,30 @@ func TestHotPoolStats(t *testing.T) {
 	}
 }
 
+func TestHotPoolCleanupStaleArchivingKeepsRequestWithoutDuplicateCallback(t *testing.T) {
+	pool := NewHotPool(HotPoolConfig{MaxAge: time.Hour, MaxSize: 4, CleanupInterval: time.Hour, ArchivingTimeout: time.Millisecond})
+	defer pool.Close()
+
+	var retried []*ActiveRequest
+	pool.SetArchiveCallback(func(req *ActiveRequest) { retried = append(retried, req) })
+	if err := pool.Add(NewActiveRequest("stale", "127.0.0.1", "test", "POST", "/", false)); err != nil {
+		t.Fatalf("add request: %v", err)
+	}
+	if err := pool.CompleteAndArchive("stale", func(req *ActiveRequest) { req.Status = "completed" }); err != nil {
+		t.Fatalf("complete request: %v", err)
+	}
+	callbackCount := len(retried)
+	time.Sleep(2 * time.Millisecond)
+	pool.cleanupStaleArchiving()
+
+	if len(retried) != callbackCount {
+		t.Fatalf("stale cleanup must not emit a duplicate archive callback, got %#v", retried)
+	}
+	if pool.GetArchivingCount() != 1 {
+		t.Fatalf("expected stale request to remain archiving, got %d", pool.GetArchivingCount())
+	}
+}
+
 func TestHotPoolClose(t *testing.T) {
 	config := DefaultHotPoolConfig()
 	pool := NewHotPool(config)
