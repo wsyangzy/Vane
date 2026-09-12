@@ -385,6 +385,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// 常规请求处理 - 使用RegularHandler
+		logNonStreamRequestSummary(connID, bodyBytes)
 		h.regularHandler.HandleRegularRequestUnified(ctx, w, r, bodyBytes, lifecycleManager)
 	}
 }
@@ -411,8 +412,7 @@ func (h *Handler) trackRequestMetadata(lifecycleManager *RequestLifecycleManager
 // detectSSERequest 统一SSE请求检测逻辑
 func (h *Handler) detectSSERequest(r *http.Request, bodyBytes []byte) bool {
 	// 请求体中的 stream 是 Anthropic API 的明确语义，优先于 Accept/Cache-Control。
-	// CLI 的非流式请求也可能带 Cache-Control: no-cache；先看 header 会把它误判成
-	// 流式请求，从而绕过非流式端点（stream_only）过滤。
+	// CLI 的非流式请求也可能带 Cache-Control: no-cache；先看 header 会把它误判成流式请求。
 	if len(bodyBytes) > 0 {
 		var requestBody struct {
 			Stream *bool `json:"stream"`
