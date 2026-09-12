@@ -43,6 +43,7 @@ test('fetchRequests normalizes request network fields in both naming styles', as
       requests: [{
         request_id: 'req-network',
         http_status_code: 201,
+        http_status_is_upstream: true,
         retry_count: 2,
         method: 'PATCH',
         path: '/v1/responses',
@@ -68,6 +69,55 @@ test('fetchRequests normalizes request network fields in both naming styles', as
     assert.equal(request.user_agent, 'Codex CLI/1.0');
 	assert.equal(request.billingRuleSnapshot.rule_mode, 'fixed');
 	assert.equal(request.billingRuleSnapshot.context_mode, 'long');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchRequests hides explicitly Relay-generated status codes', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: () => 'application/json' },
+    json: async () => ({
+      requests: [{
+        request_id: 'req-relay-status',
+        http_status_code: 502,
+        http_status_is_upstream: false,
+      }],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    }),
+  });
+
+  try {
+    const request = (await fetchRequests({ limit: 50 })).requests[0];
+    assert.equal(request.httpStatusCode, null);
+    assert.equal(request.http_status_code, null);
+    assert.equal(request.statusCode, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchRequests hides status codes when origin is not declared', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: () => 'application/json' },
+    json: async () => ({
+      requests: [{ request_id: 'req-legacy-status', http_status_code: 503 }],
+      total: 1,
+      page: 1,
+      pageSize: 50,
+    }),
+  });
+
+  try {
+    const request = (await fetchRequests({ limit: 50 })).requests[0];
+    assert.equal(request.httpStatusCode, null);
+    assert.equal(request.httpStatusIsUpstream, false);
   } finally {
     globalThis.fetch = originalFetch;
   }

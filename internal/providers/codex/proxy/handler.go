@@ -381,9 +381,13 @@ outerLoop:
 				lastErr = result.lastErr
 				lastStatus = result.lastStatus
 				lastSummary = result.lastSummary
-				lastUpstreamStatus = result.lastUpstreamStatus
-				lastUpstreamHeaders = result.lastUpstreamHeaders
-				lastUpstreamBody = result.lastUpstreamBody
+				// 只有本轮真的拿到过上游响应才覆盖：后续渠道/轮次全是网络错误时，
+				// 仍要把最后一次真实的上游状态、头和正文透传给客户端。
+				if result.lastUpstreamStatus > 0 {
+					lastUpstreamStatus = result.lastUpstreamStatus
+					lastUpstreamHeaders = result.lastUpstreamHeaders
+					lastUpstreamBody = result.lastUpstreamBody
+				}
 				if !h.failoverConfig().Enabled {
 					break
 				}
@@ -439,7 +443,7 @@ outerLoop:
 				"duration_ms", time.Since(startTime).Milliseconds(),
 				"reason", "client_canceled_during_suspend",
 			)
-			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_suspend", 499, nil, requestModel)
+			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_suspend", nil, requestModel)
 			return
 
 		case SuspendTimedOut:
@@ -495,7 +499,11 @@ outerLoop:
 		"loops_tried", maxLoops,
 		"channel", channelName,
 	)
-	h.recordFailure(requestID, startTime, failureReason, detail, statusCode, nil, requestModel)
+	if lastUpstreamStatus > 0 {
+		h.recordUpstreamFailure(requestID, startTime, failureReason, detail, lastUpstreamStatus, nil, requestModel)
+	} else {
+		h.recordFailure(requestID, startTime, failureReason, detail, nil, requestModel)
+	}
 	if lastUpstreamStatus > 0 {
 		response := &http.Response{
 			StatusCode: lastUpstreamStatus,
@@ -570,6 +578,12 @@ func (h *Handler) tryEndpointCycle(
 		return cycleResult{completed: false, lastErr: err, lastStatus: status}
 	}
 
+	// 整条端点链上最后一次真实的上游 HTTP 响应。后面的端点只剩网络错误时，
+	// 耗尽后透传的仍应是它，而不是被"没有响应"覆盖成 Relay 自造的 503。
+	var lastUpstreamStatus int
+	var lastUpstreamHeaders http.Header
+	var lastUpstreamBody []byte
+
 	// 遍历当前轮可用端点
 	for {
 		if h.activeChannelChanged(channelName) {
@@ -639,7 +653,7 @@ func (h *Handler) tryEndpointCycle(
 				"duration_ms", time.Since(startTime).Milliseconds(),
 				"reason", "client_canceled",
 			)
-			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", 499, nil, requestModel)
+			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", nil, requestModel)
 			if resp != nil {
 				resp.Body.Close()
 			}
@@ -649,38 +663,15 @@ func (h *Handler) tryEndpointCycle(
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
 			if isStreaming {
-				if streamErr := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain)); streamErr != nil {
-					fwdErr = streamErr
-					resp = nil
-				} else {
-					h.manager.MarkHealthy(endpoint.ID)
-					// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
-					if len(*failedIDs) > 0 && !h.activeChannelChanged(channelName) {
-						if err := h.manager.PromoteActive(endpoint.ID); err != nil {
-							h.logger.Warn("故障转移后提升活跃端点失败",
-								"request_id", requestID,
-								"endpoint_id", endpoint.ID,
-								"endpoint", endpoint.Name,
-								"error", err,
-							)
-						}
-					}
+				streamErr, served := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
+				if streamErr == nil {
+					h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID)
 					return cycleResult{completed: true}
 				}
+				fwdErr = streamErr
 			} else {
-				h.manager.MarkHealthy(endpoint.ID)
-				// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
-				if len(*failedIDs) > 0 && !h.activeChannelChanged(channelName) {
-					if err := h.manager.PromoteActive(endpoint.ID); err != nil {
-						h.logger.Warn("故障转移后提升活跃端点失败",
-							"request_id", requestID,
-							"endpoint_id", endpoint.ID,
-							"endpoint", endpoint.Name,
-							"error", err,
-						)
-					}
-				}
-				h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
+				served := h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
+				h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID)
 				return cycleResult{completed: true}
 			}
 		}
@@ -692,6 +683,9 @@ func (h *Handler) tryEndpointCycle(
 		if resp != nil {
 			status = resp.StatusCode
 			errBody, errSummary = h.readErrorBody(resp)
+			lastUpstreamStatus = status
+			lastUpstreamHeaders = resp.Header.Clone()
+			lastUpstreamBody = append([]byte(nil), errBody...)
 		} else if streamErr, ok := fwdErr.(*UpstreamStreamError); ok {
 			// status 留 0：响应已被流式路径消费掉，这里拿不到上游的状态码。
 			// 链路里显示成空白，而不是编一个从未返回过的 429/401。
@@ -720,7 +714,7 @@ func (h *Handler) tryEndpointCycle(
 					"endpoints_tried", len(*endpointChain),
 					"channel", channelName,
 				)
-				h.recordFailure(requestID, startTime, "server_error", detail, resp.StatusCode, nil, requestModel)
+				h.recordUpstreamFailure(requestID, startTime, "server_error", detail, resp.StatusCode, nil, requestModel)
 				h.passthroughWithBody(w, resp, errBody)
 				return cycleResult{completed: true}
 			}
@@ -741,7 +735,7 @@ func (h *Handler) tryEndpointCycle(
 				"endpoints_tried", len(*endpointChain),
 				"channel", channelName,
 			)
-			h.recordFailure(requestID, startTime, "network_error", detail, http.StatusBadGateway, nil, requestModel)
+			h.recordFailure(requestID, startTime, "network_error", detail, nil, requestModel)
 			h.writeError(w, http.StatusBadGateway, detail)
 			return cycleResult{completed: true}
 		}
@@ -783,10 +777,10 @@ func (h *Handler) tryEndpointCycle(
 				lastStatus:  quotaAwareStatus(nextErr, status),
 				lastSummary: errSummary,
 			}
-			if status > 0 && !errors.Is(nextErr, errCredentialGroupDailyCostLimitExceeded) {
-				result.lastUpstreamStatus = status
-				result.lastUpstreamHeaders = resp.Header.Clone()
-				result.lastUpstreamBody = append([]byte(nil), errBody...)
+			if lastUpstreamStatus > 0 && !errors.Is(nextErr, errCredentialGroupDailyCostLimitExceeded) {
+				result.lastUpstreamStatus = lastUpstreamStatus
+				result.lastUpstreamHeaders = lastUpstreamHeaders
+				result.lastUpstreamBody = lastUpstreamBody
 			}
 			return result
 		}
@@ -800,6 +794,28 @@ func (h *Handler) tryEndpointCycle(
 			"reason", reason,
 		)
 		endpoint = next
+	}
+}
+
+// markEndpointServed 只有上游把这次请求完整服务掉了，才把端点记为健康并设为下一次请求的首选。
+// 流中途报错、正文读取失败的端点不能成为首选，否则下一次请求会优先撞回它。
+func (h *Handler) markEndpointServed(endpoint *CodexEndpoint, served bool, failedOver bool, channelName, requestID string) {
+	if !served {
+		h.manager.ClearPreferredEndpoint(endpoint.ID)
+		return
+	}
+	h.manager.MarkHealthy(endpoint.ID)
+	h.manager.MarkEndpointRequestSuccess(endpoint.ID)
+	// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
+	if failedOver && !h.activeChannelChanged(channelName) {
+		if err := h.manager.PromoteActive(endpoint.ID); err != nil {
+			h.logger.Warn("故障转移后提升活跃端点失败",
+				"request_id", requestID,
+				"endpoint_id", endpoint.ID,
+				"endpoint", endpoint.Name,
+				"error", err,
+			)
+		}
 	}
 }
 
@@ -886,8 +902,9 @@ func (h *Handler) buildExhaustedDetail(maxLoops int, chain []chainNode, lastErr 
 	return ""
 }
 
-// handleNonStreaming 处理非流式响应：读取完整 body，解析 token，写回客户端
-func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) {
+// handleNonStreaming 处理非流式响应：读取完整 body，解析 token，写回客户端。
+// 返回 false 表示上游虽给了 2xx 但正文没读完整，端点不应被记为成功。
+func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) bool {
 	defer resp.Body.Close()
 
 	// 🆕 [详细日志] 非流式处理开始（emoji 风格，对齐 Claude 日志详细度）
@@ -908,9 +925,10 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 			"channel", channelName,
 		)
 		detail := err.Error()
-		h.recordFailure(requestID, startTime, "network_error", detail, http.StatusBadGateway, nil, requestModel)
+		// 上游 HTTP 层已经响应过（2xx），只是正文没读完：追踪记它的真实状态码，客户端才收本地 502。
+		h.recordUpstreamFailure(requestID, startTime, "network_error", detail, resp.StatusCode, nil, requestModel)
 		h.writeError(w, http.StatusBadGateway, detail)
-		return
+		return false
 	}
 
 	// 解析 token 用量并记录成功
@@ -990,11 +1008,13 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 	}
 	w.WriteHeader(resp.StatusCode)
 	w.Write(respBody)
+	return true
 }
 
 // handleStreaming 处理流式响应：逐行透传 SSE 并提取 token。
 // 如果上游在真正输出前通过 SSE 返回错误事件，则返回错误交给外层端点循环做故障转移。
-func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) *UpstreamStreamError {
+// served 表示端点是否把这次请求完整服务掉了：已输出后的 SSE 错误 / 读取中断都算 false。
+func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) (streamErr *UpstreamStreamError, served bool) {
 	defer resp.Body.Close()
 
 	var headersWritten bool
@@ -1073,13 +1093,23 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 
 		if streamErr := h.tokenParser.ParseStreamingErrorLine(line); streamErr != nil {
 			if !headersWritten {
+				// The caller may still fail over. Restore the consumed SSE event so
+				// the final exhausted response keeps the upstream 200 and raw body.
+				raw := make([]byte, 0, pendingBytes+len(line)+1)
+				for _, pending := range pendingLines {
+					raw = append(raw, pending...)
+					raw = append(raw, '\n')
+				}
+				raw = append(raw, line...)
+				raw = append(raw, '\n', '\n')
+				resp.Body = io.NopCloser(bytes.NewReader(raw))
 				h.logger.Warn("[Codex 流式上游错误] 输出前捕获到可转移错误",
 					"provider", "codex",
 					"request_id", requestID,
 					"endpoint", endpointName,
 					"error", streamErr.Error(),
 				)
-				return streamErr
+				return streamErr, false
 			}
 			downstreamStreamErr = streamErr
 		}
@@ -1125,7 +1155,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 			return &UpstreamStreamError{
 				Type:    "stream_read_error",
 				Message: scanErr.Error(),
-			}
+			}, false
 		}
 		if isContextCanceledError(scanErr) {
 			if streamCompleted {
@@ -1137,7 +1167,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"error", scanErr,
 				)
 				h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
-				return nil
+				return nil, true
 			}
 			if outputSentRecorded {
 				h.logger.Warn("[Codex 流式下游取消] 已输出内容后连接取消，按客户端取消记录",
@@ -1147,14 +1177,14 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"bytes_processed", bytesProcessed,
 					"error", scanErr,
 				)
-				h.recordCancelled(requestID, startTime, "client_canceled_after_output", 499, lastResult, requestModel, endpointName, groupName, channelName)
-				return nil
+				h.recordCancelled(requestID, startTime, "client_canceled_after_output", lastResult, requestModel, endpointName, groupName, channelName)
+				return nil, true
 			}
 		}
 		// 上游 HTTP 层这次是真给过响应的（200），流是在那之后断的，就记它的真实状态码。
 		// 原先这里固定写 502，是一个提供商从未返回过的码。
-		h.recordFailure(requestID, startTime, "network_error", scanErr.Error(), resp.StatusCode, nil, requestModel)
-		return nil
+		h.recordUpstreamFailure(requestID, startTime, "network_error", scanErr.Error(), resp.StatusCode, nil, requestModel)
+		return nil, false
 	} else {
 		h.logger.Info(fmt.Sprintf("✅ [Codex流式完成] [%s] 端点: %s, 已处理 %d 字节",
 			requestID, endpointName, bytesProcessed),
@@ -1170,8 +1200,8 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		)
 		// 记上游真实给出的状态码（这条响应 HTTP 层就是 200，错误只在 SSE 事件里）。
 		// 200 + failed 是准确的：它说明失败发生在流中途，而不是连接或鉴权阶段。
-		h.recordFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), resp.StatusCode, nil, requestModel)
-		return nil
+		h.recordUpstreamFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), resp.StatusCode, nil, requestModel)
+		return nil, false
 	}
 
 	flushPending()
@@ -1226,7 +1256,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		"provider", "codex", "request_id", requestID)
 
 	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
-	return nil
+	return nil, true
 }
 
 func parseSSEEventName(line []byte) (string, bool) {
@@ -1506,8 +1536,9 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 	h.usageTracker.RecordRequestSuccessWithHTTPStatus(requestID, modelName, tokens, duration, httpStatus)
 }
 
-// recordFailure 记录请求失败
-func (h *Handler) recordFailure(requestID string, startTime time.Time, reason string, detail string, httpStatus int, tokenResult *TokenResult, requestModel string) {
+// recordFailure 记录没有拿到上游 HTTP 响应的最终失败：不接受也不记录状态码，
+// 给客户端的兜底码是协议必需，与追踪无关（对齐 Claude 侧 FailRequest）。
+func (h *Handler) recordFailure(requestID string, startTime time.Time, reason string, detail string, tokenResult *TokenResult, requestModel string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -1520,10 +1551,25 @@ func (h *Handler) recordFailure(requestID string, startTime time.Time, reason st
 	} else {
 		modelName = requestModel
 	}
-	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", reason, detail, duration, httpStatus, tokens)
+	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", reason, detail, duration, 0, tokens)
 }
 
-func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason string, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, groupName, channelName string) {
+func (h *Handler) recordUpstreamFailure(requestID string, startTime time.Time, reason string, detail string, httpStatus int, tokenResult *TokenResult, requestModel string) {
+	if h.usageTracker == nil {
+		return
+	}
+	duration := time.Since(startTime)
+	var tokens *tracking.TokenUsage
+	modelName := requestModel
+	if tokenResult != nil {
+		modelName = pickModelName(tokenResult.Model, requestModel)
+		tokens = buildTokenUsage(tokenResult, tracking.BillingOutputTokenSourceOutput)
+	}
+	h.usageTracker.RecordRequestFinalFailureWithUpstreamStatus(requestID, modelName, "failed", reason, detail, duration, httpStatus, tokens)
+}
+
+// recordCancelled 客户端取消是 Relay 对下游连接的观察，不是上游响应，同样不记状态码。
+func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason string, tokenResult *TokenResult, requestModel, endpointName, groupName, channelName string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -1539,7 +1585,7 @@ func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason 
 		}
 	}
 	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
-	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", reason, "", duration, httpStatus, tokens)
+	h.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", reason, "", duration, 0, tokens)
 }
 
 // ============================================

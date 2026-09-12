@@ -134,7 +134,7 @@ INSERT INTO model_pricing (
 			t.Fatalf("expected request_logs.%s to exist after InitSchema", c)
 		}
 	}
-	for _, c := range []string{"timeout_seconds", "supports_count_tokens", "stream_only"} {
+	for _, c := range []string{"timeout_seconds", "supports_count_tokens"} {
 		if !sqliteColumnExists(t, adapter.GetReadDB(), "endpoints", c) {
 			t.Fatalf("expected endpoints.%s to exist after InitSchema", c)
 		}

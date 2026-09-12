@@ -12,6 +12,7 @@ test('generated RequestRecord model includes request network fields', () => {
     assert.match(requestRecord, new RegExp(`\\b${field}: string;`));
   }
   assert.match(requestRecord, /last_failure_reason\?: string;/);
+  assert.match(requestRecord, /http_status_is_upstream: boolean;/);
   const bridge = readFileSync(new URL('./wailsApi.js', import.meta.url), 'utf8');
   assert.match(bridge, /last_failure_reason: r\.last_failure_reason/);
 });
@@ -42,6 +43,7 @@ test('generated Codex credential-group models keep combination billing rules', (
 test('request network bridge maps snake and camel case fields without losing zero retries', () => {
   const mapped = wailsApi.mapRequestNetworkFields({
     httpStatus: 204,
+    httpStatusIsUpstream: true,
     retryCount: 0,
     method: 'DELETE',
     path: '/v1/responses/1',
@@ -52,12 +54,33 @@ test('request network bridge maps snake and camel case fields without losing zer
   assert.deepEqual(mapped, {
     status_code: 204,
     http_status_code: 204,
+    http_status_is_upstream: true,
+    httpStatusIsUpstream: true,
     retry_count: 0,
     method: 'DELETE',
     path: '/v1/responses/1',
     client_ip: '192.0.2.20:4321',
     user_agent: 'Codex Desktop/1.0',
   });
+});
+
+test('request network bridge hides explicitly Relay-generated status codes', () => {
+  const mapped = wailsApi.mapRequestNetworkFields({
+    http_status: 502,
+    http_status_is_upstream: false,
+  });
+
+  assert.equal(mapped.status_code, 0);
+  assert.equal(mapped.http_status_code, 0);
+  assert.equal(mapped.httpStatusIsUpstream, false);
+});
+
+test('request network bridge hides status codes without an origin flag', () => {
+  const mapped = wailsApi.mapRequestNetworkFields({ http_status: 503 });
+
+  assert.equal(mapped.status_code, 0);
+  assert.equal(mapped.http_status_code, 0);
+  assert.equal(mapped.httpStatusIsUpstream, false);
 });
 
 test('parseEndpointPriority preserves zero as the highest priority', () => {

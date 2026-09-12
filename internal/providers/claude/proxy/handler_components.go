@@ -57,6 +57,10 @@ func (spa *StreamProcessorAdapter) HasWrittenResponse() bool {
 	return spa.innerProcessor.HasWrittenResponse()
 }
 
+func (spa *StreamProcessorAdapter) BufferedUpstreamBody() []byte {
+	return spa.innerProcessor.BufferedUpstreamBody()
+}
+
 // TokenAnalyzerAdapter 适配 *response.TokenAnalyzer → handlers.TokenAnalyzer
 type TokenAnalyzerAdapter struct {
 	innerAnalyzer *response.TokenAnalyzer

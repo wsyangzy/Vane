@@ -23,6 +23,9 @@ const (
 	LineBufferInitSize   = 1024 // 1KB行缓冲区初始大小
 	BackgroundBufferSize = 4096 // 4KB后台解析缓冲区
 	DebugLineLimit       = 100  // 调试模式下最多保存100行SSE数据
+	// maxPreOutputBufferBytes 首个 content_block_delta 之前最多缓冲的上游字节数，超过即放弃转移能力直接写出。
+	// 与 Codex 侧 maxPreOutputStreamBufferBytes 一致。
+	maxPreOutputBufferBytes = 256 * 1024
 )
 
 // StreamProcessor 流式处理器核心结构体
@@ -47,6 +50,10 @@ type StreamProcessor struct {
 	lineBuffer         []byte    // SSE行缓冲区
 	partialData        []byte    // 部分数据缓冲区，用于错误恢复
 	outputSentRecorded bool      // 是否已记录首个写出 chunk
+	// 首个 content_block_delta 之前的上游原始字节暂不写客户端：上游此时若以 SSE error 收场，
+	// 端点循环还能转移；全部耗尽后这段原始正文连同 200 一起原样透传（对齐 Codex handleStreaming）。
+	preOutput     []byte
+	outputStarted bool
 
 	// 并发控制
 	parseMutex sync.Mutex // 保护 partialData、tokenParser 等共享状态
@@ -135,7 +142,16 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 			// 保存部分数据用于错误恢复
 			sp.savePartialData(chunk)
 
-			// 2. 立即转发到客户端 - 这是关键！不等待完整响应
+			// 2. 先同步解析，再决定是否写出：输出前的 SSE error 要留给端点循环转移，不能先泼给客户端
+			sp.parseTokensInline(chunk)
+
+			if sp.holdForFailover() {
+				sp.preOutput = append(sp.preOutput, chunk...)
+				slog.Warn(fmt.Sprintf("⚠️ [流式上游错误] [%s] 端点: %s, 输出前收到错误事件，保留原始正文供转移/透传", sp.requestID, sp.endpoint))
+				return sp.getFinalTokenUsage(), sp.lastAPIError
+			}
+
+			// 3. 转发到客户端（首个 content_block_delta 之前只进缓冲）
 			if writeErr := sp.forwardToClient(chunk); writeErr != nil {
 				// 使用错误恢复管理器处理转发错误
 				errorCtx := sp.errorRecovery.ClassifyError(writeErr, sp.requestID, sp.endpoint, "", 0)
@@ -143,9 +159,6 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 				slog.Error(fmt.Sprintf("❌ [流式错误] [%s] 转发到客户端失败: %v", sp.requestID, writeErr))
 				return nil, fmt.Errorf("failed to forward to client: %w", writeErr)
 			}
-
-			// 3. 同步解析Token信息 - 保证chunk顺序，避免goroutine竞态
-			sp.parseTokensInline(chunk)
 
 			// 4. 更新处理状态
 			sp.bytesProcessed += int64(n)
@@ -155,6 +168,13 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 		if err == io.EOF {
 			// 处理剩余缓冲数据
 			sp.finalizeParsing()
+			if sp.holdForFailover() {
+				return sp.getFinalTokenUsage(), sp.lastAPIError
+			}
+			// 没有真实输出的空回复也要原样送达客户端
+			if writeErr := sp.flushPreOutput(); writeErr != nil {
+				return nil, fmt.Errorf("failed to forward to client: %w", writeErr)
+			}
 
 			// 获取最终的 Token 使用信息
 			finalTokenUsage := sp.getFinalTokenUsage()
@@ -165,14 +185,48 @@ func (sp *StreamProcessor) ProcessStream(ctx context.Context, resp *http.Respons
 		}
 
 		if err != nil {
-			// 网络中断或其他错误，尝试部分数据处理
+			// 网络中断或其他错误，尝试部分数据处理；缓冲中的字节不写出，端点循环仍可转移
 			return sp.handlePartialStream(err)
 		}
 	}
 }
 
+// holdForFailover 上游在任何真实输出之前就给出了 SSE error：不写客户端，让调用方换端点。
+func (sp *StreamProcessor) holdForFailover() bool {
+	return !sp.outputStarted && sp.lastAPIError != nil && !sp.HasSentContent()
+}
+
+// flushPreOutput 把首字节前缓冲的上游原始字节写给客户端，并从此直通。
+func (sp *StreamProcessor) flushPreOutput() error {
+	if sp.outputStarted {
+		return nil
+	}
+	sp.outputStarted = true
+	data := sp.preOutput
+	sp.preOutput = nil
+	if len(data) == 0 {
+		return nil
+	}
+	return sp.forwardToClient(data)
+}
+
+// BufferedUpstreamBody 返回尚未写给客户端的上游原始正文（已解压）。已开始直通后为空。
+func (sp *StreamProcessor) BufferedUpstreamBody() []byte {
+	return append([]byte(nil), sp.preOutput...)
+}
+
 // forwardToClient 立即转发数据到客户端
 func (sp *StreamProcessor) forwardToClient(data []byte) error {
+	if !sp.outputStarted {
+		sp.preOutput = append(sp.preOutput, data...)
+		// ponytail: 只按 content_block_delta 与字节上限放行；长时间无 delta 的 ping 会一起被扣住，
+		// 若客户端空闲超时成为问题，再加时间阈值。
+		if !sp.HasSentContent() && len(sp.preOutput) < maxPreOutputBufferBytes {
+			return nil
+		}
+		return sp.flushPreOutput()
+	}
+
 	// 写入数据到响应
 	if _, err := sp.responseWriter.Write(data); err != nil {
 		return err
@@ -463,6 +517,8 @@ func (sp *StreamProcessor) Reset() {
 	sp.lineBuffer = sp.lineBuffer[:0]
 	sp.partialData = sp.partialData[:0] // 重置部分数据缓冲区
 	sp.parseErrors = sp.parseErrors[:0]
+	sp.preOutput = nil
+	sp.outputStarted = false
 
 	// 重置TokenParser状态
 	if sp.tokenParser != nil {

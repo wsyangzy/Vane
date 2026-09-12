@@ -8,7 +8,8 @@ import Header from '@components/layout/Header.jsx';
 import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
 import { fetchRequests, fetchStatus, isWailsEnvironment } from '@utils/api.js';
-import { getSuspendedRequestsCount, getManualRetryRequestsCount, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
+import { getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
+import { buildFailureToast, buildSuspensionToast, shouldNotifyFailure } from '@pages/requests/utils/failureSummary.js';
 import releaseNotes from './release-notes.json';
 import { consumeReleaseAnnouncement, showReleaseToastSummary } from '@utils/releaseAnnouncement.js';
 
@@ -31,53 +32,6 @@ const LogsPage = lazy(() => import('@pages/log-viewer/index.jsx'));
 // ============================================
 // App 组件
 // ============================================
-
-const shouldNotifyFailoverFailure = (failureReason) => {
-  if (!failureReason || typeof failureReason !== 'string') {
-    return false;
-  }
-  const raw = failureReason.trim();
-  if (!raw) return false;
-
-  const lower = raw.toLowerCase();
-  // 匹配终态失败：渠道耗尽、端点耗尽、循环/重启上限
-  const keywords = [
-    'all_channels_unavailable',
-    'endpoint_exhausted',
-    'max_loops_exceeded',
-    'max_restarts_exceeded'
-  ];
-  const hints = [
-    '所有渠道均已尝试',
-    '没有可用的故障转移渠道',
-    '最大循环轮数',
-    '最大重启次数',
-    'exceeded maximum restart attempts'
-  ];
-  return keywords.some(keyword => lower.includes(keyword)) || hints.some(hint => raw.includes(hint));
-};
-
-const buildFailoverFailureMessage = (failureReason) => {
-  if (!failureReason || typeof failureReason !== 'string') {
-    return '服务暂时不可用，请稍后重试';
-  }
-
-  if (failureReason.includes('all_channels_unavailable') || failureReason.includes('所有渠道均已尝试')) {
-    return '所有渠道均已尝试，服务暂时不可用';
-  }
-  if (failureReason.includes('endpoint_exhausted')) {
-    return '当前渠道所有端点均不可用';
-  }
-  if (failureReason.includes('max_loops_exceeded') || failureReason.includes('最大循环轮数')) {
-    return '已达到最大循环轮数，等待手动处理';
-  }
-  if (failureReason.includes('max_restarts_exceeded') || failureReason.includes('最大重启次数')) {
-    return '已达到最大重启次数，请求终止';
-  }
-
-  const trimmed = failureReason.trim();
-  return trimmed.length > 120 ? `${trimmed.slice(0, 120)}...` : trimmed;
-};
 
 const ReleaseAnnouncement = () => {
   const toast = useToast();
@@ -156,28 +110,24 @@ const GlobalAlerts = () => {
         return;
       }
 
-      if (manualRetryCount > 0 && lastManualRetryCountRef.current === 0) {
-        toast.warning(`已有 ${manualRetryCount} 个请求达到最大循环轮数，等待手动重试`, '请求等待重试');
-      } else if (manualRetryCount === 0 && suspendedCount > 0 && lastSuspendedCountRef.current === 0) {
-        toast.info(`已有 ${suspendedCount} 个请求挂起，等待端点恢复或渠道切换`, '请求已挂起');
+      // 挂起 / 等待重试从 0 变为非 0 时提示一次，并带上具体端点或渠道
+      const manualJustStarted = manualRetryCount > 0 && lastManualRetryCountRef.current === 0;
+      const suspendJustStarted = manualRetryCount === 0 && suspendedCount > 0 && lastSuspendedCountRef.current === 0;
+      if (manualJustStarted || suspendJustStarted) {
+        const [endpointCounts, channelCounts] = await Promise.all([
+          suspendJustStarted ? getSuspendedEndpointCounts().catch(() => ({})) : {},
+          manualJustStarted ? getManualRetryChannelCounts().catch(() => ({})) : {}
+        ]);
+        const suspension = buildSuspensionToast({ suspendedCount, endpointCounts, manualRetryCount, channelCounts });
+        if (suspension) {
+          toast.show(suspension.message, { type: suspension.type, title: suspension.title, duration: 6000 });
+        }
       }
 
       if (latestFailureId && latestFailureId !== lastFailureIdRef.current) {
-        if (shouldNotifyFailoverFailure(failureReason)) {
-          // 根据失败类型选择不同的提示级别
-          // max_loops_exceeded 和 max_restarts_exceeded 需要用户手动处理，使用 warning 级别
-          // 避免与真正的错误混淆（如并发场景下其他请求还在正常运行）
-          const isManualInterventionNeeded =
-            failureReason.includes('max_loops_exceeded') ||
-            failureReason.includes('max_restarts_exceeded') ||
-            failureReason.includes('最大循环轮数') ||
-            failureReason.includes('最大重启次数');
-
-          if (isManualInterventionNeeded) {
-            toast.warning(buildFailoverFailureMessage(failureReason), '需要处理');
-          } else {
-            toast.error(buildFailoverFailureMessage(failureReason), '请求失败');
-          }
+        if (shouldNotifyFailure(failureReason)) {
+          const failure = buildFailureToast(latestFailed);
+          toast.show(failure.message, { type: failure.type, title: failure.title, duration: 8000 });
         }
         lastFailureIdRef.current = latestFailureId;
       }
@@ -207,20 +157,33 @@ const GlobalAlerts = () => {
       const count = Number(data?.suspended_count) || 0;
       const prev = lastCodexSuspendedCountRef.current;
       if (count > 0 && prev === 0) {
-        toast.warning(
-          `已有 ${count} 个 Codex 请求挂起，请在 Codex 渠道页重新激活渠道或端点`,
-          'Codex 请求等待激活'
-        );
+        toast.show([
+          `${count} 个 Codex 请求已挂起，当前没有可承接的端点`,
+          '请在 Codex 渠道页重新激活渠道或端点'
+        ], { type: 'warning', title: 'Codex 请求等待激活', duration: 6000 });
       } else if (count === 0 && prev > 0) {
-        toast.success('Codex 挂起请求已恢复', 'Codex 已恢复');
+        toast.success('Codex 挂起请求已全部恢复处理', 'Codex 已恢复');
       }
       lastCodexSuspendedCountRef.current = count;
     };
     const unsubscribeCodexSuspension = subscribeToEvent('codex-provider:suspension', handleCodexSuspension);
 
+    // 后端主动推送的通知（数据库占用、数据迁移、渠道间转移回滚等），此前从未被前端消费
+    const handleNotification = (data) => {
+      const level = ['success', 'error', 'warning', 'info'].includes(data?.level) ? data.level : 'info';
+      const message = data?.message || '';
+      const title = data?.title || '';
+      if (!message && !title) return;
+      toast.show(message || title, { type: level, title: message ? title : undefined, duration: level === 'error' ? 8000 : 6000 });
+    };
+    const unsubscribeNotification = subscribeToEvent('notification', handleNotification);
+    const unsubscribeError = subscribeToEvent('error', (data) => handleNotification({ ...data, level: 'error' }));
+
     return () => {
       clearInterval(timer);
       if (typeof unsubscribeCodexSuspension === 'function') unsubscribeCodexSuspension();
+      if (typeof unsubscribeNotification === 'function') unsubscribeNotification();
+      if (typeof unsubscribeError === 'function') unsubscribeError();
     };
   }, [pollAlerts, toast]);
 

@@ -41,7 +41,6 @@ import {
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 import {
-  countChannelSwitches,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   getRequestChannelLabel,
@@ -61,24 +60,32 @@ import {
   PRIVACY_STATE_STYLES,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
+import { describeFailureReason } from '../utils/failureSummary.js';
 
-// last_failure_reason is the provider's raw response. Keep failure_reason as a
-// compatibility fallback for records written before the fields were separated.
+// last_failure_reason 只存原样保存的上游正文或传输层错误文本，标签"原始信息"。
+// 没有它的失败只剩 Relay 的分类（failure_reason），按分类渲染一句说明，标签"失败原因"，
+// 与 HTTP 状态码来源无关：正文读取失败这类记录带着真实上游 200，详情却是本地错误文本。
+// 分类文案与右上角提示共用 failureSummary，避免两处说法不一致。
+const FAILURE_STATUSES = new Set([
+  'failed',
+  'error',
+  'cancelled',
+  'timeout',
+  'partial_failed',
+  'auth_error',
+  'rate_limited',
+  'server_error',
+  'network_error',
+  'stream_error',
+]);
+
 const getFailureDetail = (request) => {
+  const isFailure = FAILURE_STATUSES.has(String(request.status || '').toLowerCase());
+  if (!isFailure) return { text: '', isRaw: false };
   const raw = request.last_failure_reason || request.lastFailureReason || '';
-  if (raw) return String(raw);
-
-  let legacy = String(request.failure_reason || request.failureReason || '');
-  if (!legacy.includes(':')) return '';
-  let previous;
-  do {
-    previous = legacy;
-    legacy = legacy
-      .replace(/^[a-z][a-z0-9_]*:\s*/i, '')
-      .replace(/^上游 HTTP \d+:\s*/i, '')
-      .replace(/^upstream stream error(?:\s*\([^)]*\))?:\s*/i, '');
-  } while (legacy !== previous);
-  return legacy;
+  if (raw) return { text: String(raw), isRaw: true };
+  const reason = request.failure_reason || request.failureReason || '';
+  return { text: describeFailureReason(reason), isRaw: false };
 };
 
 /**
@@ -270,6 +277,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   }).filter(Boolean);
   const networkSummary = summarizeEndpointAttempts(request, chainNodes);
   const networkDisplayState = getRequestNetworkDisplayState(request);
+  // 后端只下发真实上游返回过的状态码；本地失败此处为空，不再由前端补位。
   const networkHTTPStatus = request.httpStatusCode ?? request.http_status_code ?? request.statusCode;
   const networkFirstByteMs = request.firstByteMs ?? request.first_byte_ms;
   const currentCredentialGroupLabel = getRequestCredentialGroupLabel(request, chainNodes);
@@ -301,11 +309,11 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
     if (index === total - 1) return '最终';
     return '中转';
   };
-  const failureDetail = getFailureDetail(request);
+  const { text: failureDetail, isRaw: failureDetailIsRaw } = getFailureDetail(request);
   const errorText = [
-    networkHTTPStatus ? `HTTP 状态码: ${networkHTTPStatus}` : null,
-    failureDetail ? `失败原因: ${failureDetail}` : null,
-    request.cancel_reason ? `取消原因: ${request.cancel_reason}` : null
+    networkHTTPStatus > 0 ? `HTTP 状态码: ${networkHTTPStatus}` : null,
+    failureDetail,
+    request.cancel_reason
   ].filter(Boolean).join('\n');
   const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
   const originalModelName = request.originalModelName || request.original_model_name || '';
@@ -884,18 +892,16 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
-                    {networkHTTPStatus && (
+                    {networkHTTPStatus > 0 && (
                       <div className="flex flex-wrap items-center gap-2">
-                        {networkHTTPStatus && (
-                          <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
-                            HTTP {networkHTTPStatus}
-                          </span>
-                        )}
+                        <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
+                          HTTP {networkHTTPStatus}
+                        </span>
                       </div>
                     )}
                     {failureDetail && (
                       <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
-                        <span className="shrink-0 font-medium text-slate-600">原始信息：</span>
+                        <span className="shrink-0 font-medium text-slate-600">{failureDetailIsRaw ? '原始信息：' : '失败原因：'}</span>
                         <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
                       </div>
                     )}
@@ -919,7 +925,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
                 const uniqueGroups = new Set(chainNodes.map(n => n.credentialGroup).filter(Boolean));
                 const uniqueEndpoints = new Set(chainNodes.map(n => n.endpoint).filter(Boolean));
-                const channelSwitches = showChannelInChain ? countChannelSwitches(chainNodes) : 0;
                 return (
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -948,12 +953,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                         <Server className="w-3 h-3" />
                         {uniqueEndpoints.size} 端点
                       </span>
-                      {channelSwitches > 0 && (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 text-amber-700 text-xs font-medium rounded-lg border border-amber-200">
-                          <Zap className="w-3 h-3" />
-                          {channelSwitches} 次渠道切换
-                        </span>
-                      )}
                     </div>
 
                     <div className="ml-auto flex items-center gap-2">
@@ -990,18 +989,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                         const isFirst = idx === 0;
                         const isLast = idx === chainNodes.length - 1;
                         const isSingle = chainNodes.length === 1;
-                        const isChannelSwitch = showChannelInChain && idx > 0 && node.channel && chainNodes[idx - 1].channel && node.channel !== chainNodes[idx - 1].channel;
                         const roleLabel = getChainRoleLabel(idx, chainNodes.length);
 
                         return (
                           <div key={`${node.raw}-${idx}`} className={`relative ${isLast ? '' : 'pb-2.5'}`}>
-                            {/* 渠道切换提示（在卡片上方） */}
-                            {isChannelSwitch && (
-                              <div className="flex items-center gap-1 mb-1.5 ml-1">
-                                <Zap className="w-3 h-3 text-amber-500" />
-                                <span className="text-[10px] text-amber-600 font-medium">渠道切换至 {channelLabel}</span>
-                              </div>
-                            )}
                             {/* 卡片行：相对定位容器，圆点绝对定位到卡片垂直中心 */}
                             <div className="relative">
                               {/* 圆点 - 绝对定位到卡片左侧、垂直居中 */}
@@ -1196,10 +1187,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   <h3 className="text-sm font-semibold text-slate-900">路由与尝试</h3>
                 </div>
                 <div className="px-4">
-                  <InfoRow icon={Replace} label="是否转移" value={networkSummary.transferred ? '已转移' : '未转移'} />
                   <InfoRow icon={Activity} label="尝试次数" value={`${networkSummary.attemptCount} 次`} />
                   <InfoRow icon={RefreshCw} label="重试次数" value={`${networkSummary.retryCount} 次`} />
-                  <InfoRow icon={Layers} label="转移次数" value={`${networkSummary.transferCount} 次`} />
                   <InfoRow icon={Server} label="起始端点" value={networkSummary.firstEndpoint || '-'} />
                   <InfoRow icon={Server} label="最终端点" value={networkSummary.finalEndpoint || request.endpoint || '-'} />
                 </div>

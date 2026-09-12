@@ -109,6 +109,38 @@ func TestStreamProcessor_ProcessStream_SimpleData(t *testing.T) {
 	}
 }
 
+// 输出前收到 SSE error：不写客户端、返回错误让端点循环转移，原始字节保留供耗尽后原样透传。
+// 已开始输出（content_block_delta）后：字节直通客户端，缓冲清空。
+func TestStreamProcessor_HoldsPreOutputSSEErrorForFailover(t *testing.T) {
+	raw := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-x\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n" +
+		"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"
+	writer := &mockResponseWriter{}
+	processor := NewStreamProcessor(NewTokenParser(), nil, writer, writer, "hold-error", "endpoint")
+
+	_, _, err := processor.ProcessStreamWithRetry(context.Background(), mockResponse(raw, 200))
+
+	if err == nil || !strings.Contains(err.Error(), "Overloaded") {
+		t.Fatalf("expected upstream SSE error, got %v", err)
+	}
+	if writer.buffer.Len() != 0 || processor.HasWrittenResponse() {
+		t.Fatalf("nothing may reach the client before failover, got %q", writer.buffer.String())
+	}
+	if got := string(processor.BufferedUpstreamBody()); got != raw {
+		t.Fatalf("buffered upstream body must be verbatim, got %q", got)
+	}
+
+	streamed := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	writer = &mockResponseWriter{}
+	processor = NewStreamProcessor(NewTokenParser(), nil, writer, writer, "pass-through", "endpoint")
+	if _, err := processor.ProcessStream(context.Background(), mockResponse(streamed, 200)); err != nil {
+		t.Fatalf("ProcessStream failed: %v", err)
+	}
+	if writer.buffer.String() != streamed || !processor.HasWrittenResponse() || len(processor.BufferedUpstreamBody()) != 0 {
+		t.Fatalf("stream with output must pass through verbatim and drain the buffer, got %q", writer.buffer.String())
+	}
+}
+
 func TestStreamProcessor_GetProcessingStats(t *testing.T) {
 	// 创建处理器
 	tokenParser := NewTokenParser()

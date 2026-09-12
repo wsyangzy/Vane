@@ -30,8 +30,7 @@ import {
   Settings,
   KeyRound,
   Eye,
-  EyeOff,
-  Waves
+  EyeOff
 } from 'lucide-react';
 import {
   Button,
@@ -751,7 +750,6 @@ const EndpointDetailModal = ({
 
   const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
-  const streamOnly = !!(endpoint.streamOnly ?? endpoint.stream_only);
   const priority = Number(endpoint.priority ?? 0);
   const timeoutSeconds = Number(endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0);
   const hasCustomTimeout = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 && timeoutSeconds !== 300;
@@ -923,16 +921,6 @@ const EndpointDetailModal = ({
                 <span className="inline-flex">
                   <DetailPill tone="purple" icon={Calculator}>
                     count_tokens
-                  </DetailPill>
-                </span>
-              </Tooltip>
-            )}
-
-            {streamOnly && (
-              <Tooltip content="该端点仅支持流式请求，非流式请求不会路由到此端点">
-                <span className="inline-flex">
-                  <DetailPill tone="amber" icon={Waves}>
-                    仅流式
                   </DetailPill>
                 </span>
               </Tooltip>

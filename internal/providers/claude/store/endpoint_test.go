@@ -45,7 +45,6 @@ func createTestDB(t *testing.T) (*sql.DB, func()) {
 			timeout_seconds INTEGER DEFAULT 300,
 			skip_health_check INTEGER DEFAULT 0,
 			supports_count_tokens INTEGER DEFAULT 0,
-			stream_only INTEGER DEFAULT 0,
 			cost_multiplier REAL DEFAULT 1.0,
 			input_cost_multiplier REAL DEFAULT 1.0,
 			output_cost_multiplier REAL DEFAULT 1.0,
@@ -526,62 +525,6 @@ func TestCostMultipliers(t *testing.T) {
 
 	if got.CacheReadCostMultiplier != 0.1 {
 		t.Errorf("CacheReadCostMultiplier 不匹配: got %f, want 0.1", got.CacheReadCostMultiplier)
-	}
-}
-
-// TestStreamOnlyRoundTrip 验证 stream_only 在写入与两条读取路径上都不丢失。
-// scanEndpoint 与 scanEndpointsWithArgs 是各自独立的实现，必须分别覆盖——
-// 该字段此前正是因为漏接层导致配置永远读不出来。
-func TestStreamOnlyRoundTrip(t *testing.T) {
-	db, cleanup := createTestDB(t)
-	defer cleanup()
-
-	store := NewSQLiteEndpointStore(db)
-	ctx := context.Background()
-
-	created, err := store.Create(ctx, &EndpointRecord{
-		Channel:    "test",
-		Name:       "stream-only-ep",
-		URL:        "https://example.com",
-		Enabled:    true,
-		StreamOnly: true,
-	})
-	if err != nil {
-		t.Fatalf("创建端点失败: %v", err)
-	}
-
-	// 单行读取路径（scanEndpoint）
-	got, err := store.Get(ctx, "stream-only-ep")
-	if err != nil {
-		t.Fatalf("获取端点失败: %v", err)
-	}
-	if !got.StreamOnly {
-		t.Error("Get 读回的 StreamOnly 应为 true")
-	}
-
-	// 多行读取路径（scanEndpointsWithArgs）
-	list, err := store.List(ctx)
-	if err != nil {
-		t.Fatalf("列出端点失败: %v", err)
-	}
-	if len(list) != 1 {
-		t.Fatalf("端点数量不匹配: got %d, want 1", len(list))
-	}
-	if !list[0].StreamOnly {
-		t.Error("List 读回的 StreamOnly 应为 true")
-	}
-
-	// 取消勾选后必须能读回 false，而非维持旧值
-	created.StreamOnly = false
-	if err := store.UpdateByID(ctx, created); err != nil {
-		t.Fatalf("更新端点失败: %v", err)
-	}
-	got, err = store.Get(ctx, "stream-only-ep")
-	if err != nil {
-		t.Fatalf("获取端点失败: %v", err)
-	}
-	if got.StreamOnly {
-		t.Error("更新后 StreamOnly 应为 false")
 	}
 }
 

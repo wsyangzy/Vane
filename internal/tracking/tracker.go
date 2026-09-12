@@ -121,15 +121,23 @@ type RequestStartData struct {
 
 // RequestUpdateData 请求更新事件数据
 type RequestUpdateData struct {
-	Channel      string `json:"channel"`
-	EndpointName string `json:"endpoint_name"`
-	GroupName    string `json:"group_name"`
-	Status       string `json:"status"`
-	RetryCount   int    `json:"retry_count"`
-	HTTPStatus   int    `json:"http_status"`
+	Channel              string `json:"channel"`
+	EndpointName         string `json:"endpoint_name"`
+	GroupName            string `json:"group_name"`
+	Status               string `json:"status"`
+	RetryCount           int    `json:"retry_count"`
+	HTTPStatus           int    `json:"http_status"`
+	HTTPStatusIsUpstream bool   `json:"http_status_is_upstream"`
 	// 🚀 [状态机重构] Phase 2: 新增失败原因和取消原因字段
 	FailureReason string `json:"failure_reason,omitempty"`
 	CancelReason  string `json:"cancel_reason,omitempty"`
+}
+
+func normalizeUpstreamHTTPStatus(code int, isUpstream bool) (int, bool) {
+	if !isUpstream || code <= 0 {
+		return 0, false
+	}
+	return code, true
 }
 
 // RequestCompleteData 请求完成事件数据
@@ -568,25 +576,26 @@ type WriteRequest struct {
 // UpdateOptions 统一的请求更新选项
 // 支持可选字段更新，只更新非nil的字段
 type UpdateOptions struct {
-	EndpointName       *string        // 端点名称
-	EndpointChain      *string        // 端点链路（形如 "A -> B -> C"）
-	Channel            *string        // 渠道标签
-	GroupName          *string        // 组名称
-	Status             *string        // 状态
-	RetryCount         *int           // 重试次数
-	HttpStatus         *int           // HTTP状态码
-	ModelName          *string        // 模型名称
-	OriginalModelName  *string        // 改写前的原始请求模型
-	ModelRewriteSource *string        // 模型改写来源：mapping/channel_model
-	ModelRewriteTarget *string        // 改写后的目标模型
-	PrivacyRedacted    *bool          // 是否命中隐私脱敏
-	PrivacySummary     *string        // 隐私脱敏摘要（仅规则名与命中数，绝不含原文）
-	EndTime            *time.Time     // 结束时间
-	Duration           *time.Duration // 持续时间
-	FailureReason      *string        // 失败原因（用于中间过程记录）
-	Provider           *string        // 提供商标识: claude/codex
-	ReasoningEffort    *string        // reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
-	ServiceTier        *string        // 服务档位: auto/default/batch/flex/priority/fast
+	EndpointName         *string        // 端点名称
+	EndpointChain        *string        // 端点链路（形如 "A -> B -> C"）
+	Channel              *string        // 渠道标签
+	GroupName            *string        // 组名称
+	Status               *string        // 状态
+	RetryCount           *int           // 重试次数
+	HttpStatus           *int           // HTTP状态码
+	HttpStatusIsUpstream *bool          // HTTP状态码是否来自真实上游响应
+	ModelName            *string        // 模型名称
+	OriginalModelName    *string        // 改写前的原始请求模型
+	ModelRewriteSource   *string        // 模型改写来源：mapping/channel_model
+	ModelRewriteTarget   *string        // 改写后的目标模型
+	PrivacyRedacted      *bool          // 是否命中隐私脱敏
+	PrivacySummary       *string        // 隐私脱敏摘要（仅规则名与命中数，绝不含原文）
+	EndTime              *time.Time     // 结束时间
+	Duration             *time.Duration // 持续时间
+	FailureReason        *string        // 失败原因（用于中间过程记录）
+	Provider             *string        // 提供商标识: claude/codex
+	ReasoningEffort      *string        // reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
+	ServiceTier          *string        // 服务档位: auto/default/batch/flex/priority/fast
 }
 
 // UsageTracker 使用跟踪器
@@ -1305,6 +1314,12 @@ func (ut *UsageTracker) GetHotPoolDroppedCount() int64 {
 // 文件格式：每行一个 JSON 对象 {"kind":"start|update|complete|fail","payload":{...}}
 // 滚动策略：单文件超过 10 MB 时备份为 .{timestamp} 并新建
 func (ut *UsageTracker) recordToFailureQueue(kind string, payload any) {
+	if fields, ok := payload.(map[string]any); ok {
+		if isUpstream, _ := fields["http_status_is_upstream"].(bool); !isUpstream {
+			delete(fields, "http_status")
+		}
+	}
+
 	// 推断失败队列文件路径
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1416,7 +1431,11 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 				req.RetryCount = *opts.RetryCount
 			}
 			if opts.HttpStatus != nil {
-				req.HTTPStatus = *opts.HttpStatus
+				isUpstream := opts.HttpStatusIsUpstream != nil && *opts.HttpStatusIsUpstream
+				req.HTTPStatus, req.HTTPStatusIsUpstream = normalizeUpstreamHTTPStatus(*opts.HttpStatus, isUpstream)
+			} else if opts.HttpStatusIsUpstream != nil && !*opts.HttpStatusIsUpstream {
+				req.HTTPStatus = 0
+				req.HTTPStatusIsUpstream = false
 			}
 			if opts.ModelName != nil {
 				req.ModelName = *opts.ModelName
@@ -1502,28 +1521,26 @@ func (ut *UsageTracker) RecordOutputSent(requestID string) {
 // RecordRequestSuccess 记录请求成功完成
 // 一次性更新所有成功相关字段：status='completed', end_time, duration_ms, Token和成本信息
 func (ut *UsageTracker) RecordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration) {
-	ut.recordRequestSuccess(requestID, modelName, tokens, duration, 200, "")
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, 200, false, "")
 }
 
 // RecordRequestSuccessWithQuality 记录请求成功完成（支持数据质量标记）
 // 🔧 [方案A实现] 2025-12-20: 原子操作，在 CompleteAndArchive 中一次性设置所有字段包括 failureReason
 // 一次性更新所有成功相关字段：status='completed', end_time, duration_ms, Token、成本信息和可选的 failure_reason
 func (ut *UsageTracker) RecordRequestSuccessWithQuality(requestID, modelName string, tokens *TokenUsage, duration time.Duration, failureReason string) {
-	ut.recordRequestSuccess(requestID, modelName, tokens, duration, 200, failureReason)
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, 200, false, failureReason)
 }
 
 // RecordRequestSuccessWithHTTPStatus 记录带真实上游状态码的成功请求。
 func (ut *UsageTracker) RecordRequestSuccessWithHTTPStatus(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int) {
-	ut.recordRequestSuccess(requestID, modelName, tokens, duration, httpStatus, "")
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, httpStatus, true, "")
 }
 
-func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int, failureReason string) {
+func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int, httpStatusIsUpstream bool, failureReason string) {
 	if ut.config == nil || !ut.config.Enabled {
 		return
 	}
-	if httpStatus <= 0 {
-		httpStatus = 200
-	}
+	httpStatus, httpStatusIsUpstream = normalizeUpstreamHTTPStatus(httpStatus, httpStatusIsUpstream)
 
 	// 🚀 [架构修复] 支持 nil tokens，确保耗时信息总是被记录
 	var inputTokens, outputTokens, reasoningTokens, billableOutputTokens, cacheCreationTokens, cacheReadTokens int64
@@ -1558,7 +1575,12 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 		now := ut.now()
 		err := ut.hotPool.CompleteAndArchive(requestID, func(req *ActiveRequest) {
 			req.Status = "completed"
-			req.HTTPStatus = httpStatus
+			if httpStatusIsUpstream {
+				req.HTTPStatus = httpStatus
+				req.HTTPStatusIsUpstream = true
+			} else if !req.HTTPStatusIsUpstream {
+				req.HTTPStatus = 0
+			}
 			req.ModelName = modelName
 			// 🔧 [P1.4 防御] 仅当本次提供的 token 非零，或之前没有被失败路径记录过时，才覆盖
 			// 避免"先 RecordFailedRequestTokens 记录了真实 token → 后 CompleteAndArchive 传入零值覆盖"
@@ -1612,6 +1634,7 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 				"cache_read_tokens":           cacheReadTokens,
 				"duration_ms":                 duration.Milliseconds(),
 				"http_status":                 httpStatus,
+				"http_status_is_upstream":     httpStatusIsUpstream,
 				"failure_reason":              failureReason,
 				"error":                       err.Error(),
 			})
@@ -1621,12 +1644,13 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 
 	// 🔧 [P5.1] HotPool 未启用的极端场景：直接走失败队列
 	ut.recordToFailureQueue("complete", map[string]any{
-		"request_id":    requestID,
-		"model_name":    modelName,
-		"reason":        "hot_pool_disabled",
-		"input_tokens":  inputTokens,
-		"output_tokens": outputTokens,
-		"http_status":   httpStatus,
+		"request_id":              requestID,
+		"model_name":              modelName,
+		"reason":                  "hot_pool_disabled",
+		"input_tokens":            inputTokens,
+		"output_tokens":           outputTokens,
+		"http_status":             httpStatus,
+		"http_status_is_upstream": httpStatusIsUpstream,
 	})
 }
 
@@ -1634,9 +1658,20 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 // 一次性更新所有失败/取消相关字段：status, end_time, duration_ms, failure_reason/cancel_reason, http_status_code, 可选Token
 // 🔧 [修复] 2025-12-11: 添加 modelName 参数，确保取消/失败请求能正确计算成本
 func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, reason, errorDetail string, duration time.Duration, httpStatus int, tokens *TokenUsage) {
+	ut.recordRequestFinalFailure(requestID, modelName, status, reason, errorDetail, duration, httpStatus, false, tokens)
+}
+
+// RecordRequestFinalFailureWithUpstreamStatus records a final failure and marks
+// the status code as provider-originated when it came from a real HTTP response.
+func (ut *UsageTracker) RecordRequestFinalFailureWithUpstreamStatus(requestID, modelName, status, reason, errorDetail string, duration time.Duration, httpStatus int, tokens *TokenUsage) {
+	ut.recordRequestFinalFailure(requestID, modelName, status, reason, errorDetail, duration, httpStatus, true, tokens)
+}
+
+func (ut *UsageTracker) recordRequestFinalFailure(requestID, modelName, status, reason, errorDetail string, duration time.Duration, httpStatus int, httpStatusIsUpstream bool, tokens *TokenUsage) {
 	if ut.config == nil || !ut.config.Enabled {
 		return
 	}
+	httpStatus, httpStatusIsUpstream = normalizeUpstreamHTTPStatus(httpStatus, httpStatusIsUpstream)
 
 	// 处理Token信息（失败/取消时可能有也可能没有）
 	var inputTokens, outputTokens, reasoningTokens, billableOutputTokens, cacheCreationTokens, cacheReadTokens int64
@@ -1683,7 +1718,13 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 		now := ut.now()
 		err := ut.hotPool.CompleteAndArchive(requestID, func(req *ActiveRequest) {
 			req.Status = status
-			req.HTTPStatus = httpStatus
+			if httpStatusIsUpstream {
+				req.HTTPStatus = httpStatus
+				req.HTTPStatusIsUpstream = true
+			} else {
+				req.HTTPStatus = 0
+				req.HTTPStatusIsUpstream = false
+			}
 			// 🔧 [修复] 2025-12-11: 设置模型名，否则成本计算会失败
 			if modelName != "" && modelName != "unknown" {
 				req.ModelName = modelName
@@ -1710,13 +1751,14 @@ func (ut *UsageTracker) RecordRequestFinalFailure(requestID, modelName, status, 
 			// 🔧 [P5.1] 不再降级到 traditional eventChan，改为持久化失败队列
 			ut.triggerHotPoolAlert("fail_archive_failed")
 			ut.recordToFailureQueue("fail", map[string]any{
-				"request_id":   requestID,
-				"model_name":   modelName,
-				"status":       status,
-				"reason":       reason,
-				"error_detail": errorDetail,
-				"duration_ms":  duration.Milliseconds(),
-				"http_status":  httpStatus,
+				"request_id":              requestID,
+				"model_name":              modelName,
+				"status":                  status,
+				"reason":                  reason,
+				"error_detail":            errorDetail,
+				"duration_ms":             duration.Milliseconds(),
+				"http_status":             httpStatus,
+				"http_status_is_upstream": httpStatusIsUpstream,
 				"input_tokens": func() int64 {
 					if legacyTokens != nil {
 						return legacyTokens.InputTokens
@@ -1857,6 +1899,7 @@ func (ut *UsageTracker) RecordPartialFailure(requestID, modelName string, tokens
 				IsStreaming:              activeReq.IsStreaming,
 				Status:                   "partial_failed", // 特殊状态标记
 				HTTPStatus:               activeReq.HTTPStatus,
+				HTTPStatusIsUpstream:     activeReq.HTTPStatusIsUpstream,
 				RetryCount:               activeReq.RetryCount,
 				FailureReason:            failureReason,
 				InputTokens:              0,
@@ -2732,6 +2775,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	provider := req.Provider
 	status := req.Status
 	httpStatusSnapshot := req.HTTPStatus
+	httpStatusIsUpstream := req.HTTPStatusIsUpstream
 	retryCount := req.RetryCount
 	failureReason := req.FailureReason
 	lastFailureReason := req.LastFailureReason
@@ -2785,7 +2829,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		}
 		firstByteMs = &ms
 	}
-	if httpStatusSnapshot > 0 {
+	if httpStatusIsUpstream && httpStatusSnapshot > 0 {
 		s := httpStatusSnapshot
 		httpStatus = &s
 	}
@@ -2889,6 +2933,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		Provider:                      provider, // 提供商标识
 		Status:                        status,
 		HTTPStatusCode:                httpStatus,
+		HTTPStatusIsUpstream:          httpStatusIsUpstream,
 		RetryCount:                    retryCount,
 		FailureReason:                 failureReason,
 		LastFailureReason:             lastFailureReason,

@@ -51,9 +51,11 @@ type RequestLifecycleManager interface {
 	PrepareErrorContext(errorCtx *ErrorContext)
 	// 新增方法：统一的请求完成入口
 	CompleteRequest(tokens *tracking.TokenUsage)
+	CompleteRequestWithUpstreamStatus(tokens *tracking.TokenUsage, httpStatus int)
 	// 🆕 [流完整性追踪] 2025-12-11: 带数据质量标记的请求完成
 	CompleteRequestWithQuality(tokens *tracking.TokenUsage, failureReason string)
 	HandleNonTokenResponse(responseContent string)
+	HandleNonTokenResponseWithUpstreamStatus(responseContent string, httpStatus int)
 	RecordPrivacyRedaction(summaryJSON string)
 	// 失败请求Token记录方法：只记录Token统计，不改变请求状态
 	RecordTokensForFailedRequest(tokens *tracking.TokenUsage, failureReason string)
@@ -64,8 +66,9 @@ type RequestLifecycleManager interface {
 	InitRetryBudget(maxAttempts int, maxDuration time.Duration)
 	CheckRetryBudget() (exhausted bool, reason string)
 	// 🚀 [状态机重构] Phase 4: 新增状态管理方法
-	MapErrorTypeToFailureReason(errorType ErrorType) string         // 映射ErrorType到failure_reason
-	FailRequest(failureReason, errorDetail string, httpStatus int)  // 标记请求为最终失败
+	MapErrorTypeToFailureReason(errorType ErrorType) string // 映射ErrorType到failure_reason
+	FailRequest(failureReason, errorDetail string)          // 标记本地失败；本地失败没有上游 HTTP 状态
+	FailRequestWithUpstreamStatus(failureReason, errorDetail string, httpStatus int)
 	CancelRequest(cancelReason string, tokens *tracking.TokenUsage) // 标记请求被取消
 	// 🔥 [重复计费防护] 2025-12-26: 重复计费防护相关方法
 	MarkOutputSent()        // 标记已输出内容
@@ -125,8 +128,9 @@ type TokenParser interface {
 // 修改版本：返回Token使用信息和模型名称而非直接记录到usageTracker
 type StreamProcessor interface {
 	ProcessStreamWithRetry(ctx context.Context, resp *http.Response) (*tracking.TokenUsage, string, error)
-	HasSentContent() bool     // 🔥 [重复计费防护] 2025-12-26: 检查是否已发送实际模型输出
-	HasWrittenResponse() bool // 检查是否已向客户端写出任意流字节
+	HasSentContent() bool         // 🔥 [重复计费防护] 2025-12-26: 检查是否已发送实际模型输出
+	HasWrittenResponse() bool     // 检查是否已向客户端写出任意流字节
+	BufferedUpstreamBody() []byte // 首字节前缓冲、尚未写给客户端的上游原始正文（供耗尽后原样透传）
 }
 
 // RetryHandler 重试处理器接口
@@ -210,10 +214,9 @@ type SuspensionManager interface {
 	WaitForGroupSwitch(ctx context.Context, connID string) bool
 	WaitForEndpointRecovery(ctx context.Context, connID, failedEndpoint string) bool // 🚀 [端点自愈] 新增端点恢复等待方法
 	// 🎯 [挂起取消区分] 新增带结果的端点恢复等待方法，能区分成功/超时/取消
-	// requireNonStream=true 表示挂起的是非流式请求，唤醒判断必须排除 stream_only 端点
-	WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string, requireNonStream bool) SuspensionResult
+	WaitForEndpointRecoveryWithResult(ctx context.Context, connID, failedEndpoint string) SuspensionResult
 	// 🛑 [循环终止] 仅等待用户操作的挂起（不监听端点自愈）
-	WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string, requireNonStream bool) SuspensionResult
+	WaitForEndpointRecoveryWithResultManual(ctx context.Context, connID, failedEndpoint string) SuspensionResult
 	// 🛑 [循环终止] 手动重试计数与渠道标记
 	BeginManualRetry(requestID string, channels []string)
 	EndManualRetry(requestID string)

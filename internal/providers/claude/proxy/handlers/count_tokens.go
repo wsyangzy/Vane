@@ -65,13 +65,13 @@ func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, 
 			// 隐私策略拒绝：短路返回，既不重试也不降级到本地估算
 			if policyErr := AsPrivacyPolicyError(redactionErr); policyErr != nil {
 				if lifecycleManager != nil {
-					lifecycleManager.FailRequest(PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode)
+					lifecycleManager.FailRequest(PrivacyFailureReason(policyErr), policyErr.Message)
 				}
 				WritePrivacyPolicyErrorResponse(w, policyErr)
 				return
 			}
 			if lifecycleManager != nil {
-				lifecycleManager.FailRequest("privacy_filter_failed", redactionErr.Error(), http.StatusInternalServerError)
+				lifecycleManager.FailRequest("privacy_filter_failed", redactionErr.Error())
 			}
 			http.Error(w, fmt.Sprintf("隐私防护处理失败: %v", redactionErr), http.StatusInternalServerError)
 			return
@@ -157,7 +157,7 @@ func (h *CountTokensHandler) respondWithEstimation(w http.ResponseWriter, bodyBy
 	tokens, err := h.estimateTokens(bodyBytes)
 	if err != nil {
 		if lifecycleManager != nil {
-			lifecycleManager.FailRequest("count_tokens_estimation_failed", err.Error(), http.StatusBadRequest)
+			lifecycleManager.FailRequest("count_tokens_estimation_failed", err.Error())
 		}
 		http.Error(w, fmt.Sprintf("Failed to estimate tokens: %v", err), http.StatusBadRequest)
 		return
@@ -181,12 +181,13 @@ func (h *CountTokensHandler) completeCountTokensRequest(lifecycleManager Request
 	if lifecycleManager == nil {
 		return
 	}
+	// tryForward 只在上游返回 200 时才交出正文，这里记录的就是那次真实的上游状态。
 	var response CountTokensResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		lifecycleManager.CompleteRequest(nil)
+		lifecycleManager.CompleteRequestWithUpstreamStatus(nil, http.StatusOK)
 		return
 	}
-	lifecycleManager.CompleteRequest(&tracking.TokenUsage{InputTokens: int64(response.InputTokens)})
+	lifecycleManager.CompleteRequestWithUpstreamStatus(&tracking.TokenUsage{InputTokens: int64(response.InputTokens)}, http.StatusOK)
 }
 
 // estimateTokens 本地估算token数量

@@ -145,6 +145,60 @@ func TestEndpointManagerPrimaryUsesCredentialGroupBeforeActiveEndpoint(t *testin
 	}
 }
 
+func TestEndpointManagerPrefersLastSuccessfulEndpointUntilFailure(t *testing.T) {
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{ID: 1, CredentialGroupOrder: 0, Name: "primary", FailoverEnabled: true, Priority: 0},
+			{ID: 2, CredentialGroupOrder: 1, Name: "secondary", FailoverEnabled: true, Priority: 0},
+			{ID: 3, CredentialGroupOrder: 2, Name: "tertiary", FailoverEnabled: true, Priority: 0},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+
+	manager.MarkEndpointRequestSuccess(3)
+	preferred, err := manager.GetPrimaryEndpoint()
+	if err != nil {
+		t.Fatalf("GetPrimaryEndpoint() error = %v", err)
+	}
+	if preferred.ID != 3 {
+		t.Fatalf("last successful endpoint = %d, want 3", preferred.ID)
+	}
+
+	manager.MarkUnhealthyWithDetail(3, 200, "SSE response.failed")
+	fallback, err := manager.GetPrimaryEndpoint()
+	if err != nil {
+		t.Fatalf("GetPrimaryEndpoint() after failure error = %v", err)
+	}
+	if fallback.ID != 1 {
+		t.Fatalf("failed preferred endpoint should be cleared, got %d", fallback.ID)
+	}
+}
+
+func TestEndpointManagerPreferredEndpointOverridesFastestAndGroupOrder(t *testing.T) {
+	manager := &EndpointManager{
+		strategyType: "fastest",
+		endpoints: []*CodexEndpoint{
+			{ID: 1, CredentialGroupOrder: 0, Name: "primary", FailoverEnabled: true, Priority: 0},
+			{ID: 2, CredentialGroupOrder: 1, Name: "preferred", FailoverEnabled: true, Priority: 2},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		latencies:      map[int64]int64{1: 10, 2: 100},
+		logger:         newTestLogger(),
+	}
+
+	manager.MarkEndpointRequestSuccess(2)
+	selected, err := manager.GetPrimaryEndpoint()
+	if err != nil {
+		t.Fatalf("GetPrimaryEndpoint() error = %v", err)
+	}
+	if selected.ID != 2 {
+		t.Fatalf("preferred endpoint should outrank fastest/group order, got %d", selected.ID)
+	}
+}
+
 func TestEndpointManagerSkipHealthCheckBypassesHealthFilter(t *testing.T) {
 	manager := &EndpointManager{
 		endpoints: []*CodexEndpoint{

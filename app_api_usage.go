@@ -306,6 +306,7 @@ type RequestRecord struct {
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
 	HTTPStatus               int         `json:"http_status"`
+	HTTPStatusIsUpstream     bool        `json:"http_status_is_upstream"`
 	RetryCount               int         `json:"retry_count"`                   // 重试次数
 	FailureReason            string      `json:"failure_reason,omitempty"`      // 失败原因分类
 	LastFailureReason        string      `json:"last_failure_reason,omitempty"` // 最后一次失败的原始详情
@@ -495,6 +496,7 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
+		HTTPStatusIsUpstream:          r.HTTPStatusIsUpstream,
 		RetryCount:                    retryCount,
 		FailureReason:                 r.FailureReason,
 		LastFailureReason:             r.LastFailureReason,
@@ -529,10 +531,8 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		ModelCacheReadCostMultiplier:  r.ModelCacheReadCostMultiplier,
 	}
 
-	if r.HTTPStatusCode != nil {
+	if r.HTTPStatusCode != nil && r.HTTPStatusIsUpstream {
 		record.HTTPStatus = *r.HTTPStatusCode
-	} else if r.Status == "completed" {
-		record.HTTPStatus = 200
 	}
 	if r.DurationMs != nil {
 		record.ResponseTime = *r.DurationMs

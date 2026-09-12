@@ -738,10 +738,15 @@ export const getUsageSummary = async (startTime = '', endTime = '', provider = '
 };
 
 export const mapRequestNetworkFields = (record = {}) => {
-  const httpStatus = record.http_status ?? record.httpStatus ?? record.http_status_code ?? record.httpStatusCode ?? 0;
+  const httpStatusIsUpstream = Boolean(record.http_status_is_upstream ?? record.httpStatusIsUpstream ?? false);
+  const httpStatus = httpStatusIsUpstream
+    ? (record.http_status ?? record.httpStatus ?? record.http_status_code ?? record.httpStatusCode ?? 0)
+    : 0;
   return {
     status_code: httpStatus,
     http_status_code: httpStatus,
+    http_status_is_upstream: httpStatusIsUpstream,
+    httpStatusIsUpstream,
     retry_count: record.retry_count ?? record.retryCount ?? 0,
     method: record.method || '',
     path: record.path || '',
@@ -1337,9 +1342,6 @@ export const getEndpointRecords = async () => {
     cooldownSeconds: r.cooldown_seconds,
     timeoutSeconds: r.timeout_seconds,
     supportsCountTokens: r.supports_count_tokens,
-    // 仅支持流式请求（非流请求不会路由到此端点）
-    stream_only: r.stream_only,
-    streamOnly: r.stream_only,
     costMultiplier: r.cost_multiplier,
     inputCostMultiplier: r.input_cost_multiplier,
     outputCostMultiplier: r.output_cost_multiplier,
@@ -1399,9 +1401,6 @@ export const getEndpointRecord = async (name) => {
     cooldownSeconds: r.cooldown_seconds,
     timeoutSeconds: r.timeout_seconds,
     supportsCountTokens: r.supports_count_tokens,
-    // 仅支持流式请求（非流请求不会路由到此端点）
-    stream_only: r.stream_only,
-    streamOnly: r.stream_only,
     costMultiplier: r.cost_multiplier,
     inputCostMultiplier: r.input_cost_multiplier,
     outputCostMultiplier: r.output_cost_multiplier,
@@ -1448,7 +1447,6 @@ export const createEndpointRecord = async (input) => {
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
-    stream_only: !!(input?.streamOnly ?? input?.stream_only ?? false),
     cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
     input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
@@ -1489,7 +1487,6 @@ export const updateEndpointRecord = async (name, input) => {
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
-    stream_only: !!(input?.streamOnly ?? input?.stream_only ?? false),
     cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
     input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),
@@ -1531,7 +1528,6 @@ export const updateEndpointRecordByID = async (id, input) => {
     cooldown_seconds: input.cooldownSeconds ? parseInt(input.cooldownSeconds) : null,
     timeout_seconds: parseInt(input.timeoutSeconds) || 300,
     supports_count_tokens: input.supportsCountTokens || false,
-    stream_only: !!(input?.streamOnly ?? input?.stream_only ?? false),
     cost_multiplier: parseEndpointMultiplier(input.costMultiplier),
     input_cost_multiplier: parseEndpointMultiplier(input.inputCostMultiplier),
     output_cost_multiplier: parseEndpointMultiplier(input.outputCostMultiplier),

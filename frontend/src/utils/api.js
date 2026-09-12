@@ -341,6 +341,7 @@ export const fetchRequests = async (params = {}) => {
     const httpStatusCode = normalizeNumberOrNull(
       request.http_status_code ?? request.httpStatusCode ?? request.http_status ?? request.httpStatus ?? request.status_code ?? request.statusCode
     );
+    const httpStatusIsUpstream = Boolean(request.http_status_is_upstream ?? request.httpStatusIsUpstream ?? false);
     const rawRetryCount = Number(request.retry_count ?? request.retryCount ?? 0);
     const retryCount = Number.isFinite(rawRetryCount) ? Math.max(0, Math.trunc(rawRetryCount)) : 0;
     const clientIP = request.client_ip || request.clientIP || '';
@@ -365,8 +366,10 @@ export const fetchRequests = async (params = {}) => {
       privacyRedacted: Boolean(request.privacy_redacted ?? request.privacyRedacted),
       privacyRedactionSummary: request.privacy_redaction_summary || request.privacyRedactionSummary || '',
       provider: request.provider || '',
-      http_status_code: httpStatusCode,
-      httpStatusCode,
+      http_status_code: httpStatusIsUpstream ? httpStatusCode : null,
+      httpStatusCode: httpStatusIsUpstream ? httpStatusCode : null,
+      http_status_is_upstream: httpStatusIsUpstream,
+      httpStatusIsUpstream,
       retry_count: retryCount,
       retryCount,
       method: request.method || '',
@@ -417,7 +420,7 @@ export const fetchRequests = async (params = {}) => {
       last_failure_reason: request.last_failure_reason || request.lastFailureReason || '',
       failureReason: request.failure_reason || request.failureReason || '',
       lastFailureReason: request.last_failure_reason || request.lastFailureReason || '',
-      statusCode: httpStatusCode
+      statusCode: httpStatusIsUpstream ? httpStatusCode : null
     });
   };
 

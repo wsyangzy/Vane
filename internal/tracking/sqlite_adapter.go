@@ -635,6 +635,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN service_tier TEXT",
 			description: "服务等级字段 (Codex fast mode)",
 		},
+		{
+			checkColumn: "http_status_is_upstream",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN http_status_is_upstream BOOLEAN NOT NULL DEFAULT 0",
+			description: "HTTP状态码来源标记（真实上游响应）",
+		},
 	}
 
 	// endpoints 迁移：端点存储表迭代新增字段时，需要兼容旧 db（CREATE TABLE IF NOT EXISTS 不会补列）
@@ -697,11 +702,6 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			checkColumn: "model_multipliers",
 			alterSQL:    "ALTER TABLE endpoints ADD COLUMN model_multipliers TEXT NOT NULL DEFAULT '[]'",
 			description: "端点模型附加倍率字段",
-		},
-		{
-			checkColumn: "stream_only",
-			alterSQL:    "ALTER TABLE endpoints ADD COLUMN stream_only INTEGER DEFAULT 0",
-			description: "端点仅支持流式请求字段 (v8.7)",
 		},
 	}
 
@@ -797,6 +797,8 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := runMigrations("request_logs", requestLogMigrations); err != nil {
 		return err
 	}
+	// 历史行的 http_status_code 可能是旧版本 Relay 自造的兜底码，但读取侧已按
+	// http_status_is_upstream 隐藏；不做不可逆的批量清空，真实上游码也在其中。
 	if err := s.purgePrivacyPlaintextMatches(ctx); err != nil {
 		return err
 	}

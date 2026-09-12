@@ -100,11 +100,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	if err != nil {
 		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环
 		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
-			lifecycleManager.FailRequest(PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode)
+			lifecycleManager.FailRequest(PrivacyFailureReason(policyErr), policyErr.Message)
 			WritePrivacyPolicyErrorResponse(w, policyErr)
 			return
 		}
-		lifecycleManager.FailRequest("privacy_filter_failed", err.Error(), http.StatusInternalServerError)
+		lifecycleManager.FailRequest("privacy_filter_failed", err.Error())
 		WriteUpstreamErrorResponse(w, nil, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -122,8 +122,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
 	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-		lifecycleManager.FailRequest("retry_budget_exhausted", "", http.StatusGatewayTimeout)
-		WriteUpstreamErrorResponse(w, nil, "", http.StatusGatewayTimeout)
+		lifecycleManager.FailRequest("retry_budget_exhausted", "")
+		WriteUpstreamErrorResponse(w, nil, "retry_budget_exhausted", http.StatusGatewayTimeout)
 		return
 	}
 
@@ -154,13 +154,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			// 后续获取，排除已尝试的端点
 			candidates = retryMgr.GetHealthyEndpointsExcluding(ctx, stringSetKeys(triedEndpoints))
 		}
-		// stream_only 端点不接非流请求。过滤后为空不等于全局无端点，只说明当前渠道
-		// 全是流式专用端点——此时必须继续向下一渠道转移，否则链路会停在这里直接失败，
-		// 表现为「渠道/链路为空 + no_healthy_endpoints」，其余渠道一个都没试过。
-		rawEndpoints := filterStreamOnlyEndpoints(candidates)
-		streamOnlyBlocked := len(rawEndpoints) == 0 && len(candidates) > 0
-		rawEndpoints = filterClaudeModelEndpoints(rh.forwarder, rawEndpoints, bodyBytes)
-		modelBlocked := len(rawEndpoints) == 0 && len(candidates) > 0 && !streamOnlyBlocked
+		rawEndpoints := filterClaudeModelEndpoints(rh.forwarder, candidates, bodyBytes)
+		modelBlocked := len(rawEndpoints) == 0 && len(candidates) > 0
 
 		endpoints, quotaBlocked := filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, rawEndpoints)
 		if len(endpoints) == 0 {
@@ -181,34 +176,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					)
 					continue
 				}
-				lifecycleManager.FailRequest("daily_cost_limit_exceeded", "", http.StatusTooManyRequests)
-				WriteUpstreamErrorResponse(w, nil, "", http.StatusTooManyRequests)
-				return
-			}
-			if streamOnlyBlocked {
-				currentChannel := endpointRouteName(candidates[0])
-				lifecycleManager.SetEndpoint(candidates[0].Config.Name, endpointDisplayGroupName(candidates[0]), candidates[0].Config.Channel)
-				*r = *r.WithContext(context.WithValue(r.Context(), "selected_endpoint", candidates[0].Config.Name))
-				if currentChannel != "" {
-					triedChannels[currentChannel] = struct{}{}
-				}
-				// 走「不标记失败」的切换：stream_only 是静态配置而非故障，这些端点
-				// 对并发的流式请求完全健康，标记 RequestFailed 会把它们一起拖下线。
-				// 同理不需要 loop 语义——再绕回来它们照样接不了非流请求。
-				newChannel, failoverErr := rh.endpointManager.TriggerChannelSwitchWithoutFailure(
-					currentChannel,
-					stringSetKeys(triedChannels),
-				)
-				if failoverErr == nil && newChannel != "" {
-					slog.Info("[Claude 仅流式端点触发渠道间故障转移]",
-						"request_id", connID,
-						"from_channel", currentChannel,
-						"to_channel", newChannel,
-					)
-					continue
-				}
-				lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
-				WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
+				lifecycleManager.FailRequest("daily_cost_limit_exceeded", "")
+				WriteUpstreamErrorResponse(w, nil, "daily_cost_limit_exceeded", http.StatusTooManyRequests)
 				return
 			}
 			if modelBlocked {
@@ -216,19 +185,25 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				if currentChannel != "" {
 					triedChannels[currentChannel] = struct{}{}
 				}
+				// 走「不标记失败」的切换：模型能力是静态配置而非故障，这些端点
+				// 对其它模型的请求完全健康，标记 RequestFailed 会把它们一起拖下线。
 				newChannel, failoverErr := rh.endpointManager.TriggerChannelSwitchWithoutFailure(currentChannel, stringSetKeys(triedChannels))
 				if failoverErr == nil && newChannel != "" {
 					slog.Info("[Claude 模型能力不匹配触发渠道间故障转移]", "request_id", connID, "from_channel", currentChannel, "to_channel", newChannel)
 					continue
 				}
-				lifecycleManager.FailRequest("no_supported_model_endpoint", "", http.StatusServiceUnavailable)
-				WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
+				// 这是 Relay 自己的路由决策，不是上游响应：追踪里不记任何状态码，给客户端的码只是协议必需。
+				// 选 400 而非 503：Claude Code 对 5xx 会按 CLAUDE_CODE_MAX_RETRIES（默认 10）自行重试，
+				// 一次后台非流式调用会被放大成 11 条无效记录；400 在 SDK 与 Claude Code 里都是不可重试错误。
+				// 模型能力是静态配置，重试永远不会改变结果。
+				lifecycleManager.FailRequest("no_supported_model_endpoint", "")
+				WriteUpstreamErrorResponse(w, nil, "no_supported_model_endpoint", http.StatusBadRequest)
 				return
 			}
 			noHealthyErr := fmt.Errorf("no healthy endpoints available")
 			lifecycleManager.HandleError(noHealthyErr)
-			lifecycleManager.FailRequest("no_healthy_endpoints", "", http.StatusServiceUnavailable)
-			WriteUpstreamErrorResponse(w, nil, "", http.StatusServiceUnavailable)
+			lifecycleManager.FailRequest("no_healthy_endpoints", "")
+			WriteUpstreamErrorResponse(w, nil, "no_healthy_endpoints", http.StatusServiceUnavailable)
 			return
 		}
 
@@ -361,9 +336,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 							connID, decision.Reason, ep.Config.Name))
 
 						// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
-						// requireNonStream=true：本处理器只服务非流式请求
 						failedEndpointKey := epKey
-						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey, true)
+						result := rh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey)
 						switch result {
 						case SuspensionSuccess:
 							slog.Info(fmt.Sprintf("🎯 [恢复成功] [%s] 端点 %s 已恢复或组已切换，重新获取端点列表",
@@ -381,7 +355,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						case SuspensionTimeout:
 							// 挂起等待超时，记录为失败。504 是网关等待上游超时的标准语义。
 							slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
-							lifecycleManager.UpdateStatus("error", globalAttemptCount, http.StatusGatewayTimeout)
+							lifecycleManager.UpdateStatus("error", globalAttemptCount, 0)
 							rh.endpointManager.ClearEndpointsRequestFailure(stringSetKeys(triedEndpoints))
 							http.Error(w, "Request suspended but recovery timeout", http.StatusGatewayTimeout)
 							return
@@ -404,7 +378,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					if err != nil && failReason == "" {
 						failReason = err.Error()
 					}
-					rh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
+					rh.endpointManager.SetEndpointLastRequestFail(epKey, GetStatusCodeFromError(err, resp), failReason)
 
 					if decision.SwitchEndpoint {
 						// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
@@ -427,7 +401,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						failureReason := lifecycleManager.MapErrorTypeToFailureReason(errorCtx.ErrorType)
 
 						// 使用新的FailRequest方法标记最终失败（修复：添加HTTP状态码）
-						lifecycleManager.FailRequest(failureReason, ExtractUpstreamErrorMessage(err), failStatusCode)
+						failRequest(lifecycleManager, failureReason, ExtractUpstreamErrorMessage(err), err, resp)
 						rh.endpointManager.ClearEndpointsRequestFailure([]string{epKey})
 						WriteUpstreamErrorResponse(w, err, ExtractUpstreamErrorMessage(err), failStatusCode)
 						return
@@ -475,9 +449,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				triedKeys = append(triedKeys, key)
 			}
 
-			// 检查是否有已恢复的端点（非流路径的第二个端点来源，同样要滤掉 stream_only）
-			recoveredEndpoints := filterStreamOnlyEndpoints(retryMgr.GetRecoveredEndpointsInChannel(triedKeys))
-			recoveredEndpoints = filterClaudeModelEndpoints(rh.forwarder, recoveredEndpoints, bodyBytes)
+			// 检查是否有已恢复的端点（非流路径的第二个端点来源）
+			recoveredEndpoints := filterClaudeModelEndpoints(rh.forwarder, retryMgr.GetRecoveredEndpointsInChannel(triedKeys), bodyBytes)
 			recoveredEndpoints, _ = filterCredentialGroupDailyCostLimits(ctx, rh.usageTracker, recoveredEndpoints)
 			if len(recoveredEndpoints) > 0 {
 				slog.Info(fmt.Sprintf("🔄 [auto_wait恢复重试] [%s] 发现 %d 个已恢复端点，按优先级顺序重试",
@@ -523,13 +496,16 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 						return
 					}
 
-					// 重试失败，记录日志并继续下一个
-					if resp != nil {
+					// 重试失败：非 2xx 响应要保留状态码和正文，耗尽后透传的才是这次真实的上游响应
+					if err == nil && resp != nil {
+						err = newEndpointErrorFromResponse(resp, ep.Config.URL+r.URL.Path)
+					} else if resp != nil {
 						if closeErr := resp.Body.Close(); closeErr != nil {
 							slog.Warn(fmt.Sprintf("⚠️ [auto_wait响应体关闭失败] [%s] 端点: %s, Close错误: %v",
 								connID, ep.Config.Name, closeErr))
 						}
 					}
+					lastErr = err
 					slog.Warn(fmt.Sprintf("⚠️ [auto_wait恢复重试失败] [%s] 端点 %s 重试失败: %v",
 						connID, epKey, err))
 				}
@@ -655,8 +631,9 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 	if err != nil {
 		lifecycleManager.HandleError(fmt.Errorf("failed to process response: %w", err))
 		slog.Error("Failed to process response body", "request_id", connID, "error", err)
-		// 此时尚未 WriteHeader，可以安全返回错误状态码
-		lifecycleManager.FailRequest("response_read_error", err.Error(), http.StatusBadGateway)
+		// 上游 HTTP 层已响应过（2xx），只是正文没读完：追踪记它的真实状态码；
+		// 此时尚未 WriteHeader，客户端收到的是本地 502。
+		lifecycleManager.FailRequestWithUpstreamStatus("response_read_error", err.Error(), resp.StatusCode)
 		WriteUpstreamErrorResponse(w, nil, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -670,7 +647,7 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		lifecycleManager.HandleError(fmt.Errorf("failed to write response: %w", err))
 		slog.Error("Failed to write response to client", "request_id", connID, "error", err)
 		// 🔧 [修复] 2025-12-11: 写入失败时必须终结请求，否则会滞留在内存热池
-		lifecycleManager.FailRequest("response_write_error", err.Error(), resp.StatusCode)
+		lifecycleManager.FailRequestWithUpstreamStatus("response_write_error", err.Error(), resp.StatusCode)
 		return
 	}
 	lifecycleManager.MarkOutputSent()
@@ -682,7 +659,7 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 	if r.URL.Path == "/v1/messages/count_tokens" {
 		slog.Debug(fmt.Sprintf("🔍 [路径过滤] [%s] 跳过count_tokens端点的Token解析", connID))
 		// count_tokens端点不需要Token解析，直接完成请求
-		lifecycleManager.CompleteRequest(nil)
+		lifecycleManager.CompleteRequestWithUpstreamStatus(nil, resp.StatusCode)
 		rh.endpointManager.MarkEndpointRequestSuccess(ep)
 		return
 	}
@@ -697,13 +674,13 @@ func (rh *RegularHandler) processSuccessResponse(_ context.Context, w http.Respo
 		if modelName != "unknown" && modelName != "" {
 			lifecycleManager.SetModelWithComparison(modelName, "常规响应解析")
 		}
-		lifecycleManager.CompleteRequest(tokenUsage)
+		lifecycleManager.CompleteRequestWithUpstreamStatus(tokenUsage, resp.StatusCode)
 		rh.endpointManager.MarkEndpointRequestSuccess(ep)
 		slog.Info(fmt.Sprintf("✅ [常规请求Token完成] [%s] 端点: %s, 模型: %s, 输入: %d, 输出: %d",
 			connID, endpointName, modelName, tokenUsage.InputTokens, tokenUsage.OutputTokens))
 	} else {
 		// 处理非Token响应
-		lifecycleManager.HandleNonTokenResponse(string(responseBytes))
+		lifecycleManager.HandleNonTokenResponseWithUpstreamStatus(string(responseBytes), resp.StatusCode)
 		rh.endpointManager.MarkEndpointRequestSuccess(ep)
 		slog.Info(fmt.Sprintf("✅ [常规请求完成] [%s] 端点: %s, 响应类型: %s",
 			connID, endpointName, modelName))
@@ -751,17 +728,4 @@ func (rh *RegularHandler) tryExtractTokensFromHttpError(resp *http.Response, lif
 // 支持运行时配置热更新，确保设置变更能立即生效
 func (rh *RegularHandler) UpdateConfig(cfg *config.Config) {
 	rh.config = cfg
-}
-
-// filterStreamOnlyEndpoints 从端点列表中移除仅支持流式的端点。
-// 常规（非流式）请求不应路由到 stream_only=true 的端点，
-// 以避免提供商因请求类型不匹配而拒绝服务。
-func filterStreamOnlyEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
-	filtered := endpoints[:0:0] // 复用底层数组，避免额外分配
-	for _, ep := range endpoints {
-		if !ep.Config.StreamOnly {
-			filtered = append(filtered, ep)
-		}
-	}
-	return filtered
 }

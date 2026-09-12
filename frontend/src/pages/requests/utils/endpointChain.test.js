@@ -47,6 +47,12 @@ test('parseChainNode keeps structured endpoint error details', () => {
   assert.equal(node.error, '{"error":{"message":"quota exceeded"}}');
 });
 
+test('parseChainNode never surfaces the internal failure_reason classification as an error', () => {
+  const node = parseChainNode({ hop: 1, endpoint: 'Ark API', failure_reason: 'endpoint_exhausted' });
+
+  assert.equal(node.error, '');
+});
+
 test('parseEndpointChain supports legacy transfer path strings', () => {
   const chain = parseEndpointChain('Claude::default::Ark API -> Claude::backup::AWSQ');
 

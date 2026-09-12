@@ -3,12 +3,15 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"ai-relay-forwarder/internal/tracking"
 
 	"github.com/andybalholm/brotli"
 )
@@ -121,6 +124,22 @@ func TestIsRetryableStatus(t *testing.T) {
 				t.Errorf("IsRetryableStatus(%d) = %v, expected %v", tc.statusCode, result, tc.expected)
 			}
 		})
+	}
+}
+
+// TestLocalFailureBodyFallsBackToReason 没有上游正文时，客户端只收到 Relay 的失败分类标识，不收编造的说明。
+func TestLocalFailureBodyFallsBackToReason(t *testing.T) {
+	if got := localFailureBody("no_supported_model_endpoint", ""); got != "no_supported_model_endpoint" {
+		t.Fatalf("localFailureBody without upstream message = %q, want reason token", got)
+	}
+	if got := localFailureBody("endpoint_exhausted", "dial tcp: i/o timeout"); got != "dial tcp: i/o timeout" {
+		t.Fatalf("localFailureBody must keep the real transport error, got %q", got)
+	}
+
+	recorder := httptest.NewRecorder()
+	WriteUpstreamErrorResponse(recorder, nil, localFailureBody("no_supported_model_endpoint", ""), http.StatusBadRequest)
+	if recorder.Code != http.StatusBadRequest || recorder.Body.String() != "no_supported_model_endpoint" {
+		t.Fatalf("local rejection = %d %q, want non-retryable 400 with reason token", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -369,8 +388,9 @@ func TestNewEndpointErrorFromResponse_DecompressesCompressedBody(t *testing.T) {
 			if string(err.Body) != expectedBody {
 				t.Fatalf("expected decoded body %q, got %q", expectedBody, string(err.Body))
 			}
-			if got := ExtractUpstreamErrorMessage(err); got != expectedBody {
-				t.Fatalf("expected extracted message %q, got %q", expectedBody, got)
+			wantMessage := expectedBody
+			if got := ExtractUpstreamErrorMessage(err); got != wantMessage {
+				t.Fatalf("expected extracted message %q, got %q", wantMessage, got)
 			}
 		})
 	}
@@ -392,8 +412,9 @@ func TestNewEndpointErrorFromResponse_FallsBackToRawBodyWhenDecompressFails(t *t
 	if !bytes.Equal(err.Body, rawBody) {
 		t.Fatalf("body = %q, want original bytes %q", err.Body, rawBody)
 	}
-	if got := ExtractUpstreamErrorMessage(err); got != string(rawBody) {
-		t.Fatalf("extracted body = %q, want original %q", got, rawBody)
+	wantMessage := string(rawBody)
+	if got := ExtractUpstreamErrorMessage(err); got != wantMessage {
+		t.Fatalf("extracted body = %q, want %q", got, wantMessage)
 	}
 }
 
@@ -408,7 +429,7 @@ func TestWriteUpstreamErrorResponsePassesThroughEndpointError(t *testing.T) {
 			"Retry-After":      []string{"15"},
 			"X-Upstream-Trace": []string{"trace-123"},
 		},
-		URL:         "https://upstream.example/v1/messages",
+		URL: "https://upstream.example/v1/messages",
 	}
 
 	WriteUpstreamErrorResponse(recorder, err, "fallback should not be used", http.StatusBadGateway)
@@ -461,11 +482,82 @@ func TestExtractUpstreamErrorMessageDoesNotTruncate(t *testing.T) {
 
 	got := ExtractUpstreamErrorMessage(&EndpointError{StatusCode: 500, Body: longBody})
 
-	if got != string(longBody) {
-		t.Fatalf("expected provider body verbatim (len %d), got len %d", len(longBody), len(got))
+	want := string(longBody)
+	if got != want {
+		t.Fatalf("expected complete provider error (len %d), got len %d", len(want), len(got))
 	}
 	if strings.Contains(got, "truncated") {
 		t.Fatalf("message should not carry a truncation suffix, got tail %q", got[len(got)-40:])
+	}
+}
+
+type bufferedBodyStub struct{ body []byte }
+
+func (s bufferedBodyStub) ProcessStreamWithRetry(context.Context, *http.Response) (*tracking.TokenUsage, string, error) {
+	return nil, "", nil
+}
+func (s bufferedBodyStub) HasSentContent() bool         { return false }
+func (s bufferedBodyStub) HasWrittenResponse() bool     { return false }
+func (s bufferedBodyStub) BufferedUpstreamBody() []byte { return s.body }
+
+// TestUpstreamStreamFailurePassesThroughRawSSEVerbatim
+// 上游 200 + SSE error 先于任何输出到达：耗尽后客户端收到的必须是那次真实的 200、头和原始事件字节。
+func TestUpstreamStreamFailurePassesThroughRawSSEVerbatim(t *testing.T) {
+	raw := []byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Upstream-Marker": []string{"sse-200"}},
+	}
+
+	err := upstreamStreamFailure(resp, bufferedBodyStub{body: raw}, "https://upstream.example/v1/messages")
+	recorder := httptest.NewRecorder()
+	WriteUpstreamErrorResponse(recorder, err, "relay fallback", http.StatusBadGateway)
+
+	if GetStatusCodeFromError(err, nil) != http.StatusOK || recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d (tracking %d), want upstream 200", recorder.Code, GetStatusCodeFromError(err, nil))
+	}
+	if recorder.Header().Get("X-Upstream-Marker") != "sse-200" || recorder.Body.String() != string(raw) {
+		t.Fatalf("expected upstream headers and raw SSE verbatim, got %q body=%q", recorder.Header(), recorder.Body.String())
+	}
+	if got, want := ExtractUpstreamErrorMessage(err), string(raw); got != want {
+		t.Fatalf("tracking detail must preserve raw upstream body, got %q want %q", got, want)
+	}
+}
+
+func TestExtractUpstreamErrorMessagePreservesRawBody(t *testing.T) {
+	testCases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "empty upstream body",
+			err:  &EndpointError{StatusCode: http.StatusForbidden},
+			want: "",
+		},
+		{
+			name: "legacy status prefix is not duplicated",
+			err:  &EndpointError{StatusCode: http.StatusForbidden, Body: []byte("HTTP 403: access denied")},
+			want: "HTTP 403: access denied",
+		},
+		{
+			name: "ordinary error keeps original text",
+			err:  errors.New("dial tcp 127.0.0.1:4031: connect: connection refused"),
+			want: "dial tcp 127.0.0.1:4031: connect: connection refused",
+		},
+		{
+			name: "endpoint without a real status keeps body",
+			err:  &EndpointError{Body: []byte("transport wrapper")},
+			want: "transport wrapper",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExtractUpstreamErrorMessage(tc.err); got != tc.want {
+				t.Fatalf("ExtractUpstreamErrorMessage() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

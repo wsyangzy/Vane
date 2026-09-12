@@ -215,7 +215,6 @@ type EndpointConfig struct {
 	Headers              map[string]string
 	SupportsCountTokens  bool  // 是否支持count_tokens端点
 	Enabled              *bool // 是否激活为代理端点（SQLite模式），默认: true
-	StreamOnly           bool  // 仅支持流式请求（非流请求不会路由到此端点）
 }
 
 // TokenConfig Token 配置项，用于多 Token 切换功能

@@ -47,7 +47,6 @@ type EndpointRecord struct {
 
 	// 功能支持
 	SupportsCountTokens bool `json:"supports_count_tokens"` // 是否支持 count_tokens
-	StreamOnly          bool `json:"stream_only"`           // 仅支持流式请求（非流请求不会路由到此端点）
 
 	// 成本倍率
 	CostMultiplier                float64                         `json:"cost_multiplier"`
@@ -128,7 +127,7 @@ func (s *SQLiteEndpointStore) BeginTx(ctx context.Context) (*sql.Tx, error) {
 
 const endpointRecordColumns = `id, channel, COALESCE(credential_group_id, 0), name, url, token, api_key, headers,
 	priority, failover_enabled, cooldown_seconds, timeout_seconds,
-	skip_health_check, supports_count_tokens, COALESCE(stream_only, 0),
+	skip_health_check, supports_count_tokens,
 	cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 	cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
 	COALESCE(model_multipliers, '[]'),
@@ -185,18 +184,18 @@ func (s *SQLiteEndpointStore) Create(ctx context.Context, record *EndpointRecord
 			INSERT INTO endpoints (
 				channel, credential_group_id, name, url, token, api_key, headers,
 				priority, failover_enabled, cooldown_seconds, timeout_seconds,
-				skip_health_check, supports_count_tokens, stream_only,
+				skip_health_check, supports_count_tokens,
 				cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 				cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
 				model_multipliers,
 				enabled
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`
 
 	result, err := s.getQuerier().ExecContext(ctx, query,
 		record.Channel, nullInt64IfZero(record.CredentialGroupID), record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
 		record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
-		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens), boolToInt(record.StreamOnly),
+		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 		record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
 		modelMultipliersJSON,
@@ -373,7 +372,7 @@ func (s *SQLiteEndpointStore) updateByIDLocked(ctx context.Context, record *Endp
 			UPDATE endpoints SET
 				channel = ?, credential_group_id = ?, name = ?, url = ?, token = ?, api_key = ?, headers = ?,
 				priority = ?, failover_enabled = ?, cooldown_seconds = ?, timeout_seconds = ?,
-				skip_health_check = ?, supports_count_tokens = ?, stream_only = ?,
+				skip_health_check = ?, supports_count_tokens = ?,
 				cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?, cache_read_cost_multiplier = ?,
 			model_multipliers = ?,
@@ -384,7 +383,7 @@ func (s *SQLiteEndpointStore) updateByIDLocked(ctx context.Context, record *Endp
 	result, err := s.getQuerier().ExecContext(ctx, query,
 		record.Channel, nullInt64IfZero(record.CredentialGroupID), record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
 		record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
-		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens), boolToInt(record.StreamOnly),
+		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 		record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
 		encodeEndpointModelMultipliers(record.ModelMultipliers),
@@ -416,7 +415,7 @@ func (s *SQLiteEndpointStore) updateByChannelAndNameLocked(ctx context.Context, 
 			UPDATE endpoints SET
 				credential_group_id = ?, url = ?, token = ?, api_key = ?, headers = ?,
 				priority = ?, failover_enabled = ?, cooldown_seconds = ?, timeout_seconds = ?,
-				skip_health_check = ?, supports_count_tokens = ?, stream_only = ?,
+				skip_health_check = ?, supports_count_tokens = ?,
 			cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?,
 			cache_creation_cost_multiplier = ?, cache_creation_cost_multiplier_1h = ?, cache_read_cost_multiplier = ?,
 			model_multipliers = ?,
@@ -427,7 +426,7 @@ func (s *SQLiteEndpointStore) updateByChannelAndNameLocked(ctx context.Context, 
 	result, err := s.getQuerier().ExecContext(ctx, query,
 		nullInt64IfZero(record.CredentialGroupID), record.URL, record.Token, record.ApiKey, string(headersJSON),
 		record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
-		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens), boolToInt(record.StreamOnly),
+		boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 		record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 		record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
 		encodeEndpointModelMultipliers(record.ModelMultipliers),
@@ -487,12 +486,12 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 			INSERT INTO endpoints (
 				channel, credential_group_id, name, url, token, api_key, headers,
 				priority, failover_enabled, cooldown_seconds, timeout_seconds,
-				skip_health_check, supports_count_tokens, stream_only,
+				skip_health_check, supports_count_tokens,
 				cost_multiplier, input_cost_multiplier, output_cost_multiplier,
 				cache_creation_cost_multiplier, cache_creation_cost_multiplier_1h, cache_read_cost_multiplier,
 				model_multipliers,
 				enabled
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`
 
 	stmt, err := tx.PrepareContext(ctx, query)
@@ -533,7 +532,7 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 		_, err = stmt.ExecContext(ctx,
 			record.Channel, nullInt64IfZero(record.CredentialGroupID), record.Name, record.URL, record.Token, record.ApiKey, string(headersJSON),
 			record.Priority, boolToInt(record.FailoverEnabled), record.CooldownSeconds, record.TimeoutSeconds,
-			boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens), boolToInt(record.StreamOnly),
+			boolToInt(record.SkipHealthCheck), boolToInt(record.SupportsCountTokens),
 			record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier,
 			record.CacheCreationCostMultiplier, record.CacheCreationCostMultiplier1h, record.CacheReadCostMultiplier,
 			encodeEndpointModelMultipliers(record.ModelMultipliers),
@@ -705,14 +704,14 @@ func (s *SQLiteEndpointStore) scanEndpoint(row *sql.Row) (*EndpointRecord, error
 	var headersJSON string
 	var modelMultipliersJSON string
 	var cooldownSeconds sql.NullInt64
-	var failoverEnabled, skipHealthCheck, supportsCountTokens, streamOnly, enabled int
+	var failoverEnabled, skipHealthCheck, supportsCountTokens, enabled int
 	var createdAt, updatedAt string
 
 	err := row.Scan(
 		&record.ID, &record.Channel, &record.CredentialGroupID, &record.Name, &record.URL,
 		&record.Token, &record.ApiKey, &headersJSON,
 		&record.Priority, &failoverEnabled, &cooldownSeconds, &record.TimeoutSeconds,
-		&skipHealthCheck, &supportsCountTokens, &streamOnly,
+		&skipHealthCheck, &supportsCountTokens,
 		&record.CostMultiplier, &record.InputCostMultiplier, &record.OutputCostMultiplier,
 		&record.CacheCreationCostMultiplier, &record.CacheCreationCostMultiplier1h, &record.CacheReadCostMultiplier,
 		&modelMultipliersJSON,
@@ -743,7 +742,6 @@ func (s *SQLiteEndpointStore) scanEndpoint(row *sql.Row) (*EndpointRecord, error
 	record.FailoverEnabled = failoverEnabled == 1
 	record.SkipHealthCheck = skipHealthCheck == 1
 	record.SupportsCountTokens = supportsCountTokens == 1
-	record.StreamOnly = streamOnly == 1
 	record.Enabled = enabled == 1
 
 	// 解析时间
@@ -772,14 +770,14 @@ func (s *SQLiteEndpointStore) scanEndpointsWithArgs(ctx context.Context, query s
 		var headersJSON string
 		var modelMultipliersJSON string
 		var cooldownSeconds sql.NullInt64
-		var failoverEnabled, skipHealthCheck, supportsCountTokens, streamOnly, enabled int
+		var failoverEnabled, skipHealthCheck, supportsCountTokens, enabled int
 		var createdAt, updatedAt string
 
 		err := rows.Scan(
 			&record.ID, &record.Channel, &record.CredentialGroupID, &record.Name, &record.URL,
 			&record.Token, &record.ApiKey, &headersJSON,
 			&record.Priority, &failoverEnabled, &cooldownSeconds, &record.TimeoutSeconds,
-			&skipHealthCheck, &supportsCountTokens, &streamOnly,
+			&skipHealthCheck, &supportsCountTokens,
 			&record.CostMultiplier, &record.InputCostMultiplier, &record.OutputCostMultiplier,
 			&record.CacheCreationCostMultiplier, &record.CacheCreationCostMultiplier1h, &record.CacheReadCostMultiplier,
 			&modelMultipliersJSON,
@@ -807,7 +805,6 @@ func (s *SQLiteEndpointStore) scanEndpointsWithArgs(ctx context.Context, query s
 		record.FailoverEnabled = failoverEnabled == 1
 		record.SkipHealthCheck = skipHealthCheck == 1
 		record.SupportsCountTokens = supportsCountTokens == 1
-		record.StreamOnly = streamOnly == 1
 		record.Enabled = enabled == 1
 
 		// 解析时间

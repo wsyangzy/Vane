@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS endpoints (
 	timeout_seconds INTEGER DEFAULT 300,
 	skip_health_check INTEGER DEFAULT 0,
 	supports_count_tokens INTEGER DEFAULT 0,
-	stream_only INTEGER DEFAULT 0,
 	cost_multiplier REAL DEFAULT 1.0,
 	input_cost_multiplier REAL DEFAULT 1.0,
 	output_cost_multiplier REAL DEFAULT 1.0,
@@ -166,7 +165,7 @@ func TestEndpointService_FailoverActivationPreservesNewerManualChannel(t *testin
 		Health: config.HealthConfig{
 			Timeout: 20 * time.Millisecond,
 		},
-		Failover:         config.FailoverConfig{Enabled: true},
+		Failover: config.FailoverConfig{Enabled: true},
 	}
 	manager := endpoint.NewManager(cfg)
 	storeImpl := store.NewSQLiteEndpointStore(db)
@@ -1007,7 +1006,7 @@ func newEndpointRecoveryTestService(t *testing.T) (*EndpointService, *store.SQLi
 	t.Cleanup(cleanup)
 
 	cfg := &config.Config{
-		Health:           config.HealthConfig{Timeout: 20 * time.Millisecond},
+		Health: config.HealthConfig{Timeout: 20 * time.Millisecond},
 	}
 	manager := endpoint.NewManager(cfg)
 	t.Cleanup(manager.Stop)

@@ -295,7 +295,6 @@ go test -race ./internal/...
 **正确处理方式：**
 - 客户端发送流式请求 → 路由到支持流式的端点，原样透传
 - 客户端发送非流式请求 → 路由到支持非流式的端点，原样透传
-- 若端点配置了 `stream_only: true` → 该端点不参与非流式请求的端点选择
 
 ### Codex `model` 字段例外（v7.4+）
 
@@ -322,28 +321,6 @@ go test -race ./internal/...
 **实现方式：** `internal/privacy/json_walker.go` 用 `json.Decoder.InputOffset()` 定位字符串 token 的原始字节区间，只重写命中区间。扫描字段由 API path 白名单锁定，协议字段（`model`/`stream`/`tools`/`metadata`/`reasoning`）天然不参与匹配。
 
 **隐私数据红线：** 命中原文只允许出现在本地 `slog` 输出。禁止落库、禁止经 Wails API 回传前端 —— 否则隐私防护功能自身会变成一份客户信息的集中副本。`privacy.RuleHit.Matches` 用 `json:"-"` 在类型层面阻断序列化。
-
-### `stream_only` 端点配置（v8.7 起可在 UI 配置）
-
-部分中转商的 `/v1/messages` 仅支持 SSE 流式，非流式请求会被上游直接拒绝（典型表现为 Cloudflare 520，平均 2 秒即返回；少数走到 60 秒超时后 502）。由于这类请求多为 CLI 后台小任务，失败不会打断主对话，用户往往只能在请求追踪里发现。
-
-勾选端点的「仅支持流式」后，非流式请求不再路由到该端点：从「挨个端点重试、耗 2–60 秒后失败」变为立即跳过。
-
-**配置方式：** 端点管理页面 → 编辑端点 → 勾选「仅支持流式」。默认关闭，不影响既有端点。
-
-**实现位置：**
-- `internal/tracking/schema.sql` + `sqlite_adapter.go` → `endpoints.stream_only` 列与旧库迁移
-- `internal/providers/claude/store/endpoint.go` → `EndpointRecord.StreamOnly` 读写
-- `internal/providers/claude/service/endpoint.go` → 与 `config.EndpointConfig` 双向转换
-- `config/config.go` → `EndpointConfig.StreamOnly` 字段
-- `internal/providers/claude/proxy/handlers/regular.go` → `filterStreamOnlyEndpoints()` 过滤函数
-- `frontend/src/pages/providers/claude/components/EndpointForm.jsx` → UI 开关
-
-> ⚠️ **该配置存于 SQLite `endpoints` 表。** 所有运行配置均由代码默认值初始化，并通过设置页面和 SQLite 管理；应用不再读取或打包外部文本配置。
->
-> 该字段曾长期是死配置：结构体、过滤函数、单测俱在，但 DB 无此列、`service` 转换未赋值，导致 `ep.Config.StreamOnly` 恒为 false、过滤函数空转。新增此类跨层字段时务必逐层核对。
-
-**不受影响：** `/v1/messages/count_tokens` 虽也是非流式，但在 `handler.go` 的 `ServeHTTP` 开头即被拦截，走独立的 `CountTokensHandler`（按 `SupportsCountTokens` 选端点），不经过本过滤。
 
 ## 计费倍率解析约束（v8.7+）
 

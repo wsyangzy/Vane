@@ -152,8 +152,48 @@ func TestRecordRequestSuccessPersistsHTTPStatus(t *testing.T) {
 			statuses[detail.RequestID] = *detail.HTTPStatusCode
 		}
 	}
-	if statuses["req-success-default-status"] != 200 || statuses["req-success-real-status"] != 201 {
+	if statuses["req-success-default-status"] != 0 || statuses["req-success-real-status"] != 201 {
 		t.Fatalf("unexpected persisted success statuses: %#v", statuses)
+	}
+}
+
+func TestRecordRequestFinalFailurePersistsOnlyUpstreamStatus(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       10,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: time.Hour,
+		RetentionDays:   1,
+	})
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	defer tracker.Close()
+
+	tracker.RecordRequestStart("req-relay-failure-status", "127.0.0.1", "test-agent", "POST", "/v1/responses", false)
+	tracker.RecordRequestFinalFailure("req-relay-failure-status", "gpt-test", "failed", "network_error", "dial tcp: timeout", 10*time.Millisecond, 502, nil)
+	tracker.RecordRequestStart("req-upstream-failure-status", "127.0.0.1", "test-agent", "POST", "/v1/responses", false)
+	tracker.RecordRequestFinalFailureWithUpstreamStatus("req-upstream-failure-status", "gpt-test", "failed", "server_error", `{"error":"upstream"}`, 10*time.Millisecond, 503, nil)
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatalf("flush tracker: %v", err)
+	}
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &QueryOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	statuses := make(map[string]*int, len(details))
+	for _, detail := range details {
+		statuses[detail.RequestID] = detail.HTTPStatusCode
+	}
+	if statuses["req-relay-failure-status"] != nil {
+		t.Fatalf("Relay fallback status should be hidden, got %v", *statuses["req-relay-failure-status"])
+	}
+	if statuses["req-upstream-failure-status"] == nil || *statuses["req-upstream-failure-status"] != 503 {
+		t.Fatalf("upstream status should be preserved, got %v", statuses["req-upstream-failure-status"])
 	}
 }
 

@@ -73,6 +73,9 @@ type EndpointManager struct {
 	failureDetails map[int64]EndpointFailureDetail
 	latencies      map[int64]int64
 	strategyType   string
+	// preferredEndpointID 记录当前活跃渠道内上一次请求成功的端点，下一次请求从它开始（对齐 Claude 侧）。
+	// ponytail: 单值而非 per-channel map，Reload 时重置；需要跨渠道保留首选时再升级为 map。
+	preferredEndpointID int64
 
 	// 活跃端点变更回调（由 App 注入，用于发送 Wails 事件刷新前端 UI）
 	onActiveChanged func()
@@ -200,6 +203,7 @@ func (m *EndpointManager) Reload() error {
 		m.mu.Lock()
 		m.activeChannel = nil
 		m.endpoints = nil
+		m.preferredEndpointID = 0
 		m.mu.Unlock()
 		m.logger.Warn("无活跃 Codex 渠道，端点列表已清空")
 		return nil
@@ -215,6 +219,8 @@ func (m *EndpointManager) Reload() error {
 	m.mu.Lock()
 	m.activeChannel = channel
 	m.endpoints = endpoints
+	// 端点列表重建后，旧的成功端点提示可能已不再适用（与 Claude 端点同步时清空语义一致）。
+	m.preferredEndpointID = 0
 	// 健康检查覆盖所有参与转移的渠道，不能按当前活跃渠道裁剪全局端点状态。
 	m.mu.Unlock()
 
@@ -397,7 +403,7 @@ func (m *EndpointManager) GetNextEndpointForModel(requestedModel string, failedI
 	}
 
 	if len(candidates) > 0 {
-		sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies)
+		sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies, m.preferredEndpointID)
 		return candidates[0], nil
 	}
 
@@ -428,7 +434,7 @@ func (m *EndpointManager) GetPrimaryEndpointForModel(requestedModel string, skip
 		candidates = append(candidates, e)
 	}
 	if len(candidates) > 0 {
-		sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies)
+		sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies, m.preferredEndpointID)
 		return candidates[0], nil
 	}
 	return nil, fmt.Errorf("无可用 Codex 端点")
@@ -485,6 +491,25 @@ func (m *EndpointManager) RecordLatency(endpointID int64, ms int64) {
 	m.mu.Unlock()
 }
 
+// MarkEndpointRequestSuccess 记录刚完成请求的端点，让下一次请求从这条已验证可用的路由开始。
+func (m *EndpointManager) MarkEndpointRequestSuccess(endpointID int64) {
+	if endpointID <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.preferredEndpointID = endpointID
+	m.mu.Unlock()
+}
+
+// ClearPreferredEndpoint 撤销首选：端点在已输出后失败时不改健康状态，但下一次请求不该再优先撞它。
+func (m *EndpointManager) ClearPreferredEndpoint(endpointID int64) {
+	m.mu.Lock()
+	if m.preferredEndpointID == endpointID {
+		m.preferredEndpointID = 0
+	}
+	m.mu.Unlock()
+}
+
 // MarkUnhealthy 标记端点为不健康（仅靠健康检查恢复，不再使用冷却时间）
 func (m *EndpointManager) MarkUnhealthy(endpointID int64) {
 	m.MarkUnhealthyWithDetail(endpointID, 0, "")
@@ -501,6 +526,10 @@ func (m *EndpointManager) MarkUnhealthyWithDetail(endpointID int64, statusCode i
 	_, wasUnhealthy := m.unhealthyMap[endpointID]
 	oldDetail, hadDetail := m.failureDetails[endpointID]
 	m.unhealthyMap[endpointID] = true
+	// 首选端点失败即失效，避免下一次请求继续优先撞它。
+	if m.preferredEndpointID == endpointID {
+		m.preferredEndpointID = 0
+	}
 	if statusCode > 0 || reason != "" {
 		m.failureDetails[endpointID] = EndpointFailureDetail{StatusCode: statusCode, Reason: reason}
 	}
@@ -669,10 +698,15 @@ func sortCodexEndpoints(endpoints []*CodexEndpoint) {
 	})
 }
 
-func sortCodexEndpointCandidates(endpoints []*CodexEndpoint, strategyType string, latencies map[int64]int64) {
+// sortCodexEndpointCandidates 请求时的候选排序：上次成功端点 → 凭证分组顺序 → 延迟（仅 fastest）→ 优先级。
+// preferredID 为 0 表示无首选。
+func sortCodexEndpointCandidates(endpoints []*CodexEndpoint, strategyType string, latencies map[int64]int64, preferredID int64) {
 	sort.Slice(endpoints, func(i, j int) bool {
 		left := endpoints[i]
 		right := endpoints[j]
+		if preferredID > 0 && (left.ID == preferredID) != (right.ID == preferredID) {
+			return left.ID == preferredID
+		}
 		if left.CredentialGroupOrder != right.CredentialGroupOrder {
 			return left.CredentialGroupOrder < right.CredentialGroupOrder
 		}

@@ -124,8 +124,44 @@ func TestRequestDetailToRecordUsesEndpointChainAsHistoricalRetryFloor(t *testing
 	if record.RetryCount != 1 {
 		t.Fatalf("retry count = %d, want historical floor 1", record.RetryCount)
 	}
-	if record.HTTPStatus != 200 {
-		t.Fatalf("completed historical HTTP status = %d, want 200", record.HTTPStatus)
+	if record.HTTPStatus != 0 {
+		t.Fatalf("completed historical HTTP status = %d, want hidden status", record.HTTPStatus)
+	}
+}
+
+func TestRequestDetailToRecordShowsOnlyProviderHTTPStatus(t *testing.T) {
+	provider := 200
+	if got := requestDetailToRecord(tracking.RequestDetail{
+		Status:               "failed",
+		HTTPStatusCode:       &provider,
+		HTTPStatusIsUpstream: true,
+		FailureReason:        "server_error",
+		LastFailureReason:    `{"error":"upstream"}`,
+	}); got.HTTPStatus != 200 || !got.HTTPStatusIsUpstream {
+		t.Fatalf("provider HTTP result = %#v, want status 200 with upstream origin", got)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status string
+		reason string
+		code   int
+	}{
+		{name: "client cancellation", status: "cancelled", reason: "client_cancelled", code: 499},
+		{name: "network fallback", status: "failed", reason: "network_error", code: 502},
+		{name: "endpoint fallback", status: "failed", reason: "endpoint_exhausted", code: 503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code := tc.code
+			got := requestDetailToRecord(tracking.RequestDetail{
+				Status:         tc.status,
+				HTTPStatusCode: &code,
+				FailureReason:  tc.reason,
+			})
+			if got.HTTPStatus != 0 || got.HTTPStatusIsUpstream {
+				t.Fatalf("relay result = %#v, want hidden status", got)
+			}
+		})
 	}
 }
 

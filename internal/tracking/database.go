@@ -422,14 +422,12 @@ func (ut *UsageTracker) buildUpdateQuery(event RequestEvent) (string, []interfac
 		query := fmt.Sprintf(`UPDATE request_logs SET
 			status = ?,
 			retry_count = ?,
-			http_status_code = ?,
 			updated_at = %s
 		WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
 
 		args := []interface{}{
 			data.Status,
 			data.RetryCount,
-			data.HTTPStatus,
 			event.RequestID,
 		}
 
@@ -442,7 +440,6 @@ func (ut *UsageTracker) buildUpdateQuery(event RequestEvent) (string, []interfac
 		group_name = ?,
 		status = ?,
 		retry_count = ?,
-		http_status_code = ?,
 		updated_at = %s
 	WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
 
@@ -451,7 +448,6 @@ func (ut *UsageTracker) buildUpdateQuery(event RequestEvent) (string, []interfac
 		data.GroupName,
 		data.Status,
 		data.RetryCount,
-		data.HTTPStatus,
 		event.RequestID,
 	}
 
@@ -496,8 +492,23 @@ func (ut *UsageTracker) buildFlexibleUpdateQuery(event RequestEvent) (string, []
 		args = append(args, *opts.RetryCount)
 	}
 	if opts.HttpStatus != nil {
+		isUpstream := opts.HttpStatusIsUpstream != nil && *opts.HttpStatusIsUpstream
+		httpStatus, isUpstream := normalizeUpstreamHTTPStatus(*opts.HttpStatus, isUpstream)
 		setParts = append(setParts, "http_status_code = ?")
-		args = append(args, *opts.HttpStatus)
+		if isUpstream {
+			args = append(args, httpStatus)
+		} else {
+			args = append(args, nil)
+		}
+		setParts = append(setParts, "http_status_is_upstream = ?")
+		args = append(args, isUpstream)
+	}
+	if opts.HttpStatusIsUpstream != nil && opts.HttpStatus == nil {
+		setParts = append(setParts, "http_status_is_upstream = ?")
+		args = append(args, *opts.HttpStatusIsUpstream)
+		if !*opts.HttpStatusIsUpstream {
+			setParts = append(setParts, "http_status_code = NULL")
+		}
 	}
 	if opts.ModelName != nil {
 		setParts = append(setParts, "model_name = ?")
@@ -578,7 +589,6 @@ func (ut *UsageTracker) buildSuccessQuery(event RequestEvent) (string, []interfa
 		cache_read_cost_usd = ?,
 		total_cost_usd = ?,
 		failure_reason = ?,
-		http_status_code = CASE WHEN http_status_code IS NULL OR http_status_code = 0 THEN 200 ELSE http_status_code END,
 		status = 'completed',
 		updated_at = %s
 	WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
@@ -620,6 +630,12 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 	errorDetail, _ := data["error_detail"].(string)
 	duration, _ := data["duration"].(time.Duration)
 	httpStatus, _ := data["http_status"].(int)
+	httpStatusIsUpstream, _ := data["http_status_is_upstream"].(bool)
+	httpStatus, httpStatusIsUpstream = normalizeUpstreamHTTPStatus(httpStatus, httpStatusIsUpstream)
+	var persistedHTTPStatus any
+	if httpStatusIsUpstream {
+		persistedHTTPStatus = httpStatus
+	}
 	modelName, _ := data["model_name"].(string) // 🔧 [修复] 2025-12-11: 读取模型名
 	inputTokens := data["input_tokens"]
 	outputTokens := data["output_tokens"]
@@ -644,6 +660,7 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			failure_reason = NULL,
 			last_failure_reason = NULL,
 			http_status_code = ?,
+			http_status_is_upstream = ?,
 			model_name = COALESCE(NULLIF(NULLIF(?, ''), 'unknown'), model_name),
 			input_tokens = COALESCE(?, input_tokens),
 			output_tokens = COALESCE(?, output_tokens),
@@ -660,9 +677,10 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 		args = []interface{}{
 			event.Timestamp,
 			duration.Milliseconds(),
-			reason,     // cancel_reason
-			httpStatus, // http_status_code
-			modelName,  // 🔧 [修复] 2025-12-11: model_name (空字符串和 'unknown' 都会被忽略)
+			reason, // cancel_reason
+			persistedHTTPStatus,
+			httpStatusIsUpstream,
+			modelName, // 🔧 [修复] 2025-12-11: model_name (空字符串和 'unknown' 都会被忽略)
 			inputTokens,
 			outputTokens,
 			reasoningTokens,
@@ -683,6 +701,7 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			failure_reason = ?,
 			last_failure_reason = ?,
 			http_status_code = ?,
+			http_status_is_upstream = ?,
 			model_name = COALESCE(NULLIF(NULLIF(?, ''), 'unknown'), model_name),
 			input_tokens = COALESCE(?, input_tokens),
 			output_tokens = COALESCE(?, output_tokens),
@@ -701,8 +720,9 @@ func (ut *UsageTracker) buildFinalFailureQuery(event RequestEvent) (string, []in
 			duration.Milliseconds(),
 			reason,      // failure_reason
 			errorDetail, // last_failure_reason
-			httpStatus,  // http_status_code
-			modelName,   // 🔧 [修复] 2025-12-11: model_name (空字符串和 'unknown' 都会被忽略)
+			persistedHTTPStatus,
+			httpStatusIsUpstream,
+			modelName, // 🔧 [修复] 2025-12-11: model_name (空字符串和 'unknown' 都会被忽略)
 			inputTokens,
 			outputTokens,
 			reasoningTokens,
@@ -824,6 +844,11 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 	if !ok {
 		return fmt.Errorf("invalid update event data type")
 	}
+	httpStatus, httpStatusIsUpstream := normalizeUpstreamHTTPStatus(data.HTTPStatus, data.HTTPStatusIsUpstream)
+	var persistedHTTPStatus any
+	if httpStatusIsUpstream {
+		persistedHTTPStatus = httpStatus
+	}
 
 	// 如果端点名和组名都为空，只更新状态相关字段
 	if data.EndpointName == "" && data.GroupName == "" {
@@ -831,13 +856,15 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 			status = ?,
 			retry_count = ?,
 			http_status_code = ?,
+			http_status_is_upstream = ?,
 			updated_at = %s
 		WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
 
 		result, err := tx.ExecContext(ctx, query,
 			data.Status,
 			data.RetryCount,
-			data.HTTPStatus,
+			persistedHTTPStatus,
+			httpStatusIsUpstream,
 			event.RequestID)
 
 		if err != nil {
@@ -876,6 +903,7 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 		status = ?,
 		retry_count = ?,
 		http_status_code = ?,
+		http_status_is_upstream = ?,
 		updated_at = %s
 	WHERE request_id = ?`, ut.adapter.BuildDateTimeNow())
 
@@ -884,7 +912,8 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 		data.GroupName,
 		data.Status,
 		data.RetryCount,
-		data.HTTPStatus,
+		persistedHTTPStatus,
+		httpStatusIsUpstream,
 		event.RequestID)
 
 	if err != nil {
@@ -899,8 +928,8 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 
 	if rowsAffected == 0 {
 		// 记录不存在，使用适配器构建INSERT OR REPLACE查询
-		columns := []string{"request_id", "endpoint_name", "group_name", "status", "retry_count", "http_status_code", "start_time", "environment", "updated_at"}
-		placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", ut.adapter.BuildDateTimeNow()}
+		columns := []string{"request_id", "endpoint_name", "group_name", "status", "retry_count", "http_status_code", "http_status_is_upstream", "start_time", "environment", "updated_at"}
+		placeholders := []string{"?", "?", "?", "?", "?", "?", "?", "?", "?", ut.adapter.BuildDateTimeNow()}
 		insertQuery := ut.adapter.BuildInsertOrReplaceQuery("request_logs", columns, placeholders)
 
 		_, err = tx.ExecContext(ctx, insertQuery,
@@ -909,7 +938,8 @@ func (ut *UsageTracker) updateRequestStatus(ctx context.Context, tx *sql.Tx, eve
 			data.GroupName,
 			data.Status,
 			data.RetryCount,
-			data.HTTPStatus,
+			persistedHTTPStatus,
+			httpStatusIsUpstream,
 			event.Timestamp,
 			ut.environment)
 	}

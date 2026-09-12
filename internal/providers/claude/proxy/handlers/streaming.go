@@ -99,7 +99,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 	if !ok {
 		slog.Error(fmt.Sprintf("🚨 [Flusher不支持] [%s] 当前 ResponseWriter 未实现 http.Flusher，拒绝流式请求", connID))
 		lifecycleManager.FailRequest("flusher_unsupported",
-			"ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
+			"ResponseWriter does not support http.Flusher")
 		WriteUpstreamErrorResponse(w, nil, "ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
 		return
 	}
@@ -111,7 +111,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
 			reason, message, status = PrivacyFailureReason(policyErr), policyErr.Message, policyErr.StatusCode
 		}
-		lifecycleManager.FailRequest(reason, message, status)
+		lifecycleManager.FailRequest(reason, message)
 		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
 			WritePrivacyPolicyErrorResponse(w, policyErr)
 		} else {
@@ -245,7 +245,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, previousErr)
 				return
 			}
-			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "no_supported_model_endpoint", http.StatusServiceUnavailable)
+			// 模型能力是静态配置，重试无意义：用不可重试的 400，避免 Claude Code 按 5xx 重试 10 次放大记录。
+			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "no_supported_model_endpoint", http.StatusBadRequest)
 			return
 		}
 		noHealthyErr := fmt.Errorf("no healthy endpoints available")
@@ -386,7 +387,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						// 任意流字节一旦写出，HTTP 响应就已提交，不能再切换端点或追加自定义错误。
 						if processor.HasWrittenResponse() {
 							lifecycleManager.RecordTokensForFailedRequest(finalTokenUsage, failureReason)
-							lifecycleManager.FailRequest(failureReason, err.Error(), resp.StatusCode)
+							lifecycleManager.FailRequestWithUpstreamStatus(failureReason, err.Error(), resp.StatusCode)
 							*r = *r.WithContext(withFinalStatusCode(r.Context(), resp.StatusCode))
 							sh.endpointManager.ClearEndpointsRequestFailure([]string{epKey})
 							return
@@ -398,8 +399,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						slog.Warn(fmt.Sprintf("⚠️ [流截断记录部分Token] [%s] 端点: %s, failure_reason: %s, 模型: %s, 将继续重试其他端点",
 							connID, ep.Config.Name, failureReason, parsedModelName))
 
-						// 将此错误视为端点失败，触发故障转移
-						lastErr = err
+						// 将此错误视为端点失败，触发故障转移；保留上游这次真实的 2xx + 原始正文供耗尽后透传
+						lastErr = upstreamStreamFailure(resp, processor, ep.Config.URL+r.URL.Path)
 						endpointSuccess = false
 						break // 当前端点未写出响应，直接尝试下一个端点
 					}
@@ -414,7 +415,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						if finalTokenUsage != nil {
 							lifecycleManager.RecordTokensForFailedRequest(finalTokenUsage, "stream_error")
 						}
-						lifecycleManager.FailRequest("stream_error", err.Error(), resp.StatusCode)
+						lifecycleManager.FailRequestWithUpstreamStatus("stream_error", err.Error(), resp.StatusCode)
 						*r = *r.WithContext(withFinalStatusCode(r.Context(), resp.StatusCode))
 						slog.Warn(fmt.Sprintf("🛑 [流式处理失败] [%s] 端点: %s, 模型: %s, 错误: %v",
 							connID, ep.Config.Name, modelName, err))
@@ -424,7 +425,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					if finalTokenUsage != nil {
 						lifecycleManager.RecordPartialTokens(finalTokenUsage, "stream_error", ep.Config.Name)
 					}
-					lastErr = err
+					lastErr = upstreamStreamFailure(resp, processor, ep.Config.URL+r.URL.Path)
 					endpointSuccess = false
 					break
 				}
@@ -436,10 +437,10 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					if modelName != "unknown" && modelName != "" {
 						lifecycleManager.SetModelWithComparison(modelName, "流式响应解析")
 					}
-					lifecycleManager.CompleteRequest(finalTokenUsage)
+					lifecycleManager.CompleteRequestWithUpstreamStatus(finalTokenUsage, resp.StatusCode)
 				} else {
 					// 没有Token信息，使用HandleNonTokenResponse处理
-					lifecycleManager.HandleNonTokenResponse("")
+					lifecycleManager.HandleNonTokenResponseWithUpstreamStatus("", resp.StatusCode)
 				}
 				sh.endpointManager.MarkEndpointRequestSuccess(ep)
 				return
@@ -521,9 +522,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: suspend:" 数据行
 
 					// 🚀 [端点自愈] 使用新的端点恢复等待方法，能区分成功/超时/取消
-					// requireNonStream=false：流式请求可以落到 stream_only 端点
 					failedEndpointKey := epKey
-					result := sh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey, false)
+					result := sh.sharedSuspensionManager.WaitForEndpointRecoveryWithResult(ctx, connID, failedEndpointKey)
 					switch result {
 					case SuspensionSuccess:
 						// 🔥 [递归修复] 2025-12-26: 检查重启次数限制，防止栈溢出
@@ -531,8 +531,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
 							if lifecycleManager.HasOutputContent() {
 								slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 端点恢复成功但已发送内容，禁止重试", connID))
-								lifecycleManager.FailRequest("output_sent_no_retry",
-									ExtractUpstreamErrorMessage(lastErr), GetStatusCodeFromError(lastErr, lastResp))
+								failRequest(lifecycleManager, "output_sent_no_retry",
+									ExtractUpstreamErrorMessage(lastErr), lastErr, lastResp)
 								return
 							}
 
@@ -561,7 +561,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					case SuspensionTimeout:
 						// 🔧 [修复] 添加生命周期状态更新
 						currentAttemptCount := lifecycleManager.GetAttemptCount()
-						lifecycleManager.UpdateStatus("error", currentAttemptCount, http.StatusBadGateway)
+						lifecycleManager.UpdateStatus("error", currentAttemptCount, 0)
 						slog.Warn(fmt.Sprintf("⏰ [挂起超时] [%s] 等待端点恢复或组切换超时", connID))
 						sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "suspension_timeout", http.StatusGatewayTimeout)
 						return
@@ -580,7 +580,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				if lastErr != nil && failReason == "" {
 					failReason = lastErr.Error()
 				}
-				sh.endpointManager.SetEndpointLastRequestFail(epKey, failStatusCode, failReason)
+				sh.endpointManager.SetEndpointLastRequestFail(epKey, GetStatusCodeFromError(lastErr, lastResp), failReason)
 
 				if decision.SwitchEndpoint {
 					// 移除渠道内端点冷却，使用 triedEndpoints 追踪
@@ -595,7 +595,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 使用新的FailRequest方法标记最终失败。尚未写出流字节时，
 					// 可以安全地按普通 HTTP 响应透传上游状态和正文。
 					failureMessage := ExtractUpstreamErrorMessage(lastErr)
-					lifecycleManager.FailRequest(failureReason, failureMessage, failStatusCode)
+					failRequest(lifecycleManager, failureReason, failureMessage, lastErr, lastResp)
 					sh.endpointManager.ClearEndpointsRequestFailure([]string{epKey})
 
 					// 终止重试，不再把提供商错误包装成自定义 SSE 事件。
@@ -662,7 +662,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 						statusCode = getDefaultStatusCodeForFinalStatus(lastDecision.FinalStatus)
 					}
 					failureMessage := ExtractUpstreamErrorMessage(lastErr)
-					lifecycleManager.FailRequest(failureReason, failureMessage, statusCode)
+					failRequest(lifecycleManager, failureReason, failureMessage, lastErr, lastResp)
 					sh.endpointManager.ClearEndpointsRequestFailure([]string{epKey})
 					clearStreamingHeaders(w)
 					WriteUpstreamErrorResponse(w, lastErr, failureMessage, statusCode)
@@ -791,11 +791,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 								if finalTokenUsage != nil {
 									lifecycleManager.RecordTokensForFailedRequest(finalTokenUsage, "stream_error")
 								}
-								lifecycleManager.FailRequest("stream_error", streamErr.Error(), resp.StatusCode)
+								lifecycleManager.FailRequestWithUpstreamStatus("stream_error", streamErr.Error(), resp.StatusCode)
 								*r = *r.WithContext(withFinalStatusCode(r.Context(), resp.StatusCode))
 								return
 							}
-							lastErr = streamErr
+							lastErr = upstreamStreamFailure(resp, processor, ep.Config.URL+r.URL.Path)
 							continue
 						}
 
@@ -804,9 +804,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							if modelName != "unknown" && modelName != "" {
 								lifecycleManager.SetModelWithComparison(modelName, "流式响应解析")
 							}
-							lifecycleManager.CompleteRequest(finalTokenUsage)
+							lifecycleManager.CompleteRequestWithUpstreamStatus(finalTokenUsage, resp.StatusCode)
 						} else {
-							lifecycleManager.HandleNonTokenResponse("")
+							lifecycleManager.HandleNonTokenResponseWithUpstreamStatus("", resp.StatusCode)
 						}
 						sh.endpointManager.MarkEndpointRequestSuccess(ep)
 						return
@@ -868,8 +868,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				// 🔥 [重复计费防护] 2025-12-26: 检查是否已发送内容
 				if lifecycleManager.HasOutputContent() {
 					slog.Warn(fmt.Sprintf("🚫 [重复计费防护] [%s] 故障转移成功但已发送内容，禁止重试", connID))
-					lifecycleManager.FailRequest("output_sent_no_retry",
-						ExtractUpstreamErrorMessage(lastErr), GetStatusCodeFromError(lastErr, lastResp))
+					failRequest(lifecycleManager, "output_sent_no_retry",
+						ExtractUpstreamErrorMessage(lastErr), lastErr, lastResp)
 					sh.endpointManager.ClearEndpointsRequestFailure(failedEndpointNames)
 					return
 				}

@@ -131,6 +131,18 @@ func IsRetryableStatus(statusCode int) bool {
 	}
 }
 
+// upstreamStreamFailure 上游 2xx 后、首字节写出前流失败（SSE error / 截断）：
+// 把缓冲的原始正文连同状态、头一起装进 EndpointError，耗尽后与 HTTP 错误走同一条透传通道。
+func upstreamStreamFailure(resp *http.Response, processor StreamProcessor, targetURL string) *EndpointError {
+	return &EndpointError{
+		StatusCode:  resp.StatusCode,
+		Body:        processor.BufferedUpstreamBody(),
+		ContentType: resp.Header.Get("Content-Type"),
+		Headers:     resp.Header.Clone(),
+		URL:         targetURL,
+	}
+}
+
 // GetStatusCodeFromError 只返回 HTTP 层实际提供的状态码。
 // 普通 error 文本不携带可信的提供商响应，不能从其中猜测状态码。
 func GetStatusCodeFromError(err error, resp *http.Response) int {
@@ -180,11 +192,10 @@ func WriteUpstreamErrorResponse(w http.ResponseWriter, err error, fallbackMsg st
 	}
 }
 
-// ExtractUpstreamErrorMessage 从错误中提取上游提供商的原始错误信息。
-// 如果是 EndpointError 且携带原始响应体，返回响应体文本；
-// 否则返回 error.Error() 原始错误描述（如网络超时信息）。
+// ExtractUpstreamErrorMessage 从错误中提取上游提供商的完整原始错误信息。
+// HTTP 状态码单独由 EndpointError.StatusCode 传递；这里不拼接 Relay 自己的文本，
+// 以免把生成的 "HTTP nnn:" 前缀误当成提供商原文。
 //
-// 原文一律原样返回，不截断、不改写、不加前缀——展示的就该是服务商说了什么。
 // 长度上限由读取侧的 maxUpstreamErrorBodyBytes 兜底，这里不再二次裁剪。
 func ExtractUpstreamErrorMessage(err error) string {
 	if err == nil {
@@ -192,10 +203,12 @@ func ExtractUpstreamErrorMessage(err error) string {
 	}
 	var epErr *EndpointError
 	if errors.As(err, &epErr) {
-		if len(epErr.Body) == 0 {
+		if epErr == nil {
 			return ""
 		}
-		return toStorableText(string(epErr.Body))
+
+		body := toStorableText(string(epErr.Body))
+		return body
 	}
 	return toStorableText(err.Error())
 }

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
     -- 状态信息 (更新: 生命周期状态与错误原因分离 - 2025-09-28)
     status TEXT NOT NULL DEFAULT 'pending', -- 生命周期状态: pending/forwarding/processing/retry/suspended/completed/failed/cancelled
     http_status_code INTEGER,               -- HTTP状态码
+    http_status_is_upstream BOOLEAN NOT NULL DEFAULT 0, -- 状态码是否来自真实上游HTTP响应
     retry_count INTEGER DEFAULT 0,          -- 重试次数
 
     -- 失败信息 (状态机重构新增字段 2025-09-28)
@@ -197,7 +198,6 @@ CREATE TABLE IF NOT EXISTS endpoints (
     -- ========== 功能支持 ==========
     supports_count_tokens INTEGER DEFAULT 0,        -- 是否支持 count_tokens 端点
     skip_health_check INTEGER DEFAULT 0,            -- 跳过健康检查 (, 1=跳过, 0=正常检查)
-    stream_only INTEGER DEFAULT 0,                  -- 仅支持流式请求 (1=非流请求不路由到此端点, 0=正常)
 
     -- ========== 成本倍率 ==========
     cost_multiplier REAL DEFAULT 1.0,               -- 总成本倍率

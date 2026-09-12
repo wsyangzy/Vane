@@ -440,7 +440,7 @@ func (m *Manager) TriggerRequestFailoverWithLoopCount(failedEndpointNames []stri
 
 // TriggerChannelSwitchWithoutFailure switches channels without changing endpoint health/request-failure state.
 // 用于「端点本身健康、只是接不了这一条请求」的场景：分组日限额（会自动恢复）、
-// 仅流式端点遇到非流请求（是静态配置，不是故障）。把这两类记成端点失败会误伤其他请求。
+// 分组声明的模型能力不匹配（是静态配置，不是故障）。把这两类记成端点失败会误伤其他请求。
 func (m *Manager) TriggerChannelSwitchWithoutFailure(currentChannel string, excludeChannels []string) (string, error) {
 	if m == nil || m.config == nil {
 		return "", fmt.Errorf("配置未初始化")

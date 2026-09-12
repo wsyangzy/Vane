@@ -1098,7 +1098,6 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		Timeout:              time.Duration(record.TimeoutSeconds) * time.Second,
 		SupportsCountTokens:  record.SupportsCountTokens,
 		SkipHealthCheck:      record.SkipHealthCheck,
-		StreamOnly:           record.StreamOnly,
 	}
 
 	// 设置 Enabled（是否作为代理端点）
@@ -1242,7 +1241,6 @@ func (s *EndpointService) configToRecord(cfg config.EndpointConfig) *store.Endpo
 		SkipHealthCheck:     cfg.SkipHealthCheck,
 		TimeoutSeconds:      int(cfg.Timeout.Seconds()),
 		SupportsCountTokens: cfg.SupportsCountTokens,
-		StreamOnly:          cfg.StreamOnly,
 		CostMultiplier:      1.0,
 		Enabled:             true,
 	}

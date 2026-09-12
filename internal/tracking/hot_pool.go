@@ -21,24 +21,25 @@ type ActiveRequest struct {
 	Provider    string    `json:"provider"` // 提供商标识: claude/codex
 
 	// 可变状态（频繁更新）
-	Status             string `json:"status"`               // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
-	Channel            string `json:"channel"`              // 渠道标签（来自端点配置）
-	EndpointName       string `json:"endpoint_name"`        // 当前使用的端点
-	EndpointChain      string `json:"endpoint_chain"`       // 端点尝试链路（简略）
-	GroupName          string `json:"group_name"`           // 当前使用的组
-	RetryCount         int    `json:"retry_count"`          // 重试次数
-	HTTPStatus         int    `json:"http_status"`          // HTTP状态码
-	ModelName          string `json:"model_name"`           // 模型名称
-	OriginalModelName  string `json:"original_model_name"`  // 改写前的原始请求模型
-	ModelRewriteSource string `json:"model_rewrite_source"` // 模型改写来源：mapping/channel_model
-	ModelRewriteTarget string `json:"model_rewrite_target"` // 改写后的目标模型
-	ReasoningEffort    string `json:"reasoning_effort"`     // Codex reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
-	ServiceTier        string `json:"service_tier"`         // 服务档位: auto/default/batch/flex/priority/fast
-	PrivacyRedacted    bool   `json:"privacy_redacted"`     // 请求体发送上游前是否已脱敏
-	PrivacySummary     string `json:"privacy_redaction_summary"`
-	FailureReason      string `json:"failure_reason"`      // 失败原因分类
-	LastFailureReason  string `json:"last_failure_reason"` // 最后一次失败的原始详情
-	CancelReason       string `json:"cancel_reason"`       // 取消原因
+	Status               string `json:"status"`                  // pending/forwarding/processing/completed/failed/cancelled/suspended/awaiting_endpoint
+	Channel              string `json:"channel"`                 // 渠道标签（来自端点配置）
+	EndpointName         string `json:"endpoint_name"`           // 当前使用的端点
+	EndpointChain        string `json:"endpoint_chain"`          // 端点尝试链路（简略）
+	GroupName            string `json:"group_name"`              // 当前使用的组
+	RetryCount           int    `json:"retry_count"`             // 重试次数
+	HTTPStatus           int    `json:"http_status"`             // HTTP状态码
+	HTTPStatusIsUpstream bool   `json:"http_status_is_upstream"` // 状态码是否来自真实上游响应
+	ModelName            string `json:"model_name"`              // 模型名称
+	OriginalModelName    string `json:"original_model_name"`     // 改写前的原始请求模型
+	ModelRewriteSource   string `json:"model_rewrite_source"`    // 模型改写来源：mapping/channel_model
+	ModelRewriteTarget   string `json:"model_rewrite_target"`    // 改写后的目标模型
+	ReasoningEffort      string `json:"reasoning_effort"`        // Codex reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
+	ServiceTier          string `json:"service_tier"`            // 服务档位: auto/default/batch/flex/priority/fast
+	PrivacyRedacted      bool   `json:"privacy_redacted"`        // 请求体发送上游前是否已脱敏
+	PrivacySummary       string `json:"privacy_redaction_summary"`
+	FailureReason        string `json:"failure_reason"`      // 失败原因分类
+	LastFailureReason    string `json:"last_failure_reason"` // 最后一次失败的原始详情
+	CancelReason         string `json:"cancel_reason"`       // 取消原因
 
 	// Token 累积（流式请求实时更新）
 	InputTokens              int64  `json:"input_tokens"`

@@ -194,7 +194,6 @@ func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, http
 				GroupName:    &groupName,
 				Status:       &status,
 				RetryCount:   &actualRetryCount,
-				HttpStatus:   &httpStatus,
 				ModelName:    &currentModel,
 			}
 			rlm.usageTracker.RecordRequestUpdate(requestID, opts)
@@ -206,7 +205,6 @@ func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, http
 				GroupName:    &groupName,
 				Status:       &status,
 				RetryCount:   &actualRetryCount,
-				HttpStatus:   &httpStatus,
 			}
 			rlm.usageTracker.RecordRequestUpdate(requestID, opts)
 		}
@@ -266,6 +264,16 @@ func (rlm *RequestLifecycleManager) notifyStatusChange(status string, retryCount
 // 调用 RecordRequestComplete 记录请求完成，包含Token使用信息和成本计算
 // 这是所有请求完成的统一入口，确保架构一致性
 func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage) {
+	rlm.completeRequest(tokens, 0, false)
+}
+
+// CompleteRequestWithUpstreamStatus records a successful response status only
+// when it came from the real upstream HTTP response.
+func (rlm *RequestLifecycleManager) CompleteRequestWithUpstreamStatus(tokens *tracking.TokenUsage, httpStatus int) {
+	rlm.completeRequest(tokens, httpStatus, true)
+}
+
+func (rlm *RequestLifecycleManager) completeRequest(tokens *tracking.TokenUsage, httpStatus int, httpStatusIsUpstream bool) {
 	endpointName := rlm.stateManager.GetEndpointName()
 	if !rlm.stateManager.MarkCompletedOnce() {
 		rlm.logger.Debug(fmt.Sprintf("⏭️ [完成忽略] [%s] 请求已终态，忽略完成更新",
@@ -325,12 +333,20 @@ func (rlm *RequestLifecycleManager) CompleteRequest(tokens *tracking.TokenUsage)
 		}
 
 		// 记录请求成功完成到使用跟踪器（包括状态、耗时、Token、成本）
-		rlm.usageTracker.RecordRequestSuccess(requestID, modelName, tokens, duration)
+		if httpStatusIsUpstream {
+			rlm.usageTracker.RecordRequestSuccessWithHTTPStatus(requestID, modelName, tokens, duration, httpStatus)
+		} else {
+			rlm.usageTracker.RecordRequestSuccess(requestID, modelName, tokens, duration)
+		}
 		rlm.logger.Info(fmt.Sprintf("✅ Request completed [%s]", requestID))
 	}
 
 	// 调用统一的状态通知方法
-	rlm.notifyStatusChange("completed", rlm.stateManager.GetRetryCount(), 200)
+	statusCode := 0
+	if httpStatusIsUpstream {
+		statusCode = httpStatus
+	}
+	rlm.notifyStatusChange("completed", rlm.stateManager.GetRetryCount(), statusCode)
 }
 
 // CompleteRequestWithQuality 完成请求并标记数据质量问题
@@ -396,7 +412,7 @@ func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.
 	}
 
 	// 调用统一的状态通知方法
-	rlm.notifyStatusChange("completed", rlm.stateManager.GetRetryCount(), 200)
+	rlm.notifyStatusChange("completed", rlm.stateManager.GetRetryCount(), 0)
 }
 
 // RecordPartialTokens 记录部分失败的Token消耗（用于流截断等场景）
@@ -453,6 +469,16 @@ func (rlm *RequestLifecycleManager) RecordPartialTokens(tokens *tracking.TokenUs
 // 🎯 [SRP重构] 使用 stateManager 获取信息
 // 用于处理不包含Token信息的响应（如健康检查、配置查询等）
 func (rlm *RequestLifecycleManager) HandleNonTokenResponse(responseContent string) {
+	rlm.handleNonTokenResponse(responseContent, 0, false)
+}
+
+// HandleNonTokenResponseWithUpstreamStatus preserves the real status for a
+// successful response that does not contain token usage information.
+func (rlm *RequestLifecycleManager) HandleNonTokenResponseWithUpstreamStatus(responseContent string, httpStatus int) {
+	rlm.handleNonTokenResponse(responseContent, httpStatus, true)
+}
+
+func (rlm *RequestLifecycleManager) handleNonTokenResponse(responseContent string, httpStatus int, httpStatusIsUpstream bool) {
 	// 分析响应内容，确定合适的模型名
 	modelName := rlm.analyzeResponseType(responseContent)
 
@@ -465,7 +491,11 @@ func (rlm *RequestLifecycleManager) HandleNonTokenResponse(responseContent strin
 	}
 
 	// 完成请求记录
-	rlm.CompleteRequest(emptyTokens)
+	if httpStatusIsUpstream {
+		rlm.CompleteRequestWithUpstreamStatus(emptyTokens, httpStatus)
+	} else {
+		rlm.CompleteRequest(emptyTokens)
+	}
 
 	requestID := rlm.stateManager.GetRequestID()
 	rlm.logger.Info(fmt.Sprintf("🎯 [非Token响应] [%s] 模型: %s, 内容长度: %d字节",
@@ -857,11 +887,14 @@ func (rlm *RequestLifecycleManager) getModelNameForCost() string {
 	return modelName
 }
 
-// FailRequest 标记请求最终失败
+// FailRequest 标记请求最终失败。本地失败没有上游状态，因此不接受也不记录 HTTP 状态码。
 // 🎯 [SRP重构] 使用 stateManager 获取信息
 // Phase 3新增: 专门用于标记最终失败的方法
 // 设置状态为"failed"并记录失败原因和错误详情
-func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail string, httpStatus int) {
+func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail string) {
+	// Local failures have no provider response. Keep the protocol fallback out
+	// of lifecycle state, events, and request tracking; only the explicit
+	// WithUpstreamStatus path may persist an HTTP status.
 	duration := rlm.stateManager.GetDuration()
 	modelName := rlm.getModelNameForCost()
 	requestID := rlm.stateManager.GetRequestID()
@@ -874,13 +907,28 @@ func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail strin
 
 	// 🚀 [架构重构] 使用统一的最终失败记录方法，一次性更新所有相关字段
 	if rlm.usageTracker != nil {
-		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", failureReason, errorDetail, duration, httpStatus, nil)
+		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", failureReason, errorDetail, duration, 0, nil)
 	}
 
-	rlm.logger.Error(fmt.Sprintf("❌ [请求最终失败] [%s] 端点: %s, 原因: %s, 状态码: %d, 耗时: %dms",
-		requestID, endpointName, failureReason, httpStatus, duration.Milliseconds()))
+	rlm.logger.Error(fmt.Sprintf("❌ [请求最终失败] [%s] 端点: %s, 原因: %s, 耗时: %dms",
+		requestID, endpointName, failureReason, duration.Milliseconds()))
 
 	// 调用统一的状态通知方法
+	rlm.notifyStatusChange("failed", rlm.stateManager.GetRetryCount(), 0)
+}
+
+// FailRequestWithUpstreamStatus records a failure whose status was carried by
+// a real upstream HTTP response. Relay-generated control statuses stay hidden.
+func (rlm *RequestLifecycleManager) FailRequestWithUpstreamStatus(failureReason, errorDetail string, httpStatus int) {
+	duration := rlm.stateManager.GetDuration()
+	modelName := rlm.getModelNameForCost()
+	requestID := rlm.stateManager.GetRequestID()
+	if !rlm.stateManager.MarkCompletedOnce() {
+		return
+	}
+	if rlm.usageTracker != nil {
+		rlm.usageTracker.RecordRequestFinalFailureWithUpstreamStatus(requestID, modelName, "failed", failureReason, errorDetail, duration, httpStatus, nil)
+	}
 	rlm.notifyStatusChange("failed", rlm.stateManager.GetRetryCount(), httpStatus)
 }
 
@@ -902,7 +950,7 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 
 	// 🚀 [架构重构] 使用统一的最终失败记录方法，一次性更新所有相关字段
 	if rlm.usageTracker != nil {
-		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", cancelReason, "", duration, 499, tokens)
+		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", cancelReason, "", duration, 0, tokens)
 	}
 
 	if tokens != nil {
@@ -915,7 +963,7 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 	}
 
 	// 调用统一的状态通知方法
-	rlm.notifyStatusChange("cancelled", rlm.stateManager.GetRetryCount(), 499)
+	rlm.notifyStatusChange("cancelled", rlm.stateManager.GetRetryCount(), 0)
 }
 
 // GetLastError 获取最后一次错误

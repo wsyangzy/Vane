@@ -176,9 +176,10 @@ type RequestDetail struct {
 	IsStreaming             bool   `json:"is_streaming"` // 是否为流式请求
 	Provider                string `json:"provider"`     // 提供商标识: claude/codex
 
-	Status         string `json:"status"`
-	HTTPStatusCode *int   `json:"http_status_code"`
-	RetryCount     int    `json:"retry_count"`
+	Status               string `json:"status"`
+	HTTPStatusCode       *int   `json:"http_status_code"`
+	HTTPStatusIsUpstream bool   `json:"http_status_is_upstream"`
+	RetryCount           int    `json:"retry_count"`
 
 	// 状态机重构新增字段 - 错误原因分离
 	FailureReason     string `json:"failure_reason"`      // 失败原因类型
@@ -505,9 +506,9 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 	if db == nil {
 		return nil, fmt.Errorf("read database not initialized")
 	}
-	optionalColumns := make(map[string]bool, 3)
+	optionalColumns := make(map[string]bool, 4)
 	columnRows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')
-		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot')`)
+		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot', 'http_status_is_upstream')`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
 	}
@@ -532,6 +533,12 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		}
 		return "''"
 	}
+	optionalBoolExpr := func(column string) string {
+		if optionalColumns[column] {
+			return "COALESCE(" + column + ", 0)"
+		}
+		return "0"
+	}
 
 	query := `SELECT id, request_id,
 		COALESCE(client_ip, '') as client_ip,
@@ -551,7 +558,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		COALESCE(privacy_redaction_summary, '') as privacy_redaction_summary,
 		COALESCE(is_streaming, false) as is_streaming,
 		COALESCE(provider, 'claude') as provider,
-		status, http_status_code, retry_count,
+		status, CASE WHEN ` + optionalBoolExpr("http_status_is_upstream") + ` = 1 THEN http_status_code ELSE NULL END as http_status_code, ` + optionalBoolExpr("http_status_is_upstream") + ` as http_status_is_upstream, retry_count,
 		COALESCE(failure_reason, '') as failure_reason,
 		COALESCE(last_failure_reason, '') as last_failure_reason,
 		COALESCE(cancel_reason, '') as cancel_reason,
@@ -687,7 +694,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary,
 			&detail.IsStreaming,
 			&detail.Provider,
-			&detail.Status, &detail.HTTPStatusCode, &detail.RetryCount,
+			&detail.Status, &detail.HTTPStatusCode, &detail.HTTPStatusIsUpstream, &detail.RetryCount,
 			&detail.FailureReason, &detail.LastFailureReason, &detail.CancelReason,
 			&detail.InputTokens, &detail.OutputTokens,
 			&detail.ReasoningTokens, &detail.BillableOutputTokens, &detail.BillingOutputTokenSource, &detail.BillingRuleSnapshot,

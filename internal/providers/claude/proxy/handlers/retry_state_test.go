@@ -78,23 +78,6 @@ func TestNextFailoverLoopStateStartsNewLoopForSameChannel(t *testing.T) {
 	}
 }
 
-func TestFilterStreamOnlyEndpoints(t *testing.T) {
-	input := []*endpoint.Endpoint{
-		{Config: config.EndpointConfig{Name: "regular-a", StreamOnly: false}},
-		{Config: config.EndpointConfig{Name: "stream-only", StreamOnly: true}},
-		{Config: config.EndpointConfig{Name: "regular-b", StreamOnly: false}},
-	}
-
-	filtered := filterStreamOnlyEndpoints(input)
-
-	if len(filtered) != 2 {
-		t.Fatalf("len(filtered) = %d, want 2", len(filtered))
-	}
-	if filtered[0].Config.Name != "regular-a" || filtered[1].Config.Name != "regular-b" {
-		t.Fatalf("filtered endpoints = [%s %s], want [regular-a regular-b]", filtered[0].Config.Name, filtered[1].Config.Name)
-	}
-}
-
 func TestEndpointKeysDeduplicatesAndSkipsInvalidEndpoints(t *testing.T) {
 	endpoints := []*endpoint.Endpoint{
 		nil,

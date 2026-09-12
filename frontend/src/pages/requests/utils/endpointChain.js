@@ -25,7 +25,8 @@ export const parseChainNode = (item, hop) => {
     const credentialGroup = item.credential_group || item.credentialGroup || item.group_name || item.group || '';
     const endpoint = item.endpoint || '';
     const statusCode = Number(item.status_code ?? item.statusCode ?? item.http_status ?? item.httpStatus ?? 0) || 0;
-    const error = item.error || item.error_message || item.errorMessage || item.failure_reason || item.failureReason || '';
+    // 只认后端写入链路节点的原始错误文本；failure_reason 是 Relay 内部分类，不做展示。
+    const error = item.error || item.error_message || item.errorMessage || '';
     const raw = channel
       ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
       : endpoint;

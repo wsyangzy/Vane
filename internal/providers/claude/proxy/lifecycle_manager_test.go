@@ -152,6 +152,38 @@ func TestRequestLifecycleManager_IsCompleted(t *testing.T) {
 	}
 }
 
+func TestRequestLifecycleManager_UpstreamStatusProvenance(t *testing.T) {
+	upstream := NewRequestLifecycleManager(nil, nil, "test-upstream-status", nil)
+	upstream.CompleteRequestWithUpstreamStatus(nil, 204)
+	if got := upstream.GetFinalStatusCode(); got != 204 {
+		t.Fatalf("expected real upstream status 204, got %d", got)
+	}
+
+	local := NewRequestLifecycleManager(nil, nil, "test-local-success", nil)
+	local.CompleteRequest(nil)
+	if got := local.GetFinalStatusCode(); got != 0 {
+		t.Fatalf("local success must not invent HTTP 200, got %d", got)
+	}
+
+	localFailure := NewRequestLifecycleManager(nil, nil, "test-local-failure-status", nil)
+	localFailure.FailRequest("no_supported_model_endpoint", "")
+	if got := localFailure.GetFinalStatusCode(); got != 0 {
+		t.Fatalf("local failure must not record Relay HTTP 400, got %d", got)
+	}
+
+	localCancel := NewRequestLifecycleManager(nil, nil, "test-local-cancel-status", nil)
+	localCancel.CancelRequest("client disconnected", nil)
+	if got := localCancel.GetFinalStatusCode(); got != 0 {
+		t.Fatalf("client cancellation must not record Relay HTTP 499, got %d", got)
+	}
+
+	nonToken := NewRequestLifecycleManager(nil, nil, "test-non-token-upstream-status", nil)
+	nonToken.HandleNonTokenResponseWithUpstreamStatus("ok", 202)
+	if got := nonToken.GetFinalStatusCode(); got != 202 {
+		t.Fatalf("expected non-token upstream status 202, got %d", got)
+	}
+}
+
 func TestRequestLifecycleManager_GetStats(t *testing.T) {
 	requestID := "test-stats-606"
 	rlm := NewRequestLifecycleManager(nil, nil, requestID, nil)

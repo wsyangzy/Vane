@@ -751,7 +751,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			start_time, end_time, duration_ms, output_sent_at,
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
 			original_model_name, model_rewrite_source, model_rewrite_target, model_reasoning_effort, service_tier,
-			status, http_status_code, retry_count,
+			status, http_status_code, http_status_is_upstream, retry_count,
 			failure_reason, last_failure_reason, cancel_reason,
 			is_streaming, provider, environment, privacy_redacted, privacy_redaction_summary,
 			input_tokens, output_tokens,
@@ -782,6 +782,7 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			service_tier = excluded.service_tier,
 			status = excluded.status,
 			http_status_code = excluded.http_status_code,
+			http_status_is_upstream = excluded.http_status_is_upstream,
 			retry_count = excluded.retry_count,
 			failure_reason = excluded.failure_reason,
 			last_failure_reason = excluded.last_failure_reason,
@@ -831,6 +832,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 
 	for _, event := range events {
 		req := event.Request
+		httpStatus, httpStatusIsUpstream := normalizeUpstreamHTTPStatus(req.HTTPStatus, req.HTTPStatusIsUpstream)
+		var persistedHTTPStatus any
+		if httpStatusIsUpstream {
+			persistedHTTPStatus = httpStatus
+		}
 
 		// 计算分开的成本
 		costBreakdown := am.calculateCost(req)
@@ -871,7 +877,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			nullString(req.ReasoningEffort),
 			nullString(req.ServiceTier),
 			req.Status,
-			req.HTTPStatus,
+			persistedHTTPStatus,
+			httpStatusIsUpstream,
 			req.RetryCount,
 			nullString(req.FailureReason),
 			nullString(req.LastFailureReason),

@@ -48,9 +48,9 @@ func TestHandleStreamingReturnsCapacityErrorBeforeClientOutput(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 
-	streamErr := handler.handleStreaming(recorder, resp, "req-capacity", time.Now(), "gpt-5.4", "primary", "轮询", "CCTQ", 1)
-	if streamErr == nil {
-		t.Fatal("expected capacity stream error")
+	streamErr, served := handler.handleStreaming(recorder, resp, "req-capacity", time.Now(), "gpt-5.4", "primary", "轮询", "CCTQ", 1)
+	if streamErr == nil || served {
+		t.Fatalf("expected capacity stream error without served endpoint, got err=%v served=%v", streamErr, served)
 	}
 	if action := NewErrorClassifier().Classify(nil, streamErr); action != ActionFailover {
 		t.Fatalf("capacity 错误应切换端点，got %v", action)
@@ -60,6 +60,135 @@ func TestHandleStreamingReturnsCapacityErrorBeforeClientOutput(t *testing.T) {
 	}
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected recorder to remain unwritten default 200, got %d", recorder.Code)
+	}
+	restored, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read restored upstream stream body: %v", err)
+	}
+	if !strings.Contains(string(restored), `"response.failed"`) {
+		t.Fatalf("expected raw SSE failure event to be restored, got %q", restored)
+	}
+}
+
+func TestServeHTTPPreservesHTTP200AndRawSSEErrorAfterExhaustion(t *testing.T) {
+	const raw = "event: response.failed\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"capacity\"}}}\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Upstream-Marker", "sse-200")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(raw))
+	}))
+	defer upstream.Close()
+
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{{
+			ID:                  1,
+			CredentialGroupName: "default",
+			BaseURL:             upstream.URL,
+			APIKey:              "test-key",
+			FailoverEnabled:     true,
+			SkipHealthCheck:     true,
+		}},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+	handler := NewHandler(
+		manager,
+		time.Second,
+		config.RetryConfig{MaxAttempts: 1},
+		config.FailoverConfig{},
+		nil,
+		newTestLogger(),
+		nil,
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true}`))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected upstream HTTP 200 to be preserved, got %d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("X-Upstream-Marker"); got != "sse-200" {
+		t.Fatalf("expected upstream response header to be preserved, got %q", got)
+	}
+	if got := recorder.Body.String(); got != raw {
+		t.Fatalf("expected raw SSE failure payload %q, got %q", raw, got)
+	}
+}
+
+// 多端点转移链：首个端点给出 HTTP 200 + SSE 错误，后续端点只剩网络错误。
+// 耗尽后透传给客户端的必须仍是那次真实的上游响应，而不是 Relay 自造的 503。
+func TestServeHTTPKeepsLastRealUpstreamResponseAcrossNetworkErrorEndpoints(t *testing.T) {
+	const raw = "event: response.failed\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"capacity\"}}}\n\n"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Upstream-Marker", "sse-200")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(raw))
+	}))
+	defer upstream.Close()
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	dead.Close() // 连接拒绝：纯网络错误，没有任何上游响应
+
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{ID: 1, Name: "sse-error", BaseURL: upstream.URL, APIKey: "k", FailoverEnabled: true, SkipHealthCheck: true, Priority: 0},
+			{ID: 2, Name: "dead", BaseURL: dead.URL, APIKey: "k", FailoverEnabled: true, SkipHealthCheck: true, Priority: 1},
+		},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+	handler := NewHandler(manager, time.Second, config.RetryConfig{MaxAttempts: 1}, config.FailoverConfig{}, nil, newTestLogger(), nil)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true}`)))
+
+	if recorder.Code != http.StatusOK || recorder.Header().Get("X-Upstream-Marker") != "sse-200" || recorder.Body.String() != raw {
+		t.Fatalf("expected first endpoint's real 200 + raw SSE to survive later network errors, got %d %q", recorder.Code, recorder.Body.String())
+	}
+	if manager.preferredEndpointID != 0 {
+		t.Fatalf("no endpoint served the request, preferred must stay empty, got %d", manager.preferredEndpointID)
+	}
+}
+
+// 已向客户端输出后才收到 SSE 错误：请求按失败记录，端点不能成为下一次请求的首选。
+func TestTryEndpointCycleDoesNotPreferEndpointThatFailedAfterOutput(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"event: response.output_text.delta\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n" +
+				"event: response.failed\n" +
+				"data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"mid-stream\"}}}\n\n",
+		))
+	}))
+	defer upstream.Close()
+
+	manager := &EndpointManager{
+		endpoints:      []*CodexEndpoint{{ID: 1, Name: "flaky", BaseURL: upstream.URL, APIKey: "k", FailoverEnabled: true, SkipHealthCheck: true}},
+		unhealthyMap:   make(map[int64]bool),
+		failureDetails: make(map[int64]EndpointFailureDetail),
+		logger:         newTestLogger(),
+	}
+	manager.MarkEndpointRequestSuccess(1)
+	handler := NewHandler(manager, time.Second, config.RetryConfig{MaxAttempts: 1}, config.FailoverConfig{}, nil, newTestLogger(), nil)
+
+	body := []byte(`{"model":"gpt-5.5","stream":true}`)
+	recorder := httptest.NewRecorder()
+	var failedIDs []int64
+	var chain []chainNode
+	result := handler.tryEndpointCycle(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body))), body, "req-after-output", time.Now(), true, "CCTQ", "gpt-5.5", &failedIDs, &chain, new(int))
+
+	if !result.completed || recorder.Code != http.StatusOK {
+		t.Fatalf("response already streamed, expected completed 200, got %+v status=%d", result, recorder.Code)
+	}
+	if manager.preferredEndpointID != 0 {
+		t.Fatalf("endpoint that failed mid-stream must not be preferred, got %d", manager.preferredEndpointID)
 	}
 }
 
@@ -617,7 +746,7 @@ func TestServeHTTPRecoversFromInitiallyUnhealthyEndpointsBeforeExhaustion(t *tes
 	}
 }
 
-func TestTryEndpointCycleDoesNotCacheCredentialGroupFailureWithinTurn(t *testing.T) {
+func TestTryEndpointCyclePrefersRecentSuccessfulEndpointAcrossRequests(t *testing.T) {
 	var primaryAHits atomic.Int32
 	var primaryBHits atomic.Int32
 	var backupHits atomic.Int32
@@ -719,11 +848,11 @@ func TestTryEndpointCycleDoesNotCacheCredentialGroupFailureWithinTurn(t *testing
 
 	manager.ResetUnhealthy()
 	secondChain := run("req-turn-1-b")
-	if primaryAHits.Load() != 2 || primaryBHits.Load() != 2 || backupHits.Load() != 2 {
-		t.Fatalf("same turn must retry every endpoint after health state reset, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
+	if primaryAHits.Load() != 1 || primaryBHits.Load() != 1 || backupHits.Load() != 2 {
+		t.Fatalf("next request should prefer the recent successful endpoint, hits: primaryA=%d primaryB=%d backup=%d", primaryAHits.Load(), primaryBHits.Load(), backupHits.Load())
 	}
-	if len(secondChain) != 3 || secondChain[0].CredentialGroup != "主分组" || secondChain[1].CredentialGroup != "主分组" || secondChain[2].CredentialGroup != "备用分组" {
-		t.Fatalf("same turn must not skip the failed credential group, got chain: %#v", secondChain)
+	if len(secondChain) != 1 || secondChain[0].CredentialGroup != "备用分组" || secondChain[0].Endpoint != "国内-backup" {
+		t.Fatalf("next request should start from the previous successful endpoint, got chain: %#v", secondChain)
 	}
 }
 
@@ -771,9 +900,9 @@ func TestHandleStreamingRecordsSuccessWhenContextCanceledAfterCompletion(t *test
 	}
 	recorder := httptest.NewRecorder()
 
-	streamErr := handler.handleStreaming(recorder, resp, requestID, startTime, "gpt-5.5", "jp-node", "默认分组", "anyrouter", 1)
-	if streamErr != nil {
-		t.Fatalf("unexpected stream error: %v", streamErr)
+	streamErr, served := handler.handleStreaming(recorder, resp, requestID, startTime, "gpt-5.5", "jp-node", "默认分组", "anyrouter", 1)
+	if streamErr != nil || !served {
+		t.Fatalf("unexpected stream result: err=%v served=%v", streamErr, served)
 	}
 
 	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 1})

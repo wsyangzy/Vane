@@ -1101,7 +1101,6 @@ export class UpdateSettingInput {
 	    cooldown_seconds?: number;
 	    timeout_seconds: number;
 	    supports_count_tokens: boolean;
-	    stream_only: boolean;
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -1129,7 +1128,6 @@ export class UpdateSettingInput {
 	        this.cooldown_seconds = source["cooldown_seconds"];
 	        this.timeout_seconds = source["timeout_seconds"];
 	        this.supports_count_tokens = source["supports_count_tokens"];
-	        this.stream_only = source["stream_only"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];
@@ -1436,7 +1434,6 @@ export class UpdateSettingInput {
 	    cooldown_seconds?: number;
 	    timeout_seconds: number;
 	    supports_count_tokens: boolean;
-	    stream_only: boolean;
 	    cost_multiplier: number;
 	    input_cost_multiplier: number;
 	    output_cost_multiplier: number;
@@ -1481,7 +1478,6 @@ export class UpdateSettingInput {
 	        this.cooldown_seconds = source["cooldown_seconds"];
 	        this.timeout_seconds = source["timeout_seconds"];
 	        this.supports_count_tokens = source["supports_count_tokens"];
-	        this.stream_only = source["stream_only"];
 	        this.cost_multiplier = source["cost_multiplier"];
 	        this.input_cost_multiplier = source["input_cost_multiplier"];
 	        this.output_cost_multiplier = source["output_cost_multiplier"];
@@ -1683,6 +1679,7 @@ export class UpdateSettingInput {
 	    model: string;
 	    status: string;
 	    http_status: number;
+	    http_status_is_upstream: boolean;
 	    retry_count: number;
 	    failure_reason?: string;
 	    last_failure_reason?: string;
@@ -1729,6 +1726,7 @@ export class UpdateSettingInput {
 	        this.model = source["model"];
 	        this.status = source["status"];
 	        this.http_status = source["http_status"];
+	        this.http_status_is_upstream = source["http_status_is_upstream"];
 	        this.retry_count = source["retry_count"];
 	        this.failure_reason = source["failure_reason"];
 	        this.last_failure_reason = source["last_failure_reason"];

@@ -52,7 +52,7 @@ export const EndpointLatencyBadge = ({ ms, inScope = true, detail = false, ariaL
 
 export const EndpointRequestFailureBadge = ({ failCode, failReason, detail = false, hideWhenEmpty = false }) => {
   const code = Number(failCode || 0);
-  const hasCode = Number.isFinite(code) && code > 0;
+  const hasCode = Number.isFinite(code) && code >= 100 && code <= 599;
   const hasReason = !!failReason;
   if (hideWhenEmpty && !hasCode && !hasReason) return null;
 

@@ -12,7 +12,6 @@ test('Claude endpoint copy payload preserves channel, group and endpoint setting
     base_url: 'https://example.test',
     failover_enabled: false,
     skip_health_check: true,
-    stream_only: true,
     timeout_seconds: 45
   }, 'Claude A', 12), {
     channel: 'Claude A',
@@ -25,8 +24,7 @@ test('Claude endpoint copy payload preserves channel, group and endpoint setting
     skipHealthCheck: true,
     cooldownSeconds: null,
     timeoutSeconds: 45,
-    supportsCountTokens: false,
-    streamOnly: true
+    supportsCountTokens: false
   });
 });
 
