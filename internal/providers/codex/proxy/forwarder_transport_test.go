@@ -35,3 +35,17 @@ func TestForwarderUsesConfiguredTransport(t *testing.T) {
 		t.Fatalf("proxy = %v, want %s", got, proxyURL)
 	}
 }
+
+func TestStreamingForwarderUsesStreamingTransport(t *testing.T) {
+	cfg := &config.Config{Streaming: config.StreamingConfig{ResponseHeaderTimeout: 7 * time.Minute}}
+	forwarder := NewStreamingForwarder(slog.Default(), transport.NewProvider(cfg))
+
+	client, err := forwarder.clientForEndpoint(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr.ResponseHeaderTimeout != 7*time.Minute {
+		t.Fatalf("streaming forwarder did not use Streaming.ResponseHeaderTimeout: %+v", client.Transport)
+	}
+}

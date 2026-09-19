@@ -746,6 +746,9 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		// 请求历史固定每日维护并按自然月归档，不再暴露技术参数。
 		{CategoryRetention, "cleanup_interval"},
 		{CategoryRetention, "max_active_database_size_mb"},
+		// 响应头超时从隐藏的 streaming 分类移到可见的 request 分类；旧行连同其 60s 旧值一起丢弃，
+		// 新行按 300s 默认值种入（60s 正是导致 Codex 长上下文请求被断流重放的值）。
+		{CategoryStreaming, "response_header_timeout"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -877,8 +880,9 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 		// 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*store.SettingRecord{
 			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
-			{Category: CategoryRequest, Key: "suspend_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "挂起等待超时", Description: "普通挂起等待端点恢复/渠道切换的最大时间", DisplayOrder: 2},
-			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 3},
+			{Category: CategoryRequest, Key: "response_header_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "流式响应头超时", Description: "流式请求等待服务端首次响应头的超时时间（Claude 与 Codex 共用）。长上下文 + 高推理档位首包可能超过 60s；超时后请求不会重放", DisplayOrder: 2},
+			{Category: CategoryRequest, Key: "suspend_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "挂起等待超时", Description: "普通挂起等待端点恢复/渠道切换的最大时间", DisplayOrder: 3},
+			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 4},
 		}
 
 	case CategoryStreaming:
@@ -886,7 +890,6 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 			{Category: CategoryStreaming, Key: "heartbeat_interval", Value: "30s", ValueType: ValueTypeDuration, Label: "心跳间隔", Description: "流式连接心跳间隔", DisplayOrder: 1},
 			{Category: CategoryStreaming, Key: "read_timeout", Value: "10s", ValueType: ValueTypeDuration, Label: "读取超时", Description: "流式数据读取超时", DisplayOrder: 2},
 			{Category: CategoryStreaming, Key: "max_idle_time", Value: "120s", ValueType: ValueTypeDuration, Label: "最大空闲时间", Description: "流式连接最大空闲时间", DisplayOrder: 3},
-			{Category: CategoryStreaming, Key: "response_header_timeout", Value: "60s", ValueType: ValueTypeDuration, Label: "响应头超时", Description: "等待服务端首次响应头的超时时间", DisplayOrder: 4},
 		}
 
 	case CategoryAuth:

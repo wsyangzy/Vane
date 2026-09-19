@@ -165,8 +165,7 @@ func TestPauseGroupRestoresParticipationWhenAutomaticActivationFails(t *testing.
 		failChannel: "B",
 	}
 	cfg := &config.Config{
-		Failover:         config.FailoverConfig{Enabled: true},
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
+		Failover: config.FailoverConfig{Enabled: true},
 	}
 	manager := claudeendpoint.NewManager(cfg)
 	t.Cleanup(manager.Stop)
@@ -217,7 +216,7 @@ func TestUpdateChannelReturnsPriorityRuntimeSyncFailure(t *testing.T) {
 		},
 		listErr: fmt.Errorf("forced channel list failure"),
 	}
-	cfg := &config.Config{EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"}}
+	cfg := &config.Config{}
 	manager := claudeendpoint.NewManager(cfg)
 	t.Cleanup(manager.Stop)
 	app := &App{
@@ -252,7 +251,7 @@ func TestCreateChannelDoesNotReportFailureAfterPersistentRuntimeSyncError(t *tes
 		records: map[string]*claudestore.ChannelRecord{},
 		listErr: fmt.Errorf("forced channel list failure"),
 	}
-	cfg := &config.Config{EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"}}
+	cfg := &config.Config{}
 	manager := claudeendpoint.NewManager(cfg)
 	t.Cleanup(manager.Stop)
 	app := &App{

@@ -82,15 +82,15 @@ build.log
 
 # 废弃代码
 internal/tracking/deprecated/
-.gocache
-.gomodcache
+# 本地 Go 构建缓存（含 GOCACHE 指到仓库内的任何变体，如 .gocache-statusfix）
+.gocache*/
+.gomodcache*/
 docs/TODO.md
 
 # AI
 AGENTS.md
 CLAUDE.md
 .claude
-.trellis
 .opencode
 .agents
 .codex

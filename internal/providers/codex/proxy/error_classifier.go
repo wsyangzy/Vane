@@ -38,6 +38,7 @@ func NewErrorClassifier() *ErrorClassifier {
 //
 // 三态规则：
 //   - 网络错误（连接超时、DNS 失败等） → ActionRetry（瞬时，同端点重试）
+//   - 响应头超时                       → ActionFailFast（请求已被上游接收，重放只会重复计费）
 //   - HTTP 408/425                     → ActionRetry（瞬时超时类）
 //   - HTTP 5xx                         → ActionFailover（端点宕机，切换端点）
 //   - HTTP 401/402/403/404/409/410/429/451 → ActionFailover（端点或凭证分组级问题，切换端点/分组）
@@ -47,6 +48,12 @@ func (c *ErrorClassifier) Classify(resp *http.Response, err error) ErrorAction {
 		var streamErr *UpstreamStreamError
 		if errors.As(err, &streamErr) {
 			return classifyStreamError(streamErr)
+		}
+		// 响应头超时说明请求体已被上游完整接收并开始处理（额度已消耗），只是首包没在
+		// 期限内到达。重放同一份请求只会再消耗一次额度并加速触发上游限流，交给客户端
+		// 自己决定是否重试。HTTP/1 与 HTTP/2 的错误文本都含这一段。
+		if strings.Contains(err.Error(), "timeout awaiting response headers") {
+			return ActionFailFast
 		}
 		return ActionRetry
 	}

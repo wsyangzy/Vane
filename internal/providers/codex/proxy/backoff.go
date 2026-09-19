@@ -3,7 +3,44 @@
 
 package codexproxy
 
-import "time"
+import (
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// maxRetryAfterWait 上游建议等待时长的上限，防止异常大值把请求挂死。
+const maxRetryAfterWait = 30 * time.Second
+
+// retryAfterPattern 匹配上游错误文本里的 "retry after 9 seconds" 之类提示。
+var retryAfterPattern = regexp.MustCompile(`(?i)retry after (\d+) ?s(?:ec(?:ond)?s?)?\b`)
+
+// retryAfterHint 从上游响应头 Retry-After 或错误文本中提取建议等待时长，没有则返回 0。
+//
+// 服务商在 SSE 里返回 "Codex accounts are temporarily throttled, retry after 9 seconds"
+// 时，立即重发只会再吃一次限流；按它说的等一等，下一次尝试才有意义。
+func retryAfterHint(resp *http.Response, errText string) time.Duration {
+	seconds := 0
+	if resp != nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil {
+			seconds = v
+		}
+	}
+	if seconds <= 0 {
+		if m := retryAfterPattern.FindStringSubmatch(errText); m != nil {
+			seconds, _ = strconv.Atoi(m[1])
+		}
+	}
+	if seconds <= 0 {
+		return 0
+	}
+	if d := time.Duration(seconds) * time.Second; d < maxRetryAfterWait {
+		return d
+	}
+	return maxRetryAfterWait
+}
 
 // computeBackoff 计算第 attempt 次重试前的等待时长（指数退避）
 //

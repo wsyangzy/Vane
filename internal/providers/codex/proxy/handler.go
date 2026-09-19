@@ -718,7 +718,7 @@ func (h *Handler) tryEndpointCycle(
 				h.passthroughWithBody(w, resp, errBody)
 				return cycleResult{completed: true}
 			}
-			// 兜底：网络错误归类为 ActionRetry，理论不应到这里
+			// 无上游响应的 FailFast：目前只有响应头超时会走到这里（请求已被上游接收，不重放）
 			detail := "请求失败"
 			if fwdErr != nil {
 				detail = fwdErr.Error()
@@ -763,6 +763,22 @@ func (h *Handler) tryEndpointCycle(
 		annotateLastChainError(endpointChain, status, chainErrorText(fwdErr, errSummary, reason))
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
+
+		// 上游明确给了 retry after 提示：先等够再发下一次，无论下一跳是换端点还是新一轮循环。
+		if wait := retryAfterHint(resp, reason); wait > 0 {
+			h.logger.Info("[Codex 遵守上游 retry-after]",
+				"provider", "codex",
+				"request_id", requestID,
+				"endpoint", failedEndpointName,
+				"wait_ms", wait.Milliseconds(),
+			)
+			select {
+			case <-time.After(wait):
+			case <-r.Context().Done():
+				h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_retry_after", nil, requestModel)
+				return cycleResult{completed: true}
+			}
+		}
 
 		// 选下个端点
 		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpointForModel(

@@ -21,7 +21,11 @@ type Forwarder struct {
 	transportProvider  *transport.Provider
 	timeout            time.Duration
 	useEndpointTimeout bool
-	logger             *slog.Logger
+	// streaming 为 true 时使用 Streaming Transport，其响应头超时来自设置页
+	// 「请求控制 → 流式响应头超时」。Default Transport 固定 60s，长上下文 + 高推理
+	// 档位的首包经常超过它；超时后重放同一请求只会重复消耗上游额度。
+	streaming bool
+	logger    *slog.Logger
 }
 
 // NewForwarder 创建转发器实例
@@ -55,6 +59,7 @@ func NewStreamingForwarder(logger *slog.Logger, providers ...*transport.Provider
 		transportProvider:  firstTransportProvider(providers...),
 		timeout:            0,
 		useEndpointTimeout: false,
+		streaming:          true,
 		logger:             logger,
 	}
 }
@@ -110,7 +115,7 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) (*http.Client, error) {
 	client := f.client
 	if f.transportProvider != nil {
-		tr, err := f.transportProvider.Default()
+		tr, err := f.transport()
 		if err != nil {
 			return nil, err
 		}
@@ -122,6 +127,13 @@ func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) (*http.Client, er
 	clientCopy := *client
 	clientCopy.Timeout = endpoint.Timeout
 	return &clientCopy, nil
+}
+
+func (f *Forwarder) transport() (*http.Transport, error) {
+	if f.streaming {
+		return f.transportProvider.Streaming()
+	}
+	return f.transportProvider.Default()
 }
 
 func firstTransportProvider(providers ...*transport.Provider) *transport.Provider {

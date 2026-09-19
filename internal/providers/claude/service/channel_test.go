@@ -130,7 +130,6 @@ func TestEnsureActiveChannelParticipatesResumesOnlyActiveChannel(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		EndpointsStorage: config.EndpointsStorageConfig{Type: "sqlite"},
 		Endpoints: []config.EndpointConfig{
 			{Name: "active-endpoint", URL: "http://active.invalid", Channel: "active", Timeout: time.Second},
 			{Name: "backup-endpoint", URL: "http://backup.invalid", Channel: "paused-backup", Timeout: time.Second},
