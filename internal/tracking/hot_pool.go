@@ -330,6 +330,8 @@ func (hp *HotPool) CompleteAndArchive(requestID string, finalizer func(*ActiveRe
 	}
 	// 所有终态都经过这里：统一推导 stream_outcome，Claude/Codex 各调用点无需各自维护
 	req.StreamOutcome = ResolveStreamOutcome(req.Status, req.IsStreaming, req.FailureReason)
+	// 同理在此结束最后一跳的计时：各 provider 的退出路径很多，逐一补写容易漏
+	req.EndpointChain = closeOpenChainHop(req.EndpointChain, req.DurationMs)
 	req.mu.Unlock()
 
 	// 更新统计

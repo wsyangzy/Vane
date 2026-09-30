@@ -29,6 +29,11 @@ export const parseChainNode = (item, hop) => {
     const error = item.error || item.error_message || item.errorMessage || '';
     // 本跳实际发出的请求次数；旧记录没有该字段，为 0 表示未知
     const attempts = Math.max(0, Math.trunc(Number(item.attempts ?? 0) || 0));
+    // 本跳耗时；旧记录与进行中的最后一跳没有，为 null
+    const rawDuration = item.duration_ms ?? item.durationMs;
+    const durationMs = rawDuration === null || rawDuration === undefined || !Number.isFinite(Number(rawDuration))
+      ? null
+      : Math.max(0, Number(rawDuration));
     const raw = channel
       ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
       : endpoint;
@@ -40,6 +45,7 @@ export const parseChainNode = (item, hop) => {
       statusCode,
       error,
       attempts,
+      durationMs,
       hop: item.hop || hop,
     };
   }

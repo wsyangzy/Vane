@@ -400,6 +400,14 @@ func TestTryEndpointCycleRecordsPerHopAttempts(t *testing.T) {
 	if len(chain) != 2 || chain[0].Attempts != 3 || chain[1].Attempts != 1 {
 		t.Fatalf("chain=%+v, want primary×3 then backup×1", chain)
 	}
+	for _, node := range chain {
+		if node.DurationMs == nil || *node.DurationMs < 0 {
+			t.Fatalf("hop %d must carry a duration, got %+v", node.Hop, node)
+		}
+	}
+	if chain[1].StartMs < chain[0].StartMs+*chain[0].DurationMs {
+		t.Fatalf("second hop must start after the first one ended: %+v", chain)
+	}
 	if details[0].StreamOutcome != tracking.StreamOutcomeNotStreaming {
 		t.Fatalf("stream_outcome=%q, want not_streaming", details[0].StreamOutcome)
 	}

@@ -1,6 +1,11 @@
 package tracking
 
-import "strings"
+import (
+	"bytes"
+	"encoding/json"
+	"strconv"
+	"strings"
+)
 
 // stream_outcome 请求终态的统一枚举，Claude 与 Codex 共用。
 //
@@ -38,6 +43,50 @@ func ResolveStreamOutcome(status string, isStreaming bool, failureReason string)
 		// failed / partial_failed / error / timeout / *_error 等一律视为失败
 		return StreamOutcomeFailed
 	}
+}
+
+// closeOpenChainHop 请求终态时给链路最后一跳补上耗时（duration_ms = 请求总耗时 - 本跳 start_ms）。
+//
+// 只改写最后一个节点的 duration_ms 字段，其余字段逐字节保留，不做整体 map 往返：
+// 链路里的错误文本可能含 < > &，json.Marshal 的 HTML 转义会改变原文。
+// 非 JSON 数组、没有 start_ms（旧格式）或已有 duration_ms 时原样返回。
+func closeOpenChainHop(chain string, requestDurationMs int64) string {
+	trimmed := strings.TrimSpace(chain)
+	if !strings.HasPrefix(trimmed, "[") {
+		return chain
+	}
+	var nodes []json.RawMessage
+	if err := json.Unmarshal([]byte(trimmed), &nodes); err != nil || len(nodes) == 0 {
+		return chain
+	}
+	last := nodes[len(nodes)-1]
+	var timing struct {
+		StartMs    *int64 `json:"start_ms"`
+		DurationMs *int64 `json:"duration_ms"`
+	}
+	if err := json.Unmarshal(last, &timing); err != nil || timing.StartMs == nil || timing.DurationMs != nil {
+		return chain
+	}
+	duration := requestDurationMs - *timing.StartMs
+	if duration < 0 {
+		duration = 0
+	}
+	lastTrimmed := bytes.TrimRight(bytes.TrimSpace(last), " \t\r\n")
+	if len(lastTrimmed) == 0 || lastTrimmed[len(lastTrimmed)-1] != '}' {
+		return chain
+	}
+	closed := append(append([]byte(nil), lastTrimmed[:len(lastTrimmed)-1]...), []byte(`,"duration_ms":`+strconv.FormatInt(duration, 10)+`}`)...)
+	nodes[len(nodes)-1] = closed
+	var out bytes.Buffer
+	out.WriteByte('[')
+	for i, node := range nodes {
+		if i > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(bytes.TrimSpace(node))
+	}
+	out.WriteByte(']')
+	return out.String()
 }
 
 func isIncompleteStreamReason(failureReason string) bool {

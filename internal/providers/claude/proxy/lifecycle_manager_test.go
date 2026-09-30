@@ -367,6 +367,15 @@ func TestRequestLifecycleManager_RetryCountFollowsWholeRequestAttempts(t *testin
 	if len(chain) != 2 || chain[0].Attempts != 3 || chain[1].Attempts != 1 {
 		t.Fatalf("chain = %+v, want ep-a×3 then ep-b×1", chain)
 	}
+	// 每跳都有耗时：第一跳在切换时结束，最后一跳在终态归档时补齐
+	for _, node := range chain {
+		if node.DurationMs == nil || *node.DurationMs < 0 {
+			t.Fatalf("hop %d must carry a duration, got %+v", node.Hop, node)
+		}
+	}
+	if chain[1].StartMs < chain[0].StartMs {
+		t.Fatalf("hop start offsets must be monotonic: %+v", chain)
+	}
 	if details[0].StreamOutcome != tracking.StreamOutcomeNotStreaming {
 		t.Fatalf("stream_outcome = %q, want not_streaming", details[0].StreamOutcome)
 	}

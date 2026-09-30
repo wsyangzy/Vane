@@ -150,9 +150,25 @@ type ChainNode struct {
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
 	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
-	Attempts   int    `json:"attempts,omitempty"`
+	Attempts int `json:"attempts,omitempty"`
+	// StartMs 本跳开始时距请求开始的毫秒数；DurationMs 本跳耗时，下一跳开始时写入，
+	// 最后一跳由热池在请求终态时补齐（tracking.closeOpenChainHop）。
+	// 用相对毫秒而非时间戳：与 start_time 的时区格式无关，前端直接可用
+	StartMs    int64  `json:"start_ms"`
+	DurationMs *int64 `json:"duration_ms,omitempty"`
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// closeLastHopLocked 结束最后一跳的计时；调用方需持有 endpointChainMu
+func (rsm *RequestStateManager) closeLastHopLocked(nowMs int64) {
+	if n := len(rsm.endpointChain); n > 0 && rsm.endpointChain[n-1].DurationMs == nil {
+		duration := nowMs - rsm.endpointChain[n-1].StartMs
+		if duration < 0 {
+			duration = 0
+		}
+		rsm.endpointChain[n-1].DurationMs = &duration
+	}
 }
 
 // AppendEndpointChain 追加端点到链路（按切换去重）
@@ -170,11 +186,14 @@ func (rsm *RequestStateManager) AppendEndpointChain(channel, credentialGroup, en
 		rsm.endpointChain[chainLen-1].Channel != channel ||
 		rsm.endpointChain[chainLen-1].CredentialGroup != credentialGroup ||
 		rsm.endpointChain[chainLen-1].Endpoint != endpointName {
+		nowMs := time.Since(rsm.startTime).Milliseconds()
+		rsm.closeLastHopLocked(nowMs)
 		rsm.endpointChain = append(rsm.endpointChain, ChainNode{
 			Hop:             chainLen + 1,
 			Channel:         channel,
 			CredentialGroup: credentialGroup,
 			Endpoint:        endpointName,
+			StartMs:         nowMs,
 		})
 	}
 

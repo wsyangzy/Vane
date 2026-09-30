@@ -120,3 +120,27 @@ test('billing detail reads the persisted snapshot and only reverse-derives for l
   assert.match(detailSource, /snapshot\.rule_mode === 'fixed'/);
   assert.doesNotMatch(detailSource, /billingRuleSnapshot\.(mode|selector_|effective_)/);
 });
+
+test('request detail keeps cancellation out of the red error card and uses one failure set', () => {
+  // 取消不是错误：FAILURE_STATUSES 不含 cancelled，取消走独立的中性卡片
+  assert.doesNotMatch(detailSource.match(/const FAILURE_STATUSES = new Set\(\[([\s\S]*?)\]\)/)?.[1] || '', /'cancelled'/);
+  assert.match(detailSource, /\{isCancelled && \(/);
+  assert.match(detailSource, /\{isFailure && \(/);
+  // 错误卡片不再维护第二份手写状态列表
+  assert.doesNotMatch(detailSource, /\['failed', 'error', 'cancelled', 'timeout', 'partial_failed'\]\.includes/);
+  // 全页统一"流式 / 非流式"
+  assert.doesNotMatch(detailSource, /常规请求/);
+});
+
+test('request detail tabs flag empty privacy and chain content', () => {
+  assert.match(detailSource, /empty: !privacyRedacted/);
+  assert.match(detailSource, /empty: chainNodes\.length === 0/);
+});
+
+test('request detail chain cards surface per-hop attempts and upstream status', () => {
+  assert.match(detailSource, /node\.durationMs != null &&/);
+  assert.match(detailSource, /node\.attempts > 1 &&/);
+  assert.match(detailSource, /node\.statusCode > 0 &&/);
+  // 链路徽章不再使用难以辨认的 9px 字号
+  assert.doesNotMatch(detailSource, /text-\[9px\]/);
+});

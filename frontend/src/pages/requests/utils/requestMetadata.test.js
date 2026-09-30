@@ -4,9 +4,21 @@ import {
   formatReasoningFieldValue,
   getReasoningEffortMeta,
   getServiceTierMeta,
+  getStreamOutcomeMeta,
   isThinkingTypeActive,
   parseReasoningConfig
 } from './requestMetadata.js';
+
+test('stream outcome labels separate an incomplete stream from a completed one', () => {
+  assert.equal(getStreamOutcomeMeta('completed').label, '完整');
+  assert.equal(getStreamOutcomeMeta('incomplete').label, '不完整');
+  assert.equal(getStreamOutcomeMeta('not_streaming').label, '非流式完成');
+  assert.equal(getStreamOutcomeMeta('canceled').label, '已取消');
+  // 历史行没有终态
+  assert.equal(getStreamOutcomeMeta(''), null);
+  assert.equal(getStreamOutcomeMeta(null), null);
+  assert.equal(getStreamOutcomeMeta('weird').label, 'weird');
+});
 
 test('request metadata safely parses reasoning and keeps product modes distinct', () => {
   assert.deepEqual(parseReasoningConfig('null'), {});

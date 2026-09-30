@@ -162,6 +162,31 @@ func TestCacheHitSQLMatchesInMemoryParts(t *testing.T) {
 	}
 }
 
+func TestCloseOpenChainHopFillsOnlyTheLastOpenHop(t *testing.T) {
+	chain := `[{"hop":1,"endpoint":"A","start_ms":0,"duration_ms":1200,"error":"<html>&"},{"hop":2,"endpoint":"B","start_ms":1200}]`
+	got := closeOpenChainHop(chain, 3000)
+	want := `[{"hop":1,"endpoint":"A","start_ms":0,"duration_ms":1200,"error":"<html>&"},{"hop":2,"endpoint":"B","start_ms":1200,"duration_ms":1800}]`
+	if got != want {
+		t.Fatalf("closeOpenChainHop =\n%s\nwant\n%s", got, want)
+	}
+	// 已结束、旧格式、非 JSON、空链路都原样返回
+	for _, unchanged := range []string{
+		want,
+		`[{"hop":1,"endpoint":"A"}]`,
+		`CCTQ::A -> CCTQ::B`,
+		``,
+		`[]`,
+	} {
+		if got := closeOpenChainHop(unchanged, 3000); got != unchanged {
+			t.Fatalf("closeOpenChainHop(%q) = %q, want unchanged", unchanged, got)
+		}
+	}
+	// 时钟抖动导致负值时钳到 0
+	if got := closeOpenChainHop(`[{"start_ms":500}]`, 100); got != `[{"start_ms":500,"duration_ms":0}]` {
+		t.Fatalf("negative duration must clamp to 0, got %s", got)
+	}
+}
+
 func TestHotPoolCompleteAndArchiveResolvesStreamOutcome(t *testing.T) {
 	pool := NewHotPool(DefaultHotPoolConfig())
 	defer pool.Close()

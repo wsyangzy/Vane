@@ -819,6 +819,9 @@ export const getRequests = async (params = {}) => {
     privacyRedactionSummary: r.privacy_redaction_summary || '',
     provider: r.provider || '',
     status: r.status,
+    // 终态枚举；历史行与进行中的请求为空
+    stream_outcome: r.stream_outcome || '',
+    streamOutcome: r.stream_outcome || '',
     ...mapRequestNetworkFields(r),
     input_tokens: r.input_tokens,
     output_tokens: r.output_tokens,

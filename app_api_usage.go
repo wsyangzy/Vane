@@ -554,7 +554,9 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
-	Attempts        int    `json:"attempts,omitempty"` // 本跳实际发出的请求次数；旧记录为 0
+	Attempts        int    `json:"attempts,omitempty"`    // 本跳实际发出的请求次数；旧记录为 0
+	StartMs         int64  `json:"start_ms,omitempty"`    // 本跳开始时距请求开始的毫秒数
+	DurationMs      *int64 `json:"duration_ms,omitempty"` // 本跳耗时；旧记录与进行中的最后一跳为空
 	StatusCode      int    `json:"status_code,omitempty"`
 	Error           string `json:"error,omitempty"`
 }

@@ -87,6 +87,25 @@ export const getServiceTierMeta = (value) => {
   } : null;
 };
 
+// 请求终态（request_logs.stream_outcome）。它回答的是"客户端拿到完整结果了吗"，
+// 与生命周期状态不同：流式请求缺结束事件时状态仍是 completed，终态才是 incomplete。
+const STREAM_OUTCOMES = {
+  completed: ['完整', '流式响应收到了结束事件，客户端拿到了完整结果。', 'bg-emerald-50 text-emerald-700 border-emerald-200'],
+  not_streaming: ['非流式完成', '非流式请求已返回结果。', 'bg-emerald-50 text-emerald-700 border-emerald-200'],
+  incomplete: ['不完整', '上游返回 2xx，但流缺少结束事件或中途截断，客户端拿到的可能是半截回答。', 'bg-amber-50 text-amber-700 border-amber-200'],
+  failed: ['失败', '请求最终失败。', 'bg-rose-50 text-rose-700 border-rose-200'],
+  canceled: ['已取消', '客户端主动断开。', 'bg-slate-100 text-slate-600 border-slate-200']
+};
+
+// 历史行与进行中的请求没有终态，返回 null 由展示层显示 "-"
+export const getStreamOutcomeMeta = (value) => {
+  const outcome = String(value || '').trim().toLowerCase();
+  if (!outcome) return null;
+  const configured = STREAM_OUTCOMES[outcome];
+  if (configured) return { value: outcome, label: configured[0], description: configured[1], className: configured[2] };
+  return { value: outcome, label: outcome, description: '当前界面未识别的终态，保留原值用于排障。', className: 'bg-slate-50 text-slate-600 border-slate-200' };
+};
+
 export const formatReasoningFieldValue = (key, value) => {
   if (typeof value === 'number') return value.toLocaleString();
   if (typeof value === 'string') return REASONING_VALUE_LABELS[key]?.[value] || value;

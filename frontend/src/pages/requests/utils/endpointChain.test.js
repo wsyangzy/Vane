@@ -29,9 +29,13 @@ test('parseEndpointChain keeps structured JSON chain nodes', () => {
     statusCode: 0,
     error: '',
     attempts: 0,
+    durationMs: null,
     hop: 1,
   });
   assert.equal(chainHasMultipleChannels(chain), true);
+  // 新链路带每跳耗时；0 是有效值
+  assert.equal(parseChainNode({ endpoint: 'A', duration_ms: 1234 }).durationMs, 1234);
+  assert.equal(parseChainNode({ endpoint: 'A', duration_ms: 0 }).durationMs, 0);
 });
 
 test('parseChainNode keeps structured endpoint error details', () => {

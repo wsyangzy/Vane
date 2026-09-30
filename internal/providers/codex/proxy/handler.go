@@ -34,9 +34,23 @@ type chainNode struct {
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
 	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
-	Attempts   int    `json:"attempts,omitempty"`
+	Attempts int `json:"attempts,omitempty"`
+	// StartMs / DurationMs 与 Claude 端 ChainNode 同口径：距请求开始的毫秒数与本跳耗时
+	StartMs    int64  `json:"start_ms"`
+	DurationMs *int64 `json:"duration_ms,omitempty"`
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// closeLastHop 结束最后一跳的计时（已结束的跳不重复写）
+func closeLastHop(chain []chainNode, startTime time.Time) {
+	if n := len(chain); n > 0 && chain[n-1].DurationMs == nil {
+		duration := time.Since(startTime).Milliseconds() - chain[n-1].StartMs
+		if duration < 0 {
+			duration = 0
+		}
+		chain[n-1].DurationMs = &duration
+	}
 }
 
 const maxPreOutputStreamBufferBytes = 256 * 1024
@@ -647,11 +661,13 @@ func (h *Handler) tryEndpointCycleForStage(
 			(*endpointChain)[n-1].Channel != channelName ||
 			(*endpointChain)[n-1].CredentialGroup != endpoint.CredentialGroupName ||
 			(*endpointChain)[n-1].Endpoint != endpoint.Name {
+			closeLastHop(*endpointChain, startTime)
 			*endpointChain = append(*endpointChain, chainNode{
 				Hop:             n + 1,
 				Channel:         channelName,
 				CredentialGroup: endpoint.CredentialGroupName,
 				Endpoint:        endpoint.Name,
+				StartMs:         time.Since(startTime).Milliseconds(),
 			})
 		}
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
