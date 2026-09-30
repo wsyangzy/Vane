@@ -559,6 +559,10 @@ type chainNode struct {
 	DurationMs      *int64 `json:"duration_ms,omitempty"` // 本跳耗时；旧记录与进行中的最后一跳为空
 	StatusCode      int    `json:"status_code,omitempty"`
 	Error           string `json:"error,omitempty"`
+	// Headers 失败响应的诊断头白名单（server、cf-ray、x-request-id 等）
+	Headers map[string]string `json:"headers,omitempty"`
+	// Local 本跳没有拿到上游响应，Error 是本地（网络/超时）错误
+	Local bool `json:"local,omitempty"`
 }
 
 // parseEndpointChain 解析端点链路字符串（兼容三种历史格式）

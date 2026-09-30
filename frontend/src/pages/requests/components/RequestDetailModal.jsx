@@ -4,7 +4,7 @@
 // 2025-12-01
 // ============================================
 
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   X,
   Copy,
@@ -46,6 +46,9 @@ import {
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 import {
+  collectFailedHops,
+  extractUpstreamErrorMessage,
+  formatUpstreamErrorText,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   getRequestChannelLabel,
@@ -134,6 +137,68 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
               )}
             </button>
           </Tooltip>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * 单跳的上游报错：状态码、服务商原话、格式化正文（可切原文）与诊断头。
+ * 不做任何改写或翻译——这里要回答的是「服务商到底说了什么」。
+ */
+const UpstreamErrorHop = ({ hop, isLast, showChannel }) => {
+  const [showRaw, setShowRaw] = useState(false);
+  const formatted = formatUpstreamErrorText(hop.error);
+  const message = extractUpstreamErrorMessage(hop.error);
+  const headers = Object.entries(hop.headers || {});
+  const location = [showChannel ? hop.channel : '', hop.credentialGroup, hop.endpoint].filter(Boolean).join(' / ');
+
+  return (
+    <div className={`rounded-lg border bg-white ${isLast ? 'border-rose-300' : 'border-rose-100'}`}>
+      <div className="flex flex-wrap items-center gap-2 border-b border-rose-100 px-3 py-2 text-xs">
+        <span className="font-semibold text-slate-500">#{hop.hop}</span>
+        {location && <span className="min-w-0 font-medium text-slate-700 [overflow-wrap:anywhere]">{location}</span>}
+        {hop.local ? (
+          <Tooltip content="没有收到上游的 HTTP 响应（连接失败、超时等），下方是本地错误文本">
+            <span className="rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">本地失败</span>
+          </Tooltip>
+        ) : hop.statusCode > 0 && (
+          <span className="rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 font-mono font-semibold text-rose-800">HTTP {hop.statusCode}</span>
+        )}
+        {isLast && <span className="text-rose-500">最终</span>}
+        {formatted.isJSON && (
+          <button
+            type="button"
+            onClick={() => setShowRaw((value) => !value)}
+            className="ml-auto rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+          >
+            {showRaw ? '格式化' : '原文'}
+          </button>
+        )}
+      </div>
+      <div className="space-y-2 px-3 py-2">
+        {message && (
+          <p className="text-sm font-medium leading-6 text-rose-800 [overflow-wrap:anywhere]">{message}</p>
+        )}
+        {hop.error ? (
+          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-50 px-2.5 py-2 font-mono text-xs leading-5 text-slate-800">
+            {showRaw || !formatted.isJSON ? hop.error : formatted.text}
+          </pre>
+        ) : (
+          <p className="text-xs text-slate-500">
+            {hop.local ? '未记录错误文本。' : '上游未返回正文，只能从状态码与下方响应头判断来源（例如 server: cloudflare 表示由 Cloudflare 边缘返回）。'}
+          </p>
+        )}
+        {headers.length > 0 && (
+          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+            {headers.map(([key, value]) => (
+              <Fragment key={key}>
+                <span className="font-mono text-slate-400">{key}</span>
+                <span className="min-w-0 font-mono text-slate-600 [overflow-wrap:anywhere]">{value}</span>
+              </Fragment>
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -341,10 +406,21 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
     return '中转';
   };
   const { text: failureDetail, isRaw: failureDetailIsRaw } = getFailureDetail(request);
-  const errorText = [
-    networkHTTPStatus > 0 ? `HTTP 状态码: ${networkHTTPStatus}` : null,
-    failureDetail
-  ].filter(Boolean).join('\n');
+  // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
+  const failedHops = isFailure ? collectFailedHops(chainNodes) : [];
+  const failureCode = request.failure_reason || request.failureReason || '';
+  // 复制内容：逐跳的状态码、原始正文与诊断头，排查时可直接贴给服务商
+  const errorText = failedHops.length > 0
+    ? failedHops.map((hop) => [
+      `#${hop.hop} ${[hop.channel, hop.credentialGroup, hop.endpoint].filter(Boolean).join(' / ')}`,
+      hop.local ? '本地失败（未收到上游响应）' : `HTTP ${hop.statusCode || '-'}`,
+      hop.error || '（上游未返回正文）',
+      ...Object.entries(hop.headers || {}).map(([key, value]) => `${key}: ${value}`)
+    ].join('\n')).join('\n\n')
+    : [
+      networkHTTPStatus > 0 ? `HTTP 状态码: ${networkHTTPStatus}` : null,
+      failureDetail
+    ].filter(Boolean).join('\n');
   const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
   const originalModelName = request.originalModelName || request.original_model_name || '';
   const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
@@ -954,21 +1030,38 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
-                    {networkHTTPStatus > 0 && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
-                          HTTP {networkHTTPStatus}
-                        </span>
+                    {failureCode && (
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-slate-500">失败分类</span>
+                        <span className="rounded-md border border-rose-200 bg-white px-1.5 py-0.5 font-mono text-rose-700">{failureCode}</span>
+                        {describeFailureReason(failureCode) && <span className="text-slate-600">{describeFailureReason(failureCode)}</span>}
                       </div>
                     )}
-                    {failureDetail && (
-                      <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
-                        <span className="shrink-0 font-medium text-slate-600">{failureDetailIsRaw ? '原始信息：' : '失败原因：'}</span>
-                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
+                    {failedHops.length > 0 ? (
+                      <div className="space-y-2">
+                        {failedHops.map((hop, index) => (
+                          <UpstreamErrorHop key={`${hop.hop}-${index}`} hop={hop} isLast={index === 0} showChannel={showChannelInChain} />
+                        ))}
                       </div>
-                    )}
-                    {!failureDetail && networkHTTPStatus <= 0 && (
-                      <p className="text-sm text-rose-700">未记录失败详情。</p>
+                    ) : (
+                      <>
+                        {networkHTTPStatus > 0 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
+                              HTTP {networkHTTPStatus}
+                            </span>
+                          </div>
+                        )}
+                        {failureDetail && (
+                          <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
+                            <span className="shrink-0 font-medium text-slate-600">{failureDetailIsRaw ? '原始信息：' : '失败原因：'}</span>
+                            <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
+                          </div>
+                        )}
+                        {!failureDetail && networkHTTPStatus <= 0 && (
+                          <p className="text-sm text-rose-700">未记录失败详情。</p>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

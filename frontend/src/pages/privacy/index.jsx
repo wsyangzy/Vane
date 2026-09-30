@@ -26,6 +26,7 @@ import {
   discardLegacyPrivacyRules,
   fetchPrivacyOverview,
   previewPrivacyRedaction,
+  previewPrivacyRequest,
   setPrivacyRulesEnabled,
   updatePrivacyRule,
   updatePrivacySettings
@@ -97,6 +98,22 @@ const BUILTIN_MATCHERS = {
   'builtin:email': {
     label: '邮箱地址',
     detail: '排除 git@host 形式的仓库地址与 logo@2x.png 一类资源名。'
+  },
+  'builtin:cn_landline': {
+    label: '中国座机号',
+    detail: '0 开头区号 + 7~8 位号码，区号与号码之间须有分隔符或括号，可带分机号。'
+  },
+  'builtin:cn_passport': {
+    label: '中国护照号',
+    detail: 'E/G 开头的 9 位编号，且前方 32 字节内须出现「护照」或 passport 字样，避免误伤普通编号。'
+  },
+  'builtin:cn_credit_code': {
+    label: '统一社会信用代码',
+    detail: '18 位，按 GB 32100 校验位验算。'
+  },
+  'builtin:public_ipv4': {
+    label: '公网 IPv4 地址',
+    detail: '排除内网、回环、链路本地、CGNAT 与保留地址段，以及 1.2.3.4.5 一类版本号形态。'
   }
 };
 
@@ -240,7 +257,48 @@ const ModeSelector = ({ mode, onChange, saving }) => (
   </div>
 );
 
-const PolicyPanel = ({ settings, onChange, saving }) => (
+// 「拒发请求」三处策略的风险说明。选中前必须确认：拒发不是静默的——
+// 客户端会收到 Relay 本地的 403/413，而不是上游的正常响应。
+const FAIL_CLOSED_WARNINGS = {
+  onError: '扫描出错（例如请求体不是合法 JSON）时，请求会被直接拒发。',
+  unsupportedPathAction: '不在扫描范围内的接口路径（新版本客户端新增的接口、检测类接口等）会被直接拒发。',
+  overLimitAction: '超长上下文会被直接拒发，而不是只扫描前面一部分。'
+};
+
+// PolicyPanel 选中任一「拒发请求」前先弹确认，其余选项直接生效
+const PolicyPanel = ({ settings, onChange, saving }) => {
+  const [pending, setPending] = useState(null);
+  const request = (key, value) => {
+    if (value === 'fail_closed' && settings[key] !== 'fail_closed') {
+      setPending({ key, value });
+      return;
+    }
+    onChange({ ...settings, [key]: value });
+  };
+  return (
+    <>
+      <PolicyPanelFields settings={settings} saving={saving} onSelect={request} />
+      <ConfirmDialog
+        isOpen={Boolean(pending)}
+        variant="danger"
+        title="确认改为「拒发请求」？"
+        message={[
+          pending ? FAIL_CLOSED_WARNINGS[pending.key] : '',
+          '被拒发的请求会以 Relay 本地错误返回，客户端通常会自动重试。部分中转商与官方订阅会把短时间内大量异常失败、',
+          '或请求形态异常视为风险行为，存在被限流乃至封号的风险。建议先用「放行并告警」观察未覆盖情况，确认可控后再开启。'
+        ].join('')}
+        confirmText="仍然开启"
+        onConfirm={() => {
+          onChange({ ...settings, [pending.key]: pending.value });
+          setPending(null);
+        }}
+        onCancel={() => setPending(null)}
+      />
+    </>
+  );
+};
+
+const PolicyPanelFields = ({ settings, onSelect, saving }) => (
   <div className="grid gap-4 sm:grid-cols-3">
     <div className="text-sm">
       <span className="font-medium text-slate-700">扫描出错时</span>
@@ -250,7 +308,7 @@ const PolicyPanel = ({ settings, onChange, saving }) => (
           disabled={saving}
           ariaLabel="扫描出错时的处理方式"
           value={settings.onError}
-          onChange={(value) => onChange({ ...settings, onError: value })}
+          onChange={(value) => onSelect('onError', value)}
           options={[
             { value: 'fail_open', label: '放行请求' },
             { value: 'fail_closed', label: '拒发请求' }
@@ -268,14 +326,17 @@ const PolicyPanel = ({ settings, onChange, saving }) => (
           disabled={saving}
           ariaLabel="未覆盖路径的处理方式"
           value={settings.unsupportedPathAction}
-          onChange={(value) => onChange({ ...settings, unsupportedPathAction: value })}
+          onChange={(value) => onSelect('unsupportedPathAction', value)}
           options={[
             { value: 'warn', label: '放行并告警' },
             { value: 'fail_closed', label: '拒发请求' }
           ]}
         />
       </div>
-      <p className="mt-1 text-xs text-slate-500">扫描按 API 路径的字段白名单进行，白名单外的路径不扫描。</p>
+      <p className="mt-1 text-xs text-slate-500">
+        扫描覆盖 Claude /v1/messages、Codex /v1/responses 与 /v1/chat/completions 的全部对话与工具字段。
+        「拒发」可能触发中转商或官方订阅的风控，默认建议放行并告警。
+      </p>
     </div>
 
     <div className="text-sm">
@@ -286,7 +347,7 @@ const PolicyPanel = ({ settings, onChange, saving }) => (
           disabled={saving}
           ariaLabel="超出扫描上限的处理方式"
           value={settings.overLimitAction}
-          onChange={(value) => onChange({ ...settings, overLimitAction: value })}
+          onChange={(value) => onSelect('overLimitAction', value)}
           options={[
             { value: 'scan_prefix', label: `只扫描前 ${Math.round(settings.scanMaxBytes / 1024 / 1024)} MB` },
             { value: 'fail_closed', label: '拒发请求' }
@@ -479,9 +540,35 @@ const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy, selected, onSelect })
   );
 };
 
-const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) => {
+const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, builtinMatchers = [] }) => {
   if (!open) return null;
+  // 种子化的内置规则匹配逻辑锁定；用户新建的内置匹配器规则（source=custom）可以改选匹配器
   const isBuiltin = rule.source === 'builtin';
+  const changeMatchType = (value) => {
+    if (value === 'builtin' && rule.matchType !== 'builtin') {
+      const first = builtinMatchers[0];
+      onChange({
+        ...rule,
+        matchType: value,
+        pattern: first?.pattern || '',
+        name: rule.name || first?.name || '',
+        placeholder: first?.placeholder || rule.placeholder,
+        pseudonymKind: first?.pseudonymKind || rule.pseudonymKind
+      });
+      return;
+    }
+    // 从内置切走时清掉 builtin:xxx 标识，避免它被当作字面量或正则保存
+    onChange({ ...rule, matchType: value, pattern: rule.matchType === 'builtin' ? '' : rule.pattern });
+  };
+  const changeBuiltinMatcher = (pattern) => {
+    const matcher = builtinMatchers.find((item) => item.pattern === pattern);
+    onChange({
+      ...rule,
+      pattern,
+      placeholder: matcher?.placeholder || rule.placeholder,
+      pseudonymKind: matcher?.pseudonymKind || rule.pseudonymKind
+    });
+  };
   const matchMeta = MATCH_TYPES.find((item) => item.value === rule.matchType);
   const replacementMeta = REPLACEMENT_MODES.find((item) => item.value === rule.replacementMode);
 
@@ -527,7 +614,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
                   disabled={isBuiltin}
                   ariaLabel="匹配方式"
                   value={rule.matchType}
-                  onChange={(value) => onChange({ ...rule, matchType: value })}
+                  onChange={changeMatchType}
                   options={MATCH_TYPES.map((item) => ({ value: item.value, label: item.label }))}
                 />
               </div>
@@ -549,6 +636,17 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
           {rule.matchType === 'builtin' ? (
             <div className="block text-sm">
               <span className="font-medium text-slate-700">内置匹配器</span>
+              {!isBuiltin && builtinMatchers.length > 0 && (
+                <div className="mt-1.5">
+                  <CustomSelect
+                    fullWidth
+                    ariaLabel="内置匹配器"
+                    value={rule.pattern}
+                    onChange={changeBuiltinMatcher}
+                    options={builtinMatchers.map((item) => ({ value: item.pattern, label: item.name }))}
+                  />
+                </div>
+              )}
               <div className="mt-1.5 rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2.5">
                 <div className="text-sm font-medium text-indigo-900">{describePattern(rule)}</div>
                 <p className="mt-1 text-xs leading-relaxed text-indigo-700">
@@ -556,7 +654,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
                 </p>
               </div>
               <p className="mt-1 text-xs text-slate-500">
-                判定逻辑在程序内实现，带校验位与结构画像，不可编辑。需要不同口径请另建一条正则规则。
+                判定逻辑在程序内实现，带校验位或上下文约束，不可编辑。需要不同口径请另建一条正则规则。
               </p>
             </div>
           ) : (
@@ -663,7 +761,16 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit }) =
 // 测试面板的输入与结果都停留在本机，不落库、不上报。
 // 规则测试弹窗。按需打开，不常驻占位。
 // 输入与结果都停留在本机：不落库、不进日志、不发往任何服务商。
+// 完整请求模式可选的 API 路径；与后端扫描白名单一致
+const PREVIEW_PATHS = [
+  { value: '/v1/messages', label: 'Claude /v1/messages' },
+  { value: '/v1/responses', label: 'Codex /v1/responses' },
+  { value: '/v1/chat/completions', label: 'OpenAI /v1/chat/completions' }
+];
+
 const TestModal = ({ open, onClose }) => {
+  const [mode, setMode] = useState('text');
+  const [path, setPath] = useState(PREVIEW_PATHS[0].value);
   const [input, setInput] = useState('');
   const [result, setResult] = useState(null);
   const [running, setRunning] = useState(false);
@@ -684,7 +791,9 @@ const TestModal = ({ open, onClose }) => {
     if (!input.trim()) return;
     setRunning(true);
     try {
-      setResult(await previewPrivacyRedaction(input));
+      setResult(mode === 'request'
+        ? await previewPrivacyRequest(path, input)
+        : await previewPrivacyRedaction(input));
     } catch (error) {
       toast.error(`测试失败: ${error.message}`);
     } finally {
@@ -708,21 +817,88 @@ const TestModal = ({ open, onClose }) => {
 
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
           <p className="text-xs text-slate-500">
-            试跑当前全部启用规则。输入与结果只停留在本机，不会写入数据库或发往任何服务商。
+            试跑当前全部启用规则，始终按「脱敏」推演。输入与结果只停留在本机，不会写入数据库或发往任何服务商。
           </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
+              {[
+                { value: 'text', label: '文本' },
+                { value: 'request', label: '完整请求 JSON' }
+              ].map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => { setMode(item.value); setResult(null); }}
+                  aria-pressed={mode === item.value}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium ${
+                    mode === item.value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            {mode === 'request' && (
+              <div className="w-64">
+                <CustomSelect
+                  fullWidth
+                  ariaLabel="请求路径"
+                  value={path}
+                  onChange={(value) => { setPath(value); setResult(null); }}
+                  options={PREVIEW_PATHS}
+                />
+              </div>
+            )}
+          </div>
           <textarea
             autoFocus
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            rows={5}
-            placeholder="粘贴一段文本，检查规则会命中什么"
-            className={FIELD_CLASS}
+            rows={mode === 'request' ? 9 : 5}
+            placeholder={mode === 'request'
+              ? '粘贴一段完整的请求体 JSON，查看哪些字段会被扫描、哪些会被改写'
+              : '粘贴一段文本，检查规则会命中什么'}
+            className={mode === 'request' ? FIELD_MONO_CLASS : FIELD_CLASS}
           />
-          {result && (
+          {result?.error && (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              请求体无法解析：{result.error}
+            </p>
+          )}
+          {result && mode === 'request' && !result.supported && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              该路径不在扫描范围内，实际请求会按「路径未被覆盖时」策略处理。
+            </p>
+          )}
+          {result && !result.error && (
             <div className="space-y-2">
               <div className="text-xs text-slate-500">
                 命中 {result.hitCount} 处{result.changed ? '，已替换' : '，无替换'}
               </div>
+              {mode === 'request' && result.fields?.length > 0 && (
+                <div className="max-h-40 overflow-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                      <tr>
+                        <th className="px-2 py-1 font-medium">被扫描的字段（{result.fields.length}）</th>
+                        <th className="px-2 py-1 font-medium">字节</th>
+                        <th className="px-2 py-1 font-medium">结果</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.fields.map((field, index) => (
+                        <tr key={`${field.path}-${index}`} className="border-t border-slate-100">
+                          <td className="px-2 py-1 font-mono text-slate-700 [overflow-wrap:anywhere]">{field.path}</td>
+                          <td className="px-2 py-1 text-slate-500">{field.bytes}</td>
+                          <td className={`px-2 py-1 ${field.redacted ? 'font-medium text-emerald-700' : 'text-slate-400'}`}>
+                            {field.redacted ? '已改写' : '未命中'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               {result.ruleHits.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {result.ruleHits.map((hit) => (
@@ -1085,6 +1261,7 @@ const PrivacyPage = () => {
       <RuleModal
         open={Boolean(modalRule)}
         rule={modalRule || emptyRule()}
+        builtinMatchers={overview.builtinMatchers || []}
         saving={modalSaving}
         error={modalError}
         onChange={setModalRule}

@@ -158,6 +158,10 @@ type ChainNode struct {
 	DurationMs *int64 `json:"duration_ms,omitempty"`
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Headers 失败响应的诊断头白名单（server、cf-ray、x-request-id、retry-after 等），见 tracking.DiagnosticHeaders
+	Headers map[string]string `json:"headers,omitempty"`
+	// Local 本跳失败没有拿到上游 HTTP 响应（连接失败、超时、TLS 错误等），Error 是本地错误文本
+	Local bool `json:"local,omitempty"`
 }
 
 // closeLastHopLocked 结束最后一跳的计时；调用方需持有 endpointChainMu
@@ -212,8 +216,12 @@ func (rsm *RequestStateManager) GetEndpointChain() string {
 	return string(data)
 }
 
-func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, errorText string) string {
-	if errorText == "" {
+// AnnotateEndpointChainError 在最后一跳记录失败信息。
+//
+// 上游返回了状态码但正文为空（anyrouter 的 520 常见）时同样要记：只有状态码与诊断头
+// 能说明这是 Cloudflare 还是中转站自己的错误。statusCode 为 0 表示没拿到上游响应，标为本地失败。
+func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, errorText string, headers map[string]string) string {
+	if errorText == "" && statusCode == 0 && len(headers) == 0 {
 		return rsm.GetEndpointChain()
 	}
 
@@ -225,6 +233,8 @@ func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, error
 	last := &rsm.endpointChain[len(rsm.endpointChain)-1]
 	last.StatusCode = statusCode
 	last.Error = errorText
+	last.Headers = headers
+	last.Local = statusCode == 0
 
 	data, _ := json.Marshal(rsm.endpointChain)
 	return string(data)

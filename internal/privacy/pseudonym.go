@@ -156,17 +156,52 @@ func luhnCheckDigitFor(base string) string {
 
 // looksLikePseudonym 判断值是否为本引擎生成的替身值，
 // 用于避免对已脱敏内容二次替换（同一会话历史会反复重发）。
+//
+// 判定必须与生成器逐位一致，不能只看前缀：只看前缀时，恰好以 1341111 开头的真实手机号
+// 会被当作替身直接放行——那是一条真实的泄露路径。这里按生成器的全部约束反向校验：
+// 手机号序号在 0001~9999、身份证序号在 101~999 且校验位吻合、银行卡序号与 Luhn 校验位吻合。
+// 仍有极小概率撞上同格式的真实值（例如恰为 13411110001 的号码），这是避免二次替换的代价。
 func looksLikePseudonym(value string) bool {
-	if strings.HasPrefix(value, "fake_") {
+	if isFakeTokenPseudonym(value) {
 		return true
 	}
 	switch {
 	case len(value) == 11 && strings.HasPrefix(value, "1341111"):
-		return true
+		seq, ok := parseDigits(value[7:])
+		return ok && seq >= 1 && seq <= 10000 && value == pseudonymPhone(seq)
 	case len(value) == 18 && strings.HasPrefix(value, "42082219990101"):
-		return true
+		seq, ok := parseDigits(value[14:17])
+		return ok && seq >= 101 && seq <= 999 && value == pseudonymIDCard(seq-100)
 	case len(value) == 16 && strings.HasPrefix(value, "62220200000"):
-		return true
+		seq, ok := parseDigits(value[11:15])
+		return ok && seq >= 1 && value == pseudonymBankCard(seq)
 	}
 	return false
+}
+
+// isFakeTokenPseudonym 只认 fake_<类别>_<4 位序号> 的完整形态；
+// 任意以 fake_ 开头的真实密钥（例如某些测试环境的 key）不能因此被放行。
+func isFakeTokenPseudonym(value string) bool {
+	for _, prefix := range []string{"fake_secret_", "fake_token_", "fake_api_key_", "fake_value_"} {
+		if strings.HasPrefix(value, prefix) {
+			rest := value[len(prefix):]
+			_, ok := parseDigits(rest)
+			return ok && len(rest) == 4
+		}
+	}
+	return false
+}
+
+func parseDigits(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if !isASCIIDigit(s[i]) {
+			return 0, false
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n, true
 }

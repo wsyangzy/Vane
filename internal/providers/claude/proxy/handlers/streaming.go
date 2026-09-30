@@ -103,7 +103,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		WriteUpstreamErrorResponse(w, nil, "ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
 		return
 	}
-	protectedBody, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
+	bodies, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(sh.endpointManager))
 	if err != nil {
 		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环。
 		reason, message := "privacy_filter_failed", err.Error()
@@ -119,7 +119,9 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		}
 		return
 	}
-	bodyBytes = protectedBody
+	// bodyBytes 只用于路由决策与模型能力判断；实际外发正文在每次尝试时经 outboundBody 按渠道挑选
+	ctx = contextWithPrivacyBodies(ctx, bodies)
+	bodyBytes = bodies.result.Body
 	// 先准备 SSE 头但不提交状态码；若最终没有任何流字节，最终错误处理会清除这些头并透传 HTTP 错误。
 	sh.setStreamingHeaders(w)
 
@@ -338,7 +340,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 
 			// 尝试连接端点
-			requestBody := rewriteBodyForRoute(sh.forwarder, lifecycleManager, bodyBytes, ep, route)
+			requestBody := rewriteBodyForRoute(sh.forwarder, lifecycleManager, outboundBody(ctx, ep, bodyBytes), ep, route)
 			resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 			// 🔧 [修复] 保存最后的响应，用于获取真实HTTP状态码
 			lastResp = resp
@@ -792,7 +794,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 内部重试状态已通过上方 slog 记录
 
 					// 尝试转发请求
-					requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, bodyBytes, ep)
+					requestBody := rewriteBodyForEndpoint(sh.forwarder, lifecycleManager, outboundBody(ctx, ep, bodyBytes), ep)
 					resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
 					if err != nil && ctx.Err() != nil {
 						slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 恢复重试期间检测到客户端取消，立即停止重试", connID))

@@ -746,6 +746,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		{"priority", "ALTER TABLE codex_channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0", "Codex 渠道优先级字段"},
 		{"failover_enabled", "ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1", "Codex 渠道故障转移参与字段"},
 		{"non_stream_route", "ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT", "Codex 渠道非流改道字段"},
+		{"privacy_level", "ALTER TABLE codex_channels ADD COLUMN privacy_level TEXT", "Codex 渠道隐私级别字段"},
 	}
 	modelRouteMigrations := []struct {
 		checkColumn string
@@ -785,6 +786,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			checkColumn: "non_stream_route",
 			alterSQL:    "ALTER TABLE channels ADD COLUMN non_stream_route TEXT",
 			description: "渠道非流改道字段",
+		},
+		{
+			checkColumn: "privacy_level",
+			alterSQL:    "ALTER TABLE channels ADD COLUMN privacy_level TEXT",
+			description: "渠道隐私级别字段",
 		},
 	}
 

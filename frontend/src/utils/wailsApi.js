@@ -889,7 +889,14 @@ export const getPrivacyOverview = async () => {
       description: preset.description || '',
       ruleCount: Array.isArray(preset.rules) ? preset.rules.length : 0
     })),
-    pseudonymKinds: overview?.pseudonym_kinds || []
+    pseudonymKinds: overview?.pseudonym_kinds || [],
+    builtinMatchers: (overview?.builtin_matchers || []).map((matcher) => ({
+      pattern: matcher.pattern || '',
+      name: matcher.name || '',
+      description: matcher.description || '',
+      placeholder: matcher.placeholder || '',
+      pseudonymKind: matcher.pseudonym_kind || ''
+    }))
   };
 };
 
@@ -951,6 +958,27 @@ export const previewPrivacyRedaction = async (input) => {
     hitCount: Number(result?.hit_count ?? 0),
     ruleHits: (result?.rule_hits || []).map(normalizePrivacyRuleHit)
   };
+};
+
+// 完整 JSON 请求体预演：返回哪些字段被扫描、哪些被改写（不含命中原文）
+export const mapPrivacyRequestPreview = (result = {}) => ({
+  supported: Boolean(result?.supported),
+  error: result?.error || '',
+  output: result?.output || '',
+  changed: Boolean(result?.changed),
+  hitCount: Number(result?.hit_count ?? 0),
+  ruleHits: (result?.rule_hits || []).map(normalizePrivacyRuleHit),
+  fields: (result?.fields || []).map((field) => ({
+    path: field.path || '',
+    bytes: Number(field.bytes ?? 0),
+    redacted: Boolean(field.redacted)
+  }))
+});
+
+export const previewPrivacyRequest = async (path, body) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return mapPrivacyRequestPreview(await WailsApp.PreviewPrivacyRequest(String(path || ''), String(body ?? '')));
 };
 
 export const getPrivacyUnscannedPaths = async () => {
@@ -1677,6 +1705,7 @@ export const getChannels = async () => {
     priority: c.priority || 1,
     modelMapping: normalizeModelMapping(c.model_mapping || c.modelMapping),
     nonStreamRoute: mapNonStreamRoute(c.non_stream_route || c.nonStreamRoute),
+    privacyLevel: normalizeChannelPrivacyLevel(c.privacy_level ?? c.privacyLevel),
     createdAt: c.created_at || '',
     endpointCount: c.endpoint_count,
     credentialGroups: (c.credential_groups || c.credentialGroups || []).map(mapClaudeCredentialGroup)
@@ -1862,6 +1891,18 @@ export const previewRoute = async (provider, sourceChannelId, model, streaming) 
       paused: Boolean(stage.paused)
     }))
   };
+};
+
+// 渠道隐私级别：'' 跟随全局 / 'third_party' 三方中转强制脱敏 / 'trusted' 可信渠道只检测
+export const normalizeChannelPrivacyLevel = (level) => (
+  level === 'third_party' || level === 'trusted' ? level : ''
+);
+
+export const setChannelPrivacyLevel = async (provider, channelId, level) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetChannelPrivacyLevel(provider || 'claude', Number(channelId), normalizeChannelPrivacyLevel(level));
+  return { success: true };
 };
 
 // route 为 null 或没有目标表示关闭非流改道
@@ -2355,6 +2396,7 @@ const mapCodexChannel = (channel) => {
     failoverEnabled: channel.failover_enabled !== false,
     isActive: Boolean(channel.is_active),
     nonStreamRoute: mapNonStreamRoute(channel.non_stream_route || channel.nonStreamRoute),
+    privacyLevel: normalizeChannelPrivacyLevel(channel.privacy_level ?? channel.privacyLevel),
     credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
     createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',

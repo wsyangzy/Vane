@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   chainHasMultipleChannels,
+  collectFailedHops,
   countChannelSwitches,
+  extractUpstreamErrorMessage,
+  formatUpstreamErrorText,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   parseChainNode,
@@ -13,6 +16,36 @@ import {
   summarizeEndpointAttempts,
 } from './endpointChain.js';
 import * as endpointChainUtils from './endpointChain.js';
+
+test('failed hops list every upstream error, newest first, including empty-body statuses', () => {
+  const nodes = [
+    { hop: 1, endpoint: 'A', statusCode: 401, error: '{"error":{"message":"Invalid token"}}', headers: {} },
+    { hop: 2, endpoint: 'B', statusCode: 520, error: '', headers: { server: 'cloudflare' } },
+    { hop: 3, endpoint: 'C', statusCode: 0, error: '', headers: {} },
+  ];
+  // 第 3 跳什么都没记录（进行中或旧记录），不列出；520 空正文仍要列出
+  assert.deepEqual(collectFailedHops(nodes).map((node) => node.hop), [2, 1]);
+});
+
+test('upstream error text is pretty-printed without altering its content', () => {
+  const raw = '{"error":{"message":"由于 claude 模型供应难以保证","type":"error"}}';
+  const formatted = formatUpstreamErrorText(raw);
+  assert.equal(formatted.isJSON, true);
+  assert.deepEqual(JSON.parse(formatted.text), JSON.parse(raw));
+  assert.equal(formatUpstreamErrorText('http2: timeout awaiting response headers').isJSON, false);
+  assert.equal(formatUpstreamErrorText('{broken').text, '{broken');
+
+  assert.equal(extractUpstreamErrorMessage(raw), '由于 claude 模型供应难以保证');
+  assert.equal(extractUpstreamErrorMessage('{"error":"quota exceeded","type":"error"}'), 'quota exceeded');
+  assert.equal(extractUpstreamErrorMessage('plain text'), '');
+});
+
+test('parseChainNode keeps diagnostic headers and the local-failure flag', () => {
+  const node = parseChainNode({ endpoint: 'A', status_code: 520, headers: { server: 'cloudflare', 'cf-ray': 'x1' } });
+  assert.deepEqual(node.headers, { server: 'cloudflare', 'cf-ray': 'x1' });
+  assert.equal(node.local, false);
+  assert.equal(parseChainNode({ endpoint: 'A', error: 'dial tcp: timeout', local: true }).local, true);
+});
 
 test('parseEndpointChain keeps structured JSON chain nodes', () => {
   const chain = parseEndpointChain(JSON.stringify([
@@ -30,6 +63,8 @@ test('parseEndpointChain keeps structured JSON chain nodes', () => {
     error: '',
     attempts: 0,
     durationMs: null,
+    headers: {},
+    local: false,
     hop: 1,
   });
   assert.equal(chainHasMultipleChannels(chain), true);

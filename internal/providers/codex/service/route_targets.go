@@ -30,12 +30,13 @@ func BuildRouteCatalog(ctx context.Context, channelStore store.CodexChannelStore
 			continue
 		}
 		entry := routing.CatalogChannel{
-			ID:        channel.ID,
-			Name:      channel.Name,
-			Priority:  channel.Priority,
-			Paused:    !channel.FailoverEnabled,
-			Active:    channel.IsActive,
-			NonStream: channel.NonStreamRoute,
+			ID:           channel.ID,
+			Name:         channel.Name,
+			Priority:     channel.Priority,
+			Paused:       !channel.FailoverEnabled,
+			Active:       channel.IsActive,
+			NonStream:    channel.NonStreamRoute,
+			PrivacyLevel: channel.PrivacyLevel,
 		}
 		if groupStore != nil {
 			groups, err := groupStore.ListByChannelID(ctx, channel.ID)
@@ -55,6 +56,22 @@ func BuildRouteCatalog(ctx context.Context, channelStore store.CodexChannelStore
 
 type codexNonStreamRouteSetter interface {
 	SetNonStreamRoute(ctx context.Context, id int64, route *routing.NonStreamRoute) error
+}
+
+type codexPrivacyLevelSetter interface {
+	SetPrivacyLevel(ctx context.Context, id int64, level string) error
+}
+
+// SetPrivacyLevel 设置渠道隐私级别；level 须已由调用方用 privacy.NormalizeChannelLevel 规范化
+func (s *CodexChannelService) SetPrivacyLevel(ctx context.Context, id int64, level string) error {
+	if s == nil || s.channelStore == nil {
+		return fmt.Errorf("Codex 渠道存储未初始化")
+	}
+	setter, ok := s.channelStore.(codexPrivacyLevelSetter)
+	if !ok {
+		return fmt.Errorf("当前 Codex 渠道存储不支持隐私级别")
+	}
+	return setter.SetPrivacyLevel(ctx, id, level)
 }
 
 // SetNonStreamRoute 设置渠道的非流改道：渠道不接非流请求时，非流请求改送到这些目标。

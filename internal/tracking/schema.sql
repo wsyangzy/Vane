@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS channels (
     failover_enabled INTEGER DEFAULT 1,             -- 是否参与渠道间故障转移 (1=是, 0=否)
     model_mapping TEXT NOT NULL DEFAULT '{}',       -- 渠道级请求模型映射 JSON object：source_model -> target_model
     non_stream_route TEXT,                          -- 非流改道 JSON {"mode","targets"}；NULL 表示关闭
+    privacy_level TEXT,                             -- 隐私级别：NULL=跟随全局 / third_party / trusted
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
@@ -366,6 +367,7 @@ CREATE TABLE IF NOT EXISTS codex_channels (
     priority INTEGER NOT NULL DEFAULT 0,
     failover_enabled INTEGER NOT NULL DEFAULT 1,
     non_stream_route TEXT,                                      -- 非流改道 JSON {"mode","targets"}；NULL 表示关闭
+    privacy_level TEXT,                                         -- 隐私级别：NULL=跟随全局 / third_party / trusted
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')

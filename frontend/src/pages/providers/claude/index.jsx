@@ -83,6 +83,7 @@ import { selectPersistedEndpoints } from '@pages/management/shared/endpointActio
 import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
 import NonStreamRouteEditor from '@pages/management/shared/NonStreamRouteEditor.jsx';
 import ChannelModelRoutesEditor from '@pages/management/shared/ChannelModelRoutesEditor.jsx';
+import ChannelPrivacyLevelSelector from '@pages/management/shared/ChannelPrivacyLevelSelector.jsx';
 import {
   buildNonStreamRouteForm,
   nonStreamRouteFromForm,
@@ -104,6 +105,7 @@ import {
   createChannel,
   updateChannel,
   setChannelNonStreamRoute,
+  setChannelPrivacyLevel,
   deleteChannel,
   getGroupsRaw,
   activateGroup,
@@ -1156,6 +1158,7 @@ const CreateChannelModal = ({
   const [priority, setPriority] = useState(() => (isEdit ? String(initialValue?.priority ?? 1) : ''));
   const [modelMappingRows, setModelMappingRows] = useState(() => buildInitialModelMappingRows(initialValue?.modelMapping));
   const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(initialValue?.nonStreamRoute));
+  const [privacyLevel, setPrivacyLevel] = useState(() => initialValue?.privacyLevel || '');
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
 
@@ -1239,7 +1242,7 @@ const CreateChannelModal = ({
               website: website.trim(),
               priority: priorityValue,
               modelMapping: buildModelMappingPayload(modelMappingRows),
-              ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm) } : {})
+              ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm), privacyLevel } : {})
             });
           }}
           className="flex flex-1 flex-col overflow-hidden"
@@ -1317,6 +1320,10 @@ const CreateChannelModal = ({
               />
               <p className="text-xs text-slate-400 mt-1">用于渠道信息展示，非必填</p>
             </div>
+
+            {canEditNonStream && (
+              <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
+            )}
 
           </div>
             )}
@@ -3191,18 +3198,22 @@ const ChannelsPage = () => {
       website: meta?.website || '',
       priority: meta?.priority ?? 0,
       modelMapping: meta?.modelMapping || {},
-      nonStreamRoute: meta?.nonStreamRoute || null
+      nonStreamRoute: meta?.nonStreamRoute || null,
+      privacyLevel: meta?.privacyLevel || ''
     });
     setShowEditChannel(true);
   }, [channelsMeta]);
 
   const handleUpdateChannel = useCallback(async (payload) => {
-    const { nonStreamRoute, ...channelPayload } = payload;
+    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
     try {
       setChannelFormLoading(true);
       setEditChannelError('');
 
       await updateChannel(channelPayload);
+      if (editingChannel?.id > 0 && 'privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
+        await setChannelPrivacyLevel('claude', editingChannel.id, privacyLevel);
+      }
       // 非流改道单独保存：只在确有变更时提交，避免仅改官网也重写路由配置
       let routeWarnings = [];
       if (editingChannel?.id > 0 && 'nonStreamRoute' in payload

@@ -1043,6 +1043,7 @@ type ChannelInfo struct {
 	Priority         int                         `json:"priority"`
 	ModelMapping     map[string]string           `json:"model_mapping"`
 	NonStreamRoute   *NonStreamRouteInfo         `json:"non_stream_route"` // 非流改道配置，关闭时为 null
+	PrivacyLevel     string                      `json:"privacy_level"`    // 隐私级别：""=跟随全局 / third_party / trusted
 	CreatedAt        string                      `json:"created_at"`
 	EndpointCount    int                         `json:"endpoint_count"`
 	CredentialGroups []ClaudeCredentialGroupInfo `json:"credential_groups"`
@@ -1098,6 +1099,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	channelCreatedAt := make(map[string]string)
 	channelIDs := make(map[string]int64)
 	channelNonStream := make(map[string]*routing.NonStreamRoute)
+	channelPrivacyLevel := make(map[string]string)
 	orderedChannels := make([]string, 0, 16)
 	if channelService != nil {
 		channelRecords, err := channelService.ListChannels(ctx)
@@ -1109,6 +1111,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 				continue
 			}
 			channelIDs[c.Name] = c.ID
+			channelPrivacyLevel[c.Name] = c.PrivacyLevel
 			if c.NonStreamRoute != nil {
 				channelNonStream[c.Name] = c.NonStreamRoute
 			}
@@ -1148,6 +1151,7 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 			Priority:         channelPriority[name],
 			ModelMapping:     channelModelMapping[name],
 			NonStreamRoute:   nonStreamRouteInfo(channelNonStream[name], routeCatalog),
+			PrivacyLevel:     channelPrivacyLevel[name],
 			CreatedAt:        channelCreatedAt[name],
 			EndpointCount:    count,
 			CredentialGroups: credentialGroups,

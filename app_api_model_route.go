@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"ai-relay-forwarder/internal/privacy"
 	claudeproxyendpoint "ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	codexservice "ai-relay-forwarder/internal/providers/codex/service"
@@ -528,6 +529,65 @@ func (a *App) deleteChannelModelRoutes(ctx context.Context, provider string, cha
 	}
 }
 
+// SetChannelPrivacyLevel 设置渠道隐私级别（渠道编辑表单），保存后立即生效。
+// level：""=跟随全局 / third_party=三方中转（强制脱敏）/ trusted=可信渠道（只检测）。
+func (a *App) SetChannelPrivacyLevel(provider string, channelID int64, level string) error {
+	provider, err := normalizeProviderParam(provider)
+	if err != nil {
+		return err
+	}
+	normalized := privacy.NormalizeChannelLevel(strings.TrimSpace(level))
+	if strings.TrimSpace(level) != "" && normalized == privacy.ChannelLevelDefault {
+		return fmt.Errorf("隐私级别无效: %q（可选 third_party / trusted，留空跟随全局）", level)
+	}
+	ctx, cancel := routeCtx()
+	defer cancel()
+
+	catalog, err := a.routeCatalog(ctx, provider)
+	if err != nil {
+		return fmt.Errorf("获取渠道失败: %w", err)
+	}
+	channel := catalog.Channel(channelID)
+	if channel == nil {
+		return fmt.Errorf("渠道不存在: %d", channelID)
+	}
+
+	if provider == "codex" {
+		a.mu.RLock()
+		channelService := a.codexChannelService
+		a.mu.RUnlock()
+		if channelService == nil {
+			return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
+		}
+		a.codexActivationMu.Lock()
+		err = channelService.SetPrivacyLevel(ctx, channelID, normalized)
+		if err == nil {
+			// Codex 运行时从渠道记录读取隐私级别，重载后生效
+			err = a.reloadCodexEndpointManager()
+		}
+		a.codexActivationMu.Unlock()
+		if err != nil {
+			return err
+		}
+		a.emitCodexProviderUpdate()
+		return nil
+	}
+
+	a.mu.RLock()
+	channelService := a.channelService
+	a.mu.RUnlock()
+	if channelService == nil {
+		return fmt.Errorf("渠道存储服务未启用")
+	}
+	if err := channelService.SetPrivacyLevel(ctx, channel.Name, normalized); err != nil {
+		return err
+	}
+	// Claude 运行时从路由快照读取隐私级别
+	a.syncClaudeRouteConfig(ctx)
+	a.emitEndpointUpdate()
+	return nil
+}
+
 // syncRouteRuntime 把已保存的路由配置发布到运行时；失败只记日志，运行时保留上一份快照。
 func (a *App) syncRouteRuntime(ctx context.Context, provider string) {
 	if provider == "codex" {
@@ -573,6 +633,7 @@ func (a *App) buildClaudeRouteConfig(ctx context.Context) (*claudeproxyendpoint.
 		ModelRules:      make(map[string][]routing.ModelRule),
 		NonStreamRoutes: make(map[string]*routing.NonStreamRoute),
 		ChannelNames:    make(map[int64]string, len(catalog)),
+		PrivacyLevels:   make(map[string]string),
 	}
 	bySource := routing.RulesBySource(rules)
 	for _, channel := range catalog {
@@ -582,6 +643,9 @@ func (a *App) buildClaudeRouteConfig(ctx context.Context) (*claudeproxyendpoint.
 		}
 		if channelRules := bySource[channel.ID]; len(channelRules) > 0 {
 			cfg.ModelRules[channel.Name] = channelRules
+		}
+		if channel.PrivacyLevel != "" {
+			cfg.PrivacyLevels[channel.Name] = channel.PrivacyLevel
 		}
 	}
 	return cfg, nil

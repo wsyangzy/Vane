@@ -896,6 +896,7 @@ func (rlm *RequestLifecycleManager) HandleError(err error) {
 			chain := rlm.stateManager.AnnotateEndpointChainError(
 				handlers.GetStatusCodeFromError(err, nil),
 				handlers.ExtractUpstreamErrorMessage(err),
+				tracking.DiagnosticHeaders(handlers.UpstreamErrorHeaders(err)),
 			)
 			opts := tracking.UpdateOptions{
 				FailureReason: &failureReason,

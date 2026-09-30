@@ -138,7 +138,7 @@ func (h *CountTokensHandler) countTokensEndpointsFromOtherChannels(body []byte) 
 
 // tryForward 尝试转发到支持的端点
 func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string, lifecycleManager RequestLifecycleManager) ([]byte, bool, error) {
-	protectedBody, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
+	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(h.endpointManager))
 	if err != nil {
 		return nil, false, err
 	}
@@ -148,7 +148,7 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 		if lifecycleManager != nil {
 			lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
 		}
-		requestBody := h.forwarder.RewriteModelForEndpoint(protectedBody, ep, connID).Body
+		requestBody := h.forwarder.RewriteModelForEndpoint(bodies.forEndpoint(ep), ep, connID).Body
 		targetURL := ep.Config.URL + "/v1/messages/count_tokens"
 		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(requestBody))
 		if err != nil {

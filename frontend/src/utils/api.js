@@ -917,6 +917,11 @@ export const previewPrivacyRedaction = async (input) => {
   return await WailsApi.previewPrivacyRedaction(input);
 };
 
+export const previewPrivacyRequest = async (path, body) => {
+  requirePrivacyWails();
+  return await WailsApi.previewPrivacyRequest(path, body);
+};
+
 export const fetchPrivacyUnscannedPaths = async () => {
   requirePrivacyWails();
   return await WailsApi.getPrivacyUnscannedPaths();

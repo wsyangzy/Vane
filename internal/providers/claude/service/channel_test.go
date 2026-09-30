@@ -33,6 +33,7 @@ CREATE TABLE channels (
 	failover_enabled INTEGER DEFAULT 1,
 	model_mapping TEXT NOT NULL DEFAULT '{}',
 	non_stream_route TEXT,
+	privacy_level TEXT,
 	created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
 	updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );`

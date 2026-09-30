@@ -84,6 +84,10 @@ export function SetChannelNonStreamRoute(arg1, arg2, arg3) {
   return Call.ByName("main.App.SetChannelNonStreamRoute", arg1, arg2, arg3);
 }
 
+export function SetChannelPrivacyLevel(arg1, arg2, arg3) {
+  return Call.ByName("main.App.SetChannelPrivacyLevel", arg1, arg2, arg3);
+}
+
 export function GetPrivacyOverview() {
   return Call.ByName("main.App.GetPrivacyOverview");
 }
@@ -370,6 +374,10 @@ export function OpenLogDir() {
 
 export function PreviewPrivacyRedaction(arg1) {
   return Call.ByName("main.App.PreviewPrivacyRedaction", arg1);
+}
+
+export function PreviewPrivacyRequest(arg1, arg2) {
+  return Call.ByName("main.App.PreviewPrivacyRequest", arg1, arg2);
 }
 
 export function PauseGroup(arg1) {

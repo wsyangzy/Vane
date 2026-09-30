@@ -176,6 +176,7 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 		{"priority", `ALTER TABLE codex_channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`},
 		{"failover_enabled", `ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1`},
 		{"non_stream_route", `ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT`},
+		{"privacy_level", `ALTER TABLE codex_channels ADD COLUMN privacy_level TEXT`},
 	} {
 		exists, err := sqliteColumnExists(ctx, db, "codex_channels", column.name)
 		if err != nil {

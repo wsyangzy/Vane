@@ -31,6 +31,9 @@ type CodexChannelRecord struct {
 	// NonStreamRoute 渠道不接非流请求时，非流请求改道到的目标；nil 表示关闭。
 	// 只经 SetNonStreamRoute 写入，UpdateByID 不改动该列。
 	NonStreamRoute *routing.NonStreamRoute `json:"non_stream_route,omitempty"`
+	// PrivacyLevel 渠道隐私级别：""=跟随全局 / third_party / trusted。
+	// 只经 SetPrivacyLevel 写入，UpdateByID 不改动该列。
+	PrivacyLevel string `json:"privacy_level,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -87,7 +90,7 @@ func (s *SQLiteCodexChannelStore) getQuerier() interface {
 
 const codexChannelColumns = `id, name, provider_type, api_key, model, model_reasoning_effort,
 		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), COALESCE(priority, 0), COALESCE(failover_enabled, 1),
-		COALESCE(non_stream_route, ''), created_at, updated_at`
+		COALESCE(non_stream_route, ''), COALESCE(privacy_level, ''), created_at, updated_at`
 
 func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChannelRecord) (*CodexChannelRecord, error) {
 	s.mu.Lock()
@@ -324,6 +327,20 @@ func (s *SQLiteCodexChannelStore) SetFailoverEnabled(ctx context.Context, id int
 	return nil
 }
 
+// SetPrivacyLevel 写入渠道隐私级别；空串表示跟随全局（落库为 NULL）。取值由调用方校验。
+func (s *SQLiteCodexChannelStore) SetPrivacyLevel(ctx context.Context, id int64, level string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET privacy_level = ? WHERE id = ?`, nullIfEmpty(level), id)
+	if err != nil {
+		return fmt.Errorf("更新 Codex 渠道隐私级别失败: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	return nil
+}
+
 // SetNonStreamRoute 写入渠道的非流改道配置；route 为 nil 或没有目标时落库为 NULL（关闭）。
 func (s *SQLiteCodexChannelStore) SetNonStreamRoute(ctx context.Context, id int64, route *routing.NonStreamRoute) error {
 	encoded, err := routing.EncodeNonStreamRoute(route)
@@ -382,6 +399,7 @@ func scanCodexChannelRow(scanner interface {
 		&record.Priority,
 		&failoverEnabled,
 		&nonStreamRouteJSON,
+		&record.PrivacyLevel,
 		&createdAt,
 		&updatedAt,
 	)

@@ -84,6 +84,7 @@ type CodexChannelInfo struct {
 	Priority         int                        `json:"priority"`
 	FailoverEnabled  bool                       `json:"failover_enabled"`
 	NonStreamRoute   *NonStreamRouteInfo        `json:"non_stream_route"` // 非流改道配置，关闭时为 null
+	PrivacyLevel     string                     `json:"privacy_level"`    // 隐私级别：""=跟随全局 / third_party / trusted
 	CredentialGroups []CodexCredentialGroupInfo `json:"credential_groups"`
 	Endpoints        []CodexEndpointInfo        `json:"endpoints"`
 	CreatedAt        string                     `json:"created_at"`
@@ -356,6 +357,7 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 		}
 		info := a.buildCodexChannelInfo(ch, endpoints, credentialGroups)
 		info.NonStreamRoute = nonStreamRouteInfo(ch.NonStreamRoute, routeCatalog)
+		info.PrivacyLevel = ch.PrivacyLevel
 		result = append(result, info)
 	}
 	return result, nil

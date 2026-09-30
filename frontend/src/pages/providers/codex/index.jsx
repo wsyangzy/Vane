@@ -71,6 +71,7 @@ import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEdito
 import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
 import NonStreamRouteEditor from '@pages/management/shared/NonStreamRouteEditor.jsx';
 import ChannelModelRoutesEditor from '@pages/management/shared/ChannelModelRoutesEditor.jsx';
+import ChannelPrivacyLevelSelector from '@pages/management/shared/ChannelPrivacyLevelSelector.jsx';
 import {
   buildNonStreamRouteForm,
   nonStreamRouteFromForm,
@@ -110,6 +111,7 @@ import {
   subscribeToEvent,
   setDefaultCodexCredentialGroup,
   setChannelNonStreamRoute,
+  setChannelPrivacyLevel,
   setCodexChannelFailoverEnabled,
   updateCodexChannelByID,
   updateCodexCredentialGroupByID,
@@ -390,6 +392,7 @@ const CodexLogo = ({ className = 'w-6 h-6' }) => (
 const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
   const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(channel?.nonStreamRoute));
+  const [privacyLevel, setPrivacyLevel] = useState(() => channel?.privacyLevel || '');
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
@@ -475,7 +478,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       modelMapping: buildModelMappingPayload(formData.modelMappingRows),
       priority: !isEdit && !hasPriority ? -1 : parsedPriority,
       failoverEnabled: formData.failoverEnabled,
-      ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm) } : {})
+      ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm), privacyLevel } : {})
     };
 
     await onSave?.(payload);
@@ -601,6 +604,10 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
                 </label>
               )}
             </div>
+
+            {canEditNonStream && (
+              <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
+            )}
               </>
             ) : activeTab === 'mapping' ? (
               <div className="space-y-3">
@@ -3223,7 +3230,7 @@ const CodexPage = () => {
 
   const handleSaveChannel = async (payload) => {
     const isCreating = channelFormMode !== 'edit' || !editingChannel;
-    const { nonStreamRoute, ...channelPayload } = payload;
+    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
     let channelCreated = false;
     let routeWarnings = [];
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
@@ -3231,6 +3238,9 @@ const CodexPage = () => {
     try {
       if (!isCreating) {
         await updateCodexChannelByID(editingChannel.id, channelPayload);
+        if ('privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
+          await setChannelPrivacyLevel('codex', editingChannel.id, privacyLevel);
+        }
         // 非流改道单独保存：只在确有变更时提交
         if ('nonStreamRoute' in payload
           && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {

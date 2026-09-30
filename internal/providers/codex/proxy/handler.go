@@ -40,6 +40,9 @@ type chainNode struct {
 	DurationMs *int64 `json:"duration_ms,omitempty"`
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+	// Headers / Local 与 Claude 端 ChainNode 同口径：诊断头白名单；没拿到上游响应的本地失败
+	Headers map[string]string `json:"headers,omitempty"`
+	Local   bool              `json:"local,omitempty"`
 }
 
 // closeLastHop 结束最后一跳的计时（已结束的跳不重复写）
@@ -257,6 +260,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusInternalServerError, "隐私防护处理失败")
 			return
 		}
+		// 挂到请求 ctx 上：每次尝试选定端点后按其渠道隐私级别挑选实际发送的正文
+		// （三方中转在全局「仅检测」下也强制脱敏、可信渠道只检测）
+		scanned := append([]byte(nil), originalBody...)
+		r = r.WithContext(contextWithCodexPrivacy(r.Context(), &codexPrivacyBodies{original: scanned, result: result}))
 		originalBody = result.Body
 		if result.Changed {
 			privacySummaryJSON = privacy.SummaryToJSON(result)
@@ -635,14 +642,20 @@ func (h *Handler) tryEndpointCycleForStage(
 			return cycleResult{routeChanged: true}
 		}
 		channel := h.manager.GetActiveChannel()
+		// 按本次尝试的目标渠道的隐私级别挑选正文，再做模型改写（只动顶层 model 字段）
+		targetChannel := channel
+		if routed {
+			targetChannel = stage.channel
+		}
+		attemptBody := h.outboundBody(r, requestID, targetChannel, originalBody)
 		var attemptRewrite modelRewriteResult
 		switch {
 		case routed && stage.upstreamModel != "":
-			attemptRewrite = rewriteModelForRoute(originalBody, stage.upstreamModel, h.logger, requestID)
+			attemptRewrite = rewriteModelForRoute(attemptBody, stage.upstreamModel, h.logger, requestID)
 		case routed:
-			attemptRewrite = rewriteModelForEndpoint(originalBody, endpoint, stage.channel, h.logger, requestID)
+			attemptRewrite = rewriteModelForEndpoint(attemptBody, endpoint, stage.channel, h.logger, requestID)
 		default:
-			attemptRewrite = rewriteModelForEndpoint(originalBody, endpoint, channel, h.logger, requestID)
+			attemptRewrite = rewriteModelForEndpoint(attemptBody, endpoint, channel, h.logger, requestID)
 		}
 		body = attemptRewrite.Body
 		requestModel = h.tokenParser.ParseModelFromBody(body)
@@ -767,7 +780,8 @@ func (h *Handler) tryEndpointCycleForStage(
 				if strings.TrimSpace(detail) == "" {
 					detail = errSummary
 				}
-				annotateLastChainError(endpointChain, status, errSummary)
+				// 链路存上游完整原文（不是日志用的 500 字单行摘要），排查时才能看清服务商的真实报错
+				annotateLastChainError(endpointChain, status, chainBodyText(errBody, errSummary), resp.Header, false)
 				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 				h.manager.SetFailureDetail(endpoint.ID, status, detail)
 				h.logger.Error("[Codex 请求失败]",
@@ -788,7 +802,7 @@ func (h *Handler) tryEndpointCycleForStage(
 			if fwdErr != nil {
 				detail = fwdErr.Error()
 			}
-			annotateLastChainError(endpointChain, 0, detail)
+			annotateLastChainError(endpointChain, 0, detail, nil, true)
 			h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 			h.manager.SetFailureDetail(endpoint.ID, 0, detail)
 			h.logger.Error("[Codex 请求失败]",
@@ -825,7 +839,17 @@ func (h *Handler) tryEndpointCycleForStage(
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
 		}
-		annotateLastChainError(endpointChain, status, chainErrorText(fwdErr, errSummary, reason))
+		var respHeaders http.Header
+		if resp != nil {
+			respHeaders = resp.Header
+		}
+		chainText := chainErrorText(fwdErr, errSummary, reason)
+		if status > 0 {
+			// 拿到上游响应时存完整原文，而不是日志摘要
+			chainText = chainBodyText(errBody, chainText)
+		}
+		_, isStreamEvent := fwdErr.(*UpstreamStreamError)
+		annotateLastChainError(endpointChain, status, chainText, respHeaders, resp == nil && !isStreamEvent)
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 
@@ -1544,17 +1568,38 @@ func latestCredentialGroupName(chain []chainNode) string {
 	return chain[len(chain)-1].CredentialGroup
 }
 
-func annotateLastChainError(chain *[]chainNode, statusCode int, errorText string) {
+// annotateLastChainError 在最后一跳记录失败信息。上游只回状态码不带正文时也记录，
+// 并附上诊断头白名单。local 表示本跳没有拿到任何上游响应（连接失败、超时等）；
+// 上游 SSE 错误事件状态码同为 0，但它来自上游，由调用方传 local=false。
+func annotateLastChainError(chain *[]chainNode, statusCode int, errorText string, headers http.Header, local bool) {
 	if chain == nil || len(*chain) == 0 {
 		return
 	}
 	errorText = strings.TrimSpace(errorText)
-	if errorText == "" {
+	diagnostic := tracking.DiagnosticHeaders(headers)
+	if errorText == "" && statusCode == 0 && len(diagnostic) == 0 {
 		return
 	}
 	last := &(*chain)[len(*chain)-1]
 	last.StatusCode = statusCode
 	last.Error = errorText
+	last.Headers = diagnostic
+	last.Local = local
+}
+
+// maxChainErrorBodyBytes 链路里保存的上游错误原文上限，与 Claude 侧 maxUpstreamErrorBodyBytes 一致
+const maxChainErrorBodyBytes = 64 * 1024
+
+// chainBodyText 链路记录用的上游错误原文：完整保留（超长截断到 64KB），正文为空时回退 fallback。
+// 无效 UTF-8 替换为 U+FFFD，否则写库或前端 JSON 解析会失败。
+func chainBodyText(body []byte, fallback string) string {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return fallback
+	}
+	if len(body) > maxChainErrorBodyBytes {
+		body = body[:maxChainErrorBodyBytes]
+	}
+	return strings.ToValidUTF8(string(body), "�")
 }
 
 func chainErrorText(err error, errSummary, fallback string) string {
