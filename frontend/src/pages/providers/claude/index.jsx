@@ -39,7 +39,8 @@ import {
   LoadingSpinner,
   ErrorMessage,
   SegmentedTabs,
-  Tooltip
+  Tooltip,
+  useToast
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import useEndpointsData from '@hooks/useEndpointsData.js';
@@ -80,6 +81,14 @@ import { buildInitialModelMappingRows, buildModelMappingPayload } from '@pages/m
 import { buildInitialModelMultiplierRows, MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '@pages/management/shared/modelMultiplierRows.js';
 import { selectPersistedEndpoints } from '@pages/management/shared/endpointActions.js';
 import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
+import NonStreamRouteEditor from '@pages/management/shared/NonStreamRouteEditor.jsx';
+import ChannelModelRoutesEditor from '@pages/management/shared/ChannelModelRoutesEditor.jsx';
+import {
+  buildNonStreamRouteForm,
+  nonStreamRouteFromForm,
+  nonStreamRouteSignature,
+  validateRouteTargets
+} from '@pages/management/shared/routeTargets.js';
 import { getCredentialGroupCostMultiplier, getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
 import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
 import {
@@ -94,6 +103,7 @@ import {
   getChannels,
   createChannel,
   updateChannel,
+  setChannelNonStreamRoute,
   deleteChannel,
   getGroupsRaw,
   activateGroup,
@@ -129,6 +139,13 @@ const ENDPOINT_STATE_BUTTON_CLASS = 'inline-flex size-5 min-h-5 min-w-5 max-h-5 
 const CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'mapping', label: '模型映射' }
+];
+
+// 模型路由与非流改道都按渠道 ID 保存，只在编辑已入库的渠道时提供
+const CHANNEL_EDIT_FORM_TABS = [
+  ...CHANNEL_FORM_TABS,
+  { key: 'modelRoutes', label: '模型路由' },
+  { key: 'nonStream', label: '非流改道' }
 ];
 
 const CREDENTIAL_GROUP_FORM_TABS = [
@@ -1132,10 +1149,13 @@ const CreateChannelModal = ({
 }) => {
   const isEdit = mode === 'edit';
   const showPriority = isEdit || channelFailoverEnabled;
+  const channelId = Number(initialValue?.id) || 0;
+  const canEditNonStream = isEdit && channelId > 0;
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
   const [priority, setPriority] = useState(() => (isEdit ? String(initialValue?.priority ?? 1) : ''));
   const [modelMappingRows, setModelMappingRows] = useState(() => buildInitialModelMappingRows(initialValue?.modelMapping));
+  const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(initialValue?.nonStreamRoute));
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
 
@@ -1205,12 +1225,21 @@ const CreateChannelModal = ({
               setError('优先级必须是 1 或更大的整数');
               return;
             }
+            if (canEditNonStream && nonStreamForm.enabled) {
+              const routeError = validateRouteTargets(nonStreamForm.targets);
+              if (routeError) {
+                setActiveTab('nonStream');
+                setError(routeError);
+                return;
+              }
+            }
             setError('');
             onSubmit?.({
               name: trimmedName,
               website: website.trim(),
               priority: priorityValue,
-              modelMapping: buildModelMappingPayload(modelMappingRows)
+              modelMapping: buildModelMappingPayload(modelMappingRows),
+              ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm) } : {})
             });
           }}
           className="flex flex-1 flex-col overflow-hidden"
@@ -1218,10 +1247,11 @@ const CreateChannelModal = ({
         >
           <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={CHANNEL_FORM_TABS}
+              tabs={canEditNonStream ? CHANNEL_EDIT_FORM_TABS : CHANNEL_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
+              className={canEditNonStream ? 'grid-cols-4' : 'grid-cols-2'}
             />
           </div>
 
@@ -1350,6 +1380,28 @@ const CreateChannelModal = ({
                 ))}
               </div>
             </div>
+            )}
+
+            {activeTab === 'modelRoutes' && canEditNonStream && (
+              <ChannelModelRoutesEditor
+                provider="claude"
+                channelId={channelId}
+                channelName={initialValue?.name || ''}
+                disabled={loading}
+              />
+            )}
+
+            {activeTab === 'nonStream' && canEditNonStream && (
+              <NonStreamRouteEditor
+                provider="claude"
+                channelId={channelId}
+                value={nonStreamForm}
+                onChange={(next) => {
+                  setNonStreamForm(next);
+                  if (error) setError('');
+                }}
+                disabled={loading}
+              />
             )}
           </div>
 
@@ -2364,6 +2416,8 @@ const ChannelCard = ({
 // ============================================
 
 const ChannelsPage = () => {
+  const toast = useToast();
+
   // 存储模式状态
   const [storageStatus, setStorageStatus] = useState(null);
   const [storageEndpoints, setStorageEndpoints] = useState([]);
@@ -3132,32 +3186,44 @@ const ChannelsPage = () => {
     if (!name) return;
     const meta = channelsMeta.find((c) => c?.name === name) || null;
     setEditingChannel({
+      id: meta?.id || 0,
       name,
       website: meta?.website || '',
       priority: meta?.priority ?? 0,
-      modelMapping: meta?.modelMapping || {}
+      modelMapping: meta?.modelMapping || {},
+      nonStreamRoute: meta?.nonStreamRoute || null
     });
     setShowEditChannel(true);
   }, [channelsMeta]);
 
   const handleUpdateChannel = useCallback(async (payload) => {
+    const { nonStreamRoute, ...channelPayload } = payload;
     try {
       setChannelFormLoading(true);
       setEditChannelError('');
 
-      await updateChannel(payload);
+      await updateChannel(channelPayload);
+      // 非流改道单独保存：只在确有变更时提交，避免仅改官网也重写路由配置
+      let routeWarnings = [];
+      if (editingChannel?.id > 0 && 'nonStreamRoute' in payload
+        && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
+        routeWarnings = (await setChannelNonStreamRoute('claude', editingChannel.id, nonStreamRoute)).warnings;
+      }
 
       setShowEditChannel(false);
       setEditingChannel(null);
       await loadChannelsMeta();
       await loadGroups();
+      if (routeWarnings.length > 0) {
+        toast.warning(routeWarnings, '非流改道已保存，请留意');
+      }
     } catch (err) {
       console.error('更新渠道失败:', err);
       setEditChannelError(getErrorMessage(err, '更新渠道失败'));
     } finally {
       setChannelFormLoading(false);
     }
-  }, [loadChannelsMeta, loadGroups]);
+  }, [editingChannel, loadChannelsMeta, loadGroups, toast]);
 
   const openCreateCredentialGroupForm = useCallback((channelName) => {
     const name = String(channelName || '').trim();

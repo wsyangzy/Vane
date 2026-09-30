@@ -586,8 +586,9 @@ type UpdateOptions struct {
 	HttpStatusIsUpstream *bool          // HTTP状态码是否来自真实上游响应
 	ModelName            *string        // 模型名称
 	OriginalModelName    *string        // 改写前的原始请求模型
-	ModelRewriteSource   *string        // 模型改写来源：mapping/channel_model
+	ModelRewriteSource   *string        // 模型改写来源：mapping/channel_model/route
 	ModelRewriteTarget   *string        // 改写后的目标模型
+	RouteSnapshot        *string        // 请求级路由快照 JSON（只含规则标识与阶段序号）
 	PrivacyRedacted      *bool          // 是否命中隐私脱敏
 	PrivacySummary       *string        // 隐私脱敏摘要（仅规则名与命中数，绝不含原文）
 	EndTime              *time.Time     // 结束时间
@@ -1448,6 +1449,9 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 			if opts.ModelRewriteTarget != nil {
 				req.ModelRewriteTarget = *opts.ModelRewriteTarget
+			}
+			if opts.RouteSnapshot != nil {
+				req.RouteSnapshot = *opts.RouteSnapshot
 			}
 			if opts.PrivacyRedacted != nil {
 				req.PrivacyRedacted = *opts.PrivacyRedacted
@@ -2767,6 +2771,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	originalModelName := req.OriginalModelName
 	modelRewriteSource := req.ModelRewriteSource
 	modelRewriteTarget := req.ModelRewriteTarget
+	routeSnapshot := req.RouteSnapshot
 	reasoningEffort := req.ReasoningEffort
 	serviceTier := req.ServiceTier
 	privacyRedacted := req.PrivacyRedacted
@@ -2774,6 +2779,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	isStreaming := req.IsStreaming
 	provider := req.Provider
 	status := req.Status
+	streamOutcome := req.StreamOutcome
 	httpStatusSnapshot := req.HTTPStatus
 	httpStatusIsUpstream := req.HTTPStatusIsUpstream
 	retryCount := req.RetryCount
@@ -2925,6 +2931,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		OriginalModelName:             originalModelName,
 		ModelRewriteSource:            modelRewriteSource,
 		ModelRewriteTarget:            modelRewriteTarget,
+		RouteSnapshot:                 routeSnapshot,
 		ReasoningEffort:               reasoningEffort,
 		ServiceTier:                   serviceTier,
 		PrivacyRedacted:               privacyRedacted,
@@ -2932,6 +2939,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		IsStreaming:                   isStreaming,
 		Provider:                      provider, // 提供商标识
 		Status:                        status,
+		StreamOutcome:                 streamOutcome,
 		HTTPStatusCode:                httpStatus,
 		HTTPStatusIsUpstream:          httpStatusIsUpstream,
 		RetryCount:                    retryCount,

@@ -153,7 +153,10 @@ func (rlm *RequestLifecycleManager) RecordPrivacyRedaction(summaryJSON string) {
 // UpdateStatus 更新请求状态
 // 🎯 [SRP重构] 使用 stateManager 管理状态，保留模型搭便车逻辑
 // 调用 RecordRequestUpdate 记录状态变化，并实现模型信息搭便车更新机制
-// 如果retryCount为-1，则使用内部attemptCounter
+//
+// retry_count 的口径与 Codex 一致：整请求累计尝试次数 - 1（跨端点、跨渠道、跨路由阶段）。
+// 入参 retryCount 只用于日志与事件：各调用点历史上分别传过端点下标、全局尝试数，
+// 直接落库会让同一请求的 retry_count 随最后一次调用来回跳，因此持久化值一律取内部计数。
 func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, httpStatus int) {
 	if rlm.stateManager.IsCompleted() {
 		rlm.logger.Debug(fmt.Sprintf("⏭️ [状态忽略] [%s] 请求已终态，忽略状态更新: %s",
@@ -162,10 +165,11 @@ func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, http
 	}
 
 	// 处理特殊的-1标记，使用内部计数器
-	actualRetryCount := retryCount
+	eventRetryCount := retryCount
 	if retryCount == -1 {
-		actualRetryCount = rlm.GetAttemptCount()
+		eventRetryCount = rlm.GetAttemptCount()
 	}
+	actualRetryCount := rlm.stateManager.GetRetryCount()
 
 	requestID := rlm.stateManager.GetRequestID()
 	endpointName := rlm.stateManager.GetEndpointName()
@@ -211,7 +215,22 @@ func (rlm *RequestLifecycleManager) UpdateStatus(status string, retryCount, http
 	}
 
 	// 调用统一的状态通知方法
-	rlm.notifyStatusChange(status, actualRetryCount, httpStatus)
+	rlm.notifyStatusChange(status, eventRetryCount, httpStatus)
+}
+
+// syncRetryCount 在终态落库前补写 retry_count 与链路（含每跳尝试次数）。
+// 最后一次尝试失败后通常直接进入 FailRequest，中间没有 UpdateStatus；成功的那次尝试
+// 也不会再触发链路写入。不补写的话热池里停留的是上一次更新时的值，会少算最后一次尝试。
+func (rlm *RequestLifecycleManager) syncRetryCount(requestID string) {
+	if rlm.usageTracker == nil || requestID == "" {
+		return
+	}
+	retryCount := rlm.stateManager.GetRetryCount()
+	opts := tracking.UpdateOptions{RetryCount: &retryCount}
+	if chain := rlm.stateManager.GetEndpointChain(); chain != "" {
+		opts.EndpointChain = &chain
+	}
+	rlm.usageTracker.RecordRequestUpdate(requestID, opts)
 }
 
 // notifyStatusChange 统一的状态通知方法
@@ -333,6 +352,7 @@ func (rlm *RequestLifecycleManager) completeRequest(tokens *tracking.TokenUsage,
 		}
 
 		// 记录请求成功完成到使用跟踪器（包括状态、耗时、Token、成本）
+		rlm.syncRetryCount(requestID)
 		if httpStatusIsUpstream {
 			rlm.usageTracker.RecordRequestSuccessWithHTTPStatus(requestID, modelName, tokens, duration, httpStatus)
 		} else {
@@ -403,6 +423,7 @@ func (rlm *RequestLifecycleManager) CompleteRequestWithQuality(tokens *tracking.
 
 		// 🔧 [方案A核心] 使用 RecordRequestSuccessWithQuality 一次性完成所有字段设置
 		// 包括 status、tokens、duration 和 failureReason，避免两次独立操作的时序问题
+		rlm.syncRetryCount(requestID)
 		rlm.usageTracker.RecordRequestSuccessWithQuality(requestID, modelName, tokens, duration, failureReason)
 
 		if failureReason != "" {
@@ -670,6 +691,18 @@ func (rlm *RequestLifecycleManager) SetModelName(modelName string) {
 	rlm.SetModel(modelName)
 }
 
+// SetRouteSnapshot 记录请求级路由快照（命中的规则或改道来源，以及当前所处阶段）。
+// 快照只含规则标识与阶段序号，不含请求内容。
+func (rlm *RequestLifecycleManager) SetRouteSnapshot(snapshotJSON string) {
+	snapshotJSON = strings.TrimSpace(snapshotJSON)
+	if snapshotJSON == "" || rlm.usageTracker == nil || rlm.stateManager.GetRequestID() == "" {
+		return
+	}
+	rlm.usageTracker.RecordRequestUpdate(rlm.stateManager.GetRequestID(), tracking.UpdateOptions{
+		RouteSnapshot: &snapshotJSON,
+	})
+}
+
 // SetReasoningConfig 将 Claude 的推理配置写入请求追踪
 // reasoningJSON 形如 {"type":"adaptive","effort":"high"}：
 // type 是扩展思考的开关模式，effort 才是推理强度，两者可各自缺省
@@ -907,6 +940,7 @@ func (rlm *RequestLifecycleManager) FailRequest(failureReason, errorDetail strin
 
 	// 🚀 [架构重构] 使用统一的最终失败记录方法，一次性更新所有相关字段
 	if rlm.usageTracker != nil {
+		rlm.syncRetryCount(requestID)
 		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "failed", failureReason, errorDetail, duration, 0, nil)
 	}
 
@@ -927,6 +961,7 @@ func (rlm *RequestLifecycleManager) FailRequestWithUpstreamStatus(failureReason,
 		return
 	}
 	if rlm.usageTracker != nil {
+		rlm.syncRetryCount(requestID)
 		rlm.usageTracker.RecordRequestFinalFailureWithUpstreamStatus(requestID, modelName, "failed", failureReason, errorDetail, duration, httpStatus, nil)
 	}
 	rlm.notifyStatusChange("failed", rlm.stateManager.GetRetryCount(), httpStatus)
@@ -950,6 +985,7 @@ func (rlm *RequestLifecycleManager) CancelRequest(cancelReason string, tokens *t
 
 	// 🚀 [架构重构] 使用统一的最终失败记录方法，一次性更新所有相关字段
 	if rlm.usageTracker != nil {
+		rlm.syncRetryCount(requestID)
 		rlm.usageTracker.RecordRequestFinalFailure(requestID, modelName, "cancelled", cancelReason, "", duration, 0, tokens)
 	}
 

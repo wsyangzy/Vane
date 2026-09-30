@@ -86,6 +86,9 @@ type App struct {
 	modelPricingStore   store.ModelPricingStore      // 模型定价数据持久化
 	modelPricingService *service.ModelPricingService // 模型定价业务服务
 
+	// 模型路由规则 (SQLite, Claude/Codex 共用一张表按 provider 隔离)
+	modelRouteService *service.ModelRouteService
+
 	// 系统设置存储 (SQLite)
 	settingsStore   store.SettingsStore      // 设置数据持久化
 	settingsService *service.SettingsService // 设置业务服务
@@ -288,6 +291,9 @@ func (a *App) startup() {
 
 	// 7.55 初始化 Codex Provider 存储 (SQLite)
 	a.setupCodexProviderStore()
+
+	// 7.56 发布 Claude 请求级路由配置（模型路由规则 + 渠道非流改道）
+	a.syncClaudeRouteConfig(context.Background())
 
 	// 7.6 同步端点倍率到 UsageTracker（用于成本计算）
 	a.syncEndpointMultipliersToTracker(context.Background())
@@ -1704,6 +1710,8 @@ func (a *App) initCodexProxy() {
 		a.emitCodexProviderStateUpdate()
 	})
 	a.codexEndpointMgr = mgr
+	// 发布 Codex 模型路由规则（渠道非流改道已随 Reload 加载）；此时代理端口尚未开始接收请求
+	a.syncCodexModelRules(context.Background())
 
 	// 创建 HealthChecker（参数动态从 a.config.Health.* 读取，设置页改动下一轮即生效）
 	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger)

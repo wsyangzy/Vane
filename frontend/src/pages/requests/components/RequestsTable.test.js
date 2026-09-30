@@ -34,6 +34,7 @@ test('request display calculations preserve retry, transfer and token semantics'
   assert.equal(countChannelSwitches(items), 1);
   assert.deepEqual(summarizeEndpointAttempts(request), {
     attemptCount: 3,
+    finalEndpointAttempts: null,
     retryCount: 2,
     transferCount: 1,
     transferred: true,

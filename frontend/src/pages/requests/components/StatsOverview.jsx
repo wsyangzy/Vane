@@ -7,11 +7,13 @@ import {
   Zap,
   CheckCircle2,
   Clock,
+  Database,
   DollarSign,
   FileText,
   XCircle
 } from 'lucide-react';
 import { KPICard } from '@components/ui';
+import { formatCacheHitRate } from '../utils/tokenDisplay.js';
 
 /**
  * 格式化Token数量（转换为M单位）
@@ -97,17 +99,26 @@ const StatsOverview = ({ stats, claudeStats, codexStats, total = 0, isBlurred = 
     ? tokenSubParts.join(' / ')
     : undefined;
 
+  // 缓存命中率：两个 provider 的 input_tokens 口径不同（Codex 已含缓存），合并成一个数没有意义，
+  // 主值取筛选范围自身的命中率，子文本按 provider 分列
+  const cacheHitRate = formatCacheHitRate(stats.cache_hit_rate);
+  const cacheSubParts = [];
+  if (claudeRequests > 0) cacheSubParts.push(`Claude ${formatCacheHitRate(claudeStats?.cache_hit_rate)}`);
+  if (codexRequests > 0) cacheSubParts.push(`Codex ${formatCacheHitRate(codexStats?.cache_hit_rate)}`);
+  const cacheSubText = cacheSubParts.length > 1 ? cacheSubParts.join(' / ') : undefined;
+
   const kpis = [
     { label: '总请求数', value: totalRequests, subText: requestSubText, icon: Zap, statusColor: 'bg-orange-50 text-orange-500' },
     { label: '成功率', value: successRate, icon: CheckCircle2, statusColor: 'bg-emerald-50 text-emerald-500' },
     { label: '平均耗时', value: avgDuration, icon: Clock, statusColor: 'bg-amber-50 text-amber-500' },
     { label: '总成本', value: totalCost, subText: costSubText, icon: DollarSign, statusColor: 'bg-blue-50 text-blue-500' },
     { label: '总Token数 (M)', value: totalTokens, subText: tokenSubText, icon: FileText, statusColor: 'bg-indigo-50 text-indigo-500' },
+    { label: '缓存命中率', value: cacheHitRate, subText: cacheSubText, icon: Database, statusColor: 'bg-sky-50 text-sky-500' },
     { label: '失败请求', value: failedRequests, icon: XCircle, statusColor: 'bg-rose-50 text-rose-500' }
   ];
 
   return (
-    <div className={`motion-content-dim grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 ${isBlurred ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
+    <div className={`motion-content-dim grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 ${isBlurred ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
       {kpis.map((kpi, idx) => (
         <KPICard
           key={idx}

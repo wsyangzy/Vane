@@ -5,11 +5,12 @@
 package codexproxy
 
 import (
-	"encoding/json"
 	"log/slog"
 	"strings"
 
+	"ai-relay-forwarder/internal/bodyrewrite"
 	"ai-relay-forwarder/internal/providers/codex/store"
+	"ai-relay-forwarder/internal/routing"
 )
 
 type modelRewriteResult struct {
@@ -61,18 +62,48 @@ func effectiveCodexModel(endpoint *CodexEndpoint, channel *store.CodexChannelRec
 	return requestedModel
 }
 
+// endpointSupportsCodexModel 声明项含 * 时大小写不敏感地通配；不含 * 的声明保持精确匹配。
 func endpointSupportsCodexModel(endpoint *CodexEndpoint, channel *store.CodexChannelRecord, requestedModel string) bool {
 	if endpoint == nil || len(endpoint.SupportedModels) == 0 || strings.TrimSpace(requestedModel) == "" {
 		return true
 	}
 	effective := effectiveCodexModel(endpoint, channel, requestedModel)
 	for _, model := range endpoint.SupportedModels {
-		model = strings.TrimSpace(model)
-		if model == requestedModel || model == effective {
+		if routing.MatchSupportedModel(model, requestedModel) || routing.MatchSupportedModel(model, effective) {
 			return true
 		}
 	}
 	return false
+}
+
+// endpointDeclaresCodexModel 按分组能力声明核对一个确定的上游模型（不再经过模型映射）；未声明时不过滤。
+func endpointDeclaresCodexModel(endpoint *CodexEndpoint, model string) bool {
+	if endpoint == nil || len(endpoint.SupportedModels) == 0 {
+		return true
+	}
+	for _, declared := range endpoint.SupportedModels {
+		if routing.MatchSupportedModel(declared, model) {
+			return true
+		}
+	}
+	return false
+}
+
+// rewriteModelForRoute 路由目标声明了上游模型时强制改写 model，
+// 优先级高于分组映射，也跳过 channel.Model 兜底改写。
+func rewriteModelForRoute(body []byte, upstreamModel string, logger *slog.Logger, requestID string) modelRewriteResult {
+	result := modelRewriteResult{Body: body}
+	newBody, originalModel, ok := bodyrewrite.ReplaceTopLevelString(body, "model", upstreamModel)
+	if !ok || originalModel == upstreamModel {
+		return result
+	}
+	logger.Info("[Codex model 改写]",
+		"request_id", requestID,
+		"original_model", originalModel,
+		"new_model", upstreamModel,
+		"rewrite_source", "route",
+	)
+	return modelRewriteResult{Body: newBody, OriginalModel: originalModel, NewModel: upstreamModel, Source: "route"}
 }
 
 // rewriteModelIfNeeded 按 channelModel 决定是否改写 body 中的 model 字段。
@@ -81,9 +112,8 @@ func endpointSupportsCodexModel(endpoint *CodexEndpoint, channel *store.CodexCha
 // 降级策略——以下场景均返回原 body 不阻断：
 //   - channelModel 为空（使用全局默认，不改写）
 //   - body 不是合法 JSON 对象
-//   - JSON 对象中无 model 字段
+//   - JSON 对象中无 model 字段，或 model 不是字符串
 //   - body 中 model 已等于 channelModel
-//   - JSON Marshal/Unmarshal 失败
 func rewriteModelIfNeeded(body []byte, channelModel string, logger *slog.Logger, requestID string) []byte {
 	return rewriteModelWithMappingIfNeeded(body, nil, channelModel, logger, requestID)
 }
@@ -95,6 +125,7 @@ func rewriteModelWithMappingIfNeeded(body []byte, modelMapping map[string]string
 }
 
 // rewriteModelWithMappingDetails 返回改写后的 body，并携带可写入请求详情的改写元信息。
+// 只替换顶层 model 字符串 token 的字节区间，其余字节（键序、空白、转义、数字）保持原样。
 func rewriteModelWithMappingDetails(body []byte, modelMapping map[string]string, channelModel string, logger *slog.Logger, requestID string) modelRewriteResult {
 	result := modelRewriteResult{Body: body}
 	channelModel = strings.TrimSpace(channelModel)
@@ -102,26 +133,15 @@ func rewriteModelWithMappingDetails(body []byte, modelMapping map[string]string,
 		return result
 	}
 
-	// 用 RawMessage 解析以保留整数/浮点精度和字段原始 JSON 语法
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		// body 不是 JSON 对象（如二进制、表单上传）→ 透传
+	// 非 JSON 对象（如二进制、表单上传）、没有 model、model 不是字符串 → 透传
+	originalModel, ok := bodyrewrite.LookupTopLevelString(body, "model")
+	if !ok {
 		return result
 	}
-
-	modelRaw, hasModel := raw["model"]
-	if !hasModel {
-		// 没有 model 字段（如 GET /v1/models 路径错走 POST）→ 透传
-		return result
-	}
-
-	// 比对原 model 与 channelModel；相同则跳过改写
-	var originalModel string
-	originalModelErr := json.Unmarshal(modelRaw, &originalModel)
 
 	newModel := ""
 	rewriteSource := ""
-	if originalModelErr == nil && len(modelMapping) > 0 {
+	if len(modelMapping) > 0 {
 		if mappedModel := strings.TrimSpace(modelMapping[originalModel]); mappedModel != "" {
 			newModel = mappedModel
 			rewriteSource = "mapping"
@@ -131,31 +151,12 @@ func rewriteModelWithMappingDetails(body []byte, modelMapping map[string]string,
 		newModel = channelModel
 		rewriteSource = "channel_model"
 	}
-	if newModel == "" {
-		return result
-	}
-	if originalModelErr == nil && originalModel == newModel {
+	if newModel == "" || originalModel == newModel {
 		return result
 	}
 
-	// 构造新的 model JSON 值并替换
-	newModelBytes, err := json.Marshal(newModel)
-	if err != nil {
-		logger.Warn("[Codex model 改写] 新 model 序列化失败，原样转发",
-			"request_id", requestID,
-			"new_model", newModel,
-			"error", err,
-		)
-		return result
-	}
-	raw["model"] = newModelBytes
-
-	newBody, err := json.Marshal(raw)
-	if err != nil {
-		logger.Warn("[Codex model 改写] body 重新序列化失败，原样转发",
-			"request_id", requestID,
-			"error", err,
-		)
+	newBody, _, ok := bodyrewrite.ReplaceTopLevelString(body, "model", newModel)
+	if !ok {
 		return result
 	}
 

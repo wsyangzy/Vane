@@ -84,20 +84,25 @@ func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string)
 	if m == nil || m.groupManager == nil {
 		return nil
 	}
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.GetAllEndpoints())
+	if len(activeEndpoints) == 0 {
+		return nil
+	}
+	return filterRoutableEndpoints(activeEndpoints, excludeKeys)
+}
 
+// filterRoutableEndpoints 请求选路的通用过滤：排除本次请求已尝试的端点、
+// 不参与故障转移的端点，以及健康检查判定为不可用的端点。
+func filterRoutableEndpoints(endpoints []*Endpoint, excludeKeys []string) []*Endpoint {
 	excludeSet := make(map[string]struct{}, len(excludeKeys))
 	for _, key := range excludeKeys {
 		if key != "" {
 			excludeSet[key] = struct{}{}
 		}
 	}
-	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.GetAllEndpoints())
-	if len(activeEndpoints) == 0 {
-		return nil
-	}
 
-	filtered := make([]*Endpoint, 0, len(activeEndpoints))
-	for _, ep := range activeEndpoints {
+	filtered := make([]*Endpoint, 0, len(endpoints))
+	for _, ep := range endpoints {
 		if ep == nil {
 			continue
 		}
@@ -118,6 +123,59 @@ func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string)
 		filtered = append(filtered, ep)
 	}
 	return filtered
+}
+
+// GetRoutableEndpointsForChannel 返回指定渠道的可路由端点，只供本次请求使用。
+// 与激活渠道的选路过滤相同，但不经过激活渠道过滤，也不读写全局激活状态；
+// groupID > 0 时只取该凭证分组。已暂停的渠道返回空。
+func (m *Manager) GetRoutableEndpointsForChannel(channel string, groupID int64, excludeKeys []string) []*Endpoint {
+	if m == nil || m.groupManager == nil || channel == "" {
+		return nil
+	}
+	if m.groupManager.IsGroupManuallyPaused(channel) {
+		return nil
+	}
+	all := m.GetAllEndpoints()
+	inChannel := make([]*Endpoint, 0, len(all))
+	for _, ep := range all {
+		if ep == nil || ChannelKey(ep) != channel {
+			continue
+		}
+		if groupID > 0 && ep.Config.CredentialGroupID != groupID {
+			continue
+		}
+		inChannel = append(inChannel, ep)
+	}
+	candidates := filterRoutableEndpoints(inChannel, excludeKeys)
+	if len(candidates) == 0 {
+		return nil
+	}
+	return m.sortHealthyEndpoints(candidates, false)
+}
+
+// RoutableChannelsByPriority 按渠道优先级返回未暂停的渠道名，供请求级改道挑选候选渠道。
+func (m *Manager) RoutableChannelsByPriority() []string {
+	if m == nil || m.groupManager == nil {
+		return nil
+	}
+	groups := m.groupManager.GetAllGroups()
+	names := make([]string, 0, len(groups))
+	for _, group := range groups {
+		if group == nil || group.Name == "" || group.ManuallyPaused {
+			continue
+		}
+		names = append(names, group.Name)
+	}
+	return names
+}
+
+// ActiveChannelName 返回当前激活渠道名（无激活渠道时为空串）
+func (m *Manager) ActiveChannelName() string {
+	if m == nil || m.groupManager == nil {
+		return ""
+	}
+	active, _ := m.groupManager.ActiveGroupSnapshot()
+	return active
 }
 
 // sortHealthyEndpoints sorts healthy endpoints by credential group first, then by the configured

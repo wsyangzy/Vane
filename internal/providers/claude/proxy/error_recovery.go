@@ -420,11 +420,12 @@ func (erm *ErrorRecoveryManager) HandleFinalFailure(errorCtx *ErrorContext) {
 			status = "stream_error"
 		}
 
+		// 不写 retry_count：errorCtx.AttemptCount 是调用点的局部计数（流式转发失败时恒为 0），
+		// 整请求口径由生命周期管理器在终态统一补写
 		opts := tracking.UpdateOptions{
 			EndpointName: &errorCtx.EndpointName,
 			GroupName:    &errorCtx.GroupName,
 			Status:       &status,
-			RetryCount:   &errorCtx.AttemptCount,
 			HttpStatus:   intPtr(0),
 		}
 		erm.usageTracker.RecordRequestUpdate(errorCtx.RequestID, opts)

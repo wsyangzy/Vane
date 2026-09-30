@@ -358,6 +358,8 @@ type EndpointCostItem struct {
 	Tokens   int64   `json:"tokens"`
 	Cost     float64 `json:"cost"`
 	Provider string  `json:"provider"`
+	// CacheHitRate token 加权缓存命中率（0~1）；没有输入用量时为 null
+	CacheHitRate *float64 `json:"cache_hit_rate"`
 }
 
 // GetEndpointCosts 获取当日端点成本数据
@@ -447,13 +449,14 @@ func queryEndpointCostsForDate(usageTracker interface {
 		totalTokens := cost.InputTokens + cost.OutputTokens + cost.CacheCreationTokens + cost.CacheReadTokens
 
 		result = append(result, EndpointCostItem{
-			Name:     name,
-			Channel:  cost.Channel,
-			Endpoint: cost.EndpointName,
-			Group:    cost.GroupName,
-			Tokens:   totalTokens,
-			Cost:     cost.TotalCostUSD,
-			Provider: prov,
+			Name:         name,
+			Channel:      cost.Channel,
+			Endpoint:     cost.EndpointName,
+			Group:        cost.GroupName,
+			Tokens:       totalTokens,
+			Cost:         cost.TotalCostUSD,
+			Provider:     prov,
+			CacheHitRate: cost.CacheHitRate,
 		})
 	}
 

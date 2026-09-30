@@ -13,6 +13,7 @@ import (
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
+	"ai-relay-forwarder/internal/routing"
 )
 
 // ============================================================
@@ -1036,10 +1037,12 @@ func (a *App) ActivateEndpointRecordByID(id int64) error {
 
 // ChannelInfo 渠道信息
 type ChannelInfo struct {
+	ID               int64                       `json:"id"`
 	Name             string                      `json:"name"`
 	Website          string                      `json:"website,omitempty"`
 	Priority         int                         `json:"priority"`
 	ModelMapping     map[string]string           `json:"model_mapping"`
+	NonStreamRoute   *NonStreamRouteInfo         `json:"non_stream_route"` // 非流改道配置，关闭时为 null
 	CreatedAt        string                      `json:"created_at"`
 	EndpointCount    int                         `json:"endpoint_count"`
 	CredentialGroups []ClaudeCredentialGroupInfo `json:"credential_groups"`
@@ -1093,6 +1096,8 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	channelPriority := make(map[string]int)
 	channelModelMapping := make(map[string]map[string]string)
 	channelCreatedAt := make(map[string]string)
+	channelIDs := make(map[string]int64)
+	channelNonStream := make(map[string]*routing.NonStreamRoute)
 	orderedChannels := make([]string, 0, 16)
 	if channelService != nil {
 		channelRecords, err := channelService.ListChannels(ctx)
@@ -1102,6 +1107,10 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 		for _, c := range channelRecords {
 			if c == nil || c.Name == "" {
 				continue
+			}
+			channelIDs[c.Name] = c.ID
+			if c.NonStreamRoute != nil {
+				channelNonStream[c.Name] = c.NonStreamRoute
 			}
 			channelWebsite[c.Name] = c.Website
 			if c.Priority <= 0 {
@@ -1122,16 +1131,23 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 
 	seen := make(map[string]struct{}, len(channelCount))
 	result := make([]ChannelInfo, 0, len(channelCount))
+	// 只有存在非流改道配置时才需要目标目录来解析目标名称
+	var routeCatalog routing.Catalog
+	if len(channelNonStream) > 0 {
+		routeCatalog, _ = a.routeCatalog(ctx, "claude")
+	}
 
 	// 1) channels 表中的渠道（已按 store 层排序），优先输出，保证 UI 顺序稳定
 	for _, name := range orderedChannels {
 		count := channelCount[name]
 		credentialGroups := a.listClaudeCredentialGroupInfos(ctx, claudeCredentialGroupService, claudeCredentialGroupStore, name)
 		result = append(result, ChannelInfo{
+			ID:               channelIDs[name],
 			Name:             name,
 			Website:          channelWebsite[name],
 			Priority:         channelPriority[name],
 			ModelMapping:     channelModelMapping[name],
+			NonStreamRoute:   nonStreamRouteInfo(channelNonStream[name], routeCatalog),
 			CreatedAt:        channelCreatedAt[name],
 			EndpointCount:    count,
 			CredentialGroups: credentialGroups,
@@ -1519,6 +1535,8 @@ func (a *App) syncChannelRuntimeState(ctx context.Context) error {
 		return err
 	}
 	a.syncChannelModelMappingsToEndpointManager(ctx)
+	// 渠道增删改会改变路由目标的 ID→名称映射与非流改道配置
+	a.syncClaudeRouteConfig(ctx)
 	return nil
 }
 
@@ -1727,6 +1745,12 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 		}
 	}
 
+	// 删除前记下渠道 ID：模型路由规则按 ID 挂在渠道上
+	var deletedChannelID int64
+	if record, err := channelStore.Get(ctx, name); err == nil && record != nil {
+		deletedChannelID = record.ID
+	}
+
 	// 删除渠道
 	if err := channelStore.Delete(ctx, name); err != nil {
 		return err
@@ -1735,6 +1759,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交事务失败: %w", err)
 	}
+	a.deleteChannelModelRoutes(ctx, "claude", deletedChannelID)
 
 	// 同步运行时配置（删除端点/组）
 	if endpointService != nil {
@@ -1743,6 +1768,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 		}
 	}
 	a.syncChannelModelMappingsToEndpointManager(ctx)
+	a.syncClaudeRouteConfig(ctx)
 
 	// 推送前端刷新
 	a.emitEndpointUpdate()

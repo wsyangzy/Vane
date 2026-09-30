@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/codex/store"
+	"ai-relay-forwarder/internal/routing"
 )
 
 // 注意：冷却机制已完全移除（参考 Claude 端 internal/providers/claude/proxy/endpoint/cooldown.go 历史经验）
@@ -76,6 +78,13 @@ type EndpointManager struct {
 	// preferredEndpointID 记录当前活跃渠道内上一次请求成功的端点，下一次请求从它开始（对齐 Claude 侧）。
 	// ponytail: 单值而非 per-channel map，Reload 时重置；需要跨渠道保留首选时再升级为 map。
 	preferredEndpointID int64
+
+	// 全部渠道的快照，供请求级路由按渠道取候选端点；Reload 时整体刷新。
+	// 健康状态仍按端点 ID 记在 unhealthyMap，与激活渠道共用。
+	channelsByID       map[int64]*store.CodexChannelRecord
+	endpointsByChannel map[int64][]*CodexEndpoint
+	// 已启用的模型路由规则，由 App 在规则变更后发布
+	modelRules atomic.Pointer[map[int64][]routing.ModelRule]
 
 	// 活跃端点变更回调（由 App 注入，用于发送 Wails 事件刷新前端 UI）
 	onActiveChanged func()
@@ -200,10 +209,13 @@ func (m *EndpointManager) Reload() error {
 		return fmt.Errorf("获取活跃 Codex 渠道失败: %w", err)
 	}
 	if channel == nil {
+		channelsByID, endpointsByChannel := m.loadChannelSnapshots(ctx, nil, nil)
 		m.mu.Lock()
 		m.activeChannel = nil
 		m.endpoints = nil
 		m.preferredEndpointID = 0
+		m.channelsByID = channelsByID
+		m.endpointsByChannel = endpointsByChannel
 		m.mu.Unlock()
 		m.logger.Warn("无活跃 Codex 渠道，端点列表已清空")
 		return nil
@@ -215,10 +227,13 @@ func (m *EndpointManager) Reload() error {
 	}
 
 	sortCodexEndpoints(endpoints)
+	channelsByID, endpointsByChannel := m.loadChannelSnapshots(ctx, channel, endpoints)
 
 	m.mu.Lock()
 	m.activeChannel = channel
 	m.endpoints = endpoints
+	m.channelsByID = channelsByID
+	m.endpointsByChannel = endpointsByChannel
 	// 端点列表重建后，旧的成功端点提示可能已不再适用（与 Claude 端点同步时清空语义一致）。
 	m.preferredEndpointID = 0
 	// 健康检查覆盖所有参与转移的渠道，不能按当前活跃渠道裁剪全局端点状态。
@@ -229,6 +244,114 @@ func (m *EndpointManager) Reload() error {
 		"endpoint_count", len(endpoints),
 	)
 	return nil
+}
+
+// loadChannelSnapshots 加载全部渠道及其端点，供请求级路由按渠道取候选。
+// 失败只记日志：快照缺失时请求级路由暂不可用，但不能影响激活渠道的正常转发。
+func (m *EndpointManager) loadChannelSnapshots(ctx context.Context, active *store.CodexChannelRecord, activeEndpoints []*CodexEndpoint) (map[int64]*store.CodexChannelRecord, map[int64][]*CodexEndpoint) {
+	channels, err := m.channelStore.List(ctx)
+	if err != nil {
+		m.logger.Warn("加载 Codex 渠道快照失败，请求级路由暂不可用", "error", err)
+		return nil, nil
+	}
+	channelsByID := make(map[int64]*store.CodexChannelRecord, len(channels))
+	endpointsByChannel := make(map[int64][]*CodexEndpoint, len(channels))
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		channelsByID[channel.ID] = channel
+		if active != nil && channel.ID == active.ID {
+			endpointsByChannel[channel.ID] = activeEndpoints
+			continue
+		}
+		endpoints, err := m.loadChannelEndpoints(ctx, channel)
+		if err != nil {
+			m.logger.Warn("加载 Codex 渠道端点快照失败，该渠道暂不可作为路由目标", "channel", channel.Name, "error", err)
+			continue
+		}
+		endpointsByChannel[channel.ID] = endpoints
+	}
+	return channelsByID, endpointsByChannel
+}
+
+// ChannelByID 返回渠道快照；渠道不存在时为 nil
+func (m *EndpointManager) ChannelByID(id int64) *store.CodexChannelRecord {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.channelsByID[id]
+}
+
+// SetModelRules 发布已启用的模型路由规则（按来源渠道分组）；nil 表示关闭
+func (m *EndpointManager) SetModelRules(rules []routing.ModelRule) {
+	if rules == nil {
+		m.modelRules.Store(nil)
+		return
+	}
+	grouped := routing.RulesBySource(rules)
+	m.modelRules.Store(&grouped)
+}
+
+// ModelRules 返回指定来源渠道已启用的模型路由规则
+func (m *EndpointManager) ModelRules(sourceChannelID int64) []routing.ModelRule {
+	if rules := m.modelRules.Load(); rules != nil {
+		return (*rules)[sourceChannelID]
+	}
+	return nil
+}
+
+// GetEndpointForChannel 在指定渠道（groupID > 0 时只取该凭证分组）内按路由策略选端点，只供本次请求使用，
+// 不读写激活渠道。upstreamModel 非空表示目标强制改写上游模型：分组映射不再生效，按改写后的模型核对能力声明。
+// 暂停的渠道（非激活渠道且未参与故障转移）不作为路由目标。
+func (m *EndpointManager) GetEndpointForChannel(channelID, groupID int64, requestedModel, upstreamModel string, failedIDs []int64, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	channel := m.channelsByID[channelID]
+	if channel == nil {
+		return nil, fmt.Errorf("Codex 路由目标渠道不存在: %d", channelID)
+	}
+	isActive := m.activeChannel != nil && m.activeChannel.ID == channelID
+	if !isActive && !channel.FailoverEnabled {
+		return nil, fmt.Errorf("Codex 路由目标渠道已暂停: %s", channel.Name)
+	}
+
+	failedSet := make(map[int64]struct{}, len(failedIDs))
+	for _, id := range failedIDs {
+		failedSet[id] = struct{}{}
+	}
+	endpoints := m.endpointsByChannel[channelID]
+	candidates := make([]*CodexEndpoint, 0, len(endpoints))
+	for _, ep := range endpoints {
+		if ep == nil || !ep.FailoverEnabled {
+			continue
+		}
+		if groupID > 0 && ep.CredentialGroupID != groupID {
+			continue
+		}
+		if _, failed := failedSet[ep.ID]; failed {
+			continue
+		}
+		if credentialGroupSkipped(ep, skippedGroups) {
+			continue
+		}
+		if upstreamModel != "" {
+			if !endpointDeclaresCodexModel(ep, upstreamModel) {
+				continue
+			}
+		} else if requestedModel != "" && len(ep.SupportedModels) > 0 && !endpointSupportsCodexModel(ep, channel, requestedModel) {
+			continue
+		}
+		if !m.endpointHealthAllowsRoutingLocked(ep) {
+			continue
+		}
+		candidates = append(candidates, ep)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("Codex 路由目标渠道 %s 没有可用端点", channel.Name)
+	}
+	sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies, m.preferredEndpointID)
+	return candidates[0], nil
 }
 
 func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *store.CodexChannelRecord) ([]*CodexEndpoint, error) {

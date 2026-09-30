@@ -28,6 +28,7 @@ test('parseEndpointChain keeps structured JSON chain nodes', () => {
     endpoint: 'Ark API',
     statusCode: 0,
     error: '',
+    attempts: 0,
     hop: 1,
   });
   assert.equal(chainHasMultipleChannels(chain), true);
@@ -168,12 +169,28 @@ test('summarizeEndpointAttempts separates retries from adjacent identity transfe
     ],
   }), {
     attemptCount: 4,
+    finalEndpointAttempts: null,
     retryCount: 3,
     transferCount: 1,
     transferred: true,
     firstEndpoint: 'A',
     finalEndpoint: 'B',
   });
+});
+
+test('summarizeEndpointAttempts separates final-endpoint attempts from the request total', () => {
+  // 端点内重试 2 次后转移 1 次：A 发了 3 次，B 发了 1 次
+  const summary = summarizeEndpointAttempts({
+    retry_count: 3,
+    endpoint_chain: [
+      { hop: 1, channel: 'CCTQ', endpoint: 'A', attempts: 3, status_code: 503 },
+      { hop: 2, channel: 'CCTQ', endpoint: 'B', attempts: 1 },
+    ],
+  });
+
+  assert.equal(summary.finalEndpointAttempts, 1);
+  assert.equal(summary.attemptCount, 4);
+  assert.equal(summary.retryCount, 3);
 });
 
 test('summarizeEndpointAttempts uses chain length as the historical retry floor', () => {

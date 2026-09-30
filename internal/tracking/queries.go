@@ -169,6 +169,7 @@ type RequestDetail struct {
 	OriginalModelName       string `json:"original_model_name"`
 	ModelRewriteSource      string `json:"model_rewrite_source"`
 	ModelRewriteTarget      string `json:"model_rewrite_target"`
+	RouteSnapshot           string `json:"route_snapshot"`
 	ReasoningEffort         string `json:"reasoning_effort"`
 	ServiceTier             string `json:"service_tier"`
 	PrivacyRedacted         bool   `json:"privacy_redacted"`
@@ -177,6 +178,7 @@ type RequestDetail struct {
 	Provider                string `json:"provider"`     // 提供商标识: claude/codex
 
 	Status               string `json:"status"`
+	StreamOutcome        string `json:"stream_outcome"` // 终态枚举；历史行与活跃请求为空
 	HTTPStatusCode       *int   `json:"http_status_code"`
 	HTTPStatusIsUpstream bool   `json:"http_status_is_upstream"`
 	RetryCount           int    `json:"retry_count"`
@@ -251,6 +253,10 @@ type UsageStatsTotals struct {
 	TotalCostUSD    float64
 	DurationSumMs   int64
 	DurationCount   int64
+	// CacheHitNumerator / CacheHitDenominator 缓存命中率的分子分母（token 加权）。
+	// 分开累加而不是存比率：跨数据源（活动库 + 月度归档 + 热池）合并时比率不可相加
+	CacheHitNumerator   int64
+	CacheHitDenominator int64
 }
 
 func (t *UsageStatsTotals) add(other UsageStatsTotals) {
@@ -261,6 +267,8 @@ func (t *UsageStatsTotals) add(other UsageStatsTotals) {
 	t.TotalCostUSD += other.TotalCostUSD
 	t.DurationSumMs += other.DurationSumMs
 	t.DurationCount += other.DurationCount
+	t.CacheHitNumerator += other.CacheHitNumerator
+	t.CacheHitDenominator += other.CacheHitDenominator
 }
 
 func (t UsageStatsTotals) AvgDurationMs() float64 {
@@ -268,6 +276,57 @@ func (t UsageStatsTotals) AvgDurationMs() float64 {
 		return 0
 	}
 	return float64(t.DurationSumMs) / float64(t.DurationCount)
+}
+
+// CacheHitRate 缓存命中率（0~1）；没有任何输入用量时返回 nil，由展示层显示 "-"
+func (t UsageStatsTotals) CacheHitRate() *float64 {
+	return cacheHitRate(t.CacheHitNumerator, t.CacheHitDenominator)
+}
+
+func cacheHitRate(numerator, denominator int64) *float64 {
+	if denominator <= 0 {
+		return nil
+	}
+	rate := float64(numerator) / float64(denominator)
+	return &rate
+}
+
+// 缓存命中率按 provider 分别计算（09-25 评审修正 3）：
+//
+//	Claude：input_tokens 不含缓存 → cache_read / (input + cache_creation + cache_read)
+//	Codex ：input_tokens 已含 cached_tokens → cache_read / input
+//
+// Codex 极旧的行只存了计费输入（cache_read > input），分母按展示口径补回 cache_read，
+// 与 totalTokensSQLExpression 的处理一致，避免命中率超过 100%。
+const cacheHitNumeratorSQLExpression = `COALESCE(cache_read_tokens, 0)`
+
+const cacheHitDenominatorSQLExpression = `CASE
+	WHEN LOWER(COALESCE(provider, 'claude')) IN ('codex', 'openai') THEN
+		CASE
+			WHEN COALESCE(cache_read_tokens, 0) > COALESCE(input_tokens, 0) THEN COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0)
+			ELSE COALESCE(input_tokens, 0)
+		END
+	ELSE
+		COALESCE(input_tokens, 0) + COALESCE(cache_creation_tokens, 0) + COALESCE(cache_read_tokens, 0)
+END`
+
+// cacheHitParts 内存侧（热池、端点统计）使用的同一口径
+func cacheHitParts(provider string, inputTokens, cacheCreationTokens, cacheReadTokens int64) (numerator, denominator int64) {
+	if isInputCacheInclusiveProvider(provider) {
+		return cacheReadTokens, DisplayInputTokens(provider, inputTokens, cacheReadTokens)
+	}
+	return cacheReadTokens, inputTokens + cacheCreationTokens + cacheReadTokens
+}
+
+// requestLogsHasColumn 月度归档库的表结构复制自归档当时的活动库，可能缺后加的列
+func requestLogsHasColumn(ctx context.Context, db *sql.DB, column string) (bool, error) {
+	var count int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('request_logs') WHERE name = ?`, column,
+	).Scan(&count); err != nil {
+		return false, fmt.Errorf("failed to inspect request_logs schema: %w", err)
+	}
+	return count > 0, nil
 }
 
 // EndpointCostSummary represents cost summary data for an endpoint
@@ -290,6 +349,11 @@ type EndpointCostSummary struct {
 	OutputCostUSD        float64 `json:"output_cost_usd"`
 	CacheCreationCostUSD float64 `json:"cache_creation_cost_usd"`
 	CacheReadCostUSD     float64 `json:"cache_read_cost_usd"`
+
+	// CacheHitRate token 加权缓存命中率（0~1），按 provider 口径计算；没有输入用量时为 nil
+	CacheHitRate        *float64 `json:"cache_hit_rate"`
+	cacheHitNumerator   int64
+	cacheHitDenominator int64
 }
 
 type TokenUsageTotals struct {
@@ -506,9 +570,9 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 	if db == nil {
 		return nil, fmt.Errorf("read database not initialized")
 	}
-	optionalColumns := make(map[string]bool, 4)
+	optionalColumns := make(map[string]bool, 5)
 	columnRows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info('request_logs')
-		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot', 'http_status_is_upstream')`)
+		WHERE name IN ('model_reasoning_effort', 'service_tier', 'billing_rule_snapshot', 'http_status_is_upstream', 'route_snapshot', 'stream_outcome')`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect request detail schema: %w", err)
 	}
@@ -552,13 +616,14 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		COALESCE(original_model_name, '') as original_model_name,
 		COALESCE(model_rewrite_source, '') as model_rewrite_source,
 		COALESCE(model_rewrite_target, '') as model_rewrite_target,
+		` + optionalTextExpr("route_snapshot") + ` as route_snapshot,
 		` + optionalTextExpr("model_reasoning_effort") + ` as model_reasoning_effort,
 		` + optionalTextExpr("service_tier") + ` as service_tier,
 		COALESCE(privacy_redacted, false) as privacy_redacted,
 		COALESCE(privacy_redaction_summary, '') as privacy_redaction_summary,
 		COALESCE(is_streaming, false) as is_streaming,
 		COALESCE(provider, 'claude') as provider,
-		status, CASE WHEN ` + optionalBoolExpr("http_status_is_upstream") + ` = 1 THEN http_status_code ELSE NULL END as http_status_code, ` + optionalBoolExpr("http_status_is_upstream") + ` as http_status_is_upstream, retry_count,
+		status, ` + optionalTextExpr("stream_outcome") + ` as stream_outcome, CASE WHEN ` + optionalBoolExpr("http_status_is_upstream") + ` = 1 THEN http_status_code ELSE NULL END as http_status_code, ` + optionalBoolExpr("http_status_is_upstream") + ` as http_status_is_upstream, retry_count,
 		COALESCE(failure_reason, '') as failure_reason,
 		COALESCE(last_failure_reason, '') as last_failure_reason,
 		COALESCE(cancel_reason, '') as cancel_reason,
@@ -689,12 +754,13 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 			&detail.StartTime, &detail.EndTime, &detail.DurationMs, &detail.OutputSentAt,
 			&detail.Channel, &detail.EndpointName, &detail.EndpointChain, &detail.GroupName, &detail.ModelName,
 			&detail.OriginalModelName, &detail.ModelRewriteSource, &detail.ModelRewriteTarget,
+			&detail.RouteSnapshot,
 			&detail.ReasoningEffort,
 			&detail.ServiceTier,
 			&detail.PrivacyRedacted, &detail.PrivacyRedactionSummary,
 			&detail.IsStreaming,
 			&detail.Provider,
-			&detail.Status, &detail.HTTPStatusCode, &detail.HTTPStatusIsUpstream, &detail.RetryCount,
+			&detail.Status, &detail.StreamOutcome, &detail.HTTPStatusCode, &detail.HTTPStatusIsUpstream, &detail.RetryCount,
 			&detail.FailureReason, &detail.LastFailureReason, &detail.CancelReason,
 			&detail.InputTokens, &detail.OutputTokens,
 			&detail.ReasoningTokens, &detail.BillableOutputTokens, &detail.BillingOutputTokenSource, &detail.BillingRuleSnapshot,
@@ -802,14 +868,26 @@ func (ut *UsageTracker) queryUsageStatsTotalsFromSource(ctx context.Context, db 
 		return nil, fmt.Errorf("read database not initialized")
 	}
 
+	// 历史月度归档可能早于 stream_outcome / cache 列：列缺失时退回旧口径与 0
+	hasOutcome, err := requestLogsHasColumn(ctx, db, "stream_outcome")
+	if err != nil {
+		return nil, err
+	}
+	successExpr := `CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END`
+	if hasOutcome {
+		successExpr = `CASE WHEN ` + successRequestSQLCondition + ` THEN 1 ELSE 0 END`
+	}
+
 	query := `SELECT
 		COUNT(*) as total_requests,
-		COALESCE(SUM(CASE WHEN status IN ('completed', 'processing') THEN 1 ELSE 0 END), 0) as success_requests,
+		COALESCE(SUM(` + successExpr + `), 0) as success_requests,
 		COALESCE(SUM(CASE WHEN status IN ('failed', 'partial_failed', 'error', 'auth_error', 'rate_limited', 'server_error', 'network_error', 'stream_error', 'timeout') THEN 1 ELSE 0 END), 0) as failed_requests,
 		COALESCE(SUM(` + totalTokensSQLExpression + `), 0) as total_tokens,
 		COALESCE(SUM(total_cost_usd), 0.0) as total_cost_usd,
 		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN duration_ms ELSE 0 END), 0) as duration_sum_ms,
-		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 ELSE 0 END), 0) as duration_count
+		COALESCE(SUM(CASE WHEN duration_ms IS NOT NULL AND duration_ms > 0 THEN 1 ELSE 0 END), 0) as duration_count,
+		COALESCE(SUM(` + cacheHitNumeratorSQLExpression + `), 0) as cache_hit_numerator,
+		COALESCE(SUM(` + cacheHitDenominatorSQLExpression + `), 0) as cache_hit_denominator
 		FROM request_logs WHERE 1=1
 			AND COALESCE(environment, 'release') = ?`
 
@@ -865,6 +943,8 @@ func (ut *UsageTracker) queryUsageStatsTotalsFromSource(ctx context.Context, db 
 		&totals.TotalCostUSD,
 		&totals.DurationSumMs,
 		&totals.DurationCount,
+		&totals.CacheHitNumerator,
+		&totals.CacheHitDenominator,
 	); err != nil {
 		return nil, fmt.Errorf("failed to query usage stats totals: %w", err)
 	}
@@ -983,13 +1063,21 @@ func (ut *UsageTracker) QueryUsageStatsTotalsWithHotPool(ctx context.Context, op
 	var hotTotals UsageStatsTotals
 	for _, req := range hotRequests {
 		hotTotals.TotalRequests++
-		switch req.Status {
-		case "completed", "processing":
+		httpStatus := 0
+		if req.HTTPStatusCode != nil {
+			httpStatus = *req.HTTPStatusCode
+		}
+		if isSuccessfulOutcome(req.StreamOutcome, req.Status, httpStatus, req.HTTPStatusIsUpstream) {
 			hotTotals.SuccessRequests++
+		}
+		switch req.Status {
 		case "failed", "partial_failed", "error", "auth_error", "rate_limited", "server_error", "network_error", "stream_error", "timeout":
 			hotTotals.FailedRequests++
 		}
 
+		numerator, denominator := cacheHitParts(req.Provider, req.InputTokens, req.CacheCreationTokens, req.CacheReadTokens)
+		hotTotals.CacheHitNumerator += numerator
+		hotTotals.CacheHitDenominator += denominator
 		hotTotals.TotalTokens += DisplayTotalTokens(req.Provider, req.InputTokens, req.OutputTokens, req.CacheCreationTokens, req.CacheReadTokens)
 		hotTotals.TotalCostUSD += req.TotalCostUSD
 
@@ -1102,13 +1190,14 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 	startOfDay := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 0, 0, 0, 0, location)
 	endOfDay := time.Date(startTime.Year(), startTime.Month(), startTime.Day(), 23, 59, 59, 999999999, location)
 
-	query := `SELECT
+	// %s 为成功判定表达式：月度归档可能缺 stream_outcome 列，按数据源分别选口径
+	queryTemplate := `SELECT
 		COALESCE(channel, '') as channel,
 		COALESCE(endpoint_name, '') as endpoint_name,
 		COALESCE(group_name, '') as group_name,
 		COALESCE(endpoint_chain, '') as endpoint_chain,
 		COALESCE(provider, 'claude') as provider,
-		COALESCE(status, '') as status,
+		CASE WHEN %s THEN 1 ELSE 0 END as success,
 		COALESCE(` + totalTokensSQLExpression + `, 0) as total_tokens,
 		COALESCE(total_cost_usd, 0.0) as total_cost_usd,
 		COALESCE(input_tokens, 0) as input_tokens,
@@ -1135,7 +1224,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		GroupName            string
 		EndpointChain        string
 		Provider             string
-		Status               string
+		Success              bool
 		TotalTokens          int64
 		TotalCostUSD         float64
 		InputTokens          int64
@@ -1150,7 +1239,15 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 
 	grouped := make(map[endpointCostKey]*EndpointCostSummary)
 	err = ut.forEachHistorySource(ctx, &startOfDay, &endOfDay, func(source historyQuerySource) error {
-		rows, err := source.db.QueryContext(ctx, query,
+		hasOutcome, err := requestLogsHasColumn(ctx, source.db, "stream_outcome")
+		if err != nil {
+			return err
+		}
+		successExpr := `COALESCE(status, '') = 'completed'`
+		if hasOutcome {
+			successExpr = successRequestSQLCondition
+		}
+		rows, err := source.db.QueryContext(ctx, fmt.Sprintf(queryTemplate, successExpr),
 			ut.formatStartTimeQueryBound(startOfDay), ut.formatEndTimeQueryBound(endOfDay), normalizeTrackingEnvironment(ut.environment))
 		if err != nil {
 			return err
@@ -1159,7 +1256,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 		for rows.Next() {
 			var row endpointCostRow
 			if err := rows.Scan(
-				&row.Channel, &row.EndpointName, &row.GroupName, &row.EndpointChain, &row.Provider, &row.Status,
+				&row.Channel, &row.EndpointName, &row.GroupName, &row.EndpointChain, &row.Provider, &row.Success,
 				&row.TotalTokens, &row.TotalCostUSD,
 				&row.InputTokens, &row.OutputTokens,
 				&row.CacheCreationTokens, &row.CacheReadTokens,
@@ -1191,9 +1288,12 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 			cost.TotalTokens += row.TotalTokens
 			cost.TotalCostUSD += row.TotalCostUSD
 			cost.RequestCount++
-			if row.Status == "completed" {
+			if row.Success {
 				cost.SuccessCount++
 			}
+			numerator, denominator := cacheHitParts(row.Provider, row.InputTokens, row.CacheCreationTokens, row.CacheReadTokens)
+			cost.cacheHitNumerator += numerator
+			cost.cacheHitDenominator += denominator
 			cost.InputTokens += row.InputTokens
 			cost.OutputTokens += row.OutputTokens
 			cost.CacheCreationTokens += row.CacheCreationTokens
@@ -1212,6 +1312,7 @@ func (ut *UsageTracker) GetEndpointCostsForDate(ctx context.Context, date string
 
 	costs := make([]EndpointCostSummary, 0, len(grouped))
 	for _, cost := range grouped {
+		cost.CacheHitRate = cacheHitRate(cost.cacheHitNumerator, cost.cacheHitDenominator)
 		costs = append(costs, *cost)
 	}
 	sort.Slice(costs, func(i, j int) bool {

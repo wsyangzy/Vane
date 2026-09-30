@@ -526,6 +526,10 @@ func (ut *UsageTracker) buildFlexibleUpdateQuery(event RequestEvent) (string, []
 		setParts = append(setParts, "model_rewrite_target = ?")
 		args = append(args, *opts.ModelRewriteTarget)
 	}
+	if opts.RouteSnapshot != nil {
+		setParts = append(setParts, "route_snapshot = ?")
+		args = append(args, nullString(*opts.RouteSnapshot))
+	}
 	if opts.EndTime != nil {
 		setParts = append(setParts, "end_time = ?")
 		args = append(args, *opts.EndTime)

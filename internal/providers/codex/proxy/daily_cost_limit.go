@@ -17,9 +17,11 @@ func (h *Handler) selectQuotaEligibleEndpoint(
 	quotaSkipped []credentialGroupRef,
 	primary bool,
 ) (*CodexEndpoint, []credentialGroupRef, error) {
-	return h.selectQuotaEligibleEndpointForModel(ctx, channelName, "", failedIDs, baseSkipped, quotaSkipped, primary)
+	return h.selectQuotaEligibleEndpointForModel(ctx, channelName, "", failedIDs, baseSkipped, quotaSkipped, primary, nil)
 }
 
+// selectQuotaEligibleEndpointForModel stage 非空时只在路由阶段的渠道内选端点（不读写激活渠道），
+// 否则按激活渠道的现有流程选端点。
 func (h *Handler) selectQuotaEligibleEndpointForModel(
 	ctx context.Context,
 	channelName string,
@@ -28,6 +30,7 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 	baseSkipped []credentialGroupRef,
 	quotaSkipped []credentialGroupRef,
 	primary bool,
+	stage *codexRouteStage,
 ) (*CodexEndpoint, []credentialGroupRef, error) {
 	blocked := false
 	for {
@@ -37,9 +40,12 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 
 		var endpoint *CodexEndpoint
 		var err error
-		if primary {
+		switch {
+		case stage != nil:
+			endpoint, err = h.manager.GetEndpointForChannel(stage.channel.ID, stage.groupID, requestedModel, stage.upstreamModel, failedIDs, skipped...)
+		case primary:
 			endpoint, err = h.manager.GetPrimaryEndpointForModel(requestedModel, skipped...)
-		} else {
+		default:
 			endpoint, err = h.manager.GetNextEndpointForModel(requestedModel, failedIDs, skipped...)
 		}
 		if err != nil {

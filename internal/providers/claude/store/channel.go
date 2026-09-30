@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ai-relay-forwarder/internal/routing"
 )
 
 // ChannelRecord 表示数据库中的渠道记录
@@ -22,6 +24,9 @@ type ChannelRecord struct {
 	// FailoverEnabled 表示该渠道是否参与“渠道间故障转移”（暂停/恢复按钮持久化）。
 	FailoverEnabled bool              `json:"failover_enabled"`
 	ModelMapping    map[string]string `json:"model_mapping"`
+	// NonStreamRoute 渠道不接非流请求时，非流请求改道到的目标；nil 表示关闭。
+	// 只经 SetNonStreamRoute 写入，Update 不改动该列。
+	NonStreamRoute *routing.NonStreamRoute `json:"non_stream_route,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -124,44 +129,14 @@ func (s *SQLiteChannelStore) Get(ctx context.Context, name string) (*ChannelReco
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	query := `
-		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), COALESCE(model_mapping, '{}'), created_at, updated_at
-		FROM channels
-		WHERE name = ?
-	`
-
-	var record ChannelRecord
-	var createdAt, updatedAt string
-	var failoverEnabled int
-	var modelMappingJSON string
-
-	err := s.queryRowContext(ctx, query, name).Scan(
-		&record.ID,
-		&record.Name,
-		&record.Website,
-		&record.Priority,
-		&failoverEnabled,
-		&modelMappingJSON,
-		&createdAt,
-		&updatedAt,
-	)
+	record, err := scanChannelRecord(s.queryRowContext(ctx, `SELECT `+channelColumns+` FROM channels WHERE name = ?`, name))
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("获取渠道失败: %w", err)
 	}
-
-	record.CreatedAt = parseSQLiteDateTime(createdAt)
-	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
-	record.FailoverEnabled = failoverEnabled != 0
-	modelMapping, err := channelModelMappingFromJSON(modelMappingJSON)
-	if err != nil {
-		return nil, err
-	}
-	record.ModelMapping = modelMapping
-
-	return &record, nil
+	return record, nil
 }
 
 // GetByPriority 根据优先级获取渠道（用于优先级冲突交换）
@@ -169,33 +144,38 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	query := `
-		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), COALESCE(model_mapping, '{}'), created_at, updated_at
-		FROM channels
-		WHERE priority = ?
-		LIMIT 1
-	`
+	record, err := scanChannelRecord(s.queryRowContext(ctx, `SELECT `+channelColumns+` FROM channels WHERE priority = ? LIMIT 1`, priority))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("根据优先级获取渠道失败: %w", err)
+	}
+	return record, nil
+}
 
+// channelColumns 渠道表的查询列，顺序与 scanChannelRecord 一致
+const channelColumns = `id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1),
+	COALESCE(model_mapping, '{}'), COALESCE(non_stream_route, ''), created_at, updated_at`
+
+func scanChannelRecord(scanner interface{ Scan(dest ...any) error }) (*ChannelRecord, error) {
 	var record ChannelRecord
 	var createdAt, updatedAt string
 	var failoverEnabled int
-	var modelMappingJSON string
+	var modelMappingJSON, nonStreamRouteJSON string
 
-	err := s.queryRowContext(ctx, query, priority).Scan(
+	if err := scanner.Scan(
 		&record.ID,
 		&record.Name,
 		&record.Website,
 		&record.Priority,
 		&failoverEnabled,
 		&modelMappingJSON,
+		&nonStreamRouteJSON,
 		&createdAt,
 		&updatedAt,
-	)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("根据优先级获取渠道失败: %w", err)
+	); err != nil {
+		return nil, err
 	}
 
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
@@ -206,7 +186,8 @@ func (s *SQLiteChannelStore) GetByPriority(ctx context.Context, priority int) (*
 		return nil, err
 	}
 	record.ModelMapping = modelMapping
-
+	// 非流改道配置损坏时按关闭处理：它只是改道增强，不能让整张渠道表读不出来
+	record.NonStreamRoute, _ = routing.ParseNonStreamRoute(nonStreamRouteJSON)
 	return &record, nil
 }
 
@@ -231,8 +212,7 @@ func (s *SQLiteChannelStore) List(ctx context.Context) ([]*ChannelRecord, error)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	query := `
-		SELECT id, name, COALESCE(website, ''), COALESCE(priority, 1), COALESCE(failover_enabled, 1), COALESCE(model_mapping, '{}'), created_at, updated_at
+	query := `SELECT ` + channelColumns + `
 		FROM channels
 		ORDER BY COALESCE(priority, 1) ASC, created_at DESC, name ASC
 	`
@@ -244,22 +224,11 @@ func (s *SQLiteChannelStore) List(ctx context.Context) ([]*ChannelRecord, error)
 
 	var result []*ChannelRecord
 	for rows.Next() {
-		var record ChannelRecord
-		var createdAt, updatedAt string
-		var failoverEnabled int
-		var modelMappingJSON string
-		if err := rows.Scan(&record.ID, &record.Name, &record.Website, &record.Priority, &failoverEnabled, &modelMappingJSON, &createdAt, &updatedAt); err != nil {
+		record, err := scanChannelRecord(rows)
+		if err != nil {
 			return nil, fmt.Errorf("读取渠道失败: %w", err)
 		}
-		record.CreatedAt = parseSQLiteDateTime(createdAt)
-		record.UpdatedAt = parseSQLiteDateTime(updatedAt)
-		record.FailoverEnabled = failoverEnabled != 0
-		modelMapping, err := channelModelMappingFromJSON(modelMappingJSON)
-		if err != nil {
-			return nil, err
-		}
-		record.ModelMapping = modelMapping
-		result = append(result, &record)
+		result = append(result, record)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("读取渠道失败: %w", err)
@@ -304,6 +273,26 @@ func (s *SQLiteChannelStore) Delete(ctx context.Context, name string) error {
 	res, err := s.execContext(ctx, `DELETE FROM channels WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("删除渠道失败: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("渠道不存在: %s", name)
+	}
+	return nil
+}
+
+// SetNonStreamRoute 写入渠道的非流改道配置；route 为 nil 或没有目标时落库为 NULL（关闭）。
+func (s *SQLiteChannelStore) SetNonStreamRoute(ctx context.Context, name string, route *routing.NonStreamRoute) error {
+	encoded, err := routing.EncodeNonStreamRoute(route)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	res, err := s.execContext(ctx, `UPDATE channels SET non_stream_route = ? WHERE name = ?`, nullIfEmpty(encoded), name)
+	if err != nil {
+		return fmt.Errorf("更新渠道非流改道失败: %w", err)
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {

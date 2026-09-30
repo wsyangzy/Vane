@@ -710,8 +710,17 @@ export const getUsageStats = async (params = {}) => {
     avg_duration_ms: data.avg_duration_ms || 0,
     total_cost_usd: data.total_cost_usd || 0,
     total_tokens: data.total_tokens || 0,
-    failed_requests: data.failed_requests || 0
+    failed_requests: data.failed_requests || 0,
+    // null 表示没有输入用量，展示为 "-"；0 是真实的 0%
+    cache_hit_rate: normalizeRate(data.cache_hit_rate)
   };
+};
+
+// 比率字段：后端用 null 表示无数据，不能用 || 0 抹成 0%
+export const normalizeRate = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const rate = Number(value);
+  return Number.isFinite(rate) ? rate : null;
 };
 
 export const getUsageSummary = async (startTime = '', endTime = '', provider = '') => {
@@ -798,6 +807,8 @@ export const getRequests = async (params = {}) => {
     originalModelName: r.original_model_name || '',
     modelRewriteSource: r.model_rewrite_source || '',
     modelRewriteTarget: r.model_rewrite_target || '',
+    route_snapshot: r.route_snapshot || '',
+    routeSnapshot: r.route_snapshot || '',
     reasoning_effort: r.reasoning_effort || '',
     reasoningEffort: r.reasoning_effort || '',
     service_tier: r.service_tier || '',
@@ -1657,10 +1668,12 @@ export const getChannels = async () => {
 
   const channels = await WailsApp.GetChannels();
   return (channels || []).map(c => ({
+    id: Number(c.id ?? 0),
     name: c.name,
     website: c.website || '',
     priority: c.priority || 1,
     modelMapping: normalizeModelMapping(c.model_mapping || c.modelMapping),
+    nonStreamRoute: mapNonStreamRoute(c.non_stream_route || c.nonStreamRoute),
     createdAt: c.created_at || '',
     endpointCount: c.endpoint_count,
     credentialGroups: (c.credential_groups || c.credentialGroups || []).map(mapClaudeCredentialGroup)
@@ -1714,6 +1727,149 @@ export const deleteChannel = async (name, deleteEndpoints = false) => {
 
   await WailsApp.DeleteChannel(channelName, !!deleteEndpoints);
   return { success: true };
+};
+
+// ============================================
+// 请求级路由：模型路由规则 + 渠道非流改道
+// 两者共用同一种目标结构 {channel_id, group_id, upstream_model}；group_id=0 表示渠道下全部分组
+// ============================================
+
+export const mapRouteTarget = (target = {}) => ({
+  channelId: Number(target.channel_id ?? target.channelId ?? 0),
+  groupId: Number(target.group_id ?? target.groupId ?? 0),
+  upstreamModel: target.upstream_model ?? target.upstreamModel ?? '',
+  channelName: target.channel_name ?? target.channelName ?? '',
+  groupName: target.group_name ?? target.groupName ?? '',
+  missing: Boolean(target.missing)
+});
+
+export const buildRouteTargetsPayload = (targets = []) =>
+  (Array.isArray(targets) ? targets : [])
+    .map((target) => ({
+      channel_id: Number(target?.channelId ?? target?.channel_id ?? 0),
+      group_id: Number(target?.groupId ?? target?.group_id ?? 0),
+      upstream_model: String(target?.upstreamModel ?? target?.upstream_model ?? '').trim()
+    }))
+    .filter((target) => Number.isInteger(target.channel_id) && target.channel_id > 0);
+
+// 非流改道：后端返回 null 表示关闭
+export function mapNonStreamRoute(route) {
+  if (!route || !Array.isArray(route.targets) || route.targets.length === 0) return null;
+  return { mode: route.mode || 'prefer', targets: route.targets.map(mapRouteTarget) };
+}
+
+export const mapModelRoute = (route = {}) => ({
+  id: Number(route.id ?? 0),
+  provider: route.provider || 'claude',
+  sourceChannelId: Number(route.source_channel_id ?? route.sourceChannelId ?? 0),
+  name: route.name || '',
+  enabled: Boolean(route.enabled),
+  priority: Number(route.priority ?? 100),
+  matchModel: route.match_model ?? route.matchModel ?? '',
+  mode: route.mode || 'prefer',
+  targets: (route.targets || []).map(mapRouteTarget),
+  updatedAt: route.updated_at ?? route.updatedAt ?? ''
+});
+
+export const buildModelRoutePayload = (input = {}) => {
+  const priority = Number.parseInt(input.priority, 10);
+  return {
+    id: Number(input.id || 0),
+    provider: input.provider || 'claude',
+    source_channel_id: Number(input.sourceChannelId ?? input.source_channel_id ?? 0),
+    name: String(input.name || '').trim(),
+    enabled: input.enabled !== false,
+    priority: Number.isInteger(priority) ? priority : 100,
+    match_model: String(input.matchModel ?? input.match_model ?? '').trim(),
+    mode: input.mode || 'prefer',
+    targets: buildRouteTargetsPayload(input.targets)
+  };
+};
+
+const mapRouteSaveResult = (result) => ({
+  id: Number(result?.id ?? 0),
+  warnings: Array.isArray(result?.warnings) ? result.warnings : []
+});
+
+// 模型路由规则挂在来源渠道上，只在该渠道为激活渠道时生效
+export const listModelRoutes = async (provider, sourceChannelId) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const routes = await WailsApp.ListModelRoutes(provider || 'claude', Number(sourceChannelId));
+  return (routes || []).map(mapModelRoute);
+};
+
+export const saveModelRoute = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return mapRouteSaveResult(await WailsApp.SaveModelRoute(buildModelRoutePayload(input)));
+};
+
+export const deleteModelRoute = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeleteModelRoute(Number(id));
+  return { success: true };
+};
+
+export const setModelRouteEnabled = async (id, enabled) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetModelRouteEnabled(Number(id), Boolean(enabled));
+  return { success: true };
+};
+
+export const getRouteTargetOptions = async (provider) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const options = await WailsApp.GetRouteTargetOptions(provider || 'claude');
+  return {
+    channels: (options?.channels || []).map((channel) => ({
+      id: Number(channel.id ?? 0),
+      name: channel.name || '',
+      priority: Number(channel.priority ?? 0),
+      paused: Boolean(channel.paused),
+      active: Boolean(channel.active),
+      nonStreamRouteEnabled: Boolean(channel.non_stream_route_enabled),
+      groups: (channel.groups || []).map((group) => ({ id: Number(group.id ?? 0), name: group.name || '' }))
+    })),
+    models: Array.isArray(options?.models) ? options.models : []
+  };
+};
+
+// 预演假设 sourceChannelId 为激活渠道
+export const previewRoute = async (provider, sourceChannelId, model, streaming) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.PreviewRoute(provider || 'claude', Number(sourceChannelId), String(model || '').trim(), Boolean(streaming));
+  return {
+    kind: result?.kind || '',
+    mode: result?.mode || '',
+    ruleId: Number(result?.rule_id ?? 0),
+    ruleName: result?.rule_name || '',
+    sourceChannel: result?.source_channel || '',
+    stages: (result?.stages || []).map((stage) => ({
+      target: Number(stage.target ?? 0),
+      channelId: Number(stage.channel_id ?? 0),
+      channelName: stage.channel_name || '',
+      groupId: Number(stage.group_id ?? 0),
+      groupName: stage.group_name || '',
+      upstreamModel: stage.upstream_model || '',
+      missing: Boolean(stage.missing),
+      paused: Boolean(stage.paused)
+    }))
+  };
+};
+
+// route 为 null 或没有目标表示关闭非流改道
+export const setChannelNonStreamRoute = async (provider, channelId, route) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const payload = {
+    mode: route?.mode || 'prefer',
+    targets: route ? buildRouteTargetsPayload(route.targets) : []
+  };
+  return mapRouteSaveResult(await WailsApp.SetChannelNonStreamRoute(provider || 'claude', Number(channelId), payload));
 };
 
 /**
@@ -2195,6 +2351,7 @@ const mapCodexChannel = (channel) => {
     priority: channel.priority ?? 0,
     failoverEnabled: channel.failover_enabled !== false,
     isActive: Boolean(channel.is_active),
+    nonStreamRoute: mapNonStreamRoute(channel.non_stream_route || channel.nonStreamRoute),
     credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
     createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',

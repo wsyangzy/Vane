@@ -69,6 +69,14 @@ import {
 } from '@pages/management/shared/formatters.js';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
+import NonStreamRouteEditor from '@pages/management/shared/NonStreamRouteEditor.jsx';
+import ChannelModelRoutesEditor from '@pages/management/shared/ChannelModelRoutesEditor.jsx';
+import {
+  buildNonStreamRouteForm,
+  nonStreamRouteFromForm,
+  nonStreamRouteSignature,
+  validateRouteTargets
+} from '@pages/management/shared/routeTargets.js';
 import BillingRuleEditor, {
   buildInitialBillingRuleRows,
   createDefaultBillingRuleRow,
@@ -101,6 +109,7 @@ import {
   openExternalURL,
   subscribeToEvent,
   setDefaultCodexCredentialGroup,
+  setChannelNonStreamRoute,
   setCodexChannelFailoverEnabled,
   updateCodexChannelByID,
   updateCodexCredentialGroupByID,
@@ -195,6 +204,13 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
 const CODEX_CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'mapping', label: '模型映射' }
+];
+
+// 模型路由与非流改道都按渠道 ID 保存，只在编辑已有渠道时提供
+const CODEX_CHANNEL_EDIT_FORM_TABS = [
+  ...CODEX_CHANNEL_FORM_TABS,
+  { key: 'modelRoutes', label: '模型路由' },
+  { key: 'nonStream', label: '非流改道' }
 ];
 
 const CODEX_CREDENTIAL_GROUP_FORM_TABS = [
@@ -373,10 +389,13 @@ const CodexLogo = ({ className = 'w-6 h-6' }) => (
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
+  const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(channel?.nonStreamRoute));
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const isEdit = mode === 'edit';
+  const channelId = Number(channel?.id) || 0;
+  const canEditNonStream = isEdit && channelId > 0;
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
@@ -439,6 +458,15 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       return;
     }
 
+    if (canEditNonStream && nonStreamForm.enabled) {
+      const routeError = validateRouteTargets(nonStreamForm.targets);
+      if (routeError) {
+        setActiveTab('nonStream');
+        setFieldError(routeError);
+        return;
+      }
+    }
+
     const payload = {
       name,
       apiKey: '',
@@ -446,7 +474,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       model: formData.model.trim(),
       modelMapping: buildModelMappingPayload(formData.modelMappingRows),
       priority: !isEdit && !hasPriority ? -1 : parsedPriority,
-      failoverEnabled: formData.failoverEnabled
+      failoverEnabled: formData.failoverEnabled,
+      ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm) } : {})
     };
 
     await onSave?.(payload);
@@ -485,11 +514,11 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={CODEX_CHANNEL_FORM_TABS}
+              tabs={canEditNonStream ? CODEX_CHANNEL_EDIT_FORM_TABS : CODEX_CHANNEL_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
-              className="grid-cols-2"
+              className={canEditNonStream ? 'grid-cols-4' : 'grid-cols-2'}
               buttonPaddingClass="px-2"
             />
           </div>
@@ -573,7 +602,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               )}
             </div>
               </>
-            ) : (
+            ) : activeTab === 'mapping' ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -625,7 +654,25 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
                 </div>
                 <p className="text-xs text-slate-400">未命中映射时，仍按基础信息中的渠道模型覆盖规则处理。</p>
               </div>
-            )}
+            ) : activeTab === 'modelRoutes' && canEditNonStream ? (
+              <ChannelModelRoutesEditor
+                provider="codex"
+                channelId={channelId}
+                channelName={channel?.name || ''}
+                disabled={loading}
+              />
+            ) : canEditNonStream ? (
+              <NonStreamRouteEditor
+                provider="codex"
+                channelId={channelId}
+                value={nonStreamForm}
+                onChange={(next) => {
+                  setNonStreamForm(next);
+                  if (fieldError) setFieldError('');
+                }}
+                disabled={loading}
+              />
+            ) : null}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
@@ -3176,14 +3223,21 @@ const CodexPage = () => {
 
   const handleSaveChannel = async (payload) => {
     const isCreating = channelFormMode !== 'edit' || !editingChannel;
+    const { nonStreamRoute, ...channelPayload } = payload;
     let channelCreated = false;
+    let routeWarnings = [];
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
       if (!isCreating) {
-        await updateCodexChannelByID(editingChannel.id, payload);
+        await updateCodexChannelByID(editingChannel.id, channelPayload);
+        // 非流改道单独保存：只在确有变更时提交
+        if ('nonStreamRoute' in payload
+          && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
+          routeWarnings = (await setChannelNonStreamRoute('codex', editingChannel.id, nonStreamRoute)).warnings;
+        }
       } else {
-        await createCodexChannel(payload);
+        await createCodexChannel(channelPayload);
         channelCreated = true;
       }
       const refreshedChannels = await fetchData({ silent: true, throwOnError: true });
@@ -3196,6 +3250,9 @@ const CodexPage = () => {
         openCreateCredentialGroupForm(createdChannel, true);
       } else {
         closeChannelForm();
+        if (routeWarnings.length > 0) {
+          toast.warning(routeWarnings, '非流改道已保存，请留意');
+        }
       }
     } catch (err) {
       const message = getFailoverToggleErrorMessage(err, '保存渠道失败');

@@ -640,6 +640,17 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			alterSQL:    "ALTER TABLE request_logs ADD COLUMN http_status_is_upstream BOOLEAN NOT NULL DEFAULT 0",
 			description: "HTTP状态码来源标记（真实上游响应）",
 		},
+		{
+			checkColumn: "route_snapshot",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN route_snapshot TEXT",
+			description: "请求级路由快照字段",
+		},
+		{
+			// 不回填历史行：旧行没有流完整性判定的原始信号，成功率 SQL 对 NULL 回退到旧口径
+			checkColumn: "stream_outcome",
+			alterSQL:    "ALTER TABLE request_logs ADD COLUMN stream_outcome TEXT",
+			description: "请求终态枚举字段",
+		},
 	}
 
 	// endpoints 迁移：端点存储表迭代新增字段时，需要兼容旧 db（CREATE TABLE IF NOT EXISTS 不会补列）
@@ -734,6 +745,15 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	}{
 		{"priority", "ALTER TABLE codex_channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0", "Codex 渠道优先级字段"},
 		{"failover_enabled", "ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1", "Codex 渠道故障转移参与字段"},
+		{"non_stream_route", "ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT", "Codex 渠道非流改道字段"},
+	}
+	modelRouteMigrations := []struct {
+		checkColumn string
+		alterSQL    string
+		description string
+	}{
+		// 旧行补 0：它们原本是全局规则，改为渠道级后不再参与匹配，需用户在渠道下重建
+		{"source_channel_id", "ALTER TABLE model_routes ADD COLUMN source_channel_id INTEGER NOT NULL DEFAULT 0", "模型路由规则来源渠道字段"},
 	}
 
 	channelMigrations := []struct {
@@ -760,6 +780,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			checkColumn: "model_mapping",
 			alterSQL:    "ALTER TABLE channels ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '{}'",
 			description: "渠道模型映射字段",
+		},
+		{
+			checkColumn: "non_stream_route",
+			alterSQL:    "ALTER TABLE channels ADD COLUMN non_stream_route TEXT",
+			description: "渠道非流改道字段",
 		},
 	}
 
@@ -795,6 +820,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	}
 
 	if err := runMigrations("request_logs", requestLogMigrations); err != nil {
+		return err
+	}
+	if err := runMigrations("model_routes", modelRouteMigrations); err != nil {
 		return err
 	}
 	// 历史行的 http_status_code 可能是旧版本 Relay 自造的兜底码，但读取侧已按

@@ -299,12 +299,14 @@ type RequestRecord struct {
 	OriginalModelName        string      `json:"original_model_name"`
 	ModelRewriteSource       string      `json:"model_rewrite_source"`
 	ModelRewriteTarget       string      `json:"model_rewrite_target"`
+	RouteSnapshot            string      `json:"route_snapshot,omitempty"` // 请求级路由快照 JSON，未命中路由为空
 	ReasoningEffort          string      `json:"reasoning_effort"`
 	ServiceTier              string      `json:"service_tier"`
 	PrivacyRedacted          bool        `json:"privacy_redacted"`
 	PrivacyRedactionSummary  string      `json:"privacy_redaction_summary,omitempty"`
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
+	StreamOutcome            string      `json:"stream_outcome,omitempty"` // 终态枚举；历史行与活跃请求为空
 	HTTPStatus               int         `json:"http_status"`
 	HTTPStatusIsUpstream     bool        `json:"http_status_is_upstream"`
 	RetryCount               int         `json:"retry_count"`                   // 重试次数
@@ -490,12 +492,14 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		OriginalModelName:             r.OriginalModelName,
 		ModelRewriteSource:            r.ModelRewriteSource,
 		ModelRewriteTarget:            r.ModelRewriteTarget,
+		RouteSnapshot:                 r.RouteSnapshot,
 		ReasoningEffort:               r.ReasoningEffort,
 		ServiceTier:                   r.ServiceTier,
 		PrivacyRedacted:               r.PrivacyRedacted,
 		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
+		StreamOutcome:                 r.StreamOutcome,
 		HTTPStatusIsUpstream:          r.HTTPStatusIsUpstream,
 		RetryCount:                    retryCount,
 		FailureReason:                 r.FailureReason,
@@ -550,6 +554,7 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
+	Attempts        int    `json:"attempts,omitempty"` // 本跳实际发出的请求次数；旧记录为 0
 	StatusCode      int    `json:"status_code,omitempty"`
 	Error           string `json:"error,omitempty"`
 }
@@ -801,6 +806,8 @@ type UsageStatsData struct {
 	TotalCostUSD  float64 `json:"total_cost_usd"`
 	TotalTokens   int64   `json:"total_tokens"`
 	FailedCount   int     `json:"failed_requests"`
+	// CacheHitRate token 加权缓存命中率（0~1）；没有输入用量时为 null，前端显示 "-"
+	CacheHitRate *float64 `json:"cache_hit_rate"`
 }
 
 // UsageStatsQueryParams 使用统计查询参数
@@ -907,6 +914,7 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 			result.TotalTokens = totals.TotalTokens
 			result.TotalCostUSD = totals.TotalCostUSD
 			result.AvgDurationMs = totals.AvgDurationMs()
+			result.CacheHitRate = totals.CacheHitRate()
 
 			if totals.TotalRequests > 0 {
 				result.SuccessRate = float64(totals.SuccessRequests) / float64(totals.TotalRequests) * 100

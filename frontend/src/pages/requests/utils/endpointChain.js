@@ -27,6 +27,8 @@ export const parseChainNode = (item, hop) => {
     const statusCode = Number(item.status_code ?? item.statusCode ?? item.http_status ?? item.httpStatus ?? 0) || 0;
     // 只认后端写入链路节点的原始错误文本；failure_reason 是 Relay 内部分类，不做展示。
     const error = item.error || item.error_message || item.errorMessage || '';
+    // 本跳实际发出的请求次数；旧记录没有该字段，为 0 表示未知
+    const attempts = Math.max(0, Math.trunc(Number(item.attempts ?? 0) || 0));
     const raw = channel
       ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
       : endpoint;
@@ -37,6 +39,7 @@ export const parseChainNode = (item, hop) => {
       endpoint,
       statusCode,
       error,
+      attempts,
       hop: item.hop || hop,
     };
   }
@@ -144,8 +147,12 @@ export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
     if (previousIdentity !== currentIdentity) transferCount += 1;
   }
 
+  // 最终端点内的尝试次数：只有新链路记录了每跳次数；旧记录无从得知，返回 null 由展示层显示 "-"
+  const finalAttempts = nodes[nodes.length - 1]?.attempts || 0;
+
   return {
     attemptCount: Math.max(1, retryCount + 1, nodes.length),
+    finalEndpointAttempts: finalAttempts > 0 ? finalAttempts : null,
     retryCount,
     transferCount,
     transferred: transferCount > 0,

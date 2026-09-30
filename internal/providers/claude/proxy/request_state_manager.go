@@ -149,8 +149,10 @@ type ChainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
-	StatusCode      int    `json:"status_code,omitempty"`
-	Error           string `json:"error,omitempty"`
+	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
+	Attempts   int    `json:"attempts,omitempty"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // AppendEndpointChain 追加端点到链路（按切换去重）
@@ -250,8 +252,15 @@ func (rsm *RequestStateManager) GetStartTime() time.Time {
 
 // ========== 计数器管理方法 ==========
 
-// IncrementAttempt 增加尝试次数并返回新值
+// IncrementAttempt 增加尝试次数并返回新值；同时计入当前链路节点，
+// 让链路能还原每一跳各自发了几次（最终端点尝试次数由此而来）
 func (rsm *RequestStateManager) IncrementAttempt() int {
+	rsm.endpointChainMu.Lock()
+	if n := len(rsm.endpointChain); n > 0 {
+		rsm.endpointChain[n-1].Attempts++
+	}
+	rsm.endpointChainMu.Unlock()
+
 	rsm.counterMu.Lock()
 	defer rsm.counterMu.Unlock()
 	rsm.attemptCount++

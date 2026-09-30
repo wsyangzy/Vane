@@ -25,7 +25,8 @@ import {
   TrendingDown,
   Zap,
   Calculator,
-  Replace
+  Replace,
+  Route
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -61,6 +62,7 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
+import { describeRouteSnapshot } from '@pages/management/shared/routeTargets.js';
 
 // last_failure_reason 只存原样保存的上游正文或传输层错误文本，标签"原始信息"。
 // 没有它的失败只剩 Relay 的分类（failure_reason），按分类渲染一句说明，标签"失败原因"，
@@ -320,14 +322,17 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
   const modelRewriteLabelMap = {
     mapping: '模型映射',
-    channel_model: '渠道覆盖'
+    channel_model: '渠道覆盖',
+    route: '路由改写'
   };
   const modelRewriteIconClassMap = {
     mapping: 'text-amber-500',
-    channel_model: 'text-violet-500'
+    channel_model: 'text-violet-500',
+    route: 'text-sky-500'
   };
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
+  const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
   const reasoningEffort = reasoning.effort || '';
@@ -464,6 +469,23 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       </span>
                     )}
                   />
+                  {route && (
+                    <InfoRow
+                      icon={Route}
+                      label="路由"
+                      value={(
+                        <span className="inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5 font-sans">
+                          <span className="inline-flex min-w-0 max-w-full items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-right text-xs font-medium text-sky-700 [overflow-wrap:anywhere]">
+                            {route.title}
+                          </span>
+                          {route.mode && (
+                            <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-1 text-xs text-slate-600">{route.mode}</span>
+                          )}
+                          <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-1 text-xs text-slate-600">{route.stage}</span>
+                        </span>
+                      )}
+                    />
+                  )}
                   <InfoRow
                     icon={Database}
                     label="分组"
@@ -1187,7 +1209,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   <h3 className="text-sm font-semibold text-slate-900">路由与尝试</h3>
                 </div>
                 <div className="px-4">
-                  <InfoRow icon={Activity} label="尝试次数" value={`${networkSummary.attemptCount} 次`} />
+                  <InfoRow icon={Activity} label="最终端点尝试" value={networkSummary.finalEndpointAttempts == null ? '-' : `${networkSummary.finalEndpointAttempts} 次`} />
+                  <InfoRow icon={Activity} label="整请求尝试" value={`${networkSummary.attemptCount} 次`} />
                   <InfoRow icon={RefreshCw} label="重试次数" value={`${networkSummary.retryCount} 次`} />
                   <InfoRow icon={Server} label="起始端点" value={networkSummary.firstEndpoint || '-'} />
                   <InfoRow icon={Server} label="最终端点" value={networkSummary.finalEndpoint || request.endpoint || '-'} />

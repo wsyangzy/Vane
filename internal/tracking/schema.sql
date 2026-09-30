@@ -25,8 +25,10 @@ CREATE TABLE IF NOT EXISTS request_logs (
     group_name TEXT,                        -- 所属组名
     model_name TEXT,                        -- Claude模型名称
     original_model_name TEXT,               -- 模型改写前的原始请求模型
-    model_rewrite_source TEXT,              -- 模型改写来源：mapping/channel_model
+    model_rewrite_source TEXT,              -- 模型改写来源：mapping/channel_model/route
     model_rewrite_target TEXT,              -- 模型改写后的目标模型
+    route_snapshot TEXT,                    -- 请求级路由快照 JSON（模型规则/非流改道/模型能力改道），未命中为 NULL
+    stream_outcome TEXT,                    -- 终态枚举: completed/incomplete/failed/canceled/not_streaming；历史行为 NULL
     model_reasoning_effort TEXT,             -- 推理强度/thinking 完整 JSON
     service_tier TEXT,                       -- 服务档位: auto/default/batch/flex/priority/fast
     is_streaming BOOLEAN DEFAULT FALSE,     -- 是否为流式请求
@@ -248,6 +250,7 @@ CREATE TABLE IF NOT EXISTS channels (
     priority INTEGER DEFAULT 1,                     -- 渠道优先级（数字越小越高，用于渠道间故障转移顺序）
     failover_enabled INTEGER DEFAULT 1,             -- 是否参与渠道间故障转移 (1=是, 0=否)
     model_mapping TEXT NOT NULL DEFAULT '{}',       -- 渠道级请求模型映射 JSON object：source_model -> target_model
+    non_stream_route TEXT,                          -- 非流改道 JSON {"mode","targets"}；NULL 表示关闭
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
@@ -362,6 +365,7 @@ CREATE TABLE IF NOT EXISTS codex_channels (
     is_active INTEGER NOT NULL DEFAULT 0,
     priority INTEGER NOT NULL DEFAULT 0,
     failover_enabled INTEGER NOT NULL DEFAULT 1,
+    non_stream_route TEXT,                                      -- 非流改道 JSON {"mode","targets"}；NULL 表示关闭
 
     created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
     updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
@@ -519,6 +523,39 @@ CREATE TRIGGER IF NOT EXISTS update_model_pricing_timestamp
     WHEN NEW.updated_at = OLD.updated_at
 BEGIN
     UPDATE model_pricing SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
+END;
+
+-- ============================================================================
+-- 模型路由规则表 (新增 - 2026-09-28)
+-- 按请求模型把请求改道到指定渠道/凭证分组/上游模型，只在本次请求内生效，不切换全局激活渠道。
+-- 规则挂在来源渠道上，只在该渠道为激活渠道时生效。
+-- Claude 与 Codex 共用本表，provider 维度隔离；唯一键 (provider, name) 不变，
+-- source_channel_id 由迁移补列（同名约束跨渠道保留，避免重建表）。
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS model_routes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,                         -- claude / codex
+    source_channel_id INTEGER NOT NULL DEFAULT 0,   -- 来源渠道 ID：仅该渠道为激活渠道时生效；0 为旧版全局规则，不再参与匹配
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 100,          -- 同特异度下小者优先
+    match_model TEXT NOT NULL,                      -- 精确值或含 * 的通配，大小写不敏感
+    mode TEXT NOT NULL,                             -- prefer / fallback
+    targets TEXT NOT NULL DEFAULT '[]',             -- JSON 数组 [{"channel_id","group_id","upstream_model"}]
+    created_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00'),
+    UNIQUE(provider, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_routes_provider ON model_routes(provider, enabled);
+CREATE INDEX IF NOT EXISTS idx_model_routes_source ON model_routes(provider, source_channel_id);
+
+CREATE TRIGGER IF NOT EXISTS update_model_routes_timestamp
+    AFTER UPDATE ON model_routes
+    FOR EACH ROW
+    WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE model_routes SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 END;
 
 -- ============================================================================

@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getBillableInputTokens } from './tokenDisplay.js';
+import { formatCacheHitRate, getBillableInputTokens } from './tokenDisplay.js';
+
+test('cache hit rate shows "-" without input usage and keeps a real 0%', () => {
+  assert.equal(formatCacheHitRate(null), '-');
+  assert.equal(formatCacheHitRate(undefined), '-');
+  assert.equal(formatCacheHitRate(0), '0.0%');
+  assert.equal(formatCacheHitRate(0.8771), '87.7%');
+});
 
 test('Codex billable input excludes cache reads and writes', () => {
   assert.equal(getBillableInputTokens({

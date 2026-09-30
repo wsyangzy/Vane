@@ -2,6 +2,7 @@ package codexproxy
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -335,6 +336,72 @@ func TestForwardWithRetryReturnsActualAttemptCount(t *testing.T) {
 	defer resp.Body.Close()
 	if attempts != 2 || hits.Load() != 2 {
 		t.Fatalf("attempts = %d, upstream hits = %d, want 2", attempts, hits.Load())
+	}
+}
+
+func TestTryEndpointCycleRecordsPerHopAttempts(t *testing.T) {
+	// 同端点重试 2 次后转移 1 次：primary 发 3 次，backup 发 1 次
+	var primaryHits atomic.Int32
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryHits.Add(1)
+		http.Error(w, "retry", http.StatusRequestTimeout)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":2}}`))
+	}))
+	defer backup.Close()
+
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{
+		Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 10, BatchSize: 5,
+		FlushInterval: time.Hour, MaxRetry: 1, CleanupInterval: time.Hour, RetentionDays: 1,
+	})
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	defer tracker.Close()
+	manager := &EndpointManager{
+		endpoints: []*CodexEndpoint{
+			{ID: 1, Name: "primary", BaseURL: primary.URL, APIKey: "key", IsActive: true, FailoverEnabled: true, Priority: 0},
+			{ID: 2, Name: "backup", BaseURL: backup.URL, APIKey: "key", FailoverEnabled: true, Priority: 1},
+		},
+		unhealthyMap: make(map[int64]bool), failureDetails: make(map[int64]EndpointFailureDetail), logger: newTestLogger(),
+	}
+	handler := &Handler{
+		manager: manager, forwarder: NewForwarder(time.Second, newTestLogger()), streamFwd: NewStreamingForwarder(newTestLogger()),
+		tokenParser: NewTokenParser(), classifier: NewErrorClassifier(), logger: newTestLogger(), usageTracker: tracker,
+		retryCfg: config.RetryConfig{MaxAttempts: 3},
+	}
+	requestID := "req-per-hop-attempts"
+	body := []byte(`{"model":"gpt-5.5","stream":false}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(body)))
+	handler.recordStart(requestID, req, false, "CCTQ", "gpt-5.5", modelRewriteResult{}, "", "")
+	var failedIDs []int64
+	var endpointChain []chainNode
+	attemptCount := 0
+
+	result := handler.tryEndpointCycle(httptest.NewRecorder(), req, body, requestID, time.Now(), false, "CCTQ", "gpt-5.5", &failedIDs, &endpointChain, &attemptCount)
+	if !result.completed {
+		t.Fatalf("expected backup to succeed, got %+v", result)
+	}
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	if len(details) != 1 || details[0].RetryCount != 3 {
+		t.Fatalf("details=%#v, want retry_count=3", details)
+	}
+	var chain []chainNode
+	if err := json.Unmarshal([]byte(details[0].EndpointChain), &chain); err != nil {
+		t.Fatalf("parse chain %q: %v", details[0].EndpointChain, err)
+	}
+	if len(chain) != 2 || chain[0].Attempts != 3 || chain[1].Attempts != 1 {
+		t.Fatalf("chain=%+v, want primary×3 then backup×1", chain)
+	}
+	if details[0].StreamOutcome != tracking.StreamOutcomeNotStreaming {
+		t.Fatalf("stream_outcome=%q, want not_streaming", details[0].StreamOutcome)
 	}
 }
 

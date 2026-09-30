@@ -8,6 +8,7 @@ import (
 
 	"ai-relay-forwarder/internal/providers/codex/proxy"
 	codexstore "ai-relay-forwarder/internal/providers/codex/store"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -82,6 +83,7 @@ type CodexChannelInfo struct {
 	IsActive         bool                       `json:"is_active"`
 	Priority         int                        `json:"priority"`
 	FailoverEnabled  bool                       `json:"failover_enabled"`
+	NonStreamRoute   *NonStreamRouteInfo        `json:"non_stream_route"` // 非流改道配置，关闭时为 null
 	CredentialGroups []CodexCredentialGroupInfo `json:"credential_groups"`
 	Endpoints        []CodexEndpointInfo        `json:"endpoints"`
 	CreatedAt        string                     `json:"created_at"`
@@ -332,6 +334,14 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 	}
 
 	result := make([]CodexChannelInfo, 0, len(channels))
+	// 只有存在非流改道配置时才需要目标目录来解析目标名称
+	var routeCatalog routing.Catalog
+	for _, ch := range channels {
+		if ch != nil && ch.NonStreamRoute != nil {
+			routeCatalog, _ = a.routeCatalog(ctx, "codex")
+			break
+		}
+	}
 	for _, ch := range channels {
 		endpoints, err := endpointService.ListByChannelID(ctx, ch.ID)
 		if err != nil {
@@ -344,7 +354,9 @@ func (a *App) GetCodexChannels() ([]CodexChannelInfo, error) {
 				return nil, fmt.Errorf("获取渠道 '%s' 凭证分组列表失败: %w", ch.Name, err)
 			}
 		}
-		result = append(result, a.buildCodexChannelInfo(ch, endpoints, credentialGroups))
+		info := a.buildCodexChannelInfo(ch, endpoints, credentialGroups)
+		info.NonStreamRoute = nonStreamRouteInfo(ch.NonStreamRoute, routeCatalog)
+		result = append(result, info)
 	}
 	return result, nil
 }
@@ -765,6 +777,8 @@ func (a *App) DeleteCodexChannelByID(id int64) error {
 	if err := channelService.DeleteChannelByID(ctx, id); err != nil {
 		return rollbackPrepared(fmt.Errorf("删除 Codex 渠道失败: %w", err))
 	}
+	a.deleteChannelModelRoutes(ctx, "codex", id)
+	a.syncCodexModelRules(ctx)
 	if err := a.reloadCodexEndpointManager(); err != nil && logger != nil {
 		logger.Warn("⚠️ Codex 渠道删除后重新加载运行时失败", "id", id, "error", err)
 	}

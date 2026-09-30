@@ -142,6 +142,15 @@ func (gm *GroupManager) IsChannelFailoverEnabled(channel string) bool {
 	return v
 }
 
+// IsGroupManuallyPaused 查询渠道是否处于暂停状态（含"渠道内端点全部不参与故障转移"的兜底暂停）。
+// 未知渠道视为未暂停。
+func (gm *GroupManager) IsGroupManuallyPaused(channel string) bool {
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+	group, ok := gm.groups[channel]
+	return ok && group != nil && group.ManuallyPaused
+}
+
 // SetSingleChannelFailoverEnabled 设置单个渠道的故障转移开关状态。
 // 仅更新指定渠道，不影响其他渠道的状态。
 // 解决恢复一个渠道时影响其他渠道的问题。

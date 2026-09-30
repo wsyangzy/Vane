@@ -28,6 +28,13 @@ export function CreateModelPricing(arg1:main.CreateModelPricingInput):Promise<vo
 
 export function DeletePrivacyRules(arg1:Array<number>):Promise<number>;
 export function SetPrivacyRulesEnabled(arg1:Array<number>,arg2:boolean):Promise<number>;
+export function ListModelRoutes(arg1:string,arg2:number):Promise<Array<main.ModelRouteInfo>>;
+export function SaveModelRoute(arg1:main.SaveModelRouteInput):Promise<main.RouteSaveResult>;
+export function DeleteModelRoute(arg1:number):Promise<void>;
+export function SetModelRouteEnabled(arg1:number,arg2:boolean):Promise<void>;
+export function GetRouteTargetOptions(arg1:string):Promise<main.RouteTargetOptions>;
+export function PreviewRoute(arg1:string,arg2:number,arg3:string,arg4:boolean):Promise<main.RoutePreviewResult>;
+export function SetChannelNonStreamRoute(arg1:string,arg2:number,arg3:main.NonStreamRouteInput):Promise<main.RouteSaveResult>;
 export function GetPrivacyOverview():Promise<privacy.Overview>;
 export function UpdatePrivacySettings(arg1:privacy.Settings):Promise<void>;
 export function ApplyPrivacyPreset(arg1:string):Promise<number>;

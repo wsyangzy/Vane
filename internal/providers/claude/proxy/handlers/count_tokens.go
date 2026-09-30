@@ -54,8 +54,12 @@ func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, 
 	// 关闭 TokenCounting 时仍由 Relay 本地处理，不能把客户端发来的路径落穿到上游。
 	var supportedEndpoints []*endpoint.Endpoint
 	if h.config != nil && h.config.TokenCounting.Enabled {
-		supportedEndpoints = h.getSupportedEndpoints()
-		supportedEndpoints = filterClaudeModelEndpoints(h.forwarder, supportedEndpoints, bodyBytes)
+		candidates := h.getSupportedEndpoints()
+		supportedEndpoints = filterClaudeModelEndpoints(h.forwarder, candidates, bodyBytes)
+		if len(supportedEndpoints) == 0 && len(candidates) > 0 {
+			// 激活渠道的 count_tokens 端点都不支持该模型：本次请求借用其它渠道，不切换全局激活渠道
+			supportedEndpoints = h.countTokensEndpointsFromOtherChannels(bodyBytes)
+		}
 	}
 
 	// 2. 如果有，尝试转发
@@ -106,6 +110,30 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 	}
 
 	return supported
+}
+
+// countTokensEndpointsFromOtherChannels 按渠道优先级找第一个有 count_tokens 端点支持请求模型的渠道。
+// 只在本次请求内使用；关闭渠道间故障转移时不借用其它渠道，退回本地估算。
+func (h *CountTokensHandler) countTokensEndpointsFromOtherChannels(body []byte) []*endpoint.Endpoint {
+	if h.endpointManager == nil || !h.endpointManager.IsFailoverEnabled() {
+		return nil
+	}
+	active := h.endpointManager.ActiveChannelName()
+	for _, channel := range h.endpointManager.RoutableChannelsByPriority() {
+		if channel == active {
+			continue
+		}
+		var supported []*endpoint.Endpoint
+		for _, ep := range h.endpointManager.GetRoutableEndpointsForChannel(channel, 0, nil) {
+			if ep.Config.SupportsCountTokens {
+				supported = append(supported, ep)
+			}
+		}
+		if filtered := filterClaudeModelEndpoints(h.forwarder, supported, body); len(filtered) > 0 {
+			return filtered
+		}
+	}
+	return nil
 }
 
 // tryForward 尝试转发到支持的端点

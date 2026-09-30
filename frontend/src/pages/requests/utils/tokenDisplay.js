@@ -33,6 +33,14 @@ export const getBillableInputTokens = (request) => {
   return Math.max(0, inputTokens - cachedInputTokens);
 };
 
+// 缓存命中率（后端按 provider 口径计算，0~1）；null 表示没有输入用量，与真实的 0% 区分
+export const formatCacheHitRate = (rate) => {
+  if (rate === null || rate === undefined || rate === '') return '-';
+  const num = Number(rate);
+  if (!Number.isFinite(num)) return '-';
+  return `${(num * 100).toFixed(1)}%`;
+};
+
 export const getDisplayTotalTokens = (request) => {
   const outputTokens = numeric(request?.outputTokens ?? request?.output_tokens);
   const cacheCreationTokens = numeric(request?.cacheCreationTokens ?? request?.cache_creation_tokens);

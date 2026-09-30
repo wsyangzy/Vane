@@ -33,8 +33,10 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
-	StatusCode      int    `json:"status_code,omitempty"`
-	Error           string `json:"error,omitempty"`
+	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
+	Attempts   int    `json:"attempts,omitempty"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 const maxPreOutputStreamBufferBytes = 256 * 1024
@@ -291,6 +293,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.recordPrivacyRedaction(requestID, privacySummaryJSON)
 	}
 
+	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，全局激活渠道全程不读写
+	if route := h.planCodexRoute(r, originalBody, isStreaming, requestID); route != nil {
+		h.serveRouted(w, r, originalBody, requestID, startTime, isStreaming, route)
+		return
+	}
+
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1
 	if failoverCfg := h.failoverConfig(); failoverCfg.LoopRetry {
@@ -543,23 +551,43 @@ func (h *Handler) tryEndpointCycle(
 	endpointChain *[]chainNode,
 	attemptCount *int,
 ) cycleResult {
+	return h.tryEndpointCycleForStage(w, r, body, requestID, startTime, isStreaming, channelName, requestModel, failedIDs, endpointChain, attemptCount, nil)
+}
+
+// tryEndpointCycleForStage stage 非空时是请求级路由阶段：只在该阶段的渠道内换端点，
+// 不跟随也不写入全局激活渠道（不检测激活渠道变化、不提升活跃端点、不改首选端点）。
+func (h *Handler) tryEndpointCycleForStage(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID string,
+	startTime time.Time,
+	isStreaming bool,
+	channelName string,
+	requestModel string,
+	failedIDs *[]int64,
+	endpointChain *[]chainNode,
+	attemptCount *int,
+	stage *codexRouteStage,
+) cycleResult {
 	originalBody := append([]byte(nil), body...)
 	requestedModel := requestModel
-	if h.activeChannelChanged(channelName) {
+	routed := stage != nil
+	if !routed && h.activeChannelChanged(channelName) {
 		return cycleResult{routeChanged: true}
 	}
 	// 选择起始端点
 	var skippedGroups []credentialGroupRef
 	var quotaSkippedGroups []credentialGroupRef
 	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpointForModel(
-		r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+		r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true, stage,
 	)
 	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && len(*endpointChain) == 0 {
 		// 新请求不能被上一请求留下的全局 unhealthy 状态直接挡在选路之前。
 		// 仅在尚未产生真实链路时重置一次；凭证分组跳过状态仍然保留。
 		h.manager.ResetUnhealthy()
 		endpoint, quotaSkippedGroups, err = h.selectQuotaEligibleEndpointForModel(
-			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true, stage,
 		)
 	}
 	if err != nil {
@@ -583,14 +611,25 @@ func (h *Handler) tryEndpointCycle(
 	var lastUpstreamStatus int
 	var lastUpstreamHeaders http.Header
 	var lastUpstreamBody []byte
+	if routed && stage.snapshotJSON != "" {
+		h.recordRouteSnapshot(requestID, stage.snapshotJSON)
+	}
 
 	// 遍历当前轮可用端点
 	for {
-		if h.activeChannelChanged(channelName) {
+		if !routed && h.activeChannelChanged(channelName) {
 			return cycleResult{routeChanged: true}
 		}
 		channel := h.manager.GetActiveChannel()
-		attemptRewrite := rewriteModelForEndpoint(originalBody, endpoint, channel, h.logger, requestID)
+		var attemptRewrite modelRewriteResult
+		switch {
+		case routed && stage.upstreamModel != "":
+			attemptRewrite = rewriteModelForRoute(originalBody, stage.upstreamModel, h.logger, requestID)
+		case routed:
+			attemptRewrite = rewriteModelForEndpoint(originalBody, endpoint, stage.channel, h.logger, requestID)
+		default:
+			attemptRewrite = rewriteModelForEndpoint(originalBody, endpoint, channel, h.logger, requestID)
+		}
 		body = attemptRewrite.Body
 		requestModel = h.tokenParser.ParseModelFromBody(body)
 		if h.usageTracker != nil && attemptRewrite.Source != "" {
@@ -636,11 +675,21 @@ func (h *Handler) tryEndpointCycle(
 
 		// 同端点重试转发
 		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID)
-		if attempts > 0 && attemptCount != nil {
-			*attemptCount += attempts
-			retryCount := *attemptCount - 1
+		if attempts > 0 {
+			(*endpointChain)[len(*endpointChain)-1].Attempts += attempts
+			opts := tracking.UpdateOptions{}
+			if attemptCount != nil {
+				*attemptCount += attempts
+				retryCount := *attemptCount - 1
+				opts.RetryCount = &retryCount
+			}
+			// 成功路径不会再写链路；这里先把本跳次数落进热池，终态归档时才完整
+			if chainBytes, err := json.Marshal(*endpointChain); err == nil {
+				chainStr := string(chainBytes)
+				opts.EndpointChain = &chainStr
+			}
 			if h.usageTracker != nil {
-				h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{RetryCount: &retryCount})
+				h.usageTracker.RecordRequestUpdate(requestID, opts)
 			}
 		}
 
@@ -665,13 +714,13 @@ func (h *Handler) tryEndpointCycle(
 			if isStreaming {
 				streamErr, served := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
 				if streamErr == nil {
-					h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID)
+					h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID, routed)
 					return cycleResult{completed: true}
 				}
 				fwdErr = streamErr
 			} else {
 				served := h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
-				h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID)
+				h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID, routed)
 				return cycleResult{completed: true}
 			}
 		}
@@ -782,7 +831,7 @@ func (h *Handler) tryEndpointCycle(
 
 		// 选下个端点
 		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpointForModel(
-			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, false,
+			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, false, stage,
 		)
 		quotaSkippedGroups = updatedQuotaSkippedGroups
 		if nextErr != nil {
@@ -815,12 +864,16 @@ func (h *Handler) tryEndpointCycle(
 
 // markEndpointServed 只有上游把这次请求完整服务掉了，才把端点记为健康并设为下一次请求的首选。
 // 流中途报错、正文读取失败的端点不能成为首选，否则下一次请求会优先撞回它。
-func (h *Handler) markEndpointServed(endpoint *CodexEndpoint, served bool, failedOver bool, channelName, requestID string) {
+// routed 为 true 时是请求级路由：只记录端点健康，不改首选端点、不提升活跃端点。
+func (h *Handler) markEndpointServed(endpoint *CodexEndpoint, served bool, failedOver bool, channelName, requestID string, routed bool) {
 	if !served {
 		h.manager.ClearPreferredEndpoint(endpoint.ID)
 		return
 	}
 	h.manager.MarkHealthy(endpoint.ID)
+	if routed {
+		return
+	}
 	h.manager.MarkEndpointRequestSuccess(endpoint.ID)
 	// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
 	if failedOver && !h.activeChannelChanged(channelName) {

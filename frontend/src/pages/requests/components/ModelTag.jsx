@@ -245,6 +245,11 @@ const getRewriteIndicator = (source) => {
         label: '渠道模型覆盖',
         classes: 'text-violet-500'
       };
+    case 'route':
+      return {
+        label: '路由改写',
+        classes: 'text-sky-500'
+      };
     default:
       return null;
   }

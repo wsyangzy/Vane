@@ -415,10 +415,12 @@ export class UpdateSettingInput {
 	    }
 	}
 	export class ChannelInfo {
+	    id: number;
 	    name: string;
 	    website?: string;
 	    priority: number;
 	    model_mapping: Record<string, string>;
+	    non_stream_route?: NonStreamRouteInfo;
 	    created_at: string;
 	    endpoint_count: number;
 	    credential_groups: ClaudeCredentialGroupInfo[];
@@ -429,13 +431,253 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.website = source["website"];
 	        this.priority = source["priority"];
 	        this.model_mapping = source["model_mapping"];
+	        this.non_stream_route = source["non_stream_route"] ? new NonStreamRouteInfo(source["non_stream_route"]) : undefined;
 	        this.created_at = source["created_at"];
 	        this.endpoint_count = source["endpoint_count"];
 	        this.credential_groups = (source["credential_groups"] || []).map((e: any) => new ClaudeCredentialGroupInfo(e));
+	    }
+	}
+	export class RouteTargetInfo {
+	    channel_id: number;
+	    group_id: number;
+	    upstream_model: string;
+	    channel_name: string;
+	    group_name: string;
+	    missing: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new RouteTargetInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channel_id = source["channel_id"];
+	        this.group_id = source["group_id"];
+	        this.upstream_model = source["upstream_model"];
+	        this.channel_name = source["channel_name"];
+	        this.group_name = source["group_name"];
+	        this.missing = source["missing"];
+	    }
+	}
+	export class RouteTargetInput {
+	    channel_id: number;
+	    group_id: number;
+	    upstream_model: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RouteTargetInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channel_id = source["channel_id"];
+	        this.group_id = source["group_id"];
+	        this.upstream_model = source["upstream_model"];
+	    }
+	}
+	export class NonStreamRouteInfo {
+	    mode: string;
+	    targets: RouteTargetInfo[];
+
+	    static createFrom(source: any = {}) {
+	        return new NonStreamRouteInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.targets = (source["targets"] || []).map((e: any) => new RouteTargetInfo(e));
+	    }
+	}
+	export class NonStreamRouteInput {
+	    mode: string;
+	    targets: RouteTargetInput[];
+
+	    static createFrom(source: any = {}) {
+	        return new NonStreamRouteInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.targets = (source["targets"] || []).map((e: any) => new RouteTargetInput(e));
+	    }
+	}
+	export class ModelRouteInfo {
+	    id: number;
+	    provider: string;
+	    source_channel_id: number;
+	    name: string;
+	    enabled: boolean;
+	    priority: number;
+	    match_model: string;
+	    mode: string;
+	    targets: RouteTargetInfo[];
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ModelRouteInfo(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.source_channel_id = source["source_channel_id"];
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.priority = source["priority"];
+	        this.match_model = source["match_model"];
+	        this.mode = source["mode"];
+	        this.targets = (source["targets"] || []).map((e: any) => new RouteTargetInfo(e));
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class SaveModelRouteInput {
+	    id: number;
+	    provider: string;
+	    source_channel_id: number;
+	    name: string;
+	    enabled: boolean;
+	    priority: number;
+	    match_model: string;
+	    mode: string;
+	    targets: RouteTargetInput[];
+
+	    static createFrom(source: any = {}) {
+	        return new SaveModelRouteInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.provider = source["provider"];
+	        this.source_channel_id = source["source_channel_id"];
+	        this.name = source["name"];
+	        this.enabled = source["enabled"];
+	        this.priority = source["priority"];
+	        this.match_model = source["match_model"];
+	        this.mode = source["mode"];
+	        this.targets = (source["targets"] || []).map((e: any) => new RouteTargetInput(e));
+	    }
+	}
+	export class RouteSaveResult {
+	    id: number;
+	    warnings: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new RouteSaveResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.warnings = source["warnings"] || [];
+	    }
+	}
+	export class RouteTargetGroupOption {
+	    id: number;
+	    name: string;
+
+	    static createFrom(source: any = {}) {
+	        return new RouteTargetGroupOption(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	    }
+	}
+	export class RouteTargetChannelOption {
+	    id: number;
+	    name: string;
+	    priority: number;
+	    paused: boolean;
+	    active: boolean;
+	    non_stream_route_enabled: boolean;
+	    groups: RouteTargetGroupOption[];
+
+	    static createFrom(source: any = {}) {
+	        return new RouteTargetChannelOption(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.priority = source["priority"];
+	        this.paused = source["paused"];
+	        this.active = source["active"];
+	        this.non_stream_route_enabled = source["non_stream_route_enabled"];
+	        this.groups = (source["groups"] || []).map((e: any) => new RouteTargetGroupOption(e));
+	    }
+	}
+	export class RouteTargetOptions {
+	    channels: RouteTargetChannelOption[];
+	    models: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new RouteTargetOptions(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.channels = (source["channels"] || []).map((e: any) => new RouteTargetChannelOption(e));
+	        this.models = source["models"] || [];
+	    }
+	}
+	export class RoutePreviewStage {
+	    target: number;
+	    channel_id: number;
+	    channel_name: string;
+	    group_id: number;
+	    group_name: string;
+	    upstream_model: string;
+	    missing: boolean;
+	    paused: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new RoutePreviewStage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.channel_id = source["channel_id"];
+	        this.channel_name = source["channel_name"];
+	        this.group_id = source["group_id"];
+	        this.group_name = source["group_name"];
+	        this.upstream_model = source["upstream_model"];
+	        this.missing = source["missing"];
+	        this.paused = source["paused"];
+	    }
+	}
+	export class RoutePreviewResult {
+	    kind: string;
+	    mode: string;
+	    rule_id: number;
+	    rule_name: string;
+	    source_channel: string;
+	    stages: RoutePreviewStage[];
+
+	    static createFrom(source: any = {}) {
+	        return new RoutePreviewResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.mode = source["mode"];
+	        this.rule_id = source["rule_id"];
+	        this.rule_name = source["rule_name"];
+	        this.source_channel = source["source_channel"];
+	        this.stages = (source["stages"] || []).map((e: any) => new RoutePreviewStage(e));
 	    }
 	}
 	export class ClaudeCredentialGroupInfo {
@@ -790,6 +1032,7 @@ export class UpdateSettingInput {
 	    priority: number;
 	    failover_enabled?: boolean;
 	    is_active: boolean;
+	    non_stream_route?: NonStreamRouteInfo;
 	    credential_groups: CodexCredentialGroupInfo[];
 	    endpoints: CodexEndpointInfo[];
 	    created_at: string;
@@ -813,6 +1056,7 @@ export class UpdateSettingInput {
 	        this.priority = source["priority"];
 	        this.failover_enabled = source["failover_enabled"];
 	        this.is_active = source["is_active"];
+	        this.non_stream_route = source["non_stream_route"] ? new NonStreamRouteInfo(source["non_stream_route"]) : undefined;
 	        this.credential_groups = (source["credential_groups"] || []).map((e: any) => new CodexCredentialGroupInfo(e));
 	        this.endpoints = (source["endpoints"] || []).map((e: any) => new CodexEndpointInfo(e));
 	        this.created_at = source["created_at"];
@@ -1216,6 +1460,7 @@ export class UpdateSettingInput {
 	    tokens: number;
 	    cost: number;
 	    provider: string;
+	    cache_hit_rate?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new EndpointCostItem(source);
@@ -1230,6 +1475,7 @@ export class UpdateSettingInput {
 	        this.tokens = source["tokens"];
 	        this.cost = source["cost"];
 	        this.provider = source["provider"];
+	        this.cache_hit_rate = source["cache_hit_rate"];
 	    }
 	}
 	export class EndpointAvailabilitySlice {
@@ -2036,6 +2282,7 @@ export class SettingInfo {
 	    total_cost_usd: number;
 	    total_tokens: number;
 	    failed_requests: number;
+	    cache_hit_rate?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new UsageStatsData(source);
@@ -2050,6 +2297,7 @@ export class SettingInfo {
 	        this.total_cost_usd = source["total_cost_usd"];
 	        this.total_tokens = source["total_tokens"];
 	        this.failed_requests = source["failed_requests"];
+	        this.cache_hit_rate = source["cache_hit_rate"];
 	    }
 	}
 	export class UsageStatsQueryParams {

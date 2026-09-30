@@ -1048,6 +1048,7 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			is_active INTEGER NOT NULL DEFAULT 0,
 			priority INTEGER NOT NULL DEFAULT 1,
 			failover_enabled INTEGER NOT NULL DEFAULT 1,
+			non_stream_route TEXT,
 			created_at TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,
