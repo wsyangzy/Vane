@@ -5,6 +5,44 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## v8.7 (2026-10-05)
+
+### 请求路由
+
+- 渠道级模型路由规则：挂在来源渠道下，仅该渠道激活时生效；顶层 `model` 字节级改写，未命中时 body 原样透传
+- 渠道级非流改道：激活渠道不接非流请求时，转送到指定目标渠道
+- 模型能力不匹配改为请求级借用渠道，不再持久化切换全局激活渠道
+- Claude 凭证分组新增 `inherit` / `override` / `passthrough` 模型策略，与 Codex 对齐
+
+### 隐私防护
+
+- 扫描范围扩展到对话与工具下全部字符串（`tool_use.input`、`function_call.arguments` 等），协议字段、thinking 正文与签名不改写
+- 补齐 `/responses`、`/responses/compact`、`/v1/chat/completions` 路径
+- 渠道新增隐私级别：三方中转强制脱敏、可信渠道只检测、默认跟随全局
+- 新增座机、护照、统一社会信用代码、公网 IPv4 内置匹配器，邮箱默认启用
+
+### 请求追踪与报错展示
+
+- `http_status_code` 只记上游真实状态码，本地失败由 `failure_reason` 表达
+- 失败详情透传上游原始错误；错误卡片逐跳展示状态码、服务商原话、正文与诊断响应头
+- 链路逐跳记录耗时与尝试次数；新增 `stream_outcome` 终态与按 provider 计算的缓存命中率
+- 全局提示重做：只展示失败原因与本次尝试范围
+
+### 计费与配置
+
+- 倍率与定价缓存 key 加入 provider 与 service tier 维度，修复 Claude/Codex 同名配置互相覆盖导致的计费错误
+- 移除运行时外部 YAML 配置，改由代码默认值与 SQLite 设置驱动
+
+### 稳定性
+
+- Codex 响应头超时不再固定 60s，且不再同端点重放，根治请求放大与上游限流；遵守 `retry-after`
+- 修复 `request_logs` 批量 SQL 错位导致的归档丢失
+- 删除端点级 `stream_only` 开关
+
+### 版本体验
+
+- 新版更新说明不再在首次启动时自动弹出，仅在点击用户菜单中的程序版本号时展示
+
 ## v8.6 (2026-08-29)
 
 ### 隐私防护重建（破坏性变更）

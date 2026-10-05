@@ -4,20 +4,11 @@ import { readFileSync } from 'node:fs';
 
 import {
   buildReleaseToastSummary,
-  consumeReleaseAnnouncement,
   getReleaseAnnouncement,
   normalizeReleaseVersion,
   RELEASE_SUMMARY_TOAST_DURATION_MS,
   showReleaseToastSummary
 } from './releaseAnnouncement.js';
-
-const createStorage = () => {
-  const values = new Map();
-  return {
-    getItem: (key) => values.get(key) ?? null,
-    setItem: (key, value) => values.set(key, value)
-  };
-};
 
 const sampleReleaseCatalog = {
   currentVersion: '8.5',
@@ -50,23 +41,6 @@ test('release announcement selects the running version from the archive', () => 
     sections: sampleReleaseCatalog.releases[1].sections
   });
   assert.equal(getReleaseAnnouncement('8.3', sampleReleaseCatalog), null);
-});
-
-test('release announcement is consumed only once for each archived version', () => {
-  const storage = createStorage();
-
-  assert.deepEqual(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.5', releaseNotes: sampleReleaseCatalog, storage }),
-    sampleAnnouncement
-  );
-  assert.equal(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.5', releaseNotes: sampleReleaseCatalog, storage }),
-    null
-  );
-  assert.deepEqual(
-    consumeReleaseAnnouncement({ runtimeVersion: '8.4', releaseNotes: sampleReleaseCatalog, storage }),
-    { version: '8.4', sections: sampleReleaseCatalog.releases[1].sections }
-  );
 });
 
 test('release announcement accepts the legacy single-version shape', () => {
@@ -115,14 +89,11 @@ test('manual release summary displays all categories in one toast', () => {
   assert.deepEqual(dismissed, [1]);
 });
 
-test('app startup uses the same release summary as manual replay', () => {
+test('app startup never pops release notes; they only show on version click', () => {
   const appSource = readFileSync(new URL('../App.jsx', import.meta.url), 'utf8');
 
-  assert.match(appSource, /showReleaseToastSummary\(\{/);
-  assert.match(appSource, /showToast: toast\.show/);
-  assert.match(appSource, /dismissToast: toast\.dismiss/);
-  assert.match(appSource, /stopAnnouncement\(\)/);
-  assert.doesNotMatch(appSource, /playReleaseToastSequence/);
+  assert.doesNotMatch(appSource, /release-notes\.json/);
+  assert.doesNotMatch(appSource, /showReleaseToastSummary|ReleaseAnnouncement/);
 });
 
 test('bundled release catalog archives old versions and keeps current entries concise', () => {
@@ -138,7 +109,7 @@ test('bundled release catalog archives old versions and keeps current entries co
   assert.ok(versionMatch, 'globals.go must define Version');
   assert.equal(normalizeReleaseVersion(catalog.currentVersion), normalizeReleaseVersion(versionMatch[1]));
   assert.equal(new Set(versions).size, versions.length);
-  assert.deepEqual(versions.slice(0, 2), ['8.6', '8.5']);
+  assert.deepEqual(versions.slice(0, 2), ['8.7', '8.6']);
   assert.equal(summary.message.length, 5);
   assert.ok(summary.message.every((item) => item.length <= 48));
 });

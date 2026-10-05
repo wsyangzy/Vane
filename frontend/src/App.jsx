@@ -7,11 +7,9 @@ import { useState, Suspense, lazy, useCallback, useEffect, useRef } from 'react'
 import Header from '@components/layout/Header.jsx';
 import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
-import { fetchRequests, fetchStatus, isWailsEnvironment } from '@utils/api.js';
+import { fetchRequests, isWailsEnvironment } from '@utils/api.js';
 import { getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
 import { buildFailureToast, buildSuspensionToast, shouldNotifyFailure } from '@pages/requests/utils/failureSummary.js';
-import releaseNotes from './release-notes.json';
-import { consumeReleaseAnnouncement, showReleaseToastSummary } from '@utils/releaseAnnouncement.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -32,46 +30,6 @@ const LogsPage = lazy(() => import('@pages/log-viewer/index.jsx'));
 // ============================================
 // App 组件
 // ============================================
-
-const ReleaseAnnouncement = () => {
-  const toast = useToast();
-
-  useEffect(() => {
-    if (!isWailsEnvironment()) return undefined;
-
-    let cancelled = false;
-    let stopAnnouncement = () => {};
-    fetchStatus()
-      .then((status) => {
-        if (cancelled) return;
-
-        const announcement = consumeReleaseAnnouncement({
-          runtimeVersion: status?.version,
-          releaseNotes,
-          storage: import.meta.env.DEV ? window.sessionStorage : undefined
-        });
-        if (!announcement) return;
-
-        stopAnnouncement = showReleaseToastSummary({
-          announcement,
-          showToast: toast.show,
-          dismissToast: toast.dismiss
-        });
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.warn('加载新版功能提示失败:', error);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      stopAnnouncement();
-    };
-  }, [toast]);
-
-  return null;
-};
 
 const GlobalAlerts = () => {
   const toast = useToast();
@@ -305,7 +263,6 @@ function App() {
 
   return (
     <ToastProvider>
-      <ReleaseAnnouncement />
       <GlobalAlerts />
 
       {/* 端口冲突对话框 - 使用独立的显示状态，避免成功后被自动关闭 */}
