@@ -28,6 +28,7 @@ import {
   Replace,
   Route,
   CheckCircle2,
+  ChevronDown,
   Percent
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
@@ -149,14 +150,17 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
  */
 const UpstreamErrorHop = ({ hop, isLast, showChannel }) => {
   const [showRaw, setShowRaw] = useState(false);
+  // 详情默认收起：标题行与服务商原话已能说明原因，正文与响应头按需展开
+  const [expanded, setExpanded] = useState(false);
   const formatted = formatUpstreamErrorText(hop.error);
   const message = extractUpstreamErrorMessage(hop.error);
   const headers = Object.entries(hop.headers || {});
   const location = [showChannel ? hop.channel : '', hop.credentialGroup, hop.endpoint].filter(Boolean).join(' / ');
+  const hasDetail = Boolean(hop.error) || headers.length > 0;
 
   return (
-    <div className={`rounded-lg border bg-white ${isLast ? 'border-rose-300' : 'border-rose-100'}`}>
-      <div className="flex flex-wrap items-center gap-2 border-b border-rose-100 px-3 py-2 text-xs">
+    <div className="space-y-1.5 py-2.5 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="font-semibold text-slate-500">#{hop.hop}</span>
         {location && <span className="min-w-0 font-medium text-slate-700 [overflow-wrap:anywhere]">{location}</span>}
         {hop.local ? (
@@ -167,40 +171,56 @@ const UpstreamErrorHop = ({ hop, isLast, showChannel }) => {
           <span className="rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 font-mono font-semibold text-rose-800">HTTP {hop.statusCode}</span>
         )}
         {isLast && <span className="text-rose-500">最终</span>}
-        {formatted.isJSON && (
-          <button
-            type="button"
-            onClick={() => setShowRaw((value) => !value)}
-            className="ml-auto rounded px-1.5 py-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-          >
-            {showRaw ? '格式化' : '原文'}
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-1">
+          {expanded && formatted.isJSON && (
+            <button
+              type="button"
+              onClick={() => setShowRaw((value) => !value)}
+              className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-rose-100 hover:text-slate-700"
+            >
+              {showRaw ? '格式化' : '原文'}
+            </button>
+          )}
+          {hasDetail && (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-slate-500 hover:bg-rose-100 hover:text-slate-700"
+            >
+              {expanded ? '收起详情' : '展开详情'}
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            </button>
+          )}
+        </div>
       </div>
-      <div className="space-y-2 px-3 py-2">
-        {message && (
-          <p className="text-sm font-medium leading-6 text-rose-800 [overflow-wrap:anywhere]">{message}</p>
-        )}
-        {hop.error ? (
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-50 px-2.5 py-2 font-mono text-xs leading-5 text-slate-800">
-            {showRaw || !formatted.isJSON ? hop.error : formatted.text}
-          </pre>
-        ) : (
-          <p className="text-xs text-slate-500">
-            {hop.local ? '未记录错误文本。' : '上游未返回正文，只能从状态码与下方响应头判断来源（例如 server: cloudflare 表示由 Cloudflare 边缘返回）。'}
-          </p>
-        )}
-        {headers.length > 0 && (
-          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
-            {headers.map(([key, value]) => (
-              <Fragment key={key}>
-                <span className="font-mono text-slate-400">{key}</span>
-                <span className="min-w-0 font-mono text-slate-600 [overflow-wrap:anywhere]">{value}</span>
-              </Fragment>
-            ))}
-          </div>
-        )}
-      </div>
+      {(message || expanded) && (
+        <div className="space-y-2">
+          {message && (
+            <p className="text-sm font-medium leading-6 text-rose-800 [overflow-wrap:anywhere]">{message}</p>
+          )}
+          {/* 正文用深色代码块：在红色卡片里与周围色调区分开，JSON 也更易读 */}
+          {expanded && (hop.error ? (
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 px-3 py-2 font-mono text-xs leading-5 text-slate-100">
+              {showRaw || !formatted.isJSON ? hop.error : formatted.text}
+            </pre>
+          ) : (
+            <p className="text-xs text-slate-500">
+              {hop.local ? '未记录错误文本。' : '上游未返回正文，只能从状态码与下方响应头判断来源（例如 server: cloudflare 表示由 Cloudflare 边缘返回）。'}
+            </p>
+          ))}
+          {expanded && headers.length > 0 && (
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+              {headers.map(([key, value]) => (
+                <Fragment key={key}>
+                  <span className="font-mono text-slate-400">{key}</span>
+                  <span className="min-w-0 font-mono text-slate-600 [overflow-wrap:anywhere]">{value}</span>
+                </Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -256,6 +276,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
+  // 记录「已展开此前失败跳」的请求 ID：弹窗组件常驻，换一条请求打开时自动回到收起状态
+  const [earlierHopsRequestId, setEarlierHopsRequestId] = useState(null);
   const requestIdCopyTimerRef = useRef(null);
   const modalPositionRef = useRef(null);
 
@@ -408,6 +430,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const { text: failureDetail, isRaw: failureDetailIsRaw } = getFailureDetail(request);
   // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
   const failedHops = isFailure ? collectFailedHops(chainNodes) : [];
+  const showEarlierHops = earlierHopsRequestId === request.requestId;
+  const setShowEarlierHops = (toggle) => {
+    setEarlierHopsRequestId(toggle(showEarlierHops) ? request.requestId : null);
+  };
   const failureCode = request.failure_reason || request.failureReason || '';
   // 复制内容：逐跳的状态码、原始正文与诊断头，排查时可直接贴给服务商
   const errorText = failedHops.length > 0
@@ -1033,15 +1059,29 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     {failureCode && (
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <span className="text-slate-500">失败分类</span>
-                        <span className="rounded-md border border-rose-200 bg-white px-1.5 py-0.5 font-mono text-rose-700">{failureCode}</span>
+                        <span className="rounded-md border border-rose-200 bg-rose-100/60 px-1.5 py-0.5 font-mono text-rose-700">{failureCode}</span>
                         {describeFailureReason(failureCode) && <span className="text-slate-600">{describeFailureReason(failureCode)}</span>}
                       </div>
                     )}
                     {failedHops.length > 0 ? (
-                      <div className="space-y-2">
-                        {failedHops.map((hop, index) => (
+                      <div className="divide-y divide-rose-200/70">
+                        {/* 默认只列最终跳；转移过的早先失败跳按需展开，避免卡片随转移次数无限变长 */}
+                        {(showEarlierHops ? failedHops : failedHops.slice(0, 1)).map((hop, index) => (
                           <UpstreamErrorHop key={`${hop.hop}-${index}`} hop={hop} isLast={index === 0} showChannel={showChannelInChain} />
                         ))}
+                        {failedHops.length > 1 && (
+                          <div className="pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowEarlierHops((value) => !value)}
+                              aria-expanded={showEarlierHops}
+                              className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs text-rose-600 hover:bg-rose-100 hover:text-rose-800"
+                            >
+                              {showEarlierHops ? '收起此前的失败跳' : `查看此前 ${failedHops.length - 1} 跳失败`}
+                              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showEarlierHops ? 'rotate-180' : ''}`} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <>

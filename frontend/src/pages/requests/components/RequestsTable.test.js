@@ -144,3 +144,16 @@ test('request detail chain cards surface per-hop attempts and upstream status', 
   // 链路徽章不再使用难以辨认的 9px 字号
   assert.doesNotMatch(detailSource, /text-\[9px\]/);
 });
+
+test('upstream error hops collapse details and stay on the rose card tone', () => {
+  const hopSource = detailSource.match(/const UpstreamErrorHop = [\s\S]*?\n\};/)?.[0] || '';
+  // 每跳详情默认收起，可手动切换
+  assert.match(hopSource, /const \[expanded, setExpanded\] = useState\(false\)/);
+  assert.match(hopSource, /aria-expanded=\{expanded\}/);
+  assert.match(hopSource, /收起详情/);
+  // 嵌在红色错误卡片内：不套白底卡片和边框，正文用深色代码块
+  assert.doesNotMatch(hopSource, /bg-white|rounded-lg border/);
+  assert.match(hopSource, /<pre className="[^"]*bg-slate-800/);
+  // 转移产生的早先失败跳默认折叠，只列最终跳
+  assert.match(detailSource, /showEarlierHops \? failedHops : failedHops\.slice\(0, 1\)/);
+});
