@@ -238,7 +238,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
-	var privacySummaryJSON string
 	if h.privacyService != nil {
 		result, privacyErr := h.privacyService.Apply(r.Context(), privacy.Request{
 			RequestID:    requestID,
@@ -261,13 +260,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 挂到请求 ctx 上：每次尝试选定端点后按其渠道隐私级别挑选实际发送的正文
-		// （三方中转在全局「仅检测」下也强制脱敏、可信渠道只检测）
+		// （三方中转在全局「仅检测」下也强制脱敏、可信渠道只检测）。
+		// 脱敏摘要不在这里记：发往可信渠道时正文没被改写，提前记录会让请求详情误标「已脱敏」；
+		// 由 outboundBody 在第一次真正发出改写正文时记录。
 		scanned := append([]byte(nil), originalBody...)
 		r = r.WithContext(contextWithCodexPrivacy(r.Context(), &codexPrivacyBodies{original: scanned, result: result}))
 		originalBody = result.Body
-		if result.Changed {
-			privacySummaryJSON = privacy.SummaryToJSON(result)
-		}
 	}
 
 	// 模型改写必须等候选端点（及其凭证分组）选定后再执行；这里保留隐私处理后的
@@ -310,9 +308,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewriteResult{}, reasoningJSON, serviceTier)
-	if privacySummaryJSON != "" {
-		h.recordPrivacyRedaction(requestID, privacySummaryJSON)
-	}
 
 	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，全局激活渠道全程不读写
 	if route := h.planCodexRoute(r, originalBody, isStreaming, requestID); route != nil {

@@ -14,7 +14,7 @@ import (
 type codexPrivacyBodies struct {
 	original []byte
 	result   privacy.ApplyResult
-	// recorded 全局模式未改写、但某次尝试因渠道级别强制脱敏时，只补记一次摘要
+	// recorded 脱敏摘要只在第一次真正发出改写正文时记录一次（与 Claude 侧 privacyBodies 一致）
 	recorded sync.Once
 }
 
@@ -28,7 +28,10 @@ func contextWithCodexPrivacy(ctx context.Context, bodies *codexPrivacyBodies) co
 }
 
 // outboundBody 选出发往该渠道的正文；请求未经隐私过滤时原样返回 fallback。
-// fallback 是全局模式下的正文（ServeHTTP 已把它设为 result.Body），跟随全局的渠道直接用它。
+//
+// 脱敏摘要在这里、而不是在入口处记录：入口处还不知道请求最终发往哪个渠道。
+// 全局为「脱敏」时，发往可信渠道的仍是原文；若入口提前记录，请求详情会误标「已脱敏」。
+// 只要本次请求有任一次尝试发出了改写正文就记录（同一请求可能先打可信渠道、再转移到三方中转）。
 func (h *Handler) outboundBody(r *http.Request, requestID string, channel *store.CodexChannelRecord, fallback []byte) []byte {
 	if r == nil {
 		return fallback
@@ -41,15 +44,8 @@ func (h *Handler) outboundBody(r *http.Request, requestID string, channel *store
 	if channel != nil {
 		level = channel.PrivacyLevel
 	}
-	switch privacy.NormalizeChannelLevel(level) {
-	case privacy.ChannelLevelDefault:
-		return fallback
-	case privacy.ChannelLevelTrusted:
-		return bodies.original
-	}
 	body, redacted := bodies.result.SelectBody(level, bodies.original)
-	// 全局已脱敏时入口处已记过摘要；这里只补记「渠道强制脱敏」这一种情况
-	if redacted && !bodies.result.Changed {
+	if redacted {
 		bodies.recorded.Do(func() {
 			summary := bodies.result
 			summary.Changed = true
