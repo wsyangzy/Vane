@@ -128,13 +128,13 @@ test('Codex credential group and endpoint saves separate mutation errors from re
   const groupHandler = source.slice(groupStart, groupEnd);
   assert.ok(groupHandler.indexOf('closeCredentialGroupForm();') < groupHandler.indexOf('await fetchData({ silent: true, throwOnError: true });'));
   assert.match(groupHandler, /setCredentialGroupFormError\(getErrorMessage\(err, '保存凭证分组失败'\)\);\s*return;/);
-  assert.match(groupHandler, /setError\(`凭证分组已保存，但列表刷新失败/);
+  assert.match(groupHandler, /toast\.error\(`凭证分组已保存，但列表刷新失败/);
 
   const endpointStart = source.indexOf('const handleSaveEndpoint = async');
   const endpointEnd = source.indexOf('const handleActivateEndpoint', endpointStart);
   const endpointHandler = source.slice(endpointStart, endpointEnd);
   assert.equal((endpointHandler.match(/await fetchData\(\{ silent: true, throwOnError: true \}\);/g) || []).length, 2);
-  assert.equal((endpointHandler.match(/setError\(`端点已保存，但列表刷新失败/g) || []).length, 2);
+  assert.equal((endpointHandler.match(/toast\.error\(`端点已保存，但列表刷新失败/g) || []).length, 2);
   assert.match(endpointHandler, /setEndpointFormError\(getErrorMessage\(err, '更新端点失败'\)\);\s*return;/);
   assert.match(endpointHandler, /setEndpointFormError\(getErrorMessage\(err, '保存端点失败'\)\);\s*return;/);
 });
@@ -145,7 +145,7 @@ test('Codex creation flow does not silently stop when channel refresh fails', ()
   assert.match(source, /fetchData\(\{ silent: true, throwOnError: true \}\)/);
   assert.match(source, /if \(!createdChannel\) \{\s*throw new Error\('渠道已创建，但刷新后未找到该渠道/);
   assert.match(source, /if \(throwOnError\) throw err/);
-  assert.match(source, /if \(channelCreated\) \{[\s\S]*?closeChannelForm\(\)[\s\S]*?setError\(/);
+  assert.match(source, /if \(channelCreated\) \{[\s\S]*?closeChannelForm\(\)[\s\S]*?toast\.error\(/);
 });
 
 test('Codex channels without credential groups do not expose endpoint actions', () => {

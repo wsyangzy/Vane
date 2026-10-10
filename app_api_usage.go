@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	"ai-relay-forwarder/internal/tracking"
@@ -149,7 +150,8 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 			todayEnd := todayStart.Add(24 * time.Hour)
 			cacheKey := fmt.Sprintf("runtime|provider=%s|today=%s|tz=%s", provider, todayStart.Format("2006-01-02"), loc.String())
 
-			snapshot, err := a.usageSummaryCache.GetOrLoad(cacheKey, func() (usageSummaryDBSnapshot, error) {
+			// 含全部历史聚合，任意时间的写入都会影响，只按 provider 区分失效
+			snapshot, err := a.usageSummaryCache.GetOrLoadScoped(cacheKey, appcache.Scope{Provider: provider}, func() (usageSummaryDBSnapshot, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 				allTimeCost, allTimeTokens, allTimeRequests, err := queryStatsFromDBStrict(ctx, logger, usageTracker, time.Time{}, time.Now(), provider)
 				cancel()
@@ -231,30 +233,26 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
-	a.ensureCacheRegistry()
-	cacheKey := fmt.Sprintf("history|provider=%s|start=%s|end=%s", provider, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano))
-	return a.usageHistoryCache.GetOrLoad(cacheKey, func() (UsageSummary, error) {
-		summaries, err := usageTracker.QueryUsageSummary(ctx, &tracking.QueryOptions{
-			StartDate: &startTime,
-			EndDate:   &endTime,
-			Provider:  provider,
-		})
-		if err != nil {
-			return UsageSummary{}, err
-		}
-
-		// 聚合所有摘要
-		result := UsageSummary{}
-		for _, s := range summaries {
-			result.TotalRequests += int64(s.RequestCount)
-			result.SuccessRequests += int64(s.SuccessCount)
-			result.FailedRequests += int64(s.ErrorCount)
-			result.TotalInputTokens += s.TotalInputTokens
-			result.TotalOutputTokens += s.TotalOutputTokens
-			result.TotalCost += s.TotalCostUSD
-		}
-		return result, nil
+	summaries, err := usageTracker.QueryUsageSummary(ctx, &tracking.QueryOptions{
+		StartDate: &startTime,
+		EndDate:   &endTime,
+		Provider:  provider,
 	})
+	if err != nil {
+		return UsageSummary{}, err
+	}
+
+	// 聚合所有摘要
+	result := UsageSummary{}
+	for _, s := range summaries {
+		result.TotalRequests += int64(s.RequestCount)
+		result.SuccessRequests += int64(s.SuccessCount)
+		result.FailedRequests += int64(s.ErrorCount)
+		result.TotalInputTokens += s.TotalInputTokens
+		result.TotalOutputTokens += s.TotalOutputTokens
+		result.TotalCost += s.TotalCostUSD
+	}
+	return result, nil
 }
 
 // queryStatsFromDB 直接从 request_logs 表查询成本、tokens 和请求数
@@ -1023,7 +1021,8 @@ func (a *App) GetTokenUsage(provider string) (TokenUsageData, error) {
 	tomorrowStart := todayStart.Add(24 * time.Hour)
 	a.ensureCacheRegistry()
 	cacheKey := fmt.Sprintf("provider=%s|date=%s|tz=%s", provider, todayStart.Format("2006-01-02"), loc.String())
-	data, err := a.tokenUsageCache.GetOrLoad(cacheKey, func() (TokenUsageData, error) {
+	scope := appcache.Scope{Provider: provider, Start: todayStart, End: tomorrowStart}
+	data, err := a.tokenUsageCache.GetOrLoadScoped(cacheKey, scope, func() (TokenUsageData, error) {
 		return queryTokenUsageForRange(usageTracker, todayStart, tomorrowStart, provider)
 	})
 	if err != nil {

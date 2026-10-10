@@ -119,13 +119,8 @@ func (s *CodexCredentialGroupService) DeleteGroup(ctx context.Context, id int64)
 	if existing.IsDefault {
 		return fmt.Errorf("默认凭证分组不能删除")
 	}
-	count, err := s.groupStore.CountEndpoints(ctx, id)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return fmt.Errorf("凭证分组仍被 %d 个端点引用，不能删除", count)
-	}
+	// The store rechecks activation/participation and deletes the group's
+	// inactive endpoints atomically with the group record.
 	return s.groupStore.DeleteByID(ctx, id)
 }
 

@@ -244,6 +244,7 @@ export namespace main {
 	export class CacheStatusItem {
 	    name: string;
 	    enabled: boolean;
+	    fixed: boolean;
 	    ttl: string;
 	    max_entries: number;
 	    size: number;
@@ -252,6 +253,7 @@ export namespace main {
 	    expired: number;
 	    evicted: number;
 	    invalidations: number;
+	    stale_served: number;
 	    last_updated_at: string;
 	    last_invalidated_at: string;
 
@@ -263,6 +265,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.enabled = source["enabled"];
+	        this.fixed = source["fixed"];
 	        this.ttl = source["ttl"];
 	        this.max_entries = source["max_entries"];
 	        this.size = source["size"];
@@ -271,6 +274,7 @@ export namespace main {
 	        this.expired = source["expired"];
 	        this.evicted = source["evicted"];
 	        this.invalidations = source["invalidations"];
+	        this.stale_served = source["stale_served"];
 	        this.last_updated_at = source["last_updated_at"];
 	        this.last_invalidated_at = source["last_invalidated_at"];
 	    }

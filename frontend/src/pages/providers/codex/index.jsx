@@ -3118,13 +3118,18 @@ const CodexPage = () => {
       setLastUpdate(new Date().toLocaleTimeString());
       return normalizedList;
     } catch (err) {
-      setError(getErrorMessage(err, '加载 Codex 渠道失败'));
       if (throwOnError) throw err;
+      const message = getErrorMessage(err, '加载 Codex 渠道失败');
+      if (silent) {
+        toast.error(message, '刷新失败');
+      } else {
+        setError(message);
+      }
       return [];
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     fetchData();
@@ -3268,7 +3273,7 @@ const CodexPage = () => {
       const message = getFailoverToggleErrorMessage(err, '保存渠道失败');
       if (channelCreated) {
         closeChannelForm();
-        setError(`渠道已创建，但刷新列表失败，请点击刷新后继续配置凭证分组和端点。\n${message}`);
+        toast.error(`渠道已创建，但刷新列表失败，请点击刷新后继续配置凭证分组和端点。\n${message}`, '刷新失败');
       } else {
         setChannelFormError(message);
         toast.error(message, '保存失败');
@@ -3286,7 +3291,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       setDeleteChannelTarget(null);
     } catch (err) {
-      setError(getErrorMessage(err, '删除渠道失败'));
+      toast.error(getErrorMessage(err, '删除渠道失败'), '删除渠道失败');
     } finally {
       setActionLoading('');
     }
@@ -3365,7 +3370,7 @@ const CodexPage = () => {
     try {
       await fetchData({ silent: true, throwOnError: true });
     } catch (err) {
-      setError(`凭证分组已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+      toast.error(`凭证分组已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
     }
   };
 
@@ -3378,7 +3383,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       setDeleteCredentialGroupTarget(null);
     } catch (err) {
-      setError(getErrorMessage(err, '删除凭证分组失败'));
+      toast.error(getErrorMessage(err, '删除凭证分组失败'), '删除凭证分组失败');
     } finally {
       setActionLoading('');
     }
@@ -3391,7 +3396,7 @@ const CodexPage = () => {
       await setDefaultCodexCredentialGroup(group.id);
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '设置默认分组失败'));
+      toast.error(getErrorMessage(err, '设置默认分组失败'), '设置默认分组失败');
     } finally {
       setActionLoading('');
     }
@@ -3455,7 +3460,7 @@ const CodexPage = () => {
       try {
         await fetchData({ silent: true, throwOnError: true });
       } catch (err) {
-        setError(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+        toast.error(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
       }
       return;
     }
@@ -3484,7 +3489,7 @@ const CodexPage = () => {
     try {
       await fetchData({ silent: true, throwOnError: true });
     } catch (err) {
-      setError(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+      toast.error(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
     }
   };
 
@@ -3495,7 +3500,7 @@ const CodexPage = () => {
       await activateCodexEndpoint(endpoint.id);
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '激活端点失败'));
+      toast.error(getErrorMessage(err, '激活端点失败'), '激活端点失败');
     } finally {
       setActionLoading('');
     }
@@ -3513,7 +3518,7 @@ const CodexPage = () => {
       });
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getFailoverToggleErrorMessage(err));
+      toast.error(getFailoverToggleErrorMessage(err), '操作失败');
     }
   };
 
@@ -3528,10 +3533,11 @@ const CodexPage = () => {
           failoverEnabled: enabled
         }));
       }
-      await fetchData({ silent: true });
     } catch (err) {
       toast.error(getFailoverToggleErrorMessage(err, '批量操作失败'), '批量操作失败');
     } finally {
+      // Some endpoints may have been saved before a later update failed.
+      await fetchData({ silent: true });
       setActionLoading('');
     }
   };
@@ -3546,10 +3552,10 @@ const CodexPage = () => {
           skipHealthCheck
         }));
       }
-      await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '批量切换跳过检测失败'));
+      toast.error(getErrorMessage(err, '批量切换跳过检测失败'), '批量操作失败');
     } finally {
+      await fetchData({ silent: true });
       setActionLoading('');
     }
   };
@@ -3567,7 +3573,7 @@ const CodexPage = () => {
       });
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '切换跳过检测失败'));
+      toast.error(getErrorMessage(err, '切换跳过检测失败'), '操作失败');
     } finally {
       setActionLoading('');
     }
@@ -3582,7 +3588,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       setDeleteEndpointTarget(null);
     } catch (err) {
-      setError(getErrorMessage(err, '删除端点失败'));
+      toast.error(getErrorMessage(err, '删除端点失败'), '删除端点失败');
     } finally {
       setActionLoading('');
     }
@@ -3592,6 +3598,14 @@ const CodexPage = () => {
     credentialGroupFormMode === 'create' && credentialGroupFormChannel
       ? buildCodexEndpointCopyOptions(credentialGroupFormChannel)
       : [];
+
+  const deletingCredentialGroupChannel = channels.find(
+    (channel) => channel.id === deleteCredentialGroupTarget?.channel?.id
+  ) || deleteCredentialGroupTarget?.channel;
+  const deletingCredentialGroupEndpointCount = (deletingCredentialGroupChannel?.endpoints || []).filter(
+    (endpoint) => Number(endpoint.credentialGroupId ?? endpoint.credential_group_id ?? 0) ===
+      Number(deleteCredentialGroupTarget?.group?.id)
+  ).length;
 
   return (
     <div className="animate-fade-in">
@@ -3813,7 +3827,9 @@ const CodexPage = () => {
         <DeleteConfirmDialog
           title="删除凭证分组"
           description={`即将从渠道「${deleteCredentialGroupTarget.channel?.name}」中删除凭证分组「${deleteCredentialGroupTarget.group?.name}」。`}
-          hint="默认分组或仍被端点引用的分组不能删除；如需删除，请先切换端点使用其他分组。"
+          hint={deletingCredentialGroupEndpointCount > 0
+            ? `将同时删除组内 ${deletingCredentialGroupEndpointCount} 个端点。仅当这些端点全部不参与转移且未被激活时才能删除；历史请求记录会保留。`
+            : '该分组当前没有端点，确认后将删除此分组。默认分组不能删除。'}
           loading={actionLoading === `delete-credential-group-${deleteCredentialGroupTarget.group.id}`}
           onCancel={() => setDeleteCredentialGroupTarget(null)}
           onConfirm={handleDeleteCredentialGroup}

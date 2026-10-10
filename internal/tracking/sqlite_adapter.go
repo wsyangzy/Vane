@@ -83,7 +83,7 @@ func (s *SQLiteAdapter) Open() error {
 
 	writeDSN := s.buildSQLiteDSN(dbPath)
 
-	writeDB, err := sql.Open("sqlite", writeDSN)
+	writeDB, err := sql.Open(sqliteDriverName, writeDSN)
 	if err != nil {
 		return fmt.Errorf("failed to open SQLite database: %w", err)
 	}
@@ -101,7 +101,7 @@ func (s *SQLiteAdapter) Open() error {
 		return fmt.Errorf("failed to ping SQLite database: %w", err)
 	}
 
-	readDB, err := sql.Open("sqlite", writeDSN)
+	readDB, err := sql.Open(sqliteDriverName, writeDSN)
 	if err != nil {
 		writeDB.Close()
 		return fmt.Errorf("failed to open SQLite read database: %w", err)
@@ -2520,7 +2520,12 @@ func (s *SQLiteAdapter) buildSQLiteDSN(dbPath string) string {
 		separator = "&"
 	}
 
-	return basePath + separator + "_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_foreign_keys=1&_busy_timeout=60000"
+	// modernc accepts repeated _pragma parameters; the sqlite3-style options
+	// previously used here were ignored, leaving DELETE journaling and no wait.
+	// Keep the lock wait below the management APIs' 10-second request budget.
+	// Foreign-key enforcement stays unchanged; enabling it needs a legacy-data
+	// compatibility review independent of this connection-lifecycle fix.
+	return basePath + separator + "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(10000)"
 }
 
 // diagnoseTimezoneSettings 诊断SQLite时区设置，帮助调试时区不一致问题

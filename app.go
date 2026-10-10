@@ -63,12 +63,10 @@ type App struct {
 	authMiddleware       *middleware.AuthMiddleware
 
 	// 读路径缓存治理
-	cacheRegistry            *appcache.Registry
-	usageSummaryCache        *appcache.Cache[usageSummaryDBSnapshot]
-	usageHistoryCache        *appcache.Cache[UsageSummary]
-	tokenUsageCache          *appcache.Cache[TokenUsageData]
-	endpointCostTodayCache   *appcache.Cache[[]EndpointCostItem]
-	endpointCostHistoryCache *appcache.Cache[[]EndpointCostItem]
+	cacheRegistry          *appcache.Registry
+	usageSummaryCache      *appcache.Cache[usageSummaryDBSnapshot]
+	tokenUsageCache        *appcache.Cache[TokenUsageData]
+	endpointCostTodayCache *appcache.Cache[[]EndpointCostItem]
 
 	// 端点存储 (SQLite)
 	endpointStore   claudestore.EndpointStore      // 端点数据持久化
@@ -791,11 +789,6 @@ func (a *App) setupModelPricingStore() {
 	// 如果表为空，初始化默认数据
 	if count == 0 {
 		a.initDefaultModelPricing(ctx)
-	}
-
-	// 加载缓存
-	if err := a.modelPricingService.LoadCache(ctx); err != nil {
-		a.logger.Warn("⚠️ 加载模型定价缓存失败", "error", err)
 	}
 
 	// 同步定价到 UsageTracker（用于成本计算）

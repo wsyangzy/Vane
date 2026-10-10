@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/tracking"
 )
@@ -382,23 +383,23 @@ func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 			loc = parsedLoc
 		}
 	}
-	date := time.Now().In(loc).Format("2006-01-02")
-	return a.getEndpointCostsForDate(usageTracker, date, provider, true, logger)
+	now := time.Now().In(loc)
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	return a.getEndpointCostsForDate(usageTracker, dayStart, provider, logger)
 }
 
 func (a *App) getEndpointCostsForDate(usageTracker interface {
 	GetEndpointCostsForDate(context.Context, string) ([]tracking.EndpointCostSummary, error)
-}, date, provider string, isToday bool, logger interface {
+}, dayStart time.Time, provider string, logger interface {
 	Error(string, ...any)
 }) []EndpointCostItem {
 	a.ensureCacheRegistry()
-	cacheKey := fmt.Sprintf("date=%s|provider=%s", date, provider)
-	targetCache := a.endpointCostHistoryCache
-	if isToday {
-		targetCache = a.endpointCostTodayCache
-	}
+	date := dayStart.Format("2006-01-02")
+	cacheKey := fmt.Sprintf("date=%s|provider=%s|tz=%s", date, provider, dayStart.Location())
+	// 不带 provider：provider 过滤在内存里做，且旧记录的空 provider 按 claude 归并
+	scope := appcache.Scope{Start: dayStart, End: dayStart.AddDate(0, 0, 1)}
 
-	items, err := targetCache.GetOrLoad(cacheKey, func() ([]EndpointCostItem, error) {
+	items, err := a.endpointCostTodayCache.GetOrLoadScoped(cacheKey, scope, func() ([]EndpointCostItem, error) {
 		return queryEndpointCostsForDate(usageTracker, date, provider, logger)
 	})
 	if err != nil {

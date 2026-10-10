@@ -1,16 +1,7 @@
 import { formatMultiplierExpression, parseMultiplierExpression } from '@utils/multiplier.js';
+import { getErrorMessage } from '@utils/errorMessage.js';
 
-export const getErrorMessage = (error, fallback = '操作失败') => {
-  if (!error) return fallback;
-  if (typeof error === 'string') return error || fallback;
-  if (error instanceof Error) return error.message || fallback;
-  if (typeof error?.message === 'string' && error.message) return error.message;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-};
+export { getErrorMessage };
 
 export const FAILOVER_CANDIDATE_REQUIRED_MESSAGE = '至少保留一个参与转移的备用端点，已保留当前端点。';
 

@@ -842,25 +842,68 @@ func (ut *UsageTracker) QueryUsageStats(ctx context.Context, period string) (*Us
 // QueryUsageStatsTotals 查询聚合统计（数据库部分）。
 // 该方法只做聚合，不返回明细，适用于前端统计卡片/图表的快速刷新。
 func (ut *UsageTracker) QueryUsageStatsTotals(ctx context.Context, opts *QueryOptions) (*UsageStatsTotals, error) {
-	opts = ut.scopedQueryOptions(opts)
-	var combined UsageStatsTotals
-	var startTime, endTime *time.Time
-	if opts != nil {
-		startTime = opts.StartDate
-		endTime = opts.EndDate
+	if ut == nil || ut.readDB == nil {
+		return nil, fmt.Errorf("read database not initialized")
 	}
-	err := ut.forEachHistorySource(ctx, startTime, endTime, func(source historyQuerySource) error {
-		totals, err := ut.queryUsageStatsTotalsFromSource(ctx, source.db, opts)
-		if err != nil {
-			return err
-		}
-		combined.add(*totals)
-		return nil
-	})
+	opts = ut.scopedQueryOptions(opts)
+
+	ut.historyMu.RLock()
+	defer ut.historyMu.RUnlock()
+
+	var combined UsageStatsTotals
+	active, err := ut.queryUsageStatsTotalsFromSource(ctx, ut.readDB, opts)
+	if err != nil {
+		return nil, fmt.Errorf("活动数据库查询失败: %w", err)
+	}
+	combined.add(*active)
+
+	files, err := ut.intersectingArchiveFilesLocked(opts.StartDate, opts.EndDate)
 	if err != nil {
 		return nil, err
 	}
+	for _, file := range files {
+		load := func() (UsageStatsTotals, error) {
+			var totals UsageStatsTotals
+			err := ut.queryHistoryArchiveFile(ctx, file, func(source historyQuerySource) error {
+				result, err := ut.queryUsageStatsTotalsFromSource(ctx, source.db, opts)
+				if err != nil {
+					return err
+				}
+				totals = *result
+				return nil
+			})
+			return totals, err
+		}
+		var totals UsageStatsTotals
+		if ut.archiveTotalsCache != nil {
+			// 归档文件只在 historyMu 写锁下变更，变更时整表清空；这里持有读锁，
+			// 读到的缓存与磁盘上的归档文件一致。命中时不必打开归档文件。
+			totals, err = ut.archiveTotalsCache.GetOrLoad(file.month+"|"+ut.archiveScopedCacheKey(file.month, opts), load)
+		} else {
+			totals, err = load()
+		}
+		if err != nil {
+			return nil, err
+		}
+		combined.add(totals)
+	}
 	return &combined, nil
+}
+
+// archiveScopedCacheKey 生成归档月份聚合的缓存 key。
+// 时间范围完整覆盖该月时不同查询的结果相同，用 "full" 归一，
+// 避免 end=time.Now() 这类每次都变的上界让归档月份永远无法命中。
+func (ut *UsageTracker) archiveScopedCacheKey(month string, opts *QueryOptions) string {
+	monthStart, monthEnd, err := ut.archiveMonthBounds(month)
+	covers := err == nil &&
+		(opts.StartDate == nil || !opts.StartDate.After(monthStart)) &&
+		(opts.EndDate == nil || !opts.EndDate.Before(monthEnd))
+	if !covers {
+		return queryOptsCacheKey(opts)
+	}
+	return fmt.Sprintf("full|p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|env=%s",
+		opts.Provider, opts.Channel, opts.ModelName, opts.EndpointName,
+		opts.GroupName, opts.Status, opts.Environment)
 }
 
 func (ut *UsageTracker) queryUsageStatsTotalsFromSource(ctx context.Context, db *sql.DB, opts *QueryOptions) (*UsageStatsTotals, error) {
@@ -1006,6 +1049,38 @@ func (ut *UsageTracker) ConfigureDBCountFallbackCache(options appcache.Options) 
 	ut.dbCountFallbackCache.SetOptions(options)
 }
 
+// QueryScope 把查询条件映射成缓存依赖范围：provider 过滤与 start_time 区间决定哪些写入会影响结果。
+func QueryScope(opts *QueryOptions) appcache.Scope {
+	if opts == nil {
+		return appcache.Scope{}
+	}
+	scope := appcache.Scope{Provider: opts.Provider}
+	if opts.StartDate != nil {
+		scope.Start = *opts.StartDate
+	}
+	if opts.EndDate != nil {
+		scope.End = *opts.EndDate
+	}
+	return scope
+}
+
+// ArchiveTotalsCache returns the archive-month aggregation cache for app-level registry wiring.
+func (ut *UsageTracker) ArchiveTotalsCache() appcache.ManagedCache {
+	if ut == nil || ut.archiveTotalsCache == nil {
+		return nil
+	}
+	return ut.archiveTotalsCache
+}
+
+// ConfigureArchiveTotalsCache 应用统一开关等运行时选项；归档聚合由失效驱动，不设 TTL。
+func (ut *UsageTracker) ConfigureArchiveTotalsCache(options appcache.Options) {
+	if ut == nil || ut.archiveTotalsCache == nil {
+		return
+	}
+	options.TTL = 0
+	ut.archiveTotalsCache.SetOptions(options)
+}
+
 // DBCountFallbackCache returns the managed cache instance for app-level registry wiring.
 func (ut *UsageTracker) DBCountFallbackCache() appcache.ManagedCache {
 	if ut == nil || ut.dbCountFallbackCache == nil {
@@ -1028,7 +1103,7 @@ func (ut *UsageTracker) queryUsageStatsTotalsCached(ctx context.Context, opts *Q
 	}
 
 	key := "usage:stats:" + queryOptsCacheKey(opts)
-	value, err := ut.usageStatsCache.GetOrLoad(key, func() (UsageStatsTotals, error) {
+	value, err := ut.usageStatsCache.GetOrLoadScoped(key, QueryScope(opts), func() (UsageStatsTotals, error) {
 		totals, err := ut.QueryUsageStatsTotals(ctx, opts)
 		if err != nil {
 			return UsageStatsTotals{}, err

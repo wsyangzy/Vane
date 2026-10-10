@@ -316,27 +316,47 @@ type endpointCostTestLogger struct{}
 
 func (endpointCostTestLogger) Error(string, ...any) {}
 
-func TestEndpointCostCacheUsesCallerTodaySelection(t *testing.T) {
+func TestEndpointCostCacheBuildsStructuredItems(t *testing.T) {
 	app := NewApp()
 	app.endpointCostTodayCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostToday, TTL: time.Minute, MaxEntries: 10, StaleOnError: true, Enabled: true})
-	app.endpointCostHistoryCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostHistory, TTL: time.Minute, MaxEntries: 10, StaleOnError: true, Enabled: true})
 
 	tracker := &endpointCostTrackerStub{costs: []tracking.EndpointCostSummary{
 		{Channel: "Codex 正价", EndpointName: "codex-main", GroupName: "国内", Provider: "codex", InputTokens: 100, OutputTokens: 20, TotalCostUSD: 0.25},
 	}}
 
-	items := app.getEndpointCostsForDate(tracker, "1999-01-01", "codex", true, endpointCostTestLogger{})
+	day := time.Date(1999, 1, 1, 0, 0, 0, 0, time.Local)
+	items := app.getEndpointCostsForDate(tracker, day, "codex", endpointCostTestLogger{})
 	if len(items) != 1 || items[0].Name != "codex-main (国内)" || items[0].Channel != "Codex 正价" || items[0].Endpoint != "codex-main" || items[0].Group != "国内" {
 		t.Fatalf("endpoint costs = %#v, want structured codex-main item", items)
 	}
 
 	todayStats := app.endpointCostTodayCache.Stats()
-	historyStats := app.endpointCostHistoryCache.Stats()
 	if todayStats.Misses != 1 || todayStats.Size != 1 {
 		t.Fatalf("expected today cache miss+entry, got misses=%d size=%d", todayStats.Misses, todayStats.Size)
 	}
-	if historyStats.Misses != 0 || historyStats.Size != 0 {
-		t.Fatalf("expected history cache untouched, got misses=%d size=%d", historyStats.Misses, historyStats.Size)
+}
+
+// 写入只清依赖受影响日期的条目：昨天的写入不能清掉今天的成本缓存，今天的写入必须清掉。
+func TestEndpointCostCacheInvalidatedOnlyBySameDayWrites(t *testing.T) {
+	app := NewApp()
+	app.endpointCostTodayCache.SetOptions(appcache.Options{Name: cacheNameEndpointCostToday, TTL: time.Hour, MaxEntries: 10, Enabled: true})
+	tracker := &endpointCostTrackerStub{costs: []tracking.EndpointCostSummary{{EndpointName: "e", Provider: "claude"}}}
+
+	day := time.Date(2026, 10, 8, 0, 0, 0, 0, time.Local)
+	app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
+
+	yesterday := day.Add(-time.Hour)
+	app.invalidateUsageQueryCaches(appcache.Change{Providers: []string{"claude"}, Start: yesterday, End: yesterday})
+	app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
+	if tracker.calls != 1 {
+		t.Fatalf("write on another day must not invalidate, loader calls = %d", tracker.calls)
+	}
+
+	noon := day.Add(12 * time.Hour)
+	app.invalidateUsageQueryCaches(appcache.Change{Providers: []string{"codex"}, Start: noon, End: noon})
+	app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
+	if tracker.calls != 2 {
+		t.Fatalf("same-day write must invalidate regardless of provider, loader calls = %d", tracker.calls)
 	}
 }
 
@@ -348,7 +368,8 @@ func TestEndpointCostCacheReturnsStaleValueOnLoaderError(t *testing.T) {
 		{EndpointName: "claude-main", Provider: "claude", InputTokens: 42, OutputTokens: 8, TotalCostUSD: 0.12},
 	}}
 
-	first := app.getEndpointCostsForDate(tracker, "2026-06-27", "claude", true, endpointCostTestLogger{})
+	day := time.Date(2026, 6, 27, 0, 0, 0, 0, time.Local)
+	first := app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
 	if len(first) != 1 || first[0].Name != "claude-main" {
 		t.Fatalf("first endpoint costs = %#v, want claude-main item", first)
 	}
@@ -357,7 +378,7 @@ func TestEndpointCostCacheReturnsStaleValueOnLoaderError(t *testing.T) {
 	tracker.fail = true
 	tracker.costs = nil
 
-	second := app.getEndpointCostsForDate(tracker, "2026-06-27", "claude", true, endpointCostTestLogger{})
+	second := app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
 	if len(second) != 1 || second[0].Name != "claude-main" {
 		t.Fatalf("second endpoint costs = %#v, want stale claude-main item", second)
 	}

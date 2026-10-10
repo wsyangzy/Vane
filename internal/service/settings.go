@@ -749,6 +749,12 @@ func (s *SettingsService) cleanupDeprecatedSettings(ctx context.Context) error {
 		// 响应头超时从隐藏的 streaming 分类移到可见的 request 分类；旧行连同其 60s 旧值一起丢弃，
 		// 新行按 300s 默认值种入（60s 正是导致 Codex 长上下文请求被断流重放的值）。
 		{CategoryStreaming, "response_header_timeout"},
+		// 统计缓存改为写入时按范围失效，分项 TTL 合并为单一兜底时长 fallback_ttl。
+		{CategoryCache, "usage_stats_ttl"},
+		{CategoryCache, "usage_summary_ttl"},
+		{CategoryCache, "token_usage_ttl"},
+		{CategoryCache, "endpoint_cost_today_ttl"},
+		{CategoryCache, "endpoint_cost_history_ttl"},
 	}
 
 	for _, dep := range deprecatedKeys {
@@ -911,14 +917,10 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*store.Setti
 
 	case CategoryCache:
 		return []*store.SettingRecord{
-			{Category: CategoryCache, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用缓存", Description: "启用统计聚合读路径缓存，不影响请求转发和计费事实记录", DisplayOrder: 1},
-			{Category: CategoryCache, Key: "usage_stats_ttl", Value: "5s", ValueType: ValueTypeDuration, Label: "统计卡片缓存", Description: "Usage Stats 数据库聚合部分缓存时间", DisplayOrder: 2},
-			{Category: CategoryCache, Key: "usage_summary_ttl", Value: "30s", ValueType: ValueTypeDuration, Label: "摘要缓存", Description: "Usage Summary 数据库聚合缓存时间", DisplayOrder: 3},
-			{Category: CategoryCache, Key: "token_usage_ttl", Value: "5s", ValueType: ValueTypeDuration, Label: "Token 缓存", Description: "今日 Token 聚合缓存时间", DisplayOrder: 4},
-			{Category: CategoryCache, Key: "endpoint_cost_today_ttl", Value: "10s", ValueType: ValueTypeDuration, Label: "今日端点成本缓存", Description: "今日端点成本聚合缓存时间", DisplayOrder: 5},
-			{Category: CategoryCache, Key: "endpoint_cost_history_ttl", Value: "5m", ValueType: ValueTypeDuration, Label: "历史端点成本缓存", Description: "历史日期端点成本聚合缓存时间", DisplayOrder: 6},
-			{Category: CategoryCache, Key: "max_entries", Value: "1000", ValueType: ValueTypeInt, Label: "最大条目数", Description: "每类缓存最多保留的 key 数量", DisplayOrder: 7},
-			{Category: CategoryCache, Key: "stale_on_error", Value: "true", ValueType: ValueTypeBool, Label: "错误时使用旧值", Description: "数据库瞬时错误时允许统计聚合展示旧值", DisplayOrder: 8},
+			{Category: CategoryCache, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用缓存", Description: "启用统计聚合读路径缓存，不影响请求转发和计费事实记录；端口检测、CLI 版本等运行时缓存始终启用", DisplayOrder: 1},
+			{Category: CategoryCache, Key: "fallback_ttl", Value: "5m", ValueType: ValueTypeDuration, Label: "兜底刷新时间", Description: "请求记录写入后统计缓存会立即按受影响范围刷新；此值只是兜底，超过该时长无论是否有写入都重新查库", DisplayOrder: 2},
+			{Category: CategoryCache, Key: "max_entries", Value: "1000", ValueType: ValueTypeInt, Label: "最大条目数", Description: "每类缓存最多保留的 key 数量", DisplayOrder: 3},
+			{Category: CategoryCache, Key: "stale_on_error", Value: "true", ValueType: ValueTypeBool, Label: "错误时使用旧值", Description: "数据库瞬时错误时允许统计聚合展示旧值", DisplayOrder: 4},
 		}
 
 	case CategoryHotPool:

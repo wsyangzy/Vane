@@ -1011,6 +1011,11 @@ func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
 		return fmt.Errorf("Codex 凭证分组服务未就绪，请稍后重试")
 	}
 
+	// Serialize with endpoint creation/edit/activation through the runtime
+	// reload, so no endpoint can be attached to a group being removed.
+	a.codexActivationMu.Lock()
+	defer a.codexActivationMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

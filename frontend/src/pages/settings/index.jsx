@@ -93,6 +93,9 @@ const formatCacheHitRate = (hits = 0, misses = 0) => {
   return `${((hits / total) * 100).toFixed(1)}%`;
 };
 
+// TTL 为 0 的缓存只靠写入失效刷新，不按时间过期
+const formatCacheTTL = (ttl) => (!ttl || ttl === '0s' ? '随写入失效' : ttl);
+
 const formatCacheCapacity = (cache) => {
   const size = cache?.size ?? 0;
   const maxEntries = cache?.maxEntries ?? 0;
@@ -296,20 +299,31 @@ const CacheStatusPanel = ({
                       </span>
                     </td>
                     <td className="px-3 py-2">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                        cache.enabled
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'bg-slate-100 text-slate-500'
-                      }`}>
-                        {cache.enabled ? '启用' : '禁用'}
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          cache.enabled
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-slate-100 text-slate-500'
+                        }`}
+                        title={cache.fixed ? '运行时状态缓存，不受「启用缓存」开关控制' : undefined}
+                      >
+                        {cache.fixed ? '常驻' : cache.enabled ? '启用' : '禁用'}
                       </span>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{cache.ttl || '-'}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{formatCacheTTL(cache.ttl)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheCapacity(cache)}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheHitRate(cache.hits, cache.misses)}
+                      {cache.staleServed > 0 && (
+                        <span
+                          className="ml-1.5 text-amber-600"
+                          title="数据库查询失败时返回旧值的次数"
+                        >
+                          · 旧值 {cache.staleServed}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {cache.invalidations}

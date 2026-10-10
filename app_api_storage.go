@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
@@ -577,6 +578,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 			"UPDATE usage_summary SET endpoint_name = ? WHERE endpoint_name = ? AND group_name = ?",
 			newName, existingRecord.Name, channel,
 		)
+		a.notifyUsageDataChanged(usageTracker, appcache.Change{Providers: []string{"claude"}})
 	}
 
 	// 更新成功后，异步同步端点倍率到 UsageTracker
@@ -713,6 +715,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 			"UPDATE usage_summary SET endpoint_name = ? WHERE endpoint_name = ? AND group_name = ?",
 			newName, existingRecord.Name, channel,
 		)
+		a.notifyUsageDataChanged(usageTracker, appcache.Change{Providers: []string{"claude"}})
 	}
 
 	go a.syncEndpointMultipliersToTracker(context.Background())

@@ -27,14 +27,13 @@ func TestSettingsServiceIncludesCacheDefaults(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		"enabled":                   "true",
-		"usage_stats_ttl":           "5s",
-		"usage_summary_ttl":         "30s",
-		"token_usage_ttl":           "5s",
-		"endpoint_cost_today_ttl":   "10s",
-		"endpoint_cost_history_ttl": "5m",
-		"max_entries":               "1000",
-		"stale_on_error":            "true",
+		"enabled":        "true",
+		"fallback_ttl":   "5m",
+		"max_entries":    "1000",
+		"stale_on_error": "true",
+	}
+	if len(values) != len(expected) {
+		t.Fatalf("expected %d cache settings, got %v", len(expected), values)
 	}
 	for key, value := range expected {
 		if values[key] != value {
