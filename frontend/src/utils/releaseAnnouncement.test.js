@@ -109,7 +109,7 @@ test('bundled release catalog archives old versions and keeps current entries co
   assert.ok(versionMatch, 'globals.go must define Version');
   assert.equal(normalizeReleaseVersion(catalog.currentVersion), normalizeReleaseVersion(versionMatch[1]));
   assert.equal(new Set(versions).size, versions.length);
-  assert.deepEqual(versions.slice(0, 2), ['8.7', '8.6']);
+  assert.deepEqual(versions.slice(0, 3), ['8.8', '8.7', '8.6']);
   assert.equal(summary.message.length, 5);
   assert.ok(summary.message.every((item) => item.length <= 48));
 });
