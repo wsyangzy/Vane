@@ -4,7 +4,7 @@
 // 2025-12-01
 // ============================================
 
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Fragment, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   X,
   Copy,
@@ -25,7 +25,11 @@ import {
   TrendingDown,
   Zap,
   Calculator,
-  Replace
+  Replace,
+  Route,
+  CheckCircle2,
+  ChevronDown,
+  Percent
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
@@ -35,12 +39,17 @@ import { formatMultiplierDisplayValue } from '@utils/multiplier.js';
 import { Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import {
+  formatCacheHitRate,
   getBillableInputTokens,
   getDisplayInputTokens,
   getDisplayTotalTokens,
+  getRequestCacheHitRate,
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 import {
+  collectFailedHops,
+  extractUpstreamErrorMessage,
+  formatUpstreamErrorText,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   getRequestChannelLabel,
@@ -53,6 +62,7 @@ import {
   formatReasoningFieldValue,
   getReasoningEffortMeta,
   getServiceTierMeta,
+  getStreamOutcomeMeta,
   isThinkingTypeActive,
   getPrivacyDisplay,
   parseReasoningConfig,
@@ -61,15 +71,16 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
+import { describeRouteSnapshot, describeRouteExecution } from '@pages/management/shared/routeTargets.js';
 
 // last_failure_reason 只存原样保存的上游正文或传输层错误文本，标签"原始信息"。
 // 没有它的失败只剩 Relay 的分类（failure_reason），按分类渲染一句说明，标签"失败原因"，
 // 与 HTTP 状态码来源无关：正文读取失败这类记录带着真实上游 200，详情却是本地错误文本。
 // 分类文案与右上角提示共用 failureSummary，避免两处说法不一致。
+// 取消不在此列：它是客户端主动断开，单独以中性样式展示，不混进红色错误卡片。
 const FAILURE_STATUSES = new Set([
   'failed',
   'error',
-  'cancelled',
   'timeout',
   'partial_failed',
   'auth_error',
@@ -79,9 +90,11 @@ const FAILURE_STATUSES = new Set([
   'stream_error',
 ]);
 
+const isFailureStatus = (status) => FAILURE_STATUSES.has(String(status || '').toLowerCase());
+const isCancelledStatus = (status) => ['cancelled', 'canceled'].includes(String(status || '').toLowerCase());
+
 const getFailureDetail = (request) => {
-  const isFailure = FAILURE_STATUSES.has(String(request.status || '').toLowerCase());
-  if (!isFailure) return { text: '', isRaw: false };
+  if (!isFailureStatus(request.status)) return { text: '', isRaw: false };
   const raw = request.last_failure_reason || request.lastFailureReason || '';
   if (raw) return { text: String(raw), isRaw: true };
   const reason = request.failure_reason || request.failureReason || '';
@@ -132,17 +145,115 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
 };
 
 /**
+ * 单跳的上游报错：状态码、服务商原话、格式化正文（可切原文）与诊断头。
+ * 不做任何改写或翻译——这里要回答的是「服务商到底说了什么」。
+ */
+const UpstreamErrorHop = ({ hop, isLast, showChannel }) => {
+  const [showRaw, setShowRaw] = useState(false);
+  // 详情默认收起：标题行与服务商原话已能说明原因，正文与响应头按需展开
+  const [expanded, setExpanded] = useState(false);
+  const formatted = formatUpstreamErrorText(hop.error);
+  const message = extractUpstreamErrorMessage(hop.error);
+  const headers = Object.entries(hop.headers || {});
+  const location = [showChannel ? hop.channel : '', hop.credentialGroup, hop.endpoint].filter(Boolean).join(' / ');
+  const hasDetail = Boolean(hop.error) || headers.length > 0;
+
+  return (
+    <div className="space-y-1.5 py-2.5 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold text-slate-500">#{hop.hop}</span>
+        {location && <span className="min-w-0 font-medium text-slate-700 [overflow-wrap:anywhere]">{location}</span>}
+        {hop.local ? (
+          <Tooltip content="没有收到上游的 HTTP 响应（连接失败、超时等），下方是本地错误文本">
+            <span className="rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">本地失败</span>
+          </Tooltip>
+        ) : hop.statusCode > 0 && (
+          <span className="rounded border border-rose-300 bg-rose-100 px-1.5 py-0.5 font-mono font-semibold text-rose-800">HTTP {hop.statusCode}</span>
+        )}
+        {isLast && <span className="text-rose-500">最终</span>}
+        <div className="ml-auto flex items-center gap-1">
+          {expanded && formatted.isJSON && (
+            <button
+              type="button"
+              onClick={() => setShowRaw((value) => !value)}
+              className="rounded px-1.5 py-0.5 text-slate-500 hover:bg-rose-100 hover:text-slate-700"
+            >
+              {showRaw ? '格式化' : '原文'}
+            </button>
+          )}
+          {hasDetail && (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-slate-500 hover:bg-rose-100 hover:text-slate-700"
+            >
+              {expanded ? '收起详情' : '展开详情'}
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            </button>
+          )}
+        </div>
+      </div>
+      {(message || expanded) && (
+        <div className="space-y-2">
+          {message && (
+            <p className="text-sm font-medium leading-6 text-rose-800 [overflow-wrap:anywhere]">{message}</p>
+          )}
+          {/* 正文用深色代码块：在红色卡片里与周围色调区分开，JSON 也更易读 */}
+          {expanded && (hop.error ? (
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-slate-800 px-3 py-2 font-mono text-xs leading-5 text-slate-100">
+              {showRaw || !formatted.isJSON ? hop.error : formatted.text}
+            </pre>
+          ) : (
+            <p className="text-xs text-slate-500">
+              {hop.local ? '未记录错误文本。' : '上游未返回正文，只能从状态码与下方响应头判断来源（例如 server: cloudflare 表示由 Cloudflare 边缘返回）。'}
+            </p>
+          ))}
+          {expanded && headers.length > 0 && (
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+              {headers.map(([key, value]) => (
+                <Fragment key={key}>
+                  <span className="font-mono text-slate-400">{key}</span>
+                  <span className="min-w-0 font-mono text-slate-600 [overflow-wrap:anywhere]">{value}</span>
+                </Fragment>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/**
+ * 请求路由徽章：规则 / 执行方式 / 最终落在的阶段
+ */
+const RouteBadges = ({ route }) => (
+  <span className="inline-flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
+    <span className="inline-flex min-w-0 max-w-full items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700 [overflow-wrap:anywhere]">
+      {route.title}
+    </span>
+    {route.mode && (
+      <span className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600">{route.mode}</span>
+    )}
+    <span className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600">{route.stage}</span>
+  </span>
+);
+
+/**
  * Token 指标卡片
  */
-const TokenCard = ({ icon: Icon, label, value, colorClass }) => (
+// displayValue 用于非 token 数值（如命中率）；hint 是标签下方的补充说明
+const TokenCard = ({ icon: Icon, label, value, displayValue, hint, colorClass }) => (
   <div className={`rounded-lg p-4 border ${colorClass.border} ${colorClass.bg}`}>
     <div className="flex items-center justify-between mb-2">
       <Icon className={`w-4 h-4 ${colorClass.icon}`} />
     </div>
     <div className={`text-2xl font-bold font-mono ${colorClass.text}`}>
-      {(value || 0).toLocaleString()}
+      {displayValue ?? (value || 0).toLocaleString()}
     </div>
     <div className="text-xs text-slate-500 mt-1">{label}</div>
+    {hint && <div className="mt-0.5 text-[11px] text-slate-400">{hint}</div>}
   </div>
 );
 
@@ -165,6 +276,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const [activeTab, setActiveTab] = useState('overview');
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
+  // 记录「已展开此前失败跳」的请求 ID：弹窗组件常驻，换一条请求打开时自动回到收起状态
+  const [earlierHopsRequestId, setEarlierHopsRequestId] = useState(null);
   const requestIdCopyTimerRef = useRef(null);
   const modalPositionRef = useRef(null);
 
@@ -257,10 +370,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   };
   const billingOutputSourceLabel = outputSourceLabelMap[billingOutputTokenSource] || outputSourceLabelMap.output_tokens;
 
-  // 请求类型
+  // 请求类型：全页统一用"流式 / 非流式"，与网络信息页、非流改道的叫法一致
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
-  const streamLabel = request.isStreaming ? '流式请求' : '常规请求';
+  const streamLabel = request.isStreaming ? '流式' : '非流式';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
+  const streamOutcomeMeta = getStreamOutcomeMeta(request.streamOutcome || request.stream_outcome);
+  const cacheHitRate = getRequestCacheHitRate(request);
+  const isFailure = isFailureStatus(request.status);
+  const isCancelled = isCancelledStatus(request.status);
+  const cancelReason = request.cancel_reason || request.cancelReason || '';
 
   const endpointChain = getEndpointChainItems(request);
   const chainNodes = endpointChain.map((item, index) => {
@@ -310,24 +428,42 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
     return '中转';
   };
   const { text: failureDetail, isRaw: failureDetailIsRaw } = getFailureDetail(request);
-  const errorText = [
-    networkHTTPStatus > 0 ? `HTTP 状态码: ${networkHTTPStatus}` : null,
-    failureDetail,
-    request.cancel_reason
-  ].filter(Boolean).join('\n');
+  // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
+  const failedHops = isFailure ? collectFailedHops(chainNodes) : [];
+  const showEarlierHops = earlierHopsRequestId === request.requestId;
+  const setShowEarlierHops = (toggle) => {
+    setEarlierHopsRequestId(toggle(showEarlierHops) ? request.requestId : null);
+  };
+  const failureCode = request.failure_reason || request.failureReason || '';
+  // 复制内容：逐跳的状态码、原始正文与诊断头，排查时可直接贴给服务商
+  const errorText = failedHops.length > 0
+    ? failedHops.map((hop) => [
+      `#${hop.hop} ${[hop.channel, hop.credentialGroup, hop.endpoint].filter(Boolean).join(' / ')}`,
+      hop.local ? '本地失败（未收到上游响应）' : `HTTP ${hop.statusCode || '-'}`,
+      hop.error || '（上游未返回正文）',
+      ...Object.entries(hop.headers || {}).map(([key, value]) => `${key}: ${value}`)
+    ].join('\n')).join('\n\n')
+    : [
+      networkHTTPStatus > 0 ? `HTTP 状态码: ${networkHTTPStatus}` : null,
+      failureDetail
+    ].filter(Boolean).join('\n');
   const modelRewriteSource = request.modelRewriteSource || request.model_rewrite_source || '';
   const originalModelName = request.originalModelName || request.original_model_name || '';
   const modelRewriteTarget = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
   const modelRewriteLabelMap = {
     mapping: '模型映射',
-    channel_model: '渠道覆盖'
+    channel_model: '渠道覆盖',
+    route: '路由改写'
   };
   const modelRewriteIconClassMap = {
     mapping: 'text-amber-500',
-    channel_model: 'text-violet-500'
+    channel_model: 'text-violet-500',
+    route: 'text-sky-500'
   };
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
+  const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
+  const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
   const reasoningEffort = reasoning.effort || '';
@@ -384,32 +520,39 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
         {/* Tab 导航 - 固定不滚动 */}
         <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-6 pt-4">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
+            {/* 无内容的标签置灰并标注"无"，仍可点击查看说明；等宽排布避免窄窗口下换行 */}
             {[
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
               { id: 'network', label: '网络信息', icon: Server },
-              { id: 'privacy', label: '隐私防护', icon: ShieldCheck },
-              { id: 'chain', label: '端点链路', icon: Layers }
+              { id: 'privacy', label: '隐私防护', icon: ShieldCheck, empty: !privacyRedacted },
+              { id: 'chain', label: '端点链路', icon: Layers, empty: chainNodes.length === 0 }
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
+                title={tab.empty ? `${tab.label}：本请求无记录` : undefined}
+                className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
                   activeTab === tab.id
                     ? 'bg-white text-indigo-700 border-slate-200 shadow-sm'
-                    : 'bg-transparent text-slate-600 border-transparent hover:bg-white/60 hover:text-slate-900'
+                    : tab.empty
+                      ? 'bg-transparent text-slate-400 border-transparent hover:bg-white/60 hover:text-slate-600'
+                      : 'bg-transparent text-slate-600 border-transparent hover:bg-white/60 hover:text-slate-900'
                 } focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50`}
               >
-                <tab.icon className="w-4 h-4" />
-                {tab.label}
+                <tab.icon className="w-4 h-4 flex-shrink-0" />
+                <span className="truncate">{tab.label}</span>
+                {tab.empty && (
+                  <span className="rounded bg-slate-200/70 px-1 text-[10px] font-medium leading-4 text-slate-500">无</span>
+                )}
               </button>
             ))}
           </div>
         </div>
 
         {/* 内容区域 - 自动填充剩余空间并滚动 */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2 [scrollbar-gutter:stable] scrollbar-thin scrollbar-thumb-slate-200">
+        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2">
           {/* 概览 Tab */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
@@ -447,7 +590,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   <InfoRow icon={Calendar} label="时间戳" value={formatTimestamp(request.timestamp)} />
                   <InfoRow
                     icon={Clock}
-                    label="用时/首字"
+                    label="总耗时/首字"
                     value={(
                       <span className="inline-flex items-center justify-end gap-1.5">
                         <DurationBadge ms={request.duration} status={request.status} />
@@ -542,6 +685,39 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                         </span>
                       </Tooltip>
                     </div>
+                  )}
+                  {/* 路由与模型改写都在回答"请求被改成了什么样"，放在一起看 */}
+                  {route && (
+                    <div className="flex items-start justify-between gap-4 py-3 border-t border-slate-100">
+                      <span className="shrink-0 text-sm font-medium text-slate-500">请求路由</span>
+                      <RouteBadges route={route} />
+                    </div>
+                  )}
+                  {routeExecution && (
+                    <details className="min-w-0 border-t border-slate-100 py-3 text-xs text-slate-600">
+                      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg hover:text-indigo-600">
+                        <Route className="h-3.5 w-3.5 shrink-0" />
+                        <span>执行记录 · {routeExecution.attempts} 次请求 · 等待 {routeExecution.waitMs} ms</span>
+                        <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0" />
+                      </summary>
+                      {routeExecution.subscription && <div className="mt-2 space-y-1 rounded-lg border border-indigo-100 bg-indigo-50/50 p-2 text-xs text-slate-600">
+                        <p>订阅调用方分组 #{routeExecution.subscription.groupId} · 绑定 v{routeExecution.subscription.bindingVersion} · {routeExecution.subscription.officialEnabled ? '允许官方' : '官方手动暂停'} · 官方验证待完成</p>
+                        {routeExecution.subscription.availability.map((pause, index) => <p key={index} className="break-words [overflow-wrap:anywhere]">{pause.model} · {pause.state} · {pause.reason} · {pause.source}{pause.resumeNotBefore ? ` · ${pause.resetKnown ? '上游重置' : '下次允许验证'} ${new Date(pause.resumeNotBefore).toLocaleString()}` : ''}</p>)}
+                      </div>}
+                      {routeExecution.stopReason && <p className="mt-2 text-amber-700 [overflow-wrap:anywhere]">终止原因：{routeExecution.stopReason}</p>}
+                      <div className="mt-2 max-h-64 overflow-auto rounded-lg border border-slate-200">
+                        <table className="w-full table-fixed text-left">
+                          <thead className="bg-slate-50"><tr><th className="p-2">目标 / 模型</th><th className="p-2">结果 / 原因</th></tr></thead>
+                          <tbody>{routeExecution.events.map((event, index) => (
+                            <tr key={index} className="border-t border-slate-100 align-top">
+                              <td className="p-2 [overflow-wrap:anywhere]">{event.channel || '-'}<div className="font-mono text-slate-500">{event.model || '未记录'}</div></td>
+                              <td className="p-2 [overflow-wrap:anywhere]">{({ attempt: '尝试', failed: '失败', skipped: '跳过' })[event.action] || event.action}<div className="text-slate-500">{event.reason}{event.scope ? ` · ${event.scope}` : ''}</div></td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                      {routeExecution.dropped > 0 && <p className="mt-1">另有 {routeExecution.dropped} 项事件未展开记录</p>}
+                    </details>
                   )}
                   {hasModelRewrite && (
                     <div className="flex items-center justify-between gap-4 py-3 border-t border-slate-100">
@@ -863,9 +1039,24 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 )
               })()}
 
-              {/* 错误信息（如果有） */}
-              {(['failed', 'error', 'cancelled', 'timeout', 'partial_failed'].includes(request.status) ||
-                failureDetail || request.cancel_reason) && (
+              {/* 取消：客户端主动断开，不是错误，用中性样式单独展示 */}
+              {isCancelled && (
+                <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                  <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-100/60 px-4 py-3">
+                    <X className="h-4 w-4 text-slate-500" />
+                    <h3 className="text-sm font-semibold text-slate-800">请求已取消</h3>
+                  </div>
+                  <div className="flex w-full min-w-0 items-start gap-1.5 p-4 text-sm">
+                    <span className="shrink-0 font-medium text-slate-600">取消原因：</span>
+                    <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-slate-700 [overflow-wrap:anywhere]">
+                      {cancelReason || '客户端断开连接'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* 错误信息：失败判定与 getFailureDetail 共用 FAILURE_STATUSES */}
+              {isFailure && (
                 <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">
                   <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-rose-900 flex items-center gap-2">
@@ -892,24 +1083,52 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
-                    {networkHTTPStatus > 0 && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
-                          HTTP {networkHTTPStatus}
-                        </span>
+                    {failureCode && (
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-slate-500">失败分类</span>
+                        <span className="rounded-md border border-rose-200 bg-rose-100/60 px-1.5 py-0.5 font-mono text-rose-700">{failureCode}</span>
+                        {describeFailureReason(failureCode) && <span className="text-slate-600">{describeFailureReason(failureCode)}</span>}
                       </div>
                     )}
-                    {failureDetail && (
-                      <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
-                        <span className="shrink-0 font-medium text-slate-600">{failureDetailIsRaw ? '原始信息：' : '失败原因：'}</span>
-                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
+                    {failedHops.length > 0 ? (
+                      <div className="divide-y divide-rose-200/70">
+                        {/* 默认只列最终跳；转移过的早先失败跳按需展开，避免卡片随转移次数无限变长 */}
+                        {(showEarlierHops ? failedHops : failedHops.slice(0, 1)).map((hop, index) => (
+                          <UpstreamErrorHop key={`${hop.hop}-${index}`} hop={hop} isLast={index === 0} showChannel={showChannelInChain} />
+                        ))}
+                        {failedHops.length > 1 && (
+                          <div className="pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowEarlierHops((value) => !value)}
+                              aria-expanded={showEarlierHops}
+                              className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs text-rose-600 hover:bg-rose-100 hover:text-rose-800"
+                            >
+                              {showEarlierHops ? '收起此前的失败跳' : `查看此前 ${failedHops.length - 1} 跳失败`}
+                              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showEarlierHops ? 'rotate-180' : ''}`} />
+                            </button>
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {request.cancel_reason && (
-                      <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
-                        <span className="shrink-0 font-medium text-slate-600">取消原因：</span>
-                        <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{request.cancel_reason}</span>
-                      </div>
+                    ) : (
+                      <>
+                        {networkHTTPStatus > 0 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="inline-flex items-center rounded-md border border-rose-300 bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-800">
+                              HTTP {networkHTTPStatus}
+                            </span>
+                          </div>
+                        )}
+                        {failureDetail && (
+                          <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
+                            <span className="shrink-0 font-medium text-slate-600">{failureDetailIsRaw ? '原始信息：' : '失败原因：'}</span>
+                            <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
+                          </div>
+                        )}
+                        {!failureDetail && networkHTTPStatus <= 0 && (
+                          <p className="text-sm text-rose-700">未记录失败详情。</p>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -964,6 +1183,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 );
               })()}
 
+              {/* 链路为什么这样走：命中路由时给出规则与阶段，和下方时间线对照看 */}
+              {route && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sky-100 bg-sky-50/70 px-3 py-2 text-xs text-sky-900">
+                  <Route className="h-3.5 w-3.5 text-sky-500" />
+                  <RouteBadges route={route} />
+                </div>
+              )}
+
               {/* 端点链路内容 */}
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="p-4">
@@ -1002,30 +1229,53 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                               {/* 卡片 */}
                               <div className={`border ${tone.border} rounded-lg px-2.5 py-1.5 ${isLast && !isSingle ? 'bg-emerald-50/30' : isFirst && !isSingle ? 'bg-blue-50/30' : 'bg-slate-50/50'}`}>
                                 <div className="flex items-center gap-1.5 min-w-0">
-                                  <span className={`text-[10px] font-semibold shrink-0 ${
+                                  <span className={`text-[11px] font-semibold shrink-0 ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-500' : isLast ? 'text-emerald-500' : 'text-slate-400'
                                   }`}>
                                     #{node.hop}
                                   </span>
+                                  {/* 9px 中文基本不可辨认，徽章统一 11px */}
                                   {showChannelInChain && (
-                                    <span className={`inline-flex items-center rounded px-1.5 py-[1px] text-[9px] font-medium border whitespace-nowrap ${tone.badge}`}>
+                                    <span className={`inline-flex items-center rounded px-1.5 py-[1px] text-[11px] font-medium border whitespace-nowrap ${tone.badge}`}>
                                       <span className="mr-1 text-current/70">渠道</span>{channelLabel}
                                     </span>
                                   )}
                                   {groupLabel && (
-                                    <span className="inline-flex max-w-[7rem] shrink-0 items-center rounded border border-violet-200/70 bg-violet-50/80 px-1.5 py-[1px] text-[9px] font-medium text-violet-600">
+                                    <span className="inline-flex max-w-[10rem] shrink-0 items-center rounded border border-violet-200/70 bg-violet-50/80 px-1.5 py-[1px] text-[11px] font-medium text-violet-600">
                                       <span className="mr-1 text-violet-400">分组</span>
                                       <span className="truncate">{groupLabel}</span>
                                     </span>
                                   )}
                                   <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                                    <Tooltip content={routeLabel} className="min-w-0 max-w-[12rem]">
+                                    <Tooltip content={routeLabel} className="min-w-0 max-w-[16rem]">
                                       <span className="block truncate text-[13px] font-semibold text-slate-800">
                                         {endpointLabel}
                                       </span>
                                     </Tooltip>
                                   </div>
-                                  <span className={`shrink-0 text-[10px] ${
+                                  {node.durationMs != null && (
+                                    <Tooltip content="本跳耗时（含同端点重试与退避等待）">
+                                      <span className="shrink-0 inline-flex items-center gap-0.5 font-mono text-[11px] text-slate-500">
+                                        <Clock className="h-3 w-3" />
+                                        {formatDuration(node.durationMs)}
+                                      </span>
+                                    </Tooltip>
+                                  )}
+                                  {node.attempts > 1 && (
+                                    <Tooltip content={`本跳共发出 ${node.attempts} 次请求（含同端点重试）`}>
+                                      <span className="shrink-0 rounded border border-slate-200 bg-white px-1.5 py-[1px] font-mono text-[11px] font-medium text-slate-600">
+                                        ×{node.attempts}
+                                      </span>
+                                    </Tooltip>
+                                  )}
+                                  {node.statusCode > 0 && (
+                                    <span className={`shrink-0 rounded border px-1.5 py-[1px] font-mono text-[11px] font-semibold ${
+                                      node.statusCode >= 400 ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    }`}>
+                                      HTTP {node.statusCode}
+                                    </span>
+                                  )}
+                                  <span className={`shrink-0 text-[11px] ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-400' : isLast ? 'text-emerald-500' : 'text-slate-400'
                                   }`}>
                                     {roleLabel}
@@ -1098,7 +1348,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 </div>
               )}
 
-              {/* Token 卡片 - 缓存 */}
+              {/* Token 卡片 - 缓存。缓存创建总计就是 5 分钟 + 1 小时之和，合进卡片说明，不再单占一格 */}
               <div className="grid grid-cols-2 gap-4">
                 {isClaudeRequest && (
                   <>
@@ -1106,6 +1356,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       icon={Database}
                       label="缓存创建 (5分钟)"
                       value={request.cacheCreation5mTokens || 0}
+                      hint={`缓存创建合计 ${(request.cacheCreationTokens || 0).toLocaleString()}`}
                       colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }}
                     />
                     <TokenCard
@@ -1122,14 +1373,13 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   value={request.cacheReadTokens || 0}
                   colorClass={{ bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-600', icon: 'text-amber-600' }}
                 />
-                {isClaudeRequest && (
-                  <TokenCard
-                    icon={Database}
-                    label="缓存创建 (总计)"
-                    value={request.cacheCreationTokens || 0}
-                    colorClass={{ bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-600', icon: 'text-slate-500' }}
-                  />
-                )}
+                <TokenCard
+                  icon={Percent}
+                  label="缓存命中率"
+                  displayValue={formatCacheHitRate(cacheHitRate)}
+                  hint={isCodexRequest ? '缓存读取 ÷ 输入（Codex 输入已含缓存）' : '缓存读取 ÷ (输入 + 缓存创建 + 缓存读取)'}
+                  colorClass={{ bg: 'bg-sky-50', border: 'border-sky-200', text: 'text-sky-600', icon: 'text-sky-600' }}
+                />
               </div>
 
               {/* Token 总计 */}
@@ -1176,7 +1426,18 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 <div className="px-4">
                   <InfoRow icon={Server} label="HTTP 状态码" value={networkHTTPStatus > 0 ? networkHTTPStatus : '-'} />
                   <InfoRow icon={Activity} label="请求状态" value={<RequestStatusBadge status={request.status} />} />
-                  <InfoRow icon={Waves} label="流式状态" value={networkDisplayState.isStreaming == null ? '-' : (networkDisplayState.isStreaming ? '流式' : '非流式')} />
+                  <InfoRow icon={Waves} label="请求类型" value={networkDisplayState.isStreaming == null ? '-' : (networkDisplayState.isStreaming ? '流式' : '非流式')} />
+                  <InfoRow
+                    icon={CheckCircle2}
+                    label="终态"
+                    value={streamOutcomeMeta ? (
+                      <Tooltip content={streamOutcomeMeta.description}>
+                        <span className={`inline-flex items-center whitespace-nowrap rounded border px-2 py-0.5 font-sans text-xs font-medium ${streamOutcomeMeta.className}`}>
+                          {streamOutcomeMeta.label}
+                        </span>
+                      </Tooltip>
+                    ) : '-'}
+                  />
                   <InfoRow icon={Clock} label="总耗时" value={networkDisplayState.durationMs == null ? '-' : formatDuration(networkDisplayState.durationMs)} />
                   <InfoRow icon={Zap} label="首字耗时" value={networkFirstByteMs == null ? '-' : formatDuration(networkFirstByteMs)} />
                 </div>
@@ -1187,7 +1448,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   <h3 className="text-sm font-semibold text-slate-900">路由与尝试</h3>
                 </div>
                 <div className="px-4">
-                  <InfoRow icon={Activity} label="尝试次数" value={`${networkSummary.attemptCount} 次`} />
+                  <InfoRow icon={Activity} label="最终端点尝试" value={networkSummary.finalEndpointAttempts == null ? '-' : `${networkSummary.finalEndpointAttempts} 次`} />
+                  <InfoRow icon={Activity} label="整请求尝试" value={`${networkSummary.attemptCount} 次`} />
                   <InfoRow icon={RefreshCw} label="重试次数" value={`${networkSummary.retryCount} 次`} />
                   <InfoRow icon={Server} label="起始端点" value={networkSummary.firstEndpoint || '-'} />
                   <InfoRow icon={Server} label="最终端点" value={networkSummary.finalEndpoint || request.endpoint || '-'} />
@@ -1226,6 +1488,11 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       {privacy.hitCount > 0 && <span className="opacity-70">· {privacy.hitCount} 处</span>}
                     </span>
                   </div>
+                  {!privacyRedacted && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      本请求未命中任何隐私规则，请求正文按原样发往服务商。隐私防护关闭或路径不在扫描范围时同样显示为未命中。
+                    </p>
+                  )}
                   {privacyDetectOnly && (
                     <p className="mt-2 text-xs text-slate-500">
                       当前为「仅检测」模式，命中已统计但请求正文未被改写。

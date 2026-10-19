@@ -21,6 +21,8 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/privacy"
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
 	"ai-relay-forwarder/internal/transport"
 )
@@ -33,14 +35,34 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
-	StatusCode      int    `json:"status_code,omitempty"`
-	Error           string `json:"error,omitempty"`
+	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
+	Attempts int `json:"attempts,omitempty"`
+	// StartMs / DurationMs 与 Claude 端 ChainNode 同口径：距请求开始的毫秒数与本跳耗时
+	StartMs    int64  `json:"start_ms"`
+	DurationMs *int64 `json:"duration_ms,omitempty"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// Headers / Local 与 Claude 端 ChainNode 同口径：诊断头白名单；没拿到上游响应的本地失败
+	Headers map[string]string `json:"headers,omitempty"`
+	Local   bool              `json:"local,omitempty"`
+}
+
+// closeLastHop 结束最后一跳的计时（已结束的跳不重复写）
+func closeLastHop(chain []chainNode, startTime time.Time) {
+	if n := len(chain); n > 0 && chain[n-1].DurationMs == nil {
+		duration := time.Since(startTime).Milliseconds() - chain[n-1].StartMs
+		if duration < 0 {
+			duration = 0
+		}
+		chain[n-1].DurationMs = &duration
+	}
 }
 
 const maxPreOutputStreamBufferBytes = 256 * 1024
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
+	subscriptions  *subscription.Controller
 	configMu       sync.RWMutex
 	manager        *EndpointManager
 	forwarder      *Forwarder
@@ -50,6 +72,7 @@ type Handler struct {
 	logger         *slog.Logger
 	usageTracker   *tracking.UsageTracker
 	privacyService *privacy.Service
+	states         *routing.StateTracker
 
 	// retryCfg 同端点重试配置（来自设置页 retry.*）
 	retryCfg config.RetryConfig
@@ -146,6 +169,7 @@ func newHandler(
 		logger:         logger,
 		usageTracker:   usageTracker,
 		privacyService: redactor,
+		states:         routing.NewStateTracker(),
 		retryCfg:       retryCfg,
 		failoverCfg:    failoverCfg,
 		suspensionMgr:  suspensionMgr,
@@ -210,7 +234,14 @@ func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestID := generateRequestID()
+	if sub := subscription.FromContext(r.Context()); sub != nil && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
+		return
+	}
 
+	if r.Body == nil {
+		r.Body = http.NoBody
+	}
 	// 1. 读取并缓存请求体（重试时需要重放）
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -219,7 +250,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
-	var privacySummaryJSON string
 	if h.privacyService != nil {
 		result, privacyErr := h.privacyService.Apply(r.Context(), privacy.Request{
 			RequestID:    requestID,
@@ -241,10 +271,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusInternalServerError, "隐私防护处理失败")
 			return
 		}
+		// 挂到请求 ctx 上：每次尝试选定端点后按其渠道隐私级别挑选实际发送的正文
+		// （三方中转在全局「仅检测」下也强制脱敏、可信渠道只检测）。
+		// 脱敏摘要不在这里记：发往可信渠道时正文没被改写，提前记录会让请求详情误标「已脱敏」；
+		// 由 outboundBody 在第一次真正发出改写正文时记录。
+		scanned := append([]byte(nil), originalBody...)
+		r = r.WithContext(contextWithCodexPrivacy(r.Context(), &codexPrivacyBodies{original: scanned, result: result}))
 		originalBody = result.Body
-		if result.Changed {
-			privacySummaryJSON = privacy.SummaryToJSON(result)
-		}
 	}
 
 	// 模型改写必须等候选端点（及其凭证分组）选定后再执行；这里保留隐私处理后的
@@ -287,10 +320,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewriteResult{}, reasoningJSON, serviceTier)
-	if privacySummaryJSON != "" {
-		h.recordPrivacyRedaction(requestID, privacySummaryJSON)
+
+	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，全局激活渠道全程不读写
+	if route := h.planCodexRoute(r, originalBody, isStreaming, requestID); route != nil {
+		h.serveRouted(w, r, originalBody, requestID, startTime, isStreaming, route)
+		return
 	}
 
+	if subscription.FromContext(r.Context()) != nil {
+		h.writeError(w, 400, "subscription_route_unavailable")
+		return
+	}
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1
 	if failoverCfg := h.failoverConfig(); failoverCfg.LoopRetry {
@@ -543,23 +583,43 @@ func (h *Handler) tryEndpointCycle(
 	endpointChain *[]chainNode,
 	attemptCount *int,
 ) cycleResult {
+	return h.tryEndpointCycleForStage(w, r, body, requestID, startTime, isStreaming, channelName, requestModel, failedIDs, endpointChain, attemptCount, nil)
+}
+
+// tryEndpointCycleForStage stage 非空时是请求级路由阶段：只在该阶段的渠道内换端点，
+// 不跟随也不写入全局激活渠道（不检测激活渠道变化、不提升活跃端点、不改首选端点）。
+func (h *Handler) tryEndpointCycleForStage(
+	w http.ResponseWriter,
+	r *http.Request,
+	body []byte,
+	requestID string,
+	startTime time.Time,
+	isStreaming bool,
+	channelName string,
+	requestModel string,
+	failedIDs *[]int64,
+	endpointChain *[]chainNode,
+	attemptCount *int,
+	stage *codexRouteStage,
+) cycleResult {
 	originalBody := append([]byte(nil), body...)
 	requestedModel := requestModel
-	if h.activeChannelChanged(channelName) {
+	routed := stage != nil
+	if !routed && h.activeChannelChanged(channelName) {
 		return cycleResult{routeChanged: true}
 	}
 	// 选择起始端点
 	var skippedGroups []credentialGroupRef
 	var quotaSkippedGroups []credentialGroupRef
 	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpointForModel(
-		r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+		r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true, stage,
 	)
-	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && len(*endpointChain) == 0 {
+	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && !errors.Is(err, errRouteCandidateIneligible) && len(*endpointChain) == 0 {
 		// 新请求不能被上一请求留下的全局 unhealthy 状态直接挡在选路之前。
 		// 仅在尚未产生真实链路时重置一次；凭证分组跳过状态仍然保留。
 		h.manager.ResetUnhealthy()
 		endpoint, quotaSkippedGroups, err = h.selectQuotaEligibleEndpointForModel(
-			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true,
+			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true, stage,
 		)
 	}
 	if err != nil {
@@ -583,14 +643,31 @@ func (h *Handler) tryEndpointCycle(
 	var lastUpstreamStatus int
 	var lastUpstreamHeaders http.Header
 	var lastUpstreamBody []byte
+	if routed && stage.snapshotJSON != "" {
+		h.recordRouteSnapshot(requestID, stage.snapshotJSON)
+	}
 
 	// 遍历当前轮可用端点
 	for {
-		if h.activeChannelChanged(channelName) {
+		if !routed && h.activeChannelChanged(channelName) {
 			return cycleResult{routeChanged: true}
 		}
 		channel := h.manager.GetActiveChannel()
-		attemptRewrite := rewriteModelForEndpoint(originalBody, endpoint, channel, h.logger, requestID)
+		// 按本次尝试的目标渠道的隐私级别挑选正文，再做模型改写（只动顶层 model 字段）
+		targetChannel := channel
+		if routed {
+			targetChannel = stage.channel
+		}
+		attemptBody := h.outboundBody(r, requestID, targetChannel, originalBody)
+		var attemptRewrite modelRewriteResult
+		switch {
+		case routed && stage.upstreamModel != "":
+			attemptRewrite = rewriteModelForRoute(attemptBody, stage.upstreamModel, h.logger, requestID)
+		case routed:
+			attemptRewrite = rewriteModelForEndpoint(attemptBody, endpoint, stage.channel, h.logger, requestID)
+		default:
+			attemptRewrite = rewriteModelForEndpoint(attemptBody, endpoint, channel, h.logger, requestID)
+		}
 		body = attemptRewrite.Body
 		requestModel = h.tokenParser.ParseModelFromBody(body)
 		if h.usageTracker != nil && attemptRewrite.Source != "" {
@@ -608,11 +685,13 @@ func (h *Handler) tryEndpointCycle(
 			(*endpointChain)[n-1].Channel != channelName ||
 			(*endpointChain)[n-1].CredentialGroup != endpoint.CredentialGroupName ||
 			(*endpointChain)[n-1].Endpoint != endpoint.Name {
+			closeLastHop(*endpointChain, startTime)
 			*endpointChain = append(*endpointChain, chainNode{
 				Hop:             n + 1,
 				Channel:         channelName,
 				CredentialGroup: endpoint.CredentialGroupName,
 				Endpoint:        endpoint.Name,
+				StartMs:         time.Since(startTime).Milliseconds(),
 			})
 		}
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
@@ -635,12 +714,29 @@ func (h *Handler) tryEndpointCycle(
 		)
 
 		// 同端点重试转发
-		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID)
-		if attempts > 0 && attemptCount != nil {
-			*attemptCount += attempts
-			retryCount := *attemptCount - 1
+		var onAttempt func()
+		if routed && stage.execution != nil {
+			onAttempt = func() {
+				stage.execution.Begin(stage.candidate(endpoint, requestedModel))
+				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+			}
+		}
+		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID, onAttempt)
+		if attempts > 0 {
+			(*endpointChain)[len(*endpointChain)-1].Attempts += attempts
+			opts := tracking.UpdateOptions{}
+			if attemptCount != nil {
+				*attemptCount += attempts
+				retryCount := *attemptCount - 1
+				opts.RetryCount = &retryCount
+			}
+			// 成功路径不会再写链路；这里先把本跳次数落进热池，终态归档时才完整
+			if chainBytes, err := json.Marshal(*endpointChain); err == nil {
+				chainStr := string(chainBytes)
+				opts.EndpointChain = &chainStr
+			}
 			if h.usageTracker != nil {
-				h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{RetryCount: &retryCount})
+				h.usageTracker.RecordRequestUpdate(requestID, opts)
 			}
 		}
 
@@ -662,16 +758,19 @@ func (h *Handler) tryEndpointCycle(
 
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
+			if routed && h.states != nil {
+				resp.Body = routing.CaptureResponse(resp.Body, func(data []byte) { h.observeRoutedState(r, stage.candidate(endpoint, requestedModel), data) })
+			}
 			if isStreaming {
 				streamErr, served := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
 				if streamErr == nil {
-					h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID)
+					h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID, routed)
 					return cycleResult{completed: true}
 				}
 				fwdErr = streamErr
 			} else {
 				served := h.handleNonStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
-				h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID)
+				h.markEndpointServed(endpoint, served, len(*failedIDs) > 0, channelName, requestID, routed)
 				return cycleResult{completed: true}
 			}
 		}
@@ -682,7 +781,12 @@ func (h *Handler) tryEndpointCycle(
 		var status int
 		if resp != nil {
 			status = resp.StatusCode
+			if status == http.StatusUnauthorized && endpoint.AuthMode == subscription.ClientPassthrough && h.subscriptions != nil {
+				h.subscriptions.RejectCredential(r.Context())
+			}
 			errBody, errSummary = h.readErrorBody(resp)
+			errBody = []byte(subscription.Redact(r.Context(), string(errBody)))
+			errSummary = subscription.Redact(r.Context(), errSummary)
 			lastUpstreamStatus = status
 			lastUpstreamHeaders = resp.Header.Clone()
 			lastUpstreamBody = append([]byte(nil), errBody...)
@@ -694,6 +798,22 @@ func (h *Handler) tryEndpointCycle(
 
 		// 三态分类
 		action := h.classifier.Classify(resp, fwdErr)
+		var routeFailure routing.Failure
+		if routed {
+			if errors.Is(fwdErr, routing.ErrBudgetExhausted) {
+				return cycleResult{lastErr: fwdErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
+			}
+			routeFailure = codexRouteFailure(status, errBody, fwdErr)
+			if stage.execution != nil {
+				stage.execution.Fail(stage.candidate(endpoint, requestedModel), routeFailure)
+				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+			}
+			if routeFailure.Terminal || (status == http.StatusUnauthorized && subscription.FromContext(r.Context()) != nil) {
+				action = ActionFailFast
+			} else {
+				action = ActionFailover
+			}
+		}
 
 		// FailFast：透传上游 4xx 错误响应，不再尝试任何重试或切换
 		if action == ActionFailFast {
@@ -702,7 +822,8 @@ func (h *Handler) tryEndpointCycle(
 				if strings.TrimSpace(detail) == "" {
 					detail = errSummary
 				}
-				annotateLastChainError(endpointChain, status, errSummary)
+				// 链路存上游完整原文（不是日志用的 500 字单行摘要），排查时才能看清服务商的真实报错
+				annotateLastChainError(endpointChain, status, chainBodyText(errBody, errSummary), resp.Header, false)
 				h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 				h.manager.SetFailureDetail(endpoint.ID, status, detail)
 				h.logger.Error("[Codex 请求失败]",
@@ -723,7 +844,7 @@ func (h *Handler) tryEndpointCycle(
 			if fwdErr != nil {
 				detail = fwdErr.Error()
 			}
-			annotateLastChainError(endpointChain, 0, detail)
+			annotateLastChainError(endpointChain, 0, detail, nil, true)
 			h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
 			h.manager.SetFailureDetail(endpoint.ID, 0, detail)
 			h.logger.Error("[Codex 请求失败]",
@@ -760,21 +881,37 @@ func (h *Handler) tryEndpointCycle(
 				requestID, failedEndpointName, status, errSummary),
 				"provider", "codex", "request_id", requestID)
 		}
-		annotateLastChainError(endpointChain, status, chainErrorText(fwdErr, errSummary, reason))
+		var respHeaders http.Header
+		if resp != nil {
+			respHeaders = resp.Header
+		}
+		chainText := chainErrorText(fwdErr, errSummary, reason)
+		if status > 0 {
+			// 拿到上游响应时存完整原文，而不是日志摘要
+			chainText = chainBodyText(errBody, chainText)
+		}
+		_, isStreamEvent := fwdErr.(*UpstreamStreamError)
+		annotateLastChainError(endpointChain, status, chainText, respHeaders, resp == nil && !isStreamEvent)
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
-		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
+		if !routed || routeFailure.Scope == routing.ScopeEndpoint {
+			h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
+		}
 
 		// 上游明确给了 retry after 提示：先等够再发下一次，无论下一跳是换端点还是新一轮循环。
-		if wait := retryAfterHint(resp, reason); wait > 0 {
+		if wait := retryAfterHint(resp, reason); wait > 0 && subscription.FromContext(r.Context()) == nil && (!routed || routeFailure.Scope != routing.ScopeModel) {
 			h.logger.Info("[Codex 遵守上游 retry-after]",
 				"provider", "codex",
 				"request_id", requestID,
 				"endpoint", failedEndpointName,
 				"wait_ms", wait.Milliseconds(),
 			)
-			select {
-			case <-time.After(wait):
-			case <-r.Context().Done():
+			if waitErr := routing.BudgetFromContext(r.Context()).Wait(r.Context(), wait); waitErr != nil {
+				if routed {
+					h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+				}
+				if errors.Is(waitErr, routing.ErrBudgetExhausted) {
+					return cycleResult{lastErr: waitErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
+				}
 				h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_retry_after", nil, requestModel)
 				return cycleResult{completed: true}
 			}
@@ -782,7 +919,7 @@ func (h *Handler) tryEndpointCycle(
 
 		// 选下个端点
 		next, updatedQuotaSkippedGroups, nextErr := h.selectQuotaEligibleEndpointForModel(
-			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, false,
+			r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, false, stage,
 		)
 		quotaSkippedGroups = updatedQuotaSkippedGroups
 		if nextErr != nil {
@@ -815,12 +952,16 @@ func (h *Handler) tryEndpointCycle(
 
 // markEndpointServed 只有上游把这次请求完整服务掉了，才把端点记为健康并设为下一次请求的首选。
 // 流中途报错、正文读取失败的端点不能成为首选，否则下一次请求会优先撞回它。
-func (h *Handler) markEndpointServed(endpoint *CodexEndpoint, served bool, failedOver bool, channelName, requestID string) {
+// routed 为 true 时是请求级路由：只记录端点健康，不改首选端点、不提升活跃端点。
+func (h *Handler) markEndpointServed(endpoint *CodexEndpoint, served bool, failedOver bool, channelName, requestID string, routed bool) {
 	if !served {
 		h.manager.ClearPreferredEndpoint(endpoint.ID)
 		return
 	}
 	h.manager.MarkHealthy(endpoint.ID)
+	if routed {
+		return
+	}
 	h.manager.MarkEndpointRequestSuccess(endpoint.ID)
 	// 故障转移后将当前成功端点提升为活跃，刷新前端 UI
 	if failedOver && !h.activeChannelChanged(channelName) {
@@ -844,6 +985,7 @@ func (h *Handler) forwardWithRetry(
 	endpoint *CodexEndpoint,
 	isStreaming bool,
 	requestID string,
+	onAttempt ...func(),
 ) (*http.Response, error, int) {
 	fwd := h.forwarder
 	if isStreaming {
@@ -862,11 +1004,6 @@ func (h *Handler) forwardWithRetry(
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			// 关闭上一次的响应体（如果有）
-			if lastResp != nil {
-				lastResp.Body.Close()
-				lastResp = nil
-			}
 			delay := computeBackoff(attempt-1, retryCfg.BaseDelay, retryCfg.MaxDelay, retryCfg.Multiplier)
 			h.logger.Info("[Codex 同端点重试]",
 				"provider", "codex",
@@ -876,14 +1013,27 @@ func (h *Handler) forwardWithRetry(
 				"max_attempts", maxAttempts,
 				"delay_ms", delay.Milliseconds(),
 			)
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-				return nil, r.Context().Err(), attempts
+			if err := routing.BudgetFromContext(r.Context()).Wait(r.Context(), delay); err != nil {
+				return lastResp, err, attempts
 			}
 		}
 
-		resp, err := fwd.Forward(r, body, endpoint)
+		sendRequest, lease, admitErr := h.admitSubscription(r, endpoint, body)
+		if admitErr != nil {
+			return lastResp, admitErr, attempts
+		}
+		if err := routing.BudgetFromContext(r.Context()).Begin(r.Context()); err != nil {
+			lease.Finish(0, nil, nil, false)
+			return lastResp, err, attempts
+		}
+		if lastResp != nil {
+			lastResp.Body.Close()
+			lastResp = nil
+		}
+		if len(onAttempt) > 0 && onAttempt[0] != nil {
+			onAttempt[0]()
+		}
+		resp, err := fwd.Forward(sendRequest, body, endpoint)
 		attempts++
 		lastResp = resp
 		lastErr = err
@@ -1108,6 +1258,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		}
 
 		if streamErr := h.tokenParser.ParseStreamingErrorLine(line); streamErr != nil {
+			if resp.Request != nil {
+				streamErr.Message = subscription.Redact(resp.Request.Context(), streamErr.Message)
+			}
 			if !headersWritten {
 				// The caller may still fail over. Restore the consumed SSE event so
 				// the final exhausted response keeps the upstream 200 and raw body.
@@ -1475,17 +1628,38 @@ func latestCredentialGroupName(chain []chainNode) string {
 	return chain[len(chain)-1].CredentialGroup
 }
 
-func annotateLastChainError(chain *[]chainNode, statusCode int, errorText string) {
+// annotateLastChainError 在最后一跳记录失败信息。上游只回状态码不带正文时也记录，
+// 并附上诊断头白名单。local 表示本跳没有拿到任何上游响应（连接失败、超时等）；
+// 上游 SSE 错误事件状态码同为 0，但它来自上游，由调用方传 local=false。
+func annotateLastChainError(chain *[]chainNode, statusCode int, errorText string, headers http.Header, local bool) {
 	if chain == nil || len(*chain) == 0 {
 		return
 	}
 	errorText = strings.TrimSpace(errorText)
-	if errorText == "" {
+	diagnostic := tracking.DiagnosticHeaders(headers)
+	if errorText == "" && statusCode == 0 && len(diagnostic) == 0 {
 		return
 	}
 	last := &(*chain)[len(*chain)-1]
 	last.StatusCode = statusCode
 	last.Error = errorText
+	last.Headers = diagnostic
+	last.Local = local
+}
+
+// maxChainErrorBodyBytes 链路里保存的上游错误原文上限，与 Claude 侧 maxUpstreamErrorBodyBytes 一致
+const maxChainErrorBodyBytes = 64 * 1024
+
+// chainBodyText 链路记录用的上游错误原文：完整保留（超长截断到 64KB），正文为空时回退 fallback。
+// 无效 UTF-8 替换为 U+FFFD，否则写库或前端 JSON 解析会失败。
+func chainBodyText(body []byte, fallback string) string {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return fallback
+	}
+	if len(body) > maxChainErrorBodyBytes {
+		body = body[:maxChainErrorBodyBytes]
+	}
+	return strings.ToValidUTF8(string(body), "�")
 }
 
 func chainErrorText(err error, errSummary, fallback string) string {

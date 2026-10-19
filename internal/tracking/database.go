@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	appcache "ai-relay-forwarder/internal/cache"
 )
 
 // initDatabase 初始化数据库
@@ -79,6 +81,10 @@ func (ut *UsageTracker) flushBatch(events []RequestEvent) {
 	if len(events) == 0 {
 		return
 	}
+	// 事件队列路径按 request_id UPDATE 已落库的行（如已归档请求的 token 补录），
+	// 拿不到原行的 start_time，影响范围按未知处理。processBatch 逐条执行，
+	// 即使整批报错也可能已有部分写入，因此无论成败都通知。
+	defer ut.notifyUsageDataChanged(appcache.Change{All: true})
 
 	var retryCount int
 	for retryCount < ut.config.MaxRetry {
@@ -525,6 +531,10 @@ func (ut *UsageTracker) buildFlexibleUpdateQuery(event RequestEvent) (string, []
 	if opts.ModelRewriteTarget != nil {
 		setParts = append(setParts, "model_rewrite_target = ?")
 		args = append(args, *opts.ModelRewriteTarget)
+	}
+	if opts.RouteSnapshot != nil {
+		setParts = append(setParts, "route_snapshot = ?")
+		args = append(args, nullString(*opts.RouteSnapshot))
 	}
 	if opts.EndTime != nil {
 		setParts = append(setParts, "end_time = ?")
@@ -1277,7 +1287,10 @@ func (ut *UsageTracker) cleanupOldRecords() error {
 		"cutoff_date", cutoffTime.Format("2006-01-02"),
 		"retention_days", policy.retentionDays)
 
-	ut.invalidateUsageCaches()
+	// 删除了 cutoff 之前的活动记录与归档记录：归档聚合在 historyMu 写锁内清空，
+	// 其余统计缓存只清依赖 cutoff 之前数据的条目
+	ut.invalidateArchiveTotalsLocked()
+	ut.notifyUsageDataChanged(appcache.Change{End: cutoffTime})
 
 	// 更新汇总统计（异步）
 	go ut.updateUsageSummary()

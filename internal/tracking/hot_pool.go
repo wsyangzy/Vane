@@ -31,8 +31,9 @@ type ActiveRequest struct {
 	HTTPStatusIsUpstream bool   `json:"http_status_is_upstream"` // 状态码是否来自真实上游响应
 	ModelName            string `json:"model_name"`              // 模型名称
 	OriginalModelName    string `json:"original_model_name"`     // 改写前的原始请求模型
-	ModelRewriteSource   string `json:"model_rewrite_source"`    // 模型改写来源：mapping/channel_model
+	ModelRewriteSource   string `json:"model_rewrite_source"`    // 模型改写来源：mapping/channel_model/route
 	ModelRewriteTarget   string `json:"model_rewrite_target"`    // 改写后的目标模型
+	RouteSnapshot        string `json:"route_snapshot"`          // 请求级路由快照 JSON，未命中路由为空
 	ReasoningEffort      string `json:"reasoning_effort"`        // Codex reasoning 配置 JSON；effort 常见为 minimal/low/medium/high/xhigh
 	ServiceTier          string `json:"service_tier"`            // 服务档位: auto/default/batch/flex/priority/fast
 	PrivacyRedacted      bool   `json:"privacy_redacted"`        // 请求体发送上游前是否已脱敏
@@ -40,6 +41,7 @@ type ActiveRequest struct {
 	FailureReason        string `json:"failure_reason"`      // 失败原因分类
 	LastFailureReason    string `json:"last_failure_reason"` // 最后一次失败的原始详情
 	CancelReason         string `json:"cancel_reason"`       // 取消原因
+	StreamOutcome        string `json:"stream_outcome"`      // 终态枚举，见 stream_outcome.go；活跃请求为空
 
 	// Token 累积（流式请求实时更新）
 	InputTokens              int64  `json:"input_tokens"`
@@ -326,6 +328,10 @@ func (hp *HotPool) CompleteAndArchive(requestID string, finalizer func(*ActiveRe
 		req.EndTime = &now
 		req.DurationMs = now.Sub(req.StartTime).Milliseconds()
 	}
+	// 所有终态都经过这里：统一推导 stream_outcome，Claude/Codex 各调用点无需各自维护
+	req.StreamOutcome = ResolveStreamOutcome(req.Status, req.IsStreaming, req.FailureReason)
+	// 同理在此结束最后一跳的计时：各 provider 的退出路径很多，逐一补写容易漏
+	req.EndpointChain = closeOpenChainHop(req.EndpointChain, req.DurationMs)
 	req.mu.Unlock()
 
 	// 更新统计

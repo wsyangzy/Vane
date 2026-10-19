@@ -14,7 +14,34 @@ const (
 	BuiltinCNMobile     = "builtin:cn_mobile"
 	BuiltinCNIDCard     = "builtin:cn_id_card"
 	BuiltinBankCardLuhn = "builtin:bank_card_luhn"
+	BuiltinCNLandline   = "builtin:cn_landline"
+	BuiltinCNPassport   = "builtin:cn_passport"
+	BuiltinCNCreditCode = "builtin:cn_credit_code"
+	BuiltinPublicIPv4   = "builtin:public_ipv4"
 )
+
+// BuiltinMatcherInfo 内置匹配器的可选项（供前端新建规则时选择）
+type BuiltinMatcherInfo struct {
+	Pattern       string `json:"pattern"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Placeholder   string `json:"placeholder"`
+	PseudonymKind string `json:"pseudonym_kind"`
+}
+
+// BuiltinMatchers 全部内置匹配器。默认种子只含误报率最低的几条，其余由用户按需启用。
+func BuiltinMatchers() []BuiltinMatcherInfo {
+	return []BuiltinMatcherInfo{
+		{BuiltinCNIDCard, "中国身份证号", "18 位格式、省级地址码、合法出生日期与校验位", "[身份证]", pseudonymKindIDCard},
+		{BuiltinBankCardLuhn, "银行卡号", "主流卡组织前缀/长度匹配，并通过 Luhn 校验", "[银行卡]", pseudonymKindBankCard},
+		{BuiltinCNMobile, "中国手机号", "中国大陆手机号段格式，支持 +86 前缀", "[手机号]", pseudonymKindPhone},
+		{BuiltinEmail, "邮箱地址", "排除 git@host 仓库地址与 logo@2x.png 一类资源名", "[邮箱]", pseudonymKindCustom},
+		{BuiltinCNLandline, "中国座机号", "0 开头区号 + 7~8 位号码，区号与号码之间须有分隔符，可带分机号", "[座机]", pseudonymKindPhone},
+		{BuiltinCNPassport, "中国护照号", "E/G 开头 + 8 位（新版 E + 字母 + 7 位），须出现在「护照」或 passport 字样附近", "[护照]", pseudonymKindCustom},
+		{BuiltinCNCreditCode, "统一社会信用代码", "18 位，按 GB 32100 校验位验算", "[信用代码]", pseudonymKindCustom},
+		{BuiltinPublicIPv4, "公网 IPv4 地址", "排除内网、回环、链路本地与保留地址段，以及版本号形态", "[IP]", pseudonymKindCustom},
+	}
+}
 
 // builtinMatcher 返回文本中所有命中区间（字节偏移）
 type builtinMatcher func(text string) [][2]int
@@ -27,15 +54,29 @@ var (
 	bankCardBuiltinRe            = regexp.MustCompile(`\d{13,19}`)
 )
 
-// BuiltinPIIRules 返回默认确定型 PII 内置规则。
-// 三者都带强校验（校验位 / Luhn / 卡组织画像），
-// 避免把订单号、时间戳、版本号一类数字串误判为 PII。
+// BuiltinPIIRules 返回默认种子化的内置规则。
+// 都带强校验或强上下文约束，避免把订单号、时间戳、版本号一类数字串误判为 PII。
+// 邮箱在编程场景里常出现在 git 配置与作者信息中，走三方中转时同样属于要保护的身份信息。
+// 座机、护照、信用代码、公网 IP 误报面更大，不默认启用，由用户在界面按需新建。
 func BuiltinPIIRules() []Rule {
 	return []Rule{
 		builtinRule("中国身份证号", "18 位格式、省级地址码、合法出生日期与校验位", BuiltinCNIDCard, "[身份证]", pseudonymKindIDCard, 20),
 		builtinRule("银行卡号", "主流卡组织前缀/长度匹配，并通过 Luhn 校验", BuiltinBankCardLuhn, "[银行卡]", pseudonymKindBankCard, 30),
 		builtinRule("中国手机号", "中国大陆手机号段格式，支持 +86 前缀", BuiltinCNMobile, "[手机号]", pseudonymKindPhone, 40),
+		builtinRule("邮箱地址", "排除 git@host 仓库地址与 logo@2x.png 一类资源名", BuiltinEmail, "[邮箱]", pseudonymKindCustom, 50),
 	}
+}
+
+// BuiltinRuleFor 按内置匹配器生成一条可新建的规则（source 为 custom，可删除）
+func BuiltinRuleFor(pattern string) (Rule, bool) {
+	for _, info := range BuiltinMatchers() {
+		if info.Pattern == pattern {
+			rule := builtinRule(info.Name, info.Description, info.Pattern, info.Placeholder, info.PseudonymKind, 60)
+			rule.Source = SourceCustom
+			return rule, true
+		}
+	}
+	return Rule{}, false
 }
 
 func builtinRule(name, description, pattern, placeholder, pseudonymKind string, priority int) Rule {
@@ -64,9 +105,150 @@ func compileBuiltinMatcher(pattern string) (builtinMatcher, error) {
 		return matchBuiltinCNIDCard, nil
 	case BuiltinBankCardLuhn:
 		return matchBuiltinBankCardLuhn, nil
+	case BuiltinCNLandline:
+		return matchBuiltinCNLandline, nil
+	case BuiltinCNPassport:
+		return matchBuiltinCNPassport, nil
+	case BuiltinCNCreditCode:
+		return matchBuiltinCNCreditCode, nil
+	case BuiltinPublicIPv4:
+		return matchBuiltinPublicIPv4, nil
 	default:
 		return nil, fmt.Errorf("unknown builtin pattern: %s", pattern)
 	}
+}
+
+// 座机：区号 0 开头 3~4 位 + 分隔符 + 7~8 位号码 + 可选分机。
+// 强制要求分隔符（- 或空格或括号），否则 010 开头的任意 11 位数字串都会误判。
+var cnLandlineBuiltinRe = regexp.MustCompile(`(?:\(0\d{2,3}\)\s?|0\d{2,3}[-\s])[2-9]\d{6,7}(?:[-转]\d{1,6})?`)
+
+func matchBuiltinCNLandline(text string) [][2]int {
+	locs := cnLandlineBuiltinRe.FindAllStringIndex(text, -1)
+	out := make([][2]int, 0, len(locs))
+	for _, loc := range locs {
+		if hasDigitBoundary(text, loc[0], loc[1]) {
+			continue
+		}
+		out = append(out, [2]int{loc[0], loc[1]})
+	}
+	return out
+}
+
+// 护照号本身格式很弱（E + 8 位与大量编号冲突），只在关键词附近命中
+var (
+	cnPassportBuiltinRe  = regexp.MustCompile(`\b[EG][A-Z0-9]\d{7}\b`)
+	cnPassportKeywordRe  = regexp.MustCompile(`(?i)护照|passport`)
+	passportContextBytes = 32
+)
+
+func matchBuiltinCNPassport(text string) [][2]int {
+	locs := cnPassportBuiltinRe.FindAllStringIndex(text, -1)
+	out := make([][2]int, 0, len(locs))
+	for _, loc := range locs {
+		start := loc[0] - passportContextBytes
+		if start < 0 {
+			start = 0
+		}
+		if !cnPassportKeywordRe.MatchString(text[start:loc[0]]) {
+			continue
+		}
+		out = append(out, [2]int{loc[0], loc[1]})
+	}
+	return out
+}
+
+// 统一社会信用代码：18 位，字符集为数字与除 I O Z S V 外的大写字母，末位为 GB 32100 校验位
+var cnCreditCodeBuiltinRe = regexp.MustCompile(`\b[0-9A-HJ-NPQRTUWXY]{2}\d{6}[0-9A-HJ-NPQRTUWXY]{10}\b`)
+
+const cnCreditCodeCharset = "0123456789ABCDEFGHJKLMNPQRTUWXY"
+
+var cnCreditCodeWeights = [17]int{1, 3, 9, 27, 19, 26, 16, 17, 20, 29, 25, 13, 8, 24, 10, 30, 28}
+
+func matchBuiltinCNCreditCode(text string) [][2]int {
+	locs := cnCreditCodeBuiltinRe.FindAllStringIndex(text, -1)
+	out := make([][2]int, 0, len(locs))
+	for _, loc := range locs {
+		if validCNCreditCode(text[loc[0]:loc[1]]) {
+			out = append(out, [2]int{loc[0], loc[1]})
+		}
+	}
+	return out
+}
+
+func validCNCreditCode(value string) bool {
+	if len(value) != 18 {
+		return false
+	}
+	sum := 0
+	for i := 0; i < 17; i++ {
+		idx := strings.IndexByte(cnCreditCodeCharset, value[i])
+		if idx < 0 {
+			return false
+		}
+		sum += idx * cnCreditCodeWeights[i]
+	}
+	check := (31 - sum%31) % 31
+	return value[17] == cnCreditCodeCharset[check]
+}
+
+var publicIPv4BuiltinRe = regexp.MustCompile(`\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}\b`)
+
+// matchBuiltinPublicIPv4 只命中公网地址：内网、回环、保留段对第三方没有识别意义，
+// 却在代码与配置里大量出现，全部脱敏只会干扰模型理解。
+// 前后紧邻点号或字母数字时视为版本号 / 更长标识的一部分（如 1.2.3.4.5、v1.2.3.4）。
+func matchBuiltinPublicIPv4(text string) [][2]int {
+	locs := publicIPv4BuiltinRe.FindAllStringIndex(text, -1)
+	out := make([][2]int, 0, len(locs))
+	for _, loc := range locs {
+		if loc[0] > 0 && (text[loc[0]-1] == '.' || isASCIIAlnum(text[loc[0]-1])) {
+			continue
+		}
+		if loc[1] < len(text) && text[loc[1]] == '.' && loc[1]+1 < len(text) && isASCIIDigit(text[loc[1]+1]) {
+			continue
+		}
+		if !isPublicIPv4(text[loc[0]:loc[1]]) {
+			continue
+		}
+		out = append(out, [2]int{loc[0], loc[1]})
+	}
+	return out
+}
+
+func isPublicIPv4(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	var octets [4]int
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || n > 255 {
+			return false
+		}
+		octets[i] = n
+	}
+	a, b := octets[0], octets[1]
+	switch {
+	case a == 0, a == 10, a == 127, a >= 224:
+		return false
+	case a == 100 && b >= 64 && b <= 127: // CGNAT
+		return false
+	case a == 169 && b == 254:
+		return false
+	case a == 172 && b >= 16 && b <= 31:
+		return false
+	case a == 192 && b == 168:
+		return false
+	case a == 192 && b == 0:
+		return false
+	case a == 198 && (b == 18 || b == 19):
+		return false
+	}
+	return true
+}
+
+func isASCIIAlnum(b byte) bool {
+	return isASCIIDigit(b) || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
 func matchBuiltinEmail(text string) [][2]int {

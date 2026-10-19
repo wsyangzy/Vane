@@ -14,6 +14,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	"ai-relay-forwarder/internal/providers/claude/store"
 )
 
@@ -1041,6 +1042,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 	credentialGroupOrder := 0
 	dailyCostLimitUSD := 0.0
 	modelPolicy := store.ClaudeModelPolicyInherit
+	authMode := "group_credential"
 	var modelMapping map[string]string
 	var supportedModels []string
 	if s.credentialGroupStore != nil {
@@ -1057,6 +1059,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 			group, _ = s.credentialGroupStore.GetDefaultByChannel(context.Background(), record.Channel)
 		}
 		if group != nil {
+			authMode = group.AuthMode
 			credentialGroupID = group.ID
 			credentialGroupName = group.Name
 			credentialGroupOrder = s.credentialGroupOrder(context.Background(), record.Channel, group.ID)
@@ -1079,6 +1082,10 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		}
 	}
 
+	if authMode == subscription.ClientPassthrough {
+		token = ""
+		apiKey = ""
+	}
 	cfg := config.EndpointConfig{
 		Name:                 record.Name,
 		URL:                  record.URL,
@@ -1086,6 +1093,7 @@ func (s *EndpointService) recordToConfig(record *store.EndpointRecord) config.En
 		RuntimeKey:           EndpointRuntimeKey(record),
 		CredentialGroupID:    credentialGroupID,
 		CredentialGroupName:  credentialGroupName,
+		AuthMode:             authMode,
 		CredentialGroupOrder: credentialGroupOrder,
 		DailyCostLimitUSD:    dailyCostLimitUSD,
 		ModelPolicy:          modelPolicy,
@@ -1171,7 +1179,14 @@ func (s *EndpointService) ensureEndpointCredentialGroup(ctx context.Context, rec
 			return fmt.Errorf("Claude 渠道 '%s' 尚未配置凭证分组，不能创建端点", record.Channel)
 		}
 	}
-	if strings.TrimSpace(group.Token) == "" && strings.TrimSpace(group.ApiKey) == "" &&
+	if group.AuthMode == "client_passthrough" {
+		if err := subscription.ValidateEndpoint(record.URL, record.Headers); err != nil {
+			return err
+		}
+		if record.Token != "" || record.ApiKey != "" {
+			return fmt.Errorf("订阅端点不能保存 Token 或 API Key")
+		}
+	} else if strings.TrimSpace(group.Token) == "" && strings.TrimSpace(group.ApiKey) == "" &&
 		strings.TrimSpace(record.Token) == "" && strings.TrimSpace(record.ApiKey) == "" {
 		return fmt.Errorf("Claude 凭证分组 '%s' 尚未配置 Token 或 API Key，不能创建端点", group.Name)
 	}

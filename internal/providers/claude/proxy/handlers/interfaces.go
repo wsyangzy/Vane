@@ -44,6 +44,7 @@ type RequestLifecycleManager interface {
 	SetModel(modelName string)                              // 简单设置模型
 	SetModelWithComparison(modelName, source string)        // 带对比的设置模型
 	SetModelRewrite(originalModel, newModel, source string) // 设置模型改写信息
+	SetRouteSnapshot(snapshotJSON string)                   // 记录请求级路由快照
 	HasModel() bool                                         // 检查是否已有模型
 	GetModelName() string                                   // 获取当前模型名称
 	UpdateStatus(status string, endpointIndex, statusCode int)

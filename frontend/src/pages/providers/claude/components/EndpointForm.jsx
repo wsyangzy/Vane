@@ -9,6 +9,7 @@ import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
 import { getErrorMessage } from '@pages/management/shared/formatters.js';
 import { formatMultiplierExpression } from '@utils/multiplier.js';
+import { isSubscriptionGroup } from './subscription.js';
 
 const ENDPOINT_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
@@ -236,6 +237,7 @@ const EndpointForm = ({
     selectedChannelGroups.find((group) => group.isDefault || group.is_default) ||
     selectedChannelGroups[0] ||
     null;
+  const subscriptionMode = isSubscriptionGroup(selectedCredentialGroup);
   const credentialGroupOptions = selectedChannelGroups.map((group) => ({
     value: String(group.id),
     label: `${group.name || '未命名分组'}${group.isDefault || group.is_default ? ' · 默认' : ''}`
@@ -283,9 +285,9 @@ const EndpointForm = ({
     if (!formData.name.trim()) {
       newErrors.name = '请输入端点名称';
     }
-    if (!formData.url.trim()) {
+    if (!subscriptionMode && !formData.url.trim()) {
       newErrors.url = '请输入端点 URL';
-    } else if (!/^https?:\/\/.+/.test(formData.url)) {
+    } else if (!subscriptionMode && !/^https?:\/\/.+/.test(formData.url)) {
       newErrors.url = '请输入有效的 URL (以 http:// 或 https:// 开头)';
     }
     const priorityRaw = String(formData.priority ?? '').trim();
@@ -337,6 +339,7 @@ const EndpointForm = ({
 
     try {
       const endpointPayload = { ...formData };
+      if (subscriptionMode) { endpointPayload.url = 'https://api.anthropic.com'; endpointPayload.supportsCountTokens = true; }
       delete endpointPayload.token;
       delete endpointPayload.apiKey;
       if (isEditMode && String(endpointPayload.priority ?? '').trim() === '') {
@@ -511,7 +514,7 @@ const EndpointForm = ({
                       placeholder="请选择凭证分组"
                     />
                     <p className="text-xs text-slate-400">
-                      端点归属到该分组后复用其中的 Token/API Key 与默认倍率
+                      {subscriptionMode ? '使用该分组所选的订阅账号或客户端登录凭证，端点不保存订阅 token' : '端点归属到该分组后复用其中的 Token/API Key 与默认倍率'}
                     </p>
                   </div>
                   {errors.credentialGroupId && (
@@ -540,7 +543,9 @@ const EndpointForm = ({
                 <FormInput
                   label="URL"
                   name="url"
-                  value={formData.url}
+                  value={subscriptionMode ? 'https://api.anthropic.com' : formData.url}
+                  disabled={loading || subscriptionMode}
+                  help={subscriptionMode ? '订阅端点使用固定官方出口，健康状态由真实请求验证' : undefined}
                   onChange={handleChange}
                   placeholder="https://api.example.com"
                   required

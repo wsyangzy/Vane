@@ -248,6 +248,62 @@ func TestPositiveRetentionDeletesExpiredArchive(t *testing.T) {
 	}
 }
 
+// 全量聚合按月份缓存归档文件结果：活动库每次实时查，归档文件只在首次查询时打开；
+// 归档、保留期清理等改动归档文件的操作必须清空归档聚合缓存。
+func TestUsageStatsTotalsCachesArchiveMonths(t *testing.T) {
+	tracker, _ := newHistoryArchiveTestTracker(t)
+	oldDay := tracker.now().AddDate(0, -2, 0).Format("2006-01") + "-15"
+	insertHistoryRequest(t, tracker, "archive-cache-old", oldDay+" 10:00:00", "completed", "claude", 0)
+	if _, moved, err := tracker.archiveOldestClosedMonth(context.Background()); err != nil || !moved {
+		t.Fatalf("archive request: moved=%v err=%v", moved, err)
+	}
+
+	queryAllTime := func() int64 {
+		t.Helper()
+		// end=now 每次都不同，验证完整覆盖的月份仍能命中
+		end := time.Now()
+		totals, err := tracker.QueryUsageStatsTotals(context.Background(), &QueryOptions{EndDate: &end, Provider: "claude"})
+		if err != nil {
+			t.Fatalf("query totals: %v", err)
+		}
+		return totals.TotalRequests
+	}
+
+	if got := queryAllTime(); got != 1 {
+		t.Fatalf("expected archived request counted, got %d", got)
+	}
+	insertHistoryRequest(t, tracker, "archive-cache-active", tracker.now().Format("2006-01-02 15:04:05"), "completed", "claude", 0)
+	if got := queryAllTime(); got != 2 {
+		t.Fatalf("active database must be queried live, got %d", got)
+	}
+	if stats := tracker.archiveTotalsCache.Stats(); stats.Hits != 1 || stats.Misses != 1 {
+		t.Fatalf("expected archive month loaded once then hit, got hits=%d misses=%d", stats.Hits, stats.Misses)
+	}
+
+	// 再归档一个更早的月份，归档文件集合变化后必须重新读取
+	olderDay := tracker.now().AddDate(0, -3, 0).Format("2006-01") + "-15"
+	insertHistoryRequest(t, tracker, "archive-cache-older", olderDay+" 10:00:00", "completed", "claude", 0)
+	if _, moved, err := tracker.archiveOldestClosedMonth(context.Background()); err != nil || !moved {
+		t.Fatalf("archive older request: moved=%v err=%v", moved, err)
+	}
+	if size := tracker.archiveTotalsCache.Stats().Size; size != 0 {
+		t.Fatalf("monthly archive must clear archive totals cache, size=%d", size)
+	}
+	if got := queryAllTime(); got != 3 {
+		t.Fatalf("expected all three requests after re-archive, got %d", got)
+	}
+
+	tracker.retentionMu.Lock()
+	tracker.config.RetentionDays = 3
+	tracker.retentionMu.Unlock()
+	if err := tracker.cleanupOldRecords(); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if got := queryAllTime(); got != 1 {
+		t.Fatalf("retention cleanup must drop cached archive totals, got %d", got)
+	}
+}
+
 func TestMonthlyArchiveIncludesLegacyTerminalStatuses(t *testing.T) {
 	tracker, archiveDir := newHistoryArchiveTestTracker(t)
 	oldMonth := tracker.now().AddDate(0, -1, 0).Format("2006-01")

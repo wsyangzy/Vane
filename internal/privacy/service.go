@@ -187,6 +187,8 @@ type Overview struct {
 	UnscannedPaths []UnscannedPathStat `json:"unscanned_paths"`
 	Presets        []Preset            `json:"presets"`
 	PseudonymKinds []string            `json:"pseudonym_kinds"`
+	// BuiltinMatchers 可新建的内置匹配器（带校验位或上下文约束的确定型 PII）
+	BuiltinMatchers []BuiltinMatcherInfo `json:"builtin_matchers"`
 }
 
 func (s *Service) GetOverview(ctx context.Context) (Overview, error) {
@@ -206,12 +208,13 @@ func (s *Service) GetOverview(ctx context.Context) (Overview, error) {
 		return Overview{}, err
 	}
 	return Overview{
-		Settings:       settings,
-		Rules:          rules,
-		LegacyRules:    legacy,
-		UnscannedPaths: s.UnscannedPaths(),
-		Presets:        Presets(),
-		PseudonymKinds: PseudonymKinds(),
+		Settings:        settings,
+		Rules:           rules,
+		LegacyRules:     legacy,
+		UnscannedPaths:  s.UnscannedPaths(),
+		Presets:         Presets(),
+		PseudonymKinds:  PseudonymKinds(),
+		BuiltinMatchers: BuiltinMatchers(),
 	}, nil
 }
 
@@ -387,6 +390,65 @@ func (s *Service) PreviewText(text string) PreviewResult {
 		HitCount: result.HitCount,
 		RuleHits: result.RuleHits,
 	}
+}
+
+// RequestPreviewResult 完整请求体的预演结果：展示哪些字段被扫描、哪些命中，不含命中原文。
+type RequestPreviewResult struct {
+	// Supported 路径是否在扫描范围内；false 时请求会按「路径未被覆盖时」策略处理
+	Supported bool `json:"supported"`
+	// Error 请求体无法解析等扫描错误（不含请求内容）
+	Error    string         `json:"error,omitempty"`
+	Output   string         `json:"output"`
+	Changed  bool           `json:"changed"`
+	HitCount int            `json:"hit_count"`
+	RuleHits []RuleHit      `json:"rule_hits"`
+	Fields   []PreviewField `json:"fields"`
+}
+
+// PreviewField 一个被扫描的字符串字段。Path 如 messages[0].content[1].input.command
+type PreviewField struct {
+	Path     string `json:"path"`
+	Bytes    int    `json:"bytes"`
+	Redacted bool   `json:"redacted"`
+}
+
+// PreviewRequest 按路径扫描一段完整 JSON 请求体，始终按脱敏语义给出改写结果（不受全局模式影响）。
+// 仅用于规则测试面板：输入由用户粘贴，不经过任何上游。
+func (s *Service) PreviewRequest(path string, body []byte) RequestPreviewResult {
+	out := RequestPreviewResult{Output: string(body), Fields: []PreviewField{}}
+	matcher := walkerForPath(path)
+	if matcher == nil {
+		return out
+	}
+	out.Supported = true
+	segments, paths, err := collectJSONTextSegmentsWithPaths(body, matcher)
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	snapshot := s.currentSnapshot()
+	if snapshot == nil {
+		for i, seg := range segments {
+			out.Fields = append(out.Fields, PreviewField{Path: paths[i], Bytes: len(seg.Value)})
+		}
+		return out
+	}
+	// 按脱敏模式推演：测试面板要回答「开启脱敏后会改成什么样」
+	preview := *snapshot
+	preview.Settings.Mode = ModeRedact
+	var result ApplyResult
+	replacements, _ := preview.scanSegments(&result, preview.candidateRules(), segments)
+	for i, seg := range segments {
+		_, redacted := replacements[i]
+		out.Fields = append(out.Fields, PreviewField{Path: paths[i], Bytes: len(seg.Value), Redacted: redacted})
+	}
+	if len(replacements) > 0 {
+		out.Output = string(replaceSegments(body, segments, replacements))
+		out.Changed = true
+	}
+	out.HitCount = result.HitCount
+	out.RuleHits = result.RuleHits
+	return out
 }
 
 // normalizeRule 补齐默认值并校验

@@ -40,6 +40,19 @@ test('generated Codex credential-group models keep combination billing rules', (
   }
 });
 
+test('usage stats bridge keeps a missing cache hit rate distinct from 0%', () => {
+  assert.equal(wailsApi.normalizeRate(null), null);
+  assert.equal(wailsApi.normalizeRate(undefined), null);
+  assert.equal(wailsApi.normalizeRate(0), 0);
+  assert.equal(wailsApi.normalizeRate(0.42), 0.42);
+
+  const source = readFileSync(new URL('../wailsjs/go/models.ts', import.meta.url), 'utf8');
+  for (const model of ['UsageStatsData', 'EndpointCostItem']) {
+    const body = source.match(new RegExp(`export class ${model} \\{([\\s\\S]*?)static createFrom`))?.[1] || '';
+    assert.match(body, /cache_hit_rate\?: number;/);
+  }
+});
+
 test('request network bridge maps snake and camel case fields without losing zero retries', () => {
   const mapped = wailsApi.mapRequestNetworkFields({
     httpStatus: 204,
@@ -308,4 +321,62 @@ test('Claude credential-group bridge preserves model policy fields', () => {
   assert.equal(payload.model_policy, 'passthrough');
   assert.deepEqual(payload.model_mapping, { 'claude-small': 'claude-haiku' });
   assert.deepEqual(payload.supported_models, ['claude-opus', 'claude-opus']);
+});
+
+test('generated App binding exposes request-level routing APIs', () => {
+  const source = readFileSync(new URL('../wailsjs/go/main/App.js', import.meta.url), 'utf8');
+  for (const [name, args] of [
+    // 模型路由规则按来源渠道隔离：列表与预演都带渠道 ID
+    ['ListModelRoutes', 'arg1, arg2'],
+    ['SaveModelRoute', 'arg1'],
+    ['DeleteModelRoute', 'arg1'],
+    ['SetModelRouteEnabled', 'arg1, arg2'],
+    ['GetRouteTargetOptions', 'arg1'],
+    ['PreviewRoute', 'arg1, arg2, arg3, arg4'],
+    ['SetChannelNonStreamRoute', 'arg1, arg2, arg3'],
+  ]) {
+    assert.match(source, new RegExp(`export function ${name}\\(${args}\\)`));
+    assert.match(source, new RegExp(`Call\\.ByName\\("main\\.App\\.${name}"`));
+  }
+});
+
+test('model route bridge round-trips targets by ID', () => {
+  const mapped = wailsApi.mapModelRoute({
+    id: 3,
+    provider: 'claude',
+    source_channel_id: 4,
+    name: 'haiku 改道',
+    enabled: true,
+    priority: 10,
+    match_model: 'claude-haiku-*',
+    mode: 'prefer',
+    targets: [{ channel_id: 7, group_id: 0, upstream_model: '', channel_name: 'deepseek', group_name: '', missing: false }]
+  });
+  assert.equal(mapped.matchModel, 'claude-haiku-*');
+  assert.deepEqual(mapped.targets[0], {
+    channelId: 7, groupId: 0, upstreamModel: '', channelName: 'deepseek', groupName: '', missing: false
+  });
+
+  const payload = wailsApi.buildModelRoutePayload({ ...mapped, priority: '0', targets: [...mapped.targets, { channelId: 0 }] });
+  // 优先级 0 是合法值；渠道 ID 无效的目标行不提交
+  assert.equal(payload.priority, 0);
+  assert.equal(payload.match_model, 'claude-haiku-*');
+  // 规则归属的来源渠道必须原样回传，后端据此拒绝跨渠道挪动
+  assert.equal(mapped.sourceChannelId, 4);
+  assert.equal(payload.source_channel_id, 4);
+  assert.deepEqual(payload.targets, [{ channel_id: 7, group_id: 0, upstream_model: '' }]);
+});
+
+test('non-stream route bridge treats null or empty targets as disabled', () => {
+  assert.equal(wailsApi.mapNonStreamRoute(null), null);
+  assert.equal(wailsApi.mapNonStreamRoute({ mode: 'prefer', targets: [] }), null);
+  const route = wailsApi.mapNonStreamRoute({ mode: 'fallback', targets: [{ channel_id: 2, group_id: 5, upstream_model: 'm' }] });
+  assert.equal(route.mode, 'fallback');
+  assert.equal(route.targets[0].groupId, 5);
+  assert.deepEqual(wailsApi.buildRouteTargetsPayload(route.targets), [{ channel_id: 2, group_id: 5, upstream_model: 'm' }]);
+});
+
+test('request bridge keeps the route snapshot', () => {
+  const bridge = readFileSync(new URL('./wailsApi.js', import.meta.url), 'utf8');
+  assert.match(bridge, /route_snapshot: r\.route_snapshot/);
 });

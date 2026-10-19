@@ -11,6 +11,8 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/transport"
 )
 
@@ -19,6 +21,8 @@ type Forwarder struct {
 	config          *config.Config
 	endpointManager *endpoint.Manager
 	transport       *transport.Provider
+	states          *routing.StateTracker
+	subscriptions   *subscription.Controller
 }
 
 // NewForwarder 创建新的Forwarder实例
@@ -27,6 +31,7 @@ func NewForwarder(cfg *config.Config, endpointManager *endpoint.Manager) *Forwar
 		config:          cfg,
 		endpointManager: endpointManager,
 		transport:       transport.NewProvider(cfg),
+		states:          routing.NewStateTracker(),
 	}
 }
 
@@ -69,7 +74,7 @@ func (f *Forwarder) ForwardRequestToEndpoint(ctx context.Context, r *http.Reques
 	}
 
 	// 执行请求
-	resp, err := client.Do(req)
+	resp, err := f.sendClaude(ctx, r, req, ep, bodyBytes, client)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +94,7 @@ func (f *Forwarder) CopyHeaders(src *http.Request, dst *http.Request, ep *endpoi
 		"host":          true, // We'll set this based on target endpoint
 		"authorization": true, // We'll add our own if configured
 		"x-api-key":     true, // Remove sensitive client API keys
+		"x-relay-key":   true,
 	}
 
 	// Copy all headers except those we want to skip
@@ -110,13 +116,19 @@ func (f *Forwarder) CopyHeaders(src *http.Request, dst *http.Request, ep *endpoi
 	}
 
 	// Add or override Authorization header with dynamically resolved token
-	token := f.endpointManager.GetTokenForEndpoint(ep)
+	token := ep.Config.Token
+	if subscription.FromContext(src.Context()) == nil {
+		token = f.endpointManager.GetTokenForEndpoint(ep)
+	}
 	if token != "" {
 		dst.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	// Add or override X-Api-Key header with dynamically resolved api-key
-	apiKey := f.endpointManager.GetApiKeyForEndpoint(ep)
+	apiKey := ep.Config.ApiKey
+	if subscription.FromContext(src.Context()) == nil {
+		apiKey = f.endpointManager.GetApiKeyForEndpoint(ep)
+	}
 	if apiKey != "" {
 		dst.Header.Set("X-Api-Key", apiKey)
 	}
@@ -140,5 +152,10 @@ func (f *Forwarder) CopyHeaders(src *http.Request, dst *http.Request, ep *endpoi
 
 	for _, header := range hopByHopHeaders {
 		dst.Header.Del(header)
+	}
+	for _, value := range src.Header.Values("Connection") {
+		for _, name := range strings.Split(value, ",") {
+			dst.Header.Del(strings.TrimSpace(name))
+		}
 	}
 }

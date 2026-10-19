@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +13,20 @@ import (
 
 	"ai-relay-forwarder/internal/tracking"
 )
+
+// newLifecycleTestTracker 独立临时库的追踪器；FlushInterval 设长，确保读到的是热池内存状态
+func newLifecycleTestTracker(t *testing.T) *tracking.UsageTracker {
+	t.Helper()
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{
+		Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 10, BatchSize: 5,
+		FlushInterval: time.Hour, MaxRetry: 1, CleanupInterval: time.Hour, RetentionDays: 1,
+	})
+	if err != nil {
+		t.Fatalf("create tracker: %v", err)
+	}
+	t.Cleanup(func() { _ = tracker.Close() })
+	return tracker
+}
 
 func TestRequestLifecycleManager_NewRequestLifecycleManager(t *testing.T) {
 	requestID := "test-lifecycle-123"
@@ -311,6 +328,56 @@ func TestRequestLifecycleManager_UpdateStatusWithAttemptCounter(t *testing.T) {
 	rlm.UpdateStatus("processing", 5, 200)
 	if rlm.GetRetryCount() != 2 {
 		t.Errorf("Expected retry count remain derived value (2), got %d", rlm.GetRetryCount())
+	}
+}
+
+// 端点内重试 2 次后转移 1 次：最终端点尝试 1 次、整请求尝试 4 次、retry_count=3。
+// 各调用点传给 UpdateStatus 的 retryCount 口径不一（端点下标 / 全局尝试数），落库值必须只取内部计数。
+func TestRequestLifecycleManager_RetryCountFollowsWholeRequestAttempts(t *testing.T) {
+	tracker := newLifecycleTestTracker(t)
+	requestID := "test-retry-scope"
+	rlm := NewRequestLifecycleManager(tracker, nil, requestID, nil)
+	rlm.StartRequest("127.0.0.1", "test-agent", "POST", "/v1/messages", false)
+
+	rlm.SetEndpoint("ep-a", "group-a", "ch")
+	rlm.UpdateStatus("forwarding", 0, 0) // 端点下标 0
+	for i := 0; i < 3; i++ {
+		rlm.IncrementAttempt()
+		rlm.UpdateStatus("retry", rlm.GetAttemptCount(), 0)
+	}
+	rlm.SetEndpoint("ep-b", "group-a", "ch")
+	rlm.UpdateStatus("forwarding", 1, 0) // 端点下标 1：旧实现会把 retry_count 写回 1
+	rlm.IncrementAttempt()
+	rlm.CompleteRequestWithUpstreamStatus(&tracking.TokenUsage{InputTokens: 1, OutputTokens: 1}, 200)
+
+	details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("query request details: %v", err)
+	}
+	if len(details) != 1 {
+		t.Fatalf("details = %#v, want 1 record", details)
+	}
+	if details[0].RetryCount != 3 {
+		t.Fatalf("retry_count = %d, want 3 (4 attempts - 1)", details[0].RetryCount)
+	}
+	var chain []ChainNode
+	if err := json.Unmarshal([]byte(details[0].EndpointChain), &chain); err != nil {
+		t.Fatalf("parse chain %q: %v", details[0].EndpointChain, err)
+	}
+	if len(chain) != 2 || chain[0].Attempts != 3 || chain[1].Attempts != 1 {
+		t.Fatalf("chain = %+v, want ep-a×3 then ep-b×1", chain)
+	}
+	// 每跳都有耗时：第一跳在切换时结束，最后一跳在终态归档时补齐
+	for _, node := range chain {
+		if node.DurationMs == nil || *node.DurationMs < 0 {
+			t.Fatalf("hop %d must carry a duration, got %+v", node.Hop, node)
+		}
+	}
+	if chain[1].StartMs < chain[0].StartMs {
+		t.Fatalf("hop start offsets must be monotonic: %+v", chain)
+	}
+	if details[0].StreamOutcome != tracking.StreamOutcomeNotStreaming {
+		t.Fatalf("stream_outcome = %q, want not_streaming", details[0].StreamOutcome)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	"ai-relay-forwarder/internal/providers/claude/proxy/handlers"
 	"ai-relay-forwarder/internal/providers/claude/proxy/response"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -20,6 +21,11 @@ import (
 type contextKey string
 
 const EndpointContextKey = contextKey("endpoint")
+
+func (h *Handler) SetSubscriptionController(c *subscription.Controller) {
+	h.subscriptions = c
+	h.forwarder.SetSubscriptionController(c)
+}
 
 // Handler handles HTTP proxy requests
 type Handler struct {
@@ -31,6 +37,7 @@ type Handler struct {
 	responseProcessor    *response.Processor
 	tokenAnalyzer        *response.TokenAnalyzer
 	forwarder            *handlers.Forwarder
+	subscriptions        *subscription.Controller
 	regularHandler       *handlers.RegularHandler
 	streamingHandler     *handlers.StreamingHandler
 	privacyService       *privacy.Service
@@ -308,6 +315,37 @@ func (h *Handler) extractReasoningConfig(bodyBytes []byte) string {
 // ServeHTTP implements the http.Handler interface
 // 统一请求分发逻辑 - 整合流式处理、错误恢复和生命周期管理
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if subscription.FromContext(r.Context()) == nil {
+		for name := range r.Header {
+			if strings.EqualFold(name, "X-Relay-Key") {
+				if h.subscriptions == nil {
+					http.Error(w, "Relay authentication rejected", http.StatusUnauthorized)
+					return
+				}
+				ctx, _, err := h.subscriptions.Authenticate(r)
+				if err != nil {
+					http.Error(w, "Relay authentication rejected", http.StatusUnauthorized)
+					return
+				}
+				r = r.WithContext(ctx)
+				break
+			}
+		}
+	}
+	if subscription.FromContext(r.Context()) != nil {
+		if !subscription.AllowedPath(r) {
+			http.Error(w, "Subscription path rejected", http.StatusForbidden)
+			return
+		}
+		// Credentials live only in the trusted request context, outside trace capture.
+		r.Header = r.Header.Clone()
+		for name := range r.Header {
+			if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "X-Relay-Key") {
+				delete(r.Header, name)
+			}
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+	}
 	// 客户端可能始终发起 count_tokens。无论是否开启上游转发，都必须在这里拦截，
 	// 避免关闭开关后落入普通处理器并把该路径原样发送给服务商。
 	if r.URL.Path == "/v1/messages/count_tokens" {

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	"ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/tracking"
 )
@@ -195,6 +196,17 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 	}
 	if err := s.validateCredentialGroupWithOverride(ctx, existing.ChannelID, credentialGroupID, apiKey); err != nil {
 		return err
+	}
+	if s.credentialGroupStore != nil {
+		g, e := s.credentialGroupStore.GetByID(ctx, credentialGroupID)
+		if e != nil {
+			return e
+		}
+		if g != nil && g.AuthMode == subscription.ClientPassthrough {
+			if e = subscription.ValidateEndpoint(baseURL); e != nil {
+				return e
+			}
+		}
 	}
 	groupChanged := existing.CredentialGroupID != credentialGroupID
 
@@ -574,6 +586,12 @@ func (s *CodexEndpointService) ensureEndpointCredentialGroup(ctx context.Context
 		if group.ChannelID != record.ChannelID {
 			return fmt.Errorf("凭证分组不属于当前渠道")
 		}
+		if group.AuthMode == subscription.ClientPassthrough {
+			if record.ApiKey != "" {
+				return fmt.Errorf("订阅端点不能保存 API Key")
+			}
+			return subscription.ValidateEndpoint(record.BaseURL)
+		}
 		if !s.codexCredentialAvailable(ctx, record.ChannelID, record.ApiKey, group.ApiKey) {
 			return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能创建端点", group.Name)
 		}
@@ -585,6 +603,13 @@ func (s *CodexEndpointService) ensureEndpointCredentialGroup(ctx context.Context
 	}
 	if group == nil {
 		return fmt.Errorf("Codex 渠道 %d 尚未配置凭证分组，不能创建端点", record.ChannelID)
+	}
+	if group.AuthMode == subscription.ClientPassthrough {
+		record.CredentialGroupID = group.ID
+		if record.ApiKey != "" {
+			return fmt.Errorf("订阅端点不能保存 API Key")
+		}
+		return subscription.ValidateEndpoint(record.BaseURL)
 	}
 	if strings.TrimSpace(group.ApiKey) == "" {
 		return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能创建端点", group.Name)
@@ -607,6 +632,9 @@ func (s *CodexEndpointService) validateCredentialGroup(ctx context.Context, chan
 	if group.ChannelID != channelID {
 		return fmt.Errorf("凭证分组不属于当前渠道")
 	}
+	if group.AuthMode == subscription.ClientPassthrough {
+		return nil
+	}
 	if !s.codexCredentialAvailable(ctx, channelID, "", group.ApiKey) {
 		return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能使用该分组创建端点", group.Name)
 	}
@@ -626,6 +654,12 @@ func (s *CodexEndpointService) validateCredentialGroupWithOverride(ctx context.C
 	}
 	if group.ChannelID != channelID {
 		return fmt.Errorf("凭证分组不属于当前渠道")
+	}
+	if group.AuthMode == subscription.ClientPassthrough {
+		if endpointApiKey != "" {
+			return fmt.Errorf("订阅端点不能保存 API Key")
+		}
+		return nil
 	}
 	if !s.codexCredentialAvailable(ctx, channelID, endpointApiKey, group.ApiKey) {
 		return fmt.Errorf("Codex 凭证分组 '%s' 尚未配置 API Key，不能使用该分组创建端点", group.Name)

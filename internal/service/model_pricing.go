@@ -6,40 +6,22 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
-	"sync/atomic"
-	"time"
 
-	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/store"
 	"ai-relay-forwarder/internal/tracking"
 )
 
 // ModelPricingService 模型定价管理业务服务
+//
+// 不设读缓存：计费走 UsageTracker 自己的定价表（syncPricingToTracker 同步，key 含 provider 与档位），
+// 这里只服务低频的管理页读写，直接查库即可保证读到最新事实。
 type ModelPricingService struct {
 	store store.ModelPricingStore
-
-	// 内存缓存（用于快速查询）
-	cache   map[string]*store.ModelPricingRecord
-	cacheMu sync.RWMutex
-
-	// 默认定价缓存（按 provider 区分）
-	defaultPricingCache map[string]*store.ModelPricingRecord
-
-	cacheHits          atomic.Uint64
-	cacheMisses        atomic.Uint64
-	cacheInvalidations atomic.Uint64
-	lastUpdatedAt      time.Time
-	lastInvalidatedAt  time.Time
 }
 
 // NewModelPricingService 创建模型定价服务实例
 func NewModelPricingService(st store.ModelPricingStore) *ModelPricingService {
-	return &ModelPricingService{
-		store:               st,
-		cache:               make(map[string]*store.ModelPricingRecord),
-		defaultPricingCache: make(map[string]*store.ModelPricingRecord),
-	}
+	return &ModelPricingService{store: st}
 }
 
 // CreatePricing 创建新的模型定价
@@ -71,35 +53,16 @@ func (s *ModelPricingService) CreatePricing(ctx context.Context, record *store.M
 		return nil, fmt.Errorf("创建模型定价失败: %w", err)
 	}
 
-	// 清除缓存，强制后续读取从数据库加载新事实
-	s.clearCache()
-
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 创建模型定价: %s", record.ModelName))
 	return created, nil
 }
 
-// GetPricing 获取模型定价
+// GetPricing 获取模型的标准档主行定价
 func (s *ModelPricingService) GetPricing(ctx context.Context, modelName string) (*store.ModelPricingRecord, error) {
-	// 先查缓存
-	s.cacheMu.RLock()
-	if cached, ok := s.cache[modelName]; ok {
-		s.cacheMu.RUnlock()
-		s.cacheHits.Add(1)
-		return cached, nil
-	}
-	s.cacheMu.RUnlock()
-	s.cacheMisses.Add(1)
-
-	// 查数据库
 	record, err := s.store.Get(ctx, modelName)
 	if err != nil {
 		return nil, fmt.Errorf("获取模型定价失败: %w", err)
 	}
-
-	if record != nil {
-		s.updateCache(record)
-	}
-
 	return record, nil
 }
 
@@ -119,15 +82,6 @@ func (s *ModelPricingService) GetPricingOrDefault(ctx context.Context, modelName
 // GetDefaultPricing 获取指定 provider 的默认定价
 func (s *ModelPricingService) GetDefaultPricing(ctx context.Context, provider string) *store.ModelPricingRecord {
 	provider = normalizeProvider(provider)
-	s.cacheMu.RLock()
-	cacheKey := provider + "::default"
-	if cached, ok := s.defaultPricingCache[cacheKey]; ok && cached != nil {
-		s.cacheMu.RUnlock()
-		s.cacheHits.Add(1)
-		return cached
-	}
-	s.cacheMu.RUnlock()
-	s.cacheMisses.Add(1)
 
 	// 从数据库获取指定 provider 的默认
 	record, err := s.store.GetDefaultByProvider(ctx, provider)
@@ -148,10 +102,6 @@ func (s *ModelPricingService) GetDefaultPricing(ctx context.Context, provider st
 			IsDefault:            true,
 		}
 	}
-
-	s.cacheMu.Lock()
-	s.defaultPricingCache[cacheKey] = record
-	s.cacheMu.Unlock()
 
 	return record
 }
@@ -203,9 +153,6 @@ func (s *ModelPricingService) UpdatePricing(ctx context.Context, record *store.M
 		return fmt.Errorf("更新模型定价失败: %w", err)
 	}
 
-	// 清除缓存，强制后续读取从数据库加载新事实
-	s.clearCache()
-
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 更新模型定价: %s", record.ModelName))
 	return nil
 }
@@ -233,9 +180,6 @@ func (s *ModelPricingService) DeletePricing(ctx context.Context, provider, model
 		return fmt.Errorf("删除模型定价失败: %w", err)
 	}
 
-	// 从缓存移除
-	s.clearCache()
-
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 删除模型定价: %s/%s", provider, modelName))
 	return nil
 }
@@ -248,8 +192,6 @@ func (s *ModelPricingService) DeleteTierPricing(ctx context.Context, provider, m
 		return fmt.Errorf("删除档位定价失败: %w", err)
 	}
 
-	s.clearCache()
-
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 删除档位定价: %s/%s/%s", provider, modelName, serviceTier))
 	return nil
 }
@@ -260,35 +202,7 @@ func (s *ModelPricingService) SetDefaultPricing(ctx context.Context, modelName s
 		return fmt.Errorf("设置默认定价失败: %w", err)
 	}
 
-	// 清除缓存，强制重新加载
-	s.clearCache()
-
 	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 设置默认定价: %s", modelName))
-	return nil
-}
-
-// LoadCache 加载所有定价到缓存
-func (s *ModelPricingService) LoadCache(ctx context.Context) error {
-	records, err := s.store.List(ctx)
-	if err != nil {
-		return fmt.Errorf("加载模型定价缓存失败: %w", err)
-	}
-
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-
-	s.cache = make(map[string]*store.ModelPricingRecord)
-	s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
-	for _, record := range records {
-		s.cache[record.ModelName] = record
-		if record.IsDefault {
-			provider := normalizeProvider(record.Provider)
-			s.defaultPricingCache[provider+"::default"] = record
-		}
-	}
-	s.lastUpdatedAt = time.Now()
-
-	slog.Info(fmt.Sprintf("✅ [ModelPricingService] 加载 %d 个模型定价到缓存", len(records)))
 	return nil
 }
 
@@ -378,61 +292,4 @@ func (s *ModelPricingService) clearDefaultFlag(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// updateCache 更新缓存
-func (s *ModelPricingService) updateCache(record *store.ModelPricingRecord) {
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-
-	s.cache[record.ModelName] = record
-	if record.IsDefault {
-		if s.defaultPricingCache == nil {
-			s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
-		}
-		provider := normalizeProvider(record.Provider)
-		s.defaultPricingCache[provider+"::default"] = record
-	}
-	s.lastUpdatedAt = time.Now()
-}
-
-// clearCache 清除缓存
-func (s *ModelPricingService) clearCache() int {
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-
-	removed := len(s.cache)
-	s.cache = make(map[string]*store.ModelPricingRecord)
-	s.defaultPricingCache = make(map[string]*store.ModelPricingRecord)
-	s.cacheInvalidations.Add(1)
-	s.lastInvalidatedAt = time.Now()
-	return removed
-}
-
-// InvalidateCache clears the model-pricing read cache.
-func (s *ModelPricingService) InvalidateCache() int {
-	if s == nil {
-		return 0
-	}
-	return s.clearCache()
-}
-
-// CacheStats returns a cache status snapshot for unified cache observability.
-func (s *ModelPricingService) CacheStats() appcache.Stats {
-	if s == nil {
-		return appcache.Stats{Name: "model-pricing"}
-	}
-	s.cacheMu.RLock()
-	stats := appcache.Stats{
-		Name:              "model-pricing",
-		Enabled:           true,
-		Size:              len(s.cache),
-		Hits:              s.cacheHits.Load(),
-		Misses:            s.cacheMisses.Load(),
-		Invalidations:     s.cacheInvalidations.Load(),
-		LastUpdatedAt:     s.lastUpdatedAt,
-		LastInvalidatedAt: s.lastInvalidatedAt,
-	}
-	s.cacheMu.RUnlock()
-	return stats
 }

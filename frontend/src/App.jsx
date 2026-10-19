@@ -7,11 +7,9 @@ import { useState, Suspense, lazy, useCallback, useEffect, useRef } from 'react'
 import Header from '@components/layout/Header.jsx';
 import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@components/ui';
 import useSSE from '@hooks/useSSE.js';
-import { fetchRequests, fetchStatus, isWailsEnvironment } from '@utils/api.js';
+import { fetchRequests, isWailsEnvironment } from '@utils/api.js';
 import { getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@utils/wailsApi.js';
 import { buildFailureToast, buildSuspensionToast, shouldNotifyFailure } from '@pages/requests/utils/failureSummary.js';
-import releaseNotes from './release-notes.json';
-import { consumeReleaseAnnouncement, showReleaseToastSummary } from '@utils/releaseAnnouncement.js';
 
 // 懒加载页面组件
 const OverviewPage = lazy(() => import('@pages/overview/index.jsx'));
@@ -32,46 +30,6 @@ const LogsPage = lazy(() => import('@pages/log-viewer/index.jsx'));
 // ============================================
 // App 组件
 // ============================================
-
-const ReleaseAnnouncement = () => {
-  const toast = useToast();
-
-  useEffect(() => {
-    if (!isWailsEnvironment()) return undefined;
-
-    let cancelled = false;
-    let stopAnnouncement = () => {};
-    fetchStatus()
-      .then((status) => {
-        if (cancelled) return;
-
-        const announcement = consumeReleaseAnnouncement({
-          runtimeVersion: status?.version,
-          releaseNotes,
-          storage: import.meta.env.DEV ? window.sessionStorage : undefined
-        });
-        if (!announcement) return;
-
-        stopAnnouncement = showReleaseToastSummary({
-          announcement,
-          showToast: toast.show,
-          dismissToast: toast.dismiss
-        });
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.warn('加载新版功能提示失败:', error);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      stopAnnouncement();
-    };
-  }, [toast]);
-
-  return null;
-};
 
 const GlobalAlerts = () => {
   const toast = useToast();
@@ -292,20 +250,17 @@ function App() {
   const isLogsPage = activeTab === 'logs';
   const isRequestsPage = activeTab === 'requests';
 
-  // 日志/请求页面使用全高布局，避免外部滚动
-  const containerClass = isLogsPage
-    ? 'h-screen bg-[#FAFAFA] font-sans text-slate-900 overflow-hidden flex flex-col'
-    : isRequestsPage
-      ? 'h-screen bg-[#FAFAFA] font-sans text-slate-900 overflow-hidden flex flex-col'
-      : 'min-h-screen bg-[#FAFAFA] font-sans text-slate-900 pb-20';
+  // Only the area below Header scrolls; request/log pages own their inner scrolling.
+  const contentClass = isRequestsPage || isLogsPage
+    ? 'app-content relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden'
+    : 'app-content relative z-10 min-h-0 flex-1 overflow-y-auto';
 
   const mainClass = isRequestsPage || isLogsPage
-    ? 'flex-1 min-h-0 w-full px-6 pt-6 relative z-10'
-    : 'max-w-7xl mx-auto px-6 pt-8 relative z-10';
+    ? 'flex min-h-0 flex-1 flex-col w-full px-6 pt-6 pb-4'
+    : 'max-w-7xl mx-auto px-6 pt-8 pb-20';
 
   return (
     <ToastProvider>
-      <ReleaseAnnouncement />
       <GlobalAlerts />
 
       {/* 端口冲突对话框 - 使用独立的显示状态，避免成功后被自动关闭 */}
@@ -318,7 +273,7 @@ function App() {
         onDismiss={handlePortConflictDismiss}
       />
 
-      <div className={containerClass}>
+      <div className="flex h-dvh flex-col overflow-hidden bg-[#FAFAFA] font-sans text-slate-900">
         {/* 背景纹理 */}
         <div
           className="fixed inset-0 pointer-events-none opacity-[0.4]"
@@ -337,11 +292,13 @@ function App() {
         />
 
         {/* 主内容区 */}
-        <main className={mainClass}>
-          <Suspense fallback={<LoadingSpinner text="加载页面..." />}>
-            {renderPage()}
-          </Suspense>
-        </main>
+        <div className={contentClass}>
+          <main className={mainClass}>
+            <Suspense fallback={<LoadingSpinner text="加载页面..." />}>
+              {renderPage()}
+            </Suspense>
+          </main>
+        </div>
       </div>
     </ToastProvider>
   );

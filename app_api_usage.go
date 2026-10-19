@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	"ai-relay-forwarder/internal/tracking"
@@ -149,7 +150,8 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 			todayEnd := todayStart.Add(24 * time.Hour)
 			cacheKey := fmt.Sprintf("runtime|provider=%s|today=%s|tz=%s", provider, todayStart.Format("2006-01-02"), loc.String())
 
-			snapshot, err := a.usageSummaryCache.GetOrLoad(cacheKey, func() (usageSummaryDBSnapshot, error) {
+			// 含全部历史聚合，任意时间的写入都会影响，只按 provider 区分失效
+			snapshot, err := a.usageSummaryCache.GetOrLoadScoped(cacheKey, appcache.Scope{Provider: provider}, func() (usageSummaryDBSnapshot, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 				allTimeCost, allTimeTokens, allTimeRequests, err := queryStatsFromDBStrict(ctx, logger, usageTracker, time.Time{}, time.Now(), provider)
 				cancel()
@@ -231,30 +233,26 @@ func (a *App) GetUsageSummary(startTimeStr, endTimeStr, provider string) (UsageS
 
 	ctx, cancel := context.WithTimeout(context.Background(), usageDBQueryTimeout)
 	defer cancel()
-	a.ensureCacheRegistry()
-	cacheKey := fmt.Sprintf("history|provider=%s|start=%s|end=%s", provider, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano))
-	return a.usageHistoryCache.GetOrLoad(cacheKey, func() (UsageSummary, error) {
-		summaries, err := usageTracker.QueryUsageSummary(ctx, &tracking.QueryOptions{
-			StartDate: &startTime,
-			EndDate:   &endTime,
-			Provider:  provider,
-		})
-		if err != nil {
-			return UsageSummary{}, err
-		}
-
-		// 聚合所有摘要
-		result := UsageSummary{}
-		for _, s := range summaries {
-			result.TotalRequests += int64(s.RequestCount)
-			result.SuccessRequests += int64(s.SuccessCount)
-			result.FailedRequests += int64(s.ErrorCount)
-			result.TotalInputTokens += s.TotalInputTokens
-			result.TotalOutputTokens += s.TotalOutputTokens
-			result.TotalCost += s.TotalCostUSD
-		}
-		return result, nil
+	summaries, err := usageTracker.QueryUsageSummary(ctx, &tracking.QueryOptions{
+		StartDate: &startTime,
+		EndDate:   &endTime,
+		Provider:  provider,
 	})
+	if err != nil {
+		return UsageSummary{}, err
+	}
+
+	// 聚合所有摘要
+	result := UsageSummary{}
+	for _, s := range summaries {
+		result.TotalRequests += int64(s.RequestCount)
+		result.SuccessRequests += int64(s.SuccessCount)
+		result.FailedRequests += int64(s.ErrorCount)
+		result.TotalInputTokens += s.TotalInputTokens
+		result.TotalOutputTokens += s.TotalOutputTokens
+		result.TotalCost += s.TotalCostUSD
+	}
+	return result, nil
 }
 
 // queryStatsFromDB 直接从 request_logs 表查询成本、tokens 和请求数
@@ -299,12 +297,14 @@ type RequestRecord struct {
 	OriginalModelName        string      `json:"original_model_name"`
 	ModelRewriteSource       string      `json:"model_rewrite_source"`
 	ModelRewriteTarget       string      `json:"model_rewrite_target"`
+	RouteSnapshot            string      `json:"route_snapshot,omitempty"` // 请求级路由快照 JSON，未命中路由为空
 	ReasoningEffort          string      `json:"reasoning_effort"`
 	ServiceTier              string      `json:"service_tier"`
 	PrivacyRedacted          bool        `json:"privacy_redacted"`
 	PrivacyRedactionSummary  string      `json:"privacy_redaction_summary,omitempty"`
 	Provider                 string      `json:"provider"` // 提供商标识: claude/codex
 	Status                   string      `json:"status"`
+	StreamOutcome            string      `json:"stream_outcome,omitempty"` // 终态枚举；历史行与活跃请求为空
 	HTTPStatus               int         `json:"http_status"`
 	HTTPStatusIsUpstream     bool        `json:"http_status_is_upstream"`
 	RetryCount               int         `json:"retry_count"`                   // 重试次数
@@ -490,12 +490,14 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 		OriginalModelName:             r.OriginalModelName,
 		ModelRewriteSource:            r.ModelRewriteSource,
 		ModelRewriteTarget:            r.ModelRewriteTarget,
+		RouteSnapshot:                 r.RouteSnapshot,
 		ReasoningEffort:               r.ReasoningEffort,
 		ServiceTier:                   r.ServiceTier,
 		PrivacyRedacted:               r.PrivacyRedacted,
 		PrivacyRedactionSummary:       r.PrivacyRedactionSummary,
 		Provider:                      r.Provider, // 提供商标识
 		Status:                        r.Status,
+		StreamOutcome:                 r.StreamOutcome,
 		HTTPStatusIsUpstream:          r.HTTPStatusIsUpstream,
 		RetryCount:                    retryCount,
 		FailureReason:                 r.FailureReason,
@@ -550,8 +552,15 @@ type chainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
+	Attempts        int    `json:"attempts,omitempty"`    // 本跳实际发出的请求次数；旧记录为 0
+	StartMs         int64  `json:"start_ms,omitempty"`    // 本跳开始时距请求开始的毫秒数
+	DurationMs      *int64 `json:"duration_ms,omitempty"` // 本跳耗时；旧记录与进行中的最后一跳为空
 	StatusCode      int    `json:"status_code,omitempty"`
 	Error           string `json:"error,omitempty"`
+	// Headers 失败响应的诊断头白名单（server、cf-ray、x-request-id 等）
+	Headers map[string]string `json:"headers,omitempty"`
+	// Local 本跳没有拿到上游响应，Error 是本地（网络/超时）错误
+	Local bool `json:"local,omitempty"`
 }
 
 // parseEndpointChain 解析端点链路字符串（兼容三种历史格式）
@@ -801,6 +810,8 @@ type UsageStatsData struct {
 	TotalCostUSD  float64 `json:"total_cost_usd"`
 	TotalTokens   int64   `json:"total_tokens"`
 	FailedCount   int     `json:"failed_requests"`
+	// CacheHitRate token 加权缓存命中率（0~1）；没有输入用量时为 null，前端显示 "-"
+	CacheHitRate *float64 `json:"cache_hit_rate"`
 }
 
 // UsageStatsQueryParams 使用统计查询参数
@@ -907,6 +918,7 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 			result.TotalTokens = totals.TotalTokens
 			result.TotalCostUSD = totals.TotalCostUSD
 			result.AvgDurationMs = totals.AvgDurationMs()
+			result.CacheHitRate = totals.CacheHitRate()
 
 			if totals.TotalRequests > 0 {
 				result.SuccessRate = float64(totals.SuccessRequests) / float64(totals.TotalRequests) * 100
@@ -1009,7 +1021,8 @@ func (a *App) GetTokenUsage(provider string) (TokenUsageData, error) {
 	tomorrowStart := todayStart.Add(24 * time.Hour)
 	a.ensureCacheRegistry()
 	cacheKey := fmt.Sprintf("provider=%s|date=%s|tz=%s", provider, todayStart.Format("2006-01-02"), loc.String())
-	data, err := a.tokenUsageCache.GetOrLoad(cacheKey, func() (TokenUsageData, error) {
+	scope := appcache.Scope{Provider: provider, Start: todayStart, End: tomorrowStart}
+	data, err := a.tokenUsageCache.GetOrLoadScoped(cacheKey, scope, func() (TokenUsageData, error) {
 		return queryTokenUsageForRange(usageTracker, todayStart, tomorrowStart, provider)
 	})
 	if err != nil {

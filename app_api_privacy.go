@@ -174,6 +174,16 @@ func (a *App) PreviewPrivacyRedaction(input string) (privacy.PreviewResult, erro
 	return svc.PreviewText(input), nil
 }
 
+// PreviewPrivacyRequest 按 API 路径扫描一段完整 JSON 请求体，列出被扫描的字段与命中情况。
+// 仅在本地推演，不发往任何上游；返回的 RuleHit 不含命中原文。
+func (a *App) PreviewPrivacyRequest(path, body string) (privacy.RequestPreviewResult, error) {
+	svc, err := a.privacySvc()
+	if err != nil {
+		return privacy.RequestPreviewResult{}, err
+	}
+	return svc.PreviewRequest(path, []byte(body)), nil
+}
+
 // GetPrivacyUnscannedPaths 未被隐私规则扫描的请求路径统计。
 // 白名单之外的路径不扫描，此接口保证该情况对用户可见，不做静默漏扫。
 func (a *App) GetPrivacyUnscannedPaths() ([]privacy.UnscannedPathStat, error) {

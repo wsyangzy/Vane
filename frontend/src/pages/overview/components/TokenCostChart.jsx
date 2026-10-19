@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { fetchEndpointCostsData } from '@utils/api.js';
 import { Tooltip as UiTooltip, useToast } from '@components/ui';
+import { formatCacheHitRate } from '@pages/requests/utils/tokenDisplay.js';
 
 // 格式化 Token 数量
 const formatTokens = (value) => {
@@ -77,6 +78,10 @@ const CustomTooltip = ({ active, payload }) => {
           </span>
         </div>
       ))}
+      <div className="flex items-center justify-between gap-4">
+        <span className="text-slate-500">缓存命中率:</span>
+        <span className="font-mono font-medium text-sky-600">{formatCacheHitRate(item?.cache_hit_rate)}</span>
+      </div>
     </div>
   )
 };

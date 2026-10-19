@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ai-relay-forwarder/internal/routing"
 )
 
 // CodexChannelRecord 表示 Codex 渠道配置（共用配置：API Key、模型、推理强度、1M 上下文等）。
@@ -26,6 +28,12 @@ type CodexChannelRecord struct {
 	IsActive        bool              `json:"is_active"`
 	Priority        int               `json:"priority"`
 	FailoverEnabled bool              `json:"failover_enabled"`
+	// NonStreamRoute 渠道不接非流请求时，非流请求改道到的目标；nil 表示关闭。
+	// 只经 SetNonStreamRoute 写入，UpdateByID 不改动该列。
+	NonStreamRoute *routing.NonStreamRoute `json:"non_stream_route,omitempty"`
+	// PrivacyLevel 渠道隐私级别：""=跟随全局 / third_party / trusted。
+	// 只经 SetPrivacyLevel 写入，UpdateByID 不改动该列。
+	PrivacyLevel string `json:"privacy_level,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -81,7 +89,8 @@ func (s *SQLiteCodexChannelStore) getQuerier() interface {
 }
 
 const codexChannelColumns = `id, name, provider_type, api_key, model, model_reasoning_effort,
-		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), COALESCE(priority, 0), COALESCE(failover_enabled, 1), created_at, updated_at`
+		COALESCE(model_mapping, '{}'), COALESCE(enable_1m_context, 0), COALESCE(website, ''), COALESCE(is_active, 0), COALESCE(priority, 0), COALESCE(failover_enabled, 1),
+		COALESCE(non_stream_route, ''), COALESCE(privacy_level, ''), created_at, updated_at`
 
 func (s *SQLiteCodexChannelStore) Create(ctx context.Context, record *CodexChannelRecord) (*CodexChannelRecord, error) {
 	s.mu.Lock()
@@ -318,6 +327,39 @@ func (s *SQLiteCodexChannelStore) SetFailoverEnabled(ctx context.Context, id int
 	return nil
 }
 
+// SetPrivacyLevel 写入渠道隐私级别；空串表示跟随全局（落库为 NULL）。取值由调用方校验。
+func (s *SQLiteCodexChannelStore) SetPrivacyLevel(ctx context.Context, id int64, level string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET privacy_level = ? WHERE id = ?`, nullIfEmpty(level), id)
+	if err != nil {
+		return fmt.Errorf("更新 Codex 渠道隐私级别失败: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	return nil
+}
+
+// SetNonStreamRoute 写入渠道的非流改道配置；route 为 nil 或没有目标时落库为 NULL（关闭）。
+func (s *SQLiteCodexChannelStore) SetNonStreamRoute(ctx context.Context, id int64, route *routing.NonStreamRoute) error {
+	encoded, err := routing.EncodeNonStreamRoute(route)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET non_stream_route = ? WHERE id = ?`, nullIfEmpty(encoded), id)
+	if err != nil {
+		return fmt.Errorf("更新 Codex 渠道非流改道失败: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("Codex 渠道不存在: %d", id)
+	}
+	return nil
+}
+
 func (s *SQLiteCodexChannelStore) scanRecord(row *sql.Row) (*CodexChannelRecord, error) {
 	return scanCodexChannelRow(row)
 }
@@ -332,14 +374,15 @@ func scanCodexChannelRow(scanner interface {
 	Scan(dest ...interface{}) error
 }) (*CodexChannelRecord, error) {
 	var (
-		record           CodexChannelRecord
-		enable1M         int
-		modelMappingJSON string
-		website          string
-		isActive         int
-		failoverEnabled  int
-		createdAt        string
-		updatedAt        string
+		record             CodexChannelRecord
+		enable1M           int
+		modelMappingJSON   string
+		website            string
+		isActive           int
+		failoverEnabled    int
+		nonStreamRouteJSON string
+		createdAt          string
+		updatedAt          string
 	)
 
 	err := scanner.Scan(
@@ -355,6 +398,8 @@ func scanCodexChannelRow(scanner interface {
 		&isActive,
 		&record.Priority,
 		&failoverEnabled,
+		&nonStreamRouteJSON,
+		&record.PrivacyLevel,
 		&createdAt,
 		&updatedAt,
 	)
@@ -370,6 +415,8 @@ func scanCodexChannelRow(scanner interface {
 		return nil, err
 	}
 	record.ModelMapping = modelMapping
+	// 非流改道配置损坏时按关闭处理：它只是改道增强，不能让整张渠道表读不出来
+	record.NonStreamRoute, _ = routing.ParseNonStreamRoute(nonStreamRouteJSON)
 	record.Enable1MContext = enable1M != 0
 	record.Website = website
 	record.IsActive = isActive != 0

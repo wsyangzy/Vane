@@ -10,9 +10,12 @@ import (
 	"strings"
 	"time"
 
+	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
+	"ai-relay-forwarder/internal/routing"
 )
 
 // ============================================================
@@ -89,6 +92,11 @@ type CreateEndpointInput struct {
 }
 
 type ClaudeCredentialGroupInfo struct {
+	AuthMode                               string                                      `json:"auth_mode"`
+	Subscription                           *subscription.Binding                       `json:"subscription,omitempty"`
+	LocalKeyConfigured                     bool                                        `json:"local_key_configured"`
+	SubscriptionStatus                     []subscription.Pause                        `json:"subscription_status"`
+	OfficialVerification                   string                                      `json:"official_verification"`
 	ID                                     int64                                       `json:"id"`
 	Channel                                string                                      `json:"channel"`
 	Name                                   string                                      `json:"name"`
@@ -120,6 +128,8 @@ type ClaudeCredentialGroupInfo struct {
 }
 
 type CreateClaudeCredentialGroupInput struct {
+	AuthMode                               string                                      `json:"auth_mode"`
+	Subscription                           *subscription.Binding                       `json:"subscription,omitempty"`
 	Channel                                string                                      `json:"channel"`
 	Name                                   string                                      `json:"name"`
 	Token                                  string                                      `json:"token"`
@@ -576,6 +586,7 @@ func (a *App) UpdateEndpointRecord(name string, input CreateEndpointInput) error
 			"UPDATE usage_summary SET endpoint_name = ? WHERE endpoint_name = ? AND group_name = ?",
 			newName, existingRecord.Name, channel,
 		)
+		a.notifyUsageDataChanged(usageTracker, appcache.Change{Providers: []string{"claude"}})
 	}
 
 	// 更新成功后，异步同步端点倍率到 UsageTracker
@@ -712,6 +723,7 @@ func (a *App) UpdateEndpointRecordByID(id int64, input CreateEndpointInput) erro
 			"UPDATE usage_summary SET endpoint_name = ? WHERE endpoint_name = ? AND group_name = ?",
 			newName, existingRecord.Name, channel,
 		)
+		a.notifyUsageDataChanged(usageTracker, appcache.Change{Providers: []string{"claude"}})
 	}
 
 	go a.syncEndpointMultipliersToTracker(context.Background())
@@ -1036,10 +1048,13 @@ func (a *App) ActivateEndpointRecordByID(id int64) error {
 
 // ChannelInfo 渠道信息
 type ChannelInfo struct {
+	ID               int64                       `json:"id"`
 	Name             string                      `json:"name"`
 	Website          string                      `json:"website,omitempty"`
 	Priority         int                         `json:"priority"`
 	ModelMapping     map[string]string           `json:"model_mapping"`
+	NonStreamRoute   *NonStreamRouteInfo         `json:"non_stream_route"` // 非流改道配置，关闭时为 null
+	PrivacyLevel     string                      `json:"privacy_level"`    // 隐私级别：""=跟随全局 / third_party / trusted
 	CreatedAt        string                      `json:"created_at"`
 	EndpointCount    int                         `json:"endpoint_count"`
 	CredentialGroups []ClaudeCredentialGroupInfo `json:"credential_groups"`
@@ -1093,6 +1108,9 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 	channelPriority := make(map[string]int)
 	channelModelMapping := make(map[string]map[string]string)
 	channelCreatedAt := make(map[string]string)
+	channelIDs := make(map[string]int64)
+	channelNonStream := make(map[string]*routing.NonStreamRoute)
+	channelPrivacyLevel := make(map[string]string)
 	orderedChannels := make([]string, 0, 16)
 	if channelService != nil {
 		channelRecords, err := channelService.ListChannels(ctx)
@@ -1102,6 +1120,11 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 		for _, c := range channelRecords {
 			if c == nil || c.Name == "" {
 				continue
+			}
+			channelIDs[c.Name] = c.ID
+			channelPrivacyLevel[c.Name] = c.PrivacyLevel
+			if c.NonStreamRoute != nil {
+				channelNonStream[c.Name] = c.NonStreamRoute
 			}
 			channelWebsite[c.Name] = c.Website
 			if c.Priority <= 0 {
@@ -1122,16 +1145,24 @@ func (a *App) GetChannels() ([]ChannelInfo, error) {
 
 	seen := make(map[string]struct{}, len(channelCount))
 	result := make([]ChannelInfo, 0, len(channelCount))
+	// 只有存在非流改道配置时才需要目标目录来解析目标名称
+	var routeCatalog routing.Catalog
+	if len(channelNonStream) > 0 {
+		routeCatalog, _ = a.routeCatalog(ctx, "claude")
+	}
 
 	// 1) channels 表中的渠道（已按 store 层排序），优先输出，保证 UI 顺序稳定
 	for _, name := range orderedChannels {
 		count := channelCount[name]
 		credentialGroups := a.listClaudeCredentialGroupInfos(ctx, claudeCredentialGroupService, claudeCredentialGroupStore, name)
 		result = append(result, ChannelInfo{
+			ID:               channelIDs[name],
 			Name:             name,
 			Website:          channelWebsite[name],
 			Priority:         channelPriority[name],
 			ModelMapping:     channelModelMapping[name],
+			NonStreamRoute:   nonStreamRouteInfo(channelNonStream[name], routeCatalog),
+			PrivacyLevel:     channelPrivacyLevel[name],
 			CreatedAt:        channelCreatedAt[name],
 			EndpointCount:    count,
 			CredentialGroups: credentialGroups,
@@ -1197,6 +1228,8 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		return ClaudeCredentialGroupInfo{}
 	}
 	info := ClaudeCredentialGroupInfo{
+		AuthMode:                               group.AuthMode,
+		OfficialVerification:                   "not_verified",
 		ID:                                     group.ID,
 		Channel:                                group.Channel,
 		Name:                                   group.Name,
@@ -1223,6 +1256,18 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		DisableLongContextPricing:              group.DisableLongContextPricing,
 		ModelMultipliers:                       group.ModelMultipliers,
 	}
+	if group.Subscription != nil {
+		binding := *group.Subscription
+		info.LocalKeyConfigured = binding.KeyHash != ""
+		binding.KeyHash = ""
+		binding.Action = ""
+		binding.GroupID = group.ID
+		binding.Channel = group.Channel
+		info.Subscription = &binding
+		if a.claudeSubscriptions != nil && group.AuthMode == subscription.ClientPassthrough {
+			info.SubscriptionStatus = a.claudeSubscriptions.Status(ctx, binding)
+		}
+	}
 	if !group.CreatedAt.IsZero() {
 		info.CreatedAt = group.CreatedAt.Format("2006-01-02 15:04:05")
 	}
@@ -1239,6 +1284,8 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 
 func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) *claudestore.ClaudeCredentialGroupRecord {
 	return &claudestore.ClaudeCredentialGroupRecord{
+		AuthMode:                               input.AuthMode,
+		Subscription:                           input.Subscription,
 		Channel:                                input.Channel,
 		Name:                                   input.Name,
 		Token:                                  input.Token,
@@ -1519,6 +1566,8 @@ func (a *App) syncChannelRuntimeState(ctx context.Context) error {
 		return err
 	}
 	a.syncChannelModelMappingsToEndpointManager(ctx)
+	// 渠道增删改会改变路由目标的 ID→名称映射与非流改道配置
+	a.syncClaudeRouteConfig(ctx)
 	return nil
 }
 
@@ -1727,6 +1776,12 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 		}
 	}
 
+	// 删除前记下渠道 ID：模型路由规则按 ID 挂在渠道上
+	var deletedChannelID int64
+	if record, err := channelStore.Get(ctx, name); err == nil && record != nil {
+		deletedChannelID = record.ID
+	}
+
 	// 删除渠道
 	if err := channelStore.Delete(ctx, name); err != nil {
 		return err
@@ -1735,6 +1790,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("提交事务失败: %w", err)
 	}
+	a.deleteChannelModelRoutes(ctx, "claude", deletedChannelID)
 
 	// 同步运行时配置（删除端点/组）
 	if endpointService != nil {
@@ -1743,6 +1799,7 @@ func (a *App) DeleteChannel(name string, deleteEndpoints bool) error {
 		}
 	}
 	a.syncChannelModelMappingsToEndpointManager(ctx)
+	a.syncClaudeRouteConfig(ctx)
 
 	// 推送前端刷新
 	a.emitEndpointUpdate()

@@ -6,19 +6,19 @@ import (
 
 	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/service"
+	"ai-relay-forwarder/internal/tracking"
 )
 
 const (
-	cacheNameUsageStats          = "usage:stats"
-	cacheNameUsageSummary        = "usage:summary"
-	cacheNameUsageHistory        = "usage:history"
-	cacheNameTokenUsage          = "usage:token"
-	cacheNameEndpointCostToday   = "endpoint-cost:today"
-	cacheNameEndpointCostHistory = "endpoint-cost:history"
-	cacheNameRequestCount        = "requests:count-fallback"
-	cacheNameRuntimePortCheck    = "runtime:port-check"
-	cacheNameRuntimeClaudeCLI    = "runtime:claude-cli-version"
-	cacheNameRuntimeCodexCLI     = "runtime:codex-cli-version"
+	cacheNameUsageStats        = "usage:stats"
+	cacheNameUsageSummary      = "usage:summary"
+	cacheNameUsageArchive      = "usage:archive-months"
+	cacheNameTokenUsage        = "usage:token"
+	cacheNameEndpointCostToday = "endpoint-cost:today"
+	cacheNameRequestCount      = "requests:count-fallback"
+	cacheNameRuntimePortCheck  = "runtime:port-check"
+	cacheNameRuntimeClaudeCLI  = "runtime:claude-cli-version"
+	cacheNameRuntimeCodexCLI   = "runtime:codex-cli-version"
 )
 
 type usageSummaryDBSnapshot struct {
@@ -30,15 +30,13 @@ type usageSummaryDBSnapshot struct {
 	todayRequests      int64
 }
 
+// cacheSettings 的 TTL 是兜底时长：统计缓存靠 request_logs 写入时的失效保持新鲜，
+// TTL 只防御遗漏的写入路径，因此所有统计缓存共用一个值。
 type cacheSettings struct {
-	Enabled                bool
-	UsageStatsTTL          time.Duration
-	UsageSummaryTTL        time.Duration
-	TokenUsageTTL          time.Duration
-	EndpointCostTodayTTL   time.Duration
-	EndpointCostHistoryTTL time.Duration
-	MaxEntries             int
-	StaleOnError           bool
+	Enabled      bool
+	FallbackTTL  time.Duration
+	MaxEntries   int
+	StaleOnError bool
 }
 
 // CacheStatus is returned to the frontend for cache observability.
@@ -50,6 +48,7 @@ type CacheStatus struct {
 type CacheStatusItem struct {
 	Name              string `json:"name"`
 	Enabled           bool   `json:"enabled"`
+	Fixed             bool   `json:"fixed"`
 	TTL               string `json:"ttl"`
 	MaxEntries        int    `json:"max_entries"`
 	Size              int    `json:"size"`
@@ -58,6 +57,7 @@ type CacheStatusItem struct {
 	Expired           uint64 `json:"expired"`
 	Evicted           uint64 `json:"evicted"`
 	Invalidations     uint64 `json:"invalidations"`
+	StaleServed       uint64 `json:"stale_served"`
 	LastUpdatedAt     string `json:"last_updated_at"`
 	LastInvalidatedAt string `json:"last_invalidated_at"`
 }
@@ -72,6 +72,8 @@ type CacheClearResult struct {
 	UnknownNames   []string `json:"unknown_names,omitempty"`
 }
 
+// externalCacheAdapter 把运行时状态缓存（端口检测、CLI 版本）接入注册表以便观测与清理。
+// 这类缓存保护的是外部进程和网络探测而非数据库，不受「启用缓存」开关控制，状态里标记为常驻。
 type externalCacheAdapter struct {
 	name       string
 	stats      func() appcache.Stats
@@ -83,13 +85,16 @@ func (a externalCacheAdapter) Name() string {
 }
 
 func (a externalCacheAdapter) Stats() appcache.Stats {
-	if a.stats == nil {
-		return appcache.Stats{Name: a.name, Enabled: true}
+	stats := appcache.Stats{Name: a.name, Enabled: true}
+	if a.stats != nil {
+		stats = a.stats()
 	}
-	return a.stats()
+	stats.Fixed = true
+	return stats
 }
 
 func (a externalCacheAdapter) Invalidate(options appcache.InvalidateOptions) int {
+	// 运行时状态与 request_logs 无关，按数据范围的失效不作用于它们
 	if a.invalidate == nil || (!options.All && options.Key == "" && options.Prefix == "") {
 		return 0
 	}
@@ -106,30 +111,14 @@ func (a *App) setupCacheRegistry() {
 	a.cacheRegistry = appcache.NewRegistry()
 	settings := defaultCacheSettings()
 
-	a.usageSummaryCache = appcache.New[usageSummaryDBSnapshot](cacheOptions(cacheNameUsageSummary, settings.UsageSummaryTTL, settings))
-	a.usageHistoryCache = appcache.New[UsageSummary](cacheOptions(cacheNameUsageHistory, settings.UsageSummaryTTL, settings))
-	a.tokenUsageCache = appcache.New[TokenUsageData](cacheOptions(cacheNameTokenUsage, settings.TokenUsageTTL, settings))
-	a.endpointCostTodayCache = appcache.New[[]EndpointCostItem](cacheOptions(cacheNameEndpointCostToday, settings.EndpointCostTodayTTL, settings))
-	a.endpointCostHistoryCache = appcache.New[[]EndpointCostItem](cacheOptions(cacheNameEndpointCostHistory, settings.EndpointCostHistoryTTL, settings))
+	a.usageSummaryCache = appcache.New[usageSummaryDBSnapshot](cacheOptions(cacheNameUsageSummary, settings))
+	a.tokenUsageCache = appcache.New[TokenUsageData](cacheOptions(cacheNameTokenUsage, settings))
+	a.endpointCostTodayCache = appcache.New[[]EndpointCostItem](cacheOptions(cacheNameEndpointCostToday, settings))
 
 	a.cacheRegistry.Register(a.usageSummaryCache)
-	a.cacheRegistry.Register(a.usageHistoryCache)
 	a.cacheRegistry.Register(a.tokenUsageCache)
 	a.cacheRegistry.Register(a.endpointCostTodayCache)
-	a.cacheRegistry.Register(a.endpointCostHistoryCache)
 	a.registerRuntimeStatusCaches()
-}
-
-func (a *App) registerModelPricingCache() {
-	if a == nil || a.cacheRegistry == nil || a.modelPricingService == nil {
-		return
-	}
-	service := a.modelPricingService
-	a.cacheRegistry.Register(externalCacheAdapter{
-		name:       "model-pricing",
-		stats:      service.CacheStats,
-		invalidate: service.InvalidateCache,
-	})
 }
 
 func (a *App) registerRuntimeStatusCaches() {
@@ -157,11 +146,14 @@ func (a *App) registerUsageTrackerCaches() {
 	if a == nil || a.cacheRegistry == nil || a.usageTracker == nil {
 		return
 	}
-	if usageStatsCache := a.usageTracker.UsageStatsCache(); usageStatsCache != nil {
-		a.cacheRegistry.Register(usageStatsCache)
-	}
-	if countCache := a.usageTracker.DBCountFallbackCache(); countCache != nil {
-		a.cacheRegistry.Register(countCache)
+	for _, managed := range []appcache.ManagedCache{
+		a.usageTracker.UsageStatsCache(),
+		a.usageTracker.ArchiveTotalsCache(),
+		a.usageTracker.DBCountFallbackCache(),
+	} {
+		if managed != nil {
+			a.cacheRegistry.Register(managed)
+		}
 	}
 }
 
@@ -173,21 +165,17 @@ func (a *App) ensureCacheRegistry() {
 
 func defaultCacheSettings() cacheSettings {
 	return cacheSettings{
-		Enabled:                true,
-		UsageStatsTTL:          5 * time.Second,
-		UsageSummaryTTL:        30 * time.Second,
-		TokenUsageTTL:          5 * time.Second,
-		EndpointCostTodayTTL:   10 * time.Second,
-		EndpointCostHistoryTTL: 5 * time.Minute,
-		MaxEntries:             1000,
-		StaleOnError:           true,
+		Enabled:      true,
+		FallbackTTL:  5 * time.Minute,
+		MaxEntries:   1000,
+		StaleOnError: true,
 	}
 }
 
-func cacheOptions(name string, ttl time.Duration, settings cacheSettings) appcache.Options {
+func cacheOptions(name string, settings cacheSettings) appcache.Options {
 	return appcache.Options{
 		Name:         name,
-		TTL:          ttl,
+		TTL:          settings.FallbackTTL,
 		MaxEntries:   settings.MaxEntries,
 		StaleOnError: settings.StaleOnError,
 		Enabled:      settings.Enabled,
@@ -202,11 +190,7 @@ func (a *App) applyCacheSettings(ctx context.Context) {
 	settings := defaultCacheSettings()
 	if a.settingsService != nil {
 		settings.Enabled = a.settingsService.GetBool(ctx, service.CategoryCache, "enabled", settings.Enabled)
-		settings.UsageStatsTTL = a.settingsService.GetDuration(ctx, service.CategoryCache, "usage_stats_ttl", settings.UsageStatsTTL)
-		settings.UsageSummaryTTL = a.settingsService.GetDuration(ctx, service.CategoryCache, "usage_summary_ttl", settings.UsageSummaryTTL)
-		settings.TokenUsageTTL = a.settingsService.GetDuration(ctx, service.CategoryCache, "token_usage_ttl", settings.TokenUsageTTL)
-		settings.EndpointCostTodayTTL = a.settingsService.GetDuration(ctx, service.CategoryCache, "endpoint_cost_today_ttl", settings.EndpointCostTodayTTL)
-		settings.EndpointCostHistoryTTL = a.settingsService.GetDuration(ctx, service.CategoryCache, "endpoint_cost_history_ttl", settings.EndpointCostHistoryTTL)
+		settings.FallbackTTL = a.settingsService.GetDuration(ctx, service.CategoryCache, "fallback_ttl", settings.FallbackTTL)
 		settings.MaxEntries = a.settingsService.GetInt(ctx, service.CategoryCache, "max_entries", settings.MaxEntries)
 		settings.StaleOnError = a.settingsService.GetBool(ctx, service.CategoryCache, "stale_on_error", settings.StaleOnError)
 	}
@@ -214,51 +198,52 @@ func (a *App) applyCacheSettings(ctx context.Context) {
 		settings.MaxEntries = 1000
 	}
 
-	a.usageSummaryCache.SetOptions(cacheOptions(cacheNameUsageSummary, settings.UsageSummaryTTL, settings))
-	a.usageHistoryCache.SetOptions(cacheOptions(cacheNameUsageHistory, settings.UsageSummaryTTL, settings))
-	a.tokenUsageCache.SetOptions(cacheOptions(cacheNameTokenUsage, settings.TokenUsageTTL, settings))
-	a.endpointCostTodayCache.SetOptions(cacheOptions(cacheNameEndpointCostToday, settings.EndpointCostTodayTTL, settings))
-	a.endpointCostHistoryCache.SetOptions(cacheOptions(cacheNameEndpointCostHistory, settings.EndpointCostHistoryTTL, settings))
+	a.usageSummaryCache.SetOptions(cacheOptions(cacheNameUsageSummary, settings))
+	a.tokenUsageCache.SetOptions(cacheOptions(cacheNameTokenUsage, settings))
+	a.endpointCostTodayCache.SetOptions(cacheOptions(cacheNameEndpointCostToday, settings))
 
 	if a.usageTracker != nil {
-		a.usageTracker.ConfigureUsageStatsCache(cacheOptions(cacheNameUsageStats, settings.UsageStatsTTL, settings))
-		a.usageTracker.ConfigureDBCountFallbackCache(cacheOptions(cacheNameRequestCount, 0, settings))
+		a.usageTracker.ConfigureUsageStatsCache(cacheOptions(cacheNameUsageStats, settings))
+		a.usageTracker.ConfigureArchiveTotalsCache(cacheOptions(cacheNameUsageArchive, settings))
+		// 计数兜底值只在查库失败时使用，本就是「上次成功的值」，不设 TTL
+		countOptions := cacheOptions(cacheNameRequestCount, settings)
+		countOptions.TTL = 0
+		a.usageTracker.ConfigureDBCountFallbackCache(countOptions)
 		a.registerUsageTrackerCaches()
 	}
 }
 
-func (a *App) invalidateUsageQueryCaches() {
+// invalidateUsageQueryCaches 是 UsageTracker 在 request_logs 变更后的回调，只清依赖受影响范围的条目。
+func (a *App) invalidateUsageQueryCaches(change appcache.Change) {
 	if a == nil {
 		return
 	}
+	options := appcache.InvalidateOptions{Change: &change}
 	if a.usageSummaryCache != nil {
-		a.usageSummaryCache.Invalidate(appcache.InvalidateOptions{All: true})
-	}
-	if a.usageHistoryCache != nil {
-		a.usageHistoryCache.Invalidate(appcache.InvalidateOptions{All: true})
+		a.usageSummaryCache.Invalidate(options)
 	}
 	if a.tokenUsageCache != nil {
-		a.tokenUsageCache.Invalidate(appcache.InvalidateOptions{All: true})
+		a.tokenUsageCache.Invalidate(options)
 	}
 	if a.endpointCostTodayCache != nil {
-		a.endpointCostTodayCache.Invalidate(appcache.InvalidateOptions{All: true})
+		a.endpointCostTodayCache.Invalidate(options)
 	}
-	if a.endpointCostHistoryCache != nil {
-		a.endpointCostHistoryCache.Invalidate(appcache.InvalidateOptions{All: true})
+}
+
+// notifyUsageDataChanged 供 tracking 包外直接改写 request_logs 的调用点使用。
+func (a *App) notifyUsageDataChanged(usageTracker *tracking.UsageTracker, change appcache.Change) {
+	if usageTracker != nil {
+		usageTracker.NotifyUsageDataChanged(change)
+		return
 	}
-	if a.usageTracker != nil {
-		a.usageTracker.InvalidateUsageStatsCache()
-		a.usageTracker.InvalidateDBCountFallbackCache()
-	}
+	a.invalidateUsageQueryCaches(change)
 }
 
 func (a *App) GetCacheStatus() (CacheStatus, error) {
 	if a.cacheRegistry == nil {
 		a.setupCacheRegistry()
 	}
-	a.registerRuntimeStatusCaches()
 	a.registerUsageTrackerCaches()
-	a.registerModelPricingCache()
 
 	status := CacheStatus{Enabled: true}
 	if a.settingsService != nil {
@@ -279,9 +264,7 @@ func (a *App) ClearCache(input ClearCacheInput) (CacheClearResult, error) {
 	if a.cacheRegistry == nil {
 		a.setupCacheRegistry()
 	}
-	a.registerRuntimeStatusCaches()
 	a.registerUsageTrackerCaches()
-	a.registerModelPricingCache()
 	result := a.cacheRegistry.Clear(appcache.ClearOptions{Names: input.Names})
 	return CacheClearResult{
 		ClearedCaches:  result.ClearedCaches,
@@ -294,6 +277,7 @@ func cacheStatusItem(stat appcache.Stats) CacheStatusItem {
 	return CacheStatusItem{
 		Name:              stat.Name,
 		Enabled:           stat.Enabled,
+		Fixed:             stat.Fixed,
 		TTL:               stat.TTL.String(),
 		MaxEntries:        stat.MaxEntries,
 		Size:              stat.Size,
@@ -302,6 +286,7 @@ func cacheStatusItem(stat appcache.Stats) CacheStatusItem {
 		Expired:           stat.Expired,
 		Evicted:           stat.Evicted,
 		Invalidations:     stat.Invalidations,
+		StaleServed:       stat.StaleServed,
 		LastUpdatedAt:     formatCacheTime(stat.LastUpdatedAt),
 		LastInvalidatedAt: formatCacheTime(stat.LastInvalidatedAt),
 	}

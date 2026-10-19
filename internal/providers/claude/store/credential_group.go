@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 )
 
 const (
@@ -19,11 +21,13 @@ const (
 // ClaudeCredentialGroupRecord 表示 Claude 渠道下可复用的凭证分组。
 // 分组承载上游 Token/API Key 与基础成本倍率；端点可保留自己的覆盖值。
 type ClaudeCredentialGroupRecord struct {
-	ID      int64  `json:"id"`
-	Channel string `json:"channel"`
-	Name    string `json:"name"`
-	Token   string `json:"token,omitempty"`
-	ApiKey  string `json:"api_key,omitempty"`
+	ID           int64                 `json:"id"`
+	Channel      string                `json:"channel"`
+	Name         string                `json:"name"`
+	Token        string                `json:"token,omitempty"`
+	ApiKey       string                `json:"api_key,omitempty"`
+	AuthMode     string                `json:"auth_mode"`
+	Subscription *subscription.Binding `json:"-"`
 
 	IsDefault         bool              `json:"is_default"`
 	DailyCostLimitUSD float64           `json:"daily_cost_limit_usd"`
@@ -96,7 +100,7 @@ func (s *SQLiteClaudeCredentialGroupStore) getQuerier() interface {
 	return s.db
 }
 
-const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), COALESCE(api_key, ''), COALESCE(is_default, 0),
+const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), COALESCE(api_key, ''), COALESCE(auth_mode, 'group_credential'), COALESCE(subscription_config, '{}'), COALESCE(is_default, 0),
 	COALESCE(daily_cost_limit_usd, 0),
 	COALESCE(model_policy, 'inherit'), COALESCE(model_mapping, '{}'), COALESCE(supported_models, '[]'),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
@@ -144,8 +148,8 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
 			disable_long_context_pricing, disable_service_tier_pricing,
 			service_tier_cost_multiplier, service_tier_input_cost_multiplier, service_tier_output_cost_multiplier, service_tier_cache_read_cost_multiplier,
-			model_multipliers
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			model_multipliers, auth_mode, subscription_config
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.Channel, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
 		defaultClaudeGroupStoreMultiplier(record.InputCostMultiplier),
@@ -165,7 +169,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Create(ctx context.Context, record *C
 		record.ServiceTierInputCostMultiplier,
 		record.ServiceTierOutputCostMultiplier,
 		record.ServiceTierCacheReadCostMultiplier,
-		encodeEndpointModelMultipliers(record.ModelMultipliers))
+		encodeEndpointModelMultipliers(record.ModelMultipliers), defaultAuthMode(record.AuthMode), encodeSubscription(record.Subscription))
 	if err != nil {
 		return nil, fmt.Errorf("创建 Claude 凭证分组失败: %w", err)
 	}
@@ -230,6 +234,17 @@ func (s *SQLiteClaudeCredentialGroupStore) ListByChannel(ctx context.Context, ch
 func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *ClaudeCredentialGroupRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.tx == nil {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := s.WithTx(tx).Update(ctx, record); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 
 	if record == nil {
 		return fmt.Errorf("record 不能为空")
@@ -244,6 +259,10 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 		return fmt.Errorf("凭证分组名不能为空")
 	}
 
+	previous, err := scanClaudeCredentialGroupRow(s.getQuerier().QueryRowContext(ctx, "SELECT "+claudeCredentialGroupColumns+" FROM claude_credential_groups WHERE id=?", record.ID))
+	if err != nil {
+		return err
+	}
 	if record.IsDefault {
 		if _, err := s.getQuerier().ExecContext(ctx, `UPDATE claude_credential_groups SET is_default = 0 WHERE channel = ? AND id <> ?`, record.Channel, record.ID); err != nil {
 			return fmt.Errorf("清空默认凭证分组失败: %w", err)
@@ -260,7 +279,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 			long_context_cache_creation_cost_multiplier = ?, long_context_cache_read_cost_multiplier = ?,
 			disable_long_context_pricing = ?, disable_service_tier_pricing = ?,
 			service_tier_cost_multiplier = ?, service_tier_input_cost_multiplier = ?, service_tier_output_cost_multiplier = ?, service_tier_cache_read_cost_multiplier = ?,
-			model_multipliers = ?
+			model_multipliers = ?, auth_mode = ?, subscription_config = ?
 		WHERE id = ?
 	`, record.Name, record.Token, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultClaudeGroupStoreMultiplier(record.CostMultiplier),
@@ -282,6 +301,7 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 		record.ServiceTierOutputCostMultiplier,
 		record.ServiceTierCacheReadCostMultiplier,
 		encodeEndpointModelMultipliers(record.ModelMultipliers),
+		defaultAuthMode(record.AuthMode), encodeSubscription(record.Subscription),
 		record.ID)
 	if err != nil {
 		return fmt.Errorf("更新 Claude 凭证分组失败: %w", err)
@@ -289,6 +309,9 @@ func (s *SQLiteClaudeCredentialGroupStore) Update(ctx context.Context, record *C
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return fmt.Errorf("Claude 凭证分组不存在: %d", record.ID)
+	}
+	if err := s.reviseSubscriptionPauses(ctx, previous, record); err != nil {
+		return err
 	}
 	return nil
 }
@@ -379,6 +402,7 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		modelMultipliersJSON               string
 		createdAt                          string
 		updatedAt                          string
+		subscriptionJSON                   string
 	)
 	if err := scanner.Scan(
 		&record.ID,
@@ -386,6 +410,8 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		&record.Name,
 		&record.Token,
 		&record.ApiKey,
+		&record.AuthMode,
+		&subscriptionJSON,
 		&isDefault,
 		&dailyCostLimitUSD,
 		&modelPolicy,
@@ -418,6 +444,11 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		return nil, fmt.Errorf("读取 Claude 凭证分组失败: %w", err)
 	}
 	record.IsDefault = isDefault != 0
+	record.Subscription = decodeSubscription(subscriptionJSON)
+	if record.Subscription != nil {
+		record.Subscription.GroupID = record.ID
+		record.Subscription.Channel = record.Channel
+	}
 	record.DailyCostLimitUSD = dailyCostLimitUSD
 	record.ModelPolicy = defaultClaudeModelPolicy(modelPolicy)
 	record.ModelMapping = decodeClaudeModelMapping(modelMappingJSON)
@@ -443,6 +474,13 @@ func scanClaudeCredentialGroupRow(scanner interface {
 	record.CreatedAt = parseSQLiteDateTime(createdAt)
 	record.UpdatedAt = parseSQLiteDateTime(updatedAt)
 	return &record, nil
+}
+
+func defaultAuthMode(mode string) string {
+	if mode == "" {
+		return subscription.GroupCredential
+	}
+	return mode
 }
 
 func defaultClaudeGroupStoreMultiplier(value float64) float64 {

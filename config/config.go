@@ -196,6 +196,7 @@ type EndpointConfig struct {
 	RuntimeKey           string  // SQLite runtime key
 	CredentialGroupID    int64   // SQLite Claude credential group ID
 	CredentialGroupName  string  // SQLite Claude credential group display name
+	AuthMode string // Claude group_credential or client_passthrough; no OAuth stored
 	CredentialGroupOrder int     // SQLite Claude credential group order
 	DailyCostLimitUSD    float64 // SQLite Claude daily cost limit; 0 means unlimited
 	ModelPolicy          string

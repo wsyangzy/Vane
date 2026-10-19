@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	appcache "ai-relay-forwarder/internal/cache"
 )
 
 const archivableRequestStatusSQL = `COALESCE(status, '') NOT IN ('pending', 'forwarding', 'streaming', 'processing', 'retry', 'suspended')`
@@ -36,6 +38,8 @@ func (ut *UsageTracker) reconcileHistoryArchives() error {
 	defer ut.historyMu.Unlock()
 	ut.writeMu.Lock()
 	defer ut.writeMu.Unlock()
+	// 启动对账会删除归档中的重复记录，结束时（defer 逆序，仍持有写锁）清空归档聚合
+	defer ut.invalidateArchiveTotalsLocked()
 
 	files, err := ut.historyArchiveFilesLocked()
 	if err != nil {
@@ -229,7 +233,9 @@ func (ut *UsageTracker) archiveOldestClosedMonth(ctx context.Context) (string, b
 	}
 
 	ut.resyncRequestCounter()
-	ut.invalidateUsageCaches()
+	// 记录从活动库搬到归档文件：总量不变，但归档聚合与按数据源拆分的结果都已过期
+	ut.invalidateArchiveTotalsLocked()
+	ut.notifyUsageDataChanged(appcache.Change{All: true})
 	return month, true, nil
 }
 

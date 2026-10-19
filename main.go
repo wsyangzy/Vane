@@ -129,15 +129,14 @@ func main() {
 	// 创建主窗口
 	window := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            windowTitle,
+		Frameless:        true,
 		Width:            mainWindowDefaultWidth,
 		Height:           mainWindowDefaultHeight,
 		MinWidth:         mainWindowMinWidth,
 		MinHeight:        mainWindowMinHeight,
 		BackgroundColour: application.RGBA{Red: 26, Green: 26, Blue: 46, Alpha: 255},
 		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
+			Backdrop: application.MacBackdropTranslucent,
 		},
 		Windows: application.WindowsWindow{
 			DisableIcon: false,

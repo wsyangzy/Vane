@@ -586,8 +586,9 @@ type UpdateOptions struct {
 	HttpStatusIsUpstream *bool          // HTTP状态码是否来自真实上游响应
 	ModelName            *string        // 模型名称
 	OriginalModelName    *string        // 改写前的原始请求模型
-	ModelRewriteSource   *string        // 模型改写来源：mapping/channel_model
+	ModelRewriteSource   *string        // 模型改写来源：mapping/channel_model/route
 	ModelRewriteTarget   *string        // 改写后的目标模型
+	RouteSnapshot        *string        // 请求级路由快照 JSON（只含规则标识与阶段序号）
 	PrivacyRedacted      *bool          // 是否命中隐私脱敏
 	PrivacySummary       *string        // 隐私脱敏摘要（仅规则名与命中数，绝不含原文）
 	EndTime              *time.Time     // 结束时间
@@ -653,9 +654,12 @@ type UsageTracker struct {
 	// added live on every QueryUsageStatsTotalsWithHotPool call.
 	usageStatsCache      *appcache.Cache[UsageStatsTotals]
 	dbCountFallbackCache *appcache.Cache[int]
+	// archiveTotalsCache 缓存月度归档文件的聚合结果。归档文件只在持有 historyMu 写锁时变更，
+	// 变更时整表清空，因此条目无需 TTL；活动库部分每次实时查询。
+	archiveTotalsCache *appcache.Cache[UsageStatsTotals]
 
 	usageCacheInvalidatorMu sync.RWMutex
-	usageCacheInvalidator   func()
+	usageCacheInvalidator   func(appcache.Change)
 
 	retentionMu      sync.RWMutex
 	retentionChanged chan struct{}
@@ -762,6 +766,11 @@ func NewUsageTracker(cfg *Config, globalTimezone ...string) (*UsageTracker, erro
 		}),
 		dbCountFallbackCache: appcache.New[int](appcache.Options{
 			Name:       "requests:count-fallback",
+			MaxEntries: 1000,
+			Enabled:    true,
+		}),
+		archiveTotalsCache: appcache.New[UsageStatsTotals](appcache.Options{
+			Name:       "usage:archive-months",
 			MaxEntries: 1000,
 			Enabled:    true,
 		}),
@@ -880,7 +889,7 @@ func (ut *UsageTracker) initHotPool() {
 	}
 	ut.archiveManager = NewArchiveManager(ut.adapter, archiveConfig, ut.pricing, ut.location)
 	ut.archiveManager.SetWriteLocker(&ut.writeMu)
-	ut.archiveManager.SetArchiveSuccessCallback(ut.invalidateUsageCachesAfterArchive)
+	ut.archiveManager.SetArchiveSuccessCallback(ut.notifyUsageDataChanged)
 
 	// 🔧 [P6 新增] 把内存计数器注入 ArchiveManager，归档成功后增量维护 total / by-provider
 	if ut.dbCounter != nil {
@@ -914,32 +923,44 @@ func (ut *UsageTracker) initHotPool() {
 }
 
 // SetUsageCacheInvalidationCallback registers an external invalidator for app-level usage caches.
-func (ut *UsageTracker) SetUsageCacheInvalidationCallback(callback func()) {
+// 每次 request_logs 落库变更后回调，参数描述受影响的 provider 与时间范围。
+func (ut *UsageTracker) SetUsageCacheInvalidationCallback(callback func(appcache.Change)) {
 	if ut == nil {
 		return
 	}
 	ut.usageCacheInvalidatorMu.Lock()
 	ut.usageCacheInvalidator = callback
 	ut.usageCacheInvalidatorMu.Unlock()
-	if ut.archiveManager != nil {
-		ut.archiveManager.SetArchiveSuccessCallback(ut.invalidateUsageCachesAfterArchive)
-	}
 }
 
-func (ut *UsageTracker) invalidateUsageCachesAfterArchive() {
-	ut.invalidateUsageCaches()
+// NotifyUsageDataChanged 供 tracking 包外直接改写 request_logs 的调用点（如端点改名）使缓存失效。
+func (ut *UsageTracker) NotifyUsageDataChanged(change appcache.Change) {
+	ut.notifyUsageDataChanged(change)
 }
 
-func (ut *UsageTracker) invalidateUsageCaches() {
+// notifyUsageDataChanged 是 request_logs 变更后的唯一失效入口：所有写路径都必须经过这里，
+// 否则统计缓存只能等兜底 TTL 才刷新。
+// requests:count-fallback 是「上次成功的计数」兜底值，本就允许陈旧，不随数据变更清除。
+func (ut *UsageTracker) notifyUsageDataChanged(change appcache.Change) {
 	if ut == nil {
 		return
 	}
-	ut.InvalidateUsageStatsCache()
+	if ut.usageStatsCache != nil {
+		ut.usageStatsCache.Invalidate(appcache.InvalidateOptions{Change: &change})
+	}
 	ut.usageCacheInvalidatorMu.RLock()
 	callback := ut.usageCacheInvalidator
 	ut.usageCacheInvalidatorMu.RUnlock()
 	if callback != nil {
-		callback()
+		callback(change)
+	}
+}
+
+// invalidateArchiveTotalsLocked 必须在持有 historyMu 写锁时调用：归档文件内容已变，
+// 持有读锁的查询都已结束，之后的查询会重新读取归档文件。
+func (ut *UsageTracker) invalidateArchiveTotalsLocked() {
+	if ut.archiveTotalsCache != nil {
+		ut.archiveTotalsCache.Invalidate(appcache.InvalidateOptions{All: true})
 	}
 }
 
@@ -1448,6 +1469,9 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			}
 			if opts.ModelRewriteTarget != nil {
 				req.ModelRewriteTarget = *opts.ModelRewriteTarget
+			}
+			if opts.RouteSnapshot != nil {
+				req.RouteSnapshot = *opts.RouteSnapshot
 			}
 			if opts.PrivacyRedacted != nil {
 				req.PrivacyRedacted = *opts.PrivacyRedacted
@@ -2767,6 +2791,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	originalModelName := req.OriginalModelName
 	modelRewriteSource := req.ModelRewriteSource
 	modelRewriteTarget := req.ModelRewriteTarget
+	routeSnapshot := req.RouteSnapshot
 	reasoningEffort := req.ReasoningEffort
 	serviceTier := req.ServiceTier
 	privacyRedacted := req.PrivacyRedacted
@@ -2774,6 +2799,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	isStreaming := req.IsStreaming
 	provider := req.Provider
 	status := req.Status
+	streamOutcome := req.StreamOutcome
 	httpStatusSnapshot := req.HTTPStatus
 	httpStatusIsUpstream := req.HTTPStatusIsUpstream
 	retryCount := req.RetryCount
@@ -2925,6 +2951,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		OriginalModelName:             originalModelName,
 		ModelRewriteSource:            modelRewriteSource,
 		ModelRewriteTarget:            modelRewriteTarget,
+		RouteSnapshot:                 routeSnapshot,
 		ReasoningEffort:               reasoningEffort,
 		ServiceTier:                   serviceTier,
 		PrivacyRedacted:               privacyRedacted,
@@ -2932,6 +2959,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		IsStreaming:                   isStreaming,
 		Provider:                      provider, // 提供商标识
 		Status:                        status,
+		StreamOutcome:                 streamOutcome,
 		HTTPStatusCode:                httpStatus,
 		HTTPStatusIsUpstream:          httpStatusIsUpstream,
 		RetryCount:                    retryCount,

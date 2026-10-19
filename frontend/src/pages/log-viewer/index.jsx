@@ -84,6 +84,18 @@ function LogsPage() {
     setListHeight((prev) => (prev === nextHeight ? prev : nextHeight));
   }, []);
 
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    // The available space changes with window size and wrapped header controls.
+    const observer = new ResizeObserver(() => {
+      const nextHeight = Math.max(1, container.clientHeight);
+      setListHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
   // 搜索防抖 - 使用 useDeferredValue 延迟过滤计算
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
@@ -249,11 +261,7 @@ function LogsPage() {
 
   return (
     <div
-      className="flex flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm h-full"
-      style={{
-        // 填满 main 区域可用高度：100vh - Header(~92px) - main上边距(32px) - 安全边距(16px)
-        height: 'calc(100vh - 140px)'
-      }}
+      className="flex min-h-0 flex-1 flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm"
     >
       {/* 页面头部 - 固定 */}
       <div className="flex-shrink-0 border-b border-slate-200 px-6 py-4">

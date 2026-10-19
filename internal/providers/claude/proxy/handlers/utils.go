@@ -143,6 +143,16 @@ func upstreamStreamFailure(resp *http.Response, processor StreamProcessor, targe
 	}
 }
 
+// UpstreamErrorHeaders 返回上游错误响应的原始响应头；err 不携带上游响应时返回 nil。
+// 调用方落库前必须经 tracking.DiagnosticHeaders 过滤白名单。
+func UpstreamErrorHeaders(err error) http.Header {
+	var epErr *EndpointError
+	if errors.As(err, &epErr) && epErr != nil {
+		return epErr.Headers
+	}
+	return nil
+}
+
 // GetStatusCodeFromError 只返回 HTTP 层实际提供的状态码。
 // 普通 error 文本不携带可信的提供商响应，不能从其中猜测状态码。
 func GetStatusCodeFromError(err error, resp *http.Response) int {

@@ -149,8 +149,30 @@ type ChainNode struct {
 	Channel         string `json:"channel"`
 	CredentialGroup string `json:"credential_group,omitempty"`
 	Endpoint        string `json:"endpoint"`
-	StatusCode      int    `json:"status_code,omitempty"`
-	Error           string `json:"error,omitempty"`
+	// Attempts 本跳内实际发出的请求次数（含同端点重试）；整请求累计 = retry_count + 1
+	Attempts int `json:"attempts,omitempty"`
+	// StartMs 本跳开始时距请求开始的毫秒数；DurationMs 本跳耗时，下一跳开始时写入，
+	// 最后一跳由热池在请求终态时补齐（tracking.closeOpenChainHop）。
+	// 用相对毫秒而非时间戳：与 start_time 的时区格式无关，前端直接可用
+	StartMs    int64  `json:"start_ms"`
+	DurationMs *int64 `json:"duration_ms,omitempty"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// Headers 失败响应的诊断头白名单（server、cf-ray、x-request-id、retry-after 等），见 tracking.DiagnosticHeaders
+	Headers map[string]string `json:"headers,omitempty"`
+	// Local 本跳失败没有拿到上游 HTTP 响应（连接失败、超时、TLS 错误等），Error 是本地错误文本
+	Local bool `json:"local,omitempty"`
+}
+
+// closeLastHopLocked 结束最后一跳的计时；调用方需持有 endpointChainMu
+func (rsm *RequestStateManager) closeLastHopLocked(nowMs int64) {
+	if n := len(rsm.endpointChain); n > 0 && rsm.endpointChain[n-1].DurationMs == nil {
+		duration := nowMs - rsm.endpointChain[n-1].StartMs
+		if duration < 0 {
+			duration = 0
+		}
+		rsm.endpointChain[n-1].DurationMs = &duration
+	}
 }
 
 // AppendEndpointChain 追加端点到链路（按切换去重）
@@ -168,11 +190,14 @@ func (rsm *RequestStateManager) AppendEndpointChain(channel, credentialGroup, en
 		rsm.endpointChain[chainLen-1].Channel != channel ||
 		rsm.endpointChain[chainLen-1].CredentialGroup != credentialGroup ||
 		rsm.endpointChain[chainLen-1].Endpoint != endpointName {
+		nowMs := time.Since(rsm.startTime).Milliseconds()
+		rsm.closeLastHopLocked(nowMs)
 		rsm.endpointChain = append(rsm.endpointChain, ChainNode{
 			Hop:             chainLen + 1,
 			Channel:         channel,
 			CredentialGroup: credentialGroup,
 			Endpoint:        endpointName,
+			StartMs:         nowMs,
 		})
 	}
 
@@ -191,8 +216,12 @@ func (rsm *RequestStateManager) GetEndpointChain() string {
 	return string(data)
 }
 
-func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, errorText string) string {
-	if errorText == "" {
+// AnnotateEndpointChainError 在最后一跳记录失败信息。
+//
+// 上游返回了状态码但正文为空（anyrouter 的 520 常见）时同样要记：只有状态码与诊断头
+// 能说明这是 Cloudflare 还是中转站自己的错误。statusCode 为 0 表示没拿到上游响应，标为本地失败。
+func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, errorText string, headers map[string]string) string {
+	if errorText == "" && statusCode == 0 && len(headers) == 0 {
 		return rsm.GetEndpointChain()
 	}
 
@@ -204,6 +233,8 @@ func (rsm *RequestStateManager) AnnotateEndpointChainError(statusCode int, error
 	last := &rsm.endpointChain[len(rsm.endpointChain)-1]
 	last.StatusCode = statusCode
 	last.Error = errorText
+	last.Headers = headers
+	last.Local = statusCode == 0
 
 	data, _ := json.Marshal(rsm.endpointChain)
 	return string(data)
@@ -250,8 +281,15 @@ func (rsm *RequestStateManager) GetStartTime() time.Time {
 
 // ========== 计数器管理方法 ==========
 
-// IncrementAttempt 增加尝试次数并返回新值
+// IncrementAttempt 增加尝试次数并返回新值；同时计入当前链路节点，
+// 让链路能还原每一跳各自发了几次（最终端点尝试次数由此而来）
 func (rsm *RequestStateManager) IncrementAttempt() int {
+	rsm.endpointChainMu.Lock()
+	if n := len(rsm.endpointChain); n > 0 {
+		rsm.endpointChain[n-1].Attempts++
+	}
+	rsm.endpointChainMu.Unlock()
+
 	rsm.counterMu.Lock()
 	defer rsm.counterMu.Unlock()
 	rsm.attemptCount++

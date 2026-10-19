@@ -47,6 +47,9 @@ import {
   useToast
 } from '@components/ui';
 import { renderModalPortal } from '@components/ui/modalPortal.js';
+import SubscriptionManagement from '@pages/management/shared/SubscriptionManagement.jsx';
+import SubscriptionSettings, { SubscriptionStatus } from '@pages/management/shared/SubscriptionSettings.jsx';
+import { isSubscriptionGroup, validateSubscription } from '@pages/management/shared/subscriptionSettings.js';
 import CredentialGroupStrip from '@pages/management/shared/CredentialGroupStrip.jsx';
 import { buildCredentialGroupStats } from '@pages/management/shared/credentialGroupStats.js';
 import EndpointAvailabilityBar from '@pages/management/shared/EndpointAvailabilityBar.jsx';
@@ -69,6 +72,15 @@ import {
 } from '@pages/management/shared/formatters.js';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
 import MultiplierSettingsModal from '@pages/management/shared/MultiplierSettingsModal.jsx';
+import NonStreamRouteEditor from '@pages/management/shared/NonStreamRouteEditor.jsx';
+import ChannelModelRoutesEditor from '@pages/management/shared/ChannelModelRoutesEditor.jsx';
+import ChannelPrivacyLevelSelector from '@pages/management/shared/ChannelPrivacyLevelSelector.jsx';
+import {
+  buildNonStreamRouteForm,
+  nonStreamRouteFromForm,
+  nonStreamRouteSignature,
+  validateRouteTargets
+} from '@pages/management/shared/routeTargets.js';
 import BillingRuleEditor, {
   buildInitialBillingRuleRows,
   createDefaultBillingRuleRow,
@@ -101,6 +113,8 @@ import {
   openExternalURL,
   subscribeToEvent,
   setDefaultCodexCredentialGroup,
+  setChannelNonStreamRoute,
+  setChannelPrivacyLevel,
   setCodexChannelFailoverEnabled,
   updateCodexChannelByID,
   updateCodexCredentialGroupByID,
@@ -128,7 +142,7 @@ const getCredentialGroups = (channel) => {
   return Array.isArray(groups) ? groups : [];
 };
 
-const hasCodexCredential = (...sources) => sources.some((source) => [
+const hasCodexCredential = (...sources) => sources.some((source) => isSubscriptionGroup(source) || [
   source?.apiKey,
   source?.api_key,
   source?.apiKeyMasked,
@@ -166,6 +180,9 @@ const buildInitialChannelForm = (channel) => ({
 });
 
 const buildInitialCredentialGroupForm = (group, channel) => ({
+  authMode: group?.authMode || 'group_credential',
+  localKeyConfigured: Boolean(group?.localKeyConfigured), localKeyAcknowledged: false,
+  subscription: group?.subscription ? { ...group.subscription, action: '', backupTargets: (group.subscription.backupTargets || []).map((target) => ({ ...target, rowId: crypto.randomUUID() })) } : { version: 0, enabled: true, accountId: '', backupTargets: [] },
   name: group?.name || '',
   apiKey: group?.apiKey || '',
   isDefault: Boolean(group?.isDefault || group?.is_default || (!group && getCredentialGroups(channel).length === 0)),
@@ -195,6 +212,13 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
 const CODEX_CHANNEL_FORM_TABS = [
   { key: 'basic', label: '基础信息' },
   { key: 'mapping', label: '模型映射' }
+];
+
+// 模型路由与非流改道都按渠道 ID 保存，只在编辑已有渠道时提供
+const CODEX_CHANNEL_EDIT_FORM_TABS = [
+  ...CODEX_CHANNEL_FORM_TABS,
+  { key: 'modelRoutes', label: '模型路由' },
+  { key: 'nonStream', label: '非流改道' }
 ];
 
 const CODEX_CREDENTIAL_GROUP_FORM_TABS = [
@@ -373,10 +397,14 @@ const CodexLogo = ({ className = 'w-6 h-6' }) => (
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
+  const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(channel?.nonStreamRoute));
+  const [privacyLevel, setPrivacyLevel] = useState(() => channel?.privacyLevel || '');
   const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const isEdit = mode === 'edit';
+  const channelId = Number(channel?.id) || 0;
+  const canEditNonStream = isEdit && channelId > 0;
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
@@ -439,6 +467,15 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       return;
     }
 
+    if (canEditNonStream && nonStreamForm.enabled) {
+      const routeError = validateRouteTargets(nonStreamForm.targets);
+      if (routeError) {
+        setActiveTab('nonStream');
+        setFieldError(routeError);
+        return;
+      }
+    }
+
     const payload = {
       name,
       apiKey: '',
@@ -446,7 +483,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       model: formData.model.trim(),
       modelMapping: buildModelMappingPayload(formData.modelMappingRows),
       priority: !isEdit && !hasPriority ? -1 : parsedPriority,
-      failoverEnabled: formData.failoverEnabled
+      failoverEnabled: formData.failoverEnabled,
+      ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm), privacyLevel } : {})
     };
 
     await onSave?.(payload);
@@ -485,11 +523,11 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={CODEX_CHANNEL_FORM_TABS}
+              tabs={canEditNonStream ? CODEX_CHANNEL_EDIT_FORM_TABS : CODEX_CHANNEL_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
-              className="grid-cols-2"
+              className={canEditNonStream ? 'grid-cols-4' : 'grid-cols-2'}
               buttonPaddingClass="px-2"
             />
           </div>
@@ -572,8 +610,12 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
                 </label>
               )}
             </div>
+
+            {canEditNonStream && (
+              <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
+            )}
               </>
-            ) : (
+            ) : activeTab === 'mapping' ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -625,7 +667,25 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
                 </div>
                 <p className="text-xs text-slate-400">未命中映射时，仍按基础信息中的渠道模型覆盖规则处理。</p>
               </div>
-            )}
+            ) : activeTab === 'modelRoutes' && canEditNonStream ? (
+              <ChannelModelRoutesEditor
+                provider="codex"
+                channelId={channelId}
+                channelName={channel?.name || ''}
+                disabled={loading}
+              />
+            ) : canEditNonStream ? (
+              <NonStreamRouteEditor
+                provider="codex"
+                channelId={channelId}
+                value={nonStreamForm}
+                onChange={(next) => {
+                  setNonStreamForm(next);
+                  if (fieldError) setFieldError('');
+                }}
+                disabled={loading}
+              />
+            ) : null}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">
@@ -645,7 +705,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
 // ============================================================================
 // 凭证分组编辑弹窗
 // ============================================================================
-const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
+const CredentialGroupFormModal = ({ mode, channel, channels = [], group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
   const [standardMultiplierSettingsOpen, setStandardMultiplierSettingsOpen] = useState(false);
   const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);  const [activeTab, setActiveTab] = useState('basic');
@@ -664,7 +724,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
     ...endpointCopyOptions
   ];
   const selectedCopyOption = copyChoices.find((option) => option.value === (formData.copyEndpointsFromGroupId || '')) || copyChoices[0];
-  const canCopyEndpoints = !isEdit && copyChoices.length > 1;
+  const canCopyEndpoints = !isEdit && formData.authMode !== 'client_passthrough' && copyChoices.length > 1;
   const credentialGroupTabs = canCopyEndpoints && copyEndpointsEnabled
     ? CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS
     : CODEX_CREDENTIAL_GROUP_FORM_TABS;
@@ -757,14 +817,16 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 
   const buildSubmitPayload = () => {
     const name = formData.name.trim();
-    const apiKey = formData.apiKey.trim();
+    const apiKey = formData.authMode === 'client_passthrough' ? '' : formData.apiKey.trim();
+    const subscriptionError = validateSubscription(formData);
+    if (subscriptionError) { setFieldError(subscriptionError); setFormStep('details'); setActiveTab('basic'); return null; }
     if (!name) {
       setFieldError('分组名称不能为空');
       setFormStep('details');
       setActiveTab('basic');
       return null;
     }
-    if (!apiKey) {
+    if (formData.authMode !== 'client_passthrough' && !apiKey) {
       setFieldError('API Key 不能为空');
       setFormStep('details');
       setActiveTab('basic');
@@ -818,13 +880,14 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 	}
     return {
       name,
+      authMode: formData.authMode, subscription: formData.subscription,
       apiKey,
       isDefault: formData.isDefault,
 	  modelPolicy,
 	  modelMapping: modelPolicy === 'override' ? buildModelMappingPayload(formData.modelMappingRows) : {},
 	  supportedModels: String(formData.supportedModelsText || '').split(',').map((model) => model.trim()).filter(Boolean),
 	  dailyCostLimitUSD,
-      copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
+      copyEndpointsFromGroupId: formData.authMode === 'client_passthrough' ? '' : (formData.copyEndpointsFromGroupId || ''),
       ...multiplierResult.payload,
       disableLongContextPricing: formData.disableLongContextPricing,billingOutputTokenSource: formData.billingOutputTokenSource,
 	  modelMultipliers: modelMultiplierResult.payload,
@@ -932,6 +995,8 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   disabled={loading}
                 />
 
+                <div><label className="mb-1.5 block text-sm font-medium text-slate-700">认证方式</label><CustomSelect value={formData.authMode} options={[{ value: 'group_credential', label: '分组凭证' }, { value: 'client_passthrough', label: '官方订阅' }]} onChange={(authMode) => updateField('authMode', authMode)} disabled={loading} /></div>
+                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings provider="codex" value={formData.subscription} onChange={(value) => updateField('subscription', value)} channels={channels} localKeyConfigured={formData.localKeyConfigured} acknowledged={formData.localKeyAcknowledged} onAcknowledge={(value) => updateField('localKeyAcknowledged', value)} disabled={loading} /> : (
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
                   <div className="relative">
@@ -954,6 +1019,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   </div>
                 </div>
 
+                )}
                 <div className={`grid gap-3 ${canCopyEndpoints ? 'md:grid-cols-2' : ''}`}>
                   <button
                     type="button"
@@ -1343,6 +1409,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
     credentialGroups.find((group) => Number(group.id) === Number(credentialGroupId)) ||
     credentialGroup ||
     defaultCredentialGroup;
+  const subscriptionGroup = isSubscriptionGroup(selectedCredentialGroup);
   const selectedCredentialGroupId = Number(selectedCredentialGroup?.id || credentialGroupId || 0);
   const credentialGroupOptions = [
     ...(!credentialGroups.some((group) => Number(group.id) === selectedCredentialGroupId) && selectedCredentialGroupId > 0
@@ -1378,7 +1445,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
   const handleSubmit = async (event) => {
     event.preventDefault();
     const trimmedName = name.trim();
-    const trimmed = baseURL.trim();
+    const trimmed = subscriptionGroup ? 'https://chatgpt.com/backend-api/codex' : baseURL.trim();
     if (!trimmedName) {
       setActiveTab('basic');
       setFieldError('端点名称不能为空');
@@ -1523,7 +1590,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       placeholder="请选择凭证分组"
                     />
                     <p className="mt-1 text-xs text-slate-400">
-                      端点归属到该分组后复用其中的 API Key 与默认倍率
+                      {subscriptionGroup ? '使用该分组所选的订阅账号或客户端登录凭证' : '端点归属到该分组后复用其中的 API Key 与默认倍率'}
                     </p>
                   </div>
 
@@ -1551,7 +1618,8 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                     </label>
                     <input
                       type="text"
-                      value={baseURL}
+                      value={subscriptionGroup ? 'https://chatgpt.com/backend-api/codex' : baseURL}
+                      disabled={loading || subscriptionGroup}
                       onChange={(event) => {
                         setBaseURL(event.target.value);
                         if (fieldError) setFieldError('');
@@ -1560,7 +1628,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                       className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                     />
                     <p className="mt-1 text-xs text-slate-400">
-                      端点只保存线路信息；API Key 与计费倍率来自上方凭证分组
+                      {subscriptionGroup ? '订阅端点固定连接官方 Codex 服务，凭证来源在分组中配置' : '端点只保存线路信息；API Key 与计费倍率来自上方凭证分组'}
                     </p>
                   </div>
                 </div>
@@ -2746,6 +2814,7 @@ const ChannelCard = ({
         />
       </div>
 
+      {isSubscriptionGroup(selectedCredentialGroup) && <div className="border-t border-slate-100 px-4 py-2"><SubscriptionStatus group={selectedCredentialGroup} /></div>}
       {/* 端点子列表 */}
       <div className="border-t border-slate-100 bg-slate-50/30">
         <div className="flex h-9 items-center justify-between px-4">
@@ -3064,13 +3133,18 @@ const CodexPage = () => {
       setLastUpdate(new Date().toLocaleTimeString());
       return normalizedList;
     } catch (err) {
-      setError(getErrorMessage(err, '加载 Codex 渠道失败'));
       if (throwOnError) throw err;
+      const message = getErrorMessage(err, '加载 Codex 渠道失败');
+      if (silent) {
+        toast.error(message, '刷新失败');
+      } else {
+        setError(message);
+      }
       return [];
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     fetchData();
@@ -3176,14 +3250,24 @@ const CodexPage = () => {
 
   const handleSaveChannel = async (payload) => {
     const isCreating = channelFormMode !== 'edit' || !editingChannel;
+    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
     let channelCreated = false;
+    let routeWarnings = [];
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
       if (!isCreating) {
-        await updateCodexChannelByID(editingChannel.id, payload);
+        await updateCodexChannelByID(editingChannel.id, channelPayload);
+        if ('privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
+          await setChannelPrivacyLevel('codex', editingChannel.id, privacyLevel);
+        }
+        // 非流改道单独保存：只在确有变更时提交
+        if ('nonStreamRoute' in payload
+          && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
+          routeWarnings = (await setChannelNonStreamRoute('codex', editingChannel.id, nonStreamRoute)).warnings;
+        }
       } else {
-        await createCodexChannel(payload);
+        await createCodexChannel(channelPayload);
         channelCreated = true;
       }
       const refreshedChannels = await fetchData({ silent: true, throwOnError: true });
@@ -3196,12 +3280,15 @@ const CodexPage = () => {
         openCreateCredentialGroupForm(createdChannel, true);
       } else {
         closeChannelForm();
+        if (routeWarnings.length > 0) {
+          toast.warning(routeWarnings, '非流改道已保存，请留意');
+        }
       }
     } catch (err) {
       const message = getFailoverToggleErrorMessage(err, '保存渠道失败');
       if (channelCreated) {
         closeChannelForm();
-        setError(`渠道已创建，但刷新列表失败，请点击刷新后继续配置凭证分组和端点。\n${message}`);
+        toast.error(`渠道已创建，但刷新列表失败，请点击刷新后继续配置凭证分组和端点。\n${message}`, '刷新失败');
       } else {
         setChannelFormError(message);
         toast.error(message, '保存失败');
@@ -3219,7 +3306,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       setDeleteChannelTarget(null);
     } catch (err) {
-      setError(getErrorMessage(err, '删除渠道失败'));
+      toast.error(getErrorMessage(err, '删除渠道失败'), '删除渠道失败');
     } finally {
       setActionLoading('');
     }
@@ -3298,7 +3385,7 @@ const CodexPage = () => {
     try {
       await fetchData({ silent: true, throwOnError: true });
     } catch (err) {
-      setError(`凭证分组已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+      toast.error(`凭证分组已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
     }
   };
 
@@ -3311,7 +3398,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       setDeleteCredentialGroupTarget(null);
     } catch (err) {
-      setError(getErrorMessage(err, '删除凭证分组失败'));
+      toast.error(getErrorMessage(err, '删除凭证分组失败'), '删除凭证分组失败');
     } finally {
       setActionLoading('');
     }
@@ -3324,7 +3411,7 @@ const CodexPage = () => {
       await setDefaultCodexCredentialGroup(group.id);
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '设置默认分组失败'));
+      toast.error(getErrorMessage(err, '设置默认分组失败'), '设置默认分组失败');
     } finally {
       setActionLoading('');
     }
@@ -3388,7 +3475,7 @@ const CodexPage = () => {
       try {
         await fetchData({ silent: true, throwOnError: true });
       } catch (err) {
-        setError(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+        toast.error(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
       }
       return;
     }
@@ -3417,7 +3504,7 @@ const CodexPage = () => {
     try {
       await fetchData({ silent: true, throwOnError: true });
     } catch (err) {
-      setError(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+      toast.error(`端点已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
     }
   };
 
@@ -3428,7 +3515,7 @@ const CodexPage = () => {
       await activateCodexEndpoint(endpoint.id);
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '激活端点失败'));
+      toast.error(getErrorMessage(err, '激活端点失败'), '激活端点失败');
     } finally {
       setActionLoading('');
     }
@@ -3446,7 +3533,7 @@ const CodexPage = () => {
       });
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getFailoverToggleErrorMessage(err));
+      toast.error(getFailoverToggleErrorMessage(err), '操作失败');
     }
   };
 
@@ -3461,10 +3548,11 @@ const CodexPage = () => {
           failoverEnabled: enabled
         }));
       }
-      await fetchData({ silent: true });
     } catch (err) {
       toast.error(getFailoverToggleErrorMessage(err, '批量操作失败'), '批量操作失败');
     } finally {
+      // Some endpoints may have been saved before a later update failed.
+      await fetchData({ silent: true });
       setActionLoading('');
     }
   };
@@ -3479,10 +3567,10 @@ const CodexPage = () => {
           skipHealthCheck
         }));
       }
-      await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '批量切换跳过检测失败'));
+      toast.error(getErrorMessage(err, '批量切换跳过检测失败'), '批量操作失败');
     } finally {
+      await fetchData({ silent: true });
       setActionLoading('');
     }
   };
@@ -3500,7 +3588,7 @@ const CodexPage = () => {
       });
       await fetchData({ silent: true });
     } catch (err) {
-      setError(getErrorMessage(err, '切换跳过检测失败'));
+      toast.error(getErrorMessage(err, '切换跳过检测失败'), '操作失败');
     } finally {
       setActionLoading('');
     }
@@ -3515,7 +3603,7 @@ const CodexPage = () => {
       await fetchData({ silent: true });
       setDeleteEndpointTarget(null);
     } catch (err) {
-      setError(getErrorMessage(err, '删除端点失败'));
+      toast.error(getErrorMessage(err, '删除端点失败'), '删除端点失败');
     } finally {
       setActionLoading('');
     }
@@ -3526,10 +3614,18 @@ const CodexPage = () => {
       ? buildCodexEndpointCopyOptions(credentialGroupFormChannel)
       : [];
 
+  const deletingCredentialGroupChannel = channels.find(
+    (channel) => channel.id === deleteCredentialGroupTarget?.channel?.id
+  ) || deleteCredentialGroupTarget?.channel;
+  const deletingCredentialGroupEndpointCount = (deletingCredentialGroupChannel?.endpoints || []).filter(
+    (endpoint) => Number(endpoint.credentialGroupId ?? endpoint.credential_group_id ?? 0) ===
+      Number(deleteCredentialGroupTarget?.group?.id)
+  ).length;
+
   return (
     <div className="animate-fade-in">
       {/* 页面标题 */}
-      <div className="flex justify-between items-end mb-8">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
             <CodexLogo className="w-6 h-6" />
@@ -3544,7 +3640,8 @@ const CodexPage = () => {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} />
           <Button
             variant="ghost"
             size="sm"
@@ -3658,6 +3755,7 @@ const CodexPage = () => {
 
       {showCredentialGroupForm && (
         <CredentialGroupFormModal
+          channels={channels}
           mode={credentialGroupFormMode}
           channel={credentialGroupFormChannel}
           group={editingCredentialGroup}
@@ -3746,7 +3844,9 @@ const CodexPage = () => {
         <DeleteConfirmDialog
           title="删除凭证分组"
           description={`即将从渠道「${deleteCredentialGroupTarget.channel?.name}」中删除凭证分组「${deleteCredentialGroupTarget.group?.name}」。`}
-          hint="默认分组或仍被端点引用的分组不能删除；如需删除，请先切换端点使用其他分组。"
+          hint={deletingCredentialGroupEndpointCount > 0
+            ? `将同时删除组内 ${deletingCredentialGroupEndpointCount} 个端点。仅当这些端点全部不参与转移且未被激活时才能删除；历史请求记录会保留。`
+            : '该分组当前没有端点，确认后将删除此分组。默认分组不能删除。'}
           loading={actionLoading === `delete-credential-group-${deleteCredentialGroupTarget.group.id}`}
           onCancel={() => setDeleteCredentialGroupTarget(null)}
           onConfirm={handleDeleteCredentialGroup}

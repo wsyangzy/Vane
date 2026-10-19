@@ -7,6 +7,9 @@ import (
 
 // shutdown 在 Wails 应用关闭时调用
 func (a *App) shutdown() {
+	if a.subscriptionAccounts != nil {
+		a.subscriptionAccounts.Close()
+	}
 	a.mu.Lock()
 	logger := a.logger
 	proxyServer := a.proxyServer

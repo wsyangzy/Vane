@@ -1048,6 +1048,8 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			is_active INTEGER NOT NULL DEFAULT 0,
 			priority INTEGER NOT NULL DEFAULT 1,
 			failover_enabled INTEGER NOT NULL DEFAULT 1,
+			non_stream_route TEXT,
+			privacy_level TEXT,
 			created_at TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,
@@ -1106,6 +1108,9 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatalf("create test schema: %v", err)
 		}
+	}
+	if err := store.EnsureCodexSubscriptionSchema(context.Background(), db); err != nil {
+		t.Fatalf("subscription schema: %v", err)
 	}
 	return db
 }

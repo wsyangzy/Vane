@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	appcache "ai-relay-forwarder/internal/cache"
 )
 
 // ArchiveEvent 归档事件（请求完成时发送）
@@ -76,7 +78,7 @@ type ArchiveManager struct {
 	dbCounter *DBRequestCounter
 
 	archiveSuccessMu       sync.RWMutex
-	archiveSuccessCallback func()
+	archiveSuccessCallback func(appcache.Change)
 
 	// 🔧 [P1.7 新增] 同步刷新请求通道
 	// Flush() 调用时向此 channel 发送一个回复 channel，
@@ -164,19 +166,56 @@ func (am *ArchiveManager) SetDBCounter(counter *DBRequestCounter) {
 
 // SetArchiveSuccessCallback registers a callback that runs only after a batch
 // has been successfully inserted into request_logs.
-func (am *ArchiveManager) SetArchiveSuccessCallback(callback func()) {
+func (am *ArchiveManager) SetArchiveSuccessCallback(callback func(appcache.Change)) {
 	am.archiveSuccessMu.Lock()
 	am.archiveSuccessCallback = callback
 	am.archiveSuccessMu.Unlock()
 }
 
-func (am *ArchiveManager) notifyArchiveSuccess() {
+func (am *ArchiveManager) notifyArchiveSuccess(events []*ArchiveEvent) {
 	am.archiveSuccessMu.RLock()
 	callback := am.archiveSuccessCallback
 	am.archiveSuccessMu.RUnlock()
 	if callback != nil {
-		callback()
+		callback(archiveBatchChange(events))
 	}
+}
+
+// archiveBatchChange 汇总一批归档事件影响的 provider 与 start_time 范围。
+// 只看 start_time：所有统计查询都按 start_time 过滤，与写入行的时间维度一致。
+func archiveBatchChange(events []*ArchiveEvent) appcache.Change {
+	change := appcache.Change{}
+	seen := make(map[string]struct{}, 2)
+	unbounded := false
+	for _, event := range events {
+		if event == nil || event.Request == nil {
+			continue
+		}
+		event.Request.mu.RLock()
+		provider := defaultProvider(event.Request.Provider)
+		startTime := event.Request.StartTime
+		event.Request.mu.RUnlock()
+
+		if _, ok := seen[provider]; !ok {
+			seen[provider] = struct{}{}
+			change.Providers = append(change.Providers, provider)
+		}
+		if startTime.IsZero() {
+			unbounded = true
+			continue
+		}
+		if change.Start.IsZero() || startTime.Before(change.Start) {
+			change.Start = startTime
+		}
+		if change.End.IsZero() || startTime.After(change.End) {
+			change.End = startTime
+		}
+	}
+	if unbounded {
+		// 无法定位时间的记录按全时间范围处理
+		change.Start, change.End = time.Time{}, time.Time{}
+	}
+	return change
 }
 
 // UpdateEndpointMultipliers 更新端点成本倍率
@@ -403,7 +442,6 @@ func (am *ArchiveManager) flushBatch(events []*ArchiveEvent) error {
 				}
 				am.hotPool.ConfirmArchived(requestIDs)
 			}
-			am.notifyArchiveSuccess()
 			return nil
 		}
 
@@ -750,8 +788,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 	const archiveColumns = `request_id, client_ip, user_agent, method, path,
 			start_time, end_time, duration_ms, output_sent_at,
 			channel, endpoint_name, endpoint_chain, group_name, model_name,
-			original_model_name, model_rewrite_source, model_rewrite_target, model_reasoning_effort, service_tier,
-			status, http_status_code, http_status_is_upstream, retry_count,
+			original_model_name, model_rewrite_source, model_rewrite_target, route_snapshot, model_reasoning_effort, service_tier,
+			status, stream_outcome, http_status_code, http_status_is_upstream, retry_count,
 			failure_reason, last_failure_reason, cancel_reason,
 			is_streaming, provider, environment, privacy_redacted, privacy_redaction_summary,
 			input_tokens, output_tokens,
@@ -778,9 +816,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			original_model_name = excluded.original_model_name,
 			model_rewrite_source = excluded.model_rewrite_source,
 			model_rewrite_target = excluded.model_rewrite_target,
+			route_snapshot = excluded.route_snapshot,
 			model_reasoning_effort = excluded.model_reasoning_effort,
 			service_tier = excluded.service_tier,
 			status = excluded.status,
+			stream_outcome = excluded.stream_outcome,
 			http_status_code = excluded.http_status_code,
 			http_status_is_upstream = excluded.http_status_is_upstream,
 			retry_count = excluded.retry_count,
@@ -874,9 +914,11 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			nullString(req.OriginalModelName),
 			nullString(req.ModelRewriteSource),
 			nullString(req.ModelRewriteTarget),
+			nullString(req.RouteSnapshot),
 			nullString(req.ReasoningEffort),
 			nullString(req.ServiceTier),
 			req.Status,
+			nullString(req.StreamOutcome),
 			persistedHTTPStatus,
 			httpStatusIsUpstream,
 			req.RetryCount,
@@ -945,6 +987,8 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 		}
 		am.dbCounter.IncBatch(providers)
 	}
+	// 在 batchInsert 内通知，常规归档与失败文件回放两条写入路径都会使统计缓存失效
+	am.notifyArchiveSuccess(events)
 
 	return nil
 }

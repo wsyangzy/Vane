@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"ai-relay-forwarder/internal/providers/claude/store"
 )
@@ -12,9 +13,11 @@ const DefaultClaudeCredentialGroupName = "默认分组"
 
 // ClaudeCredentialGroupService 管理 Claude 渠道下的 Token/API Key 分组。
 type ClaudeCredentialGroupService struct {
-	groupStore    store.ClaudeCredentialGroupStore
-	channelStore  store.ChannelStore
-	endpointStore store.EndpointStore
+	validateAccount func(context.Context, string) error
+	mu              sync.Mutex
+	groupStore      store.ClaudeCredentialGroupStore
+	channelStore    store.ChannelStore
+	endpointStore   store.EndpointStore
 }
 
 func NewClaudeCredentialGroupService(groupStore store.ClaudeCredentialGroupStore, channelStore store.ChannelStore, endpointStore store.EndpointStore) *ClaudeCredentialGroupService {
@@ -130,6 +133,14 @@ func (s *ClaudeCredentialGroupService) EnsureDefaultGroupsFromEndpoints(ctx cont
 }
 
 func (s *ClaudeCredentialGroupService) CreateGroup(ctx context.Context, record *store.ClaudeCredentialGroupRecord) (*store.ClaudeCredentialGroupRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if record == nil {
+		return nil, fmt.Errorf("record 不能为空")
+	}
+	if err := s.normalizeSubscription(ctx, record, nil); err != nil {
+		return nil, err
+	}
 	if err := s.normalizeAndValidate(ctx, record, 0); err != nil {
 		return nil, err
 	}
@@ -137,6 +148,11 @@ func (s *ClaudeCredentialGroupService) CreateGroup(ctx context.Context, record *
 }
 
 func (s *ClaudeCredentialGroupService) UpdateGroup(ctx context.Context, id int64, record *store.ClaudeCredentialGroupRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if record == nil {
+		return fmt.Errorf("record 不能为空")
+	}
 	existing, err := s.groupStore.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -146,6 +162,9 @@ func (s *ClaudeCredentialGroupService) UpdateGroup(ctx context.Context, id int64
 	}
 	record.ID = id
 	record.Channel = existing.Channel
+	if err := s.normalizeSubscription(ctx, record, existing); err != nil {
+		return err
+	}
 	if err := s.normalizeAndValidate(ctx, record, id); err != nil {
 		return err
 	}

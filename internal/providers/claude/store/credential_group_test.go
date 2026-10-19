@@ -32,6 +32,7 @@ func newClaudeCredentialGroupTestDB(t *testing.T) *sql.DB {
 		db.Close()
 		t.Fatal(err)
 	}
+	if err:=EnsureClaudeSubscriptionSchema(context.Background(),db);err!=nil{db.Close();t.Fatal(err)}
 	return db
 }
 

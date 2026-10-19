@@ -159,3 +159,27 @@ func TestRewriteModelIfNeeded_PreserveNestedObjects(t *testing.T) {
 		t.Errorf("expected input array preserved, got %s", string(got))
 	}
 }
+
+func TestRewriteModelKeepsEveryByteOutsideModelToken(t *testing.T) {
+	// 旧实现走 map 往返：键序被字母序重排、< > & 被转成 \u003c 形式。现在只替换 model 区间。
+	body := []byte("{\"stream\":true, \"model\" : \"gpt-5\",\"instructions\":\"<tag> & \\u003e\"," +
+		"\"input\":[{\"type\":\"message\",\"model\":\"gpt-5\"}],\"max_output_tokens\":123456789012345678901}")
+	want := "{\"stream\":true, \"model\" : \"gpt-5-codex\",\"instructions\":\"<tag> & \\u003e\"," +
+		"\"input\":[{\"type\":\"message\",\"model\":\"gpt-5\"}],\"max_output_tokens\":123456789012345678901}"
+
+	got := rewriteModelWithMappingDetails(body, map[string]string{"gpt-5": "gpt-5-codex"}, "fallback", newTestLogger(), "req-test")
+	if string(got.Body) != want {
+		t.Fatalf("unexpected body\n got: %s\nwant: %s", got.Body, want)
+	}
+	if got.OriginalModel != "gpt-5" || got.NewModel != "gpt-5-codex" || got.Source != "mapping" {
+		t.Fatalf("unexpected rewrite metadata: %#v", got)
+	}
+}
+
+func TestRewriteModelIfNeeded_NonStringModelPassesThrough(t *testing.T) {
+	body := []byte(`{"model":{"name":"gpt-5"},"input":[]}`)
+	got := rewriteModelIfNeeded(body, "gpt-5-codex", newTestLogger(), "req-test")
+	if !bytes.Equal(got, body) {
+		t.Errorf("expected body unchanged when model is not a string, got %s", string(got))
+	}
+}

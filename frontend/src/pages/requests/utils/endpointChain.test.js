@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   chainHasMultipleChannels,
+  collectFailedHops,
   countChannelSwitches,
+  extractUpstreamErrorMessage,
+  formatUpstreamErrorText,
   getEndpointChainItems,
   getRequestNetworkDisplayState,
   parseChainNode,
@@ -13,6 +16,36 @@ import {
   summarizeEndpointAttempts,
 } from './endpointChain.js';
 import * as endpointChainUtils from './endpointChain.js';
+
+test('failed hops list every upstream error, newest first, including empty-body statuses', () => {
+  const nodes = [
+    { hop: 1, endpoint: 'A', statusCode: 401, error: '{"error":{"message":"Invalid token"}}', headers: {} },
+    { hop: 2, endpoint: 'B', statusCode: 520, error: '', headers: { server: 'cloudflare' } },
+    { hop: 3, endpoint: 'C', statusCode: 0, error: '', headers: {} },
+  ];
+  // 第 3 跳什么都没记录（进行中或旧记录），不列出；520 空正文仍要列出
+  assert.deepEqual(collectFailedHops(nodes).map((node) => node.hop), [2, 1]);
+});
+
+test('upstream error text is pretty-printed without altering its content', () => {
+  const raw = '{"error":{"message":"由于 claude 模型供应难以保证","type":"error"}}';
+  const formatted = formatUpstreamErrorText(raw);
+  assert.equal(formatted.isJSON, true);
+  assert.deepEqual(JSON.parse(formatted.text), JSON.parse(raw));
+  assert.equal(formatUpstreamErrorText('http2: timeout awaiting response headers').isJSON, false);
+  assert.equal(formatUpstreamErrorText('{broken').text, '{broken');
+
+  assert.equal(extractUpstreamErrorMessage(raw), '由于 claude 模型供应难以保证');
+  assert.equal(extractUpstreamErrorMessage('{"error":"quota exceeded","type":"error"}'), 'quota exceeded');
+  assert.equal(extractUpstreamErrorMessage('plain text'), '');
+});
+
+test('parseChainNode keeps diagnostic headers and the local-failure flag', () => {
+  const node = parseChainNode({ endpoint: 'A', status_code: 520, headers: { server: 'cloudflare', 'cf-ray': 'x1' } });
+  assert.deepEqual(node.headers, { server: 'cloudflare', 'cf-ray': 'x1' });
+  assert.equal(node.local, false);
+  assert.equal(parseChainNode({ endpoint: 'A', error: 'dial tcp: timeout', local: true }).local, true);
+});
 
 test('parseEndpointChain keeps structured JSON chain nodes', () => {
   const chain = parseEndpointChain(JSON.stringify([
@@ -28,9 +61,16 @@ test('parseEndpointChain keeps structured JSON chain nodes', () => {
     endpoint: 'Ark API',
     statusCode: 0,
     error: '',
+    attempts: 0,
+    durationMs: null,
+    headers: {},
+    local: false,
     hop: 1,
   });
   assert.equal(chainHasMultipleChannels(chain), true);
+  // 新链路带每跳耗时；0 是有效值
+  assert.equal(parseChainNode({ endpoint: 'A', duration_ms: 1234 }).durationMs, 1234);
+  assert.equal(parseChainNode({ endpoint: 'A', duration_ms: 0 }).durationMs, 0);
 });
 
 test('parseChainNode keeps structured endpoint error details', () => {
@@ -168,12 +208,28 @@ test('summarizeEndpointAttempts separates retries from adjacent identity transfe
     ],
   }), {
     attemptCount: 4,
+    finalEndpointAttempts: null,
     retryCount: 3,
     transferCount: 1,
     transferred: true,
     firstEndpoint: 'A',
     finalEndpoint: 'B',
   });
+});
+
+test('summarizeEndpointAttempts separates final-endpoint attempts from the request total', () => {
+  // 端点内重试 2 次后转移 1 次：A 发了 3 次，B 发了 1 次
+  const summary = summarizeEndpointAttempts({
+    retry_count: 3,
+    endpoint_chain: [
+      { hop: 1, channel: 'CCTQ', endpoint: 'A', attempts: 3, status_code: 503 },
+      { hop: 2, channel: 'CCTQ', endpoint: 'B', attempts: 1 },
+    ],
+  });
+
+  assert.equal(summary.finalEndpointAttempts, 1);
+  assert.equal(summary.attemptCount, 4);
+  assert.equal(summary.retryCount, 3);
 });
 
 test('summarizeEndpointAttempts uses chain length as the historical retry floor', () => {

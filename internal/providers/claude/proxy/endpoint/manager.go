@@ -21,6 +21,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/transport"
 )
 
@@ -46,9 +47,14 @@ type EndpointStatus struct {
 
 // Endpoint represents an endpoint with its configuration and status
 type Endpoint struct {
-	Config config.EndpointConfig
-	Status EndpointStatus
-	mutex  sync.RWMutex
+	stateVersion uint64
+	Config       config.EndpointConfig
+	Status       EndpointStatus
+	mutex        sync.RWMutex
+}
+
+func (ep *Endpoint) RouteStateVersion() uint64 {
+	return routing.StateVersion(&ep.stateVersion)
 }
 
 // Manager manages endpoints and their health status
@@ -96,6 +102,8 @@ type Manager struct {
 	// 最近一次成功的端点按渠道保存，用于后续请求直接复用成功线路。
 	preferredEndpointMu   sync.RWMutex
 	preferredEndpointKeys map[string]string
+	// 请求级路由快照（模型路由规则 + 渠道非流改道），见 route_config.go
+	routeConfig atomic.Pointer[RouteConfig]
 }
 
 // UpdateChannelPriorities 同步渠道优先级到运行时组管理器，用于“渠道间”故障转移顺序。

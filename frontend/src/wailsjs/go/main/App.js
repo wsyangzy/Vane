@@ -56,6 +56,38 @@ export function SetPrivacyRulesEnabled(arg1, arg2) {
   return Call.ByName("main.App.SetPrivacyRulesEnabled", arg1, arg2);
 }
 
+export function ListModelRoutes(arg1, arg2) {
+  return Call.ByName("main.App.ListModelRoutes", arg1, arg2);
+}
+
+export function SaveModelRoute(arg1) {
+  return Call.ByName("main.App.SaveModelRoute", arg1);
+}
+
+export function DeleteModelRoute(arg1) {
+  return Call.ByName("main.App.DeleteModelRoute", arg1);
+}
+
+export function SetModelRouteEnabled(arg1, arg2) {
+  return Call.ByName("main.App.SetModelRouteEnabled", arg1, arg2);
+}
+
+export function GetRouteTargetOptions(arg1) {
+  return Call.ByName("main.App.GetRouteTargetOptions", arg1);
+}
+
+export function PreviewRoute(arg1, arg2, arg3, arg4) {
+  return Call.ByName("main.App.PreviewRoute", arg1, arg2, arg3, arg4);
+}
+
+export function SetChannelNonStreamRoute(arg1, arg2, arg3) {
+  return Call.ByName("main.App.SetChannelNonStreamRoute", arg1, arg2, arg3);
+}
+
+export function SetChannelPrivacyLevel(arg1, arg2, arg3) {
+  return Call.ByName("main.App.SetChannelPrivacyLevel", arg1, arg2, arg3);
+}
+
 export function GetPrivacyOverview() {
   return Call.ByName("main.App.GetPrivacyOverview");
 }
@@ -344,6 +376,10 @@ export function PreviewPrivacyRedaction(arg1) {
   return Call.ByName("main.App.PreviewPrivacyRedaction", arg1);
 }
 
+export function PreviewPrivacyRequest(arg1, arg2) {
+  return Call.ByName("main.App.PreviewPrivacyRequest", arg1, arg2);
+}
+
 export function PauseGroup(arg1) {
   return Call.ByName("main.App.PauseGroup", arg1);
 }
@@ -533,4 +569,12 @@ export function GetCodexGlobalConfig() {
 
 export function UpdateCodexGlobalConfig(arg1) {
   return Call.ByName("main.App.UpdateCodexGlobalConfig", arg1);
+}
+
+export function ManageSubscriptionAccounts(arg1) {
+  return Call.ByName("main.App.ManageSubscriptionAccounts", arg1);
+}
+
+export function ManageSubscriptionConnection(arg1) {
+  return Call.ByName("main.App.ManageSubscriptionConnection", arg1);
 }

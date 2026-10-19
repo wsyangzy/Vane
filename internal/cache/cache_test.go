@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -158,6 +159,118 @@ func TestGetOrLoadCachesValueAndSupportsStaleOnError(t *testing.T) {
 	}
 	if _, ok := withoutStale.Get("missing"); ok {
 		t.Fatal("loader errors must not populate cache")
+	}
+}
+
+func TestGetOrLoadCountsStaleServedAndExpiredOnce(t *testing.T) {
+	c := New[string](Options{Name: "stale", TTL: 5 * time.Millisecond, MaxEntries: 10, StaleOnError: true})
+	if _, err := c.GetOrLoad("k", func() (string, error) { return "v1", nil }); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	if _, err := c.GetOrLoad("k", func() (string, error) { return "", errors.New("busy") }); err != nil {
+		t.Fatalf("expected stale fallback, got %v", err)
+	}
+	if got := c.Stats().StaleServed; got != 1 {
+		t.Fatalf("expected 1 stale-served, got %d", got)
+	}
+
+	if _, err := c.GetOrLoad("k", func() (string, error) { return "v2", nil }); err != nil {
+		t.Fatal(err)
+	}
+	// 同一条过期条目只计一次（旧实现在 GetOrLoad 与随后的 purge 中各计一次）
+	if got := c.Stats().Expired; got != 1 {
+		t.Fatalf("expected the expired entry to be counted once, got %d", got)
+	}
+}
+
+func TestGetOrLoadCoalescesConcurrentMisses(t *testing.T) {
+	c := New[int](Options{Name: "coalesce", TTL: time.Hour, MaxEntries: 10})
+	release := make(chan struct{})
+	var loads atomic.Int32
+
+	const callers = 8
+	var wg sync.WaitGroup
+	results := make([]int, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			value, err := c.GetOrLoad("k", func() (int, error) {
+				loads.Add(1)
+				<-release
+				return 42, nil
+			})
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			results[i] = value
+		}(i)
+	}
+	// 等首个加载进入后再放行，其余调用方应全部等待同一次加载
+	for loads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := loads.Load(); got != 1 {
+		t.Fatalf("expected a single load for concurrent misses, got %d", got)
+	}
+	for i, value := range results {
+		if value != 42 {
+			t.Fatalf("caller %d got %d, want 42", i, value)
+		}
+	}
+}
+
+func TestInvalidateByChangeRemovesOnlyAffectedScopes(t *testing.T) {
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) }
+	c := New[string](Options{Name: "scoped", TTL: time.Hour, MaxEntries: 10})
+	load := func(v string) func() (string, error) { return func() (string, error) { return v, nil } }
+
+	_, _ = c.GetOrLoadScoped("claude-today", Scope{Provider: "claude", Start: day(8), End: day(9)}, load("a"))
+	_, _ = c.GetOrLoadScoped("codex-today", Scope{Provider: "codex", Start: day(8), End: day(9)}, load("b"))
+	_, _ = c.GetOrLoadScoped("claude-last-week", Scope{Provider: "claude", Start: day(1), End: day(2)}, load("c"))
+	_, _ = c.GetOrLoadScoped("all-provider-today", Scope{Start: day(8), End: day(9)}, load("d"))
+	_, _ = c.GetOrLoadScoped("claude-all-time", Scope{Provider: "claude"}, load("e"))
+
+	noon := day(8).Add(12 * time.Hour)
+	removed := c.Invalidate(InvalidateOptions{Change: &Change{Providers: []string{"claude"}, Start: noon, End: noon}})
+	if removed != 3 {
+		t.Fatalf("expected claude-today, all-provider-today and claude-all-time removed, got %d", removed)
+	}
+	for _, key := range []string{"codex-today", "claude-last-week"} {
+		if _, ok := c.Get(key); !ok {
+			t.Fatalf("expected %s to survive", key)
+		}
+	}
+
+	if removed := c.Invalidate(InvalidateOptions{Change: &Change{Providers: []string{"codex"}, End: day(3)}}); removed != 0 {
+		t.Fatalf("codex cleanup before day 3 should not touch remaining entries, removed %d", removed)
+	}
+	if got := c.Stats().Invalidations; got != 1 {
+		t.Fatalf("no-op scoped invalidation must not be counted, got %d", got)
+	}
+	if removed := c.Invalidate(InvalidateOptions{Change: &Change{All: true}}); removed != 2 {
+		t.Fatalf("Change.All should remove everything, removed %d", removed)
+	}
+}
+
+// 加载期间发生失效时，结果可能基于失效前的数据，只返回不入缓存。
+func TestGetOrLoadDoesNotCacheResultRacingInvalidation(t *testing.T) {
+	c := New[string](Options{Name: "epoch", TTL: time.Hour, MaxEntries: 10})
+	value, err := c.GetOrLoad("k", func() (string, error) {
+		c.Invalidate(InvalidateOptions{All: true})
+		return "possibly-stale", nil
+	})
+	if err != nil || value != "possibly-stale" {
+		t.Fatalf("caller should still get the loaded value, got %q, %v", value, err)
+	}
+	if _, ok := c.Get("k"); ok {
+		t.Fatal("value loaded across an invalidation must not be cached")
 	}
 }
 

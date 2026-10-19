@@ -8,6 +8,7 @@ import (
 )
 
 var errCredentialGroupDailyCostLimitExceeded = errors.New("credential group daily cost limit exceeded")
+var errRouteCandidateIneligible = errors.New("route candidates excluded by execution or state eligibility")
 
 func (h *Handler) selectQuotaEligibleEndpoint(
 	ctx context.Context,
@@ -17,9 +18,11 @@ func (h *Handler) selectQuotaEligibleEndpoint(
 	quotaSkipped []credentialGroupRef,
 	primary bool,
 ) (*CodexEndpoint, []credentialGroupRef, error) {
-	return h.selectQuotaEligibleEndpointForModel(ctx, channelName, "", failedIDs, baseSkipped, quotaSkipped, primary)
+	return h.selectQuotaEligibleEndpointForModel(ctx, channelName, "", failedIDs, baseSkipped, quotaSkipped, primary, nil)
 }
 
+// selectQuotaEligibleEndpointForModel stage 非空时只在路由阶段的渠道内选端点（不读写激活渠道），
+// 否则按激活渠道的现有流程选端点。
 func (h *Handler) selectQuotaEligibleEndpointForModel(
 	ctx context.Context,
 	channelName string,
@@ -28,8 +31,11 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 	baseSkipped []credentialGroupRef,
 	quotaSkipped []credentialGroupRef,
 	primary bool,
+	stage *codexRouteStage,
 ) (*CodexEndpoint, []credentialGroupRef, error) {
 	blocked := false
+	locallyExcluded := false
+	localReason := ""
 	for {
 		skipped := make([]credentialGroupRef, 0, len(baseSkipped)+len(quotaSkipped))
 		skipped = append(skipped, baseSkipped...)
@@ -37,16 +43,56 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 
 		var endpoint *CodexEndpoint
 		var err error
-		if primary {
+		switch {
+		case stage != nil:
+			endpoint, err = h.manager.getEndpointForChannel(stage.channel.ID, stage.groupID, requestedModel, stage.upstreamModel, failedIDs, func(ep *CodexEndpoint) bool {
+				return h.states != nil && h.states.Preferred(stage.turn, stage.candidate(ep, requestedModel))
+			}, skipped...)
+		case primary:
 			endpoint, err = h.manager.GetPrimaryEndpointForModel(requestedModel, skipped...)
-		} else {
+		default:
 			endpoint, err = h.manager.GetNextEndpointForModel(requestedModel, failedIDs, skipped...)
 		}
 		if err != nil {
 			if blocked {
 				return nil, quotaSkipped, fmt.Errorf("%w: channel %s", errCredentialGroupDailyCostLimitExceeded, channelName)
 			}
+			if locallyExcluded {
+				return nil, quotaSkipped, fmt.Errorf("%w: %s", errRouteCandidateIneligible, localReason)
+			}
 			return nil, quotaSkipped, err
+		}
+		model := requestedModel
+		if stage != nil {
+			model = stage.candidate(endpoint, requestedModel).Model
+		}
+		if allowed, reason := h.subscriptionEligibility(ctx, endpoint, model); !allowed {
+			if stage != nil && stage.execution != nil {
+				stage.execution.Skip(stage.candidate(endpoint, requestedModel), reason)
+			}
+			locallyExcluded = true
+			localReason = reason
+			failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+			continue
+		}
+		if stage != nil && stage.execution != nil {
+			candidate := stage.candidate(endpoint, requestedModel)
+			if h.states != nil {
+				if allowed, reason := h.states.Allowed(stage.stateKeys, candidate); !allowed {
+					stage.execution.Skip(candidate, reason)
+					locallyExcluded = true
+					localReason = reason
+					failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+					continue
+				}
+			}
+			if allowed, reason := stage.execution.Allowed(candidate); !allowed {
+				stage.execution.Skip(candidate, reason)
+				locallyExcluded = true
+				localReason = reason
+				failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+				continue
+			}
 		}
 		if endpoint.DailyCostLimitUSD <= 0 {
 			return endpoint, quotaSkipped, nil

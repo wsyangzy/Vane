@@ -175,6 +175,8 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 	for _, column := range []struct{ name, ddl string }{
 		{"priority", `ALTER TABLE codex_channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`},
 		{"failover_enabled", `ALTER TABLE codex_channels ADD COLUMN failover_enabled INTEGER NOT NULL DEFAULT 1`},
+		{"non_stream_route", `ALTER TABLE codex_channels ADD COLUMN non_stream_route TEXT`},
+		{"privacy_level", `ALTER TABLE codex_channels ADD COLUMN privacy_level TEXT`},
 	} {
 		exists, err := sqliteColumnExists(ctx, db, "codex_channels", column.name)
 		if err != nil {
@@ -204,6 +206,9 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 
 	// 为 Codex 凭证分组补充 schema、默认分组和端点引用
 	if err := a.ensureCodexCredentialGroupSchema(ctx, db); err != nil {
+		return err
+	}
+	if err := codexstore.EnsureCodexSubscriptionSchema(ctx, db); err != nil {
 		return err
 	}
 

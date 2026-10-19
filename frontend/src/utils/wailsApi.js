@@ -63,7 +63,28 @@ const getExplicitModelMultipliers = (input, normalizer = normalizeModelMultiplie
   return undefined;
 };
 
+const mapSubscription = (binding) => binding ? ({
+  accountId: binding.account_id || binding.accountId || '',
+  version: binding.version || 0,
+  enabled: Boolean(binding.enabled),
+  backupTargets: (binding.backup_targets || binding.backupTargets || []).map((target) => ({
+    channelId: Number(target.channel_id ?? target.channelId ?? 0),
+    groupId: Number(target.group_id ?? target.groupId ?? 0),
+    upstreamModel: target.upstream_model ?? target.upstreamModel ?? ''
+  }))
+}) : null;
+
 export const mapClaudeCredentialGroup = (group = {}) => ({
+  authMode: group.auth_mode || group.authMode || 'group_credential',
+  subscription: mapSubscription(group.subscription),
+  localKeyConfigured: Boolean(group.local_key_configured ?? group.localKeyConfigured),
+  officialVerification: group.official_verification || group.officialVerification || 'not_verified',
+  subscriptionStatus: (group.subscription_status || group.subscriptionStatus || []).map((pause) => ({
+    model: pause.model, state: pause.state, reason: pause.reason, source: pause.source,
+    observedAt: pause.observed_at ?? pause.observedAt,
+    resumeNotBefore: pause.resume_not_before ?? pause.resumeNotBefore,
+    resetKnown: Boolean(pause.reset_known ?? pause.resetKnown)
+  })),
   id: group.id,
   channel: group.channel || '',
   name: group.name || '',
@@ -98,6 +119,7 @@ export const mapClaudeCredentialGroup = (group = {}) => ({
 
 export const buildClaudeCredentialGroupPayload = (input = {}) => {
   const payload = {
+    auth_mode: input.authMode || input.auth_mode || '',
     channel: (input.channel || '').trim(),
     name: (input.name || '').trim(),
     token: (input.token || '').trim(),
@@ -122,6 +144,18 @@ export const buildClaudeCredentialGroupPayload = (input = {}) => {
     long_context_cache_read_cost_multiplier: parseEndpointMultiplier(input.longContextCacheReadCostMultiplier),
     disable_long_context_pricing: Boolean(input.disableLongContextPricing)
   };
+  if (input.subscription) {
+    const binding = input.subscription;
+    payload.subscription = {
+      account_id: binding.accountId || '',
+      version: Number(binding.version || 0), enabled: Boolean(binding.enabled),
+      key_hash: binding.keyHash || '', action: binding.action || '',
+      backup_targets: (binding.backupTargets || []).map((target) => ({
+        channel_id: Number(target.channelId), group_id: Number(target.groupId),
+        upstream_model: String(target.upstreamModel || '').trim()
+      }))
+    };
+  }
   const modelMultipliers = getExplicitModelMultipliers(input);
   if (modelMultipliers !== undefined) {
     payload.model_multipliers = modelMultipliers;
@@ -710,8 +744,17 @@ export const getUsageStats = async (params = {}) => {
     avg_duration_ms: data.avg_duration_ms || 0,
     total_cost_usd: data.total_cost_usd || 0,
     total_tokens: data.total_tokens || 0,
-    failed_requests: data.failed_requests || 0
+    failed_requests: data.failed_requests || 0,
+    // null 表示没有输入用量，展示为 "-"；0 是真实的 0%
+    cache_hit_rate: normalizeRate(data.cache_hit_rate)
   };
+};
+
+// 比率字段：后端用 null 表示无数据，不能用 || 0 抹成 0%
+export const normalizeRate = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const rate = Number(value);
+  return Number.isFinite(rate) ? rate : null;
 };
 
 export const getUsageSummary = async (startTime = '', endTime = '', provider = '') => {
@@ -798,6 +841,8 @@ export const getRequests = async (params = {}) => {
     originalModelName: r.original_model_name || '',
     modelRewriteSource: r.model_rewrite_source || '',
     modelRewriteTarget: r.model_rewrite_target || '',
+    route_snapshot: r.route_snapshot || '',
+    routeSnapshot: r.route_snapshot || '',
     reasoning_effort: r.reasoning_effort || '',
     reasoningEffort: r.reasoning_effort || '',
     service_tier: r.service_tier || '',
@@ -808,6 +853,9 @@ export const getRequests = async (params = {}) => {
     privacyRedactionSummary: r.privacy_redaction_summary || '',
     provider: r.provider || '',
     status: r.status,
+    // 终态枚举；历史行与进行中的请求为空
+    stream_outcome: r.stream_outcome || '',
+    streamOutcome: r.stream_outcome || '',
     ...mapRequestNetworkFields(r),
     input_tokens: r.input_tokens,
     output_tokens: r.output_tokens,
@@ -875,7 +923,14 @@ export const getPrivacyOverview = async () => {
       description: preset.description || '',
       ruleCount: Array.isArray(preset.rules) ? preset.rules.length : 0
     })),
-    pseudonymKinds: overview?.pseudonym_kinds || []
+    pseudonymKinds: overview?.pseudonym_kinds || [],
+    builtinMatchers: (overview?.builtin_matchers || []).map((matcher) => ({
+      pattern: matcher.pattern || '',
+      name: matcher.name || '',
+      description: matcher.description || '',
+      placeholder: matcher.placeholder || '',
+      pseudonymKind: matcher.pseudonym_kind || ''
+    }))
   };
 };
 
@@ -937,6 +992,27 @@ export const previewPrivacyRedaction = async (input) => {
     hitCount: Number(result?.hit_count ?? 0),
     ruleHits: (result?.rule_hits || []).map(normalizePrivacyRuleHit)
   };
+};
+
+// 完整 JSON 请求体预演：返回哪些字段被扫描、哪些被改写（不含命中原文）
+export const mapPrivacyRequestPreview = (result = {}) => ({
+  supported: Boolean(result?.supported),
+  error: result?.error || '',
+  output: result?.output || '',
+  changed: Boolean(result?.changed),
+  hitCount: Number(result?.hit_count ?? 0),
+  ruleHits: (result?.rule_hits || []).map(normalizePrivacyRuleHit),
+  fields: (result?.fields || []).map((field) => ({
+    path: field.path || '',
+    bytes: Number(field.bytes ?? 0),
+    redacted: Boolean(field.redacted)
+  }))
+});
+
+export const previewPrivacyRequest = async (path, body) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return mapPrivacyRequestPreview(await WailsApp.PreviewPrivacyRequest(String(path || ''), String(body ?? '')));
 };
 
 export const getPrivacyUnscannedPaths = async () => {
@@ -1248,9 +1324,11 @@ const mapCacheStatusItem = (item = {}) => {
     size: Number(item.size ?? 0),
     hits: Number(item.hits ?? 0),
     misses: Number(item.misses ?? 0),
+    fixed: Boolean(item.fixed),
     expired: Number(item.expired ?? 0),
     evicted: Number(item.evicted ?? 0),
     invalidations: Number(item.invalidations ?? 0),
+    staleServed: Number(item.stale_served ?? item.staleServed ?? 0),
     lastUpdatedAt,
     last_updated_at: lastUpdatedAt,
     lastInvalidatedAt,
@@ -1657,10 +1735,13 @@ export const getChannels = async () => {
 
   const channels = await WailsApp.GetChannels();
   return (channels || []).map(c => ({
+    id: Number(c.id ?? 0),
     name: c.name,
     website: c.website || '',
     priority: c.priority || 1,
     modelMapping: normalizeModelMapping(c.model_mapping || c.modelMapping),
+    nonStreamRoute: mapNonStreamRoute(c.non_stream_route || c.nonStreamRoute),
+    privacyLevel: normalizeChannelPrivacyLevel(c.privacy_level ?? c.privacyLevel),
     createdAt: c.created_at || '',
     endpointCount: c.endpoint_count,
     credentialGroups: (c.credential_groups || c.credentialGroups || []).map(mapClaudeCredentialGroup)
@@ -1714,6 +1795,161 @@ export const deleteChannel = async (name, deleteEndpoints = false) => {
 
   await WailsApp.DeleteChannel(channelName, !!deleteEndpoints);
   return { success: true };
+};
+
+// ============================================
+// 请求级路由：模型路由规则 + 渠道非流改道
+// 两者共用同一种目标结构 {channel_id, group_id, upstream_model}；group_id=0 表示渠道下全部分组
+// ============================================
+
+export const mapRouteTarget = (target = {}) => ({
+  channelId: Number(target.channel_id ?? target.channelId ?? 0),
+  groupId: Number(target.group_id ?? target.groupId ?? 0),
+  upstreamModel: target.upstream_model ?? target.upstreamModel ?? '',
+  channelName: target.channel_name ?? target.channelName ?? '',
+  groupName: target.group_name ?? target.groupName ?? '',
+  missing: Boolean(target.missing)
+});
+
+export const buildRouteTargetsPayload = (targets = []) =>
+  (Array.isArray(targets) ? targets : [])
+    .map((target) => ({
+      channel_id: Number(target?.channelId ?? target?.channel_id ?? 0),
+      group_id: Number(target?.groupId ?? target?.group_id ?? 0),
+      upstream_model: String(target?.upstreamModel ?? target?.upstream_model ?? '').trim()
+    }))
+    .filter((target) => Number.isInteger(target.channel_id) && target.channel_id > 0);
+
+// 非流改道：后端返回 null 表示关闭
+export function mapNonStreamRoute(route) {
+  if (!route || !Array.isArray(route.targets) || route.targets.length === 0) return null;
+  return { mode: route.mode || 'prefer', targets: route.targets.map(mapRouteTarget) };
+}
+
+export const mapModelRoute = (route = {}) => ({
+  id: Number(route.id ?? 0),
+  provider: route.provider || 'claude',
+  sourceChannelId: Number(route.source_channel_id ?? route.sourceChannelId ?? 0),
+  name: route.name || '',
+  enabled: Boolean(route.enabled),
+  priority: Number(route.priority ?? 100),
+  matchModel: route.match_model ?? route.matchModel ?? '',
+  mode: route.mode || 'prefer',
+  targets: (route.targets || []).map(mapRouteTarget),
+  updatedAt: route.updated_at ?? route.updatedAt ?? ''
+});
+
+export const buildModelRoutePayload = (input = {}) => {
+  const priority = Number.parseInt(input.priority, 10);
+  return {
+    id: Number(input.id || 0),
+    provider: input.provider || 'claude',
+    source_channel_id: Number(input.sourceChannelId ?? input.source_channel_id ?? 0),
+    name: String(input.name || '').trim(),
+    enabled: input.enabled !== false,
+    priority: Number.isInteger(priority) ? priority : 100,
+    match_model: String(input.matchModel ?? input.match_model ?? '').trim(),
+    mode: input.mode || 'prefer',
+    targets: buildRouteTargetsPayload(input.targets)
+  };
+};
+
+const mapRouteSaveResult = (result) => ({
+  id: Number(result?.id ?? 0),
+  warnings: Array.isArray(result?.warnings) ? result.warnings : []
+});
+
+// 模型路由规则挂在来源渠道上，只在该渠道为激活渠道时生效
+export const listModelRoutes = async (provider, sourceChannelId) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const routes = await WailsApp.ListModelRoutes(provider || 'claude', Number(sourceChannelId));
+  return (routes || []).map(mapModelRoute);
+};
+
+export const saveModelRoute = async (input) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return mapRouteSaveResult(await WailsApp.SaveModelRoute(buildModelRoutePayload(input)));
+};
+
+export const deleteModelRoute = async (id) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.DeleteModelRoute(Number(id));
+  return { success: true };
+};
+
+export const setModelRouteEnabled = async (id, enabled) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetModelRouteEnabled(Number(id), Boolean(enabled));
+  return { success: true };
+};
+
+export const getRouteTargetOptions = async (provider) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const options = await WailsApp.GetRouteTargetOptions(provider || 'claude');
+  return {
+    channels: (options?.channels || []).map((channel) => ({
+      id: Number(channel.id ?? 0),
+      name: channel.name || '',
+      priority: Number(channel.priority ?? 0),
+      paused: Boolean(channel.paused),
+      active: Boolean(channel.active),
+      nonStreamRouteEnabled: Boolean(channel.non_stream_route_enabled),
+      groups: (channel.groups || []).map((group) => ({ id: Number(group.id ?? 0), name: group.name || '' }))
+    })),
+    models: Array.isArray(options?.models) ? options.models : []
+  };
+};
+
+// 预演假设 sourceChannelId 为激活渠道
+export const previewRoute = async (provider, sourceChannelId, model, streaming) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.PreviewRoute(provider || 'claude', Number(sourceChannelId), String(model || '').trim(), Boolean(streaming));
+  return {
+    kind: result?.kind || '',
+    mode: result?.mode || '',
+    ruleId: Number(result?.rule_id ?? 0),
+    ruleName: result?.rule_name || '',
+    sourceChannel: result?.source_channel || '',
+    stages: (result?.stages || []).map((stage) => ({
+      target: Number(stage.target ?? 0),
+      channelId: Number(stage.channel_id ?? 0),
+      channelName: stage.channel_name || '',
+      groupId: Number(stage.group_id ?? 0),
+      groupName: stage.group_name || '',
+      upstreamModel: stage.upstream_model || '',
+      missing: Boolean(stage.missing),
+      paused: Boolean(stage.paused)
+    }))
+  };
+};
+
+// 渠道隐私级别：'' 跟随全局 / 'third_party' 三方中转强制脱敏 / 'trusted' 可信渠道只检测
+export const normalizeChannelPrivacyLevel = (level) => (
+  level === 'third_party' || level === 'trusted' ? level : ''
+);
+
+export const setChannelPrivacyLevel = async (provider, channelId, level) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  await WailsApp.SetChannelPrivacyLevel(provider || 'claude', Number(channelId), normalizeChannelPrivacyLevel(level));
+  return { success: true };
+};
+
+// route 为 null 或没有目标表示关闭非流改道
+export const setChannelNonStreamRoute = async (provider, channelId, route) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const payload = {
+    mode: route?.mode || 'prefer',
+    targets: route ? buildRouteTargetsPayload(route.targets) : []
+  };
+  return mapRouteSaveResult(await WailsApp.SetChannelNonStreamRoute(provider || 'claude', Number(channelId), payload));
 };
 
 /**
@@ -2138,6 +2374,15 @@ const mapCodexEndpoint = (endpoint) => ({
 });
 
 export const mapCodexCredentialGroup = (group) => ({
+  authMode: group.auth_mode || group.authMode || 'group_credential',
+  subscription: mapSubscription(group.subscription),
+  localKeyConfigured: Boolean(group.local_key_configured ?? group.localKeyConfigured),
+  officialVerification: group.official_verification || group.officialVerification || 'not_verified',
+  subscriptionStatus: (group.subscription_status || group.subscriptionStatus || []).map((pause) => ({
+    model: pause.model, state: pause.state, reason: pause.reason, source: pause.source,
+    observedAt: pause.observed_at ?? pause.observedAt, resumeNotBefore: pause.resume_not_before ?? pause.resumeNotBefore,
+    resetKnown: Boolean(pause.reset_known ?? pause.resetKnown)
+  })),
   id: group.id,
   channelId: group.channel_id,
   channel_id: group.channel_id,
@@ -2195,6 +2440,8 @@ const mapCodexChannel = (channel) => {
     priority: channel.priority ?? 0,
     failoverEnabled: channel.failover_enabled !== false,
     isActive: Boolean(channel.is_active),
+    nonStreamRoute: mapNonStreamRoute(channel.non_stream_route || channel.nonStreamRoute),
+    privacyLevel: normalizeChannelPrivacyLevel(channel.privacy_level ?? channel.privacyLevel),
     credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
     createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',
@@ -2204,6 +2451,7 @@ const mapCodexChannel = (channel) => {
 
 export const buildCodexCredentialGroupPayload = (input) => {
   const payload = {
+    auth_mode: input?.authMode || input?.auth_mode || '',
     channel_id: input?.channelId || input?.channel_id || 0,
     name: (input?.name || '').trim(),
     api_key: (input?.apiKey || input?.api_key || '').trim(),
@@ -2227,6 +2475,16 @@ export const buildCodexCredentialGroupPayload = (input) => {
     disableLongContextPricing: Boolean(input?.disableLongContextPricing),
     billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
   };
+  if (input?.subscription) {
+    const binding = input.subscription;
+    payload.subscription = {
+      account_id: binding.accountId || '', version: Number(binding.version || 0), enabled: Boolean(binding.enabled),
+      key_hash: binding.keyHash || '', action: binding.action || '',
+      backup_targets: (binding.backupTargets || []).map((target) => ({
+        channel_id: Number(target.channelId), group_id: Number(target.groupId), upstream_model: String(target.upstreamModel || '').trim()
+      }))
+    };
+  }
   const modelMultipliers = getExplicitModelMultipliers(input, normalizeCodexModelMultipliers);
   if (modelMultipliers !== undefined) {
     payload.modelMultipliers = modelMultipliers;
@@ -2787,3 +3045,39 @@ export const updateCodexGlobalConfig = async (input) => {
     enable_1m_context: Boolean(input?.enable_1m_context ?? input?.enable1MContext)
   });
 };
+
+// Subscription secrets are explicit local inputs only, never mapped back to UI.
+export const manageSubscriptionConnection = async (provider, action, input = {}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.ManageSubscriptionConnection({
+    provider, action, group_id: input.groupId || 0, local_key: input.localKey || '',
+    revision: input.revision || '', binding_version: input.bindingVersion || 0, content_revision: input.contentRevision || ''
+  });
+  return {
+    configPath: result.config_path, baseURL: result.base_url, running: Boolean(result.running),
+    backupAvailable: Boolean(result.backup_available), revision: result.revision,
+    bindingVersion: result.binding_version, endpointReady: Boolean(result.endpoint_ready),
+    officialURL: result.official_url, managed: Boolean(result.managed),
+    officialEnabled: Boolean(result.official_enabled), snippet: result.snippet, command: result.command,
+    contentRevision: result.content_revision
+  };
+};
+
+export const manageSubscriptionAccounts = async (provider, action, input = {}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.ManageSubscriptionAccounts({ provider, action, ...input });
+  return {
+    accounts: (result?.accounts || []).map(mapSubscriptionAccount),
+    account: result?.account ? mapSubscriptionAccount(result.account) : null,
+    login: result?.login ? { id: result.login.id, provider: result.login.provider, state: result.login.state,
+      url: result.login.url || '', code: result.login.code || '', error: result.login.error || '',
+      account: result.login.account ? mapSubscriptionAccount(result.login.account) : null } : null
+  };
+};
+export const mapSubscriptionAccount = (account) => ({
+  id: account.id, provider: account.provider, name: account.name, email: account.email || '', plan: account.plan || '',
+  accountId: account.account_id || '', expiresAt: account.expires_at || '', enabled: Boolean(account.enabled),
+  status: account.status || 'unknown', revision: account.revision || 0, updatedAt: account.updated_at || ''
+});

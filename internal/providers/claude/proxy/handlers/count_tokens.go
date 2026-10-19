@@ -12,6 +12,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -49,13 +50,21 @@ type CountTokensResponse struct {
 
 // Handle 处理count_tokens请求 - 极简逻辑
 func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
+	if subscription.FromContext(ctx) != nil {
+		h.handleSubscription(ctx, w, r, bodyBytes, connID, lifecycleManager)
+		return
+	}
 	slog.Info(fmt.Sprintf("🔢 [Token计数] [%s] 收到count_tokens请求", connID))
 
 	// 关闭 TokenCounting 时仍由 Relay 本地处理，不能把客户端发来的路径落穿到上游。
 	var supportedEndpoints []*endpoint.Endpoint
 	if h.config != nil && h.config.TokenCounting.Enabled {
-		supportedEndpoints = h.getSupportedEndpoints()
-		supportedEndpoints = filterClaudeModelEndpoints(h.forwarder, supportedEndpoints, bodyBytes)
+		candidates := h.getSupportedEndpoints()
+		supportedEndpoints = filterClaudeModelEndpoints(h.forwarder, candidates, bodyBytes)
+		if len(supportedEndpoints) == 0 && len(candidates) > 0 {
+			// 激活渠道的 count_tokens 端点都不支持该模型：本次请求借用其它渠道，不切换全局激活渠道
+			supportedEndpoints = h.countTokensEndpointsFromOtherChannels(bodyBytes)
+		}
 	}
 
 	// 2. 如果有，尝试转发
@@ -100,7 +109,7 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 	var supported []*endpoint.Endpoint
 
 	for _, ep := range allEndpoints {
-		if ep.Config.SupportsCountTokens {
+		if ep.Config.SupportsCountTokens && ep.Config.AuthMode != subscription.ClientPassthrough {
 			supported = append(supported, ep)
 		}
 	}
@@ -108,9 +117,33 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 	return supported
 }
 
+// countTokensEndpointsFromOtherChannels 按渠道优先级找第一个有 count_tokens 端点支持请求模型的渠道。
+// 只在本次请求内使用；关闭渠道间故障转移时不借用其它渠道，退回本地估算。
+func (h *CountTokensHandler) countTokensEndpointsFromOtherChannels(body []byte) []*endpoint.Endpoint {
+	if h.endpointManager == nil || !h.endpointManager.IsFailoverEnabled() {
+		return nil
+	}
+	active := h.endpointManager.ActiveChannelName()
+	for _, channel := range h.endpointManager.RoutableChannelsByPriority() {
+		if channel == active {
+			continue
+		}
+		var supported []*endpoint.Endpoint
+		for _, ep := range h.endpointManager.GetRoutableEndpointsForChannel(channel, 0, nil) {
+			if ep.Config.SupportsCountTokens && ep.Config.AuthMode != subscription.ClientPassthrough {
+				supported = append(supported, ep)
+			}
+		}
+		if filtered := filterClaudeModelEndpoints(h.forwarder, supported, body); len(filtered) > 0 {
+			return filtered
+		}
+	}
+	return nil
+}
+
 // tryForward 尝试转发到支持的端点
 func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string, lifecycleManager RequestLifecycleManager) ([]byte, bool, error) {
-	protectedBody, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
+	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(h.endpointManager))
 	if err != nil {
 		return nil, false, err
 	}
@@ -120,7 +153,7 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 		if lifecycleManager != nil {
 			lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
 		}
-		requestBody := h.forwarder.RewriteModelForEndpoint(protectedBody, ep, connID).Body
+		requestBody := h.forwarder.RewriteModelForEndpoint(bodies.forEndpoint(ep), ep, connID).Body
 		targetURL := ep.Config.URL + "/v1/messages/count_tokens"
 		req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(requestBody))
 		if err != nil {
@@ -134,7 +167,10 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 			continue
 		}
 
-		resp, err := client.Do(req)
+		if r.URL.RawQuery != "" {
+			req.URL.RawQuery = r.URL.RawQuery
+		}
+		resp, err := h.forwarder.sendClaude(ctx, r, req, ep, requestBody, client)
 		if err != nil {
 			slog.Debug(fmt.Sprintf("❌ [转发失败] [%s] 端点: %s, 错误: %v", connID, ep.Config.Name, err))
 			continue

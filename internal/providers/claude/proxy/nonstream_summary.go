@@ -4,21 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 )
 
-// 非流式请求正文摘要：只在 debug 级别输出，用来辨认 Claude Code 后台调用的用途。
+// 非流式请求结构摘要：只在 debug 级别输出，用来辨认 Claude Code 后台调用的用途。
 //
 // 反代不落库请求正文，追踪库只能看到「非流式、thinking disabled、主模型」这种形态，
-// 无法区分是标题生成、摘要还是探测。这里把结构（max_tokens、消息数、system 与
-// 末条 user 消息的开头）写进本地日志，看一轮就能对上号。只进 slog，不进追踪库、
-// 不经 Wails 回传，与隐私脱敏的红线一致。
-
-const (
-	nonStreamSummaryTextLimit = 300
-)
-
-// summarizeNonStreamRequest 生成一行可读摘要；正文不是 JSON 对象时返回长度信息。
+// 无法区分是标题生成、摘要还是探测。这里只写结构（max_tokens、消息数与角色序列、
+// 各内容块的类型与字符数、system 长度、metadata 的键名），足以对上号。
+//
+// 刻意不输出任何文本内容与 metadata 的值：本函数在隐私脱敏之前执行，
+// 而日志会广播到前端日志查看器并写入日志文件——哪怕截断的 300 字原文，
+// 也等于把客户对话绕过隐私防护又落了一份盘。
 func summarizeNonStreamRequest(body []byte) string {
 	var req struct {
 		Model     string          `json:"model"`
@@ -28,73 +26,73 @@ func summarizeNonStreamRequest(body []byte) string {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
-		Tools    []json.RawMessage `json:"tools"`
-		Metadata json.RawMessage   `json:"metadata"`
+		Tools    []json.RawMessage          `json:"tools"`
+		Metadata map[string]json.RawMessage `json:"metadata"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		return fmt.Sprintf("body_len=%d (not a JSON object)", len(body))
 	}
 
-	lastUser := ""
+	roles := make([]string, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		roles = append(roles, msg.Role)
+	}
+	lastUser := "-"
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == "user" {
-			lastUser = textPreview(req.Messages[i].Content)
+			lastUser = contentShape(req.Messages[i].Content)
 			break
 		}
 	}
 
-	return fmt.Sprintf("model=%s max_tokens=%d messages=%d tools=%d metadata=%s system=%q last_user=%q",
-		req.Model, req.MaxTokens, len(req.Messages), len(req.Tools),
-		compactRaw(req.Metadata), textPreview(req.System), lastUser)
+	return fmt.Sprintf("model=%s max_tokens=%d messages=%d roles=%s tools=%d metadata_keys=%s system=%s last_user=%s",
+		req.Model, req.MaxTokens, len(req.Messages), strings.Join(roles, ","), len(req.Tools),
+		metadataKeys(req.Metadata), contentShape(req.System), lastUser)
 }
 
-// textPreview 从 string 或 content block 数组里抽出文本开头。
-func textPreview(raw json.RawMessage) string {
+// contentShape 描述 string 或 content block 数组的结构：字符串给出字符数，
+// 数组给出每个块的类型与其文本字符数，如 "[text:120,tool_result]"。不含任何文本内容。
+func contentShape(raw json.RawMessage) string {
 	if len(raw) == 0 {
-		return ""
+		return "-"
 	}
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
-		return clip(text)
+		return fmt.Sprintf("text:%d", len([]rune(text)))
 	}
 	var blocks []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return clip(string(raw))
+		return fmt.Sprintf("raw_len=%d", len(raw))
 	}
-	var sb strings.Builder
-	for _, b := range blocks {
-		if b.Type == "text" && b.Text != "" {
-			if sb.Len() > 0 {
-				sb.WriteString(" | ")
-			}
-			sb.WriteString(b.Text)
-		} else if b.Type != "" && b.Type != "text" {
-			sb.WriteString("<" + b.Type + ">")
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		kind := block.Type
+		if kind == "" {
+			kind = "?"
 		}
-		if sb.Len() > nonStreamSummaryTextLimit {
-			break
+		if block.Text != "" {
+			parts = append(parts, fmt.Sprintf("%s:%d", kind, len([]rune(block.Text))))
+		} else {
+			parts = append(parts, kind)
 		}
 	}
-	return clip(sb.String())
+	return "[" + strings.Join(parts, ",") + "]"
 }
 
-func compactRaw(raw json.RawMessage) string {
-	if len(raw) == 0 {
+// metadataKeys 只列键名：metadata.user_id 等值是客户端标识，不进日志
+func metadataKeys(metadata map[string]json.RawMessage) string {
+	if len(metadata) == 0 {
 		return "-"
 	}
-	return clip(string(raw))
-}
-
-func clip(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	runes := []rune(s)
-	if len(runes) <= nonStreamSummaryTextLimit {
-		return s
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
 	}
-	return string(runes[:nonStreamSummaryTextLimit]) + "…"
+	sort.Strings(keys) // 固定顺序，便于日志比对
+	return strings.Join(keys, ",")
 }
 
 func logNonStreamRequestSummary(connID string, body []byte) {

@@ -9,6 +9,7 @@ import { BarChart3 } from 'lucide-react';
 import { useToast } from '@components/ui';
 import { fetchRequests, fetchModels, fetchUsageStats, fetchEndpoints, fetchGroups, activateGroup, fetchInterChannelFailoverEnabled } from '@utils/api.js';
 import { getCodexChannels, activateCodexChannel, getSettingsByScope } from '@utils/wailsApi.js';
+import { getErrorMessage } from '@utils/errorMessage.js';
 import { useFilters } from './hooks/useFilters.js';
 import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
@@ -217,7 +218,7 @@ const RequestsPage = () => {
     } catch (err) {
       console.error('加载请求追踪数据失败:', err);
       if (!isSilent) {
-        toast.error(err?.message || '请求数据加载失败', '请求数据加载失败');
+        toast.error(getErrorMessage(err, '请求数据加载失败'), '请求数据加载失败');
       }
     } finally {
       // 只有手动刷新才会改变 loading 状态

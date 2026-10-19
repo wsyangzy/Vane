@@ -27,6 +27,17 @@ export const parseChainNode = (item, hop) => {
     const statusCode = Number(item.status_code ?? item.statusCode ?? item.http_status ?? item.httpStatus ?? 0) || 0;
     // 只认后端写入链路节点的原始错误文本；failure_reason 是 Relay 内部分类，不做展示。
     const error = item.error || item.error_message || item.errorMessage || '';
+    // 本跳实际发出的请求次数；旧记录没有该字段，为 0 表示未知
+    const attempts = Math.max(0, Math.trunc(Number(item.attempts ?? 0) || 0));
+    // 本跳耗时；旧记录与进行中的最后一跳没有，为 null
+    const rawDuration = item.duration_ms ?? item.durationMs;
+    const durationMs = rawDuration === null || rawDuration === undefined || !Number.isFinite(Number(rawDuration))
+      ? null
+      : Math.max(0, Number(rawDuration));
+    // 失败响应的诊断头白名单（server、cf-ray、x-request-id 等）；旧记录没有
+    const headers = item.headers && typeof item.headers === 'object' && !Array.isArray(item.headers) ? item.headers : {};
+    // 本跳没有拿到上游响应（网络/超时），error 是本地错误文本
+    const local = Boolean(item.local);
     const raw = channel
       ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
       : endpoint;
@@ -37,6 +48,10 @@ export const parseChainNode = (item, hop) => {
       endpoint,
       statusCode,
       error,
+      attempts,
+      durationMs,
+      headers,
+      local,
       hop: item.hop || hop,
     };
   }
@@ -144,8 +159,12 @@ export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
     if (previousIdentity !== currentIdentity) transferCount += 1;
   }
 
+  // 最终端点内的尝试次数：只有新链路记录了每跳次数；旧记录无从得知，返回 null 由展示层显示 "-"
+  const finalAttempts = nodes[nodes.length - 1]?.attempts || 0;
+
   return {
     attemptCount: Math.max(1, retryCount + 1, nodes.length),
+    finalEndpointAttempts: finalAttempts > 0 ? finalAttempts : null,
     retryCount,
     transferCount,
     transferred: transferCount > 0,
@@ -165,3 +184,35 @@ export const getRequestNetworkDisplayState = (request = {}) => {
 };
 
 export const parseEndpointName = (item) => parseChainNode(item).endpoint;
+
+// 错误卡片要展示的失败跳：有状态码、错误文本或诊断头的节点，最后一跳在前。
+// 多跳失败时每一跳的上游原文都要能直接看到，不能只剩最终那一跳。
+export const collectFailedHops = (nodes = []) => nodes
+  .filter((node) => node && (node.statusCode > 0 || node.error || Object.keys(node.headers || {}).length > 0))
+  .slice()
+  .reverse();
+
+// 上游错误原文若是 JSON，格式化为缩进文本；否则原样返回。不改动任何内容，只换排版。
+export const formatUpstreamErrorText = (text) => {
+  const raw = String(text ?? '');
+  const trimmed = raw.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return { text: raw, isJSON: false };
+  try {
+    return { text: JSON.stringify(JSON.parse(trimmed), null, 2), isJSON: true };
+  } catch {
+    return { text: raw, isJSON: false };
+  }
+};
+
+// 从上游错误原文里挑出最能说明原因的一句（error.message / message / error 字符串），失败时返回 ''
+export const extractUpstreamErrorMessage = (text) => {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed.startsWith('{')) return '';
+  try {
+    const parsed = JSON.parse(trimmed);
+    const candidates = [parsed?.error?.message, parsed?.message, typeof parsed?.error === 'string' ? parsed.error : ''];
+    return candidates.find((value) => typeof value === 'string' && value.trim()) || '';
+  } catch {
+    return '';
+  }
+};

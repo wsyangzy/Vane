@@ -1,7 +1,5 @@
-const RELEASE_ANNOUNCEMENT_STORAGE_PREFIX = 'ai-relay-forwarder:release-announcement:';
 export const RELEASE_SUMMARY_TOAST_DURATION_MS = 12000;
 
-const fallbackSeenVersions = new Set();
 let stopActiveReleaseToastDisplay = null;
 
 export const normalizeReleaseVersion = (value) => String(value ?? '')
@@ -59,36 +57,6 @@ export const getReleaseAnnouncement = (runtimeVersion, releaseNotes) => {
     version: normalizedRuntimeVersion,
     sections
   };
-};
-
-const getPersistentStorage = () => {
-  try {
-    return typeof window !== 'undefined' ? window.localStorage : null;
-  } catch {
-    return null;
-  }
-};
-
-export const consumeReleaseAnnouncement = ({ runtimeVersion, releaseNotes, storage } = {}) => {
-  const announcement = getReleaseAnnouncement(runtimeVersion, releaseNotes);
-  if (!announcement) return null;
-
-  const storageKey = `${RELEASE_ANNOUNCEMENT_STORAGE_PREFIX}${announcement.version}`;
-  const persistentStorage = storage === undefined ? getPersistentStorage() : storage;
-
-  if (persistentStorage) {
-    try {
-      if (persistentStorage.getItem(storageKey) === '1') return null;
-      persistentStorage.setItem(storageKey, '1');
-      return announcement;
-    } catch {
-      // Fall through to process-local memory when WebView storage is unavailable.
-    }
-  }
-
-  if (fallbackSeenVersions.has(announcement.version)) return null;
-  fallbackSeenVersions.add(announcement.version);
-  return announcement;
 };
 
 export const buildReleaseToastSummary = (announcement) => {

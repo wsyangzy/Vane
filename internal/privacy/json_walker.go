@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -30,18 +31,38 @@ type segmentMatcher func(path []pathElem) bool
 
 // walkerForPath 返回请求路径对应的字段匹配器；不支持的路径返回 nil。
 //
-// 采用白名单而非黑名单：协议字段（model/stream/tools/metadata/reasoning）
-// 天然不匹配，零误伤风险。代价是未覆盖路径不扫描——该情况由
-// Settings.UnsupportedPathAction 显式暴露给用户，不做静默跳过。
+// 扫描范围是「全部字符串值，排除协议字段」：早期的文本字段白名单漏掉了
+// tool_use.input、function_call.arguments、thinking、文档正文等——在编程场景里
+// 这些恰恰是客户数据的主要载体，走三方中转时等于裸奔。
+// 协议字段（模型名、类型标记、ID、签名、密文、JSON Schema 等）由 isProtocolStringPath
+// 排除：改写它们会破坏请求语义，或被上游当作篡改（签名校验、指纹检测）。
+//
+// 未覆盖路径仍由 Settings.UnsupportedPathAction 显式暴露给用户，不做静默跳过。
 func walkerForPath(requestPath string) segmentMatcher {
-	switch requestPath {
+	switch normalizeScanPath(requestPath) {
 	case "/v1/messages", "/v1/messages/count_tokens":
 		return matchClaudeMessagesTextPath
 	case "/v1/responses", "/v1/responses/compact":
 		return matchCodexResponsesTextPath
+	case "/v1/chat/completions":
+		return matchChatCompletionsTextPath
 	default:
 		return nil
 	}
+}
+
+// normalizeScanPath 把客户端的等价路径写法归一：Codex CLI 直连时不带 /v1 前缀，
+// 查询串不参与路径匹配。
+func normalizeScanPath(requestPath string) string {
+	if idx := strings.IndexByte(requestPath, '?'); idx >= 0 {
+		requestPath = requestPath[:idx]
+	}
+	requestPath = strings.TrimRight(requestPath, "/")
+	switch requestPath {
+	case "/responses", "/responses/compact", "/chat/completions":
+		return "/v1" + requestPath
+	}
+	return requestPath
 }
 
 // IsScannablePath 报告该请求路径是否有对应的字段白名单
@@ -49,66 +70,99 @@ func IsScannablePath(requestPath string) bool {
 	return walkerForPath(requestPath) != nil
 }
 
-// matchClaudeMessagesTextPath 匹配 Claude /v1/messages 可扫描文本字段：
-//  1. system（字符串）
-//  2. system[].text
-//  3. messages[].content（字符串）
-//  4. messages[].content[].text
-//  5. messages[].content[] 中 tool_result 的 content（字符串）
-//  6. messages[].content[].content[].text（tool_result 嵌套文本块）
-//
-// 按路径结构匹配而非读取兄弟字段 type：合法请求里 text/content 字段
-// 只出现在对应类型的块上，结构匹配等价且无需前瞻。
-func matchClaudeMessagesTextPath(path []pathElem) bool {
-	switch len(path) {
-	case 1:
-		// system: "..."
-		return path[0].Key == "system" && path[0].Index < 0
-	case 3:
-		// system[].text
-		if path[0].Key == "system" && path[1].Index >= 0 && path[2].Key == "text" {
-			return true
-		}
-		// messages[].content: "..."
-		return path[0].Key == "messages" && path[1].Index >= 0 && path[2].Key == "content"
-	case 5:
-		if path[0].Key != "messages" || path[1].Index < 0 || path[2].Key != "content" || path[3].Index < 0 {
-			return false
-		}
-		// messages[].content[].text 或 tool_result 的 content 字符串
-		return path[4].Key == "text" || path[4].Key == "content"
-	case 7:
-		return path[0].Key == "messages" && path[1].Index >= 0 &&
-			path[2].Key == "content" && path[3].Index >= 0 &&
-			path[4].Key == "content" && path[5].Index >= 0 &&
-			path[6].Key == "text"
-	default:
-		return false
-	}
+// 顶层协议字段：整棵子树不扫描。
+//   - model/stream/max_tokens 等是请求参数；
+//   - tools / tool_choice 是工具定义（名称、描述、JSON Schema），改写会让模型调用错工具；
+//   - metadata 含客户端标识（user_id 等），部分上游据此做会话关联与风控，改写等于伪造身份；
+//   - reasoning / thinking / text / response_format 等是生成配置；
+//   - mcp_servers / container 含连接配置；
+//   - previous_response_id / prompt_cache_key 等是会话引用。
+var protocolTopLevelKeys = map[string]bool{
+	"model": true, "stream": true, "stream_options": true, "max_tokens": true, "max_output_tokens": true,
+	"max_completion_tokens": true, "temperature": true, "top_p": true, "top_k": true, "stop": true,
+	"stop_sequences": true, "n": true, "seed": true, "logit_bias": true, "logprobs": true, "top_logprobs": true,
+	"presence_penalty": true, "frequency_penalty": true, "user": true,
+	"tools": true, "tool_choice": true, "parallel_tool_calls": true, "functions": true, "function_call": true,
+	"metadata": true, "reasoning": true, "reasoning_effort": true, "thinking": true, "text": true,
+	"response_format": true, "modalities": true, "audio": true, "service_tier": true, "store": true,
+	"include": true, "truncation": true, "background": true, "previous_response_id": true,
+	"prompt_cache_key": true, "safety_identifier": true, "container": true, "mcp_servers": true,
+	"betas": true, "context_management": true, "prompt": true,
 }
 
-// matchCodexResponsesTextPath 匹配 Codex /v1/responses 可扫描文本字段：
-//  1. instructions（字符串）
-//  2. input（字符串）
-//  3. input[].content（字符串）
-//  4. input[].output（function_call_output 的输出字符串）
-//  5. input[].content[].text
-func matchCodexResponsesTextPath(path []pathElem) bool {
-	switch len(path) {
-	case 1:
-		return (path[0].Key == "instructions" || path[0].Key == "input") && path[0].Index < 0
-	case 3:
-		if path[0].Key != "input" || path[1].Index < 0 {
-			return false
+// 任意层级的协议键：值是类型标记、ID、签名、密文或二进制载荷。
+//   - signature / encrypted_content / redacted_thinking.data 由上游签发，改写会导致签名校验失败甚至风控；
+//   - data 是图片、PDF 的 base64，不是可读文本，扫描只会误伤；
+//   - *_id / id / call_id 是会话内引用，改写会断开工具调用与结果的配对；
+//   - media_type / mime_type / type / role / status / name 是结构标记。
+var protocolAnyLevelKeys = map[string]bool{
+	"type": true, "role": true, "id": true, "call_id": true, "tool_use_id": true, "tool_call_id": true,
+	"name": true, "status": true, "signature": true, "encrypted_content": true, "data": true,
+	"media_type": true, "mime_type": true, "cache_control": true, "file_id": true, "image_url": true,
+	"url": true, "detail": true, "format": true, "citations": true, "phase": true,
+}
+
+// isProtocolStringPath 判断字符串值是否位于协议字段内（不扫描）。
+//
+// 判定只看键名：同名键在 Claude 与 Codex 两种协议里语义一致。
+// 数组下标不参与判定，因此 messages[3].content[0].id 与 input[0].id 同样被排除。
+func isProtocolStringPath(path []pathElem) bool {
+	if len(path) == 0 {
+		return true
+	}
+	if path[0].Index < 0 && protocolTopLevelKeys[path[0].Key] {
+		return true
+	}
+	for _, elem := range path {
+		if elem.Index < 0 && protocolAnyLevelKeys[elem.Key] {
+			return true
 		}
-		return path[2].Key == "content" || path[2].Key == "output"
-	case 5:
-		return path[0].Key == "input" && path[1].Index >= 0 &&
-			path[2].Key == "content" && path[3].Index >= 0 &&
-			path[4].Key == "text"
-	default:
+	}
+	return false
+}
+
+// matchClaudeMessagesTextPath 扫描 Claude /v1/messages 的 system 与 messages 下全部非协议字符串：
+// 文本块、tool_use.input 的全部字符串叶子、tool_result（字符串或嵌套块）、
+// 文档 source.type=text 的正文与 content[] 块、document 的 title / context、搜索结果正文等。
+// 顶层其它字段（tools、metadata 等）一律不扫。
+//
+// thinking 块的正文不扫：上游用 signature 校验 thinking 原文，改写一个字节都会被拒，
+// 订阅透传场景下更可能被判为篡改。thinking 是模型自己的输出，隐私数据的源头仍在
+// 用户消息与工具结果里，那里已经被脱敏。
+func matchClaudeMessagesTextPath(path []pathElem) bool {
+	if len(path) == 0 || path[0].Index >= 0 {
 		return false
 	}
+	if path[0].Key != "system" && path[0].Key != "messages" {
+		return false
+	}
+	if last := path[len(path)-1]; last.Index < 0 && last.Key == "thinking" {
+		return false
+	}
+	return !isProtocolStringPath(path)
+}
+
+// matchCodexResponsesTextPath 扫描 Codex /v1/responses 的 instructions 与 input 下全部非协议字符串：
+// 消息文本、function_call.arguments（JSON 字符串，按文本整体扫描）、custom_tool_call.input、
+// function_call_output 的字符串或数组输出、推理摘要 summary[].text、local_shell_call 命令等。
+func matchCodexResponsesTextPath(path []pathElem) bool {
+	if len(path) == 0 || path[0].Index >= 0 {
+		return false
+	}
+	if path[0].Key != "instructions" && path[0].Key != "input" {
+		return false
+	}
+	return !isProtocolStringPath(path)
+}
+
+// matchChatCompletionsTextPath OpenAI 兼容 /v1/chat/completions：扫描 messages 下全部非协议字符串，
+// 含 content（字符串或数组）、tool_calls[].function.arguments、tool 消息结果。
+func matchChatCompletionsTextPath(path []pathElem) bool {
+	if len(path) == 0 || path[0].Index >= 0 || path[0].Key != "messages" {
+		return false
+	}
+	// function.name 已由 name 排除；arguments 是 JSON 字符串，按文本扫描
+	return !isProtocolStringPath(path)
 }
 
 // collectJSONTextSegments 以 offset-aware 方式收集 body 中可扫描文本字段。
@@ -117,6 +171,31 @@ func matchCodexResponsesTextPath(path []pathElem) bool {
 // 后者会重排对象键、把尖括号与和号转义成 Unicode 形式并改变数字格式，
 // 等于伪造了客户端的原始请求，可能触发上游的客户端指纹检测。
 func collectJSONTextSegments(body []byte, match segmentMatcher) ([]textSegment, error) {
+	segments, _, err := walkJSONTextSegments(body, match, false)
+	return segments, err
+}
+
+// collectJSONTextSegmentsWithPaths 同 collectJSONTextSegments，另返回每段的 JSON 路径（测试面板展示用）
+func collectJSONTextSegmentsWithPaths(body []byte, match segmentMatcher) ([]textSegment, []string, error) {
+	return walkJSONTextSegments(body, match, true)
+}
+
+func formatJSONPath(path []pathElem) string {
+	var b strings.Builder
+	for i, elem := range path {
+		if elem.Index >= 0 {
+			b.WriteString(elem.String())
+			continue
+		}
+		if i > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(elem.Key)
+	}
+	return b.String()
+}
+
+func walkJSONTextSegments(body []byte, match segmentMatcher, withPaths bool) ([]textSegment, []string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 
@@ -130,6 +209,7 @@ func collectJSONTextSegments(body []byte, match segmentMatcher) ([]textSegment, 
 	var (
 		stack    []*frame
 		segments []textSegment
+		paths    []string
 	)
 	prevOffset := int64(0)
 
@@ -163,12 +243,12 @@ func collectJSONTextSegments(body []byte, match segmentMatcher) ([]textSegment, 
 		if err == io.EOF {
 			// 截断的 JSON（容器未闭合）Token() 也可能返回干净 EOF，显式校验
 			if len(stack) != 0 {
-				return nil, fmt.Errorf("invalid json body: unexpected end of input")
+				return nil, nil, fmt.Errorf("invalid json body: unexpected end of input")
 			}
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("invalid json body: %w", err)
+			return nil, nil, fmt.Errorf("invalid json body: %w", err)
 		}
 		offset := decoder.InputOffset()
 
@@ -196,18 +276,24 @@ func collectJSONTextSegments(body []byte, match segmentMatcher) ([]textSegment, 
 			}
 			// 字符串值：定位 token 原始字节区间。前一 token 末尾到当前末尾之间
 			// 只可能有空白/逗号/冒号，因此首个双引号即 token 起点。
-			if match != nil && match(currentPath()) {
-				gap := body[prevOffset:offset]
-				quote := bytes.IndexByte(gap, '"')
-				if quote < 0 {
-					return nil, fmt.Errorf("failed to locate string token at offset %d", prevOffset)
+			if match != nil {
+				path := currentPath()
+				if match(path) {
+					gap := body[prevOffset:offset]
+					quote := bytes.IndexByte(gap, '"')
+					if quote < 0 {
+						return nil, nil, fmt.Errorf("failed to locate string token at offset %d", prevOffset)
+					}
+					segments = append(segments, textSegment{
+						Start:  int(prevOffset) + quote,
+						End:    int(offset),
+						Value:  tok,
+						IsJSON: true,
+					})
+					if withPaths {
+						paths = append(paths, formatJSONPath(path))
+					}
 				}
-				segments = append(segments, textSegment{
-					Start:  int(prevOffset) + quote,
-					End:    int(offset),
-					Value:  tok,
-					IsJSON: true,
-				})
 			}
 			advanceContainer()
 		default:
@@ -217,7 +303,7 @@ func collectJSONTextSegments(body []byte, match segmentMatcher) ([]textSegment, 
 		prevOffset = offset
 	}
 
-	return segments, nil
+	return segments, paths, nil
 }
 
 // appendJSONStringBody 按 JSON string 规则 escape 并追加（不含首尾引号）。

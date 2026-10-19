@@ -150,9 +150,14 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 		return result, policyErr
 	}
 
-	if s.Settings.Mode == ModeRedact && len(scanned) > 0 {
-		result.Body = replaceSegments(body, segments, scanned)
-		result.Changed = true
+	// 替换结果无论全局模式都算出来：渠道可按自身隐私级别覆盖全局模式
+	// （三方中转强制脱敏、可信渠道仅检测），逐次尝试时再挑选实际发送的正文
+	if len(scanned) > 0 {
+		result.RedactedBody = replaceSegments(body, segments, scanned)
+		if s.Settings.Mode == ModeRedact {
+			result.Body = result.RedactedBody
+			result.Changed = true
+		}
 	}
 	result.ScanDuration = time.Since(started)
 	return result, nil
@@ -224,7 +229,8 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 			hit.Count++
 			hit.Matches = append(hit.Matches, text[span.start:span.end])
 			result.HitCount++
-			if s.Settings.Mode == ModeRedact && rule.Action == ActionRedact {
+			// 规则自身是 detect 时永不替换；全局模式在 Apply 末尾决定是否采用替换结果
+			if rule.Action == ActionRedact {
 				redactSpans = append(redactSpans, span)
 			}
 		}

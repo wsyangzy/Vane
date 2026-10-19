@@ -6,12 +6,14 @@ package codexproxy
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	"ai-relay-forwarder/internal/transport"
 )
 
@@ -74,8 +76,27 @@ func (f *Forwarder) UpdateLogger(logger *slog.Logger) {
 
 // Forward 将请求转发到指定端点
 func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoint) (*http.Response, error) {
+	lease := leaseFromContext(r.Context())
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			lease.Finish(0, nil, nil, false)
+		}
+	}()
+	if endpoint.AuthMode == subscription.ClientPassthrough {
+		if err := subscription.ValidateEndpoint(endpoint.BaseURL); err != nil {
+			return nil, err
+		}
+	}
 	// 构建目标 URL
 	targetURL := buildTargetURL(endpoint.BaseURL, r.URL)
+	if endpoint.AuthMode == subscription.ClientPassthrough {
+		targetURL = subscription.TargetURL(r, endpoint.BaseURL, true)
+	} else if subscription.FromContext(r.Context()) != nil {
+		copyURL := *r.URL
+		copyURL.Path = subscription.Path(r)
+		targetURL = buildTargetURL(endpoint.BaseURL, &copyURL)
+	}
 
 	// 创建新请求
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, bytes.NewReader(body))
@@ -99,16 +120,71 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	// 移除 hop-by-hop headers
 	removeHopByHopHeaders(req)
 
+	if err := subscription.AuthorizeOutbound(r, req, endpoint.AuthMode, endpoint.CredentialGroupID); err != nil {
+		return nil, err
+	}
+
 	// 执行转发
 	client, err := f.clientForEndpoint(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("创建转发客户端失败: %w", err)
 	}
+	if subscription.FromContext(r.Context()) != nil {
+		copyClient := *client
+		copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copyClient
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		leaseFromContext(r.Context()).Finish(0, nil, nil, false)
+		if subscription.FromContext(r.Context()) != nil {
+			return nil, fmt.Errorf("subscription_transport_failed")
+		}
 		return nil, err
 	}
+	if resp.Request == nil {
+		resp.Request = req
+	}
+	if subscription.FromContext(r.Context()) != nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("subscription_redirect_rejected")
+	}
+	if endpoint.AuthMode == subscription.ClientPassthrough {
+		observeCodexSubscriptionResponse(resp, leaseFromContext(r.Context()), subscription.Path(r))
+	}
 
+	if subscription.FromContext(r.Context()) != nil {
+		if resp.StatusCode >= 400 {
+			if endpoint.AuthMode != subscription.ClientPassthrough {
+				if err := decodeCodexSubscriptionResponse(resp); err != nil {
+					resp.Body.Close()
+					return nil, err
+				}
+			}
+			raw, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+			resp.Body.Close()
+			if readErr != nil || len(raw) > 1<<20 {
+				return nil, fmt.Errorf("subscription_error_response_unavailable")
+			}
+			text := subscription.Redact(r.Context(), string(raw))
+			for _, name := range []string{"Authorization", "X-Api-Key"} {
+				value := req.Header.Get(name)
+				if value != "" {
+					text = strings.ReplaceAll(text, value, "[REDACTED]")
+					text = strings.ReplaceAll(text, strings.TrimPrefix(value, "Bearer "), "[REDACTED]")
+				}
+			}
+			resp.Body = io.NopCloser(strings.NewReader(text))
+			resp.Header.Del("Content-Length")
+			resp.ContentLength = -1
+		}
+		for name := range resp.Header {
+			if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "X-Api-Key") || strings.EqualFold(name, "X-Relay-Key") || strings.EqualFold(name, "ChatGPT-Account-ID") {
+				delete(resp.Header, name)
+			}
+		}
+	}
+	handedOff = true
 	return resp, nil
 }
 
@@ -165,8 +241,10 @@ func buildTargetURL(baseURL string, reqURL *url.URL) string {
 // copyHeaders 复制请求头（排除 Host, Authorization）
 func copyHeaders(src, dst *http.Request) {
 	skipHeaders := map[string]bool{
-		"host":          true,
-		"authorization": true,
+		"host":               true,
+		"authorization":      true,
+		"x-relay-key":        true,
+		"chatgpt-account-id": true,
 	}
 
 	for key, values := range src.Header {

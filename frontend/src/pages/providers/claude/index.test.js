@@ -158,7 +158,7 @@ test('Claude creation flow does not silently stop when channel refresh fails', (
 });
 
 test('Claude credential groups without a usable secret do not expose endpoint actions', () => {
-  assert.match(source, /const hasClaudeCredential = \(group\) => \[/);
+  assert.match(source, /const hasClaudeCredential = \(group\) => \(isSubscriptionGroup\(group\) && group\.localKeyConfigured\) \|\| \[/);
   assert.match(source, /group\?\.tokenMasked/);
   assert.match(source, /group\?\.token_masked/);
   assert.match(source, /group\?\.apiKeyMasked/);

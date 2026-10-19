@@ -18,6 +18,8 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   max_loops_exceeded: '已达最大循环轮数，等待手动重试',
   max_restarts_exceeded: '已达最大重启次数，请求终止',
   endpoint_exhausted: '当前渠道端点已全部尝试失败',
+  route_exhausted: '模型路由规则的全部目标均已尝试失败',
+  non_stream_route_exhausted: '非流改道的全部目标均已尝试失败',
   stream_truncated: '上游流式响应中途截断',
   response_read_error: '上游响应正文读取失败',
   response_write_error: '响应写回客户端失败',
@@ -38,6 +40,8 @@ const MANUAL_INTERVENTION_REASONS = new Set(['max_loops_exceeded', 'max_restarts
 const NOTIFY_REASONS = new Set([
   'all_channels_unavailable',
   'endpoint_exhausted',
+  'route_exhausted',
+  'non_stream_route_exhausted',
   'max_loops_exceeded',
   'max_restarts_exceeded',
   'no_healthy_endpoints',
