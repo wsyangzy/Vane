@@ -12,6 +12,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -49,6 +50,10 @@ type CountTokensResponse struct {
 
 // Handle 处理count_tokens请求 - 极简逻辑
 func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
+	if subscription.FromContext(ctx) != nil {
+		h.handleSubscription(ctx, w, r, bodyBytes, connID, lifecycleManager)
+		return
+	}
 	slog.Info(fmt.Sprintf("🔢 [Token计数] [%s] 收到count_tokens请求", connID))
 
 	// 关闭 TokenCounting 时仍由 Relay 本地处理，不能把客户端发来的路径落穿到上游。
@@ -104,7 +109,7 @@ func (h *CountTokensHandler) getSupportedEndpoints() []*endpoint.Endpoint {
 	var supported []*endpoint.Endpoint
 
 	for _, ep := range allEndpoints {
-		if ep.Config.SupportsCountTokens {
+		if ep.Config.SupportsCountTokens && ep.Config.AuthMode != subscription.ClientPassthrough {
 			supported = append(supported, ep)
 		}
 	}
@@ -125,7 +130,7 @@ func (h *CountTokensHandler) countTokensEndpointsFromOtherChannels(body []byte) 
 		}
 		var supported []*endpoint.Endpoint
 		for _, ep := range h.endpointManager.GetRoutableEndpointsForChannel(channel, 0, nil) {
-			if ep.Config.SupportsCountTokens {
+			if ep.Config.SupportsCountTokens && ep.Config.AuthMode != subscription.ClientPassthrough {
 				supported = append(supported, ep)
 			}
 		}
@@ -162,7 +167,10 @@ func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bo
 			continue
 		}
 
-		resp, err := client.Do(req)
+		if r.URL.RawQuery != "" {
+			req.URL.RawQuery = r.URL.RawQuery
+		}
+		resp, err := h.forwarder.sendClaude(ctx, r, req, ep, requestBody, client)
 		if err != nil {
 			slog.Debug(fmt.Sprintf("❌ [转发失败] [%s] 端点: %s, 错误: %v", connID, ep.Config.Name, err))
 			continue

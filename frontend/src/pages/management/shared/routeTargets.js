@@ -109,6 +109,7 @@ export const describeRouteSnapshot = (raw) => {
     // 规则挂在渠道上；早期快照没有 channel 字段
     model_rule: snapshot.channel ? `模型规则${ruleName}（${snapshot.channel}）` : `模型规则${ruleName}`,
     non_stream: `非流改道（来自 ${source}）`,
+    subscription: `官方订阅与授权备用（${source}）`,
     model_capability: `模型能力改道（${source} 的分组均不支持该模型）`
   };
   let stage = '来源渠道';
@@ -120,5 +121,36 @@ export const describeRouteSnapshot = (raw) => {
     title: titles[kind] || kind,
     mode: routeModeLabel(kind, snapshot.mode),
     stage
+  };
+};
+
+export const describeRouteExecution = (raw) => {
+  let snapshot = raw;
+  if (typeof raw === 'string') {
+    try { snapshot = JSON.parse(raw); } catch { return null; }
+  }
+  if (!snapshot || !snapshot.execution || !Array.isArray(snapshot.execution.events)) return null;
+  return {
+    subscription: snapshot.subscription ? {
+      groupId: Number(snapshot.subscription.group_id || 0),
+      bindingVersion: Number(snapshot.subscription.binding_version || 0),
+      officialEnabled: Boolean(snapshot.subscription.official_enabled),
+      availability: (snapshot.subscription.availability || []).map((pause) => ({
+        model: String(pause.model || ''), state: String(pause.state || ''), reason: String(pause.reason || ''),
+        source: String(pause.source || ''), resumeNotBefore: pause.resume_not_before,
+        resetKnown: Boolean(pause.reset_known)
+      }))
+    } : null,
+    attempts: Math.max(0, Number(snapshot.attempts) || 0),
+    waitMs: Math.max(0, Number(snapshot.wait_ms) || 0),
+    stopReason: String(snapshot.stop_reason || ''),
+    dropped: Math.max(0, Number(snapshot.execution.dropped_events) || 0),
+    events: snapshot.execution.events.filter((event) => event && typeof event === 'object').map((event) => ({
+      channel: String(event.candidate?.channel || ''),
+      model: String(event.candidate?.model || ''),
+      action: String(event.action || ''),
+      reason: String(event.reason || ''),
+      scope: String(event.failure_scope || ''),
+    })),
   };
 };

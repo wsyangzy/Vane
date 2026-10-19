@@ -60,7 +60,10 @@ func (rh *RegularHandler) writeRegularEndpointExhausted(w http.ResponseWriter, r
 }
 
 // writeRegularTerminalFailure 有上游响应时透传最后一次真实响应；上游从未响应过才用兜底状态码。
-func (rh *RegularHandler) writeRegularTerminalFailure(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, failureReason string, fallbackStatusCode int) {
+func (rh *RegularHandler) writeRegularTerminalFailure(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, failureReason string, fallbackStatusCode int, routes ...*routeRun) {
+	if len(routes) > 0 {
+		lastErr = routes[0].responseEvidence(lastErr)
+	}
 	errMsg := ExtractUpstreamErrorMessage(lastErr)
 	statusCode := GetStatusCodeFromError(lastErr, nil)
 	if statusCode == 0 {
@@ -78,8 +81,9 @@ func (rh *RegularHandler) writeRegularTerminalFailure(w http.ResponseWriter, r *
 // writeRouteExhausted 路由的全部阶段都已失败
 func (rh *RegularHandler) writeRouteExhausted(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, run *routeRun, connID string) {
 	reason, fallbackStatus := run.terminalFailure(lastErr)
+	rh.forwarder.subscriptionRetryAfter(w, r, run)
 	slog.Warn("[Claude 请求级路由耗尽]", "request_id", connID, "kind", run.kind, "failure_reason", reason, "stages", len(run.stages))
-	rh.writeRegularTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, reason, fallbackStatus)
+	rh.writeRegularTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, reason, fallbackStatus, run)
 }
 
 func (sh *StreamingHandler) writeStreamingFailoverTermination(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, errText string, isLoopLimit bool, connID string) {
@@ -108,11 +112,15 @@ func (sh *StreamingHandler) writeStreamingEndpointExhausted(w http.ResponseWrite
 // writeStreamingRouteExhausted 路由的全部阶段都已失败（尚未写出任何流字节）
 func (sh *StreamingHandler) writeStreamingRouteExhausted(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, run *routeRun, connID string) {
 	reason, fallbackStatus := run.terminalFailure(lastErr)
+	sh.forwarder.subscriptionRetryAfter(w, r, run)
 	slog.Warn("[Claude 请求级路由耗尽]", "request_id", connID, "kind", run.kind, "failure_reason", reason, "stages", len(run.stages))
-	sh.writeStreamingTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, reason, fallbackStatus)
+	sh.writeStreamingTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, reason, fallbackStatus, run)
 }
 
-func (sh *StreamingHandler) writeStreamingTerminalFailure(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, failureReason string, fallbackStatusCode int) {
+func (sh *StreamingHandler) writeStreamingTerminalFailure(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, failureReason string, fallbackStatusCode int, routes ...*routeRun) {
+	if len(routes) > 0 {
+		lastErr = routes[0].responseEvidence(lastErr)
+	}
 	errMsg := ExtractUpstreamErrorMessage(lastErr)
 	statusCode := GetStatusCodeFromError(lastErr, nil)
 	if statusCode == 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
 	"ai-relay-forwarder/internal/bodyrewrite"
@@ -20,12 +21,25 @@ const claudeGenerationPath = "/v1/messages"
 // 命中路由的请求按阶段依次尝试，每个阶段只在自己的渠道（可限定凭证分组）内换端点，
 // 不调用任何跨渠道全局故障转移，也不读写全局激活渠道；阶段全部失败即结束。
 type routeRun struct {
-	kind     routing.Kind
-	snapshot routing.Snapshot
-	stages   []routeStage
-	index    int
+	subscription bool
+	ledger       routing.Ledger
+	budget       *routing.Budget
+	turn         string
+	onUpdate     func(string)
+	refresh      func()
+	lastResponse error
+	kind         routing.Kind
+	snapshot     routing.Snapshot
+	stages       []routeStage
+	index        int
 	// quotaBlocked 有阶段因凭证分组每日限额被整体跳过；一次都没发出请求时据此回 429
 	quotaBlocked bool
+}
+
+func (run *routeRun) publishSnapshot() {
+	if run != nil && run.onUpdate != nil {
+		run.onUpdate(run.stageSnapshotJSON())
+	}
 }
 
 // routeStage 执行阶段：channel 为运行时渠道名，groupID 为 0 表示该渠道全部凭证分组
@@ -60,9 +74,20 @@ func (run *routeRun) upstreamModel() string {
 }
 
 func (run *routeRun) stageSnapshotJSON() string {
+	if run.refresh != nil {
+		run.refresh()
+	}
 	stage := run.current()
+	if stage == nil && len(run.stages) > 0 {
+		stage = &run.stages[len(run.stages)-1]
+	}
 	if stage == nil {
 		return ""
+	}
+	run.snapshot.Execution = &run.ledger
+	run.snapshot.Attempts, run.snapshot.WaitMs = run.budget.Stats()
+	if run.budget.Stopped() {
+		run.snapshot.StopReason = "retry_budget_exhausted"
 	}
 	return run.snapshot.JSON(stage.index)
 }
@@ -76,6 +101,12 @@ func (run *routeRun) terminalFailure(lastErr error) (string, int) {
 	}
 	if run.quotaBlocked {
 		return "daily_cost_limit_exceeded", http.StatusTooManyRequests
+	}
+	if reason := run.ledger.LastSkipReason(); strings.HasPrefix(reason, "state_") {
+		return reason, http.StatusBadRequest
+	}
+	if reason := run.ledger.LastSkipReason(); strings.HasPrefix(reason, "subscription_") {
+		return reason, http.StatusTooManyRequests
 	}
 	if run.kind == routing.KindModelCapability {
 		return "no_supported_model_endpoint", http.StatusBadRequest
@@ -101,7 +132,7 @@ func planClaudeRoute(em *endpoint.Manager, r *http.Request, body []byte, streami
 		return nil
 	}
 
-	run := &routeRun{kind: decision.Kind, snapshot: routing.NewSnapshot(decision, source)}
+	run := &routeRun{kind: decision.Kind, snapshot: routing.NewSnapshot(decision, source), turn: routing.ExplicitTurn(r.Context(), r.Header)}
 	for _, stage := range decision.Stages() {
 		if stage.Target == nil {
 			if source != "" {
@@ -166,11 +197,39 @@ func planModelCapabilityRoute(forwarder *Forwarder, em *endpoint.Manager, body [
 
 // routeStageEndpoints 当前阶段经过模型能力与凭证分组每日限额过滤后的候选端点
 func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker *tracking.UsageTracker, em *endpoint.Manager, run *routeRun, body []byte, triedEndpoints map[string]struct{}) ([]*endpoint.Endpoint, bool) {
+	defer run.publishSnapshot()
+	run.observeSubscription(ctx, forwarder)
 	stage := run.current()
 	if stage == nil || em == nil {
 		return nil, false
 	}
-	candidates := em.GetRoutableEndpointsForChannel(stage.channel, stage.groupID, stringSetKeys(triedEndpoints))
+	candidates := em.GetRoutableEndpointsForChannel(stage.channel, stage.groupID, nil)
+	eligible := candidates[:0:0]
+	for _, ep := range candidates {
+		candidate := run.candidate(forwarder, ep, body)
+		if allowed, reason := forwarder.subscriptionEligibility(ctx, ep, candidate.Model); !allowed {
+			run.ledger.Skip(candidate, reason)
+			continue
+		}
+		if forwarder.states != nil {
+			if allowed, reason := forwarder.states.Allowed(claudeStateKeys(ctx, body), candidate); !allowed {
+				run.ledger.Skip(candidate, reason)
+				continue
+			}
+		}
+		if allowed, reason := run.ledger.Allowed(candidate); allowed {
+			eligible = append(eligible, ep)
+		} else {
+			run.ledger.Skip(candidate, reason)
+		}
+	}
+	candidates = eligible
+	if forwarder.states != nil {
+		turn := run.turn
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return forwarder.states.Preferred(turn, run.candidate(forwarder, candidates[i], body)) && !forwarder.states.Preferred(turn, run.candidate(forwarder, candidates[j], body))
+		})
+	}
 	var capable []*endpoint.Endpoint
 	if stage.upstreamModel != "" {
 		// 目标强制改写了上游模型：分组映射不再生效，按改写后的模型核对分组能力声明
@@ -230,5 +289,10 @@ func checkRouteBudget(run *routeRun, lifecycleManager RequestLifecycleManager) (
 	if run == nil || lifecycleManager == nil {
 		return false, ""
 	}
-	return lifecycleManager.CheckRetryBudget()
+	exhausted, reason := lifecycleManager.CheckRetryBudget()
+	if exhausted {
+		run.budget.Stop()
+		run.publishSnapshot()
+	}
+	return exhausted, reason
 }

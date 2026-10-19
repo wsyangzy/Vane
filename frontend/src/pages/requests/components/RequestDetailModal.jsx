@@ -71,7 +71,7 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
-import { describeRouteSnapshot } from '@pages/management/shared/routeTargets.js';
+import { describeRouteSnapshot, describeRouteExecution } from '@pages/management/shared/routeTargets.js';
 
 // last_failure_reason 只存原样保存的上游正文或传输层错误文本，标签"原始信息"。
 // 没有它的失败只剩 Relay 的分类（failure_reason），按分类渲染一句说明，标签"失败原因"，
@@ -463,6 +463,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
   const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
+  const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
   const reasoningEffort = reasoning.effort || '';
@@ -551,7 +552,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
         </div>
 
         {/* 内容区域 - 自动填充剩余空间并滚动 */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2 [scrollbar-gutter:stable] scrollbar-thin scrollbar-thumb-slate-200">
+        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2">
           {/* 概览 Tab */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
@@ -691,6 +692,32 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       <span className="shrink-0 text-sm font-medium text-slate-500">请求路由</span>
                       <RouteBadges route={route} />
                     </div>
+                  )}
+                  {routeExecution && (
+                    <details className="min-w-0 border-t border-slate-100 py-3 text-xs text-slate-600">
+                      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg hover:text-indigo-600">
+                        <Route className="h-3.5 w-3.5 shrink-0" />
+                        <span>执行记录 · {routeExecution.attempts} 次请求 · 等待 {routeExecution.waitMs} ms</span>
+                        <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0" />
+                      </summary>
+                      {routeExecution.subscription && <div className="mt-2 space-y-1 rounded-lg border border-indigo-100 bg-indigo-50/50 p-2 text-xs text-slate-600">
+                        <p>订阅调用方分组 #{routeExecution.subscription.groupId} · 绑定 v{routeExecution.subscription.bindingVersion} · {routeExecution.subscription.officialEnabled ? '允许官方' : '官方手动暂停'} · 官方验证待完成</p>
+                        {routeExecution.subscription.availability.map((pause, index) => <p key={index} className="break-words [overflow-wrap:anywhere]">{pause.model} · {pause.state} · {pause.reason} · {pause.source}{pause.resumeNotBefore ? ` · ${pause.resetKnown ? '上游重置' : '下次允许验证'} ${new Date(pause.resumeNotBefore).toLocaleString()}` : ''}</p>)}
+                      </div>}
+                      {routeExecution.stopReason && <p className="mt-2 text-amber-700 [overflow-wrap:anywhere]">终止原因：{routeExecution.stopReason}</p>}
+                      <div className="mt-2 max-h-64 overflow-auto rounded-lg border border-slate-200">
+                        <table className="w-full table-fixed text-left">
+                          <thead className="bg-slate-50"><tr><th className="p-2">目标 / 模型</th><th className="p-2">结果 / 原因</th></tr></thead>
+                          <tbody>{routeExecution.events.map((event, index) => (
+                            <tr key={index} className="border-t border-slate-100 align-top">
+                              <td className="p-2 [overflow-wrap:anywhere]">{event.channel || '-'}<div className="font-mono text-slate-500">{event.model || '未记录'}</div></td>
+                              <td className="p-2 [overflow-wrap:anywhere]">{({ attempt: '尝试', failed: '失败', skipped: '跳过' })[event.action] || event.action}<div className="text-slate-500">{event.reason}{event.scope ? ` · ${event.scope}` : ''}</div></td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                      {routeExecution.dropped > 0 && <p className="mt-1">另有 {routeExecution.dropped} 项事件未展开记录</p>}
+                    </details>
                   )}
                   {hasModelRewrite && (
                     <div className="flex items-center justify-between gap-4 py-3 border-t border-slate-100">

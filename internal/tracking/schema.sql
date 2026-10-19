@@ -271,6 +271,8 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
     name TEXT NOT NULL,
+    auth_mode TEXT NOT NULL DEFAULT 'group_credential',
+    subscription_config TEXT NOT NULL DEFAULT '{}',
     token TEXT NOT NULL DEFAULT '',
     api_key TEXT NOT NULL DEFAULT '',
     is_default INTEGER NOT NULL DEFAULT 0,
@@ -390,6 +392,8 @@ CREATE TABLE IF NOT EXISTS codex_credential_groups (
     channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     api_key TEXT NOT NULL DEFAULT '',
+    auth_mode TEXT NOT NULL DEFAULT 'group_credential',
+    subscription_config TEXT NOT NULL DEFAULT '{}',
     is_default INTEGER NOT NULL DEFAULT 0,
     daily_cost_limit_usd REAL NOT NULL DEFAULT 0,
     model_policy TEXT NOT NULL DEFAULT 'inherit', -- inherit/override/passthrough

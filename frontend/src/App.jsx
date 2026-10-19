@@ -250,16 +250,14 @@ function App() {
   const isLogsPage = activeTab === 'logs';
   const isRequestsPage = activeTab === 'requests';
 
-  // 日志/请求页面使用全高布局，避免外部滚动
-  const containerClass = isLogsPage
-    ? 'h-screen bg-[#FAFAFA] font-sans text-slate-900 overflow-hidden flex flex-col'
-    : isRequestsPage
-      ? 'h-screen bg-[#FAFAFA] font-sans text-slate-900 overflow-hidden flex flex-col'
-      : 'min-h-screen bg-[#FAFAFA] font-sans text-slate-900 pb-20';
+  // Only the area below Header scrolls; request/log pages own their inner scrolling.
+  const contentClass = isRequestsPage || isLogsPage
+    ? 'app-content relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden'
+    : 'app-content relative z-10 min-h-0 flex-1 overflow-y-auto';
 
   const mainClass = isRequestsPage || isLogsPage
-    ? 'flex-1 min-h-0 w-full px-6 pt-6 relative z-10'
-    : 'max-w-7xl mx-auto px-6 pt-8 relative z-10';
+    ? 'flex min-h-0 flex-1 flex-col w-full px-6 pt-6 pb-4'
+    : 'max-w-7xl mx-auto px-6 pt-8 pb-20';
 
   return (
     <ToastProvider>
@@ -275,7 +273,7 @@ function App() {
         onDismiss={handlePortConflictDismiss}
       />
 
-      <div className={containerClass}>
+      <div className="flex h-dvh flex-col overflow-hidden bg-[#FAFAFA] font-sans text-slate-900">
         {/* 背景纹理 */}
         <div
           className="fixed inset-0 pointer-events-none opacity-[0.4]"
@@ -294,11 +292,13 @@ function App() {
         />
 
         {/* 主内容区 */}
-        <main className={mainClass}>
-          <Suspense fallback={<LoadingSpinner text="加载页面..." />}>
-            {renderPage()}
-          </Suspense>
-        </main>
+        <div className={contentClass}>
+          <main className={mainClass}>
+            <Suspense fallback={<LoadingSpinner text="加载页面..." />}>
+              {renderPage()}
+            </Suspense>
+          </main>
+        </div>
       </div>
     </ToastProvider>
   );

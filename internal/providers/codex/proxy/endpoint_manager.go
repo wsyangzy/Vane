@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/config"
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	"ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/routing"
 )
@@ -24,6 +25,8 @@ import (
 
 // CodexEndpoint 运行时端点信息（合并渠道与端点数据）
 type CodexEndpoint struct {
+	AuthMode             string
+	stateVersion         uint64
 	ID                   int64
 	ChannelID            int64
 	CredentialGroupID    int64
@@ -304,6 +307,10 @@ func (m *EndpointManager) ModelRules(sourceChannelID int64) []routing.ModelRule 
 // 不读写激活渠道。upstreamModel 非空表示目标强制改写上游模型：分组映射不再生效，按改写后的模型核对能力声明。
 // 暂停的渠道（非激活渠道且未参与故障转移）不作为路由目标。
 func (m *EndpointManager) GetEndpointForChannel(channelID, groupID int64, requestedModel, upstreamModel string, failedIDs []int64, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
+	return m.getEndpointForChannel(channelID, groupID, requestedModel, upstreamModel, failedIDs, nil, skippedGroups...)
+}
+
+func (m *EndpointManager) getEndpointForChannel(channelID, groupID int64, requestedModel, upstreamModel string, failedIDs []int64, preferred func(*CodexEndpoint) bool, skippedGroups ...credentialGroupRef) (*CodexEndpoint, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -351,6 +358,11 @@ func (m *EndpointManager) GetEndpointForChannel(channelID, groupID int64, reques
 		return nil, fmt.Errorf("Codex 路由目标渠道 %s 没有可用端点", channel.Name)
 	}
 	sortCodexEndpointCandidates(candidates, m.strategyTypeLocked(), m.latencies, m.preferredEndpointID)
+	if preferred != nil {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return preferred(candidates[i]) && !preferred(candidates[j])
+		})
+	}
 	return candidates[0], nil
 }
 
@@ -409,6 +421,11 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 		if apiKey == "" {
 			apiKey = channel.ApiKey
 		}
+		authMode := subscription.GroupCredential
+		if group != nil && group.AuthMode == subscription.ClientPassthrough {
+			authMode = subscription.ClientPassthrough
+			apiKey = ""
+		}
 		groupName := ""
 		groupOrder := len(groupOrderByID)
 		dailyCostLimitUSD := 0.0
@@ -426,6 +443,7 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 			}
 		}
 		endpoints = append(endpoints, &CodexEndpoint{
+			AuthMode:             authMode,
 			ID:                   record.ID,
 			ChannelID:            record.ChannelID,
 			CredentialGroupID:    record.CredentialGroupID,
@@ -472,7 +490,7 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 			return nil, err
 		}
 		for _, endpoint := range endpoints {
-			if endpoint.FailoverEnabled {
+			if endpoint.FailoverEnabled && endpoint.AuthMode != subscription.ClientPassthrough {
 				result = append(result, endpoint)
 			}
 		}
@@ -507,7 +525,7 @@ func (m *EndpointManager) GetNextEndpointForModel(requestedModel string, failedI
 
 	candidates := make([]*CodexEndpoint, 0, len(m.endpoints))
 	for _, ep := range m.endpoints {
-		if !ep.FailoverEnabled {
+		if !ep.FailoverEnabled || ep.AuthMode == subscription.ClientPassthrough {
 			continue
 		}
 		if _, failed := failedSet[ep.ID]; failed {
@@ -545,7 +563,7 @@ func (m *EndpointManager) GetPrimaryEndpointForModel(requestedModel string, skip
 
 	candidates := make([]*CodexEndpoint, 0, len(m.endpoints))
 	for _, e := range m.endpoints {
-		if !e.FailoverEnabled || credentialGroupSkipped(e, skippedGroups) {
+		if !e.FailoverEnabled || e.AuthMode == subscription.ClientPassthrough || credentialGroupSkipped(e, skippedGroups) {
 			continue
 		}
 		if !m.endpointSupportsModelLocked(e, requestedModel) {

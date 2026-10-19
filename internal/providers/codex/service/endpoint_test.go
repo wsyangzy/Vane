@@ -1109,5 +1109,8 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			t.Fatalf("create test schema: %v", err)
 		}
 	}
+	if err := store.EnsureCodexSubscriptionSchema(context.Background(), db); err != nil {
+		t.Fatalf("subscription schema: %v", err)
+	}
 	return db
 }

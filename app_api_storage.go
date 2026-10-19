@@ -12,6 +12,7 @@ import (
 
 	appcache "ai-relay-forwarder/internal/cache"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	"ai-relay-forwarder/internal/routing"
@@ -91,6 +92,11 @@ type CreateEndpointInput struct {
 }
 
 type ClaudeCredentialGroupInfo struct {
+	AuthMode                               string                                      `json:"auth_mode"`
+	Subscription                           *subscription.Binding                       `json:"subscription,omitempty"`
+	LocalKeyConfigured                     bool                                        `json:"local_key_configured"`
+	SubscriptionStatus                     []subscription.Pause                        `json:"subscription_status"`
+	OfficialVerification                   string                                      `json:"official_verification"`
 	ID                                     int64                                       `json:"id"`
 	Channel                                string                                      `json:"channel"`
 	Name                                   string                                      `json:"name"`
@@ -122,6 +128,8 @@ type ClaudeCredentialGroupInfo struct {
 }
 
 type CreateClaudeCredentialGroupInput struct {
+	AuthMode                               string                                      `json:"auth_mode"`
+	Subscription                           *subscription.Binding                       `json:"subscription,omitempty"`
 	Channel                                string                                      `json:"channel"`
 	Name                                   string                                      `json:"name"`
 	Token                                  string                                      `json:"token"`
@@ -1220,6 +1228,8 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		return ClaudeCredentialGroupInfo{}
 	}
 	info := ClaudeCredentialGroupInfo{
+		AuthMode:                               group.AuthMode,
+		OfficialVerification:                   "not_verified",
 		ID:                                     group.ID,
 		Channel:                                group.Channel,
 		Name:                                   group.Name,
@@ -1246,6 +1256,18 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		DisableLongContextPricing:              group.DisableLongContextPricing,
 		ModelMultipliers:                       group.ModelMultipliers,
 	}
+	if group.Subscription != nil {
+		binding := *group.Subscription
+		info.LocalKeyConfigured = binding.KeyHash != ""
+		binding.KeyHash = ""
+		binding.Action = ""
+		binding.GroupID = group.ID
+		binding.Channel = group.Channel
+		info.Subscription = &binding
+		if a.claudeSubscriptions != nil && group.AuthMode == subscription.ClientPassthrough {
+			info.SubscriptionStatus = a.claudeSubscriptions.Status(ctx, binding)
+		}
+	}
 	if !group.CreatedAt.IsZero() {
 		info.CreatedAt = group.CreatedAt.Format("2006-01-02 15:04:05")
 	}
@@ -1262,6 +1284,8 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 
 func claudeCredentialGroupInputToRecord(input CreateClaudeCredentialGroupInput) *claudestore.ClaudeCredentialGroupRecord {
 	return &claudestore.ClaudeCredentialGroupRecord{
+		AuthMode:                               input.AuthMode,
+		Subscription:                           input.Subscription,
 		Channel:                                input.Channel,
 		Name:                                   input.Name,
 		Token:                                  input.Token,

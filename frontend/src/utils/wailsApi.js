@@ -63,7 +63,28 @@ const getExplicitModelMultipliers = (input, normalizer = normalizeModelMultiplie
   return undefined;
 };
 
+const mapSubscription = (binding) => binding ? ({
+  accountId: binding.account_id || binding.accountId || '',
+  version: binding.version || 0,
+  enabled: Boolean(binding.enabled),
+  backupTargets: (binding.backup_targets || binding.backupTargets || []).map((target) => ({
+    channelId: Number(target.channel_id ?? target.channelId ?? 0),
+    groupId: Number(target.group_id ?? target.groupId ?? 0),
+    upstreamModel: target.upstream_model ?? target.upstreamModel ?? ''
+  }))
+}) : null;
+
 export const mapClaudeCredentialGroup = (group = {}) => ({
+  authMode: group.auth_mode || group.authMode || 'group_credential',
+  subscription: mapSubscription(group.subscription),
+  localKeyConfigured: Boolean(group.local_key_configured ?? group.localKeyConfigured),
+  officialVerification: group.official_verification || group.officialVerification || 'not_verified',
+  subscriptionStatus: (group.subscription_status || group.subscriptionStatus || []).map((pause) => ({
+    model: pause.model, state: pause.state, reason: pause.reason, source: pause.source,
+    observedAt: pause.observed_at ?? pause.observedAt,
+    resumeNotBefore: pause.resume_not_before ?? pause.resumeNotBefore,
+    resetKnown: Boolean(pause.reset_known ?? pause.resetKnown)
+  })),
   id: group.id,
   channel: group.channel || '',
   name: group.name || '',
@@ -98,6 +119,7 @@ export const mapClaudeCredentialGroup = (group = {}) => ({
 
 export const buildClaudeCredentialGroupPayload = (input = {}) => {
   const payload = {
+    auth_mode: input.authMode || input.auth_mode || '',
     channel: (input.channel || '').trim(),
     name: (input.name || '').trim(),
     token: (input.token || '').trim(),
@@ -122,6 +144,18 @@ export const buildClaudeCredentialGroupPayload = (input = {}) => {
     long_context_cache_read_cost_multiplier: parseEndpointMultiplier(input.longContextCacheReadCostMultiplier),
     disable_long_context_pricing: Boolean(input.disableLongContextPricing)
   };
+  if (input.subscription) {
+    const binding = input.subscription;
+    payload.subscription = {
+      account_id: binding.accountId || '',
+      version: Number(binding.version || 0), enabled: Boolean(binding.enabled),
+      key_hash: binding.keyHash || '', action: binding.action || '',
+      backup_targets: (binding.backupTargets || []).map((target) => ({
+        channel_id: Number(target.channelId), group_id: Number(target.groupId),
+        upstream_model: String(target.upstreamModel || '').trim()
+      }))
+    };
+  }
   const modelMultipliers = getExplicitModelMultipliers(input);
   if (modelMultipliers !== undefined) {
     payload.model_multipliers = modelMultipliers;
@@ -2340,6 +2374,15 @@ const mapCodexEndpoint = (endpoint) => ({
 });
 
 export const mapCodexCredentialGroup = (group) => ({
+  authMode: group.auth_mode || group.authMode || 'group_credential',
+  subscription: mapSubscription(group.subscription),
+  localKeyConfigured: Boolean(group.local_key_configured ?? group.localKeyConfigured),
+  officialVerification: group.official_verification || group.officialVerification || 'not_verified',
+  subscriptionStatus: (group.subscription_status || group.subscriptionStatus || []).map((pause) => ({
+    model: pause.model, state: pause.state, reason: pause.reason, source: pause.source,
+    observedAt: pause.observed_at ?? pause.observedAt, resumeNotBefore: pause.resume_not_before ?? pause.resumeNotBefore,
+    resetKnown: Boolean(pause.reset_known ?? pause.resetKnown)
+  })),
   id: group.id,
   channelId: group.channel_id,
   channel_id: group.channel_id,
@@ -2408,6 +2451,7 @@ const mapCodexChannel = (channel) => {
 
 export const buildCodexCredentialGroupPayload = (input) => {
   const payload = {
+    auth_mode: input?.authMode || input?.auth_mode || '',
     channel_id: input?.channelId || input?.channel_id || 0,
     name: (input?.name || '').trim(),
     api_key: (input?.apiKey || input?.api_key || '').trim(),
@@ -2431,6 +2475,16 @@ export const buildCodexCredentialGroupPayload = (input) => {
     disableLongContextPricing: Boolean(input?.disableLongContextPricing),
     billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
   };
+  if (input?.subscription) {
+    const binding = input.subscription;
+    payload.subscription = {
+      account_id: binding.accountId || '', version: Number(binding.version || 0), enabled: Boolean(binding.enabled),
+      key_hash: binding.keyHash || '', action: binding.action || '',
+      backup_targets: (binding.backupTargets || []).map((target) => ({
+        channel_id: Number(target.channelId), group_id: Number(target.groupId), upstream_model: String(target.upstreamModel || '').trim()
+      }))
+    };
+  }
   const modelMultipliers = getExplicitModelMultipliers(input, normalizeCodexModelMultipliers);
   if (modelMultipliers !== undefined) {
     payload.modelMultipliers = modelMultipliers;
@@ -2991,3 +3045,39 @@ export const updateCodexGlobalConfig = async (input) => {
     enable_1m_context: Boolean(input?.enable_1m_context ?? input?.enable1MContext)
   });
 };
+
+// Subscription secrets are explicit local inputs only, never mapped back to UI.
+export const manageSubscriptionConnection = async (provider, action, input = {}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.ManageSubscriptionConnection({
+    provider, action, group_id: input.groupId || 0, local_key: input.localKey || '',
+    revision: input.revision || '', binding_version: input.bindingVersion || 0, content_revision: input.contentRevision || ''
+  });
+  return {
+    configPath: result.config_path, baseURL: result.base_url, running: Boolean(result.running),
+    backupAvailable: Boolean(result.backup_available), revision: result.revision,
+    bindingVersion: result.binding_version, endpointReady: Boolean(result.endpoint_ready),
+    officialURL: result.official_url, managed: Boolean(result.managed),
+    officialEnabled: Boolean(result.official_enabled), snippet: result.snippet, command: result.command,
+    contentRevision: result.content_revision
+  };
+};
+
+export const manageSubscriptionAccounts = async (provider, action, input = {}) => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const result = await WailsApp.ManageSubscriptionAccounts({ provider, action, ...input });
+  return {
+    accounts: (result?.accounts || []).map(mapSubscriptionAccount),
+    account: result?.account ? mapSubscriptionAccount(result.account) : null,
+    login: result?.login ? { id: result.login.id, provider: result.login.provider, state: result.login.state,
+      url: result.login.url || '', code: result.login.code || '', error: result.login.error || '',
+      account: result.login.account ? mapSubscriptionAccount(result.login.account) : null } : null
+  };
+};
+export const mapSubscriptionAccount = (account) => ({
+  id: account.id, provider: account.provider, name: account.name, email: account.email || '', plan: account.plan || '',
+  accountId: account.account_id || '', expiresAt: account.expires_at || '', enabled: Boolean(account.enabled),
+  status: account.status || 'unknown', revision: account.revision || 0, updatedAt: account.updated_at || ''
+});

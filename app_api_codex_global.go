@@ -11,8 +11,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
+
+	codexservice "ai-relay-forwarder/internal/providers/codex/service"
 )
 
 // codexDefaultProviderName 当 config.toml 中 model_provider 字段为空时使用的约定名称
@@ -166,6 +170,11 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 
 	// 2. 自动计算 base_url（取自系统 server 配置）
 	baseURL := a.computeCodexProxyBaseURL()
+	// Subscription setup owns a separate provider route; model settings must
+	// not turn it back into a generic /v1 provider on the next save.
+	if providerName == codexservice.SubscriptionClientProvider {
+		baseURL = strings.TrimSuffix(baseURL, "/v1") + "/backend-api/codex"
+	}
 
 	// 3. 写 Relay 管理的顶层字段；model_reasoning_effort 由客户端管理，保持原值
 	topValues := map[string]codexTopLevelValue{
@@ -228,15 +237,18 @@ func (a *App) computeCodexProxyBaseURL() string {
 	if cfg == nil {
 		return "http://127.0.0.1:8080/v1"
 	}
-	host := strings.TrimSpace(cfg.Server.Host)
+	host := strings.Trim(strings.TrimSpace(cfg.Server.Host), "[]")
 	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
+	}
+	if host == "::" {
+		host = "::1"
 	}
 	port := cfg.Server.Port
 	if port <= 0 {
 		port = 8080
 	}
-	return fmt.Sprintf("http://%s:%d/v1", host, port)
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/v1"
 }
 
 // readCodexTopLevelString 从 TOML 顶层（首个 section 之前）读取一个字符串/数字字段的值

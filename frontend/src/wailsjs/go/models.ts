@@ -221,6 +221,35 @@ export namespace privacy {
 
 export namespace main {
 
+    export interface SubscriptionConnectionCommand {
+        content_revision: string;
+        provider: string;
+        action: string;
+        group_id: number;
+        local_key: string;
+        revision: string;
+        binding_version: number;
+    }
+    export interface SubscriptionConnectionResult {
+        content_revision: string;
+        config_path: string;
+        base_url: string;
+        running: boolean;
+        backup_available: boolean;
+        revision: string;
+        binding_version: number;
+        endpoint_ready: boolean;
+        official_url: string;
+        managed: boolean;
+        official_enabled: boolean;
+        snippet: string;
+        command: string;
+    }
+ export interface SubscriptionAccountCommand { login_method?: string; action: string; provider: string; id?: string; name?: string; enabled?: boolean; credential_json?: string; code?: string; }
+ export interface SubscriptionAccountInfo { id: string; provider: string; name: string; email: string; plan: string; account_id: string; expires_at: string; enabled: boolean; status: string; revision: number; updated_at: string; }
+ export interface SubscriptionAccountResult { accounts: SubscriptionAccountInfo[]; account?: SubscriptionAccountInfo; login?: { id: string; provider: string; state: string; url: string; code: string; error: string; account?: SubscriptionAccountInfo }; }
+
+
 	export class BatchHealthCheckResult {
 	    success: boolean;
 	    message: string;
@@ -685,6 +714,11 @@ export class UpdateSettingInput {
 	    }
 	}
 	export class ClaudeCredentialGroupInfo {
+	    auth_mode: string;
+	    subscription?: { account_id?: string; version: number; enabled: boolean; key_hash?: string; action?: string; backup_targets: { channel_id: number; group_id: number; upstream_model: string }[] };
+	    local_key_configured: boolean;
+	    subscription_status: { model: string; state: string; reason: string; source: string; observed_at: string; resume_not_before: string; reset_known: boolean }[];
+	    official_verification: string;
 	    id: number;
 	    channel: string;
 	    name: string;
@@ -714,6 +748,12 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.auth_mode = source["auth_mode"];
+	        this.subscription = source["subscription"];
+	        this.local_key_configured = source["local_key_configured"];
+	        this.subscription_status = source["subscription_status"] || [];
+	        this.official_verification = source["official_verification"];
+
 	        this.id = source["id"];
 	        this.channel = source["channel"];
 	        this.name = source["name"];
@@ -962,6 +1002,11 @@ export class UpdateSettingInput {
 	    }
 	}
 	export class CodexCredentialGroupInfo {
+	    auth_mode: string;
+	    subscription?: { account_id?: string; version: number; enabled: boolean; key_hash?: string; action?: string; backup_targets: { channel_id: number; group_id: number; upstream_model: string }[] };
+	    local_key_configured: boolean;
+	    subscription_status: any[];
+	    official_verification: string;
 	    id: number;
 	    channel_id: number;
 	    name: string;
@@ -995,6 +1040,11 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.auth_mode = source["auth_mode"];
+	        this.subscription = source["subscription"];
+	        this.local_key_configured = source["local_key_configured"];
+	        this.subscription_status = source["subscription_status"];
+	        this.official_verification = source["official_verification"];
 	        this.id = source["id"];
 	        this.channel_id = source["channel_id"];
 	        this.name = source["name"];
@@ -1116,6 +1166,8 @@ export class UpdateSettingInput {
 	    }
 	}
 	export class CreateCodexCredentialGroupInput {
+	    auth_mode: string;
+	    subscription?: { account_id?: string; version: number; enabled: boolean; key_hash?: string; action?: string; backup_targets: { channel_id: number; group_id: number; upstream_model: string }[] };
 	    channel_id: number;
 	    name: string;
 	    api_key: string;
@@ -1145,6 +1197,8 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.auth_mode = source["auth_mode"];
+	        this.subscription = source["subscription"];
 	        this.channel_id = source["channel_id"];
 	        this.name = source["name"];
 	        this.api_key = source["api_key"];
@@ -1170,6 +1224,8 @@ export class UpdateSettingInput {
 	    }
 }
 	export class UpdateCodexCredentialGroupInput {
+	    auth_mode: string;
+	    subscription?: { account_id?: string; version: number; enabled: boolean; key_hash?: string; action?: string; backup_targets: { channel_id: number; group_id: number; upstream_model: string }[] };
 	    name: string;
 	    api_key: string;
 	    is_default: boolean;
@@ -1195,6 +1251,8 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.auth_mode = source["auth_mode"];
+	        this.subscription = source["subscription"];
 	        this.name = source["name"];
 	        this.api_key = source["api_key"];
 	        this.is_default = source["is_default"];
@@ -1294,6 +1352,8 @@ export class UpdateSettingInput {
 	    }
 	}
 	export class CreateClaudeCredentialGroupInput {
+	    auth_mode: string;
+	    subscription?: { account_id?: string; version: number; enabled: boolean; key_hash?: string; action?: string; backup_targets: { channel_id: number; group_id: number; upstream_model: string }[] };
 	    channel: string;
 	    name: string;
 	    token: string;
@@ -1317,6 +1377,9 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.auth_mode = source["auth_mode"];
+	        this.subscription = source["subscription"];
+
 	        this.channel = source["channel"];
 	        this.name = source["name"];
 	        this.token = source["token"];
@@ -1363,6 +1426,7 @@ export class UpdateSettingInput {
 
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+
 	        this.channel = source["channel"];
 	        this.credential_group_id = source["credential_group_id"];
 	        this.name = source["name"];

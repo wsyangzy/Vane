@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	claudestore "ai-relay-forwarder/internal/providers/claude/store"
+	codexstore "ai-relay-forwarder/internal/providers/codex/store"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -898,6 +901,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 			description: "Codex 凭证分组组合计费规则",
 		},
 	}); err != nil {
+		return err
+	}
+	if err := codexstore.EnsureCodexSubscriptionSchema(ctx, s.GetWriteDB()); err != nil {
 		return err
 	}
 	if err := runMigrations("codex_endpoints", codexEndpointMigrations); err != nil {
@@ -1868,7 +1874,7 @@ END;`
 			}
 		}
 	}
-	return nil
+	return claudestore.EnsureClaudeSubscriptionSchema(ctx, s.GetWriteDB())
 }
 
 func (s *SQLiteAdapter) backfillClaudeCredentialGroups(ctx context.Context) error {

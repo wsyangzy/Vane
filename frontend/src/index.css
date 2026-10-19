@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* Wails v3 reads this CSS property to drag a frameless window. Interactive
+   descendants override it so navigation and window buttons remain clickable. */
+.desktop-titlebar {
+  --wails-draggable: drag;
+}
+
+.desktop-titlebar :is(button, a, input, select, textarea, [role="tablist"], [role="menu"]),
+.desktop-window-controls {
+  --wails-draggable: no-drag;
+}
+
 :root {
   --duration-quick: 150ms;
   --duration-fast: 250ms;
@@ -34,10 +45,11 @@
   --toast-ease: var(--ease-smooth-out);
 }
 
-/* 避免内容高度变化导致滚动条出现/消失引起的页面抖动（Windows 下尤为明显） */
-html {
-  overflow-y: scroll;
-  scrollbar-gutter: stable;
+/* App owns scrolling below Header so window controls never share a scrollbar. */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
 }
 
 /* 自定义动画 */
@@ -322,24 +334,13 @@ html {
   }
 }
 
-/* 自定义滚动条 */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+/* 隐藏滚动条外观，保留页面、列表和弹窗的滚动能力。 */
+* {
+  scrollbar-width: none;
 }
 
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: #f1f5f9;
-  border-radius: 3px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+*::-webkit-scrollbar {
+  display: none;
 }
 
 /* 定高的横向滚动区：滚动条会从内容高度里扣掉几像素，导致同类卡片高度不一，
@@ -354,7 +355,7 @@ html {
 
 /* 确保 root 元素填满视口 */
 #root {
-  min-height: 100vh;
+  height: 100%;
   width: 100%;
 }
 

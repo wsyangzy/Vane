@@ -102,6 +102,9 @@ CREATE TABLE IF NOT EXISTS claude_credential_groups (
 		t.Fatalf("创建表失败: %v", err)
 	}
 
+	if err := store.EnsureClaudeSubscriptionSchema(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
 	return db, func() {
 		_ = db.Close()
 		_ = os.RemoveAll(tmpDir)

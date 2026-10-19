@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 
 	"ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/tracking"
@@ -14,9 +15,11 @@ const DefaultCodexCredentialGroupName = "默认分组"
 
 // CodexCredentialGroupService 管理 Codex 渠道下的 API Key 分组。
 type CodexCredentialGroupService struct {
-	groupStore    store.CodexCredentialGroupStore
-	channelStore  store.CodexChannelStore
-	endpointStore store.CodexEndpointStore
+	mu              sync.Mutex
+	validateAccount func(context.Context, string) error
+	groupStore      store.CodexCredentialGroupStore
+	channelStore    store.CodexChannelStore
+	endpointStore   store.CodexEndpointStore
 }
 
 func NewCodexCredentialGroupService(groupStore store.CodexCredentialGroupStore, channelStore store.CodexChannelStore, endpointStore store.CodexEndpointStore) *CodexCredentialGroupService {
@@ -83,6 +86,11 @@ func (s *CodexCredentialGroupService) EnsureDefaultGroup(ctx context.Context, ch
 }
 
 func (s *CodexCredentialGroupService) CreateGroup(ctx context.Context, record *store.CodexCredentialGroupRecord) (*store.CodexCredentialGroupRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.normalizeSubscription(ctx, record, nil); err != nil {
+		return nil, err
+	}
 	if err := s.normalizeAndValidate(ctx, record, 0); err != nil {
 		return nil, err
 	}
@@ -90,6 +98,11 @@ func (s *CodexCredentialGroupService) CreateGroup(ctx context.Context, record *s
 }
 
 func (s *CodexCredentialGroupService) UpdateGroup(ctx context.Context, id int64, record *store.CodexCredentialGroupRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if record == nil {
+		return fmt.Errorf("record 不能为空")
+	}
 	existing, err := s.groupStore.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -99,6 +112,9 @@ func (s *CodexCredentialGroupService) UpdateGroup(ctx context.Context, id int64,
 	}
 	record.ID = id
 	record.ChannelID = existing.ChannelID
+	if err := s.normalizeSubscription(ctx, record, existing); err != nil {
+		return err
+	}
 	if err := s.normalizeAndValidate(ctx, record, id); err != nil {
 		return err
 	}
@@ -185,7 +201,7 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	if record.Name == "" {
 		return fmt.Errorf("凭证分组名不能为空")
 	}
-	if record.ApiKey == "" {
+	if record.ApiKey == "" && record.AuthMode != "client_passthrough" {
 		return fmt.Errorf("API Key 不能为空")
 	}
 	channel, err := s.channelStore.GetByID(ctx, record.ChannelID)

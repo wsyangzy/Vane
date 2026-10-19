@@ -88,7 +88,13 @@ func (m *Manager) activeEndpointCandidates(excludeKeys []string, turnKey string)
 	if len(activeEndpoints) == 0 {
 		return nil
 	}
-	return filterRoutableEndpoints(activeEndpoints, excludeKeys)
+	var ordinary []*Endpoint
+	for _, ep := range activeEndpoints {
+		if ep != nil && ep.Config.AuthMode != "client_passthrough" {
+			ordinary = append(ordinary, ep)
+		}
+	}
+	return filterRoutableEndpoints(ordinary, excludeKeys)
 }
 
 // filterRoutableEndpoints 请求选路的通用过滤：排除本次请求已尝试的端点、
@@ -117,7 +123,7 @@ func filterRoutableEndpoints(endpoints []*Endpoint, excludeKeys []string) []*End
 		if !failoverEnabled {
 			continue
 		}
-		if !endpointHealthAllowsRouting(ep) {
+		if ep.Config.AuthMode != "client_passthrough" && !endpointHealthAllowsRouting(ep) {
 			continue
 		}
 		filtered = append(filtered, ep)

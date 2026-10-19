@@ -29,13 +29,16 @@ import (
 	"ai-relay-forwarder/internal/privacy"
 	"ai-relay-forwarder/internal/providers/claude/proxy"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
 	claudeservice "ai-relay-forwarder/internal/providers/claude/service"
 	claudestore "ai-relay-forwarder/internal/providers/claude/store"
 	codexproxy "ai-relay-forwarder/internal/providers/codex/proxy"
+	codexsubscription "ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	codexservice "ai-relay-forwarder/internal/providers/codex/service"
 	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/service"
 	"ai-relay-forwarder/internal/store"
+	"ai-relay-forwarder/internal/subscriptions/accounts"
 	"ai-relay-forwarder/internal/tracking"
 	"ai-relay-forwarder/internal/transport"
 	"ai-relay-forwarder/internal/utils"
@@ -79,6 +82,9 @@ type App struct {
 	// Claude 凭证分组 (SQLite)
 	claudeCredentialGroupStore   claudestore.ClaudeCredentialGroupStore      // Claude Token/API Key 分组
 	claudeCredentialGroupService *claudeservice.ClaudeCredentialGroupService // Claude 凭证分组业务
+	claudeSubscriptions          *subscription.Controller
+	codexSubscriptions           *codexsubscription.Controller
+	subscriptionAccounts         *accounts.Manager
 
 	// 模型定价存储 (SQLite)
 	modelPricingStore   store.ModelPricingStore      // 模型定价数据持久化
@@ -692,6 +698,8 @@ func (a *App) setupEndpointStore() {
 		return
 	}
 
+	a.setupSubscriptionAccounts(db)
+
 	// 创建 EndpointStore
 	a.endpointStore = claudestore.NewSQLiteEndpointStore(db)
 
@@ -701,7 +709,20 @@ func (a *App) setupEndpointStore() {
 
 	// 创建 Claude CredentialGroupStore / Service
 	a.claudeCredentialGroupStore = claudestore.NewSQLiteClaudeCredentialGroupStore(db)
+	a.claudeSubscriptions = subscription.NewController(claudestore.NewSQLiteClaudeSubscriptionStore(db))
+	a.claudeSubscriptions.SetOnChange(a.endpointManager.NotifyEndpointStatusChange)
 	a.claudeCredentialGroupService = claudeservice.NewClaudeCredentialGroupService(a.claudeCredentialGroupStore, a.channelStore, a.endpointStore)
+	if a.subscriptionAccounts != nil {
+		validate := func(ctx context.Context, id string) error { return a.subscriptionAccounts.Validate(ctx, "claude", id) }
+		a.claudeCredentialGroupService.SetAccountValidator(validate)
+		a.claudeSubscriptions.SetCredentialRejector(func(ctx context.Context, id, token string) {
+			a.subscriptionAccounts.RejectAccess(ctx, "claude", id, token)
+		})
+		a.claudeSubscriptions.SetAccountResolver(func(ctx context.Context, id string) (string, string, error) {
+			c, e := a.subscriptionAccounts.Resolve(ctx, "claude", id)
+			return c.AccessToken, c.AccountID, e
+		}, validate)
+	}
 
 	// 创建 EndpointService
 	a.endpointService = claudeservice.NewEndpointService(a.endpointStore, a.endpointManager, a.config, a.claudeCredentialGroupStore)
@@ -886,6 +907,18 @@ func (a *App) ensureCodexProviderService() {
 	codexChannelService := codexservice.NewCodexChannelService(codexChannelStore, codexEndpointStore)
 	codexEndpointService := codexservice.NewCodexEndpointService(codexEndpointStore, codexChannelStore, codexCredentialGroupStore)
 	codexCredentialGroupService := codexservice.NewCodexCredentialGroupService(codexCredentialGroupStore, codexChannelStore, codexEndpointStore)
+	codexSubscriptions := codexsubscription.NewController(codexstore.NewSQLiteCodexSubscriptionStore(db))
+	if a.subscriptionAccounts != nil {
+		validate := func(ctx context.Context, id string) error { return a.subscriptionAccounts.Validate(ctx, "codex", id) }
+		codexCredentialGroupService.SetAccountValidator(validate)
+		codexSubscriptions.SetCredentialRejector(func(ctx context.Context, id, token string) {
+			a.subscriptionAccounts.RejectAccess(ctx, "codex", id, token)
+		})
+		codexSubscriptions.SetAccountResolver(func(ctx context.Context, id string) (string, string, error) {
+			c, e := a.subscriptionAccounts.Resolve(ctx, "codex", id)
+			return c.AccessToken, c.AccountID, e
+		}, validate)
+	}
 
 	a.mu.Lock()
 	if a.codexProviderService == nil {
@@ -899,6 +932,7 @@ func (a *App) ensureCodexProviderService() {
 		a.codexChannelService = codexChannelService
 		a.codexEndpointService = codexEndpointService
 		a.codexCredentialGroupService = codexCredentialGroupService
+		a.codexSubscriptions = codexSubscriptions
 	}
 	a.mu.Unlock()
 }
@@ -1445,11 +1479,23 @@ func (a *App) setupProxyHandler() {
 	a.proxyHandler = proxy.NewHandler(a.endpointManager, a.config)
 	a.proxyHandler.SetEventBus(a.eventBus)
 	a.proxyHandler.SetPrivacyService(a.privacyService)
+	a.proxyHandler.SetSubscriptionController(a.claudeSubscriptions)
 
 	// 创建中间件（Claude 代理日志附加 provider=claude，用于文件分流）
 	a.loggingMiddleware = middleware.NewLoggingMiddleware(a.logger.With("provider", "claude"))
 	a.monitoringMiddleware = middleware.NewMonitoringMiddleware(a.endpointManager)
 	a.authMiddleware = middleware.NewAuthMiddleware(a.config.Auth)
+	if a.claudeSubscriptions != nil {
+		a.authMiddleware.SetRequestAuthenticator(func(r *http.Request) (context.Context, bool, error) {
+			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+				return a.claudeSubscriptions.Authenticate(r)
+			}
+			if a.codexSubscriptions != nil {
+				return a.codexSubscriptions.Authenticate(r)
+			}
+			return a.claudeSubscriptions.Authenticate(r)
+		})
+	}
 
 	// 连接组件
 	a.monitoringMiddleware.SetEventBus(a.eventBus)
@@ -1749,6 +1795,7 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 		SuspensionMgr: a.codexSuspensionMgr,   // 请求挂起队列
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker, a.privacyService)
+	baseHandler.SetSubscriptionController(a.codexSubscriptions)
 	a.codexHTTPHandler = baseHandler
 
 	// 公用 Claude 代理的鉴权中间件 + 日志中间件
@@ -1764,6 +1811,7 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 	// 同时注册精确路径和子树路径（带尾斜杠），以匹配子路径请求（如 /v1/responses/{id}）。
 	// 同时注册不带 /v1 前缀的路径，因为 Codex CLI 的 base_url 可能不含 /v1。
 	codexBasePaths := []string{
+		"/backend-api/codex",
 		"/v1/chat/completions",
 		"/v1/completions",
 		"/v1/models",

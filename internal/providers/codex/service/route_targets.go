@@ -44,7 +44,7 @@ func BuildRouteCatalog(ctx context.Context, channelStore store.CodexChannelStore
 				return nil, err
 			}
 			for _, group := range groups {
-				if group != nil {
+				if group != nil && group.AuthMode != "client_passthrough" {
 					entry.Groups = append(entry.Groups, routing.CatalogGroup{ID: group.ID, Name: group.Name})
 				}
 			}

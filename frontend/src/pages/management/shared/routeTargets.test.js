@@ -1,4 +1,6 @@
 import test from 'node:test';
+
+import { describeRouteExecution } from './routeTargets.js';
 import assert from 'node:assert/strict';
 
 import {
@@ -94,4 +96,22 @@ test('route snapshots describe the rule, the mode and the stage that served the 
   for (const raw of ['', '  ', 'not json', '{}', null, undefined]) {
     assert.equal(describeRouteSnapshot(raw), null);
   }
+});
+
+test('execution trace preserves model/scope and keeps old records unknown', () => {
+  assert.equal(describeRouteExecution('{"kind":"model_rule","target":1}'), null);
+  assert.equal(describeRouteExecution('broken'), null);
+  const trace = describeRouteExecution(JSON.stringify({ attempts: 2, wait_ms: 15, stop_reason: 'retry_budget_exhausted', execution: { dropped_events: 3, events: [{ candidate: { channel: 'B', model: 'X' }, action: 'failed', reason: 'model_not_found', failure_scope: 'model' }] } }));
+  assert.deepEqual(trace, { subscription: null, attempts: 2, waitMs: 15, stopReason: 'retry_budget_exhausted', dropped: 3, events: [{ channel: 'B', model: 'X', action: 'failed', reason: 'model_not_found', scope: 'model' }] });
+});
+
+
+test('subscription execution exposes public binding and preserves uncertain recovery', () => {
+  const snapshot = { kind: 'subscription', channel: 'official', subscription: { group_id: 7, binding_version: 4, official_enabled: false, availability: [{ model: 'family:opus', state: 'due_unverified', reason: 'quota_exhausted', source: 'observed-header', resume_not_before: '2026-10-16T12:00:00Z', reset_known: false }] }, execution: { events: [] } };
+  const execution = describeRouteExecution(snapshot);
+  assert.equal(execution.subscription.groupId, 7);
+  assert.equal(execution.subscription.officialEnabled, false);
+  assert.equal(execution.subscription.availability[0].state, 'due_unverified');
+  assert.equal(execution.subscription.availability[0].resetKnown, false);
+  assert.match(describeRouteSnapshot(snapshot).title, /官方订阅与授权备用/);
 });

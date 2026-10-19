@@ -570,3 +570,11 @@ export function GetCodexGlobalConfig() {
 export function UpdateCodexGlobalConfig(arg1) {
   return Call.ByName("main.App.UpdateCodexGlobalConfig", arg1);
 }
+
+export function ManageSubscriptionAccounts(arg1) {
+  return Call.ByName("main.App.ManageSubscriptionAccounts", arg1);
+}
+
+export function ManageSubscriptionConnection(arg1) {
+  return Call.ByName("main.App.ManageSubscriptionConnection", arg1);
+}

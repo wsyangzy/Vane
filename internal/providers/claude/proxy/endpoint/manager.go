@@ -21,6 +21,7 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/events"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/transport"
 )
 
@@ -46,9 +47,14 @@ type EndpointStatus struct {
 
 // Endpoint represents an endpoint with its configuration and status
 type Endpoint struct {
-	Config config.EndpointConfig
-	Status EndpointStatus
-	mutex  sync.RWMutex
+	stateVersion uint64
+	Config       config.EndpointConfig
+	Status       EndpointStatus
+	mutex        sync.RWMutex
+}
+
+func (ep *Endpoint) RouteStateVersion() uint64 {
+	return routing.StateVersion(&ep.stateVersion)
 }
 
 // Manager manages endpoints and their health status

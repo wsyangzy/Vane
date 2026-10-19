@@ -257,3 +257,7 @@ export function UpdatePrivacyRule(arg1:number,arg2:privacy.Rule):Promise<privacy
 export function UpdatePreferredPort(arg1:number):Promise<void>;
 
 export function UpdateSetting(arg1:main.UpdateSettingInput):Promise<void>;
+
+export function ManageSubscriptionAccounts(arg1:main.SubscriptionAccountCommand):Promise<main.SubscriptionAccountResult>;
+
+export function ManageSubscriptionConnection(arg1:main.SubscriptionConnectionCommand):Promise<main.SubscriptionConnectionResult>;

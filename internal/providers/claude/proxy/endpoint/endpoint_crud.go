@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"ai-relay-forwarder/config"
@@ -256,6 +257,7 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 	// 更新配置
 	targetEndpoint.mutex.Lock()
 	targetEndpoint.Config = cfg
+	atomic.StoreUint64(&targetEndpoint.stateVersion, 0)
 	targetEndpoint.mutex.Unlock()
 	m.clearPreferredEndpoints()
 

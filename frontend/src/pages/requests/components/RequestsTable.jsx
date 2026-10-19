@@ -242,7 +242,7 @@ const EndpointChainCell = ({ request }) => {
       {chainItems.length > 0 && renderTooltip(
         <div className="min-w-[220px] max-w-[360px] flex flex-col min-h-0">
           <div className="shrink-0 px-3 pt-3 pb-1 text-[10px] text-slate-400 font-medium uppercase tracking-wide">转移路径</div>
-          <div className="overflow-y-auto min-h-0 px-3 pb-3 space-y-1" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(100,116,139,0.5) transparent' }}>
+          <div className="overflow-y-auto min-h-0 px-3 pb-3 space-y-1">
             {chainItems.map((item, idx) => {
               const { channel, credentialGroup, endpoint } = parseChainNode(item);
               const isLast = idx === chainItems.length - 1;

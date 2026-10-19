@@ -30,6 +30,7 @@ const (
 	// KindModelCapability 激活渠道的凭证分组都不支持请求模型时，
 	// 只在本次请求内借用其它渠道，不切换全局激活渠道。
 	KindModelCapability Kind = "model_capability"
+	KindSubscription    Kind = "subscription"
 )
 
 // Target 路由目标。用 ID 引用渠道与凭证分组，渠道改名不会让配置失效。
@@ -241,6 +242,8 @@ func (k Kind) ExhaustedReason() string {
 		return "route_exhausted"
 	case KindNonStream:
 		return "non_stream_route_exhausted"
+	case KindSubscription:
+		return "subscription_route_exhausted"
 	default:
 		return "endpoint_exhausted"
 	}
@@ -248,13 +251,36 @@ func (k Kind) ExhaustedReason() string {
 
 // Snapshot request_logs.route_snapshot 的内容。只记录规则标识与阶段序号，不含请求内容。
 type Snapshot struct {
-	Kind Kind   `json:"kind"`
-	ID   int64  `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Subscription *SubscriptionSnapshot `json:"subscription,omitempty"`
+	Execution    *Ledger               `json:"execution,omitempty"`
+	Attempts     int                   `json:"attempts,omitempty"`
+	WaitMs       int64                 `json:"wait_ms,omitempty"`
+	StopReason   string                `json:"stop_reason,omitempty"`
+	Kind         Kind                  `json:"kind"`
+	ID           int64                 `json:"id,omitempty"`
+	Name         string                `json:"name,omitempty"`
 	// Channel 非流改道 / 模型能力改道的来源渠道
 	Channel string `json:"channel,omitempty"`
 	Mode    string `json:"mode,omitempty"`
 	Target  int    `json:"target"`
+}
+
+// SubscriptionSnapshot contains public binding/availability evidence only.
+// Credentials and local key hashes never enter a request's persisted trace.
+type SubscriptionSnapshot struct {
+	GroupID              int64                  `json:"group_id"`
+	BindingVersion       int64                  `json:"binding_version"`
+	OfficialEnabled      bool                   `json:"official_enabled"`
+	OfficialVerification string                 `json:"official_verification"`
+	Availability         []AvailabilitySnapshot `json:"availability,omitempty"`
+}
+type AvailabilitySnapshot struct {
+	Model           string `json:"model"`
+	State           string `json:"state"`
+	Reason          string `json:"reason"`
+	Source          string `json:"source"`
+	ResumeNotBefore string `json:"resume_not_before"`
+	ResetKnown      bool   `json:"reset_known"`
 }
 
 // NewSnapshot 按决策构造快照；sourceChannel 为请求发起时的激活渠道名。

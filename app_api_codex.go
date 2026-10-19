@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/providers/codex/proxy"
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	codexstore "ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
@@ -98,6 +99,11 @@ type CodexChannelCandidateInfo struct {
 
 // CodexCredentialGroupInfo 提供给前端展示的凭证分组信息。
 type CodexCredentialGroupInfo struct {
+	AuthMode                               string                                  `json:"auth_mode"`
+	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
+	LocalKeyConfigured                     bool                                    `json:"local_key_configured"`
+	SubscriptionStatus                     []subscription.Pause                    `json:"subscription_status"`
+	OfficialVerification                   string                                  `json:"official_verification"`
 	ID                                     int64                                   `json:"id"`
 	ChannelID                              int64                                   `json:"channel_id"`
 	Name                                   string                                  `json:"name"`
@@ -193,6 +199,8 @@ type UpdateCodexChannelInput struct {
 }
 
 type CreateCodexCredentialGroupInput struct {
+	AuthMode                               string                                  `json:"auth_mode"`
+	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
 	ChannelID                              int64                                   `json:"channel_id"`
 	Name                                   string                                  `json:"name"`
 	ApiKey                                 string                                  `json:"api_key"`
@@ -218,6 +226,8 @@ type CreateCodexCredentialGroupInput struct {
 }
 
 type UpdateCodexCredentialGroupInput struct {
+	AuthMode                               string                                  `json:"auth_mode"`
+	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
 	Name                                   string                                  `json:"name"`
 	ApiKey                                 string                                  `json:"api_key"`
 	IsDefault                              bool                                    `json:"is_default"`
@@ -537,7 +547,7 @@ func (a *App) UpdateCodexChannelByID(id int64, input UpdateCodexChannelInput) er
 		if groupErr != nil {
 			return rollbackChannel(fmt.Errorf("读取 Codex 默认凭证分组失败: %w", groupErr))
 		}
-		if defaultGroup != nil && defaultGroup.ApiKey == previous.ApiKey {
+		if defaultGroup != nil && defaultGroup.AuthMode != subscription.ClientPassthrough && defaultGroup.ApiKey == previous.ApiKey {
 			groupCopy := *defaultGroup
 			previousDefaultGroup = &groupCopy
 			defaultGroup.ApiKey = record.ApiKey
@@ -933,12 +943,18 @@ func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	created, err := credentialGroupService.CreateGroup(ctx, codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.ModelPolicy, input.ModelMapping, input.SupportedModels, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules))
+	record := codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.ModelPolicy, input.ModelMapping, input.SupportedModels, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules)
+	record.AuthMode = input.AuthMode
+	record.Subscription = input.Subscription
+	created, err := credentialGroupService.CreateGroup(ctx, record)
 	if err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("创建 Codex 凭证分组失败: %w", err)
 	}
 	if logger != nil {
 		logger.Info("✅ Codex 凭证分组已创建", "channel_id", created.ChannelID, "name", created.Name, "is_default", created.IsDefault)
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return CodexCredentialGroupInfo{}, err
 	}
 	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
@@ -967,7 +983,9 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组不存在: %d", id)
 	}
 	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.ModelPolicy, input.ModelMapping, input.SupportedModels, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules)
-	if record.ApiKey == "" {
+	record.AuthMode = input.AuthMode
+	record.Subscription = input.Subscription
+	if record.ApiKey == "" && input.AuthMode != subscription.ClientPassthrough {
 		record.ApiKey = existing.ApiKey
 	}
 	if input.ModelMultipliers == nil {
@@ -994,6 +1012,9 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 	}
 	if logger != nil {
 		logger.Info("✅ Codex 凭证分组已更新", "id", id, "name", updated.Name, "is_default", updated.IsDefault)
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return CodexCredentialGroupInfo{}, err
 	}
 	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
@@ -1025,6 +1046,9 @@ func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
 	if logger != nil {
 		logger.Info("✅ Codex 凭证分组已删除", "id", id)
 	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return err
+	}
 	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
 	return nil
@@ -1044,6 +1068,9 @@ func (a *App) SetDefaultCodexCredentialGroup(id int64) error {
 	defer cancel()
 	if err := credentialGroupService.SetDefault(ctx, id); err != nil {
 		return fmt.Errorf("设置默认 Codex 凭证分组失败: %w", err)
+	}
+	if err := a.reloadCodexEndpointManager(); err != nil {
+		return err
 	}
 	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
@@ -1713,7 +1740,8 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 	if record == nil {
 		return CodexCredentialGroupInfo{}
 	}
-	return CodexCredentialGroupInfo{
+	info := CodexCredentialGroupInfo{
+		AuthMode: record.AuthMode, OfficialVerification: "not_verified",
 		ID:                                     record.ID,
 		ChannelID:                              record.ChannelID,
 		Name:                                   record.Name,
@@ -1741,6 +1769,16 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		CreatedAt:                              formatCodexTime(record.CreatedAt),
 		UpdatedAt:                              formatCodexTime(record.UpdatedAt),
 	}
+	if record.Subscription != nil {
+		binding := *record.Subscription
+		info.LocalKeyConfigured = binding.KeyHash != ""
+		binding.KeyHash = ""
+		binding.Action = ""
+		binding.GroupID = record.ID
+		binding.ChannelID = record.ChannelID
+		info.Subscription = &binding
+	}
+	return info
 }
 
 func copyCodexModelMapping(modelMapping map[string]string) map[string]string {
@@ -1793,7 +1831,11 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 	info.CredentialGroups = make([]CodexCredentialGroupInfo, 0, len(credentialGroups))
 	groupNames := make(map[int64]string, len(credentialGroups))
 	for _, group := range credentialGroups {
-		info.CredentialGroups = append(info.CredentialGroups, buildCodexCredentialGroupInfo(group))
+		groupInfo := buildCodexCredentialGroupInfo(group)
+		if a.codexSubscriptions != nil && group.Subscription != nil && group.AuthMode == subscription.ClientPassthrough {
+			groupInfo.SubscriptionStatus = a.codexSubscriptions.Status(context.Background(), *group.Subscription)
+		}
+		info.CredentialGroups = append(info.CredentialGroups, groupInfo)
 		groupNames[group.ID] = group.Name
 	}
 

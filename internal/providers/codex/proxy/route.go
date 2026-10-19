@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ai-relay-forwarder/internal/bodyrewrite"
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	"ai-relay-forwarder/internal/providers/codex/store"
 	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
@@ -23,21 +24,32 @@ type codexRoute struct {
 
 // codexRouteStage 路由阶段：在 channel（groupID > 0 时只取该凭证分组）内跑一个端点周期
 type codexRouteStage struct {
-	channel       *store.CodexChannelRecord
-	groupID       int64
-	upstreamModel string
-	index         int    // route_snapshot.target：0 为来源渠道
-	snapshotJSON  string // 进入本阶段时写入 request_logs.route_snapshot
+	subscriptionStatus func() *routing.SubscriptionSnapshot
+	execution          *routing.Ledger
+	budget             *routing.Budget
+	stateKeys          []string
+	turn               string
+	channel            *store.CodexChannelRecord
+	groupID            int64
+	upstreamModel      string
+	index              int    // route_snapshot.target：0 为来源渠道
+	snapshotJSON       string // 进入本阶段时写入 request_logs.route_snapshot
 }
 
 // isCodexGenerationPath 请求级路由只作用于生成路径
 func isCodexGenerationPath(path string) bool {
-	return path == "/v1/responses" || path == "/responses"
+	return path == "/v1/responses" || path == "/responses" || path == "/backend-api/codex/responses" || path == "/backend-api/codex/responses/compact" || path == "/v1/responses/compact" || path == "/responses/compact"
 }
 
 // planCodexRoute 在隐私脱敏之后做路由决策：模型规则 > 非流改道 > 默认流程。未命中返回 nil，行为不变。
 func (h *Handler) planCodexRoute(r *http.Request, body []byte, streaming bool, requestID string) *codexRoute {
-	if h.manager == nil || r == nil || r.URL == nil || !isCodexGenerationPath(r.URL.Path) {
+	if h.manager == nil || r == nil || r.URL == nil {
+		return nil
+	}
+	if subscription.FromContext(r.Context()) != nil {
+		return h.planSubscriptionRoute(r, body, streaming)
+	}
+	if !isCodexGenerationPath(r.URL.Path) {
 		return nil
 	}
 	active := h.manager.GetActiveChannel()
@@ -89,7 +101,16 @@ func (h *Handler) planCodexRoute(r *http.Request, body []byte, streaming bool, r
 // serveRouted 按阶段依次尝试：每个阶段只跑一个端点周期，不进入 loop_retry 轮次与挂起等待，
 // 也不触发渠道间故障转移——全局激活渠道全程不读写。
 func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byte, requestID string, startTime time.Time, isStreaming bool, route *codexRoute) {
-	var failedIDs []int64
+	ledger := &routing.Ledger{}
+	cfg := h.retryConfig()
+	budget := routing.NewBudget(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
+	r = r.WithContext(routing.WithBudget(r.Context(), budget))
+	var currentStage *codexRouteStage
+	defer func() {
+		if currentStage != nil {
+			h.recordRouteSnapshot(requestID, currentStage.executionSnapshot())
+		}
+	}()
 	var endpointChain []chainNode
 	attemptCount := 0
 	var lastErr error
@@ -102,6 +123,21 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 
 	for i := range route.stages {
 		stage := &route.stages[i]
+		stage.execution, stage.budget = ledger, budget
+		stage.stateKeys = codexStateKeys(r, body)
+		stage.turn = routing.ExplicitTurn(r.Context(), r.Header)
+		currentStage = stage
+		var failedIDs []int64
+		if err := r.Context().Err(); err != nil {
+			h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", nil, requestModel)
+			return
+		}
+		if err := budget.Check(); err != nil {
+			budget.Stop()
+			lastErr = err
+			break
+		}
 		result := h.tryEndpointCycleForStage(
 			w, r, body, requestID, startTime,
 			isStreaming, stage.channel.Name, requestModel,
@@ -124,9 +160,20 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 	}
 
 	failureReason := route.kind.ExhaustedReason()
+	if currentStage != nil {
+		h.recordRouteSnapshot(requestID, currentStage.executionSnapshot())
+	}
+	if errors.Is(lastErr, routing.ErrBudgetExhausted) {
+		failureReason = "retry_budget_exhausted"
+	}
 	detail := lastSummary
 	if strings.TrimSpace(detail) == "" && lastErr != nil {
 		detail = lastErr.Error()
+	}
+	if len(endpointChain) == 0 {
+		if reason := ledger.LastSkipReason(); strings.HasPrefix(reason, "state_") {
+			failureReason, detail = reason, reason
+		}
 	}
 	h.logger.Error("[Codex 请求失败]",
 		"provider", "codex",
@@ -154,10 +201,19 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 	// 上游从未给出 HTTP 响应：追踪不记状态码，给客户端的码只是协议必需
 	statusCode := http.StatusServiceUnavailable
 	switch {
+	case errors.Is(lastErr, routing.ErrBudgetExhausted):
+		statusCode = http.StatusGatewayTimeout
+	case strings.HasPrefix(failureReason, "state_"):
+		statusCode = http.StatusBadRequest
 	case len(endpointChain) > 0:
 		// 发出过请求但只有网络错误：沿用 Codex 现有的 503
-	case quotaBlocked:
+	case quotaBlocked || subscription.FromContext(r.Context()) != nil:
 		failureReason = "daily_cost_limit_exceeded"
+		if sub := subscription.FromContext(r.Context()); sub != nil {
+			failureReason = "subscription_unavailable"
+			detail = failureReason
+			w.Header().Set("Retry-After", h.subscriptionRetryAfter(r.Context(), sub.Binding))
+		}
 		statusCode = http.StatusTooManyRequests
 	default:
 		// 一次都没发出：路由配置当前无法服务这条请求，重试不会改变结果，回不可重试的 400

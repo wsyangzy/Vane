@@ -12,6 +12,8 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -140,6 +142,9 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 	loopCount := 0
 	// 请求级路由：流式请求只可能命中模型规则，非流改道天然不参与
 	route := planClaudeRoute(sh.endpointManager, r, bodyBytes, true, lifecycleManager.GetRequestID())
+	if subRoute := planSubscriptionRoute(sh.endpointManager, r, bodyBytes); subRoute != nil {
+		route = subRoute
+	}
 	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, nil, route)
 }
 
@@ -166,14 +171,28 @@ func clearStreamingHeaders(w http.ResponseWriter) {
 // loopCount: 当前循环轮数（用于 MaxLoops 限制）
 // route: 请求级路由执行状态；非 nil 时只按阶段尝试目标，不触发跨渠道全局故障转移
 func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int, previousErr error, route *routeRun) {
+	route.initBudget(sh.config.Retry)
+	route.watchSubscription(ctx, sh.forwarder)
+	if route != nil {
+		route.onUpdate = lifecycleManager.SetRouteSnapshot
+	}
+	defer func() {
+		if route != nil {
+			lifecycleManager.SetRouteSnapshot(route.stageSnapshotJSON())
+		}
+	}()
 	connID := lifecycleManager.GetRequestID()
 
 	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
 	// 由于 executeStreamingWithRetry 可能被递归调用（端点恢复/故障转移重启），
 	// 这个检查能在递归层级累计超过预算时及时终止
 	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
+		if route != nil {
+			route.budget.Stop()
+			route.publishSnapshot()
+		}
 		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "retry_budget_exhausted", http.StatusGatewayTimeout)
+		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 		return
 	}
 
@@ -300,13 +319,13 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		lastFailedEndpoint = ep.Config.Name // 🚀 [端点自愈] 记录当前尝试的端点
 		// 记录已尝试的端点（确保严格优先级转移，不回退）
 		epKey := endpoint.EndpointKeyForConfig(ep.Config)
-		if _, alreadyTried := triedEndpoints[epKey]; alreadyTried {
+		if _, alreadyTried := triedEndpoints[epKey]; alreadyTried && route == nil {
 			continue
 		}
 		// 路由阶段之间共享全局重试预算：预算耗尽即停止，不再进入后续目标
 		if exhausted, reason := checkRouteBudget(route, lifecycleManager); exhausted {
 			slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout)
+			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 			return
 		}
 		triedEndpoints[epKey] = struct{}{}
@@ -321,6 +340,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 		// ✅ [同端点重试] 对当前端点进行max_attempts次重试
 		endpointSuccess := false
+		localAdmissionRejected := false
 		var attempt int                 // 声明在外部，循环结束后仍可访问
 		var lastDecision *RetryDecision // 保存最后的重试决策，用于外层逻辑
 
@@ -340,8 +360,36 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 
 			// 尝试连接端点
+			if exhausted, _ := lifecycleManager.CheckRetryBudget(); exhausted {
+				if route != nil {
+					route.budget.Stop()
+					route.publishSnapshot()
+				}
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+				return
+			}
+			attemptCtx, admission, admitErr := sh.forwarder.admitSubscription(ctx, ep, route.candidate(sh.forwarder, ep, bodyBytes).Model)
+			if admitErr != nil {
+				localAdmissionRejected = true
+				if route != nil {
+					route.ledger.Skip(route.candidate(sh.forwarder, ep, bodyBytes), admitErr.Error())
+					route.publishSnapshot()
+				}
+				break
+			}
+			defer admission.Finish(0, nil, nil, false)
+			if err := beginRouteAttempt(ctx, route); err != nil {
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+				return
+			}
+			var attemptCandidate routing.Candidate
+			if route != nil {
+				attemptCandidate = route.candidate(sh.forwarder, ep, bodyBytes)
+				route.ledger.Begin(attemptCandidate)
+				lifecycleManager.SetRouteSnapshot(route.stageSnapshotJSON())
+			}
 			requestBody := rewriteBodyForRoute(sh.forwarder, lifecycleManager, outboundBody(ctx, ep, bodyBytes), ep, route)
-			resp, err := sh.forwarder.ForwardRequestToEndpoint(ctx, r, requestBody, ep)
+			resp, err := sh.forwarder.ForwardRequestToEndpoint(attemptCtx, r, requestBody, ep)
 			// 🔧 [修复] 保存最后的响应，用于获取真实HTTP状态码
 			lastResp = resp
 			if err != nil && ctx.Err() != nil {
@@ -355,6 +403,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				return
 			}
 			if err == nil && IsSuccessStatus(resp.StatusCode) {
+				if route != nil && sh.forwarder.states != nil {
+					resp.Body = routing.CaptureResponse(resp.Body, func(data []byte) {
+						sh.forwarder.observeRoutedState(ctx, r, attemptCandidate, data)
+					})
+				}
 				// 🔢 [成功计数] 成功的尝试记录到生命周期管理器
 				lifecycleManager.IncrementAttempt()
 				currentAttemptCount := lifecycleManager.GetAttemptCount()
@@ -372,6 +425,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 只设置响应头，不提前提交 200；首个上游流字节写出时再由 net/http 提交。
 				sh.setStreamingHeaders(w)
+				if subscription.FromContext(ctx) != nil {
+					copySubscriptionResponseHeaders(w, resp.Header)
+				}
 
 				// 创建Token解析器和流式处理器
 				tokenParser := sh.tokenParserFactory.NewTokenParserWithUsageTracker(connID, sh.usageTracker)
@@ -530,7 +586,12 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			// attempt: 当前端点内的尝试次数，用于退避计算
 			// globalAttemptCount: 全局尝试次数，用于限流策略
 			decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, true) // 流式请求: isStreaming=true
-			lastDecision = &decision                                                                  // 保存决策，供外层逻辑使用
+			decision = route.failureDecision(sh.forwarder, ep, bodyBytes, lastErr, decision)
+			if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized {
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "subscription_authentication_required", http.StatusUnauthorized, route)
+				return
+			}
+			lastDecision = &decision // 保存决策，供外层逻辑使用
 
 			// 检查决策结果
 			if decision.FinalStatus == "cancelled" {
@@ -650,6 +711,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				// 🔧 [P0-S1 修复] 不再向客户端发送非协议的 "data: retry:" 数据行
 
 				// 等待延迟，同时检查取消
+				if route != nil {
+					if err := waitRouteRetry(ctx, route, decision.Delay); err != nil {
+						if ctx.Err() != nil {
+							lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
+							return
+						}
+						sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+						return
+					}
+					continue
+				}
 				select {
 				case <-ctx.Done():
 					slog.Info(fmt.Sprintf("🚫 [重试取消] [%s] 等待重试期间检测到取消", connID))
@@ -664,6 +736,10 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 					// 继续下一次重试
 				}
 			}
+		}
+
+		if localAdmissionRejected {
+			continue
 		}
 
 		// 🔧 当前端点所有重试都失败了
@@ -718,7 +794,14 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
 			// 这是关键修复：之前只有渠道间故障转移才设置 RequestFailed，导致禁用渠道间转移时端点循环
 			sh.endpointManager.ClearPreferredEndpoint(ep)
-			ep.MarkRequestFailed(lastErr)
+			if route != nil {
+				route.rememberResponse(lastErr)
+				route.ledger.Fail(route.candidate(sh.forwarder, ep, bodyBytes), claudeRouteFailure(lastErr))
+				route.publishSnapshot()
+			}
+			if route == nil || claudeRouteFailure(lastErr).Scope == routing.ScopeEndpoint {
+				ep.MarkRequestFailed(lastErr)
+			}
 			// 通知前端状态变化（使用防抖机制避免频繁刷新）
 			sh.endpointManager.NotifyEndpointStatusChange()
 

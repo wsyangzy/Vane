@@ -21,6 +21,8 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/privacy"
+	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
 	"ai-relay-forwarder/internal/transport"
 )
@@ -60,6 +62,7 @@ const maxPreOutputStreamBufferBytes = 256 * 1024
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
+	subscriptions  *subscription.Controller
 	configMu       sync.RWMutex
 	manager        *EndpointManager
 	forwarder      *Forwarder
@@ -69,6 +72,7 @@ type Handler struct {
 	logger         *slog.Logger
 	usageTracker   *tracking.UsageTracker
 	privacyService *privacy.Service
+	states         *routing.StateTracker
 
 	// retryCfg 同端点重试配置（来自设置页 retry.*）
 	retryCfg config.RetryConfig
@@ -165,6 +169,7 @@ func newHandler(
 		logger:         logger,
 		usageTracker:   usageTracker,
 		privacyService: redactor,
+		states:         routing.NewStateTracker(),
 		retryCfg:       retryCfg,
 		failoverCfg:    failoverCfg,
 		suspensionMgr:  suspensionMgr,
@@ -229,7 +234,14 @@ func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestID := generateRequestID()
+	if sub := subscription.FromContext(r.Context()); sub != nil && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
+		return
+	}
 
+	if r.Body == nil {
+		r.Body = http.NoBody
+	}
 	// 1. 读取并缓存请求体（重试时需要重放）
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -315,6 +327,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if subscription.FromContext(r.Context()) != nil {
+		h.writeError(w, 400, "subscription_route_unavailable")
+		return
+	}
 	// 6. 决定外层循环轮数（loop_retry）
 	maxLoops := 1
 	if failoverCfg := h.failoverConfig(); failoverCfg.LoopRetry {
@@ -598,7 +614,7 @@ func (h *Handler) tryEndpointCycleForStage(
 	endpoint, quotaSkippedGroups, err := h.selectQuotaEligibleEndpointForModel(
 		r.Context(), channelName, requestedModel, *failedIDs, skippedGroups, quotaSkippedGroups, true, stage,
 	)
-	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && len(*endpointChain) == 0 {
+	if err != nil && !errors.Is(err, errCredentialGroupDailyCostLimitExceeded) && !errors.Is(err, errRouteCandidateIneligible) && len(*endpointChain) == 0 {
 		// 新请求不能被上一请求留下的全局 unhealthy 状态直接挡在选路之前。
 		// 仅在尚未产生真实链路时重置一次；凭证分组跳过状态仍然保留。
 		h.manager.ResetUnhealthy()
@@ -698,7 +714,14 @@ func (h *Handler) tryEndpointCycleForStage(
 		)
 
 		// 同端点重试转发
-		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID)
+		var onAttempt func()
+		if routed && stage.execution != nil {
+			onAttempt = func() {
+				stage.execution.Begin(stage.candidate(endpoint, requestedModel))
+				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+			}
+		}
+		resp, fwdErr, attempts := h.forwardWithRetry(r, body, endpoint, isStreaming, requestID, onAttempt)
 		if attempts > 0 {
 			(*endpointChain)[len(*endpointChain)-1].Attempts += attempts
 			opts := tracking.UpdateOptions{}
@@ -735,6 +758,9 @@ func (h *Handler) tryEndpointCycleForStage(
 
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
+			if routed && h.states != nil {
+				resp.Body = routing.CaptureResponse(resp.Body, func(data []byte) { h.observeRoutedState(r, stage.candidate(endpoint, requestedModel), data) })
+			}
 			if isStreaming {
 				streamErr, served := h.handleStreaming(w, resp, requestID, startTime, requestModel, endpoint.Name, endpoint.CredentialGroupName, channelName, len(*endpointChain))
 				if streamErr == nil {
@@ -755,7 +781,12 @@ func (h *Handler) tryEndpointCycleForStage(
 		var status int
 		if resp != nil {
 			status = resp.StatusCode
+			if status == http.StatusUnauthorized && endpoint.AuthMode == subscription.ClientPassthrough && h.subscriptions != nil {
+				h.subscriptions.RejectCredential(r.Context())
+			}
 			errBody, errSummary = h.readErrorBody(resp)
+			errBody = []byte(subscription.Redact(r.Context(), string(errBody)))
+			errSummary = subscription.Redact(r.Context(), errSummary)
 			lastUpstreamStatus = status
 			lastUpstreamHeaders = resp.Header.Clone()
 			lastUpstreamBody = append([]byte(nil), errBody...)
@@ -767,6 +798,22 @@ func (h *Handler) tryEndpointCycleForStage(
 
 		// 三态分类
 		action := h.classifier.Classify(resp, fwdErr)
+		var routeFailure routing.Failure
+		if routed {
+			if errors.Is(fwdErr, routing.ErrBudgetExhausted) {
+				return cycleResult{lastErr: fwdErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
+			}
+			routeFailure = codexRouteFailure(status, errBody, fwdErr)
+			if stage.execution != nil {
+				stage.execution.Fail(stage.candidate(endpoint, requestedModel), routeFailure)
+				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+			}
+			if routeFailure.Terminal || (status == http.StatusUnauthorized && subscription.FromContext(r.Context()) != nil) {
+				action = ActionFailFast
+			} else {
+				action = ActionFailover
+			}
+		}
 
 		// FailFast：透传上游 4xx 错误响应，不再尝试任何重试或切换
 		if action == ActionFailFast {
@@ -846,19 +893,25 @@ func (h *Handler) tryEndpointCycleForStage(
 		_, isStreamEvent := fwdErr.(*UpstreamStreamError)
 		annotateLastChainError(endpointChain, status, chainText, respHeaders, resp == nil && !isStreamEvent)
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
-		h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
+		if !routed || routeFailure.Scope == routing.ScopeEndpoint {
+			h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
+		}
 
 		// 上游明确给了 retry after 提示：先等够再发下一次，无论下一跳是换端点还是新一轮循环。
-		if wait := retryAfterHint(resp, reason); wait > 0 {
+		if wait := retryAfterHint(resp, reason); wait > 0 && subscription.FromContext(r.Context()) == nil && (!routed || routeFailure.Scope != routing.ScopeModel) {
 			h.logger.Info("[Codex 遵守上游 retry-after]",
 				"provider", "codex",
 				"request_id", requestID,
 				"endpoint", failedEndpointName,
 				"wait_ms", wait.Milliseconds(),
 			)
-			select {
-			case <-time.After(wait):
-			case <-r.Context().Done():
+			if waitErr := routing.BudgetFromContext(r.Context()).Wait(r.Context(), wait); waitErr != nil {
+				if routed {
+					h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+				}
+				if errors.Is(waitErr, routing.ErrBudgetExhausted) {
+					return cycleResult{lastErr: waitErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
+				}
 				h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_retry_after", nil, requestModel)
 				return cycleResult{completed: true}
 			}
@@ -932,6 +985,7 @@ func (h *Handler) forwardWithRetry(
 	endpoint *CodexEndpoint,
 	isStreaming bool,
 	requestID string,
+	onAttempt ...func(),
 ) (*http.Response, error, int) {
 	fwd := h.forwarder
 	if isStreaming {
@@ -950,11 +1004,6 @@ func (h *Handler) forwardWithRetry(
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			// 关闭上一次的响应体（如果有）
-			if lastResp != nil {
-				lastResp.Body.Close()
-				lastResp = nil
-			}
 			delay := computeBackoff(attempt-1, retryCfg.BaseDelay, retryCfg.MaxDelay, retryCfg.Multiplier)
 			h.logger.Info("[Codex 同端点重试]",
 				"provider", "codex",
@@ -964,14 +1013,27 @@ func (h *Handler) forwardWithRetry(
 				"max_attempts", maxAttempts,
 				"delay_ms", delay.Milliseconds(),
 			)
-			select {
-			case <-time.After(delay):
-			case <-r.Context().Done():
-				return nil, r.Context().Err(), attempts
+			if err := routing.BudgetFromContext(r.Context()).Wait(r.Context(), delay); err != nil {
+				return lastResp, err, attempts
 			}
 		}
 
-		resp, err := fwd.Forward(r, body, endpoint)
+		sendRequest, lease, admitErr := h.admitSubscription(r, endpoint, body)
+		if admitErr != nil {
+			return lastResp, admitErr, attempts
+		}
+		if err := routing.BudgetFromContext(r.Context()).Begin(r.Context()); err != nil {
+			lease.Finish(0, nil, nil, false)
+			return lastResp, err, attempts
+		}
+		if lastResp != nil {
+			lastResp.Body.Close()
+			lastResp = nil
+		}
+		if len(onAttempt) > 0 && onAttempt[0] != nil {
+			onAttempt[0]()
+		}
+		resp, err := fwd.Forward(sendRequest, body, endpoint)
 		attempts++
 		lastResp = resp
 		lastErr = err
@@ -1196,6 +1258,9 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		}
 
 		if streamErr := h.tokenParser.ParseStreamingErrorLine(line); streamErr != nil {
+			if resp.Request != nil {
+				streamErr.Message = subscription.Redact(resp.Request.Context(), streamErr.Message)
+			}
 			if !headersWritten {
 				// The caller may still fail over. Restore the consumed SSE event so
 				// the final exhausted response keeps the upstream 200 and raw body.

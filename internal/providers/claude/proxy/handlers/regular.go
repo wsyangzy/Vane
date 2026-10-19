@@ -11,6 +11,8 @@ import (
 
 	"ai-relay-forwarder/config"
 	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
+	"ai-relay-forwarder/internal/routing"
 	"ai-relay-forwarder/internal/tracking"
 )
 
@@ -136,6 +138,19 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，不读写全局激活渠道
 	route := planClaudeRoute(rh.endpointManager, r, bodyBytes, false, connID)
+	if subRoute := planSubscriptionRoute(rh.endpointManager, r, bodyBytes); subRoute != nil {
+		route = subRoute
+	}
+	route.initBudget(rh.config.Retry)
+	route.watchSubscription(ctx, rh.forwarder)
+	if route != nil {
+		route.onUpdate = lifecycleManager.SetRouteSnapshot
+	}
+	defer func() {
+		if route != nil {
+			lifecycleManager.SetRouteSnapshot(route.stageSnapshotJSON())
+		}
+	}()
 
 	// 创建管理器 - 修复依赖注入
 	retryMgr := rh.retryManagerFactory.NewRetryManager()
@@ -244,16 +259,20 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		for i, ep := range endpoints {
 			// 记录已尝试的端点（确保严格优先级转移，不回退）
 			epKey := endpoint.EndpointKeyForConfig(ep.Config)
-			if _, alreadyTried := triedEndpoints[epKey]; alreadyTried {
+			if _, alreadyTried := triedEndpoints[epKey]; alreadyTried && route == nil {
 				continue
 			}
 			// 路由阶段之间共享全局重试预算：预算耗尽即停止，不再进入后续目标
 			if exhausted, reason := checkRouteBudget(route, lifecycleManager); exhausted {
 				slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-				rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout)
+				rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 				return
 			}
 			triedEndpoints[epKey] = struct{}{}
+			if route != nil {
+				route.initBudget(rh.config.Retry)
+				route.onUpdate = lifecycleManager.SetRouteSnapshot
+			}
 
 			routeGroup := endpointRouteName(ep)
 			lifecycleManager.SetEndpoint(ep.Config.Name, endpointDisplayGroupName(ep), ep.Config.Channel)
@@ -278,11 +297,38 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				default:
 				}
 
+				if exhausted, _ := lifecycleManager.CheckRetryBudget(); exhausted {
+					if route != nil {
+						route.budget.Stop()
+						route.publishSnapshot()
+					}
+					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+					return
+				}
+				attemptCtx, admission, admitErr := rh.forwarder.admitSubscription(ctx, ep, route.candidate(rh.forwarder, ep, bodyBytes).Model)
+				if admitErr != nil {
+					if route != nil {
+						route.ledger.Skip(route.candidate(rh.forwarder, ep, bodyBytes), admitErr.Error())
+						route.publishSnapshot()
+					}
+					break
+				}
+				defer admission.Finish(0, nil, nil, false)
+				if err := beginRouteAttempt(ctx, route); err != nil {
+					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+					return
+				}
+				var attemptCandidate routing.Candidate
+				if route != nil {
+					attemptCandidate = route.candidate(rh.forwarder, ep, bodyBytes)
+					route.ledger.Begin(attemptCandidate)
+					lifecycleManager.SetRouteSnapshot(route.stageSnapshotJSON())
+				}
 				// 🔢 [关键修复] 每次尝试开始时增加全局计数 - 确保生命周期和重试策略正确
 				globalAttemptCount := lifecycleManager.IncrementAttempt()
 
 				// 执行请求
-				resp, err := rh.executeRequest(ctx, r, bodyBytes, ep, lifecycleManager, route)
+				resp, err := rh.executeRequest(attemptCtx, r, bodyBytes, ep, lifecycleManager, route)
 				if err != nil && ctx.Err() != nil {
 					lifecycleManager.CancelRequest("client disconnected", nil)
 
@@ -295,6 +341,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				}
 
 				if err == nil && IsSuccessStatus(resp.StatusCode) {
+					if route != nil && rh.forwarder.states != nil {
+						resp.Body = routing.CaptureResponse(resp.Body, func(data []byte) {
+							rh.forwarder.observeRoutedState(ctx, r, attemptCandidate, data)
+						})
+					}
 					// ✅ [重试决策] 成功请求的决策日志 - 保持监控完整性
 					slog.Info(fmt.Sprintf("✅ [重试决策] 请求成功完成 request_id=%s endpoint=%s attempt=%d reason=请求成功完成",
 						connID, ep.Config.Name, attempt))
@@ -350,6 +401,11 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// localAttempt: 当前端点内的尝试次数，用于退避计算
 				// globalAttemptCount: 全局尝试次数，用于限流策略
 				decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
+				decision = route.failureDecision(rh.forwarder, ep, bodyBytes, err, decision)
+				if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
+					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), err, "subscription_authentication_required", http.StatusUnauthorized, route)
+					return
+				}
 				if decision.FinalStatus == "cancelled" {
 					lifecycleManager.CancelRequest("client disconnected", nil)
 					statusCode := getDefaultStatusCodeForFinalStatus("cancelled")
@@ -415,7 +471,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					if decision.SwitchEndpoint {
 						// 渠道内端点切换时标记当前端点为请求失败，防止后续重新选择到此端点
 						rh.endpointManager.ClearPreferredEndpoint(ep)
-						ep.MarkRequestFailed(err)
+						if route == nil || claudeRouteFailure(err).Scope == routing.ScopeEndpoint {
+							ep.MarkRequestFailed(err)
+						}
 						// 通知前端状态变化（使用防抖机制避免频繁刷新）
 						rh.endpointManager.NotifyEndpointStatusChange()
 
@@ -447,6 +505,17 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 					// 使用统一延迟
 					if decision.Delay > 0 {
+						if route != nil {
+							if err := waitRouteRetry(ctx, route, decision.Delay); err != nil {
+								if ctx.Err() != nil {
+									lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
+									return
+								}
+								rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+								return
+							}
+							continue
+						}
 						select {
 						case <-ctx.Done():
 							lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
@@ -644,7 +713,7 @@ func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, b
 	}
 
 	// 执行请求
-	return client.Do(req)
+	return rh.forwarder.sendClaude(ctx, r, req, endpoint, bodyBytes, client)
 }
 
 // processSuccessResponse 处理成功响应

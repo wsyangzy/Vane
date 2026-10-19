@@ -48,6 +48,9 @@ import {
   EndpointForm,
   DeleteConfirmDialog
 } from './components';
+import SubscriptionManagement from '@pages/management/shared/SubscriptionManagement.jsx';
+import SubscriptionSettings, { SubscriptionStatus } from './components/SubscriptionSettings.jsx';
+import { isSubscriptionGroup, validateSubscription } from './components/subscription.js';
 import ModelTag from '@pages/requests/components/ModelTag.jsx';
 import { ClaudeIcon } from '@pages/requests/components/ModelTag.jsx';
 import ModelMultiplierEditor from '@pages/management/shared/ModelMultiplierEditor.jsx';
@@ -172,7 +175,7 @@ const getInitialClaudeCredentialSecretType = (group) => {
   return !hasToken && hasApiKey ? 'apiKey' : 'token';
 };
 
-const hasClaudeCredential = (group) => [
+const hasClaudeCredential = (group) => (isSubscriptionGroup(group) && group.localKeyConfigured) || [
   group?.token,
   group?.tokenMasked,
   group?.token_masked,
@@ -247,6 +250,10 @@ const buildClaudeEndpointCopyOptions = (credentialGroups = [], endpoints = []) =
 );
 
 const buildInitialClaudeCredentialGroupForm = (group, channelName = '') => ({
+  authMode: group?.authMode || 'group_credential',
+  localKeyConfigured: Boolean(group?.localKeyConfigured),
+  localKeyAcknowledged: false,
+  subscription: group?.subscription ? { ...group.subscription, action: '', backupTargets: (group.subscription.backupTargets || []).map((target) => ({ ...target, rowId: crypto.randomUUID() })) } : { version: 0, enabled: true, backupTargets: [] },
   channel: group?.channel || channelName || '',
   name: group?.name || '',
   token: group?.token || '',
@@ -1435,6 +1442,7 @@ const ClaudeCredentialGroupFormModal = ({
   loading = false,
   serverError = '',
   endpointCopyOptions = [],
+  channels = [],
   onClose,
   onSubmit
 }) => {
@@ -1454,7 +1462,7 @@ const ClaudeCredentialGroupFormModal = ({
     ...endpointCopyOptions
   ];
   const selectedCopyOption = copyChoices.find((option) => option.value === (formData.copyEndpointsFromGroupId || '')) || copyChoices[0];
-  const canCopyEndpoints = !isEdit && copyChoices.length > 1;
+  const canCopyEndpoints = !isEdit && formData.authMode !== 'client_passthrough' && copyChoices.length > 1;
   const credentialGroupTabs = canCopyEndpoints && copyEndpointsEnabled
     ? CREDENTIAL_GROUP_CREATE_FORM_TABS
     : CREDENTIAL_GROUP_FORM_TABS;
@@ -1523,8 +1531,8 @@ const ClaudeCredentialGroupFormModal = ({
 
   const buildSubmitPayload = () => {
     const name = formData.name.trim();
-    const token = credentialSecretType === 'token' ? formData.token.trim() : '';
-    const apiKey = credentialSecretType === 'apiKey' ? formData.apiKey.trim() : '';
+    const token = formData.authMode !== 'client_passthrough' && credentialSecretType === 'token' ? formData.token.trim() : '';
+    const apiKey = formData.authMode !== 'client_passthrough' && credentialSecretType === 'apiKey' ? formData.apiKey.trim() : '';
 
     if (!name) {
       setError('分组名称不能为空');
@@ -1532,13 +1540,13 @@ const ClaudeCredentialGroupFormModal = ({
       setActiveTab('basic');
       return null;
     }
-    if (credentialSecretType === 'token' && !token) {
+    if (formData.authMode !== 'client_passthrough' && credentialSecretType === 'token' && !token) {
       setError('Token 不能为空');
       setFormStep('details');
       setActiveTab('basic');
       return null;
     }
-    if (credentialSecretType === 'apiKey' && !apiKey) {
+    if (formData.authMode !== 'client_passthrough' && credentialSecretType === 'apiKey' && !apiKey) {
       setError('API Key 不能为空');
       setFormStep('details');
       setActiveTab('basic');
@@ -1552,6 +1560,9 @@ const ClaudeCredentialGroupFormModal = ({
 	  setActiveTab('billing');
 	  return null;
 	}
+
+    const subscriptionError = validateSubscription(formData);
+    if (subscriptionError) { setError(subscriptionError); setFormStep('details'); setActiveTab('basic'); return null; }
 
     const multiplierError = validateClaudeCredentialGroupMultipliers(formData);
     if (multiplierError) {
@@ -1576,7 +1587,7 @@ const ClaudeCredentialGroupFormModal = ({
       token,
       apiKey,
 	  dailyCostLimitUSD,
-      copyEndpointsFromGroupId: formData.copyEndpointsFromGroupId || '',
+      copyEndpointsFromGroupId: formData.authMode === 'client_passthrough' ? '' : (formData.copyEndpointsFromGroupId || ''),
       modelPolicy: ['inherit', 'override', 'passthrough'].includes(formData.modelPolicy) ? formData.modelPolicy : 'inherit',
       modelMapping: formData.modelPolicy === 'override' ? buildModelMappingPayload(formData.modelMappingRows) : {},
       supportedModels: String(formData.supportedModelsText || '').split(',').map((model) => model.trim()).filter(Boolean),
@@ -1717,6 +1728,11 @@ const ClaudeCredentialGroupFormModal = ({
                   />
                 </div>
 
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-slate-700">认证方式</label>
+                  <CustomSelect value={formData.authMode} options={[{ value: 'group_credential', label: '分组凭证' }, { value: 'client_passthrough', label: '官方订阅' }]} onChange={(authMode) => updateField('authMode', authMode)} disabled={loading} />
+                </div>
+                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings value={formData.subscription} onChange={(value) => updateField('subscription', value)} channels={channels} localKeyConfigured={formData.localKeyConfigured} acknowledged={formData.localKeyAcknowledged} onAcknowledge={(value) => updateField('localKeyAcknowledged', value)} disabled={loading} /> : (
                 <div className="space-y-3">
                   <SegmentedTabs
                     tabs={CLAUDE_CREDENTIAL_SECRET_TABS}
@@ -1741,6 +1757,8 @@ const ClaudeCredentialGroupFormModal = ({
                     setVisible: setShowApiKey
                   })}
                 </div>
+
+                )}
 
                 <div className={`grid gap-3 ${canCopyEndpoints ? 'md:grid-cols-2' : ''}`}>
                   <button
@@ -2311,6 +2329,8 @@ const ChannelCard = ({
           />
         </div>
       )}
+
+      {isSubscriptionGroup(selectedCredentialGroup) && <div className="border-t border-slate-100 px-4 py-2"><SubscriptionStatus group={selectedCredentialGroup} /></div>}
 
       {/* 端点子列表 */}
       <div className="border-t border-slate-100 bg-slate-50/30">
@@ -3451,7 +3471,7 @@ const ChannelsPage = () => {
   return (
       <div className="animate-fade-in">
       {/* 页面标题 */}
-      <div className="flex justify-between items-end mb-8">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
             <ClaudeIcon className="w-6 h-6" />
@@ -3466,7 +3486,8 @@ const ChannelsPage = () => {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} />
           {/* 刷新按钮 */}
           <Button
             variant="ghost"
@@ -3765,6 +3786,7 @@ const ChannelsPage = () => {
           loading={credentialGroupFormLoading}
           serverError={credentialGroupFormError}
           endpointCopyOptions={credentialGroupEndpointCopyOptions}
+          channels={channelsMeta}
           onClose={closeCredentialGroupForm}
           onSubmit={handleSaveCredentialGroup}
         />

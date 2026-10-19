@@ -264,6 +264,9 @@ func (m *Manager) healthThrottleAllow(endpoint *Endpoint) bool {
 // checkEndpointHealthInternal 实际的健康检查逻辑（无节流）
 // 🔧 [P5.4 重命名] 原 checkEndpointHealth 的实现，由节流入口调用
 func (m *Manager) checkEndpointHealthInternal(endpoint *Endpoint) {
+	// Subscription auth belongs to a real caller request. No timer/manual
+	// health check may invent credentials or consume subscription quota.
+	if endpoint.Config.AuthMode=="client_passthrough" {return}
 	// 跳过健康检查（部分中转商不支持健康检查端点）
 	if endpoint.Config.SkipHealthCheck {
 		// 仅进行“可达性/延迟探测”，不根据 HTTP 状态码判定健康与否，避免误判为不健康；

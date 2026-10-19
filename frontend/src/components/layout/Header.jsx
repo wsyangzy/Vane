@@ -6,7 +6,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Command } from 'lucide-react';
 import { isWailsEnvironment } from '@utils/wailsApi.js';
+import { useToast } from '@components/ui';
 import UserMenu from './UserMenu.jsx';
+import WindowControls from './WindowControls.jsx';
 
 const NAV_TABS = [
   { name: 'overview', label: '概览' },
@@ -28,7 +30,7 @@ const NavItem = ({ label, active, onClick, buttonRef }) => (
   <button
     ref={buttonRef}
     onClick={onClick}
-    className={`relative z-10 px-4 py-2 text-sm font-medium rounded-full transition-colors duration-200 ${
+    className={`relative z-10 whitespace-nowrap px-3 py-2 text-sm font-medium rounded-full transition-colors duration-200 ${
       active
         ? 'text-white'
         : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
@@ -112,6 +114,7 @@ const SlidingNav = ({ tabs, activeTab, onTabChange, className = '' }) => {
 };
 
 const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyStatus = {} }) => {
+  const toast = useToast();
   // 使用真实的代理网关状态
   const {
     running: proxyRunning = false,
@@ -128,41 +131,48 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
       }
     : null;
 
-  // Wails 环境下为窗口按钮预留顶部空间
   const isWails = isWailsEnvironment();
-  const titlebarPadding = isWails ? 'pt-7' : '';
+  const handleTitlebarDoubleClick = async (event) => {
+    if (!isWails || getComputedStyle(event.target).getPropertyValue('--wails-draggable').trim() !== 'drag') return;
+    try {
+      const { Window } = await import('@wailsio/runtime');
+      await Window.ToggleMaximise();
+    } catch { toast.error('窗口操作失败，请重试'); }
+  };
 
   return (
-    <nav className={`sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-200/60 supports-[backdrop-filter]:bg-white/60 ${titlebarPadding}`}
-         style={isWails ? { WebkitAppRegion: 'drag' } : {}}>
-      <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between"
-           style={isWails ? { WebkitAppRegion: 'no-drag' } : {}}>
-        {/* 左侧：Logo + 导航 */}
-        <div className="flex items-center space-x-8">
-          {/* Logo */}
-          <div
-            className="flex items-center space-x-2.5 group cursor-pointer"
+    <header className="relative z-50 shrink-0 border-b border-slate-200/60 bg-white/80 backdrop-blur-xl supports-[backdrop-filter]:bg-white/60">
+      {isWails && (
+        <div onDoubleClick={handleTitlebarDoubleClick} className="desktop-titlebar flex h-8 items-center justify-end border-b border-slate-100 bg-slate-50/70">
+          <WindowControls />
+        </div>
+      )}
+
+      {/* Equal side columns keep navigation centred on the whole window. */}
+      <nav aria-label="主导航" className="grid h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-6 min-[1200px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <div className="flex min-w-0 items-center">
+          <button type="button" aria-label="返回概览"
+            className="group flex min-w-0 items-center gap-2.5 rounded-lg"
             onClick={() => onTabChange('overview')}
           >
-            <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-white shadow-lg">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white shadow-lg">
               <Command size={16} strokeWidth={3} />
             </div>
-            <span className="font-bold text-lg tracking-tight text-slate-900">
+            <span className="truncate text-lg font-bold tracking-tight text-slate-900">
               AI Relay Forwarder
             </span>
-          </div>
-
-          {/* 导航标签 */}
-          <SlidingNav
-            tabs={NAV_TABS}
-            activeTab={activeTab}
-            onTabChange={onTabChange}
-            className="hidden md:flex"
-          />
+          </button>
         </div>
 
+        <SlidingNav
+          tabs={NAV_TABS}
+          activeTab={activeTab}
+          onTabChange={onTabChange}
+          className="hidden min-[1200px]:flex"
+        />
+
         {/* 右侧：状态指示器 + 头像 */}
-        <div className="flex items-center space-x-4">
+        <div className="flex min-w-0 items-center justify-end gap-3">
           {/* 连接状态 */}
           {isDisconnected ? (
             <div className="hidden sm:flex items-center px-3 py-1.5 bg-white border border-slate-200 rounded-md shadow-sm text-xs text-slate-500">
@@ -189,18 +199,18 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
           {/* 用户菜单 */}
           <UserMenu />
         </div>
-      </div>
+      </nav>
 
       {/* 移动端导航 */}
-      <div className="md:hidden px-4 pb-3 overflow-x-auto">
+      <div className="px-4 pb-3 overflow-x-auto min-[1200px]:hidden">
         <SlidingNav
           tabs={NAV_TABS}
           activeTab={activeTab}
           onTabChange={onTabChange}
-          className="flex w-max"
+          className="mx-auto flex w-max"
         />
       </div>
-    </nav>
+    </header>
   );
 };
 

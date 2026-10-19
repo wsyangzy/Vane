@@ -208,6 +208,9 @@ func (a *App) ensureCodexChannelsSchema(ctx context.Context, db *sql.DB) error {
 	if err := a.ensureCodexCredentialGroupSchema(ctx, db); err != nil {
 		return err
 	}
+	if err := codexstore.EnsureCodexSubscriptionSchema(ctx, db); err != nil {
+		return err
+	}
 
 	// 为 codex_endpoints 补充故障转移字段（v7.2+）
 	if err := a.ensureCodexEndpointFailoverColumns(ctx, db); err != nil {
