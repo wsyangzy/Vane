@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 func TestHealthCheck_SkipHealthCheck_RecordsLatencyButKeepsNeverChecked(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/tracking"
 
 	"github.com/stretchr/testify/require"
 )

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/privacy"
-	"ai-relay-forwarder/internal/tracking"
-	"ai-relay-forwarder/internal/transport"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
+	"github.com/wsyangzy/Vane/internal/privacy"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // ServerConfig 服务器配置

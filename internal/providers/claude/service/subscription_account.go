@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"ai-relay-forwarder/internal/subscriptions/accounts"
+	"github.com/wsyangzy/Vane/internal/subscriptions/accounts"
 )
 
 type SubscriptionAccountAdapter struct{ Client *http.Client }

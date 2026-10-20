@@ -3,8 +3,8 @@ package response
 import (
 	"testing"
 
-	"ai-relay-forwarder/internal/monitor"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/platform/monitor"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestDetectResponseFormat 测试智能响应格式检测

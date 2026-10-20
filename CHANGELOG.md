@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，
 项目遵循 [语义化版本控制](https://semver.org/lang/zh-CN/)。
 
+## Vane 1.0.0 (2026-10-20)
+
+- 项目全面更名为 Vane，统一应用、Go module、构建产物、文档与项目约束。
+- 仓库迁移至 `https://github.com/wsyangzy/Vane`，延续原有 Git 提交历史，旧标签不迁入新仓库。
+- Vane 版本从 `1.0.0` 开始；旧应用数据目录继续兼容迁移和回退。
+- 发布工作流适配 GitHub，Windows 产品信息与发布资产使用 Vane 名称。
+
+## 原项目历史
+
+以下记录属于更名前的项目版本，不属于 Vane 的新发布序列。
+
 ## v8.8 (2026-10-19)
 
 ### Claude / Codex 订阅管理

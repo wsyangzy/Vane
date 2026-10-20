@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/providers/claude/proxy"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/platform/middleware"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // MissingNewlineReader 模拟在 message_delta 后直接 EOF，不发送终止空行的场景

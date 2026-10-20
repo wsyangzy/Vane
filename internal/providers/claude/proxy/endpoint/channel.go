@@ -1,6 +1,6 @@
 package endpoint
 
-import "ai-relay-forwarder/config"
+import "github.com/wsyangzy/Vane/internal/config"
 
 // ChannelKeyFromConfig returns the routing channel key for an endpoint.
 //

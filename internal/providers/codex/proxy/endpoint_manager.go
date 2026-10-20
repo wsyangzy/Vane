@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // 注意：冷却机制已完全移除（参考 Claude 端 internal/providers/claude/proxy/endpoint/cooldown.go 历史经验）

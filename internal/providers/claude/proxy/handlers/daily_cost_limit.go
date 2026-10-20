@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 type credentialGroupDailyLimitDecision struct {

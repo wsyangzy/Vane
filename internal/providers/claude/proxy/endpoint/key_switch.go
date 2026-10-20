@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"ai-relay-forwarder/internal/events"
+	"github.com/wsyangzy/Vane/internal/platform/events"
 )
 
 // GetKeyManager 返回 Key 管理器

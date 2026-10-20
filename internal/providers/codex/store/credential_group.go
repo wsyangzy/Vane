@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 )
 
 type CodexServiceTierMultiplierRecord struct {

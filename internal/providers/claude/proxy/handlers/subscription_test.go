@@ -13,10 +13,10 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 type subscriptionMemoryStore struct {

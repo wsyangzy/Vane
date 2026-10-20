@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 )
 
 // mockEndpointServer 模拟端点服务器，支持配置失败次数
@@ -83,14 +83,14 @@ func TestStreamingRetryLogic(t *testing.T) {
 			expectSuccess:      true,
 		},
 		{
-			name:               "第二次尝试成功",
+			name:               "单端点失败后不重复尝试",
 			maxAttempts:        3,
 			endpointFailCount:  1, // 第1次失败，第2次成功
 			expectedRetryCount: 1, // 当前实现失败后快速切换，单端点场景不会同端点重试
 			expectSuccess:      false,
 		},
 		{
-			name:               "第三次尝试成功",
+			name:               "最大重试次数不允许重复访问失败端点",
 			maxAttempts:        3,
 			endpointFailCount:  2, // 前2次失败，第3次成功
 			expectedRetryCount: 1, // 当前实现失败后快速切换，单端点场景不会同端点重试
@@ -127,7 +127,7 @@ func TestStreamingRetryLogic(t *testing.T) {
 						URL:      mockServer.server.URL,
 						Priority: 1,
 						Timeout:  5 * time.Second,
-						Group:    "test-group",
+						Channel:  "test-group",
 						Token:    "test-token",
 					},
 				},
@@ -135,9 +135,7 @@ func TestStreamingRetryLogic(t *testing.T) {
 
 			// 创建端点管理器
 			endpointManager := endpoint.NewManager(cfg)
-
-			// 等待健康检查完成并强制标记为健康
-			time.Sleep(200 * time.Millisecond)
+			defer endpointManager.Stop()
 
 			// 手动标记端点为健康状态
 			endpoints := endpointManager.GetAllEndpoints()
@@ -146,12 +144,15 @@ func TestStreamingRetryLogic(t *testing.T) {
 				ep.Status.Healthy = true
 				ep.Status.LastCheck = time.Now()
 			}
+			if err := endpointManager.ManualActivateGroup("test-group"); err != nil {
+				t.Fatalf("activate test channel: %v", err)
+			}
 
 			// 创建处理器
 			handler := NewHandler(endpointManager, cfg)
 
 			// 创建测试请求
-			requestBody := `{"message": "test streaming request"}`
+			requestBody := `{"model":"claude-3-5-haiku","messages":[],"stream":true}`
 			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(requestBody))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "text/event-stream") // 标记为流式请求
@@ -200,10 +201,10 @@ func TestStreamingRetryLogic(t *testing.T) {
 					t.Errorf("成功响应应包含流式数据，但没有找到: %s", responseBody)
 				}
 			} else {
-				// 期望失败：应该返回错误状态码或错误信息
+				// 首个流字节发送前失败，应保留真实上游状态和错误正文。
 				responseBody := recorder.Body.String()
-				if recorder.Code == http.StatusOK && !strings.Contains(responseBody, "error") {
-					t.Errorf("预期失败但成功: 状态码 %d, 响应: %s", recorder.Code, responseBody)
+				if recorder.Code != http.StatusInternalServerError || !strings.Contains(responseBody, "mock server error") {
+					t.Errorf("预期上游失败响应: 状态码 %d, 响应: %s", recorder.Code, responseBody)
 				}
 			}
 
@@ -229,7 +230,7 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 	mockServer2 := newMockEndpointServer(0) // 立即成功
 	defer mockServer2.close()
 
-	// 创建配置 - 每个端点最多重试3次
+	// 即使配置了多次重试，失败端点也只访问一次，然后按优先级转移。
 	cfg := &config.Config{
 		Retry: config.RetryConfig{
 			MaxAttempts: 3,
@@ -252,7 +253,7 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 				URL:      mockServer1.server.URL,
 				Priority: 1,
 				Timeout:  5 * time.Second,
-				Group:    "test-group",
+				Channel:  "test-group",
 				Token:    "test-token-1",
 			},
 			{
@@ -260,7 +261,7 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 				URL:      mockServer2.server.URL,
 				Priority: 2,
 				Timeout:  5 * time.Second,
-				Group:    "test-group",
+				Channel:  "test-group",
 				Token:    "test-token-2",
 			},
 		},
@@ -268,7 +269,7 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 
 	// 创建端点管理器和处理器
 	endpointManager := endpoint.NewManager(cfg)
-	time.Sleep(200 * time.Millisecond) // 等待健康检查
+	defer endpointManager.Stop()
 
 	// 手动标记端点为健康状态
 	endpoints := endpointManager.GetAllEndpoints()
@@ -277,11 +278,14 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 		ep.Status.Healthy = true
 		ep.Status.LastCheck = time.Now()
 	}
+	if err := endpointManager.ManualActivateGroup("test-group"); err != nil {
+		t.Fatalf("activate test channel: %v", err)
+	}
 
 	handler := NewHandler(endpointManager, cfg)
 
 	// 创建流式请求
-	requestBody := `{"message": "test multi-endpoint retry"}`
+	requestBody := `{"model":"claude-3-5-haiku","messages":[],"stream":true}`
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(requestBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -302,7 +306,7 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 	endpoint2Requests := mockServer2.getRequestCount()
 
 	t.Logf("多端点重试测试结果:")
-	t.Logf("  端点1请求次数: %d (预期3次)", endpoint1Requests)
+	t.Logf("  端点1请求次数: %d (预期1次)", endpoint1Requests)
 	t.Logf("  端点2请求次数: %d (预期1次)", endpoint2Requests)
 	t.Logf("  最终状态码: %d", recorder.Code)
 	t.Logf("  处理时长: %v", duration)
@@ -330,7 +334,7 @@ func TestStreamingRetryWithMultipleEndpoints(t *testing.T) {
 }
 
 // TestStreamingRetryWithinChannel 测试“同渠道内多端点故障转移”
-// 预期：渠道 A 内 endpoint-1 重试耗尽后切换到 endpoint-2 成功，不触发跨渠道切换
+// 预期：渠道 A 内 endpoint-1 失败一次后切换到 endpoint-2 成功，不触发跨渠道切换
 func TestStreamingRetryWithinChannel(t *testing.T) {
 	// 渠道A：endpoint-1 前3次失败；endpoint-2 立即成功
 	mockServer1 := newMockEndpointServer(3)
@@ -387,7 +391,7 @@ func TestStreamingRetryWithinChannel(t *testing.T) {
 	}
 
 	endpointManager := endpoint.NewManager(cfg)
-	time.Sleep(200 * time.Millisecond)
+	defer endpointManager.Stop()
 
 	// 手动标记端点为健康状态
 	for _, ep := range endpointManager.GetAllEndpoints() {
@@ -395,10 +399,13 @@ func TestStreamingRetryWithinChannel(t *testing.T) {
 		ep.Status.LastCheck = time.Now()
 		ep.Status.NeverChecked = false
 	}
+	if err := endpointManager.ManualActivateGroup("channel-a"); err != nil {
+		t.Fatalf("activate test channel: %v", err)
+	}
 
 	handler := NewHandler(endpointManager, cfg)
 
-	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"message":"test channel failover"}`))
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude-3-5-haiku","messages":[],"stream":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
@@ -411,6 +418,12 @@ func TestStreamingRetryWithinChannel(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("预期成功响应: got=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "event: message_start") {
+		t.Errorf("成功响应应包含流式数据: %s", recorder.Body.String())
+	}
+	if active, _ := endpointManager.GetGroupManager().ActiveGroupSnapshot(); active != "channel-a" {
+		t.Errorf("同渠道故障转移不能切换活跃渠道: got=%q", active)
 	}
 
 	// endpoint-1 失败一次后切到 endpoint-2 成功，endpoint-3 不应被使用
@@ -426,7 +439,7 @@ func TestStreamingRetryWithinChannel(t *testing.T) {
 }
 
 // TestStreamingRetryCrossChannelAfterChannelExhausted 测试“同渠道耗尽后跨渠道切换”
-// 预期：渠道 A 内两个端点都重试耗尽后，切换到渠道 B 的端点成功
+// 预期：渠道 A 内两个端点各失败一次后，切换到渠道 B 的端点成功
 func TestStreamingRetryCrossChannelAfterChannelExhausted(t *testing.T) {
 	// 渠道A：两个端点都前3次失败
 	mockServer1 := newMockEndpointServer(3)
@@ -483,17 +496,20 @@ func TestStreamingRetryCrossChannelAfterChannelExhausted(t *testing.T) {
 	}
 
 	endpointManager := endpoint.NewManager(cfg)
-	time.Sleep(200 * time.Millisecond)
+	defer endpointManager.Stop()
 
 	for _, ep := range endpointManager.GetAllEndpoints() {
 		ep.Status.Healthy = true
 		ep.Status.LastCheck = time.Now()
 		ep.Status.NeverChecked = false
 	}
+	if err := endpointManager.ManualActivateGroup("channel-a"); err != nil {
+		t.Fatalf("activate test channel: %v", err)
+	}
 
 	handler := NewHandler(endpointManager, cfg)
 
-	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"message":"test cross channel failover"}`))
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude-3-5-haiku","messages":[],"stream":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
@@ -506,6 +522,12 @@ func TestStreamingRetryCrossChannelAfterChannelExhausted(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("预期成功响应: got=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "event: message_start") {
+		t.Errorf("成功响应应包含流式数据: %s", recorder.Body.String())
+	}
+	if active, _ := endpointManager.GetGroupManager().ActiveGroupSnapshot(); active != "channel-b" {
+		t.Errorf("渠道耗尽后应激活备用渠道: got=%q", active)
 	}
 
 	if got := mockServer1.getRequestCount(); got != 1 {

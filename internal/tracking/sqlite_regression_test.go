@@ -43,6 +43,7 @@ func TestSQLiteDataPersistence(t *testing.T) {
 
 	ctx := context.Background()
 	requestID := "req-test-persistence"
+	startTime := time.Now().Add(-3 * time.Second).Truncate(time.Millisecond)
 
 	// 第1步：发送开始事件
 	t.Run("Step1_StartEvent", func(t *testing.T) {
@@ -50,7 +51,7 @@ func TestSQLiteDataPersistence(t *testing.T) {
 			{
 				Type:      "start",
 				RequestID: requestID,
-				Timestamp: time.Now(),
+				Timestamp: startTime,
 				Data: RequestStartData{
 					ClientIP:    "192.168.1.100",
 					UserAgent:   "TestAgent/1.0",
@@ -63,9 +64,6 @@ func TestSQLiteDataPersistence(t *testing.T) {
 
 		err := tracker.processBatch(startEvents)
 		require.NoError(t, err)
-
-		// 强制刷新等待异步处理完成
-		time.Sleep(200 * time.Millisecond)
 
 		// 验证开始事件数据存在 - 直接查询数据库
 		db := tracker.GetReadDB()
@@ -117,22 +115,20 @@ func TestSQLiteDataPersistence(t *testing.T) {
 			{
 				Type:      "update",
 				RequestID: requestID,
-				Timestamp: time.Now(),
+				Timestamp: startTime.Add(time.Second),
 				Data: RequestUpdateData{
-					EndpointName: "test-endpoint-001",
-					GroupName:    "primary-group",
-					Status:       "processing",
-					RetryCount:   1,
-					HTTPStatus:   200,
+					EndpointName:         "test-endpoint-001",
+					GroupName:            "primary-group",
+					Status:               "processing",
+					RetryCount:           1,
+					HTTPStatus:           200,
+					HTTPStatusIsUpstream: true,
 				},
 			},
 		}
 
 		err := tracker.processBatch(updateEvents)
 		require.NoError(t, err)
-
-		// 强制刷新等待异步处理完成
-		time.Sleep(200 * time.Millisecond)
 
 		// 验证更新事件数据存在，且原有数据未丢失 - 直接查询数据库
 		db := tracker.GetReadDB()
@@ -187,7 +183,7 @@ func TestSQLiteDataPersistence(t *testing.T) {
 
 	// 第3步：发送完成事件 - 关键测试点：不应该清空前面的数据
 	t.Run("Step3_CompleteEvent", func(t *testing.T) {
-		endTime := time.Now()
+		endTime := startTime.Add(2500 * time.Millisecond)
 		completeEvents := []RequestEvent{
 			{
 				Type:      "complete",
@@ -206,9 +202,6 @@ func TestSQLiteDataPersistence(t *testing.T) {
 
 		err := tracker.processBatch(completeEvents)
 		require.NoError(t, err)
-
-		// 强制刷新等待异步处理完成
-		time.Sleep(200 * time.Millisecond)
 
 		// 验证完成事件数据存在，且所有前面的数据都保留 - 直接查询数据库
 		db := tracker.GetReadDB()
@@ -263,7 +256,7 @@ func TestSQLiteDataPersistence(t *testing.T) {
 		assert.Equal(t, "completed", req.Status)
 		assert.NotNil(t, req.EndTime)
 		require.NotNil(t, req.DurationMs)
-		assert.Greater(t, *req.DurationMs, int64(2000)) // 至少2.5秒
+		assert.Equal(t, int64(2500), *req.DurationMs)
 
 		// 验证成本计算
 		assert.Greater(t, req.TotalCostUSD, float64(0))
@@ -304,6 +297,72 @@ func TestSQLiteDataPersistence(t *testing.T) {
 		assert.NotEmpty(t, endpointName, "应该包含更新事件数据")
 		assert.NotEmpty(t, modelName, "应该包含完成事件数据")
 	})
+}
+
+// 通过真实事件写队列检查状态来源，避免本地兜底状态被当作上游响应保存。
+func TestSQLiteUpdateHTTPStatusSource(t *testing.T) {
+	tracker, err := NewUsageTracker(&Config{
+		Enabled:         true,
+		DatabasePath:    ":memory:",
+		BufferSize:      10,
+		BatchSize:       5,
+		FlushInterval:   time.Hour,
+		MaxRetry:        1,
+		CleanupInterval: time.Hour,
+		RetentionDays:   1,
+	})
+	require.NoError(t, err)
+	defer tracker.Close()
+
+	for _, withEndpoint := range []bool{false, true} {
+		name := "status_only"
+		if withEndpoint {
+			name = "with_endpoint"
+		}
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, tracker.processBatch([]RequestEvent{{
+				Type: "start", RequestID: name, Timestamp: time.Now(),
+				Data: RequestStartData{Method: "POST", Path: "/v1/messages"},
+			}}))
+			for _, tt := range []struct {
+				name     string
+				code     int
+				upstream bool
+				wantCode int
+			}{
+				{name: "upstream_success", code: 201, upstream: true, wantCode: 201},
+				{name: "local_failure_clears_upstream", code: 503},
+				{name: "upstream_failure", code: 502, upstream: true, wantCode: 502},
+				{name: "missing_status_clears_upstream", upstream: true},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					update := RequestUpdateData{
+						Status: "processing", HTTPStatus: tt.code, HTTPStatusIsUpstream: tt.upstream,
+					}
+					if withEndpoint {
+						update.EndpointName = "test-endpoint"
+						update.GroupName = "test-group"
+					}
+					require.NoError(t, tracker.processBatch([]RequestEvent{{
+						Type: "update", RequestID: name, Timestamp: time.Now(), Data: update,
+					}}))
+					var code *int
+					var isUpstream bool
+					require.NoError(t, tracker.GetReadDB().QueryRow(
+						"SELECT http_status_code, http_status_is_upstream FROM request_logs WHERE request_id = ?", name,
+					).Scan(&code, &isUpstream))
+					if tt.wantCode == 0 {
+						assert.Nil(t, code)
+						assert.False(t, isUpstream)
+					} else {
+						require.NotNil(t, code)
+						assert.Equal(t, tt.wantCode, *code)
+						assert.True(t, isUpstream)
+					}
+				})
+			}
+		})
+	}
 }
 
 // TestSQLiteUpsertBehavior 测试SQLite upsert行为

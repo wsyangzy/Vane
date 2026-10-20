@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/routing"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 func TestRoutedCodexTriesDifferentModelOnSameEndpoint(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func TestRouteExecutionSurvivesHotPoolSQLiteReplayAndMonthlyArchive(t *testing.T) {

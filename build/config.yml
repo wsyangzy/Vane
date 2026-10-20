@@ -1,14 +1,14 @@
 # Wails v3 Dev Mode Configuration
-# Claude Request Forwarder
+# Vane
 
 version: '3'
 
 info:
-  companyName: "Claude Request Forwarder"
-  productName: "Claude Request Forwarder"
-  productIdentifier: "com.claude-request-forwarder.desktop"
-  description: "Claude API Request Forwarding Service"
-  version: "8.8"
+  companyName: "Vane"
+  productName: "Vane"
+  productIdentifier: "io.github.wsyangzy.vane"
+  description: "Local AI Gateway, Routing and Request Tracing"
+  version: "1.0.0"
 
 dev_mode:
   root_path: .

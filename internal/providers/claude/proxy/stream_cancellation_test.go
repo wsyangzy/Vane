@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // readCloser 包装 strings.Reader 实现 io.ReadCloser

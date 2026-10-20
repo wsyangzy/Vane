@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	appcache "ai-relay-forwarder/internal/cache"
+	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 )
 
 func TestUsageStatsCacheCachesDBTotalsButAddsHotPoolEveryCall(t *testing.T) {

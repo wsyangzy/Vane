@@ -56,10 +56,14 @@ data/
 /docs/*
 !/docs/DEVLOG.md
 !/docs/TODO.md
+!/docs/images/
+!/docs/images/**
 /data
 docs/TECHNICAL_ARCHITECTURE.md
 docs/REFACTOR_PLAN.md
 cc-forwarder
+/Vane
+/vane
 /logs
 
 # OpenSpec directory
@@ -72,9 +76,37 @@ internal/web/static/frontend/dist/
 internal/web/static/dist/
 
 # Wails 构建输出（保留资源文件）
+!/build/
+/build/*
+!/build/Taskfile.yml
+!/build/config.yml
+!/build/wails.json
+!/build/darwin/
+/build/darwin/*
+!/build/darwin/Taskfile.yml
+!/build/darwin/Info.plist
+!/build/darwin/Info.dev.plist
+!/build/darwin/appicon.icns
+!/build/linux/
+/build/linux/*
+!/build/linux/Taskfile.yml
+!/build/linux/appicon.png
+!/build/windows/
+/build/windows/*
+!/build/windows/Taskfile.yml
+!/build/windows/app.manifest
+!/build/windows/wails.exe.manifest
+!/build/windows/info.json
+!/build/windows/versioninfo.json
+!/build/windows/icon.ico
 build/bin/
 build/dist/
 build.log
+
+# Build helper scripts are source files, including with a global build/ ignore.
+!/scripts/build/
+/scripts/build/*
+!/scripts/build/*.sh
 
 # Wails v3 构建中间文件
 *.syso
@@ -88,6 +120,7 @@ internal/tracking/deprecated/
 docs/TODO.md
 
 # AI
+AGENT.md
 AGENTS.md
 CLAUDE.md
 .claude
@@ -95,6 +128,8 @@ CLAUDE.md
 .agents
 .codex
 .codegraph
+.reasonix/
+.superpowers/
 
 # Local research snapshots
 tmp_research
@@ -103,4 +138,6 @@ tmp_research
 
 .mcp.json
 
-.reasonix/
+# Python bytecode caches
+__pycache__/
+*.py[cod]

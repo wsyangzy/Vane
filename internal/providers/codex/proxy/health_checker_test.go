@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 func TestBuildProbeURL(t *testing.T) {

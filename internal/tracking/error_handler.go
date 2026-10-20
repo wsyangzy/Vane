@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wsyangzy/Vane/internal/tracking/storage"
 )
 
 // ErrorHandler handles errors and provides recovery mechanisms
@@ -282,7 +284,7 @@ func (eh *ErrorHandler) CreateBackup() error {
 // 同时使用 PRAGMA table_info 动态获取列列表，避免 SELECT/INSERT 硬编码列名
 func (eh *ErrorHandler) performSimpleBackup(ctx context.Context, backupDB *sql.DB) error {
 	// 🔧 [P1.1] 使用嵌入的 schema.sql 创建完整 schema（包含所有表与索引）
-	schemaData, err := schemaFS.ReadFile("schema.sql")
+	schemaData, err := storage.Schema()
 	if err != nil {
 		return fmt.Errorf("failed to read embedded schema: %w", err)
 	}

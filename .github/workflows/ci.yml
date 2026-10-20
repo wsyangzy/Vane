@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  checks:
+    name: Source and workflow checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Detect code changes
+        id: changes
+        shell: python
+        run: |
+          import os
+          import subprocess
+          from pathlib import PurePosixPath
+
+          code = True
+          if os.environ['GITHUB_EVENT_NAME'] == 'pull_request':
+              files = subprocess.check_output([
+                  'git', 'diff', '--name-only', '--no-renames', '-z', 'HEAD^1', 'HEAD',
+              ]).decode('utf-8').split('\0')
+              code = any(
+                  name and not (name.startswith('docs/') or PurePosixPath(name).suffix.lower() == '.md')
+                  for name in files
+              )
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'code={str(code).lower()}\n')
+
+      - name: Check Go formatting
+        shell: python
+        run: |
+          import subprocess
+          import sys
+
+          files = subprocess.check_output(['git', 'ls-files', '-z', '*.go']).decode('utf-8').split('\0')
+          result = subprocess.run(['gofmt', '-l', *filter(None, files)], check=True, capture_output=True, text=True)
+          if result.stdout:
+              print(result.stdout)
+              sys.exit('Run gofmt on the files listed above.')
+
+      - name: Check workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+      - name: Test build and release scripts
+        run: python -B -m unittest discover -s scripts/checks -p 'test_*.py'
+
+  frontend:
+    name: Frontend checks
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Skip steps, rather than the job, so docs-only PRs retain stable check names.
+      - uses: actions/checkout@v4
+        if: needs.checks.outputs.code == 'true'
+
+      - uses: actions/setup-node@v4
+        if: needs.checks.outputs.code == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        if: needs.checks.outputs.code == 'true'
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        if: needs.checks.outputs.code == 'true'
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Test
+        if: needs.checks.outputs.code == 'true'
+        working-directory: frontend
+        run: npm test
+
+      - name: Build embedded frontend
+        if: needs.checks.outputs.code == 'true'
+        working-directory: frontend
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        if: needs.checks.outputs.code == 'true'
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  go:
+    name: Go checks (${{ matrix.platform }})
+    needs: [checks, frontend]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-amd64
+            runner: windows-latest
+          - platform: macos-arm64
+            runner: macos-14
+          - platform: linux-amd64
+            runner: ubuntu-24.04
+    env:
+      CGO_ENABLED: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.checks.outputs.code == 'true'
+
+      - uses: actions/setup-go@v5
+        if: needs.checks.outputs.code == 'true'
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/download-artifact@v4
+        if: needs.checks.outputs.code == 'true'
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Install Linux desktop dependencies
+        if: needs.checks.outputs.code == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev xvfb xauth
+
+      - name: Verify Go modules
+        if: needs.checks.outputs.code == 'true'
+        run: go mod verify
+
+      - name: Vet
+        if: needs.checks.outputs.code == 'true'
+        run: go vet ./...
+
+      - name: Compile desktop packages
+        if: needs.checks.outputs.code == 'true'
+        timeout-minutes: 10
+        run: go test -tags desktop -run '^$' -timeout 2m ./...
+
+      - name: Test
+        if: needs.checks.outputs.code == 'true'
+        timeout-minutes: 15
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a go test -count=1 -timeout 10m ./...
+          else
+            go test -count=1 -timeout 10m ./...
+          fi

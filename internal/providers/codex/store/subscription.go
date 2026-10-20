@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 )
 
 // EnsureCodexSubscriptionSchema is provider-owned and idempotent. It is

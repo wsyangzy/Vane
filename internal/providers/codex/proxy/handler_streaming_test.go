@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 type contextCanceledAfterReadCloser struct {

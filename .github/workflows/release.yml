@@ -2,244 +2,139 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-
-env:
-  GO_VERSION: '1.25.0'
-  NODE_VERSION: '20'
-  ASSET_NAME: AI-Relay-Forwarder-windows-amd64.zip
+    tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ASSET_NAME: Vane-windows-amd64.zip
 
 jobs:
-  build-windows:
-    name: Build Windows
-    runs-on: windows-latest
+  metadata:
+    name: Validate release tag
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
+      - name: Validate version and release notes
+        id: release
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./scripts/release/prepare-release.ps1 -Tag $env:RELEASE_TAG
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+  ci:
+    name: Release checks
+    needs: metadata
+    uses: ./.github/workflows/ci.yml
 
-      - name: Install build tools
-        shell: powershell
+  build-windows:
+    name: Build Windows release
+    needs: [metadata, ci]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      COMMIT: ${{ github.sha }}
+      GOFLAGS: -mod=readonly
+      CGO_ENABLED: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download checked frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Install pinned build tools
         run: |
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.96
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.5.0
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Resolve build metadata
-        shell: powershell
-        run: |
-          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
-            $version = "${{ github.ref_name }}".TrimStart("v")
-          } else {
-            $source = Get-Content -LiteralPath "globals.go" -Raw
-            $match = [regex]::Match($source, 'Version\s*=\s*"([^"]+)"')
-            if (-not $match.Success) {
-              throw "Unable to resolve Version from globals.go"
-            }
-            $version = $match.Groups[1].Value
-          }
-          $commit = (git rev-parse --short HEAD).Trim()
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "COMMIT=$commit" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows
-        shell: powershell
-        run: wails3 task build VERSION="$env:VERSION" COMMIT="$env:COMMIT"
+        run: wails3 task windows:build VERSION="$env:VERSION" COMMIT="$env:COMMIT"
 
-      - name: Package Windows
-        shell: powershell
+      - name: Verify and package Windows
         run: |
-          $exePath = "build/bin/AI Relay Forwarder.exe"
-          $assetPath = "build/bin/${{ env.ASSET_NAME }}"
-
-          if (-not (Test-Path -LiteralPath $exePath)) {
-            throw "Windows executable not found: $exePath"
+          $exePath = "build/bin/Vane.exe"
+          $assetPath = "build/bin/$env:ASSET_NAME"
+          $version = (Get-Item -LiteralPath $exePath).VersionInfo
+          if ($version.FileVersion -ne "$env:VERSION.0" -or $version.ProductVersion -ne $env:VERSION) {
+            throw "Windows version resources do not match v$env:VERSION"
           }
-          Remove-Item -LiteralPath $assetPath -Force -ErrorAction SilentlyContinue
+          $output = (& $exePath -version | Out-String)
+          $versionPattern = '(?m)^Version: ' + [regex]::Escape($env:VERSION) + '\r?$'
+          if ($LASTEXITCODE -ne 0 -or -not [regex]::IsMatch($output, $versionPattern)) {
+            throw "Windows executable did not report the release version"
+          }
           Compress-Archive -LiteralPath $exePath -DestinationPath $assetPath -Force
-          Get-FileHash -Algorithm SHA256 -LiteralPath $assetPath |
-            ForEach-Object { "$($_.Hash.ToLower())  ${{ env.ASSET_NAME }}" } |
-            Set-Content -Path "build/bin/checksums.txt" -Encoding UTF8
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $assetPath).Hash.ToLowerInvariant()
+          "$hash  $env:ASSET_NAME" | Set-Content -LiteralPath "build/bin/checksums.txt" -Encoding ascii
 
-      - name: Upload workflow artifact
+      - name: Upload release package
         uses: actions/upload-artifact@v4
         with:
-          name: ai-relay-forwarder-windows-amd64
+          name: vane-windows-amd64
           path: |
             build/bin/${{ env.ASSET_NAME }}
             build/bin/checksums.txt
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Create Gitea release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: powershell
+  publish:
+    name: Publish GitHub release
+    needs: build-windows
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: vane-windows-amd64
+          path: build/release/
+
+      - name: Verify release checksums
+        working-directory: build/release
+        run: sha256sum --check checksums.txt
+
+      - name: Create GitHub release
+        shell: pwsh
         env:
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          FALLBACK_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $ErrorActionPreference = "Stop"
-          Add-Type -AssemblyName System.Net.Http
-
-          $token = $env:RELEASE_TOKEN
-          if ([string]::IsNullOrWhiteSpace($token)) {
-            $token = $env:FALLBACK_TOKEN
+          $notesPath = Join-Path $env:RUNNER_TEMP "vane-release-notes.md"
+          ./scripts/release/prepare-release.ps1 -Tag $env:RELEASE_TAG -NotesPath $notesPath
+          gh release view $env:RELEASE_TAG --repo $env:GH_REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release edit $env:RELEASE_TAG --repo $env:GH_REPO --title "Vane $env:RELEASE_TAG" --notes-file $notesPath
+          } else {
+            gh release create $env:RELEASE_TAG --repo $env:GH_REPO --verify-tag --title "Vane $env:RELEASE_TAG" --notes-file $notesPath
           }
-          if ([string]::IsNullOrWhiteSpace($token)) {
-            throw "Missing release token. Set repository secret RELEASE_TOKEN with release write permission."
-          }
-
-          $repo = "${{ github.repository }}"
-          $tag = "${{ github.ref_name }}"
-          $serverUrl = "${{ github.server_url }}".TrimEnd("/")
-          $apiUrl = $env:GITHUB_API_URL
-          if ([string]::IsNullOrWhiteSpace($apiUrl)) {
-            $apiUrl = "$serverUrl/api/v1"
-          }
-          $apiUrl = $apiUrl.TrimEnd("/")
-
-          $headers = @{
-            Authorization = "token $token"
-            Accept = "application/json"
-          }
-
-          $catalog = Get-Content -LiteralPath "frontend/src/release-notes.json" -Raw | ConvertFrom-Json
-          $releaseVersion = $tag.TrimStart("v")
-          $notes = @($catalog.releases | Where-Object {
-            "$($_.version)" -eq $releaseVersion
-          }) | Select-Object -First 1
-          if (-not $notes) {
-            throw "Release notes not found for $tag"
-          }
-          $sectionLines = @($notes.sections | ForEach-Object {
-            $items = @($_.items) -join "；"
-            "- **$($_.title)**：$items"
-          })
-          if ($sectionLines.Count -eq 0) {
-            $sectionLines = @("- 稳定性与体验优化")
-          }
-          $releaseBody = @"
-          ## AI Relay Forwarder $tag
-
-          ### 本次更新
-
-          $($sectionLines -join "`n")
-
-          ### 下载
-
-          - Windows x64: ${{ env.ASSET_NAME }}
-
-          ### 校验
-
-          同目录提供 checksums.txt。
-          "@
-
-          $releasePayload = @{
-            tag_name = $tag
-            name = "AI Relay Forwarder $tag"
-            body = $releaseBody
-            draft = $false
-            prerelease = $false
-          } | ConvertTo-Json
-
-          $releasesUrl = "$apiUrl/repos/$repo/releases"
-          try {
-            $release = Invoke-RestMethod `
-              -Method Post `
-              -Uri $releasesUrl `
-              -Headers $headers `
-              -ContentType "application/json; charset=utf-8" `
-              -Body ([System.Text.Encoding]::UTF8.GetBytes($releasePayload))
-          } catch {
-            $statusCode = $null
-            if ($_.Exception.Response) {
-              $statusCode = [int]$_.Exception.Response.StatusCode
-            }
-            if ($statusCode -ne 409 -and $statusCode -ne 422) {
-              throw
-            }
-            $release = Invoke-RestMethod `
-              -Method Get `
-              -Uri "$releasesUrl/tags/$tag" `
-              -Headers $headers
-          }
-
-          function Remove-ExistingAsset {
-            param(
-              [Parameter(Mandatory = $true)] $Release,
-              [Parameter(Mandatory = $true)] [string] $Name
-            )
-
-            if (-not $Release.assets) {
-              return
-            }
-            foreach ($asset in $Release.assets) {
-              if ($asset.name -eq $Name) {
-                Invoke-RestMethod `
-                  -Method Delete `
-                  -Uri "$releasesUrl/$($Release.id)/assets/$($asset.id)" `
-                  -Headers $headers | Out-Null
-              }
-            }
-          }
-
-          function Upload-ReleaseAsset {
-            param(
-              [Parameter(Mandatory = $true)] $Release,
-              [Parameter(Mandatory = $true)] [string] $Path
-            )
-
-            $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
-            $fileName = Split-Path -Leaf $resolvedPath
-            Remove-ExistingAsset -Release $Release -Name $fileName
-
-            $uploadUrl = "$releasesUrl/$($Release.id)/assets?name=$([uri]::EscapeDataString($fileName))"
-            $client = [System.Net.Http.HttpClient]::new()
-            $fileStream = $null
-            $multipart = $null
-
-            try {
-              $client.DefaultRequestHeaders.Authorization =
-                [System.Net.Http.Headers.AuthenticationHeaderValue]::new("token", $token)
-              $client.DefaultRequestHeaders.Accept.ParseAdd("application/json")
-
-              $multipart = [System.Net.Http.MultipartFormDataContent]::new()
-              $fileStream = [System.IO.File]::OpenRead($resolvedPath)
-              $fileContent = [System.Net.Http.StreamContent]::new($fileStream)
-              $fileContent.Headers.ContentType =
-                [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse("application/octet-stream")
-              $multipart.Add($fileContent, "attachment", $fileName)
-
-              $response = $client.PostAsync($uploadUrl, $multipart).GetAwaiter().GetResult()
-              if (-not $response.IsSuccessStatusCode) {
-                $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-                throw "Upload failed for $fileName. Status: $($response.StatusCode). Body: $body"
-              }
-            } finally {
-              if ($multipart) { $multipart.Dispose() }
-              if ($fileStream) { $fileStream.Dispose() }
-              $client.Dispose()
-            }
-          }
-
-          Upload-ReleaseAsset -Release $release -Path "build/bin/${{ env.ASSET_NAME }}"
-          Upload-ReleaseAsset -Release $release -Path "build/bin/checksums.txt"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to create or update GitHub release" }
+          gh release upload $env:RELEASE_TAG "build/release/$env:ASSET_NAME" "build/release/checksums.txt" --repo $env:GH_REPO --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Unable to upload GitHub release assets" }

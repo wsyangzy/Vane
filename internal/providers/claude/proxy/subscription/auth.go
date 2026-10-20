@@ -12,7 +12,7 @@ import (
 	"net/url"
 	"strings"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func callerID(id, version int64) string { return fmt.Sprintf("claude:%d:%d", id, version) }

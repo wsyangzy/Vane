@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai-relay-forwarder/internal/privacy"
+	"github.com/wsyangzy/Vane/internal/privacy"
 )
 
 type staticPrivacyFilter struct {

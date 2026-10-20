@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"ai-relay-forwarder/internal/bodyrewrite"
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/routing"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // codexRoute 一次请求的路由执行计划，只在本次请求内有效

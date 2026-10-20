@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/events"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/events"
 )
 
 // SyncEndpoints 从数据库同步端点（Desktop 专用）

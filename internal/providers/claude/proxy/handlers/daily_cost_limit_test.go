@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 )
 
 func TestFilterCredentialGroupDailyCostLimitsFailsClosedAndKeepsUnlimitedGroup(t *testing.T) {

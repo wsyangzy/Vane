@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"ai-relay-forwarder/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 )
 
 var codexChannelNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} _-]{0,63}$`)

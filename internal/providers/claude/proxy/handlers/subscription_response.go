@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/response"
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/response"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
 )
 
 func decodeSubscriptionResponse(resp *http.Response) error {

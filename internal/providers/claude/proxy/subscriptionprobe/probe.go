@@ -19,8 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ai-relay-forwarder/internal/bodyrewrite"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 const OfficialOrigin = "https://api.anthropic.com"

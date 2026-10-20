@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"ai-relay-forwarder/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 )
 
 func TestCodexSetActiveMissingTargetPreservesCurrentActive(t *testing.T) {

@@ -5,14 +5,15 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	_ "modernc.org/sqlite"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestSubscriptionMigrationAndConfigurationPreserveQuota(t *testing.T) {
@@ -136,7 +137,7 @@ func newCodexSubscriptionTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema, err := os.ReadFile(filepath.Join("..", "..", "..", "tracking", "schema.sql"))
+	schema, err := os.ReadFile(filepath.Join("..", "..", "..", "tracking", "storage", "schema.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}

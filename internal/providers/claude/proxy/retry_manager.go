@@ -5,9 +5,9 @@ import (
 	"math"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/providers/claude/proxy/handlers"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/handlers"
 )
 
 // RetryManager 重试管理器

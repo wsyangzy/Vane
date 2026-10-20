@@ -2,231 +2,46 @@ package endpoint
 
 import (
 	"testing"
-	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
-// TestForceActivation tests the force activation feature
-// 适配一端点一组架构，组名 = 端点名
+// 显式激活不受健康检查限制；force 参数只为旧调用方保留。
 func TestForceActivation(t *testing.T) {
-	// Create test configuration
-	cfg := &config.Config{
-		Group: config.GroupConfig{
-			Cooldown:                time.Minute,
-			AutoSwitchBetweenGroups: false,
-		},
-		Failover: config.FailoverConfig{
-			Enabled: false,
-		},
+	for _, tt := range []struct {
+		name    string
+		healthy bool
+		force   bool
+	}{
+		{name: "healthy", healthy: true},
+		{name: "unhealthy"},
+		{name: "healthy with legacy force", healthy: true, force: true},
+		{name: "unhealthy with legacy force", force: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gm := NewGroupManager(&config.Config{})
+			ep := &Endpoint{
+				Config: config.EndpointConfig{Name: "test-endpoint"},
+				Status: EndpointStatus{Healthy: tt.healthy},
+			}
+			gm.UpdateGroups([]*Endpoint{ep})
+			require.Empty(t, gm.GetActiveGroups(), "构造管理器不应自动激活渠道")
+
+			if tt.force {
+				require.NoError(t, gm.ManualActivateGroupWithForce("test-endpoint", true))
+			} else {
+				require.NoError(t, gm.ManualActivateGroup("test-endpoint"))
+			}
+
+			active := gm.GetActiveGroups()
+			require.Len(t, active, 1)
+			assert.Equal(t, "test-endpoint", active[0].Name)
+			assert.False(t, active[0].ManualActivationTime.IsZero())
+			assert.False(t, active[0].ForcedActivation)
+			assert.True(t, active[0].ForcedActivationTime.IsZero())
+			assert.Equal(t, tt.healthy, ep.IsHealthy(), "激活不能伪造已完成的健康检查结果")
+		})
 	}
-
-	// Create group manager
-	gm := NewGroupManager(cfg)
-
-	// 创建测试端点，每个端点自动成为一个独立的组
-	// 组名就是端点名
-	endpoints := []*Endpoint{
-		{
-			Config: config.EndpointConfig{
-				Name:     "test-endpoint",
-				URL:      "https://api.example.com",
-				Priority: 1,
-			},
-			Status: EndpointStatus{
-				Healthy: true,
-			},
-		},
-	}
-
-	gm.UpdateGroups(endpoints)
-
-	// 组名 = 端点名
-	groupName := "test-endpoint"
-
-	t.Run("Normal activation with healthy endpoints", func(t *testing.T) {
-		// Ensure endpoint is healthy
-		endpoints[0].Status.Healthy = true
-		gm.UpdateGroups(endpoints)
-
-		err := gm.ManualActivateGroup(groupName)
-		if err != nil {
-			t.Errorf("Normal activation failed: %v", err)
-		}
-
-		groups := gm.GetAllGroups()
-		var testGroup *GroupInfo
-		for _, g := range groups {
-			if g.Name == groupName {
-				testGroup = g
-				break
-			}
-		}
-		if testGroup == nil || !testGroup.IsActive {
-			t.Error("Group should be active after normal activation")
-		}
-		if testGroup != nil && testGroup.ForcedActivation {
-			t.Error("Group should not be marked as force activated")
-		}
-	})
-
-	t.Run("Normal activation fails with no healthy endpoints", func(t *testing.T) {
-		// Make all endpoints unhealthy
-		endpoints[0].Status.Healthy = false
-		gm.UpdateGroups(endpoints)
-
-		// Reset group state
-		for _, group := range gm.groups {
-			group.IsActive = false
-			group.ForcedActivation = false
-			group.ManuallyPaused = false
-		}
-
-		err := gm.ManualActivateGroup(groupName)
-		if err == nil {
-			t.Error("Normal activation should fail with no healthy endpoints")
-		}
-		expectedMsg := "组 " + groupName + " 中没有健康的端点，无法激活。如需强制激活请使用强制模式"
-		if err.Error() != expectedMsg {
-			t.Errorf("Expected specific error message, got: %v", err)
-		}
-	})
-
-	t.Run("Force activation succeeds with no healthy endpoints", func(t *testing.T) {
-		// Ensure all endpoints are unhealthy
-		endpoints[0].Status.Healthy = false
-		gm.UpdateGroups(endpoints)
-
-		// Reset group state
-		for _, group := range gm.groups {
-			group.IsActive = false
-			group.ForcedActivation = false
-			group.ForcedActivationTime = time.Time{}
-			group.ManuallyPaused = false
-		}
-
-		err := gm.ManualActivateGroupWithForce(groupName, true)
-		if err != nil {
-			t.Errorf("Force activation failed: %v", err)
-		}
-
-		groups := gm.GetAllGroups()
-		var testGroup *GroupInfo
-		for _, g := range groups {
-			if g.Name == groupName {
-				testGroup = g
-				break
-			}
-		}
-		if testGroup == nil || !testGroup.IsActive {
-			t.Error("Group should be active after force activation")
-		}
-		if testGroup != nil && !testGroup.ForcedActivation {
-			t.Error("Group should be marked as force activated")
-		}
-		if testGroup != nil && testGroup.ForcedActivationTime.IsZero() {
-			t.Error("Force activation time should be set")
-		}
-	})
-
-	t.Run("Force activation fails with healthy endpoints", func(t *testing.T) {
-		// Make one endpoint healthy
-		endpoints[0].Status.Healthy = true
-		gm.UpdateGroups(endpoints)
-
-		// Reset group state
-		for _, group := range gm.groups {
-			group.IsActive = false
-			group.ForcedActivation = false
-			group.ManuallyPaused = false
-		}
-
-		err := gm.ManualActivateGroupWithForce(groupName, true)
-		if err == nil {
-			t.Error("Force activation should fail with healthy endpoints")
-		}
-		expectedMsg := "组 " + groupName + " 有 1 个健康端点，无需强制激活。请使用正常激活"
-		if err.Error() != expectedMsg {
-			t.Errorf("Expected specific error message, got: %v", err)
-		}
-	})
-
-	t.Run("Group details include force activation info", func(t *testing.T) {
-		// Force activate with no healthy endpoints
-		endpoints[0].Status.Healthy = false
-		gm.UpdateGroups(endpoints)
-
-		// Reset group state
-		for _, group := range gm.groups {
-			group.IsActive = false
-			group.ForcedActivation = false
-			group.ForcedActivationTime = time.Time{}
-			group.ManuallyPaused = false
-		}
-
-		err := gm.ManualActivateGroupWithForce(groupName, true)
-		if err != nil {
-			t.Errorf("Force activation failed: %v", err)
-		}
-
-		details := gm.GetGroupDetails()
-		groups, ok := details["groups"].([]map[string]interface{})
-		if !ok || len(groups) == 0 {
-			t.Fatal("Expected group details")
-		}
-
-		// Find the test group
-		var testGroupData map[string]interface{}
-		for _, g := range groups {
-			if g["name"] == groupName {
-				testGroupData = g
-				break
-			}
-		}
-		if testGroupData == nil {
-			t.Fatal("Expected to find test group in details")
-		}
-
-		if testGroupData["forced_activation"] != true {
-			t.Error("Group should be marked as force activated in details")
-		}
-		if testGroupData["activation_type"] != "forced" {
-			t.Error("Activation type should be 'forced'")
-		}
-		if testGroupData["can_force_activate"] != false {
-			t.Error("Can force activate should be false for active group")
-		}
-		if forcedTime, ok := testGroupData["forced_activation_time"].(string); !ok || forcedTime == "" {
-			t.Error("Forced activation time should be set")
-		}
-	})
-
-	t.Run("Normal activation clears force activation flags", func(t *testing.T) {
-		// Make endpoints healthy and do normal activation
-		endpoints[0].Status.Healthy = true
-		gm.UpdateGroups(endpoints)
-
-		err := gm.ManualActivateGroup(groupName)
-		if err != nil {
-			t.Errorf("Normal activation failed: %v", err)
-		}
-
-		groups := gm.GetAllGroups()
-		var testGroup *GroupInfo
-		for _, g := range groups {
-			if g.Name == groupName {
-				testGroup = g
-				break
-			}
-		}
-		if testGroup == nil || !testGroup.IsActive {
-			t.Error("Group should be active after normal activation")
-		}
-		if testGroup != nil && testGroup.ForcedActivation {
-			t.Error("Force activation flag should be cleared")
-		}
-		if testGroup != nil && !testGroup.ForcedActivationTime.IsZero() {
-			t.Error("Force activation time should be cleared")
-		}
-	})
 }

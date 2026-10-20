@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"sync"
 
-	"ai-relay-forwarder/internal/privacy"
-	"ai-relay-forwarder/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/privacy"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 )
 
 // codexPrivacyBodies 一次请求的隐私过滤结果：扫描只做一次（在 ServeHTTP 入口），

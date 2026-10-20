@@ -1,15 +1,15 @@
 {
   "fixed": {
-    "file_version": "8.8.0.0"
+    "file_version": "1.0.0.0"
   },
   "info": {
     "0000": {
-      "ProductVersion": "8.8",
-      "CompanyName": "AI Relay Forwarder",
-      "FileDescription": "AI Relay Forwarder",
-      "LegalCopyright": "Copyright © 2026 AI Relay Forwarder",
-      "ProductName": "AI Relay Forwarder",
-      "Comments": "AI Relay Forwarder 本地多 AI 中继转发服务"
+      "ProductVersion": "1.0.0",
+      "CompanyName": "Vane",
+      "FileDescription": "Vane",
+      "LegalCopyright": "Copyright © 2026 Vane",
+      "ProductName": "Vane",
+      "Comments": "Vane 本地多 AI 中继转发服务"
     }
   }
 }

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"ai-relay-forwarder/internal/providers/claude/store"
+	"github.com/wsyangzy/Vane/internal/providers/claude/store"
 )
 
 const DefaultClaudeCredentialGroupName = "默认分组"

@@ -53,11 +53,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@components': path.resolve(__dirname, './src/components'),
-      '@pages': path.resolve(__dirname, './src/pages'),
-      '@hooks': path.resolve(__dirname, './src/hooks'),
-      '@utils': path.resolve(__dirname, './src/utils'),
-      '@wailsjs': path.resolve(__dirname, './src/wailsjs')
+      '@app': path.resolve(__dirname, './src/app'),
+      '@features': path.resolve(__dirname, './src/features'),
+      '@services': path.resolve(__dirname, './src/services'),
+      '@shared': path.resolve(__dirname, './src/shared'),
+      '@bindings': path.resolve(__dirname, './src/bindings')
     }
   },
 

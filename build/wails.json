@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "vane",
+  "outputfilename": "Vane",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "./frontend/src",
+  "author": {
+    "name": "yangzhengyu",
+    "email": "yangzhengyu0913@gmail.com"
+  },
+  "info": {
+    "companyName": "Vane",
+    "productName": "Vane",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2026 Vane",
+    "comments": "Vane 本地多 AI 中继转发服务"
+  }
+}

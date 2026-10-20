@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/privacy"
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/privacy"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // 渠道隐私级别：同一请求在不同渠道上发出的正文由渠道级别决定。

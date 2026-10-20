@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // CodexChannelRecord 表示 Codex 渠道配置（共用配置：API Key、模型、推理强度、1M 上下文等）。

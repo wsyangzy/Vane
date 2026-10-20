@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/providers/claude/proxy"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/platform/middleware"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestStreamingTokenLossDetection 验证流式Token丢失问题检测

@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 var codexEndpointNamePattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} _-]{0,63}$`)

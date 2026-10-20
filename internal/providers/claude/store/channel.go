@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // ChannelRecord 表示数据库中的渠道记录

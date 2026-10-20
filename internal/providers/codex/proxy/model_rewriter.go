@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"ai-relay-forwarder/internal/bodyrewrite"
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 type modelRewriteResult struct {

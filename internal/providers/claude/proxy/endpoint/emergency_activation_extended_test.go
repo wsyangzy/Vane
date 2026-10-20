@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wsyangzy/Vane/internal/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"ai-relay-forwarder/config"
 )
 
 // 冷却机制已移除，TestEmergencyActivationCooldownScenarios 测试已删除
@@ -25,8 +25,7 @@ func TestEmergencyActivationEdgeCases(t *testing.T) {
 
 	t.Run("不存在的组应该返回错误", func(t *testing.T) {
 		err := gm.ManualActivateGroupWithForce("nonexistent-group", true)
-		assert.Error(t, err, "不存在的组应该返回错误")
-		assert.Contains(t, err.Error(), "组不存在", "错误消息应该提到组不存在")
+		require.ErrorContains(t, err, "组不存在", "不存在的组应该返回错误")
 	})
 
 	t.Run("空组名应该在Web API层面被拦截", func(t *testing.T) {
@@ -148,10 +147,11 @@ func TestEmergencyActivationComprehensiveAPI(t *testing.T) {
 
 		// 验证强制激活的组
 		assert.True(t, unhealthyGroupData["is_active"].(bool), "unhealthy-endpoint应该已激活")
-		assert.True(t, unhealthyGroupData["forced_activation"].(bool), "应该标记为强制激活")
-		assert.Equal(t, "forced", unhealthyGroupData["activation_type"], "激活类型应该是forced")
+		assert.False(t, unhealthyGroupData["forced_activation"].(bool), "旧 force 参数不再改变激活类型")
+		assert.Equal(t, "normal", unhealthyGroupData["activation_type"], "显式激活统一使用 normal 类型")
 		assert.False(t, unhealthyGroupData["can_force_activate"].(bool), "已激活组不能再强制激活")
-		assert.NotEmpty(t, unhealthyGroupData["forced_activation_time"], "应该有强制激活时间")
+		assert.Empty(t, unhealthyGroupData["forced_activation_time"], "保留旧字段但不记录强制激活时间")
+		assert.NotEmpty(t, unhealthyGroupData["last_manual_activation"], "应该记录用户显式激活时间")
 
 		// 验证其他组
 		assert.False(t, healthyGroupData["is_active"].(bool), "healthy-endpoint应该非活跃")

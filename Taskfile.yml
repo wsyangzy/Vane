@@ -1,4 +1,4 @@
-# Wails v3 Taskfile - AI Relay Forwarder
+# Wails v3 Taskfile - Vane
 # Root task definitions with platform-specific includes
 
 version: '3'
@@ -10,7 +10,7 @@ includes:
   linux: ./build/linux/Taskfile.yml
 
 vars:
-  APP_NAME: "AI Relay Forwarder"
+  APP_NAME: "Vane"
   BIN_DIR: "build/bin"
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9087}}'
 
@@ -18,10 +18,10 @@ tasks:
   clean:
     summary: Clean build artifacts
     cmds:
-      - cmd: powershell -Command "if (Test-Path '{{.BIN_DIR}}') { Remove-Item -Path '{{.BIN_DIR}}/*' -Recurse -Force -ErrorAction SilentlyContinue }; Remove-Item -Path 'resource_windows.syso' -Force -ErrorAction SilentlyContinue"
+      - cmd: powershell -Command "if (Test-Path '{{.BIN_DIR}}') { Remove-Item -Path '{{.BIN_DIR}}/*' -Recurse -Force -ErrorAction SilentlyContinue }; Remove-Item -Path 'cmd/vane/resource_windows.syso' -Force -ErrorAction SilentlyContinue"
         platforms: [windows]
         ignore_error: true
-      - cmd: rm -rf "{{.BIN_DIR}}/*" resource_windows.syso 2>/dev/null || true
+      - cmd: rm -rf "{{.BIN_DIR}}/*" cmd/vane/resource_windows.syso 2>/dev/null || true
         platforms: [linux, darwin]
 
   build:

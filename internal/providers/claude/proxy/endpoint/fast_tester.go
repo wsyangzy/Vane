@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/transport"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
 )
 
 // FastTestResult represents the result of a fast endpoint test

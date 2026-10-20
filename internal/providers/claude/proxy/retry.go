@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // RetryHandler handles retry logic with exponential backoff

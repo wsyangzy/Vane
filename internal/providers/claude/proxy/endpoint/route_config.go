@@ -3,7 +3,7 @@ package endpoint
 import (
 	"strings"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // RouteConfig Claude 请求级路由的运行时快照：各渠道的模型路由规则与非流改道配置。

@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
-	"ai-relay-forwarder/internal/providers/claude/store"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/claude/store"
 )
 
 func TestSubscriptionGroupValidationAndLegacyFieldPreservation(t *testing.T) {

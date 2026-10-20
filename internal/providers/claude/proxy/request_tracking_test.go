@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestRequestIDLogging 测试完整的requestId日志追踪链路

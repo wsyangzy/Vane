@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/monitor"
-	"ai-relay-forwarder/internal/providers/claude/proxy/contracts"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/monitor"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/contracts"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // SuspensionResult 挂起等待结果类型

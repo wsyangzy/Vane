@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
 )
 
 const (

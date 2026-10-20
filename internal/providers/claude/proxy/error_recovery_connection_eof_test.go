@@ -12,11 +12,11 @@ func TestErrorRecoveryManager_ConnectionPhaseEOF(t *testing.T) {
 	erm := NewErrorRecoveryManager(nil)
 
 	testCases := []struct {
-		name          string
-		err           error
-		expectedType  ErrorType
-		shouldRetry   bool
-		description   string
+		name         string
+		err          error
+		expectedType ErrorType
+		shouldRetry  bool
+		description  string
 	}{
 		{
 			name:         "HTTP POST 连接阶段 EOF",

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func (s *codexRouteStage) candidate(ep *CodexEndpoint, requestedModel string) routing.Candidate {

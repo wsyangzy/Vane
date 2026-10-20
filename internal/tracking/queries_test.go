@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/wsyangzy/Vane/internal/tracking/storage"
 )
 
 func TestQueryRequestDetailsSupportsLegacyArchiveColumns(t *testing.T) {
@@ -14,7 +16,7 @@ func TestQueryRequestDetailsSupportsLegacyArchiveColumns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	schema, err := sqliteSchemaFS.ReadFile("schema.sql")
+	schema, err := storage.Schema()
 	if err != nil {
 		t.Fatalf("read schema: %v", err)
 	}

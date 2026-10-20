@@ -3,7 +3,7 @@ package endpoint
 import (
 	"testing"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 func TestUpdateGroupsPreservesSQLiteActiveAndAppliesChannelState(t *testing.T) {

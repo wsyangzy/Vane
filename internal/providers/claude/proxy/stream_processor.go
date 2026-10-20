@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/response"
-	"ai-relay-forwarder/internal/tracking"
-	"ai-relay-forwarder/internal/utils"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/response"
+	"github.com/wsyangzy/Vane/internal/tracking"
+	debuglog "github.com/wsyangzy/Vane/internal/tracking/debuglog"
 )
 
 // 缓冲区大小常量
@@ -344,7 +344,7 @@ func (sp *StreamProcessor) attemptUsageRecovery() {
 	}
 
 	// 尝试从debug文件恢复usage信息
-	err := utils.RecoverAndUpdateUsage(sp.requestID, modelName, sp.usageTracker)
+	err := debuglog.RecoverAndUpdateUsage(sp.requestID, modelName, sp.usageTracker)
 	if err != nil {
 		slog.Warn(fmt.Sprintf("🔧 [Recovery失败] [%s] 从debug文件恢复usage失败: %v", sp.requestID, err))
 		return
@@ -550,10 +550,10 @@ func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {
 			slog.Info(fmt.Sprintf("🔧 [完整数据] [%s] 使用%d字节完整数据替代100行限制数据", sp.requestID, len(sp.partialData)))
 
 			// 使用完整数据保存debug文件
-			utils.WriteStreamDebugResponse(sp.requestID, sp.endpoint, fullLines, sp.bytesProcessed)
+			debuglog.WriteStreamDebugResponse(sp.requestID, sp.endpoint, fullLines, sp.bytesProcessed)
 		} else {
 			// 兜底：如果没有完整数据，使用现有的debug数据
-			utils.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
+			debuglog.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
 		}
 
 		// 🔧 [Fallback修复] 异步尝试从debug文件恢复完整的usage信息
@@ -579,7 +579,7 @@ func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {
 			slog.Info(fmt.Sprintf("🎯 [无Token完成] [%s] 流式响应包含空Token信息", sp.requestID))
 
 			// 🔍 [调试] 异步保存流式调试数据用于分析Token解析失败
-			utils.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
+			debuglog.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
 
 			return nil
 		}
@@ -588,7 +588,7 @@ func (sp *StreamProcessor) getFinalTokenUsage() *tracking.TokenUsage {
 		slog.Info(fmt.Sprintf("🎯 [无Token完成] [%s] 流式响应不包含token信息", sp.requestID))
 
 		// 🔍 [调试] 异步保存流式调试数据用于分析Token解析失败
-		utils.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
+		debuglog.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
 
 		return nil
 	}
@@ -627,9 +627,9 @@ func (sp *StreamProcessor) handlePartialStream(err error) (*tracking.TokenUsage,
 	// 🔍 [EOF调试] 流中断时保存 debug 文件，无论是否有 Token 信息，方便调试
 	if len(sp.partialData) > 0 {
 		fullLines := strings.Split(string(sp.partialData), "\n")
-		utils.WriteStreamDebugResponse(sp.requestID, sp.endpoint, fullLines, sp.bytesProcessed)
+		debuglog.WriteStreamDebugResponse(sp.requestID, sp.endpoint, fullLines, sp.bytesProcessed)
 	} else if len(sp.debugLines) > 0 {
-		utils.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
+		debuglog.WriteStreamDebugResponse(sp.requestID, sp.endpoint, sp.debugLines, sp.bytesProcessed)
 	}
 
 	// 处理Token信息

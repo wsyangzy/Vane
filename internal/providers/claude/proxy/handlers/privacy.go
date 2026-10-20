@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"ai-relay-forwarder/internal/privacy"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/privacy"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 )
 
 // 隐私策略短路时写入 lifecycle 的失败原因

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(t *testing.T) {
@@ -25,6 +25,10 @@ func TestTriggerRequestFailoverWithFailedEndpoints_SelectsNextChannelByPriority(
 	}
 
 	mgr := NewManager(cfg)
+	defer mgr.Stop()
+	if err := mgr.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("activate initial channel: %v", err)
+	}
 
 	// 设定健康状态与响应时间（模拟健康检查历史）
 	for _, ep := range mgr.GetAllEndpoints() {
@@ -67,6 +71,10 @@ func TestTriggerRequestFailoverWithFailedEndpoints_UsesChannelPriorityAndSkipHea
 	}
 
 	mgr := NewManager(cfg)
+	defer mgr.Stop()
+	if err := mgr.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("activate initial channel: %v", err)
+	}
 	mgr.UpdateChannelPriorities(map[string]int{
 		"A": 1,
 		"B": 2,
@@ -114,6 +122,10 @@ func TestTriggerRequestFailoverWithFailedEndpoints_PrioritySkipsPausedOrCooldown
 	}
 
 	mgr := NewManager(cfg)
+	defer mgr.Stop()
+	if err := mgr.ManualActivateGroup("A"); err != nil {
+		t.Fatalf("activate initial channel: %v", err)
+	}
 
 	for _, ep := range mgr.GetAllEndpoints() {
 		ep.mutex.Lock()

@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"ai-relay-forwarder/internal/bodyrewrite"
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func (h *HTTPHandler) SetSubscriptionController(c *subscription.Controller) {

@@ -1,11 +1,11 @@
-# Wails v3 macOS Taskfile - Claude Request Forwarder
+# Wails v3 macOS Taskfile - Vane
 # macOS-specific build, run, and package tasks
 # Note: CGO_ENABLED=1 required for go-sqlite3
 
 version: '3'
 
 vars:
-  VERSION: '{{default "8.8" .VERSION}}'
+  VERSION: '{{default "1.0.0" .VERSION}}'
   COMMIT: '{{default "unknown" .COMMIT}}'
   BUILD_TIME: '{{now | date "2006-01-02T15:04:05Z07:00"}}'
   DEV: '{{default "false" .DEV}}'
@@ -20,15 +20,15 @@ tasks:
         {{else}}
         -tags production,desktop -trimpath -buildvcs=false
         -ldflags="-w -s
-        -X main.Version={{.VERSION}}
-        -X main.Commit={{.COMMIT}}
-        -X main.BuildTime={{.BUILD_TIME}}
-        -X main.BuildMode=release"
+        -X github.com/wsyangzy/Vane/internal/buildinfo.Version={{.VERSION}}
+        -X github.com/wsyangzy/Vane/internal/buildinfo.Commit={{.COMMIT}}
+        -X github.com/wsyangzy/Vane/internal/buildinfo.BuildTime={{.BUILD_TIME}}
+        -X github.com/wsyangzy/Vane/internal/buildinfo.BuildMode=release"
         {{end}}
     env:
       CGO_ENABLED: "1"
     cmds:
-      - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}"
+      - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}" ./cmd/vane
 
   run:
     summary: Runs the built macOS application

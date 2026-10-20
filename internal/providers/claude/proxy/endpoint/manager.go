@@ -19,10 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/events"
-	"ai-relay-forwarder/internal/routing"
-	"ai-relay-forwarder/internal/transport"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/events"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // EndpointStatus represents the health status of an endpoint

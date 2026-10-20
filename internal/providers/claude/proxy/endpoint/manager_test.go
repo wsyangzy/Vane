@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/events"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/events"
 )
 
 // MockEventBus 用于测试的模拟EventBus

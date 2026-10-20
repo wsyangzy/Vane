@@ -1,4 +1,4 @@
-# Wails v3 Common Taskfile - Claude Request Forwarder
+# Wails v3 Common Taskfile - Vane
 # Platform-independent tasks for frontend and code generation
 
 version: '3'
@@ -34,12 +34,12 @@ tasks:
   generate:bindings:
     summary: Generates Wails v3 bindings
     cmds:
-      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true
+      - wails3 generate bindings -clean=true -f '-tags desktop' -names -d frontend/src/bindings ./cmd/vane
 
   generate:icons:
-    summary: Generates icons from appicon.png
+    summary: Generates platform icons from assets/vane.png
     cmds:
-      - wails3 generate icons -input build/appicon.png -output build
+      - python scripts/assets/generate-icon.py
 
   go:mod:tidy:
     summary: Runs go mod tidy

@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	"ai-relay-forwarder/internal/events"
-	"ai-relay-forwarder/internal/utils"
+	display "github.com/wsyangzy/Vane/internal/platform/display"
+	"github.com/wsyangzy/Vane/internal/platform/events"
 )
 
 // SetEventBus 设置EventBus事件总线
@@ -45,7 +45,7 @@ func (m *Manager) notifyWebInterface(endpoint *Endpoint) {
 		Data: map[string]interface{}{
 			"endpoint":          endpoint.Config.Name,
 			"healthy":           status.Healthy,
-			"response_time":     utils.FormatResponseTime(status.ResponseTime),
+			"response_time":     display.FormatResponseTime(status.ResponseTime),
 			"last_check":        status.LastCheck.Format("2006-01-02 15:04:05"),
 			"consecutive_fails": status.ConsecutiveFails,
 			"change_type":       changeType,

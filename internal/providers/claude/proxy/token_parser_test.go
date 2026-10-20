@@ -1,8 +1,9 @@
 package proxy
 
 import (
-	"ai-relay-forwarder/internal/monitor"
 	"testing"
+
+	"github.com/wsyangzy/Vane/internal/platform/monitor"
 )
 
 func TestTokenParser(t *testing.T) {

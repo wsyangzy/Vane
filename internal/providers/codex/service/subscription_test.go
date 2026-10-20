@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
-	"ai-relay-forwarder/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 )
 
 func TestSubscriptionCodexGroupLifecycleAndEndpointBoundary(t *testing.T) {

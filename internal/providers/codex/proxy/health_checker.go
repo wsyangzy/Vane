@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 const (

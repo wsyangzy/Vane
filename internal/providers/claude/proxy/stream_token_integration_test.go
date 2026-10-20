@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestStreamProcessorTokenIntegration 测试流式处理器与Token解析的集成

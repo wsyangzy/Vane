@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 // GroupInfo represents information about an endpoint group

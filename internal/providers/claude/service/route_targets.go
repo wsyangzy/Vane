@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"ai-relay-forwarder/internal/providers/claude/store"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/providers/claude/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // BuildRouteCatalog 列出 Claude 全部渠道及其凭证分组，作为请求级路由的目标候选。

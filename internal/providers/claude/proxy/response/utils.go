@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"ai-relay-forwarder/config"
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 // CalculateRetryDelay 计算重试延迟（指数退避算法）

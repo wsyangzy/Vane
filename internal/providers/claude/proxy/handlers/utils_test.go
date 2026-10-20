@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking"
 
 	"github.com/andybalholm/brotli"
 )

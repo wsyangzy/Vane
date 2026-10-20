@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"ai-relay-forwarder/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 )
 
 func TestNormalizeAndValidateCodexChannelAcceptsUnicodeNames(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"ai-relay-forwarder/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 )
 
 var codexProviderNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)

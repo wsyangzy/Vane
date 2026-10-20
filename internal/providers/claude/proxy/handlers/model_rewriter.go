@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"strings"
 
-	"ai-relay-forwarder/internal/bodyrewrite"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/providers/claude/store"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/providers/claude/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // ModelRewriteResult 描述一次请求体 model 改写结果。

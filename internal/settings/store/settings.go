@@ -1,0 +1,524 @@
+// Package store 提供数据存储层实现
+// 设置存储 - 新增 (2025-12-08)
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/wsyangzy/Vane/internal/platform/sqlite"
+)
+
+// SettingRecord 表示数据库中的设置记录
+type SettingRecord struct {
+	ID int64 `json:"id"`
+
+	// 设置标识
+	Provider string `json:"provider"` // 作用域: global, claude, codex
+	Category string `json:"category"` // 分类: strategy, retry, health, etc.
+	Key      string `json:"key"`      // 配置键
+
+	// 设置值
+	Value     string `json:"value"`      // 值 (支持 JSON)
+	ValueType string `json:"value_type"` // 类型: string, int, float, bool, duration, json, password, enum
+
+	// 显示信息
+	Label        string `json:"label"`         // 显示名称
+	Description  string `json:"description"`   // 配置说明
+	DisplayOrder int    `json:"display_order"` // 显示顺序
+
+	// 枚举类型专用字段
+	EnumOptions []EnumOption `json:"enum_options,omitempty"` // 枚举可选值列表（仅 ValueType=enum 时有效）
+
+	// 元信息
+	RequiresRestart bool `json:"requires_restart"` // 是否需要重启生效
+
+	// 审计字段
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// EnumOption 枚举选项
+type EnumOption struct {
+	Value       string `json:"value"`       // 选项值
+	Label       string `json:"label"`       // 显示文本
+	Description string `json:"description"` // 选项说明
+}
+
+// SettingsStore 定义设置存储接口
+type SettingsStore interface {
+	// CRUD 操作
+	GetScoped(ctx context.Context, provider, category, key string) (*SettingRecord, error)
+	SetScoped(ctx context.Context, provider, category, key, value string) error
+	Get(ctx context.Context, category, key string) (*SettingRecord, error)
+	Set(ctx context.Context, category, key, value string) error
+	Delete(ctx context.Context, category, key string) error
+
+	// 批量操作
+	GetByCategoryScoped(ctx context.Context, provider, category string) ([]*SettingRecord, error)
+	GetByCategory(ctx context.Context, category string) ([]*SettingRecord, error)
+	GetAll(ctx context.Context) ([]*SettingRecord, error)
+	BatchSet(ctx context.Context, records []*SettingRecord) error
+	BatchUpdateValues(ctx context.Context, records []*SettingRecord) error // 只更新value
+	DeleteByCategory(ctx context.Context, category string) error
+	DeleteByCategoryScoped(ctx context.Context, provider, category string) error
+
+	// 初始化
+	InitDefaults(ctx context.Context, defaults []*SettingRecord) error
+	IsInitialized(ctx context.Context) (bool, error)
+	SyncMetadata(ctx context.Context, defaults []*SettingRecord) error // 同步元数据
+
+	// 统计
+	Count(ctx context.Context) (int, error)
+	CountByCategory(ctx context.Context, category string) (int, error)
+
+	// 分类列表
+	ListCategories(ctx context.Context) ([]string, error)
+}
+
+func (s *SQLiteSettingsStore) GetByCategoryScoped(ctx context.Context, provider, category string) ([]*SettingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	query := `
+		SELECT id, provider, category, key, value, value_type,
+			COALESCE(label, ''), COALESCE(description, ''),
+			display_order, requires_restart, created_at, updated_at
+		FROM settings
+		WHERE provider = ? AND category = ?
+		ORDER BY display_order ASC, key ASC
+	`
+	return s.scanSettings(ctx, query, provider, category)
+}
+
+func (s *SQLiteSettingsStore) DeleteByCategoryScoped(ctx context.Context, provider, category string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE provider = ? AND category = ?`, provider, category)
+	if err != nil {
+		return fmt.Errorf("删除分类设置失败: %w", err)
+	}
+	return nil
+}
+
+// SQLiteSettingsStore 实现 SettingsStore 接口
+type SQLiteSettingsStore struct {
+	db *sql.DB
+	mu sync.RWMutex
+}
+
+// NewSQLiteSettingsStore 创建新的 SQLite 设置存储
+func NewSQLiteSettingsStore(db *sql.DB) *SQLiteSettingsStore {
+	return &SQLiteSettingsStore{db: db}
+}
+
+func defaultSettingsProvider(category string) string {
+	if category == "failover" {
+		return "claude"
+	}
+	return "global"
+}
+
+// GetScoped 获取指定 Provider 的单个设置。
+func (s *SQLiteSettingsStore) GetScoped(ctx context.Context, provider, category, key string) (*SettingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, provider, category, key, value, value_type,
+			COALESCE(label, '') as label,
+			COALESCE(description, '') as description,
+			display_order, requires_restart, created_at, updated_at
+		FROM settings
+		WHERE provider = ? AND category = ? AND key = ?
+	`
+
+	var record SettingRecord
+	var requiresRestart int
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, query, provider, category, key).Scan(
+		&record.ID, &record.Provider, &record.Category, &record.Key, &record.Value, &record.ValueType,
+		&record.Label, &record.Description, &record.DisplayOrder,
+		&requiresRestart, &createdAt, &updatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("获取设置失败: %w", err)
+	}
+	record.RequiresRestart = requiresRestart == 1
+	record.CreatedAt = sqlite.ParseDateTime(createdAt)
+	record.UpdatedAt = sqlite.ParseDateTime(updatedAt)
+	return &record, nil
+}
+
+// SetScoped 设置指定 Provider 的单个值。
+func (s *SQLiteSettingsStore) SetScoped(ctx context.Context, provider, category, key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO settings (provider, category, key, value)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(provider, category, key) DO UPDATE SET value = excluded.value
+	`, provider, category, key, value)
+	if err != nil {
+		return fmt.Errorf("设置值失败: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteSettingsStore) DeleteScoped(ctx context.Context, provider, category, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE provider = ? AND category = ? AND key = ?`, provider, category, key); err != nil {
+		return fmt.Errorf("删除设置失败: %w", err)
+	}
+	return nil
+}
+
+// Get 获取单个设置
+func (s *SQLiteSettingsStore) Get(ctx context.Context, category, key string) (*SettingRecord, error) {
+	return s.GetScoped(ctx, defaultSettingsProvider(category), category, key)
+}
+
+// Set 设置单个值（存在则更新，不存在则插入）
+func (s *SQLiteSettingsStore) Set(ctx context.Context, category, key, value string) error {
+	return s.SetScoped(ctx, defaultSettingsProvider(category), category, key, value)
+}
+
+// BatchUpdateValues 批量更新值（只更新 value，保留其他元数据）
+func (s *SQLiteSettingsStore) BatchUpdateValues(ctx context.Context, records []*SettingRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开始事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 只更新 value，不影响 label、description 等元数据
+	query := `UPDATE settings SET value = ? WHERE provider = ? AND category = ? AND key = ?`
+
+	stmt, err := tx.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("准备语句失败: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, record := range records {
+		provider := record.Provider
+		if provider == "" {
+			provider = defaultSettingsProvider(record.Category)
+		}
+		_, err = stmt.ExecContext(ctx, record.Value, provider, record.Category, record.Key)
+		if err != nil {
+			return fmt.Errorf("更新 %s.%s 失败: %w", record.Category, record.Key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交事务失败: %w", err)
+	}
+
+	return nil
+}
+
+// Delete 删除单个设置
+func (s *SQLiteSettingsStore) Delete(ctx context.Context, category, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `DELETE FROM settings WHERE provider = ? AND category = ? AND key = ?`
+
+	_, err := s.db.ExecContext(ctx, query, defaultSettingsProvider(category), category, key)
+	if err != nil {
+		return fmt.Errorf("删除设置失败: %w", err)
+	}
+
+	// 注意：配置不存在时不视为错误（rowsAffected == 0 是正常的）
+	return nil
+}
+
+// GetByCategory 获取分类下的所有设置
+func (s *SQLiteSettingsStore) GetByCategory(ctx context.Context, category string) ([]*SettingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, provider, category, key, value, value_type,
+			COALESCE(label, '') as label,
+			COALESCE(description, '') as description,
+			display_order, requires_restart, created_at, updated_at
+		FROM settings
+		WHERE provider = ? AND category = ?
+		ORDER BY display_order ASC, key ASC
+	`
+
+	return s.scanSettings(ctx, query, defaultSettingsProvider(category), category)
+}
+
+// GetAll 获取所有设置
+func (s *SQLiteSettingsStore) GetAll(ctx context.Context) ([]*SettingRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `
+		SELECT id, provider, category, key, value, value_type,
+			COALESCE(label, '') as label,
+			COALESCE(description, '') as description,
+			display_order, requires_restart, created_at, updated_at
+		FROM settings
+		ORDER BY provider ASC, category ASC, display_order ASC, key ASC
+	`
+
+	return s.scanSettings(ctx, query)
+}
+
+// BatchSet 批量设置（事务）
+func (s *SQLiteSettingsStore) BatchSet(ctx context.Context, records []*SettingRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开始事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	query := `
+		INSERT INTO settings (provider, category, key, value, value_type, label, description, display_order, requires_restart)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, category, key) DO UPDATE SET
+			value = excluded.value,
+			value_type = excluded.value_type,
+			label = excluded.label,
+			description = excluded.description,
+			display_order = excluded.display_order,
+			requires_restart = excluded.requires_restart
+	`
+
+	stmt, err := tx.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("准备语句失败: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, record := range records {
+		provider := record.Provider
+		if provider == "" {
+			provider = defaultSettingsProvider(record.Category)
+		}
+		_, err = stmt.ExecContext(ctx,
+			provider, record.Category, record.Key, record.Value, record.ValueType,
+			record.Label, record.Description, record.DisplayOrder,
+			sqlite.BoolToInt(record.RequiresRestart),
+		)
+		if err != nil {
+			return fmt.Errorf("设置 %s.%s 失败: %w", record.Category, record.Key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交事务失败: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteByCategory 删除分类下的所有设置
+func (s *SQLiteSettingsStore) DeleteByCategory(ctx context.Context, category string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	query := `DELETE FROM settings WHERE provider = ? AND category = ?`
+
+	_, err := s.db.ExecContext(ctx, query, defaultSettingsProvider(category), category)
+	if err != nil {
+		return fmt.Errorf("删除分类设置失败: %w", err)
+	}
+
+	return nil
+}
+
+// InitDefaults 初始化默认设置（仅当设置为空时）
+func (s *SQLiteSettingsStore) InitDefaults(ctx context.Context, defaults []*SettingRecord) error {
+	initialized, err := s.IsInitialized(ctx)
+	if err != nil {
+		return err
+	}
+
+	if initialized {
+		return nil // 已初始化，跳过
+	}
+
+	return s.BatchSet(ctx, defaults)
+}
+
+// IsInitialized 检查是否已初始化（设置表是否有数据）
+func (s *SQLiteSettingsStore) IsInitialized(ctx context.Context) (bool, error) {
+	count, err := s.Count(ctx)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// SyncMetadata 同步设置元数据（label、description等），保留用户设置的value
+func (s *SQLiteSettingsStore) SyncMetadata(ctx context.Context, defaults []*SettingRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(defaults) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开始事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 只更新元数据，不更新 value（保留用户设置的值）
+	// 如果记录不存在，则插入默认值
+	query := `
+		INSERT INTO settings (provider, category, key, value, value_type, label, description, display_order, requires_restart)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider, category, key) DO UPDATE SET
+			value_type = excluded.value_type,
+			label = excluded.label,
+			description = excluded.description,
+			display_order = excluded.display_order,
+			requires_restart = excluded.requires_restart
+	`
+
+	stmt, err := tx.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("准备语句失败: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, record := range defaults {
+		provider := record.Provider
+		if provider == "" {
+			provider = defaultSettingsProvider(record.Category)
+		}
+		_, err = stmt.ExecContext(ctx,
+			provider, record.Category, record.Key, record.Value, record.ValueType,
+			record.Label, record.Description, record.DisplayOrder,
+			sqlite.BoolToInt(record.RequiresRestart),
+		)
+		if err != nil {
+			return fmt.Errorf("同步元数据 %s.%s 失败: %w", record.Category, record.Key, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("提交事务失败: %w", err)
+	}
+
+	return nil
+}
+
+// Count 获取设置总数
+func (s *SQLiteSettingsStore) Count(ctx context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settings").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("获取设置数量失败: %w", err)
+	}
+
+	return count, nil
+}
+
+// CountByCategory 获取分类下的设置数量
+func (s *SQLiteSettingsStore) CountByCategory(ctx context.Context, category string) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM settings WHERE provider = ? AND category = ?", defaultSettingsProvider(category), category).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("获取分类设置数量失败: %w", err)
+	}
+
+	return count, nil
+}
+
+// ListCategories 获取所有分类
+func (s *SQLiteSettingsStore) ListCategories(ctx context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	query := `SELECT DISTINCT category FROM settings ORDER BY category ASC`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("获取分类列表失败: %w", err)
+	}
+	defer rows.Close()
+
+	var categories []string
+	for rows.Next() {
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			return nil, fmt.Errorf("扫描分类失败: %w", err)
+		}
+		categories = append(categories, category)
+	}
+
+	return categories, nil
+}
+
+// scanSettings 扫描多个设置记录
+func (s *SQLiteSettingsStore) scanSettings(ctx context.Context, query string, args ...interface{}) ([]*SettingRecord, error) {
+	rows, err := sqlite.QueryRowsWithBusyRetry(ctx, func() (*sql.Rows, error) {
+		return s.db.QueryContext(ctx, query, args...)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("查询设置失败: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*SettingRecord
+	for rows.Next() {
+		var record SettingRecord
+		var requiresRestart int
+		var createdAt, updatedAt string
+
+		err := rows.Scan(
+			&record.ID, &record.Provider, &record.Category, &record.Key, &record.Value, &record.ValueType,
+			&record.Label, &record.Description, &record.DisplayOrder,
+			&requiresRestart, &createdAt, &updatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("扫描设置记录失败: %w", err)
+		}
+
+		record.RequiresRestart = requiresRestart == 1
+		record.CreatedAt = sqlite.ParseDateTime(createdAt)
+		record.UpdatedAt = sqlite.ParseDateTime(updatedAt)
+
+		records = append(records, &record)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("遍历设置记录失败: %w", err)
+	}
+
+	return records, nil
+}

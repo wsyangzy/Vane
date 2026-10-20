@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscriptionprobe"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscriptionprobe"
 )
 
 func main() {

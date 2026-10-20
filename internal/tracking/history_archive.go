@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	appcache "ai-relay-forwarder/internal/cache"
+	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 )
 
 const archivableRequestStatusSQL = `COALESCE(status, '') NOT IN ('pending', 'forwarding', 'streaming', 'processing', 'retry', 'suspended')`

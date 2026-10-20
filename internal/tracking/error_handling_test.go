@@ -24,46 +24,46 @@ func TestErrorHandler(t *testing.T) {
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
 	defer tracker.Close()
-	
+
 	// Test that error handler is initialized
 	if tracker.errorHandler == nil {
 		t.Error("Error handler should be initialized")
 	}
-	
+
 	// Test backup creation
 	t.Run("CreateBackup", func(t *testing.T) {
 		err := tracker.errorHandler.CreateBackup()
 		if err != nil {
 			t.Errorf("Failed to create backup: %v", err)
 		}
-		
+
 		// Check that backup file exists
 		backupPath := dbPath + ".backup"
 		if _, err := os.Stat(backupPath); os.IsNotExist(err) {
 			t.Error("Backup file should be created")
 		}
 	})
-	
+
 	// Test recovery from backup
 	t.Run("RestoreFromBackup", func(t *testing.T) {
 		// First create some data
 		tracker.RecordRequestStart("req-error-test", "127.0.0.1", "error-agent", "POST", "/v1/messages", false)
-		
+
 		// Wait for processing
 		time.Sleep(100 * time.Millisecond)
-		
+
 		// Force a backup
 		err = tracker.errorHandler.CreateBackup()
 		if err != nil {
 			t.Fatalf("Failed to create backup for recovery test: %v", err)
 		}
-		
+
 		// Verify backup can be restored
 		err = tracker.errorHandler.RestoreFromBackup()
 		if err != nil {
@@ -75,7 +75,7 @@ func TestErrorHandler(t *testing.T) {
 func TestErrorHandlerDiskSpace(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "diskspace_test.db")
-	
+
 	config := &Config{
 		Enabled:         true,
 		DatabasePath:    dbPath,
@@ -86,18 +86,18 @@ func TestErrorHandlerDiskSpace(t *testing.T) {
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
 	defer tracker.Close()
-	
+
 	// Simulate disk space error
 	diskSpaceError := fmt.Errorf("database or disk is full")
-	
+
 	handled := tracker.errorHandler.HandleDatabaseError(diskSpaceError, "test_operation")
-	
+
 	// Should return false (can't handle disk space errors easily in test)
 	if handled {
 		t.Log("Disk space error handling attempted (expected behavior)")
@@ -107,7 +107,7 @@ func TestErrorHandlerDiskSpace(t *testing.T) {
 func TestErrorHandlerCorruption(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "corruption_test.db")
-	
+
 	// Create a database first
 	config := &Config{
 		Enabled:         true,
@@ -119,32 +119,32 @@ func TestErrorHandlerCorruption(t *testing.T) {
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
-	
+
 	// Create a backup
 	err = tracker.errorHandler.CreateBackup()
 	if err != nil {
 		t.Fatalf("Failed to create backup for corruption test: %v", err)
 	}
-	
+
 	tracker.Close()
-	
+
 	// Create new tracker to test error handler
 	tracker2, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create second tracker: %v", err)
 	}
 	defer tracker2.Close()
-	
+
 	// Simulate corruption error
 	corruptionError := fmt.Errorf("database disk image is malformed")
-	
+
 	handled := tracker2.errorHandler.HandleDatabaseError(corruptionError, "test_operation")
-	
+
 	// Should attempt to handle corruption
 	if !handled {
 		t.Log("Corruption error handling attempted")
@@ -162,13 +162,13 @@ func TestRetryLogic(t *testing.T) {
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
 	defer tracker.Close()
-	
+
 	// Test successful operation (no retries needed)
 	events := []RequestEvent{
 		{
@@ -183,7 +183,7 @@ func TestRetryLogic(t *testing.T) {
 			},
 		},
 	}
-	
+
 	err = tracker.processBatch(events)
 	if err != nil {
 		t.Errorf("Successful operation should not fail: %v", err)
@@ -195,31 +195,31 @@ func TestGracefulShutdown(t *testing.T) {
 		Enabled:         true,
 		DatabasePath:    ":memory:",
 		BufferSize:      100,
-		BatchSize:       20, // Large batch size to keep events in buffer
+		BatchSize:       20,            // Large batch size to keep events in buffer
 		FlushInterval:   1 * time.Hour, // Long interval
 		MaxRetry:        3,
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
-	
+
 	// Send some events
 	for i := 0; i < 5; i++ {
 		requestID := time.Now().Format("req-shutdown-20060102150405") + string(rune('0'+i))
-		
+
 		tracker.RecordRequestStart(requestID, "127.0.0.1", "shutdown-agent", "POST", "/v1/messages", false)
 	}
-	
+
 	// Close tracker (should process remaining events)
 	err = tracker.Close()
 	if err != nil {
 		t.Errorf("Failed to close tracker gracefully: %v", err)
 	}
-	
+
 	// Try to close again (should be safe)
 	err = tracker.Close()
 	if err != nil {
@@ -295,13 +295,13 @@ func TestInvalidEventData(t *testing.T) {
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
 	defer tracker.Close()
-	
+
 	// Test events with invalid data types
 	invalidEvents := []RequestEvent{
 		{
@@ -329,13 +329,13 @@ func TestInvalidEventData(t *testing.T) {
 			Data:      nil,
 		},
 	}
-	
+
 	// Process batch with invalid events (should not crash)
 	err = tracker.processBatch(invalidEvents)
 	if err != nil {
 		t.Log("Expected some errors with invalid data, got:", err)
 	}
-	
+
 	// Tracker should still be functional
 	validEvent := RequestEvent{
 		Type:      "start",
@@ -348,7 +348,7 @@ func TestInvalidEventData(t *testing.T) {
 			Path:      "/v1/messages",
 		},
 	}
-	
+
 	err = tracker.processBatch([]RequestEvent{validEvent})
 	if err != nil {
 		t.Errorf("Valid event should work after invalid events: %v", err)
@@ -366,17 +366,17 @@ func TestContextCancellation(t *testing.T) {
 		CleanupInterval: 24 * time.Hour,
 		RetentionDays:   30,
 	}
-	
+
 	tracker, err := NewUsageTracker(config)
 	if err != nil {
 		t.Fatalf("Failed to create usage tracker: %v", err)
 	}
 	defer tracker.Close()
-	
+
 	// Test operations with cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Immediately cancel
-	
+
 	// Database operations should handle cancelled context gracefully
 	_, err = tracker.GetDatabaseStats(ctx)
 	if err == nil {
@@ -384,13 +384,13 @@ func TestContextCancellation(t *testing.T) {
 	} else {
 		t.Log("Database operation handled cancelled context:", err)
 	}
-	
+
 	// Test with timeout context
 	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
 	defer timeoutCancel()
-	
+
 	time.Sleep(1 * time.Millisecond) // Ensure timeout
-	
+
 	_, err = tracker.GetUsageStats(timeoutCtx, time.Now().AddDate(0, 0, -1), time.Now())
 	if err != nil {
 		t.Log("Operation correctly handled timeout:", err)

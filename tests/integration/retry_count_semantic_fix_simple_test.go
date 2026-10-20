@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/providers/claude/proxy"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/middleware"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestRetryCountSemanticFix_StreamingSuspendedStatus 测试流式请求挂起时的语义修复

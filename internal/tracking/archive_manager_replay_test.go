@@ -109,8 +109,12 @@ func assertReplayedRequest(t *testing.T, manager *ArchiveManager, requestID, env
 
 func TestReplayFailedArchivesRestoresFileWhenDatabaseUnavailable(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "usage.db")
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{DatabasePath: dbPath})
+	if err != nil {
+		t.Fatal(err)
+	}
 	manager := &ArchiveManager{
-		adapter: &SQLiteAdapter{config: DatabaseConfig{DatabasePath: dbPath}},
+		adapter: adapter,
 		config:  ArchiveManagerConfig{BatchSize: 1, MaxRetry: 1, Environment: "release"},
 	}
 	dumpPath := manager.getDumpFilePath()

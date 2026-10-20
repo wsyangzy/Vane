@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	codexstore "ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/config"
+	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 func TestEndpointManagerActivatesNextEligibleChannel(t *testing.T) {

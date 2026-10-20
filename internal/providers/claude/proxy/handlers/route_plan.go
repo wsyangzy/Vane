@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 
-	"ai-relay-forwarder/internal/bodyrewrite"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/routing"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/routing"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // claudeGenerationPath 请求级路由只作用于生成路径；count_tokens 等路径不参与模型规则与非流改道

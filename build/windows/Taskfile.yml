@@ -1,4 +1,4 @@
-# Wails v3 Windows Taskfile - Claude Request Forwarder
+# Wails v3 Windows Taskfile - Vane
 # Windows-specific build, run, and package tasks
 # Note: CGO_ENABLED=1 required for go-sqlite3
 
@@ -6,7 +6,7 @@ version: '3'
 
 vars:
   # Version info for ldflags injection
-  VERSION: '{{default "8.8" .VERSION}}'
+  VERSION: '{{default "1.0.0" .VERSION}}'
   COMMIT: '{{default "unknown" .COMMIT}}'
   BUILD_TIME: '{{now | date "2006-01-02T15:04:05Z07:00"}}'
   DEV: '{{default "false" .DEV}}'
@@ -21,21 +21,21 @@ tasks:
       BUILD_FLAGS: >-
         {{if eq .DEV "true"}}
         -tags desktop -buildvcs=false -gcflags="all=-l"
-        -ldflags="-X main.BuildMode=dev"
+        -ldflags="-X github.com/wsyangzy/Vane/internal/buildinfo.BuildMode=dev"
         {{else}}
         -tags production,desktop -trimpath -buildvcs=false
         -ldflags="-w -s -H windowsgui
-        -X main.Version={{.VERSION}}
-        -X main.Commit={{.COMMIT}}
-        -X main.BuildTime={{.BUILD_TIME}}
-        -X main.BuildMode=release"
+        -X github.com/wsyangzy/Vane/internal/buildinfo.Version={{.VERSION}}
+        -X github.com/wsyangzy/Vane/internal/buildinfo.Commit={{.COMMIT}}
+        -X github.com/wsyangzy/Vane/internal/buildinfo.BuildTime={{.BUILD_TIME}}
+        -X github.com/wsyangzy/Vane/internal/buildinfo.BuildMode=release"
         {{end}}
     env:
       CGO_ENABLED: "1"
     cmds:
       # 使用 goversioninfo 生成包含图标的 syso 文件
-      - goversioninfo -o resource_windows.syso
-      - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.OUTPUT_NAME}}.exe"
+      - goversioninfo {{if eq ARCH "amd64"}}-64{{else if eq ARCH "arm64"}}-arm -64{{else if eq ARCH "arm"}}-arm{{end}} -o cmd/vane/resource_windows.syso build/windows/versioninfo.json
+      - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.OUTPUT_NAME}}.exe" ./cmd/vane
 
   run:
     summary: Runs the built Windows application

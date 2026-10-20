@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 const (

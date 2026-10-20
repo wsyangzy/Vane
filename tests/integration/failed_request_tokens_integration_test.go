@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/middleware"
-	"ai-relay-forwarder/internal/providers/claude/proxy"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/platform/middleware"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestFailedRequestTokensIntegration 集成测试：验证失败请求Token记录的完整流程

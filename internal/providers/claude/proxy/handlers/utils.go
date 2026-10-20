@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	proxyresponse "ai-relay-forwarder/internal/providers/claude/proxy/response"
+	proxyresponse "github.com/wsyangzy/Vane/internal/providers/claude/proxy/response"
 )
 
 const (

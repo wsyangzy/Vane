@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 )
 
 // TestGroupChangeNotifications tests the group change notification system
@@ -129,9 +129,8 @@ func TestGroupChangeNotifications(t *testing.T) {
 	gm.UnsubscribeFromGroupChanges(ch2)
 }
 
-// TestGroupCooldownNotifications tests notifications when groups enter cooldown
-// 适配一端点一组架构
-func TestGroupCooldownNotifications(t *testing.T) {
+// 旧冷却入口只停用渠道；替代渠道必须由调用方显式激活。
+func TestGroupDeactivationWaitsForExplicitActivation(t *testing.T) {
 	// Create test configuration with short cooldown for testing
 	cfg := &config.Config{
 		Group: config.GroupConfig{
@@ -170,34 +169,52 @@ func TestGroupCooldownNotifications(t *testing.T) {
 	}
 
 	gm.UpdateGroups(endpoints)
+	if err := gm.ManualActivateGroup("primary"); err != nil {
+		t.Fatalf("activate initial group: %v", err)
+	}
 
 	// Subscribe to notifications
 	ch := gm.SubscribeToGroupChanges()
 	defer gm.UnsubscribeFromGroupChanges(ch)
 
-	// Initially primary group should be active (highest priority = 1)
+	// Initial activation is explicit, rather than selected by priority.
 	activeGroups := gm.GetActiveGroups()
 	if len(activeGroups) != 1 || activeGroups[0].Name != "primary" {
 		t.Fatalf("Expected primary group to be active initially, got: %v", activeGroups)
 	}
 
-	// Set primary group into cooldown
 	gm.SetGroupCooldown("primary")
+	if active := gm.GetActiveGroups(); len(active) != 0 {
+		t.Fatalf("deactivation must wait for explicit replacement, got: %v", active)
+	}
+	for _, group := range gm.GetAllGroups() {
+		if group.Name == "primary" && !group.ManuallyPaused {
+			t.Error("deactivated group should remain paused until manual retry")
+		}
+	}
+	select {
+	case name := <-ch:
+		t.Fatalf("deactivation must not announce an unactivated replacement: %s", name)
+	default:
+	}
+	if err := gm.ManualActivateGroup("secondary"); err != nil {
+		t.Fatalf("activate replacement group: %v", err)
+	}
 
-	// Should receive notification about switch to secondary
+	// Only the explicit replacement activation announces secondary.
 	select {
 	case groupName := <-ch:
 		if groupName != "secondary" {
-			t.Errorf("Expected 'secondary' notification after cooldown, got: %s", groupName)
+			t.Errorf("Expected 'secondary' notification after activation, got: %s", groupName)
 		}
 	case <-time.After(time.Second):
-		t.Error("Timeout waiting for notification after cooldown")
+		t.Error("Timeout waiting for notification after activation")
 	}
 
 	// Verify secondary group is now active
 	activeGroups = gm.GetActiveGroups()
 	if len(activeGroups) != 1 || activeGroups[0].Name != "secondary" {
-		t.Errorf("Expected secondary group to be active after cooldown, got: %v", activeGroups)
+		t.Errorf("Expected secondary group to be active after activation, got: %v", activeGroups)
 	}
 }
 
@@ -251,26 +268,20 @@ func TestGroupPauseResumeNotifications(t *testing.T) {
 	ch := gm.SubscribeToGroupChanges()
 	defer gm.UnsubscribeFromGroupChanges(ch)
 
-	// Drain the activation notification
-	select {
-	case <-ch:
-	case <-time.After(100 * time.Millisecond):
-	}
-
 	// Pause primary group
 	err = gm.ManualPauseGroup("primary", 0)
 	if err != nil {
 		t.Fatalf("Failed to pause primary group: %v", err)
 	}
 
-	// Should switch to secondary group
+	// Pausing clears the active group without selecting a replacement.
+	if active := gm.GetActiveGroups(); len(active) != 0 {
+		t.Fatalf("pause must clear the active group, got: %v", active)
+	}
 	select {
 	case groupName := <-ch:
-		if groupName != "secondary" {
-			t.Errorf("Expected 'secondary' notification after pause, got: %s", groupName)
-		}
-	case <-time.After(time.Second):
-		t.Error("Timeout waiting for notification after pause")
+		t.Fatalf("pause must not announce a replacement: %s", groupName)
+	default:
 	}
 
 	// Resume primary group
@@ -281,23 +292,20 @@ func TestGroupPauseResumeNotifications(t *testing.T) {
 
 	// Check the actual active groups after resume
 	activeGroups := gm.GetActiveGroups()
+	if len(activeGroups) != 0 {
+		t.Fatalf("resume only makes the group available for explicit activation, got: %v", activeGroups)
+	}
+	for _, group := range gm.GetAllGroups() {
+		if group.Name == "primary" && group.ManuallyPaused {
+			t.Error("resumed group should no longer be paused")
+		}
+	}
 
 	// Should receive notification about group change
 	select {
 	case groupName := <-ch:
-		// Log for debugging what's happening
-		t.Logf("Received notification for group: %s", groupName)
-		t.Logf("Active groups after resume: %d", len(activeGroups))
-		for _, ag := range activeGroups {
-			t.Logf("  - %s (priority: %d, active: %v)", ag.Name, ag.Priority, ag.IsActive)
-		}
-
-		// In auto mode with primary (priority 1) and secondary (priority 2), primary should be preferred
-		// But since secondary was already active and primary was just unpaused,
-		// the system might not switch automatically unless there's a re-evaluation
-		// Let's accept either outcome for now and just verify we got a notification
-		if groupName != "primary" && groupName != "secondary" {
-			t.Errorf("Expected 'primary' or 'secondary' notification after resume, got: %s", groupName)
+		if groupName != "primary" {
+			t.Errorf("Expected 'primary' state notification after resume, got: %s", groupName)
 		}
 	case <-time.After(time.Second):
 		t.Error("Timeout waiting for notification after resume")

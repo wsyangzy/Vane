@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"ai-relay-forwarder/internal/providers/codex/store"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // BuildRouteCatalog 列出 Codex 全部渠道及其凭证分组，作为请求级路由的目标候选（按渠道优先级排列）。

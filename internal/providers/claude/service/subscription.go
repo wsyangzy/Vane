@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
-	"ai-relay-forwarder/internal/providers/claude/store"
-	"ai-relay-forwarder/internal/routing"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/claude/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func (s *ClaudeCredentialGroupService) SetAccountValidator(validate func(context.Context, string) error) {

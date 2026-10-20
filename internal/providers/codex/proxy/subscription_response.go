@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
 	"github.com/andybalholm/brotli"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 )
 
 type codexDecodedBody struct {

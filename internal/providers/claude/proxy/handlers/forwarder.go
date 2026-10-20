@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/providers/claude/proxy/endpoint"
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
-	"ai-relay-forwarder/internal/routing"
-	"ai-relay-forwarder/internal/transport"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // Forwarder 负责HTTP请求转发和头部处理

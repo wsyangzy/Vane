@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/codex/proxy/subscription"
-	"ai-relay-forwarder/internal/transport"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 )
 
 // Forwarder 执行实际的 HTTP 转发

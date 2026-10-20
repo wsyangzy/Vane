@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // TestClientCancelDetection 测试客户端取消检测功能

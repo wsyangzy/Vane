@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
 )
 
 // EnsureClaudeSubscriptionSchema is provider-owned and idempotent. It is

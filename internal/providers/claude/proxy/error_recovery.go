@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"ai-relay-forwarder/internal/providers/claude/proxy/contracts"
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/contracts"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 type ErrorType = contracts.ErrorType

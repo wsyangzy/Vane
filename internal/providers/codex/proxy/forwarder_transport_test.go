@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/config"
-	"ai-relay-forwarder/internal/transport"
+	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
 )
 
 func TestForwarderUsesConfiguredTransport(t *testing.T) {

@@ -1,10 +1,11 @@
 package endpoint
 
 import (
-	"ai-relay-forwarder/config"
 	"context"
 	"testing"
 	"time"
+
+	"github.com/wsyangzy/Vane/internal/config"
 )
 
 func TestFastTester(t *testing.T) {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"ai-relay-forwarder/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 // newLifecycleTestTracker 独立临时库的追踪器；FlushInterval 设长，确保读到的是热池内存状态
