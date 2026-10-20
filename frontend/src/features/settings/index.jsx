@@ -28,6 +28,7 @@ import {
 import { Button, ErrorMessage, ConfirmDialog } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SettingItem, SettingsSection, PortInfo } from './components/index.js';
+import { buildSettingsUpdates } from './settingsUpdates.js';
 import {
   isWailsEnvironment,
   getSettingCategories,
@@ -661,10 +662,7 @@ const SettingsPage = () => {
       setSaveMessage(null);
 
       // 构建更新数据
-      const updateData = Object.entries(changes).map(([key, value]) => {
-        const [provider, category, settingKey] = key.split('./index.jsx');
-        return { provider, category, key: settingKey, value: String(value) };
-      });
+      const updateData = buildSettingsUpdates(changes);
 
       if (isWails) {
         await batchUpdateSettings({ settings: updateData });

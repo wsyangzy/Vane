@@ -96,9 +96,11 @@ Windows 输出位于 `build/bin/Vane.exe`，开发版本为 `build/bin/Vane-dev.
 
 ### 数据迁移
 
-Vane 仅使用上述数据目录，不自动识别或回退到其他品牌目录。首次切换前关闭旧应用，将原应用数据目录整体迁移到 Vane；请保留完整数据库、SQLite 辅助文件、日志和追踪恢复文件，不要只复制 usage.db。
+Vane 仅使用上述数据目录，不自动识别、回退或合并其他品牌目录，也不会从 `usage-dev.db`、`usage-v2.db` 或程序运行目录导入数据。新目录首次启动时创建独立数据库。
 
-存在多份历史数据时，以当前使用的数据作为主目录；其他历史目录可独立保存到 Vane 下的 `archives/`，不会自动合并到当前数据库。迁移前备份，且不得覆盖已有 Vane 数据。
+从 RelayScope 切换时，先完全退出两边应用（包括托盘），并备份已有 Vane 目录；将 RelayScope 应用数据目录的完整副本放入 Vane，其中数据库必须位于 `Vane/data/usage.db`。请保留 SQLite 辅助文件、月度归档、日志和追踪恢复文件；不要向正在运行的应用目录覆盖数据库，也不要将旧库与新库的 `-wal`、`-shm` 文件混用。数据库可使用 SQLite backup API 生成包含已提交 WAL 数据的一致副本，迁入前后检查完整性和关键表记录数。
+
+迁移完成后，Vane 直接使用自己的数据库，旧目录只作为备份。存在多份历史数据时，以当前使用的数据作为迁移来源，其余历史库独立保留，不自动合并或覆盖当前数据。
 
 图标源文件为 `assets/vane.png`。安装 Pillow 后运行 `python scripts/assets/generate-icon.py`，可重新生成桌面、托盘、Windows、macOS、Linux 与网页图标。
 

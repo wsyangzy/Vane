@@ -38,8 +38,6 @@ func (a *App) setupUsageTracker() {
 	dbPath := a.getEffectiveUsageDBPath()
 	a.config.UsageTracking.DatabasePath = dbPath
 
-	a.migrateLegacyDatabaseIfNeeded()
-
 	a.logger.Info("📊 初始化使用追踪器", "db_path", dbPath)
 
 	// 定价配置完全从 SQLite 加载。
@@ -88,9 +86,6 @@ func (a *App) setupStoreDB() {
 	dbPath := a.getEffectiveUsageDBPath()
 	// 运行时回填，确保后续组件拿到统一路径（即使 usage_tracking.enabled=false）。
 	a.config.UsageTracking.DatabasePath = dbPath
-
-	// 即使未启用 usage tracking，也将旧的环境专用数据库迁移到统一的 usage.db。
-	a.migrateLegacyDatabaseIfNeeded()
 
 	// 确保数据库目录存在
 	if dbPath != ":memory:" {
