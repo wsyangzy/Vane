@@ -6323,6 +6323,13 @@ export class SubscriptionAccountCommand {
              */
             this["credential_json"] = "";
         }
+        if (!("account_email" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["account_email"] = "";
+        }
         if (!("code" in $$source)) {
             /**
              * @member

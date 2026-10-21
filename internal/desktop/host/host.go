@@ -16,6 +16,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/app"
 	"github.com/wsyangzy/Vane/internal/buildinfo"
 	"github.com/wsyangzy/Vane/internal/desktop/api"
+	"github.com/wsyangzy/Vane/internal/subscriptions/accounts"
 )
 
 // 命令行参数
@@ -32,6 +33,9 @@ const (
 )
 
 func Run() {
+	if accounts.CaptureLoginBrowser(os.Args[1:]) {
+		return
+	}
 	flag.Parse()
 
 	// 处理版本标志

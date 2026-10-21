@@ -28,9 +28,8 @@ func TestClaudeSubscriptionAccountOfficialProfileAndRefresh(t *testing.T) {
 	if c.Subject != "user-a" || c.ExpiresAt.UnixMilli() != 1800000000123 || c.Plan != "max" || c.Email != "test@example.invalid" {
 		t.Fatal("official metadata or millisecond expiry lost")
 	}
-	fallback, e := adapter.Parse(raw)
-	if e != nil || !strings.HasPrefix(fallback.Subject, "credential:") {
-		t.Fatal("explicit import without profile not supported")
+	if _, e := adapter.Parse(raw); e == nil {
+		t.Fatal("identity-free credential accepted as a stable account")
 	}
 	if _, e = adapter.Parse([]byte(`{"api_key":"api-key"}`)); e == nil {
 		t.Fatal("API key imported as subscription")

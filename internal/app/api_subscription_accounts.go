@@ -21,6 +21,7 @@ type SubscriptionAccountCommand struct {
 	Name           string `json:"name"`
 	Enabled        bool   `json:"enabled"`
 	CredentialJSON string `json:"credential_json"`
+	AccountEmail   string `json:"account_email"`
 	Code           string `json:"code"`
 }
 
@@ -42,6 +43,12 @@ func (a *App) setupSubscriptionAccounts(db *sql.DB) {
 		a.logger.Error("订阅账号存储初始化失败")
 		return
 	}
+	proxyURL, proxyLabel, closeProxy, err := transport.LoginProxy(a.config)
+	if err != nil {
+		a.logger.Error("订阅登录代理初始化失败")
+		return
+	}
+	m.ConfigureLoginProxy(proxyURL, proxyLabel, closeProxy)
 	a.subscriptionAccounts = m
 }
 
@@ -69,6 +76,17 @@ func (a *App) ManageSubscriptionAccounts(input SubscriptionAccountCommand) (Subs
 		var info accounts.Info
 		raw := []byte(input.CredentialJSON)
 		defer clear(raw)
+		if len(raw) > 1<<20 {
+			return result, errors.New("凭证不能超过 1 MiB")
+		}
+		if input.Provider == "claude" {
+			prepared, e := claudeservice.PrepareSubscriptionImport(raw, input.AccountEmail)
+			if e != nil {
+				return result, e
+			}
+			raw = prepared
+			defer clear(prepared)
+		}
 		info, err = m.Import(ctx, input.Provider, input.Name, raw)
 		if err == nil {
 			result.Account = &info
@@ -106,7 +124,9 @@ func (a *App) ManageSubscriptionAccounts(input SubscriptionAccountCommand) (Subs
 			err = m.CompleteLogin(input.ID, input.Code)
 		} else if input.Action == "login_cancel" {
 			err = m.CancelLogin(input.ID)
-		} else {
+		}
+		if err == nil {
+			login, err = m.LoginStatus(input.ID)
 			result.Login = &login
 		}
 	default:

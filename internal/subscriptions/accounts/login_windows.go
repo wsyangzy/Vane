@@ -5,6 +5,7 @@ package accounts
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,14 +15,29 @@ import (
 )
 
 func loginCommand(ctx context.Context, path string, args []string) *exec.Cmd {
-	var cmd *exec.Cmd
-	if strings.HasSuffix(strings.ToLower(path), ".cmd") {
-		// All arguments are fixed adapter arguments, never user-entered strings.
-		cmd = exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", `""`+path+`" `+strings.Join(args, " ")+`"`)
-	} else {
-		cmd = exec.CommandContext(ctx, path, args...)
-	}
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if ext := strings.ToLower(filepath.Ext(path)); ext == ".cmd" || ext == ".bat" {
+		// cmd.exe does not use Go's normal Windows argv escaping. Adapter
+		// arguments are fixed words; reject shell syntax rather than interpolate it.
+		for _, arg := range append([]string{path}, args...) {
+			if strings.ContainsAny(arg, "\"%&|<>^\r\n\x00") {
+				cmd.Err = exec.ErrNotFound
+				return cmd
+			}
+		}
+		shell, err := exec.LookPath("cmd.exe")
+		if err != nil {
+			cmd.Err = err
+			return cmd
+		}
+		line := `"` + shell + `" /d /v:off /s /c ""` + path + `"`
+		for _, arg := range args {
+			line += ` "` + arg + `"`
+		}
+		cmd.Path = shell
+		cmd.SysProcAttr.CmdLine = line + `"`
+	}
 	return cmd
 }
 

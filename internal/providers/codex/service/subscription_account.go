@@ -12,11 +12,12 @@ import (
 
 type SubscriptionAccountAdapter struct{ Client *http.Client }
 
-func (SubscriptionAccountAdapter) Login() accounts.LoginSpec {
-	return accounts.LoginSpec{Command: "codex", Args: []string{"login"}, DeviceArgs: []string{"login", "--device-auth"}, DirectoryEnv: []string{"CODEX_HOME"}, CredentialFile: "auth.json", ConfigFile: "config.toml", ConfigContent: "cli_auth_credentials_store = \"file\"\n", AllowedHosts: []string{"auth.openai.com"}}
+func (a SubscriptionAccountAdapter) Login() accounts.LoginSpec {
+	return accounts.LoginSpec{Command: "codex", Args: []string{"login"}, DeviceArgs: []string{"login", "--device-auth"}, DirectoryEnv: []string{"CODEX_HOME"}, CredentialFile: "auth.json", ConfigFile: "config.toml", ConfigContent: "cli_auth_credentials_store = \"file\"\n", AllowedHosts: []string{"auth.openai.com"}, BrowserLogin: a.browserLogin}
 }
 func (SubscriptionAccountAdapter) Parse(raw []byte) (accounts.Credential, error) {
 	var p struct {
+		Type   string `json:"type"`
 		Mode   string `json:"auth_mode"`
 		Tokens struct {
 			Access  string `json:"access_token"`
@@ -25,7 +26,23 @@ func (SubscriptionAccountAdapter) Parse(raw []byte) (accounts.Credential, error)
 			Account string `json:"account_id"`
 		} `json:"tokens"`
 	}
-	if json.Unmarshal(raw, &p) != nil || (p.Mode != "" && p.Mode != "chatgpt") || !accounts.ValidToken(p.Tokens.Access) {
+	if json.Unmarshal(raw, &p) != nil {
+		return accounts.Credential{}, errors.New("凭证不是有效 JSON")
+	}
+	if p.Type != "" && p.Type != "codex" {
+		return accounts.Credential{}, errors.New("请选择 Codex 订阅凭证")
+	}
+	if p.Tokens.Access == "" {
+		var flat struct {
+			Access  string `json:"access_token"`
+			Refresh string `json:"refresh_token"`
+			ID      string `json:"id_token"`
+			Account string `json:"account_id"`
+		}
+		_ = json.Unmarshal(raw, &flat)
+		p.Tokens.Access, p.Tokens.Refresh, p.Tokens.ID, p.Tokens.Account = flat.Access, flat.Refresh, flat.ID, flat.Account
+	}
+	if (p.Mode != "" && p.Mode != "chatgpt") || !accounts.ValidToken(p.Tokens.Access) {
 		return accounts.Credential{}, errors.New("请选择 Codex 的 ChatGPT 登录 auth.json，API Key 登录不属于订阅账号")
 	}
 	claims := accounts.JWTClaims(p.Tokens.ID)
@@ -43,8 +60,8 @@ func (SubscriptionAccountAdapter) Parse(raw []byte) (accounts.Credential, error)
 	if sub == "" || !accounts.ValidToken(p.Tokens.Account) {
 		return accounts.Credential{}, errors.New("Codex 凭证缺少 ChatGPT 账号身份，请重新登录")
 	}
-	if p.Tokens.Refresh != "" && !accounts.ValidToken(p.Tokens.Refresh) {
-		return accounts.Credential{}, errors.New("invalid_subscription_refresh_token")
+	if !accounts.ValidToken(p.Tokens.Refresh) {
+		return accounts.Credential{}, errors.New("Codex 凭证缺少有效的 refresh token，请重新登录或选择完整凭证")
 	}
 	return accounts.Credential{AccessToken: p.Tokens.Access, RefreshToken: p.Tokens.Refresh, IDToken: p.Tokens.ID, AccountID: p.Tokens.Account, Subject: sub, Email: accounts.Claim(claims, "email"), Plan: accounts.Claim(auth, "chatgpt_plan_type"), ExpiresAt: accounts.TokenExpiry(p.Tokens.Access)}, nil
 }
