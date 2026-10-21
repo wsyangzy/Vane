@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,10 +14,15 @@ import (
 type SubscriptionAccountAdapter struct{ Client *http.Client }
 
 func (SubscriptionAccountAdapter) Login() accounts.LoginSpec {
-	return accounts.LoginSpec{Command: "claude", Args: []string{"auth", "login", "--claudeai"}, DirectoryEnv: []string{"CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"}, CredentialFile: ".credentials.json", ProfileFile: ".claude.json", PrepareImport: prepareClaudeLoginImport, AllowedHosts: []string{"claude.ai", "platform.claude.com", "console.anthropic.com"}}
+	return accounts.LoginSpec{Command: "claude", Args: []string{"auth", "login", "--claudeai"}, DirectoryEnv: []string{"CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"}, CredentialFile: ".credentials.json", ProfileFile: ".claude.json", PrepareImport: prepareClaudeLoginImport, AllowedHosts: []string{"claude.com", "claude.ai", "platform.claude.com", "console.anthropic.com"}, CaptureBrowser: true, ValidateCode: validateClaudeCode}
 }
 
 func (SubscriptionAccountAdapter) Parse(raw []byte) (accounts.Credential, error) {
+	prepared, err := PrepareSubscriptionImport(raw, "")
+	if err != nil {
+		return accounts.Credential{}, err
+	}
+	defer clear(prepared)
 	var p struct {
 		OAuth struct {
 			Access  string   `json:"accessToken"`
@@ -31,18 +34,20 @@ func (SubscriptionAccountAdapter) Parse(raw []byte) (accounts.Credential, error)
 		Email   string `json:"email"`
 		Subject string `json:"account_uuid"`
 	}
-	if json.Unmarshal(raw, &p) != nil || !accounts.ValidToken(p.OAuth.Access) {
+	if json.Unmarshal(prepared, &p) != nil || !accounts.ValidToken(p.OAuth.Access) {
 		return accounts.Credential{}, errors.New("请选择 Claude Code 的 .credentials.json 登录凭证")
 	}
-	if p.OAuth.Refresh != "" && !accounts.ValidToken(p.OAuth.Refresh) {
-		return accounts.Credential{}, errors.New("invalid_subscription_refresh_token")
+	if !accounts.ValidToken(p.OAuth.Refresh) {
+		return accounts.Credential{}, errors.New("Claude 凭证缺少有效的 refresh token，请重新登录或选择完整凭证")
 	}
 	if p.Subject == "" {
-		sum := sha256.Sum256([]byte(p.OAuth.Refresh))
-		if p.OAuth.Refresh == "" {
-			sum = sha256.Sum256([]byte(p.OAuth.Access))
+		if p.Email == "" {
+			return accounts.Credential{}, errors.New("Claude 凭证缺少账号身份，请填写账号邮箱，或改用浏览器登录")
 		}
-		p.Subject = "credential:" + hex.EncodeToString(sum[:])
+		p.Subject = "email:" + strings.ToLower(strings.TrimSpace(p.Email))
+	}
+	if !accounts.ValidToken(p.Subject) || len(p.Subject) > 512 {
+		return accounts.Credential{}, errors.New("invalid_subscription_identity")
 	}
 	var expiry time.Time
 	if p.OAuth.Expiry > 0 {

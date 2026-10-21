@@ -44,25 +44,31 @@ const initWails = async () => {
 };
 
 // 打开外部链接（Wails 环境下优先走 BrowserOpenURL，避免 WebView 内导航）
-const openExternalURL = async (url) => {
+const openExternalURL = async (url, { reportFailure = false } = {}) => {
   const target = (url || '').trim();
   if (!target) return;
 
   if (isWailsEnvironment()) {
     await initWails();
     try {
-      WailsRuntime?.BrowserOpenURL?.(target);
+      if (typeof WailsRuntime?.BrowserOpenURL !== 'function') throw new Error('浏览器服务尚未就绪');
+      await WailsRuntime.BrowserOpenURL(target);
       return;
     } catch (error) {
+      if (reportFailure) throw new Error('无法打开系统浏览器，请复制登录链接后手动打开', { cause: error });
       console.warn('Failed to open URL via Wails runtime:', error);
     }
   }
 
   try {
     if (typeof window !== 'undefined' && typeof window.open === 'function') {
-      window.open(target, '_blank', 'noopener,noreferrer');
+      if (!reportFailure) { window.open(target, '_blank', 'noopener,noreferrer'); return; }
+      const opened = window.open(target, '_blank');
+      if (opened) { opened.opener = null; return; }
+      if (reportFailure) throw new Error('浏览器未打开，请复制登录链接后手动打开');
     }
   } catch (error) {
+    if (reportFailure) throw error;
     console.warn('Failed to open URL via window.open:', error);
   }
 };

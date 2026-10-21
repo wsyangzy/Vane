@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -45,14 +46,24 @@ type TokenResponse struct {
 }
 
 func Exchange(ctx context.Context, client *http.Client, endpoint string, payload map[string]any) (TokenResponse, error) {
-	var result TokenResponse
 	body, _ := json.Marshal(payload)
 	defer clear(body)
+	return exchange(ctx, client, endpoint, "application/json", body)
+}
+
+func ExchangeForm(ctx context.Context, client *http.Client, endpoint string, form url.Values) (TokenResponse, error) {
+	body := []byte(form.Encode())
+	defer clear(body)
+	return exchange(ctx, client, endpoint, "application/x-www-form-urlencoded", body)
+}
+
+func exchange(ctx context.Context, client *http.Client, endpoint, contentType string, body []byte) (TokenResponse, error) {
+	var result TokenResponse
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return result, errors.New("subscription_refresh_request_failed")
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if client == nil {
 		client = &http.Client{Timeout: 25 * time.Second}
 	}

@@ -27,6 +27,9 @@ const manageSubscriptionAccounts = async (provider, action, input = {}) => {
     account: result?.account ? mapSubscriptionAccount(result.account) : null,
     login: result?.login ? { id: result.login.id, provider: result.login.provider, state: result.login.state,
       url: result.login.url || '', code: result.login.code || '', error: result.login.error || '',
+      method: result.login.method || 'browser', pasteCallback: Boolean(result.login.paste_callback),
+      pasteCode: Boolean(result.login.paste_code), callbackWarning: result.login.callback_warning || '',
+      proxy: result.login.proxy || '',
       account: result.login.account ? mapSubscriptionAccount(result.login.account) : null } : null
   };
 };

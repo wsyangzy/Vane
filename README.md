@@ -94,6 +94,19 @@ Windows 输出位于 `build/bin/Vane.exe`，开发版本为 `build/bin/Vane-dev.
 
 默认数据库位于数据目录下的 `data/usage.db`，日志位于 `logs/`。用户显式设置的自定义数据库路径继续按应用配置使用。
 
+### 订阅账号登录与导入
+
+在 Claude 或 Codex 管理页打开「订阅管理 → 订阅账号」：
+
+- Codex 的「浏览器登录」由 Vane 生成独立的 OAuth/PKCE 授权会话并打开官方页面，无需安装 Codex CLI。官方回调地址为 `http://localhost:1455/auth/callback`；端口被占用或保留时，可将浏览器最后停留的完整回调 URL 粘贴到登录面板完成授权。
+- Codex 的「设备码登录」需要已安装官方 Codex CLI。面板显示官方验证地址及设备验证码。
+- Claude 登录需要已安装官方 Claude Code。Vane 在独立临时配置目录运行 `claude auth login --claudeai`，捕获并打开它的官方授权链接，支持自动回调、回调 URL 补交及 CLI 提供的完整授权码。
+- 登录面板支持复制链接、重新打开浏览器和取消登录。CLI 使用 Vane 的全局代理配置，SOCKS5 经本地临时 HTTP CONNECT 桥接；浏览器使用自身网络设置。取消或超时不会保存尚未完成的登录。
+- 「导入凭证」支持选择文件或粘贴单个账号 JSON，包括 Codex 的 ChatGPT `auth.json`、Claude Code 的 `.credentials.json` 和 CLIProxyAPI 的对应账号文件；需要完整的 access token 与 refresh token。Claude 文件缺少账号 UUID/邮箱时，需补充该凭证对应的邮箱，避免将轮换的 token 当成账号身份。
+- 导入只读取并加密保存显式提供的内容，不代表已在线验证可用性；访问凭证按需刷新。与原工具共用刷新凭证可能导致其中一方需要重新登录，建议使用独立登录。
+
+凭证使用当前 Windows 用户的 DPAPI 加密存储。登录和导入不会改写用户原有的 Codex/Claude 登录文件；临时登录目录和子进程在会话结束后清理。
+
 ### 数据迁移
 
 Vane 仅使用上述数据目录，不自动识别、回退或合并其他品牌目录，也不会从 `usage-dev.db`、`usage-v2.db` 或程序运行目录导入数据。新目录首次启动时创建独立数据库。

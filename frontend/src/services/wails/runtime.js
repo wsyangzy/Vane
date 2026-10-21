@@ -85,7 +85,7 @@ export function EventsEmit(eventName, ...data) {
 // ============================================================
 
 export function BrowserOpenURL(url) {
-  Browser.OpenURL(url);
+  return Browser.OpenURL(url);
 }
 
 // ============================================================

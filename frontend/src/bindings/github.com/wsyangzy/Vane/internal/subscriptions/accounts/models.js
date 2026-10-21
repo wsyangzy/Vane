@@ -156,6 +156,41 @@ export class LoginInfo {
              */
             this["error"] = "";
         }
+        if (!("method" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["method"] = "";
+        }
+        if (!("paste_callback" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["paste_callback"] = false;
+        }
+        if (!("paste_code" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["paste_code"] = false;
+        }
+        if (!("callback_warning" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["callback_warning"] = "";
+        }
+        if (!("proxy" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["proxy"] = "";
+        }
         if (/** @type {any} */(false)) {
             /**
              * @member
@@ -173,10 +208,10 @@ export class LoginInfo {
      * @returns {LoginInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType1;
+        const $$createField11_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("account" in $$parsedSource) {
-            $$parsedSource["account"] = $$createField6_0($$parsedSource["account"]);
+            $$parsedSource["account"] = $$createField11_0($$parsedSource["account"]);
         }
         return new LoginInfo(/** @type {Partial<LoginInfo>} */($$parsedSource));
     }

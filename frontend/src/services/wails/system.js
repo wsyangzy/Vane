@@ -130,9 +130,8 @@ const copyToClipboard = async (text) => {
     textArea.value = text;
     document.body.appendChild(textArea);
     textArea.select();
-    document.execCommand('copy');
-    document.body.removeChild(textArea);
-    return true;
+    try { return document.execCommand('copy'); }
+    finally { document.body.removeChild(textArea); }
   }
 };
 

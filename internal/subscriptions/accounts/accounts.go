@@ -3,6 +3,7 @@
 package accounts
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -58,12 +59,15 @@ type Vault interface {
 }
 
 type Manager struct {
-	db       *sql.DB
-	vault    Vault
-	adapters map[string]Adapter
-	locks    sync.Map
-	loginMu  sync.Mutex
-	logins   map[string]*loginFlow
+	db         *sql.DB
+	vault      Vault
+	adapters   map[string]Adapter
+	locks      sync.Map
+	loginMu    sync.Mutex
+	logins     map[string]*loginFlow
+	cliProxy   string
+	proxyLabel string
+	closeProxy func()
 }
 
 func New(db *sql.DB, vault Vault, adapters map[string]Adapter) (*Manager, error) {
@@ -143,7 +147,9 @@ func (m *Manager) write(ctx context.Context, info Info, cred Credential, expecte
 	info.Revision = expected + 1
 	info.UpdatedAt = time.Now().UTC()
 	raw, _ := json.Marshal(info)
-	result, err := m.db.ExecContext(ctx, `UPDATE subscription_accounts SET info=?,credential=?,revision=? WHERE id=? AND revision=?`, string(raw), ciphertext, info.Revision, info.ID, expected)
+	sum := sha256.Sum256([]byte(cred.Subject + "\x00" + cred.AccountID))
+	identity := hex.EncodeToString(sum[:])
+	result, err := m.db.ExecContext(ctx, `UPDATE subscription_accounts SET info=?,credential=?,identity_hash=?,revision=? WHERE id=? AND revision=?`, string(raw), ciphertext, identity, info.Revision, info.ID, expected)
 	if err != nil {
 		return err
 	}
@@ -164,6 +170,7 @@ func (m *Manager) Import(ctx context.Context, provider, name string, raw []byte)
 	if len(raw) == 0 || len(raw) > 1<<20 {
 		return Info{}, errors.New("invalid_credential_file_size")
 	}
+	raw = bytes.TrimPrefix(bytes.TrimSpace(raw), []byte{0xef, 0xbb, 0xbf})
 	cred, err := a.Parse(raw)
 	if err != nil {
 		return Info{}, err
@@ -173,7 +180,9 @@ func (m *Manager) Import(ctx context.Context, provider, name string, raw []byte)
 	}
 	sum := sha256.Sum256([]byte(cred.Subject + "\x00" + cred.AccountID))
 	identity := hex.EncodeToString(sum[:])
-	unlock := m.lock(provider + ":" + identity)
+	// Imports for one provider are serialized so alternate identity metadata
+	// (UUID, email or a legacy credential fingerprint) cannot create two rows.
+	unlock := m.lock(provider + ":import")
 	defer unlock()
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -187,6 +196,32 @@ func (m *Manager) Import(ctx context.Context, provider, name string, raw []byte)
 	}
 	var id string
 	err = m.db.QueryRowContext(ctx, `SELECT id FROM subscription_accounts WHERE provider=? AND identity_hash=?`, provider, identity).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		if matcher, ok := a.(interface {
+			MatchAccount(Credential, Credential) (Credential, bool)
+		}); ok {
+			list, e := m.List(ctx, provider)
+			if e != nil {
+				return Info{}, e
+			}
+			var matched Credential
+			for _, candidate := range list {
+				_, saved, e := m.read(ctx, candidate.ID)
+				if e != nil {
+					return Info{}, e
+				}
+				if merged, same := matcher.MatchAccount(saved, cred); same {
+					if id != "" {
+						return Info{}, errors.New("凭证匹配多个已存账号，请使用包含账号 UUID 的完整凭证")
+					}
+					id, matched = candidate.ID, merged
+				}
+			}
+			if id != "" {
+				cred, err = matched, nil
+			}
+		}
+	}
 	if err == nil {
 		unlockID := m.lock(id)
 		defer unlockID()
