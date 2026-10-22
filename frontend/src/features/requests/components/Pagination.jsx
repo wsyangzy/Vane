@@ -3,8 +3,8 @@
 // 2025-12-01 11:34:29
 // ============================================
 
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { CustomSelect } from '@/shared/ui/index.js';
+import { ChevronLeft, ChevronRight, MousePointer2 } from 'lucide-react';
+import { CustomSelect, Tooltip } from '@/shared/ui/index.js';
 
 /**
  * Pagination - 分页控件组件
@@ -64,9 +64,9 @@ const Pagination = ({
   ];
 
   return (
-    <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-4 border-t border-gray-200 bg-gray-50/30 gap-4 sm:gap-0">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-gray-200 bg-gray-50/30 px-4 py-2.5">
       {/* 左侧信息 */}
-      <div className="flex items-center gap-4 text-sm text-gray-600">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-600 sm:text-sm">
         <span>
           显示第 <span className="font-medium">{startItem}</span> 到 <span className="font-medium">{endItem}</span> 条，
           共 <span className="font-medium">{total}</span> 条记录
@@ -81,12 +81,19 @@ const Pagination = ({
             className="min-w-[100px]"
           />
         </div>
+        <Tooltip content="单击请求行复制 ID · 双击查看详情">
+          <span tabIndex={0} aria-label="请求列表操作提示" className="inline-flex items-center gap-1 rounded text-slate-400 focus-visible:outline-2 focus-visible:outline-indigo-500">
+            <MousePointer2 className="h-3.5 w-3.5" />
+            <span className="hidden text-xs min-[75rem]:inline">操作提示</span>
+          </span>
+        </Tooltip>
       </div>
 
       {/* 右侧页码导航 */}
-      <div className="flex items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-1">
         {/* 上一页 */}
         <button
+          aria-label="上一页"
           onClick={() => onPageChange?.(currentPage - 1)}
           disabled={currentPage <= 1}
           className="p-1.5 rounded-md border border-gray-200 bg-white text-gray-400 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
@@ -124,6 +131,7 @@ const Pagination = ({
 
         {/* 下一页 */}
         <button
+          aria-label="下一页"
           onClick={() => onPageChange?.(currentPage + 1)}
           disabled={currentPage >= totalPages}
           className="p-1.5 rounded-md border border-gray-200 bg-white text-gray-600 hover:text-indigo-600 hover:border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"

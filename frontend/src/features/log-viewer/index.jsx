@@ -264,17 +264,17 @@ function LogsPage() {
       className="flex min-h-0 flex-1 flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm"
     >
       {/* 页面头部 - 固定 */}
-      <div className="flex-shrink-0 border-b border-slate-200 px-6 py-4">
+      <div className="shrink-0 border-b border-slate-200 px-4 py-3">
         {/* 标题栏 */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
               <FileText size={20} />
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-slate-800">系统日志</h1>
-              <p className="text-slate-500 text-sm mt-1">
-                实时查看系统运行日志 · 共 {logs.length} 条
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="text-xl font-bold text-slate-900">系统日志</h1>
+              <p className="text-xs text-slate-500">
+                共 {logs.length} 条
                 {filteredLogs.length !== logs.length && ` · 筛选后 ${filteredLogs.length} 条`}
               </p>
             </div>

@@ -38,26 +38,6 @@ const FORCED_ENUM_MAP = {
   'logging.format': [
     { value: 'text', label: '文本格式' },
     { value: 'json', label: 'JSON 格式' }
-  ],
-  'timezone.global': [
-    { value: 'Asia/Shanghai', label: '中国（北京时间 UTC+8）' },
-    { value: 'Asia/Hong_Kong', label: '香港（UTC+8）' },
-    { value: 'Asia/Taipei', label: '台北（UTC+8）' },
-    { value: 'Asia/Tokyo', label: '东京（UTC+9）' },
-    { value: 'Asia/Singapore', label: '新加坡（UTC+8）' },
-    { value: 'Asia/Seoul', label: '首尔（UTC+9）' },
-    { value: 'UTC', label: 'UTC（协调世界时）' },
-    { value: 'Europe/London', label: '伦敦（UTC+0/+1）' },
-    { value: 'Europe/Paris', label: '巴黎（UTC+1/+2）' },
-    { value: 'Europe/Berlin', label: '柏林（UTC+1/+2）' },
-    { value: 'Europe/Moscow', label: '莫斯科（UTC+3）' },
-    { value: 'America/New_York', label: '纽约（UTC-5/-4）' },
-    { value: 'America/Chicago', label: '芝加哥（UTC-6/-5）' },
-    { value: 'America/Denver', label: '丹佛（UTC-7/-6）' },
-    { value: 'America/Los_Angeles', label: '洛杉矶（UTC-8/-7）' },
-    { value: 'America/Sao_Paulo', label: '圣保罗（UTC-3）' },
-    { value: 'Australia/Sydney', label: '悉尼（UTC+10/+11）' },
-    { value: 'Pacific/Auckland', label: '奥克兰（UTC+12/+13）' }
   ]
 }
 

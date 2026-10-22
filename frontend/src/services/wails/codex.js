@@ -222,6 +222,7 @@ const mapCodexEndpoint = (endpoint) => ({
 });
 
 const mapCodexCredentialGroup = (group) => ({
+  enabled: group.enabled !== false,
   authMode: group.auth_mode || group.authMode || 'group_credential',
   subscription: mapSubscription(group.subscription),
   localKeyConfigured: Boolean(group.local_key_configured ?? group.localKeyConfigured),

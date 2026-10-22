@@ -102,7 +102,7 @@ test('execution trace preserves model/scope and keeps old records unknown', () =
   assert.equal(describeRouteExecution('{"kind":"model_rule","target":1}'), null);
   assert.equal(describeRouteExecution('broken'), null);
   const trace = describeRouteExecution(JSON.stringify({ attempts: 2, wait_ms: 15, stop_reason: 'retry_budget_exhausted', execution: { dropped_events: 3, events: [{ candidate: { channel: 'B', model: 'X' }, action: 'failed', reason: 'model_not_found', failure_scope: 'model' }] } }));
-  assert.deepEqual(trace, { subscription: null, attempts: 2, waitMs: 15, stopReason: 'retry_budget_exhausted', dropped: 3, events: [{ channel: 'B', model: 'X', action: 'failed', reason: 'model_not_found', scope: 'model' }] });
+  assert.deepEqual(trace, { subscription: null, attempts: 2, waitMs: 15, stopReason: 'retry_budget_exhausted', dropped: 3, events: [{ channel: 'B', pool: '', tier: '', groupId: 0, endpoint: '', model: 'X', action: 'failed', reason: 'model_not_found', scope: 'model' }] });
 });
 
 
@@ -114,4 +114,13 @@ test('subscription execution exposes public binding and preserves uncertain reco
   assert.equal(execution.subscription.availability[0].state, 'due_unverified');
   assert.equal(execution.subscription.availability[0].resetKnown, false);
   assert.match(describeRouteSnapshot(snapshot).title, /官方订阅与授权备用/);
+});
+
+test('pool execution identifies each account and recovery wait without inferring old membership', () => {
+ const raw = { kind: 'pool', pool_name: '默认池', member: { pool_name: '备用池', tier: 'backup', group_id: 9 }, execution: { events: [{ member: { pool_name: '备用池', tier: 'backup', group_id: 9 }, action: 'wait', reason: 'waiting_for_account_recovery' }] } };
+ assert.equal(describeRouteSnapshot(raw).stage, '备用池 · 备用 · 账号 #9');
+ const event = describeRouteExecution(raw).events[0];
+ assert.equal(event.pool, '备用池');
+ assert.equal(event.tier, '备用');
+ assert.equal(event.action, 'wait');
 });

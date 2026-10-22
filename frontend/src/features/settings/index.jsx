@@ -21,7 +21,6 @@ import {
   Archive,
   X,
   FileText,
-  Map as MapIcon,
   Gauge,
   Trash2
 } from 'lucide-react';
@@ -59,9 +58,7 @@ const CATEGORY_ICONS = {
   auth: Lock,
   token_counting: Hash,
   retention: Archive,
-  // 🔧 [P5.5.5 新增] Logging / Timezone 分类图标
   logging: FileText,
-  timezone: MapIcon,
   cache: Gauge
 };
 
@@ -70,7 +67,8 @@ const BALANCED_CATEGORY_ORDER = [
   'strategy',
   'failover',
   'cache',
-  'retention'
+  'retention',
+  'logging'
 ];
 
 const CATEGORY_ORDER = [
@@ -108,6 +106,7 @@ const formatCacheTime = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -850,7 +849,7 @@ const SettingsPage = () => {
   }
 
   const orderedSettingCategories = categories
-    .filter(category => category.name !== 'server')
+    .filter(category => category.name !== 'server' && category.name !== 'timezone')
     .sort((a, b) => (
       getCategoryOrder(a.name) - getCategoryOrder(b.name) ||
       (a.display_order ?? 0) - (b.display_order ?? 0)
@@ -868,6 +867,7 @@ const SettingsPage = () => {
   );
 
   const renderSettingCategory = (category, className = '') => {
+    if (category?.name === "failover") return null;
     if (!category) return null;
     const categorySettings = settingsByCategory[category.name]?.filter(shouldShowSetting) || [];
     return (
@@ -937,7 +937,7 @@ const SettingsPage = () => {
   };
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* CSS 动画定义 */}
       <style>{`
         @keyframes countdown {
@@ -951,19 +951,15 @@ const SettingsPage = () => {
       `}</style>
 
       {/* 页面标题 */}
-      <div className="flex justify-between items-end">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-            <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-              <Settings size={20} />
-            </div>
-            <div>
-              <div>系统设置</div>
-              <p className="text-sm text-slate-500 font-normal mt-1">
-                配置系统运行参数，大部分设置即时生效
-              </p>
-            </div>
-          </h1>
+      <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <Settings size={20} />
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-xl font-bold text-slate-900">系统设置</h1>
+            <p className="text-xs text-slate-500">大部分设置即时生效</p>
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <Button
@@ -1071,37 +1067,39 @@ const SettingsPage = () => {
         <SettingsSection
           title="服务端口"
           icon={Server}
-          description="API 服务端口配置"
+          compact
           onReset={() => handleResetCategory('server', '服务端口')}
           resetDisabled={saving}
         >
-          <PortInfo portInfo={portInfo} loading={loading} />
-          <div className="mt-4 pt-4 border-t border-slate-100">
-            {settingsByCategory['server']?.filter(shouldShowSetting).map(setting => {
-              const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
-              return (
-                <SettingItem
-                  key={changeKey}
-                  setting={setting}
-                  value={getCurrentValue(setting)}
-                  onChange={handleSettingChange}
-                  disabled={saving}
-                  hasChange={changeKey in changes}
-                  onRevert={handleRevertSetting}
-                />
-              );
-            })}
+          <div className="grid items-center gap-4 sm:grid-cols-2">
+            <PortInfo portInfo={portInfo} loading={loading} />
+            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-4">
+              {settingsByCategory['server']?.filter(shouldShowSetting).map(setting => {
+                const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
+                return (
+                  <SettingItem
+                    key={changeKey}
+                    setting={setting}
+                    value={getCurrentValue(setting)}
+                    onChange={handleSettingChange}
+                    disabled={saving}
+                    hasChange={changeKey in changes}
+                    onRevert={handleRevertSetting}
+                  />
+                );
+              })}
+            </div>
           </div>
         </SettingsSection>
       )}
 
       {/* 其他设置分类：普通卡片成对对齐，仅对中间高低差明显的卡片做组合布局。 */}
       <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
           {leadingSettingCategories.map(category => renderSettingCategory(category))}
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
           {BALANCED_CATEGORY_ORDER.slice(0, 2)
             .map(name => settingCategoriesByName.get(name))
             .filter(Boolean)
@@ -1109,20 +1107,16 @@ const SettingsPage = () => {
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch">
-          <div className="contents lg:flex lg:h-full lg:min-w-0 lg:flex-col lg:gap-6">
-            <div className="order-0 min-w-0 lg:flex-1">
-              {renderSettingCategory(settingCategoriesByName.get('failover'), 'lg:h-full')}
-            </div>
-            <div className="order-2 min-w-0 lg:flex-1">
-              {renderSettingCategory(settingCategoriesByName.get('retention'), 'lg:h-full')}
-            </div>
+          <div className="flex min-w-0 flex-col gap-6">
+            {renderSettingCategory(settingCategoriesByName.get('retention'))}
+            {renderSettingCategory(settingCategoriesByName.get('logging'), 'lg:flex-1')}
           </div>
-          <div className="order-1 min-w-0 lg:h-full lg:order-none">
+          <div className="min-w-0 lg:h-full">
             {renderSettingCategory(settingCategoriesByName.get('cache'), 'lg:h-full')}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
           {trailingSettingCategories.map(category => renderSettingCategory(category))}
         </div>
       </div>

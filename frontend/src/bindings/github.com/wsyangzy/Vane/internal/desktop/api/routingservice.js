@@ -9,6 +9,27 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as app$0 from "../../app/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as routing$0 from "../../routing/models.js";
+
+/**
+ * @param {string} provider
+ * @param {number} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function CheckPoolEndpoint(provider, id) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.CheckPoolEndpoint", provider, id);
+}
+
+/**
+ * @param {string} provider
+ * @param {number} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteAccountPool(provider, id) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.DeleteAccountPool", provider, id);
+}
 
 /**
  * @param {number} id
@@ -30,12 +51,22 @@ export function GetRouteTargetOptions(provider) {
 
 /**
  * @param {string} provider
+ * @returns {$CancellablePromise<app$0.AccountPoolState>}
+ */
+export function ListAccountPools(provider) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListAccountPools", provider).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType1($result);
+    }));
+}
+
+/**
+ * @param {string} provider
  * @param {number} sourceChannelID
  * @returns {$CancellablePromise<app$0.ModelRouteInfo[]>}
  */
 export function ListModelRoutes(provider, sourceChannelID) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListModelRoutes", provider, sourceChannelID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType3($result);
     }));
 }
 
@@ -48,8 +79,27 @@ export function ListModelRoutes(provider, sourceChannelID) {
  */
 export function PreviewRoute(provider, sourceChannelID, model, streaming) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.PreviewRoute", provider, sourceChannelID, model, streaming).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType4($result);
     }));
+}
+
+/**
+ * @param {string} provider
+ * @param {number} id
+ * @returns {$CancellablePromise<app$0.PoolKeyResult>}
+ */
+export function RotateAccountPoolKey(provider, id) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.RotateAccountPoolKey", provider, id).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
+}
+
+/**
+ * @param {routing$0.Pool} input
+ * @returns {$CancellablePromise<number>}
+ */
+export function SaveAccountPool(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveAccountPool", input);
 }
 
 /**
@@ -58,7 +108,7 @@ export function PreviewRoute(provider, sourceChannelID, model, streaming) {
  */
 export function SaveModelRoute(input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveModelRoute", input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType6($result);
     }));
 }
 
@@ -70,7 +120,7 @@ export function SaveModelRoute(input) {
  */
 export function SetChannelNonStreamRoute(provider, channelID, input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetChannelNonStreamRoute", provider, channelID, input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType6($result);
     }));
 }
 
@@ -93,9 +143,22 @@ export function SetModelRouteEnabled(id, enabled) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetModelRouteEnabled", id, enabled);
 }
 
+/**
+ * @param {string} provider
+ * @param {number} channelID
+ * @param {number} groupID
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetPoolAccountEnabled(provider, channelID, groupID, enabled) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetPoolAccountEnabled", provider, channelID, groupID, enabled);
+}
+
 // Private type creation functions
 const $$createType0 = app$0.RouteTargetOptions.createFrom;
-const $$createType1 = app$0.ModelRouteInfo.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = app$0.RoutePreviewResult.createFrom;
-const $$createType4 = app$0.RouteSaveResult.createFrom;
+const $$createType1 = app$0.AccountPoolState.createFrom;
+const $$createType2 = app$0.ModelRouteInfo.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = app$0.RoutePreviewResult.createFrom;
+const $$createType5 = app$0.PoolKeyResult.createFrom;
+const $$createType6 = app$0.RouteSaveResult.createFrom;

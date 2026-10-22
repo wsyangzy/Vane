@@ -12,7 +12,7 @@ import {
   FileText,
   XCircle
 } from 'lucide-react';
-import { KPICard } from '@/shared/ui/index.js';
+import { Tooltip } from '@/shared/ui/index.js';
 import { formatCacheHitRate } from '../utils/tokenDisplay.js';
 
 /**
@@ -56,7 +56,7 @@ const formatDuration = (duration) => {
  * @param {Object} props.codexStats - Codex 提供商统计
  * @param {number} props.total - 总记录数（来自分页）
  */
-const StatsOverview = ({ stats, claudeStats, codexStats, total = 0, isBlurred = false }) => {
+const StatsOverview = ({ stats, claudeStats, codexStats, total = 0 }) => {
   if (!stats) return null;
 
   // 格式化后端返回的原始数据
@@ -108,28 +108,31 @@ const StatsOverview = ({ stats, claudeStats, codexStats, total = 0, isBlurred = 
   const cacheSubText = cacheSubParts.length > 1 ? cacheSubParts.join(' / ') : undefined;
 
   const kpis = [
-    { label: '总请求数', value: totalRequests, subText: requestSubText, icon: Zap, statusColor: 'bg-orange-50 text-orange-500' },
-    { label: '成功率', value: successRate, icon: CheckCircle2, statusColor: 'bg-emerald-50 text-emerald-500' },
-    { label: '平均耗时', value: avgDuration, icon: Clock, statusColor: 'bg-amber-50 text-amber-500' },
-    { label: '总成本', value: totalCost, subText: costSubText, icon: DollarSign, statusColor: 'bg-blue-50 text-blue-500' },
-    { label: '总Token数 (M)', value: totalTokens, subText: tokenSubText, icon: FileText, statusColor: 'bg-indigo-50 text-indigo-500' },
-    { label: '缓存命中率', value: cacheHitRate, subText: cacheSubText, icon: Database, statusColor: 'bg-sky-50 text-sky-500' },
-    { label: '失败请求', value: failedRequests, icon: XCircle, statusColor: 'bg-rose-50 text-rose-500' }
+    { label: '总请求数', value: totalRequests, subText: requestSubText, icon: Zap, statusColor: 'text-orange-500' },
+    { label: '成功率', value: successRate, icon: CheckCircle2, statusColor: 'text-emerald-500' },
+    { label: '平均耗时', value: avgDuration, icon: Clock, statusColor: 'text-amber-500' },
+    { label: '总成本', value: totalCost, subText: costSubText, icon: DollarSign, statusColor: 'text-blue-500' },
+    { label: '总 Token', value: totalTokens, subText: tokenSubText, icon: FileText, statusColor: 'text-indigo-500' },
+    { label: '缓存命中率', value: cacheHitRate, subText: cacheSubText, icon: Database, statusColor: 'text-sky-500' },
+    { label: '失败请求', value: failedRequests, icon: XCircle, statusColor: 'text-rose-500' }
   ];
 
   return (
-    <div className={`motion-content-dim grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 ${isBlurred ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
-      {kpis.map((kpi, idx) => (
-        <KPICard
-          key={idx}
-          title={kpi.label}
-          value={kpi.value}
-          subText={kpi.subText}
-          icon={kpi.icon}
-          statusColor={kpi.statusColor}
-        />
+    <dl aria-label="请求统计" className="grid shrink-0 grid-cols-7 divide-x divide-slate-200/70 border-b border-slate-200/80 bg-slate-50/40 py-3">
+      {kpis.map(({ label, value, subText, icon: Icon, statusColor }) => (
+        <div key={label} className="min-w-0 px-3 xl:px-4">
+          <dt className="flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium leading-4 text-slate-500">
+            <Icon aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${statusColor}`} />
+            {label}
+          </dt>
+          <dd className="mt-1 text-base font-semibold leading-6 tabular-nums text-slate-900 xl:text-lg">
+            <Tooltip content={[value, subText].filter(item => item !== undefined).join('\n')} className="block min-w-0" contentClassName="whitespace-pre-line">
+              <span tabIndex={0} className="block truncate rounded-sm focus-visible:outline-2 focus-visible:outline-indigo-500">{value}</span>
+            </Tooltip>
+          </dd>
+        </div>
       ))}
-    </div>
+    </dl>
   );
 };
 

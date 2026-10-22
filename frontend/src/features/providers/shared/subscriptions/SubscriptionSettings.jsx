@@ -6,7 +6,7 @@ import { generateLocalRelayKey, subscriptionStateLabel } from './subscriptionSet
 
 const FIELD = 'w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
 
-export function SubscriptionStatus({ group }) {
+export function SubscriptionStatus({ group, poolMode = false }) {
   const pauses = group.subscriptionStatus || [];
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -18,7 +18,7 @@ export function SubscriptionStatus({ group }) {
     <div className="flex flex-wrap items-center gap-2">
       <span className="font-medium text-indigo-700">官方订阅 · 绑定 v{group.subscription?.version || 1}</span>
       <span>{group.subscription?.accountId ? '托管账号' : '客户端凭证透传'}</span>
-      <span>{group.subscription?.enabled ? '默认官方优先，按模型规则与备用授权选路' : '官方已手动暂停，仅使用已授权备用'}</span>
+      <span>{poolMode ? (group.subscription?.enabled ? '按账号池规则调度' : '官方订阅已暂停') : (group.subscription?.enabled ? '默认官方优先，按模型规则与备用授权选路' : '官方已手动暂停，仅使用已授权备用')}</span>
       <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">官方验证待完成</span>
     </div>
     {pauses.map((pause, index) => <div key={`${pause.model}:${index}`} className="break-words [overflow-wrap:anywhere]">

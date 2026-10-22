@@ -3,6 +3,7 @@
 // 2025-12-01 09:30:08
 // ============================================
 
+import { useEffect, useRef, useState } from 'react';
 import { X, Columns, Eye, EyeOff, Check } from 'lucide-react';
 
 /**
@@ -23,10 +24,31 @@ const ViewConfigPanel = ({
   onToggleColumn,
   onReset
 }) => {
+  const panelRef = useRef(null);
+  const [horizontalOffset, setHorizontalOffset] = useState(0);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const updatePosition = () => {
+      const panel = panelRef.current;
+      const anchor = panel?.offsetParent;
+      if (!panel || !anchor) return;
+      const anchorRight = anchor.getBoundingClientRect().right;
+      const panelLeft = anchorRight - panel.offsetWidth;
+      setHorizontalOffset(panelLeft < 16 ? 16 - panelLeft : Math.min(window.innerWidth - 16 - anchorRight, 0));
+    };
+    const frame = window.requestAnimationFrame(updatePosition);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="absolute top-12 right-0 z-30 w-64 bg-white rounded-xl shadow-xl border border-gray-100 ring-1 ring-black/5 animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 origin-top-right">
+    <div ref={panelRef} style={{ translate: `${horizontalOffset}px 0` }} className="absolute top-12 right-0 z-30 w-64 bg-white rounded-xl shadow-xl border border-gray-100 ring-1 ring-black/5 animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 origin-top-right">
       {/* 头部 */}
       <div className="px-4 py-3 border-b border-gray-50 flex justify-between items-center bg-gray-50/50 rounded-t-xl">
         <div className="flex items-center gap-2 text-sm font-semibold text-gray-800">

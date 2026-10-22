@@ -16,6 +16,21 @@ export const KPICard = ({
   iconContainerClassName = '',
   iconClassName = ''
 }) => {
+  if (layout === 'compact') {
+    const isSmall = size === 'sm';
+    return (
+      <div className={`motion-kpi-card flex min-w-0 items-center rounded-xl border border-slate-200/60 bg-white shadow-sm ${isSmall ? 'gap-2 p-2.5' : 'gap-2.5 p-3'}`} title={[value, subText].filter(item => item !== undefined && item !== null && item !== '').join('\n')}>
+        <div className={`motion-kpi-icon shrink-0 rounded-lg ${isSmall ? 'p-1' : 'p-1.5'} ${statusColor}`}>
+          <Icon size={isSmall ? 14 : 16} />
+        </div>
+        <div className="min-w-0">
+          <h3 className="text-xs font-medium leading-5 text-slate-500">{title}</h3>
+          <div className={`font-semibold leading-6 tabular-nums text-slate-900 ${isSmall ? 'truncate text-base' : 'break-all text-lg'}`}>{value}</div>
+        </div>
+      </div>
+    );
+  }
+
   if (layout === 'side') {
     const isLarge = size === 'lg';
     const resolvedIconSize = iconSize ?? (isLarge ? 19 : 18);

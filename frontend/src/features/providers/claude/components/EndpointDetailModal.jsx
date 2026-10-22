@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Database, Server, ArrowRight, Calculator, Repeat, XCircle, Clock, Settings, KeyRound } from 'lucide-react';
+import { Activity, RotateCcw, Pencil, Trash2, Database, Server, ArrowRight, Calculator, XCircle, Clock, Settings, KeyRound } from 'lucide-react';
 import { Button, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModelTag from '@/features/requests/components/ModelTag.jsx';
@@ -19,13 +19,14 @@ const EndpointDetailModal = ({
   credentialGroup,
   isOpen,
   isSqliteMode,
-  channelFailoverEnabled = true,
   channelMeta = null,
   globalTimeoutSeconds = 300,
   // failoverDefaultCooldownSeconds 已移除
   onClose,
   onEdit,
-  onDelete
+  onDelete,
+  onRestore,
+  onHealth
 }) => {
   if (!isOpen || !endpoint) return null;
 
@@ -152,6 +153,8 @@ const EndpointDetailModal = ({
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
+              {!failoverEnabled && <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => onRestore?.(endpoint)}>恢复历史端点</Button>}
+              <Button variant="ghost" size="sm" icon={Activity} onClick={() => onHealth?.(endpoint)}>健康检测</Button>
               {isSqliteMode && (
                 <>
                   <Button
@@ -210,13 +213,8 @@ const EndpointDetailModal = ({
               </span>
             </Tooltip>
 
-            <Tooltip content={failoverEnabled ? '参与渠道内故障转移' : '不参与渠道内故障转移'}>
-              <span className="inline-flex">
-                <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={failoverEnabled ? Repeat : RepeatOffIcon}>
-                  {failoverEnabled ? '参与故障转移' : '不参与转移'}
-                </DetailPill>
-              </span>
-            </Tooltip>
+            {!failoverEnabled && <DetailPill tone="amber" icon={RepeatOffIcon}>历史停用</DetailPill>}
+
 
             {supportsCountTokens && (
               <Tooltip content="支持 count_tokens">
@@ -361,9 +359,7 @@ const EndpointDetailModal = ({
                   <div className="flex items-start gap-2">
                     <span className="text-amber-600 font-medium min-w-[70px]">等待说明:</span>
                     <span className="text-amber-900">
-                      {channelFailoverEnabled
-                        ? '请求已挂起等待端点恢复或自动切换渠道。'
-                        : '请求已挂起，等待用户点击「重试」按钮重新尝试当前渠道。'}
+                      账号池请求在预算内等待已配置账号恢复。
                     </span>
                   </div>
                   {hasFailDetail && (

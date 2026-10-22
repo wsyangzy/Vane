@@ -46,11 +46,6 @@ test('request display calculations preserve retry, transfer and token semantics'
   assert.deepEqual(getRequestNetworkDisplayState(request), { durationMs: 125, isStreaming: true });
 });
 
-test('request table never exposes a horizontal scrollbar', () => {
-  assert.match(source, /overflow-x-hidden/);
-  assert.doesNotMatch(source, /overflow-x-auto/);
-});
-
 test('request channel failover display is data-driven for Claude and Codex', () => {
   assert.match(source, /requestHasInterChannelTransfer\(request\)/);
   assert.match(detailSource, /const showChannelInChain = requestHasInterChannelTransfer\(request\)/);

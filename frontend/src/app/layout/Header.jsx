@@ -29,7 +29,7 @@ const NavItem = ({ label, active, onClick, buttonRef }) => (
   <button
     ref={buttonRef}
     onClick={onClick}
-    className={`relative z-10 whitespace-nowrap px-3 py-2 text-sm font-medium rounded-full transition-colors duration-200 ${
+    className={`relative z-10 whitespace-nowrap px-2.5 py-2 text-sm font-medium rounded-full transition-colors duration-200 ${
       active
         ? 'text-white'
         : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
@@ -148,7 +148,7 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
       )}
 
       {/* Equal side columns keep navigation centred on the whole window. */}
-      <nav aria-label="主导航" className="grid h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-6 min-[1200px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+      <nav aria-label="主导航" className="grid h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-6 min-[1080px]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
         <div className="flex min-w-0 items-center">
           <button type="button" aria-label="返回概览"
             className="group flex min-w-0 items-center gap-2.5 rounded-lg"
@@ -165,7 +165,7 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
           tabs={NAV_TABS}
           activeTab={activeTab}
           onTabChange={onTabChange}
-          className="hidden min-[1200px]:flex"
+          className="hidden min-[1080px]:flex"
         />
 
         {/* 右侧：状态指示器 + 头像 */}
@@ -199,7 +199,7 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
       </nav>
 
       {/* 移动端导航 */}
-      <div className="px-4 pb-3 overflow-x-auto min-[1200px]:hidden">
+      <div className="px-4 pb-2 overflow-x-auto min-[1080px]:hidden">
         <SlidingNav
           tabs={NAV_TABS}
           activeTab={activeTab}

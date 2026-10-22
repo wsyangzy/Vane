@@ -1,7 +1,10 @@
+import { checkPoolEndpoint } from '@/services/wails/pools.js';
+import PoolWorkspace from '@/features/providers/shared/pools/PoolWorkspace.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowRightLeft, CheckCircle2, Database, KeyRound, Plus, RefreshCw, Server, Settings, ShieldOff, XCircle } from 'lucide-react';
-import { Button, EmptyState, ErrorMessage, KPICard, LoadingSpinner, useToast } from '@/shared/ui/index.js';
+import { Database, Plus, RefreshCw, Settings } from 'lucide-react';
+import { Button, EmptyState, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
 import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
+import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
 import { nonStreamRouteSignature } from '@/features/providers/shared/routing/routeTargets.js';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
@@ -17,11 +20,12 @@ import { ActiveChannelPauseDialog } from './components/ActiveChannelPauseDialog.
 import { CodexGlobalConfigModal } from './components/CodexGlobalConfigModal.jsx';
 import { CodexEndpointDetailModal } from './components/CodexEndpointDetailModal.jsx';
 import { ChannelCard } from './components/ChannelCard.jsx';
+import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
 
 // ============================================================================
 // 主页面
 // ============================================================================
-const CodexPage = () => {
+const CodexPage = ({ clientVersion }) => {
   const toast = useToast();
   const [channels, setChannels] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -86,7 +90,6 @@ const CodexPage = () => {
   const [deleteEndpointTarget, setDeleteEndpointTarget] = useState(null);
   const [endpointDetailTarget, setEndpointDetailTarget] = useState(null);
 
-  const activeChannel = channels.find((channel) => channel.isActive) || null;
   const selectedEndpointDetail = endpointDetailTarget ? (() => {
     const latestChannel = channels.find((channel) => channel.id === endpointDetailTarget.channelOwner?.id) ||
       endpointDetailTarget.channelOwner;
@@ -102,119 +105,6 @@ const CodexPage = () => {
 	  ) || credentialGroupDetailTarget.group;
 	  return { channel: latestChannel, group: latestGroup };
 	})() : null;
-  const allEndpoints = channels.flatMap((channel) =>
-    (channel.endpoints || []).map((endpoint) => ({ channel, endpoint }))
-  );
-  const endpointInScope = ({ channel, endpoint }) => {
-    if (endpoint.failoverEnabled === false) return false;
-    return channelFailoverEnabled ? channel.failoverEnabled !== false : channel.isActive;
-  };
-  const scopedEndpoints = allEndpoints.filter(endpointInScope);
-  const endpointHealthState = ({ endpoint }) => endpoint.healthState || endpoint.health_state || 'unchecked';
-  const skippedEndpointCount = scopedEndpoints.filter((item) => endpointHealthState(item) === 'skipped').length;
-  const healthyEndpointCount = scopedEndpoints.filter((item) => {
-    const state = endpointHealthState(item);
-    return state === 'healthy' || state === 'skipped';
-  }).length;
-  const unhealthyEndpointCount = scopedEndpoints.filter((item) => endpointHealthState(item) === 'unhealthy').length;
-  const uncheckedEndpointCount = allEndpoints.filter((item) => {
-    if (!endpointInScope(item)) return true;
-    const state = endpointHealthState(item);
-    return state === 'unchecked' || state === 'inactive' || state === 'excluded';
-  }).length;
-  const participatingChannelCount = channels.filter((channel) => channel.failoverEnabled !== false).length;
-  const activeChannelEndpoints = activeChannel?.endpoints || [];
-  const activeChannelCredentialGroupCount = activeChannel?.credentialGroups?.length || 0;
-  const failoverOverviewCards = [
-    {
-      title: '参与端点',
-      value: String(scopedEndpoints.length),
-      subText: `端点总数 ${allEndpoints.length} 个`,
-      icon: Server,
-      statusColor: 'bg-indigo-50 text-indigo-600'
-    },
-    {
-      title: '健康端点',
-      value: String(healthyEndpointCount),
-      subText: '当前通过健康检测',
-      icon: CheckCircle2,
-      statusColor: 'bg-emerald-50 text-emerald-600'
-    },
-    {
-      title: '跳过检测',
-      value: String(skippedEndpointCount),
-      subText: '已标记跳过健康检查',
-      icon: ShieldOff,
-      statusColor: 'bg-violet-50 text-violet-600'
-    },
-    {
-      title: '异常端点',
-      value: String(unhealthyEndpointCount),
-      subText: '当前判定异常',
-      icon: XCircle,
-      statusColor: 'bg-rose-50 text-rose-600'
-    },
-    {
-      title: '未参与端点',
-      value: String(uncheckedEndpointCount),
-      subText: '未纳入当前检测范围',
-      icon: ShieldOff,
-      statusColor: 'bg-slate-100 text-slate-500'
-    },
-    {
-      title: '参与渠道',
-      value: String(participatingChannelCount),
-      subText: `总渠道 ${channels.length} 个`,
-      icon: ArrowRightLeft,
-      statusColor: 'bg-slate-100 text-slate-700'
-    }
-  ];
-  const activeChannelOverviewCards = [
-    {
-      title: '凭证分组',
-      value: String(activeChannelCredentialGroupCount),
-      subText: activeChannel ? `当前渠道 ${activeChannel.name}` : '暂无活跃渠道',
-      icon: KeyRound,
-      statusColor: 'bg-sky-50 text-sky-600'
-    },
-    {
-      title: '参与端点',
-      value: String(scopedEndpoints.length),
-      subText: '当前活跃渠道参与路由',
-      icon: Server,
-      statusColor: 'bg-indigo-50 text-indigo-600'
-    },
-    {
-      title: '健康端点',
-      value: String(healthyEndpointCount),
-      subText: '当前活跃渠道通过检测',
-      icon: CheckCircle2,
-      statusColor: 'bg-emerald-50 text-emerald-600'
-    },
-    {
-      title: '跳过检测',
-      value: String(skippedEndpointCount),
-      subText: '当前活跃渠道跳过检测',
-      icon: ShieldOff,
-      statusColor: 'bg-violet-50 text-violet-600'
-    },
-    {
-      title: '异常端点',
-      value: String(unhealthyEndpointCount),
-      subText: '当前活跃渠道判定异常',
-      icon: XCircle,
-      statusColor: 'bg-rose-50 text-rose-600'
-    },
-    {
-      title: '总端点',
-      value: String(activeChannelEndpoints.length),
-      subText: '当前活跃渠道全部端点',
-      icon: Database,
-      statusColor: 'bg-slate-100 text-slate-700'
-    }
-  ];
-  const overviewCards = channelFailoverEnabled ? failoverOverviewCards : activeChannelOverviewCards;
-
   const fetchData = useCallback(async ({ silent = false, throwOnError = false } = {}) => {
     if (!silent) setLoading(true);
     setError('');
@@ -719,21 +609,19 @@ const CodexPage = () => {
   ).length;
 
   return (
-    <div className="animate-fade-in">
+    <ModalPortalScope><div className="animate-fade-in">
       {/* 页面标题 */}
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-            <CodexLogo className="w-6 h-6" />
+      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <CodexLogo className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">Codex 管理</h1>
-            <p className="text-slate-500 text-sm mt-1">
-              管理 Codex 渠道、端点与模型映射；请求通过主代理端口按当前接管渠道转发
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="text-xl font-bold text-slate-900">Codex 管理</h1>
+              <ClientVersionBadge provider="codex" version={clientVersion} />
               {lastUpdate && (
-                <span className="ml-2 text-slate-400">· 更新于 {lastUpdate}</span>
+                <span className="hidden text-[11px] text-slate-400 min-[75rem]:inline">更新于 {lastUpdate}</span>
               )}
-            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -761,22 +649,7 @@ const CodexPage = () => {
         </div>
       </div>
 
-      {/* 统计卡片 */}
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        {overviewCards.map((card) => (
-          <KPICard
-            key={card.title}
-            title={card.title}
-            value={card.value}
-            subText={card.subText}
-            icon={card.icon}
-            statusColor={card.statusColor}
-            layout="side"
-            size="lg"
-          />
-        ))}
-      </div>
-
+      <PoolWorkspace provider="codex" refreshToken={lastUpdate}>
       {error && (
         <div className="mb-4">
           <ErrorMessage message={error} onClose={() => setError('')} />
@@ -791,7 +664,7 @@ const CodexPage = () => {
         <EmptyState
           icon={Database}
           title="暂无 Codex 渠道"
-          description="请先创建一个渠道并为其添加至少一个端点（base_url），随后即可在管理界面中切换激活。"
+          description="创建渠道和账号后，将账号加入池以开始调度。"
           action={
             <Button variant="primary" icon={Plus} onClick={openCreateChannelForm}>
               添加渠道
@@ -799,7 +672,7 @@ const CodexPage = () => {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div aria-label="Codex 渠道列表" className="channel-resource-grid">
           {channels.map((channel) => (
             <ChannelCard
               key={channel.id}
@@ -836,6 +709,8 @@ const CodexPage = () => {
           ))}
         </div>
       )}
+
+      </PoolWorkspace>
 
       {showChannelForm && (
         <ChannelFormModal
@@ -900,6 +775,8 @@ const CodexPage = () => {
 
       {selectedEndpointDetail?.endpoint && (
         <CodexEndpointDetailModal
+          onRestore={async (ep) => { await handleToggleEndpointFailover(ep, true); setEndpointDetailTarget(null); }}
+          onHealth={async (ep) => { try { await checkPoolEndpoint('codex', ep.id); setEndpointDetailTarget(null); await fetchData({ silent: true }); } catch (error) { toast.error(getErrorMessage(error)); } }}
           endpoint={selectedEndpointDetail.endpoint}
           channel={selectedEndpointDetail.channelOwner}
           globalConfig={globalConfig}
@@ -970,7 +847,7 @@ const CodexPage = () => {
           onSaved={loadGlobalConfig}
         />
       )}
-    </div>
+    </div></ModalPortalScope>
   );
 };
 

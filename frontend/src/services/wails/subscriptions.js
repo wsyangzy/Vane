@@ -5,7 +5,7 @@ const manageSubscriptionConnection = async (provider, action, input = {}) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const result = await WailsApp.ManageSubscriptionConnection({
-    provider, action, group_id: input.groupId || 0, local_key: input.localKey || '',
+    provider, action, pool_id: input.poolId || 0, group_id: input.groupId || 0, local_key: input.localKey || '',
     revision: input.revision || '', binding_version: input.bindingVersion || 0, content_revision: input.contentRevision || ''
   });
   return {

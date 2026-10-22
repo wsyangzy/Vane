@@ -103,19 +103,21 @@ export const describeRouteSnapshot = (raw) => {
 
   const kind = String(snapshot.kind);
   const target = Math.max(0, Math.trunc(Number(snapshot.target) || 0));
-  const source = snapshot.channel || '激活渠道';
+  const source = snapshot.pool_name || snapshot.channel || '激活渠道';
   const ruleName = `「${snapshot.name || `#${snapshot.id || '?'}`}」`;
   const titles = {
     // 规则挂在渠道上；早期快照没有 channel 字段
-    model_rule: snapshot.channel ? `模型规则${ruleName}（${snapshot.channel}）` : `模型规则${ruleName}`,
+    pool: `账号池（${source}）`,
+    model_rule: snapshot.pool_name ? `模型规则${ruleName}（${source}）` : snapshot.channel ? `模型规则${ruleName}（${snapshot.channel}）` : `模型规则${ruleName}`,
     non_stream: `非流改道（来自 ${source}）`,
     subscription: `官方订阅与授权备用（${source}）`,
     model_capability: `模型能力改道（${source} 的分组均不支持该模型）`
   };
-  let stage = '来源渠道';
+  let stage = snapshot.pool_name ? '入口池' : '来源渠道';
   if (target > 0) {
     stage = kind === 'model_capability' ? `第 ${target} 个候选渠道` : `第 ${target} 个目标`;
   }
+  if (snapshot.member) { const member = snapshot.member; stage = `${member.pool_name || source} · ${member.tier === 'backup' ? '备用' : '主要'} · 账号 #${member.group_id}`; }
   return {
     kind,
     title: titles[kind] || kind,
@@ -147,6 +149,10 @@ export const describeRouteExecution = (raw) => {
     dropped: Math.max(0, Number(snapshot.execution.dropped_events) || 0),
     events: snapshot.execution.events.filter((event) => event && typeof event === 'object').map((event) => ({
       channel: String(event.candidate?.channel || ''),
+      pool: String(event.member?.pool_name || ''),
+      tier: event.member?.tier === 'backup' ? '备用' : event.member ? '主要' : '',
+      groupId: Number(event.member?.group_id || 0),
+      endpoint: String(event.candidate?.endpoint || ''),
       model: String(event.candidate?.model || ''),
       action: String(event.action || ''),
       reason: String(event.reason || ''),

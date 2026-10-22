@@ -343,6 +343,32 @@ body {
   display: none;
 }
 
+/* Dense tables need a visible drag target to reach columns beyond the viewport. */
+.scrollbar-visible {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.scrollbar-visible::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-visible::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+
+.scrollbar-visible::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.scrollbar-visible::-webkit-scrollbar-track,
+.scrollbar-visible::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* 定高的横向滚动区：滚动条会从内容高度里扣掉几像素，导致同类卡片高度不一，
    所以整条隐藏，用最后一项被裁切来暗示「右边还有」 */
 .no-scrollbar {

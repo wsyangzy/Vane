@@ -596,16 +596,6 @@ const EndpointForm = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <FormCheckbox
-                label="参与渠道内故障转移"
-                name="failoverEnabled"
-                checked={formData.failoverEnabled}
-                onChange={handleChange}
-                disabled={loading}
-                compact
-                help="关闭后该端点不会参与同一渠道内的端点故障转移"
-              />
-
-              <FormCheckbox
                 label="跳过健康检查"
                 name="skipHealthCheck"
                 checked={formData.skipHealthCheck}

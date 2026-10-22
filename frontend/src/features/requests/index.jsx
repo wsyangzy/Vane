@@ -343,18 +343,15 @@ const RequestsPage = () => {
   // ==================== 渲染 ====================
 
   return (
-    <div ref={requestPageRef} className="h-full flex flex-col gap-6 pb-4 animate-in fade-in slide-in-from-bottom-2 duration-500 relative min-h-0">
+    <div ref={requestPageRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* 页面标题 & 工具栏 */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-30">
+      <div className="relative z-30 flex shrink-0 items-center gap-4">
         {/* 页面标题 */}
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-indigo-600 rounded-lg text-white shadow-lg shadow-indigo-200/50">
-            <BarChart3 className="w-6 h-6" />
+        <div className="flex shrink-0 items-center gap-2.5">
+          <div className="rounded-lg bg-indigo-600 p-1.5 text-white shadow-sm shadow-indigo-200/50">
+            <BarChart3 className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">请求追踪</h1>
-            <p className="text-sm text-gray-500">实时监控所有转发请求的状态与详情</p>
-          </div>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">请求追踪</h1>
         </div>
 
         {/* 工具栏 */}
@@ -398,20 +395,17 @@ const RequestsPage = () => {
         />
       </div>
 
-      {/* 统计概览 - 面板打开时blur */}
-      <div className="flex-none">
-        <StatsOverview
-          stats={stats}
-          claudeStats={claudeStats}
-          codexStats={codexStats}
-          total={pagination.total}
-          isBlurred={isFilterOpen || isViewConfigOpen || isHeatmapOpen}
-        />
-      </div>
-
-      {/* 请求列表表格 - 面板打开时blur */}
-      <div className={`motion-content-dim flex-1 min-h-0 ${isFilterOpen || isViewConfigOpen || isHeatmapOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
+      {/* 统计与明细共用一个工作区，面板打开时一起淡化 */}
+      <div className={`motion-content-dim flex min-h-[20rem] min-w-0 flex-1 flex-col ${isFilterOpen || isViewConfigOpen || isHeatmapOpen ? 'opacity-40 pointer-events-none blur-[1px]' : ''}`}>
         <RequestsTable
+          summary={
+            <StatsOverview
+              stats={stats}
+              claudeStats={claudeStats}
+              codexStats={codexStats}
+              total={pagination.total}
+            />
+          }
           requests={requests}
           loading={loading}
           pagination={pagination}

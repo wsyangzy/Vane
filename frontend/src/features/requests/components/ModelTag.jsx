@@ -3,8 +3,9 @@
 // 2025-12-01 09:30:08
 // ============================================
 
-import { Replace } from 'lucide-react';
+import { Layers, Replace, Route, Split } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
+import { describeRouteSnapshot } from '@/features/providers/shared/routing/routeTargets.js';
 
 const BRAND_ICON_CLASS = 'h-3 w-3 shrink-0';
 const CLAUDE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0';
@@ -266,7 +267,8 @@ const ModelTag = ({
   title,
   rewriteSource = '',
   originalModel = '',
-  rewriteTarget = ''
+  rewriteTarget = '',
+  routeSnapshot
 }) => {
   const modelStyle = getModelStyle(model);
   const BrandIcon = MODEL_ICONS[modelStyle.icon] || GenericModelIcon;
@@ -275,23 +277,32 @@ const ModelTag = ({
   const rewriteTitle = rewriteIndicator
     ? `${rewriteIndicator.label}: ${originalModel || '-'} -> ${rewriteTarget || displayName}`
     : '';
+  const route = describeRouteSnapshot(routeSnapshot);
+  const routeIndicator = route?.kind === 'model_rule'
+    ? { label: '模型路由', Icon: Route, classes: 'text-sky-600' }
+    : route?.kind === 'non_stream'
+      ? { label: '非流改道', Icon: Split, classes: 'text-teal-600' }
+      : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
+  const RouteIcon = routeIndicator?.Icon;
+  const routeTitle = routeIndicator ? `${routeIndicator.label}：${[route.title, route.mode, route.stage].filter(Boolean).join(' · ')}` : '';
   const tag = (
     <span
       className={`inline-flex w-fit max-w-none items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${modelStyle.classes} ${className}`}
     >
       <BrandIcon className={modelStyle.icon === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
       <span>{displayName}</span>
-      {rewriteIndicator && (
+      {rewriteIndicator && !(rewriteSource === 'route' && routeIndicator) && (
         <Replace
           className={`h-3 w-3 shrink-0 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
           aria-label={rewriteIndicator.label}
         />
       )}
+      {routeIndicator && <RouteIcon className={`h-3 w-3 shrink-0 stroke-[2.4] ${routeIndicator.classes}`} aria-label={routeIndicator.label} />}
     </span>
   );
 
   return (
-    <Tooltip content={title || rewriteTitle || displayName}>
+    <Tooltip content={[title || rewriteTitle || displayName, routeTitle].filter(Boolean).join('；')}>
       {tag}
     </Tooltip>
   );

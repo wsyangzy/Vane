@@ -7,6 +7,284 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * ModelRule 已启用的模型路由规则（运行时快照）。
+ *
+ * 规则挂在来源渠道上：只有该渠道是当前激活渠道时才参与匹配，语义是
+ * "本渠道不适合处理模型 X，把 X 送到这些目标"。不同渠道的规则互不影响。
+ */
+export class ModelRule {
+    /**
+     * Creates a new ModelRule instance.
+     * @param {Partial<ModelRule>} [$$source = {}] - The source object to create the ModelRule.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["disabled"] = undefined;
+        }
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["id"] = 0;
+        }
+        if (!("source_channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["source_channel_id"] = 0;
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("priority" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["priority"] = 0;
+        }
+        if (!("match_model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["match_model"] = "";
+        }
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("Targets" in $$source)) {
+            /**
+             * @member
+             * @type {Target[]}
+             */
+            this["Targets"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ModelRule instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ModelRule}
+     */
+    static createFrom($$source = {}) {
+        const $$createField7_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("Targets" in $$parsedSource) {
+            $$parsedSource["Targets"] = $$createField7_0($$parsedSource["Targets"]);
+        }
+        return new ModelRule(/** @type {Partial<ModelRule>} */($$parsedSource));
+    }
+}
+
+/**
+ * NonStreamRoute 渠道级非流改道配置，对应 channels / codex_channels 的 non_stream_route 列。
+ */
+export class NonStreamRoute {
+    /**
+     * Creates a new NonStreamRoute instance.
+     * @param {Partial<NonStreamRoute>} [$$source = {}] - The source object to create the NonStreamRoute.
+     */
+    constructor($$source = {}) {
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("targets" in $$source)) {
+            /**
+             * @member
+             * @type {Target[]}
+             */
+            this["targets"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new NonStreamRoute instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {NonStreamRoute}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("targets" in $$parsedSource) {
+            $$parsedSource["targets"] = $$createField1_0($$parsedSource["targets"]);
+        }
+        return new NonStreamRoute(/** @type {Partial<NonStreamRoute>} */($$parsedSource));
+    }
+}
+
+/**
+ * Pool contains request-local routing configuration. Referenced pools contribute
+ * members only; their rules are never evaluated recursively.
+ */
+export class Pool {
+    /**
+     * Creates a new Pool instance.
+     * @param {Partial<Pool>} [$$source = {}] - The source object to create the Pool.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["id"] = 0;
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("strategy" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["strategy"] = "";
+        }
+        if (!("is_default" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["is_default"] = false;
+        }
+        if (!("members" in $$source)) {
+            /**
+             * @member
+             * @type {PoolMember[]}
+             */
+            this["members"] = [];
+        }
+        if (!("rules" in $$source)) {
+            /**
+             * @member
+             * @type {ModelRule[]}
+             */
+            this["rules"] = [];
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {NonStreamRoute | null | undefined}
+             */
+            this["non_stream"] = undefined;
+        }
+        if (!("has_key" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["has_key"] = false;
+        }
+        if (!("revision" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["revision"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Pool instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Pool}
+     */
+    static createFrom($$source = {}) {
+        const $$createField5_0 = $$createType3;
+        const $$createField6_0 = $$createType5;
+        const $$createField7_0 = $$createType7;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("members" in $$parsedSource) {
+            $$parsedSource["members"] = $$createField5_0($$parsedSource["members"]);
+        }
+        if ("rules" in $$parsedSource) {
+            $$parsedSource["rules"] = $$createField6_0($$parsedSource["rules"]);
+        }
+        if ("non_stream" in $$parsedSource) {
+            $$parsedSource["non_stream"] = $$createField7_0($$parsedSource["non_stream"]);
+        }
+        return new Pool(/** @type {Partial<Pool>} */($$parsedSource));
+    }
+}
+
+export class PoolMember {
+    /**
+     * Creates a new PoolMember instance.
+     * @param {Partial<PoolMember>} [$$source = {}] - The source object to create the PoolMember.
+     */
+    constructor($$source = {}) {
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("tier" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["tier"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new PoolMember instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {PoolMember}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new PoolMember(/** @type {Partial<PoolMember>} */($$parsedSource));
+    }
+}
+
+/**
  * Target 路由目标。用 ID 引用渠道与凭证分组，渠道改名不会让配置失效。
  */
 export class Target {
@@ -15,6 +293,13 @@ export class Target {
      * @param {Partial<Target>} [$$source = {}] - The source object to create the Target.
      */
     constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["pool_id"] = undefined;
+        }
         if (!("channel_id" in $$source)) {
             /**
              * @member
@@ -52,3 +337,13 @@ export class Target {
         return new Target(/** @type {Partial<Target>} */($$parsedSource));
     }
 }
+
+// Private type creation functions
+const $$createType0 = Target.createFrom;
+const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = PoolMember.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = ModelRule.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = NonStreamRoute.createFrom;
+const $$createType7 = $Create.Nullable($$createType6);

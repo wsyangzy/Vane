@@ -12,10 +12,11 @@ const SettingsSection = ({
   children,
   onReset,
   resetDisabled = false,
+  compact = false,
   className = ''
 }) => (
   <div className={`bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden ${className}`.trim()}>
-    <div className="px-6 py-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between">
+    <div className={`bg-slate-50/50 border-b border-slate-100 flex items-center justify-between ${compact ? 'px-4 py-3' : 'px-6 py-4'}`}>
       <div className="flex items-center">
         {Icon && (
           <div className="p-1.5 bg-indigo-100 rounded-lg mr-3">
@@ -46,7 +47,7 @@ const SettingsSection = ({
         </button>
       )}
     </div>
-    <div className="p-6">
+    <div className={compact ? 'p-4' : 'p-6'}>
       {children}
     </div>
   </div>
