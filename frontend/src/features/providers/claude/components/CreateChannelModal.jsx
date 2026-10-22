@@ -6,6 +6,8 @@ import { buildInitialModelMappingRows, buildModelMappingPayload } from '@/featur
 import NonStreamRouteEditor from '@/features/providers/shared/routing/NonStreamRouteEditor.jsx';
 import ChannelModelRoutesEditor from '@/features/providers/shared/routing/ChannelModelRoutesEditor.jsx';
 import ChannelPrivacyLevelSelector from '@/features/providers/shared/privacy/ChannelPrivacyLevelSelector.jsx';
+import ChannelFeatureSettings from '@/features/providers/shared/routing/ChannelFeatureSettings.jsx';
+import { useChannelFeatureTabs } from '@/features/providers/shared/routing/useChannelFeatureTabs.js';
 import { buildNonStreamRouteForm, nonStreamRouteFromForm, validateRouteTargets } from '@/features/providers/shared/routing/routeTargets.js';
 import { CHANNEL_FORM_TABS, CHANNEL_EDIT_FORM_TABS } from '../model.js';
 
@@ -35,6 +37,10 @@ const CreateChannelModal = ({
   const [privacyLevel, setPrivacyLevel] = useState(() => initialValue?.privacyLevel || '');
   const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
+  const { features, toggleFeature, visibleTabs } = useChannelFeatureTabs({
+    provider: 'claude', channelId, modelMapping: initialValue?.modelMapping, nonStreamRoute: initialValue?.nonStreamRoute,
+    tabs: canEditNonStream ? CHANNEL_EDIT_FORM_TABS : CHANNEL_FORM_TABS
+  });
 
   if (!open) return null;
 
@@ -105,6 +111,7 @@ const CreateChannelModal = ({
             if (canEditNonStream && nonStreamForm.enabled) {
               const routeError = validateRouteTargets(nonStreamForm.targets);
               if (routeError) {
+                if (!features.nonStream) toggleFeature('nonStream');
                 setActiveTab('nonStream');
                 setError(routeError);
                 return;
@@ -124,11 +131,11 @@ const CreateChannelModal = ({
         >
           <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={canEditNonStream ? CHANNEL_EDIT_FORM_TABS : CHANNEL_FORM_TABS}
+              tabs={visibleTabs}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
-              className={canEditNonStream ? 'grid-cols-4' : 'grid-cols-2'}
+              className="grid-flow-col auto-cols-fr"
             />
           </div>
 
@@ -198,6 +205,7 @@ const CreateChannelModal = ({
             {canEditNonStream && (
               <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
             )}
+            <ChannelFeatureSettings features={features} onToggle={toggleFeature} canEditRoutes={canEditNonStream} disabled={loading} />
 
           </div>
             )}

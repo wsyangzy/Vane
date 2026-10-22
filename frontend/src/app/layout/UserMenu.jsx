@@ -3,7 +3,7 @@
 // (2026-02-09)
 // ============================================
 
-import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Copy,
   FolderOpen,
@@ -13,15 +13,11 @@ import {
   Clock,
   Cpu,
   Database,
-  Terminal,
-  RefreshCw,
   ChevronRight
 } from 'lucide-react';
 import {
   isWailsEnvironment,
   getSystemStatus,
-  getClaudeCodeVersion,
-  getCodexVersion,
   getProxyURL,
   openClaudeConfigDir,
   openCodexConfigDir,
@@ -85,12 +81,6 @@ const InfoItem = ({
 const UserMenu = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [systemInfo, setSystemInfo] = useState(null);
-  const [claudeVersion, setClaudeVersion] = useState(null);
-  const [claudeVersionCheckedAt, setClaudeVersionCheckedAt] = useState(null);
-  const [isCheckingVersion, setIsCheckingVersion] = useState(false);
-  const [codexVersion, setCodexVersion] = useState(null);
-  const [codexVersionCheckedAt, setCodexVersionCheckedAt] = useState(null);
-  const [isCheckingCodexVersion, setIsCheckingCodexVersion] = useState(false);
   const [proxyAddress, setProxyAddress] = useState('');
   const [copied, setCopied] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -130,51 +120,12 @@ const UserMenu = () => {
     });
   }, [systemInfo?.version, toast]);
 
-  // 手动检查 Claude Code 版本
-  const checkClaudeVersion = useCallback(async () => {
-    if (!isWails || isCheckingVersion) return;
-    setIsCheckingVersion(true);
-    try {
-      const version = await getClaudeCodeVersion();
-      setClaudeVersion(version);
-      setClaudeVersionCheckedAt(new Date());
-    } catch (error) {
-      console.warn('Failed to load Claude Code version:', error);
-      setClaudeVersion('未知');
-    } finally {
-      setIsCheckingVersion(false);
-    }
-  }, [isWails, isCheckingVersion]);
-
-  // 手动检查 Codex 版本
-  const checkCodexVersion = useCallback(async () => {
-    if (!isWails || isCheckingCodexVersion) return;
-    setIsCheckingCodexVersion(true);
-    try {
-      const version = await getCodexVersion();
-      setCodexVersion(version);
-      setCodexVersionCheckedAt(new Date());
-    } catch (error) {
-      console.warn('Failed to load Codex version:', error);
-      setCodexVersion('未知');
-    } finally {
-      setIsCheckingCodexVersion(false);
-    }
-  }, [isWails, isCheckingCodexVersion]);
-
-  // 菜单关闭时重置动画状态（同步，避免闪烁）
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      setIsLoaded(false);
-    }
-  }, [isOpen]);
-
-  // 打开菜单时加载数据并触发动画（不自动检查 Claude 版本）
+  // 打开菜单时加载数据并触发动画
   useEffect(() => {
     if (isOpen) {
-      loadSystemInfo();
       // 延迟触发动画（等待下一帧渲染完成）
       const frameId = requestAnimationFrame(() => {
+        void loadSystemInfo();
         requestAnimationFrame(() => {
           setIsLoaded(true);
         });
@@ -281,23 +232,11 @@ const UserMenu = () => {
     return `${pad(minutes)}:${pad(secs)}`;
   };
 
-  // 格式化上次检查时间
-  const formatCheckedAt = (date) => {
-    if (!date) return null;
-    const now = new Date();
-    const diff = Math.floor((now - date) / 1000);
-
-    if (diff < 60) return '刚刚';
-    if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
-    return `${Math.floor(diff / 86400)}天前`;
-  };
-
   return (
     <div className="relative" ref={menuRef}>
       {/* 头像按钮 */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => { setIsLoaded(false); setIsOpen(!isOpen); }}
         className={`w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 border-2 border-white shadow-md cursor-pointer transition-all duration-200 ${
           isOpen ? 'ring-2 ring-indigo-300 scale-105' : 'hover:ring-2 ring-indigo-200 hover:scale-105'
         }`}
@@ -341,134 +280,6 @@ const UserMenu = () => {
               onValueClick={systemInfo?.version ? handleShowReleaseNotes : undefined}
               valueAriaLabel={systemInfo?.version ? `查看 v${systemInfo.version} 更新内容` : undefined}
             />
-
-            {/* Claude Code 版本（带刷新按钮） */}
-            <div
-              className="flex items-center justify-between transition-all duration-300 ease-out"
-              style={{
-                opacity: isLoaded ? 1 : 0,
-                transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-                transitionDelay: '50ms'
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-purple-100 rounded-lg transition-transform duration-300 hover:scale-110">
-                  <Terminal size={14} className="text-purple-600" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-xs font-medium text-slate-500">Claude Code</span>
-                  {claudeVersionCheckedAt && (
-                    <span className="text-[10px] text-slate-400">
-                      {formatCheckedAt(claudeVersionCheckedAt)}检测
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {claudeVersion ? (
-                  <>
-                    <button
-                      onClick={checkClaudeVersion}
-                      disabled={isCheckingVersion}
-                      className={`p-1 rounded-md transition-all duration-200 ${
-                        isCheckingVersion
-                          ? 'text-slate-300 cursor-not-allowed'
-                          : 'text-slate-400 hover:text-purple-600 hover:bg-purple-100'
-                      }`}
-                      aria-label="重新检测版本"
-                    >
-                      <RefreshCw size={13} className={isCheckingVersion ? 'animate-spin' : ''} />
-                    </button>
-                    <span className="text-sm font-semibold text-purple-600 font-mono">
-                      {isCheckingVersion ? '检测中...' : claudeVersion}
-                    </span>
-                  </>
-                ) : (
-                  <button
-                    onClick={checkClaudeVersion}
-                    disabled={isCheckingVersion}
-                    className={`text-sm font-medium transition-colors duration-200 ${
-                      isCheckingVersion
-                        ? 'text-slate-400 cursor-not-allowed'
-                        : 'text-purple-500 hover:text-purple-600 cursor-pointer'
-                    }`}
-                  >
-                    {isCheckingVersion ? (
-                      <span className="flex items-center gap-1.5">
-                        <RefreshCw size={12} className="animate-spin" />
-                        检测中
-                      </span>
-                    ) : (
-                      '点击检测'
-                    )}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Codex 版本 */}
-            <div
-              className="flex items-center justify-between transition-all duration-300 ease-out"
-              style={{
-                opacity: isLoaded ? 1 : 0,
-                transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-                transitionDelay: '75ms'
-              }}
-            >
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-green-100 rounded-lg transition-transform duration-300 hover:scale-110">
-                  <Terminal size={14} className="text-green-600" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-xs font-medium text-slate-500">Codex</span>
-                  {codexVersionCheckedAt && (
-                    <span className="text-[10px] text-slate-400">
-                      {formatCheckedAt(codexVersionCheckedAt)}检测
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {codexVersion ? (
-                  <>
-                    <button
-                      onClick={checkCodexVersion}
-                      disabled={isCheckingCodexVersion}
-                      className={`p-1 rounded-md transition-all duration-200 ${
-                        isCheckingCodexVersion
-                          ? 'text-slate-300 cursor-not-allowed'
-                          : 'text-slate-400 hover:text-green-600 hover:bg-green-100'
-                      }`}
-                      aria-label="重新检测版本"
-                    >
-                      <RefreshCw size={13} className={isCheckingCodexVersion ? 'animate-spin' : ''} />
-                    </button>
-                    <span className="text-sm font-semibold text-green-600 font-mono">
-                      {isCheckingCodexVersion ? '检测中...' : codexVersion}
-                    </span>
-                  </>
-                ) : (
-                  <button
-                    onClick={checkCodexVersion}
-                    disabled={isCheckingCodexVersion}
-                    className={`text-sm font-medium transition-colors duration-200 ${
-                      isCheckingCodexVersion
-                        ? 'text-slate-400 cursor-not-allowed'
-                        : 'text-green-500 hover:text-green-600 cursor-pointer'
-                    }`}
-                  >
-                    {isCheckingCodexVersion ? (
-                      <span className="flex items-center gap-1.5">
-                        <RefreshCw size={12} className="animate-spin" />
-                        检测中
-                      </span>
-                    ) : (
-                      '点击检测'
-                    )}
-                  </button>
-                )}
-              </div>
-            </div>
 
             <InfoItem
               icon={Clock}

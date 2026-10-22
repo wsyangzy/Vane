@@ -5,6 +5,7 @@ import {
   Eye,
   FlaskConical,
   History,
+  Info,
   Minus,
   Package,
   PencilLine,
@@ -15,7 +16,7 @@ import {
   Trash,
   X
 } from 'lucide-react';
-import { Button, ConfirmDialog, CustomSelect, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
+import { Button, ConfirmDialog, CustomSelect, ErrorMessage, LoadingSpinner, Tooltip, useToast } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import {
   applyPrivacyPreset,
@@ -38,19 +39,19 @@ const MODES = [
     value: 'disabled',
     label: '关闭',
     icon: ShieldOff,
-    description: '不扫描、不改写。请求原样发往服务商。'
+    description: '请求原样发出，不扫描、不改写。'
   },
   {
     value: 'detect',
     label: '仅检测',
     icon: Eye,
-    description: '统计命中但不改写请求。用它先量清规则的误伤面，再决定是否开启脱敏。'
+    description: '仅统计命中，不改写请求，适合先验证规则。'
   },
   {
     value: 'redact',
     label: '脱敏',
     icon: ShieldCheck,
-    description: '命中内容在发往服务商前被替换。未命中的字节与原始请求完全一致。'
+    description: '外发前替换命中内容，其余字节保持原样。'
   }
 ];
 
@@ -235,9 +236,10 @@ const ModeSelector = ({ mode, onChange, saving }) => (
         <button
           key={item.value}
           type="button"
+          aria-pressed={active}
           disabled={saving}
           onClick={() => onChange(item.value)}
-          className={`rounded-xl border p-3 text-left transition-colors ${
+          className={`min-w-0 rounded-lg border px-3 py-2.5 text-left transition-colors ${
             active
               ? 'border-emerald-300 bg-emerald-50 ring-1 ring-emerald-200'
               : 'border-slate-200 bg-white hover:border-slate-300'
@@ -250,7 +252,7 @@ const ModeSelector = ({ mode, onChange, saving }) => (
             </span>
             {active && <Check className="ml-auto h-4 w-4 text-emerald-600" />}
           </div>
-          <p className="mt-1.5 text-xs leading-relaxed text-slate-500">{item.description}</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>
         </button>
       );
     })}
@@ -299,8 +301,8 @@ const PolicyPanel = ({ settings, onChange, saving }) => {
 };
 
 const PolicyPanelFields = ({ settings, onSelect, saving }) => (
-  <div className="grid gap-4 sm:grid-cols-3">
-    <div className="text-sm">
+  <div className="grid gap-3 sm:grid-cols-3">
+    <div className="min-w-0 text-xs">
       <span className="font-medium text-slate-700">扫描出错时</span>
       <div className="mt-1.5">
         <CustomSelect
@@ -315,11 +317,18 @@ const PolicyPanelFields = ({ settings, onSelect, saving }) => (
           ]}
         />
       </div>
-      <p className="mt-1 text-xs text-slate-500">选「拒发」表示宁可请求失败，也不冒未经扫描就外发的风险。</p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">拒发时请求失败，未经扫描的内容不会外发。</p>
     </div>
 
-    <div className="text-sm">
-      <span className="font-medium text-slate-700">路径未被覆盖时</span>
+    <div className="min-w-0 text-xs">
+      <div className="flex items-center gap-1.5">
+        <span className="font-medium text-slate-700">路径未被覆盖时</span>
+        <Tooltip content="扫描覆盖 Claude /v1/messages、Codex /v1/responses 与 /v1/chat/completions 的全部对话与工具字段。">
+          <button type="button" aria-label="查看扫描覆盖范围" className="rounded text-slate-400 hover:text-slate-600 focus-visible:outline-2 focus-visible:outline-indigo-500">
+            <Info size={12} />
+          </button>
+        </Tooltip>
+      </div>
       <div className="mt-1.5">
         <CustomSelect
           fullWidth
@@ -333,13 +342,10 @@ const PolicyPanelFields = ({ settings, onSelect, saving }) => (
           ]}
         />
       </div>
-      <p className="mt-1 text-xs text-slate-500">
-        扫描覆盖 Claude /v1/messages、Codex /v1/responses 与 /v1/chat/completions 的全部对话与工具字段。
-        「拒发」可能触发中转商或官方订阅的风控，默认建议放行并告警。
-      </p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">建议放行并告警；拒发可能触发上游风控。</p>
     </div>
 
-    <div className="text-sm">
+    <div className="min-w-0 text-xs">
       <span className="font-medium text-slate-700">超出扫描上限时</span>
       <div className="mt-1.5">
         <CustomSelect
@@ -354,7 +360,7 @@ const PolicyPanelFields = ({ settings, onSelect, saving }) => (
           ]}
         />
       </div>
-      <p className="mt-1 text-xs text-slate-500">超长上下文下，未扫描的尾部会原样发出。</p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">超长上下文中，未扫描的尾部将原样发出。</p>
     </div>
   </div>
 );
@@ -1089,19 +1095,19 @@ const PrivacyPage = () => {
   return (
     <div className="animate-fade-in">
       {/* 页面标题 */}
-      <div className="flex justify-between items-end mb-8">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-            <ShieldCheck className="w-6 h-6" />
+      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <ShieldCheck className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">隐私防护</h1>
-            <p className="text-slate-500 text-sm mt-1">
-              请求发往服务商前先在本机扫描。未命中的字节与原始请求完全一致，命中的原文不写入数据库、日志或本页面。
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-xl font-bold text-slate-900">隐私防护</h1>
+            <p className="text-xs text-slate-500">
+              外发前在本机扫描，命中原文不写入数据库、日志或本页面。
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           <Button variant="secondary" size="sm" onClick={load}>
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             刷新
@@ -1109,7 +1115,7 @@ const PrivacyPage = () => {
         </div>
       </div>
 
-      <div className="space-y-5">
+      <div className="space-y-4">
         <UnscannedPathsBanner
           paths={overview.unscannedPaths}
           onClear={async () => {
@@ -1119,13 +1125,13 @@ const PrivacyPage = () => {
         />
 
         <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">运行模式</h2>
+          <h2 className="mb-2.5 text-sm font-semibold text-slate-900">运行模式</h2>
           <ModeSelector
             mode={settings.mode}
             saving={savingSettings}
             onChange={(mode) => saveSettings({ ...settings, mode })}
           />
-          <div className="mt-4 border-t border-slate-100 pt-4">
+          <div className="mt-3 border-t border-slate-100 pt-3">
             <PolicyPanel settings={settings} saving={savingSettings} onChange={saveSettings} />
           </div>
         </div>

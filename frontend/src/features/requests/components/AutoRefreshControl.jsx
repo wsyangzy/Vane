@@ -39,11 +39,14 @@ const AutoRefreshControl = ({
   ];
 
   return (
-    <div className="relative flex items-center" ref={dropdownRef}>
+    <div className="relative flex shrink-0 items-center" ref={dropdownRef}>
       {/* 主切换/显示按钮 */}
       <button
+        aria-label="自动刷新间隔"
+        aria-expanded={isOpen}
+        title="自动刷新间隔"
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 px-3 h-9 rounded-l-lg text-sm font-medium border transition-all relative ${
+        className={`flex items-center gap-1.5 px-2.5 h-9 rounded-l-lg text-sm font-medium border transition-all relative ${
           interval > 0
             ? 'bg-indigo-50 border-indigo-200 text-indigo-700 z-10'
             : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 z-0'
@@ -58,12 +61,12 @@ const AutoRefreshControl = ({
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
               </svg>
             </div>
-            <span>Auto {interval < 60 ? `${interval}s` : '1m'}</span>
+            <span><span className="hidden min-[75rem]:inline">Auto </span>{interval < 60 ? `${interval}s` : '1m'}</span>
           </>
         ) : (
           <>
             <Timer className="w-4 h-4" />
-            <span className="hidden sm:inline">Auto Off</span>
+            <span><span className="hidden min-[75rem]:inline">Auto </span>Off</span>
           </>
         )}
         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -71,6 +74,8 @@ const AutoRefreshControl = ({
 
       {/* 手动刷新按钮 - 连体右侧 */}
       <button
+        aria-label="立即刷新"
+        title="立即刷新"
         onClick={onManualRefresh}
         className={`h-9 w-9 flex items-center justify-center border rounded-r-lg border-gray-200 bg-white text-gray-500 hover:text-indigo-600 hover:bg-gray-50 -ml-px transition-colors z-0 ${
           interval > 0 ? 'border-l-indigo-200' : ''

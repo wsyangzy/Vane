@@ -710,8 +710,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                           <thead className="bg-slate-50"><tr><th className="p-2">目标 / 模型</th><th className="p-2">结果 / 原因</th></tr></thead>
                           <tbody>{routeExecution.events.map((event, index) => (
                             <tr key={index} className="border-t border-slate-100 align-top">
-                              <td className="p-2 [overflow-wrap:anywhere]">{event.channel || '-'}<div className="font-mono text-slate-500">{event.model || '未记录'}</div></td>
-                              <td className="p-2 [overflow-wrap:anywhere]">{({ attempt: '尝试', failed: '失败', skipped: '跳过' })[event.action] || event.action}<div className="text-slate-500">{event.reason}{event.scope ? ` · ${event.scope}` : ''}</div></td>
+                              <td className="p-2 [overflow-wrap:anywhere]">{event.channel || '-'}{event.pool && <div className="text-slate-500">{event.pool} · {event.tier} · 账号 #{event.groupId}</div>}<div className="font-mono text-slate-500">{event.model || '未记录'}</div></td>
+                              <td className="p-2 [overflow-wrap:anywhere]">{({ attempt: '尝试', failed: '失败', skipped: '跳过', wait: '等待恢复' })[event.action] || event.action}<div className="text-slate-500">{event.reason}{event.scope ? ` · ${event.scope}` : ''}</div></td>
                             </tr>
                           ))}</tbody>
                         </table>

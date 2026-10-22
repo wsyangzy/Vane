@@ -37,7 +37,7 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
   const initialPriority = getNextCodexEndpointPriority(channel, initialCredentialGroupId);
   const [priority, setPriority] = useState(() => (isEdit ? String(endpoint?.priority ?? initialPriority) : ''));
   const [timeoutSeconds, setTimeoutSeconds] = useState(formatEndpointTimeoutInputValue(endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0));
-  const [failoverEnabled, setFailoverEnabled] = useState(endpoint?.failoverEnabled !== false);
+  const failoverEnabled = endpoint?.failoverEnabled !== false;
   const [skipHealthCheck, setSkipHealthCheck] = useState(Boolean(endpoint?.skipHealthCheck || endpoint?.skip_health_check));
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
@@ -289,14 +289,6 @@ const EndpointFormModal = ({ mode, channel, endpoint, credentialGroup, loading, 
                 </div>
 
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <Tooltip content="关闭后该端点不会参与同一渠道内的端点故障转移" className="block">
-                    <EndpointToggleTile
-                      label="参与渠道内故障转移"
-                      checked={failoverEnabled}
-                      onChange={setFailoverEnabled}
-                      disabled={loading}
-                    />
-                  </Tooltip>
                   <Tooltip content="部分中转商不支持健康检查端点，开启后将跳过定时健康检测" className="block">
                     <EndpointToggleTile
                       label="跳过健康检查"

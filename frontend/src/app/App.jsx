@@ -9,6 +9,7 @@ import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@/s
 import useSSE from '@/shared/hooks/useSSE.js';
 import { fetchRequests, isWailsEnvironment } from '@/services/http/api.js';
 import { getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, getCodexSuspendedCount, getPortConflictStatus, resolvePortConflict, subscribeToEvent } from '@/services/wails/index.js';
+import { getClaudeCodeVersion, getCodexVersion } from '@/services/wails/index.js';
 import { buildFailureToast, buildSuspensionToast, shouldNotifyFailure } from '@/features/requests/utils/failureSummary.js';
 
 // 懒加载页面组件
@@ -150,6 +151,21 @@ const GlobalAlerts = () => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('overview');
+  const [clientVersions, setClientVersions] = useState({ claude: '', codex: '' });
+  const versionCheckRef = useRef(null);
+
+  useEffect(() => {
+    let active = true;
+    // Retain the startup promise across StrictMode effects and page switches.
+    versionCheckRef.current ||= isWailsEnvironment()
+      ? { claude: getClaudeCodeVersion(), codex: getCodexVersion() }
+      : { claude: Promise.resolve('仅桌面可用'), codex: Promise.resolve('仅桌面可用') };
+    Object.entries(versionCheckRef.current).forEach(([provider, check]) => {
+      const update = (version) => { if (active) setClientVersions((previous) => ({ ...previous, [provider]: version || '检测失败' })); };
+      check.then(update, () => update('检测失败'));
+    });
+    return () => { active = false; };
+  }, []);
   // 代理网关真实状态（来自后端 system:status 事件）
   const [proxyStatus, setProxyStatus] = useState({
     running: false,
@@ -189,11 +205,9 @@ function App() {
   }, []);
 
   // 初始化时检查端口冲突
-  /* eslint-disable react-hooks/set-state-in-effect -- 初始化数据加载是标准模式 */
   useEffect(() => {
     checkPortConflict();
   }, [checkPortConflict]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 处理端口冲突解决
   const handlePortConflictRetry = useCallback(async () => {
@@ -229,8 +243,8 @@ function App() {
   const renderPage = () => {
     const pages = {
       overview: <OverviewPage />,
-      channels: <ChannelsPage />,
-      codex: <CodexPage />,
+      channels: <ChannelsPage clientVersion={clientVersions.claude} />,
+      codex: <CodexPage clientVersion={clientVersions.codex} />,
       // 组管理页面已移除
       // groups: <GroupsPage />,
       requests: <RequestsPage />,
@@ -250,14 +264,18 @@ function App() {
   const isLogsPage = activeTab === 'logs';
   const isRequestsPage = activeTab === 'requests';
 
-  // Only the area below Header scrolls; request/log pages own their inner scrolling.
-  const contentClass = isRequestsPage || isLogsPage
+  // Request pages can scroll when their toolbar and minimum table height exceed
+  // the viewport; logs retain their dedicated inner scroll area.
+  const contentClass = isLogsPage
     ? 'app-content relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden'
-    : 'app-content relative z-10 min-h-0 flex-1 overflow-y-auto';
+    : `app-content relative z-10 min-h-0 flex-1 overflow-y-auto${isRequestsPage ? ' scrollbar-visible' : ''}`;
 
-  const mainClass = isRequestsPage || isLogsPage
-    ? 'flex min-h-0 flex-1 flex-col w-full px-6 pt-6 pb-4'
-    : 'max-w-7xl mx-auto px-6 pt-8 pb-20';
+  const pageFrameClass = 'mx-auto w-full max-w-[1440px] px-6 lg:px-8 xl:px-10';
+  const mainClass = isRequestsPage
+    ? `${pageFrameClass} flex h-full flex-col py-5`
+    : isLogsPage
+      ? `${pageFrameClass} flex min-h-0 flex-1 flex-col pt-5 pb-4`
+      : `${pageFrameClass} pt-5 pb-12`;
 
   return (
     <ToastProvider>

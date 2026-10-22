@@ -157,9 +157,11 @@ const KPICardsGrid = ({ data }) => {
     : undefined
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4 mb-6">
+    <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 min-[75rem]:grid-cols-8">
       <KPICard
         title="今日成本"
+        layout="compact"
+        size="sm"
         value={todayCost}
         subText={todayCostSub}
         icon={DollarSign}
@@ -167,6 +169,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="今日 Tokens"
+        layout="compact"
+        size="sm"
         value={todayTokens}
         subText={todayTokensSub}
         icon={Zap}
@@ -174,6 +178,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="今日请求"
+        layout="compact"
+        size="sm"
         value={connections.today_requests || 0}
         subText={todayRequestsSub}
         icon={Network}
@@ -181,6 +187,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="总成本"
+        layout="compact"
+        size="sm"
         value={totalCost}
         subText={costSub}
         icon={DollarSign}
@@ -188,6 +196,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="总 Tokens"
+        layout="compact"
+        size="sm"
         value={totalTokens}
         subText={tokensSub}
         icon={Zap}
@@ -195,6 +205,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="总请求数"
+        layout="compact"
+        size="sm"
         value={connections.all_time_total_requests || 0}
         subText={requestsSub}
         icon={Network}
@@ -202,6 +214,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="渠道数量"
+        layout="compact"
+        size="sm"
         value={codexChannelStats.loaded ? combinedChannelTotal : claudeChannelCount}
         subText={channelTotalSub}
         icon={Activity}
@@ -209,6 +223,8 @@ const KPICardsGrid = ({ data }) => {
       />
       <KPICard
         title="端点数量"
+        layout="compact"
+        size="sm"
         value={codexChannelStats.loaded ? combinedEndpointTotal : (endpoints.total || 0)}
         subText={endpointTotalSub}
         icon={Server}

@@ -761,15 +761,15 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
         : 'border-slate-200/60'}
     `}>
       {/* 头部 */}
-      <div className="px-5 py-4 border-b border-slate-100">
+      <div className="border-b border-slate-100 px-4 py-3">
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="font-bold text-slate-900 truncate">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h3 className="truncate text-sm font-semibold text-slate-900" title={group.displayName || group.modelName}>
                 {group.displayName || group.modelName}
               </h3>
               {isDefault && (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                <span className={`inline-flex shrink-0 items-center whitespace-nowrap px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${
                   group.provider === 'codex'
                     ? 'bg-blue-100 text-blue-700 border-blue-200'
                     : 'bg-orange-100 text-orange-700 border-orange-200'
@@ -778,7 +778,7 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
                   默认
                 </span>
               )}
-              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+              <span className={`inline-flex shrink-0 items-center whitespace-nowrap px-1.5 py-0.5 rounded-full text-[10px] font-medium border ${
                 group.provider === 'codex'
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-indigo-50 text-indigo-700 border-indigo-200'
@@ -786,11 +786,11 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
                 {group.provider === 'codex' ? 'Codex' : 'Claude'}
               </span>
             </div>
-            <p className="text-xs text-slate-400 font-mono mt-1 truncate">
+            <p className="text-xs text-slate-400 font-mono mt-1 truncate" title={group.modelName}>
               {group.modelName}
             </p>
           </div>
-          <div className="flex items-center gap-1 ml-2">
+          <div className="ml-2 flex shrink-0 items-center gap-1">
             {!isDefault && (
               <Tooltip content="设为默认">
                 <button
@@ -1149,15 +1149,15 @@ const PricingPage = () => {
   return (
     <div className="animate-fade-in">
       {/* 页面标题 */}
-      <div className="flex justify-between items-end mb-8">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-            <DollarSign className="w-6 h-6" />
+      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <DollarSign className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">基础定价</h1>
-            <p className="text-slate-500 text-sm mt-1">
-              管理模型的基础定价配置 (USD per 1M tokens)
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-xl font-bold text-slate-900">基础定价</h1>
+            <p className="text-xs text-slate-500">
+              USD / 1M Tokens
             </p>
           </div>
         </div>
@@ -1181,24 +1181,24 @@ const PricingPage = () => {
       </div>
 
       {/* 统计卡片 */}
-      <div className="grid auto-rows-fr grid-cols-1 gap-4 mb-6 md:grid-cols-3 xl:grid-cols-5">
+      <div className="mb-3 grid auto-rows-fr grid-cols-2 overflow-hidden rounded-xl border border-slate-200 bg-white min-[900px]:grid-cols-[minmax(6.5rem,0.65fr)_1.35fr_1.35fr_1fr_1fr] min-[900px]:divide-x min-[900px]:divide-slate-100">
         {pricingSummaryCards.map((card) => (
           <Tooltip
             key={card.title}
             content={card.tooltip || card.value}
-            className="block h-full"
+            className="block h-full min-w-0"
           >
-            <div className="h-full bg-white rounded-2xl border border-slate-200/60 p-4 shadow-sm transition-shadow hover:shadow-md">
-              <div className="mb-3 flex items-center gap-2.5">
-                <div className={`rounded-lg p-2 ${card.statusColor}`}>
-                  <card.icon size={18} />
-                </div>
-                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <div className="flex h-full min-w-0 items-center gap-2.5 p-3">
+              <div className={`shrink-0 rounded-lg p-1.5 ${card.statusColor}`}>
+                <card.icon size={16} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-xs font-medium leading-5 text-slate-500">
                   {card.title}
                 </h3>
-              </div>
-              <div className={`font-bold text-slate-900 ${card.wrapValue ? 'break-all text-base leading-snug' : 'truncate text-2xl'} ${card.valueClassName || ''}`}>
-                {card.value}
+                <div className={`font-semibold text-slate-900 ${card.wrapValue ? 'truncate text-sm leading-6' : 'break-all text-lg leading-6 tabular-nums'} ${card.valueClassName || ''}`}>
+                  {card.value}
+                </div>
               </div>
             </div>
           </Tooltip>

@@ -23,12 +23,6 @@ test('pricing modal centers within the viewport without page scrolling', () => {
   assert.doesNotMatch(source, /pt-\[10vh\]/);
 });
 
-test('pricing summary cards keep the same height when default names wrap', () => {
-  assert.match(source, /grid auto-rows-fr grid-cols-1[^"']*xl:grid-cols-5/);
-  assert.match(source, /className="block h-full"/);
-  assert.match(source, /className="h-full bg-white rounded-2xl[^"']*hover:shadow-md"/);
-});
-
 test('档位 tab 与 long context 定价仅对 Codex 展示', () => {
   assert.match(source, /const showTierTabs = formData\.provider === 'codex'/);
   assert.match(source, /visibleFormTabs/);

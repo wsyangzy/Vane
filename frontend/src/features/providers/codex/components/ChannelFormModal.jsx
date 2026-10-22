@@ -5,6 +5,8 @@ import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import NonStreamRouteEditor from '@/features/providers/shared/routing/NonStreamRouteEditor.jsx';
 import ChannelModelRoutesEditor from '@/features/providers/shared/routing/ChannelModelRoutesEditor.jsx';
 import ChannelPrivacyLevelSelector from '@/features/providers/shared/privacy/ChannelPrivacyLevelSelector.jsx';
+import ChannelFeatureSettings from '@/features/providers/shared/routing/ChannelFeatureSettings.jsx';
+import { useChannelFeatureTabs } from '@/features/providers/shared/routing/useChannelFeatureTabs.js';
 import { buildNonStreamRouteForm, nonStreamRouteFromForm, validateRouteTargets } from '@/features/providers/shared/routing/routeTargets.js';
 import { buildModelMappingPayload } from '@/features/providers/shared/routing/modelMapping.js';
 import { isWailsEnvironment } from '@/services/wails/index.js';
@@ -23,6 +25,10 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
   const isEdit = mode === 'edit';
   const channelId = Number(channel?.id) || 0;
   const canEditNonStream = isEdit && channelId > 0;
+  const { features, toggleFeature, visibleTabs } = useChannelFeatureTabs({
+    provider: 'codex', channelId, modelMapping: channel?.modelMapping, nonStreamRoute: channel?.nonStreamRoute,
+    tabs: canEditNonStream ? CODEX_CHANNEL_EDIT_FORM_TABS : CODEX_CHANNEL_FORM_TABS
+  });
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
@@ -88,6 +94,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
     if (canEditNonStream && nonStreamForm.enabled) {
       const routeError = validateRouteTargets(nonStreamForm.targets);
       if (routeError) {
+        if (!features.nonStream) toggleFeature('nonStream');
         setActiveTab('nonStream');
         setFieldError(routeError);
         return;
@@ -141,11 +148,11 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
           <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
             <SegmentedTabs
-              tabs={canEditNonStream ? CODEX_CHANNEL_EDIT_FORM_TABS : CODEX_CHANNEL_FORM_TABS}
+              tabs={visibleTabs}
               activeTab={activeTab}
               onChange={setActiveTab}
               disabled={loading}
-              className={canEditNonStream ? 'grid-cols-4' : 'grid-cols-2'}
+              className="grid-flow-col auto-cols-fr"
               buttonPaddingClass="px-2"
             />
           </div>
@@ -232,6 +239,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
             {canEditNonStream && (
               <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
             )}
+            <ChannelFeatureSettings features={features} onToggle={toggleFeature} canEditRoutes={canEditNonStream} disabled={loading} />
               </>
             ) : activeTab === 'mapping' ? (
               <div className="space-y-3">

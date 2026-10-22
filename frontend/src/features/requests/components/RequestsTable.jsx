@@ -359,6 +359,7 @@ const renderCell = (columnId, request) => {
           rewriteSource={request.modelRewriteSource || request.model_rewrite_source || ''}
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
+          routeSnapshot={request.routeSnapshot || request.route_snapshot}
         />
       );
     case 'channel':
@@ -425,7 +426,7 @@ const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
       {columns.map((column) => (
         <td
           key={column.id}
-          className={`min-w-0 px-3 py-3 text-center align-middle ${column.id === 'model' ? 'overflow-hidden' : ''}`}
+          className={`min-w-0 px-3 py-2.5 text-center align-middle ${column.id === 'model' ? 'overflow-hidden' : ''}`}
           style={column.width === 'auto' ? undefined : { width: column.width, maxWidth: column.width }}
         >
           {renderCell(column.id, request)}
@@ -439,6 +440,7 @@ const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
  * RequestsTable - 请求列表表格组件（支持动态列）
  * @param {Object} props
  * @param {Array} props.requests - 请求列表
+ * @param {React.ReactNode} props.summary - 请求统计栏
  * @param {boolean} props.loading - 加载状态
  * @param {Object} props.pagination - 分页信息
  * @param {Function} props.onPageChange - 页码变更回调
@@ -448,6 +450,7 @@ const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
  * @param {Function} props.onRowDoubleClick - 双击行回调
  */
 const RequestsTable = ({
+  summary,
   requests = [],
   loading = false,
   pagination = { page: 1, pageSize: 10, total: 0 },
@@ -466,33 +469,24 @@ const RequestsTable = ({
   const visibleColumnConfigs = columnConfigs.filter(col => visibleColumns.includes(col.id));
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col h-full min-h-0">
-      {/* 表头 */}
-      <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50/30 px-4 py-4">
-        <div className="flex items-center gap-2">
-          <h3 className="font-semibold text-gray-800">请求明细</h3>
-          <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs rounded-full font-medium">
-            共 {pagination.total} 条
-          </span>
-        </div>
-        <span className="text-xs text-gray-400">单击复制 ID · 双击查看详情</span>
-      </div>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      {summary}
 
       {/* 表格 */}
-      <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+      <div role="region" aria-label="请求明细表格" tabIndex={0} className="scrollbar-visible relative min-h-0 min-w-0 flex-1 overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500">
         {loading && (
           <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
             <LoadingSpinner text="加载请求数据..." />
           </div>
         )}
 
-        <table className={`w-full text-sm whitespace-nowrap ${loading ? 'opacity-60' : ''}`}>
+        <table className={`w-full min-w-max text-sm whitespace-nowrap ${loading ? 'opacity-60' : ''}`}>
           <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500 border-b border-gray-100">
             <tr>
               {visibleColumnConfigs.map(col => (
                 <th
                   key={col.id}
-                  className="px-3 py-3 font-medium text-xs uppercase tracking-wider text-center align-middle"
+                  className="px-3 py-2.5 font-medium text-xs uppercase tracking-wider text-center align-middle"
                   style={col.width === 'auto' ? undefined : { width: col.width, maxWidth: col.width }}
                 >
                   {col.label}

@@ -1,4 +1,4 @@
-import { ArrowRight, Database, KeyRound, Pencil, Repeat, Server, Settings, XCircle } from 'lucide-react';
+import { Activity, RotateCcw, ArrowRight, Database, KeyRound, Pencil, Server, Settings, XCircle } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import EndpointAvailabilityBar from '@/features/providers/shared/endpoints/EndpointAvailabilityBar.jsx';
@@ -17,7 +17,7 @@ import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '
 // 端点行（紧凑表格风，延续渠道管理页密度）：
 // 左侧 toggle = 激活；行整体点击展开内嵌编辑（base_url 直改即保存）
 // ============================================================================
-const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit }) => {
+const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onRestore, onHealth }) => {
   if (!endpoint) return null;
 
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
@@ -149,17 +149,13 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
                 <span className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
                   {channel?.name || 'Codex'}
                 </span>
-                {endpoint.isActive && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
-                    <span className="h-1 w-1 rounded-full bg-emerald-500" />
-                    当前端点
-                  </span>
-                )}
               </div>
               <p className="mt-1 truncate font-mono text-xs text-slate-500">{endpoint.baseURL || '<未设置 base_url>'}</p>
             </div>
 
             <div className="flex flex-shrink-0 items-center gap-2">
+              {!failoverEnabled && <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => onRestore?.(endpoint)}>恢复历史端点</Button>}
+              <Button variant="ghost" size="sm" icon={Activity} onClick={() => onHealth?.(endpoint)}>健康检测</Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -189,9 +185,8 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
               <span className="leading-none">分组倍率</span>
               <span className="font-mono leading-none">{formatDetailMultiplier(credentialGroup?.costMultiplier ?? 1)}</span>
             </DetailPill>
-            <DetailPill tone={failoverEnabled ? 'emerald' : 'slate'} icon={failoverEnabled ? Repeat : RepeatOffIcon}>
-              {failoverEnabled ? '参与故障转移' : '不参与转移'}
-            </DetailPill>
+            {!failoverEnabled && <DetailPill tone="amber" icon={RepeatOffIcon}>历史停用</DetailPill>}
+
             <DetailPill tone="sky" icon={Database}>
               <span className="leading-none">{billingName}</span>
               <span className="font-mono text-[9px] leading-none opacity-75">{billingSource}</span>

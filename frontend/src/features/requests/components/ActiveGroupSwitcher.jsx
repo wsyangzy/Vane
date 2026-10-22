@@ -101,32 +101,35 @@ const ActiveGroupSwitcher = ({
   }
 
   return (
-    <div className="relative" ref={containerRef}>
+    <div className="relative w-max min-w-0 max-w-[22rem]" ref={containerRef}>
       <button
+        aria-label="切换活跃渠道"
         onClick={() => { setSwitchError(''); setIsOpen(!isOpen) }}
         disabled={switching || loading}
-        className={`flex items-center gap-2 px-3 py-1.5 bg-white border rounded-lg text-sm font-medium transition-all shadow-sm ${
+        className={`flex h-9 w-full min-w-0 items-center gap-2 px-2.5 bg-white border rounded-lg text-sm font-medium transition-all shadow-sm ${
           isOpen
             ? 'border-indigo-300 ring-2 ring-indigo-100 text-indigo-700'
             : 'border-gray-200 text-gray-700 hover:border-indigo-300 hover:text-indigo-600'
         } ${(switching || loading) ? 'opacity-60 cursor-wait' : ''}`}
       >
-        {claudeChannels.length > 0 && (
-          <span className="flex items-center gap-1">
-            <span className="text-[10px] text-orange-500 font-bold">Claude:</span>
-            <span className="text-xs font-bold text-orange-600">{activeClaudeChannel?.name || '-'}</span>
-          </span>
-        )}
-        {claudeChannels.length > 0 && codexChannels.length > 0 && (
-          <span className="text-slate-300">|</span>
-        )}
-        {codexChannels.length > 0 && (
-          <span className="flex items-center gap-1">
-            <span className="text-[10px] text-blue-500 font-bold">Codex:</span>
-            <span className="text-xs font-bold text-blue-600">{activeCodexChannel?.name || '-'}</span>
-          </span>
-        )}
-        <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <span className="flex min-w-0 flex-col gap-0.5 min-[75rem]:flex-row min-[75rem]:items-center min-[75rem]:gap-2">
+          {claudeChannels.length > 0 && (
+            <span className="flex min-w-0 items-center gap-1 leading-3.5">
+              <span className="shrink-0 text-[10px] text-orange-500 font-bold">Claude:</span>
+              <span className="truncate text-xs font-bold text-orange-600" title={activeClaudeChannel?.name}>{activeClaudeChannel?.name || '-'}</span>
+            </span>
+          )}
+          {claudeChannels.length > 0 && codexChannels.length > 0 && (
+            <span className="hidden shrink-0 text-slate-300 min-[75rem]:inline">|</span>
+          )}
+          {codexChannels.length > 0 && (
+            <span className="flex min-w-0 items-center gap-1 leading-3.5">
+              <span className="shrink-0 text-[10px] text-blue-500 font-bold">Codex:</span>
+              <span className="truncate text-xs font-bold text-blue-600" title={activeCodexChannel?.name}>{activeCodexChannel?.name || '-'}</span>
+            </span>
+          )}
+        </span>
+        <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (

@@ -32,14 +32,14 @@ const OverviewPage = () => {
   return (
     <div className="animate-fade-in">
       {/* 页面标题 */}
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-            <LayoutDashboard className="w-6 h-6" />
+      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <LayoutDashboard className="h-5 w-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">概览</h1>
-            <p className="text-slate-500 text-sm mt-1">高性能 API 请求转发器监控面板</p>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-xl font-bold text-slate-900">概览</h1>
+            <p className="text-xs text-slate-500">API 转发与用量监控</p>
           </div>
         </div>
       </div>
@@ -48,12 +48,12 @@ const OverviewPage = () => {
       <KPICardsGrid data={data} />
 
       {/* 图表区域 */}
-      <div className="space-y-6">
+      <div className="space-y-4">
         {/* 请求趋势 - 全宽 */}
         <RequestTrendChart uptimeSeconds={uptimeSeconds} />
 
         {/* 性能指标 - 响应时间 & 连接活动 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <ResponseTimeChart uptimeSeconds={uptimeSeconds} />
           <ConnectionActivityChart uptimeSeconds={uptimeSeconds} />
         </div>
@@ -62,7 +62,7 @@ const OverviewPage = () => {
         <TokenCostChart />
 
         {/* 资源状- Token 分布 & 端点健康 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <TokenDistributionChart />
           <EndpointHealthChart />
         </div>
