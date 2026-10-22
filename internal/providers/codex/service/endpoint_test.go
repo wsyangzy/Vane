@@ -1054,7 +1054,8 @@ func newCodexEndpointTestDB(t *testing.T) *sql.DB {
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE codex_credential_groups (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			enabled INTEGER NOT NULL DEFAULT 1,
+id INTEGER PRIMARY KEY AUTOINCREMENT,
 			channel_id INTEGER NOT NULL,
 			name TEXT NOT NULL,
 			api_key TEXT NOT NULL DEFAULT '',

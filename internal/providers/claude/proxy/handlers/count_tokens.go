@@ -13,6 +13,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/config"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
@@ -50,7 +51,8 @@ type CountTokensResponse struct {
 
 // Handle 处理count_tokens请求 - 极简逻辑
 func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
-	if subscription.FromContext(ctx) != nil {
+	_, poolCaller := routing.PoolCallerFromContext(ctx)
+	if subscription.FromContext(ctx) != nil || h.endpointManager.PoolRuntime() != nil && (h.config != nil && h.config.TokenCounting.Enabled || poolCaller) {
 		h.handleSubscription(ctx, w, r, bodyBytes, connID, lifecycleManager)
 		return
 	}

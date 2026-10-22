@@ -141,6 +141,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	if subRoute := planSubscriptionRoute(rh.endpointManager, r, bodyBytes); subRoute != nil {
 		route = subRoute
 	}
+	route.preferPool(rh.forwarder, bodyBytes)
 	route.initBudget(rh.config.Retry)
 	route.watchSubscription(ctx, rh.forwarder)
 	if route != nil {
@@ -314,6 +315,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 					break
 				}
 				defer admission.Finish(0, nil, nil, false)
+				defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
 				if err := beginRouteAttempt(ctx, route); err != nil {
 					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 					return
@@ -402,7 +404,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// globalAttemptCount: 全局尝试次数，用于限流策略
 				decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
 				decision = route.failureDecision(rh.forwarder, ep, bodyBytes, err, decision)
-				if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
+				if (route == nil || route.pool == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
 					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), err, "subscription_authentication_required", http.StatusUnauthorized, route)
 					return
 				}

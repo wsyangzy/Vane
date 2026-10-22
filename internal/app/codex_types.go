@@ -79,6 +79,7 @@ type CodexChannelCandidateInfo struct {
 }
 
 type CodexCredentialGroupInfo struct {
+	Enabled                                bool                                    `json:"enabled"`
 	AuthMode                               string                                  `json:"auth_mode"`
 	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
 	LocalKeyConfigured                     bool                                    `json:"local_key_configured"`

@@ -15,6 +15,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/platform/transport"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // Forwarder 执行实际的 HTTP 转发
@@ -77,10 +78,12 @@ func (f *Forwarder) UpdateLogger(logger *slog.Logger) {
 // Forward 将请求转发到指定端点
 func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoint) (*http.Response, error) {
 	lease := leaseFromContext(r.Context())
+	poolAttempt := routing.PoolAttemptFromContext(r.Context())
 	handedOff := false
 	defer func() {
 		if !handedOff {
 			lease.Finish(0, nil, nil, false)
+			poolAttempt.Finish(false)
 		}
 	}()
 	if endpoint.AuthMode == subscription.ClientPassthrough {
@@ -92,7 +95,7 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	targetURL := buildTargetURL(endpoint.BaseURL, r.URL)
 	if endpoint.AuthMode == subscription.ClientPassthrough {
 		targetURL = subscription.TargetURL(r, endpoint.BaseURL, true)
-	} else if subscription.FromContext(r.Context()) != nil {
+	} else if _, poolCaller := routing.PoolCallerFromContext(r.Context()); subscription.FromContext(r.Context()) != nil || poolCaller {
 		copyURL := *r.URL
 		copyURL.Path = subscription.Path(r)
 		targetURL = buildTargetURL(endpoint.BaseURL, &copyURL)
@@ -137,6 +140,9 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	resp, err := client.Do(req)
 	if err != nil {
 		leaseFromContext(r.Context()).Finish(0, nil, nil, false)
+		if r.Context().Err() == nil {
+			poolAttempt.Fail(codexRouteFailure(0, nil, err), time.Time{})
+		}
 		if subscription.FromContext(r.Context()) != nil {
 			return nil, fmt.Errorf("subscription_transport_failed")
 		}
@@ -184,6 +190,13 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 			}
 		}
 	}
+	if poolAttempt != nil {
+		if err := decodeCodexSubscriptionResponse(resp); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+	}
+	observeCodexPool(resp, r.Context(), subscription.Path(r))
 	handedOff = true
 	return resp, nil
 }

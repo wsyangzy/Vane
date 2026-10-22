@@ -144,9 +144,8 @@ func (s *SettingsService) GetAllDefaults() []*settingsstore.SettingRecord {
 	// Cache 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryCache)...)
 
-	// Logging / Timezone 设置（SQLite）
+	// Logging 设置（SQLite）
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
-	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
 
 	for _, record := range defaults {
 		if record.Provider == "" {
@@ -263,31 +262,6 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 				{Value: "text", Label: "文本格式"},
 				{Value: "json", Label: "JSON 格式"},
 			}, DisplayOrder: 2},
-		}
-
-	// 🔧 [P5.5.3 新增] Timezone 全局时区
-	case CategoryTimezone:
-		return []*settingsstore.SettingRecord{
-			{Category: CategoryTimezone, Key: "global", Value: "Asia/Shanghai", ValueType: ValueTypeEnum, Label: "全局时区", Description: "影响所有时间戳显示（数据库、日志、UI）。修改后需重启应用生效。", EnumOptions: []settingsstore.EnumOption{
-				{Value: "Asia/Shanghai", Label: "中国（北京时间 UTC+8）"},
-				{Value: "Asia/Hong_Kong", Label: "香港（UTC+8）"},
-				{Value: "Asia/Taipei", Label: "台北（UTC+8）"},
-				{Value: "Asia/Tokyo", Label: "东京（UTC+9）"},
-				{Value: "Asia/Singapore", Label: "新加坡（UTC+8）"},
-				{Value: "Asia/Seoul", Label: "首尔（UTC+9）"},
-				{Value: "UTC", Label: "UTC（协调世界时）"},
-				{Value: "Europe/London", Label: "伦敦（UTC+0/+1）"},
-				{Value: "Europe/Paris", Label: "巴黎（UTC+1/+2）"},
-				{Value: "Europe/Berlin", Label: "柏林（UTC+1/+2）"},
-				{Value: "Europe/Moscow", Label: "莫斯科（UTC+3）"},
-				{Value: "America/New_York", Label: "纽约（UTC-5/-4）"},
-				{Value: "America/Chicago", Label: "芝加哥（UTC-6/-5）"},
-				{Value: "America/Denver", Label: "丹佛（UTC-7/-6）"},
-				{Value: "America/Los_Angeles", Label: "洛杉矶（UTC-8/-7）"},
-				{Value: "America/Sao_Paulo", Label: "圣保罗（UTC-3）"},
-				{Value: "Australia/Sydney", Label: "悉尼（UTC+10/+11）"},
-				{Value: "Pacific/Auckland", Label: "奥克兰（UTC+12/+13）"},
-			}, DisplayOrder: 1, RequiresRestart: true},
 		}
 
 	default:

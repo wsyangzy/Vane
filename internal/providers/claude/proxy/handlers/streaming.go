@@ -171,6 +171,7 @@ func clearStreamingHeaders(w http.ResponseWriter) {
 // loopCount: 当前循环轮数（用于 MaxLoops 限制）
 // route: 请求级路由执行状态；非 nil 时只按阶段尝试目标，不触发跨渠道全局故障转移
 func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int, previousErr error, route *routeRun) {
+	route.preferPool(sh.forwarder, bodyBytes)
 	route.initBudget(sh.config.Retry)
 	route.watchSubscription(ctx, sh.forwarder)
 	if route != nil {
@@ -378,6 +379,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				break
 			}
 			defer admission.Finish(0, nil, nil, false)
+			defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
 			if err := beginRouteAttempt(ctx, route); err != nil {
 				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 				return
@@ -587,7 +589,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			// globalAttemptCount: 全局尝试次数，用于限流策略
 			decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, true) // 流式请求: isStreaming=true
 			decision = route.failureDecision(sh.forwarder, ep, bodyBytes, lastErr, decision)
-			if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized {
+			if (route == nil || route.pool == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized {
 				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "subscription_authentication_required", http.StatusUnauthorized, route)
 				return
 			}

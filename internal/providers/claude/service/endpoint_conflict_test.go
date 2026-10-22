@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS endpoints (
 	updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 );
 CREATE TABLE IF NOT EXISTS claude_credential_groups (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	enabled INTEGER NOT NULL DEFAULT 1,
+id INTEGER PRIMARY KEY AUTOINCREMENT,
 	channel TEXT NOT NULL,
 	name TEXT NOT NULL,
 	token TEXT,

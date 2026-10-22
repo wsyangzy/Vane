@@ -82,6 +82,16 @@ func (h *HealthChecker) CheckNow() {
 	go h.checkAll()
 }
 
+func (h *HealthChecker) CheckOne(id int64) error {
+	for _, ep := range h.manager.PoolEndpoints(0, 0) {
+		if ep.ID == id {
+			h.checkEndpoint(ep)
+			return nil
+		}
+	}
+	return fmt.Errorf("端点不存在")
+}
+
 // GetLatencies 获取所有端点的延迟数据（供前端展示）
 func (h *HealthChecker) GetLatencies() map[int64]int64 {
 	h.mu.RLock()
@@ -161,7 +171,7 @@ func (h *HealthChecker) loop() {
 
 // checkAll 对所有端点执行一轮探测
 func (h *HealthChecker) checkAll() {
-	channelFailoverEnabled := h.cfg != nil && h.cfg.CodexFailover.Enabled
+	channelFailoverEnabled := h.manager.PoolRuntime() != nil || h.cfg != nil && h.cfg.CodexFailover.Enabled
 	endpoints, err := h.manager.GetHealthCheckEndpoints(context.Background(), channelFailoverEnabled)
 	if err != nil {
 		h.logger.Warn("加载 Codex 健康检查端点失败", "error", err)

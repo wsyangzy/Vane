@@ -599,6 +599,14 @@ func (a *App) syncRouteRuntime(ctx context.Context, provider string) {
 
 // syncClaudeRouteConfig 重建 Claude 路由快照：已启用规则 + 各渠道非流改道 + 渠道 ID→名称
 func (a *App) syncClaudeRouteConfig(ctx context.Context) {
+	if _, err := a.refreshPoolRuntime(ctx, "claude"); err != nil {
+		a.closePoolRuntime("claude")
+		if a.logger != nil {
+			a.logger.Error("Claude 账号池加载失败", "error", err)
+		}
+	} else {
+		a.publishPoolRuntime("claude")
+	}
 	a.mu.RLock()
 	endpointManager := a.endpointManager
 	logger := a.logger
@@ -653,6 +661,14 @@ func (a *App) buildClaudeRouteConfig(ctx context.Context) (*claudeproxyendpoint.
 
 // syncCodexModelRules 把 Codex 已启用规则发布到端点管理器（渠道非流改道随 Reload 加载）
 func (a *App) syncCodexModelRules(ctx context.Context) {
+	if _, err := a.refreshPoolRuntime(ctx, "codex"); err != nil {
+		a.closePoolRuntime("codex")
+		if a.logger != nil {
+			a.logger.Error("Codex 账号池加载失败", "error", err)
+		}
+	} else {
+		a.publishPoolRuntime("codex")
+	}
 	a.mu.RLock()
 	manager := a.codexEndpointMgr
 	logger := a.logger

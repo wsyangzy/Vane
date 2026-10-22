@@ -25,7 +25,7 @@ const (
 
 	// 运行配置分类
 	CategoryLogging  = "logging"  // 日志级别/格式
-	CategoryTimezone = "timezone" // 全局时区
+	CategoryTimezone = "timezone" // 兼容旧数据；运行时固定使用北京时间，不再提供此设置
 )
 
 type SettingsProvider string
@@ -171,20 +171,12 @@ func NewSettingsService(store settingsstore.SettingsStore) *SettingsService {
 				Icon:        "📡",
 				Order:       0, // 最前（特殊处理，单独显示）
 			},
-			// 🔧 [P5.5 新增] Logging / Timezone 分类
 			CategoryLogging: {
 				Name:        CategoryLogging,
 				Label:       "日志设置",
 				Description: "配置日志级别和输出格式",
 				Icon:        "📝",
 				Order:       10,
-			},
-			CategoryTimezone: {
-				Name:        CategoryTimezone,
-				Label:       "时区设置",
-				Description: "配置全局时区（影响所有时间显示）",
-				Icon:        "🕐",
-				Order:       11,
 			},
 		},
 	}

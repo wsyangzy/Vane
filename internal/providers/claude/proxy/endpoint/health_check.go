@@ -50,6 +50,10 @@ func (m *Manager) triggerHealthCheckCompleteDebounced() {
 // 解决新增端点后不会自动激活的问题
 // 使用防抖机制触发回调，避免并发检查时多次触发
 func (m *Manager) refreshGroupActivation() {
+	if m.PoolRuntime() != nil {
+		m.triggerHealthCheckCompleteDebounced()
+		return
+	}
 	// 防御性检查：确保 groupManager 已初始化
 	if m.groupManager == nil {
 		return
@@ -108,7 +112,7 @@ func (m *Manager) healthCheckLoop() {
 // performHealthChecks performs health checks on all endpoints
 func (m *Manager) performHealthChecks() {
 	// 循环重试模式下，如果配置了跳过健康检测，则不执行定时健康检查
-	if m.config.Failover.ShouldSkipHealthCheck() {
+	if m.PoolRuntime() == nil && m.config.Failover.ShouldSkipHealthCheck() {
 		slog.Debug("🩺 [健康检查] 循环重试模式已启用跳过检测，跳过定时健康检查")
 		return
 	}
@@ -129,13 +133,13 @@ func (m *Manager) performHealthChecks() {
 	// 健康检查覆盖范围（与 TODO.md 的资源优化要求对齐）：
 	// - 启用“渠道间故障转移”时：检查所有“参与故障转移”的渠道，且仅检查其中参与故障转移的端点
 	// - 未启用时：只检查当前活跃渠道中参与故障转移的端点
-	if m.IsFailoverEnabled() {
+	if m.PoolRuntime() != nil || m.IsFailoverEnabled() {
 		for _, ep := range snapshot {
 			if ep == nil {
 				continue
 			}
 			// 渠道级开关：暂停渠道不参与跨渠道故障转移，也不做健康检查
-			if m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+			if m.PoolRuntime() == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
 				continue
 			}
 			// 端点级开关：不参与故障转移的端点不做健康检查
@@ -603,14 +607,14 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	// 根据渠道间故障转移状态筛选需要检测的端点
 	var endpointsToCheck []*Endpoint
 
-	if m.IsFailoverEnabled() {
+	if m.PoolRuntime() != nil || m.IsFailoverEnabled() {
 		// 开启渠道间转移：检测所有参与的渠道中参与转移的端点
 		for _, ep := range snapshot {
 			if ep == nil {
 				continue
 			}
 			// 渠道级开关：暂停渠道不检测
-			if m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+			if m.PoolRuntime() == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
 				continue
 			}
 			// 端点级开关：不参与故障转移的端点不检测

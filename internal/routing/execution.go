@@ -39,6 +39,7 @@ type Failure struct {
 }
 
 type ExecutionEvent struct {
+	Member    *PoolStage   `json:"member,omitempty"`
 	Candidate Candidate    `json:"candidate"`
 	Action    string       `json:"action"`
 	Reason    string       `json:"reason,omitempty"`
@@ -46,6 +47,7 @@ type ExecutionEvent struct {
 }
 
 type Ledger struct {
+	Member   *PoolStage `json:"-"`
 	tried    map[Candidate]bool
 	failures map[failureKey]Failure
 	Events   []ExecutionEvent `json:"events,omitempty"`
@@ -58,6 +60,10 @@ type failureKey struct {
 }
 
 func (l *Ledger) event(event ExecutionEvent) {
+	if l.Member != nil {
+		member := *l.Member
+		event.Member = &member
+	}
 	if len(l.Events) < 128 {
 		l.Events = append(l.Events, event)
 	} else {
@@ -113,6 +119,8 @@ func (l *Ledger) Fail(c Candidate, failure Failure) {
 func (l *Ledger) Skip(c Candidate, reason string) {
 	l.event(ExecutionEvent{Candidate: c, Action: "skipped", Reason: reason})
 }
+
+func (l *Ledger) Wait(reason string) { l.event(ExecutionEvent{Action: "wait", Reason: reason}) }
 
 func (l *Ledger) LastSkipReason() string {
 	for i := len(l.Events) - 1; i >= 0; i-- {
@@ -285,3 +293,5 @@ func ErrorIdentity(body []byte) (code, kind, param string) {
 	}
 	return envelope.Code, envelope.Type, envelope.Param
 }
+
+func (l *Ledger) RetryRecovered() { l.tried = nil; l.failures = nil }

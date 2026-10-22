@@ -32,6 +32,12 @@ func SingleHeader(h http.Header, name string) (string, bool) {
 }
 
 func (c *Controller) Authenticate(r *http.Request) (context.Context, bool, error) {
+	if caller, ok := routing.PoolCallerFromContext(r.Context()); ok {
+		if c.poolRuntime.Load() == nil || !c.poolRuntime.Load().ValidCaller(caller) || !AllowedPath(r) {
+			return r.Context(), true, errors.New("pool_request_rejected")
+		}
+		return r.Context(), true, nil
+	}
 	present := false
 	for name := range r.Header {
 		if strings.EqualFold(name, "X-Relay-Key") {
@@ -60,6 +66,11 @@ func (c *Controller) Authenticate(r *http.Request) (context.Context, bool, error
 	for name := range r.Header {
 		if strings.EqualFold(name, "X-Api-Key") {
 			return r.Context(), true, errors.New("conflicting_subscription_authentication")
+		}
+	}
+	if runtime := c.poolRuntime.Load(); runtime != nil {
+		if caller, err := runtime.Authenticate("claude", key); err == nil {
+			return routing.WithPoolCaller(r.Context(), caller), true, nil
 		}
 	}
 	bindings, err := c.store.ListBindings(r.Context())

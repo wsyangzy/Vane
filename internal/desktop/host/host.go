@@ -25,10 +25,10 @@ var (
 )
 
 const (
-	mainWindowDefaultWidth  = 1440
-	mainWindowDefaultHeight = 900
-	mainWindowMinWidth      = 1200
-	mainWindowMinHeight     = 620
+	mainWindowDefaultWidth  = 1200
+	mainWindowDefaultHeight = 760
+	mainWindowMinWidth      = 900
+	mainWindowMinHeight     = 600
 	mainWindowWorkAreaInset = 48
 )
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
@@ -21,6 +22,12 @@ const claudeGenerationPath = "/v1/messages"
 // 命中路由的请求按阶段依次尝试，每个阶段只在自己的渠道（可限定凭证分组）内换端点，
 // 不调用任何跨渠道全局故障转移，也不读写全局激活渠道；阶段全部失败即结束。
 type routeRun struct {
+	pool         *routing.PoolRuntime
+	preferred    bool
+	poolCtx      context.Context
+	poolModel    string
+	waitStages   []routing.PoolStage
+	recovery     func(routing.PoolStage) (time.Time, bool)
 	subscription bool
 	ledger       routing.Ledger
 	budget       *routing.Budget
@@ -44,6 +51,7 @@ func (run *routeRun) publishSnapshot() {
 
 // routeStage 执行阶段：channel 为运行时渠道名，groupID 为 0 表示该渠道全部凭证分组
 type routeStage struct {
+	member        *routing.PoolStage
 	channel       string
 	groupID       int64
 	upstreamModel string
@@ -63,6 +71,18 @@ func (run *routeRun) advance() bool {
 		return false
 	}
 	run.index++
+	if run.index >= len(run.stages) && run.pool != nil {
+		if next, ok := run.pool.NextRecoveryWith(run.waitStages, run.poolModel, run.recovery); ok {
+			run.ledger.Wait("waiting_for_account_recovery")
+			run.publishSnapshot()
+			if err := run.budget.Wait(run.poolCtx, time.Until(next)); err == nil {
+				run.index = 0
+				run.ledger.RetryRecovered()
+				run.waitStages = nil
+				return len(run.stages) > 0
+			}
+		}
+	}
 	return run.index < len(run.stages)
 }
 
@@ -85,6 +105,7 @@ func (run *routeRun) stageSnapshotJSON() string {
 		return ""
 	}
 	run.snapshot.Execution = &run.ledger
+	run.snapshot.Member = stage.member
 	run.snapshot.Attempts, run.snapshot.WaitMs = run.budget.Stats()
 	if run.budget.Stopped() {
 		run.snapshot.StopReason = "retry_budget_exhausted"
@@ -121,6 +142,9 @@ func planClaudeRoute(em *endpoint.Manager, r *http.Request, body []byte, streami
 		return nil
 	}
 	cfg := em.RouteConfig()
+	if runtime := em.PoolRuntime(); runtime != nil {
+		return planClaudePool(runtime, cfg, r, body, streaming)
+	}
 	if cfg == nil {
 		return nil
 	}
@@ -204,15 +228,41 @@ func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker
 		return nil, false
 	}
 	candidates := em.GetRoutableEndpointsForChannel(stage.channel, stage.groupID, nil)
+	if run.pool != nil {
+		candidates = em.PoolEndpoints(stage.channel, stage.groupID)
+	}
+	if stage.upstreamModel != "" {
+		candidates = filterEndpointsDeclaringModel(candidates, stage.upstreamModel)
+	} else {
+		candidates = filterClaudeModelEndpoints(forwarder, candidates, body)
+	}
+	var quotaBlocked bool
+	candidates, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, usageTracker, candidates)
+	run.ledger.Member = stage.member
+	run.recovery = func(member routing.PoolStage) (time.Time, bool) { return forwarder.poolRecovery(ctx, member) }
 	eligible := candidates[:0:0]
 	for _, ep := range candidates {
 		candidate := run.candidate(forwarder, ep, body)
-		if allowed, reason := forwarder.subscriptionEligibility(ctx, ep, candidate.Model); !allowed {
+		if forwarder.states != nil {
+			if allowed, reason := forwarder.states.Allowed(claudeStateKeys(ctx, body), candidate); !allowed {
+				run.ledger.Skip(candidate, reason)
+				continue
+			}
+		}
+		allowed, reason := forwarder.subscriptionEligibility(ctx, ep, candidate.Model)
+		if !allowed && !(run.pool != nil && reason == "subscription_paused") {
 			run.ledger.Skip(candidate, reason)
 			continue
 		}
-		if forwarder.states != nil {
-			if allowed, reason := forwarder.states.Allowed(claudeStateKeys(ctx, body), candidate); !allowed {
+		if run.pool != nil {
+			member := *stage.member
+			member.UpstreamModel, member.Endpoint = candidate.Model, candidate.Endpoint
+			run.waitStages = append(run.waitStages, member)
+			if !allowed {
+				run.ledger.Skip(candidate, reason)
+				continue
+			}
+			if allowed, reason := run.pool.Allowed(member.ChannelID, member.GroupID, candidate.Endpoint, candidate.Model); !allowed {
 				run.ledger.Skip(candidate, reason)
 				continue
 			}
@@ -230,14 +280,7 @@ func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker
 			return forwarder.states.Preferred(turn, run.candidate(forwarder, candidates[i], body)) && !forwarder.states.Preferred(turn, run.candidate(forwarder, candidates[j], body))
 		})
 	}
-	var capable []*endpoint.Endpoint
-	if stage.upstreamModel != "" {
-		// 目标强制改写了上游模型：分组映射不再生效，按改写后的模型核对分组能力声明
-		capable = filterEndpointsDeclaringModel(candidates, stage.upstreamModel)
-	} else {
-		capable = filterClaudeModelEndpoints(forwarder, candidates, body)
-	}
-	return filterCredentialGroupDailyCostLimits(ctx, usageTracker, capable)
+	return candidates, quotaBlocked
 }
 
 func filterEndpointsDeclaringModel(endpoints []*endpoint.Endpoint, model string) []*endpoint.Endpoint {
@@ -295,4 +338,29 @@ func checkRouteBudget(run *routeRun, lifecycleManager RequestLifecycleManager) (
 		run.publishSnapshot()
 	}
 	return exhausted, reason
+}
+
+func (run *routeRun) preferPool(f *Forwarder, body []byte) {
+	if run == nil || run.pool == nil || run.preferred || f.states == nil {
+		return
+	}
+	run.preferred = true
+	preferred := func(stage routeStage) bool {
+		copyRun := *run
+		copyRun.stages = []routeStage{stage}
+		copyRun.index = 0
+		for _, ep := range f.endpointManager.PoolEndpoints(stage.channel, stage.groupID) {
+			if f.states.Preferred(run.turn, copyRun.candidate(f, ep, body)) {
+				return true
+			}
+		}
+		return false
+	}
+	sort.SliceStable(run.stages, func(i, j int) bool {
+		a, b := run.stages[i], run.stages[j]
+		if a.index != b.index || a.member.Tier != b.member.Tier {
+			return false
+		}
+		return preferred(a) && !preferred(b)
+	})
 }

@@ -32,6 +32,9 @@ func visibleSettingRecords(records []*settingsstore.SettingRecord) []*settingsst
 	var basePort, scopedPort *settingsstore.SettingRecord
 	visible := make([]*settingsstore.SettingRecord, 0, len(records))
 	for _, record := range records {
+		if record != nil && record.Category == settingsservice.CategoryTimezone {
+			continue
+		}
 		if record != nil && record.Category == settingsservice.CategoryServer {
 			switch record.Key {
 			case "preferred_port":

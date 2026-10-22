@@ -64,6 +64,7 @@ func (g credentialGroupRef) valid() bool {
 
 // EndpointManager 管理活跃渠道的端点，提供故障转移选择
 type EndpointManager struct {
+	poolRuntime atomic.Pointer[routing.PoolRuntime]
 	// 依赖
 	channelStore         store.CodexChannelStore
 	endpointStore        store.CodexEndpointStore
@@ -319,7 +320,7 @@ func (m *EndpointManager) getEndpointForChannel(channelID, groupID int64, reques
 		return nil, fmt.Errorf("Codex 路由目标渠道不存在: %d", channelID)
 	}
 	isActive := m.activeChannel != nil && m.activeChannel.ID == channelID
-	if !isActive && !channel.FailoverEnabled {
+	if m.PoolRuntime() == nil && !isActive && !channel.FailoverEnabled {
 		return nil, fmt.Errorf("Codex 路由目标渠道已暂停: %s", channel.Name)
 	}
 
@@ -349,7 +350,7 @@ func (m *EndpointManager) getEndpointForChannel(channelID, groupID int64, reques
 		} else if requestedModel != "" && len(ep.SupportedModels) > 0 && !endpointSupportsCodexModel(ep, channel, requestedModel) {
 			continue
 		}
-		if !m.endpointHealthAllowsRoutingLocked(ep) {
+		if m.PoolRuntime() == nil && !m.endpointHealthAllowsRoutingLocked(ep) {
 			continue
 		}
 		candidates = append(candidates, ep)
@@ -478,7 +479,9 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 		if channel == nil {
 			continue
 		}
-		if channelFailoverEnabled {
+		if m.PoolRuntime() != nil {
+			// Pool membership and account availability replace legacy channel participation.
+		} else if channelFailoverEnabled {
 			if !channel.FailoverEnabled {
 				continue
 			}

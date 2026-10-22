@@ -11,8 +11,6 @@ import (
 	"github.com/wsyangzy/Vane/internal/platform/middleware"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
 	codexproxy "github.com/wsyangzy/Vane/internal/providers/codex/proxy"
-	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
-	settingsservice "github.com/wsyangzy/Vane/internal/settings/service"
 )
 
 func (a *App) setupProxyHandler() {
@@ -28,6 +26,13 @@ func (a *App) setupProxyHandler() {
 	a.authMiddleware = middleware.NewAuthMiddleware(a.config.Auth)
 	if a.claudeSubscriptions != nil {
 		a.authMiddleware.SetRequestAuthenticator(func(r *http.Request) (context.Context, bool, error) {
+			provider := "codex"
+			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+				provider = "claude"
+			}
+			if ctx, handled, err := a.authenticatePool(r, provider); handled {
+				return ctx, handled, err
+			}
 			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
 				return a.claudeSubscriptions.Authenticate(r)
 			}
@@ -236,48 +241,10 @@ func (a *App) initCodexProxy() {
 	mgr.SetActivationMutex(&a.codexActivationMu)
 	mgr.SetConfig(a.config)
 
-	// 启动时恢复活跃渠道参与状态与首次 Reload 必须处于同一补偿边界。
-	// Reload 成功前不发布 manager，避免请求观察到未验证的运行时状态。
-	a.codexActivationMu.Lock()
-	var (
-		activeSnapshot *codexstore.CodexChannelRecord
-		resumed        bool
-		prepareErr     error
-	)
-	if a.config.CodexFailover.Enabled {
-		if a.codexChannelService == nil {
-			prepareErr = fmt.Errorf("Codex 渠道服务未初始化")
-		} else {
-			prepareCtx, prepareCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			activeSnapshot, prepareErr = a.codexChannelService.GetActiveChannel(prepareCtx)
-			if prepareErr == nil {
-				resumed, prepareErr = a.codexChannelService.EnsureActiveChannelParticipates(prepareCtx)
-			}
-			prepareCancel()
-		}
-	}
-	if prepareErr == nil {
-		prepareErr = mgr.Reload()
-	}
-	if prepareErr != nil && activeSnapshot != nil {
-		if restoreErr := a.restoreCodexActiveParticipation(activeSnapshot); restoreErr != nil {
-			prepareErr = fmt.Errorf("%w；恢复原活跃渠道参与状态失败: %v", prepareErr, restoreErr)
-		}
-	}
-	a.codexActivationMu.Unlock()
-
-	if prepareErr != nil {
-		if a.config.CodexFailover.Enabled {
-			if rollbackErr := a.rollbackFailoverSetting(settingsservice.ProviderCodex, "Codex 渠道间转移已关闭：启动时运行时加载失败", prepareErr); rollbackErr != nil {
-				a.logger.Error("启动时回滚 Codex 渠道间转移失败", "error", rollbackErr)
-			}
-		} else {
-			a.logger.Error("Codex 端点管理器加载失败", "error", prepareErr)
-		}
+	// Pool scheduling never changes persisted global channel participation.
+	if err := mgr.Reload(); err != nil {
+		a.logger.Error("Codex 端点管理器加载失败", "error", err)
 		return
-	}
-	if resumed {
-		a.logger.Info("✅ Codex 当前接管渠道已自动恢复参与渠道间转移")
 	}
 	// 注册活跃端点变更回调：故障转移成功提升端点后，刷新前端 UI
 	mgr.SetOnActiveChanged(func() {
@@ -291,7 +258,7 @@ func (a *App) initCodexProxy() {
 	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger)
 	// 按设置项决定是否启动定时探测；保留实例以供 GetLatencies 等接口使用
 	// 与 Claude 端对齐：仅当 Enabled + LoopRetry + SkipHealthCheck 三者都为 true 时才跳过
-	if !a.config.CodexFailover.ShouldSkipHealthCheck() {
+	if mgr.PoolRuntime() != nil || !a.config.CodexFailover.ShouldSkipHealthCheck() {
 		hc.Start()
 	} else {
 		a.logger.Info("Codex 健康检查器已创建但未启动（ShouldSkipHealthCheck=true）")

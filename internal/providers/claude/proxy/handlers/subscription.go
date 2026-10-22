@@ -25,6 +25,11 @@ type subscriptionAdmissionKey struct{}
 // Admission precedes the execution budget: losing a recovery race is a local
 // skip, not an upstream attempt. The same lease reaches the actual send.
 func (f *Forwarder) admitSubscription(ctx context.Context, ep *endpoint.Endpoint, model string) (context.Context, *subscription.Lease, error) {
+	var poolErr error
+	ctx, poolErr = f.admitPool(ctx, ep, model)
+	if poolErr != nil {
+		return ctx, nil, poolErr
+	}
 	if ep.Config.AuthMode != subscription.ClientPassthrough {
 		return ctx, nil, nil
 	}
@@ -34,6 +39,7 @@ func (f *Forwarder) admitSubscription(ctx context.Context, ep *endpoint.Endpoint
 	}
 	lease, err := f.subscriptions.Acquire(ctx, request.Binding, model)
 	if err != nil {
+		routing.PoolAttemptFromContext(ctx).Finish(false)
 		return ctx, nil, err
 	}
 	return context.WithValue(ctx, subscriptionAdmissionKey{}, lease), lease, nil
@@ -48,7 +54,7 @@ func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *
 	decision := routing.Decision{Kind: routing.KindSubscription, Mode: routing.ModeFallback}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	cfg := em.RouteConfig()
-	if cfg != nil && r.URL.Path == claudeGenerationPath {
+	if cfg != nil && em.PoolRuntime() == nil && r.URL.Path == claudeGenerationPath {
 		streaming := false
 		var object struct {
 			Stream bool `json:"stream"`
@@ -87,6 +93,21 @@ func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *
 }
 
 func (f *Forwarder) subscriptionEligibility(ctx context.Context, ep *endpoint.Endpoint, model string) (bool, string) {
+	if runtime := f.endpointManager.PoolRuntime(); runtime != nil {
+		if account, ok := runtime.Account(f.poolChannelID(ep), ep.Config.CredentialGroupID); !ok || !account.Enabled {
+			return false, "account_disabled"
+		}
+	}
+	if _, ok := routing.PoolCallerFromContext(ctx); ok && ep.Config.AuthMode == subscription.ClientPassthrough {
+		if f.subscriptions == nil {
+			return false, "subscription_state_unavailable"
+		}
+		b, err := f.subscriptions.PoolBinding(ctx, f.poolChannelID(ep), ep.Config.CredentialGroupID)
+		if err != nil {
+			return false, "managed_account_not_authorized"
+		}
+		return f.subscriptions.Eligible(ctx, b, model)
+	}
 	request := subscription.FromContext(ctx)
 	if request != nil && (f.subscriptions == nil || !f.subscriptions.Valid(ctx, request.Binding)) {
 		return false, "subscription_binding_changed"
@@ -142,6 +163,11 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 	resp, err := client.Do(dst)
 	if err != nil {
 		lease.Finish(0, nil, nil, false)
+		if ctx.Err() == nil {
+			routing.PoolAttemptFromContext(ctx).Fail(claudeRouteFailure(err), time.Time{})
+		} else {
+			routing.PoolAttemptFromContext(ctx).Finish(false)
+		}
 		if request != nil {
 			return nil, errors.New("subscription_transport_failed")
 		}
@@ -171,7 +197,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 		resp.Header.Del("Content-Encoding")
 		resp.Header.Del("Content-Length")
 	}
-	if request != nil {
+	if request != nil || routing.PoolAttemptFromContext(ctx) != nil {
 		// Existing response processors forward decoded bytes. Decode before
 		// recovery observation as well, including the count_tokens path.
 		if err := decodeSubscriptionResponse(resp); err != nil {
@@ -191,6 +217,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 			}
 		}
 	}
+	observeClaudePool(resp, ctx)
 	return resp, nil
 }
 
@@ -207,6 +234,9 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 		return
 	}
 	run := planSubscriptionRoute(h.endpointManager, r, body)
+	if run == nil {
+		run = planClaudePool(h.endpointManager.PoolRuntime(), h.endpointManager.RouteConfig(), r, body, true)
+	}
 	run.initBudget(h.config.Retry)
 	run.watchSubscription(ctx, h.forwarder)
 	if lifecycle != nil {
@@ -225,6 +255,7 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 				continue
 			}
 			defer admission.Finish(0, nil, nil, false)
+			defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
 			if err := beginRouteAttempt(ctx, run); err != nil {
 				lastErr = err
 				break
@@ -273,14 +304,14 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 			run.rememberResponse(err)
 			run.ledger.Fail(candidate, claudeRouteFailure(err))
 			run.publishSnapshot()
-			if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
+			if run.pool == nil && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
 				break
 			}
 			if ctx.Err() != nil || claudeRouteFailure(err).Terminal {
 				break
 			}
 		}
-		if GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized || ctx.Err() != nil || run.budget.Stopped() || claudeRouteFailure(lastErr).Terminal {
+		if run.pool == nil && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized || ctx.Err() != nil || run.budget.Stopped() || claudeRouteFailure(lastErr).Terminal {
 			break
 		}
 		if !run.advance() {

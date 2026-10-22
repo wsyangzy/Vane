@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+
+	"github.com/wsyangzy/Vane/internal/routing"
 	"time"
 )
 
@@ -16,6 +19,7 @@ type scope struct {
 	model          string
 }
 type Controller struct {
+	poolRuntime     atomic.Pointer[routing.PoolRuntime]
 	rejectAccess    func(context.Context, string, string)
 	resolveAccount  func(context.Context, string) (string, string, error)
 	validateAccount func(context.Context, string) error
@@ -111,8 +115,7 @@ func (c *Controller) Eligible(ctx context.Context, b Binding, model string) (boo
 	if c.load(ctx) != nil {
 		return false, "subscription_state_unavailable"
 	}
-	for _, m := range applicableScopes(model) {
-		key := scope{b.GroupID, b.Version, m}
+	for _, key := range c.quotaScopes(ctx, b, model) {
 		if c.probing[key] != 0 {
 			return false, "subscription_probing"
 		}
@@ -126,6 +129,7 @@ func (c *Controller) Eligible(ctx context.Context, b Binding, model string) (boo
 type Lease struct {
 	c     *Controller
 	b     Binding
+	quota Binding
 	model string
 	keys  map[scope]uint64
 	once  sync.Once
@@ -150,9 +154,8 @@ func (c *Controller) Acquire(ctx context.Context, b Binding, model string) (*Lea
 	if err := c.load(ctx); err != nil {
 		return nil, errors.New("subscription_state_unavailable")
 	}
-	lease := &Lease{c: c, b: b, model: model, keys: map[scope]uint64{}}
-	for _, m := range applicableScopes(model) {
-		key := scope{b.GroupID, b.Version, m}
+	lease := &Lease{c: c, b: b, quota: c.scopeBinding(ctx, b), model: model, keys: map[scope]uint64{}}
+	for _, key := range c.quotaScopes(ctx, b, model) {
 		if c.probing[key] != 0 {
 			return nil, ErrUnavailable
 		}
@@ -222,7 +225,7 @@ func (l *Lease) Finish(status int, headers http.Header, body []byte, success boo
 				c.persist(ctx, p)
 			}
 		}
-		for _, p := range QuotaPauses(status, headers, body, l.b, l.model, c.now()) {
+		for _, p := range QuotaPauses(status, headers, body, l.quota, l.model, c.now()) {
 			changed = true
 			// A failed recovery may already have advanced the same revision.
 			// Reload before applying stronger quota evidence.
@@ -243,6 +246,7 @@ func (l *Lease) Finish(status int, headers http.Header, body []byte, success boo
 }
 
 func (c *Controller) Status(ctx context.Context, b Binding) []Pause {
+	aliases := c.quotaBindings(ctx, b)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.load(ctx) != nil {
@@ -250,7 +254,14 @@ func (c *Controller) Status(ctx context.Context, b Binding) []Pause {
 	}
 	var result []Pause
 	for key, p := range c.pauses {
-		if key.group != b.GroupID || key.version != b.Version {
+		matched := false
+		for _, alias := range aliases {
+			if key.group == alias.GroupID && key.version == alias.Version {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			continue
 		}
 		p.State = "paused"
@@ -289,4 +300,92 @@ func (c *Controller) persist(ctx context.Context, p Pause) {
 
 func IsLocalError(err error) bool {
 	return err != nil && (errors.Is(err, ErrUnavailable) || errors.Is(err, ErrBindingChanged) || strings.HasPrefix(err.Error(), "subscription_"))
+}
+
+// A managed account may appear in multiple credential groups. Quota and probe
+// ownership use one persisted binding identity, while authorization still uses
+// the actual selected binding and its version.
+func (c *Controller) scopeBinding(ctx context.Context, b Binding) Binding {
+	if b.AccountID == "" {
+		return b
+	}
+	bindings, err := c.store.ListBindings(ctx)
+	if err != nil {
+		return b
+	}
+	quota := b
+	for _, other := range bindings {
+		if other.AccountID == b.AccountID && other.GroupID < quota.GroupID {
+			quota = other
+		}
+	}
+	quota.Enabled = b.Enabled
+	return quota
+}
+
+// Include pauses written before multiple groups shared an account. A successful
+// recovery clears each original persisted pause with its own revision.
+func (c *Controller) quotaBindings(ctx context.Context, b Binding) []Binding {
+	if b.AccountID == "" {
+		return []Binding{b}
+	}
+	bindings, err := c.store.ListBindings(ctx)
+	if err != nil {
+		return []Binding{b}
+	}
+	result := []Binding{}
+	for _, other := range bindings {
+		if other.AccountID == b.AccountID {
+			result = append(result, other)
+		}
+	}
+	if len(result) == 0 {
+		return []Binding{b}
+	}
+	return result
+}
+func (c *Controller) quotaScopes(ctx context.Context, b Binding, model string) []scope {
+	var result []scope
+	seen := map[scope]bool{}
+	for _, alias := range c.quotaBindings(ctx, b) {
+		for _, m := range applicableScopes(model) {
+			key := scope{alias.GroupID, alias.Version, m}
+			if !seen[key] {
+				result = append(result, key)
+				seen[key] = true
+			}
+		}
+	}
+	return result
+}
+
+// RecoveryTime reports quota availability without sending credentials or probes.
+func (c *Controller) RecoveryTime(ctx context.Context, b Binding, model string) (time.Time, bool) {
+	if !c.current(ctx, b) {
+		return time.Time{}, false
+	}
+	scopes := applicableScopes(model)
+	var next time.Time
+	for _, pause := range c.Status(ctx, b) {
+		applies := false
+		for _, m := range scopes {
+			if pause.Model == m {
+				applies = true
+				break
+			}
+		}
+		if pause.State == "unknown" {
+			return time.Time{}, false
+		}
+		if !applies {
+			continue
+		}
+		if pause.State == "manual_disabled" || pause.State == "probing" {
+			return time.Time{}, false
+		}
+		if pause.ResumeNotBefore.After(next) {
+			next = pause.ResumeNotBefore
+		}
+	}
+	return next, true
 }

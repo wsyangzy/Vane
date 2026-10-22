@@ -59,6 +59,7 @@ func (ep *Endpoint) RouteStateVersion() uint64 {
 
 // Manager manages endpoints and their health status
 type Manager struct {
+	poolRuntime  atomic.Pointer[routing.PoolRuntime]
 	endpoints    []*Endpoint
 	endpointsMu  sync.RWMutex // 保护 endpoints 切片的并发访问
 	config       *config.Config

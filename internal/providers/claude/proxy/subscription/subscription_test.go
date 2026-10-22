@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/wsyangzy/Vane/internal/routing"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -278,5 +279,67 @@ func TestRecoverySingleAdmissionCancellationAndVersionIsolation(t *testing.T) {
 	cancel()
 	if _, err := c.Acquire(cancelled, b, "sonnet"); err == nil {
 		t.Fatal("cancel acquired")
+	}
+}
+
+func TestPoolAccountsResolveIndependentlyAndShareLegacyAliasQuota(t *testing.T) {
+	c, s, b := fixture()
+	ctx := context.Background()
+	b.AccountID = "managed-one"
+	s.bindings[0] = b
+	second := b
+	second.GroupID = 2
+	second.AccountID = "managed-two"
+	alias := b
+	alias.GroupID = 3
+	s.bindings = append(s.bindings, second, alias)
+	var resolutions []string
+	c.SetAccountResolver(func(_ context.Context, id string) (string, string, error) {
+		resolutions = append(resolutions, id)
+		return "token-" + id, "workspace", nil
+	}, func(context.Context, string) error { return nil })
+	digest := sha256.Sum256([]byte("pool-test-key"))
+	runtime := routing.NewPoolRuntime(routing.PoolConfig{Pools: []routing.Pool{{ID: 1, Provider: "claude", Revision: 1, KeyHash: hex.EncodeToString(digest[:])}}, Accounts: []routing.AccountState{{ChannelID: 1, GroupID: 1, Enabled: true, Managed: true}, {ChannelID: 1, GroupID: 2, Enabled: true, Managed: true}, {ChannelID: 1, GroupID: 3, Enabled: true, Managed: true}}}, nil, nil)
+	c.SetPoolRuntime(runtime)
+	caller, err := runtime.Authenticate("claude", "pool-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolCtx := routing.WithPoolCaller(ctx, caller)
+	for _, group := range []int64{1, 2} {
+		selected, err := c.SelectPoolAccount(poolCtx, 1, group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if FromContext(selected).Binding.GroupID != group {
+			t.Fatal("pool reused another member's binding")
+		}
+	}
+	if len(resolutions) != 2 || resolutions[0] == resolutions[1] {
+		t.Fatal("credentials were not resolved for each selected account")
+	}
+	if _, err = c.SelectPoolAccount(ctx, 1, 2); err == nil {
+		t.Fatal("API caller borrowed managed account")
+	}
+	now := time.Now()
+	c.now = func() time.Time { return now }
+	s.PutPause(ctx, Pause{GroupID: alias.GroupID, Version: alias.Version, Model: "*", Revision: 1, ResumeNotBefore: now.Add(time.Minute)})
+	if allowed, _ := c.Eligible(ctx, b, "test-model"); allowed {
+		t.Fatal("legacy alias quota was ignored")
+	}
+	if allowed, _ := c.Eligible(ctx, second, "test-model"); !allowed {
+		t.Fatal("quota leaked to a different account")
+	}
+	now = now.Add(time.Minute)
+	lease, err := c.Acquire(ctx, b, "test-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.Acquire(ctx, alias, "test-model"); err == nil {
+		t.Fatal("two groups probed the same account")
+	}
+	lease.Finish(200, nil, nil, true)
+	if len(c.Status(ctx, alias)) != 0 {
+		t.Fatal("alias pause not cleared after protocol success")
 	}
 }

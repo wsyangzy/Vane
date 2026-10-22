@@ -2,9 +2,30 @@ package api
 
 import (
 	"github.com/wsyangzy/Vane/internal/app"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 type RoutingService struct{ app *app.App }
+
+func (s *RoutingService) CheckPoolEndpoint(provider string, id int64) error {
+	return s.app.CheckPoolEndpoint(provider, id)
+}
+
+func (s *RoutingService) ListAccountPools(provider string) (app.AccountPoolState, error) {
+	return s.app.ListAccountPools(provider)
+}
+func (s *RoutingService) SaveAccountPool(input routing.Pool) (int64, error) {
+	return s.app.SaveAccountPool(input)
+}
+func (s *RoutingService) DeleteAccountPool(provider string, id int64) error {
+	return s.app.DeleteAccountPool(provider, id)
+}
+func (s *RoutingService) RotateAccountPoolKey(provider string, id int64) (app.PoolKeyResult, error) {
+	return s.app.RotateAccountPoolKey(provider, id)
+}
+func (s *RoutingService) SetPoolAccountEnabled(provider string, channelID, groupID int64, enabled bool) error {
+	return s.app.SetPoolAccountEnabled(provider, channelID, groupID, enabled)
+}
 
 func (s *RoutingService) ListModelRoutes(provider string, sourceChannelID int64) ([]app.ModelRouteInfo, error) {
 	return s.app.ListModelRoutes(provider, sourceChannelID)

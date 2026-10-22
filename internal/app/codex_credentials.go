@@ -85,6 +85,9 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 	if err := credentialGroupService.UpdateGroup(ctx, id, record); err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("更新 Codex 凭证分组失败: %w", err)
 	}
+	if input.ApiKey != "" && input.ApiKey != existing.ApiKey {
+		a.repairPoolGroup("codex", id)
+	}
 	updated, err := credentialGroupService.GetByID(ctx, id)
 	if err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("读取更新后的 Codex 凭证分组失败: %w", err)

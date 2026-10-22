@@ -14,6 +14,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/handlers"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/response"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
@@ -315,6 +316,22 @@ func (h *Handler) extractReasoningConfig(bodyBytes []byte) string {
 // ServeHTTP implements the http.Handler interface
 // 统一请求分发逻辑 - 整合流式处理、错误恢复和生命周期管理
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if _, ok := routing.PoolCallerFromContext(r.Context()); ok {
+		if !subscription.AllowedPath(r) {
+			http.Error(w, "Pool path rejected", http.StatusForbidden)
+			return
+		}
+		r.Header = r.Header.Clone()
+		for name := range r.Header {
+			if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "X-Api-Key") || strings.EqualFold(name, "X-Relay-Key") {
+				delete(r.Header, name)
+			}
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		}
+	}
+
 	if subscription.FromContext(r.Context()) == nil {
 		for name := range r.Header {
 			if strings.EqualFold(name, "X-Relay-Key") {

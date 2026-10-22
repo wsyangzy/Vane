@@ -201,6 +201,10 @@ func (a *App) codexChannelEndpointAsProviderRecord(channel *codexstore.CodexChan
 }
 
 func (a *App) syncActiveCodexChannelToConfig(channel *codexstore.CodexChannelRecord, endpoint *codexstore.CodexEndpointRecord, previousChannelName string) error {
+	if a.codexEndpointMgr != nil && a.codexEndpointMgr.PoolRuntime() != nil {
+		return nil
+	}
+
 	if channel == nil {
 		return fmt.Errorf("Codex 渠道为空")
 	}
@@ -231,6 +235,10 @@ func (a *App) applyCodexProxyOverride(_ *codexstore.CodexProviderRecord) {
 }
 
 func (a *App) removeCodexChannelConfig(name string, nextChannel *codexstore.CodexChannelRecord, nextEndpoint *codexstore.CodexEndpointRecord) error {
+	if a.codexEndpointMgr != nil && a.codexEndpointMgr.PoolRuntime() != nil {
+		return nil
+	}
+
 	// 当 Codex 代理启用时，不再修改 config.toml
 	if a.isCodexProxyEnabled() {
 		if a.logger != nil {

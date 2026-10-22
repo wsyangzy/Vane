@@ -18,7 +18,16 @@ import (
 
 func (run *routeRun) initBudget(cfg config.RetryConfig) {
 	if run != nil && run.budget == nil {
-		run.budget = routing.NewBudget(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
+		attempts, duration := cfg.MaxTotalAttempts, cfg.MaxTotalDuration
+		if run.pool != nil {
+			if attempts <= 0 {
+				attempts = 10
+			}
+			if duration <= 0 {
+				duration = 60 * time.Second
+			}
+		}
+		run.budget = routing.NewBudget(attempts, duration)
 	}
 }
 
@@ -62,6 +71,9 @@ func claudeRouteFailure(err error) routing.Failure {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: err.Error()}
 	}
 	var response *EndpointError
+	if err != nil && strings.Contains(err.Error(), "timeout awaiting response headers") {
+		return routing.Failure{Scope: routing.ScopeRequest, Reason: "response_header_timeout", Terminal: true}
+	}
 	if !errors.As(err, &response) {
 		return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "network_error"}
 	}
@@ -101,7 +113,7 @@ func (run *routeRun) failureDecision(f *Forwarder, ep *endpoint.Endpoint, body [
 	if failure.Terminal {
 		return RetryDecision{FinalStatus: "error", Reason: failure.Reason}
 	}
-	if run.subscription {
+	if run.subscription || run.pool != nil {
 		return RetryDecision{SwitchEndpoint: true, Reason: failure.Reason}
 	}
 	// Network/overload backoff retains the existing bounded policy. Known

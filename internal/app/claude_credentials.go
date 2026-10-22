@@ -12,6 +12,7 @@ import (
 )
 
 type ClaudeCredentialGroupInfo struct {
+	Enabled                                bool                                        `json:"enabled"`
 	AuthMode                               string                                      `json:"auth_mode"`
 	Subscription                           *subscription.Binding                       `json:"subscription,omitempty"`
 	LocalKeyConfigured                     bool                                        `json:"local_key_configured"`
@@ -107,6 +108,7 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		return ClaudeCredentialGroupInfo{}
 	}
 	info := ClaudeCredentialGroupInfo{
+		Enabled:                                group.Enabled,
 		AuthMode:                               group.AuthMode,
 		OfficialVerification:                   "not_verified",
 		ID:                                     group.ID,
@@ -199,6 +201,7 @@ func (a *App) refreshClaudeRuntimeAfterCredentialGroupChange(ctx context.Context
 			a.logger.Warn("⚠️ Claude 凭证分组变更后同步运行时端点失败", "error", err)
 		}
 	}
+	a.syncClaudeRouteConfig(ctx)
 	a.syncEndpointMultipliersToTracker(ctx)
 	a.emitEndpointUpdate()
 }
@@ -260,6 +263,9 @@ func (a *App) UpdateClaudeCredentialGroupByID(id int64, input CreateClaudeCreden
 	}
 	if err := svc.UpdateGroup(ctx, id, record); err != nil {
 		return ClaudeCredentialGroupInfo{}, err
+	}
+	if input.Token != "" || input.ApiKey != "" {
+		a.repairPoolGroup("claude", id)
 	}
 	updated, err := svc.GetByID(ctx, id)
 	if err != nil {

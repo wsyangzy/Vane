@@ -14,6 +14,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/privacy"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // generateRequestID 生成请求 ID（统一 req- 前缀）
@@ -62,6 +63,26 @@ func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestID := generateRequestID()
+	if _, ok := routing.PoolCallerFromContext(r.Context()); ok {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
+			return
+		}
+		if !subscription.AllowedPath(r) {
+			h.writeError(w, http.StatusForbidden, "pool_path_rejected")
+			return
+		}
+		r.Header = r.Header.Clone()
+		for name := range r.Header {
+			if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "X-Api-Key") || strings.EqualFold(name, "X-Relay-Key") || strings.EqualFold(name, "ChatGPT-Account-ID") {
+				delete(r.Header, name)
+			}
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		}
+	}
+
 	if sub := subscription.FromContext(r.Context()); sub != nil && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
 		return

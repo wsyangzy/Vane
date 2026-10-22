@@ -28,6 +28,7 @@ import (
 	codexsubscription "github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 	routingservice "github.com/wsyangzy/Vane/internal/routing/service"
 	settingsservice "github.com/wsyangzy/Vane/internal/settings/service"
 	settingsstore "github.com/wsyangzy/Vane/internal/settings/store"
@@ -36,6 +37,8 @@ import (
 )
 
 type App struct {
+	poolMu       sync.Mutex
+	poolRuntimes map[string]*routing.PoolRuntime
 	// Wails v3 应用与窗口引用
 	wailsApp *application.App
 	window   *application.WebviewWindow

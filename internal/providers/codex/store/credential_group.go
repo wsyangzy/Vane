@@ -52,6 +52,7 @@ type CodexCredentialGroupRecord struct {
 	ChannelID         int64                 `json:"channel_id"`
 	Name              string                `json:"name"`
 	ApiKey            string                `json:"api_key,omitempty"`
+	Enabled           bool                  `json:"enabled"`
 	IsDefault         bool                  `json:"is_default"`
 	DailyCostLimitUSD float64               `json:"daily_cost_limit_usd"`
 	ModelPolicy       string                `json:"model_policy"`
@@ -120,7 +121,7 @@ func (s *SQLiteCodexCredentialGroupStore) getQuerier() interface {
 	return s.db
 }
 
-const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0),
+const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0), enabled,
 	COALESCE(daily_cost_limit_usd, 0),
 	COALESCE(model_policy, 'inherit'), COALESCE(model_mapping, '{}'), COALESCE(supported_models, '[]'),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
@@ -454,7 +455,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&record.Name,
 		&record.ApiKey,
 		&isDefault,
-		&dailyCostLimitUSD,
+		&record.Enabled, &dailyCostLimitUSD,
 		&modelPolicy,
 		&modelMappingJSON,
 		&supportedModelsJSON,

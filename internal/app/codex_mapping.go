@@ -55,6 +55,7 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		return CodexCredentialGroupInfo{}
 	}
 	info := CodexCredentialGroupInfo{
+		Enabled:  record.Enabled,
 		AuthMode: record.AuthMode, OfficialVerification: "not_verified",
 		ID:                                     record.ID,
 		ChannelID:                              record.ChannelID,

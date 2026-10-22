@@ -29,6 +29,7 @@ type ClaudeCredentialGroupRecord struct {
 	AuthMode     string                `json:"auth_mode"`
 	Subscription *subscription.Binding `json:"-"`
 
+	Enabled           bool              `json:"enabled"`
 	IsDefault         bool              `json:"is_default"`
 	DailyCostLimitUSD float64           `json:"daily_cost_limit_usd"`
 	ModelPolicy       string            `json:"model_policy"`
@@ -100,7 +101,7 @@ func (s *SQLiteClaudeCredentialGroupStore) getQuerier() interface {
 	return s.db
 }
 
-const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), COALESCE(api_key, ''), COALESCE(auth_mode, 'group_credential'), COALESCE(subscription_config, '{}'), COALESCE(is_default, 0),
+const claudeCredentialGroupColumns = `id, channel, name, COALESCE(token, ''), COALESCE(api_key, ''), COALESCE(auth_mode, 'group_credential'), COALESCE(subscription_config, '{}'), COALESCE(is_default, 0), enabled,
 	COALESCE(daily_cost_limit_usd, 0),
 	COALESCE(model_policy, 'inherit'), COALESCE(model_mapping, '{}'), COALESCE(supported_models, '[]'),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
@@ -413,7 +414,7 @@ func scanClaudeCredentialGroupRow(scanner interface {
 		&record.AuthMode,
 		&subscriptionJSON,
 		&isDefault,
-		&dailyCostLimitUSD,
+		&record.Enabled, &dailyCostLimitUSD,
 		&modelPolicy,
 		&modelMappingJSON,
 		&supportedModelsJSON,

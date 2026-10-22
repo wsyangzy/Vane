@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/buildinfo"
+	"github.com/wsyangzy/Vane/internal/config"
 	"github.com/wsyangzy/Vane/internal/platform/netutil"
 	"github.com/wsyangzy/Vane/internal/privacy"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
@@ -345,9 +346,8 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 		a.applyRuntimeLoggingConfig()
 	}
 
-	// 🔧 [P5.5.4 新增] Timezone 时区配置（从 SQLite 同步）
-	// 注意：时区变更标记为 RequiresRestart=true，运行时变更只影响后续新生成的时间戳
-	a.config.Timezone = a.getSettingString(ctx, settingsservice.CategoryTimezone, "global", a.config.Timezone)
+	// 固定使用北京时间，忽略旧数据库中的可选时区设置。
+	a.config.Timezone = config.BeijingTimezone
 
 	// Codex 代理与 Claude 代理共用主端口，始终启用路径路由。
 	a.config.CodexServer.Enabled = true

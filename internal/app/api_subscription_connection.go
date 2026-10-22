@@ -23,6 +23,7 @@ import (
 )
 
 type SubscriptionConnectionCommand struct {
+	PoolID          int64  `json:"pool_id"`
 	Provider        string `json:"provider"`
 	Action          string `json:"action"`
 	GroupID         int64  `json:"group_id"`
@@ -133,6 +134,9 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		result.OfficialURL = codexsub.OfficialBaseURL
 	} else {
 		result.OfficialURL = claudesub.OfficialOrigin
+	}
+	if input.PoolID > 0 {
+		return a.managePoolConnection(input, result, current)
 	}
 	if input.GroupID <= 0 {
 		if input.Action == "status" {

@@ -35,6 +35,7 @@ const (
 
 // Target 路由目标。用 ID 引用渠道与凭证分组，渠道改名不会让配置失效。
 type Target struct {
+	PoolID    int64 `json:"pool_id,omitempty"`
 	ChannelID int64 `json:"channel_id"`
 	// GroupID 为 0 表示该渠道下的全部凭证分组，按分组现有顺序尝试
 	GroupID int64 `json:"group_id"`
@@ -47,12 +48,13 @@ type Target struct {
 // 规则挂在来源渠道上：只有该渠道是当前激活渠道时才参与匹配，语义是
 // "本渠道不适合处理模型 X，把 X 送到这些目标"。不同渠道的规则互不影响。
 type ModelRule struct {
-	ID              int64
-	SourceChannelID int64
-	Name            string
-	Priority        int
-	MatchModel      string
-	Mode            string
+	Disabled        bool   `json:"disabled,omitempty"`
+	ID              int64  `json:"id"`
+	SourceChannelID int64  `json:"source_channel_id"`
+	Name            string `json:"name"`
+	Priority        int    `json:"priority"`
+	MatchModel      string `json:"match_model"`
+	Mode            string `json:"mode"`
 	Targets         []Target
 }
 
@@ -187,7 +189,7 @@ func ResolveModelRule(rules []ModelRule, model string) *ModelRule {
 	var best *ModelRule
 	for i := range rules {
 		rule := &rules[i]
-		if len(rule.Targets) == 0 || !MatchModel(rule.MatchModel, model) {
+		if rule.Disabled || len(rule.Targets) == 0 || !MatchModel(rule.MatchModel, model) {
 			continue
 		}
 		if best == nil || RuleLess(rule, best) {
@@ -238,6 +240,8 @@ func (d Decision) Stages() []Stage {
 // ExhaustedReason 路由全部阶段失败时写入 failure_reason 的取值
 func (k Kind) ExhaustedReason() string {
 	switch k {
+	case KindPool:
+		return "pool_exhausted"
 	case KindModelRule:
 		return "route_exhausted"
 	case KindNonStream:
@@ -251,6 +255,9 @@ func (k Kind) ExhaustedReason() string {
 
 // Snapshot request_logs.route_snapshot 的内容。只记录规则标识与阶段序号，不含请求内容。
 type Snapshot struct {
+	PoolID       int64                 `json:"pool_id,omitempty"`
+	PoolName     string                `json:"pool_name,omitempty"`
+	Member       *PoolStage            `json:"member,omitempty"`
 	Subscription *SubscriptionSnapshot `json:"subscription,omitempty"`
 	Execution    *Ledger               `json:"execution,omitempty"`
 	Attempts     int                   `json:"attempts,omitempty"`
@@ -310,7 +317,7 @@ func NormalizeTargets(targets []Target) []Target {
 	seen := make(map[Target]struct{}, len(targets))
 	for _, target := range targets {
 		target.UpstreamModel = strings.TrimSpace(target.UpstreamModel)
-		if target.ChannelID <= 0 || target.GroupID < 0 {
+		if target.PoolID <= 0 && target.ChannelID <= 0 || target.GroupID < 0 {
 			continue
 		}
 		if _, ok := seen[target]; ok {

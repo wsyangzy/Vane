@@ -150,6 +150,9 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 	if err := validateSettingsProvider(provider); err != nil {
 		return err
 	}
+	if category == CategoryTimezone {
+		return fmt.Errorf("时区固定为北京时间（UTC+8），不支持修改")
+	}
 	if category != CategoryRetention {
 		return nil
 	}
