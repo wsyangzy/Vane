@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/Go-1.25.0-00ADD8.svg" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8.svg" alt="Go">
   <img src="https://img.shields.io/badge/React-19-61DAFB.svg" alt="React">
 </p>
 
@@ -56,7 +56,7 @@ Windows 运行需要 Microsoft Edge WebView2 Runtime。解压后运行 `Vane.exe
 
 ## 从源码开发
 
-需要 Go **1.25.0**、Node.js **20.19+ 或 22.12+**及 npm。Wails 使用项目固定的 `v3.0.0-alpha.96`；Windows 构建还需要可用的 C 编译器与 `goversioninfo`。
+需要 Go **1.27.3**、Node.js **20.19+ 或 22.12+**及 npm。Wails 使用项目固定的 `v3.0.0-alpha.96`；Windows 构建还需要可用的 C 编译器与 `goversioninfo`。
 
 以下示例使用 PowerShell：
 
