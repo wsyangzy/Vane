@@ -274,6 +274,9 @@ func (a *App) SaveModelRoute(input SaveModelRouteInput) (RouteSaveResult, error)
 	}
 	ctx, cancel := routeCtx()
 	defer cancel()
+	if err := a.requireLegacyRouting(ctx, provider); err != nil {
+		return RouteSaveResult{}, err
+	}
 
 	catalog, err := a.routeCatalog(ctx, provider)
 	if err != nil {
@@ -313,6 +316,9 @@ func (a *App) DeleteModelRoute(id int64) error {
 	if existing == nil {
 		return fmt.Errorf("模型路由规则不存在: %d", id)
 	}
+	if err := a.requireLegacyRouting(ctx, existing.Provider); err != nil {
+		return err
+	}
 	if err := svc.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -335,6 +341,9 @@ func (a *App) SetModelRouteEnabled(id int64, enabled bool) error {
 	}
 	if existing == nil {
 		return fmt.Errorf("模型路由规则不存在: %d", id)
+	}
+	if err := a.requireLegacyRouting(ctx, existing.Provider); err != nil {
+		return err
 	}
 	if err := svc.SetEnabled(ctx, id, enabled); err != nil {
 		return err
@@ -463,6 +472,9 @@ func (a *App) SetChannelNonStreamRoute(provider string, channelID int64, input N
 	}
 	ctx, cancel := routeCtx()
 	defer cancel()
+	if err := a.requireLegacyRouting(ctx, provider); err != nil {
+		return RouteSaveResult{}, err
+	}
 
 	catalog, err := a.routeCatalog(ctx, provider)
 	if err != nil {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
@@ -348,7 +349,7 @@ type EndpointCostItem struct {
 	CacheHitRate *float64 `json:"cache_hit_rate"`
 }
 
-// GetEndpointCosts 获取当日端点成本数据
+// GetEndpointCosts 获取当日渠道与凭证分组成本；保留导出名称以兼容桌面绑定。
 // provider 参数用于按提供商过滤（"claude"/"codex"），为空时返回全部
 func (a *App) GetEndpointCosts(provider string) []EndpointCostItem {
 	a.mu.RLock()
@@ -409,8 +410,9 @@ func queryEndpointCostsForDate(usageTracker interface {
 		return nil, err
 	}
 
-	// 转换为前端期望的格式，按 provider 过滤
-	result := make([]EndpointCostItem, 0, len(costs))
+	// One chart item per provider/channel/credential group, across all endpoints.
+	type groupKey struct{ provider, channel, group string }
+	grouped := make(map[groupKey]tracking.UsageStatsTotals)
 	for _, cost := range costs {
 		// 如果指定了 provider，过滤不匹配的记录
 		if provider != "" && cost.Provider != "" && cost.Provider != provider {
@@ -421,30 +423,50 @@ func queryEndpointCostsForDate(usageTracker interface {
 			continue
 		}
 
-		// 端点标签：仅端点名称 (渠道名)，不含来源前缀
 		prov := cost.Provider
 		if prov == "" {
 			prov = "claude"
 		}
-		name := cost.EndpointName
-		if cost.GroupName != "" {
-			name = cost.EndpointName + " (" + cost.GroupName + ")"
+		key := groupKey{prov, cost.Channel, cost.GroupName}
+		totals := grouped[key]
+		usage := cost.UsageTotals()
+		totals.TotalTokens += usage.TotalTokens
+		totals.TotalCostUSD += usage.TotalCostUSD
+		totals.CacheHitNumerator += usage.CacheHitNumerator
+		totals.CacheHitDenominator += usage.CacheHitDenominator
+		grouped[key] = totals
+	}
+	result := make([]EndpointCostItem, 0, len(grouped))
+	for key, totals := range grouped {
+		channel, group := key.channel, key.group
+		if channel == "" {
+			channel = "未记录渠道"
 		}
-
-		// 计算总 Token
-		totalTokens := cost.InputTokens + cost.OutputTokens + cost.CacheCreationTokens + cost.CacheReadTokens
-
+		if group == "" {
+			group = "未记录分组"
+		}
 		result = append(result, EndpointCostItem{
-			Name:         name,
-			Channel:      cost.Channel,
-			Endpoint:     cost.EndpointName,
-			Group:        cost.GroupName,
-			Tokens:       totalTokens,
-			Cost:         cost.TotalCostUSD,
-			Provider:     prov,
-			CacheHitRate: cost.CacheHitRate,
+			Name:         channel + " / " + group,
+			Channel:      key.channel,
+			Group:        key.group,
+			Tokens:       totals.TotalTokens,
+			Cost:         totals.TotalCostUSD,
+			Provider:     key.provider,
+			CacheHitRate: totals.CacheHitRate(),
 		})
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Cost != result[j].Cost {
+			return result[i].Cost > result[j].Cost
+		}
+		if result[i].Provider != result[j].Provider {
+			return result[i].Provider < result[j].Provider
+		}
+		if result[i].Channel != result[j].Channel {
+			return result[i].Channel < result[j].Channel
+		}
+		return result[i].Group < result[j].Group
+	})
 
 	return result, nil
 }

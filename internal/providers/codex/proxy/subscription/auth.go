@@ -89,11 +89,6 @@ func (c *Controller) Authenticate(r *http.Request) (context.Context, bool, error
 	if !ok {
 		return r.Context(), true, errors.New("relay_authentication_rejected")
 	}
-	if runtime := c.poolRuntime.Load(); runtime != nil {
-		if caller, err := runtime.Authenticate("codex", key); err == nil {
-			return routing.WithPoolCaller(r.Context(), caller), true, nil
-		}
-	}
 	bindings, err := c.store.ListBindings(r.Context())
 	if err != nil {
 		return r.Context(), true, errors.New("subscription_configuration_unavailable")

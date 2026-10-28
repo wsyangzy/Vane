@@ -68,11 +68,6 @@ func (c *Controller) Authenticate(r *http.Request) (context.Context, bool, error
 			return r.Context(), true, errors.New("conflicting_subscription_authentication")
 		}
 	}
-	if runtime := c.poolRuntime.Load(); runtime != nil {
-		if caller, err := runtime.Authenticate("claude", key); err == nil {
-			return routing.WithPoolCaller(r.Context(), caller), true, nil
-		}
-	}
 	bindings, err := c.store.ListBindings(r.Context())
 	if err != nil {
 		return r.Context(), true, errors.New("subscription_configuration_unavailable")

@@ -49,6 +49,9 @@ func (f *Forwarder) poolChannelID(ep *endpoint.Endpoint) int64 {
 }
 
 func (f *Forwarder) admitPool(ctx context.Context, ep *endpoint.Endpoint, model string) (context.Context, error) {
+	if routing.ProfileRequestFromContext(ctx) != nil {
+		return f.admitProfile(ctx, ep, model)
+	}
 	runtime := f.endpointManager.PoolRuntime()
 	if runtime == nil {
 		return ctx, nil

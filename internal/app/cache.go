@@ -118,6 +118,7 @@ func (a *App) setupCacheRegistry() {
 	a.cacheRegistry.Register(a.usageSummaryCache)
 	a.cacheRegistry.Register(a.tokenUsageCache)
 	a.cacheRegistry.Register(a.endpointCostTodayCache)
+	a.cacheRegistry.Register(a.usageReader())
 	a.registerRuntimeStatusCaches()
 }
 
@@ -201,6 +202,8 @@ func (a *App) applyCacheSettings(ctx context.Context) {
 	a.usageSummaryCache.SetOptions(cacheOptions(cacheNameUsageSummary, settings))
 	a.tokenUsageCache.SetOptions(cacheOptions(cacheNameTokenUsage, settings))
 	a.endpointCostTodayCache.SetOptions(cacheOptions(cacheNameEndpointCostToday, settings))
+	reader := a.usageReader()
+	reader.SetOptions(cacheOptions(reader.Name(), settings))
 
 	if a.usageTracker != nil {
 		a.usageTracker.ConfigureUsageStatsCache(cacheOptions(cacheNameUsageStats, settings))

@@ -2,9 +2,10 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -326,8 +327,8 @@ func TestEndpointCostCacheBuildsStructuredItems(t *testing.T) {
 
 	day := time.Date(1999, 1, 1, 0, 0, 0, 0, time.Local)
 	items := app.getEndpointCostsForDate(tracker, day, "codex", endpointCostTestLogger{})
-	if len(items) != 1 || items[0].Name != "codex-main (国内)" || items[0].Channel != "Codex 正价" || items[0].Endpoint != "codex-main" || items[0].Group != "国内" {
-		t.Fatalf("endpoint costs = %#v, want structured codex-main item", items)
+	if len(items) != 1 || items[0].Name != "Codex 正价 / 国内" || items[0].Channel != "Codex 正价" || items[0].Endpoint != "" || items[0].Group != "国内" {
+		t.Fatalf("group costs = %#v, want structured credential-group item", items)
 	}
 
 	todayStats := app.endpointCostTodayCache.Stats()
@@ -370,8 +371,8 @@ func TestEndpointCostCacheReturnsStaleValueOnLoaderError(t *testing.T) {
 
 	day := time.Date(2026, 6, 27, 0, 0, 0, 0, time.Local)
 	first := app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
-	if len(first) != 1 || first[0].Name != "claude-main" {
-		t.Fatalf("first endpoint costs = %#v, want claude-main item", first)
+	if len(first) != 1 || first[0].Name != "未记录渠道 / 未记录分组" {
+		t.Fatalf("first group costs = %#v, want unattributed group item", first)
 	}
 
 	time.Sleep(10 * time.Millisecond)
@@ -379,11 +380,68 @@ func TestEndpointCostCacheReturnsStaleValueOnLoaderError(t *testing.T) {
 	tracker.costs = nil
 
 	second := app.getEndpointCostsForDate(tracker, day, "claude", endpointCostTestLogger{})
-	if len(second) != 1 || second[0].Name != "claude-main" {
-		t.Fatalf("second endpoint costs = %#v, want stale claude-main item", second)
+	if len(second) != 1 || second[0].Name != "未记录渠道 / 未记录分组" {
+		t.Fatalf("second group costs = %#v, want stale unattributed group item", second)
 	}
 	if tracker.calls != 2 {
 		t.Fatalf("expected loader to be retried after TTL expiry, got %d calls", tracker.calls)
+	}
+}
+
+func TestOverviewCostsMergeEndpointsAndIsolateProvidersChannelsAndGroups(t *testing.T) {
+	tracker := &endpointCostTrackerStub{costs: []tracking.EndpointCostSummary{
+		{Provider: "codex", Channel: "relay", GroupName: "key", EndpointName: "east", InputTokens: 100, CacheReadTokens: 50, OutputTokens: 20, TotalCostUSD: 1},
+		{Provider: "codex", Channel: "relay", GroupName: "key", EndpointName: "west", InputTokens: 900, CacheReadTokens: 90, OutputTokens: 80, TotalCostUSD: 2},
+		{Provider: "codex", Channel: "relay", GroupName: "other", EndpointName: "east", InputTokens: 10, TotalCostUSD: .1},
+		{Provider: "codex", Channel: "other", GroupName: "key", EndpointName: "east", InputTokens: 10, TotalCostUSD: .2},
+		{Provider: "claude", Channel: "relay", GroupName: "key", EndpointName: "east", InputTokens: 100, CacheReadTokens: 40, CacheCreationTokens: 10, OutputTokens: 20, TotalCostUSD: 4},
+		{Channel: "relay", GroupName: "key", EndpointName: "west", InputTokens: 50, TotalCostUSD: .5},
+		{Provider: "codex", EndpointName: "unknown", InputTokens: 10, OutputTokens: 5},
+	}}
+	items, err := queryEndpointCostsForDate(tracker, "2026-10-27", "", endpointCostTestLogger{})
+	if err != nil || len(items) != 5 {
+		t.Fatalf("costs = %#v, err = %v; want five distinct groups", items, err)
+	}
+	for _, item := range items {
+		if item.Endpoint != "" {
+			t.Fatalf("group summary leaked an endpoint: %#v", item)
+		}
+	}
+	claude, codex := items[0], items[1]
+	if claude.Provider != "claude" || claude.Tokens != 220 || math.Abs(claude.Cost-4.5) > 1e-9 || claude.CacheHitRate == nil || math.Abs(*claude.CacheHitRate-.2) > 1e-9 {
+		t.Fatalf("Claude totals or token-weighted cache rate = %#v", claude)
+	}
+	if codex.Provider != "codex" || codex.Tokens != 1100 || codex.Cost != 3 || codex.CacheHitRate == nil || math.Abs(*codex.CacheHitRate-.14) > 1e-9 {
+		t.Fatalf("Codex totals double counted cached input or averaged ratios: %#v", codex)
+	}
+	if items[4].Name != "未记录渠道 / 未记录分组" || items[4].Tokens != 15 {
+		t.Fatalf("unattributed usage must be retained: %#v", items[4])
+	}
+	filtered, err := queryEndpointCostsForDate(tracker, "2026-10-27", "codex", endpointCostTestLogger{})
+	if err != nil || len(filtered) != 4 {
+		t.Fatalf("provider filter = %#v, err = %v", filtered, err)
+	}
+}
+
+func TestOverviewGroupCostsPreservePerRequestCacheAccounting(t *testing.T) {
+	tracker := newAppUsageTestTracker(t)
+	defer tracker.Close()
+	for index, input := range []int64{100, 10} {
+		_, err := tracker.GetDB().Exec(`INSERT INTO request_logs
+			(request_id, start_time, status, provider, channel, group_name, endpoint_name, input_tokens, output_tokens, cache_read_tokens, total_cost_usd)
+			VALUES (?, '2026-10-27 12:00:00', 'completed', 'codex', 'relay', 'key', 'east', ?, 20, 50, 1)`, fmt.Sprintf("group-cost-%d", index), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := queryEndpointCostsForDate(tracker, "2026-10-27", "codex", endpointCostTestLogger{})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("costs = %#v, err = %v", items, err)
+	}
+	// The legacy second row stores uncached input; its cache must be restored
+	// before grouping, even though the combined input exceeds the combined cache.
+	if items[0].Tokens != 200 || items[0].CacheHitRate == nil || math.Abs(*items[0].CacheHitRate-.625) > 1e-9 {
+		t.Fatalf("per-request token semantics lost during aggregation: %#v", items[0])
 	}
 }
 
@@ -401,144 +459,6 @@ func TestQueryTokenUsageForRangeFiltersProvider(t *testing.T) {
 
 	if got.InputTokens != 190 || got.OutputTokens != 20 || got.CacheReadTokens != 10 || got.TotalTokens != 220 {
 		t.Fatalf("codex token usage = %#v, want input=190 output=20 cache_read=10 total=220", got)
-	}
-}
-
-func TestQueryTokenUsageHeatmapMatchesRequestFilters(t *testing.T) {
-	tracker := newAppUsageTestTracker(t)
-	defer tracker.Close()
-
-	db := tracker.GetDB()
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "match-day-1", startTime: "2026-07-01 10:00:00",
-		status: "timeout", provider: "codex", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
-		input: 200, output: 20, cacheRead: 10,
-	})
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "status-miss", startTime: "2026-07-01 11:00:00",
-		status: "completed", provider: "codex", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
-		input: 900, output: 90,
-	})
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "provider-miss", startTime: "2026-07-01 12:00:00",
-		status: "timeout", provider: "claude", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
-		input: 900, output: 90,
-	})
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "match-day-3", startTime: "2026-07-03 11:00:00",
-		status: "failed", provider: "codex", model: "gpt-5", channel: "合租巴士", endpoint: "大陆优化", group: "正价",
-		input: 300, output: 30, cacheRead: 15,
-	})
-
-	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 7, 3, 23, 59, 0, 0, time.UTC)
-	got, err := queryTokenUsageHeatmap(tracker, &tracking.QueryOptions{
-		StartDate:    &start,
-		EndDate:      &end,
-		Status:       "failed",
-		Provider:     "codex",
-		ModelName:    "gpt-5",
-		Channel:      "合租巴士",
-		EndpointName: "大陆优化",
-		GroupName:    "正价",
-	})
-	if err != nil {
-		t.Fatalf("queryTokenUsageHeatmap failed: %v", err)
-	}
-
-	if len(got) != 72 {
-		t.Fatalf("heatmap len = %d, want 72 hourly buckets: %#v", len(got), got)
-	}
-	if got[10].Date != "2026-07-01 10" || got[10].InputTokens != 190 || got[10].OutputTokens != 20 || got[10].TotalTokens != 220 {
-		t.Fatalf("hour 2026-07-01 10 = %#v, want codex-only tokens", got[10])
-	}
-	if got[10].Bucket != "hour" {
-		t.Fatalf("bucket = %q, want hour", got[10].Bucket)
-	}
-	if got[34].Date != "2026-07-02 10" || got[34].TotalTokens != 0 {
-		t.Fatalf("empty hour = %#v, want empty filled hour", got[34])
-	}
-	if got[59].Date != "2026-07-03 11" || got[59].InputTokens != 285 || got[59].OutputTokens != 30 || got[59].TotalTokens != 330 {
-		t.Fatalf("hour 2026-07-03 11 = %#v, want codex-only tokens", got[59])
-	}
-	if got[10].Intensity != 220.0/330.0 || got[59].Intensity != 1 {
-		t.Fatalf("intensity = %.4f %.4f, want normalized by peak total", got[10].Intensity, got[59].Intensity)
-	}
-}
-
-func TestQueryTokenUsageHeatmapUsesHourlyBucketsForSingleDay(t *testing.T) {
-	tracker := newAppUsageTestTracker(t)
-	defer tracker.Close()
-
-	db := tracker.GetDB()
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "hour-10-a", startTime: "2026-07-01 10:05:00",
-		status: "completed", provider: "codex", model: "gpt-5",
-		input: 100, output: 10, cacheRead: 5,
-	})
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "hour-10-b", startTime: "2026-07-01 10:55:00",
-		status: "completed", provider: "codex", model: "gpt-5",
-		input: 50, output: 5,
-	})
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "next-day-miss", startTime: "2026-07-02 10:00:00",
-		status: "completed", provider: "codex", model: "gpt-5",
-		input: 500, output: 50,
-	})
-
-	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 7, 1, 23, 59, 0, 0, time.UTC)
-	got, err := queryTokenUsageHeatmap(tracker, &tracking.QueryOptions{
-		StartDate: &start,
-		EndDate:   &end,
-		Provider:  "codex",
-	})
-	if err != nil {
-		t.Fatalf("queryTokenUsageHeatmap failed: %v", err)
-	}
-
-	if len(got) != 24 {
-		t.Fatalf("heatmap len = %d, want 24: %#v", len(got), got)
-	}
-	if got[10].Date != "2026-07-01 10" || got[10].Bucket != "hour" {
-		t.Fatalf("hour bucket = %#v, want 2026-07-01 10/hour", got[10])
-	}
-	if got[10].InputTokens != 145 || got[10].OutputTokens != 15 || got[10].TotalTokens != 165 || got[10].Intensity != 1 {
-		t.Fatalf("hour 10 = %#v, want summed codex tokens", got[10])
-	}
-	if got[9].TotalTokens != 0 || got[11].TotalTokens != 0 {
-		t.Fatalf("neighbor hours = %#v %#v, want empty filled hours", got[9], got[11])
-	}
-}
-
-func TestQueryTokenUsageHeatmapUsesDailyBucketsForThirtyDayRanges(t *testing.T) {
-	tracker := newAppUsageTestTracker(t)
-	defer tracker.Close()
-
-	db := tracker.GetDB()
-	mustInsertHeatmapUsage(t, db, heatmapUsageRow{
-		requestID: "thirty-day-range-day", startTime: "2026-07-20 10:05:00",
-		status: "completed", provider: "codex", model: "gpt-5",
-		input: 100, output: 10,
-	})
-
-	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, 7, 30, 23, 59, 0, 0, time.UTC)
-	got, err := queryTokenUsageHeatmap(tracker, &tracking.QueryOptions{
-		StartDate: &start,
-		EndDate:   &end,
-		Provider:  "codex",
-	})
-	if err != nil {
-		t.Fatalf("queryTokenUsageHeatmap failed: %v", err)
-	}
-
-	if len(got) != 30 {
-		t.Fatalf("heatmap len = %d, want 30 daily buckets: %#v", len(got), got)
-	}
-	if got[19].Date != "2026-07-20" || got[19].Bucket != "day" || got[19].TotalTokens != 110 {
-		t.Fatalf("day bucket = %#v, want 2026-07-20/day tokens", got[19])
 	}
 }
 
@@ -781,37 +701,5 @@ func recordTokenUsageForProvider(t *testing.T, tracker *tracking.UsageTracker, r
 	}, 100*time.Millisecond)
 	if err := tracker.ForceFlush(); err != nil {
 		t.Fatalf("ForceFlush failed: %v", err)
-	}
-}
-
-type heatmapUsageRow struct {
-	requestID     string
-	startTime     string
-	status        string
-	provider      string
-	model         string
-	channel       string
-	endpoint      string
-	group         string
-	input         int64
-	output        int64
-	cacheCreation int64
-	cacheRead     int64
-}
-
-func mustInsertHeatmapUsage(t *testing.T, db interface {
-	Exec(query string, args ...any) (sql.Result, error)
-}, row heatmapUsageRow) {
-	t.Helper()
-
-	_, err := db.Exec(`INSERT INTO request_logs (
-		request_id, start_time, status, provider, model_name, channel, endpoint_name, group_name,
-		input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.requestID, row.startTime, row.status, row.provider, row.model, row.channel, row.endpoint, row.group,
-		row.input, row.output, row.cacheCreation, row.cacheRead,
-	)
-	if err != nil {
-		t.Fatalf("insert heatmap usage %s: %v", row.requestID, err)
 	}
 }

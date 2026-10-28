@@ -100,3 +100,26 @@ func TestSubscriptionCodexManagedAccountMustBeIndependentAndProviderValid(t *tes
 		t.Fatal("provider mismatch accepted")
 	}
 }
+
+func TestCodexSubscriptionGroupsDoNotRequireCallerKeys(t *testing.T) {
+	db := newCodexEndpointTestDB(t)
+	ctx := context.Background()
+	channels := store.NewSQLiteCodexChannelStore(db)
+	channel, err := channels.Create(ctx, &store.CodexChannelRecord{Name: "official"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewCodexCredentialGroupService(store.NewSQLiteCodexCredentialGroupStore(db), channels, nil)
+	for _, name := range []string{"first", "second"} {
+		group, err := svc.CreateGroup(ctx, &store.CodexCredentialGroupRecord{
+			ChannelID: channel.ID, Name: name, AuthMode: subscription.ClientPassthrough,
+			Subscription: &subscription.Binding{Enabled: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if group.Subscription.KeyHash != "" || group.Subscription.Version != 1 {
+			t.Fatalf("unexpected binding: %+v", group.Subscription)
+		}
+	}
+}

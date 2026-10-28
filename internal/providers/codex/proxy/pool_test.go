@@ -69,10 +69,7 @@ func TestCodexPoolManagedFallbackResolvesSelectedAccountOnEverySend(t *testing.T
 		r.RemoteAddr = "127.0.0.1:1234"
 		r.Header.Set("X-Relay-Key", "pool-key")
 		r.Header.Set("User-Agent", "codex-test")
-		ctx, _, err := c.Authenticate(r)
-		if err != nil {
-			t.Fatal(err)
-		}
+		ctx := routing.WithPoolCaller(r.Context(), routing.PoolCaller{Provider: "codex", PoolID: 1, Revision: 1})
 		r = r.WithContext(ctx)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, r)
@@ -93,12 +90,14 @@ func TestCodexPoolActualSendsStayBoundedAndNeverActivate(t *testing.T) {
 		name           string
 		status, budget int
 		disabled       bool
+		groupsOff      bool
 		want           []string
 	}{
-		{"network_endpoint_fallback", 503, 10, false, []string{"/a/v1/responses", "/b/v1/responses", "/c/v1/responses"}},
-		{"invalid_request_is_terminal", 400, 10, false, []string{"/a/v1/responses"}},
-		{"attempt_budget", 503, 2, false, []string{"/a/v1/responses", "/b/v1/responses"}},
-		{"disabled_account", 503, 10, true, []string{"/c/v1/responses"}},
+		{"channel_group_endpoint_fallback", 503, 10, false, false, []string{"/a/v1/responses", "/b/v1/responses", "/b2/v1/responses", "/c/v1/responses"}},
+		{"invalid_request_is_terminal", 400, 10, false, false, []string{"/a/v1/responses"}},
+		{"attempt_budget", 503, 2, false, false, []string{"/a/v1/responses", "/b/v1/responses"}},
+		{"disabled_account", 503, 10, true, false, []string{"/b2/v1/responses", "/c/v1/responses"}},
+		{"deselected_pool_groups", 503, 10, false, true, []string{"/c/v1/responses"}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			var paths []string
@@ -121,15 +120,24 @@ func TestCodexPoolActualSendsStayBoundedAndNeverActivate(t *testing.T) {
 			a := &store.CodexChannelRecord{ID: 1, Name: "A", FailoverEnabled: true}
 			b := &store.CodexChannelRecord{ID: 2, Name: "B", FailoverEnabled: true}
 			var eps []*CodexEndpoint
-			for i, part := range []string{"a", "b", "c"} {
+			for i, part := range []string{"a", "b", "b2", "c", "outside"} {
 				ch, group := int64(1), int64(11)
 				if i == 2 {
+					group = 12
+				} else if i == 3 {
 					ch, group = 2, 22
+				} else if i == 4 {
+					ch, group = 3, 33
 				}
 				eps = append(eps, &CodexEndpoint{ID: int64(i + 1), ChannelID: ch, CredentialGroupID: group, Name: part, BaseURL: upstream.URL + "/" + part + "/v1", APIKey: part, FailoverEnabled: true, Timeout: time.Second, Priority: i})
 			}
-			manager := &EndpointManager{activeChannel: a, channelsByID: map[int64]*store.CodexChannelRecord{1: a, 2: b}, endpointsByChannel: map[int64][]*CodexEndpoint{1: eps[:2], 2: eps[2:]}, unhealthyMap: map[int64]bool{}, failureDetails: map[int64]EndpointFailureDetail{}, logger: newTestLogger()}
-			runtime := routing.NewPoolRuntime(routing.PoolConfig{Pools: []routing.Pool{{ID: 1, Provider: "codex", Name: "pool", Default: true, Strategy: routing.PoolSequential, Members: []routing.PoolMember{{ChannelID: 1, GroupID: 11, Tier: routing.TierPrimary}, {ChannelID: 2, GroupID: 22, Tier: routing.TierBackup}}}}, Accounts: []routing.AccountState{{ChannelID: 1, GroupID: 11, Enabled: !scenario.disabled}, {ChannelID: 2, GroupID: 22, Enabled: true}}}, nil, nil)
+			manager := &EndpointManager{activeChannel: a, channelsByID: map[int64]*store.CodexChannelRecord{1: a, 2: b, 3: {ID: 3, Name: "outside", FailoverEnabled: true}}, endpointsByChannel: map[int64][]*CodexEndpoint{1: eps[:3], 2: eps[3:4], 3: eps[4:]}, unhealthyMap: map[int64]bool{}, failureDetails: map[int64]EndpointFailureDetail{}, logger: newTestLogger()}
+			runtime := routing.NewPoolRuntime(routing.PoolConfig{Pools: []routing.Pool{{ID: 1, Provider: "codex", Name: "pool", Default: true, Strategy: routing.PoolSequential, Channels: []routing.PoolChannel{{1, routing.TierPrimary}, {2, routing.TierBackup}}, Members: []routing.PoolMember{{ChannelID: 1, GroupID: 11, Tier: routing.TierPrimary}, {ChannelID: 2, GroupID: 22, Tier: routing.TierBackup}, {ChannelID: 1, GroupID: 12, Tier: routing.TierPrimary}}}}, Accounts: []routing.AccountState{{ChannelID: 1, GroupID: 11, Enabled: !scenario.disabled}, {ChannelID: 1, GroupID: 12, Enabled: true}, {ChannelID: 2, GroupID: 22, Enabled: true}, {ChannelID: 3, GroupID: 33, Enabled: true}}}, nil, nil)
+			if scenario.groupsOff {
+				cfg := runtime.Config()
+				cfg.Pools[0].Members = []routing.PoolMember{{ChannelID: 2, GroupID: 22, Tier: routing.TierBackup}}
+				runtime.Replace(cfg)
+			}
 			manager.SetPoolRuntime(runtime)
 			h := NewHandler(manager, time.Second, config.RetryConfig{MaxAttempts: 5, MaxTotalAttempts: scenario.budget, MaxTotalDuration: time.Second}, config.FailoverConfig{Enabled: true}, nil, newTestLogger(), nil)
 			rec := httptest.NewRecorder()
@@ -140,13 +148,13 @@ func TestCodexPoolActualSendsStayBoundedAndNeverActivate(t *testing.T) {
 			if manager.GetActiveChannel().ID != 1 || manager.preferredEndpointID != 0 {
 				t.Fatal("pool mutated global activation")
 			}
-			if len(paths) == 3 && rec.Code != 200 {
+			if strings.HasSuffix(paths[len(paths)-1], "/c/v1/responses") && rec.Code != 200 {
 				t.Fatalf("fallback failed: %d %s", rec.Code, rec.Body.String())
 			}
 			if scenario.status == 400 && rec.Code != 400 {
 				t.Fatalf("lost upstream status: %d", rec.Code)
 			}
-			if !scenario.disabled && len(runtime.Cooldowns()) == 0 && scenario.status == 503 {
+			if !scenario.groupsOff && len(runtime.Cooldowns()) == 0 && scenario.status == 503 {
 				t.Fatal("failed sends did not register cooldown")
 			}
 		})

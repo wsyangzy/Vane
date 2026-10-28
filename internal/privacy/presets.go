@@ -26,7 +26,7 @@ func Presets() []Preset {
 		{
 			ID:          PresetAIAPIKeys,
 			Name:        "常见 AI / API 密钥",
-			Description: "密码字段、通用密钥字段、OpenAI、Anthropic、GitHub、AWS、Google、Slack、JWT、私钥头等",
+			Description: "密码字段、通用密钥字段、OpenAI、Anthropic、GitHub、AWS、Google、Slack、JWT、完整私钥块等",
 			Rules: []Rule{
 				presetRule("密码字段", `(?i)(?:\b(?:password|passwd|pwd|passphrase)\b|密码|口令)\s*[:=：]\s*['"]?(?P<redact>[^'"\s,;]{6,})['"]?`, "[密码]", 80),
 				presetRule("通用密钥字段", `(?i)(?:\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|secret)\b|密钥|令牌|访问令牌|刷新令牌|客户端密钥)\s*[:=：]\s*['"]?(?P<redact>[A-Za-z0-9._~+/=-]{12,})['"]?`, "[密钥]", 90),
@@ -44,7 +44,7 @@ func Presets() []Preset {
 				presetRule("Hugging Face Token", `\bhf_[A-Za-z0-9]{20,}\b`, "[HuggingFace令牌]", 160),
 				presetRule("Telegram Bot Token", `\b\d{8,10}:[A-Za-z0-9_-]{35}\b`, "[Telegram令牌]", 170),
 				presetRule("JWT", `\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}`, "[JWT]", 180),
-				presetRule("私钥块头部", `-----BEGIN [A-Z ]*PRIVATE KEY-----`, "[私钥]", 190),
+				presetRule("完整私钥块", privateKeyPattern, "[私钥]", 190),
 			},
 		},
 	}

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -22,23 +23,27 @@ const claudeGenerationPath = "/v1/messages"
 // 命中路由的请求按阶段依次尝试，每个阶段只在自己的渠道（可限定凭证分组）内换端点，
 // 不调用任何跨渠道全局故障转移，也不读写全局激活渠道；阶段全部失败即结束。
 type routeRun struct {
-	pool         *routing.PoolRuntime
-	preferred    bool
-	poolCtx      context.Context
-	poolModel    string
-	waitStages   []routing.PoolStage
-	recovery     func(routing.PoolStage) (time.Time, bool)
-	subscription bool
-	ledger       routing.Ledger
-	budget       *routing.Budget
-	turn         string
-	onUpdate     func(string)
-	refresh      func()
-	lastResponse error
-	kind         routing.Kind
-	snapshot     routing.Snapshot
-	stages       []routeStage
-	index        int
+	profile         *routing.DispatchPlan
+	profileRuntime  *routing.ProfileRuntime
+	profileRecovery func(routing.DispatchCandidate) (time.Time, bool)
+	profileChannels *endpoint.RouteConfig
+	pool            *routing.PoolRuntime
+	preferred       bool
+	poolCtx         context.Context
+	poolModel       string
+	waitStages      []routing.PoolStage
+	recovery        func(routing.PoolStage) (time.Time, bool)
+	subscription    bool
+	ledger          routing.Ledger
+	budget          *routing.Budget
+	turn            string
+	onUpdate        func(string)
+	refresh         func()
+	lastResponse    error
+	kind            routing.Kind
+	snapshot        routing.Snapshot
+	stages          []routeStage
+	index           int
 	// quotaBlocked 有阶段因凭证分组每日限额被整体跳过；一次都没发出请求时据此回 429
 	quotaBlocked bool
 }
@@ -51,6 +56,7 @@ func (run *routeRun) publishSnapshot() {
 
 // routeStage 执行阶段：channel 为运行时渠道名，groupID 为 0 表示该渠道全部凭证分组
 type routeStage struct {
+	candidate     *routing.DispatchCandidate
 	member        *routing.PoolStage
 	channel       string
 	groupID       int64
@@ -71,6 +77,28 @@ func (run *routeRun) advance() bool {
 		return false
 	}
 	run.index++
+	if run.index >= len(run.stages) && run.profile != nil {
+		for {
+			next, ok := run.profileRuntime.NextRecovery(run.profile, run.profileRecovery)
+			if !ok {
+				return false
+			}
+			run.ledger.Wait("waiting_for_account_recovery")
+			run.publishSnapshot()
+			if run.budget.Wait(run.poolCtx, time.Until(next)) != nil {
+				return false
+			}
+			run.profileRuntime.Recover(run.poolCtx, run.profile)
+			run.stages = claudeProfileStages(run.profile, run.profileChannels)
+			run.index = 0
+			// The profile ledger retains deterministic failures across recovery.
+			// This local adapter ledger is only a projection used by old handlers.
+			run.ledger.RetryRecovered()
+			if len(run.stages) > 0 {
+				return true
+			}
+		}
+	}
 	if run.index >= len(run.stages) && run.pool != nil {
 		if next, ok := run.pool.NextRecoveryWith(run.waitStages, run.poolModel, run.recovery); ok {
 			run.ledger.Wait("waiting_for_account_recovery")
@@ -94,6 +122,10 @@ func (run *routeRun) upstreamModel() string {
 }
 
 func (run *routeRun) stageSnapshotJSON() string {
+	if run != nil && run.profile != nil {
+		data, _ := json.Marshal(run.profile.Trace())
+		return string(data)
+	}
 	if run.refresh != nil {
 		run.refresh()
 	}
@@ -117,6 +149,14 @@ func (run *routeRun) stageSnapshotJSON() string {
 // 有上游响应时由调用方透传最后一次真实响应；一次都没发出请求说明路由配置当前无法服务这条请求，
 // 回 400 而不是 5xx：Claude Code 会按 CLAUDE_CODE_MAX_RETRIES 重试 5xx，把一次调用放大成十几条记录。
 func (run *routeRun) terminalFailure(lastErr error) (string, int) {
+	if run.profile != nil {
+		if run.budget.Stopped() {
+			return "retry_budget_exhausted", http.StatusGatewayTimeout
+		}
+		if run.profile.Error != "" {
+			return run.profile.Error, http.StatusBadRequest
+		}
+	}
 	if lastErr != nil {
 		return run.kind.ExhaustedReason(), http.StatusBadGateway
 	}
@@ -143,6 +183,9 @@ func planClaudeRoute(em *endpoint.Manager, r *http.Request, body []byte, streami
 	}
 	cfg := em.RouteConfig()
 	if runtime := em.PoolRuntime(); runtime != nil {
+		if profile := runtime.ProfileRuntime(); profile != nil {
+			return planClaudeProfile(profile, cfg, r, body, streaming, requestID)
+		}
 		return planClaudePool(runtime, cfg, r, body, streaming)
 	}
 	if cfg == nil {
@@ -227,9 +270,29 @@ func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker
 	if stage == nil || em == nil {
 		return nil, false
 	}
-	candidates := em.GetRoutableEndpointsForChannel(stage.channel, stage.groupID, nil)
-	if run.pool != nil {
+	var candidates []*endpoint.Endpoint
+	if run.profile != nil {
+		candidates = em.ProfileEndpoints(stage.channel, stage.groupID)
+	} else if run.pool != nil {
 		candidates = em.PoolEndpoints(stage.channel, stage.groupID)
+	} else {
+		candidates = em.GetRoutableEndpointsForChannel(stage.channel, stage.groupID, nil)
+	}
+	if stage.candidate != nil {
+		filtered := candidates[:0:0]
+		for _, ep := range candidates {
+			if endpoint.EndpointKeyForConfig(ep.Config) == stage.candidate.EndpointID {
+				if !forwarder.profileCandidateCurrent(*stage.candidate, ep) {
+					run.ledger.Skip(stage.candidate.Identity(), "candidate_configuration_changed")
+					if run.profile != nil {
+						run.profile.Skip(*stage.candidate, "candidate_configuration_changed")
+					}
+					continue
+				}
+				filtered = append(filtered, ep)
+			}
+		}
+		candidates = filtered
 	}
 	if stage.upstreamModel != "" {
 		candidates = filterEndpointsDeclaringModel(candidates, stage.upstreamModel)
@@ -246,6 +309,9 @@ func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker
 		if forwarder.states != nil {
 			if allowed, reason := forwarder.states.Allowed(claudeStateKeys(ctx, body), candidate); !allowed {
 				run.ledger.Skip(candidate, reason)
+				if run.profile != nil && stage.candidate != nil {
+					run.profile.Skip(*stage.candidate, reason)
+				}
 				continue
 			}
 		}
@@ -356,11 +422,13 @@ func (run *routeRun) preferPool(f *Forwarder, body []byte) {
 		}
 		return false
 	}
-	sort.SliceStable(run.stages, func(i, j int) bool {
-		a, b := run.stages[i], run.stages[j]
-		if a.index != b.index || a.member.Tier != b.member.Tier {
-			return false
+	for start := 0; start < len(run.stages); {
+		end := start + 1
+		for end < len(run.stages) && run.stages[end].index == run.stages[start].index && run.stages[end].channel == run.stages[start].channel && run.stages[end].member.Tier == run.stages[start].member.Tier {
+			end++
 		}
-		return preferred(a) && !preferred(b)
-	})
+		stages := run.stages[start:end]
+		sort.SliceStable(stages, func(i, j int) bool { return preferred(stages[i]) && !preferred(stages[j]) })
+		start = end
+	}
 }

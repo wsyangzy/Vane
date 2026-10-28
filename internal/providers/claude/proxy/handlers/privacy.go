@@ -12,6 +12,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/privacy"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // 隐私策略短路时写入 lifecycle 的失败原因
@@ -108,6 +109,9 @@ func applyPrivacyFilter(
 	lifecycleManager RequestLifecycleManager,
 	levels func(channel string) string,
 ) (*privacyBodies, error) {
+	if existing, ok := ctx.Value(privacyBodiesKey{}).(*privacyBodies); ok && existing != nil {
+		return existing, nil
+	}
 	bodies := &privacyBodies{
 		original: body,
 		result:   privacy.ApplyResult{Body: body, Action: privacy.ModeDisabled},
@@ -122,6 +126,12 @@ func applyPrivacyFilter(
 		Method:       requestMethod(r),
 		ProviderType: providerType,
 		ContentType:  requestHeader(r, "Content-Type"),
+	}
+	if r != nil {
+		turn := routing.ResolveTurn(ctx, r.Header, body, providerType)
+		if turn.ConversationID != "" {
+			req.SessionKey = providerType + "\x00" + routing.CallerScope(ctx) + "\x00" + turn.ConversationID + "\x00" + turn.BranchID
+		}
 	}
 	if lifecycleManager != nil {
 		req.RequestID = lifecycleManager.GetRequestID()

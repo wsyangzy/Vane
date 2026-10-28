@@ -9,6 +9,7 @@ import (
 // 扫描不含端点/渠道维度，只做一次；渠道级隐私级别在每次尝试选端点后，
 // 由调用方用 ChannelLevel.SelectBody 从 ApplyResult 中挑选实际发送的正文。
 type Request struct {
+	SessionKey   string `json:"-"`
 	RequestID    string `json:"request_id"`
 	Path         string `json:"path"`
 	Method       string `json:"method"`
@@ -18,6 +19,7 @@ type Request struct {
 
 // RuleHit 单条规则的命中统计。
 type RuleHit struct {
+	Kind     string `json:"kind,omitempty"`
 	RuleID   int64  `json:"rule_id"`
 	RuleName string `json:"rule_name"`
 	Source   string `json:"source"`
@@ -34,12 +36,16 @@ const (
 	SkippedUnsupportedPath = "skipped_unsupported_path"
 	SkippedScanTruncated   = "scan_truncated"
 	SkippedEmptyBody       = "skipped_empty_body"
+	SkippedNoRules         = "skipped_no_rules"
+	SkippedNoText          = "skipped_no_text"
 )
 
 // ApplyResult 一次过滤的结果。Body 始终可直接转发：
 // 零命中 / 仅检测 / 关闭时与输入 byte-identical。
 type ApplyResult struct {
-	Body []byte `json:"-"`
+	Restoration *Restoration `json:"-"`
+	activity    *activityHandle
+	Body        []byte `json:"-"`
 	// RedactedBody 按脱敏语义替换后的正文，与全局模式无关；没有可替换的命中时为 nil。
 	// 供渠道级隐私级别覆盖使用（三方中转在全局「仅检测」下仍强制脱敏）。
 	RedactedBody    []byte        `json:"-"`
@@ -92,6 +98,12 @@ func NormalizeChannelLevel(level string) string {
 // SelectBody 按渠道隐私级别挑选实际发送的正文。
 // original 是扫描前的原始正文；返回的 redacted 表示发出的正文是否被改写。
 func (r ApplyResult) SelectBody(level string, original []byte) (body []byte, redacted bool) {
+	defer func() {
+		if redacted {
+			r.Restoration.enable()
+			r.activity.update(true, 0, "")
+		}
+	}()
 	switch NormalizeChannelLevel(level) {
 	case ChannelLevelThirdParty:
 		if r.Action != ModeDisabled && r.RedactedBody != nil {

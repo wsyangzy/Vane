@@ -301,10 +301,7 @@ func TestPoolAccountsResolveIndependentlyAndShareLegacyAliasQuota(t *testing.T) 
 	digest := sha256.Sum256([]byte("pool-test-key"))
 	runtime := routing.NewPoolRuntime(routing.PoolConfig{Pools: []routing.Pool{{ID: 1, Provider: "claude", Revision: 1, KeyHash: hex.EncodeToString(digest[:])}}, Accounts: []routing.AccountState{{ChannelID: 1, GroupID: 1, Enabled: true, Managed: true}, {ChannelID: 1, GroupID: 2, Enabled: true, Managed: true}, {ChannelID: 1, GroupID: 3, Enabled: true, Managed: true}}}, nil, nil)
 	c.SetPoolRuntime(runtime)
-	caller, err := runtime.Authenticate("claude", "pool-test-key")
-	if err != nil {
-		t.Fatal(err)
-	}
+	caller := routing.PoolCaller{Provider: "claude", PoolID: 1, Revision: 1}
 	poolCtx := routing.WithPoolCaller(ctx, caller)
 	for _, group := range []int64{1, 2} {
 		selected, err := c.SelectPoolAccount(poolCtx, 1, group)
@@ -318,7 +315,7 @@ func TestPoolAccountsResolveIndependentlyAndShareLegacyAliasQuota(t *testing.T) 
 	if len(resolutions) != 2 || resolutions[0] == resolutions[1] {
 		t.Fatal("credentials were not resolved for each selected account")
 	}
-	if _, err = c.SelectPoolAccount(ctx, 1, 2); err == nil {
+	if _, err := c.SelectPoolAccount(ctx, 1, 2); err == nil {
 		t.Fatal("API caller borrowed managed account")
 	}
 	now := time.Now()

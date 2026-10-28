@@ -68,21 +68,26 @@ func (h *Handler) planPoolRoute(r *http.Request, body []byte, streaming bool, ru
 		route.stages = append(route.stages, codexRouteStage{member: &m, route: route, native: false, channel: channel, groupID: m.GroupID, upstreamModel: m.UpstreamModel, index: m.Index, snapshotJSON: snapshot.JSON(m.Index)})
 	}
 	if h.states != nil {
-		sort.SliceStable(route.stages, func(i, j int) bool {
-			a, b := &route.stages[i], &route.stages[j]
-			if a.index != b.index || a.member.Tier != b.member.Tier {
-				return false
+		for start := 0; start < len(route.stages); {
+			end := start + 1
+			for end < len(route.stages) && route.stages[end].index == route.stages[start].index && route.stages[end].channel.ID == route.stages[start].channel.ID && route.stages[end].member.Tier == route.stages[start].member.Tier {
+				end++
 			}
-			preferred := func(s *codexRouteStage) bool {
-				for _, ep := range h.manager.PoolEndpoints(s.channel.ID, s.groupID) {
-					if ep.ChannelID == s.channel.ID && ep.CredentialGroupID == s.groupID && h.states.Preferred(routing.ExplicitTurn(r.Context(), r.Header), s.candidate(ep, model)) {
-						return true
+			stages := route.stages[start:end]
+			sort.SliceStable(stages, func(i, j int) bool {
+				a, b := &stages[i], &stages[j]
+				preferred := func(s *codexRouteStage) bool {
+					for _, ep := range h.manager.PoolEndpoints(s.channel.ID, s.groupID) {
+						if ep.ChannelID == s.channel.ID && ep.CredentialGroupID == s.groupID && h.states.Preferred(routing.ExplicitTurn(r.Context(), r.Header), s.candidate(ep, model)) {
+							return true
+						}
 					}
+					return false
 				}
-				return false
-			}
-			return preferred(a) && !preferred(b)
-		})
+				return preferred(a) && !preferred(b)
+			})
+			start = end
+		}
 	}
 	return route
 }

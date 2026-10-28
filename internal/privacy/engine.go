@@ -19,10 +19,11 @@ type CompiledRule struct {
 
 // Snapshot 编译后的规则快照，热路径只读。
 type Snapshot struct {
-	Version  int64
-	Settings Settings
-	Rules    []CompiledRule
-	LoadedAt time.Time
+	Version     int64
+	Settings    Settings
+	Rules       []CompiledRule
+	LoadedAt    time.Time
+	restoration *Restoration
 }
 
 // CompileRule 编译单条规则（regex 使用 Go RE2，无回溯，天然免疫 ReDoS）
@@ -32,6 +33,11 @@ func CompileRule(rule Rule) (CompiledRule, error) {
 	}
 	compiled := CompiledRule{Rule: rule}
 	switch rule.MatchType {
+	case MatchTypePrefix:
+		if len(rule.Pattern) < 3 || len(rule.Pattern) > 64 {
+			return CompiledRule{}, fmt.Errorf("密钥前缀须为 3–64 字节")
+		}
+		compiled.regex = regexp.MustCompile(regexp.QuoteMeta(rule.Pattern) + `[A-Za-z0-9_-]{8,}`)
 	case MatchTypeRegex:
 		re, err := regexp.Compile(rule.Pattern)
 		if err != nil {
@@ -107,6 +113,7 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 	started := time.Now()
 	candidates := s.candidateRules()
 	if len(candidates) == 0 {
+		result.SkippedReason = SkippedNoRules
 		result.ScanDuration = time.Since(started)
 		return result, nil
 	}
@@ -139,6 +146,7 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 		return s.handleScanError(result, started, err)
 	}
 	if len(segments) == 0 {
+		result.SkippedReason = SkippedNoText
 		result.ScanDuration = time.Since(started)
 		return result, nil
 	}
@@ -221,16 +229,21 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 		var redactSpans []matchSpan
 		for _, span := range spans {
 			rule := &s.Rules[span.ruleIdx]
+			action := rule.Action
 			hit := hits[rule.ID]
 			if hit == nil {
-				hit = &RuleHit{RuleID: rule.ID, RuleName: rule.Name, Source: rule.Source, Action: rule.Action}
+				hit = &RuleHit{RuleID: rule.ID, RuleName: rule.Name, Source: rule.Source, Action: action, Kind: RuleKind(rule.Rule)}
 				hits[rule.ID] = hit
 			}
 			hit.Count++
 			hit.Matches = append(hit.Matches, text[span.start:span.end])
 			result.HitCount++
 			// 规则自身是 detect 时永不替换；全局模式在 Apply 末尾决定是否采用替换结果
-			if rule.Action == ActionRedact {
+			if action == ActionBlock {
+				result.RuleHits = sortedRuleHits(hits)
+				return nil, &PolicyError{StatusCode: http.StatusForbidden, Code: "privacy_sensitive_blocked", Message: "请求包含被设为拦截的敏感内容：" + kindLabels[RuleKind(rule.Rule)], Result: *result}
+			}
+			if action == ActionRedact {
 				redactSpans = append(redactSpans, span)
 			}
 		}
@@ -246,12 +259,40 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 // collectMatchSpans 按规则优先级收集命中区间；与更高优先级规则重叠的命中被丢弃。
 func (s *Snapshot) collectMatchSpans(candidates []int, text string) []matchSpan {
 	var accepted []matchSpan
-	for _, ruleIdx := range candidates {
+	// Blocking rules cannot be hidden by a higher-priority, overlapping mask.
+	var ordered, allowRules []int
+	for _, index := range candidates {
+		if s.Rules[index].Action == ActionAllow {
+			allowRules = append(allowRules, index)
+		} else {
+			ordered = append(ordered, index)
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		rank := func(index int) int {
+			if s.Rules[index].Action == ActionBlock {
+				return 0
+			}
+			if RuleKind(s.Rules[index].Rule) == "private_key" {
+				return 1
+			}
+			return 2
+		}
+		return rank(ordered[i]) < rank(ordered[j])
+	})
+	for _, ruleIdx := range ordered {
 		rule := &s.Rules[ruleIdx]
-		for _, loc := range findRuleMatches(rule, text) {
+		locations := findRuleMatches(rule, text)
+		if s.restoration != nil {
+			locations = append(locations, s.restoration.knownMatches(RuleKind(rule.Rule), text)...)
+		}
+		for _, loc := range locations {
+			if s.allowsMatch(allowRules, text[loc[0]:loc[1]]) {
+				continue
+			}
 			// 已经是本引擎生成的替身值，不再二次替换：
 			// 会话历史会反复重发，二次替换会让同一实体在上下文里出现多个假名
-			if looksLikePseudonym(text[loc[0]:loc[1]]) {
+			if looksLikePseudonym(text[loc[0]:loc[1]]) || s.restoration != nil && s.restoration.isReplacement(text[loc[0]:loc[1]]) {
 				continue
 			}
 			span := matchSpan{start: loc[0], end: loc[1], ruleIdx: ruleIdx}
@@ -263,6 +304,26 @@ func (s *Snapshot) collectMatchSpans(candidates []int, text string) []matchSpan 
 	}
 	sort.Slice(accepted, func(i, j int) bool { return accepted[i].start < accepted[j].start })
 	return accepted
+}
+
+// 放行仅豁免完整命中值；匹配其中一部分不能放行整个敏感值。
+// 字面量放行忽略大小写，与旧例外名单保持一致。
+func (s *Snapshot) allowsMatch(candidates []int, raw string) bool {
+	for _, index := range candidates {
+		rule := &s.Rules[index]
+		if rule.MatchType == MatchTypeLiteral {
+			if strings.EqualFold(rule.Pattern, raw) {
+				return true
+			}
+			continue
+		}
+		for _, loc := range findRuleMatches(rule, raw) {
+			if loc[0] == 0 && loc[1] == len(raw) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // findRuleMatches 返回规则在文本中的所有命中区间（字节偏移）
@@ -337,6 +398,9 @@ func (s *Snapshot) applySpans(text string, spans []matchSpan, pseudo *pseudonymi
 }
 
 func (s *Snapshot) replacementFor(rule *CompiledRule, raw string, pseudo *pseudonymizer) string {
+	if s.restoration != nil {
+		return s.restoration.Replace(RuleKind(rule.Rule), raw, s.Settings.KeepKeyFormat)
+	}
 	if rule.ReplacementMode == ReplacementPseudonym {
 		return pseudo.replacementFor(rule.PseudonymKind, raw)
 	}
@@ -385,7 +449,7 @@ func sortedRuleHits(hits map[int64]*RuleHit) []RuleHit {
 }
 
 // ApplyToText 对一段裸文本执行规则（规则测试面板用）。
-// 始终按 redact 语义返回替换后文本，但不会越过 mode=disabled 的快照。
+// 始终按 redact 语义推演，用于本地预览，不受运行模式影响。
 func (s *Snapshot) ApplyToText(text string) ApplyResult {
 	result := ApplyResult{Action: ModeRedact}
 	if s == nil {
@@ -401,12 +465,15 @@ func (s *Snapshot) ApplyToText(text string) ApplyResult {
 		rule := &s.Rules[span.ruleIdx]
 		hit := hits[rule.ID]
 		if hit == nil {
-			hit = &RuleHit{RuleID: rule.ID, RuleName: rule.Name, Source: rule.Source, Action: rule.Action}
+			hit = &RuleHit{RuleID: rule.ID, RuleName: rule.Name, Source: rule.Source, Action: rule.Action, Kind: RuleKind(rule.Rule)}
 			hits[rule.ID] = hit
 		}
 		hit.Count++
 		hit.Matches = append(hit.Matches, text[span.start:span.end])
 		result.HitCount++
+		if rule.Action == ActionBlock {
+			result.Action = ActionBlock
+		}
 		if rule.Action == ActionRedact {
 			redactSpans = append(redactSpans, span)
 		}

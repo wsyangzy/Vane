@@ -89,7 +89,7 @@ func (l *Ledger) Allowed(c Candidate) (bool, string) {
 		case ScopeCredential:
 			match = failed.Credential == c.Credential
 		case ScopeModel:
-			match = failed.Credential == c.Credential && failed.Model == c.Model && failed.Endpoint == c.Endpoint
+			match = failed.Credential == c.Credential && failed.Model == c.Model
 		case ScopeCandidate:
 			match = failed == c
 		}
@@ -147,6 +147,22 @@ type Budget struct {
 
 func NewBudget(maxAttempts int, maxDuration time.Duration) *Budget {
 	return &Budget{start: time.Now(), maxAttempts: maxAttempts, maxDuration: maxDuration}
+}
+
+// Limit combines profile and application ceilings without resetting elapsed
+// time or attempts when execution moves to another stage or provider adapter.
+func (b *Budget) Limit(maxAttempts int, maxDuration time.Duration) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if maxAttempts > 0 && (b.maxAttempts <= 0 || maxAttempts < b.maxAttempts) {
+		b.maxAttempts = maxAttempts
+	}
+	if maxDuration > 0 && (b.maxDuration <= 0 || maxDuration < b.maxDuration) {
+		b.maxDuration = maxDuration
+	}
 }
 
 func (b *Budget) Check() error {

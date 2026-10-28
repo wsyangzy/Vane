@@ -44,7 +44,7 @@ func (s *CodexCredentialGroupService) normalizeSubscription(ctx context.Context,
 		return fmt.Errorf("订阅分组不能保存 API Key")
 	}
 	if r.Subscription == nil {
-		return fmt.Errorf("请配置独立调用方本地密钥及订阅绑定")
+		return fmt.Errorf("请配置订阅凭证来源")
 	}
 	b := r.Subscription
 	if b.Action == "rebind" && b.AccountID != "" && old != nil && old.Subscription != nil && old.Subscription.AccountID == b.AccountID {
@@ -71,8 +71,8 @@ func (s *CodexCredentialGroupService) normalizeSubscription(ctx context.Context,
 		return fmt.Errorf("未知的订阅绑定操作")
 	}
 	digest, e := hex.DecodeString(b.KeyHash)
-	if e != nil || len(digest) != 32 {
-		return fmt.Errorf("本地密钥哈希无效，请重新生成")
+	if b.KeyHash != "" && (e != nil || len(digest) != 32) {
+		return fmt.Errorf("历史本地密钥哈希无效")
 	}
 	b.KeyHash = strings.ToLower(b.KeyHash)
 	b.GroupID = r.ID
@@ -101,7 +101,7 @@ func (s *CodexCredentialGroupService) normalizeSubscription(ctx context.Context,
 			if g.ID == r.ID || g.AuthMode != subscription.ClientPassthrough || g.Subscription == nil {
 				continue
 			}
-			if g.Subscription.KeyHash == b.KeyHash {
+			if b.KeyHash != "" && g.Subscription.KeyHash == b.KeyHash {
 				return fmt.Errorf("本地密钥已绑定其他调用方")
 			}
 			if b.AccountID != "" && g.Subscription.AccountID == b.AccountID {

@@ -22,8 +22,8 @@ func TestLedgerSeparatesModelsCredentialsAndEndpoints(t *testing.T) {
 	}
 	other := x
 	other.Endpoint = "e2"
-	if ok, _ := l.Allowed(other); !ok {
-		t.Fatal("model refusal incorrectly blocked an independent backend")
+	if ok, _ := l.Allowed(other); ok {
+		t.Fatal("same account and model escaped through another endpoint")
 	}
 	l.Fail(x, Failure{Scope: ScopeEndpoint, Reason: "network"})
 	if ok, _ := l.Allowed(y); ok {
@@ -72,5 +72,26 @@ func TestBudgetStopsSendsAndBoundsWait(t *testing.T) {
 	}
 	if n, _ := b.Stats(); n != 0 {
 		t.Fatal("cancelled request consumed attempt")
+	}
+}
+
+func TestBudgetLimitsNeverResetOrWeakenPriorCeilings(t *testing.T) {
+	b := NewBudget(10, time.Minute)
+	if err := b.Begin(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b.Limit(1, time.Hour)
+	if !errors.Is(b.Begin(context.Background()), ErrBudgetExhausted) {
+		t.Fatal("global limit reset the attempt count")
+	}
+	b.Limit(100, 10*time.Minute)
+	if !errors.Is(b.Check(), ErrBudgetExhausted) {
+		t.Fatal("a later stage weakened the attempt ceiling")
+	}
+	b = NewBudget(10, time.Minute)
+	b.start = time.Now().Add(-2 * time.Second)
+	b.Limit(0, time.Second)
+	if !errors.Is(b.Check(), ErrBudgetExhausted) {
+		t.Fatal("duration limit reset elapsed time")
 	}
 }

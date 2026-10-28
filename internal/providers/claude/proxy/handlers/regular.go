@@ -114,6 +114,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	// 实际发往上游的正文在 executeRequest 里按目标渠道的隐私级别挑选。
 	// 处理器实例跨请求共享，按请求的正文集合经 ctx 传递
 	ctx = contextWithPrivacyBodies(ctx, bodies)
+	w, finishPrivacy := bodies.result.WrapResponse(w)
+	defer finishPrivacy()
 	bodyBytes = bodies.result.Body
 
 	slog.Info(fmt.Sprintf("🔄 [常规架构] [%s] 使用unified v3架构", connID))
@@ -141,6 +143,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	if subRoute := planSubscriptionRoute(rh.endpointManager, r, bodyBytes); subRoute != nil {
 		route = subRoute
 	}
+	ctx = profileRouteContext(ctx, route, r)
+	defer route.endProfile()
 	route.preferPool(rh.forwarder, bodyBytes)
 	route.initBudget(rh.config.Retry)
 	route.watchSubscription(ctx, rh.forwarder)
@@ -316,6 +320,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				}
 				defer admission.Finish(0, nil, nil, false)
 				defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
+				defer finishProfileAttempt(attemptCtx, nil)
 				if err := beginRouteAttempt(ctx, route); err != nil {
 					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 					return
@@ -331,6 +336,9 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 				// 执行请求
 				resp, err := rh.executeRequest(attemptCtx, r, bodyBytes, ep, lifecycleManager, route)
+				if err != nil {
+					finishProfileAttempt(attemptCtx, err)
+				}
 				if err != nil && ctx.Err() != nil {
 					lifecycleManager.CancelRequest("client disconnected", nil)
 
@@ -404,7 +412,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// globalAttemptCount: 全局尝试次数，用于限流策略
 				decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
 				decision = route.failureDecision(rh.forwarder, ep, bodyBytes, err, decision)
-				if (route == nil || route.pool == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
+				if (route == nil || route.pool == nil && route.profile == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
 					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), err, "subscription_authentication_required", http.StatusUnauthorized, route)
 					return
 				}

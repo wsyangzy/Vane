@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/routing"
 )
 
@@ -116,29 +117,53 @@ func codexItemStateKeys(r *http.Request, items []any) []string {
 	return keys
 }
 
-func (h *Handler) observeRoutedState(r *http.Request, c routing.Candidate, body []byte) {
+func codexResponseStateKeys(r *http.Request, frame map[string]any) []string {
+	response := frame
+	if obj, ok := frame["response"].(map[string]any); ok {
+		response = obj
+	}
 	var keys []string
-	success, failed := false, false
+	if id, ok := response["id"].(string); ok && id != "" {
+		keys = append(keys, routing.StateKey(r.Context(), "response_id", id))
+	}
+	if items, ok := response["output"].([]any); ok {
+		keys = append(keys, codexItemStateKeys(r, items)...)
+	}
+	// Some Responses backends send sealed output only in the completed item
+	// event. These hashes remain provisional until the whole response succeeds.
+	if frame["type"] == "response.output_item.done" {
+		if item, ok := frame["item"].(map[string]any); ok {
+			keys = append(keys, codexItemStateKeys(r, []any{item})...)
+		}
+	}
+	return keys
+}
+
+func (h *Handler) observeRoutedState(r *http.Request, c routing.Candidate, body []byte) []string {
+	var keys []string
+	// A successful compact response has object/type=response.compaction and
+	// output, but no status=completed. Use the same validation as execution.
+	success, failed := codexProfileProtocolSuccess(subscription.Path(r), body), false
 	routing.JSONFrames(body, func(frame map[string]any) {
 		typ, _ := frame["type"].(string)
-		if typ == "response.failed" || typ == "error" || frame["error"] != nil {
+		if typ == "response.failed" || typ == "response.incomplete" || typ == "error" || frame["error"] != nil {
 			failed = true
 		}
 		response := frame
 		if obj, ok := frame["response"].(map[string]any); ok {
 			response = obj
 		}
+		if response["error"] != nil || response["status"] == "failed" || response["status"] == "incomplete" {
+			failed = true
+		}
 		if status, _ := response["status"].(string); status == "completed" || typ == "response.completed" {
 			success = true
 		}
-		if id, ok := response["id"].(string); ok && id != "" {
-			keys = append(keys, routing.StateKey(r.Context(), "response_id", id))
-		}
-		if items, ok := response["output"].([]any); ok {
-			keys = append(keys, codexItemStateKeys(r, items)...)
-		}
+		keys = append(keys, codexResponseStateKeys(r, frame)...)
 	})
 	if success && !failed {
 		h.states.Observe(keys, routing.ExplicitTurn(r.Context(), r.Header), c)
+		return keys
 	}
+	return nil
 }

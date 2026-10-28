@@ -154,6 +154,7 @@ func (a *App) startup() {
 
 	// 9.5 初始化 Codex 代理组件，须在 startProxyServer 前完成，以便注册路由
 	a.initCodexProxy()
+	a.startRoutingQuotaRefresh()
 
 	// 10. 启动 HTTP 代理服务器
 	proxyStarted := a.startProxyServer()

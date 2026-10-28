@@ -40,12 +40,16 @@ func (f *Forwarder) admitSubscription(ctx context.Context, ep *endpoint.Endpoint
 	lease, err := f.subscriptions.Acquire(ctx, request.Binding, model)
 	if err != nil {
 		routing.PoolAttemptFromContext(ctx).Finish(false)
+		finishProfileAttempt(ctx, err)
 		return ctx, nil, err
 	}
 	return context.WithValue(ctx, subscriptionAdmissionKey{}, lease), lease, nil
 }
 
 func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *routeRun {
+	if runtime := em.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
+		return nil
+	}
 	request := subscription.FromContext(r.Context())
 	if request == nil {
 		return nil
@@ -93,6 +97,22 @@ func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *
 }
 
 func (f *Forwarder) subscriptionEligibility(ctx context.Context, ep *endpoint.Endpoint, model string) (bool, string) {
+	if routing.ProfileRequestFromContext(ctx) != nil {
+		if _, ok := profileCandidate(ctx, f.poolChannelID(ep), ep.Config.CredentialGroupID, endpoint.EndpointKeyForConfig(ep.Config), model); !ok {
+			return false, "profile_candidate_not_authorized"
+		}
+		if ep.Config.AuthMode != subscription.ClientPassthrough {
+			return true, ""
+		}
+		if f.subscriptions == nil {
+			return false, "subscription_state_unavailable"
+		}
+		binding, err := f.subscriptions.ProfileBinding(ctx, f.poolChannelID(ep), ep.Config.CredentialGroupID)
+		if err != nil {
+			return false, "managed_account_not_authorized"
+		}
+		return f.subscriptions.Eligible(ctx, binding, model)
+	}
 	if runtime := f.endpointManager.PoolRuntime(); runtime != nil {
 		if account, ok := runtime.Account(f.poolChannelID(ep), ep.Config.CredentialGroupID); !ok || !account.Enabled {
 			return false, "account_disabled"
@@ -160,8 +180,26 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 			return nil, err
 		}
 	}
+	if reservation := profileAttempt(ctx); reservation != nil {
+		if !f.profileCandidateCurrent(reservation.Candidate(), ep) {
+			lease.Finish(0, nil, nil, false)
+			plan := routing.ProfileRequestFromContext(ctx)
+			plan.Skip(reservation.Candidate(), "candidate_configuration_changed")
+			finishProfileAttempt(ctx, errors.New("candidate_configuration_changed"))
+			return nil, errors.New("candidate_configuration_changed")
+		}
+		if err := reservation.Begin(ctx); err != nil {
+			lease.Finish(0, nil, nil, false)
+			finishProfileAttempt(ctx, err)
+			return nil, err
+		}
+		if health, _ := ctx.Value(profileHealthKey{}).(*profileHealth); health != nil {
+			health.sent = true
+		}
+	}
 	resp, err := client.Do(dst)
 	if err != nil {
+		finishProfileAttempt(ctx, err)
 		lease.Finish(0, nil, nil, false)
 		if ctx.Err() == nil {
 			routing.PoolAttemptFromContext(ctx).Fail(claudeRouteFailure(err), time.Time{})
@@ -176,6 +214,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 	if request != nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		resp.Body.Close()
 		lease.Finish(resp.StatusCode, nil, nil, false)
+		finishProfileAttempt(ctx, errors.New("subscription_redirect_rejected"))
 		return nil, errors.New("subscription_redirect_rejected")
 	}
 	if request != nil && resp.StatusCode == http.StatusUnauthorized && ep.Config.AuthMode == subscription.ClientPassthrough {
@@ -197,7 +236,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 		resp.Header.Del("Content-Encoding")
 		resp.Header.Del("Content-Length")
 	}
-	if request != nil || routing.PoolAttemptFromContext(ctx) != nil {
+	if request != nil || routing.PoolAttemptFromContext(ctx) != nil || profileAttempt(ctx) != nil {
 		// Existing response processors forward decoded bytes. Decode before
 		// recovery observation as well, including the count_tokens path.
 		if err := decodeSubscriptionResponse(resp); err != nil {
@@ -218,6 +257,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 		}
 	}
 	observeClaudePool(resp, ctx)
+	f.observeClaudeProfile(resp, ctx)
 	return resp, nil
 }
 
@@ -235,8 +275,14 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 	}
 	run := planSubscriptionRoute(h.endpointManager, r, body)
 	if run == nil {
-		run = planClaudePool(h.endpointManager.PoolRuntime(), h.endpointManager.RouteConfig(), r, body, true)
+		if runtime := h.endpointManager.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
+			run = planClaudeProfile(runtime.ProfileRuntime(), h.endpointManager.RouteConfig(), r, bodies.result.Body, true, connID)
+		} else {
+			run = planClaudePool(h.endpointManager.PoolRuntime(), h.endpointManager.RouteConfig(), r, body, true)
+		}
 	}
+	ctx = profileRouteContext(ctx, run, r)
+	defer run.endProfile()
 	run.initBudget(h.config.Retry)
 	run.watchSubscription(ctx, h.forwarder)
 	if lifecycle != nil {
@@ -256,6 +302,7 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 			}
 			defer admission.Finish(0, nil, nil, false)
 			defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
+			defer finishProfileAttempt(attemptCtx, nil)
 			if err := beginRouteAttempt(ctx, run); err != nil {
 				lastErr = err
 				break
@@ -283,6 +330,9 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 			}
 			h.forwarder.CopyHeaders(r, req, ep)
 			resp, err := h.forwarder.sendClaude(attemptCtx, r, req, ep, requestBody, client)
+			if err != nil {
+				finishProfileAttempt(attemptCtx, err)
+			}
 			if err == nil && resp != nil {
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 					data, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -304,14 +354,14 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 			run.rememberResponse(err)
 			run.ledger.Fail(candidate, claudeRouteFailure(err))
 			run.publishSnapshot()
-			if run.pool == nil && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
+			if run.pool == nil && run.profile == nil && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
 				break
 			}
 			if ctx.Err() != nil || claudeRouteFailure(err).Terminal {
 				break
 			}
 		}
-		if run.pool == nil && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized || ctx.Err() != nil || run.budget.Stopped() || claudeRouteFailure(lastErr).Terminal {
+		if run.pool == nil && run.profile == nil && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized || ctx.Err() != nil || run.budget.Stopped() || claudeRouteFailure(lastErr).Terminal {
 			break
 		}
 		if !run.advance() {

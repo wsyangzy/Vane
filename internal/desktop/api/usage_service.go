@@ -6,6 +6,10 @@ import (
 
 type UsageService struct{ app *app.App }
 
+func (s *UsageService) GetUsageDashboard(query app.UsageDashboardQuery) (app.UsageDashboard, error) {
+	return s.app.GetUsageDashboard(query)
+}
+
 func (s *UsageService) GetCredentialGroupDailyUsage(provider, channel, groupName string, limitUSD float64) (app.CredentialGroupDailyUsage, error) {
 	return s.app.GetCredentialGroupDailyUsage(provider, channel, groupName, limitUSD)
 }

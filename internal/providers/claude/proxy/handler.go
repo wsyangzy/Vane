@@ -28,6 +28,10 @@ func (h *Handler) SetSubscriptionController(c *subscription.Controller) {
 	h.forwarder.SetSubscriptionController(c)
 }
 
+func (h *Handler) SetProfileResponseObserver(observer func(routing.DispatchCandidate, int, http.Header, []byte)) {
+	h.forwarder.SetProfileResponseObserver(observer)
+}
+
 // Handler handles HTTP proxy requests
 type Handler struct {
 	endpointManager      *endpoint.Manager

@@ -43,12 +43,15 @@ const (
 	MatchTypeLiteral = "literal"
 	MatchTypeRegex   = "regex"
 	MatchTypeBuiltin = "builtin"
+	MatchTypePrefix  = "prefix"
 )
 
 // 规则动作
 const (
 	ActionDetect = "detect"
 	ActionRedact = "redact"
+	ActionBlock  = "block"
+	ActionAllow  = "allow"
 )
 
 // 替换模式。pseudonym 生成格式合法但虚构的替身值，
@@ -94,6 +97,15 @@ type Settings struct {
 	OverLimitAction       string `json:"over_limit_action"`
 	OnError               string `json:"on_error"`
 	UnsupportedPathAction string `json:"unsupported_path_action"`
+	// Deprecated matching options are read only to migrate existing databases.
+	// Runtime matching and actions come exclusively from Rule.
+	Categories       map[string]bool   `json:"categories"`
+	Words            []string          `json:"words"`
+	WordsAnyCase     bool              `json:"words_any_case"`
+	Allow            []string          `json:"allow"`
+	Actions          map[string]string `json:"actions"`
+	RestoreResponses bool              `json:"restore_responses"`
+	KeepKeyFormat    bool              `json:"keep_key_format"`
 }
 
 // DefaultSettings 返回新装默认配置。
@@ -112,6 +124,9 @@ func DefaultSettings() Settings {
 
 // ValidateSettings 校验引擎配置字段
 func ValidateSettings(s Settings) error {
+	if hasLegacyMatchingOptions(s) {
+		return fmt.Errorf("匹配配置已整合到防护规则，请在规则列表中修改")
+	}
 	switch s.Mode {
 	case ModeDisabled, ModeDetect, ModeRedact:
 	default:
@@ -147,12 +162,12 @@ func ValidateRule(r Rule) error {
 		return fmt.Errorf("rule pattern is required")
 	}
 	switch r.MatchType {
-	case MatchTypeLiteral, MatchTypeRegex, MatchTypeBuiltin:
+	case MatchTypeLiteral, MatchTypeRegex, MatchTypeBuiltin, MatchTypePrefix:
 	default:
 		return fmt.Errorf("invalid match_type: %q", r.MatchType)
 	}
 	switch r.Action {
-	case ActionDetect, ActionRedact:
+	case ActionDetect, ActionRedact, ActionBlock, ActionAllow:
 	default:
 		return fmt.Errorf("invalid action: %q", r.Action)
 	}

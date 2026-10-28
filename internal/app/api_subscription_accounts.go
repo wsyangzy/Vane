@@ -49,6 +49,7 @@ func (a *App) setupSubscriptionAccounts(db *sql.DB) {
 		return
 	}
 	m.ConfigureLoginProxy(proxyURL, proxyLabel, closeProxy)
+	a.routingCLIProxy = proxyURL
 	a.subscriptionAccounts = m
 }
 

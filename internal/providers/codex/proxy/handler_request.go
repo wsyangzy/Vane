@@ -100,7 +100,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
 	if h.privacyService != nil {
+		turn := routing.ResolveTurn(r.Context(), r.Header, originalBody, "codex")
+		sessionKey := ""
+		if turn.ConversationID != "" {
+			sessionKey = "codex\x00" + routing.CallerScope(r.Context()) + "\x00" + turn.ConversationID + "\x00" + turn.BranchID
+		}
 		result, privacyErr := h.privacyService.Apply(r.Context(), privacy.Request{
+			SessionKey:   sessionKey,
 			RequestID:    requestID,
 			Path:         r.URL.Path,
 			Method:       r.Method,
@@ -121,6 +127,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 挂到请求 ctx 上：每次尝试选定端点后按其渠道隐私级别挑选实际发送的正文
+		var finishPrivacy func() error
+		w, finishPrivacy = result.WrapResponse(w)
+		defer finishPrivacy()
 		// （三方中转在全局「仅检测」下也强制脱敏、可信渠道只检测）。
 		// 脱敏摘要不在这里记：发往可信渠道时正文没被改写，提前记录会让请求详情误标「已脱敏」；
 		// 由 outboundBody 在第一次真正发出改写正文时记录。

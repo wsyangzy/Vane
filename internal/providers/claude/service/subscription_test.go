@@ -57,3 +57,21 @@ func TestClaudeManagedRebindCannotClearSameAccountQuota(t *testing.T) {
 		t.Fatal("same managed account could clear quota by rebind")
 	}
 }
+
+func TestClaudeSubscriptionGroupsDoNotRequireCallerKeys(t *testing.T) {
+	db, cleanup := createEndpointServiceTestDB(t)
+	defer cleanup()
+	svc := NewClaudeCredentialGroupService(store.NewSQLiteClaudeCredentialGroupStore(db), nil, nil)
+	for _, name := range []string{"first", "second"} {
+		group, err := svc.CreateGroup(context.Background(), &store.ClaudeCredentialGroupRecord{
+			Channel: "official", Name: name, AuthMode: subscription.ClientPassthrough,
+			Subscription: &subscription.Binding{Enabled: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if group.Subscription.KeyHash != "" || group.Subscription.Version != 1 {
+			t.Fatalf("unexpected binding: %+v", group.Subscription)
+		}
+	}
+}

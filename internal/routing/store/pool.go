@@ -27,23 +27,37 @@ func (s *PoolStore) EnsureSchema(ctx context.Context) error {
  PRIMARY KEY(pool_id,channel_id,group_id));
  CREATE TABLE IF NOT EXISTS routing_pool_migrations (provider TEXT PRIMARY KEY, completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
  CREATE TABLE IF NOT EXISTS routing_pool_cooldowns (provider TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT '[]');`)
+	if err != nil {
+		return err
+	}
+	var columns int
+	if err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('routing_pools') WHERE name='channels'`).Scan(&columns); err != nil {
+		return err
+	}
+	if columns == 0 {
+		_, err = s.db.ExecContext(ctx, `ALTER TABLE routing_pools ADD COLUMN channels TEXT NOT NULL DEFAULT '[]'`)
+	}
 	return err
 }
 
 func (s *PoolStore) List(ctx context.Context, provider string) ([]routing.Pool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,provider,name,strategy,is_default,rules,COALESCE(non_stream,''),key_hash,revision FROM routing_pools WHERE provider=? ORDER BY id`, provider)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,provider,name,strategy,is_default,rules,COALESCE(non_stream,''),key_hash,revision,channels FROM routing_pools WHERE provider=? ORDER BY id`, provider)
 	if err != nil {
 		return nil, err
 	}
 	var pools []routing.Pool
 	for rows.Next() {
 		var p routing.Pool
-		var rules, nonStream string
-		if err = rows.Scan(&p.ID, &p.Provider, &p.Name, &p.Strategy, &p.Default, &rules, &nonStream, &p.KeyHash, &p.Revision); err != nil {
+		var rules, nonStream, channels string
+		if err = rows.Scan(&p.ID, &p.Provider, &p.Name, &p.Strategy, &p.Default, &rules, &nonStream, &p.KeyHash, &p.Revision, &channels); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if err = json.Unmarshal([]byte(rules), &p.Rules); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err = json.Unmarshal([]byte(channels), &p.Channels); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -78,11 +92,21 @@ func (s *PoolStore) List(ctx context.Context, provider string) ([]routing.Pool, 
 		if err != nil {
 			return nil, err
 		}
+		if len(pools[i].Channels) == 0 {
+			pools[i].Channels = routing.ChannelsFromMembers(pools[i].Members)
+		}
 	}
 	return pools, nil
 }
 
 func savePool(ctx context.Context, tx *sql.Tx, p *routing.Pool) error {
+	if p.Channels == nil {
+		p.Channels = routing.ChannelsFromMembers(p.Members)
+	}
+	channels, err := json.Marshal(p.Channels)
+	if err != nil {
+		return err
+	}
 	rules, err := json.Marshal(p.Rules)
 	if err != nil {
 		return err
@@ -97,14 +121,14 @@ func savePool(ctx context.Context, tx *sql.Tx, p *routing.Pool) error {
 		}
 	}
 	if p.ID == 0 {
-		result, e := tx.ExecContext(ctx, `INSERT INTO routing_pools(provider,name,strategy,is_default,rules,non_stream,key_hash) VALUES(?,?,?,?,?,?,?)`, p.Provider, p.Name, p.Strategy, p.Default, string(rules), nonStream, p.KeyHash)
+		result, e := tx.ExecContext(ctx, `INSERT INTO routing_pools(provider,name,strategy,is_default,rules,non_stream,key_hash,channels) VALUES(?,?,?,?,?,?,?,?)`, p.Provider, p.Name, p.Strategy, p.Default, string(rules), nonStream, p.KeyHash, string(channels))
 		if e != nil {
 			return e
 		}
 		p.ID, err = result.LastInsertId()
 	} else {
 		var result sql.Result
-		result, err = tx.ExecContext(ctx, `UPDATE routing_pools SET name=?,strategy=?,is_default=?,rules=?,non_stream=?,revision=revision+1 WHERE id=? AND provider=?`, p.Name, p.Strategy, p.Default, string(rules), nonStream, p.ID, p.Provider)
+		result, err = tx.ExecContext(ctx, `UPDATE routing_pools SET name=?,strategy=?,is_default=?,rules=?,non_stream=?,channels=?,revision=revision+1 WHERE id=? AND provider=?`, p.Name, p.Strategy, p.Default, string(rules), nonStream, string(channels), p.ID, p.Provider)
 		if err == nil {
 			n, _ := result.RowsAffected()
 			if n == 0 {

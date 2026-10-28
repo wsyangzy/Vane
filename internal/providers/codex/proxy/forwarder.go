@@ -95,7 +95,7 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	targetURL := buildTargetURL(endpoint.BaseURL, r.URL)
 	if endpoint.AuthMode == subscription.ClientPassthrough {
 		targetURL = subscription.TargetURL(r, endpoint.BaseURL, true)
-	} else if _, poolCaller := routing.PoolCallerFromContext(r.Context()); subscription.FromContext(r.Context()) != nil || poolCaller {
+	} else if _, poolCaller := routing.PoolCallerFromContext(r.Context()); subscription.FromContext(r.Context()) != nil || poolCaller || routing.ProfileRequestFromContext(r.Context()) != nil {
 		copyURL := *r.URL
 		copyURL.Path = subscription.Path(r)
 		targetURL = buildTargetURL(endpoint.BaseURL, &copyURL)
@@ -136,6 +136,9 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 		copyClient := *client
 		copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 		client = &copyClient
+	}
+	if err := beginCodexProfileSend(r.Context()); err != nil {
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -17,6 +17,9 @@ import (
 )
 
 func (run *routeRun) initBudget(cfg config.RetryConfig) {
+	if run != nil && run.profile != nil {
+		run.budget.Limit(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
+	}
 	if run != nil && run.budget == nil {
 		attempts, duration := cfg.MaxTotalAttempts, cfg.MaxTotalDuration
 		if run.pool != nil {
@@ -32,6 +35,9 @@ func (run *routeRun) initBudget(cfg config.RetryConfig) {
 }
 
 func (run *routeRun) candidate(f *Forwarder, ep *endpoint.Endpoint, body []byte) routing.Candidate {
+	if run != nil && run.current() != nil && run.current().candidate != nil {
+		return run.current().candidate.Identity()
+	}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	if run.upstreamModel() != "" {
 		model = run.upstreamModel()
@@ -61,6 +67,25 @@ func (run *routeRun) observeSubscription(ctx context.Context, f *Forwarder) {
 }
 
 func (run *routeRun) watchSubscription(ctx context.Context, f *Forwarder) {
+	if run != nil && run.profile != nil {
+		run.profileRecovery = func(candidate routing.DispatchCandidate) (time.Time, bool) {
+			ready, valid := f.endpointManager.PoolRuntime().HealthReadyAt(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model)
+			if !valid {
+				return time.Time{}, false
+			}
+			if candidate.CredentialMode != "managed" && candidate.CredentialMode != subscription.ClientPassthrough {
+				return ready, true
+			}
+			if f.subscriptions == nil {
+				return time.Time{}, false
+			}
+			quotaReady, ok := f.subscriptions.ProfileRecoveryTime(ctx, candidate.ChannelID, candidate.GroupID, candidate.Identity().Model)
+			if quotaReady.After(ready) {
+				ready = quotaReady
+			}
+			return ready, ok
+		}
+	}
 	if run != nil && run.subscription {
 		run.refresh = func() { run.observeSubscription(ctx, f) }
 	}
@@ -113,7 +138,7 @@ func (run *routeRun) failureDecision(f *Forwarder, ep *endpoint.Endpoint, body [
 	if failure.Terminal {
 		return RetryDecision{FinalStatus: "error", Reason: failure.Reason}
 	}
-	if run.subscription || run.pool != nil {
+	if run.subscription || run.pool != nil || run.profile != nil {
 		return RetryDecision{SwitchEndpoint: true, Reason: failure.Reason}
 	}
 	// Network/overload backoff retains the existing bounded policy. Known
@@ -146,6 +171,9 @@ func beginRouteAttempt(ctx context.Context, run *routeRun) error {
 	}
 	if run == nil {
 		return nil
+	}
+	if run.profile != nil {
+		return run.budget.Check()
 	}
 	return run.budget.Begin(ctx)
 }

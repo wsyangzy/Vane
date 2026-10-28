@@ -13,6 +13,7 @@ import (
 // PreviewResult 规则测试面板的结果。
 // RuleHits 中的 Matches 由 json:"-" 阻断，不会随响应回传。
 type PreviewResult struct {
+	Blocked  bool      `json:"blocked"`
 	Output   string    `json:"output"`
 	Changed  bool      `json:"changed"`
 	HitCount int       `json:"hit_count"`
@@ -40,7 +41,8 @@ type Service struct {
 	unscannedMu sync.Mutex
 	unscanned   map[string]*UnscannedPathStat
 
-	now func() time.Time
+	now   func() time.Time
+	vault *restorationVault
 }
 
 func NewService(store *Store, logger ...*slog.Logger) *Service {
@@ -48,6 +50,7 @@ func NewService(store *Store, logger ...*slog.Logger) *Service {
 		store:     store,
 		unscanned: make(map[string]*UnscannedPathStat),
 		now:       time.Now,
+		vault:     newRestorationVault(),
 	}
 	if len(logger) > 0 {
 		svc.logger = logger[0]
@@ -132,7 +135,16 @@ func (s *Service) Apply(ctx context.Context, req Request, body []byte) (ApplyRes
 		// 该情况由 Reload 的错误日志暴露。
 		return ApplyResult{Body: body, Action: ModeDisabled}, nil
 	}
-	result, err := snapshot.Apply(req, body)
+	copy := *snapshot
+	if snapshot.Settings.RestoreResponses && snapshot.Settings.Mode != ModeDisabled {
+		copy.restoration = s.vault.request(req.SessionKey, req.RequestID)
+	}
+	result, err := copy.Apply(req, body)
+	result.Restoration = copy.restoration
+	result.activity = s.recordActivity(ctx, req, result, err)
+	if result.Restoration != nil {
+		result.Restoration.activity = result.activity
+	}
 	if result.SkippedReason == SkippedUnsupportedPath {
 		s.recordUnscannedPath(req.Path)
 	}
@@ -181,6 +193,7 @@ func (s *Service) ClearUnscannedPaths() {
 // Overview 隐私页所需的完整视图。
 // 全部字段都不含命中原文或规则敏感原值（legacy 规则已掩码）。
 type Overview struct {
+	Activity       []Activity          `json:"activity"`
 	Settings       Settings            `json:"settings"`
 	Rules          []StoredRule        `json:"rules"`
 	LegacyRules    []LegacyRule        `json:"legacy_rules"`
@@ -207,7 +220,12 @@ func (s *Service) GetOverview(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return Overview{}, err
 	}
+	activity, err := s.store.listActivity(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
 	return Overview{
+		Activity:        activity,
 		Settings:        settings,
 		Rules:           rules,
 		LegacyRules:     legacy,
@@ -383,8 +401,13 @@ func (s *Service) PreviewText(text string) PreviewResult {
 	if snapshot == nil {
 		return PreviewResult{Output: text}
 	}
-	result := snapshot.ApplyToText(text)
+	preview := *snapshot
+	if preview.Settings.RestoreResponses {
+		preview.restoration = newRestorationVault().request("", "preview")
+	}
+	result := preview.ApplyToText(text)
 	return PreviewResult{
+		Blocked:  result.Action == ActionBlock,
 		Output:   string(result.Body),
 		Changed:  result.Changed,
 		HitCount: result.HitCount,
@@ -394,6 +417,7 @@ func (s *Service) PreviewText(text string) PreviewResult {
 
 // RequestPreviewResult 完整请求体的预演结果：展示哪些字段被扫描、哪些命中，不含命中原文。
 type RequestPreviewResult struct {
+	Blocked bool `json:"blocked"`
 	// Supported 路径是否在扫描范围内；false 时请求会按「路径未被覆盖时」策略处理
 	Supported bool `json:"supported"`
 	// Error 请求体无法解析等扫描错误（不含请求内容）
@@ -436,8 +460,15 @@ func (s *Service) PreviewRequest(path string, body []byte) RequestPreviewResult 
 	// 按脱敏模式推演：测试面板要回答「开启脱敏后会改成什么样」
 	preview := *snapshot
 	preview.Settings.Mode = ModeRedact
+	if preview.Settings.RestoreResponses {
+		preview.restoration = newRestorationVault().request("", "preview")
+	}
 	var result ApplyResult
-	replacements, _ := preview.scanSegments(&result, preview.candidateRules(), segments)
+	replacements, policyErr := preview.scanSegments(&result, preview.candidateRules(), segments)
+	if policyErr != nil {
+		out.Blocked = true
+		out.Error = policyErr.Message
+	}
 	for i, seg := range segments {
 		_, redacted := replacements[i]
 		out.Fields = append(out.Fields, PreviewField{Path: paths[i], Bytes: len(seg.Value), Redacted: redacted})

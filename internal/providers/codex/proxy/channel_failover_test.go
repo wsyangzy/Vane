@@ -15,6 +15,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/config"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
@@ -79,6 +80,38 @@ func TestEndpointManagerHealthScopeIncludesParticipatingBackupChannels(t *testin
 	}
 	if len(activeOnly) != 1 || activeOnly[0].ChannelID != manager.GetActiveChannel().ID {
 		t.Fatalf("active-only health endpoints = %#v", activeOnly)
+	}
+}
+
+func TestProfileHealthScopeIgnoresLegacyParticipation(t *testing.T) {
+	manager, db, cleanup := newChannelFailoverTestManager(t)
+	defer cleanup()
+	if _, err := db.Exec(`UPDATE codex_channels SET failover_enabled = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE codex_endpoints SET failover_enabled = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	pool := routing.NewPoolRuntime(routing.PoolConfig{}, nil, nil)
+	manager.SetPoolRuntime(pool)
+	legacy, err := manager.GetHealthCheckEndpoints(context.Background(), true)
+	if err != nil || len(legacy) != 0 {
+		t.Fatalf("legacy health endpoints = %d, err=%v", len(legacy), err)
+	}
+	pool.SetProfileRuntime(routing.NewProfileRuntime(routing.RuntimeConfig{Provider: "codex"}))
+	endpoints, err := manager.GetHealthCheckEndpoints(context.Background(), false)
+	var total int
+	if err := db.QueryRow(`SELECT count(*) FROM codex_endpoints`).Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || len(endpoints) != total {
+		t.Fatalf("profile health endpoints = %d, want %d, err=%v", len(endpoints), total, err)
+	}
+	if manager.GetActiveChannel().Name != "primary" {
+		t.Fatal("health resolution changed active channel")
 	}
 }
 

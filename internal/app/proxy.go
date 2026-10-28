@@ -11,6 +11,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/platform/middleware"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
 	codexproxy "github.com/wsyangzy/Vane/internal/providers/codex/proxy"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func (a *App) setupProxyHandler() {
@@ -19,27 +20,19 @@ func (a *App) setupProxyHandler() {
 	a.proxyHandler.SetEventBus(a.eventBus)
 	a.proxyHandler.SetPrivacyService(a.privacyService)
 	a.proxyHandler.SetSubscriptionController(a.claudeSubscriptions)
+	a.proxyHandler.SetProfileResponseObserver(a.observeRoutingQuota)
 
 	// 创建中间件（Claude 代理日志附加 provider=claude，用于文件分流）
 	a.loggingMiddleware = middleware.NewLoggingMiddleware(a.logger.With("provider", "claude"))
 	a.monitoringMiddleware = middleware.NewMonitoringMiddleware(a.endpointManager)
 	a.authMiddleware = middleware.NewAuthMiddleware(a.config.Auth)
-	if a.claudeSubscriptions != nil {
+	{
 		a.authMiddleware.SetRequestAuthenticator(func(r *http.Request) (context.Context, bool, error) {
 			provider := "codex"
 			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
 				provider = "claude"
 			}
-			if ctx, handled, err := a.authenticatePool(r, provider); handled {
-				return ctx, handled, err
-			}
-			if strings.HasPrefix(r.URL.Path, "/v1/messages") {
-				return a.claudeSubscriptions.Authenticate(r)
-			}
-			if a.codexSubscriptions != nil {
-				return a.codexSubscriptions.Authenticate(r)
-			}
-			return a.claudeSubscriptions.Authenticate(r)
+			return a.authenticateRoutingProfile(r, provider)
 		})
 	}
 
@@ -295,6 +288,9 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker, a.privacyService)
 	baseHandler.SetSubscriptionController(a.codexSubscriptions)
+	baseHandler.SetProfileResponseObserver(func(_ context.Context, c routing.DispatchCandidate, status int, headers http.Header, body []byte) {
+		a.observeRoutingQuota(c, status, headers, body)
+	})
 	a.codexHTTPHandler = baseHandler
 
 	// 公用 Claude 代理的鉴权中间件 + 日志中间件

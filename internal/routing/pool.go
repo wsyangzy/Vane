@@ -2,14 +2,12 @@ package routing
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,12 +27,38 @@ type Pool struct {
 	Name      string          `json:"name"`
 	Strategy  string          `json:"strategy"`
 	Default   bool            `json:"is_default"`
+	Channels  []PoolChannel   `json:"channels"`
 	Members   []PoolMember    `json:"members"`
 	Rules     []ModelRule     `json:"rules"`
 	NonStream *NonStreamRoute `json:"non_stream,omitempty"`
 	KeyHash   string          `json:"-"`
 	HasKey    bool            `json:"has_key"`
 	Revision  int64           `json:"revision"`
+}
+
+// PoolChannel is a channel selected into a pool. Members alone select which
+// groups participate; a channel without selected groups contributes no stages.
+type PoolChannel struct {
+	ChannelID int64  `json:"channel_id"`
+	Tier      string `json:"tier"`
+}
+
+// ChannelsFromMembers interprets the old flat membership without deleting it.
+// A channel with any primary group belongs to the primary tier.
+func ChannelsFromMembers(members []PoolMember) []PoolChannel {
+	channels := []PoolChannel{}
+	positions := map[int64]int{}
+	for _, member := range members {
+		if at, exists := positions[member.ChannelID]; exists {
+			if member.Tier == TierPrimary {
+				channels[at].Tier = TierPrimary
+			}
+			continue
+		}
+		positions[member.ChannelID] = len(channels)
+		channels = append(channels, PoolChannel{member.ChannelID, member.Tier})
+	}
+	return channels
 }
 
 type PoolMember struct {
@@ -105,14 +129,24 @@ type cooldownKey struct{ identity, endpoint, model string }
 // PoolRuntime serializes round-robin cursors and half-open admissions. Config
 // replacement keeps cooldown and cursor state across UI edits.
 type PoolRuntime struct {
-	mu        sync.Mutex
-	config    PoolConfig
-	cursors   map[string]uint64
-	cooldowns map[cooldownKey]Cooldown
-	leases    map[cooldownKey]uint64
-	sequence  uint64
-	persist   func([]Cooldown) error
-	now       func() time.Time
+	profileRuntime atomic.Pointer[ProfileRuntime]
+	mu             sync.Mutex
+	config         PoolConfig
+	cursors        map[string]uint64
+	cooldowns      map[cooldownKey]Cooldown
+	leases         map[cooldownKey]uint64
+	sequence       uint64
+	persist        func([]Cooldown) error
+	now            func() time.Time
+}
+
+// The application always attaches unified dispatch, even without a default profile.
+func (r *PoolRuntime) SetProfileRuntime(profile *ProfileRuntime) { r.profileRuntime.Store(profile) }
+func (r *PoolRuntime) ProfileRuntime() *ProfileRuntime {
+	if r == nil {
+		return nil
+	}
+	return r.profileRuntime.Load()
 }
 
 func NewPoolRuntime(cfg PoolConfig, saved []Cooldown, persist func([]Cooldown) error) *PoolRuntime {
@@ -146,26 +180,6 @@ func (r *PoolRuntime) account(channel, group int64) (AccountState, bool) {
 		}
 	}
 	return AccountState{}, false
-}
-
-func (r *PoolRuntime) Authenticate(provider, key string) (PoolCaller, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	digest := sha256.Sum256([]byte(key))
-	var caller PoolCaller
-	for _, p := range r.config.Pools {
-		stored, err := hex.DecodeString(p.KeyHash)
-		if err == nil && len(stored) == 32 && subtle.ConstantTimeCompare(stored, digest[:]) == 1 {
-			if caller.PoolID != 0 {
-				return PoolCaller{}, errors.New("ambiguous_pool_caller")
-			}
-			caller = PoolCaller{provider, p.ID, p.Revision}
-		}
-	}
-	if caller.PoolID == 0 {
-		return caller, errors.New("relay_authentication_rejected")
-	}
-	return caller, nil
 }
 
 func (r *PoolRuntime) ValidCaller(c PoolCaller) bool {
@@ -207,21 +221,32 @@ func (r *PoolRuntime) plan(ctx context.Context, provider, model string, streamin
 		if target == nil {
 			return
 		}
+		channels := target.Channels
+		if len(channels) == 0 {
+			channels = ChannelsFromMembers(target.Members)
+		}
+		groups := map[int64][]PoolMember{}
+		for _, member := range target.Members {
+			groups[member.ChannelID] = append(groups[member.ChannelID], member)
+		}
 		for _, tier := range []string{TierPrimary, TierBackup} {
-			var members []PoolMember
-			for _, m := range target.Members {
-				if m.Tier == tier {
-					members = append(members, m)
+			var candidates []PoolChannel
+			for _, channel := range channels {
+				if channel.Tier == tier && len(groups[channel.ChannelID]) > 0 {
+					candidates = append(candidates, channel)
 				}
 			}
-			if target.Strategy == PoolRoundRobin && len(members) > 0 {
+			if target.Strategy == PoolRoundRobin && len(candidates) > 0 {
 				key := fmt.Sprintf("%d/%s", target.ID, tier)
-				offset := int(r.cursors[key] % uint64(len(members)))
+				offset := int(r.cursors[key] % uint64(len(candidates)))
 				r.cursors[key]++
-				members = append(append([]PoolMember{}, members[offset:]...), members[:offset]...)
+				candidates = append(append([]PoolChannel{}, candidates[offset:]...), candidates[:offset]...)
 			}
-			for _, m := range members {
-				plan.Stages = append(plan.Stages, PoolStage{PoolID: target.ID, PoolName: target.Name, PoolMember: m, UpstreamModel: upstream, Index: index})
+			for _, channel := range candidates {
+				for _, member := range groups[channel.ChannelID] {
+					member.Tier = tier
+					plan.Stages = append(plan.Stages, PoolStage{PoolID: target.ID, PoolName: target.Name, PoolMember: member, UpstreamModel: upstream, Index: index})
+				}
 			}
 		}
 	}
@@ -257,13 +282,23 @@ func (r *PoolRuntime) identity(channel, group int64) string {
 }
 
 func (r *PoolRuntime) Allowed(channel, group int64, endpoint, model string) (bool, string) {
+	return r.allowed(channel, group, endpoint, model, true)
+}
+
+// HealthAllowed shares credential/endpoint recovery state with legacy routing,
+// but profile membership, rather than the legacy account switch, grants access.
+func (r *PoolRuntime) HealthAllowed(channel, group int64, endpoint, model string) (bool, string) {
+	return r.allowed(channel, group, endpoint, model, false)
+}
+
+func (r *PoolRuntime) allowed(channel, group int64, endpoint, model string, legacy bool) (bool, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a, ok := r.account(channel, group)
 	if !ok {
 		return false, "account_missing"
 	}
-	if !a.Enabled {
+	if legacy && !a.Enabled {
 		return false, "account_disabled"
 	}
 	for k, c := range r.cooldowns {
@@ -285,9 +320,19 @@ func (r *PoolRuntime) Allowed(channel, group int64, endpoint, model string) (boo
 
 // Acquire must run immediately before a send, after auth/state/model checks.
 func (r *PoolRuntime) Acquire(channel, group int64, endpoint, model string) (func(bool), error) {
+	return r.acquire(channel, group, endpoint, model, true)
+}
+
+// AcquireHealth retains the same single recovery probe and lease ownership as
+// Acquire. Callers must first authorize the candidate through a profile plan.
+func (r *PoolRuntime) AcquireHealth(channel, group int64, endpoint, model string) (func(bool), error) {
+	return r.acquire(channel, group, endpoint, model, false)
+}
+
+func (r *PoolRuntime) acquire(channel, group int64, endpoint, model string, legacy bool) (func(bool), error) {
 	r.mu.Lock()
 	a, ok := r.account(channel, group)
-	if !ok || !a.Enabled {
+	if !ok || legacy && !a.Enabled {
 		r.mu.Unlock()
 		return nil, errors.New("account_disabled")
 	}
@@ -350,7 +395,7 @@ func (r *PoolRuntime) Fail(channel, group int64, endpoint, model string, f Failu
 		k.endpoint = endpoint
 	} else if f.Scope != ScopeCredential {
 		k.model = model
-		if f.Scope == ScopeModel {
+		if f.Scope == ScopeCandidate {
 			k.endpoint = endpoint
 		}
 	}
@@ -443,10 +488,18 @@ func (r *PoolRuntime) NextRecoveryWith(stages []PoolStage, model string, externa
 }
 
 func (r *PoolRuntime) ReadyAt(s PoolStage, model string) (time.Time, bool) {
+	return r.readyAt(s, model, true)
+}
+
+func (r *PoolRuntime) HealthReadyAt(channel, group int64, endpoint, model string) (time.Time, bool) {
+	return r.readyAt(PoolStage{PoolMember: PoolMember{ChannelID: channel, GroupID: group}, Endpoint: endpoint}, model, false)
+}
+
+func (r *PoolRuntime) readyAt(s PoolStage, model string, legacy bool) (time.Time, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	a, ok := r.account(s.ChannelID, s.GroupID)
-	if !ok || !a.Enabled {
+	if !ok || legacy && !a.Enabled {
 		return time.Time{}, false
 	}
 	effective := model
@@ -485,8 +538,25 @@ func ValidatePool(p *Pool, catalog Catalog, pools []Pool) error {
 	if p.Strategy != "sequential" && p.Strategy != "round_robin" {
 		return errors.New("账号池调度策略无效")
 	}
+	if p.Channels == nil {
+		p.Channels = ChannelsFromMembers(p.Members)
+	}
+	channels := map[int64]PoolChannel{}
+	for _, channel := range p.Channels {
+		if catalog.Channel(channel.ChannelID) == nil || channel.Tier != TierPrimary && channel.Tier != TierBackup {
+			return errors.New("入池渠道或主备层级无效")
+		}
+		if _, exists := channels[channel.ChannelID]; exists {
+			return errors.New("同一渠道不能重复入池")
+		}
+		channels[channel.ChannelID] = channel
+	}
 	seen := map[PoolMember]bool{}
 	for i, m := range p.Members {
+		channel, exists := channels[m.ChannelID]
+		if !exists {
+			return errors.New("请先将分组所属渠道加入账号池")
+		}
 		if m.GroupID <= 0 || m.Tier != TierPrimary && m.Tier != TierBackup {
 			return fmt.Errorf("第 %d 个成员的账号或层级无效", i+1)
 		}
@@ -499,6 +569,7 @@ func ValidatePool(p *Pool, catalog Catalog, pools []Pool) error {
 		if err := catalog.Validate([]Target{{ChannelID: m.ChannelID, GroupID: m.GroupID}}); err != nil {
 			return err
 		}
+		p.Members[i].Tier = channel.Tier
 	}
 	validateTargets := func(targets []Target) error {
 		for _, t := range targets {

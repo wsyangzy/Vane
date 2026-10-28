@@ -124,22 +124,24 @@ func (m *Manager) performHealthChecks() {
 	m.endpointsMu.RUnlock()
 
 	var endpointsToCheck []*Endpoint
+	pool := m.PoolRuntime()
+	profileMode := pool != nil && pool.ProfileRuntime() != nil
 
 	if len(snapshot) == 0 {
 		slog.Debug("🩺 [健康检查] 没有配置的端点，跳过健康检查")
 		return
 	}
 
-	// 健康检查覆盖范围（与 TODO.md 的资源优化要求对齐）：
+	// 统一调度检测资源，不读取旧参与开关；兼容模式继续使用以下历史范围：
 	// - 启用“渠道间故障转移”时：检查所有“参与故障转移”的渠道，且仅检查其中参与故障转移的端点
 	// - 未启用时：只检查当前活跃渠道中参与故障转移的端点
-	if m.PoolRuntime() != nil || m.IsFailoverEnabled() {
+	if pool != nil || m.IsFailoverEnabled() {
 		for _, ep := range snapshot {
 			if ep == nil {
 				continue
 			}
 			// 渠道级开关：暂停渠道不参与跨渠道故障转移，也不做健康检查
-			if m.PoolRuntime() == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+			if pool == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
 				continue
 			}
 			// 端点级开关：不参与故障转移的端点不做健康检查
@@ -147,7 +149,7 @@ func (m *Manager) performHealthChecks() {
 			if ep.Config.FailoverEnabled != nil {
 				failoverEnabled = *ep.Config.FailoverEnabled
 			}
-			if !failoverEnabled {
+			if !profileMode && !failoverEnabled {
 				continue
 			}
 			endpointsToCheck = append(endpointsToCheck, ep)
@@ -588,6 +590,7 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 
 // BatchHealthCheckAll 批量检测端点的健康状态
 // 检测范围与定时健康检查一致：
+// - 统一调度时检测资源，不读取旧参与开关
 // - 开启渠道间转移时：检测所有参与的渠道中所有参与转移的端点
 // - 关闭渠道间转移时：仅检测活跃渠道中参与转移的端点
 // 并发执行检查，使用信号量限制并发数量
@@ -606,15 +609,17 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 
 	// 根据渠道间故障转移状态筛选需要检测的端点
 	var endpointsToCheck []*Endpoint
+	pool := m.PoolRuntime()
+	profileMode := pool != nil && pool.ProfileRuntime() != nil
 
-	if m.PoolRuntime() != nil || m.IsFailoverEnabled() {
+	if pool != nil || m.IsFailoverEnabled() {
 		// 开启渠道间转移：检测所有参与的渠道中参与转移的端点
 		for _, ep := range snapshot {
 			if ep == nil {
 				continue
 			}
 			// 渠道级开关：暂停渠道不检测
-			if m.PoolRuntime() == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
+			if pool == nil && m.groupManager != nil && !m.groupManager.IsChannelFailoverEnabled(ChannelKey(ep)) {
 				continue
 			}
 			// 端点级开关：不参与故障转移的端点不检测
@@ -622,7 +627,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 			if ep.Config.FailoverEnabled != nil {
 				failoverEnabled = *ep.Config.FailoverEnabled
 			}
-			if !failoverEnabled {
+			if !profileMode && !failoverEnabled {
 				continue
 			}
 			endpointsToCheck = append(endpointsToCheck, ep)

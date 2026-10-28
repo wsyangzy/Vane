@@ -204,6 +204,23 @@ type EndpointCostSummary struct {
 	cacheHitDenominator int64
 }
 
+// UsageTotals preserves the token-weighted cache counts when endpoints are
+// combined into credential groups. Ratios cannot be averaged across endpoints.
+func (s EndpointCostSummary) UsageTotals() UsageStatsTotals {
+	tokens := s.TotalTokens
+	if tokens == 0 {
+		tokens = DisplayTotalTokens(s.Provider, s.InputTokens, s.OutputTokens, s.CacheCreationTokens, s.CacheReadTokens)
+	}
+	numerator, denominator := s.cacheHitNumerator, s.cacheHitDenominator
+	if denominator == 0 {
+		numerator, denominator = cacheHitParts(s.Provider, s.InputTokens, s.CacheCreationTokens, s.CacheReadTokens)
+	}
+	return UsageStatsTotals{
+		TotalTokens: tokens, TotalCostUSD: s.TotalCostUSD,
+		CacheHitNumerator: numerator, CacheHitDenominator: denominator,
+	}
+}
+
 type TokenUsageTotals struct {
 	InputTokens         int64
 	OutputTokens        int64

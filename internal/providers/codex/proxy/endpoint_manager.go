@@ -470,6 +470,8 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 
 // GetHealthCheckEndpoints 返回当前健康统计范围内的参与端点，不改变活跃渠道。
 func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFailoverEnabled bool) ([]*CodexEndpoint, error) {
+	pool := m.PoolRuntime()
+	profileMode := pool != nil && pool.ProfileRuntime() != nil
 	channels, err := m.channelStore.List(ctx)
 	if err != nil {
 		return nil, err
@@ -479,7 +481,7 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 		if channel == nil {
 			continue
 		}
-		if m.PoolRuntime() != nil {
+		if pool != nil {
 			// Pool membership and account availability replace legacy channel participation.
 		} else if channelFailoverEnabled {
 			if !channel.FailoverEnabled {
@@ -493,7 +495,7 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 			return nil, err
 		}
 		for _, endpoint := range endpoints {
-			if endpoint.FailoverEnabled && endpoint.AuthMode != subscription.ClientPassthrough {
+			if (profileMode || endpoint.FailoverEnabled) && endpoint.AuthMode != subscription.ClientPassthrough {
 				result = append(result, endpoint)
 			}
 		}

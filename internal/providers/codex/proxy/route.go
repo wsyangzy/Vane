@@ -17,6 +17,7 @@ import (
 
 // codexRoute 一次请求的路由执行计划，只在本次请求内有效
 type codexRoute struct {
+	profile    *routing.DispatchPlan
 	pool       *routing.PoolRuntime
 	waitStages []routing.PoolStage
 	kind       routing.Kind
@@ -50,6 +51,9 @@ func isCodexGenerationPath(path string) bool {
 func (h *Handler) planCodexRoute(r *http.Request, body []byte, streaming bool, requestID string) *codexRoute {
 	if h.manager == nil || r == nil || r.URL == nil {
 		return nil
+	}
+	if runtime := h.manager.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
+		return h.planProfileRoute(r, body, streaming, requestID, runtime.ProfileRuntime())
 	}
 	if subscription.FromContext(r.Context()) != nil {
 		return h.planSubscriptionRoute(r, body, streaming)
@@ -109,6 +113,10 @@ func (h *Handler) planCodexRoute(r *http.Request, body []byte, streaming bool, r
 // serveRouted 按阶段依次尝试：每个阶段只跑一个端点周期，不进入 loop_retry 轮次与挂起等待，
 // 也不触发渠道间故障转移——全局激活渠道全程不读写。
 func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byte, requestID string, startTime time.Time, isStreaming bool, route *codexRoute) {
+	if route.profile != nil {
+		h.serveProfileRouted(w, r, body, requestID, startTime, isStreaming, route.profile)
+		return
+	}
 	ledger := &routing.Ledger{}
 	cfg := h.retryConfig()
 	attempts, duration := cfg.MaxTotalAttempts, cfg.MaxTotalDuration

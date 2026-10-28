@@ -18,11 +18,12 @@ import (
 
 // Forwarder 负责HTTP请求转发和头部处理
 type Forwarder struct {
-	config          *config.Config
-	endpointManager *endpoint.Manager
-	transport       *transport.Provider
-	states          *routing.StateTracker
-	subscriptions   *subscription.Controller
+	config                  *config.Config
+	endpointManager         *endpoint.Manager
+	transport               *transport.Provider
+	states                  *routing.StateTracker
+	subscriptions           *subscription.Controller
+	profileResponseObserver func(routing.DispatchCandidate, int, http.Header, []byte)
 }
 
 // NewForwarder 创建新的Forwarder实例
