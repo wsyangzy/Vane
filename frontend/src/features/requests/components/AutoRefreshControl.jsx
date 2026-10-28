@@ -3,116 +3,139 @@
 // 2025-12-01 12:56:37
 // ============================================
 
-import { useState, useRef } from 'react';
-import { Timer, ChevronDown, Check, RotateCcw } from 'lucide-react';
+import { useEffect, useId, useState, useRef } from 'react';
+import { ChevronDown, Check, CirclePause, Loader2, RefreshCw, Timer } from 'lucide-react';
+
+const intervalOptions = [
+  { label: '仅手动刷新', value: 0 },
+  { label: '5 秒', value: 5 },
+  { label: '10 秒', value: 10 },
+  { label: '30 秒', value: 30 },
+  { label: '1 分钟', value: 60 },
+];
 
 /**
- * AutoRefreshControl - 自动刷新控制组件（参考 request_test.jsx 优化版）
+ * AutoRefreshControl - 自动刷新间隔与手动刷新
  *
  * 功能:
  * 1. 连体按钮设计（自动刷新 + 手动刷新）
  * 2. 下拉菜单直接选择间隔（包括 Off）
- * 3. 简洁的 spinner 动画
+ * 3. 显示当前间隔，手动刷新期间显示加载反馈
  *
  * @param {Object} props
- * @param {boolean} props.isEnabled - 是否启用自动刷新
  * @param {number} props.interval - 刷新间隔(秒)
- * @param {Function} props.onToggle - 切换自动刷新（已废弃，直接通过选择间隔控制）
  * @param {Function} props.onIntervalChange - 更改刷新间隔
  * @param {Function} props.onManualRefresh - 手动刷新回调
+ * @param {boolean} props.loading - 页面数据正在加载
  */
 const AutoRefreshControl = ({
   interval = 5,
   onIntervalChange,
-  onManualRefresh
+  onManualRefresh,
+  loading = false
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const busy = loading || refreshing;
   const dropdownRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuId = useId();
+  const enabled = interval > 0;
+  const intervalLabel = enabled ? interval < 60 ? `${interval} 秒` : `${interval / 60} 分钟` : '手动';
+  const IntervalIcon = enabled ? Timer : CirclePause;
 
-  // 刷新间隔选项（包括 Off）
-  const options = [
-    { label: 'Off', value: 0 },
-    { label: '5s', value: 5 },
-    { label: '10s', value: 10 },
-    { label: '30s', value: 30 },
-    { label: '1m', value: 60 },
-  ];
+  useEffect(() => {
+    if (!isOpen) return;
+    dropdownRef.current?.querySelector('[role="menuitemradio"][aria-checked="true"]')?.focus();
+    const outside = (event) => {
+      if (!dropdownRef.current?.contains(event.target)) setIsOpen(false);
+    };
+    const keyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('mousedown', outside);
+    document.addEventListener('keydown', keyDown);
+    return () => {
+      document.removeEventListener('mousedown', outside);
+      document.removeEventListener('keydown', keyDown);
+    };
+  }, [isOpen]);
+
+  const manualRefresh = async () => {
+    if (busy) return;
+    setRefreshing(true);
+    try { await onManualRefresh?.(); }
+    finally { setRefreshing(false); }
+  };
+
+  const menuKeyDown = (event) => {
+    if (event.key === 'Tab') {
+      setIsOpen(false);
+      triggerRef.current?.focus();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const choices = [...event.currentTarget.querySelectorAll('[role="menuitemradio"]')];
+    const index = choices.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1
+      : (index + (['ArrowDown', 'ArrowRight'].includes(event.key) ? 1 : -1) + choices.length) % choices.length;
+    choices[next]?.focus();
+  };
+
+  const renderOption = (option) => (
+    <button type="button" key={option.value} role="menuitemradio" tabIndex={-1}
+      aria-checked={interval === option.value} className="requests-refresh-option" data-manual={option.value === 0}
+      onClick={() => { onIntervalChange?.(option.value); setIsOpen(false); triggerRef.current?.focus(); }}>
+      {option.value === 0 && <CirclePause size={14} aria-hidden="true" />}
+      <span>{option.label}</span>
+      <span className="requests-refresh-choice" aria-hidden="true">{interval === option.value && <Check size={10} strokeWidth={3} />}</span>
+    </button>
+  );
 
   return (
-    <div className="relative flex shrink-0 items-center" ref={dropdownRef}>
+    <div className="requests-refresh-control" ref={dropdownRef}>
       {/* 主切换/显示按钮 */}
       <button
+        type="button"
+        ref={triggerRef}
         aria-label="自动刷新间隔"
         aria-expanded={isOpen}
-        title="自动刷新间隔"
+        aria-haspopup="menu"
+        aria-controls={isOpen ? menuId : undefined}
+        data-enabled={enabled}
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-1.5 px-2.5 h-9 rounded-l-lg text-sm font-medium border transition-all relative ${
-          interval > 0
-            ? 'bg-indigo-50 border-indigo-200 text-indigo-700 z-10'
-            : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50 z-0'
-        }`}
+        onKeyDown={(event) => { if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setIsOpen(true); } }}
+        className="requests-refresh-interval"
       >
-        {interval > 0 ? (
-          <>
-            <div className="relative w-3.5 h-3.5 flex items-center justify-center">
-              {/* Spinner/倒计时动画 */}
-              <svg className="animate-spin w-full h-full text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-            </div>
-            <span><span className="hidden min-[75rem]:inline">Auto </span>{interval < 60 ? `${interval}s` : '1m'}</span>
-          </>
-        ) : (
-          <>
-            <Timer className="w-4 h-4" />
-            <span><span className="hidden min-[75rem]:inline">Auto </span>Off</span>
-          </>
-        )}
-        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <IntervalIcon className="requests-refresh-symbol" aria-hidden="true" />
+        <span className="requests-refresh-value">{intervalLabel}</span>
+        <ChevronDown className={`requests-tool-chevron ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {/* 手动刷新按钮 - 连体右侧 */}
       <button
+        type="button"
         aria-label="立即刷新"
-        title="立即刷新"
-        onClick={onManualRefresh}
-        className={`h-9 w-9 flex items-center justify-center border rounded-r-lg border-gray-200 bg-white text-gray-500 hover:text-indigo-600 hover:bg-gray-50 -ml-px transition-colors z-0 ${
-          interval > 0 ? 'border-l-indigo-200' : ''
-        }`}
+        onClick={manualRefresh}
+        disabled={busy}
+        aria-busy={busy}
+        className="requests-refresh-manual"
       >
-        <RotateCcw className="w-4 h-4" />
+        {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
       </button>
 
       {/* 下拉菜单 */}
       {isOpen && (
-        <>
-          {/* 遮罩层 - 点击关闭 */}
-          <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)}></div>
-
-          {/* 菜单内容 */}
-          <div className="absolute top-full right-0 mt-2 w-32 bg-white rounded-lg shadow-xl border border-gray-100 ring-1 ring-black/5 z-20 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="py-1">
-              {options.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => {
-                    onIntervalChange?.(opt.value);
-                    setIsOpen(false);
-                  }}
-                  className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between ${
-                    interval === opt.value
-                      ? 'bg-indigo-50 text-indigo-700 font-medium'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  {opt.label}
-                  {interval === opt.value && <Check className="w-3.5 h-3.5" />}
-                </button>
-              ))}
+          <div id={menuId} className="requests-refresh-menu" role="menu" aria-label="选择自动刷新间隔" onKeyDown={menuKeyDown}>
+            <div className="requests-menu-heading"><span>自动刷新</span><small>{enabled ? '已开启' : '已关闭'}</small></div>
+            <div className="requests-refresh-options">
+              {renderOption(intervalOptions[0])}
+              <div role="group" aria-label="自动刷新频率" className="requests-refresh-presets">{intervalOptions.slice(1).map(renderOption)}</div>
             </div>
           </div>
-        </>
       )}
     </div>
   );

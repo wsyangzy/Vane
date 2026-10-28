@@ -237,16 +237,6 @@ const parseEndpointPriorityPayload = (value) => {
   return { priority: parsed };
 };
 
-// ============================================================================
-// Codex 全局配置弹窗（直接读写 ~/.codex/config.toml）
-// 字段：model / enable_1m_context（base_url 由后端自动同步）
-// 显式保存模式：点击「保存」才写入文件
-// ============================================================================
-const DEFAULT_CONFIG = {
-  model: '',
-  enable_1m_context: false
-};
-
-export { buildInitialChannelForm, CODEX_CHANNEL_FORM_TABS, CODEX_CHANNEL_EDIT_FORM_TABS, buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS, CODEX_BILLING_MODES, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS, STANDARD_ENDPOINT_MULTIPLIER_FIELDS, LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS, parseEndpointMultiplierPayload, CODEX_ENDPOINT_FORM_TABS, getNextCodexEndpointPriority, formatEndpointTimeoutInputValue, parseEndpointTimeoutPayload, parseEndpointPriorityPayload, DEFAULT_CONFIG, getDefaultCredentialGroup, normalizeMultiplierValue, getCredentialGroups, hasCodexCredential, sortEndpointsByPriority, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload };
+export { buildInitialChannelForm, CODEX_CHANNEL_FORM_TABS, CODEX_CHANNEL_EDIT_FORM_TABS, buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS, CODEX_BILLING_MODES, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS, STANDARD_ENDPOINT_MULTIPLIER_FIELDS, LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS, parseEndpointMultiplierPayload, CODEX_ENDPOINT_FORM_TABS, getNextCodexEndpointPriority, formatEndpointTimeoutInputValue, parseEndpointTimeoutPayload, parseEndpointPriorityPayload, getDefaultCredentialGroup, normalizeMultiplierValue, getCredentialGroups, hasCodexCredential, sortEndpointsByPriority, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload };
 
 export const ENDPOINT_STATE_BUTTON_CLASS = 'inline-flex size-5 min-h-5 min-w-5 max-h-5 max-w-5 flex-shrink-0 appearance-none items-center justify-center rounded-md border-0 p-0 leading-none transition-colors duration-150';

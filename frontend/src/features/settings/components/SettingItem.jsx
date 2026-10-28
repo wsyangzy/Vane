@@ -120,13 +120,13 @@ const SettingItem = ({
 
     return (
       <>
-        <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
-          <div className="flex-1 min-w-0 pr-4">
+        <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
+          <div className="flex-1 min-w-0 pr-3">
             <div className="flex items-center gap-2">
               {hasChange && (
                 <ChangeDot />
               )}
-              <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+              <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
               {setting.requires_restart && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                   <AlertTriangle size={10} className="mr-0.5" />
@@ -135,7 +135,7 @@ const SettingItem = ({
               )}
             </div>
             {setting.description && (
-              <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+              <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -164,7 +164,7 @@ const SettingItem = ({
               `}
             >
               <CurrentIcon size={14} className={isLoopRetry ? 'text-indigo-500' : 'text-slate-400'} />
-              <span className="text-sm font-medium">{currentLabel}</span>
+              <span className="text-xs font-medium">{currentLabel}</span>
               <ChevronRight size={14} className="text-slate-400" />
             </button>
           </div>
@@ -185,13 +185,13 @@ const SettingItem = ({
   if (valueType === 'bool') {
     const isChecked = localValue === 'true' || localValue === true;
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
-        <div className="flex-1 min-w-0 pr-4">
+      <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
+        <div className="flex-1 min-w-0 pr-3">
           <div className="flex items-center gap-2">
             {hasChange && (
               <ChangeDot />
             )}
-            <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+            <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                 <AlertTriangle size={10} className="mr-0.5" />
@@ -200,7 +200,7 @@ const SettingItem = ({
             )}
           </div>
           {setting.description && (
-            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -210,20 +210,21 @@ const SettingItem = ({
               disabled={disabled}
             />
           )}
-          <label className="relative inline-flex items-center cursor-pointer">
+          <label className="relative inline-flex min-h-8 items-center cursor-pointer">
             <input
               type="checkbox"
+              aria-label={displayLabel}
               checked={isChecked}
               onChange={handleChange}
               disabled={disabled}
               className="sr-only peer"
             />
             <div className={`
-              w-11 h-6 bg-slate-200 rounded-full peer
+              relative w-9 h-5 bg-slate-200 rounded-full peer
               peer-checked:bg-indigo-600
               peer-focus:ring-2 peer-focus:ring-indigo-300
               after:content-[''] after:absolute after:top-0.5 after:left-[2px]
-              after:bg-white after:rounded-full after:h-5 after:w-5
+              after:bg-white after:rounded-full after:h-4 after:w-4
               after:transition-all after:shadow-sm
               peer-checked:after:translate-x-full
               ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
@@ -242,13 +243,13 @@ const SettingItem = ({
     };
 
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
-        <div className="flex-1 min-w-0 pr-4">
+      <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
+        <div className="flex-1 min-w-0 pr-3">
           <div className="flex items-center gap-2">
             {hasChange && (
               <ChangeDot />
             )}
-            <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+            <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                 <AlertTriangle size={10} className="mr-0.5" />
@@ -257,7 +258,7 @@ const SettingItem = ({
             )}
           </div>
           {setting.description && (
-            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -272,7 +273,9 @@ const SettingItem = ({
             value={localValue}
             onChange={handleStrategyChange}
             disabled={disabled}
-            size="md"
+            size="sm"
+            ariaLabel={displayLabel}
+            className="[&>button]:h-8"
           />
         </div>
       </div>
@@ -302,14 +305,14 @@ const SettingItem = ({
 
     // 通用枚举类型使用下拉选择
     return (
-      <div className="py-3 border-b border-slate-100 last:border-0 group">
+      <div className="py-2 border-b border-slate-100 last:border-0 group">
         <div className="flex justify-between items-center">
-          <div className="flex-1 min-w-0 pr-4">
+          <div className="flex-1 min-w-0 pr-3">
             <div className="flex items-center gap-2">
               {hasChange && (
                 <ChangeDot />
               )}
-              <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+              <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
               {setting.requires_restart && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                   <AlertTriangle size={10} className="mr-0.5" />
@@ -318,7 +321,7 @@ const SettingItem = ({
               )}
             </div>
             {setting.description && (
-              <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+              <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -333,14 +336,16 @@ const SettingItem = ({
               value={localValue}
               onChange={handleEnumChange}
               disabled={disabled}
-              size="md"
+              size="sm"
+              ariaLabel={displayLabel}
+              className="[&>button]:h-8"
             />
           </div>
         </div>
         {/* 当前选项的详细说明 */}
         {currentOption && currentOption.description && (
-          <div className="mt-2 pl-4 pr-32">
-            <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+          <div className="mt-2">
+            <div className="p-2 bg-indigo-50/50 border border-indigo-100 rounded-lg">
               <p className="text-xs text-indigo-900 leading-relaxed">{currentOption.description}</p>
             </div>
           </div>
@@ -357,13 +362,13 @@ const SettingItem = ({
     };
 
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
-        <div className="flex-1 min-w-0 pr-4">
+      <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
+        <div className="flex-1 min-w-0 pr-3">
           <div className="flex items-center gap-2">
             {hasChange && (
               <ChangeDot />
             )}
-            <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+            <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                 <AlertTriangle size={10} className="mr-0.5" />
@@ -372,7 +377,7 @@ const SettingItem = ({
             )}
           </div>
           {setting.description && (
-            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -395,13 +400,13 @@ const SettingItem = ({
   // 密码类型（脱敏展示 + 可切换显示）
   if (valueType === 'password') {
     return (
-      <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
-        <div className="flex-1 min-w-0 pr-4">
+      <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
+        <div className="flex-1 min-w-0 pr-3">
           <div className="flex items-center gap-2">
             {hasChange && (
               <ChangeDot />
             )}
-            <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+            <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
             {setting.requires_restart && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
                 <AlertTriangle size={10} className="mr-0.5" />
@@ -410,7 +415,7 @@ const SettingItem = ({
             )}
           </div>
           {setting.description && (
-            <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+            <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
           )}
         </div>
 
@@ -421,15 +426,16 @@ const SettingItem = ({
               disabled={disabled}
             />
           )}
-          <div className={`relative ${setting.key === 'token' ? 'w-80' : 'w-32'}`}>
+          <div className={`relative ${setting.key === 'token' ? 'w-[min(260px,45vw)]' : 'w-[104px]'}`}>
             <input
               type={showSecret ? 'text' : 'password'}
+              aria-label={displayLabel}
               value={localValue}
               onChange={handleChange}
               disabled={disabled}
               placeholder={config.placeholder}
               className={`
-                w-full px-3 py-1.5 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
+                h-8 w-full px-2.5 pr-9 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700
                 font-mono text-left
                 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
                 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
@@ -459,13 +465,13 @@ const SettingItem = ({
   const min = setting.category === 'retention' && setting.key === 'retention_days' ? 0 : undefined;
 
   return (
-    <div className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0 group">
-      <div className="flex-1 min-w-0 pr-4">
+    <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
+      <div className="flex-1 min-w-0 pr-3">
         <div className="flex items-center gap-2">
           {hasChange && (
             <ChangeDot />
           )}
-          <span className="text-sm font-medium text-slate-700">{displayLabel}</span>
+          <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
           {setting.requires_restart && (
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
               <AlertTriangle size={10} className="mr-0.5" />
@@ -474,7 +480,7 @@ const SettingItem = ({
           )}
         </div>
         {setting.description && (
-          <p className="text-xs text-slate-400 mt-0.5">{setting.description}</p>
+          <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
         )}
       </div>
       <div className="flex items-center gap-2">
@@ -484,9 +490,10 @@ const SettingItem = ({
             disabled={disabled}
           />
         )}
-        <div className={`relative ${setting.key === 'token' ? 'w-80' : 'w-32'}`}>
+        <div className={`relative ${setting.key === 'token' ? 'w-[min(260px,45vw)]' : 'w-[104px]'}`}>
           <input
             type={config.type}
+            aria-label={displayLabel}
             value={localValue}
             onChange={handleChange}
             disabled={disabled}
@@ -494,7 +501,7 @@ const SettingItem = ({
             min={min}
             placeholder={config.placeholder}
             className={`
-              w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700
+              h-8 w-full px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700
               font-mono text-right
               focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
               ${disabled ? 'opacity-50 cursor-not-allowed' : ''}

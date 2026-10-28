@@ -1,4 +1,4 @@
-import { Activity, RotateCcw, ArrowRight, Database, KeyRound, Pencil, Server, Settings, XCircle } from 'lucide-react';
+import { Activity, ArrowRight, Database, KeyRound, Pencil, Server, Settings, XCircle } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import EndpointAvailabilityBar from '@/features/providers/shared/endpoints/EndpointAvailabilityBar.jsx';
@@ -7,7 +7,6 @@ import { ModelMappingPair } from '@/features/providers/shared/endpoints/detailPa
 import { formatLastCheck, formatDetailMultiplier, getDetailTimestamp } from '@/features/providers/shared/formatters.js';
 import { EndpointHealthBadge as CodexHealthBadge, EndpointLatencyBadge as CodexLatencyBadge, EndpointRequestFailureBadge as CodexRequestFailureBadge } from '@/features/providers/shared/endpoints/endpointBadges.jsx';
 import { DetailMetricCard, DetailChip, DetailPill, DetailTimeoutPill, DetailTimestampFooter } from './detailParts.jsx';
-import { RepeatOffIcon } from './endpointState.jsx';
 import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '../model.js';
 
 // ============================================================================
@@ -17,7 +16,7 @@ import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '
 // 端点行（紧凑表格风，延续渠道管理页密度）：
 // 左侧 toggle = 激活；行整体点击展开内嵌编辑（base_url 直改即保存）
 // ============================================================================
-const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onRestore, onHealth }) => {
+const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onHealth }) => {
   if (!endpoint) return null;
 
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
@@ -25,7 +24,6 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   const lastFailCode = Number(endpoint.lastFailCode || endpoint.last_fail_code || 0);
   const lastFailReason = endpoint.lastFailReason || endpoint.last_fail_reason || '';
   const hasFailDetail = (Number.isFinite(lastFailCode) && lastFailCode > 0) || !!lastFailReason;
-  const failoverEnabled = endpoint.failoverEnabled !== false;
   const endpointGroupID = Number(endpoint.credentialGroupId || endpoint.credential_group_id || 0);
   const credentialGroup = (channel?.credentialGroups || []).find((group) => Number(group.id) === endpointGroupID) ||
     getDefaultCredentialGroup(channel);
@@ -154,7 +152,6 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
             </div>
 
             <div className="flex flex-shrink-0 items-center gap-2">
-              {!failoverEnabled && <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => onRestore?.(endpoint)}>恢复历史端点</Button>}
               <Button variant="ghost" size="sm" icon={Activity} onClick={() => onHealth?.(endpoint)}>健康检测</Button>
               <Button
                 variant="ghost"
@@ -185,7 +182,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
               <span className="leading-none">分组倍率</span>
               <span className="font-mono leading-none">{formatDetailMultiplier(credentialGroup?.costMultiplier ?? 1)}</span>
             </DetailPill>
-            {!failoverEnabled && <DetailPill tone="amber" icon={RepeatOffIcon}>历史停用</DetailPill>}
+
 
             <DetailPill tone="sky" icon={Database}>
               <span className="leading-none">{billingName}</span>

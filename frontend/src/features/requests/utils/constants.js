@@ -31,12 +31,12 @@ export const PAGINATION_CONFIG = {
   PAGE_SIZE_OPTIONS: [10, 20, 50, 100]
 };
 
-// 默认筛选器状态（移除group筛选）
+// 资源筛选层级：提供商 -> 渠道 -> 凭证分组。
 export const DEFAULT_FILTERS = {
   status: 'all',
   model: '',
   channel: 'all',
-  endpoint: 'all',
+  group: 'all',
   provider: '',
   startDate: '',
   endDate: ''

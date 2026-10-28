@@ -1,22 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import Tooltip from '@/shared/ui/Tooltip.jsx';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   Eye,
   FlaskConical,
   History,
-  Info,
+  ListFilter,
   Minus,
   Package,
   PencilLine,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
   ShieldOff,
+  SlidersHorizontal,
   Trash,
   X
 } from 'lucide-react';
-import { Button, ConfirmDialog, CustomSelect, ErrorMessage, LoadingSpinner, Tooltip, useToast } from '@/shared/ui/index.js';
+import { Button, ConfirmDialog, CustomSelect, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import {
   applyPrivacyPreset,
@@ -33,6 +37,9 @@ import {
   updatePrivacySettings
 } from '@/services/http/api.js';
 import { REGEX_TEMPLATES } from './regexTemplates.js';
+import { ProtectionOptions } from './ProtectionOptions.jsx';
+import { PrivacyActivity } from './PrivacyActivity.jsx';
+import './privacy.css';
 
 const MODES = [
   {
@@ -45,18 +52,19 @@ const MODES = [
     value: 'detect',
     label: '仅检测',
     icon: Eye,
-    description: '仅统计命中，不改写请求，适合先验证规则。'
+    description: '默认不改写；规则拦截与渠道设置仍生效。'
   },
   {
     value: 'redact',
     label: '脱敏',
     icon: ShieldCheck,
-    description: '外发前替换命中内容，其余字节保持原样。'
+    description: '按规则与渠道设置替换命中内容。'
   }
 ];
 
 const MATCH_TYPES = [
-  { value: 'literal', label: '字面量', helper: '按原样查找这段文本，不做任何模式解释。' },
+  { value: 'literal', label: '指定文本', helper: '填写项目名称、内部代号或其他指定文本。替换和检测区分大小写；放行忽略大小写。' },
+  { value: 'prefix', label: '密钥前缀', helper: '填写固定前缀（3–64 字节），例如 sk-team-；匹配其后至少 8 位字母、数字、下划线或连字符。' },
   { value: 'regex', label: '正则', helper: 'Go RE2 语法。可用 (?P<redact>...) 命名捕获组只替换其中一段，保留字段名。' },
   { value: 'builtin', label: '内置', helper: '带校验位与卡组织画像的确定型 PII 匹配器，误报率远低于纯正则。' }
 ];
@@ -139,16 +147,64 @@ const SOURCE_TONES = {
 // 与 @/shared/ui 的 Input 保持一致的输入控件样式（含 focus ring）。
 // 原生控件默认没有聚焦态，混在自定义组件之间会很突兀。
 const FIELD_CLASS =
-  'w-full rounded-lg border border-slate-200 px-3 py-2 text-sm transition-colors ' +
-  'focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+  'privacy-input w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs transition-colors ' +
+  'focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100';
 
 const FIELD_MONO_CLASS = FIELD_CLASS + ' font-mono text-xs';
 
 // 弹窗动效对齐 RequestDetailModal：遮罩淡入，面板 zoom-in-95 + 淡入。
 const OVERLAY_CLASS = 'absolute inset-0 bg-slate-900/20 backdrop-blur-sm animate-in fade-in duration-200';
 const PANEL_CLASS =
-  'relative flex w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 ' +
+  'privacy-dialog relative flex w-full min-w-0 flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 ' +
   'animate-in zoom-in-95 fade-in duration-200';
+
+const PrivacyDialog = ({ title, icon: Icon, children, footer, busy = false, onClose }) => {
+  const titleId = useId();
+  const dialogRef = useRef(null);
+  const closeRef = useRef(onClose);
+  const busyRef = useRef(busy);
+  useEffect(() => { closeRef.current = onClose; busyRef.current = busy; }, [onClose, busy]);
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const controls = () => [...dialogRef.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]')].filter(element => element.getClientRects().length > 0);
+    (dialogRef.current.querySelector('input, textarea') || controls()[0])?.focus();
+    const onKeyDown = event => {
+      if (event.defaultPrevented || (!dialogRef.current?.contains(event.target) && event.target !== document.body)) return;
+      if (document.querySelector('[role="listbox"]:not(.is-closing)')) return;
+      if (event.key === 'Escape' && !busyRef.current) {
+        event.preventDefault();
+        closeRef.current();
+      }
+      if (event.key === 'Tab') {
+        const items = controls();
+        const first = items[0], last = items.at(-1);
+        if ((event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first)?.focus();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+      previousFocus?.focus();
+    };
+  }, []);
+  return renderModalPortal(<div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+    <div className={OVERLAY_CLASS} onClick={() => { if (!busy) onClose(); }} />
+    <section ref={dialogRef} role="dialog" aria-modal="true" aria-busy={busy} aria-labelledby={titleId} className={`${PANEL_CLASS} max-w-2xl`}>
+      <header className="privacy-dialog-header">
+        <h2 id={titleId}>{Icon && <Icon size={16} />}{title}</h2>
+        <button type="button" className="privacy-icon-button" aria-label={`关闭${title}`} disabled={busy} onClick={onClose}><X size={16} /></button>
+      </header>
+      <div className="privacy-dialog-body">{children}</div>
+      <footer className="privacy-dialog-footer">{footer}</footer>
+    </section>
+  </div>);
+};
 
 const SOURCE_FILTERS = [
   { value: 'all', label: '全部' },
@@ -161,7 +217,7 @@ const emptyRule = () => ({
   id: 0,
   name: '',
   description: '',
-  matchType: 'regex',
+  matchType: 'literal',
   pattern: '',
   action: 'redact',
   replacementMode: 'placeholder',
@@ -181,8 +237,8 @@ const Toggle = ({ checked, onChange, disabled = false, label }) => (
     disabled={disabled}
     onClick={() => !disabled && onChange(!checked)}
     className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
-      checked ? 'bg-emerald-500' : 'bg-slate-300'
-    } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+      checked ? 'bg-indigo-500' : 'bg-slate-300'
+    } focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
   >
     <span
       className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
@@ -195,7 +251,7 @@ const Toggle = ({ checked, onChange, disabled = false, label }) => (
 // 自绘勾选框：原生 input 用 peer sr-only 隐藏，继续承担键盘操作与读屏语义，
 // 视觉交给 span，避免各平台原生控件样式不一致。与 ViewConfigPanel 的做法一致。
 const Checkbox = ({ checked, indeterminate = false, onChange, label, disabled = false }) => (
-  <label className={`group inline-flex items-center ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+  <label className={`group relative inline-flex items-center ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
     <input
       type="checkbox"
       checked={checked}
@@ -207,12 +263,7 @@ const Checkbox = ({ checked, indeterminate = false, onChange, label, disabled = 
     />
     <span
       aria-hidden="true"
-      className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-md border transition-all
-        peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-200 peer-focus-visible:ring-offset-1 ${
-        checked || indeterminate
-          ? 'border-indigo-500 bg-indigo-600 text-white shadow-sm shadow-indigo-500/20'
-          : 'border-slate-300 bg-white text-transparent group-hover:border-indigo-300'
-      }`}
+      className="checkbox-indicator"
     >
       {indeterminate
         ? <Minus className="h-3 w-3" strokeWidth={3} />
@@ -228,7 +279,7 @@ const Badge = ({ children, className = '' }) => (
 );
 
 const ModeSelector = ({ mode, onChange, saving }) => (
-  <div className="grid gap-2 sm:grid-cols-3">
+  <div className="privacy-modes" role="group" aria-label="运行模式">
     {MODES.map((item) => {
       const Icon = item.icon;
       const active = mode === item.value;
@@ -238,130 +289,14 @@ const ModeSelector = ({ mode, onChange, saving }) => (
           type="button"
           aria-pressed={active}
           disabled={saving}
-          onClick={() => onChange(item.value)}
-          className={`min-w-0 rounded-lg border px-3 py-2.5 text-left transition-colors ${
-            active
-              ? 'border-emerald-300 bg-emerald-50 ring-1 ring-emerald-200'
-              : 'border-slate-200 bg-white hover:border-slate-300'
-          } ${saving ? 'cursor-not-allowed opacity-60' : ''}`}
+          onClick={() => { if (!active) onChange(item.value); }}
+          className="privacy-mode"
+          data-active={active}
         >
-          <div className="flex items-center gap-2">
-            <Icon className={`h-4 w-4 ${active ? 'text-emerald-600' : 'text-slate-400'}`} />
-            <span className={`text-sm font-semibold ${active ? 'text-emerald-800' : 'text-slate-700'}`}>
-              {item.label}
-            </span>
-            {active && <Check className="ml-auto h-4 w-4 text-emerald-600" />}
-          </div>
-          <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>
+          <span className="privacy-mode-label"><Icon size={14} /><span>{item.label}</span>{active && <Check size={12} className="ml-auto" />}</span>
         </button>
       );
     })}
-  </div>
-);
-
-// 「拒发请求」三处策略的风险说明。选中前必须确认：拒发不是静默的——
-// 客户端会收到 Relay 本地的 403/413，而不是上游的正常响应。
-const FAIL_CLOSED_WARNINGS = {
-  onError: '扫描出错（例如请求体不是合法 JSON）时，请求会被直接拒发。',
-  unsupportedPathAction: '不在扫描范围内的接口路径（新版本客户端新增的接口、检测类接口等）会被直接拒发。',
-  overLimitAction: '超长上下文会被直接拒发，而不是只扫描前面一部分。'
-};
-
-// PolicyPanel 选中任一「拒发请求」前先弹确认，其余选项直接生效
-const PolicyPanel = ({ settings, onChange, saving }) => {
-  const [pending, setPending] = useState(null);
-  const request = (key, value) => {
-    if (value === 'fail_closed' && settings[key] !== 'fail_closed') {
-      setPending({ key, value });
-      return;
-    }
-    onChange({ ...settings, [key]: value });
-  };
-  return (
-    <>
-      <PolicyPanelFields settings={settings} saving={saving} onSelect={request} />
-      <ConfirmDialog
-        isOpen={Boolean(pending)}
-        variant="danger"
-        title="确认改为「拒发请求」？"
-        message={[
-          pending ? FAIL_CLOSED_WARNINGS[pending.key] : '',
-          '被拒发的请求会以 Relay 本地错误返回，客户端通常会自动重试。部分中转商与官方订阅会把短时间内大量异常失败、',
-          '或请求形态异常视为风险行为，存在被限流乃至封号的风险。建议先用「放行并告警」观察未覆盖情况，确认可控后再开启。'
-        ].join('')}
-        confirmText="仍然开启"
-        onConfirm={() => {
-          onChange({ ...settings, [pending.key]: pending.value });
-          setPending(null);
-        }}
-        onCancel={() => setPending(null)}
-      />
-    </>
-  );
-};
-
-const PolicyPanelFields = ({ settings, onSelect, saving }) => (
-  <div className="grid gap-3 sm:grid-cols-3">
-    <div className="min-w-0 text-xs">
-      <span className="font-medium text-slate-700">扫描出错时</span>
-      <div className="mt-1.5">
-        <CustomSelect
-          fullWidth
-          disabled={saving}
-          ariaLabel="扫描出错时的处理方式"
-          value={settings.onError}
-          onChange={(value) => onSelect('onError', value)}
-          options={[
-            { value: 'fail_open', label: '放行请求' },
-            { value: 'fail_closed', label: '拒发请求' }
-          ]}
-        />
-      </div>
-      <p className="mt-1 text-xs leading-5 text-slate-500">拒发时请求失败，未经扫描的内容不会外发。</p>
-    </div>
-
-    <div className="min-w-0 text-xs">
-      <div className="flex items-center gap-1.5">
-        <span className="font-medium text-slate-700">路径未被覆盖时</span>
-        <Tooltip content="扫描覆盖 Claude /v1/messages、Codex /v1/responses 与 /v1/chat/completions 的全部对话与工具字段。">
-          <button type="button" aria-label="查看扫描覆盖范围" className="rounded text-slate-400 hover:text-slate-600 focus-visible:outline-2 focus-visible:outline-indigo-500">
-            <Info size={12} />
-          </button>
-        </Tooltip>
-      </div>
-      <div className="mt-1.5">
-        <CustomSelect
-          fullWidth
-          disabled={saving}
-          ariaLabel="未覆盖路径的处理方式"
-          value={settings.unsupportedPathAction}
-          onChange={(value) => onSelect('unsupportedPathAction', value)}
-          options={[
-            { value: 'warn', label: '放行并告警' },
-            { value: 'fail_closed', label: '拒发请求' }
-          ]}
-        />
-      </div>
-      <p className="mt-1 text-xs leading-5 text-slate-500">建议放行并告警；拒发可能触发上游风控。</p>
-    </div>
-
-    <div className="min-w-0 text-xs">
-      <span className="font-medium text-slate-700">超出扫描上限时</span>
-      <div className="mt-1.5">
-        <CustomSelect
-          fullWidth
-          disabled={saving}
-          ariaLabel="超出扫描上限的处理方式"
-          value={settings.overLimitAction}
-          onChange={(value) => onSelect('overLimitAction', value)}
-          options={[
-            { value: 'scan_prefix', label: `只扫描前 ${Math.round(settings.scanMaxBytes / 1024 / 1024)} MB` },
-            { value: 'fail_closed', label: '拒发请求' }
-          ]}
-        />
-      </div>
-      <p className="mt-1 text-xs leading-5 text-slate-500">超长上下文中，未扫描的尾部将原样发出。</p>
-    </div>
   </div>
 );
 
@@ -371,7 +306,7 @@ const UnscannedPathsBanner = ({ paths, onClear }) => {
   if (!paths.length) return null;
   const total = paths.reduce((sum, item) => sum + item.count, 0);
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+    <div className="privacy-unscanned rounded-xl border border-amber-200 bg-amber-50/80 p-3">
       <div className="flex items-start gap-3">
         <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
         <div className="min-w-0 flex-1">
@@ -381,16 +316,16 @@ const UnscannedPathsBanner = ({ paths, onClear }) => {
           <p className="mt-1 text-xs leading-relaxed text-amber-800">
             以下路径不在字段白名单内，隐私规则未对其生效。若这些路径会携带客户信息，请改用「拒发请求」策略，或反馈该路径以便补充白名单。
           </p>
-          <div className="mt-2.5 space-y-1">
+          <details className="privacy-paths"><summary>查看 {paths.length} 个未覆盖路径<ChevronDown size={12} /></summary><div className="mt-2 space-y-1">
             {paths.map((item) => (
               <div key={item.path} className="flex items-center justify-between gap-3 text-xs">
-                <code className="min-w-0 truncate rounded bg-white/70 px-1.5 py-0.5 font-mono text-amber-900">
+                <code className="min-w-0 wrap-anywhere rounded bg-white/70 px-1.5 py-0.5 font-mono text-amber-900">
                   {item.path}
                 </code>
                 <span className="flex-shrink-0 font-medium text-amber-700">{item.count} 次</span>
               </div>
             ))}
-          </div>
+          </div></details>
         </div>
         <button
           type="button"
@@ -421,11 +356,12 @@ const LegacyRulesPanel = ({ rules, onDiscard }) => {
       <button
         type="button"
         onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left"
+        aria-expanded={expanded}
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left"
       >
         <History className="h-4 w-4 text-slate-400" />
-        <span className="text-sm font-semibold text-slate-800">旧版规则 · 需手工重建（{rules.length}）</span>
-        <span className="ml-auto text-xs text-slate-400">{expanded ? '收起' : '展开'}</span>
+        <span className="min-w-0 flex-1 text-xs font-medium text-slate-700">旧版规则 · 需手工重建（{rules.length}）</span>
+        <ChevronDown size={13} className={`shrink-0 text-slate-400 ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded && (
         <div className="border-t border-slate-100 px-4 py-3">
@@ -469,10 +405,11 @@ const LegacyRulesPanel = ({ rules, onDiscard }) => {
   );
 };
 
-const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy, selected, onSelect }) => {
+const RuleRow = ({ rule, settings, onEdit, onDelete, onToggle, busy, selected, onSelect }) => {
   const isBuiltin = rule.source === 'builtin';
+  const action = rule.action;
   return (
-    <tr className={`border-b border-slate-50 last:border-0 ${selected ? 'bg-indigo-50/40' : ''}`}>
+    <tr data-selected={selected} data-enabled={rule.enabled} data-action={action}>
       <td className="py-2.5 pr-2">
         <Checkbox
           checked={selected}
@@ -488,58 +425,47 @@ const RuleRow = ({ rule, onEdit, onDelete, onToggle, busy, selected, onSelect })
           label={`启用 ${rule.name}`}
         />
       </td>
-      <td className="py-2.5 pr-3">
-        <div className="text-sm font-medium text-slate-800">{rule.name}</div>
-        {rule.description && <div className="mt-0.5 text-xs text-slate-500">{rule.description}</div>}
+      <td>
+        <div className="privacy-rule-name"><strong>{rule.name}</strong><Badge className={SOURCE_TONES[rule.source] || SOURCE_TONES.custom}>{SOURCE_LABELS[rule.source] || rule.source}</Badge></div>
+        {rule.description && <p className="privacy-rule-description">{rule.description}</p>}
       </td>
-      <td className="max-w-xs py-2.5 pr-3">
+      <td>
+        <span className="privacy-rule-type">{action === 'allow' && rule.matchType === 'literal' ? '完整值 · 忽略大小写' : MATCH_TYPES.find(item => item.value === rule.matchType)?.label || rule.matchType}</span>
         {rule.matchType === 'builtin' ? (
-          <span className="block truncate text-xs text-slate-600" title={BUILTIN_MATCHERS[rule.pattern]?.detail || rule.pattern}>
+          <Tooltip asChild content={BUILTIN_MATCHERS[rule.pattern]?.detail || rule.pattern}><span className="privacy-rule-pattern">
             {describePattern(rule)}
-          </span>
+          </span></Tooltip>
         ) : (
-          <code className="block truncate font-mono text-xs text-slate-600" title={rule.pattern}>
+          <code className="privacy-rule-pattern font-mono">
             {rule.pattern}
           </code>
         )}
       </td>
-      <td className="py-2.5 pr-3">
-        <Badge className={SOURCE_TONES[rule.source] || SOURCE_TONES.custom}>
-          {SOURCE_LABELS[rule.source] || rule.source}
-        </Badge>
-      </td>
-      <td className="py-2.5 pr-3 text-xs text-slate-600">
-        {rule.action === 'detect'
-          ? '仅记录'
-          : rule.replacementMode === 'pseudonym'
-            ? `假名 · ${PSEUDONYM_KIND_LABELS[rule.pseudonymKind] || rule.pseudonymKind}`
-            : rule.placeholder}
+      <td>
+        <span className="privacy-rule-type">{action === 'allow' ? '例外放行' : action === 'block' ? '拦截' : action === 'detect' ? '仅检测' : settings.restoreResponses ? '可逆替身' : rule.replacementMode === 'pseudonym' ? '生成假名' : '占位符替换'}</span>
+        <span className="privacy-rule-pattern">{action === 'allow' ? '豁免完整命中值' : action === 'block' ? '本机拒发，不重试' : action === 'detect' ? '记录命中，原文放行' : settings.restoreResponses ? '会话内稳定替换' : rule.replacementMode === 'pseudonym' ? PSEUDONYM_KIND_LABELS[rule.pseudonymKind] || rule.pseudonymKind : rule.placeholder || '[已脱敏]'}</span>
       </td>
       <td className="py-2.5 pr-3 text-xs text-slate-500">{rule.priority}</td>
       <td className="py-2.5">
         <div className="flex items-center justify-end gap-1">
-          <button
+          <Tooltip asChild content="编辑规则"><button
             type="button"
             onClick={() => onEdit(rule)}
-            className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            className="privacy-icon-button"
+            disabled={busy}
             aria-label={`编辑 ${rule.name}`}
           >
             <PencilLine className="h-4 w-4" />
-          </button>
-          <button
+          </button></Tooltip>
+          <Tooltip asChild content={isBuiltin ? '内置规则不可删除，可停用' : '删除'}><button
             type="button"
-            disabled={isBuiltin}
+            disabled={isBuiltin || busy}
             onClick={() => onDelete(rule)}
-            title={isBuiltin ? '内置规则不可删除，可停用' : '删除'}
-            className={`rounded-md p-1.5 transition-colors ${
-              isBuiltin
-                ? 'cursor-not-allowed text-slate-200'
-                : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'
-            }`}
+            className="privacy-icon-button privacy-delete"
             aria-label={`删除 ${rule.name}`}
           >
             <Trash className="h-4 w-4" />
-          </button>
+          </button></Tooltip>
         </div>
       </td>
     </tr>
@@ -578,21 +504,12 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
   const matchMeta = MATCH_TYPES.find((item) => item.value === rule.matchType);
   const replacementMeta = REPLACEMENT_MODES.find((item) => item.value === rule.replacementMode);
 
-  return renderModalPortal(
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
-      <div className={OVERLAY_CLASS} />
-      <div className={`${PANEL_CLASS} max-h-[90vh] max-w-2xl`}>
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
-          <h3 className="text-sm font-semibold text-slate-900">{rule.id ? '编辑规则' : '新建规则'}</h3>
-          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+  return (
+    <PrivacyDialog title={rule.id ? '编辑规则' : '新建规则'} icon={PencilLine} busy={saving} onClose={onClose} footer={<><Button variant="secondary" size="sm" icon={X} onClick={onClose} disabled={saving}>取消</Button><Button size="sm" icon={Check} onClick={onSubmit} loading={saving}>保存规则</Button></>}>
+        <fieldset disabled={saving} className="min-w-0 space-y-3">
+          {error && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 wrap-anywhere">{error}</p>}
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-          {error && <ErrorMessage message={error} />}
-
-          <label className="block text-sm">
+          <div className="grid gap-3 sm:grid-cols-2"><label className="block text-sm">
             <span className="font-medium text-slate-700">规则名称</span>
             <input
               value={rule.name}
@@ -609,7 +526,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
               onChange={(event) => onChange({ ...rule, description: event.target.value })}
               className={`mt-1.5 ${FIELD_CLASS}`}
             />
-          </label>
+          </label></div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="block text-sm">
@@ -635,7 +552,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
                 onChange={(event) => onChange({ ...rule, priority: Number(event.target.value) })}
                 className={`mt-1.5 ${FIELD_CLASS}`}
               />
-              <p className="mt-1 text-xs text-slate-500">与高优先级规则命中区间重叠时，本规则的命中会被丢弃。</p>
+              <p className="mt-1 text-xs text-slate-500">数值越小越先匹配。完整值放行先判断，拦截和完整私钥优先于其他规则。</p>
             </label>
           </div>
 
@@ -666,9 +583,10 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
           ) : (
           <label className="block text-sm">
             <span className="font-medium text-slate-700">
-              {rule.matchType === 'literal' ? '匹配文本' : '正则表达式'}
+              {rule.matchType === 'prefix' ? '固定密钥前缀' : rule.matchType === 'literal' ? '匹配文本' : '正则表达式'}
             </span>
             <textarea
+              aria-label={rule.matchType === 'prefix' ? '固定密钥前缀' : rule.matchType === 'literal' ? '匹配文本' : '正则表达式'}
               value={rule.pattern}
               onChange={(event) => onChange({ ...rule, pattern: event.target.value })}
               rows={3}
@@ -691,7 +609,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
           </label>
           )}
 
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className={`grid gap-4 ${rule.action === 'redact' ? 'sm:grid-cols-2' : ''}`}>
             <div className="block text-sm">
               <span className="font-medium text-slate-700">动作</span>
               <div className="mt-1.5">
@@ -702,10 +620,13 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
                   onChange={(value) => onChange({ ...rule, action: value })}
                   options={[
                     { value: 'redact', label: '替换' },
-                    { value: 'detect', label: '仅记录命中' }
+                    { value: 'block', label: '拦截 · 拒绝发送' },
+                    { value: 'detect', label: '仅记录命中' },
+                    { value: 'allow', label: '例外放行 · 豁免完整值' }
                   ]}
                 />
               </div>
+              {rule.action === 'allow' && <p className="mt-1 text-xs text-slate-500">仅当其他规则的完整命中值符合此规则时，才免于检测、替换和拦截。指定文本忽略大小写，子串相同不会放行整个值。</p>}
             </div>
 
             {rule.action === 'redact' && (
@@ -753,14 +674,9 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
               </p>
             </div>
           )}
-        </div>
+        </fieldset>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3">
-          <Button variant="secondary" size="sm" onClick={onClose} disabled={saving}>取消</Button>
-          <Button size="sm" onClick={onSubmit} disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
-        </div>
-      </div>
-    </div>
+    </PrivacyDialog>
   );
 };
 
@@ -782,15 +698,6 @@ const TestModal = ({ open, onClose }) => {
   const [running, setRunning] = useState(false);
   const toast = useToast();
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const run = async () => {
@@ -807,21 +714,9 @@ const TestModal = ({ open, onClose }) => {
     }
   };
 
-  return renderModalPortal(
-    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
-      <div className={OVERLAY_CLASS} onClick={onClose} />
-      <div className={`${PANEL_CLASS} max-h-[85vh] max-w-2xl`}>
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5">
-          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-            <FlaskConical className="h-4 w-4 text-slate-400" />
-            规则测试
-          </h3>
-          <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+  return (
+    <PrivacyDialog title="规则测试" icon={FlaskConical} busy={running} onClose={onClose} footer={<><Button variant="secondary" size="sm" icon={X} onClick={onClose} disabled={running}>关闭</Button><Button size="sm" icon={FlaskConical} onClick={run} loading={running} disabled={!input.trim()}>运行测试</Button></>}>
+        <div className="space-y-3">
           <p className="text-xs text-slate-500">
             试跑当前全部启用规则，始终按「脱敏」推演。输入与结果只停留在本机，不会写入数据库或发往任何服务商。
           </p>
@@ -834,6 +729,7 @@ const TestModal = ({ open, onClose }) => {
                 <button
                   key={item.value}
                   type="button"
+                  disabled={running}
                   onClick={() => { setMode(item.value); setResult(null); }}
                   aria-pressed={mode === item.value}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium ${
@@ -845,9 +741,10 @@ const TestModal = ({ open, onClose }) => {
               ))}
             </div>
             {mode === 'request' && (
-              <div className="w-64">
+              <div className="min-w-0 flex-1 basis-56">
                 <CustomSelect
                   fullWidth
+                  disabled={running}
                   ariaLabel="请求路径"
                   value={path}
                   onChange={(value) => { setPath(value); setResult(null); }}
@@ -858,8 +755,9 @@ const TestModal = ({ open, onClose }) => {
           </div>
           <textarea
             autoFocus
+            disabled={running}
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(event) => { setInput(event.target.value); setResult(null); }}
             rows={mode === 'request' ? 9 : 5}
             placeholder={mode === 'request'
               ? '粘贴一段完整的请求体 JSON，查看哪些字段会被扫描、哪些会被改写'
@@ -868,7 +766,7 @@ const TestModal = ({ open, onClose }) => {
           />
           {result?.error && (
             <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              请求体无法解析：{result.error}
+              {result.blocked ? '预演结果：该请求会被本机策略拒发。' : '扫描失败：'}{result.error}
             </p>
           )}
           {result && mode === 'request' && !result.supported && (
@@ -876,10 +774,10 @@ const TestModal = ({ open, onClose }) => {
               该路径不在扫描范围内，实际请求会按「路径未被覆盖时」策略处理。
             </p>
           )}
-          {result && !result.error && (
+          {result && (!result.error || result.blocked) && (
             <div className="space-y-2">
               <div className="text-xs text-slate-500">
-                命中 {result.hitCount} 处{result.changed ? '，已替换' : '，无替换'}
+                命中 {result.hitCount} 处{result.blocked ? '，将拒绝发送' : result.changed ? '，按脱敏模式已替换' : '，无替换'}
               </div>
               {mode === 'request' && result.fields?.length > 0 && (
                 <div className="max-h-40 overflow-auto rounded-lg border border-slate-200">
@@ -921,18 +819,13 @@ const TestModal = ({ open, onClose }) => {
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3">
-          <Button variant="secondary" size="sm" onClick={onClose}>关闭</Button>
-          <Button size="sm" onClick={run} disabled={running || !input.trim()}>
-            {running ? '测试中…' : '运行'}
-          </Button>
-        </div>
-      </div>
-    </div>
+    </PrivacyDialog>
   );
 };
 
 const PrivacyPage = () => {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -945,6 +838,10 @@ const PrivacyPage = () => {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [testOpen, setTestOpen] = useState(false);
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const [importingPreset, setImportingPreset] = useState('');
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
@@ -968,8 +865,13 @@ const PrivacyPage = () => {
   const rules = useMemo(() => overview?.rules || [], [overview]);
   const enabledCount = useMemo(() => rules.filter((rule) => rule.enabled).length, [rules]);
   const visibleRules = useMemo(
-    () => (sourceFilter === 'all' ? rules : rules.filter((rule) => rule.source === sourceFilter)),
-    [rules, sourceFilter]
+    () => {
+      const query = search.trim().toLocaleLowerCase();
+      return rules.filter(rule => (sourceFilter === 'all' || rule.source === sourceFilter)
+        && (statusFilter === 'all' || rule.enabled === (statusFilter === 'enabled'))
+        && (!query || [rule.name, rule.description, rule.pattern, describePattern(rule), rule.placeholder].some(value => value?.toLocaleLowerCase().includes(query))));
+    },
+    [rules, sourceFilter, statusFilter, search]
   );
   const visibleIds = useMemo(() => visibleRules.map((rule) => rule.id), [visibleRules]);
   const someVisibleSelected = visibleIds.some((id) => selectedIds.includes(id));
@@ -1025,8 +927,10 @@ const PrivacyPage = () => {
       await updatePrivacySettings(next);
       await load();
       toast.success('隐私防护设置已生效');
+      return true;
     } catch (error) {
       toast.error(`保存失败: ${error.message}`);
+      return false;
     } finally {
       setSavingSettings(false);
     }
@@ -1075,6 +979,8 @@ const PrivacyPage = () => {
   };
 
   const importPreset = async (presetId) => {
+    if (importingPreset) return;
+    setImportingPreset(presetId);
     try {
       const added = await applyPrivacyPreset(presetId);
       await load();
@@ -1085,6 +991,8 @@ const PrivacyPage = () => {
       }
     } catch (error) {
       toast.error(`导入失败: ${error.message}`);
+    } finally {
+      setImportingPreset('');
     }
   };
 
@@ -1093,29 +1001,28 @@ const PrivacyPage = () => {
   if (!settings) return <ErrorMessage message="隐私防护服务未就绪" onRetry={load} />;
 
   return (
-    <div className="animate-fade-in">
+    <div className="privacy-workspace animate-fade-in">
       {/* 页面标题 */}
-      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+      <div className="flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="text-xl font-bold text-slate-900">隐私防护</h1>
-            <p className="text-xs text-slate-500">
-              外发前在本机扫描，命中原文不写入数据库、日志或本页面。
-            </p>
+            <span className="privacy-status" data-mode={settings.mode}><span />{MODES.find(item => item.value === settings.mode)?.label || settings.mode}<span className="privacy-status-count">{enabledCount} / {rules.length} 条启用</span></span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <Button variant="secondary" size="sm" onClick={load}>
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-            刷新
-          </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="secondary" size="sm" icon={SlidersHorizontal} onClick={() => setOptionsOpen(true)}>运行设置</Button>
+          <Button variant="secondary" size="sm" icon={History} onClick={() => { setActivityOpen(true); load(); }}>防护记录</Button>
+          <Button variant="secondary" size="sm" icon={FlaskConical} onClick={() => setTestOpen(true)}>规则测试</Button>
+          <Button variant="ghost" size="sm" icon={RefreshCw} onClick={load}>刷新</Button>
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="privacy-content">
+        <div className="privacy-configuration">
         <UnscannedPathsBanner
           paths={overview.unscannedPaths}
           onClear={async () => {
@@ -1124,17 +1031,17 @@ const PrivacyPage = () => {
           }}
         />
 
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <h2 className="mb-2.5 text-sm font-semibold text-slate-900">运行模式</h2>
-          <ModeSelector
-            mode={settings.mode}
-            saving={savingSettings}
-            onChange={(mode) => saveSettings({ ...settings, mode })}
-          />
-          <div className="mt-3 border-t border-slate-100 pt-3">
-            <PolicyPanel settings={settings} saving={savingSettings} onChange={saveSettings} />
+        <section className="privacy-runtime" aria-label="运行模式">
+          <div className="privacy-runtime-control">
+            <span className="privacy-runtime-label">运行模式</span>
+            <ModeSelector
+              mode={settings.mode}
+              saving={savingSettings}
+              onChange={(mode) => saveSettings({ ...settings, mode })}
+            />
           </div>
-        </div>
+          <p>{MODES.find(item => item.value === settings.mode)?.description}<span>选择后立即生效</span></p>
+        </section>
 
         <LegacyRulesPanel
           rules={overview.legacyRules}
@@ -1144,32 +1051,19 @@ const PrivacyPage = () => {
             toast.success('旧版规则清单已清除');
           }}
         />
+        </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-900">
-              规则（{enabledCount}/{rules.length} 启用）
-            </h2>
+        <section className="privacy-rules" aria-label="隐私规则">
+          <div className="privacy-rules-heading">
+            <div className="privacy-section-heading"><h2><ListFilter size={14} />防护规则</h2><span>{rules.length} 条 · 匹配、处理与放行统一管理</span></div>
             <div className="ml-auto flex flex-wrap items-center gap-2">
-              {overview.presets.map((preset) => (
-                <Button key={preset.id} variant="secondary" size="sm" onClick={() => importPreset(preset.id)}>
-                  <Package className="mr-1.5 h-3.5 w-3.5" />
-                  导入{preset.name}（{preset.ruleCount}）
-                </Button>
-              ))}
-              <Button variant="secondary" size="sm" onClick={() => setTestOpen(true)}>
-                <FlaskConical className="mr-1.5 h-3.5 w-3.5" />
-                规则测试
-              </Button>
-              <Button size="sm" onClick={() => { setModalRule(emptyRule()); setModalError(''); }}>
-                <Plus className="mr-1.5 h-3.5 w-3.5" />
-                新建规则
-              </Button>
+              {!!overview.presets.length && <Button variant="secondary" size="sm" icon={Package} onClick={() => setPresetsOpen(true)}>导入预设</Button>}
+              <Button size="sm" icon={Plus} onClick={() => { setModalRule(emptyRule()); setModalError(''); }}>新建规则</Button>
             </div>
           </div>
 
           {/* 来源筛选：规则会随预设导入快速增长，按来源收窄是最省事的定位方式 */}
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-2">
+          <div className="privacy-rule-toolbar"><div className="privacy-source-filters" role="group" aria-label="规则来源">
             {SOURCE_FILTERS.map((item) => {
               const count = item.value === 'all'
                 ? rules.length
@@ -1179,34 +1073,40 @@ const PrivacyPage = () => {
                 <button
                   key={item.value}
                   type="button"
+                  aria-pressed={active}
                   onClick={() => setSourceFilter(item.value)}
-                  className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                    active ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'
-                  }`}
+                  className="privacy-source-button"
                 >
                   {item.label}
-                  <span className={`ml-1 ${active ? 'text-white/60' : 'text-slate-400'}`}>{count}</span>
+                  <span>{count}</span>
                 </button>
               );
             })}
           </div>
+          <div className="privacy-rule-filters">
+            <label className="privacy-search">
+              <Search size={13} />
+              <input aria-label="搜索隐私规则" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索名称、匹配内容…" />
+              {search && <button type="button" aria-label="清除规则搜索" onClick={() => setSearch('')}><X size={12} /></button>}
+            </label>
+            <CustomSelect size="sm" fullWidth ariaLabel="规则状态" className="privacy-state-filter" value={statusFilter} onChange={setStatusFilter} options={[{ value: 'all', label: '全部状态' }, { value: 'enabled', label: '已启用' }, { value: 'disabled', label: '已停用' }]} />
+          </div></div>
 
           {/* 批量操作条：导入预设是一次性加十几条，逐条清理太痛苦 */}
           {selectedIds.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 border-b border-indigo-100 bg-indigo-50/60 px-4 py-2">
+            <div className="privacy-bulk-actions">
               <span className="text-xs font-medium text-indigo-900">已选 {selectedIds.length} 条</span>
               <div className="ml-auto flex flex-wrap items-center gap-1.5">
-                <Button variant="secondary" size="sm" onClick={() => bulkToggle(true)} disabled={bulkBusy}>
+                <Button variant="ghost" size="sm" icon={ShieldCheck} onClick={() => bulkToggle(true)} disabled={bulkBusy}>
                   批量启用
                 </Button>
-                <Button variant="secondary" size="sm" onClick={() => bulkToggle(false)} disabled={bulkBusy}>
+                <Button variant="ghost" size="sm" icon={ShieldOff} onClick={() => bulkToggle(false)} disabled={bulkBusy}>
                   批量停用
                 </Button>
-                <Button variant="dangerSoft" size="sm" onClick={() => setBulkDeleteOpen(true)} disabled={bulkBusy}>
-                  <Trash className="mr-1.5 h-3.5 w-3.5" />
+                <Button variant="dangerSoft" size="sm" icon={Trash} onClick={() => setBulkDeleteOpen(true)} disabled={bulkBusy || !deletableSelectedCount}>
                   批量删除
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setSelectedIds([])} disabled={bulkBusy}>
+                <Button variant="ghost" size="sm" icon={X} onClick={() => setSelectedIds([])} disabled={bulkBusy}>
                   取消选择
                 </Button>
               </div>
@@ -1214,15 +1114,16 @@ const PrivacyPage = () => {
           )}
 
           {rules.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-slate-500">
+            <p className="privacy-rules-empty">
               还没有任何规则。先导入一套预设，或新建自定义规则。
             </p>
           ) : visibleRules.length === 0 ? (
-            <p className="px-4 py-8 text-center text-sm text-slate-500">当前筛选下没有规则。</p>
+            <div className="privacy-rules-empty"><Search size={22} /><p>没有符合条件的规则</p><button type="button" onClick={() => { setSearch(''); setSourceFilter('all'); setStatusFilter('all'); }}><RefreshCw size={12} />清除筛选</button></div>
           ) : (
             // 限高滚动而非无限增高：规则可以到几十条，页面不该跟着一直变长
-            <div className="max-h-[38rem] overflow-auto px-4">
-              <table className="w-full text-left">
+            <div className="privacy-rule-scroll">
+              <table className="privacy-rule-table" aria-label="隐私规则列表">
+                <colgroup><col className="privacy-col-check" /><col className="privacy-col-state" /><col className="privacy-col-name" /><col className="privacy-col-pattern" /><col className="privacy-col-action" /><col className="privacy-col-priority" /><col className="privacy-col-operations" /></colgroup>
                 <thead className="sticky top-0 z-10 bg-white text-xs text-slate-500">
                   <tr className="border-b border-slate-100">
                     <th className="w-8 py-2 pr-2 font-medium">
@@ -1236,10 +1137,9 @@ const PrivacyPage = () => {
                     <th className="w-12 py-2 pr-3 font-medium">启用</th>
                     <th className="py-2 pr-3 font-medium">名称</th>
                     <th className="py-2 pr-3 font-medium">匹配内容</th>
-                    <th className="py-2 pr-3 font-medium">来源</th>
-                    <th className="py-2 pr-3 font-medium">替换为</th>
+                    <th className="py-2 pr-3 font-medium">处理方式</th>
                     <th className="py-2 pr-3 font-medium">优先级</th>
-                    <th className="py-2" />
+                    <th className="py-2"><span className="sr-only">操作</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1247,7 +1147,8 @@ const PrivacyPage = () => {
                     <RuleRow
                       key={rule.id}
                       rule={rule}
-                      busy={busyRuleId === rule.id}
+                      settings={settings}
+                      busy={bulkBusy || busyRuleId === rule.id}
                       selected={selectedIds.includes(rule.id)}
                       onSelect={toggleSelectOne}
                       onToggle={toggleRule}
@@ -1259,10 +1160,25 @@ const PrivacyPage = () => {
               </table>
             </div>
           )}
-        </div>
+          <footer className="privacy-rules-footer"><span>显示 {visibleRules.length} / {rules.length} 条规则{selectedIds.length > 0 && ` · 已选 ${selectedIds.length} 条`}</span><span>优先级数值越小，越先匹配</span></footer>
+        </section>
       </div>
 
-      <TestModal open={testOpen} onClose={() => setTestOpen(false)} />
+      {testOpen && <TestModal open onClose={() => setTestOpen(false)} />}
+      {optionsOpen && <ProtectionOptions settings={settings} Dialog={PrivacyDialog} saving={savingSettings} onSave={saveSettings} onClose={() => setOptionsOpen(false)} />}
+      {activityOpen && <PrivacyActivity activity={overview.activity || []} Dialog={PrivacyDialog} onClose={() => setActivityOpen(false)} />}
+
+      {presetsOpen && <PrivacyDialog
+        title="导入规则预设" icon={Package} busy={Boolean(importingPreset)} onClose={() => setPresetsOpen(false)}
+        footer={<Button size="sm" variant="secondary" icon={X} disabled={Boolean(importingPreset)} onClick={() => setPresetsOpen(false)}>关闭</Button>}
+      >
+        <p className="mb-3 text-xs leading-5 text-slate-500">选择需要的预设导入。已有规则会自动跳过，导入后可在列表中调整或停用。</p>
+        <div className="privacy-presets">{overview.presets.map(preset => <article key={preset.id}>
+          <span className="privacy-preset-icon"><Package size={18} /></span>
+          <div><h3>{preset.name}<span>{preset.ruleCount} 条规则</span></h3><p>{preset.description || '导入后可单独管理每条规则。'}</p></div>
+          <Button variant="secondary" size="sm" icon={Plus} loading={importingPreset === preset.id} disabled={Boolean(importingPreset) && importingPreset !== preset.id} onClick={() => importPreset(preset.id)}>导入</Button>
+        </article>)}</div>
+      </PrivacyDialog>}
 
       <RuleModal
         open={Boolean(modalRule)}

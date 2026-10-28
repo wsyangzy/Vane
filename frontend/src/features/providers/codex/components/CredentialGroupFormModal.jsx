@@ -16,7 +16,7 @@ import { buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODE
 // ============================================================================
 // 凭证分组编辑弹窗
 // ============================================================================
-const CredentialGroupFormModal = ({ mode, channel, channels = [], group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
+const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = false, loading, serverError, endpointCopyOptions = [], onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialCredentialGroupForm(group, channel));
   const [standardMultiplierSettingsOpen, setStandardMultiplierSettingsOpen] = useState(false);
   const [longContextSettingsOpen, setLongContextSettingsOpen] = useState(false);  const [activeTab, setActiveTab] = useState('basic');
@@ -307,7 +307,7 @@ const CredentialGroupFormModal = ({ mode, channel, channels = [], group, continu
                 />
 
                 <div><label className="mb-1.5 block text-sm font-medium text-slate-700">认证方式</label><CustomSelect value={formData.authMode} options={[{ value: 'group_credential', label: '分组凭证' }, { value: 'client_passthrough', label: '官方订阅' }]} onChange={(authMode) => updateField('authMode', authMode)} disabled={loading} /></div>
-                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings provider="codex" value={formData.subscription} onChange={(value) => updateField('subscription', value)} channels={channels} localKeyConfigured={formData.localKeyConfigured} acknowledged={formData.localKeyAcknowledged} onAcknowledge={(value) => updateField('localKeyAcknowledged', value)} disabled={loading} /> : (
+                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings provider="codex" value={formData.subscription} onChange={(value) => updateField('subscription', value)} disabled={loading} /> : (
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-700">API Key</label>
                   <div className="relative">

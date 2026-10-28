@@ -1,7 +1,7 @@
 import { checkPoolEndpoint } from '@/services/wails/pools.js';
-import PoolWorkspace from '@/features/providers/shared/pools/PoolWorkspace.jsx';
+import DispatchWorkspace from '@/features/providers/shared/dispatch/DispatchWorkspace.jsx';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { RefreshCw, Plus, Database, AlertTriangle } from 'lucide-react';
+import { Plus, Database, AlertTriangle } from 'lucide-react';
 import { Button, LoadingSpinner, ErrorMessage, useToast } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
@@ -13,10 +13,9 @@ import { ClaudeIcon } from '@/features/requests/components/ModelTag.jsx';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
 import { selectPersistedEndpoints } from '@/features/providers/shared/endpoints/endpointActions.js';
-import { nonStreamRouteSignature } from '@/features/providers/shared/routing/routeTargets.js';
 import { getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
 import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
-import { getEndpointStorageStatus, getEndpointRecords, createEndpointRecord, updateEndpointRecordByID, deleteEndpointRecordByID, activateEndpointRecordByID, setEndpointFailoverEnabledByID, setEndpointSkipHealthCheckByID, getChannels, createChannel, updateChannel, setChannelNonStreamRoute, setChannelPrivacyLevel, deleteChannel, getGroupsRaw, activateGroup, pauseGroup, resumeGroup, getNextAvailableChannel, getConfig, getSettingsByCategory, isInterChannelFailoverEnabled, isWailsEnvironment, subscribeToEvent, getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, createClaudeCredentialGroup, updateClaudeCredentialGroupByID, deleteClaudeCredentialGroupByID, setDefaultClaudeCredentialGroup } from '@/services/wails/index.js';
+import { getEndpointStorageStatus, getEndpointRecords, createEndpointRecord, updateEndpointRecordByID, deleteEndpointRecordByID, activateEndpointRecordByID, setEndpointFailoverEnabledByID, setEndpointSkipHealthCheckByID, getChannels, createChannel, updateChannel, setChannelPrivacyLevel, deleteChannel, getGroupsRaw, activateGroup, pauseGroup, resumeGroup, getNextAvailableChannel, getConfig, getSettingsByCategory, isInterChannelFailoverEnabled, isWailsEnvironment, subscribeToEvent, getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, createClaudeCredentialGroup, updateClaudeCredentialGroupByID, deleteClaudeCredentialGroupByID, setDefaultClaudeCredentialGroup } from '@/services/wails/index.js';
 import { hasClaudeCredential, getClaudeCredentialGroups, getDefaultClaudeCredentialGroup, buildClaudeEndpointCopyOptions, normalizeBool, parseSettingsBool, buildSuspendedEndpointKey } from './model.js';
 import { DeleteChannelConfirmDialog } from './components/DeleteChannelConfirmDialog.jsx';
 import { DeleteCredentialGroupConfirmDialog } from './components/DeleteCredentialGroupConfirmDialog.jsx';
@@ -666,7 +665,7 @@ const ChannelsPage = ({ clientVersion }) => {
   }, [channelsMeta]);
 
   const handleUpdateChannel = useCallback(async (payload) => {
-    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
+    const { privacyLevel, ...channelPayload } = payload;
     try {
       setChannelFormLoading(true);
       setEditChannelError('');
@@ -675,27 +674,17 @@ const ChannelsPage = ({ clientVersion }) => {
       if (editingChannel?.id > 0 && 'privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
         await setChannelPrivacyLevel('claude', editingChannel.id, privacyLevel);
       }
-      // 非流改道单独保存：只在确有变更时提交，避免仅改官网也重写路由配置
-      let routeWarnings = [];
-      if (editingChannel?.id > 0 && 'nonStreamRoute' in payload
-        && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
-        routeWarnings = (await setChannelNonStreamRoute('claude', editingChannel.id, nonStreamRoute)).warnings;
-      }
-
       setShowEditChannel(false);
       setEditingChannel(null);
       await loadChannelsMeta();
       await loadGroups();
-      if (routeWarnings.length > 0) {
-        toast.warning(routeWarnings, '非流改道已保存，请留意');
-      }
     } catch (err) {
       console.error('更新渠道失败:', err);
       setEditChannelError(getErrorMessage(err, '更新渠道失败'));
     } finally {
       setChannelFormLoading(false);
     }
-  }, [editingChannel, loadChannelsMeta, loadGroups, toast]);
+  }, [editingChannel, loadChannelsMeta, loadGroups]);
 
   const openCreateCredentialGroupForm = useCallback((channelName) => {
     const name = String(channelName || '').trim();
@@ -910,9 +899,9 @@ const ChannelsPage = ({ clientVersion }) => {
   }
 
   return (
-    <ModalPortalScope><div className="animate-fade-in">
+    <ModalPortalScope><div className="flex min-h-0 flex-1 flex-col animate-fade-in">
       {/* 页面标题 */}
-      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+      <div className="mb-3 flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
             <ClaudeIcon className="h-5 w-5" />
@@ -925,34 +914,24 @@ const ChannelsPage = ({ clientVersion }) => {
               )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} />
-          {/* 刷新按钮 */}
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={RefreshCw}
-            onClick={handleRefresh}
-            loading={loading || batchCheckLoading}
-          >
-            刷新
-          </Button>
 
-          {/* 新建渠道按钮 (SQLite 模式) */}
-          {isSqliteMode && (
-            <Button
-              icon={Plus}
-              onClick={() => {
-                setShowCreateChannel(true);
-              }}
-            >
-              添加渠道
-            </Button>
-          )}
-        </div>
       </div>
 
-      <PoolWorkspace provider="claude" refreshToken={headerLastUpdate}>
+      <DispatchWorkspace provider="claude" refreshToken={headerLastUpdate}
+        resourcesBusy={loading || batchCheckLoading}
+        onRefreshResources={handleRefresh}
+        resourceActions={<>
+          <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} className="dispatch-resource-action" disabled={loading || batchCheckLoading} />
+          {isSqliteMode && channelSections.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || batchCheckLoading} onClick={() => setShowCreateChannel(true)}>添加渠道</Button>}
+        </>} endpoints={displayEndpoints.map((endpoint) => {
+        const channel = channelsMeta.find((channel) => channel.name === endpoint.channel);
+        const group = getClaudeCredentialGroups(channel).find((group) => Number(group.id) === Number(endpoint.credentialGroupId)) || getDefaultClaudeCredentialGroup(channel);
+        return {
+          channelId: channel?.id, groupId: group?.id || 0,
+          endpointId: endpoint.credentialGroupId > 0 ? `${endpoint.channel}::g${endpoint.credentialGroupId}::${endpoint.name}` : buildSuspendedEndpointKey(endpoint),
+          name: endpoint.name, address: endpoint.url,
+        };
+      })} onError={(message) => toast.error(message)} onSuccess={(message) => toast.success(message)}>
       {/* 渠道分块列表 */}
       {channelSections.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm p-10 text-center text-slate-500">
@@ -1084,7 +1063,7 @@ const ChannelsPage = ({ clientVersion }) => {
         </div>
       )}
 
-      </PoolWorkspace>
+      </DispatchWorkspace>
 
       {/* 端点表单弹窗 */}
       {showForm && (

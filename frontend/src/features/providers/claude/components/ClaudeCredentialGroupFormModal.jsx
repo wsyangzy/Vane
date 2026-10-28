@@ -20,7 +20,6 @@ const ClaudeCredentialGroupFormModal = ({
   loading = false,
   serverError = '',
   endpointCopyOptions = [],
-  channels = [],
   onClose,
   onSubmit
 }) => {
@@ -310,7 +309,7 @@ const ClaudeCredentialGroupFormModal = ({
                   <label className="block text-sm font-medium text-slate-700">认证方式</label>
                   <CustomSelect value={formData.authMode} options={[{ value: 'group_credential', label: '分组凭证' }, { value: 'client_passthrough', label: '官方订阅' }]} onChange={(authMode) => updateField('authMode', authMode)} disabled={loading} />
                 </div>
-                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings value={formData.subscription} onChange={(value) => updateField('subscription', value)} channels={channels} localKeyConfigured={formData.localKeyConfigured} acknowledged={formData.localKeyAcknowledged} onAcknowledge={(value) => updateField('localKeyAcknowledged', value)} disabled={loading} /> : (
+                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings value={formData.subscription} onChange={(value) => updateField('subscription', value)} disabled={loading} /> : (
                 <div className="space-y-3">
                   <SegmentedTabs
                     tabs={CLAUDE_CREDENTIAL_SECRET_TABS}

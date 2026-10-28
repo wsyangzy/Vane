@@ -1,8 +1,8 @@
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, Info, KeyRound, Layers, Maximize2, Minus, MoreVertical, Network, Pencil, Plus, Power, Server, Trash2, X } from 'lucide-react';
+import { Info, KeyRound, Layers, Maximize2, Minus, MoreVertical, Network, Pencil, Plus, Server, Trash2, X } from 'lucide-react';
 import { ModalPortalContext, renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SubscriptionStatus } from '@/features/providers/shared/subscriptions/SubscriptionSettings.jsx';
-import { usePoolAccounts } from './poolContext.js';
 import { buildChannelGraph, fitChannelGraph, MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM, zoomChannelGraph } from './channelGraph.js';
 
 const iconButton = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-40';
@@ -16,7 +16,6 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
   const menuRef = useRef(null);
   const menuAnchorRef = useRef(null);
   const dragRef = useRef(null);
-  const context = usePoolAccounts();
   const modalScope = useContext(ModalPortalContext);
   const hasOperation = (modalScope?.layerCount || 0) > 0;
   const operationRef = useRef(false);
@@ -29,9 +28,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
   const graph = useMemo(() => buildChannelGraph(name, groups, endpoints), [name, groups, endpoints]);
   const view = manualView || fitChannelGraph(graph, viewport);
   const menuNode = graph.nodes.find((node) => node.key === menu?.key);
-  const accountFor = (group) => context?.accounts.find((account) => account.groupId === Number(group?.id));
-  const menuAccount = accountFor(menuNode?.group);
-  const controlsBusy = busy || context?.busy;
+  const controlsBusy = busy;
   const requestClose = useCallback(() => {
     if (!hasOperation) setClosing(true);
   }, [hasOperation]);
@@ -170,7 +167,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="channel-resource-emblem !h-8 !w-8"><Network size={16} /></div>
             <h2 id={titleId} className="shrink-0 text-sm font-semibold text-slate-900">凭证分组与端点</h2>
-            <span className="truncate text-xs text-slate-400" title={name}>{name}</span>
+            <span className="truncate text-xs text-slate-400">{name}</span>
           </div>
           <button ref={closeRef} type="button" aria-label="关闭渠道结构" className={iconButton} onClick={requestClose}><X size={16} /></button>
         </header>
@@ -181,7 +178,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
             <span aria-label="当前缩放比例" className="w-9 text-center tabular-nums text-slate-500">{Math.round(view.zoom * 100)}%</span>
             <button type="button" className={iconButton} aria-label="放大画布" disabled={view.zoom >= MAX_GRAPH_ZOOM} onClick={() => zoom(1.2)}><Plus size={13} /></button>
             <span className="mx-1 h-3 w-px bg-slate-200" />
-            <button type="button" className={iconButton} aria-label="适应窗口" title="适应窗口" onClick={() => { setManualView(null); setMenu(null); }}><Maximize2 size={13} /></button>
+            <Tooltip asChild content="适应窗口"><button type="button" className={iconButton} aria-label="适应窗口" onClick={() => { setManualView(null); setMenu(null); }}><Maximize2 size={13} /></button></Tooltip>
           </div>
         </div>
 
@@ -189,31 +186,27 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
           <div role="group" aria-label={`${name}思维导图`} className="absolute left-0 top-0 origin-top-left" style={{ width: graph.width, height: graph.height, transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})` }}>
             <svg aria-hidden="true" className="pointer-events-none absolute inset-0" width={graph.width} height={graph.height}>
               {graph.links.map((link) => {
-                const target = graph.nodes.find((node) => node.key === link.target);
-                const disabled = link.disabled || accountFor(target.group)?.enabled === false;
                 const highlighted = selectedKey === link.target || selectedKey === link.source;
-                return <path key={link.key} className="channel-graph-link" d={link.path} fill="none" stroke={disabled ? '#d6dce3' : highlighted ? '#d6a05f' : link.trunk ? '#cbb696' : '#bac8d1'} strokeWidth={highlighted ? 2 : 1.4} strokeLinecap="round" strokeDasharray={link.disabled ? '4 3' : undefined} />;
+                return <path key={link.key} className="channel-graph-link" d={link.path} fill="none" stroke={highlighted ? '#d6a05f' : link.trunk ? '#cbb696' : '#bac8d1'} strokeWidth={highlighted ? 2 : 1.4} strokeLinecap="round" />;
               })}
             </svg>
             {graph.nodes.map((node) => {
-              const account = accountFor(node.group);
               const isSubscription = node.group?.authMode === 'client_passthrough';
               const selected = selectedKey === node.key;
-              const disabled = account?.enabled === false;
               const Icon = node.kind === 'channel' ? Layers : node.kind === 'group' ? KeyRound : Server;
-              return <button key={node.key} type="button" data-mindmap-node={node.key} data-node-kind={node.kind} data-disabled={disabled || undefined} data-excluded={node.endpoint?.excluded || undefined} aria-label={`${node.kind === 'channel' ? '渠道' : node.kind === 'group' ? '凭证分组' : '端点'}节点 ${node.label}`} aria-haspopup="menu" aria-expanded={menu?.key === node.key} title={`${node.label}${node.kind === 'endpoint' ? `\n${node.endpoint.url}` : '\n点击操作，右键打开菜单'}`} className={`channel-flow-node absolute cursor-pointer text-left outline-none ${selected ? 'is-selected' : ''}`} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={(event) => openNodeMenu(event, node)} onContextMenu={(event) => openNodeMenu(event, node, true)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') openNodeMenu(event, node); }}>
+              return <button key={node.key} type="button" data-mindmap-node={node.key} data-node-kind={node.kind} aria-label={`${node.kind === 'channel' ? '渠道' : node.kind === 'group' ? '凭证分组' : '端点'}节点 ${node.label}`} aria-haspopup="menu" aria-expanded={menu?.key === node.key} className={`channel-flow-node absolute cursor-pointer text-left outline-none ${selected ? 'is-selected' : ''}`} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={(event) => openNodeMenu(event, node)} onContextMenu={(event) => openNodeMenu(event, node, true)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') openNodeMenu(event, node); }}>
                 {node.kind !== 'channel' && <span aria-hidden="true" className="channel-node-port is-input" />}
                 {(node.kind === 'channel' && groups.length > 0 || node.kind === 'group' && node.endpointCount > 0) && <span aria-hidden="true" className="channel-node-port is-output" />}
                 <span className="channel-node-heading">
                   <span className="channel-node-symbol"><Icon size={11} /></span>
                   <span className="flex-1">{node.kind === 'channel' ? '渠道' : node.kind === 'group' ? isSubscription ? '订阅账号' : '凭证分组' : '端点'}</span>
-                  {node.kind === 'endpoint' && <span className="channel-node-priority" title="端点优先级">P{node.endpoint.priority}</span>}
+                  {node.kind === 'endpoint' && <Tooltip asChild content="端点优先级"><span className="channel-node-priority">P{node.endpoint.priority}</span></Tooltip>}
                   <MoreVertical size={12} className="opacity-50" />
                 </span>
                 <span className="channel-node-content">
                   <span className="channel-node-name block truncate">{node.label}</span>
                   {node.kind === 'channel' && <span className="channel-node-meta">{groups.length} 个分组<span className="text-slate-300">·</span>{endpoints.length} 个端点</span>}
-                  {node.kind === 'group' && <span className="channel-node-meta"><span className="inline-flex items-center gap-1"><Server size={10} />{node.endpointCount} 端点</span><span className="channel-node-status"><span className="channel-node-status-dot" />{disabled ? '已停用' : node.group.canAddEndpoint === false ? '待配置' : '已启用'}</span></span>}
+                  {node.kind === 'group' && <span className="channel-node-meta"><span className="inline-flex items-center gap-1"><Server size={10} />{node.endpointCount} 端点</span><span className="channel-node-status"><span className="channel-node-status-dot" />{node.group.canAddEndpoint === false ? '待配置' : '已配置'}</span></span>}
                   {node.kind === 'endpoint' && <span className="channel-node-url block truncate">{node.endpoint.url}</span>}
                 </span>
               </button>;
@@ -237,7 +230,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
         }}>
           <div className="mb-1 border-b border-slate-100 px-2.5 py-2">
             <p className="text-xs font-semibold text-slate-800 [overflow-wrap:anywhere]">{menuNode.label}</p>
-            <p className="mt-1 text-[10px] text-slate-400">{menuNode.kind === 'channel' ? `渠道 · ${groups.length} 个凭证分组` : menuNode.kind === 'group' ? `${menuNode.group.authMode === 'client_passthrough' ? '订阅账号' : 'API 凭证'} · ${menuNode.endpointCount} 个端点` : `优先级 #${menuNode.endpoint.priority}${menuNode.endpoint.excluded ? ' · 历史停用' : ''}`}</p>
+            <p className="mt-1 text-[10px] text-slate-400">{menuNode.kind === 'channel' ? `渠道 · ${groups.length} 个凭证分组` : menuNode.kind === 'group' ? `${menuNode.group.authMode === 'client_passthrough' ? '订阅账号' : 'API 凭证'} · ${menuNode.endpointCount} 个端点` : `优先级 #${menuNode.endpoint.priority}`}</p>
             {menuNode.kind === 'endpoint' && <p className="mt-1 text-[10px] text-slate-400 [overflow-wrap:anywhere]">{menuNode.endpoint.url}</p>}
           </div>
           {menuNode.kind === 'channel' && <>
@@ -246,12 +239,11 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
             <button type="button" role="menuitem" className={`${menuItem} text-rose-600 hover:bg-rose-50`} disabled={controlsBusy} onClick={() => openAction(onDelete)}><Trash2 size={13} />删除渠道</button>
           </>}
           {menuNode.kind === 'group' && <>
-            <button type="button" role="menuitem" className={menuItem} disabled={controlsBusy || menuNode.group.canAddEndpoint === false} title={menuNode.group.canAddEndpoint === false ? '请先配置可用凭证' : undefined} onClick={() => openAction(onAddEndpoint, menuNode.group)}><Plus size={14} />添加端点{menuNode.group.canAddEndpoint === false && <span className="ml-auto text-[10px]">需配置凭证</span>}</button>
+            <Tooltip asChild content={menuNode.group.canAddEndpoint === false ? '请先配置可用凭证' : undefined}><button type="button" role="menuitem" className={menuItem} disabled={controlsBusy || menuNode.group.canAddEndpoint === false} onClick={() => openAction(onAddEndpoint, menuNode.group)}><Plus size={14} />添加端点{menuNode.group.canAddEndpoint === false && <span className="ml-auto text-[10px]">需配置凭证</span>}</button></Tooltip>
             <button type="button" role="menuitem" className={menuItem} onClick={() => openAction(onOpenGroup, menuNode.group)}><Info size={13} />查看分组详情</button>
             <button type="button" role="menuitem" className={menuItem} disabled={controlsBusy} onClick={() => openAction(onEditGroup, menuNode.group)}><Pencil size={13} />编辑凭证分组</button>
-            <button type="button" role="menuitem" className={menuItem} disabled={!menuAccount || controlsBusy} onClick={() => { setMenu(null); context.toggleAccount(menuAccount); menuAnchorRef.current?.focus(); }}><Power size={13} />{menuAccount?.enabled ? '停用凭证分组' : '启用凭证分组'}{menuAccount?.enabled && <Check size={12} className="ml-auto text-emerald-500" />}</button>
             <button type="button" role="menuitem" className={`${menuItem} text-rose-600 hover:bg-rose-50`} disabled={controlsBusy} onClick={() => openAction(onDeleteGroup, menuNode.group)}><Trash2 size={13} />删除凭证分组</button>
-            {menuNode.group.authMode === 'client_passthrough' && <div className="mt-1 max-h-32 overflow-y-auto border-t border-slate-100 p-1 [&>div]:p-2 [&>div]:text-[10px]"><SubscriptionStatus group={menuNode.group} poolMode /></div>}
+            {menuNode.group.authMode === 'client_passthrough' && <div className="mt-1 max-h-32 overflow-y-auto border-t border-slate-100 p-1 [&>div]:p-2 [&>div]:text-[10px]"><SubscriptionStatus group={menuNode.group} profileMode /></div>}
           </>}
           {menuNode.kind === 'endpoint' && <>
             <button type="button" role="menuitem" className={menuItem} onClick={() => openAction(onOpenEndpoint, menuNode.endpoint.original)}><Info size={13} />查看端点详情</button>

@@ -129,7 +129,7 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
           <Tooltip content={copied ? '已复制' : '复制'}>
             <button
               onClick={handleCopy}
-              className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 hover:scale-110 rounded transition-all"
+              className="motion-button rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             >
               {copied ? (
                 <Check className="w-3.5 h-3.5 text-emerald-600" />
@@ -463,6 +463,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
   const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
+  const isRoutingClassifier = request.path === '/internal/routing/classify' || route?.kind === 'routing_classifier';
   const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
@@ -532,7 +533,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
-                title={tab.empty ? `${tab.label}：本请求无记录` : undefined}
                 className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
                   activeTab === tab.id
                     ? 'bg-white text-indigo-700 border-slate-200 shadow-sm'
@@ -568,7 +568,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
 
                 <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-100">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-slate-600">总成本</span>
+                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : '总成本'}</span>
                     <DollarSign className="w-4 h-4 text-orange-500" />
                   </div>
                   <div className="text-2xl font-bold text-orange-600 font-mono">
@@ -1071,7 +1071,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                             setCopiedError(true);
                             setTimeout(() => setCopiedError(false), 2000);
                           }}
-                          className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-100/80 hover:scale-110 rounded transition-all"
+                          className="motion-button rounded p-1 text-rose-400 hover:bg-rose-100/80 hover:text-rose-600"
                         >
                           {copiedError ? (
                             <Check className="w-3.5 h-3.5 text-emerald-600" />
@@ -1490,12 +1490,12 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   </div>
                   {!privacyRedacted && (
                     <p className="mt-2 text-xs text-slate-500">
-                      本请求未命中任何隐私规则，请求正文按原样发往服务商。隐私防护关闭或路径不在扫描范围时同样显示为未命中。
+                      此调用记录没有保存脱敏摘要，无法据此判断是否扫描或命中。请在隐私防护的「防护记录」中按请求 ID 查看扫描状态、拒发和截断信息。
                     </p>
                   )}
                   {privacyDetectOnly && (
                     <p className="mt-2 text-xs text-slate-500">
-                      当前为「仅检测」模式，命中已统计但请求正文未被改写。
+                      已检测到命中；此摘要未记录请求正文被改写。实际处理还取决于运行模式、规则动作及目标渠道的隐私设置。
                     </p>
                   )}
                   {privacyHits.length > 0 && (

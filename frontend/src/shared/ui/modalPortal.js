@@ -1,13 +1,15 @@
 import { createContext, createElement, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import ScopedModalPortal from './ScopedModalPortal.jsx';
+import SurfaceMotion from './SurfaceMotion.jsx';
 
 export const ModalPortalContext = createContext(null);
 
-function ModalPortal({ content }) {
+function ModalPortal({ content, root }) {
   const scope = useContext(ModalPortalContext);
-  if (scope?.target) return createElement(ScopedModalPortal, { content, scope });
-  return typeof document === 'undefined' || !document.body ? content : createPortal(content, document.body);
+  const animatedContent = createElement(SurfaceMotion, { content });
+  if (!root && scope?.target) return createElement(ScopedModalPortal, { content: animatedContent, scope });
+  return typeof document === 'undefined' || !document.body ? content : createPortal(animatedContent, document.body);
 }
 
 export const renderModalPortal = (content, { root = false } = {}) => {
@@ -15,5 +17,5 @@ export const renderModalPortal = (content, { root = false } = {}) => {
     return content;
   }
 
-  return root ? createPortal(content, document.body) : createElement(ModalPortal, { content });
+  return createElement(ModalPortal, { content, root });
 };

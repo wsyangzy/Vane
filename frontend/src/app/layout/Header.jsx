@@ -3,7 +3,7 @@
 // 2025-11-28 (Updated 2026-02-09 for user menu)
 // ============================================
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isWailsEnvironment } from '@/services/wails/index.js';
 import { useToast } from '@/shared/ui/index.js';
 import UserMenu from './UserMenu.jsx';
@@ -114,6 +114,24 @@ const SlidingNav = ({ tabs, activeTab, onTabChange, className = '' }) => {
 
 const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyStatus = {} }) => {
   const toast = useToast();
+  const headerRef = useRef(null);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const previousHeight = root.style.getPropertyValue('--app-header-height');
+    const updateHeaderHeight = () => {
+      root.style.setProperty('--app-header-height', `${Math.ceil(headerRef.current.getBoundingClientRect().bottom)}px`);
+    };
+    // Toasts start below the whole header, including the desktop window controls.
+    updateHeaderHeight();
+    const observer = new ResizeObserver(updateHeaderHeight);
+    observer.observe(headerRef.current);
+    return () => {
+      observer.disconnect();
+      if (previousHeight) root.style.setProperty('--app-header-height', previousHeight);
+      else root.style.removeProperty('--app-header-height');
+    };
+  }, []);
   // 使用真实的代理网关状态
   const {
     running: proxyRunning = false,
@@ -140,7 +158,7 @@ const Header = ({ activeTab, onTabChange, connectionStatus = 'connected', proxyS
   };
 
   return (
-    <header className="relative z-50 shrink-0 border-b border-slate-200/60 bg-white/80 backdrop-blur-xl supports-[backdrop-filter]:bg-white/60">
+    <header ref={headerRef} className="relative z-50 shrink-0 border-b border-slate-200/60 bg-white/80 backdrop-blur-xl supports-[backdrop-filter]:bg-white/60">
       {isWails && (
         <div onDoubleClick={handleTitlebarDoubleClick} className="desktop-titlebar flex h-8 items-center justify-end border-b border-slate-100 bg-slate-50/70">
           <WindowControls />

@@ -14,7 +14,6 @@ const source = await import('node:fs').then(({ readFileSync }) => [
   'components/EndpointFormModal.jsx',
   'components/DeleteConfirmDialog.jsx',
   'components/ActiveChannelPauseDialog.jsx',
-  'components/CodexGlobalConfigModal.jsx',
   'components/CodexEndpointDetailModal.jsx',
   'components/EndpointRow.jsx',
   'components/ChannelCard.jsx',
@@ -76,7 +75,7 @@ test('new credential groups disable long-context pricing and endpoint details sh
   assert.match(source, /longContextPricingEnabled\s*&&/);
 });
 
-test('Codex global configuration leaves reasoning effort to the client', () => {
+test('Codex resource management leaves reasoning effort to the client', () => {
   assert.doesNotMatch(source, /updateField\('reasoning_effort'/);
   assert.doesNotMatch(source, /写入顶层 model_reasoning_effort 字段/);
   assert.doesNotMatch(source, /globalConfig\.reasoning_effort/);

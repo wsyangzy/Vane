@@ -24,11 +24,22 @@ export function CheckPoolEndpoint(provider, id) {
 
 /**
  * @param {string} provider
- * @param {number} id
- * @returns {$CancellablePromise<void>}
+ * @returns {$CancellablePromise<app$0.RoutingConfigurationStatus>}
  */
-export function DeleteAccountPool(provider, id) {
-    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.DeleteAccountPool", provider, id);
+export function CheckRoutingConfiguration(provider) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.CheckRoutingConfiguration", provider).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
+ * @param {app$0.DispatchInput} input
+ * @returns {$CancellablePromise<routing$0.IntentResult>}
+ */
+export function ClassifyIntent(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ClassifyIntent", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType1($result);
+    }));
 }
 
 /**
@@ -41,21 +52,64 @@ export function DeleteModelRoute(id) {
 
 /**
  * @param {string} provider
+ * @param {number} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function DeleteRoutingProfile(provider, id) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.DeleteRoutingProfile", provider, id);
+}
+
+/**
+ * @param {string} provider
  * @returns {$CancellablePromise<app$0.RouteTargetOptions>}
  */
 export function GetRouteTargetOptions(provider) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.GetRouteTargetOptions", provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType0($result);
+        return $$createType2($result);
     }));
 }
 
 /**
  * @param {string} provider
- * @returns {$CancellablePromise<app$0.AccountPoolState>}
+ * @param {number} id
+ * @returns {$CancellablePromise<routing$0.RoutingProfile | null>}
  */
-export function ListAccountPools(provider) {
-    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListAccountPools", provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType1($result);
+export function GetRoutingProfile(provider, id) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.GetRoutingProfile", provider, id).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
+    }));
+}
+
+/**
+ * @param {string} provider
+ * @param {number} limit
+ * @returns {$CancellablePromise<routing$0.DispatchTrace[]>}
+ */
+export function ListDispatchTraces(provider, limit) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListDispatchTraces", provider, limit).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
+}
+
+/**
+ * @param {string} provider
+ * @param {number} channelID
+ * @param {number} groupID
+ * @returns {$CancellablePromise<routing$0.BalanceEntry[]>}
+ */
+export function ListManualBalanceEntries(provider, channelID, groupID) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListManualBalanceEntries", provider, channelID, groupID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType8($result);
+    }));
+}
+
+/**
+ * @param {string} provider
+ * @returns {$CancellablePromise<routing$0.ManualBalance[]>}
+ */
+export function ListManualBalances(provider) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListManualBalances", provider).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType10($result);
     }));
 }
 
@@ -66,7 +120,37 @@ export function ListAccountPools(provider) {
  */
 export function ListModelRoutes(provider, sourceChannelID) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListModelRoutes", provider, sourceChannelID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType12($result);
+    }));
+}
+
+/**
+ * @param {string} provider
+ * @returns {$CancellablePromise<app$0.RoutingProfileState>}
+ */
+export function ListRoutingProfiles(provider) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListRoutingProfiles", provider).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType13($result);
+    }));
+}
+
+/**
+ * @param {string} provider
+ * @returns {$CancellablePromise<routing$0.QuotaSnapshot[]>}
+ */
+export function ListRoutingQuota(provider) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListRoutingQuota", provider).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType15($result);
+    }));
+}
+
+/**
+ * @param {app$0.DispatchInput} input
+ * @returns {$CancellablePromise<routing$0.DispatchPlan>}
+ */
+export function PreviewDispatch(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.PreviewDispatch", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType16($result);
     }));
 }
 
@@ -79,27 +163,21 @@ export function ListModelRoutes(provider, sourceChannelID) {
  */
 export function PreviewRoute(provider, sourceChannelID, model, streaming) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.PreviewRoute", provider, sourceChannelID, model, streaming).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType17($result);
     }));
 }
 
 /**
  * @param {string} provider
- * @param {number} id
- * @returns {$CancellablePromise<app$0.PoolKeyResult>}
+ * @param {number} channelID
+ * @param {number} groupID
+ * @param {string} model
+ * @returns {$CancellablePromise<routing$0.QuotaSnapshot[]>}
  */
-export function RotateAccountPoolKey(provider, id) {
-    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.RotateAccountPoolKey", provider, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+export function RefreshRoutingQuota(provider, channelID, groupID, model) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.RefreshRoutingQuota", provider, channelID, groupID, model).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType15($result);
     }));
-}
-
-/**
- * @param {routing$0.Pool} input
- * @returns {$CancellablePromise<number>}
- */
-export function SaveAccountPool(input) {
-    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveAccountPool", input);
 }
 
 /**
@@ -108,7 +186,17 @@ export function SaveAccountPool(input) {
  */
 export function SaveModelRoute(input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveModelRoute", input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType18($result);
+    }));
+}
+
+/**
+ * @param {routing$0.RoutingProfile} profile
+ * @returns {$CancellablePromise<routing$0.RoutingProfile>}
+ */
+export function SaveRoutingProfile(profile) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveRoutingProfile", profile).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
     }));
 }
 
@@ -120,7 +208,7 @@ export function SaveModelRoute(input) {
  */
 export function SetChannelNonStreamRoute(provider, channelID, input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetChannelNonStreamRoute", provider, channelID, input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType18($result);
     }));
 }
 
@@ -135,6 +223,15 @@ export function SetChannelPrivacyLevel(provider, channelID, level) {
 }
 
 /**
+ * @param {string} provider
+ * @param {number} id
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetDefaultRoutingProfile(provider, id) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetDefaultRoutingProfile", provider, id);
+}
+
+/**
  * @param {number} id
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
@@ -144,21 +241,33 @@ export function SetModelRouteEnabled(id, enabled) {
 }
 
 /**
- * @param {string} provider
- * @param {number} channelID
- * @param {number} groupID
- * @param {boolean} enabled
- * @returns {$CancellablePromise<void>}
+ * @param {routing$0.ManualBalanceUpdate} input
+ * @returns {$CancellablePromise<routing$0.ManualBalance | null>}
  */
-export function SetPoolAccountEnabled(provider, channelID, groupID, enabled) {
-    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetPoolAccountEnabled", provider, channelID, groupID, enabled);
+export function UpdateManualBalance(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.UpdateManualBalance", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType19($result);
+    }));
 }
 
 // Private type creation functions
-const $$createType0 = app$0.RouteTargetOptions.createFrom;
-const $$createType1 = app$0.AccountPoolState.createFrom;
-const $$createType2 = app$0.ModelRouteInfo.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = app$0.RoutePreviewResult.createFrom;
-const $$createType5 = app$0.PoolKeyResult.createFrom;
-const $$createType6 = app$0.RouteSaveResult.createFrom;
+const $$createType0 = app$0.RoutingConfigurationStatus.createFrom;
+const $$createType1 = routing$0.IntentResult.createFrom;
+const $$createType2 = app$0.RouteTargetOptions.createFrom;
+const $$createType3 = routing$0.RoutingProfile.createFrom;
+const $$createType4 = $Create.Nullable($$createType3);
+const $$createType5 = routing$0.DispatchTrace.createFrom;
+const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = routing$0.BalanceEntry.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = routing$0.ManualBalance.createFrom;
+const $$createType10 = $Create.Array($$createType9);
+const $$createType11 = app$0.ModelRouteInfo.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = app$0.RoutingProfileState.createFrom;
+const $$createType14 = routing$0.QuotaSnapshot.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = routing$0.DispatchPlan.createFrom;
+const $$createType17 = app$0.RoutePreviewResult.createFrom;
+const $$createType18 = app$0.RouteSaveResult.createFrom;
+const $$createType19 = $Create.Nullable($$createType9);

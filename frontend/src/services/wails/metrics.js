@@ -291,13 +291,13 @@ const getTokenUsageHeatmap = async (params = {}) => {
   const queryParams = {
     page: 0,
     page_size: 0,
-    start_date: params.start_date || params.start_time || params.startDate || '',
-    end_date: params.end_date || params.end_time || params.endDate || '',
-    status: params.status || '',
+    start_date: '',
+    end_date: '',
+    status: '',
     model: params.model || '',
-    channel: params.channel || '',
-    endpoint: params.endpoint || '',
-    group: params.group || '',
+    channel: '',
+    endpoint: '',
+    group: '',
     provider: params.provider || ''
   };
 

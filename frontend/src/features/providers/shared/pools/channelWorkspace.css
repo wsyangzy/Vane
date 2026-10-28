@@ -22,13 +22,11 @@
   background: var(--channel-band);
   box-shadow: 0 2px 2px #33415512, 0 6px 14px #3341550a;
   cursor: pointer;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast), transform var(--duration-fast) var(--ease-smooth-out);
+  transition: border-color var(--duration-quick) var(--ease-smooth-out);
 }
 .channel-resource-card[data-provider="claude"] { --channel-band: #d97757; --channel-caption-ink: #351c13; }
 .channel-resource-card:hover {
   border-color: #c5cfd9;
-  box-shadow: 0 3px 3px #33415514, 0 12px 24px #33415512;
-  transform: translateY(-2px);
 }
 .channel-card-caption {
   height: 18px;
@@ -271,6 +269,5 @@
 @media (prefers-reduced-motion: reduce) {
   .t-modal, .channel-resource-card, .channel-resource-card button, .channel-workspace button,
   .channel-workspace-backdrop, .channel-graph-link { transition: none !important; }
-  .channel-resource-card:hover { transform: none; }
   .canvas-floating-layer > div > [class*="max-w-"] { animation: none !important; }
 }

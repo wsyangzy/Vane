@@ -1,7 +1,6 @@
 // ============================================
 // KPI 卡片网格组件
-// 一个端点 = 一个组
-// 服务状态改为成本和 tokens 统计
+// 展示今日与累计用量，资源配置数量不代表实际可用性
 // 含 Claude/Codex 分项悬浮提示
 // ============================================
 
@@ -9,14 +8,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   DollarSign,
   Zap,
-  Server,
-  Network,
-  Activity
+  Network
 } from 'lucide-react'
 import { KPICard, useToast } from '@/shared/ui/index.js'
 import {
   getUsageSummary,
-  getCodexChannels,
   isWailsEnvironment
 } from '@/services/wails/index.js'
 
@@ -37,12 +33,10 @@ const formatTokens = (tokens) => {
 }
 
 const KPICardsGrid = ({ data }) => {
-  const { endpoints, connections, groups } = data
+  const { connections } = data
 
   // Claude/Codex 分项统计
   const [providerStats, setProviderStats] = useState(null)
-  // Codex 渠道用于概览 KPI 的渠道数和端点总数
-  const [codexChannelStats, setCodexChannelStats] = useState({ channels: [], totalAll: 0, loaded: false })
   const providerStatsErrorRef = useRef('')
   const toast = useToast()
 
@@ -77,49 +71,18 @@ const KPICardsGrid = ({ data }) => {
     }
   }, [toast])
 
-  const loadCodexChannelStats = useCallback(async () => {
-    if (!isWailsEnvironment()) return
-    try {
-      const codexChannels = await getCodexChannels().catch(() => [])
-      const channels = Array.isArray(codexChannels) ? codexChannels : []
-      const codexTotalAll = channels.reduce(
-        (sum, ch) => sum + ((ch.endpoints || []).length),
-        0
-      )
-      setCodexChannelStats({
-        channels,
-        totalAll: codexTotalAll,
-        loaded: true
-      })
-    } catch {
-      setCodexChannelStats(prev => ({ ...prev, loaded: true }))
-    }
-  }, [])
-
   useEffect(() => {
     const initialLoad = setTimeout(() => {
       loadProviderStats()
-      loadCodexChannelStats()
     }, 0)
     const interval = setInterval(() => {
       loadProviderStats()
-      loadCodexChannelStats()
     }, 30000)
     return () => {
       clearTimeout(initialLoad)
       clearInterval(interval)
     }
-  }, [loadProviderStats, loadCodexChannelStats])
-
-  const endpointList = Array.isArray(endpoints.endpoints) ? endpoints.endpoints : []
-  const claudeChannels = Array.isArray(groups.groups) ? groups.groups : []
-  const claudeChannelCount = claudeChannels.length
-  const claudeTotalAll = endpointList.length || endpoints.total || 0
-  const codexChannels = codexChannelStats.channels || []
-  const codexChannelCount = codexChannels.length
-  const codexTotalAll = codexChannelStats.totalAll || 0
-  const combinedChannelTotal = claudeChannelCount + codexChannelCount
-  const combinedEndpointTotal = claudeTotalAll + codexTotalAll
+  }, [loadProviderStats])
 
   // 成本和 tokens 数据
   const todayCost = formatCost(connections.today_cost)
@@ -149,15 +112,8 @@ const KPICardsGrid = ({ data }) => {
     ? `Claude ${cs?.today_requests || 0} / Codex ${xs?.today_requests || 0}`
     : undefined
 
-  const endpointTotalSub = codexChannelStats.loaded
-    ? `Claude ${claudeTotalAll} / Codex ${codexTotalAll}`
-    : undefined
-  const channelTotalSub = codexChannelStats.loaded
-    ? `Claude ${claudeChannelCount} / Codex ${codexChannelCount}`
-    : undefined
-
   return (
-    <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 min-[75rem]:grid-cols-8">
+    <div aria-label="请求与用量概览" className="mb-4 grid grid-cols-6 gap-2.5 [&_h3]:truncate">
       <KPICard
         title="今日成本"
         layout="compact"
@@ -186,7 +142,7 @@ const KPICardsGrid = ({ data }) => {
         statusColor="bg-cyan-50 text-cyan-600"
       />
       <KPICard
-        title="总成本"
+        title="累计成本"
         layout="compact"
         size="sm"
         value={totalCost}
@@ -195,7 +151,7 @@ const KPICardsGrid = ({ data }) => {
         statusColor="bg-blue-50 text-blue-600"
       />
       <KPICard
-        title="总 Tokens"
+        title="累计 Tokens"
         layout="compact"
         size="sm"
         value={totalTokens}
@@ -204,31 +160,13 @@ const KPICardsGrid = ({ data }) => {
         statusColor="bg-indigo-50 text-indigo-600"
       />
       <KPICard
-        title="总请求数"
+        title="累计请求"
         layout="compact"
         size="sm"
         value={connections.all_time_total_requests || 0}
         subText={requestsSub}
         icon={Network}
         statusColor="bg-purple-50 text-purple-600"
-      />
-      <KPICard
-        title="渠道数量"
-        layout="compact"
-        size="sm"
-        value={codexChannelStats.loaded ? combinedChannelTotal : claudeChannelCount}
-        subText={channelTotalSub}
-        icon={Activity}
-        statusColor="bg-teal-50 text-teal-600"
-      />
-      <KPICard
-        title="端点数量"
-        layout="compact"
-        size="sm"
-        value={codexChannelStats.loaded ? combinedEndpointTotal : (endpoints.total || 0)}
-        subText={endpointTotalSub}
-        icon={Server}
-        statusColor="bg-violet-50 text-violet-600"
       />
     </div>
   )

@@ -161,7 +161,7 @@ export const getPrivacyDisplay = (request) => {
   const hitCount = summary.hitCount || summary.hits.reduce((sum, hit) => sum + (hit.count || 0), 0);
 
   if (!flagged && hitCount === 0) {
-    return { state: 'none', label: '未命中', hitCount: 0, hits: [], detectOnly: false };
+    return { state: 'none', label: '无脱敏摘要', hitCount: 0, hits: [], detectOnly: false };
   }
   const detectOnly = summary.action === 'detect' || !summary.changed;
   return {

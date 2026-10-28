@@ -5,10 +5,11 @@ const manageSubscriptionConnection = async (provider, action, input = {}) => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
   const result = await WailsApp.ManageSubscriptionConnection({
-    provider, action, pool_id: input.poolId || 0, group_id: input.groupId || 0, local_key: input.localKey || '',
+    provider, action, profile_id: input.profileId || 0, local_key: input.localKey || '',
     revision: input.revision || '', binding_version: input.bindingVersion || 0, content_revision: input.contentRevision || ''
   });
   return {
+    profileId: Number(result.profile_id || 0), profileName: result.profile_name || '', authEnabled: Boolean(result.auth_enabled),
     configPath: result.config_path, baseURL: result.base_url, running: Boolean(result.running),
     backupAvailable: Boolean(result.backup_available), revision: result.revision,
     bindingVersion: result.binding_version, endpointReady: Boolean(result.endpoint_ready),

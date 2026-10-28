@@ -1,7 +1,7 @@
 // ============================================
 // 请求追踪页面组件导出
 // 2025-12-02 16:19:42
-// 更新：添加 ActiveGroupSwitcher 组件
+// 统一调度方案与请求追踪控件
 // ============================================
 
 export { default as FiltersPanel } from './FiltersPanel.jsx';
@@ -14,5 +14,4 @@ export { default as Pagination } from './Pagination.jsx';
 export { default as ViewConfigPanel } from './ViewConfigPanel.jsx';
 export { default as Toolbar } from './Toolbar.jsx';
 export { default as AutoRefreshControl } from './AutoRefreshControl.jsx';
-export { default as ActiveGroupSwitcher } from './ActiveGroupSwitcher.jsx';
-export { default as TokenUsageHeatmapPanel } from './TokenUsageHeatmapPanel.jsx';
+export { default as RoutingProfileSwitcher } from './RoutingProfileSwitcher.jsx';

@@ -63,7 +63,7 @@ function LogFilters({
   };
 
   return (
-    <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       {/* 日志级别 */}
       <div className="flex flex-wrap items-center gap-2">
         {renderLevelButton('ALL')}

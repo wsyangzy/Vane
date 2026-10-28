@@ -1,3 +1,4 @@
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 // ============================================
 // Settings 页面 - 系统设置管理（可编辑）
 // (2025-12-08)
@@ -94,6 +95,10 @@ const formatCacheHitRate = (hits = 0, misses = 0) => {
 
 // TTL 为 0 的缓存只靠写入失效刷新，不按时间过期
 const formatCacheTTL = (ttl) => (!ttl || ttl === '0s' ? '随写入失效' : ttl);
+const CACHE_DETAILS = {
+  'overview:queries': { label: '概览查询结果', description: '按日期与筛选条件缓存整页结果；仅存内存，最多 24 项，有效期不超过 30 秒。' },
+  'usage:local-index': { label: '本地会话索引', description: '缓存会话文件的用量元数据并保存到本机；重启可复用。清理后重新解析，不删除原始会话。' }
+};
 
 const formatCacheCapacity = (cache) => {
   const size = cache?.size ?? 0;
@@ -147,11 +152,11 @@ const CacheStatusPanel = ({
 
   return (
     <>
-      <div className="mt-4 rounded-xl bg-slate-50/80 px-3 py-2.5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="my-2 rounded-lg bg-slate-50/80 px-2.5 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold ring-1 ring-inset ${
+              <span className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium ring-1 ring-inset ${
                 status?.enabled
                   ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                   : 'bg-slate-100 text-slate-500 ring-slate-200'
@@ -159,7 +164,7 @@ const CacheStatusPanel = ({
                 {status?.enabled ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
                 {status?.enabled ? '缓存已启用' : '缓存已禁用'}
               </span>
-              <span className="text-xs font-medium text-slate-500">
+              <span className="text-[11px] font-medium text-slate-500">
                 {summaryText}
               </span>
             </div>
@@ -202,23 +207,23 @@ const CacheStatusPanel = ({
           }}
         >
           <div
-            className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+            className="flex max-h-[calc(100dvh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="cache-status-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-w-0 items-start gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex min-w-0 items-start gap-2.5">
                 <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
-                  <Gauge size={20} />
+                  <Gauge size={16} />
                 </div>
                 <div className="min-w-0">
-                  <h2 id="cache-status-title" className="text-lg font-semibold text-slate-900">
+                  <h2 id="cache-status-title" className="text-sm font-semibold text-slate-900">
                     缓存运行状态
                   </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {summaryText} · 占用/上限表示当前 key 数 / 自动淘汰上限
+                  <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                    {summaryText} · 占用为查询项或索引文件数，上限为自动淘汰阈值
                   </p>
                 </div>
               </div>
@@ -245,7 +250,7 @@ const CacheStatusPanel = ({
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
                   aria-label="关闭缓存状态弹窗"
                 >
                   <X size={18} />
@@ -260,8 +265,8 @@ const CacheStatusPanel = ({
               </div>
             )}
 
-            <div className="overflow-auto p-6">
-              <table className="w-full min-w-[760px] text-left text-sm">
+            <div className="min-h-0 overflow-auto p-4">
+              <table className="w-full min-w-[760px] text-left text-xs">
             <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-400">
               <tr>
                 <th className="px-3 py-2">名称</th>
@@ -294,35 +299,34 @@ const CacheStatusPanel = ({
                 return (
                   <tr key={cache.name} className="text-slate-600">
                     <td className="px-3 py-2">
-                      <span className="block max-w-[220px] truncate font-mono text-xs font-semibold text-slate-700">
-                        {cache.name}
-                      </span>
+                      <Tooltip asChild content={CACHE_DETAILS[cache.name]?.description}><div className="max-w-[260px]">
+                        {CACHE_DETAILS[cache.name] && <span className="block text-xs font-semibold text-slate-700">{CACHE_DETAILS[cache.name].label}</span>}
+                        <span className={`block break-all font-mono text-xs ${CACHE_DETAILS[cache.name] ? 'mt-0.5 text-slate-400' : 'font-semibold text-slate-700'}`}>{cache.name}</span>
+                      </div></Tooltip>
                     </td>
                     <td className="px-3 py-2">
-                      <span
+                      <Tooltip asChild content={cache.fixed ? '运行时状态缓存，不受「启用缓存」开关控制' : undefined}><span
                         className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                           cache.enabled
                             ? 'bg-emerald-50 text-emerald-700'
                             : 'bg-slate-100 text-slate-500'
                         }`}
-                        title={cache.fixed ? '运行时状态缓存，不受「启用缓存」开关控制' : undefined}
                       >
                         {cache.fixed ? '常驻' : cache.enabled ? '启用' : '禁用'}
-                      </span>
+                      </span></Tooltip>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{formatCacheTTL(cache.ttl)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{cache.name === 'usage:local-index' ? '文件变化时重建' : formatCacheTTL(cache.ttl)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheCapacity(cache)}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheHitRate(cache.hits, cache.misses)}
                       {cache.staleServed > 0 && (
-                        <span
+                        <Tooltip asChild content="数据库查询失败时返回旧值的次数"><span
                           className="ml-1.5 text-amber-600"
-                          title="数据库查询失败时返回旧值的次数"
                         >
                           · 旧值 {cache.staleServed}
-                        </span>
+                        </span></Tooltip>
                       )}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
@@ -873,6 +877,7 @@ const SettingsPage = () => {
     return (
       <SettingsSection
         key={category.name}
+        compact
         title={category.label}
         icon={CATEGORY_ICONS[category.name] || Settings}
         description={category.description}
@@ -937,7 +942,7 @@ const SettingsPage = () => {
   };
 
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="settings-workspace space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* CSS 动画定义 */}
       <style>{`
         @keyframes countdown {
@@ -961,10 +966,11 @@ const SettingsPage = () => {
             <p className="text-xs text-slate-500">大部分设置即时生效</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5">
           <Button
             icon={RefreshCw}
             variant="secondary"
+            size="sm"
             onClick={loadSettings}
             disabled={saving}
           >
@@ -973,6 +979,7 @@ const SettingsPage = () => {
           <Button
             icon={Save}
             variant="primary"
+            size="sm"
             onClick={handleSave}
             disabled={saving || !hasChanges}
             loading={saving}
@@ -991,7 +998,7 @@ const SettingsPage = () => {
       {/* 保存消息提示 */}
       {saveMessage && (
         <div className={`
-          flex items-center gap-3 px-4 py-3 rounded-lg text-sm relative overflow-hidden
+          flex items-center gap-2 px-3 py-2 rounded-lg text-xs relative overflow-hidden
           ${saveMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : ''}
           ${saveMessage.type === 'error' ? 'bg-rose-50 text-rose-700 border border-rose-200' : ''}
           ${saveMessage.type === 'info' ? 'bg-slate-50 text-slate-600 border border-slate-200' : ''}
@@ -1045,8 +1052,8 @@ const SettingsPage = () => {
 
       {/* 未保存变更提示 */}
       {hasChanges && (
-        <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-amber-50 border border-amber-200">
-          <div className="flex items-center gap-2 text-sm text-amber-700">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+          <div className="flex items-center gap-2 text-xs text-amber-700">
             <AlertCircle size={16} />
             您有 {Object.keys(changes).length} 项未保存的变更
           </div>
@@ -1071,9 +1078,9 @@ const SettingsPage = () => {
           onReset={() => handleResetCategory('server', '服务端口')}
           resetDisabled={saving}
         >
-          <div className="grid items-center gap-4 sm:grid-cols-2">
+          <div className="grid items-center gap-3 py-2 sm:grid-cols-2">
             <PortInfo portInfo={portInfo} loading={loading} />
-            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-4">
+            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">
               {settingsByCategory['server']?.filter(shouldShowSetting).map(setting => {
                 const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
                 return (
@@ -1094,20 +1101,20 @@ const SettingsPage = () => {
       )}
 
       {/* 其他设置分类：普通卡片成对对齐，仅对中间高低差明显的卡片做组合布局。 */}
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 empty:hidden lg:grid-cols-2">
           {leadingSettingCategories.map(category => renderSettingCategory(category))}
         </div>
 
-        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 empty:hidden lg:grid-cols-2">
           {BALANCED_CATEGORY_ORDER.slice(0, 2)
             .map(name => settingCategoriesByName.get(name))
             .filter(Boolean)
             .map(category => renderSettingCategory(category))}
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch">
-          <div className="flex min-w-0 flex-col gap-6">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-stretch">
+          <div className="flex min-w-0 flex-col gap-3">
             {renderSettingCategory(settingCategoriesByName.get('retention'))}
             {renderSettingCategory(settingCategoriesByName.get('logging'), 'lg:flex-1')}
           </div>
@@ -1116,7 +1123,7 @@ const SettingsPage = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 empty:hidden lg:grid-cols-2">
           {trailingSettingCategories.map(category => renderSettingCategory(category))}
         </div>
       </div>

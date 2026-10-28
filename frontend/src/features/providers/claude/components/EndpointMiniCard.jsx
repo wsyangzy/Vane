@@ -183,7 +183,7 @@ const EndpointMiniCard = ({
         <div className="flex w-[92px] flex-shrink-0 self-center items-center justify-end gap-0.5">
           {isSqliteMode && (
             <>
-              <button
+              <Tooltip asChild content={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}><button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -191,7 +191,6 @@ const EndpointMiniCard = ({
                   onToggleFailover?.(endpoint, !failoverEnabled);
                 }}
                 disabled={failoverToggleBlocked}
-                title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
                 className={`${ENDPOINT_STATE_BUTTON_CLASS} ${
                   failoverToggleBlocked
                     ? 'cursor-not-allowed text-indigo-300 opacity-60'
@@ -211,7 +210,7 @@ const EndpointMiniCard = ({
                 aria-pressed={failoverEnabled}
               >
                 {failoverEnabled ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
-              </button>
+              </button></Tooltip>
               <button
                 type="button"
                 onClick={(e) => {

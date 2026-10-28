@@ -1,15 +1,14 @@
 import { checkPoolEndpoint } from '@/services/wails/pools.js';
-import PoolWorkspace from '@/features/providers/shared/pools/PoolWorkspace.jsx';
+import DispatchWorkspace from '@/features/providers/shared/dispatch/DispatchWorkspace.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Plus, RefreshCw, Settings } from 'lucide-react';
+import { Database, Plus } from 'lucide-react';
 import { Button, EmptyState, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
 import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
-import { nonStreamRouteSignature } from '@/features/providers/shared/routing/routeTargets.js';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
 import { buildCodexEndpointMutationPayload, selectPersistedEndpoints } from '@/features/providers/shared/endpoints/endpointActions.js';
-import { activateCodexChannel, activateCodexEndpoint, createCodexChannel, createCodexCredentialGroup, createCodexEndpoint, deleteCodexChannelByID, deleteCodexCredentialGroupByID, deleteCodexEndpointByID, getCodexChannels, getCodexGlobalConfig, getNextAvailableCodexChannel, getSettingsByScope, getCodexSuspendedCount, subscribeToEvent, setDefaultCodexCredentialGroup, setChannelNonStreamRoute, setChannelPrivacyLevel, setCodexChannelFailoverEnabled, updateCodexChannelByID, updateCodexCredentialGroupByID, updateCodexEndpointByID } from '@/services/wails/index.js';
+import { activateCodexChannel, activateCodexEndpoint, createCodexChannel, createCodexCredentialGroup, createCodexEndpoint, deleteCodexChannelByID, deleteCodexCredentialGroupByID, deleteCodexEndpointByID, getCodexChannels, getCodexGlobalConfig, getNextAvailableCodexChannel, getSettingsByScope, getCodexSuspendedCount, subscribeToEvent, setDefaultCodexCredentialGroup, setChannelPrivacyLevel, setCodexChannelFailoverEnabled, updateCodexChannelByID, updateCodexCredentialGroupByID, updateCodexEndpointByID } from '@/services/wails/index.js';
 import { getCredentialGroups, hasCodexCredential, getDefaultCredentialGroup, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload } from './model.js';
 import { CodexLogo } from './components/CodexLogo.jsx';
 import { ChannelFormModal } from './components/ChannelFormModal.jsx';
@@ -17,7 +16,6 @@ import { CredentialGroupFormModal } from './components/CredentialGroupFormModal.
 import { EndpointFormModal } from './components/EndpointFormModal.jsx';
 import { DeleteConfirmDialog } from './components/DeleteConfirmDialog.jsx';
 import { ActiveChannelPauseDialog } from './components/ActiveChannelPauseDialog.jsx';
-import { CodexGlobalConfigModal } from './components/CodexGlobalConfigModal.jsx';
 import { CodexEndpointDetailModal } from './components/CodexEndpointDetailModal.jsx';
 import { ChannelCard } from './components/ChannelCard.jsx';
 import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
@@ -35,8 +33,6 @@ const CodexPage = ({ clientVersion }) => {
   // Codex 挂起请求数（>0 时触发渠道卡片/端点 toggle 的 amber 警示色）
   const [suspendedCount, setSuspendedCount] = useState(0);
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(false);
-  // Codex 全局配置弹窗
-  const [showGlobalConfig, setShowGlobalConfig] = useState(false);
   // Codex 全局配置（来自 ~/.codex/config.toml，所有渠道共用）
   const [globalConfig, setGlobalConfig] = useState({
     model: '',
@@ -46,7 +42,7 @@ const CodexPage = ({ clientVersion }) => {
     global_timeout_seconds: 300
   });
 
-  // 刷新全局配置（在 page mount + 弹窗保存成功后调用）
+  // 页面加载时读取全局配置，供端点详情展示。
   const loadGlobalConfig = useCallback(async () => {
     try {
       const data = await getCodexGlobalConfig();
@@ -236,9 +232,8 @@ const CodexPage = ({ clientVersion }) => {
 
   const handleSaveChannel = async (payload) => {
     const isCreating = channelFormMode !== 'edit' || !editingChannel;
-    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
+    const { privacyLevel, ...channelPayload } = payload;
     let channelCreated = false;
-    let routeWarnings = [];
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
@@ -246,11 +241,6 @@ const CodexPage = ({ clientVersion }) => {
         await updateCodexChannelByID(editingChannel.id, channelPayload);
         if ('privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
           await setChannelPrivacyLevel('codex', editingChannel.id, privacyLevel);
-        }
-        // 非流改道单独保存：只在确有变更时提交
-        if ('nonStreamRoute' in payload
-          && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
-          routeWarnings = (await setChannelNonStreamRoute('codex', editingChannel.id, nonStreamRoute)).warnings;
         }
       } else {
         await createCodexChannel(channelPayload);
@@ -266,9 +256,6 @@ const CodexPage = ({ clientVersion }) => {
         openCreateCredentialGroupForm(createdChannel, true);
       } else {
         closeChannelForm();
-        if (routeWarnings.length > 0) {
-          toast.warning(routeWarnings, '非流改道已保存，请留意');
-        }
       }
     } catch (err) {
       const message = getFailoverToggleErrorMessage(err, '保存渠道失败');
@@ -609,10 +596,10 @@ const CodexPage = ({ clientVersion }) => {
   ).length;
 
   return (
-    <ModalPortalScope><div className="animate-fade-in">
+    <ModalPortalScope><div className="flex min-h-0 flex-1 flex-col animate-fade-in">
       {/* 页面标题 */}
-      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
+      <div className="mb-3 flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-h-9 min-w-0 items-center gap-2.5">
           <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
             <CodexLogo className="h-5 w-5" />
           </div>
@@ -624,32 +611,18 @@ const CodexPage = ({ clientVersion }) => {
               )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} />
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={RefreshCw}
-            onClick={() => fetchData()}
-            loading={loading}
-          >
-            刷新
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={Settings}
-            onClick={() => setShowGlobalConfig(true)}
-          >
-            Codex 配置
-          </Button>
-          <Button icon={Plus} onClick={openCreateChannelForm}>
-            添加渠道
-          </Button>
-        </div>
       </div>
 
-      <PoolWorkspace provider="codex" refreshToken={lastUpdate}>
+      <DispatchWorkspace provider="codex" refreshToken={lastUpdate}
+        resourcesBusy={loading || Boolean(actionLoading)}
+        onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
+        resourceActions={<>
+          <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
+          {channels.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} onClick={openCreateChannelForm}>添加渠道</Button>}
+        </>} endpoints={channels.flatMap((channel) => channel.endpoints.map((endpoint) => ({
+        channelId: channel.id, groupId: endpoint.credentialGroupId || getDefaultCredentialGroup(channel)?.id || 0, endpointId: String(endpoint.id),
+        name: endpoint.name, address: endpoint.baseURL,
+      })))} onError={(message) => toast.error(message)} onSuccess={(message) => toast.success(message)}>
       {error && (
         <div className="mb-4">
           <ErrorMessage message={error} onClose={() => setError('')} />
@@ -664,7 +637,7 @@ const CodexPage = ({ clientVersion }) => {
         <EmptyState
           icon={Database}
           title="暂无 Codex 渠道"
-          description="创建渠道和账号后，将账号加入池以开始调度。"
+          description="创建渠道和凭证分组后，在调度方案中选择参与成员。"
           action={
             <Button variant="primary" icon={Plus} onClick={openCreateChannelForm}>
               添加渠道
@@ -710,7 +683,7 @@ const CodexPage = ({ clientVersion }) => {
         </div>
       )}
 
-      </PoolWorkspace>
+      </DispatchWorkspace>
 
       {showChannelForm && (
         <ChannelFormModal
@@ -841,12 +814,6 @@ const CodexPage = ({ clientVersion }) => {
         />
       )}
 
-      {showGlobalConfig && (
-        <CodexGlobalConfigModal
-          onClose={() => setShowGlobalConfig(false)}
-          onSaved={loadGlobalConfig}
-        />
-      )}
     </div></ModalPortalScope>
   );
 };

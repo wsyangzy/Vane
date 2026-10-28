@@ -1,3 +1,4 @@
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useCallback, useState } from 'react';
 import { ExternalLink, KeyRound, Pencil, Server, Trash2 } from 'lucide-react';
 import { openExternalURL } from '@/services/wails/index.js';
@@ -32,7 +33,7 @@ export default function ChannelResourceRow({ provider, name, website, groups, en
     }}>
       <div className="channel-card-caption">{caption}</div>
       <div className="channel-card-paper min-w-0">
-        <div role="button" tabIndex={0} aria-label={`打开渠道画布 ${name}`} aria-description="双击打开画布，也可按 Enter 或空格键" aria-haspopup="dialog" className="channel-card-surface min-w-0 outline-none" title={`${name}\n双击打开渠道画布`} onKeyDown={(event) => {
+        <Tooltip asChild content="双击打开渠道画布，也可按 Enter 或空格键"><div role="button" tabIndex={0} aria-label={`打开渠道画布 ${name}`} aria-description="双击打开画布，也可按 Enter 或空格键" aria-haspopup="dialog" className="channel-card-surface min-w-0 outline-none" onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             setStructureOpen(true);
@@ -40,23 +41,23 @@ export default function ChannelResourceRow({ provider, name, website, groups, en
         }}>
           <span className="channel-card-heading">
             <span className="channel-card-name">{name}</span>
-            {domain && <span className="channel-card-domain" title={domain}>{domain}</span>}
+            {domain && <Tooltip asChild content={website}><span className="channel-card-domain">{domain}</span></Tooltip>}
           </span>
           <span className="channel-card-groups" aria-label="凭证分组预览">
-            {groups.slice(0, 2).map((group) => <span key={group.id} className="channel-card-group" title={group.name}><KeyRound size={10} /><span>{group.name}</span></span>)}
-            {groups.length > 2 && <span className="channel-card-group-overflow" title={`另有 ${groups.length - 2} 个凭证分组`}>+{groups.length - 2}</span>}
+            {groups.slice(0, 2).map((group) => <span key={group.id} className="channel-card-group"><KeyRound size={10} /><span>{group.name}</span></span>)}
+            {groups.length > 2 && <Tooltip asChild content={groups.slice(2).map(group => group.name).join('、')}><span className="channel-card-group-overflow">+{groups.length - 2}</span></Tooltip>}
             {!groups.length && <span className="channel-card-empty">尚未添加凭证分组</span>}
           </span>
-        </div>
+        </div></Tooltip>
         <div className="channel-card-footer flex min-w-0 items-center">
           <div className="flex min-w-0 items-center gap-2 text-[10px] text-slate-500">
-            <span className="inline-flex items-center gap-1 whitespace-nowrap tabular-nums" title={`${groups.length} 个凭证分组`} aria-label={`${groups.length} 个凭证分组`}><KeyRound size={11} />{groups.length}</span>
-            <span className="inline-flex items-center gap-1 whitespace-nowrap tabular-nums" title={`${endpoints.length} 个端点`} aria-label={`${endpoints.length} 个端点`}><Server size={11} />{endpoints.length}</span>
+            <Tooltip asChild content={`${groups.length} 个凭证分组`}><span className="inline-flex items-center gap-1 whitespace-nowrap tabular-nums" aria-label={`${groups.length} 个凭证分组`}><KeyRound size={11} />{groups.length}</span></Tooltip>
+            <Tooltip asChild content={`${endpoints.length} 个端点`}><span className="inline-flex items-center gap-1 whitespace-nowrap tabular-nums" aria-label={`${endpoints.length} 个端点`}><Server size={11} />{endpoints.length}</span></Tooltip>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
-            {website && <button type="button" className={iconButton} title="打开渠道网站" aria-label="打开渠道网站" onClick={() => openExternalURL(website)}><ExternalLink size={12} /></button>}
-            <button type="button" className={iconButton} title="编辑渠道" aria-label={`编辑渠道 ${name}`} disabled={busy} onClick={onEdit}><Pencil size={12} /></button>
-            <button type="button" className={`${iconButton} hover:!bg-rose-50 hover:!text-rose-500`} title="删除渠道" aria-label={`删除渠道 ${name}`} disabled={busy} onClick={onDelete}><Trash2 size={12} /></button>
+            {website && <Tooltip asChild content="打开渠道网站"><button type="button" className={iconButton} aria-label="打开渠道网站" onClick={() => openExternalURL(website)}><ExternalLink size={12} /></button></Tooltip>}
+            <Tooltip asChild content="编辑渠道"><button type="button" className={iconButton} aria-label={`编辑渠道 ${name}`} disabled={busy} onClick={onEdit}><Pencil size={12} /></button></Tooltip>
+            <Tooltip asChild content="删除渠道"><button type="button" className={`${iconButton} hover:!bg-rose-50 hover:!text-rose-500`} aria-label={`删除渠道 ${name}`} disabled={busy} onClick={onDelete}><Trash2 size={12} /></button></Tooltip>
           </div>
         </div>
       </div>

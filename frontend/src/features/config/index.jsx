@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Settings,
+  FileCog,
   RefreshCw,
   Server,
   Network,
@@ -99,21 +100,17 @@ const ConfigPage = () => {
     : [];
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* 页面标题 */}
-      <div className="flex justify-between items-end">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
-            <div className="p-2 bg-slate-900 rounded-lg text-white shadow-lg">
-              <Settings size={20} />
-            </div>
-            <div>
-              <div>系统配置</div>
-              <p className="text-sm text-slate-500 font-normal mt-1">
-                查看当前系统配置参数（只读）
-              </p>
-            </div>
-          </h1>
+      <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <FileCog size={20} />
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-xl font-bold text-slate-900">系统配置</h1>
+            <p className="text-xs text-slate-500">查看当前系统配置参数（只读）</p>
+          </div>
         </div>
         <Button icon={RefreshCw} onClick={loadConfig}>
           刷新

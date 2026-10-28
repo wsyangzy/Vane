@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useEffect, useDeferredValue, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import { useWailsLogs } from '@/features/log-viewer/hooks/useWailsLogs.js';
-import { FileText, RefreshCw, AlertCircle } from 'lucide-react';
+import { FileText, ScrollText, RefreshCw, AlertCircle } from 'lucide-react';
 import { LogEntry, LogControls, LogFilters } from './components/index.js';
 import { escapeRegex } from './components/LogEntry.jsx';
 import { SaveResultDialog } from '@/shared/ui/index.js';
@@ -260,102 +260,103 @@ function LogsPage() {
   };
 
   return (
-    <div
-      className="flex min-h-0 flex-1 flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm"
-    >
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       {/* 页面头部 - 固定 */}
-      <div className="shrink-0 border-b border-slate-200 px-4 py-3">
-        {/* 标题栏 */}
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
-              <FileText size={20} />
-            </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="text-xl font-bold text-slate-900">系统日志</h1>
-              <p className="text-xs text-slate-500">
-                共 {logs.length} 条
-                {filteredLogs.length !== logs.length && ` · 筛选后 ${filteredLogs.length} 条`}
-              </p>
-            </div>
+      <div className="flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
+            <ScrollText size={20} />
           </div>
-
-          <LogControls
-            isStreaming={isStreaming}
-            loading={loading}
-            logsCount={filteredLogs.length}
-            onToggleStream={isStreaming ? stop : start}
-            onRefresh={refresh}
-            onClear={handleClear}
-            onExport={handleExport}
-            selectedCount={selectedIndices.size}
-            onCopySelected={handleCopySelected}
-            copySuccess={copySuccess}
-          />
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 className="text-xl font-bold text-slate-900">系统日志</h1>
+            <p className="text-xs text-slate-500">
+              共 {logs.length} 条
+              {filteredLogs.length !== logs.length && ` · 筛选后 ${filteredLogs.length} 条`}
+            </p>
+          </div>
         </div>
 
-        {/* 过滤器栏 */}
-        <LogFilters
-          stats={stats}
-          levelFilter={levelFilter}
-          onLevelFilterChange={handleLevelFilterChange}
-          searchQuery={searchQuery}
-          onSearchChange={handleSearchChange}
-          autoScroll={autoScroll}
-          onAutoScrollChange={setAutoScroll}
-          totalLogs={logs.length}
+        <LogControls
+          isStreaming={isStreaming}
+          loading={loading}
+          logsCount={filteredLogs.length}
+          onToggleStream={isStreaming ? stop : start}
+          onRefresh={refresh}
+          onClear={handleClear}
+          onExport={handleExport}
+          selectedCount={selectedIndices.size}
+          onCopySelected={handleCopySelected}
+          copySuccess={copySuccess}
         />
       </div>
 
-      {/* 日志内容区域 - 虚拟滚动 */}
-      <div ref={setContainerRef} className="flex-1 overflow-hidden bg-white">
-        {loading && logs.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-400">
-            <RefreshCw size={24} className="animate-spin mr-2" />
-            加载中...
-          </div>
-        ) : error ? (
-          <div className="flex items-center justify-center h-full text-red-500">
-            <AlertCircle size={24} className="mr-2" />
-            {error}
-          </div>
-        ) : filteredLogs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400">
-            <FileText size={48} className="mb-2 opacity-50" />
-            <p className="text-lg">暂无日志</p>
-            {searchQuery || levelFilter !== 'ALL' ? (
-              <p className="text-sm mt-1">尝试调整搜索条件或过滤器</p>
-            ) : null}
-          </div>
-        ) : (
-          <List
-            ref={listRef}
-            height={listHeight || 400}
-            itemCount={filteredLogs.length}
-            itemSize={LOG_ITEM_HEIGHT}
-            width="100%"
-            itemData={{
-              logs: filteredLogs || [],
-              searchQuery: deferredSearchQuery || '',
-              highlightRegex: highlightRegex || null,
-              selectedIndices,
-              onToggleSelect: handleToggleSelect
-            }}
-          >
-            {({ index, style, data }) => (
-              <div style={style}>
-                <LogEntry
-                  log={data.logs[index]}
-                  index={index}
-                  searchQuery={data.searchQuery}
-                  highlightRegex={data.highlightRegex}
-                  isSelected={data.selectedIndices.has(index)}
-                  onToggleSelect={data.onToggleSelect}
-                />
-              </div>
-            )}
-          </List>
-        )}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        {/* 过滤器栏 */}
+        <div className="min-w-0 shrink-0 border-b border-slate-200 px-3 py-3 lg:px-4">
+          <LogFilters
+            stats={stats}
+            levelFilter={levelFilter}
+            onLevelFilterChange={handleLevelFilterChange}
+            searchQuery={searchQuery}
+            onSearchChange={handleSearchChange}
+            autoScroll={autoScroll}
+            onAutoScrollChange={setAutoScroll}
+            totalLogs={logs.length}
+          />
+        </div>
+
+        {/* 日志内容区域 - 虚拟滚动 */}
+        <div ref={setContainerRef} className="min-h-0 min-w-0 flex-1 overflow-hidden bg-white">
+          {loading && logs.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-slate-400">
+              <RefreshCw size={24} className="animate-spin mr-2" />
+              加载中...
+            </div>
+          ) : error ? (
+            <div className="flex h-full min-w-0 items-center justify-center gap-2 p-4 text-red-500">
+              <AlertCircle size={24} className="shrink-0" />
+              <span className="min-w-0 max-w-xl text-sm [overflow-wrap:anywhere]">{error}</span>
+            </div>
+          ) : filteredLogs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full text-slate-400">
+              <FileText size={48} className="mb-2 opacity-50" />
+              <p className="text-lg">暂无日志</p>
+              {searchQuery || levelFilter !== 'ALL' ? (
+                <p className="text-sm mt-1">尝试调整搜索条件或过滤器</p>
+              ) : null}
+            </div>
+          ) : (
+            <List
+              ref={listRef}
+              className="scrollbar-visible"
+              style={{ overflowX: 'hidden' }}
+              height={listHeight || 400}
+              itemCount={filteredLogs.length}
+              itemSize={LOG_ITEM_HEIGHT}
+              width="100%"
+              itemData={{
+                logs: filteredLogs || [],
+                searchQuery: deferredSearchQuery || '',
+                highlightRegex: highlightRegex || null,
+                selectedIndices,
+                onToggleSelect: handleToggleSelect
+              }}
+            >
+              {({ index, style, data }) => (
+                <div style={style}>
+                  <LogEntry
+                    log={data.logs[index]}
+                    index={index}
+                    searchQuery={data.searchQuery}
+                    highlightRegex={data.highlightRegex}
+                    isSelected={data.selectedIndices.has(index)}
+                    onToggleSelect={data.onToggleSelect}
+                  />
+                </div>
+              )}
+            </List>
+          )}
+        </div>
       </div>
 
       {/* 保存结果弹窗 */}

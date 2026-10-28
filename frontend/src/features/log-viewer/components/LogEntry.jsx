@@ -47,7 +47,8 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
   };
 
   // 复制日志内容
-  const handleCopy = async () => {
+  const handleCopy = async (event) => {
+    event.stopPropagation();
     const timestamp = new Date(log.timestamp).toLocaleString('zh-CN', {
       year: 'numeric',
       month: '2-digit',
@@ -88,14 +89,14 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
   return (
     <div
       onClick={handleRowClick}
-      className={`group flex items-center gap-3 px-4 py-2 border-b border-slate-100 font-mono text-xs relative cursor-pointer transition-colors ${
+      className={`group relative flex h-full min-w-0 items-center gap-2 border-b border-slate-100 px-3 font-mono text-xs cursor-pointer transition-colors lg:px-4 ${
         isSelected
           ? 'bg-blue-50 hover:bg-blue-100'
           : 'hover:bg-slate-50'
       }`}
     >
       {/* 时间戳 */}
-      <div className="text-slate-400 whitespace-nowrap w-32 flex-shrink-0">
+      <Tooltip asChild content={new Date(log.timestamp).toLocaleString('zh-CN', { hour12: false })}><div className="w-24 shrink-0 whitespace-nowrap text-[11px] tabular-nums text-slate-400">
         {new Date(log.timestamp).toLocaleTimeString('zh-CN', {
           hour12: false,
           hour: '2-digit',
@@ -103,16 +104,16 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
           second: '2-digit',
           fractionalSecondDigits: 3,
         })}
-      </div>
+      </div></Tooltip>
 
       {/* 日志级别 */}
-      <div className={`flex items-center gap-1 ${levelConfig.color} whitespace-nowrap w-16 flex-shrink-0`}>
+      <div className={`flex w-14 shrink-0 items-center gap-1 ${levelConfig.color} whitespace-nowrap text-[11px]`}>
         <Icon size={12} />
         <span className="font-semibold">{log.level}</span>
       </div>
 
       {/* 日志消息 - 单行截断显示，完整内容通过悬浮提示和复制获取 */}
-      <Tooltip content={log.message} className="min-w-0 flex-1">
+      <Tooltip content={log.message} className="block min-w-0 flex-1" contentClassName="whitespace-pre-wrap [overflow-wrap:anywhere]">
         <div className="text-slate-700 truncate">
           {highlightText(log.message)}
         </div>
@@ -120,23 +121,23 @@ function LogEntry({ log, index, searchQuery, highlightRegex, isSelected, onToggl
 
       {/* 附加属性 - 显示前3个，超长值截断 */}
       {log.attrs && Object.keys(log.attrs).length > 0 && (
-        <div className="text-slate-400 text-[10px] whitespace-nowrap flex-shrink-0 max-w-[400px] truncate">
+        <Tooltip asChild content={Object.keys(log.attrs).length > 3 ? Object.entries(log.attrs).map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join(' · ') : undefined}><div className="min-w-0 max-w-[30%] shrink truncate whitespace-nowrap text-[10px] text-slate-400">
           {Object.entries(log.attrs).slice(0, 3).map(([key, value]) => (
             <span key={key} className="mr-2">
-              {key}={String(value).length > 40 ? String(value).slice(0, 40) + '...' : value}
+              {key}={typeof value === 'object' ? JSON.stringify(value) : String(value)}
             </span>
           ))}
           {Object.keys(log.attrs).length > 3 && (
             <span className="text-slate-300">+{Object.keys(log.attrs).length - 3}</span>
           )}
-        </div>
+        </div></Tooltip>
       )}
 
       {/* 复制按钮 - 鼠标悬浮时显示 */}
-      <Tooltip content={copied ? '已复制' : '复制日志'}>
+      <Tooltip content={copied ? '已复制' : '复制日志'} className="shrink-0">
         <button
           onClick={handleCopy}
-          className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"
+          className="shrink-0 rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-200 hover:text-slate-600 group-hover:opacity-100 focus-visible:opacity-100"
           aria-label={copied ? '已复制' : '复制日志'}
         >
           {copied ? (

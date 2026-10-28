@@ -16,7 +16,7 @@ test('program version is clickable and replays the archived current release note
   assert.match(source, /showToast: toast\.show/);
   assert.match(source, /dismissToast: toast\.dismiss/);
   assert.match(source, /onValueClick=\{systemInfo\?\.version \? handleShowReleaseNotes : undefined\}/);
-  assert.match(source, /title="查看当前版本更新内容"/);
+  assert.match(source, /<Tooltip asChild content="查看当前版本更新内容">/);
   assert.match(source, /<ChevronRight size=\{12\}/);
   assert.doesNotMatch(source, /playReleaseToastSequence\(/);
 });

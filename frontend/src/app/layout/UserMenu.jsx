@@ -1,391 +1,133 @@
-// ============================================
-// UserMenu - 用户菜单下拉组件
-// (2026-02-09)
-// ============================================
-
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Copy,
-  FolderOpen,
-  FileText,
-  LogOut,
-  Check,
-  Clock,
-  Cpu,
-  Database,
-  ChevronRight
-} from 'lucide-react';
-import {
-  isWailsEnvironment,
-  getSystemStatus,
-  getProxyURL,
-  openClaudeConfigDir,
-  openCodexConfigDir,
-  openLogDir,
-  openDataDir,
-  requestQuit,
-  copyToClipboard
-} from '@/services/wails/index.js';
+import { AlertCircle, Check, ChevronRight, Clock, Copy, Cpu, Database, FileText, FolderOpen, Loader2, LogOut, SlidersHorizontal } from 'lucide-react';
+import { isWailsEnvironment, getSystemStatus, getProxyURL, openClaudeConfigDir, openCodexConfigDir, openLogDir, openDataDir, requestQuit, copyToClipboard } from '@/services/wails/index.js';
 import { useToast } from '@/shared/ui/index.js';
 import releaseNotes from '@/app/release-notes.json';
 import { getReleaseAnnouncement, showReleaseToastSummary } from '@/app/updates/releaseAnnouncement.js';
+import './userMenu.css';
+import { usePresence } from '@/shared/hooks/usePresence.js';
 
-// 信息卡片项目组件（移到外部避免 lint 警告）
-const InfoItem = ({
-  icon: Icon,
-  iconBg,
-  iconColor,
-  label,
-  value,
-  delay,
-  isLoaded,
-  extra,
-  valueClass,
-  onValueClick,
-  valueAriaLabel
-}) => (
-  <div
-    className="flex items-center justify-between transition-all duration-300 ease-out"
-    style={{
-      opacity: isLoaded ? 1 : 0,
-      transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-      transitionDelay: `${delay}ms`
-    }}
-  >
-    <div className="flex items-center gap-2">
-      <div className={`p-1.5 ${iconBg} rounded-lg transition-transform duration-300 hover:scale-110`}>
-        <Icon size={14} className={iconColor} />
-      </div>
-      <span className="text-xs font-medium text-slate-500">{label}</span>
-    </div>
-    <div className="flex items-center gap-2">
-      {onValueClick ? (
-        <button
-          type="button"
-          onClick={onValueClick}
-          className={`inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-sm font-semibold transition-colors hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 ${valueClass || 'text-slate-800'}`}
-          aria-label={valueAriaLabel}
-          title="查看当前版本更新内容"
-        >
-          {value}
-          <ChevronRight size={12} aria-hidden="true" />
-        </button>
-      ) : (
-        <span className={`text-sm font-semibold ${valueClass || 'text-slate-800'}`}>{value}</span>
-      )}
-      {extra}
-    </div>
-  </div>
-);
+const InfoItem = ({ icon: Icon, label, value, onValueClick, valueAriaLabel }) => <div className="app-menu-info-item">
+  <span className="app-menu-info-label"><Icon size={12} />{label}</span>
+  {onValueClick ? <Tooltip asChild content="查看当前版本更新内容"><button type="button" onClick={onValueClick} aria-label={valueAriaLabel} className="app-menu-version">{value}<ChevronRight size={12} aria-hidden="true" /></button></Tooltip> : <span className="app-menu-info-value">{value}</span>}
+</div>;
 
-const UserMenu = () => {
+const formatUptime = (seconds) => {
+  if (seconds == null) return '—';
+  const duration = Math.max(0, seconds);
+  const days = Math.floor(duration / 86400);
+  const hours = Math.floor(duration % 86400 / 3600);
+  const minutes = Math.floor(duration % 3600 / 60);
+  const secs = Math.floor(duration % 60);
+  const time = [hours, minutes, secs].map((value) => String(value).padStart(2, '0')).join(':');
+  return days ? `${days}天 ${time}` : time;
+};
+
+export default function UserMenu() {
   const [isOpen, setIsOpen] = useState(false);
+  const presence = usePresence(isOpen);
   const [systemInfo, setSystemInfo] = useState(null);
   const [proxyAddress, setProxyAddress] = useState('');
+  const [infoError, setInfoError] = useState('');
+  const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [receivedAt, setReceivedAt] = useState(0);
+  const [now, setNow] = useState(0);
   const menuRef = useRef(null);
+  const triggerRef = useRef(null);
+  const copyTimerRef = useRef(null);
   const releaseToastCleanupRef = useRef(null);
-  const isWails = isWailsEnvironment();
   const toast = useToast();
-
-  // 加载系统信息
-  const loadSystemInfo = useCallback(async () => {
-    if (!isWails) return;
-    try {
-      const [status, url] = await Promise.all([
-        getSystemStatus(),
-        getProxyURL()
-      ]);
-      setSystemInfo(status);
-      setProxyAddress(url);
-    } catch (error) {
-      console.warn('Failed to load system info:', error);
-    }
-  }, [isWails]);
+  const isWails = isWailsEnvironment();
 
   const handleShowReleaseNotes = useCallback(() => {
     const announcement = getReleaseAnnouncement(systemInfo?.version, releaseNotes);
-    if (!announcement) {
-      toast.info('当前版本暂无更新说明', '版本更新');
-      return;
-    }
-
+    if (!announcement) { toast.info('当前版本暂无更新说明', '版本更新'); return; }
     setIsOpen(false);
     releaseToastCleanupRef.current?.();
-    releaseToastCleanupRef.current = showReleaseToastSummary({
-      announcement,
-      showToast: toast.show,
-      dismissToast: toast.dismiss
-    });
+    releaseToastCleanupRef.current = showReleaseToastSummary({ announcement, showToast: toast.show, dismissToast: toast.dismiss });
   }, [systemInfo?.version, toast]);
 
-  // 打开菜单时加载数据并触发动画
-  useEffect(() => {
-    if (isOpen) {
-      // 延迟触发动画（等待下一帧渲染完成）
-      const frameId = requestAnimationFrame(() => {
-        void loadSystemInfo();
-        requestAnimationFrame(() => {
-          setIsLoaded(true);
-        });
-      });
-      return () => cancelAnimationFrame(frameId);
-    }
-  }, [isOpen, loadSystemInfo]);
-
-  // 定时刷新运行时长（菜单打开时）
   useEffect(() => {
     if (!isOpen) return;
-    const timer = setInterval(loadSystemInfo, 1000);
-    return () => clearInterval(timer);
-  }, [isOpen, loadSystemInfo]);
-
-  useEffect(() => () => {
-    releaseToastCleanupRef.current?.();
-  }, []);
-
-  // 点击外部关闭菜单
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
+    let active = true;
+    setCopied(false);
+    setInfoError('');
+    if (isWails) {
+      setLoading(true);
+      Promise.allSettled([getSystemStatus(), getProxyURL()]).then(([status, address]) => {
+        if (!active) return;
+        const timestamp = Date.now();
+        if (status.status === 'fulfilled') { setSystemInfo(status.value); setReceivedAt(timestamp); setNow(timestamp); }
+        setProxyAddress(address.status === 'fulfilled' ? address.value : '');
+        if (status.status === 'rejected' || address.status === 'rejected') setInfoError('部分应用信息读取失败，请重新打开菜单重试。');
+        setLoading(false);
+      });
+    }
+    // Keep the clock moving locally instead of querying the desktop every second.
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const outside = (event) => { if (!menuRef.current?.contains(event.target)) setIsOpen(false); };
+    const keyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    document.addEventListener('mousedown', outside);
+    document.addEventListener('keydown', keyDown);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener('mousedown', outside);
+      document.removeEventListener('keydown', keyDown);
+    };
+  }, [isOpen, isWails]);
 
-  // 复制代理地址
+  useEffect(() => () => { clearTimeout(copyTimerRef.current); releaseToastCleanupRef.current?.(); }, []);
+
   const handleCopyAddress = async () => {
-    if (!proxyAddress) return;
-    await copyToClipboard(proxyAddress);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  // 打开 Claude 配置目录
-  const handleOpenConfigDir = async () => {
+    if (!proxyAddress || copying) return;
+    setCopying(true);
     try {
-      await openClaudeConfigDir();
-      setIsOpen(false);
-    } catch (error) {
-      toast.error(error?.message || '打开 Claude 配置目录失败', '打开失败');
-    }
+      await copyToClipboard(proxyAddress);
+      setCopied(true);
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+    } catch (error) { toast.error(error?.message || '复制代理地址失败', '复制失败'); }
+    finally { setCopying(false); }
   };
 
-  // 打开 Codex 配置目录
-  const handleOpenCodexConfigDir = async () => {
-    try {
-      await openCodexConfigDir();
-      setIsOpen(false);
-    } catch (error) {
-      toast.error(error?.message || '打开 Codex 配置目录失败', '打开失败');
-    }
+  const openDirectory = async (open, label) => {
+    try { await open(); setIsOpen(false); }
+    catch (error) { toast.error(error?.message || `打开${label}失败`, '打开失败'); }
   };
-
-  // 打开日志目录
-  const handleOpenLogDir = async () => {
-    try {
-      await openLogDir();
-      setIsOpen(false);
-    } catch (error) {
-      toast.error(error?.message || '打开日志目录失败', '打开失败');
-    }
-  };
-
-  const handleOpenDataDir = async () => {
-    try {
-      await openDataDir();
-      setIsOpen(false);
-    } catch (error) {
-      toast.error(error?.message || '打开数据目录失败', '打开失败');
-    }
-  };
-
-  // 退出应用
   const handleQuit = async () => {
-    try {
-      await requestQuit();
-    } catch (error) {
-      console.error('Failed to quit:', error);
-    }
+    try { await requestQuit(); }
+    catch (error) { toast.error(error?.message || '退出应用失败', '退出失败'); }
   };
+  const uptime = systemInfo?.uptime == null ? null : Number(systemInfo.uptime) + Math.max(0, Math.floor((now - receivedAt) / 1000));
+  const running = systemInfo?.proxy_running;
 
-  // 格式化运行时长（dd:HH:mm:ss 格式，按需显示）
-  const formatUptime = (seconds) => {
-    if (!seconds || seconds < 0) return '00:00';
-
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-
-    const pad = (n) => String(n).padStart(2, '0');
-
-    if (days > 0) {
-      return `${pad(days)}:${pad(hours)}:${pad(minutes)}:${pad(secs)}`;
-    }
-    if (hours > 0) {
-      return `${pad(hours)}:${pad(minutes)}:${pad(secs)}`;
-    }
-    return `${pad(minutes)}:${pad(secs)}`;
-  };
-
-  return (
-    <div className="relative" ref={menuRef}>
-      {/* 头像按钮 */}
-      <button
-        onClick={() => { setIsLoaded(false); setIsOpen(!isOpen); }}
-        className={`w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 border-2 border-white shadow-md cursor-pointer transition-all duration-200 ${
-          isOpen ? 'ring-2 ring-indigo-300 scale-105' : 'hover:ring-2 ring-indigo-200 hover:scale-105'
-        }`}
-        aria-label="用户菜单"
-      />
-
-      {/* 下拉菜单 */}
-      {isOpen && (
-        <div
-          className="absolute right-0 top-full mt-2 w-72 bg-white rounded-xl shadow-xl border border-slate-200/80 overflow-hidden z-50"
-          style={{
-            animation: 'menuSlideIn 0.2s ease-out forwards'
-          }}
-        >
-          <style>
-            {`
-              @keyframes menuSlideIn {
-                from {
-                  opacity: 0;
-                  transform: translateY(-8px) scale(0.96);
-                }
-                to {
-                  opacity: 1;
-                  transform: translateY(0) scale(1);
-                }
-              }
-            `}
-          </style>
-
-          {/* 信息卡片 */}
-          <div className="p-4 bg-gradient-to-br from-slate-50 to-indigo-50/30 border-b border-slate-100 space-y-3">
-            <InfoItem
-              icon={Cpu}
-              iconBg="bg-indigo-100"
-              iconColor="text-indigo-600"
-              label="程序版本"
-              value={`v${systemInfo?.version || '—'}`}
-              valueClass="text-indigo-600 font-mono"
-              delay={0}
-              isLoaded={isLoaded}
-              onValueClick={systemInfo?.version ? handleShowReleaseNotes : undefined}
-              valueAriaLabel={systemInfo?.version ? `查看 v${systemInfo.version} 更新内容` : undefined}
-            />
-
-            <InfoItem
-              icon={Clock}
-              iconBg="bg-emerald-100"
-              iconColor="text-emerald-600"
-              label="运行时长"
-              value={formatUptime(systemInfo?.uptime)}
-              valueClass="text-emerald-600 font-mono tabular-nums"
-              delay={100}
-              isLoaded={isLoaded}
-            />
-          </div>
-
-          {/* 代理地址复制 */}
-          <div
-            className="p-3 border-b border-slate-100 transition-all duration-300 ease-out"
-            style={{
-              opacity: isLoaded ? 1 : 0,
-              transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-              transitionDelay: '150ms'
-            }}
-          >
-            <div className="flex items-center gap-2">
-              <div className="flex-1 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
-                <code className="text-xs font-mono text-slate-600 truncate block">
-                  {proxyAddress || 'http://127.0.0.1:8087'}
-                </code>
-              </div>
-              <button
-                onClick={handleCopyAddress}
-                className={`shrink-0 p-2 rounded-lg transition-all duration-200 ${
-                  copied
-                    ? 'bg-emerald-100 text-emerald-600 scale-105'
-                    : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 hover:scale-105'
-                }`}
-                aria-label={copied ? '已复制' : '复制代理地址'}
-              >
-                {copied ? <Check size={16} /> : <Copy size={16} />}
-              </button>
-            </div>
-            <div className="flex items-center gap-2 mt-2 px-1">
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600">Claude</span>
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-50 text-green-600">Codex</span>
-            </div>
-          </div>
-
-          {/* 操作按钮 */}
-          <div
-            className="p-2 transition-all duration-300 ease-out"
-            style={{
-              opacity: isLoaded ? 1 : 0,
-              transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-              transitionDelay: '200ms'
-            }}
-          >
-            <button
-              onClick={handleOpenConfigDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
-            >
-              <FolderOpen size={16} className="text-slate-400" />
-              <span>打开 Claude 配置目录</span>
-            </button>
-            <button
-              onClick={handleOpenCodexConfigDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
-            >
-              <FolderOpen size={16} className="text-slate-400" />
-              <span>打开 Codex 配置目录</span>
-            </button>
-            <button
-              onClick={handleOpenLogDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
-            >
-              <FileText size={16} className="text-slate-400" />
-              <span>打开日志目录</span>
-            </button>
-            <button
-              onClick={handleOpenDataDir}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg transition-colors duration-150"
-            >
-              <Database size={16} className="text-slate-400" />
-              <span>打开数据目录</span>
-            </button>
-          </div>
-
-          {/* 退出按钮 */}
-          <div
-            className="p-2 border-t border-slate-100 transition-all duration-300 ease-out"
-            style={{
-              opacity: isLoaded ? 1 : 0,
-              transform: isLoaded ? 'translateY(0)' : 'translateY(8px)',
-              transitionDelay: '250ms'
-            }}
-          >
-            <button
-              onClick={handleQuit}
-              className="w-full flex items-center gap-3 px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 rounded-lg transition-all duration-150 hover:translate-x-1"
-            >
-              <LogOut size={16} />
-              <span>退出应用</span>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default UserMenu;
+  return <div className="app-menu" ref={menuRef}>
+    <button type="button" ref={triggerRef} className="app-menu-trigger motion-control" data-active={isOpen} onClick={() => setIsOpen((previous) => !previous)} aria-label="应用菜单" aria-expanded={isOpen} aria-controls="application-menu"><SlidersHorizontal size={16} /></button>
+    {presence.present && <section id="application-menu" aria-label="应用菜单" inert={presence.closing} aria-hidden={presence.closing} data-origin="top-right" className={`app-menu-panel t-dropdown ${presence.className}`}>
+      <header className="app-menu-heading"><h2>应用菜单</h2><span className="app-menu-status" data-running={Boolean(running)}><i aria-hidden="true" />{loading ? '读取中' : !systemInfo ? '状态未知' : running ? '代理运行中' : '代理已停止'}</span></header>
+      <div className="app-menu-info">
+        <InfoItem icon={Cpu} label="程序版本" value={systemInfo?.version ? `v${systemInfo.version}` : '—'} onValueClick={systemInfo?.version ? handleShowReleaseNotes : undefined} valueAriaLabel={systemInfo?.version ? `查看 v${systemInfo.version} 更新内容` : undefined} />
+        <InfoItem icon={Clock} label="运行时长" value={formatUptime(uptime)} />
+      </div>
+      <div className="app-menu-address"><div className="app-menu-section-title">代理地址<span>Claude / Codex</span></div><div className="app-menu-address-field"><code>{proxyAddress || (loading ? '正在读取…' : '代理地址暂不可用')}</code><Tooltip asChild content={copied ? '已复制' : '复制代理地址'}><button type="button" onClick={handleCopyAddress} disabled={!proxyAddress || copying} aria-label={copied ? '已复制' : '复制代理地址'} data-copied={copied}>{copying ? <Loader2 size={14} className="animate-spin" /> : copied ? <Check size={14} /> : <Copy size={14} />}</button></Tooltip></div></div>
+      {infoError && <p role="alert" className="app-menu-error"><AlertCircle size={13} /><span>{infoError}</span></p>}
+      {/* 操作按钮 */}
+      <div className="app-menu-directories">
+        <button type="button" disabled={!isWails} onClick={() => openDirectory(openClaudeConfigDir, ' Claude 配置目录')} aria-label="打开 Claude 配置目录" className="app-menu-directory transition-colors duration-150"><FolderOpen size={15} /><span>Claude 配置<small>打开配置目录</small></span><ChevronRight size={12} /></button>
+        <button type="button" disabled={!isWails} onClick={() => openDirectory(openCodexConfigDir, ' Codex 配置目录')} aria-label="打开 Codex 配置目录" className="app-menu-directory transition-colors duration-150"><FolderOpen size={15} /><span>Codex 配置<small>打开配置目录</small></span><ChevronRight size={12} /></button>
+        <button type="button" disabled={!isWails} onClick={() => openDirectory(openLogDir, '日志目录')} aria-label="打开日志目录" className="app-menu-directory transition-colors duration-150"><FileText size={15} /><span>运行日志<small>打开日志目录</small></span><ChevronRight size={12} /></button>
+        <button type="button" disabled={!isWails} onClick={() => openDirectory(openDataDir, '数据目录')} aria-label="打开数据目录" className="app-menu-directory transition-colors duration-150"><Database size={15} /><span>应用数据<small>打开数据目录</small></span><ChevronRight size={12} /></button>
+      </div>
+      {/* 退出按钮 */}
+      <footer className="app-menu-footer"><button type="button" disabled={!isWails} onClick={handleQuit}><LogOut size={14} />退出应用</button></footer>
+    </section>}
+  </div>;
+}

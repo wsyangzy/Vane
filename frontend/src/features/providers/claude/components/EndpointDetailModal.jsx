@@ -1,4 +1,4 @@
-import { Activity, RotateCcw, Pencil, Trash2, Database, Server, ArrowRight, Calculator, XCircle, Clock, Settings, KeyRound } from 'lucide-react';
+import { Activity, Pencil, Trash2, Database, Server, ArrowRight, Calculator, XCircle, Clock, Settings, KeyRound } from 'lucide-react';
 import { Button, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModelTag from '@/features/requests/components/ModelTag.jsx';
@@ -7,8 +7,6 @@ import { EndpointHealthBadge as HealthBadge, EndpointLatencyBadge as LatencyBadg
 import { DetailChip, DetailMetricCard, DetailPill, DetailTimeoutPill, DetailTimestampFooter, ModelMappingPair } from '@/features/providers/shared/endpoints/detailParts.jsx';
 import { formatLastCheck, formatDetailMultiplier, getDetailTimestamp, isDefaultDetailMultiplier } from '@/features/providers/shared/formatters.js';
 import { getCredentialGroupCostMultiplier } from '../utils/credentialGroups.js';
-import { RepeatOffIcon } from './endpointState.jsx';
-import { normalizeBool } from '../model.js';
 
 // ============================================
 // 端点详情弹窗（点击端点卡片弹出）
@@ -25,7 +23,6 @@ const EndpointDetailModal = ({
   onClose,
   onEdit,
   onDelete,
-  onRestore,
   onHealth
 }) => {
   if (!isOpen || !endpoint) return null;
@@ -51,7 +48,6 @@ const EndpointDetailModal = ({
   const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
   const hasFailDetail = (Number(lastFailCode) > 0) || !!lastFailReason || isRequestFailed;
 
-  const failoverEnabled = normalizeBool(endpoint.failoverEnabled, true);
   const supportsCountTokens = !!endpoint.supportsCountTokens;
   const priority = Number(endpoint.priority ?? 0);
   const timeoutSeconds = Number(endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0);
@@ -153,7 +149,6 @@ const EndpointDetailModal = ({
             </div>
 
             <div className="flex items-center gap-2 flex-shrink-0">
-              {!failoverEnabled && <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => onRestore?.(endpoint)}>恢复历史端点</Button>}
               <Button variant="ghost" size="sm" icon={Activity} onClick={() => onHealth?.(endpoint)}>健康检测</Button>
               {isSqliteMode && (
                 <>
@@ -213,7 +208,7 @@ const EndpointDetailModal = ({
               </span>
             </Tooltip>
 
-            {!failoverEnabled && <DetailPill tone="amber" icon={RepeatOffIcon}>历史停用</DetailPill>}
+
 
 
             {supportsCountTokens && (

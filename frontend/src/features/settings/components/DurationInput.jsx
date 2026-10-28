@@ -67,7 +67,7 @@ const DurationInput = ({
   }, [onChange, parsed.number]);
 
   return (
-    <div className={`flex h-9 w-[152px] items-center overflow-visible rounded-lg border border-slate-200 bg-slate-50 transition-[border-color,box-shadow] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 ${disabled ? 'opacity-50' : ''} ${className}`}>
+    <div className={`flex h-8 w-[136px] shrink-0 items-center overflow-visible rounded-lg border border-slate-200 bg-slate-50 transition-[border-color,box-shadow] focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 ${disabled ? 'opacity-50' : ''} ${className}`}>
       <input
         type="number"
         min="0"
@@ -77,7 +77,7 @@ const DurationInput = ({
         disabled={disabled}
         placeholder="0"
         aria-label="时长数值"
-        className={`min-w-0 flex-1 bg-transparent px-3 text-right font-mono text-sm text-slate-700 outline-none ${disabled ? 'cursor-not-allowed' : ''}`}
+        className={`min-w-0 flex-1 bg-transparent px-2.5 text-right font-mono text-xs text-slate-700 outline-none ${disabled ? 'cursor-not-allowed' : ''}`}
       />
       <span className="h-5 w-px flex-shrink-0 bg-slate-200" aria-hidden="true" />
       <CustomSelect
@@ -86,7 +86,7 @@ const DurationInput = ({
         onChange={handleUnitChange}
         disabled={disabled}
         size="sm"
-        minWidth={70}
+        minWidth={64}
         embedded
         ariaLabel="时间单位"
       />

@@ -1,15 +1,8 @@
 import { useState } from 'react';
-import { Plus, Trash2, ArrowRight, CheckCircle2, XCircle } from 'lucide-react';
-import { Button, SegmentedTabs, Tooltip } from '@/shared/ui/index.js';
+import { CheckCircle2, XCircle } from 'lucide-react';
+import { Button, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
-import { buildInitialModelMappingRows, buildModelMappingPayload } from '@/features/providers/shared/routing/modelMapping.js';
-import NonStreamRouteEditor from '@/features/providers/shared/routing/NonStreamRouteEditor.jsx';
-import ChannelModelRoutesEditor from '@/features/providers/shared/routing/ChannelModelRoutesEditor.jsx';
 import ChannelPrivacyLevelSelector from '@/features/providers/shared/privacy/ChannelPrivacyLevelSelector.jsx';
-import ChannelFeatureSettings from '@/features/providers/shared/routing/ChannelFeatureSettings.jsx';
-import { useChannelFeatureTabs } from '@/features/providers/shared/routing/useChannelFeatureTabs.js';
-import { buildNonStreamRouteForm, nonStreamRouteFromForm, validateRouteTargets } from '@/features/providers/shared/routing/routeTargets.js';
-import { CHANNEL_FORM_TABS, CHANNEL_EDIT_FORM_TABS } from '../model.js';
 
 // ============================================
 // 新建渠道弹窗（SQLite 模式）
@@ -28,46 +21,14 @@ const CreateChannelModal = ({
   const isEdit = mode === 'edit';
   const showPriority = isEdit || channelFailoverEnabled;
   const channelId = Number(initialValue?.id) || 0;
-  const canEditNonStream = isEdit && channelId > 0;
+  const canEditPrivacy = isEdit && channelId > 0;
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
   const [priority, setPriority] = useState(() => (isEdit ? String(initialValue?.priority ?? 1) : ''));
-  const [modelMappingRows, setModelMappingRows] = useState(() => buildInitialModelMappingRows(initialValue?.modelMapping));
-  const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(initialValue?.nonStreamRoute));
   const [privacyLevel, setPrivacyLevel] = useState(() => initialValue?.privacyLevel || '');
-  const [activeTab, setActiveTab] = useState('basic');
   const [error, setError] = useState('');
-  const { features, toggleFeature, visibleTabs } = useChannelFeatureTabs({
-    provider: 'claude', channelId, modelMapping: initialValue?.modelMapping, nonStreamRoute: initialValue?.nonStreamRoute,
-    tabs: canEditNonStream ? CHANNEL_EDIT_FORM_TABS : CHANNEL_FORM_TABS
-  });
 
   if (!open) return null;
-
-  const updateMappingRow = (index, key, value) => {
-    setModelMappingRows((prev) =>
-      (prev || []).map((row, rowIndex) =>
-        rowIndex === index ? { ...row, [key]: value } : row
-      )
-    );
-    if (error) {
-      setError('');
-    }
-  };
-
-  const addMappingRow = () => {
-    setModelMappingRows((prev) => [
-      ...(prev || []),
-      { sourceModel: '', targetModel: '' }
-    ]);
-  };
-
-  const removeMappingRow = (index) => {
-    setModelMappingRows((prev) => {
-      const nextRows = (prev || []).filter((_, rowIndex) => rowIndex !== index);
-      return nextRows.length > 0 ? nextRows : [{ sourceModel: '', targetModel: '' }];
-    });
-  };
 
   return renderModalPortal(
     <div className="fixed inset-0 bg-slate-900/30 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
@@ -96,7 +57,6 @@ const CreateChannelModal = ({
             e.preventDefault();
             const trimmedName = name.trim();
             if (!trimmedName) {
-              setActiveTab('basic');
               setError('请输入渠道名称');
               return;
             }
@@ -104,41 +64,22 @@ const CreateChannelModal = ({
             const hasPriority = priorityValue !== '';
             const parsedPriority = Number(priorityValue);
             if ((isEdit && !hasPriority) || (hasPriority && (!Number.isInteger(parsedPriority) || parsedPriority < 1))) {
-              setActiveTab('basic');
               setError('优先级必须是 1 或更大的整数');
               return;
-            }
-            if (canEditNonStream && nonStreamForm.enabled) {
-              const routeError = validateRouteTargets(nonStreamForm.targets);
-              if (routeError) {
-                if (!features.nonStream) toggleFeature('nonStream');
-                setActiveTab('nonStream');
-                setError(routeError);
-                return;
-              }
             }
             setError('');
             onSubmit?.({
               name: trimmedName,
               website: website.trim(),
               priority: priorityValue,
-              modelMapping: buildModelMappingPayload(modelMappingRows),
-              ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm), privacyLevel } : {})
+              // Saving basic channel fields must preserve stored model mappings.
+              modelMapping: isEdit ? { ...(initialValue?.modelMapping || {}) } : {},
+              ...(canEditPrivacy ? { privacyLevel } : {})
             });
           }}
           className="flex flex-1 flex-col overflow-hidden"
           autoComplete="off"
         >
-          <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
-            <SegmentedTabs
-              tabs={visibleTabs}
-              activeTab={activeTab}
-              onChange={setActiveTab}
-              disabled={loading}
-              className="grid-flow-col auto-cols-fr"
-            />
-          </div>
-
           <div className="flex-1 overflow-y-auto p-6">
             {(error || serverError) && (
               <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
@@ -146,7 +87,6 @@ const CreateChannelModal = ({
               </div>
             )}
 
-            {activeTab === 'basic' && (
           <div className="space-y-4">
             <div className={showPriority ? 'grid grid-cols-1 gap-4 sm:grid-cols-3' : ''}>
               <div className={showPriority ? 'sm:col-span-2' : ''}>
@@ -202,96 +142,10 @@ const CreateChannelModal = ({
               <p className="text-xs text-slate-400 mt-1">用于渠道信息展示，非必填</p>
             </div>
 
-            {canEditNonStream && (
+            {canEditPrivacy && (
               <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
             )}
-            <ChannelFeatureSettings features={features} onToggle={toggleFeature} canEditRoutes={canEditNonStream} disabled={loading} />
-
           </div>
-            )}
-
-            {activeTab === 'mapping' && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700">模型映射</label>
-                  <p className="mt-0.5 text-xs text-slate-400">请求模型精确命中后替换为该渠道支持的模型。</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={addMappingRow}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                  disabled={loading}
-                >
-                  <Plus size={14} />
-                  添加
-                </button>
-              </div>
-
-              <div className="mt-3 space-y-2">
-                {(modelMappingRows || []).map((row, index) => (
-                  <div
-                    key={`channel-model-mapping-${index}`}
-                    className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-center"
-                  >
-                    <input
-                      type="text"
-                      value={row.sourceModel}
-                      onChange={(event) => updateMappingRow(index, 'sourceModel', event.target.value)}
-                      placeholder="claude-3-5-haiku-20241022"
-                      autoComplete="off"
-                      data-form-type="other"
-                      className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      disabled={loading}
-                    />
-                    <ArrowRight size={16} className="text-slate-400" />
-                    <input
-                      type="text"
-                      value={row.targetModel}
-                      onChange={(event) => updateMappingRow(index, 'targetModel', event.target.value)}
-                      placeholder="claude-sonnet-4-20250514"
-                      autoComplete="off"
-                      data-form-type="other"
-                      className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      disabled={loading}
-                    />
-                    <Tooltip content="删除映射">
-                      <button
-                        type="button"
-                        onClick={() => removeMappingRow(index)}
-                        className="rounded-lg bg-white p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                        disabled={loading}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </Tooltip>
-                  </div>
-                ))}
-              </div>
-            </div>
-            )}
-
-            {activeTab === 'modelRoutes' && canEditNonStream && (
-              <ChannelModelRoutesEditor
-                provider="claude"
-                channelId={channelId}
-                channelName={initialValue?.name || ''}
-                disabled={loading}
-              />
-            )}
-
-            {activeTab === 'nonStream' && canEditNonStream && (
-              <NonStreamRouteEditor
-                provider="claude"
-                channelId={channelId}
-                value={nonStreamForm}
-                onChange={(next) => {
-                  setNonStreamForm(next);
-                  if (error) setError('');
-                }}
-                disabled={loading}
-              />
-            )}
           </div>
 
           <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4">

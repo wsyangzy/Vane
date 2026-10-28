@@ -1,6 +1,7 @@
 import { WailsApp, initWails } from './connection.js';
 
 const normalizePrivacyRule = (rule = {}) => ({
+  kind: rule.kind || 'custom',
   id: rule.id,
   name: rule.name || '',
   description: rule.description || '',
@@ -30,7 +31,9 @@ const normalizeLegacyPrivacyRule = (rule = {}) => ({
   priority: Number(rule.priority ?? 100)
 });
 
-const normalizePrivacySettings = (settings = {}) => ({
+export const normalizePrivacySettings = (settings = {}) => ({
+  restoreResponses: Boolean(settings.restore_responses ?? settings.restoreResponses),
+  keepKeyFormat: Boolean(settings.keep_key_format ?? settings.keepKeyFormat),
   mode: settings.mode || 'detect',
   scanMaxBytes: Number(settings.scan_max_bytes ?? settings.scanMaxBytes ?? 4194304),
   overLimitAction: settings.over_limit_action || settings.overLimitAction || 'scan_prefix',
@@ -38,7 +41,9 @@ const normalizePrivacySettings = (settings = {}) => ({
   unsupportedPathAction: settings.unsupported_path_action || settings.unsupportedPathAction || 'warn'
 });
 
-const denormalizePrivacySettings = (settings = {}) => ({
+export const denormalizePrivacySettings = (settings = {}) => ({
+  restore_responses: Boolean(settings.restoreResponses),
+  keep_key_format: Boolean(settings.keepKeyFormat),
   mode: settings.mode || 'detect',
   scan_max_bytes: Number(settings.scanMaxBytes ?? 4194304),
   over_limit_action: settings.overLimitAction || 'scan_prefix',
@@ -62,6 +67,7 @@ const denormalizePrivacyRule = (rule = {}) => ({
 });
 
 const normalizePrivacyRuleHit = (hit = {}) => ({
+  kind: hit.kind || '',
   ruleId: hit.rule_id ?? hit.ruleId ?? 0,
   ruleName: hit.rule_name || hit.ruleName || '',
   source: hit.source || '',
@@ -75,6 +81,22 @@ const normalizeUnscannedPath = (stat = {}) => ({
   lastSeenAt: stat.last_seen_at || stat.lastSeenAt || ''
 });
 
+export const normalizePrivacyActivity = (item = {}) => ({
+  id: Number(item.id ?? 0),
+  requestId: item.request_id || '',
+  provider: item.provider || '',
+  path: item.path || '',
+  createdAt: item.created_at || '',
+  state: item.state || 'unknown',
+  hitCount: Number(item.hit_count ?? 0),
+  ruleHits: (item.rule_hits || []).map(normalizePrivacyRuleHit),
+  scanDurationMs: Number(item.scan_duration_ms ?? 0),
+  skippedReason: item.skipped_reason || '',
+  truncated: Boolean(item.truncated),
+  restoredCount: Number(item.restored_count ?? 0),
+  restoreSkipped: item.restore_skipped || ''
+});
+
 const getPrivacyOverview = async () => {
   await initWails();
   if (!WailsApp) throw new Error('Wails not available');
@@ -82,6 +104,7 @@ const getPrivacyOverview = async () => {
   const overview = await WailsApp.GetPrivacyOverview();
   return {
     settings: normalizePrivacySettings(overview?.settings),
+    activity: (overview?.activity || []).map(normalizePrivacyActivity),
     rules: (overview?.rules || []).map(normalizePrivacyRule),
     legacyRules: (overview?.legacy_rules || []).map(normalizeLegacyPrivacyRule),
     unscannedPaths: (overview?.unscanned_paths || []).map(normalizeUnscannedPath),
@@ -156,6 +179,7 @@ const previewPrivacyRedaction = async (input) => {
   const result = await WailsApp.PreviewPrivacyRedaction(String(input ?? ''));
   return {
     output: result?.output || '',
+    blocked: Boolean(result?.blocked),
     changed: Boolean(result?.changed),
     hitCount: Number(result?.hit_count ?? 0),
     ruleHits: (result?.rule_hits || []).map(normalizePrivacyRuleHit)
@@ -164,6 +188,7 @@ const previewPrivacyRedaction = async (input) => {
 
 // 完整 JSON 请求体预演：返回哪些字段被扫描、哪些被改写（不含命中原文）
 const mapPrivacyRequestPreview = (result = {}) => ({
+  blocked: Boolean(result?.blocked),
   supported: Boolean(result?.supported),
   error: result?.error || '',
   output: result?.output || '',

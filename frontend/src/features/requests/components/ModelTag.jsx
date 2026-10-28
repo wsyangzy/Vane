@@ -3,7 +3,7 @@
 // 2025-12-01 09:30:08
 // ============================================
 
-import { Layers, Replace, Route, Split } from 'lucide-react';
+import { GitBranch, Layers, Replace, Route, Sparkles, Split } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { describeRouteSnapshot } from '@/features/providers/shared/routing/routeTargets.js';
 
@@ -268,7 +268,8 @@ const ModelTag = ({
   rewriteSource = '',
   originalModel = '',
   rewriteTarget = '',
-  routeSnapshot
+  routeSnapshot,
+  compact = false
 }) => {
   const modelStyle = getModelStyle(model);
   const BrandIcon = MODEL_ICONS[modelStyle.icon] || GenericModelIcon;
@@ -282,16 +283,22 @@ const ModelTag = ({
     ? { label: '模型路由', Icon: Route, classes: 'text-sky-600' }
     : route?.kind === 'non_stream'
       ? { label: '非流改道', Icon: Split, classes: 'text-teal-600' }
-      : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
+      : route?.kind === 'mapping'
+        ? { label: '模型映射', Icon: Replace, classes: 'text-orange-500' }
+        : route?.kind === 'composite'
+          ? { label: '条件路由', Icon: GitBranch, classes: 'text-sky-600' }
+          : route?.kind === 'intent'
+            ? { label: '意图路由', Icon: Sparkles, classes: 'text-violet-500' }
+            : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
   const RouteIcon = routeIndicator?.Icon;
   const routeTitle = routeIndicator ? `${routeIndicator.label}：${[route.title, route.mode, route.stage].filter(Boolean).join(' · ')}` : '';
   const tag = (
     <span
-      className={`inline-flex w-fit max-w-none items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${modelStyle.classes} ${className}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-md border py-0.5 font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${compact ? 'min-w-0 max-w-full gap-0.5 px-1 text-[11px]' : 'w-fit max-w-none gap-1 px-2 text-xs'} ${modelStyle.classes} ${className}`}
     >
       <BrandIcon className={modelStyle.icon === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
-      <span>{displayName}</span>
-      {rewriteIndicator && !(rewriteSource === 'route' && routeIndicator) && (
+      <span className={compact ? 'min-w-0 overflow-hidden text-ellipsis' : ''}>{displayName}</span>
+      {rewriteIndicator && !(rewriteSource === 'route' && routeIndicator) && !(rewriteSource === 'mapping' && route?.kind === 'mapping') && (
         <Replace
           className={`h-3 w-3 shrink-0 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}
           aria-label={rewriteIndicator.label}
@@ -302,7 +309,7 @@ const ModelTag = ({
   );
 
   return (
-    <Tooltip content={[title || rewriteTitle || displayName, routeTitle].filter(Boolean).join('；')}>
+    <Tooltip className={compact ? 'min-w-0 max-w-full' : ''} content={[title || rewriteTitle || displayName, routeTitle].filter(Boolean).join('；')}>
       {tag}
     </Tooltip>
   );

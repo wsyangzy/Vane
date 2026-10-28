@@ -3,6 +3,7 @@
 // ============================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CalendarRange, ChevronDown, ChevronLeft, ChevronRight, Clock } from 'lucide-react';
 import { CustomSelect } from '@/shared/ui/index.js';
 import {
@@ -281,10 +282,14 @@ const DateTimeRangePicker = ({
     if (!isOpen) return undefined;
 
     const handleMouseDown = (event) => {
-      if (containerRef.current && !containerRef.current.contains(event.target)) closePanel();
+      if (!containerRef.current?.contains(event.target) && !panelRef.current?.contains(event.target)) closePanel();
     };
     const handleKeyDown = (event) => {
-      if (event.key === 'Escape') closePanel();
+      if (event.key === 'Escape' && !document.querySelector('[role="listbox"]')) {
+        event.preventDefault();
+        closePanel();
+        containerRef.current?.querySelector('button')?.focus();
+      }
     };
 
     document.addEventListener('mousedown', handleMouseDown);
@@ -300,15 +305,17 @@ const DateTimeRangePicker = ({
 
     const updatePosition = () => {
       const panel = panelRef.current;
-      const anchor = panel?.offsetParent;
-      if (!panel || !anchor) return;
+      const trigger = containerRef.current?.querySelector('button');
+      if (!panel || !trigger) return;
 
-      const anchorLeft = anchor.getBoundingClientRect().left;
-      const panelRight = anchorLeft + panel.offsetWidth;
-      const nextOffset = anchorLeft < VIEWPORT_MARGIN
-        ? VIEWPORT_MARGIN - anchorLeft
-        : Math.min(window.innerWidth - VIEWPORT_MARGIN - panelRight, 0);
-      panel.style.translate = `${nextOffset}px 0`;
+      const rect = trigger.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom - VIEWPORT_MARGIN - 4;
+      const above = rect.top - VIEWPORT_MARGIN - 4;
+      const upward = below < Math.min(panel.scrollHeight, 400) && above > below;
+      panel.style.maxHeight = `${Math.max(0, upward ? above : below)}px`;
+      panel.style.left = `${Math.max(VIEWPORT_MARGIN, Math.min(rect.left, window.innerWidth - panel.offsetWidth - VIEWPORT_MARGIN))}px`;
+      panel.style.top = `${upward ? rect.top - panel.offsetHeight - 4 : rect.bottom + 4}px`;
+      panel.dataset.origin = upward ? 'bottom-left' : 'top-left';
     };
 
     let frameId;
@@ -391,19 +398,21 @@ const DateTimeRangePicker = ({
         className={`${inputClassName} group inline-flex min-w-0 items-center gap-2 text-left tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-50`}
         aria-haspopup="dialog"
         aria-expanded={isOpen}
+        aria-label="时间范围"
       >
         <CalendarRange className="size-4 flex-shrink-0 text-slate-400 transition-colors group-hover:text-indigo-500" />
-        <span className="min-w-0 flex-1 truncate text-center font-mono text-xs sm:text-sm">{displayStart}</span>
+        <span className="date-time-range-boundary min-w-0 flex-1 truncate text-center font-mono text-xs sm:text-sm">{displayStart}</span>
         <span className="flex-shrink-0 text-xs text-slate-400">至</span>
-        <span className="min-w-0 flex-1 truncate text-center font-mono text-xs sm:text-sm">{displayEnd}</span>
+        <span className="date-time-range-boundary min-w-0 flex-1 truncate text-center font-mono text-xs sm:text-sm">{displayEnd}</span>
         <ChevronDown className={`size-4 flex-shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
-      {isRendered && (
+      {isRendered && createPortal(
         <div
           ref={panelRef}
           data-origin="top-left"
-          className={`t-dropdown ${dropdownState} absolute left-0 top-full z-[80] mt-2 w-[min(680px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl ring-1 ring-black/5`}
+          onMouseDown={(event) => event.stopPropagation()}
+          className={`t-dropdown ${dropdownState} fixed z-[10000] w-[min(680px,calc(100vw-2rem))] overflow-y-auto overscroll-contain rounded-lg border border-slate-200 bg-white shadow-xl ring-1 ring-black/5`}
           role="dialog"
           aria-label="选择时间范围"
         >
@@ -476,7 +485,7 @@ const DateTimeRangePicker = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>, document.body
       )}
     </div>
   );

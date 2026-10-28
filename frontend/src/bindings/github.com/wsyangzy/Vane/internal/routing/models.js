@@ -6,25 +6,32 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as time$0 from "../../../../../time/models.js";
+
 /**
- * ModelRule 已启用的模型路由规则（运行时快照）。
- *
- * 规则挂在来源渠道上：只有该渠道是当前激活渠道时才参与匹配，语义是
- * "本渠道不适合处理模型 X，把 X 送到这些目标"。不同渠道的规则互不影响。
+ * @readonly
+ * @enum {string}
  */
-export class ModelRule {
+export const AffinityMode = {
     /**
-     * Creates a new ModelRule instance.
-     * @param {Partial<ModelRule>} [$$source = {}] - The source object to create the ModelRule.
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    AffinityTurn: "turn",
+    AffinitySession: "session",
+    AffinityAdaptive: "adaptive",
+    AffinityNone: "none",
+};
+
+export class BalanceEntry {
+    /**
+     * Creates a new BalanceEntry instance.
+     * @param {Partial<BalanceEntry>} [$$source = {}] - The source object to create the BalanceEntry.
      */
     constructor($$source = {}) {
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {boolean | undefined}
-             */
-            this["disabled"] = undefined;
-        }
         if (!("id" in $$source)) {
             /**
              * @member
@@ -32,76 +39,1117 @@ export class ModelRule {
              */
             this["id"] = 0;
         }
-        if (!("source_channel_id" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["source_channel_id"] = 0;
-        }
-        if (!("name" in $$source)) {
+        if (!("kind" in $$source)) {
             /**
              * @member
              * @type {string}
              */
-            this["name"] = "";
+            this["kind"] = "";
         }
-        if (!("priority" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["priority"] = 0;
-        }
-        if (!("match_model" in $$source)) {
+        if (!("amount_usd" in $$source)) {
             /**
              * @member
              * @type {string}
              */
-            this["match_model"] = "";
+            this["amount_usd"] = "";
         }
-        if (!("mode" in $$source)) {
+        if (!("balance_usd" in $$source)) {
             /**
              * @member
              * @type {string}
              */
-            this["mode"] = "";
+            this["balance_usd"] = "";
         }
-        if (!("Targets" in $$source)) {
+        if (!("estimated" in $$source)) {
             /**
              * @member
-             * @type {Target[]}
+             * @type {boolean}
              */
-            this["Targets"] = [];
+            this["estimated"] = false;
+        }
+        if (!("created_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["created_at"] = null;
         }
 
         Object.assign(this, $$source);
     }
 
     /**
-     * Creates a new ModelRule instance from a string or object.
+     * Creates a new BalanceEntry instance from a string or object.
      * @param {any} [$$source = {}]
-     * @returns {ModelRule}
+     * @returns {BalanceEntry}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("Targets" in $$parsedSource) {
-            $$parsedSource["Targets"] = $$createField7_0($$parsedSource["Targets"]);
-        }
-        return new ModelRule(/** @type {Partial<ModelRule>} */($$parsedSource));
+        return new BalanceEntry(/** @type {Partial<BalanceEntry>} */($$parsedSource));
     }
 }
 
 /**
- * NonStreamRoute 渠道级非流改道配置，对应 channels / codex_channels 的 non_stream_route 列。
+ * Candidate identifies an execution choice, not just its network endpoint.
+ * Credential is an internal config identity; it must never contain a secret.
  */
-export class NonStreamRoute {
+export class Candidate {
     /**
-     * Creates a new NonStreamRoute instance.
-     * @param {Partial<NonStreamRoute>} [$$source = {}] - The source object to create the NonStreamRoute.
+     * Creates a new Candidate instance.
+     * @param {Partial<Candidate>} [$$source = {}] - The source object to create the Candidate.
      */
     constructor($$source = {}) {
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("protocol" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["protocol"] = "";
+        }
+        if (!("channel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["channel"] = "";
+        }
+        if (!("credential" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["credential"] = "";
+        }
+        if (!("endpoint" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["endpoint"] = "";
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["state_version"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Candidate instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Candidate}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Candidate(/** @type {Partial<Candidate>} */($$parsedSource));
+    }
+}
+
+/**
+ * CandidateEvaluation contains safe configuration identities and decision
+ * reasons only. Candidate remains unchanged so its baseline Load can be reused
+ * when reserving; Load is the effective account load used for this decision.
+ */
+export class CandidateEvaluation {
+    /**
+     * Creates a new CandidateEvaluation instance.
+     * @param {Partial<CandidateEvaluation>} [$$source = {}] - The source object to create the CandidateEvaluation.
+     */
+    constructor($$source = {}) {
+        if (!("candidate" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchCandidate}
+             */
+            this["candidate"] = (new DispatchCandidate());
+        }
+        if (!("eligible" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["eligible"] = false;
+        }
+        if (!("reason" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["reason"] = "";
+        }
+        if (!("quota_known" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["quota_known"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["used_percent"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {time$0.Time | null | undefined}
+             */
+            this["reset_at"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["pace_score"] = undefined;
+        }
+        if (!("load" in $$source)) {
+            /**
+             * @member
+             * @type {LoadView}
+             */
+            this["load"] = (new LoadView());
+        }
+        if (!("preferred" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["preferred"] = false;
+        }
+        if (!("state_compatibility" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["state_compatibility"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CandidateEvaluation instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {CandidateEvaluation}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType0;
+        const $$createField7_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("candidate" in $$parsedSource) {
+            $$parsedSource["candidate"] = $$createField0_0($$parsedSource["candidate"]);
+        }
+        if ("load" in $$parsedSource) {
+            $$parsedSource["load"] = $$createField7_0($$parsedSource["load"]);
+        }
+        return new CandidateEvaluation(/** @type {Partial<CandidateEvaluation>} */($$parsedSource));
+    }
+}
+
+/**
+ * @readonly
+ * @enum {string}
+ */
+export const CandidateMode = {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    OrderedChannels: "ordered_channels",
+    UnifiedCandidates: "unified_candidates",
+};
+
+export class ClassifierConfig {
+    /**
+     * Creates a new ClassifierConfig instance.
+     * @param {Partial<ClassifierConfig>} [$$source = {}] - The source object to create the ClassifierConfig.
+     */
+    constructor($$source = {}) {
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("timeout" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Duration}
+             */
+            this["timeout"] = time$0.Duration.$zero;
+        }
+        if (!("confidence" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["confidence"] = 0;
+        }
+        if (!("failure_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["failure_mode"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ClassifierConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ClassifierConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ClassifierConfig(/** @type {Partial<ClassifierConfig>} */($$parsedSource));
+    }
+}
+
+export class DispatchCandidate {
+    /**
+     * Creates a new DispatchCandidate instance.
+     * @param {Partial<DispatchCandidate>} [$$source = {}] - The source object to create the DispatchCandidate.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {ManualBalance | null | undefined}
+             */
+            this["balance"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["account_id_hash"] = undefined;
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("endpoint_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["endpoint_id"] = "";
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (!("upstream_model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["upstream_model"] = "";
+        }
+        if (!("credential_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["credential_mode"] = "";
+        }
+        if (!("protocol" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["protocol"] = "";
+        }
+        if (!("state_version" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["state_version"] = 0;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("position" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["position"] = 0;
+        }
+        if (!("weight" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["weight"] = 0;
+        }
+        if (!("health" in $$source)) {
+            /**
+             * @member
+             * @type {HealthState}
+             */
+            this["health"] = (new HealthState());
+        }
+        if (!("quota" in $$source)) {
+            /**
+             * @member
+             * @type {QuotaView}
+             */
+            this["quota"] = (new QuotaView());
+        }
+        if (!("load" in $$source)) {
+            /**
+             * @member
+             * @type {LoadView}
+             */
+            this["load"] = (new LoadView());
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchCandidate instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchCandidate}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType3;
+        const $$createField15_0 = $$createType4;
+        const $$createField16_0 = $$createType5;
+        const $$createField17_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("balance" in $$parsedSource) {
+            $$parsedSource["balance"] = $$createField0_0($$parsedSource["balance"]);
+        }
+        if ("health" in $$parsedSource) {
+            $$parsedSource["health"] = $$createField15_0($$parsedSource["health"]);
+        }
+        if ("quota" in $$parsedSource) {
+            $$parsedSource["quota"] = $$createField16_0($$parsedSource["quota"]);
+        }
+        if ("load" in $$parsedSource) {
+            $$parsedSource["load"] = $$createField17_0($$parsedSource["load"]);
+        }
+        return new DispatchCandidate(/** @type {Partial<DispatchCandidate>} */($$parsedSource));
+    }
+}
+
+export class DispatchDecision {
+    /**
+     * Creates a new DispatchDecision instance.
+     * @param {Partial<DispatchDecision>} [$$source = {}] - The source object to create the DispatchDecision.
+     */
+    constructor($$source = {}) {
+        if (!("kind" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["kind"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["rule_id"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["intent_id"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["mode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {RouteTarget[] | undefined}
+             */
+            this["targets"] = undefined;
+        }
+        if (!("fallback_to_default" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["fallback_to_default"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {IntentRoute[] | undefined}
+             */
+            this["fallback_intents"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["reused_turn"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchDecision instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchDecision}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType7;
+        const $$createField6_0 = $$createType9;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("targets" in $$parsedSource) {
+            $$parsedSource["targets"] = $$createField4_0($$parsedSource["targets"]);
+        }
+        if ("fallback_intents" in $$parsedSource) {
+            $$parsedSource["fallback_intents"] = $$createField6_0($$parsedSource["fallback_intents"]);
+        }
+        return new DispatchDecision(/** @type {Partial<DispatchDecision>} */($$parsedSource));
+    }
+}
+
+export class DispatchPlan {
+    /**
+     * Creates a new DispatchPlan instance.
+     * @param {Partial<DispatchPlan>} [$$source = {}] - The source object to create the DispatchPlan.
+     */
+    constructor($$source = {}) {
+        if (!("request_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["request_id"] = "";
+        }
+        if (!("profile" in $$source)) {
+            /**
+             * @member
+             * @type {RoutingProfile}
+             */
+            this["profile"] = (new RoutingProfile());
+        }
+        if (!("decision" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchDecision}
+             */
+            this["decision"] = (new DispatchDecision());
+        }
+        if (!("intent" in $$source)) {
+            /**
+             * @member
+             * @type {IntentResult}
+             */
+            this["intent"] = (new IntentResult());
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (!("stages" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchPlanStage[]}
+             */
+            this["stages"] = [];
+        }
+        if (!("evaluations" in $$source)) {
+            /**
+             * @member
+             * @type {CandidateEvaluation[]}
+             */
+            this["evaluations"] = [];
+        }
+        if (!("eligible_candidates" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchCandidate[]}
+             */
+            this["eligible_candidates"] = [];
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+        if (!("preview" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["preview"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchPlan instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchPlan}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType10;
+        const $$createField2_0 = $$createType11;
+        const $$createField3_0 = $$createType12;
+        const $$createField5_0 = $$createType14;
+        const $$createField6_0 = $$createType16;
+        const $$createField7_0 = $$createType17;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("profile" in $$parsedSource) {
+            $$parsedSource["profile"] = $$createField1_0($$parsedSource["profile"]);
+        }
+        if ("decision" in $$parsedSource) {
+            $$parsedSource["decision"] = $$createField2_0($$parsedSource["decision"]);
+        }
+        if ("intent" in $$parsedSource) {
+            $$parsedSource["intent"] = $$createField3_0($$parsedSource["intent"]);
+        }
+        if ("stages" in $$parsedSource) {
+            $$parsedSource["stages"] = $$createField5_0($$parsedSource["stages"]);
+        }
+        if ("evaluations" in $$parsedSource) {
+            $$parsedSource["evaluations"] = $$createField6_0($$parsedSource["evaluations"]);
+        }
+        if ("eligible_candidates" in $$parsedSource) {
+            $$parsedSource["eligible_candidates"] = $$createField7_0($$parsedSource["eligible_candidates"]);
+        }
+        return new DispatchPlan(/** @type {Partial<DispatchPlan>} */($$parsedSource));
+    }
+}
+
+export class DispatchPlanStage {
+    /**
+     * Creates a new DispatchPlanStage instance.
+     * @param {Partial<DispatchPlanStage>} [$$source = {}] - The source object to create the DispatchPlanStage.
+     */
+    constructor($$source = {}) {
+        if (!("index" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["index"] = 0;
+        }
+        if (!("kind" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["kind"] = "";
+        }
+        if (!("evaluations" in $$source)) {
+            /**
+             * @member
+             * @type {CandidateEvaluation[]}
+             */
+            this["evaluations"] = [];
+        }
+        if (!("eligible_candidates" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchCandidate[]}
+             */
+            this["eligible_candidates"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchPlanStage instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchPlanStage}
+     */
+    static createFrom($$source = {}) {
+        const $$createField2_0 = $$createType16;
+        const $$createField3_0 = $$createType17;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("evaluations" in $$parsedSource) {
+            $$parsedSource["evaluations"] = $$createField2_0($$parsedSource["evaluations"]);
+        }
+        if ("eligible_candidates" in $$parsedSource) {
+            $$parsedSource["eligible_candidates"] = $$createField3_0($$parsedSource["eligible_candidates"]);
+        }
+        return new DispatchPlanStage(/** @type {Partial<DispatchPlanStage>} */($$parsedSource));
+    }
+}
+
+/**
+ * DispatchTrace is the persistence boundary. It deliberately has no profile
+ * descriptions, input, caller/session identifiers, quota error text or secrets.
+ */
+export class DispatchTrace {
+    /**
+     * Creates a new DispatchTrace instance.
+     * @param {Partial<DispatchTrace>} [$$source = {}] - The source object to create the DispatchTrace.
+     */
+    constructor($$source = {}) {
+        if (!("request_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["request_id"] = "";
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("profile_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["profile_name"] = "";
+        }
+        if (!("strategy" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["strategy"] = "";
+        }
+        if (!("affinity_mode" in $$source)) {
+            /**
+             * @member
+             * @type {AffinityMode}
+             */
+            this["affinity_mode"] = AffinityMode.$zero;
+        }
+        if (!("decision" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchDecision}
+             */
+            this["decision"] = (new DispatchDecision());
+        }
+        if (!("intent" in $$source)) {
+            /**
+             * @member
+             * @type {IntentResult}
+             */
+            this["intent"] = (new IntentResult());
+        }
+        if (!("candidates" in $$source)) {
+            /**
+             * @member
+             * @type {DispatchTraceEvent[]}
+             */
+            this["candidates"] = [];
+        }
+        if (!("attempts" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["attempts"] = 0;
+        }
+        if (!("wait_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["wait_ms"] = 0;
+        }
+        if (!("response_started" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["response_started"] = false;
+        }
+        if (!("successful" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["successful"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["stop_reason"] = undefined;
+        }
+        if (!("created_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["created_at"] = null;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {time$0.Time | null | undefined}
+             */
+            this["finished_at"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchTrace instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchTrace}
+     */
+    static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType11;
+        const $$createField7_0 = $$createType12;
+        const $$createField8_0 = $$createType19;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("decision" in $$parsedSource) {
+            $$parsedSource["decision"] = $$createField6_0($$parsedSource["decision"]);
+        }
+        if ("intent" in $$parsedSource) {
+            $$parsedSource["intent"] = $$createField7_0($$parsedSource["intent"]);
+        }
+        if ("candidates" in $$parsedSource) {
+            $$parsedSource["candidates"] = $$createField8_0($$parsedSource["candidates"]);
+        }
+        return new DispatchTrace(/** @type {Partial<DispatchTrace>} */($$parsedSource));
+    }
+}
+
+export class DispatchTraceEvent {
+    /**
+     * Creates a new DispatchTraceEvent instance.
+     * @param {Partial<DispatchTraceEvent>} [$$source = {}] - The source object to create the DispatchTraceEvent.
+     */
+    constructor($$source = {}) {
+        if (!("candidate" in $$source)) {
+            /**
+             * @member
+             * @type {Candidate}
+             */
+            this["candidate"] = (new Candidate());
+        }
+        if (!("action" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["action"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["reason"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {FailureScope | undefined}
+             */
+            this["failure_scope"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchTraceEvent instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchTraceEvent}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType20;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("candidate" in $$parsedSource) {
+            $$parsedSource["candidate"] = $$createField0_0($$parsedSource["candidate"]);
+        }
+        return new DispatchTraceEvent(/** @type {Partial<DispatchTraceEvent>} */($$parsedSource));
+    }
+}
+
+/**
+ * @readonly
+ * @enum {string}
+ */
+export const FailureScope = {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    ScopeCandidate: "candidate",
+    ScopeModel: "model",
+    ScopeCredential: "credential",
+    ScopeEndpoint: "endpoint",
+    ScopeRequest: "request",
+};
+
+export class HealthState {
+    /**
+     * Creates a new HealthState instance.
+     * @param {Partial<HealthState>} [$$source = {}] - The source object to create the HealthState.
+     */
+    constructor($$source = {}) {
+        if (!("repair_required" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["repair_required"] = false;
+        }
+        if (!("cooling_down" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cooling_down"] = false;
+        }
+        if (!("reason" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["reason"] = "";
+        }
+        if (!("until" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["until"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HealthState instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {HealthState}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new HealthState(/** @type {Partial<HealthState>} */($$parsedSource));
+    }
+}
+
+export class IntentResult {
+    /**
+     * Creates a new IntentResult instance.
+     * @param {Partial<IntentResult>} [$$source = {}] - The source object to create the IntentResult.
+     */
+    constructor($$source = {}) {
+        if (!("intent_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["intent_id"] = "";
+        }
+        if (!("confidence" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["confidence"] = 0;
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (!("fallback" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["fallback"] = "";
+        }
+        if (!("reason" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["reason"] = "";
+        }
+        if (!("duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["duration_ms"] = 0;
+        }
+        if (!("input_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["input_tokens"] = 0;
+        }
+        if (!("output_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["output_tokens"] = 0;
+        }
+        if (!("cost" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cost"] = 0;
+        }
+        if (!("cached" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cached"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new IntentResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {IntentResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new IntentResult(/** @type {Partial<IntentResult>} */($$parsedSource));
+    }
+}
+
+export class IntentRoute {
+    /**
+     * Creates a new IntentRoute instance.
+     * @param {Partial<IntentRoute>} [$$source = {}] - The source object to create the IntentRoute.
+     */
+    constructor($$source = {}) {
+        if (!("intent_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["intent_id"] = "";
+        }
         if (!("mode" in $$source)) {
             /**
              * @member
@@ -112,37 +1160,677 @@ export class NonStreamRoute {
         if (!("targets" in $$source)) {
             /**
              * @member
-             * @type {Target[]}
+             * @type {RouteTarget[]}
              */
             this["targets"] = [];
+        }
+        if (!("fallback_to_default" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["fallback_to_default"] = false;
         }
 
         Object.assign(this, $$source);
     }
 
     /**
-     * Creates a new NonStreamRoute instance from a string or object.
+     * Creates a new IntentRoute instance from a string or object.
      * @param {any} [$$source = {}]
-     * @returns {NonStreamRoute}
+     * @returns {IntentRoute}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType1;
+        const $$createField2_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
-            $$parsedSource["targets"] = $$createField1_0($$parsedSource["targets"]);
+            $$parsedSource["targets"] = $$createField2_0($$parsedSource["targets"]);
         }
-        return new NonStreamRoute(/** @type {Partial<NonStreamRoute>} */($$parsedSource));
+        return new IntentRoute(/** @type {Partial<IntentRoute>} */($$parsedSource));
+    }
+}
+
+export class IntentRule {
+    /**
+     * Creates a new IntentRule instance.
+     * @param {Partial<IntentRule>} [$$source = {}] - The source object to create the IntentRule.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("description" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["description"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("priority" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["priority"] = 0;
+        }
+        if (!("targets" in $$source)) {
+            /**
+             * @member
+             * @type {RouteTarget[]}
+             */
+            this["targets"] = [];
+        }
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("fallback_intent" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["fallback_intent"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["fallback_to_default"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new IntentRule instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {IntentRule}
+     */
+    static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType7;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("targets" in $$parsedSource) {
+            $$parsedSource["targets"] = $$createField6_0($$parsedSource["targets"]);
+        }
+        return new IntentRule(/** @type {Partial<IntentRule>} */($$parsedSource));
+    }
+}
+
+export class LoadView {
+    /**
+     * Creates a new LoadView instance.
+     * @param {Partial<LoadView>} [$$source = {}] - The source object to create the LoadView.
+     */
+    constructor($$source = {}) {
+        if (!("concurrent" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["concurrent"] = 0;
+        }
+        if (!("max_concurrent" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max_concurrent"] = 0;
+        }
+        if (!("decayed_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["decayed_tokens"] = 0;
+        }
+        if (!("decayed_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["decayed_requests"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new LoadView instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {LoadView}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new LoadView(/** @type {Partial<LoadView>} */($$parsedSource));
+    }
+}
+
+export class ManualBalance {
+    /**
+     * Creates a new ManualBalance instance.
+     * @param {Partial<ManualBalance>} [$$source = {}] - The source object to create the ManualBalance.
+     */
+    constructor($$source = {}) {
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("binding_changed" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["binding_changed"] = false;
+        }
+        if (!("currency" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["currency"] = "";
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("stop_when_exhausted" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["stop_when_exhausted"] = false;
+        }
+        if (!("balance_usd" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["balance_usd"] = "";
+        }
+        if (!("baseline_usd" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["baseline_usd"] = "";
+        }
+        if (!("credited_usd" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["credited_usd"] = "";
+        }
+        if (!("spent_usd" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["spent_usd"] = "";
+        }
+        if (!("incomplete_count" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["incomplete_count"] = 0;
+        }
+        if (!("revision" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["revision"] = 0;
+        }
+        if (!("calibrated_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["calibrated_at"] = null;
+        }
+        if (!("updated_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["updated_at"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ManualBalance instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ManualBalance}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ManualBalance(/** @type {Partial<ManualBalance>} */($$parsedSource));
+    }
+}
+
+export class ManualBalanceUpdate {
+    /**
+     * Creates a new ManualBalanceUpdate instance.
+     * @param {Partial<ManualBalanceUpdate>} [$$source = {}] - The source object to create the ManualBalanceUpdate.
+     */
+    constructor($$source = {}) {
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("action" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["action"] = "";
+        }
+        if (!("amount_usd" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["amount_usd"] = "";
+        }
+        if (!("stop_when_exhausted" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["stop_when_exhausted"] = false;
+        }
+        if (!("revision" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["revision"] = 0;
+        }
+        if (!("operation_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["operation_id"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ManualBalanceUpdate instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ManualBalanceUpdate}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ManualBalanceUpdate(/** @type {Partial<ManualBalanceUpdate>} */($$parsedSource));
+    }
+}
+
+export class QuotaSnapshot {
+    /**
+     * Creates a new QuotaSnapshot instance.
+     * @param {Partial<QuotaSnapshot>} [$$source = {}] - The source object to create the QuotaSnapshot.
+     */
+    constructor($$source = {}) {
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("account_id_hash" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["account_id_hash"] = "";
+        }
+        if (!("model_scope" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model_scope"] = "";
+        }
+        if (!("window_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["window_name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["used_percent"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["remaining"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["limit"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {time$0.Time | null | undefined}
+             */
+            this["reset_at"] = undefined;
+        }
+        if (!("observed_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["observed_at"] = null;
+        }
+        if (!("expires_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["expires_at"] = null;
+        }
+        if (!("source" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (!("confidence" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["confidence"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new QuotaSnapshot instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {QuotaSnapshot}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new QuotaSnapshot(/** @type {Partial<QuotaSnapshot>} */($$parsedSource));
+    }
+}
+
+export class QuotaView {
+    /**
+     * Creates a new QuotaView instance.
+     * @param {Partial<QuotaView>} [$$source = {}] - The source object to create the QuotaView.
+     */
+    constructor($$source = {}) {
+        if (!("windows" in $$source)) {
+            /**
+             * @member
+             * @type {QuotaSnapshot[]}
+             */
+            this["windows"] = [];
+        }
+        if (!("learns" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["learns"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new QuotaView instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {QuotaView}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType22;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("windows" in $$parsedSource) {
+            $$parsedSource["windows"] = $$createField0_0($$parsedSource["windows"]);
+        }
+        return new QuotaView(/** @type {Partial<QuotaView>} */($$parsedSource));
+    }
+}
+
+export class RouteTarget {
+    /**
+     * Creates a new RouteTarget instance.
+     * @param {Partial<RouteTarget>} [$$source = {}] - The source object to create the RouteTarget.
+     */
+    constructor($$source = {}) {
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("upstream_model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["upstream_model"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RouteTarget instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RouteTarget}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RouteTarget(/** @type {Partial<RouteTarget>} */($$parsedSource));
+    }
+}
+
+export class RoutingMember {
+    /**
+     * Creates a new RoutingMember instance.
+     * @param {Partial<RoutingMember>} [$$source = {}] - The source object to create the RoutingMember.
+     */
+    constructor($$source = {}) {
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("position" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["position"] = 0;
+        }
+        if (!("weight" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["weight"] = 0;
+        }
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("upstream_model" in $$source)) {
+            /**
+             * Retained for stored-data compatibility; member orchestration no longer
+             * overrides models. Only explicit rule/intent targets may specify one.
+             * @member
+             * @type {string}
+             */
+            this["upstream_model"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RoutingMember instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RoutingMember}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RoutingMember(/** @type {Partial<RoutingMember>} */($$parsedSource));
     }
 }
 
 /**
- * Pool contains request-local routing configuration. Referenced pools contribute
- * members only; their rules are never evaluated recursively.
+ * Durations use Go's nanosecond representation at the API boundary. The UI
+ * bridge must explicitly convert them to milliseconds; secrets never belong here.
  */
-export class Pool {
+export class RoutingProfile {
     /**
-     * Creates a new Pool instance.
-     * @param {Partial<Pool>} [$$source = {}] - The source object to create the Pool.
+     * Creates a new RoutingProfile instance.
+     * @param {Partial<RoutingProfile>} [$$source = {}] - The source object to create the RoutingProfile.
      */
     constructor($$source = {}) {
         if (!("id" in $$source)) {
@@ -166,12 +1854,12 @@ export class Pool {
              */
             this["name"] = "";
         }
-        if (!("strategy" in $$source)) {
+        if (!("enabled" in $$source)) {
             /**
              * @member
-             * @type {string}
+             * @type {boolean}
              */
-            this["strategy"] = "";
+            this["enabled"] = false;
         }
         if (!("is_default" in $$source)) {
             /**
@@ -180,33 +1868,75 @@ export class Pool {
              */
             this["is_default"] = false;
         }
+        if (!("candidate_mode" in $$source)) {
+            /**
+             * @member
+             * @type {CandidateMode}
+             */
+            this["candidate_mode"] = CandidateMode.$zero;
+        }
+        if (!("strategy" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["strategy"] = "";
+        }
+        if (!("affinity_mode" in $$source)) {
+            /**
+             * @member
+             * @type {AffinityMode}
+             */
+            this["affinity_mode"] = AffinityMode.$zero;
+        }
+        if (!("max_attempts" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max_attempts"] = 0;
+        }
+        if (!("max_duration" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Duration}
+             */
+            this["max_duration"] = time$0.Duration.$zero;
+        }
+        if (!("wait_for_recovery" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["wait_for_recovery"] = false;
+        }
         if (!("members" in $$source)) {
             /**
              * @member
-             * @type {PoolMember[]}
+             * @type {RoutingMember[]}
              */
             this["members"] = [];
         }
         if (!("rules" in $$source)) {
             /**
              * @member
-             * @type {ModelRule[]}
+             * @type {RoutingRule[]}
              */
             this["rules"] = [];
+        }
+        if (!("intents" in $$source)) {
+            /**
+             * @member
+             * @type {IntentRule[]}
+             */
+            this["intents"] = [];
         }
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {NonStreamRoute | null | undefined}
+             * @type {ClassifierConfig | null | undefined}
              */
-            this["non_stream"] = undefined;
-        }
-        if (!("has_key" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["has_key"] = false;
+            this["classifier"] = undefined;
         }
         if (!("revision" in $$source)) {
             /**
@@ -220,67 +1950,139 @@ export class Pool {
     }
 
     /**
-     * Creates a new Pool instance from a string or object.
+     * Creates a new RoutingProfile instance from a string or object.
      * @param {any} [$$source = {}]
-     * @returns {Pool}
+     * @returns {RoutingProfile}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType3;
-        const $$createField6_0 = $$createType5;
-        const $$createField7_0 = $$createType7;
+        const $$createField11_0 = $$createType24;
+        const $$createField12_0 = $$createType26;
+        const $$createField13_0 = $$createType28;
+        const $$createField14_0 = $$createType30;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("members" in $$parsedSource) {
-            $$parsedSource["members"] = $$createField5_0($$parsedSource["members"]);
+            $$parsedSource["members"] = $$createField11_0($$parsedSource["members"]);
         }
         if ("rules" in $$parsedSource) {
-            $$parsedSource["rules"] = $$createField6_0($$parsedSource["rules"]);
+            $$parsedSource["rules"] = $$createField12_0($$parsedSource["rules"]);
         }
-        if ("non_stream" in $$parsedSource) {
-            $$parsedSource["non_stream"] = $$createField7_0($$parsedSource["non_stream"]);
+        if ("intents" in $$parsedSource) {
+            $$parsedSource["intents"] = $$createField13_0($$parsedSource["intents"]);
         }
-        return new Pool(/** @type {Partial<Pool>} */($$parsedSource));
+        if ("classifier" in $$parsedSource) {
+            $$parsedSource["classifier"] = $$createField14_0($$parsedSource["classifier"]);
+        }
+        return new RoutingProfile(/** @type {Partial<RoutingProfile>} */($$parsedSource));
     }
 }
 
-export class PoolMember {
+export class RoutingRule {
     /**
-     * Creates a new PoolMember instance.
-     * @param {Partial<PoolMember>} [$$source = {}] - The source object to create the PoolMember.
+     * Creates a new RoutingRule instance.
+     * @param {Partial<RoutingRule>} [$$source = {}] - The source object to create the RoutingRule.
      */
     constructor($$source = {}) {
-        if (!("channel_id" in $$source)) {
+        if (!("id" in $$source)) {
             /**
              * @member
              * @type {number}
              */
-            this["channel_id"] = 0;
+            this["id"] = 0;
         }
-        if (!("group_id" in $$source)) {
+        if (!("profile_id" in $$source)) {
             /**
              * @member
              * @type {number}
              */
-            this["group_id"] = 0;
+            this["profile_id"] = 0;
         }
-        if (!("tier" in $$source)) {
+        if (!("enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["enabled"] = false;
+        }
+        if (!("kind" in $$source)) {
             /**
              * @member
              * @type {string}
              */
-            this["tier"] = "";
+            this["kind"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("priority" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["priority"] = 0;
+        }
+        if (!("match_model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["match_model"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["require_stream"] = undefined;
+        }
+        if (!("intent_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["intent_id"] = "";
+        }
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("targets" in $$source)) {
+            /**
+             * @member
+             * @type {RouteTarget[]}
+             */
+            this["targets"] = [];
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * nil uses the documented model=true, non_stream=false default.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["fallback_to_default"] = undefined;
         }
 
         Object.assign(this, $$source);
     }
 
     /**
-     * Creates a new PoolMember instance from a string or object.
+     * Creates a new RoutingRule instance from a string or object.
      * @param {any} [$$source = {}]
-     * @returns {PoolMember}
+     * @returns {RoutingRule}
      */
     static createFrom($$source = {}) {
+        const $$createField10_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PoolMember(/** @type {Partial<PoolMember>} */($$parsedSource));
+        if ("targets" in $$parsedSource) {
+            $$parsedSource["targets"] = $$createField10_0($$parsedSource["targets"]);
+        }
+        return new RoutingRule(/** @type {Partial<RoutingRule>} */($$parsedSource));
     }
 }
 
@@ -339,11 +2141,34 @@ export class Target {
 }
 
 // Private type creation functions
-const $$createType0 = Target.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = PoolMember.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = ModelRule.createFrom;
-const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = NonStreamRoute.createFrom;
-const $$createType7 = $Create.Nullable($$createType6);
+const $$createType0 = DispatchCandidate.createFrom;
+const $$createType1 = LoadView.createFrom;
+const $$createType2 = ManualBalance.createFrom;
+const $$createType3 = $Create.Nullable($$createType2);
+const $$createType4 = HealthState.createFrom;
+const $$createType5 = QuotaView.createFrom;
+const $$createType6 = RouteTarget.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = IntentRoute.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = RoutingProfile.createFrom;
+const $$createType11 = DispatchDecision.createFrom;
+const $$createType12 = IntentResult.createFrom;
+const $$createType13 = DispatchPlanStage.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = CandidateEvaluation.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = $Create.Array($$createType0);
+const $$createType18 = DispatchTraceEvent.createFrom;
+const $$createType19 = $Create.Array($$createType18);
+const $$createType20 = Candidate.createFrom;
+const $$createType21 = QuotaSnapshot.createFrom;
+const $$createType22 = $Create.Array($$createType21);
+const $$createType23 = RoutingMember.createFrom;
+const $$createType24 = $Create.Array($$createType23);
+const $$createType25 = RoutingRule.createFrom;
+const $$createType26 = $Create.Array($$createType25);
+const $$createType27 = IntentRule.createFrom;
+const $$createType28 = $Create.Array($$createType27);
+const $$createType29 = ClassifierConfig.createFrom;
+const $$createType30 = $Create.Nullable($$createType29);
