@@ -33,6 +33,9 @@ import {
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
+import RequestDispatchDetails from './RequestDispatchDetails.jsx';
+import RequestPrivacyDetails from './RequestPrivacyDetails.jsx';
+import './requestDetail.css';
 import DurationBadge from './DurationBadge.jsx';
 import { formatCost, formatDuration, formatTimestamp } from '@/services/http/api.js';
 import { formatMultiplierDisplayValue } from '@/shared/lib/multiplier.js';
@@ -66,8 +69,6 @@ import {
   isThinkingTypeActive,
   getPrivacyDisplay,
   parseReasoningConfig,
-  PRIVACY_RULE_SOURCE_LABELS,
-  PRIVACY_STATE_STYLES,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
@@ -116,8 +117,8 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
   };
 
   return (
-    <div className="flex items-start justify-between py-2 border-b border-slate-100 last:border-b-0 group">
-      <div className="flex items-center gap-2 text-slate-500 min-w-[120px]">
+    <div className="request-detail-info-row flex items-start justify-between gap-3 py-2.5 border-b border-slate-100 last:border-b-0 group">
+      <div className="flex items-center gap-2 text-slate-500 min-w-[88px] shrink-0">
         <Icon className="w-4 h-4 flex-shrink-0" />
         <span className="text-sm font-medium">{label}</span>
       </div>
@@ -272,8 +273,8 @@ const FirstByteDetailBadge = ({ ms, status }) => {
 /**
  * 请求详情模态框主组件
  */
-const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
-  const [activeTab, setActiveTab] = useState('overview');
+const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialTab = 'overview' }) => {
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
   // 记录「已展开此前失败跳」的请求 ID：弹窗组件常驻，换一条请求打开时自动回到收起状态
@@ -381,6 +382,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const cancelReason = request.cancel_reason || request.cancelReason || '';
 
   const endpointChain = getEndpointChainItems(request);
+  const dispatchTrace = request.dispatchTrace;
   const chainNodes = endpointChain.map((item, index) => {
     const node = parseChainNode(item, index + 1);
     if (!node.raw && !node.endpoint && !node.channel && !node.credentialGroup) return null;
@@ -473,9 +475,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const serviceTier = request.serviceTier || request.service_tier || '';
   const serviceTierMeta = getServiceTierMeta(serviceTier);
   const privacy = getPrivacyDisplay(request);
-  const privacyRedacted = privacy.state !== 'none';
-  const privacyHits = privacy.hits;
-  const privacyDetectOnly = privacy.detectOnly;
+  const hasPrivacyRecord = privacy.state !== 'none';
 
   return renderModalPortal(
     <div className="fixed inset-0 z-[10000]">
@@ -492,17 +492,17 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
         }}
       >
         {/* 模态框内容 - 固定高度，内容区域滚动 */}
-      <div className="relative flex h-[80vh] max-h-[48rem] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200">
+      <div role="dialog" aria-modal="true" aria-labelledby="request-detail-title" className="request-detail-modal relative flex max-h-full w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200">
         {/* 头部 - 固定不滚动 */}
-        <div className="flex flex-shrink-0 items-center justify-between rounded-t-2xl border-b border-slate-100 bg-white px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 rounded-lg">
+        <div className="request-detail-header flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-100 bg-white px-5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="shrink-0 p-2 bg-indigo-50 rounded-lg">
               <FileText className="w-5 h-5 text-indigo-600" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">请求详情</h2>
+            <div className="min-w-0">
+              <h2 id="request-detail-title" className="flex items-center gap-2 text-base font-semibold text-slate-900">请求详情<span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">{isCodexRequest ? 'Codex' : 'Claude'}</span></h2>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-slate-400 font-mono">{request.requestId}</span>
+                <span className="min-w-0 truncate text-xs text-slate-400 font-mono" title={request.requestId}>{request.requestId}</span>
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium ${streamColor}`}>
                   <StreamIcon className="w-3 h-3" />
                   {streamLabel}
@@ -512,25 +512,26 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
           </div>
           <div className="flex items-center gap-2">
             <kbd className="hidden sm:inline-block px-2 py-1 bg-slate-100 border border-slate-200 rounded text-xs text-slate-500">ESC</kbd>
-            <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-600">
+            <button onClick={onClose} aria-label="关闭请求详情" className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-600">
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
         {/* Tab 导航 - 固定不滚动 */}
-        <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-6 pt-4">
+        <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-5 py-3">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {/* 无内容的标签置灰并标注"无"，仍可点击查看说明；等宽排布避免窄窗口下换行 */}
             {[
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
               { id: 'network', label: '网络信息', icon: Server },
-              { id: 'privacy', label: '隐私防护', icon: ShieldCheck, empty: !privacyRedacted },
-              { id: 'chain', label: '端点链路', icon: Layers, empty: chainNodes.length === 0 }
+              { id: 'privacy', label: '隐私防护', icon: ShieldCheck, empty: !hasPrivacyRecord },
+              { id: 'chain', label: '调度链路', icon: Layers, empty: !dispatchTrace && chainNodes.length === 0 }
             ].map((tab) => (
               <button
                 key={tab.id}
+                aria-label={tab.label}
                 onClick={() => setActiveTab(tab.id)}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
                 className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
@@ -552,24 +553,24 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
         </div>
 
         {/* 内容区域 - 自动填充剩余空间并滚动 */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2">
+        <div className="request-detail-body min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-5">
           {/* 概览 Tab */}
           {activeTab === 'overview' && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* 状态 & 成本卡片 */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-xl p-4 border border-indigo-100">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-slate-600">请求状态</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-3.5">
+                  <div className="flex items-center gap-2">
                     <Activity className="w-4 h-4 text-indigo-500" />
+                    <span className="text-sm font-medium text-slate-600">请求状态</span>
                   </div>
                   <RequestStatusBadge status={request.status} />
                 </div>
 
-                <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-100">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : '总成本'}</span>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-100 bg-orange-50/70 p-3.5">
+                  <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-orange-500" />
+                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : '总成本'}</span>
                   </div>
                   <div className="text-2xl font-bold text-orange-600 font-mono">
                     {formatCost(request.cost)}
@@ -577,6 +578,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 </div>
               </div>
 
+              <div className="request-detail-overview-grid">
               {/* 基本信息 */}
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
@@ -731,6 +733,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     </div>
                   )}
                 </div>
+              </div>
+
               </div>
 
               {/* 计费详情 */}
@@ -1139,6 +1143,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
           {/* 端点链路 Tab */}
           {activeTab === 'chain' && (
             <div className="space-y-4">
+              {dispatchTrace && <div className="rounded-xl border border-slate-200 bg-white"><RequestDispatchDetails trace={dispatchTrace} expanded /></div>}
+              {!dispatchTrace && <>
               {/* 统计摘要条 */}
               {chainNodes.length > 0 && (() => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
@@ -1302,14 +1308,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   部分记录缺少渠道信息（历史数据），新请求已使用结构化格式。
                 </div>
               )}
+              </>}
             </div>
           )}
 
           {/* Token 详情 Tab */}
           {activeTab === 'tokens' && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Token 卡片 - 基础 */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <TokenCard
                   icon={TrendingUp}
                   label="输入 Token"
@@ -1349,7 +1356,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
               )}
 
               {/* Token 卡片 - 缓存。缓存创建总计就是 5 分钟 + 1 小时之和，合进卡片说明，不再单占一格 */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 {isClaudeRequest && (
                   <>
                     <TokenCard
@@ -1375,7 +1382,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 />
                 <TokenCard
                   icon={Percent}
-                  label="缓存命中率"
+                  label="缓存命中概率"
                   displayValue={formatCacheHitRate(cacheHitRate)}
                   hint={isCodexRequest ? '缓存读取 ÷ 输入（Codex 输入已含缓存）' : '缓存读取 ÷ (输入 + 缓存创建 + 缓存读取)'}
                   colorClass={{ bg: 'bg-sky-50', border: 'border-sky-200', text: 'text-sky-600', icon: 'text-sky-600' }}
@@ -1418,7 +1425,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
 
           {/* 网络信息 Tab */}
           {activeTab === 'network' && (
-            <div className="space-y-4">
+            <div className="request-detail-network-grid">
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
                   <h3 className="text-sm font-semibold text-slate-900">请求结果</h3>
@@ -1471,62 +1478,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
           )}
 
           {/* 隐私防护 Tab */}
-          {activeTab === 'privacy' && (
-            <div className="space-y-6">
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    隐私防护
-                  </h3>
-                </div>
-                <div className="p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-sm font-medium text-slate-500">处理结果</span>
-                    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${PRIVACY_STATE_STYLES[privacy.state]}`}>
-                      {privacy.label}
-                      {privacy.hitCount > 0 && <span className="opacity-70">· {privacy.hitCount} 处</span>}
-                    </span>
-                  </div>
-                  {!privacyRedacted && (
-                    <p className="mt-2 text-xs text-slate-500">
-                      此调用记录没有保存脱敏摘要，无法据此判断是否扫描或命中。请在隐私防护的「防护记录」中按请求 ID 查看扫描状态、拒发和截断信息。
-                    </p>
-                  )}
-                  {privacyDetectOnly && (
-                    <p className="mt-2 text-xs text-slate-500">
-                      已检测到命中；此摘要未记录请求正文被改写。实际处理还取决于运行模式、规则动作及目标渠道的隐私设置。
-                    </p>
-                  )}
-                  {privacyHits.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {privacyHits.map((hit, index) => (
-                        <span
-                          key={`${hit.rule_id || index}-${hit.rule_name || ''}`}
-                          className="min-w-0 max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 break-words [overflow-wrap:anywhere]"
-                        >
-                          {(hit.rule_name || '规则')}
-                          {hit.source ? ` · ${PRIVACY_RULE_SOURCE_LABELS[hit.source] || hit.source}` : ''}
-                          {` × ${hit.count || 0}`}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {privacyRedacted && (
-                    <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-                      仅展示命中的规则与次数。命中的原文不会写入数据库、日志或本页面 —— 否则隐私防护本身就会变成一份客户信息的集中副本。
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {activeTab === 'privacy' && <RequestPrivacyDetails privacy={privacy} />}
+
         </div>
 
         {/* 底部操作栏 - 固定不滚动 */}
-        <div className="flex flex-shrink-0 items-center justify-between rounded-b-2xl border-t border-slate-100 bg-slate-50/80 px-6 py-4 backdrop-blur-sm">
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-white px-5 py-3">
           <div className="text-xs text-slate-500">
-            Request ID: <span className="font-mono text-slate-700">{request.requestId}</span>
+            {formatTimestamp(request.timestamp)}
           </div>
           <div className="flex items-center gap-2">
             <button

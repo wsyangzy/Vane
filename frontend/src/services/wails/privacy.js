@@ -1,14 +1,23 @@
 import { WailsApp, initWails } from './connection.js';
 
-const normalizePrivacyRule = (rule = {}) => ({
+const tokenModes = new Set(['reversible', 'reversible_key', 'mask_only', 'mask_only_key']);
+const normalizeReplacementMode = value => tokenModes.has(value) ? value : 'reversible';
+const ruleReplacementMode = (rule) => {
+  const mode = normalizeReplacementMode(rule.replacement_mode || rule.replacementMode);
+  const restore = rule.action !== 'allow' && (rule.restoreResponse ?? !mode.startsWith('mask_only'));
+  return `${restore ? 'reversible' : 'mask_only'}${mode.endsWith('_key') ? '_key' : ''}`;
+};
+
+export const normalizePrivacyRule = (rule = {}) => ({
   kind: rule.kind || 'custom',
   id: rule.id,
   name: rule.name || '',
   description: rule.description || '',
   matchType: rule.match_type || rule.matchType || 'literal',
   pattern: rule.pattern || '',
-  action: rule.action || 'redact',
-  replacementMode: rule.replacement_mode || rule.replacementMode || 'placeholder',
+  action: rule.action === 'allow' ? 'allow' : 'redact',
+  replacementMode: ruleReplacementMode(rule),
+  restoreResponse: !ruleReplacementMode(rule).startsWith('mask_only'),
   placeholder: rule.placeholder || '',
   pseudonymKind: rule.pseudonym_kind || rule.pseudonymKind || '',
   source: rule.source || 'custom',
@@ -32,26 +41,24 @@ const normalizeLegacyPrivacyRule = (rule = {}) => ({
 });
 
 export const normalizePrivacySettings = (settings = {}) => ({
-  restoreResponses: Boolean(settings.restore_responses ?? settings.restoreResponses),
-  keepKeyFormat: Boolean(settings.keep_key_format ?? settings.keepKeyFormat),
+  restoreResponses: Boolean(settings.restore_responses ?? settings.restoreResponses ?? true),
   mode: settings.mode || 'detect',
   scanMaxBytes: Number(settings.scan_max_bytes ?? settings.scanMaxBytes ?? 4194304),
-  overLimitAction: settings.over_limit_action || settings.overLimitAction || 'scan_prefix',
-  onError: settings.on_error || settings.onError || 'fail_open',
-  unsupportedPathAction: settings.unsupported_path_action || settings.unsupportedPathAction || 'warn'
+  overLimitAction: (settings.over_limit_action ?? settings.overLimitAction) === 'skip_scan' ? 'skip_scan' : 'scan_prefix',
+  onError: (settings.on_error ?? settings.onError) === 'passthrough' ? 'passthrough' : 'fail_open',
+  unsupportedPathAction: (settings.unsupported_path_action ?? settings.unsupportedPathAction) === 'passthrough' ? 'passthrough' : 'warn'
 });
 
 export const denormalizePrivacySettings = (settings = {}) => ({
-  restore_responses: Boolean(settings.restoreResponses),
-  keep_key_format: Boolean(settings.keepKeyFormat),
+  restore_responses: Boolean(settings.restoreResponses ?? true),
   mode: settings.mode || 'detect',
   scan_max_bytes: Number(settings.scanMaxBytes ?? 4194304),
-  over_limit_action: settings.overLimitAction || 'scan_prefix',
-  on_error: settings.onError || 'fail_open',
-  unsupported_path_action: settings.unsupportedPathAction || 'warn'
+  over_limit_action: settings.overLimitAction === 'skip_scan' ? 'skip_scan' : 'scan_prefix',
+  on_error: settings.onError === 'passthrough' ? 'passthrough' : 'fail_open',
+  unsupported_path_action: settings.unsupportedPathAction === 'passthrough' ? 'passthrough' : 'warn'
 });
 
-const denormalizePrivacyRule = (rule = {}) => ({
+export const denormalizePrivacyRule = (rule = {}) => ({
   id: Number(rule.id ?? 0),
   enabled: Boolean(rule.enabled),
   name: rule.name || '',
@@ -59,8 +66,8 @@ const denormalizePrivacyRule = (rule = {}) => ({
   priority: Number(rule.priority ?? 100),
   match_type: rule.matchType || 'literal',
   pattern: rule.pattern || '',
-  action: rule.action || 'redact',
-  replacement_mode: rule.replacementMode || 'placeholder',
+  action: rule.action === 'allow' ? 'allow' : 'redact',
+  replacement_mode: ruleReplacementMode(rule),
   placeholder: rule.placeholder || '',
   pseudonym_kind: rule.pseudonymKind || '',
   source: rule.source || 'custom'
@@ -220,16 +227,4 @@ const clearPrivacyUnscannedPaths = async () => {
   return await WailsApp.ClearPrivacyUnscannedPaths();
 };
 
-// 渠道隐私级别：'' 跟随全局 / 'third_party' 三方中转强制脱敏 / 'trusted' 可信渠道只检测
-const normalizeChannelPrivacyLevel = (level) => (
-  level === 'third_party' || level === 'trusted' ? level : ''
-);
-
-const setChannelPrivacyLevel = async (provider, channelId, level) => {
-  await initWails();
-  if (!WailsApp) throw new Error('Wails not available');
-  await WailsApp.SetChannelPrivacyLevel(provider || 'claude', Number(channelId), normalizeChannelPrivacyLevel(level));
-  return { success: true };
-};
-
-export { getPrivacyOverview, updatePrivacySettings, createPrivacyRule, updatePrivacyRule, deletePrivacyRule, deletePrivacyRules, setPrivacyRulesEnabled, applyPrivacyPreset, discardLegacyPrivacyRules, previewPrivacyRedaction, mapPrivacyRequestPreview, previewPrivacyRequest, getPrivacyUnscannedPaths, clearPrivacyUnscannedPaths, normalizeChannelPrivacyLevel, setChannelPrivacyLevel };
+export { getPrivacyOverview, updatePrivacySettings, createPrivacyRule, updatePrivacyRule, deletePrivacyRule, deletePrivacyRules, setPrivacyRulesEnabled, applyPrivacyPreset, discardLegacyPrivacyRules, previewPrivacyRedaction, mapPrivacyRequestPreview, previewPrivacyRequest, getPrivacyUnscannedPaths, clearPrivacyUnscannedPaths };

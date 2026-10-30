@@ -4,8 +4,8 @@
 // ============================================
 
 import { useState } from 'react';
-import { Database, KeyRound, X, Save, AlertCircle } from 'lucide-react';
-import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@/shared/ui/index.js';
+import { Clock3, Database, Hash, KeyRound, Route, ShieldOff, X, Save, AlertCircle } from 'lucide-react';
+import { Button, CustomSelect, SegmentedTabs } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { getErrorMessage } from '@/features/providers/shared/formatters.js';
 import { formatMultiplierExpression } from '@/shared/lib/multiplier.js';
@@ -20,7 +20,7 @@ const ENDPOINT_FORM_TABS = [
 // 表单输入组件
 // ============================================
 
-const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, required, disabled, help, error, inputMode, min }) => (
+const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, required, disabled, help, error, inputMode, min, step }) => (
   <div className="space-y-1">
     <label className="block text-sm font-medium text-slate-700">
       {label}
@@ -35,6 +35,7 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
       disabled={disabled}
       inputMode={inputMode}
       min={min}
+      step={step}
       autoComplete="off"
       data-form-type="other"
       className={`
@@ -50,89 +51,30 @@ const FormInput = ({ label, name, value, onChange, type = 'text', placeholder, r
   </div>
 );
 
-const FormCheckbox = ({ label, name, checked, onChange, help, disabled = false, compact = false }) => {
-  const isChecked = !!checked;
-  const toggle = () => {
-    if (disabled) return;
-    onChange?.({ target: { name, type: 'checkbox', checked: !isChecked } });
-  };
-
-  const sizeClasses = compact
-    ? {
-        wrapper: 'items-center p-2 rounded-lg',
-        label: 'text-xs font-semibold text-slate-800',
-        help: help ? <p className="text-[10px] text-slate-400 mt-0.5 leading-snug sm:hidden">{help}</p> : null,
-        switch: 'h-5 w-9',
-        knob: 'h-4 w-4',
-        knobTranslate: isChecked ? 'translate-x-4' : 'translate-x-0.5',
-      }
-    : {
-        wrapper: 'items-start p-3 rounded-xl',
-        label: 'text-sm font-medium text-slate-800',
-        help: help ? <p className="text-xs text-slate-400 mt-1">{help}</p> : null,
-        switch: 'h-6 w-11',
-        knob: 'h-5 w-5',
-        knobTranslate: isChecked ? 'translate-x-5' : 'translate-x-0.5',
-      };
-
-  const field = (
-    <div
-      className={`
-        flex justify-between gap-3 border transition-colors ${sizeClasses.wrapper}
-        ${disabled ? 'bg-slate-50 opacity-70' : 'bg-white hover:bg-slate-50/60'}
-        ${isChecked ? 'border-emerald-200' : 'border-slate-200'}
-      `}
-      onClick={toggle}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      onKeyDown={(e) => {
-        if (disabled) return;
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          toggle();
-        }
-      }}
-    >
-      <div className="min-w-0">
-        <div className={sizeClasses.label}>{label}</div>
-        {sizeClasses.help}
-      </div>
-
-      <button
-        type="button"
-        role="switch"
-        aria-checked={isChecked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={(e) => {
-          e.stopPropagation();
-          toggle();
-        }}
-        className={`
-          relative inline-flex ${sizeClasses.switch} flex-shrink-0 items-center rounded-full border transition-colors
-          focus:outline-none focus:ring-2 focus:ring-indigo-500/30
-          ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}
-          ${isChecked ? 'bg-emerald-500 border-emerald-500' : 'bg-slate-200 border-slate-200'}
-        `}
-      >
-        <span
-          className={`
-            inline-block ${sizeClasses.knob} rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform
-            ${sizeClasses.knobTranslate}
-          `}
-        />
-      </button>
-    </div>
-  );
-
-  if (!compact || !help) return field;
-
-  return (
-    <Tooltip content={help} className="block">
-      {field}
-    </Tooltip>
-  );
-};
+const FormCheckbox = ({ label, name, checked, onChange, help, icon: Icon, disabled = false }) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={!!checked}
+    aria-label={label}
+    disabled={disabled}
+    onClick={() => onChange?.({ target: { name, type: 'checkbox', checked: !checked } })}
+    className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 ${
+      checked ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-white hover:bg-slate-50/60'
+    } ${disabled ? 'cursor-not-allowed opacity-70' : ''}`}
+  >
+    <span className="flex min-w-0 items-start gap-3">
+      {Icon && <span className="mt-0.5 rounded-lg bg-slate-100 p-1.5 text-slate-500"><Icon size={16} /></span>}
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-slate-800">{label}</span>
+        {help && <span className="mt-1 block text-xs leading-5 text-slate-500">{help}</span>}
+      </span>
+    </span>
+    <span aria-hidden="true" className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${checked ? 'bg-indigo-500' : 'bg-slate-200'}`}>
+      <span className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    </span>
+  </button>
+);
 
 const getEndpointCredentialGroupID = (endpoint) => Number(endpoint?.credentialGroupId || endpoint?.credential_group_id || 0);
 
@@ -161,6 +103,7 @@ const EndpointForm = ({
   defaultChannel = '',
   defaultCredentialGroupId = 0,
   lockChannel = false,
+  initialSetup = false,
   onSave,
   onCancel,
   loading = false
@@ -183,7 +126,7 @@ const EndpointForm = ({
         failoverEnabled: endpoint.failoverEnabled !== false,
         skipHealthCheck: endpoint.skipHealthCheck || endpoint.skip_health_check || false,
         cooldownSeconds: endpoint.cooldownSeconds || '',
-        timeoutSeconds: endpoint.timeoutSeconds && endpoint.timeoutSeconds !== 300 ? endpoint.timeoutSeconds : '', // 300 是全局默认，显示为空
+        timeoutSeconds: endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0,
         supportsCountTokens: endpoint.supportsCountTokens || false,
         // 端点级倍率已停用（对齐 Codex）：倍率唯一来源是凭证分组，
         // app.go 构造 EndpointMultiplier 时不再读取这些字段。
@@ -297,6 +240,10 @@ const EndpointForm = ({
         newErrors.priority = '优先级必须是大于等于 0 的整数';
       }
     }
+    const timeoutRaw = String(formData.timeoutSeconds ?? '').trim();
+    if (timeoutRaw !== '' && (!Number.isInteger(Number(timeoutRaw)) || Number(timeoutRaw) < 0)) {
+      newErrors.timeoutSeconds = '超时时间必须是大于等于 0 的整数秒数';
+    }
 
     const targetChannel = formData.channel.trim();
     const targetName = formData.name.trim();
@@ -321,7 +268,7 @@ const EndpointForm = ({
 
     if (newErrors.channel || newErrors.name || newErrors.url) {
       setActiveTab('basic');
-    } else if (newErrors.priority) {
+    } else if (newErrors.priority || newErrors.timeoutSeconds) {
       setActiveTab('routing');
     }
 
@@ -347,6 +294,7 @@ const EndpointForm = ({
       }
       await onSave({
         ...endpointPayload,
+        timeoutSeconds: Number(formData.timeoutSeconds || 0),
         credentialGroupId: Number(formData.credentialGroupId || selectedCredentialGroup?.id || 0) || 0,
         modelMultipliers: formData.modelMultipliers || []
       });
@@ -361,11 +309,17 @@ const EndpointForm = ({
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[75vh] flex flex-col overflow-hidden">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-slate-900">
-            {isEditMode ? '编辑端点' : '新建端点'}
-          </h2>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">
+              {initialSetup ? '添加渠道 · 3/3' : isEditMode ? '编辑端点' : '新建端点'}
+            </h2>
+            {initialSetup && <p className="mt-0.5 text-xs text-slate-500">配置首个端点，确认后创建渠道</p>}
+          </div>
           <button
+            type="button"
             onClick={onCancel}
+            disabled={loading}
+            aria-label="关闭"
             className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
           >
             <X size={20} />
@@ -379,6 +333,7 @@ const EndpointForm = ({
               tabs={ENDPOINT_FORM_TABS}
               activeTab={activeTab}
               onChange={setActiveTab}
+              disabled={loading}
               className="grid-cols-2"
               buttonPaddingClass="px-2 sm:px-3"
             />
@@ -393,7 +348,7 @@ const EndpointForm = ({
             </div>
           )}
 
-          {selectedCredentialGroup && (
+          {activeTab === 'basic' && selectedCredentialGroup && (
             <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
               <div className="flex items-center gap-2 text-xs font-medium text-slate-700">
                 <KeyRound size={14} />
@@ -560,49 +515,56 @@ const EndpointForm = ({
 
           {/* 路由配置 */}
           {activeTab === 'routing' && (
-          <div className="space-y-4">
-            <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wide">
-              路由配置
-            </h3>
+          <div className="space-y-3">
+            <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+              <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Route size={15} className="text-slate-500" />请求路由</h3>
+                <span className="max-w-full truncate rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-500">{formData.channel} · {selectedCredentialGroup?.name || '默认分组'}</span>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <FormInput
+                    label="优先级"
+                    name="priority"
+                    value={formData.priority}
+                    onChange={handleChange}
+                    type="number"
+                    min="0"
+                    disabled={loading}
+                    placeholder={`留空自动分配 P${getNextEndpointPriority(existingEndpoints, formData.channel, selectedCredentialGroupID)}`}
+                    help={isEditMode ? '数字越小越优先；同分组优先级相同则交换。' : `留空分配 P${getNextEndpointPriority(existingEndpoints, formData.channel, selectedCredentialGroupID)}；数字越小越优先。`}
+                  />
+                  {errors.priority && (
+                    <p className="text-xs text-rose-500 mt-1">{errors.priority}</p>
+                  )}
+                </div>
 
-            <div className="grid gap-4 grid-cols-2">
-              <div>
                 <FormInput
-                  label="优先级"
-                  name="priority"
-                  value={formData.priority}
+                  label="非流式超时（秒）"
+                  name="timeoutSeconds"
+                  value={formData.timeoutSeconds || ''}
                   onChange={handleChange}
                   type="number"
                   min="0"
-                  placeholder={`留空自动分配 P${getNextEndpointPriority(existingEndpoints, formData.channel, selectedCredentialGroupID)}`}
-                  help={isEditMode ? '0 = 最高优先级，数字越小优先级越高，同分组相同则交换' : `留空自动分配为 P${getNextEndpointPriority(existingEndpoints, formData.channel, selectedCredentialGroupID)}；填写后按填写值保存，重复则替换`}
+                  step="1"
+                  disabled={loading}
+                  error={errors.timeoutSeconds}
+                  placeholder="跟随全局设置"
+                  help="留空或 0 跟随全局，正整数覆盖此端点。"
                 />
-                {errors.priority && (
-                  <p className="text-xs text-rose-500 mt-1">{errors.priority}</p>
-                )}
               </div>
+              <p className="mt-3 flex items-start gap-2 border-t border-slate-200/70 pt-3 text-xs leading-5 text-slate-500"><Clock3 size={13} className="mt-1 shrink-0" />此处限制非流式请求的总等待时间；流式响应头超时在「设置 → 请求控制」中调整。</p>
+            </section>
 
-              {/* 超时时间 - 留空使用全局默认值 */}
-              <FormInput
-                label="超时时间 (秒)"
-                name="timeoutSeconds"
-                value={formData.timeoutSeconds || ''}
-                onChange={handleChange}
-                type="number"
-                placeholder="默认: 300 (全局配置)"
-                help="单次请求的最大等待时间，留空使用全局配置"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-3">
               <FormCheckbox
                 label="跳过健康检查"
                 name="skipHealthCheck"
                 checked={formData.skipHealthCheck}
                 onChange={handleChange}
-                disabled={loading}
-                compact
-                help="部分中转商不支持健康检查端点，勾选后将跳过定时健康检测"
+                disabled={loading || subscriptionMode}
+                icon={ShieldOff}
+                help={subscriptionMode ? '官方订阅不发送定时探测，健康状态由真实请求验证。' : '开启后跳过定时探测；关闭时仍需全局开启，且分组被当前调度方案选用。'}
               />
 
               <FormCheckbox
@@ -611,7 +573,7 @@ const EndpointForm = ({
                 checked={formData.supportsCountTokens}
                 onChange={handleChange}
                 disabled={loading}
-                compact
+                icon={Hash}
                 help="端点是否支持 Token 计数 API"
               />
             </div>
@@ -635,7 +597,7 @@ const EndpointForm = ({
               icon={Save}
               loading={loading}
             >
-              {isEditMode ? '保存修改' : '创建端点'}
+              {initialSetup ? '完成创建' : isEditMode ? '保存修改' : '创建端点'}
             </Button>
           </div>
         </form>

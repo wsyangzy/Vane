@@ -4,23 +4,20 @@
 // 更新：添加双击查看详情功能
 // ============================================
 
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { Waves, RefreshCw, Route, ChevronRight } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Waves, RefreshCw, Route } from 'lucide-react';
 import { LoadingSpinner, Tooltip } from '@/shared/ui/index.js';
 import { formatCost, formatDuration, formatNumber, formatTimestamp } from '@/services/http/api.js';
 import DurationBadge from './DurationBadge.jsx';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
+import RequestRouteCell from './RequestRouteCell.jsx';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
-import { requestColumnLayout } from '../utils/tableLayout.js';
+import { requestColumnLayout, requestRowHeight } from '../utils/tableLayout.js';
 import {
   countChannelSwitches,
   getEndpointChainItems,
-  parseChainNode,
-  parseEndpointName,
-  requestHasInterChannelTransfer,
 } from '../utils/endpointChain.js';
 import {
   getReasoningEffortMeta,
@@ -54,13 +51,6 @@ const getReasoningDisplay = (raw, compact) => {
   );
 };
 
-const ChainTooltipBadge = ({ label, value }) => (
-  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-700/80 text-[9px] font-medium text-slate-100 ring-1 ring-white/10 shrink-0">
-    <span className="text-slate-400">{label}</span>
-    <span>{value}</span>
-  </span>
-);
-
 const ChannelCell = ({ request, compact }) => {
   const channelLabel = request.channel || '-';
   const channelTransferCount = countChannelSwitches(getEndpointChainItems(request));
@@ -78,214 +68,6 @@ const ChannelCell = ({ request, compact }) => {
         </span></Tooltip>
       )}
     </span>
-  );
-};
-
-/**
- * EndpointChainCell - 端点链路单元格组件（折叠显示 + Portal Tooltip）
- * 使用 createPortal 渲染到 document.body，避免被父容器 overflow 裁剪
- * @param {Object} request - 请求数据
- */
-const EndpointChainCell = ({ request, compact }) => {
-  const [showTooltip, setShowTooltip] = useState(false);
-  const [tooltipPos, setTooltipPos] = useState(null);
-  const triggerRef = useRef(null);
-  const tooltipRef = useRef(null);
-  const hideTimerRef = useRef(null);
-
-  // 显示 Tooltip：计算视口定位和可用空间
-  const handleMouseEnter = useCallback(() => {
-    clearTimeout(hideTimerRef.current);
-    if (!triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    const spaceAbove = rect.top;
-    const spaceBelow = window.innerHeight - rect.bottom;
-    // 选择空间更大的方向弹出
-    const showAbove = spaceAbove > spaceBelow;
-    // 可用最大高度（减去 gap 8px + viewport 边距 16px）
-    const maxHeight = Math.max(120, (showAbove ? spaceAbove : spaceBelow) - 24);
-    setTooltipPos({
-      left: Math.max(8, Math.min(rect.left, window.innerWidth - 380)),
-      showAbove,
-      maxHeight,
-      ...(showAbove
-        ? { bottom: window.innerHeight - rect.top + 8 }
-        : { top: rect.bottom + 8 }),
-    });
-    setShowTooltip(true);
-  }, []);
-
-  // 延迟隐藏（允许鼠标移入可交互 Tooltip 时取消关闭）
-  const handleMouseLeave = useCallback(() => {
-    hideTimerRef.current = setTimeout(() => setShowTooltip(false), 100);
-  }, []);
-
-  // Tooltip 鼠标事件（可交互模式：支持内部滚动）
-  const handleTooltipEnter = useCallback(() => clearTimeout(hideTimerRef.current), []);
-  const handleTooltipLeave = useCallback(() => setShowTooltip(false), []);
-
-  // 清理定时器
-  useEffect(() => () => clearTimeout(hideTimerRef.current), []);
-
-  // 滚动时关闭 Tooltip（排除 Tooltip 内部滚动）
-  useEffect(() => {
-    if (!showTooltip) return;
-    const hide = (e) => {
-      if (tooltipRef.current?.contains(e.target)) return;
-      setShowTooltip(false);
-    };
-    window.addEventListener('scroll', hide, true);
-    return () => window.removeEventListener('scroll', hide, true);
-  }, [showTooltip]);
-
-  const chainItems = getEndpointChainItems(request);
-  const showChannelInChain = requestHasInterChannelTransfer(request);
-
-  // 获取链路长度（兼容 camelCase 和 Wails 原始 snake_case）
-  const chainLength = Number.isFinite(request.endpointChainLength)
-    ? request.endpointChainLength
-    : chainItems.length;
-  const chainHead = request.endpointChainHead || chainItems[0] || request.endpoint || '';
-  const chainTail = request.endpointChainTail || chainItems[chainItems.length - 1] || chainHead || '';
-
-  // 解析端点名称（去除 channel:: 前缀以简化显示）
-  const tailEndpoint = parseEndpointName(chainTail);
-
-  // Portal Tooltip 渲染器
-  // @param content - Tooltip 内容
-  // @param interactive - 是否可交互（启用内部滚动，鼠标可移入）
-  const renderTooltip = (content, interactive = false) => {
-    if (!showTooltip || !tooltipPos) return null;
-    const style = {
-      position: 'fixed',
-      left: `${tooltipPos.left}px`,
-      zIndex: 9999,
-      ...(interactive
-        ? { maxHeight: `${tooltipPos.maxHeight}px`, display: 'flex', flexDirection: 'column' }
-        : { pointerEvents: 'none' }),
-      ...(tooltipPos.showAbove
-        ? { bottom: `${tooltipPos.bottom}px` }
-        : { top: `${tooltipPos.top}px` }),
-    };
-    const arrowClass = tooltipPos.showAbove
-      ? 'absolute -bottom-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-slate-800'
-      : 'absolute -top-[6px] left-3 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-b-[6px] border-b-slate-800';
-    return createPortal(
-      <div
-        ref={tooltipRef}
-        style={style}
-        className="bg-slate-800 text-white text-xs rounded-lg shadow-xl"
-        {...(interactive ? { onMouseEnter: handleTooltipEnter, onMouseLeave: handleTooltipLeave } : {})}
-      >
-        {interactive
-          ? <div className="flex-1 min-h-0 flex flex-col">{content}</div>
-          : content}
-        <div className={arrowClass} />
-      </div>,
-      document.body
-    );
-  };
-
-  // 单端点情况
-  if (chainLength <= 1) {
-    const singleNode = parseChainNode(chainHead);
-    const singleEndpoint = singleNode.endpoint || request.endpoint || '';
-    const singleChannel = singleNode.channel || request.channel || '';
-    const singleGroup = singleNode.credentialGroup || request.credentialGroup || request.groupName || '';
-    if (!singleEndpoint) return <span className="text-gray-400 text-xs">-</span>;
-    return (
-      <div
-        ref={triggerRef}
-        className="inline-flex max-w-full items-center"
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-      >
-        <div className="inline-flex max-w-full items-center gap-1.5 min-w-0">
-          <span className="min-w-0 truncate text-gray-600 text-xs">
-            {singleEndpoint}
-          </span>
-        </div>
-        {(singleChannel || singleGroup || singleEndpoint) && renderTooltip(
-          <div className="p-2.5 whitespace-nowrap">
-            <div className="flex items-center gap-1.5">
-              {showChannelInChain && singleChannel && (
-                <ChainTooltipBadge label="渠道" value={singleChannel} />
-              )}
-              {singleGroup && (
-                <ChainTooltipBadge label="分组" value={singleGroup} />
-              )}
-              <span className="text-slate-100">{singleEndpoint}</span>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // 多端点情况：折叠显示，悬浮查看完整路径
-  return (
-    <div
-      ref={triggerRef}
-      className="inline-flex w-full max-w-full items-center justify-center gap-1 min-w-0"
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-    >
-      {/* 主显示：最终端点 + 跳数徽章 */}
-      <span className="min-w-0 truncate text-gray-700 text-xs font-medium">
-        {tailEndpoint}
-      </span>
-      <span className={`inline-flex shrink-0 items-center gap-0.5 py-0.5 text-indigo-600 text-[10px] font-medium rounded whitespace-nowrap ${compact ? '' : 'border border-indigo-100 bg-indigo-50 px-1'}`}>
-        <Route className="w-2.5 h-2.5" />
-        <span>{chainLength}</span>
-      </span>
-
-      {/* 悬浮 Tooltip：显示完整链路（可滚动） */}
-      {chainItems.length > 0 && renderTooltip(
-        <div className="min-w-[220px] max-w-[360px] flex flex-col min-h-0">
-          <div className="shrink-0 px-3 pt-3 pb-1 text-[10px] text-slate-400 font-medium uppercase tracking-wide">转移路径</div>
-          <div className="overflow-y-auto min-h-0 px-3 pb-3 space-y-1">
-            {chainItems.map((item, idx) => {
-              const { channel, credentialGroup, endpoint } = parseChainNode(item);
-              const isLast = idx === chainItems.length - 1;
-              const isFirst = idx === 0;
-              const displayName = showChannelInChain
-                ? (endpoint || channel || '-')
-                : (endpoint || credentialGroup || '-');
-              return (
-                <div key={idx}>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] w-4 shrink-0 text-center ${isLast ? 'text-emerald-400' : isFirst ? 'text-blue-400' : 'text-slate-500'}`}>
-                      {isFirst ? '起' : isLast ? '终' : '·'}
-                    </span>
-                    <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                      {showChannelInChain && channel && (
-                        <ChainTooltipBadge label="渠道" value={channel} />
-                      )}
-                      {credentialGroup && (
-                        <ChainTooltipBadge label="分组" value={credentialGroup} />
-                      )}
-                      <span className={`truncate ${isLast ? 'text-emerald-400 font-semibold' : isFirst ? 'text-blue-300' : 'text-slate-300'}`}>
-                        {displayName}
-                      </span>
-                    </div>
-                  </div>
-                  {/* 中间连接线 */}
-                  {!isLast && (
-                    <div className="flex items-center gap-2 py-0.5">
-                      <span className="w-4 shrink-0 flex justify-center">
-                        <span className="w-px h-2 bg-slate-600" />
-                      </span>
-                      <ChevronRight className="w-3 h-3 text-slate-600" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>,
-        true
-      )}
-    </div>
   );
 };
 
@@ -319,7 +101,7 @@ const LatencyCell = ({ request, compact }) => compact ? (
  * @param {Object} column - 列配置及当前分配宽度
  * @param {Object} request - 请求数据
  */
-const renderCell = (column, request) => {
+const renderCell = (column, request, onViewDispatch) => {
   const columnId = column.id;
   const compact = column.layoutWidth < 100;
   const tokenText = (value) => value == null ? '—' : column.layoutWidth < 62 ? formatNumber(Number(value)) : value;
@@ -379,7 +161,7 @@ const renderCell = (column, request) => {
     case 'channel':
       return <ChannelCell request={request} compact={column.layoutWidth < 88} />;
     case 'endpoint':
-      return <EndpointChainCell request={request} compact={column.layoutWidth < 88} />;
+      return <RequestRouteCell request={request} compact={column.layoutWidth < 112} onViewDetails={onViewDispatch ? () => onViewDispatch(request) : undefined} />;
     case 'duration':
       return <LatencyCell request={request} compact={column.layoutWidth < 126} />;
     case 'inputTokens':
@@ -402,7 +184,7 @@ const renderCell = (column, request) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
+const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onViewDispatch }) => {
   const clickTimer = useRef(null);
 
   useEffect(() => () => clearTimeout(clickTimer.current), []);
@@ -425,10 +207,10 @@ const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
       className="group cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50/80"
       onClick={handleRowClick}
     >
-      <tr className="h-10">
+      <tr style={{ height: rowHeight }}>
         {columns.map((column) => (
-          <td key={column.id} className="min-w-0 px-0.5 py-1.5 text-center align-middle whitespace-nowrap">
-            <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{renderCell(column, request)}</div>
+          <td key={column.id} className={`min-w-0 px-0.5 ${column.id === 'endpoint' ? 'py-0.5' : 'py-1.5'} text-center align-middle whitespace-nowrap`}>
+            <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{renderCell(column, request, onViewDispatch)}</div>
           </td>
         ))}
       </tr>
@@ -448,6 +230,7 @@ const RequestRow = ({ request, columns, onCopyId, onDoubleClick }) => {
  * @param {Array} props.visibleColumns - 可见列ID数组
  * @param {Array} props.columnConfigs - 列配置数组
  * @param {Function} props.onRowDoubleClick - 双击行回调
+ * @param {Function} props.onViewDispatch - 打开当前请求的完整调度详情
  */
 const RequestsTable = ({
   summary,
@@ -458,18 +241,25 @@ const RequestsTable = ({
   onPageSizeChange,
   visibleColumns = [],
   columnConfigs = [],
-  onRowDoubleClick
+  onRowDoubleClick,
+  onViewDispatch
 }) => {
   const regionRef = useRef(null);
+  const headerRef = useRef(null);
   const [tableWidth, setTableWidth] = useState(900);
+  const [bodyHeight, setBodyHeight] = useState(0);
 
   useEffect(() => {
     const region = regionRef.current;
-    const measure = () => setTableWidth(region.clientWidth);
+    const measure = () => {
+      setTableWidth(region.clientWidth);
+      setBodyHeight(Math.max(0, region.clientHeight - (headerRef.current?.offsetHeight || 0)));
+    };
     measure();
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(measure);
       observer.observe(region);
+      if (headerRef.current) observer.observe(headerRef.current);
       return () => observer.disconnect();
     }
     window.addEventListener('resize', measure);
@@ -484,13 +274,15 @@ const RequestsTable = ({
   // 获取可见的列配置
   const visibleColumnConfigs = columnConfigs.filter(col => visibleColumns.includes(col.id));
   const layout = requestColumnLayout(visibleColumnConfigs, tableWidth);
+  const rowHeight = requestRowHeight(bodyHeight, 0, pagination.pageSize);
+  const showScrollbar = rowHeight * requests.length > bodyHeight;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       {summary}
 
       {/* 表格 */}
-      <div ref={regionRef} role="region" aria-label="请求明细表格" tabIndex={0} className="scrollbar-visible relative min-h-0 min-w-0 flex-1 overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500">
+      <div ref={regionRef} role="region" aria-label="请求明细表格" tabIndex={0} className={`${showScrollbar ? 'scrollbar-visible ' : ''}relative min-h-0 min-w-0 flex-1 overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500`}>
         {loading && (
           <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
             <LoadingSpinner text="加载请求数据..." />
@@ -501,7 +293,7 @@ const RequestsTable = ({
           <colgroup>
             {layout.columns.map(col => <col key={col.id} style={{ width: `${col.layoutWidth / layout.tableWidth * 100}%` }} />)}
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500 border-b border-gray-100">
+          <thead ref={headerRef} className="sticky top-0 z-10 bg-gray-50 text-gray-500 border-b border-gray-100">
             <tr>
               {layout.columns.map(col => (
                 <th
@@ -527,9 +319,11 @@ const RequestsTable = ({
               <RequestRow
                 key={req.rawRequestId || req.requestId}
                 request={req}
+                rowHeight={rowHeight}
                 columns={layout.columns}
                 onCopyId={handleCopyId}
                 onDoubleClick={onRowDoubleClick}
+                onViewDispatch={onViewDispatch}
               />
             ))
           )}

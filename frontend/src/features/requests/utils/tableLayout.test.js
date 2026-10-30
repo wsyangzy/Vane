@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TABLE_COLUMNS, DEFAULT_VISIBLE_COLUMNS } from './constants.js';
-import { requestColumnLayout } from './tableLayout.js';
+import { requestColumnLayout, requestRowHeight } from './tableLayout.js';
 
 test('resizing fits every selected field into one row without horizontal scrolling', () => {
   for (const selected of [TABLE_COLUMNS.filter((column) => DEFAULT_VISIBLE_COLUMNS.includes(column.id)), TABLE_COLUMNS]) {
@@ -24,4 +24,16 @@ test('responsive layout respects hidden fields and does not mutate selection or 
   assert.deepEqual(requestColumnLayout(selected, 700).columns.map(({ id }) => id), ['requestId', 'timestamp', 'cost']);
   assert.deepEqual(selected, before);
   assert.deepEqual(requestColumnLayout([], 900), { columns: [], tableWidth: 0 });
+});
+
+test('complete request pages fill the viewport while short pages preserve density', () => {
+  for (const height of [480, 640, 900]) {
+    const rowHeight = requestRowHeight(height, 36, 10);
+    assert.ok(rowHeight * 10 + 36 <= height);
+    assert.ok(height - (rowHeight * 10 + 36) <= 1.001, 'only the table border and rounding allowance may remain');
+    assert.ok(rowHeight * 3 + 36 < height, 'a short last page must not enlarge its remaining rows');
+  }
+  assert.equal(requestRowHeight(300, 36, 10), 40);
+  assert.equal(requestRowHeight(700, 36, 50), 40);
+  assert.equal(requestRowHeight(0, 0, 10), 40);
 });

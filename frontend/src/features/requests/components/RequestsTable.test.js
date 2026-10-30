@@ -47,7 +47,7 @@ test('request display calculations preserve retry, transfer and token semantics'
 });
 
 test('request channel failover display is data-driven for Claude and Codex', () => {
-  assert.match(source, /requestHasInterChannelTransfer\(request\)/);
+  assert.equal(requestHasInterChannelTransfer({ provider: 'codex', endpointChain: [{ channel: 'A' }, { channel: 'B' }] }), true);
   assert.match(detailSource, /const showChannelInChain = requestHasInterChannelTransfer\(request\)/);
   assert.doesNotMatch(source, /provider === 'codex'\) return false/);
   assert.doesNotMatch(source, /provider \|\| 'claude'\) !== 'codex'/);
@@ -59,7 +59,7 @@ test('request transfer indicators use the shared Route icon for Claude and Codex
   assert.match(source, /aria-label=\{`渠道切换 \$\{channelTransferCount\} 次`\}/);
   assert.match(source, /<span>\{channelTransferCount\}<\/span>/);
   assert.doesNotMatch(source, /<Tooltip content="渠道间转移记录">/);
-  assert.equal(source.match(/<Route className="w-2\.5 h-2\.5" \/>/g)?.length, 2);
+  assert.equal(source.match(/<Route className="w-2\.5 h-2\.5" \/>/g)?.length, 1);
   assert.match(source, /<Route className="w-2\.5 h-2\.5" \/>/);
   assert.doesNotMatch(source, /<GitBranch/);
 });
@@ -126,8 +126,8 @@ test('request detail keeps cancellation out of the red error card and uses one f
 });
 
 test('request detail tabs flag empty privacy and chain content', () => {
-  assert.match(detailSource, /empty: !privacyRedacted/);
-  assert.match(detailSource, /empty: chainNodes\.length === 0/);
+  assert.match(detailSource, /empty: !hasPrivacyRecord/);
+  assert.match(detailSource, /empty: !dispatchTrace && chainNodes\.length === 0/);
 });
 
 test('request detail chain cards surface per-hop attempts and upstream status', () => {

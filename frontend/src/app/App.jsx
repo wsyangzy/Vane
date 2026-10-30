@@ -151,6 +151,7 @@ const GlobalAlerts = () => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('overview');
+  const [requestProvider, setRequestProvider] = useState('');
   const [clientVersions, setClientVersions] = useState({ claude: '', codex: '' });
   const versionCheckRef = useRef(null);
 
@@ -239,15 +240,25 @@ function App() {
   // SSE 连接状态（用于全局状态指示）
   const { connectionStatus } = useSSE(handleStatusUpdate, { events: 'status' });
 
+  const openProviderRequests = useCallback((provider) => {
+    setRequestProvider(provider);
+    setActiveTab('requests');
+  }, []);
+
+  const navigateToTab = (tab) => {
+    setRequestProvider('');
+    setActiveTab(tab);
+  };
+
   // 渲染当前页面
   const renderPage = () => {
     const pages = {
       overview: <OverviewPage />,
-      channels: <ChannelsPage clientVersion={clientVersions.claude} />,
-      codex: <CodexPage clientVersion={clientVersions.codex} />,
+      channels: <ChannelsPage clientVersion={clientVersions.claude} onViewRequests={openProviderRequests} />,
+      codex: <CodexPage clientVersion={clientVersions.codex} onViewRequests={openProviderRequests} />,
       // 组管理页面已移除
       // groups: <GroupsPage />,
-      requests: <RequestsPage />,
+      requests: <RequestsPage key={requestProvider || 'all'} initialProvider={requestProvider} />,
       privacy: <PrivacyPage />,
       pricing: <PricingPage />,
       // 设置页面（可编辑）
@@ -306,7 +317,7 @@ function App() {
         {/* 顶部导航 */}
         <Header
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={navigateToTab}
           connectionStatus={connectionStatus}
           proxyStatus={proxyStatus}
         />

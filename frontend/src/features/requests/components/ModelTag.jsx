@@ -273,6 +273,11 @@ const ModelTag = ({
 }) => {
   const modelStyle = getModelStyle(model);
   const BrandIcon = MODEL_ICONS[modelStyle.icon] || GenericModelIcon;
+  // Segoe UI's g/p descenders put GPT names below the line-box center.
+  // Lift the text's visible center while keeping the icon centered in the tag.
+  const nameAlignment = modelStyle.icon === 'openai'
+    ? (compact ? '-translate-y-[1.5px]' : '-translate-y-px')
+    : '';
   const displayName = (!model || model === 'unknown') ? '-' : model;
   const rewriteIndicator = getRewriteIndicator(rewriteSource);
   const rewriteTitle = rewriteIndicator
@@ -294,10 +299,10 @@ const ModelTag = ({
   const routeTitle = routeIndicator ? `${routeIndicator.label}：${[route.title, route.mode, route.stage].filter(Boolean).join(' · ')}` : '';
   const tag = (
     <span
-      className={`inline-flex items-center whitespace-nowrap rounded-md border py-0.5 font-normal leading-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${compact ? 'min-w-0 max-w-full gap-0.5 px-1 text-[11px]' : 'w-fit max-w-none gap-1 px-2 text-xs'} ${modelStyle.classes} ${className}`}
+      className={`model-tag inline-flex h-[26px] items-center justify-center whitespace-nowrap rounded-md border py-0 align-middle font-normal leading-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${compact ? 'min-w-0 max-w-full gap-1 px-1 text-[11px]' : 'w-fit max-w-none gap-1 px-2 text-xs'} ${modelStyle.classes} ${className}`}
     >
       <BrandIcon className={modelStyle.icon === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
-      <span className={compact ? 'min-w-0 overflow-hidden text-ellipsis' : ''}>{displayName}</span>
+      <span className={`model-tag-name block leading-4 ${nameAlignment} ${compact ? 'min-w-0 overflow-hidden text-ellipsis' : ''}`}>{displayName}</span>
       {rewriteIndicator && !(rewriteSource === 'route' && routeIndicator) && !(rewriteSource === 'mapping' && route?.kind === 'mapping') && (
         <Replace
           className={`h-3 w-3 shrink-0 -scale-x-100 stroke-[2.4] ${rewriteIndicator.classes}`}

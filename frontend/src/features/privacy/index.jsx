@@ -52,13 +52,13 @@ const MODES = [
     value: 'detect',
     label: '仅检测',
     icon: Eye,
-    description: '默认不改写；规则拦截与渠道设置仍生效。'
+    description: '只记录命中，所有渠道原文放行，不替换、不拦截。'
   },
   {
     value: 'redact',
     label: '脱敏',
     icon: ShieldCheck,
-    description: '按规则与渠道设置替换命中内容。'
+    description: '统一替换敏感内容，额外放行规则除外；回复还原由运行设置控制。'
   }
 ];
 
@@ -69,25 +69,6 @@ const MATCH_TYPES = [
   { value: 'builtin', label: '内置', helper: '带校验位与卡组织画像的确定型 PII 匹配器，误报率远低于纯正则。' }
 ];
 
-const REPLACEMENT_MODES = [
-  { value: 'placeholder', label: '占位符', helper: '统一替换成固定文本，如 [手机号]。' },
-  {
-    value: 'pseudonym',
-    label: '假名',
-    helper: '替换成格式合法但虚构的值。同一请求内同值同假名，AI 仍能区分多个客户；不留任何映射记录。'
-  }
-];
-
-const PSEUDONYM_KIND_LABELS = {
-  name: '姓名',
-  phone: '手机号',
-  id_card: '身份证',
-  bank_card: '银行卡',
-  secret: '密钥',
-  token: '令牌',
-  api_key: 'API Key',
-  custom: '通用'
-};
 
 // 内置匹配器的人类可读说明。
 // pattern 字段存的是 builtin:xxx 内部标识，直接展示给用户没有意义。
@@ -220,7 +201,8 @@ const emptyRule = () => ({
   matchType: 'literal',
   pattern: '',
   action: 'redact',
-  replacementMode: 'placeholder',
+  replacementMode: 'reversible',
+  restoreResponse: true,
   placeholder: '[已脱敏]',
   pseudonymKind: 'custom',
   source: 'custom',
@@ -293,7 +275,7 @@ const ModeSelector = ({ mode, onChange, saving }) => (
           className="privacy-mode"
           data-active={active}
         >
-          <span className="privacy-mode-label"><Icon size={14} /><span>{item.label}</span>{active && <Check size={12} className="ml-auto" />}</span>
+          <span className="privacy-mode-label"><Icon size={14} /><span>{item.label}</span><Check size={12} className="privacy-mode-check" aria-hidden="true" /></span>
         </button>
       );
     })}
@@ -314,7 +296,7 @@ const UnscannedPathsBanner = ({ paths, onClear }) => {
             有 {total} 个请求未经隐私扫描
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-amber-800">
-            以下路径不在字段白名单内，隐私规则未对其生效。若这些路径会携带客户信息，请改用「拒发请求」策略，或反馈该路径以便补充白名单。
+            以下路径不在扫描范围内，请求已原文放行。可反馈这些路径以便补充扫描支持；是否保留此类记录可在运行设置中调整。
           </p>
           <details className="privacy-paths"><summary>查看 {paths.length} 个未覆盖路径<ChevronDown size={12} /></summary><div className="mt-2 space-y-1">
             {paths.map((item) => (
@@ -405,9 +387,21 @@ const LegacyRulesPanel = ({ rules, onDiscard }) => {
   );
 };
 
-const RuleRow = ({ rule, settings, onEdit, onDelete, onToggle, busy, selected, onSelect }) => {
+const RuleRow = ({ rule, mode, restoreResponses, onEdit, onDelete, onToggle, busy, selected, onSelect }) => {
   const isBuiltin = rule.source === 'builtin';
   const action = rule.action;
+  const inactive = !rule.enabled || mode === 'disabled';
+  const effect = !rule.enabled ? '已停用'
+    : mode === 'disabled' ? '未开启'
+      : action === 'allow' ? ''
+        : mode === 'detect' ? '仅检测'
+          : restoreResponses && rule.restoreResponse ? '回复还原' : '回复不还原';
+  const actionTone = inactive ? 'border-slate-200 bg-slate-50 text-slate-500'
+    : action === 'allow' ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : 'border-indigo-200 bg-indigo-50 text-indigo-700';
+  const effectTone = inactive ? 'border-slate-200 bg-slate-50 text-slate-500'
+    : effect === '回复不还原' ? 'border-amber-200 bg-amber-50 text-amber-700'
+      : 'border-sky-200 bg-sky-50 text-sky-700';
   return (
     <tr data-selected={selected} data-enabled={rule.enabled} data-action={action}>
       <td className="py-2.5 pr-2">
@@ -436,14 +430,16 @@ const RuleRow = ({ rule, settings, onEdit, onDelete, onToggle, busy, selected, o
             {describePattern(rule)}
           </span></Tooltip>
         ) : (
-          <code className="privacy-rule-pattern font-mono">
+          <Tooltip asChild content={<code className="font-mono text-[11px] font-normal">{rule.pattern}</code>}><code className="privacy-rule-pattern font-mono" tabIndex={0}>
             {rule.pattern}
-          </code>
+          </code></Tooltip>
         )}
       </td>
       <td>
-        <span className="privacy-rule-type">{action === 'allow' ? '例外放行' : action === 'block' ? '拦截' : action === 'detect' ? '仅检测' : settings.restoreResponses ? '可逆替身' : rule.replacementMode === 'pseudonym' ? '生成假名' : '占位符替换'}</span>
-        <span className="privacy-rule-pattern">{action === 'allow' ? '豁免完整命中值' : action === 'block' ? '本机拒发，不重试' : action === 'detect' ? '记录命中，原文放行' : settings.restoreResponses ? '会话内稳定替换' : rule.replacementMode === 'pseudonym' ? PSEUDONYM_KIND_LABELS[rule.pseudonymKind] || rule.pseudonymKind : rule.placeholder || '[已脱敏]'}</span>
+        <div className="privacy-rule-badges">
+          <Badge className={actionTone}>{action === 'allow' ? '额外放行' : '脱敏'}</Badge>
+          {effect && <Badge className={effectTone}>{effect}</Badge>}
+        </div>
       </td>
       <td className="py-2.5 pr-3 text-xs text-slate-500">{rule.priority}</td>
       <td className="py-2.5">
@@ -472,7 +468,7 @@ const RuleRow = ({ rule, settings, onEdit, onDelete, onToggle, busy, selected, o
   );
 };
 
-const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, builtinMatchers = [] }) => {
+const RuleModal = ({ open, rule, mode, restoreResponses, saving, error, onChange, onClose, onSubmit, builtinMatchers = [] }) => {
   if (!open) return null;
   // 种子化的内置规则匹配逻辑锁定；用户新建的内置匹配器规则（source=custom）可以改选匹配器
   const isBuiltin = rule.source === 'builtin';
@@ -502,7 +498,6 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
     });
   };
   const matchMeta = MATCH_TYPES.find((item) => item.value === rule.matchType);
-  const replacementMeta = REPLACEMENT_MODES.find((item) => item.value === rule.replacementMode);
 
   return (
     <PrivacyDialog title={rule.id ? '编辑规则' : '新建规则'} icon={PencilLine} busy={saving} onClose={onClose} footer={<><Button variant="secondary" size="sm" icon={X} onClick={onClose} disabled={saving}>取消</Button><Button size="sm" icon={Check} onClick={onSubmit} loading={saving}>保存规则</Button></>}>
@@ -552,7 +547,7 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
                 onChange={(event) => onChange({ ...rule, priority: Number(event.target.value) })}
                 className={`mt-1.5 ${FIELD_CLASS}`}
               />
-              <p className="mt-1 text-xs text-slate-500">数值越小越先匹配。完整值放行先判断，拦截和完整私钥优先于其他规则。</p>
+              <p className="mt-1 text-xs text-slate-500">数值越小越先匹配。额外放行先判断，完整私钥优先于其他普通规则。</p>
             </label>
           </div>
 
@@ -609,71 +604,17 @@ const RuleModal = ({ open, rule, saving, error, onChange, onClose, onSubmit, bui
           </label>
           )}
 
-          <div className={`grid gap-4 ${rule.action === 'redact' ? 'sm:grid-cols-2' : ''}`}>
-            <div className="block text-sm">
-              <span className="font-medium text-slate-700">动作</span>
-              <div className="mt-1.5">
-                <CustomSelect
-                  fullWidth
-                  ariaLabel="规则动作"
-                  value={rule.action}
-                  onChange={(value) => onChange({ ...rule, action: value })}
-                  options={[
-                    { value: 'redact', label: '替换' },
-                    { value: 'block', label: '拦截 · 拒绝发送' },
-                    { value: 'detect', label: '仅记录命中' },
-                    { value: 'allow', label: '例外放行 · 豁免完整值' }
-                  ]}
-                />
-              </div>
-              {rule.action === 'allow' && <p className="mt-1 text-xs text-slate-500">仅当其他规则的完整命中值符合此规则时，才免于检测、替换和拦截。指定文本忽略大小写，子串相同不会放行整个值。</p>}
+          {mode === 'redact' && <div className="divide-y divide-slate-200/70 rounded-lg border border-slate-200 bg-slate-50/60 px-3">
+            <div className="flex items-center justify-between gap-3 py-2.5">
+              <span className="text-xs font-medium text-slate-700">额外放行</span>
+              <Toggle label="额外放行" checked={rule.action === 'allow'} disabled={saving} onChange={allow => onChange({ ...rule, action: allow ? 'allow' : 'redact', restoreResponse: allow ? false : (rule.restoreResponse ?? true) })} />
             </div>
+            {restoreResponses && rule.action !== 'allow' && <div className="flex items-center justify-between gap-3 py-2.5">
+              <span className="text-xs font-medium text-slate-700">回复还原</span>
+              <Toggle label="回复还原" checked={rule.restoreResponse ?? true} disabled={saving} onChange={restoreResponse => onChange({ ...rule, restoreResponse })} />
+            </div>}
+          </div>}
 
-            {rule.action === 'redact' && (
-              <div className="block text-sm">
-                <span className="font-medium text-slate-700">替换方式</span>
-                <div className="mt-1.5">
-                  <CustomSelect
-                    fullWidth
-                    ariaLabel="替换方式"
-                    value={rule.replacementMode}
-                    onChange={(value) => onChange({ ...rule, replacementMode: value })}
-                    options={REPLACEMENT_MODES.map((item) => ({ value: item.value, label: item.label }))}
-                  />
-                </div>
-                <p className="mt-1 text-xs text-slate-500">{replacementMeta?.helper}</p>
-              </div>
-            )}
-          </div>
-
-          {rule.action === 'redact' && rule.replacementMode === 'placeholder' && (
-            <label className="block text-sm">
-              <span className="font-medium text-slate-700">占位符</span>
-              <input
-                value={rule.placeholder}
-                onChange={(event) => onChange({ ...rule, placeholder: event.target.value })}
-                className={`mt-1.5 ${FIELD_CLASS}`}
-              />
-            </label>
-          )}
-
-          {rule.action === 'redact' && rule.replacementMode === 'pseudonym' && (
-            <div className="block text-sm">
-              <span className="font-medium text-slate-700">假名类别</span>
-              <div className="mt-1.5">
-                <CustomSelect
-                  fullWidth
-                  ariaLabel="假名类别"
-                  value={rule.pseudonymKind}
-                  onChange={(value) => onChange({ ...rule, pseudonymKind: value })}
-                  options={Object.entries(PSEUDONYM_KIND_LABELS).map(([value, label]) => ({ value, label }))}
-                />
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                生成格式合法的虚构值（身份证、银行卡带正确校验位），避免上游因格式校验拒绝请求。
-              </p>
-            </div>
-          )}
         </fieldset>
 
     </PrivacyDialog>
@@ -766,7 +707,7 @@ const TestModal = ({ open, onClose }) => {
           />
           {result?.error && (
             <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-              {result.blocked ? '预演结果：该请求会被本机策略拒发。' : '扫描失败：'}{result.error}
+              {result.blocked ? '预演结果：该请求会被本机策略拒发。' : '预演提示：'}{result.error}
             </p>
           )}
           {result && mode === 'request' && !result.supported && (
@@ -1040,7 +981,7 @@ const PrivacyPage = () => {
               onChange={(mode) => saveSettings({ ...settings, mode })}
             />
           </div>
-          <p>{MODES.find(item => item.value === settings.mode)?.description}<span>选择后立即生效</span></p>
+          <p>{MODES.find(item => item.value === settings.mode)?.description}<span>{settings.mode === 'redact' ? settings.restoreResponses ? '回复还原：按规则生效' : '回复还原：全局关闭' : '选择后立即生效'}</span></p>
         </section>
 
         <LegacyRulesPanel
@@ -1122,7 +1063,7 @@ const PrivacyPage = () => {
           ) : (
             // 限高滚动而非无限增高：规则可以到几十条，页面不该跟着一直变长
             <div className="privacy-rule-scroll">
-              <table className="privacy-rule-table" aria-label="隐私规则列表">
+              <table className="privacy-rule-table" aria-label="隐私规则列表" data-mode={settings.mode}>
                 <colgroup><col className="privacy-col-check" /><col className="privacy-col-state" /><col className="privacy-col-name" /><col className="privacy-col-pattern" /><col className="privacy-col-action" /><col className="privacy-col-priority" /><col className="privacy-col-operations" /></colgroup>
                 <thead className="sticky top-0 z-10 bg-white text-xs text-slate-500">
                   <tr className="border-b border-slate-100">
@@ -1137,7 +1078,7 @@ const PrivacyPage = () => {
                     <th className="w-12 py-2 pr-3 font-medium">启用</th>
                     <th className="py-2 pr-3 font-medium">名称</th>
                     <th className="py-2 pr-3 font-medium">匹配内容</th>
-                    <th className="py-2 pr-3 font-medium">处理方式</th>
+                    <th className="py-2 pr-3 font-medium">规则用途</th>
                     <th className="py-2 pr-3 font-medium">优先级</th>
                     <th className="py-2"><span className="sr-only">操作</span></th>
                   </tr>
@@ -1147,7 +1088,8 @@ const PrivacyPage = () => {
                     <RuleRow
                       key={rule.id}
                       rule={rule}
-                      settings={settings}
+                      mode={settings.mode}
+                      restoreResponses={settings.restoreResponses}
                       busy={bulkBusy || busyRuleId === rule.id}
                       selected={selectedIds.includes(rule.id)}
                       onSelect={toggleSelectOne}
@@ -1183,6 +1125,8 @@ const PrivacyPage = () => {
       <RuleModal
         open={Boolean(modalRule)}
         rule={modalRule || emptyRule()}
+        mode={settings.mode}
+        restoreResponses={settings.restoreResponses}
         builtinMatchers={overview.builtinMatchers || []}
         saving={modalSaving}
         error={modalError}

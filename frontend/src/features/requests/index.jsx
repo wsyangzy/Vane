@@ -16,12 +16,13 @@ import { useAutoRefresh } from './hooks/useAutoRefresh.js';
 import { FiltersPanel, StatsOverview, RequestsTable, Toolbar, RequestDetailModal } from './components/index.js';
 import { PAGINATION_CONFIG } from './utils/constants.js';
 import { buildRequestFilterResources } from './utils/filterResources.js';
+import { readRequestDispatchTrace } from './utils/dispatchTrace.js';
 
 // ============================================
 // Requests 页面
 // ============================================
 
-const RequestsPage = () => {
+const RequestsPage = ({ initialProvider = '' }) => {
   // ==================== 状态管理 ====================
 
   // 数据状态
@@ -42,6 +43,8 @@ const RequestsPage = () => {
   // 详情模态框状态
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [detailInitialTab, setDetailInitialTab] = useState('overview');
+  const detailReturnFocusRef = useRef(null);
   const requestPageRef = useRef(null);
 
   // 筛选器 Hook
@@ -49,7 +52,7 @@ const RequestsPage = () => {
     filters,
     updateFilters,
     buildQueryParams
-  } = useFilters();
+  } = useFilters({ provider: initialProvider });
 
   // 列配置 Hook
   const {
@@ -77,6 +80,13 @@ const RequestsPage = () => {
     () => buildRequestFilterResources(claudeChannels, codexChannels),
     [claudeChannels, codexChannels]
   );
+  const displayRequests = useMemo(() => {
+    const resources = [
+      ...claudeChannels.map(channel => ({ ...channel, provider: 'claude' })),
+      ...codexChannels.map(channel => ({ ...channel, provider: 'codex' })),
+    ];
+    return requests.map(request => ({ ...request, dispatchTrace: readRequestDispatchTrace(request, resources) }));
+  }, [requests, claudeChannels, codexChannels]);
 
   // ==================== 数据加载 ====================
 
@@ -133,10 +143,7 @@ const RequestsPage = () => {
       // Codex 渠道列表（用于在渠道筛选下拉框中合并展示）
       setCodexChannels(Array.isArray(codexChannelsData) ? codexChannelsData : []);
 
-      setClaudeChannels((claudeChannelsData || []).map(channel => ({
-        name: channel.name,
-        credentialGroups: (channel.credentialGroups || []).map(group => ({ name: group.name }))
-      })));
+      setClaudeChannels(Array.isArray(claudeChannelsData) ? claudeChannelsData : []);
     } catch (err) {
       console.error('加载请求追踪数据失败:', err);
       if (!isSilent) {
@@ -193,8 +200,10 @@ const RequestsPage = () => {
     }));
   };
 
-  // 双击行打开详情
-  const handleRowDoubleClick = (request) => {
+  // 调度入口直接打开链路页签，普通请求详情从概览开始。
+  const handleOpenDetails = (request, initialTab = 'overview') => {
+    detailReturnFocusRef.current = document.activeElement;
+    setDetailInitialTab(initialTab);
     setSelectedRequest(request);
     setIsDetailModalOpen(true);
   };
@@ -203,6 +212,7 @@ const RequestsPage = () => {
   const handleCloseDetailModal = () => {
     setIsDetailModalOpen(false);
     setSelectedRequest(null);
+    if (detailReturnFocusRef.current?.isConnected) detailReturnFocusRef.current.focus();
   };
 
   // ==================== 生命周期 ====================
@@ -222,7 +232,7 @@ const RequestsPage = () => {
           <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
             <ListTree className="h-5 w-5" />
           </div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">请求追踪</h1>
+          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-slate-900">请求追踪{filters.provider && <span className="rounded-md border border-indigo-100 bg-indigo-50 px-1.5 py-0.5 text-[11px] font-medium tracking-normal text-indigo-600">{filters.provider === 'codex' ? 'Codex' : 'Claude'}</span>}</h1>
         </div>
 
         {/* 工具栏 */}
@@ -263,22 +273,25 @@ const RequestsPage = () => {
               total={pagination.total}
             />
           }
-          requests={requests}
+          requests={displayRequests}
           loading={loading}
           pagination={pagination}
           onPageChange={handlePageChange}
           onPageSizeChange={handlePageSizeChange}
           visibleColumns={visibleColumns}
           columnConfigs={columnConfigs}
-          onRowDoubleClick={handleRowDoubleClick}
+          onRowDoubleClick={handleOpenDetails}
+          onViewDispatch={(request) => handleOpenDetails(request, 'chain')}
         />
       </div>
 
       {/* 请求详情模态框 */}
       <RequestDetailModal
+        key={`${isDetailModalOpen}/${selectedRequest?.requestId || ''}/${detailInitialTab}`}
         isOpen={isDetailModalOpen}
         onClose={handleCloseDetailModal}
         request={selectedRequest}
+        initialTab={detailInitialTab}
         positioningRef={requestPageRef}
       />
     </div>

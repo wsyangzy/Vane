@@ -162,6 +162,28 @@ export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
   // 最终端点内的尝试次数：只有新链路记录了每跳次数；旧记录无从得知，返回 null 由展示层显示 "-"
   const finalAttempts = nodes[nodes.length - 1]?.attempts || 0;
 
+  const dispatch = request.dispatchTrace;
+  if (dispatch && Number.isFinite(dispatch.attemptCount)) {
+    const attempts = dispatch.attempts || [];
+    const resourceKey = node => [node.channel, node.credentialGroup, node.endpoint].join('\u0000');
+    const final = attempts.at(-1);
+    let finalCount = 0;
+    let transfers = 0;
+    for (let index = attempts.length - 1; index >= 0 && resourceKey(attempts[index]) === resourceKey(final); index--) finalCount++;
+    for (let index = 1; index < attempts.length; index++) {
+      if (resourceKey(attempts[index - 1]) !== resourceKey(attempts[index])) transfers++;
+    }
+    return {
+      attemptCount: dispatch.attemptCount,
+      retryCount: Math.max(0, dispatch.attemptCount - 1),
+      finalEndpointAttempts: finalCount || null,
+      transferCount: transfers,
+      transferred: transfers > 0,
+      firstEndpoint: attempts[0]?.endpoint || nodes[0]?.endpoint || '',
+      finalEndpoint: final?.endpoint || nodes.at(-1)?.endpoint || '',
+    };
+  }
+
   return {
     attemptCount: Math.max(1, retryCount + 1, nodes.length),
     finalEndpointAttempts: finalAttempts > 0 ? finalAttempts : null,

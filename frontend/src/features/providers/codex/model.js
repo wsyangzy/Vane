@@ -213,7 +213,7 @@ const normalizeMultiplierValue = (value) => {
 
 const formatEndpointTimeoutInputValue = (value) => {
   const seconds = Number(value ?? 0);
-  if (!Number.isFinite(seconds) || seconds <= 0) return '0';
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
   return String(Math.trunc(seconds));
 };
 

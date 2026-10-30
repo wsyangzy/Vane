@@ -12,10 +12,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Server,
-  Shuffle,
   RotateCcw,
   HeartPulse,
-  ArrowLeftRight,
   Clock,
   Lock,
   Hash,
@@ -35,7 +33,6 @@ import {
   getAllSettings,
   batchUpdateSettings,
   resetCategorySettings,
-  resetSettingsByScope,
   getPortInfo,
   getCacheStatus,
   clearCache
@@ -51,10 +48,8 @@ import {
 // 分类名称到 Lucide 图标的映射
 const CATEGORY_ICONS = {
   server: Server,
-  strategy: Shuffle,
   retry: RotateCcw,
   health: HeartPulse,
-  failover: ArrowLeftRight,
   request: Clock,
   auth: Lock,
   token_counting: Hash,
@@ -63,22 +58,14 @@ const CATEGORY_ICONS = {
   cache: Gauge
 };
 
-const BALANCED_CATEGORY_ORDER = [
-  'token_counting',
-  'strategy',
-  'failover',
-  'cache',
-  'retention',
-  'logging'
-];
-
-const CATEGORY_ORDER = [
-  'auth',
-  'health',
-  'request',
-  'retry',
-  ...BALANCED_CATEGORY_ORDER
-];
+const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'token_counting', 'retention', 'logging', 'cache'];
+// Keep the columns independent and stable as descriptions wrap or values change.
+const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'logging', 'token_counting']);
+const LEGACY_CATEGORIES = new Set(['strategy', 'failover', 'timezone', 'streaming', 'hot_pool']);
+const CURRENT_KEYS = {
+  retry: ['max_total_attempts', 'max_total_duration'],
+  request: ['global_timeout', 'response_header_timeout', 'default_response_header_timeout']
+};
 
 const getCategoryOrder = (categoryName) => {
   const index = CATEGORY_ORDER.indexOf(categoryName);
@@ -373,7 +360,6 @@ const SettingsPage = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [changes, setChanges] = useState({}); // 跟踪变更: { "category.key": newValue }
-  const [failoverProvider, setFailoverProvider] = useState('claude');
   const [saveMessage, setSaveMessage] = useState(null);
   const [initRetryAttempt, setInitRetryAttempt] = useState(0); // 初始化重试次数
   const [resetConfirm, setResetConfirm] = useState({ isOpen: false, category: '', label: '' }); // 重置确认弹窗
@@ -533,9 +519,8 @@ const SettingsPage = () => {
   const settingsByCategory = useMemo(() => {
     const grouped = {};
     for (const setting of settings) {
-      const provider = setting.provider || (setting.category === 'failover' ? 'claude' : 'global');
-      if (setting.category === 'failover' && provider !== failoverProvider) continue;
-      if (setting.category !== 'failover' && provider !== 'global') continue;
+      if ((setting.provider || 'global') !== 'global' || LEGACY_CATEGORIES.has(setting.category)) continue;
+      if (CURRENT_KEYS[setting.category] && !CURRENT_KEYS[setting.category].includes(setting.key)) continue;
       if (!grouped[setting.category]) {
         grouped[setting.category] = [];
       }
@@ -546,7 +531,7 @@ const SettingsPage = () => {
       grouped[category].sort((a, b) => a.display_order - b.display_order);
     }
     return grouped;
-  }, [settings, failoverProvider]);
+  }, [settings]);
 
   // 获取当前值（优先使用变更值）
   const getCurrentValue = useCallback((setting) => {
@@ -557,101 +542,15 @@ const SettingsPage = () => {
     return setting.value;
   }, [changes]);
 
-  // 获取渠道间故障转移开关状态
-  const getChannelFailoverEnabled = useCallback(() => {
-    const failoverSettings = settingsByCategory['failover'];
-    if (!failoverSettings) return true; // 默认开启
-    // 设置项 key 是 "enabled"，category 是 "failover"
-    const channelFailoverSetting = failoverSettings.find(s => s.key === 'enabled');
-    if (!channelFailoverSetting) return true;
-    const value = getCurrentValue(channelFailoverSetting);
-    return value === 'true' || value === true;
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 获取路由策略类型
-  const getStrategyType = useCallback(() => {
-    const strategySettings = settingsByCategory['strategy'];
-    if (!strategySettings) return 'priority';
-    const typeSetting = strategySettings.find(s => s.key === 'type');
-    if (!typeSetting) return 'priority';
-    return getCurrentValue(typeSetting);
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 获取循环重试开关状态
-  const getLoopRetryEnabled = useCallback(() => {
-    const failoverSettings = settingsByCategory['failover'];
-    if (!failoverSettings) return true;
-    const loopRetrySetting = failoverSettings.find(s => s.key === 'loop_retry');
-    if (!loopRetrySetting) return true;
-    const value = getCurrentValue(loopRetrySetting);
-    return value === 'true' || value === true;
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 获取跳过健康检测设置值
-  const getSkipHealthCheck = useCallback(() => {
-    const failoverSettings = settingsByCategory['failover'];
-    if (!failoverSettings) return false;
-    const skipHealthCheckSetting = failoverSettings.find(s => s.key === 'skip_health_check');
-    if (!skipHealthCheckSetting) return false;
-    const value = getCurrentValue(skipHealthCheckSetting);
-    return value === 'true' || value === true;
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 判断设置项是否应该显示（条件显示逻辑）
-  const shouldShowSetting = useCallback((setting) => {
-    // 快速测试相关设置仅在 strategy.type === 'fastest' 时显示
-    if (setting.category === 'strategy' &&
-        ['fast_test_enabled', 'fast_test_cache_ttl', 'fast_test_timeout', 'fast_test_path'].includes(setting.key)) {
-      return getStrategyType() === 'fastest';
-    }
-
-    // loop_retry 和 max_loops 仅在渠道间故障转移开启时显示
-    if (setting.category === 'failover' && setting.key === 'loop_retry') {
-      return getChannelFailoverEnabled();
-    }
-
-    // max_loops 仅在 loop_retry === true 时显示
-    if (setting.category === 'failover' && setting.key === 'max_loops') {
-      return getChannelFailoverEnabled() && getLoopRetryEnabled();
-    }
-
-    // loop_retry_wait_timeout 仅在 loop_retry === true 时显示
-    if (setting.category === 'failover' && setting.key === 'loop_retry_wait_timeout') {
-      return getChannelFailoverEnabled() && getLoopRetryEnabled();
-    }
-
-    // skip_health_check 不再作为单独设置项显示，改为在循环重试弹窗内控制
-    if (setting.category === 'failover' && setting.key === 'skip_health_check') {
-      return false; // 始终隐藏，通过 loop_retry 弹窗控制
-    }
-
-    return true;
-  }, [getStrategyType, getChannelFailoverEnabled, getLoopRetryEnabled]);
-
-  // 判断设置项是否应该禁用（条件禁用逻辑）- 已通过 shouldShowSetting 处理
-  const shouldDisableSetting = useCallback(() => {
-    return false;
-  }, []);
-
-  // 获取禁用提示文案
-  const getDisabledReason = useCallback(() => {
-    return null;
-  }, []);
-
   // 处理设置变更
   const handleSettingChange = useCallback((category, key, value) => {
-    const provider = category === 'failover' ? failoverProvider : 'global';
+    const provider = 'global';
     const changeKey = `${provider}.${category}.${key}`;
     setChanges(prev => ({
       ...prev,
       [changeKey]: value
     }));
-  }, [failoverProvider]);
-
-  // 处理跳过健康检测变更（通过弹窗触发）
-  const handleSkipHealthCheckChange = useCallback((newValue) => {
-    handleSettingChange('failover', 'skip_health_check', newValue ? 'true' : 'false');
-  }, [handleSettingChange]);
+  }, []);
 
   // 保存所有变更
   const handleSave = useCallback(async () => {
@@ -679,15 +578,14 @@ const SettingsPage = () => {
         return setting?.requires_restart;
       });
 
+      // Reload clears stale messages; show the result after it has completed.
+      await loadSettings();
       setAutoHideMessage({
         type: 'success',
         text: requiresRestart
           ? '设置已保存。部分设置需要重启应用后生效。'
           : '设置已保存并生效'
       });
-
-      // 重新加载设置
-      await loadSettings();
     } catch (err) {
       setSaveMessage({ type: 'error', text: err.message || '保存失败' });
     } finally {
@@ -710,11 +608,7 @@ const SettingsPage = () => {
       setSaveMessage(null);
 
       if (isWails) {
-        if (category === 'failover') {
-          await resetSettingsByScope(failoverProvider, category);
-        } else {
-          await resetCategorySettings(category);
-        }
+        await resetCategorySettings(category);
       } else {
         await apiResetSettings(category);
       }
@@ -737,7 +631,7 @@ const SettingsPage = () => {
       setChanges(prev => {
         const newChanges = { ...prev };
         for (const key of Object.keys(newChanges)) {
-          if (key.startsWith(`${category === 'failover' ? failoverProvider : 'global'}.${category}.`)) {
+          if (key.startsWith(`global.${category}.`)) {
             delete newChanges[key];
           }
         }
@@ -748,7 +642,7 @@ const SettingsPage = () => {
     } finally {
       setSaving(false);
     }
-  }, [resetConfirm, isWails, setAutoHideMessage, loadCacheStatus, failoverProvider]);
+  }, [resetConfirm, isWails, setAutoHideMessage, loadCacheStatus]);
 
   // 取消重置操作
   const cancelResetCategory = useCallback(() => {
@@ -766,13 +660,13 @@ const SettingsPage = () => {
 
   // 撤销单项修改
   const handleRevertSetting = useCallback((category, key) => {
-    const provider = category === 'failover' ? failoverProvider : 'global';
+    const provider = 'global';
     const changeKey = `${provider}.${category}.${key}`;
     const newChanges = { ...changes };
     delete newChanges[changeKey];
     setChanges(newChanges);
     setAutoHideMessage({ type: 'info', text: '已撤销该项修改' });
-  }, [changes, setAutoHideMessage, failoverProvider]);
+  }, [changes, setAutoHideMessage]);
 
   const handleClearCache = useCallback(async (names = []) => {
     if (!isWails) return;
@@ -853,75 +747,61 @@ const SettingsPage = () => {
   }
 
   const orderedSettingCategories = categories
-    .filter(category => category.name !== 'server' && category.name !== 'timezone')
+    .filter(category => category.name !== 'server' && !LEGACY_CATEGORIES.has(category.name))
     .sort((a, b) => (
       getCategoryOrder(a.name) - getCategoryOrder(b.name) ||
-      (a.display_order ?? 0) - (b.display_order ?? 0)
+      (a.order ?? 0) - (b.order ?? 0)
     ));
-  const settingCategoriesByName = new Map(
-    orderedSettingCategories.map(category => [category.name, category])
-  );
-  const balancedCategoryStart = getCategoryOrder(BALANCED_CATEGORY_ORDER[0]);
-  const balancedCategoryEnd = getCategoryOrder(BALANCED_CATEGORY_ORDER.at(-1));
-  const leadingSettingCategories = orderedSettingCategories.filter(
-    category => getCategoryOrder(category.name) < balancedCategoryStart
-  );
-  const trailingSettingCategories = orderedSettingCategories.filter(
-    category => getCategoryOrder(category.name) > balancedCategoryEnd
-  );
-
+  const categoryColumns = [
+    orderedSettingCategories.filter(category => PRIMARY_COLUMN_CATEGORIES.has(category.name)),
+    orderedSettingCategories.filter(category => !PRIMARY_COLUMN_CATEGORIES.has(category.name))
+  ];
   const renderSettingCategory = (category, className = '') => {
-    if (category?.name === "failover") return null;
     if (!category) return null;
-    const categorySettings = settingsByCategory[category.name]?.filter(shouldShowSetting) || [];
+    const categorySettings = settingsByCategory[category.name] || [];
+    if (categorySettings.length === 0 && category.name !== 'cache') return null;
+    const enabledKey = category.name === 'health' ? 'active_probes_enabled' : category.name === 'logging' ? 'file_enabled' : null;
+    const enabledSetting = categorySettings.find(setting => setting.key === enabledKey);
+    const dependentDisabled = enabledSetting && String(getCurrentValue(enabledSetting)) === 'false';
+    const settingItems = categorySettings.map(setting => {
+      const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
+      const dependsOnSwitch = category.name === 'health'
+        ? setting.key !== enabledKey
+        : category.name === 'logging' && ['max_file_size', 'max_files', 'compress_rotated'].includes(setting.key);
+      return (
+        <SettingItem
+          key={changeKey}
+          setting={setting}
+          value={getCurrentValue(setting)}
+          onChange={handleSettingChange}
+          disabled={saving || Boolean(dependentDisabled && dependsOnSwitch)}
+          hasChange={changeKey in changes}
+          onRevert={handleRevertSetting}
+        />
+      );
+    });
     return (
       <SettingsSection
         key={category.name}
         compact
         title={category.label}
         icon={CATEGORY_ICONS[category.name] || Settings}
-        description={category.description}
+        description={category.name === 'server' ? undefined : category.description}
         onReset={() => handleResetCategory(category.name, category.label)}
         resetDisabled={saving}
         className={className}
       >
-        {category.name === 'failover' && (
-          <div className="mb-3 inline-flex rounded-lg bg-slate-100 p-1">
-            {['claude', 'codex'].map(provider => (
-              <button
-                key={provider}
-                type="button"
-                onClick={() => setFailoverProvider(provider)}
-                className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${failoverProvider === provider ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                {provider === 'claude' ? 'Claude' : 'Codex'}
-              </button>
-            ))}
+        {category.name === 'server' ? (
+          <div className="grid items-center gap-3 py-2 sm:grid-cols-2">
+            <PortInfo portInfo={portInfo} loading={loading} />
+            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">{settingItems}</div>
           </div>
+        ) : settingItems}
+        {category.name === 'retry' && (
+          <p className="my-2 rounded-lg bg-indigo-50/60 px-2.5 py-2 text-[11px] leading-5 text-indigo-700">
+            候选渠道、调度策略、方案预算和等待恢复，请在 Claude 管理或 Codex 管理的调度方案中配置。
+          </p>
         )}
-        {categorySettings.map(setting => {
-          const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
-          const isSettingDisabled = saving || shouldDisableSetting(setting);
-          const disabledReason = getDisabledReason(setting);
-          // 为 loop_retry 传递跳过健康检测相关 props
-          const isLoopRetrySetting = setting.category === 'failover' && setting.key === 'loop_retry';
-          return (
-            <SettingItem
-              key={changeKey}
-              setting={setting}
-              value={getCurrentValue(setting)}
-              onChange={handleSettingChange}
-              disabled={isSettingDisabled}
-              disabledReason={disabledReason}
-              hasChange={changeKey in changes}
-              onRevert={handleRevertSetting}
-              {...(isLoopRetrySetting && {
-                skipHealthCheck: getSkipHealthCheck(),
-                onSkipHealthCheckChange: handleSkipHealthCheckChange
-              })}
-            />
-          );
-        })}
         {category.name === 'cache' && isWails && (
           <CacheStatusPanel
             status={cacheStatus}
@@ -1069,63 +949,14 @@ const SettingsPage = () => {
         </div>
       )}
 
-      {/* 端口信息 (服务端口分类的特殊处理) */}
-      {categories.find(c => c.name === 'server') && (
-        <SettingsSection
-          title="服务端口"
-          icon={Server}
-          compact
-          onReset={() => handleResetCategory('server', '服务端口')}
-          resetDisabled={saving}
-        >
-          <div className="grid items-center gap-3 py-2 sm:grid-cols-2">
-            <PortInfo portInfo={portInfo} loading={loading} />
-            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">
-              {settingsByCategory['server']?.filter(shouldShowSetting).map(setting => {
-                const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
-                return (
-                  <SettingItem
-                    key={changeKey}
-                    setting={setting}
-                    value={getCurrentValue(setting)}
-                    onChange={handleSettingChange}
-                    disabled={saving}
-                    hasChange={changeKey in changes}
-                    onRevert={handleRevertSetting}
-                  />
-                );
-              })}
-            </div>
+      {renderSettingCategory(categories.find(category => category.name === 'server'))}
+
+      <div className="settings-categories grid grid-cols-1 items-start gap-3 lg:grid-cols-2 lg:items-stretch">
+        {categoryColumns.map((column, index) => (
+          <div key={index} className="settings-column flex min-w-0 flex-col gap-3">
+            {column.map(category => renderSettingCategory(category, 'lg:grow'))}
           </div>
-        </SettingsSection>
-      )}
-
-      {/* 其他设置分类：普通卡片成对对齐，仅对中间高低差明显的卡片做组合布局。 */}
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 gap-3 empty:hidden lg:grid-cols-2">
-          {leadingSettingCategories.map(category => renderSettingCategory(category))}
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 empty:hidden lg:grid-cols-2">
-          {BALANCED_CATEGORY_ORDER.slice(0, 2)
-            .map(name => settingCategoriesByName.get(name))
-            .filter(Boolean)
-            .map(category => renderSettingCategory(category))}
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:items-stretch">
-          <div className="flex min-w-0 flex-col gap-3">
-            {renderSettingCategory(settingCategoriesByName.get('retention'))}
-            {renderSettingCategory(settingCategoriesByName.get('logging'), 'lg:flex-1')}
-          </div>
-          <div className="min-w-0 lg:h-full">
-            {renderSettingCategory(settingCategoriesByName.get('cache'), 'lg:h-full')}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 empty:hidden lg:grid-cols-2">
-          {trailingSettingCategories.map(category => renderSettingCategory(category))}
-        </div>
+        ))}
       </div>
 
       {/* 重置确认弹窗 */}

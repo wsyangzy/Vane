@@ -132,7 +132,8 @@ const normalizePrivacySummary = (value) => ({
   changed: Boolean(value?.changed),
   action: typeof value?.action === 'string' ? value.action : '',
   hitCount: Number(value?.hit_count ?? 0),
-  hits: Array.isArray(value?.hits) ? value.hits : []
+  hits: Array.isArray(value?.hits) ? value.hits : [],
+  activity: value?.activity && typeof value.activity === 'object' && !Array.isArray(value.activity) ? value.activity : null
 });
 
 export const parsePrivacySummary = (value) => {
@@ -160,6 +161,17 @@ export const getPrivacyDisplay = (request) => {
   const flagged = Boolean(request?.privacyRedacted ?? request?.privacy_redacted);
   const hitCount = summary.hitCount || summary.hits.reduce((sum, hit) => sum + (hit.count || 0), 0);
 
+  if (summary.activity) {
+    const activity = summary.activity;
+    const state = Object.hasOwn(PRIVACY_ACTIVITY_LABELS, activity.state) ? activity.state : 'unknown';
+    return {
+      state, label: PRIVACY_ACTIVITY_LABELS[state],
+      hitCount: Math.max(0, Number(activity.hit_count) || 0),
+      hits: Array.isArray(activity.rule_hits) ? activity.rule_hits : [],
+      detectOnly: state === 'detected', activity
+    };
+  }
+
   if (!flagged && hitCount === 0) {
     return { state: 'none', label: '无脱敏摘要', hitCount: 0, hits: [], detectOnly: false };
   }
@@ -173,8 +185,19 @@ export const getPrivacyDisplay = (request) => {
   };
 };
 
+export const PRIVACY_ACTIVITY_LABELS = {
+  redacted: '已脱敏', detected: '仅检测到', blocked: '已拒发', clean: '扫描无命中',
+  disabled: '防护关闭', skipped: '未完整扫描', truncated: '扫描已截断', unknown: '无扫描记录'
+};
+
 export const PRIVACY_STATE_STYLES = {
   redacted: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   detected: 'border-amber-200 bg-amber-50 text-amber-700',
+  blocked: 'border-rose-200 bg-rose-50 text-rose-700',
+  clean: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  disabled: 'border-slate-200 bg-slate-100 text-slate-600',
+  skipped: 'border-amber-200 bg-amber-50 text-amber-700',
+  truncated: 'border-amber-200 bg-amber-50 text-amber-700',
+  unknown: 'border-slate-200 bg-slate-50 text-slate-500',
   none: 'border-slate-200 bg-slate-50 text-slate-400'
 };

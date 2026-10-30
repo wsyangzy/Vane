@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { Pencil, Plus, XCircle } from 'lucide-react';
 import { Button, Input, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
-import ChannelPrivacyLevelSelector from '@/features/providers/shared/privacy/ChannelPrivacyLevelSelector.jsx';
 import { isWailsEnvironment } from '@/services/wails/index.js';
 import { buildInitialChannelForm } from '../model.js';
 
@@ -11,12 +10,9 @@ import { buildInitialChannelForm } from '../model.js';
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
-  const [privacyLevel, setPrivacyLevel] = useState(() => channel?.privacyLevel || '');
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const isEdit = mode === 'edit';
-  const channelId = Number(channel?.id) || 0;
-  const canEditPrivacy = isEdit && channelId > 0;
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
@@ -54,7 +50,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       modelMapping: isEdit ? { ...(channel?.modelMapping || {}) } : {},
       priority: !isEdit && !hasPriority ? -1 : parsedPriority,
       failoverEnabled: formData.failoverEnabled,
-      ...(canEditPrivacy ? { privacyLevel } : {})
     };
 
     await onSave?.(payload);
@@ -74,8 +69,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道'}</h2>
-              <p className="mt-0.5 text-xs text-slate-500">渠道保存基础信息；API Key 在凭证分组中维护，调度方式在调度方案中设置</p>
+              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道 · 1/3'}</h2>
+              <p className="mt-0.5 text-xs text-slate-500">{isEdit ? '渠道保存基础信息；凭证在分组中维护，调度方式在方案中设置' : '填写渠道信息，完成凭证和端点配置后统一创建；中途退出不保存'}</p>
             </div>
           </div>
           <Tooltip content="关闭">
@@ -84,6 +79,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               onClick={onCancel}
               className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
               disabled={loading}
+              aria-label="关闭"
             >
               <XCircle size={18} />
             </button>
@@ -169,9 +165,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               )}
             </div>
 
-            {canEditPrivacy && (
-              <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
-            )}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">

@@ -6,8 +6,24 @@ import {
   getServiceTierMeta,
   getStreamOutcomeMeta,
   isThinkingTypeActive,
+  getPrivacyDisplay,
   parseReasoningConfig
 } from './requestMetadata.js';
+
+test('request protection uses the correlated activity instead of guessing from a missing hit summary', () => {
+  for (const state of ['clean', 'disabled', 'skipped', 'truncated', 'blocked', 'redacted', 'detected']) {
+    const activity = { state, hit_count: state === 'redacted' ? 3 : 0, rule_hits: [], scan_duration_ms: 2.3, restored_count: 1, truncated: state === 'truncated' };
+    const result = getPrivacyDisplay({ privacy_redaction_summary: JSON.stringify({ activity }) });
+    assert.equal(result.state, state);
+    assert.equal(result.hitCount, activity.hit_count);
+    assert.deepEqual(result.activity, activity);
+  }
+  assert.equal(getPrivacyDisplay({}).state, 'none');
+  assert.equal(getPrivacyDisplay({ privacy_redaction_summary: 'broken-json' }).state, 'none');
+  const legacy = getPrivacyDisplay({ privacy_redacted: true, privacy_redaction_summary: JSON.stringify({ changed: true, hits: [{ rule_name: 'old-rule', count: 2 }] }) });
+  assert.equal(legacy.state, 'redacted');
+  assert.equal(legacy.hitCount, 2);
+});
 
 test('stream outcome labels separate an incomplete stream from a completed one', () => {
   assert.equal(getStreamOutcomeMeta('completed').label, '完整');

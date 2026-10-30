@@ -44,6 +44,13 @@ test('Claude bulk actions target only persisted endpoints', () => {
   assert.deepEqual(selectPersistedEndpoints([{ id: 3 }, {}, null, { id: 0 }, { id: 9 }]), [{ id: 3 }, { id: 9 }]);
 });
 
+test('Claude endpoint copying preserves timeout inheritance and explicit overrides', () => {
+  for (const seconds of [undefined, 0, 300, 45]) {
+    const payload = buildClaudeEndpointCopyPayload({ name: 'copy', timeout_seconds: seconds }, 'Claude A', 12);
+    assert.equal(payload.timeoutSeconds, seconds ?? 0);
+  }
+});
+
 test('Claude multiplier form state preserves fractional expressions', () => {
   assert.equal(formatMultiplierInputValue('40/30'), '40/30');
 });
@@ -77,14 +84,15 @@ test('Claude credential groups no longer expose long-context pricing', () => {
   assert.match(source, /disableLongContextPricing:\s*true/);
 });
 
-test('new Claude channels continue through the default credential group and endpoint setup', () => {
-  assert.match(source, /const createdChannel = refreshedChannels\.find\(\(channel\) => channel\?\.name === payload\.name\)/);
-  assert.match(source, /const defaultCredentialGroup = getDefaultClaudeCredentialGroup\(createdChannel\)/);
-  assert.match(source, /setCredentialGroupFormMode\(defaultCredentialGroup \? 'edit' : 'create'\)/);
-  assert.match(source, /const shouldContinueInitialSetup = initialSetupChannelName === credentialGroupFormChannel/);
-  assert.match(source, /copyEndpoints\.length === 0/);
-  assert.match(source, /openCreateEndpointForm\(targetChannelName, savedGroup\)/);
-  assert.match(source, /continueToEndpoint=\{initialSetupChannelName === credentialGroupFormChannel\}/);
+test('new Claude channels keep the first two steps in a draft and commit with the endpoint', () => {
+  const firstStep = source.slice(source.indexOf('const handleCreateChannel ='), source.indexOf('const handleOpenEditChannel ='));
+  assert.match(firstStep, /setChannelSetupDraft\(\{ channel: payload \}\)/);
+  assert.doesNotMatch(firstStep, /await (createChannel|loadChannelsMeta)/);
+  assert.match(source, /if \(channelSetupDraft\) \{[\s\S]*?setShowForm\(true\);\s*return;/);
+  assert.match(source, /continueToEndpoint=\{Boolean\(channelSetupDraft\)\}/);
+  assert.match(source, /await commitChannelSetup\(/);
+  assert.match(source, /credentialGroupId: savedGroup\.id/);
+  assert.match(source, /remove: \(\) => deleteChannel\(channel\.name, true\)/);
   assert.match(source, /\{isEdit \? '保存修改' : '下一步'\}/);
   assert.match(source, /icon=\{isEdit \? CheckCircle2 : undefined\}/);
 });
@@ -94,23 +102,21 @@ test('Claude credential group save closes or advances before refreshing the page
   const end = source.indexOf('const handleSetDefaultCredentialGroup', start);
   const handler = source.slice(start, end);
   const closeIndex = handler.indexOf('closeCredentialGroupForm();');
-  const endpointIndex = handler.indexOf('openCreateEndpointForm(targetChannelName, savedGroup);');
   const refreshIndex = handler.indexOf('await loadStorageStatus({ throwOnError: true });');
 
-  assert.ok(closeIndex >= 0 && endpointIndex > closeIndex && refreshIndex > endpointIndex);
+  assert.ok(closeIndex >= 0 && refreshIndex > closeIndex);
   assert.match(handler, /setCredentialGroupFormError\(getErrorMessage\(err, '保存凭证分组失败'\)\);\s*return;/);
   assert.match(handler, /loadStorageStatus\(\{ throwOnError: true \}\)/);
   assert.match(handler, /loadGroups\(\{ throwOnError: true \}\)/);
   assert.match(handler, /setActionError\(`凭证分组已保存，但列表刷新失败/);
 });
 
-test('Claude creation flow does not silently stop when channel refresh fails', () => {
-  assert.match(source, /let channelCreated = false/);
-  assert.match(source, /channelCreated = true/);
-  assert.match(source, /loadChannelsMeta\(\{ throwOnError: true \}\)/);
-  assert.match(source, /if \(!createdChannel\) \{\s*throw new Error\('渠道已创建，但刷新后未找到该渠道/);
-  assert.match(source, /if \(throwOnError\) throw err/);
-  assert.match(source, /if \(channelCreated\) \{[\s\S]*?setShowCreateChannel\(false\)[\s\S]*?setActionError\(/);
+test('Claude setup hides infrequent model policy and distinguishes a saved channel from refresh failure', () => {
+  assert.match(source, /filter\(\(tab\) => !continueToEndpoint \|\| tab\.key !== 'model'\)/);
+  assert.match(source, /modelPolicy: 'inherit'/);
+  assert.match(source, /savedChannelSetup \? '渠道已创建' : '端点已保存'/);
+  assert.match(source, /initialSetup=\{Boolean\(channelSetupDraft\)\}/);
+  assert.doesNotMatch(source, /initialSetupChannelName/);
 });
 
 test('Claude endpoint actions accept subscription bindings without requiring legacy caller keys', () => {

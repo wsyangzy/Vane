@@ -107,23 +107,24 @@ test('Codex channel creation keeps credentials out of the channel modal', () => 
   assert.match(source, /apiKey: ''/);
 });
 
-test('new Codex channels continue through credential group and endpoint setup', () => {
-  assert.match(source, /const createdChannel = refreshedChannels\.find\(\(channel\) => channel\?\.name === payload\.name\)/);
-  assert.match(source, /if \(isCreating\) \{[\s\S]*?openCreateCredentialGroupForm\(createdChannel, true\)/);
-  assert.match(source, /const \[initialSetupChannelID, setInitialSetupChannelID\] = useState\(null\)/);
-  assert.match(source, /const shouldContinueInitialSetup = initialSetupChannelID === targetChannel\.id/);
-  assert.match(source, /shouldContinueInitialSetup && savedGroup\?\.id && copyEndpoints\.length === 0/);
-  assert.match(source, /openCreateEndpointForm\(targetChannel, savedGroup\)/);
-  assert.match(source, /continueToEndpoint=\{initialSetupChannelID === credentialGroupFormChannel\?\.id\}/);
+test('new Codex channels keep the first two steps in a draft and commit with the endpoint', () => {
+  const firstStep = source.slice(source.indexOf('if (isCreating) {'), source.indexOf("setActionLoading(channelFormMode === 'edit'"));
+  assert.match(firstStep, /setChannelSetupDraft\(\{ channel: draftChannel \}\)/);
+  assert.doesNotMatch(firstStep, /await (createCodexChannel|fetchData)/);
+  assert.match(source, /if \(channelSetupDraft\) \{[\s\S]*?setShowEndpointForm\(true\);\s*return;/);
+  assert.match(source, /continueToEndpoint=\{Boolean\(channelSetupDraft\)\}/);
+  assert.match(source, /await commitChannelSetup\(/);
+  assert.match(source, /credentialGroupId: savedGroup\.id/);
+  assert.match(source, /deleteCodexChannelByID\(createdChannel\.id\)/);
   assert.match(source, /\{isEdit \? '保存修改' : '下一步'\}/);
   assert.match(source, /<Button variant="primary" icon=\{isEdit \? Pencil : undefined\}/);
   assert.match(source, /\{isEdit \? '保存分组' : \(continueToEndpoint \|\| copyEndpointsEnabled \? '下一步' : '添加分组'\)\}/);
 });
 
 test('Codex ordinary credential group creation does not enter endpoint setup', () => {
-  assert.match(source, /const openCreateCredentialGroupForm = \(channel, isInitialSetup = false\) => \{\s*setInitialSetupChannelID\(isInitialSetup \? channel\?\.id \?\? null : null\)/);
-  assert.match(source, /const openEditCredentialGroupForm = \(channel, group\) => \{\s*setInitialSetupChannelID\(null\)/);
-  assert.match(source, /const closeCredentialGroupForm = \(\) => \{[\s\S]*?setInitialSetupChannelID\(null\)/);
+  assert.match(source, /const openCreateCredentialGroupForm = \(channel\) => \{\s*setChannelSetupDraft\(null\)/);
+  assert.match(source, /const openEditCredentialGroupForm = \(channel, group\) => \{\s*setChannelSetupDraft\(null\)/);
+  assert.match(source, /const closeCredentialGroupForm = \(\) => \{[\s\S]*?setChannelSetupDraft\(null\)/);
 });
 
 test('Codex credential group and endpoint saves separate mutation errors from refresh errors', () => {
@@ -137,19 +138,18 @@ test('Codex credential group and endpoint saves separate mutation errors from re
   const endpointStart = source.indexOf('const handleSaveEndpoint = async');
   const endpointEnd = source.indexOf('const handleActivateEndpoint', endpointStart);
   const endpointHandler = source.slice(endpointStart, endpointEnd);
-  assert.equal((endpointHandler.match(/await fetchData\(\{ silent: true, throwOnError: true \}\);/g) || []).length, 2);
+  assert.equal((endpointHandler.match(/await fetchData\(\{ silent: true, throwOnError: true \}\);/g) || []).length, 3);
   assert.equal((endpointHandler.match(/toast\.error\(`端点已保存，但列表刷新失败/g) || []).length, 2);
   assert.match(endpointHandler, /setEndpointFormError\(getErrorMessage\(err, '更新端点失败'\)\);\s*return;/);
   assert.match(endpointHandler, /setEndpointFormError\(getErrorMessage\(err, '保存端点失败'\)\);\s*return;/);
 });
 
-test('Codex creation flow does not silently stop when channel refresh fails', () => {
-  assert.match(source, /let channelCreated = false/);
-  assert.match(source, /channelCreated = true/);
-  assert.match(source, /fetchData\(\{ silent: true, throwOnError: true \}\)/);
-  assert.match(source, /if \(!createdChannel\) \{\s*throw new Error\('渠道已创建，但刷新后未找到该渠道/);
-  assert.match(source, /if \(throwOnError\) throw err/);
-  assert.match(source, /if \(channelCreated\) \{[\s\S]*?closeChannelForm\(\)[\s\S]*?toast\.error\(/);
+test('Codex setup hides infrequent model policy and distinguishes a saved channel from refresh failure', () => {
+  assert.match(source, /filter\(\(tab\) => !continueToEndpoint \|\| tab\.key !== 'model'\)/);
+  assert.match(source, /modelPolicy: 'inherit'/);
+  assert.match(source, /toast\.error\(`渠道已创建，但列表刷新失败/);
+  assert.match(source, /initialSetup \? '完成创建'/);
+  assert.doesNotMatch(source, /initialSetupChannelID/);
 });
 
 test('Codex channels without credential groups do not expose endpoint actions', () => {

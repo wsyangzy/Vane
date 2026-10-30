@@ -6,7 +6,7 @@ import { isWailsEnvironment } from '@/services/wails/index.js';
 // ============================================================================
 // 删除确认弹窗（渠道 / 端点 共用）
 // ============================================================================
-const DeleteConfirmDialog = ({ title, description, hint, loading, onCancel, onConfirm }) => {
+const DeleteConfirmDialog = ({ title, description, hint, loading, confirmDisabled = false, onCancel, onConfirm }) => {
   const isWails = isWailsEnvironment();
   const modalTopPadding = isWails ? 48 : 16;
 
@@ -30,7 +30,7 @@ const DeleteConfirmDialog = ({ title, description, hint, loading, onCancel, onCo
           <Button variant="secondary" onClick={onCancel} disabled={loading}>
             取消
           </Button>
-          <Button variant="danger" icon={Trash2} loading={loading} onClick={onConfirm}>
+          <Button variant="danger" icon={Trash2} loading={loading} disabled={confirmDisabled} onClick={onConfirm}>
             确认删除
           </Button>
         </div>

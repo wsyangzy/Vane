@@ -62,13 +62,13 @@ const EndpointAvailabilityBar = ({ provider = '', channel = '', endpointName = '
     : `最近 ${hours} 小时没有请求记录`;
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+    <section aria-label="请求可用性" className="rd-availability flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-3">
       <div className="flex items-end justify-between gap-3">
         <div className="flex min-w-0 flex-col">
           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-            Availability
+            请求可用性
           </span>
-          <span className="text-[11px] text-slate-500">最近 {hours} 小时 · 按小时</span>
+          <span className="mt-0.5 text-[10px] text-slate-400">最近 {hours} 小时 · 按真实请求统计</span>
         </div>
         <div className="flex flex-shrink-0 items-baseline gap-1">
           <span
@@ -84,7 +84,7 @@ const EndpointAvailabilityBar = ({ provider = '', channel = '', endpointName = '
       {error ? (
         <div className="py-2 text-center text-[11px] text-rose-500">{error}</div>
       ) : (
-        <div role="img" aria-label={summaryLabel} className="flex h-8 items-stretch gap-px">
+        <div role="img" aria-label={summaryLabel} className="flex h-6 items-stretch gap-0.5">
           {(loading ? Array.from({ length: hours }, () => null) : slices).map((slice, index) => {
             if (!slice) {
               return (
@@ -127,12 +127,13 @@ const EndpointAvailabilityBar = ({ provider = '', channel = '', endpointName = '
 
       <div className="flex items-center justify-between text-[10px] text-slate-400">
         <span>{hours} 小时前</span>
+        {!loading && !error && !data?.hasData && <span>暂无请求记录</span>}
         {data?.hasData && (
           <span className="font-mono">平均首字节 {formatMs(data.avgFirstByteMs)}</span>
         )}
         <span>现在</span>
       </div>
-    </div>
+    </section>
   );
 };
 

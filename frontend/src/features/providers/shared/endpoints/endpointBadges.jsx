@@ -8,6 +8,7 @@ const RepeatOffIcon = ({ size = 10, className = '' }) => (
 );
 
 const HEALTH_BADGES = {
+  disabled: ['未开启', ShieldOff, 'border-slate-200 bg-slate-50 text-slate-400'],
   healthy: ['健康', CheckCircle2, 'border-emerald-100 bg-emerald-50 text-emerald-600'],
   unhealthy: ['异常', XCircle, 'border-rose-100 bg-rose-50 text-rose-600'],
   skipped: ['跳过检测', ShieldOff, 'border-purple-200 bg-purple-50 text-purple-600'],

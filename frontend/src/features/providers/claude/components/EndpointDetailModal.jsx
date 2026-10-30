@@ -1,11 +1,10 @@
-import { Activity, Pencil, Trash2, Database, Server, ArrowRight, Calculator, XCircle, Clock, Settings, KeyRound } from 'lucide-react';
+import { Pencil, Trash2, Database, Server, ArrowRight, Calculator, XCircle, Clock, Settings, KeyRound } from 'lucide-react';
 import { Button, Tooltip } from '@/shared/ui/index.js';
-import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModelTag from '@/features/requests/components/ModelTag.jsx';
 import EndpointAvailabilityBar from '@/features/providers/shared/endpoints/EndpointAvailabilityBar.jsx';
-import { EndpointHealthBadge as HealthBadge, EndpointLatencyBadge as LatencyBadge, EndpointRequestFailureBadge as RequestFailedBadge } from '@/features/providers/shared/endpoints/endpointBadges.jsx';
-import { DetailChip, DetailMetricCard, DetailPill, DetailTimeoutPill, DetailTimestampFooter, ModelMappingPair } from '@/features/providers/shared/endpoints/detailParts.jsx';
-import { formatLastCheck, formatDetailMultiplier, getDetailTimestamp, isDefaultDetailMultiplier } from '@/features/providers/shared/formatters.js';
+import { EndpointHealthBadge as HealthBadge, EndpointRequestFailureBadge as RequestFailedBadge } from '@/features/providers/shared/endpoints/endpointBadges.jsx';
+import { EndpointHealthSection, ResourceDetailShell, DetailChip, DetailMetricCard, DetailPill, DetailTimeoutPill, DetailTimestampFooter, ModelMappingPair } from '@/features/providers/shared/endpoints/detailParts.jsx';
+import { formatLastCheck, formatDetailMultiplier, getDetailTimestamp } from '@/features/providers/shared/formatters.js';
 import { getCredentialGroupCostMultiplier } from '../utils/credentialGroups.js';
 
 // ============================================
@@ -23,7 +22,9 @@ const EndpointDetailModal = ({
   onClose,
   onEdit,
   onDelete,
-  onHealth
+  onHealth,
+  onToggleHealth,
+  busy = false
 }) => {
   if (!isOpen || !endpoint) return null;
 
@@ -32,8 +33,8 @@ const EndpointDetailModal = ({
   const createdAt = getDetailTimestamp(endpoint.createdAt, endpoint.created_at, endpoint.CreatedAt);
   const updatedAt = getDetailTimestamp(endpoint.updatedAt, endpoint.updated_at, endpoint.UpdatedAt);
   const rawLastCheck = endpoint.lastCheck || endpoint.last_check || endpoint.LastCheck;
-  const lastCheck = formatLastCheck(rawLastCheck || updatedAt);
-  const inScope = endpoint._health_scope !== false;
+  const lastCheck = formatLastCheck(rawLastCheck);
+  const inScope = endpoint._health_scope !== false && (endpoint.health_state || endpoint.healthState) !== 'disabled';
   const neverChecked = endpoint.never_checked || endpoint.neverChecked || !rawLastCheck;
   const isSkipHealthCheck = endpoint.skipHealthCheck || endpoint.skip_health_check;
   const healthNeverChecked = !inScope || neverChecked;
@@ -45,13 +46,13 @@ const EndpointDetailModal = ({
     : 0;
   const isSuspended = suspendedCountValue > 0;
   const isRequestFailed = healthState === 'request_failed';
-  const showHealthBadge = inScope && (isSkipHealthCheck || !isRequestFailed);
+  const showHealthBadge = !inScope || isSkipHealthCheck || !isRequestFailed;
   const hasFailDetail = (Number(lastFailCode) > 0) || !!lastFailReason || isRequestFailed;
 
   const supportsCountTokens = !!endpoint.supportsCountTokens;
   const priority = Number(endpoint.priority ?? 0);
   const timeoutSeconds = Number(endpoint.timeoutSeconds ?? endpoint.timeout_seconds ?? 0);
-  const hasCustomTimeout = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 && timeoutSeconds !== 300;
+  const hasCustomTimeout = Number.isFinite(timeoutSeconds) && timeoutSeconds > 0;
   const effectiveGlobalTimeoutSeconds = Number(globalTimeoutSeconds) || 300;
   const timeoutLabel = hasCustomTimeout ? `${timeoutSeconds}s` : `${effectiveGlobalTimeoutSeconds}s`;
   const timeoutScope = hasCustomTimeout ? '端点覆盖' : '使用全局超时';
@@ -75,19 +76,6 @@ const EndpointDetailModal = ({
     { label: '5分钟写入', value: credentialGroup?.cacheCreationCostMultiplier ?? credentialGroup?.cache_creation_cost_multiplier ?? endpoint.cacheCreationCostMultiplier ?? endpoint.cache_creation_cost_multiplier ?? 1, tone: 'emerald' },
     { label: '1小时写入', value: credentialGroup?.cacheCreationCostMultiplier1h ?? credentialGroup?.cache_creation_cost_multiplier_1h ?? endpoint.cacheCreationCostMultiplier1h ?? endpoint.cache_creation_cost_multiplier_1h ?? 1, tone: 'emerald' }
   ];
-  const modelMultiplierValueKeys = [
-    ['costMultiplier', 'cost_multiplier'],
-    ['inputCostMultiplier', 'input_cost_multiplier'],
-    ['outputCostMultiplier', 'output_cost_multiplier'],
-    ['cacheReadCostMultiplier', 'cache_read_cost_multiplier']
-  ];
-  const hasCustomEndpointMultiplier = multiplierItems.some((item) => !isDefaultDetailMultiplier(item.value));
-  const hasCustomModelMultiplier = modelMultiplierRules.some((rule) => (
-    modelMultiplierValueKeys.some(([camelKey, snakeKey]) => (
-      !isDefaultDetailMultiplier(rule?.[camelKey] ?? rule?.[snakeKey] ?? 1)
-    ))
-  ));
-  const hasCustomCostMultiplier = hasCustomEndpointMultiplier || hasCustomModelMultiplier;
   const hasModelMapping = modelMappingEntries.length > 0;
 
   const rows = [
@@ -119,141 +107,38 @@ const EndpointDetailModal = ({
 
   // cooldown 相关变量已移除
 
-  return renderModalPortal(
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-fade-in"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose?.();
-        }
-      }}
+  return (
+    <ResourceDetailShell
+      title={endpoint.name || '未命名端点'}
+      eyebrow={`Claude · ${channel} · 端点详情`}
+      subtitle={endpoint.url || '未设置地址'}
+      icon={Server}
+      onClose={onClose}
+      actions={isSqliteMode && <>
+        <Button variant="ghost" size="sm" icon={Pencil} onClick={() => onEdit?.(endpoint)}>编辑</Button>
+        <Tooltip asChild content="删除端点"><button type="button" className="rd-close hover:!text-rose-600" aria-label="删除端点" onClick={() => onDelete?.(endpoint)}><Trash2 size={14} /></button></Tooltip>
+      </>}
+      summary={<>
+        {showHealthBadge && <HealthBadge state={!inScope ? 'disabled' : undefined} healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} detail />}
+        {hasFailDetail && <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} detail />}
+        <DetailPill tone="slate" icon={Settings} mono>P{priority}</DetailPill>
+        <DetailTimeoutPill custom={hasCustomTimeout} value={timeoutLabel} tooltip={`${timeoutScope}: ${timeoutLabel}`} />
+        {supportsCountTokens && <DetailPill tone="slate" icon={Calculator}>count_tokens</DetailPill>}
+      </>}
     >
-      <div
-        className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="border-b border-slate-100 px-6 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-lg font-semibold text-slate-900 truncate">{endpoint.name}</h2>
-                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100">
-                  {channel}
-                </span>
-              </div>
-              <Tooltip content={endpoint.url} className="block min-w-0">
-                <p className="text-xs text-slate-500 font-mono mt-1 truncate">
-                  {endpoint.url}
-                </p>
-              </Tooltip>
-            </div>
-
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <Button variant="ghost" size="sm" icon={Activity} onClick={() => onHealth?.(endpoint)}>健康检测</Button>
-              {isSqliteMode && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    icon={Pencil}
-                    onClick={() => onEdit?.(endpoint)}
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    icon={Trash2}
-                    onClick={() => onDelete?.(endpoint)}
-                  >
-                    删除
-                  </Button>
-                </>
-              )}
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                关闭
-              </Button>
-            </div>
-        </div>
-
-          <div className="mt-2 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {showHealthBadge && (
-              <HealthBadge healthy={endpoint.healthy} neverChecked={healthNeverChecked} skipped={isSkipHealthCheck} detail />
-            )}
-            {hasFailDetail && (
-              <RequestFailedBadge failCode={lastFailCode} failReason={lastFailReason} detail />
-            )}
-            {!hasFailDetail && (
-              <LatencyBadge ms={responseTime} inScope={inScope} detail />
-            )}
-
-            <DetailPill tone="indigo" icon={Settings} mono>
-              P{priority}
-            </DetailPill>
-
-            <DetailTimeoutPill
-              custom={hasCustomTimeout}
-              value={timeoutLabel}
-              tooltip={`${timeoutScope}: ${timeoutLabel}`}
-            />
-
-            <Tooltip content={hasCustomCostMultiplier ? '使用凭证分组配置的计费倍率' : '未配置自定义倍率，使用默认 1x'}>
-              <span className="inline-flex">
-                <DetailPill tone={hasCustomCostMultiplier ? 'indigo' : 'slate'} icon={Database}>
-                  <span className="leading-none">{hasCustomCostMultiplier ? '分组倍率' : '默认倍率'}</span>
-                  <span className="font-mono leading-none">
-                    {formatDetailMultiplier(getCredentialGroupCostMultiplier(credentialGroup, endpoint))}
-                  </span>
-                </DetailPill>
-              </span>
-            </Tooltip>
-
-
-
-
-            {supportsCountTokens && (
-              <Tooltip content="支持 count_tokens">
-                <span className="inline-flex">
-                  <DetailPill tone="purple" icon={Calculator}>
-                    count_tokens
-                  </DetailPill>
-                </span>
-              </Tooltip>
-            )}
-
-            <span className="flex-shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
-              最后检查 {lastCheck}
-            </span>
-          </div>
-          {!isSuspended && hasFailDetail && (
-            <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <XCircle size={16} className="text-rose-600" />
-                <div className="text-sm font-medium text-rose-800">异常详情</div>
-              </div>
-              <div className="space-y-2 text-sm">
-                {lastFailCode > 0 && (
-                  <div className="flex items-start gap-2">
-                    <span className="min-w-[70px] font-medium text-rose-600">状态码:</span>
-                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-rose-900">
-                      {lastFailCode}
-                    </span>
-                  </div>
-                )}
-                {lastFailReason && (
-                  <div className="flex items-start gap-2">
-                    <span className="min-w-[70px] font-medium text-rose-600">失败原因:</span>
-                    <span className="break-all text-rose-900">
-                      {lastFailReason}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="overflow-y-auto p-6">
+      <EndpointHealthSection
+        inScope={inScope}
+        skipped={isSkipHealthCheck}
+        subscription={credentialGroup?.authMode === 'client_passthrough' || endpoint.authMode === 'client_passthrough'}
+        ms={responseTime}
+        lastCheck={lastCheck}
+        onCheck={onHealth ? () => onHealth(endpoint) : undefined}
+        onToggle={onToggleHealth ? (skip) => onToggleHealth(endpoint, skip) : undefined}
+        disabled={busy}
+      />
+      {hasFailDetail && !isSuspended && <DetailMetricCard label="最近异常" icon={XCircle}>
+        <p className="text-xs leading-relaxed text-rose-600 [overflow-wrap:anywhere]">{lastFailCode > 0 && <span className="mr-2 font-mono">HTTP {lastFailCode}</span>}{lastFailReason || '最近一次请求失败'}</p>
+      </DetailMetricCard>}
           <EndpointAvailabilityBar
             provider="claude"
             channel={endpoint.channel || ''}
@@ -402,10 +287,8 @@ const EndpointDetailModal = ({
             </div>
           )}
 
-          <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
-        </div>
-      </div>
-    </div>
+      <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
+    </ResourceDetailShell>
   );
 };
 

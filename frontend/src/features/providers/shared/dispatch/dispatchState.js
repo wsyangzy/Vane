@@ -124,3 +124,19 @@ export function summarizeIntentTraces(traces, provider, profileId) {
   stats.intents = Object.fromEntries(hitsByIntent);
   return stats;
 }
+export function credentialGroupRoutingImpact(workspaces, provider, groupId) {
+  const id = Number(groupId);
+  if (!id) return [];
+  const workspace = workspaces.find((item) => item.provider === provider);
+  const account = workspace?.accounts.find((item) => item.groupId === id);
+  const matches = (target) => !target.profileId && (target.groupId === id || (target.groupId === 0 && account && target.channelId === account.channelId));
+  return workspaces.flatMap((workspace) => workspace.profiles.flatMap((profile) => {
+    const ownsGroup = workspace.provider === provider;
+    const memberReference = ownsGroup && profile.members.some(matches);
+    const targetReference = ownsGroup && [...profile.rules, ...profile.intents].some((rule) => rule.targets.some(matches));
+    const classifierReference = (profile.classifier?.provider || workspace.provider) === provider && profile.classifier?.groupId === id;
+    if (!memberReference && !targetReference && !classifierReference) return [];
+    const losesLastMember = ownsGroup && profile.members.some((member) => member.enabled && member.groupId === id) && !profile.members.some((member) => member.enabled && member.groupId !== id);
+    return [{ id: profile.id, provider: workspace.provider, name: profile.name, losesLastMember, classifierReference }];
+  }));
+}

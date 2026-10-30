@@ -1,14 +1,14 @@
 import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Info, KeyRound, Layers, Maximize2, Minus, MoreVertical, Network, Pencil, Plus, Server, Trash2, X } from 'lucide-react';
+import { Clock3, Info, KeyRound, Layers, Loader2, Maximize2, Minus, MoreVertical, Network, Pencil, Plus, RefreshCw, Server, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { ModalPortalContext, renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SubscriptionStatus } from '@/features/providers/shared/subscriptions/SubscriptionSettings.jsx';
 import { buildChannelGraph, fitChannelGraph, MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM, zoomChannelGraph } from './channelGraph.js';
 
 const iconButton = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-40';
-const menuItem = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-slate-600 hover:bg-slate-100 focus:bg-slate-100 focus:outline-none disabled:opacity-40';
+const menuItem = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-slate-600 hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none disabled:opacity-40';
 
-export default function ChannelStructureDialog({ name, groups, endpoints, busy, onClose, onEdit, onDelete, onAddGroup, onOpenGroup, onEditGroup, onDeleteGroup, onAddEndpoint, onOpenEndpoint, onEditEndpoint, onDeleteEndpoint }) {
+export default function ChannelStructureDialog({ name, groups, endpoints, busy, onClose, onEdit, onDelete, onAddGroup, onOpenGroup, onEditGroup, onDeleteGroup, onAddEndpoint, onOpenEndpoint, onEditEndpoint, onDeleteEndpoint, onHealthEndpoint, onToggleEndpointSkipHealthCheck }) {
   const titleId = useId();
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
@@ -25,10 +25,15 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
   const [dragging, setDragging] = useState(false);
   const [selectedKey, setSelectedKey] = useState(null);
   const [menu, setMenu] = useState(null);
+  const [endpointAction, setEndpointAction] = useState('');
+  const [actionError, setActionError] = useState('');
   const graph = useMemo(() => buildChannelGraph(name, groups, endpoints), [name, groups, endpoints]);
   const view = manualView || fitChannelGraph(graph, viewport);
   const menuNode = graph.nodes.find((node) => node.key === menu?.key);
-  const controlsBusy = busy;
+  const controlsBusy = busy || !!endpointAction;
+  const menuSubscription = menuNode?.group?.authMode === 'client_passthrough';
+  const menuSkipped = !!menuNode?.endpoint?.skipHealthCheck;
+  const menuInScope = menuNode?.endpoint?.inScope !== false;
   const requestClose = useCallback(() => {
     if (!hasOperation) setClosing(true);
   }, [hasOperation]);
@@ -101,7 +106,8 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
     const left = menu.x + element.offsetWidth > shell.clientWidth - 8 ? menu.x - element.offsetWidth - 12 : menu.x;
     element.style.left = `${Math.max(8, Math.min(left, shell.clientWidth - element.offsetWidth - 8))}px`;
     element.style.top = `${Math.max(8, Math.min(menu.y, shell.clientHeight - element.offsetHeight - 8))}px`;
-    element.querySelector('button:not(:disabled)')?.focus();
+    if (menu.keyboard) element.querySelector('button:not(:disabled)')?.focus();
+    else element.focus({ preventScroll: true });
   }, [menu, viewport]);
 
   useEffect(() => {
@@ -132,14 +138,29 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
     const rect = event.currentTarget.getBoundingClientRect();
     const shell = dialogRef.current.getBoundingClientRect();
     menuAnchorRef.current = event.currentTarget;
+    setActionError('');
     setSelectedKey(node.key);
-    setMenu({ key: node.key, x: (atPointer ? event.clientX : rect.right + 6) - shell.left, y: (atPointer ? event.clientY : rect.top) - shell.top });
+    setMenu({ key: node.key, keyboard: event.type === 'keydown' || event.type === 'click' && event.detail === 0, x: (atPointer ? event.clientX : rect.right + 6) - shell.left, y: (atPointer ? event.clientY : rect.top) - shell.top });
   };
   // Provider forms and confirmation dialogs continue to own all mutations.
   const openAction = (callback, ...args) => {
     setMenu(null);
     setManualView(view);
     callback?.(...args);
+  };
+  const runEndpointAction = async (kind, callback) => {
+    if (controlsBusy) return;
+    setEndpointAction(kind);
+    setActionError('');
+    try {
+      await callback();
+      setMenu(null);
+      menuAnchorRef.current?.focus();
+    } catch (error) {
+      setActionError(error?.message || String(error));
+    } finally {
+      setEndpointAction('');
+    }
   };
   const zoom = (factor) => {
     setMenu(null);
@@ -194,6 +215,9 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
               const isSubscription = node.group?.authMode === 'client_passthrough';
               const selected = selectedKey === node.key;
               const Icon = node.kind === 'channel' ? Layers : node.kind === 'group' ? KeyRound : Server;
+              const latency = Number(node.endpoint?.latencyMs);
+              const hasLatency = !isSubscription && Number.isFinite(latency) && latency > 0 && node.endpoint?.inScope !== false;
+              const latencyLabel = node.endpoint?.inScope === false ? '未开启' : hasLatency ? `${Math.max(1, Math.round(latency))}ms` : isSubscription ? '请求验证' : latency < 0 ? '测速失败' : '未测速';
               return <button key={node.key} type="button" data-mindmap-node={node.key} data-node-kind={node.kind} aria-label={`${node.kind === 'channel' ? '渠道' : node.kind === 'group' ? '凭证分组' : '端点'}节点 ${node.label}`} aria-haspopup="menu" aria-expanded={menu?.key === node.key} className={`channel-flow-node absolute cursor-pointer text-left outline-none ${selected ? 'is-selected' : ''}`} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={(event) => openNodeMenu(event, node)} onContextMenu={(event) => openNodeMenu(event, node, true)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') openNodeMenu(event, node); }}>
                 {node.kind !== 'channel' && <span aria-hidden="true" className="channel-node-port is-input" />}
                 {(node.kind === 'channel' && groups.length > 0 || node.kind === 'group' && node.endpointCount > 0) && <span aria-hidden="true" className="channel-node-port is-output" />}
@@ -204,7 +228,10 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
                   <MoreVertical size={12} className="opacity-50" />
                 </span>
                 <span className="channel-node-content">
-                  <span className="channel-node-name block truncate">{node.label}</span>
+                  <span className="channel-node-title-row">
+                    <span className="channel-node-name block min-w-0 flex-1 truncate">{node.label}</span>
+                    {node.kind === 'endpoint' && <Tooltip asChild content={node.endpoint?.inScope === false ? '未参与当前默认方案，不发送后台探测' : isSubscription ? '订阅端点由真实请求验证，不主动测速' : hasLatency ? `最近一次探测延迟 ${latencyLabel}，不代表模型生成耗时` : '暂无有效探测延迟，可在节点菜单中立即检测'}><span className="channel-node-latency" data-tone={!hasLatency ? 'empty' : latency > 1000 ? 'slow' : latency > 500 ? 'medium' : 'fast'} aria-label={`探测延迟 ${latencyLabel}`}><Clock3 size={9} />{latencyLabel}</span></Tooltip>}
+                  </span>
                   {node.kind === 'channel' && <span className="channel-node-meta">{groups.length} 个分组<span className="text-slate-300">·</span>{endpoints.length} 个端点</span>}
                   {node.kind === 'group' && <span className="channel-node-meta"><span className="inline-flex items-center gap-1"><Server size={10} />{node.endpointCount} 端点</span><span className="channel-node-status"><span className="channel-node-status-dot" />{node.group.canAddEndpoint === false ? '待配置' : '已配置'}</span></span>}
                   {node.kind === 'endpoint' && <span className="channel-node-url block truncate">{node.endpoint.url}</span>}
@@ -219,13 +246,16 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
           <span>拖动画布 · 滚轮缩放</span>
         </footer>
 
-        {menu && menuNode && <div ref={menuRef} role="menu" aria-label={`${menuNode.label}节点操作`} className="channel-node-menu t-dropdown is-open absolute z-10 w-60 overflow-y-auto rounded-xl border border-slate-200 p-1.5 shadow-xl" style={{ left: menu.x, top: menu.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
+        {menu && menuNode && <div ref={menuRef} role="menu" tabIndex={-1} aria-label={`${menuNode.label}节点操作`} className="channel-node-menu t-dropdown is-open absolute z-10 w-60 overflow-y-auto rounded-xl border border-slate-200 p-1.5 shadow-xl outline-none" style={{ left: menu.x, top: menu.y }} onContextMenu={(event) => event.preventDefault()} onKeyDown={(event) => {
           if (event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); setMenu(null); menuAnchorRef.current?.focus(); }
           if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
             event.preventDefault();
             const items = [...event.currentTarget.querySelectorAll('button:not(:disabled)')];
             const index = items.indexOf(document.activeElement);
-            items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length]?.focus();
+            const lastIndex = items.length - 1;
+            const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? lastIndex :
+              event.key === 'ArrowUp' ? (index <= 0 ? lastIndex : index - 1) : (index >= lastIndex ? 0 : index + 1);
+            items[nextIndex]?.focus();
           }
         }}>
           <div className="mb-1 border-b border-slate-100 px-2.5 py-2">
@@ -247,6 +277,14 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
           </>}
           {menuNode.kind === 'endpoint' && <>
             <button type="button" role="menuitem" className={menuItem} onClick={() => openAction(onOpenEndpoint, menuNode.endpoint.original)}><Info size={13} />查看端点详情</button>
+            {!menuSubscription && onHealthEndpoint && <button type="button" role="menuitem" className={menuItem} disabled={controlsBusy} onClick={() => runEndpointAction('check', () => onHealthEndpoint(menuNode.endpoint.original))}>{endpointAction === 'check' ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}{endpointAction === 'check' ? '检测中…' : '立即检测'}</button>}
+            {!menuSubscription && onToggleEndpointSkipHealthCheck && <>
+              <button type="button" role="menuitemcheckbox" aria-checked={menuInScope && menuSkipped} className={menuItem} disabled={controlsBusy || !menuInScope} onClick={() => runEndpointAction('toggle', () => onToggleEndpointSkipHealthCheck(menuNode.endpoint.original, !menuSkipped))}>{endpointAction === 'toggle' ? <Loader2 size={13} className="animate-spin" /> : menuSkipped ? <ShieldOff size={13} /> : <ShieldCheck size={13} />}跳过健康检查<span className={`ml-auto text-[10px] ${menuInScope && menuSkipped ? 'text-indigo-500' : 'text-slate-400'}`}>{!menuInScope ? '未生效' : menuSkipped ? '已开启' : '未开启'}</span></button>
+              <p className="px-2.5 pb-2 text-[10px] leading-relaxed text-slate-400">{menuInScope ? '跳过健康判定，仍保留自动测速。' : '未参与当前默认方案，不发送后台探测。立即检测仅执行一次。'}</p>
+            </>}
+            {menuSubscription && <p className="px-2.5 py-2 text-[10px] leading-relaxed text-slate-400">订阅端点通过真实请求验证，不发送主动探测。</p>}
+            {actionError && <p role="alert" className="px-2.5 py-2 text-[10px] text-rose-600 [overflow-wrap:anywhere]">{actionError}</p>}
+            <div className="my-1 border-t border-slate-100" />
             <button type="button" role="menuitem" className={menuItem} disabled={controlsBusy} onClick={() => openAction(onEditEndpoint, menuNode.endpoint.original)}><Pencil size={13} />编辑端点</button>
             <button type="button" role="menuitem" className={`${menuItem} text-rose-600 hover:bg-rose-50`} disabled={controlsBusy} onClick={() => openAction(onDeleteEndpoint, menuNode.endpoint.original)}><Trash2 size={13} />删除端点</button>
           </>}

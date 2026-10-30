@@ -1,5 +1,4 @@
 import { parseEndpointMultiplier, parseNonNegativeNumber, normalizeModelMapping, normalizeModelMultipliers, hasOwn, getExplicitModelMultipliers, mapSubscription } from './mapping.js';
-import { normalizeChannelPrivacyLevel } from './privacy.js';
 import { WailsApp, initWails } from './connection.js';
 import { mapNonStreamRoute } from './routing.js';
 
@@ -290,7 +289,6 @@ const mapCodexChannel = (channel) => {
     failoverEnabled: channel.failover_enabled !== false,
     isActive: Boolean(channel.is_active),
     nonStreamRoute: mapNonStreamRoute(channel.non_stream_route || channel.nonStreamRoute),
-    privacyLevel: normalizeChannelPrivacyLevel(channel.privacy_level ?? channel.privacyLevel),
     credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
     createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',

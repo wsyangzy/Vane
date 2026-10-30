@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { credentialGroupRoutingImpact } from './dispatchState.js';
 import { addProfileChannel, candidateHealthPresentation, classifierInputNotice, dispatchReason, editableProfile, mappingTargetAllowed, moveProfileChannel, newRoutingProfile, quotaPresentation, selectProfileChannels, setIntentRoutingEnabled, stateCompatibilityLabel, summarizeIntentTraces, updateProfileMembers, validateProfileDraft } from './dispatchState.js';
 
 test('health presentation distinguishes disabled resources, credential repair and timed recovery', () => {
@@ -158,4 +159,29 @@ test('intent statistics use at most the latest 100 dispatches rather than a life
   assert.equal(stats.sampled, 100); assert.equal(stats.calls, 0); assert.equal(stats.cost, 0);
   const stringID = summarizeIntentTraces([{ ...old, intent: { ...old.intent, intentId: '__proto__' } }], 'codex', 1);
   assert.equal(stringID.intents.__proto__, 1);
+});
+test('credential deletion impact includes members, rules, wildcard channels and cross-provider classifiers', () => {
+  const profile = (id, name, patch = {}) => ({ id, name, members: [], rules: [], intents: [], classifier: null, ...patch });
+  const workspaces = [
+    { provider: 'claude', accounts: [{ groupId: 44, channelId: 7 }], profiles: [
+      profile(1, 'member', { members: [{ groupId: 44, channelId: 7, enabled: true }] }),
+      profile(2, 'disabled reference', { members: [{ groupId: 44, channelId: 7, enabled: false }] }),
+      profile(3, 'model rule', { rules: [{ targets: [{ groupId: 44, channelId: 7 }] }] }),
+      profile(4, 'intent rule', { intents: [{ targets: [{ groupId: 44, channelId: 7 }] }] }),
+      profile(5, 'wildcard', { members: [{ groupId: 0, channelId: 7, enabled: true }] }),
+      profile(6, 'other channel', { members: [{ groupId: 0, channelId: 8, enabled: true }] }),
+      profile(7, 'profile expansion', { rules: [{ targets: [{ profileId: 2, groupId: 44 }] }] }),
+    ] },
+    { provider: 'codex', accounts: [{ groupId: 44, channelId: 7 }], profiles: [
+      profile(8, 'same ID in other provider', { members: [{ groupId: 44, channelId: 7, enabled: true }] }),
+      profile(9, 'cross-provider classifier', { classifier: { provider: 'claude', groupId: 44, enabled: true } }),
+    ] },
+  ];
+  const impact = credentialGroupRoutingImpact(workspaces, 'claude', 44);
+  assert.deepEqual(impact.map((item) => item.id), [1, 2, 3, 4, 5, 9]);
+  assert.equal(impact[0].losesLastMember, true);
+  assert.equal(impact[1].losesLastMember, false);
+  assert.equal(impact.at(-1).classifierReference, true);
+  assert.deepEqual(credentialGroupRoutingImpact(workspaces, 'codex', 44).map((item) => item.id), [8]);
+  assert.deepEqual(credentialGroupRoutingImpact(workspaces, 'claude', 0), []);
 });

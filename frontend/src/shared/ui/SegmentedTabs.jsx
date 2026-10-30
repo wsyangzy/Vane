@@ -25,10 +25,11 @@ export const SegmentedTabs = ({
 
   return (
     <div className={`relative grid gap-1 rounded-xl bg-slate-100 p-1 ${className}`}>
-      <span
+      {activeIndex >= 0 && <span
+        aria-hidden="true"
         className="motion-tabs-slider pointer-events-none absolute inset-y-1 rounded-lg bg-white shadow-sm ring-1 ring-indigo-100"
         style={getSegmentedTabsSliderStyle(activeIndex, tabs.length)}
-      />
+      />}
       {tabs.map((tab) => {
         const active = activeTab === tab.key;
         return (

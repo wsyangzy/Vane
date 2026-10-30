@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { Button, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
-import ChannelPrivacyLevelSelector from '@/features/providers/shared/privacy/ChannelPrivacyLevelSelector.jsx';
 
 // ============================================
 // 新建渠道弹窗（SQLite 模式）
@@ -20,12 +19,9 @@ const CreateChannelModal = ({
 }) => {
   const isEdit = mode === 'edit';
   const showPriority = isEdit || channelFailoverEnabled;
-  const channelId = Number(initialValue?.id) || 0;
-  const canEditPrivacy = isEdit && channelId > 0;
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
   const [priority, setPriority] = useState(() => (isEdit ? String(initialValue?.priority ?? 1) : ''));
-  const [privacyLevel, setPrivacyLevel] = useState(() => initialValue?.privacyLevel || '');
   const [error, setError] = useState('');
 
   if (!open) return null;
@@ -35,9 +31,9 @@ const CreateChannelModal = ({
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden">
         <div className="flex items-start justify-between px-6 py-4 border-b border-slate-100">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '新建渠道'}</h2>
+            <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道 · 1/3'}</h2>
             <p className="text-xs text-slate-500 mt-1">
-              {isEdit ? '修改渠道官网与优先级' : '创建渠道后继续配置凭证分组与端点'}
+              {isEdit ? '修改渠道官网与优先级' : '填写渠道信息，完成凭证和端点配置后统一创建；中途退出不保存'}
             </p>
           </div>
           <Tooltip content="关闭">
@@ -74,7 +70,6 @@ const CreateChannelModal = ({
               priority: priorityValue,
               // Saving basic channel fields must preserve stored model mappings.
               modelMapping: isEdit ? { ...(initialValue?.modelMapping || {}) } : {},
-              ...(canEditPrivacy ? { privacyLevel } : {})
             });
           }}
           className="flex flex-1 flex-col overflow-hidden"
@@ -142,9 +137,6 @@ const CreateChannelModal = ({
               <p className="text-xs text-slate-400 mt-1">用于渠道信息展示，非必填</p>
             </div>
 
-            {canEditPrivacy && (
-              <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
-            )}
           </div>
           </div>
 

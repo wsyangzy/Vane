@@ -1,13 +1,10 @@
 // ============================================
 // SettingItem - 可编辑的设置项组件
-// (2026-01-10) - 循环重试使用双选弹窗
-// (2026-01-11) - 支持跳过健康检测开关
 // ============================================
 
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Eye, EyeOff, RotateCcw, RefreshCw, XCircle, ChevronRight, Timer } from 'lucide-react';
+import { AlertTriangle, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { CustomSelect, Tooltip } from '../../../shared/ui/index.js';
-import LoopRetrySelector from './LoopRetrySelector.jsx';
 import DurationInput from './DurationInput.jsx';
 
 // 值类型到输入类型的映射
@@ -19,12 +16,6 @@ const VALUE_TYPE_CONFIG = {
   duration: { type: 'text', step: null, placeholder: '例如: 30s, 5m, 1h' },
   password: { type: 'password', step: null }
 };
-
-// 策略类型选项
-const STRATEGY_OPTIONS = [
-  { value: 'priority', label: 'priority (优先级)' },
-  { value: 'fastest', label: 'fastest (最快响应)' }
-];
 
 // 强制渲染为下拉框的字段映射（不依赖后端 value_type 是否正确传递）
 // key 格式: "category.key"
@@ -64,14 +55,10 @@ const SettingItem = ({
   onChange,
   disabled = false,
   hasChange = false,
-  onRevert = null,
-  // 跳过健康检测相关 props（仅 loop_retry 设置项使用）
-  skipHealthCheck = false,
-  onSkipHealthCheckChange = null
+  onRevert = null
 }) => {
   const [localValue, setLocalValue] = useState(value);
   const [showSecret, setShowSecret] = useState(false);
-  const [showLoopRetrySelector, setShowLoopRetrySelector] = useState(false);
 
   // 同步外部 value 变化
   useEffect(() => {
@@ -100,86 +87,6 @@ const SettingItem = ({
     setLocalValue(newValue);
     onChange(setting.category, setting.key, newValue);
   };
-
-  // loop_retry 使用弹窗选择器
-  if (setting.category === 'failover' && setting.key === 'loop_retry') {
-    const isLoopRetry = localValue === 'true' || localValue === true;
-    const currentLabel = isLoopRetry ? '循环重试' : '快速失败';
-    const CurrentIcon = isLoopRetry ? RefreshCw : XCircle;
-
-    // 处理弹窗选择，同时更新 loop_retry 和 skip_health_check
-    const handleLoopRetrySelect = (newValue, newSkipHealthCheck) => {
-      setLocalValue(newValue);
-      onChange(setting.category, setting.key, newValue);
-
-      // 同步更新 skip_health_check 设置
-      if (onSkipHealthCheckChange) {
-        onSkipHealthCheckChange(newSkipHealthCheck);
-      }
-    };
-
-    return (
-      <>
-        <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
-          <div className="flex-1 min-w-0 pr-3">
-            <div className="flex items-center gap-2">
-              {hasChange && (
-                <ChangeDot />
-              )}
-              <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
-              {setting.requires_restart && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
-                  <AlertTriangle size={10} className="mr-0.5" />
-                  重启生效
-                </span>
-              )}
-            </div>
-            {setting.description && (
-              <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {/* 显示跳过健康检测状态标签 */}
-            {isLoopRetry && skipHealthCheck && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-100 text-indigo-700">
-                <Timer size={10} />
-                跳过检测
-              </span>
-            )}
-            {hasChange && onRevert && (
-              <RevertButton
-                onClick={() => onRevert(setting.category, setting.key)}
-                disabled={disabled}
-              />
-            )}
-            <button
-              onClick={() => !disabled && setShowLoopRetrySelector(true)}
-              disabled={disabled}
-              className={`
-                flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-colors
-                ${disabled
-                  ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
-                  : 'bg-white border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-slate-700'
-                }
-              `}
-            >
-              <CurrentIcon size={14} className={isLoopRetry ? 'text-indigo-500' : 'text-slate-400'} />
-              <span className="text-xs font-medium">{currentLabel}</span>
-              <ChevronRight size={14} className="text-slate-400" />
-            </button>
-          </div>
-        </div>
-
-        <LoopRetrySelector
-          isOpen={showLoopRetrySelector}
-          currentValue={localValue}
-          skipHealthCheck={skipHealthCheck}
-          onSelect={handleLoopRetrySelect}
-          onClose={() => setShowLoopRetrySelector(false)}
-        />
-      </>
-    );
-  }
 
   // 布尔类型使用 Toggle 开关
   if (valueType === 'bool') {
@@ -230,53 +137,6 @@ const SettingItem = ({
               ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
             `}></div>
           </label>
-        </div>
-      </div>
-    );
-  }
-
-  // 策略类型使用下拉选择
-  if (setting.key === 'type' && setting.category === 'strategy') {
-    const handleStrategyChange = (newValue) => {
-      setLocalValue(newValue);
-      onChange(setting.category, setting.key, newValue);
-    };
-
-    return (
-      <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
-        <div className="flex-1 min-w-0 pr-3">
-          <div className="flex items-center gap-2">
-            {hasChange && (
-              <ChangeDot />
-            )}
-            <span className="text-xs font-medium text-slate-700">{displayLabel}</span>
-            {setting.requires_restart && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
-                <AlertTriangle size={10} className="mr-0.5" />
-                重启生效
-              </span>
-            )}
-          </div>
-          {setting.description && (
-            <p className="text-[11px] leading-4 text-slate-500 mt-0.5 [overflow-wrap:anywhere]">{setting.description}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {hasChange && onRevert && (
-            <RevertButton
-              onClick={() => onRevert(setting.category, setting.key)}
-              disabled={disabled}
-            />
-          )}
-          <CustomSelect
-            options={STRATEGY_OPTIONS}
-            value={localValue}
-            onChange={handleStrategyChange}
-            disabled={disabled}
-            size="sm"
-            ariaLabel={displayLabel}
-            className="[&>button]:h-8"
-          />
         </div>
       </div>
     );
@@ -426,7 +286,7 @@ const SettingItem = ({
               disabled={disabled}
             />
           )}
-          <div className={`relative ${setting.key === 'token' ? 'w-[min(260px,45vw)]' : 'w-[104px]'}`}>
+          <div className={`relative ${setting.key === 'token' ? 'w-[clamp(144px,17vw,220px)]' : 'w-[104px]'}`}>
             <input
               type={showSecret ? 'text' : 'password'}
               aria-label={displayLabel}
@@ -462,7 +322,9 @@ const SettingItem = ({
   }
 
   // 其他类型使用文本/数字输入框
+  const isAttemptLimit = setting.category === 'retry' && setting.key === 'max_total_attempts';
   const min = setting.category === 'retention' && setting.key === 'retention_days' ? 0 : undefined;
+  const max = isAttemptLimit ? 100 : setting.category === 'server' ? 65535 : undefined;
 
   return (
     <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
@@ -490,7 +352,7 @@ const SettingItem = ({
             disabled={disabled}
           />
         )}
-        <div className={`relative ${setting.key === 'token' ? 'w-[min(260px,45vw)]' : 'w-[104px]'}`}>
+        <div className={`relative ${setting.key === 'health_path' ? 'w-[160px]' : 'w-[104px]'}`}>
           <input
             type={config.type}
             aria-label={displayLabel}
@@ -498,7 +360,8 @@ const SettingItem = ({
             onChange={handleChange}
             disabled={disabled}
             step={config.step}
-            min={min}
+            min={isAttemptLimit ? 1 : min ?? (valueType === 'float' ? 0.1 : config.type === 'number' ? 1 : undefined)}
+            max={max}
             placeholder={config.placeholder}
             className={`
               h-8 w-full px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700
