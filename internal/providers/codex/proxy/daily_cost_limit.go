@@ -80,15 +80,6 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 
 		if stage != nil && stage.execution != nil {
 			candidate := stage.candidate(endpoint, requestedModel)
-			if h.states != nil {
-				if allowed, reason := h.states.Allowed(stage.stateKeys, candidate); !allowed {
-					stage.execution.Skip(candidate, reason)
-					locallyExcluded = true
-					localReason = reason
-					failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
-					continue
-				}
-			}
 			eligible, eligibilityReason := h.subscriptionEligibility(ctx, endpoint, model)
 			if !eligible && !(stage.route != nil && stage.route.pool != nil && eligibilityReason == "subscription_paused") {
 				stage.execution.Skip(candidate, eligibilityReason)

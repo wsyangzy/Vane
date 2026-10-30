@@ -3,6 +3,7 @@ package privacy
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 )
@@ -68,7 +69,7 @@ func (s *Service) recordActivity(ctx context.Context, req Request, result ApplyR
 		path = "(未覆盖路径)"
 	}
 	reason := result.SkippedReason
-	if len(reason) > 0 && reason != SkippedUnsupportedPath && reason != SkippedEmptyBody && reason != SkippedNoRules && reason != SkippedNoText && reason != SkippedScanTruncated && reason != CodeScanFailed {
+	if len(reason) > 0 && reason != SkippedUnsupportedPath && reason != SkippedEmptyBody && reason != SkippedNoRules && reason != SkippedNoText && reason != SkippedScanTruncated && reason != SkippedScanLimit && reason != CodeScanFailed && reason != CodeRestoreCapacity && reason != "mapping_capacity" {
 		reason = "scan_error"
 	}
 	h := &activityHandle{store: s.store, entry: Activity{RequestID: activityText(req.RequestID, 128), Provider: activityText(req.ProviderType, 16), Path: path, CreatedAt: s.now(), State: state, HitCount: result.HitCount, ScanDurationMS: float64(result.ScanDuration) / float64(time.Millisecond), SkippedReason: reason, Truncated: result.Truncated}}
@@ -139,4 +140,37 @@ func (s *Store) listActivity(ctx context.Context) ([]Activity, error) {
 		out = append(out, entry)
 	}
 	return out, rows.Err()
+}
+
+// ActivitiesForRequests returns the same metadata as the protection history,
+// without limiting the lookup to its 100 most recent entries.
+func (s *Store) ActivitiesForRequests(ctx context.Context, provider string, requestIDs []string) (map[string]Activity, error) {
+	result := make(map[string]Activity)
+	if len(requestIDs) == 0 {
+		return result, nil
+	}
+	args := []any{time.Now().Add(-30 * 24 * time.Hour).Unix(), provider}
+	for _, id := range requestIDs {
+		args = append(args, id)
+	}
+	// This metadata table is bounded to 5,000 rows. Read its existing JSON
+	// rather than migrating the user's database just for the detail view.
+	rows, err := s.db.QueryContext(ctx, `SELECT id,payload FROM privacy_activity WHERE created_at>=? AND json_valid(payload) AND json_extract(payload,'$.provider')=? AND json_extract(payload,'$.request_id') IN (`+strings.TrimSuffix(strings.Repeat("?,", len(requestIDs)), ",")+`) ORDER BY id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var payload string
+		var activity Activity
+		if err := rows.Scan(&id, &payload); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(payload), &activity) == nil {
+			activity.ID = id
+			result[activity.RequestID] = activity
+		}
+	}
+	return result, rows.Err()
 }

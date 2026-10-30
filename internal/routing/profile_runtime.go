@@ -117,6 +117,7 @@ type dispatchRequestState struct {
 type profileAffinity struct {
 	session                bool
 	profileID              int64
+	revision               int64
 	candidate              Candidate
 	decision               DispatchDecision
 	intent                 string
@@ -127,12 +128,13 @@ type profileAffinity struct {
 }
 
 type ProfileRuntime struct {
-	mu         sync.Mutex
-	config     RuntimeConfig
-	scheduler  *Scheduler
-	classifier *IntentClassifier
-	affinity   map[string]profileAffinity
-	now        func() time.Time
+	mu              sync.Mutex
+	config          RuntimeConfig
+	healthEndpoints map[string]struct{}
+	scheduler       *Scheduler
+	classifier      *IntentClassifier
+	affinity        map[string]profileAffinity
+	now             func() time.Time
 }
 
 var dispatchRequestSequence atomic.Uint64
@@ -154,9 +156,37 @@ func (r *ProfileRuntime) Replace(config RuntimeConfig) {
 	var copy resources
 	_ = json.Unmarshal(data, &copy)
 	config.Profiles, config.Candidates = copy.Profiles, copy.Candidates
+	healthEndpoints := make(map[string]struct{})
+	if profile, ok := runtimeProfile(config, 0); ok {
+		for _, candidate := range config.Candidates {
+			if !candidate.Enabled || candidate.EndpointID == "" || candidate.Provider != profile.Provider {
+				continue
+			}
+			for _, member := range profile.Members {
+				if member.Enabled && member.ChannelID == candidate.ChannelID && (member.GroupID == 0 || member.GroupID == candidate.GroupID) {
+					healthEndpoints[candidate.EndpointID] = struct{}{}
+					break
+				}
+			}
+		}
+	}
 	r.mu.Lock()
 	r.config = config
+	r.healthEndpoints = healthEndpoints
 	r.mu.Unlock()
+}
+
+// HealthCheckEnabled limits automatic probes to enabled members of the current
+// default profile. Health and cooldown state must not prevent recovery probes.
+// A missing, disabled or ambiguous default profile enables no automatic probes.
+func (r *ProfileRuntime) HealthCheckEnabled(endpointID string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.healthEndpoints[endpointID]
+	return ok
 }
 
 func (r *ProfileRuntime) snapshot() RuntimeConfig {
@@ -469,8 +499,13 @@ func (r *ProfileRuntime) Plan(ctx context.Context, profileID int64, model string
 		}
 	}
 	previous, hasSession := r.remembered(sessionKey, now, preview)
+	// A saved policy takes effect on the next request. Keep the successful
+	// resource hint, but do not replay a decision made by an older revision.
+	if hasTurn && sameTurn.revision != p.Revision {
+		hasTurn = false
+	}
 	// Turning off intent routing also disables previously remembered intent
-	// decisions. Protocol-state compatibility is still checked by the adapter.
+	// decisions; the upstream remains responsible for protocol-state validation.
 	if hasTurn && (p.Classifier == nil || !p.Classifier.Enabled) && (sameTurn.intent != "" || sameTurn.decision.IntentID != "" || sameTurn.decision.Kind == "intent") {
 		hasTurn = false
 	}
@@ -500,6 +535,9 @@ func (r *ProfileRuntime) Plan(ctx context.Context, profileID int64, model string
 			plan.Intent = IntentResult{IntentID: sameTurn.intent, Cached: true, Reason: "turn_reused"}
 			plan.Decision = ResolveDecision(p, model, streaming, sameTurn.intent)
 		}
+	}
+	if owner, ok := ctx.Value(statePreferenceKey{}).(Candidate); ok {
+		preferred = &owner
 	}
 	plan.state.previous = preferred
 	r.populateDispatchPlan(ctx, config, &plan, preferred, now)
@@ -610,8 +648,7 @@ type profileRequestContextKey struct{}
 type profileStateContextKey struct{}
 
 // WithProfileStateKeys accepts only the provider's already-hashed StateKeys.
-// It conveys a routing preference; the adapter must still run StateTracker's
-// compatibility check before sending any opaque state to a candidate.
+// It conveys a routing preference without imposing local protocol validation.
 func WithProfileStateKeys(ctx context.Context, keys []string) context.Context {
 	return context.WithValue(ctx, profileStateContextKey{}, append([]string(nil), keys...))
 }
@@ -856,7 +893,7 @@ func (r *ProfileRuntime) rememberSuccess(plan *DispatchPlan, candidate DispatchC
 	state := plan.state
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry := profileAffinity{candidate: candidate.Identity(), decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, cachedTokens: cachedTokens, expires: now.Add(time.Hour), used: now, success: now}
+	entry := profileAffinity{candidate: candidate.Identity(), revision: plan.Profile.Revision, decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, cachedTokens: cachedTokens, expires: now.Add(time.Hour), used: now, success: now}
 	// Intent memory is independent of whether resource affinity is enabled.
 	for _, key := range []string{state.turnKey, state.sessionKey} {
 		if key != "" {
@@ -903,7 +940,7 @@ func (r *ProfileRuntime) RememberResponseStates(plan *DispatchPlan, candidate Di
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry := profileAffinity{candidate: candidate.Identity(), decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, expires: now.Add(time.Hour), used: now, success: now}
+	entry := profileAffinity{candidate: candidate.Identity(), profileID: plan.Profile.ID, revision: plan.Profile.Revision, decision: plan.Decision, intent: plan.Intent.IntentID, model: plan.Model, expires: now.Add(time.Hour), used: now, success: now}
 	for i, key := range keys {
 		if i >= 256 {
 			break

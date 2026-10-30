@@ -4,11 +4,127 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
+
+func TestActiveProbeSwitchPreservesManualChecksAndRequestFeedback(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	manager := NewEndpointManager(nil, nil, nil, nil)
+	manager.endpointsByChannel = map[int64][]*CodexEndpoint{1: {{ID: 1, ChannelID: 1, BaseURL: server.URL}}}
+	pool := routing.NewPoolRuntime(routing.PoolConfig{}, nil, nil)
+	pool.SetProfileRuntime(routing.NewProfileRuntime(routing.RuntimeConfig{Provider: "codex",
+		Profiles:   []routing.RoutingProfile{{Provider: "codex", Enabled: true, IsDefault: true, Members: []routing.RoutingMember{{ChannelID: 1, Enabled: true}}}},
+		Candidates: []routing.DispatchCandidate{{Provider: "codex", ChannelID: 1, EndpointID: "1", Enabled: true}},
+	}))
+	manager.SetPoolRuntime(pool)
+	cfg := &config.Config{Health: config.HealthConfig{PauseActiveProbes: true, Timeout: time.Second}}
+	manager.SetConfig(cfg)
+	checker := NewHealthChecker(manager, cfg, nil)
+	checker.Start()
+	checker.Stop()
+	checker.checkAll()
+	if manager.IsHealthCheckEnabled(1) || requests.Load() != 0 {
+		t.Fatal("disabled startup or scheduled checks sent an upstream request")
+	}
+	if err := checker.CheckOne(1); err != nil || requests.Load() != 1 {
+		t.Fatalf("manual detection failed while automatic checks were disabled: %v", err)
+	}
+	manager.MarkUnhealthy(1)
+	if manager.IsHealthy(1) {
+		t.Fatal("global probe switch disabled request failure feedback")
+	}
+	manager.MarkHealthy(1)
+	if !manager.IsHealthy(1) {
+		t.Fatal("global probe switch disabled request recovery feedback")
+	}
+	cfg.Health.PauseActiveProbes = false
+	manager.SetConfig(cfg)
+	checker.checkAll()
+	if !manager.IsHealthCheckEnabled(1) || requests.Load() != 2 {
+		t.Fatal("automatic checks did not resume")
+	}
+	cfg.Health.PauseActiveProbes = true
+	manager.SetConfig(cfg)
+	checker.checkAll()
+	if requests.Load() != 2 {
+		t.Fatal("automatic checks continued after disabling again")
+	}
+}
+
+func TestDefaultProfileLimitsAutomaticHealthRequests(t *testing.T) {
+	var requests [5]atomic.Int32
+	manager := NewEndpointManager(nil, nil, nil, slog.Default())
+	manager.endpointsByChannel = make(map[int64][]*CodexEndpoint)
+	var candidates []routing.DispatchCandidate
+	for i := range requests {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests[i].Add(1)
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(server.Close)
+		groupID, channelID := int64(11), int64(1)
+		if i == 1 {
+			groupID = 12
+		}
+		if i == 2 {
+			channelID = 2
+		}
+		ep := &CodexEndpoint{ID: int64(i + 1), Name: "same-name", ChannelID: channelID, CredentialGroupID: groupID, BaseURL: server.URL, SkipHealthCheck: i == 1}
+		if i == 3 {
+			ep.AuthMode = "client_passthrough"
+		}
+		manager.endpointsByChannel[channelID] = append(manager.endpointsByChannel[channelID], ep)
+		candidates = append(candidates, routing.DispatchCandidate{Provider: "codex", ChannelID: channelID, GroupID: groupID, EndpointID: strconv.FormatInt(ep.ID, 10), Enabled: i != 4})
+	}
+	runtime := routing.NewProfileRuntime(routing.RuntimeConfig{Provider: "codex"})
+	pool := routing.NewPoolRuntime(routing.PoolConfig{}, nil, nil)
+	pool.SetProfileRuntime(runtime)
+	manager.SetPoolRuntime(pool)
+	checker := NewHealthChecker(manager, &config.Config{Health: config.HealthConfig{Timeout: time.Second}}, nil)
+	assertCounts := func(want [5]int32) {
+		t.Helper()
+		for i := range requests {
+			if got := requests[i].Load(); got != want[i] {
+				t.Fatalf("resource %d received %d requests, want %d", i, got, want[i])
+			}
+		}
+	}
+	checker.checkAll()
+	assertCounts([5]int32{})
+	profile := routing.RoutingProfile{Provider: "codex", Enabled: true, IsDefault: true, Members: []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}}}
+	other := routing.RoutingProfile{Provider: "codex", Enabled: true, Members: []routing.RoutingMember{{ChannelID: 2, Enabled: true}}}
+	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile, other}, Candidates: candidates})
+	checker.checkAll()
+	assertCounts([5]int32{1})
+	profile.Members[0].GroupID = 12
+	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile, other}, Candidates: candidates})
+	checker.checkAll()
+	assertCounts([5]int32{1, 1})
+	profile.Enabled = false
+	runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile, other}, Candidates: candidates})
+	checker.checkAll()
+	assertCounts([5]int32{1, 1})
+	if err := checker.CheckOne(1); err != nil {
+		t.Fatal(err)
+	}
+	assertCounts([5]int32{2, 1})
+	if err := checker.CheckOne(4); err != nil {
+		t.Fatal(err)
+	}
+	checker.checkAll()
+	assertCounts([5]int32{2, 1})
+}
 
 func TestBuildProbeURL(t *testing.T) {
 	tests := []struct {

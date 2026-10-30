@@ -60,9 +60,11 @@ type RetryConfig struct {
 }
 
 type HealthConfig struct {
-	CheckInterval time.Duration
-	Timeout       time.Duration
-	HealthPath    string
+	// The zero value preserves automatic checks for existing runtime configs.
+	PauseActiveProbes bool
+	CheckInterval     time.Duration
+	Timeout           time.Duration
+	HealthPath        string
 }
 
 type LoggingConfig struct {

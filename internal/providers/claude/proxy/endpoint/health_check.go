@@ -21,6 +21,18 @@ func (m *Manager) SetOnHealthCheckComplete(fn func()) {
 	m.onHealthCheckComplete = fn
 }
 
+// IsHealthCheckEnabled is shared by automatic probe entry points and UI state.
+// Standalone legacy managers keep their existing participation rules.
+func (m *Manager) IsHealthCheckEnabled(endpointKey string) bool {
+	if m.healthProbesPaused.Load() {
+		return false
+	}
+	if pool := m.PoolRuntime(); pool != nil {
+		return pool.ProfileRuntime().HealthCheckEnabled(endpointKey)
+	}
+	return true
+}
+
 // triggerHealthCheckCompleteDebounced 防抖触发健康检查完成回调
 // 避免并发健康检查时多次触发回调导致日志膨胀
 // 500ms 内多次调用只会执行最后一次
@@ -111,6 +123,9 @@ func (m *Manager) healthCheckLoop() {
 
 // performHealthChecks performs health checks on all endpoints
 func (m *Manager) performHealthChecks() {
+	if m.healthProbesPaused.Load() {
+		return
+	}
 	// 循环重试模式下，如果配置了跳过健康检测，则不执行定时健康检查
 	if m.PoolRuntime() == nil && m.config.Failover.ShouldSkipHealthCheck() {
 		slog.Debug("🩺 [健康检查] 循环重试模式已启用跳过检测，跳过定时健康检查")
@@ -125,17 +140,22 @@ func (m *Manager) performHealthChecks() {
 
 	var endpointsToCheck []*Endpoint
 	pool := m.PoolRuntime()
-	profileMode := pool != nil && pool.ProfileRuntime() != nil
 
 	if len(snapshot) == 0 {
 		slog.Debug("🩺 [健康检查] 没有配置的端点，跳过健康检查")
 		return
 	}
 
-	// 统一调度检测资源，不读取旧参与开关；兼容模式继续使用以下历史范围：
+	// 统一调度仅检测默认方案的启用成员；兼容模式继续使用以下历史范围：
 	// - 启用“渠道间故障转移”时：检查所有“参与故障转移”的渠道，且仅检查其中参与故障转移的端点
 	// - 未启用时：只检查当前活跃渠道中参与故障转移的端点
-	if pool != nil || m.IsFailoverEnabled() {
+	if pool != nil {
+		for _, ep := range snapshot {
+			if ep != nil && ep.Config.AuthMode != "client_passthrough" && m.IsHealthCheckEnabled(EndpointKeyForConfig(ep.Config)) {
+				endpointsToCheck = append(endpointsToCheck, ep)
+			}
+		}
+	} else if m.IsFailoverEnabled() {
 		for _, ep := range snapshot {
 			if ep == nil {
 				continue
@@ -149,7 +169,7 @@ func (m *Manager) performHealthChecks() {
 			if ep.Config.FailoverEnabled != nil {
 				failoverEnabled = *ep.Config.FailoverEnabled
 			}
-			if !profileMode && !failoverEnabled {
+			if !failoverEnabled {
 				continue
 			}
 			endpointsToCheck = append(endpointsToCheck, ep)
@@ -226,6 +246,9 @@ func (m *Manager) performHealthChecks() {
 // 🔧 [P5.4 新增] 经过 healthThrottleAllow 节流（外部调用方应通过 checkEndpointHealthForced 绕过节流）
 // 注意：本函数自身不再做节流，由各触发源在调用前显式判断
 func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
+	if endpoint == nil || !m.IsHealthCheckEnabled(EndpointKeyForConfig(endpoint.Config)) {
+		return
+	}
 	// 🔧 [P5.4] 节流检查：避免多触发源重复检查同一端点
 	if !m.healthThrottleAllow(endpoint) {
 		slog.Debug("⏸️ [健康检查节流] 跳过短时间内重复检查",
@@ -590,7 +613,7 @@ func (m *Manager) ManualHealthCheck(endpointName string) error {
 
 // BatchHealthCheckAll 批量检测端点的健康状态
 // 检测范围与定时健康检查一致：
-// - 统一调度时检测资源，不读取旧参与开关
+// - 统一调度时仅检测默认方案的启用成员
 // - 开启渠道间转移时：检测所有参与的渠道中所有参与转移的端点
 // - 关闭渠道间转移时：仅检测活跃渠道中参与转移的端点
 // 并发执行检查，使用信号量限制并发数量
@@ -610,9 +633,14 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 	// 根据渠道间故障转移状态筛选需要检测的端点
 	var endpointsToCheck []*Endpoint
 	pool := m.PoolRuntime()
-	profileMode := pool != nil && pool.ProfileRuntime() != nil
 
-	if pool != nil || m.IsFailoverEnabled() {
+	if pool != nil {
+		for _, ep := range snapshot {
+			if ep != nil && ep.Config.AuthMode != "client_passthrough" && m.IsHealthCheckEnabled(EndpointKeyForConfig(ep.Config)) {
+				endpointsToCheck = append(endpointsToCheck, ep)
+			}
+		}
+	} else if m.IsFailoverEnabled() {
 		// 开启渠道间转移：检测所有参与的渠道中参与转移的端点
 		for _, ep := range snapshot {
 			if ep == nil {
@@ -627,7 +655,7 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 			if ep.Config.FailoverEnabled != nil {
 				failoverEnabled = *ep.Config.FailoverEnabled
 			}
-			if !profileMode && !failoverEnabled {
+			if !failoverEnabled {
 				continue
 			}
 			endpointsToCheck = append(endpointsToCheck, ep)
@@ -686,6 +714,9 @@ func (m *Manager) BatchHealthCheckAll() (int, int, error) {
 		go func(ep *Endpoint) {
 			defer wg.Done()
 			defer func() { <-semaphore }() // 释放信号量
+			if !m.IsHealthCheckEnabled(EndpointKeyForConfig(ep.Config)) {
+				return
+			}
 
 			// 🔧 [P5.4] 批量检查走 Forced 版本，整批已是统一调度，无需节流
 			m.checkEndpointHealthForced(ep)

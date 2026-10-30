@@ -7,14 +7,11 @@ import (
 )
 
 func runtimeOptionsJSON(settings Settings) ([]byte, error) {
-	return json.Marshal(map[string]bool{
-		"restore_responses": settings.RestoreResponses,
-		"keep_key_format":   settings.KeepKeyFormat,
-	})
+	return json.Marshal(map[string]bool{"restore_responses": settings.RestoreResponses})
 }
 
 // migrateMatchingOptions replaces the second layer of matching controls with
-// ordinary editable rules. Clearing the old options in the same transaction
+// ordinary editable rules. Saving only runtime options in the same transaction
 // makes restarts idempotent and prevents them from overriding later edits.
 func (s *Store) migrateMatchingOptions(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -27,12 +24,9 @@ func (s *Store) migrateMatchingOptions(ctx context.Context) error {
 	if err := tx.QueryRowContext(ctx, `SELECT options_json FROM privacy_settings WHERE id = 1`).Scan(&options); err != nil {
 		return err
 	}
-	var settings Settings
+	settings := DefaultSettings()
 	if err := json.Unmarshal([]byte(options), &settings); err != nil {
 		return fmt.Errorf("invalid privacy options")
-	}
-	if !hasLegacyMatchingOptions(settings) {
-		return nil
 	}
 	settings, err = normalizedLegacyOptions(settings)
 	if err != nil {
@@ -68,13 +62,21 @@ func (s *Store) migrateMatchingOptions(ctx context.Context) error {
 		if action := settings.Actions[legacyRuleKind(rule)]; action != "" {
 			rule.Action = action
 		}
-		// Previously non-redacting rules may not have replacement fields yet.
+		if rule.Action == ActionDetect || rule.Action == ActionBlock {
+			rule.Action = ActionRedact
+		}
+		// All masked values now have a reversible token, including formerly
+		// irreversible placeholders and pseudonyms. Matching identity is retained.
 		if rule.Action == ActionRedact {
-			if rule.ReplacementMode == "" {
-				rule.ReplacementMode = ReplacementPlaceholder
+			if !rule.usesTokens() {
+				rule.ReplacementMode = ReplacementReversible
 			}
-			if rule.ReplacementMode == ReplacementPlaceholder && rule.Placeholder == "" {
-				rule.Placeholder = DefaultPlaceholder
+			if settings.RestoreResponses && settings.KeepKeyFormat {
+				if rule.restoresResponses() {
+					rule.ReplacementMode = ReplacementReversibleKey
+				} else {
+					rule.ReplacementMode = ReplacementMaskOnlyKey
+				}
 			}
 		}
 		if _, err := CompileRule(rule); err != nil {
@@ -118,7 +120,11 @@ func (s *Store) migrateMatchingOptions(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE privacy_settings SET options_json = ?, updated_at = `+sqlNowExpr+` WHERE id = 1`, string(clean)); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE privacy_settings SET options_json = ?,
+		on_error = CASE WHEN on_error = 'fail_closed' THEN 'fail_open' ELSE on_error END,
+		over_limit_action = CASE WHEN over_limit_action = 'fail_closed' THEN 'scan_prefix' ELSE over_limit_action END,
+		unsupported_path_action = CASE WHEN unsupported_path_action = 'fail_closed' THEN 'warn' ELSE unsupported_path_action END,
+		updated_at = `+sqlNowExpr+` WHERE id = 1 AND (options_json <> ? OR on_error = 'fail_closed' OR over_limit_action = 'fail_closed' OR unsupported_path_action = 'fail_closed')`, string(clean), string(clean)); err != nil {
 		return err
 	}
 	return tx.Commit()

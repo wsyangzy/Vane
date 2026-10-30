@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/routing"
@@ -102,6 +103,38 @@ func (s *ProfileStore) ListTraces(ctx context.Context, provider string, limit in
 			return nil, err
 		}
 		result = append(result, trace)
+	}
+	return result, rows.Err()
+}
+
+// TracesForRequests looks up the requested page, including records outside the
+// recent-history window. Provider and build environment are part of the key.
+func (s *ProfileStore) TracesForRequests(ctx context.Context, provider string, requestIDs []string) (map[string]routing.DispatchTrace, error) {
+	result := make(map[string]routing.DispatchTrace)
+	if !validProfileProvider(provider) {
+		return nil, errors.New("provider_invalid")
+	}
+	if len(requestIDs) == 0 {
+		return result, nil
+	}
+	args := []any{s.environment, provider}
+	for _, id := range requestIDs {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT request_id,payload FROM routing_dispatch_traces WHERE environment=? AND provider=? AND request_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(requestIDs)), ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, payload string
+		var trace routing.DispatchTrace
+		if err := rows.Scan(&id, &payload); err != nil {
+			return nil, err
+		}
+		if json.Unmarshal([]byte(payload), &trace) == nil && trace.RequestID == id && trace.Provider == provider {
+			result[id] = trace
+		}
 	}
 	return result, rows.Err()
 }

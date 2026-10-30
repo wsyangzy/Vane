@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,8 +29,18 @@ func (a *App) SaveLogFile(content string, defaultFileName string) SaveFileResult
 		AddFilter("所有文件", "*.*").
 		PromptForSingleSelection()
 
-	if err != nil {
-		return SaveFileResult{Success: false, Error: fmt.Sprintf("打开保存对话框失败: %v", err)}
+	return completeLogExport(content, filePath, err)
+}
+
+func completeLogExport(content, filePath string, dialogErr error) SaveFileResult {
+	// Wails keeps the Windows cancellation sentinel in an internal package.
+	for cause := dialogErr; cause != nil; cause = errors.Unwrap(cause) {
+		if cause.Error() == "cancelled by user" {
+			return SaveFileResult{Success: false, Error: "cancelled"}
+		}
+	}
+	if dialogErr != nil {
+		return SaveFileResult{Success: false, Error: fmt.Sprintf("打开保存对话框失败: %v", dialogErr)}
 	}
 
 	// 用户取消了对话框
@@ -38,7 +49,7 @@ func (a *App) SaveLogFile(content string, defaultFileName string) SaveFileResult
 	}
 
 	// 写入文件
-	err = os.WriteFile(filePath, []byte(content), 0644)
+	err := os.WriteFile(filePath, []byte(content), 0644)
 	if err != nil {
 		return SaveFileResult{Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}
 	}

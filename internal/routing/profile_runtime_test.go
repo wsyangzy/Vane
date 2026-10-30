@@ -22,6 +22,86 @@ func runtimeTestTurn(id string) TurnInput {
 	return TurnInput{ConversationID: "conversation", TurnID: id, NewTurn: true, CurrentUserMessage: "PRIVATE_CURRENT_TEXT", PreviousUserMessage: "PRIVATE_PREVIOUS_TEXT", PreviousAssistantText: "PRIVATE_ASSISTANT_TEXT"}
 }
 
+func TestAutomaticHealthScopeFollowsOnlyDefaultMembers(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := RuntimeConfig{Provider: provider, Profiles: []RoutingProfile{
+				{ID: 1, Provider: provider, Enabled: true, IsDefault: true, Members: []RoutingMember{
+					{ChannelID: 1, GroupID: 11, Enabled: true},
+					{ChannelID: 2, Enabled: true},
+					{ChannelID: 3, Enabled: false},
+				}},
+				{ID: 2, Provider: provider, Enabled: true, Members: []RoutingMember{{ChannelID: 4, Enabled: true}}},
+			}, Candidates: []DispatchCandidate{
+				{Provider: provider, ChannelID: 1, GroupID: 11, EndpointID: "selected", Enabled: true, Health: HealthState{RepairRequired: true}},
+				{Provider: provider, ChannelID: 1, GroupID: 12, EndpointID: "other-group", Enabled: true},
+				{Provider: provider, ChannelID: 2, GroupID: 21, EndpointID: "wildcard-a", Enabled: true},
+				{Provider: provider, ChannelID: 2, GroupID: 22, EndpointID: "wildcard-b", Enabled: true},
+				{Provider: provider, ChannelID: 3, EndpointID: "disabled-member", Enabled: true},
+				{Provider: provider, ChannelID: 4, EndpointID: "other-profile", Enabled: true},
+				{Provider: provider, ChannelID: 2, EndpointID: "no-credential", Enabled: false},
+				{Provider: "other", ChannelID: 2, EndpointID: "other-provider", Enabled: true},
+			}}
+			r := NewProfileRuntime(cfg)
+			for _, candidate := range cfg.Candidates {
+				want := candidate.EndpointID == "selected" || strings.HasPrefix(candidate.EndpointID, "wildcard-")
+				if got := r.HealthCheckEnabled(candidate.EndpointID); got != want {
+					t.Fatalf("scope(%s) = %v, want %v", candidate.EndpointID, got, want)
+				}
+			}
+			cfg.Profiles[0].IsDefault, cfg.Profiles[1].IsDefault = false, true
+			r.Replace(cfg)
+			if r.HealthCheckEnabled("selected") || !r.HealthCheckEnabled("other-profile") {
+				t.Fatal("default change retained old health scope")
+			}
+			cfg.Profiles[1].Members = nil
+			r.Replace(cfg)
+			if r.HealthCheckEnabled("other-profile") {
+				t.Fatal("removed member retained health scope")
+			}
+			for _, profiles := range [][]RoutingProfile{
+				nil,
+				{{Provider: provider, Enabled: true}},
+				{{Provider: provider, Enabled: false, IsDefault: true}},
+				{{Provider: provider, Enabled: true, IsDefault: true}, {Provider: provider, Enabled: true, IsDefault: true}},
+			} {
+				cfg.Profiles = profiles
+				r.Replace(cfg)
+				for _, candidate := range cfg.Candidates {
+					if r.HealthCheckEnabled(candidate.EndpointID) {
+						t.Fatal("invalid default enabled automatic health checks")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestProfileEditReevaluatesCurrentTurnWithoutLosingSession(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := runtimeTestConfig()
+			cfg.Provider, cfg.Profiles[0].Provider = provider, provider
+			for i := range cfg.Candidates {
+				cfg.Candidates[i].Provider = provider
+			}
+			cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "model", Enabled: true, MatchModel: "gpt-test", Targets: []RouteTarget{{ChannelID: 1, GroupID: 1}}}}
+			r := NewProfileRuntime(cfg)
+			turn := runtimeTestTurn("same-turn")
+			first := r.Plan(context.Background(), 1, "gpt-test", true, turn, false)
+			runtimeTestSend(t, r, &first, 0)
+			cfg.Profiles[0].Revision++
+			cfg.Profiles[0].Rules[0].Targets = []RouteTarget{{ChannelID: 1, GroupID: 2}}
+			r.Replace(cfg)
+			turn.NewTurn = false
+			next := r.Plan(context.Background(), 1, "gpt-test", true, turn, false)
+			if next.Decision.ReusedTurn || runtimeTestSend(t, r, &next, 0).GroupID != 2 {
+				t.Fatal("saved policy reused stale turn targets")
+			}
+		})
+	}
+}
+
 func TestProfileRuntimeExplicitPreviewEligibilityAndNoSideEffects(t *testing.T) {
 	for _, reason := range []string{"model_unsupported", "quota_exhausted"} {
 		t.Run(reason, func(t *testing.T) {

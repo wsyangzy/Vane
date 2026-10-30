@@ -264,7 +264,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 // The auxiliary path uses the same caller, credentials and bounded route as
 // Messages. In particular a 401 must reach the client instead of an estimate.
 func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, connID string, lifecycle RequestLifecycleManager) {
-	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", body, lifecycle, privacyLevelsFor(h.endpointManager))
+	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", body, lifecycle)
 	if err != nil {
 		if policy := AsPrivacyPolicyError(err); policy != nil {
 			WritePrivacyPolicyErrorResponse(w, policy)
@@ -276,7 +276,8 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 	run := planSubscriptionRoute(h.endpointManager, r, body)
 	if run == nil {
 		if runtime := h.endpointManager.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
-			run = planClaudeProfile(runtime.ProfileRuntime(), h.endpointManager.RouteConfig(), r, bodies.result.Body, true, connID)
+			preference := routing.WithStatePreference(r.Context(), h.forwarder.states, claudeStateKeys(r.Context(), body), routing.ExplicitTurn(r.Context(), r.Header))
+			run = planClaudeProfile(runtime.ProfileRuntime(), h.endpointManager.RouteConfig(), r.WithContext(preference), bodies.result.Body, true, connID)
 		} else {
 			run = planClaudePool(h.endpointManager.PoolRuntime(), h.endpointManager.RouteConfig(), r, body, true)
 		}

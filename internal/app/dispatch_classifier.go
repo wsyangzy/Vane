@@ -45,7 +45,7 @@ func (a *App) classifierPrompt(ctx context.Context, p routing.RoutingProfile, tu
 	if err != nil || filtered.Action == privacy.ModeDisabled || filtered.SnapshotVersion == 0 || filtered.Truncated || filtered.SkippedReason != "" {
 		return "", errors.New("classifier_privacy_rejected")
 	}
-	processed, _ := filtered.SelectBody(privacy.ChannelLevelThirdParty, data)
+	processed, _ := filtered.SelectBody(data)
 	var input map[string]string
 	if json.Unmarshal(processed, &input) != nil {
 		return "", errors.New("classifier_input_invalid")

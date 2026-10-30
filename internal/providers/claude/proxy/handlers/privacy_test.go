@@ -50,7 +50,6 @@ func TestApplyPrivacyFilterDoesNotTouchTransportMetadata(t *testing.T) {
 		"claude",
 		body,
 		nil,
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("apply privacy filter: %v", err)
@@ -76,7 +75,7 @@ func TestApplyPrivacyFilterNilFilterPassesBodyThrough(t *testing.T) {
 	req := httptest.NewRequest("POST", "https://provider.example/v1/messages", nil)
 	body := []byte(`{"message":"hello"}`)
 
-	bodies, err := applyPrivacyFilter(context.Background(), nil, req, "claude", body, nil, nil)
+	bodies, err := applyPrivacyFilter(context.Background(), nil, req, "claude", body, nil)
 	if err != nil {
 		t.Fatalf("nil filter must not error: %v", err)
 	}
@@ -85,52 +84,29 @@ func TestApplyPrivacyFilterNilFilterPassesBodyThrough(t *testing.T) {
 	}
 }
 
-// 渠道隐私级别：同一请求故障转移到不同渠道时，发往三方中转的必须是脱敏正文，
-// 可信渠道收到原文；跟随全局的渠道用全局模式的结果。
-func TestPrivacyBodiesSelectByChannelLevel(t *testing.T) {
-	original := []byte(`{"message":"13800138000"}`)
-	redacted := []byte(`{"message":"[手机号]"}`)
-	levels := map[string]string{"relay": privacy.ChannelLevelThirdParty, "official": privacy.ChannelLevelTrusted}
-	recorder := &privacyRecordingLifecycle{}
-
-	// 全局「仅检测」：Body 是原文，RedactedBody 是脱敏正文
-	bodies := &privacyBodies{
-		original: original,
-		result: privacy.ApplyResult{
-			Body: original, RedactedBody: redacted, Action: privacy.ModeDetect, HitCount: 1,
-			RuleHits: []privacy.RuleHit{{RuleID: 1, RuleName: "手机号", Count: 1}},
-		},
-		levels:   func(channel string) string { return levels[channel] },
-		recorder: recorder,
-	}
-	if got := bodies.forChannel("default"); string(got) != string(original) {
-		t.Fatalf("channels following a detect-only global mode must receive the original body, got %s", got)
-	}
-	if recorder.calls != 0 {
-		t.Fatalf("no redaction happened yet, summary must not be recorded")
-	}
-	if got := bodies.forChannel("relay"); string(got) != string(redacted) {
-		t.Fatalf("third-party relays must always receive the redacted body, got %s", got)
-	}
-	if got := bodies.forChannel("official"); string(got) != string(original) {
-		t.Fatalf("trusted channels must receive the original body, got %s", got)
-	}
-	bodies.forChannel("relay")
-	if recorder.calls != 1 {
-		t.Fatalf("redaction summary must be recorded once per request, got %d", recorder.calls)
-	}
-	if !strings.Contains(recorder.summary, `"changed":true`) || strings.Contains(recorder.summary, "13800138000") {
-		t.Fatalf("summary must mark the change and never carry plaintext: %s", recorder.summary)
-	}
-
-	// 全局关闭是总开关：三方中转也不改写
-	disabled := &privacyBodies{
-		original: original,
-		result:   privacy.ApplyResult{Body: original, RedactedBody: redacted, Action: privacy.ModeDisabled},
-		levels:   func(channel string) string { return levels[channel] },
-	}
-	if got := disabled.forChannel("relay"); string(got) != string(original) {
-		t.Fatalf("a disabled global mode must win over the channel level, got %s", got)
+func TestPrivacyBodiesUseSameGlobalResultAcrossChannels(t *testing.T) {
+	original := []byte(`{"message":"original"}`)
+	redacted := []byte(`{"message":"token"}`)
+	for _, mode := range []string{privacy.ModeDisabled, privacy.ModeDetect, privacy.ModeRedact} {
+		recorder := &privacyRecordingLifecycle{}
+		result := privacy.ApplyResult{Body: original, Action: mode, HitCount: 1}
+		if mode == privacy.ModeRedact {
+			result.Body = redacted
+			result.Changed = true
+		}
+		bodies := &privacyBodies{original: original, result: result, recorder: recorder}
+		for _, channel := range []string{"official", "relay", "default", "relay"} {
+			if got := bodies.forChannel(channel); string(got) != string(result.Body) {
+				t.Fatalf("mode=%s channel=%s got=%s", mode, channel, got)
+			}
+		}
+		want := 0
+		if mode == privacy.ModeRedact {
+			want = 1
+		}
+		if recorder.calls != want {
+			t.Fatalf("summary count=%d want=%d", recorder.calls, want)
+		}
 	}
 }
 
@@ -160,7 +136,6 @@ func TestApplyPrivacyFilterSurfacesPolicyError(t *testing.T) {
 		req,
 		"claude",
 		[]byte(`{"message":"hi"}`),
-		nil,
 		nil,
 	)
 	if err == nil {

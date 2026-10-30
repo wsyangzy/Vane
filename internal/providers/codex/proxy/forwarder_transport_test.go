@@ -3,6 +3,7 @@ package codexproxy
 import (
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -10,6 +11,52 @@ import (
 	"github.com/wsyangzy/Vane/internal/config"
 	"github.com/wsyangzy/Vane/internal/platform/transport"
 )
+
+func TestHTTPSettingsApplyToNewClientsWithoutChangingInflightClients(t *testing.T) {
+	cfg := config.NewDefaultConfig()
+	cfg.GlobalTimeout = 12 * time.Second
+	h := NewHTTPHandler(nil, ServerConfig{Timeout: time.Second, Config: cfg}, slog.Default(), nil)
+	old, err := h.handler.forwarder.clientForEndpoint(nil)
+	if err != nil || old.Timeout != 12*time.Second {
+		t.Fatalf("initial default timeout = %v, %v", old, err)
+	}
+	cfg.GlobalTimeout = 24 * time.Second
+	cfg.Streaming.DefaultResponseHeaderTimeout = 8 * time.Second
+	cfg.Streaming.ResponseHeaderTimeout = 16 * time.Second
+	next, err := h.handler.forwarder.clientForEndpoint(nil)
+	if err != nil || next.Timeout != 24*time.Second || old.Timeout != 12*time.Second {
+		t.Fatal("live update did not isolate new and existing clients")
+	}
+	if next.Transport.(*http.Transport).ResponseHeaderTimeout != 8*time.Second {
+		t.Fatal("non-streaming response header setting was not applied")
+	}
+	explicit, err := h.handler.forwarder.clientForEndpoint(&CodexEndpoint{Timeout: time.Second})
+	if err != nil || explicit.Timeout != time.Second {
+		t.Fatal("endpoint timeout must take precedence over the default")
+	}
+	stream, err := h.handler.streamFwd.clientForEndpoint(&CodexEndpoint{Timeout: time.Second})
+	if err != nil || stream.Timeout != 0 || stream.Transport.(*http.Transport).ResponseHeaderTimeout != 16*time.Second {
+		t.Fatal("streaming header timeout changed the stream duration limit")
+	}
+}
+
+func TestDefaultTimeoutActuallyStopsWaitingForUpstream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	cfg := config.NewDefaultConfig()
+	cfg.GlobalTimeout = 20 * time.Millisecond
+	h := NewHTTPHandler(nil, ServerConfig{Config: cfg}, slog.Default(), nil)
+	client, err := h.handler.forwarder.clientForEndpoint(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response, err := client.Get(server.URL); err == nil {
+		response.Body.Close()
+		t.Fatal("configured non-streaming timeout did not stop the request")
+	}
+}
 
 func TestForwarderUsesConfiguredTransport(t *testing.T) {
 	proxyURL, err := url.Parse("http://127.0.0.1:18080")

@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 )
 
 func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) (CodexCredentialGroupInfo, error) {
@@ -104,10 +106,15 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 }
 
 func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
+	a.routingWriteMu.Lock()
+	defer a.routingWriteMu.Unlock()
 	a.ensureCodexProviderService()
 
 	a.mu.RLock()
 	credentialGroupService := a.codexCredentialGroupService
+	groupStore := a.codexCredentialGroupStore
+	channelStore := a.codexChannelStore
+	endpointStore := a.codexEndpointStore
 	logger := a.logger
 	a.mu.RUnlock()
 	if credentialGroupService == nil {
@@ -122,7 +129,10 @@ func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := credentialGroupService.DeleteGroup(ctx, id); err != nil {
+	if err := a.deleteCredentialGroup(ctx, "codex", id, func(tx *sql.Tx) error {
+		service := codexservice.NewCodexCredentialGroupService(groupStore.WithTx(tx), channelStore.WithTx(tx), endpointStore.WithTx(tx))
+		return service.DeleteGroup(ctx, id)
+	}); err != nil {
 		return fmt.Errorf("删除 Codex 凭证分组失败: %w", err)
 	}
 	if logger != nil {
@@ -133,7 +143,7 @@ func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
 	}
 	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
-	return nil
+	return a.refreshRoutingAfterCredentialGroupDeletion(ctx)
 }
 
 func (a *App) SetDefaultCodexCredentialGroup(id int64) error {

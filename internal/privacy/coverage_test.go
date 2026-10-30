@@ -255,33 +255,22 @@ func TestNewBuiltinMatchers(t *testing.T) {
 	}
 }
 
-// 渠道隐私级别：全局仅检测时三方中转仍拿到脱敏正文；可信渠道拿原文；全局关闭是总开关
-func TestSelectBodyHonoursChannelLevel(t *testing.T) {
+func TestSelectBodyFollowsGlobalMode(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"SECRET"}]}`)
-	detect := DefaultSettings()
-	snapshot := newTestSnapshot(t, detect, literalRuleFor(1, "SECRET", "[X]"))
-	result, err := snapshot.Apply(Request{Path: "/v1/messages"}, body)
-	if err != nil {
-		t.Fatalf("Apply returned error: %v", err)
-	}
-	if result.Changed || !bytes.Equal(result.Body, body) {
-		t.Fatal("detect mode must keep the original body as the default")
-	}
-	if got, redacted := result.SelectBody(ChannelLevelThirdParty, body); !redacted || !strings.Contains(string(got), `"content":"[X]"`) {
-		t.Fatalf("third-party relays must receive the redacted body, got %s", got)
-	}
-	if got, redacted := result.SelectBody(ChannelLevelTrusted, body); redacted || !bytes.Equal(got, body) {
-		t.Fatalf("trusted channels must receive the original body, got %s", got)
-	}
-	if got, redacted := result.SelectBody(ChannelLevelDefault, body); redacted || !bytes.Equal(got, body) {
-		t.Fatalf("default channels follow the global detect mode, got %s", got)
-	}
-
-	disabled := DefaultSettings()
-	disabled.Mode = ModeDisabled
-	off, _ := newTestSnapshot(t, disabled, literalRuleFor(1, "SECRET", "[X]")).Apply(Request{Path: "/v1/messages"}, body)
-	if got, redacted := off.SelectBody(ChannelLevelThirdParty, body); redacted || !bytes.Equal(got, body) {
-		t.Fatalf("a disabled global mode must win over the channel level, got %s", got)
+	for _, mode := range []string{ModeDisabled, ModeDetect, ModeRedact} {
+		settings := DefaultSettings()
+		settings.Mode = mode
+		result, err := newTestSnapshot(t, settings, literalRuleFor(1, "SECRET", "[X]")).Apply(Request{Path: "/v1/messages"}, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, changed := result.SelectBody(body)
+		if changed != (mode == ModeRedact) || bytes.Equal(got, body) != (mode != ModeRedact) {
+			t.Fatalf("mode %s: %s changed=%v", mode, got, changed)
+		}
+		if mode != ModeRedact && result.RedactedBody != nil {
+			t.Fatal("inactive mode computed replacement body")
+		}
 	}
 }
 

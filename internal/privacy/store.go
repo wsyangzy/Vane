@@ -222,7 +222,7 @@ func (s *Store) LoadSettings(ctx context.Context) (Settings, error) {
 	if err != nil {
 		return Settings{}, fmt.Errorf("load privacy settings: %w", err)
 	}
-	var extra Settings
+	extra := DefaultSettings()
 	if err := json.Unmarshal([]byte(options), &extra); err != nil {
 		return Settings{}, fmt.Errorf("invalid privacy options")
 	}
@@ -237,6 +237,7 @@ func (s *Store) SaveSettings(ctx context.Context, settings Settings) error {
 	if err := ValidateSettings(settings); err != nil {
 		return err
 	}
+	settings = normalizeScanPolicies(settings)
 	options, err := runtimeOptionsJSON(settings)
 	if err != nil {
 		return err

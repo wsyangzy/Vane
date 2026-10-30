@@ -15,6 +15,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/platform/bodyrewrite"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/routing"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
 func (m *EndpointManager) dispatchEndpoint(c routing.DispatchCandidate) *CodexEndpoint {
@@ -115,7 +116,9 @@ func beginCodexProfileSend(ctx context.Context) error {
 func (h *Handler) planProfileRoute(r *http.Request, body []byte, streaming bool, requestID string, runtime *routing.ProfileRuntime) *codexRoute {
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	turn := routing.ResolveTurn(r.Context(), r.Header, body, "codex")
-	plan := runtime.Plan(routing.WithProfileStateKeys(r.Context(), codexStateKeys(r, body)), 0, model, streaming, turn, false)
+	keys := codexStateKeys(r, body)
+	ctx := routing.WithStatePreference(r.Context(), h.states, keys, routing.ExplicitTurn(r.Context(), r.Header))
+	plan := runtime.Plan(routing.WithProfileStateKeys(ctx, keys), 0, model, streaming, turn, false)
 	plan.RequestID = requestID
 	if !subscription.AllowedPath(r) || strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		plan.Error = "profile_path_rejected"
@@ -265,17 +268,33 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 	globalBudget := h.retryConfig()
 	plan.Budget.Limit(globalBudget.MaxTotalAttempts, globalBudget.MaxTotalDuration)
 	r = r.WithContext(routing.WithProfileRequest(r.Context(), plan))
-	defer func() {
-		data, _ := json.Marshal(plan.Trace())
-		h.recordRouteSnapshot(requestID, string(data))
-	}()
+	var chain []chainNode
+	publishProgress := func() {
+		if h.usageTracker == nil {
+			return
+		}
+		trace := plan.Trace()
+		data, _ := json.Marshal(trace)
+		snapshot := string(data)
+		retries := max(0, trace.Attempts-1)
+		opts := tracking.UpdateOptions{RouteSnapshot: &snapshot, RetryCount: &retries}
+		if len(chain) > 0 {
+			data, _ = json.Marshal(chain)
+			chainJSON := string(data)
+			opts.EndpointChain = &chainJSON
+		}
+		h.usageTracker.RecordRequestUpdate(requestID, opts)
+	}
+	// Publish before archival. A deferred update after handle* returns is lost
+	// because the request has already left the active hot pool.
+	publishProgress()
 	if plan.Error != "" && !(plan.Error == "route_unavailable" && plan.Profile.WaitForRecovery) {
 		plan.End(plan.Error)
+		publishProgress()
 		h.recordFailure(requestID, start, plan.Error, plan.Error, nil, plan.Model)
 		h.writeError(w, http.StatusServiceUnavailable, plan.Error)
 		return
 	}
-	keys := codexStateKeys(r, body)
 	var lastResponse *http.Response
 	var lastBody []byte
 	lastFailure := "route_unavailable"
@@ -289,13 +308,6 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if ep == nil || candidate.StateVersion != 0 && candidate.StateVersion != routing.StateVersion(&ep.stateVersion) {
 				plan.Skip(candidate, "candidate_configuration_changed")
 				continue
-			}
-			if h.states != nil {
-				if allowed, reason := h.states.Allowed(keys, candidate.Identity()); !allowed {
-					lastFailure = reason
-					plan.Skip(candidate, reason)
-					continue
-				}
 			}
 			channel := h.manager.ChannelByID(candidate.ChannelID)
 			if channel == nil {
@@ -336,6 +348,9 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					_ = availability.Fail(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model, failure, retryAt)
 				}
 				attempt.Finish(tokens, successful, failure)
+				if sent {
+					closeLastHop(chain, start)
+				}
 			}
 			sendRequest := r
 			var lease *subscription.Lease
@@ -367,6 +382,9 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					return err
 				}
 				sent = true
+				chain = append(chain, chainNode{Hop: len(chain) + 1, Channel: channel.Name, CredentialGroup: ep.CredentialGroupName, Endpoint: ep.Name, Attempts: 1, StartMs: time.Since(start).Milliseconds()})
+				h.recordForwarding(requestID, ep.Name, channel.Name, candidate.Identity().Model, chain)
+				publishProgress()
 				return nil
 			}
 			sendRequest = sendRequest.WithContext(context.WithValue(sendRequest.Context(), codexProfileBeforeSendKey{}, beforeSend))
@@ -378,6 +396,10 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if err != nil {
 				failure := codexRouteFailure(0, nil, err)
 				finish(0, false, failure, time.Time{})
+				if sent {
+					annotateLastChainError(&chain, 0, subscription.Redact(sendRequest.Context(), chainErrorText(err, "", failure.Reason)), nil, true)
+					publishProgress()
+				}
 				lastFailure = failure.Reason
 				if !sent {
 					plan.Skip(candidate, "request_not_sent")
@@ -401,6 +423,8 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					}
 				}
 				finish(0, false, failure, routing.RetryAfter(resp.Header, time.Now()))
+				annotateLastChainError(&chain, resp.StatusCode, subscription.Redact(sendRequest.Context(), chainBodyText(raw, failure.Reason)), resp.Header, false)
+				publishProgress()
 				lastFailure, lastResponse, lastBody = failure.Reason, resp, raw
 				if resp.StatusCode == http.StatusUnauthorized && h.subscriptions != nil {
 					h.subscriptions.RejectCredential(sendRequest.Context())
@@ -411,6 +435,10 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				continue
 			}
 			writer := &codexProfileWriter{ResponseWriter: w, attempt: attempt}
+			if len(chain) > 0 {
+				chain[len(chain)-1].StatusCode = resp.StatusCode
+			}
+			publishProgress()
 			if streaming {
 				if err := decodeCodexSubscriptionResponse(resp); err != nil {
 					resp.Body.Close()
@@ -419,20 +447,33 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				}
 				observed := &codexProfileStream{ReadCloser: resp.Body, handler: h, request: sendRequest, candidate: candidate, status: resp.StatusCode, headers: resp.Header.Clone()}
 				resp.Body = observed
-				streamErr, served := h.handleStreaming(writer, resp, requestID, start, candidate.Identity().Model, ep.Name, ep.CredentialGroupName, channel.Name, plan.Trace().Attempts)
-				tokens, cached := profileUsage(observed.usage)
-				attempt.SetCachedTokens(cached)
-				success := served && observed.completed && !observed.failed && observed.eof
-				failure := routing.Failure{Scope: routing.ScopeCandidate, Reason: "incomplete_response"}
-				if streamErr != nil {
-					failure = codexRouteFailure(http.StatusOK, nil, streamErr)
-					switch streamErr.Code {
-					case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
-						quotaFailure = true
+				settled, success := false, false
+				var failure routing.Failure
+				settleStream := func(streamErr *UpstreamStreamError, served bool) {
+					if settled {
+						return
 					}
+					settled = true
+					tokens, cached := profileUsage(observed.usage)
+					attempt.SetCachedTokens(cached)
+					success = served && observed.completed && !observed.failed && observed.eof
+					failure = routing.Failure{Scope: routing.ScopeCandidate, Reason: "incomplete_response"}
+					if streamErr != nil {
+						failure = codexRouteFailure(http.StatusOK, nil, streamErr)
+						switch streamErr.Code {
+						case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
+							quotaFailure = true
+						}
+					}
+					attempt.SetUsage(codexAttemptUsage(observed.usage, success))
+					finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
+					if streamErr != nil {
+						annotateLastChainError(&chain, 0, streamErr.Error(), resp.Header, false)
+					}
+					publishProgress()
 				}
-				attempt.SetUsage(codexAttemptUsage(observed.usage, success))
-				finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
+				streamErr, served := h.handleStreaming(writer, resp, requestID, start, candidate.Identity().Model, ep.Name, ep.CredentialGroupName, channel.Name, plan.Trace().Attempts, settleStream)
+				settleStream(streamErr, served)
 				h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, nil)
 				if success && h.states != nil {
 					h.states.Observe(observed.keys, routing.ExplicitTurn(sendRequest.Context(), sendRequest.Header), candidate.Identity())
@@ -464,6 +505,10 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if !success {
 				failure := codexRouteFailure(resp.StatusCode, raw, readErr)
 				finish(tokens, false, failure, routing.RetryAfter(resp.Header, time.Now()))
+				// A 2xx protocol failure can contain generated text. Persist the
+				// classification only, never the complete response payload.
+				annotateLastChainError(&chain, resp.StatusCode, failure.Reason, resp.Header, false)
+				publishProgress()
 				lastFailure, lastResponse, lastBody = failure.Reason, resp, raw
 				if failure.Terminal {
 					break
@@ -471,8 +516,12 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				continue
 			}
 			resp.Body = io.NopCloser(bytes.NewReader(raw))
-			h.handleNonStreaming(writer, resp, requestID, start, candidate.Identity().Model, ep.Name, ep.CredentialGroupName, channel.Name, plan.Trace().Attempts)
-			finish(tokens, true, routing.Failure{}, time.Time{})
+			closeLastHop(chain, start)
+			publishProgress()
+			h.handleNonStreaming(writer, resp, requestID, start, candidate.Identity().Model, ep.Name, ep.CredentialGroupName, channel.Name, plan.Trace().Attempts, func() {
+				finish(tokens, true, routing.Failure{}, time.Time{})
+				publishProgress()
+			})
 			if h.states != nil {
 				stateKeys := h.observeRoutedState(sendRequest, candidate.Identity(), raw)
 				runtime.RememberResponseStates(plan, candidate, stateKeys)
@@ -519,6 +568,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		}
 	}
 	plan.End(lastFailure)
+	publishProgress()
 	if lastResponse != nil {
 		lastResponse.Body = io.NopCloser(bytes.NewReader(lastBody))
 		h.recordUpstreamFailure(requestID, start, lastFailure, lastFailure, lastResponse.StatusCode, nil, plan.Model)

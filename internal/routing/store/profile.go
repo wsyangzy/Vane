@@ -323,6 +323,21 @@ func (s *ProfileStore) Save(ctx context.Context, profile *routing.RoutingProfile
 	if err = validateProfileTargets(ctx, tx, &p); err != nil {
 		return err
 	}
+	if err = writeProfileChildren(ctx, tx, &p); err != nil {
+		return err
+	}
+	if err = ensureRuntimeDefault(ctx, tx, p.Provider); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	*profile = p
+	return nil
+}
+
+func writeProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingProfile) error {
+	var err error
 	if err = deleteProfileChildren(ctx, tx, p.ID); err != nil {
 		return err
 	}
@@ -364,13 +379,6 @@ func (s *ProfileStore) Save(ctx context.Context, profile *routing.RoutingProfile
 			return err
 		}
 	}
-	if err = ensureRuntimeDefault(ctx, tx, p.Provider); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	*profile = p
 	return nil
 }
 

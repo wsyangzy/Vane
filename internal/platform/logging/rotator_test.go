@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func TestParseSizeRejectsNonPositiveAndOverflow(t *testing.T) {
+	for _, value := range []string{"0", "-1MB", "invalid", "9007199254740993KB", "9223372036854775807GB"} {
+		if _, err := ParseSize(value); err == nil {
+			t.Fatalf("invalid log size accepted: %q", value)
+		}
+	}
+	for value, want := range map[string]int64{"1B": 1, "2KB": 2048, " 2mb ": 2 * 1024 * 1024, "1GB": 1024 * 1024 * 1024} {
+		if got, err := ParseSize(value); err != nil || got != want {
+			t.Fatalf("ParseSize(%q) = %d, %v", value, got, err)
+		}
+	}
+}
+
 func TestArchivingFileRotatorKeepsActiveFileAtRootAndArchivesPreviousDay(t *testing.T) {
 	root := t.TempDir()
 	activeFile := filepath.Join(root, "codex.log")

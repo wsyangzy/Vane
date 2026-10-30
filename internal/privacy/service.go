@@ -75,13 +75,18 @@ func (s *Service) Reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	settings = normalizeScanPolicies(settings)
 	stored, err := s.store.ListEnabledRules(ctx)
 	if err != nil {
 		return err
 	}
 	rules := make([]Rule, 0, len(stored))
 	for _, item := range stored {
-		rules = append(rules, item.Rule)
+		rule, err := normalizeRule(item.Rule)
+		if err != nil {
+			return err
+		}
+		rules = append(rules, rule)
 	}
 	compiled, err := CompileRules(rules)
 	if err != nil {
@@ -122,9 +127,7 @@ func (s *Service) SnapshotVersion() int64 {
 }
 
 // Apply 热路径入口：对出站请求体执行隐私过滤。
-//
-// 返回的 error 只会是 *PolicyError，调用方必须 errors.As 识别并短路返回，
-// 不得进入重试 / 故障转移 / 端点冷却。
+// 扫描异常放行，按配置记录防护摘要；保留 error 返回值以兼容现有 provider 接口。
 func (s *Service) Apply(ctx context.Context, req Request, body []byte) (ApplyResult, error) {
 	if s == nil {
 		return ApplyResult{Body: body, Action: ModeDisabled}, nil
@@ -136,16 +139,35 @@ func (s *Service) Apply(ctx context.Context, req Request, body []byte) (ApplyRes
 		return ApplyResult{Body: body, Action: ModeDisabled}, nil
 	}
 	copy := *snapshot
-	if snapshot.Settings.RestoreResponses && snapshot.Settings.Mode != ModeDisabled {
+	if snapshot.Settings.Mode == ModeRedact && snapshot.requiresMappings() {
 		copy.restoration = s.vault.request(req.SessionKey, req.RequestID)
+		copy.restoration.setRules(snapshot.Rules)
 	}
 	result, err := copy.Apply(req, body)
-	result.Restoration = copy.restoration
-	result.activity = s.recordActivity(ctx, req, result, err)
-	if result.Restoration != nil {
-		result.Restoration.activity = result.activity
+	if snapshot.Settings.RestoreResponses {
+		result.Restoration = copy.restoration
 	}
-	if result.SkippedReason == SkippedUnsupportedPath {
+	record := !(result.SkippedReason == "scan_error" && snapshot.Settings.OnError == OnErrorPassthrough ||
+		result.SkippedReason == SkippedUnsupportedPath && snapshot.Settings.UnsupportedPathAction == UnsupportedPathPassthrough)
+	if record {
+		result.activity = s.recordActivity(ctx, req, result, err)
+	}
+	if copy.restoration != nil {
+		copy.restoration.activity = result.activity
+		if copy.restoration.skipped != "" {
+			result.activity.update(false, 0, copy.restoration.skipped)
+		} else if !snapshot.Settings.RestoreResponses && result.Changed {
+			result.activity.update(false, 0, "restoration_disabled")
+		} else if result.Changed {
+			for _, hit := range result.RuleHits {
+				if !copy.restoration.rules[hit.RuleID] {
+					result.activity.update(false, 0, "rule_restoration_disabled")
+					break
+				}
+			}
+		}
+	}
+	if record && result.SkippedReason == SkippedUnsupportedPath {
 		s.recordUnscannedPath(req.Path)
 	}
 	return result, err
@@ -283,7 +305,7 @@ func (s *Service) UpdateRule(ctx context.Context, id int64, rule Rule) (StoredRu
 	if err != nil {
 		return StoredRule{}, err
 	}
-	// 内置规则的匹配逻辑不可改写，只允许调整启用状态与替换方式
+	// 内置规则的匹配逻辑不可改写，启用状态和处理策略仍可调整。
 	if existing.Source == SourceBuiltin {
 		rule.MatchType = existing.MatchType
 		rule.Pattern = existing.Pattern
@@ -369,7 +391,11 @@ func (s *Service) ApplyPreset(ctx context.Context, presetID string) (int, error)
 		if _, exists := known[rule.Name]; exists {
 			continue
 		}
-		if _, err := s.store.CreateRule(ctx, rule); err != nil {
+		normalized, err := normalizeRule(rule)
+		if err != nil {
+			return added, err
+		}
+		if _, err := s.store.CreateRule(ctx, normalized); err != nil {
 			return added, err
 		}
 		added++
@@ -402,12 +428,12 @@ func (s *Service) PreviewText(text string) PreviewResult {
 		return PreviewResult{Output: text}
 	}
 	preview := *snapshot
-	if preview.Settings.RestoreResponses {
+	preview.Settings.Mode = ModeRedact
+	if preview.requiresMappings() {
 		preview.restoration = newRestorationVault().request("", "preview")
 	}
 	result := preview.ApplyToText(text)
 	return PreviewResult{
-		Blocked:  result.Action == ActionBlock,
 		Output:   string(result.Body),
 		Changed:  result.Changed,
 		HitCount: result.HitCount,
@@ -460,14 +486,17 @@ func (s *Service) PreviewRequest(path string, body []byte) RequestPreviewResult 
 	// 按脱敏模式推演：测试面板要回答「开启脱敏后会改成什么样」
 	preview := *snapshot
 	preview.Settings.Mode = ModeRedact
-	if preview.Settings.RestoreResponses {
+	if preview.requiresMappings() {
 		preview.restoration = newRestorationVault().request("", "preview")
 	}
 	var result ApplyResult
-	replacements, policyErr := preview.scanSegments(&result, preview.candidateRules(), segments)
-	if policyErr != nil {
-		out.Blocked = true
-		out.Error = policyErr.Message
+	replacements := preview.scanSegments(&result, preview.candidateRules(), segments)
+	if result.SkippedReason == SkippedScanLimit {
+		out.Error = "超过扫描上限，本次跳过扫描并原文放行"
+	}
+	if preview.restoration != nil && preview.restoration.skipped != "" {
+		replacements = nil
+		out.Error = "还原映射容量已满，本次原文放行"
 	}
 	for i, seg := range segments {
 		_, redacted := replacements[i]
@@ -484,10 +513,19 @@ func (s *Service) PreviewRequest(path string, body []byte) RequestPreviewResult 
 
 // normalizeRule 补齐默认值并校验
 func normalizeRule(rule Rule) (Rule, error) {
-	if rule.Action == "" {
+	if rule.Action == "" || rule.Action == ActionDetect || rule.Action == ActionBlock {
 		rule.Action = ActionRedact
 	}
-	if rule.ReplacementMode == "" {
+	if rule.Action == ActionAllow {
+		if rule.ReplacementMode == ReplacementReversibleKey || rule.ReplacementMode == ReplacementMaskOnlyKey {
+			rule.ReplacementMode = ReplacementMaskOnlyKey
+		} else {
+			rule.ReplacementMode = ReplacementMaskOnly
+		}
+	}
+	if rule.Action == ActionRedact && !rule.usesTokens() {
+		rule.ReplacementMode = ReplacementReversible
+	} else if rule.ReplacementMode == "" {
 		rule.ReplacementMode = ReplacementPlaceholder
 	}
 	if rule.ReplacementMode == ReplacementPlaceholder && rule.Placeholder == "" {

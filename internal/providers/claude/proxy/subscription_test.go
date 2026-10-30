@@ -61,7 +61,7 @@ func newSubscriptionIntegrationFixture(t *testing.T, backup http.HandlerFunc) (*
 	t.Cleanup(server.Close)
 	hash := sha256.Sum256([]byte("local-key-sentinel"))
 	s := &subscriptionIntegrationStore{binding: subscription.Binding{GroupID: 1, Channel: "official", Version: 1, Enabled: true, KeyHash: hex.EncodeToString(hash[:]), BackupTargets: []routing.Target{{ChannelID: 2, GroupID: 2, UpstreamModel: "backup-model"}}}}
-	cfg := &config.Config{Retry: config.RetryConfig{MaxAttempts: 3, MaxTotalAttempts: 4, MaxTotalDuration: time.Second}, Endpoints: []config.EndpointConfig{
+	cfg := &config.Config{TokenCounting: config.TokenCountingConfig{Enabled: true, EstimationRatio: 4}, Retry: config.RetryConfig{MaxAttempts: 3, MaxTotalAttempts: 4, MaxTotalDuration: time.Second}, Endpoints: []config.EndpointConfig{
 		{Name: "official-a", URL: subscription.OfficialOrigin, Channel: "official", CredentialGroupID: 1, AuthMode: subscription.ClientPassthrough, Timeout: time.Second},
 		{Name: "official-b", URL: subscription.OfficialOrigin, Channel: "official", CredentialGroupID: 1, AuthMode: subscription.ClientPassthrough, Timeout: time.Second},
 		{Name: "backup", URL: server.URL, Channel: "backup", CredentialGroupID: 2, Token: "backup-key", SkipHealthCheck: true, SupportsCountTokens: true, Timeout: time.Second},
@@ -81,6 +81,47 @@ func subscriptionRequest(path string, stream bool) *http.Request {
 	r.Header.Set("X-Relay-Key", "local-key-sentinel")
 	r.Header.Set("Authorization", "Bearer oauth-sentinel")
 	return r
+}
+
+func TestSubscriptionCountTokensSwitchStopsUpstreamWithoutWeakeningAuthentication(t *testing.T) {
+	var sends atomic.Int32
+	h, store := newSubscriptionIntegrationFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		sends.Add(1)
+		if r.URL.Path == "/v1/messages/count_tokens" {
+			io.WriteString(w, `{"input_tokens":5}`)
+		} else {
+			io.WriteString(w, `{"type":"message","model":"backup-model","stop_reason":"end_turn","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+		}
+	})
+	store.pauses = []subscription.Pause{{GroupID: 1, Version: 1, Model: "*", Revision: 1, ResumeNotBefore: time.Now().Add(time.Hour)}}
+	for _, enabled := range []bool{false, true, false} {
+		h.config.TokenCounting.Enabled = enabled
+		before := sends.Load()
+		recorder := httptest.NewRecorder()
+		h.ServeHTTP(recorder, subscriptionRequest("/v1/messages/count_tokens", false))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("count request failed: enabled=%v status=%d body=%s", enabled, recorder.Code, recorder.Body.String())
+		}
+		if enabled {
+			if sends.Load() != before+1 || recorder.Body.String() != `{"input_tokens":5}` || recorder.Header().Get("X-Token-Estimation") != "" {
+				t.Fatalf("enabled count request did not use the upstream result: %s sends=%d", recorder.Body.String(), sends.Load())
+			}
+		} else if sends.Load() != before || recorder.Header().Get("X-Token-Estimation") != "true" {
+			t.Fatalf("disabled count request sent upstream: %s sends=%d", recorder.Body.String(), sends.Load())
+		}
+	}
+	invalid := subscriptionRequest("/v1/messages/count_tokens", false)
+	invalid.Header.Set("X-Relay-Key", "invalid-local-key")
+	rejected := httptest.NewRecorder()
+	h.ServeHTTP(rejected, invalid)
+	if rejected.Code != http.StatusUnauthorized || sends.Load() != 1 {
+		t.Fatalf("local estimation bypassed caller authentication: %d %s", rejected.Code, rejected.Body.String())
+	}
+	response := httptest.NewRecorder()
+	h.ServeHTTP(response, subscriptionRequest("/v1/messages", false))
+	if response.Code != http.StatusOK || sends.Load() != 2 {
+		t.Fatalf("count switch affected normal generation: %d %s sends=%d", response.Code, response.Body.String(), sends.Load())
+	}
 }
 
 func TestSubscriptionHandlerPausedOfficialUsesAuthorizedBackupForEveryPath(t *testing.T) {

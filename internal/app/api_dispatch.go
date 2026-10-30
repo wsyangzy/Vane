@@ -298,22 +298,27 @@ func (a *App) ListRoutingProfiles(provider string) (RoutingProfileState, error) 
 	if err != nil {
 		return RoutingProfileState{}, err
 	}
+	a.routingWriteMu.Lock()
+	defer a.routingWriteMu.Unlock()
 	ctx, cancel := routeCtx()
 	defer cancel()
+	s, err := a.profileStore(ctx)
+	if err != nil {
+		return RoutingProfileState{}, err
+	}
+	catalog, err := a.poolCatalog(ctx, provider)
+	if err != nil {
+		return RoutingProfileState{}, err
+	}
+	if err := s.PruneMissingCredentialGroupReferences(ctx, provider, catalog); err != nil {
+		return RoutingProfileState{}, err
+	}
 	pool, err := a.refreshPoolRuntime(ctx, provider)
 	if err != nil {
 		return RoutingProfileState{}, err
 	}
 	a.publishPoolRuntime(provider)
-	s, err := a.profileStore(ctx)
-	if err != nil {
-		return RoutingProfileState{}, err
-	}
 	profiles, err := s.List(ctx, provider)
-	if err != nil {
-		return RoutingProfileState{}, err
-	}
-	catalog, err := a.poolCatalog(ctx, provider)
 	if err != nil {
 		return RoutingProfileState{}, err
 	}
@@ -409,6 +414,7 @@ func (a *App) SaveRoutingProfile(input routing.RoutingProfile) (routing.RoutingP
 	_, err = a.refreshPoolRuntime(ctx, input.Provider)
 	if err == nil {
 		a.publishPoolRuntime(input.Provider)
+		a.emitPoolHealthUpdate(input.Provider)
 	}
 	return input, err
 }
@@ -428,6 +434,7 @@ func (a *App) DeleteRoutingProfile(provider string, id int64) error {
 	_, err = a.refreshPoolRuntime(ctx, provider)
 	if err == nil {
 		a.publishPoolRuntime(provider)
+		a.emitPoolHealthUpdate(provider)
 	}
 	return err
 }
@@ -446,6 +453,7 @@ func (a *App) SetDefaultRoutingProfile(provider string, id int64) error {
 	_, err = a.refreshPoolRuntime(ctx, provider)
 	if err == nil {
 		a.publishPoolRuntime(provider)
+		a.emitPoolHealthUpdate(provider)
 	}
 	return err
 }

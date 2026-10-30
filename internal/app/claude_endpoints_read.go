@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	claudeendpoint "github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 	claudeservice "github.com/wsyangzy/Vane/internal/providers/claude/service"
 	claudestore "github.com/wsyangzy/Vane/internal/providers/claude/store"
 )
@@ -91,6 +92,7 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 			info.CooldownReason = ""
 		}
 
+		applyClaudeHealthScope(&info, endpointManager, claudeservice.EndpointRuntimeKey(r))
 		result = append(result, info)
 	}
 
@@ -100,6 +102,7 @@ func (a *App) GetEndpointRecords() ([]EndpointRecordInfo, error) {
 func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 	a.mu.RLock()
 	endpointService := a.endpointService
+	endpointManager := a.endpointManager
 	a.mu.RUnlock()
 
 	if endpointService == nil {
@@ -188,7 +191,18 @@ func (a *App) GetEndpointRecord(name string) (EndpointRecordInfo, error) {
 		}
 	}
 
+	key := claudeservice.EndpointRuntimeKey(&claudestore.EndpointRecord{Channel: info.Channel, CredentialGroupID: info.CredentialGroupID, Name: info.Name})
+	applyClaudeHealthScope(&info, endpointManager, key)
 	return info, nil
+}
+
+func applyClaudeHealthScope(info *EndpointRecordInfo, manager *claudeendpoint.Manager, key string) {
+	if manager != nil && !manager.IsHealthCheckEnabled(key) {
+		info.HealthState = "disabled"
+		info.Healthy, info.NeverChecked = false, true
+		info.ResponseTimeMs, info.LastFailCode = 0, 0
+		info.LastCheck, info.LastFailReason = "", ""
+	}
 }
 
 func formatEndpointTimeValue(value interface{}) string {

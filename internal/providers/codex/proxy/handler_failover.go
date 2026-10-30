@@ -111,7 +111,7 @@ func (h *Handler) tryEndpointCycleForStage(
 			return cycleResult{routeChanged: true}
 		}
 		channel := h.manager.GetActiveChannel()
-		// 按本次尝试的目标渠道的隐私级别挑选正文，再做模型改写（只动顶层 model 字段）
+		// 使用本请求统一的隐私正文，再做模型改写（只动顶层 model 字段）
 		targetChannel := channel
 		if routed {
 			targetChannel = stage.channel

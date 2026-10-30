@@ -17,8 +17,13 @@ import (
 // handleStreaming 处理流式响应：逐行透传 SSE 并提取 token。
 // 如果上游在真正输出前通过 SSE 返回错误事件，则返回错误交给外层端点循环做故障转移。
 // served 表示端点是否把这次请求完整服务掉了：已输出后的 SSE 错误 / 读取中断都算 false。
-func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) (streamErr *UpstreamStreamError, served bool) {
+func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int, beforeArchive ...func(*UpstreamStreamError, bool)) (streamErr *UpstreamStreamError, served bool) {
 	defer resp.Body.Close()
+	prepareArchive := func(streamErr *UpstreamStreamError, served bool) {
+		for _, callback := range beforeArchive {
+			callback(streamErr, served)
+		}
+	}
 
 	var headersWritten bool
 	flusher, canFlush := w.(http.Flusher)
@@ -172,6 +177,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"bytes_processed", bytesProcessed,
 					"error", scanErr,
 				)
+				prepareArchive(nil, true)
 				h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
 				return nil, true
 			}
@@ -183,12 +189,14 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 					"bytes_processed", bytesProcessed,
 					"error", scanErr,
 				)
+				prepareArchive(nil, true)
 				h.recordCancelled(requestID, startTime, "client_canceled_after_output", lastResult, requestModel, endpointName, groupName, channelName)
 				return nil, true
 			}
 		}
 		// 上游 HTTP 层这次是真给过响应的（200），流是在那之后断的，就记它的真实状态码。
 		// 原先这里固定写 502，是一个提供商从未返回过的码。
+		prepareArchive(nil, false)
 		h.recordUpstreamFailure(requestID, startTime, "network_error", scanErr.Error(), resp.StatusCode, nil, requestModel)
 		return nil, false
 	} else {
@@ -206,6 +214,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		)
 		// 记上游真实给出的状态码（这条响应 HTTP 层就是 200，错误只在 SSE 事件里）。
 		// 200 + failed 是准确的：它说明失败发生在流中途，而不是连接或鉴权阶段。
+		prepareArchive(nil, false)
 		h.recordUpstreamFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), resp.StatusCode, nil, requestModel)
 		return nil, false
 	}
@@ -261,6 +270,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		requestID, modelName, inputTokens, outputTokens, inputTokens+outputTokens, cacheReadTokens, durationMs),
 		"provider", "codex", "request_id", requestID)
 
+	prepareArchive(nil, true)
 	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
 	return nil, true
 }

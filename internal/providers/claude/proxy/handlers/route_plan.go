@@ -177,14 +177,15 @@ func (run *routeRun) terminalFailure(lastErr error) (string, int) {
 
 // planClaudeRoute 在隐私脱敏之后做路由决策：模型规则 > 非流改道 > 默认流程。
 // 未命中时返回 nil，请求按现有流程处理，行为不变。
-func planClaudeRoute(em *endpoint.Manager, r *http.Request, body []byte, streaming bool, requestID string) *routeRun {
+func planClaudeRoute(em *endpoint.Manager, r *http.Request, body []byte, streaming bool, requestID string, states *routing.StateTracker) *routeRun {
 	if em == nil || r == nil || r.URL == nil || r.URL.Path != claudeGenerationPath {
 		return nil
 	}
 	cfg := em.RouteConfig()
 	if runtime := em.PoolRuntime(); runtime != nil {
 		if profile := runtime.ProfileRuntime(); profile != nil {
-			return planClaudeProfile(profile, cfg, r, body, streaming, requestID)
+			ctx := routing.WithStatePreference(r.Context(), states, claudeStateKeys(r.Context(), body), routing.ExplicitTurn(r.Context(), r.Header))
+			return planClaudeProfile(profile, cfg, r.WithContext(ctx), body, streaming, requestID)
 		}
 		return planClaudePool(runtime, cfg, r, body, streaming)
 	}
@@ -232,6 +233,28 @@ func planClaudeRoute(em *endpoint.Manager, r *http.Request, body []byte, streami
 	return run
 }
 
+func (run *routeRun) preferState(f *Forwarder, ctx context.Context, body []byte) {
+	if run == nil || run.profile != nil || run.pool != nil || run.preferred {
+		return
+	}
+	run.preferred = true
+	owner, ok := f.states.Preference(claudeStateKeys(ctx, body), run.turn)
+	if !ok {
+		return
+	}
+	preferred := func(stage routeStage) bool {
+		copyRun := *run
+		copyRun.stages, copyRun.index = []routeStage{stage}, 0
+		for _, ep := range f.endpointManager.PoolEndpoints(stage.channel, stage.groupID) {
+			if copyRun.candidate(f, ep, body) == owner {
+				return true
+			}
+		}
+		return false
+	}
+	sort.SliceStable(run.stages, func(i, j int) bool { return preferred(run.stages[i]) && !preferred(run.stages[j]) })
+}
+
 // planModelCapabilityRoute 激活渠道的端点都不支持请求模型时，按渠道优先级挑出有端点支持该模型的渠道，
 // 只在本次请求内使用，不切换全局激活渠道。关闭渠道间故障转移时不借用其它渠道，保持原有的 400。
 func planModelCapabilityRoute(forwarder *Forwarder, em *endpoint.Manager, body []byte, sourceChannel string, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}) *routeRun {
@@ -265,6 +288,7 @@ func planModelCapabilityRoute(forwarder *Forwarder, em *endpoint.Manager, body [
 // routeStageEndpoints 当前阶段经过模型能力与凭证分组每日限额过滤后的候选端点
 func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker *tracking.UsageTracker, em *endpoint.Manager, run *routeRun, body []byte, triedEndpoints map[string]struct{}) ([]*endpoint.Endpoint, bool) {
 	defer run.publishSnapshot()
+	run.preferState(forwarder, ctx, body)
 	run.observeSubscription(ctx, forwarder)
 	stage := run.current()
 	if stage == nil || em == nil {
@@ -306,15 +330,6 @@ func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker
 	eligible := candidates[:0:0]
 	for _, ep := range candidates {
 		candidate := run.candidate(forwarder, ep, body)
-		if forwarder.states != nil {
-			if allowed, reason := forwarder.states.Allowed(claudeStateKeys(ctx, body), candidate); !allowed {
-				run.ledger.Skip(candidate, reason)
-				if run.profile != nil && stage.candidate != nil {
-					run.profile.Skip(*stage.candidate, reason)
-				}
-				continue
-			}
-		}
 		allowed, reason := forwarder.subscriptionEligibility(ctx, ep, candidate.Model)
 		if !allowed && !(run.pool != nil && reason == "subscription_paused") {
 			run.ledger.Skip(candidate, reason)

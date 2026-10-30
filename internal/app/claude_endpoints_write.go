@@ -23,9 +23,6 @@ func (a *App) CreateEndpointRecord(input CreateEndpointInput) error {
 	}
 
 	// 设置默认值（注意：Priority 由 service 层自动递增，这里不设默认值）
-	if input.TimeoutSeconds == 0 {
-		input.TimeoutSeconds = 300
-	}
 	if input.CostMultiplier == 0 {
 		input.CostMultiplier = 1.0
 	}

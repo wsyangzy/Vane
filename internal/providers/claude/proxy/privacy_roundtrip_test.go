@@ -17,7 +17,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/routing"
 )
 
-func TestClaudePrivacyRoundTripAcrossProfileFailoverAndBlock(t *testing.T) {
+func TestClaudePrivacyRoundTripAcrossFailoverLegacyRulesAndRestorationToggle(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			db, err := sql.Open("sqlite", ":memory:")
@@ -34,11 +34,10 @@ func TestClaudePrivacyRoundTripAcrossProfileFailoverAndBlock(t *testing.T) {
 			svc := privacy.NewService(store)
 			settings := privacy.DefaultSettings()
 			settings.Mode = privacy.ModeRedact
-			settings.RestoreResponses = true
 			if err := svc.UpdateSettings(ctx, settings); err != nil {
 				t.Fatal(err)
 			}
-			term, err := svc.CreateRule(ctx, privacy.Rule{Name: "业务脱敏词", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "client-secret", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementPlaceholder, Placeholder: "[脱敏词]", Priority: -100})
+			term, err := svc.CreateRule(ctx, privacy.Rule{Name: "业务脱敏词", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "client-secret", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementReversible, Priority: -100})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +55,7 @@ func TestClaudePrivacyRoundTripAcrossProfileFailoverAndBlock(t *testing.T) {
 				}
 				json.Unmarshal(data, &body)
 				value := body.Messages[0].Content
-				if value == "client-secret" || !strings.HasPrefix(value, "__VANE_") {
+				if value == "client-secret" || !strings.HasPrefix(value, "__REDACTED_") {
 					t.Errorf("upstream received unsafe body: %s", data)
 				}
 				if token != "" && token != value {
@@ -96,7 +95,7 @@ func TestClaudePrivacyRoundTripAcrossProfileFailoverAndBlock(t *testing.T) {
 			req.Header.Set("User-Agent", "claude-client")
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
-			if calls != 2 || rec.Code != 200 || !trace.Successful || !strings.Contains(rec.Body.String(), "client-secret") || strings.Contains(rec.Body.String(), "__VANE_") {
+			if calls != 2 || rec.Code != 200 || !trace.Successful || !strings.Contains(rec.Body.String(), "client-secret") || strings.Contains(rec.Body.String(), "__REDACTED_") {
 				t.Fatalf("round trip: calls=%d trace=%+v response=%d %s", calls, trace, rec.Code, rec.Body)
 			}
 			if !strings.Contains(rec.Body.String(), `"input_tokens":10`) || manager.ActiveChannelName() != "A" {
@@ -106,11 +105,50 @@ func TestClaudePrivacyRoundTripAcrossProfileFailoverAndBlock(t *testing.T) {
 			if _, err := svc.UpdateRule(ctx, term.ID, term.Rule); err != nil {
 				t.Fatal(err)
 			}
+
 			rec = httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(raw)))
-			if rec.Code != 403 || calls != 2 || strings.Contains(rec.Body.String(), "client-secret") {
-				t.Fatalf("block did not short-circuit: %d calls=%d %s", rec.Code, calls, rec.Body)
+			followup := req.Clone(ctx)
+			followup.Body = io.NopCloser(strings.NewReader(raw))
+			h.ServeHTTP(rec, followup)
+			if rec.Code != 200 || calls != 3 || !strings.Contains(rec.Body.String(), "client-secret") || strings.Contains(rec.Body.String(), "__REDACTED_") {
+				t.Fatalf("legacy blocking rule interrupted conversation: %d calls=%d %s", rec.Code, calls, rec.Body)
 			}
+			settings.RestoreResponses = false
+			if err := svc.UpdateSettings(ctx, settings); err != nil {
+				t.Fatal(err)
+			}
+			rec = httptest.NewRecorder()
+			followup = req.Clone(ctx)
+			followup.Body = io.NopCloser(strings.NewReader(raw))
+			h.ServeHTTP(rec, followup)
+			if rec.Code != 200 || calls != 4 || strings.Contains(rec.Body.String(), "client-secret") {
+				t.Fatalf("disabled restoration changed request forwarding: %d calls=%d %s", rec.Code, calls, rec.Body)
+			}
+			compact := strings.ReplaceAll(rec.Body.String(), "\n", "")
+			if !stream && !strings.Contains(compact, token) || stream && !strings.Contains(compact, token[13:]) {
+				t.Fatal("disabled restoration did not preserve upstream tokens")
+			}
+
+			settings.RestoreResponses = true
+			if err := svc.UpdateSettings(ctx, settings); err != nil {
+				t.Fatal(err)
+			}
+			term.ReplacementMode = privacy.ReplacementMaskOnly
+			if _, err := svc.UpdateRule(ctx, term.ID, term.Rule); err != nil {
+				t.Fatal(err)
+			}
+			rec = httptest.NewRecorder()
+			followup = req.Clone(ctx)
+			followup.Body = io.NopCloser(strings.NewReader(raw))
+			h.ServeHTTP(rec, followup)
+			if rec.Code != 200 || calls != 5 || strings.Contains(rec.Body.String(), "client-secret") {
+				t.Fatalf("per-rule masking or restoration changed forwarding: %d calls=%d %s", rec.Code, calls, rec.Body)
+			}
+			compact = strings.ReplaceAll(rec.Body.String(), "\n", "")
+			if !stream && !strings.Contains(compact, token) || stream && !strings.Contains(compact, token[13:]) {
+				t.Fatal("per-rule mask-only response was restored")
+			}
+
 		})
 	}
 }

@@ -38,12 +38,21 @@ func TestProtectionOptionsAndActualDelivery(t *testing.T) {
 	if err != nil || result.Changed || result.HitCount != 1 {
 		t.Fatalf("detect result: %+v %v", result, err)
 	}
-	result.SelectBody(ChannelLevelTrusted, result.Body)
+	result.SelectBody(result.Body)
 	entries, err := s.store.listActivity(ctx)
 	if err != nil || entries[0].State != "detected" {
 		t.Fatalf("entries %+v %v", entries, err)
 	}
-	body, redacted := result.SelectBody(ChannelLevelThirdParty, result.Body)
+	settings, _ = s.GetSettings(ctx)
+	settings.Mode = ModeRedact
+	if err := s.UpdateSettings(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	result, err = s.Apply(ctx, Request{RequestID: "request-2", SessionKey: "s", Path: "/v1/messages", ProviderType: "claude"}, result.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, redacted := result.SelectBody(result.Body)
 	if !redacted || strings.Contains(string(body), "Acme") || !strings.Contains(string(body), "exempt@example.com") {
 		t.Fatalf("body: %s", body)
 	}
@@ -83,7 +92,7 @@ func TestToolArgumentsAndCompletePrivateKey(t *testing.T) {
 		t.Fatalf("PEM leaked: %s", out)
 	}
 }
-func TestBlockCannotBeHiddenByOverlappingRule(t *testing.T) {
+func TestLegacyBlockBecomesOrdinaryRuleAndHonorsAllowance(t *testing.T) {
 	first := presetRule("遮罩", `SECRET`, "[x]", 1)
 	block := presetRule("拦截", `SECRET`, "[x]", 500)
 	block.Action = ActionBlock
@@ -92,20 +101,19 @@ func TestBlockCannotBeHiddenByOverlappingRule(t *testing.T) {
 	settings := DefaultSettings()
 	settings.Mode = ModeRedact
 	s := Snapshot{Settings: settings, Rules: rules}
-	_, err := s.Apply(Request{Path: "/v1/responses"}, []byte(`{"input":"SECRET"}`))
-	var policy *PolicyError
-	if !errors.As(err, &policy) || policy.StatusCode != 403 || strings.Contains(policy.Error(), "SECRET") {
-		t.Fatalf("block bypassed: %v", err)
+	res, err := s.Apply(Request{Path: "/v1/responses"}, []byte(`{"input":"SECRET"}`))
+	if err != nil || !res.Changed || res.HitCount != 1 || strings.Contains(string(res.Body), "SECRET") {
+		t.Fatalf("legacy block did not follow redaction mode: %+v %v", res, err)
 	}
-	if s.ApplyToText("SECRET").Action != ActionBlock {
-		t.Fatal("preview did not report block")
+	if preview := s.ApplyToText("SECRET"); !preview.Changed || preview.Action == ActionBlock {
+		t.Fatal("preview still rejected legacy block rule")
 	}
 	allow, err := CompileRule(Rule{ID: 3, Name: "例外放行", Enabled: true, MatchType: MatchTypeLiteral, Pattern: "secret", Action: ActionAllow})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Rules = append(s.Rules, allow)
-	res, err := s.Apply(Request{Path: "/v1/responses"}, []byte(`{"input":"SECRET"}`))
+	res, err = s.Apply(Request{Path: "/v1/responses"}, []byte(`{"input":"SECRET"}`))
 	if err != nil || res.HitCount != 0 {
 		t.Fatal("allow was not honored")
 	}
@@ -253,7 +261,9 @@ func TestProtectionCategoryPrefixCaseAndKnownValueReuse(t *testing.T) {
 	}
 	// A context rule matches a password once. Its value must still be protected
 	// when the model/client repeats it later without the identifying field name.
-	_, err = s.CreateRule(ctx, presetRule("密码字段", `password=(?P<redact>[a-z]{12})`, "[密码]", 10))
+	passwordRule := presetRule("密码字段", `password=(?P<redact>[a-z]{12})`, "[密码]", 10)
+	passwordRule.ReplacementMode = ReplacementReversible
+	_, err = s.CreateRule(ctx, passwordRule)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +343,7 @@ func TestExistingSettingsAndPresetUpgradePreserveUserRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	settings, err := store.LoadSettings(ctx)
-	if err != nil || settings.Mode != ModeRedact || settings.RestoreResponses {
+	if err != nil || settings.Mode != ModeRedact || !settings.RestoreResponses {
 		t.Fatalf("legacy config: %+v %v", settings, err)
 	}
 	upgraded, _ := store.GetRule(ctx, preset.ID)

@@ -40,7 +40,7 @@ type EndpointRecord struct {
 	Priority        int  `json:"priority"`         // 优先级（数字越小越高）
 	FailoverEnabled bool `json:"failover_enabled"` // 是否参与故障转移
 	CooldownSeconds *int `json:"cooldown_seconds"` // 冷却时间（秒，nil=使用全局配置）
-	TimeoutSeconds  int  `json:"timeout_seconds"`  // 请求超时（秒）
+	TimeoutSeconds  int  `json:"timeout_seconds"`  // 非流式总超时（秒），0 跟随全局设置
 
 	// 健康检查配置
 	SkipHealthCheck bool `json:"skip_health_check"` // 跳过健康检查（部分中转商不支持健康检查端点）
@@ -174,9 +174,6 @@ func (s *SQLiteEndpointStore) Create(ctx context.Context, record *EndpointRecord
 	}
 	if record.CacheReadCostMultiplier == 0 {
 		record.CacheReadCostMultiplier = 1.0
-	}
-	if record.TimeoutSeconds == 0 {
-		record.TimeoutSeconds = 300
 	}
 	modelMultipliersJSON := encodeEndpointModelMultipliers(record.ModelMultipliers)
 
@@ -519,9 +516,6 @@ func (s *SQLiteEndpointStore) BatchCreate(ctx context.Context, records []*Endpoi
 		}
 		if record.CacheReadCostMultiplier == 0 {
 			record.CacheReadCostMultiplier = 1.0
-		}
-		if record.TimeoutSeconds == 0 {
-			record.TimeoutSeconds = 300
 		}
 
 		headersJSON, err := json.Marshal(record.Headers)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,7 +65,8 @@ func (g credentialGroupRef) valid() bool {
 
 // EndpointManager 管理活跃渠道的端点，提供故障转移选择
 type EndpointManager struct {
-	poolRuntime atomic.Pointer[routing.PoolRuntime]
+	healthProbesPaused atomic.Bool
+	poolRuntime        atomic.Pointer[routing.PoolRuntime]
 	// 依赖
 	channelStore         store.CodexChannelStore
 	endpointStore        store.CodexEndpointStore
@@ -196,6 +198,7 @@ func codexChannelID(channel *store.CodexChannelRecord) int64 {
 
 // SetConfig 注入运行时配置，供 Codex 端点选择复用全局路由策略。
 func (m *EndpointManager) SetConfig(cfg *config.Config) {
+	m.healthProbesPaused.Store(cfg != nil && cfg.Health.PauseActiveProbes)
 	m.mu.Lock()
 	m.strategyType = "priority"
 	if cfg != nil && cfg.Strategy.Type == "fastest" {
@@ -215,6 +218,7 @@ func (m *EndpointManager) Reload() error {
 	if channel == nil {
 		channelsByID, endpointsByChannel := m.loadChannelSnapshots(ctx, nil, nil)
 		m.mu.Lock()
+		m.inheritStateVersionsLocked(endpointsByChannel)
 		m.activeChannel = nil
 		m.endpoints = nil
 		m.preferredEndpointID = 0
@@ -234,6 +238,7 @@ func (m *EndpointManager) Reload() error {
 	channelsByID, endpointsByChannel := m.loadChannelSnapshots(ctx, channel, endpoints)
 
 	m.mu.Lock()
+	m.inheritStateVersionsLocked(endpointsByChannel)
 	m.activeChannel = channel
 	m.endpoints = endpoints
 	m.channelsByID = channelsByID
@@ -248,6 +253,22 @@ func (m *EndpointManager) Reload() error {
 		"endpoint_count", len(endpoints),
 	)
 	return nil
+}
+
+// Reloading unchanged backends must not invalidate active sessions or in-flight plans.
+// Only the destination and credential binding define a new backend incarnation.
+func (m *EndpointManager) inheritStateVersionsLocked(next map[int64][]*CodexEndpoint) {
+	for channelID, endpoints := range next {
+		for _, ep := range endpoints {
+			for _, prior := range m.endpointsByChannel[channelID] {
+				if prior.ID == ep.ID && prior.CredentialGroupID == ep.CredentialGroupID &&
+					prior.AuthMode == ep.AuthMode && prior.BaseURL == ep.BaseURL && prior.APIKey == ep.APIKey {
+					ep.stateVersion = routing.StateVersion(&prior.stateVersion)
+					break
+				}
+			}
+		}
+	}
 }
 
 // loadChannelSnapshots 加载全部渠道及其端点，供请求级路由按渠道取候选。
@@ -471,7 +492,15 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 // GetHealthCheckEndpoints 返回当前健康统计范围内的参与端点，不改变活跃渠道。
 func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFailoverEnabled bool) ([]*CodexEndpoint, error) {
 	pool := m.PoolRuntime()
-	profileMode := pool != nil && pool.ProfileRuntime() != nil
+	if pool != nil {
+		result := make([]*CodexEndpoint, 0)
+		for _, endpoint := range m.PoolEndpoints(0, 0) {
+			if endpoint.AuthMode != subscription.ClientPassthrough && m.IsHealthCheckEnabled(endpoint.ID) {
+				result = append(result, endpoint)
+			}
+		}
+		return result, nil
+	}
 	channels, err := m.channelStore.List(ctx)
 	if err != nil {
 		return nil, err
@@ -495,12 +524,23 @@ func (m *EndpointManager) GetHealthCheckEndpoints(ctx context.Context, channelFa
 			return nil, err
 		}
 		for _, endpoint := range endpoints {
-			if (profileMode || endpoint.FailoverEnabled) && endpoint.AuthMode != subscription.ClientPassthrough {
+			if endpoint.FailoverEnabled && endpoint.AuthMode != subscription.ClientPassthrough {
 				result = append(result, endpoint)
 			}
 		}
 	}
 	return result, nil
+}
+
+// IsHealthCheckEnabled uses the same default profile scope as automatic probes.
+func (m *EndpointManager) IsHealthCheckEnabled(endpointID int64) bool {
+	if m.healthProbesPaused.Load() {
+		return false
+	}
+	if pool := m.PoolRuntime(); pool != nil {
+		return pool.ProfileRuntime().HealthCheckEnabled(strconv.FormatInt(endpointID, 10))
+	}
+	return true
 }
 
 // GetNextEndpoint 获取下一个可用端点（排除当前请求已失败的端点和本地限额策略跳过的凭证分组）

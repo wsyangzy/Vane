@@ -58,7 +58,7 @@ func (ft *FastTester) SetManager(manager *Manager) {
 // TestEndpointsParallel performs parallel testing on all healthy endpoints
 // Returns (results, usedCache) where usedCache indicates if cached results were used
 func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*Endpoint) ([]*FastTestResult, bool) {
-	if !ft.config.Strategy.FastTestEnabled {
+	if !ft.config.Strategy.FastTestEnabled || ft.config.Health.PauseActiveProbes {
 		// Fast testing disabled, return endpoints with artificial results based on current status
 		results := make([]*FastTestResult, 0, len(endpoints))
 		for _, ep := range endpoints {

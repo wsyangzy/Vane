@@ -6,8 +6,7 @@ import (
 )
 
 // Request 描述一次出站请求的过滤上下文。
-// 扫描不含端点/渠道维度，只做一次；渠道级隐私级别在每次尝试选端点后，
-// 由调用方用 ChannelLevel.SelectBody 从 ApplyResult 中挑选实际发送的正文。
+// 扫描和处理只做一次，全部渠道及故障转移尝试共用同一结果。
 type Request struct {
 	SessionKey   string `json:"-"`
 	RequestID    string `json:"request_id"`
@@ -35,6 +34,7 @@ const (
 	SkippedNonTextBody     = "skipped_non_text_body"
 	SkippedUnsupportedPath = "skipped_unsupported_path"
 	SkippedScanTruncated   = "scan_truncated"
+	SkippedScanLimit       = "skipped_scan_limit"
 	SkippedEmptyBody       = "skipped_empty_body"
 	SkippedNoRules         = "skipped_no_rules"
 	SkippedNoText          = "skipped_no_text"
@@ -46,8 +46,7 @@ type ApplyResult struct {
 	Restoration *Restoration `json:"-"`
 	activity    *activityHandle
 	Body        []byte `json:"-"`
-	// RedactedBody 按脱敏语义替换后的正文，与全局模式无关；没有可替换的命中时为 nil。
-	// 供渠道级隐私级别覆盖使用（三方中转在全局「仅检测」下仍强制脱敏）。
+	// RedactedBody 是脱敏模式下替换后的正文；仅检测和关闭时为 nil。
 	RedactedBody    []byte        `json:"-"`
 	Changed         bool          `json:"changed"`
 	HitCount        int           `json:"hit_count"`
@@ -75,41 +74,20 @@ func (e *PolicyError) Error() string {
 	return fmt.Sprintf("privacy policy rejected request: %s (%d): %s", e.Code, e.StatusCode, e.Message)
 }
 
-// 渠道隐私级别：覆盖全局模式在该渠道上的效果。全局模式为 disabled 时一律不生效（总开关）。
-const (
-	// ChannelLevelDefault 跟随全局模式
-	ChannelLevelDefault = ""
-	// ChannelLevelThirdParty 三方中转：全局为「仅检测」时也强制脱敏
-	ChannelLevelThirdParty = "third_party"
-	// ChannelLevelTrusted 可信渠道（官方直连等）：只检测不改写
-	ChannelLevelTrusted = "trusted"
-)
-
-// NormalizeChannelLevel 规范化渠道隐私级别，未知取值按跟随全局处理
-func NormalizeChannelLevel(level string) string {
-	switch level {
-	case ChannelLevelThirdParty, ChannelLevelTrusted:
-		return level
-	default:
-		return ChannelLevelDefault
-	}
-}
-
-// SelectBody 按渠道隐私级别挑选实际发送的正文。
+// SelectBody 返回全局策略确定的正文，并在实际发送替身后启用回复还原。
 // original 是扫描前的原始正文；返回的 redacted 表示发出的正文是否被改写。
-func (r ApplyResult) SelectBody(level string, original []byte) (body []byte, redacted bool) {
+func (r ApplyResult) SelectBody(original []byte) (body []byte, redacted bool) {
 	defer func() {
-		if redacted {
+		// Conversation history may already contain tokens even when this request
+		// does not introduce a new replacement.
+		if r.Restoration != nil && len(r.Restoration.values) > 0 {
 			r.Restoration.enable()
+		}
+		if redacted {
 			r.activity.update(true, 0, "")
 		}
 	}()
-	switch NormalizeChannelLevel(level) {
-	case ChannelLevelThirdParty:
-		if r.Action != ModeDisabled && r.RedactedBody != nil {
-			return r.RedactedBody, true
-		}
-	case ChannelLevelTrusted:
+	if r.Body == nil {
 		return original, false
 	}
 	return r.Body, r.Changed
@@ -120,4 +98,5 @@ const (
 	CodeScanBodyTooLarge = "privacy_scan_body_too_large"
 	CodeScanFailed       = "privacy_scan_failed"
 	CodeUnsupportedPath  = "privacy_unsupported_path"
+	CodeRestoreCapacity  = "privacy_restore_capacity"
 )

@@ -232,9 +232,19 @@ func (a *App) CheckPoolEndpoint(provider string, id int64) error {
 		err = a.endpointManager.CheckPoolEndpoint(record.Channel, record.CredentialGroupID, record.Name)
 	}
 	if err == nil {
-		a.notifyPoolChange(provider)
+		a.emitPoolHealthUpdate(provider)
 	}
 	return err
+}
+
+// State publication must not turn a manual single probe or profile edit into
+// another background probe across all members.
+func (a *App) emitPoolHealthUpdate(provider string) {
+	if provider == "codex" {
+		a.emitCodexProviderStateUpdate()
+	} else {
+		a.emitEndpointUpdate()
+	}
 }
 
 func (a *App) repairPoolGroup(provider string, group int64) {

@@ -53,7 +53,7 @@ func TestMatchingOptionsMigrationPreservesEffectiveRulesAndUserEdits(t *testing.
 	migrateProtectionSettings(t, svc, settings)
 
 	got, err := svc.GetSettings(ctx)
-	if err != nil || hasLegacyMatchingOptions(got) || !got.RestoreResponses || !got.KeepKeyFormat || got.Mode != ModeRedact {
+	if err != nil || hasLegacyMatchingOptions(got) || !got.RestoreResponses || got.KeepKeyFormat || got.Mode != ModeRedact {
 		t.Fatalf("runtime settings lost or legacy controls retained: %+v %v", got, err)
 	}
 	rules, err := svc.ListRules(ctx)
@@ -65,7 +65,7 @@ func TestMatchingOptionsMigrationPreservesEffectiveRulesAndUserEdits(t *testing.
 		switch {
 		case rule.ID < 0:
 			words++
-			if !rule.Enabled || rule.Action != ActionRedact || rule.Pattern != "Acme" && rule.Pattern != "ACME" {
+			if !rule.Enabled || rule.Action != ActionRedact || rule.ReplacementMode != ReplacementReversibleKey || rule.Pattern != "Acme" && rule.Pattern != "ACME" {
 				t.Fatalf("term configuration lost: %+v", rule)
 			}
 		case rule.Action == ActionAllow:
@@ -74,11 +74,11 @@ func TestMatchingOptionsMigrationPreservesEffectiveRulesAndUserEdits(t *testing.
 				t.Fatal("allow value was placed in its loggable name or disabled")
 			}
 		case rule.ID == custom.ID:
-			if rule.Enabled || rule.Action != ActionDetect {
-				t.Fatal("the old custom category or action changed during migration")
+			if rule.Enabled || rule.Action != ActionRedact {
+				t.Fatal("custom category was lost or legacy warning was not migrated")
 			}
 		case rule.Source == SourceBuiltin:
-			if rule.Enabled || RuleKind(rule.Rule) == "phone" && rule.Action != ActionBlock {
+			if rule.Enabled || rule.Action != ActionRedact {
 				t.Fatalf("builtin category/action was not merged: %+v", rule)
 			}
 		}
@@ -95,8 +95,8 @@ func TestMatchingOptionsMigrationPreservesEffectiveRulesAndUserEdits(t *testing.
 	if _, err := svc.UpdateRule(ctx, custom.ID, custom.Rule); err != nil {
 		t.Fatal(err)
 	}
-	if !svc.PreviewText("Acme").Blocked {
-		t.Fatal("the old category still overrode the enabled rule")
+	if preview := svc.PreviewText("Acme"); preview.Blocked || !preview.Changed {
+		t.Fatal("the enabled legacy rule did not follow redaction mode")
 	}
 	// Persisted former synthetic rules support normal edit, toggle and delete.
 	if _, err := svc.SetRulesEnabled(ctx, []int64{-1}, false); err != nil {
@@ -139,7 +139,7 @@ func TestMatchingOptionsMigrationPreservesOverlappingTermOrder(t *testing.T) {
 	}
 	migrateProtectionSettings(t, svc, settings)
 	result := svc.PreviewText("ACME LABS A.CME aXcme")
-	if result.Output != "[脱敏词] [脱敏词] aXcme" || result.HitCount != 2 {
+	if strings.Count(result.Output, "__REDACTED_") != 2 || !strings.HasSuffix(result.Output, " aXcme") || result.HitCount != 2 {
 		t.Fatalf("term precedence, quoting, or case changed: %+v", result)
 	}
 }
@@ -186,11 +186,13 @@ func TestRuntimeSettingsRejectLegacyMatchingControls(t *testing.T) {
 	before, _ := svc.ListRules(ctx)
 	version := svc.SnapshotVersion()
 	for _, legacy := range []Settings{
+		{KeepKeyFormat: true},
 		{Categories: map[string]bool{"personal": false}}, {Words: []string{"private-project"}},
 		{WordsAnyCase: true}, {Allow: []string{"public@example.com"}}, {Actions: map[string]string{"email": ActionBlock}},
 	} {
 		settings := DefaultSettings()
 		settings.Categories, settings.Words, settings.WordsAnyCase, settings.Allow, settings.Actions = legacy.Categories, legacy.Words, legacy.WordsAnyCase, legacy.Allow, legacy.Actions
+		settings.RestoreResponses, settings.KeepKeyFormat = legacy.RestoreResponses, legacy.KeepKeyFormat
 		if err := svc.UpdateSettings(ctx, settings); err == nil || !strings.Contains(err.Error(), "防护规则") {
 			t.Fatalf("retired matching settings were accepted: %v", err)
 		}
@@ -202,9 +204,10 @@ func TestRuntimeSettingsRejectLegacyMatchingControls(t *testing.T) {
 }
 
 func TestAllowRulesOnlyExemptWholeMatchesAndHonorToggle(t *testing.T) {
+	publicValue := "Public" + "@" + "example.com"
 	for _, mode := range []string{ModeDetect, ModeRedact} {
 		for _, matching := range []struct{ matchType, pattern string }{
-			{MatchTypeLiteral, "PUBLIC@example.com"},
+			{MatchTypeLiteral, strings.ToUpper(publicValue)},
 			{MatchTypeRegex, `(?i)public@example\.com`},
 		} {
 			t.Run(mode+"/"+matching.matchType, func(t *testing.T) {
@@ -215,25 +218,26 @@ func TestAllowRulesOnlyExemptWholeMatchesAndHonorToggle(t *testing.T) {
 				if err := svc.UpdateSettings(ctx, settings); err != nil {
 					t.Fatal(err)
 				}
-				_, err := svc.CreateRule(ctx, Rule{Name: "邮箱拦截", Enabled: true, MatchType: MatchTypeBuiltin, Pattern: "builtin:email", Action: ActionBlock})
-				if err != nil {
+				if _, err := svc.CreateRule(ctx, Rule{Name: "邮箱匹配", Enabled: true, MatchType: MatchTypeBuiltin, Pattern: "builtin:email", Action: ActionRedact}); err != nil {
 					t.Fatal(err)
 				}
 				allow, err := svc.CreateRule(ctx, Rule{Name: "公开示例", Enabled: true, MatchType: matching.matchType, Pattern: matching.pattern, Action: ActionAllow})
 				if err != nil {
 					t.Fatal(err)
 				}
-				body := []byte(`{"input":"public@example.com","model":"unchanged"}`)
+				body, _ := json.Marshal(map[string]string{"input": publicValue, "model": "unchanged"})
 				result, err := svc.Apply(ctx, Request{Path: "/v1/responses"}, body)
 				if err != nil || result.HitCount != 0 || string(result.Body) != string(body) || len(result.RuleHits) != 0 {
 					t.Fatalf("whole-match allowance changed bytes or was counted as a hit: %+v %v", result, err)
 				}
-				for _, value := range []string{"notpublic@example.com", "public@example.com.cn", "private@example.com"} {
+				for _, value := range []string{"x" + publicValue, publicValue + "x", "Private" + "@" + "example.com"} {
 					preview := svc.PreviewText(value)
-					if !preview.Blocked {
-						t.Fatalf("allowed a different or partial value: %s", value)
+					if preview.Blocked || !preview.Changed || preview.HitCount != 1 || preview.Output == value {
+						t.Fatal("allowed a different or partial value")
 					}
-					if _, err := svc.Apply(ctx, Request{Path: "/v1/responses"}, []byte(`{"input":"`+value+`"}`)); err == nil {
+					request, _ := json.Marshal(map[string]string{"input": value})
+					actual, err := svc.Apply(ctx, Request{Path: "/v1/responses"}, request)
+					if err != nil || actual.Changed != (mode == ModeRedact) || actual.HitCount != 1 {
 						t.Fatal("request path disagrees with preview")
 					}
 				}
@@ -241,7 +245,8 @@ func TestAllowRulesOnlyExemptWholeMatchesAndHonorToggle(t *testing.T) {
 				if _, err := svc.UpdateRule(ctx, allow.ID, allow.Rule); err != nil {
 					t.Fatal(err)
 				}
-				if !svc.PreviewText("public@example.com").Blocked {
+				preview := svc.PreviewText(publicValue)
+				if preview.Blocked || !preview.Changed || preview.HitCount != 1 {
 					t.Fatal("disabled allow rule remained active")
 				}
 			})

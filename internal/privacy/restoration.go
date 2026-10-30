@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +16,10 @@ const maxRestorationSessions = 128
 const maxRestorationValues = 512
 const maxRestorationBytes = 128 * 1024
 
-type restoredValue struct{ raw, token, kind string }
+type restoredValue struct {
+	raw, token string
+	ruleID     int64
+}
 type restorationSession struct {
 	mu       sync.Mutex
 	values   []restoredValue
@@ -44,6 +48,7 @@ type Restoration struct {
 	session  *restorationSession
 	key      [32]byte
 	values   []restoredValue
+	rules    map[int64]bool
 	active   bool
 	restored int
 	skipped  string
@@ -99,10 +104,30 @@ func (v *restorationVault) request(scope, requestID string) *Restoration {
 }
 
 func (r *Restoration) Replace(kind, raw string, shape bool) string {
+	return r.replace(kind, raw, shape, 0)
+}
+
+func (r *Restoration) replaceForRule(rule Rule, raw string) string {
+	shape := rule.ReplacementMode == ReplacementReversibleKey || rule.ReplacementMode == ReplacementMaskOnlyKey
+	return r.replace(RuleKind(rule), raw, shape, rule.ID)
+}
+
+func (r *Restoration) setRules(rules []CompiledRule) {
+	r.rules = make(map[int64]bool, len(rules))
+	for _, rule := range rules {
+		r.rules[rule.ID] = rule.Enabled && rule.Action == ActionRedact && rule.Rule.restoresResponses()
+	}
+}
+
+func (r *Restoration) permits(value restoredValue) bool {
+	return r.rules == nil || r.rules[value.ruleID]
+}
+
+func (r *Restoration) replace(kind, raw string, shape bool, ruleID int64) string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, value := range r.values {
-		if value.raw == raw {
+		if value.raw == raw && value.ruleID == ruleID {
 			return value.token
 		}
 	}
@@ -110,7 +135,7 @@ func (r *Restoration) Replace(kind, raw string, shape bool) string {
 	defer r.session.mu.Unlock()
 	// Concurrent requests in the same conversation share the same replacement.
 	for _, value := range r.session.values {
-		if value.raw == raw {
+		if value.raw == raw && value.ruleID == ruleID {
 			r.values = append(r.values, value)
 			return value.token
 		}
@@ -120,15 +145,18 @@ func (r *Restoration) Replace(kind, raw string, shape bool) string {
 		return DefaultPlaceholder
 	}
 	h := hmac.New(sha256.New, r.key[:])
+	// Separate rule ownership prevents a restorable rule from revealing the
+	// same value masked by a different rule that disables restoration.
+	h.Write([]byte(strconv.FormatInt(ruleID, 10) + "\x00"))
 	h.Write([]byte(raw))
 	sum := h.Sum(nil)
-	token := "__VANE_" + strings.ToUpper(kind) + "_" + hex.EncodeToString(sum[:12]) + "__"
+	token := "__REDACTED_" + strings.ToUpper(kind) + "_" + hex.EncodeToString(sum[:12]) + "__"
 	if shape && (kind == "api_key" || kind == "token" || kind == "secret" || kind == "password") {
 		if shaped := shapeSecret(raw, sum); shaped != "" {
 			token = shaped
 		}
 	}
-	value := restoredValue{raw: raw, token: token, kind: kind}
+	value := restoredValue{raw: raw, token: token, ruleID: ruleID}
 	r.values = append(r.values, value)
 	r.session.values = append(r.session.values, value)
 	r.session.bytes += len(raw) + len(token)
@@ -170,12 +198,12 @@ func shapeSecret(raw string, seed []byte) string {
 	return string(out)
 }
 
-func (r *Restoration) knownMatches(kind, text string) [][2]int {
+func (r *Restoration) knownMatches(ruleID int64, text string) [][2]int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out [][2]int
 	for _, value := range r.values {
-		if value.kind != kind {
+		if value.ruleID != ruleID {
 			continue
 		}
 		for offset := 0; offset < len(text); {
@@ -220,6 +248,9 @@ func (r *Restoration) restoreText(text string, innerJSON bool, final bool) (stri
 	for len(text) > 0 {
 		at, which := -1, -1
 		for i, item := range r.values {
+			if !r.permits(item) {
+				continue
+			}
 			if j := strings.Index(text, item.token); j >= 0 && (at < 0 || j < at) {
 				at, which = j, i
 			}
@@ -241,6 +272,9 @@ func (r *Restoration) restoreText(text string, innerJSON bool, final bool) (stri
 	if !final {
 		longest := 0
 		for _, item := range r.values {
+			if !r.permits(item) {
+				continue
+			}
 			max := min(len(text), len(item.token)-1)
 			for n := max; n > longest; n-- {
 				if strings.HasSuffix(text, item.token[:n]) {

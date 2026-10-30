@@ -98,7 +98,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	connID := lifecycleManager.GetRequestID()
 	turnFailureKey := requestTurnFailureCacheKey(r, bodyBytes)
 	ctx = endpoint.ContextWithTurnFailureKey(ctx, turnFailureKey)
-	bodies, err := applyPrivacyFilter(ctx, rh.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(rh.endpointManager))
+	bodies, err := applyPrivacyFilter(ctx, rh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
 		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环
 		if policyErr := AsPrivacyPolicyError(err); policyErr != nil {
@@ -111,7 +111,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 		return
 	}
 	// bodyBytes 只用于路由决策与模型能力判断（只读 model 等协议字段，不外发）；
-	// 实际发往上游的正文在 executeRequest 里按目标渠道的隐私级别挑选。
+	// 实际发送时使用本请求统一的隐私处理结果。
 	// 处理器实例跨请求共享，按请求的正文集合经 ctx 传递
 	ctx = contextWithPrivacyBodies(ctx, bodies)
 	w, finishPrivacy := bodies.result.WrapResponse(w)
@@ -139,7 +139,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	var lastErr error
 
 	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，不读写全局激活渠道
-	route := planClaudeRoute(rh.endpointManager, r, bodyBytes, false, connID)
+	route := planClaudeRoute(rh.endpointManager, r, bodyBytes, false, connID, rh.forwarder.states)
 	if subRoute := planSubscriptionRoute(rh.endpointManager, r, bodyBytes); subRoute != nil {
 		route = subRoute
 	}
@@ -699,7 +699,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 // executeRequest 执行单个请求；route 非空时按路由阶段的上游模型改写 body
 func (rh *RegularHandler) executeRequest(ctx context.Context, r *http.Request, bodyBytes []byte, endpoint *endpoint.Endpoint, lifecycleManager RequestLifecycleManager, route *routeRun) (*http.Response, error) {
-	// 先按目标渠道的隐私级别挑选正文，再做模型改写（模型改写只动顶层 model 字段）
+	// 先读取统一隐私正文，再做模型改写（只动顶层 model 字段）
 	bodyBytes = outboundBody(ctx, endpoint, bodyBytes)
 	bodyBytes = rewriteBodyForRoute(rh.forwarder, lifecycleManager, bodyBytes, endpoint, route)
 

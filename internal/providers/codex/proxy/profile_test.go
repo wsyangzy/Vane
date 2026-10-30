@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,7 +18,55 @@ import (
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 	"github.com/wsyangzy/Vane/internal/routing"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
+
+func TestCodexProfileRecordsActualResourcesBeforeArchival(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { tracker.Close() })
+			h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/first") {
+					w.WriteHeader(503)
+					io.WriteString(w, `{"error":{"code":"overloaded"}}`)
+					return
+				}
+				if streaming {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n")
+				} else {
+					io.WriteString(w, `{"status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2}}`)
+				}
+			})
+			h.usageTracker = tracker
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"test","stream":%t,"input":"client text"}`, streaming))))
+			details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 10})
+			if err != nil || len(details) != 1 {
+				t.Fatalf("missing request: %v %+v", err, details)
+			}
+			detail := details[0]
+			var chain []chainNode
+			if err := json.Unmarshal([]byte(detail.EndpointChain), &chain); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != 200 || detail.Status != "completed" || detail.Channel != "second" || detail.GroupName != "second" || detail.EndpointName != "second" || len(chain) != 2 || chain[0].StatusCode != 503 || chain[0].DurationMs == nil || chain[1].StatusCode != 200 {
+				t.Fatalf("actual profile resources were lost: status=%d detail=%+v chain=%+v", rec.Code, detail, chain)
+			}
+			var progress routing.DispatchTrace
+			if json.Unmarshal([]byte(detail.RouteSnapshot), &progress) != nil || progress.ProfileID != trace.ProfileID || progress.Attempts != 2 || !progress.Successful || progress.FinishedAt == nil {
+				t.Fatalf("final profile outcome missing before archive: %s", detail.RouteSnapshot)
+			}
+			if !trace.Successful || trace.Attempts != 2 {
+				t.Fatalf("final diagnostic record missing: %+v", trace)
+			}
+		})
+	}
+}
 
 func newProfileCodexFixture(t *testing.T, upstream http.HandlerFunc, settlements ...func(routing.AttemptSettlement)) (*Handler, *routing.ProfileRuntime, *routing.DispatchTrace) {
 	t.Helper()
@@ -204,29 +253,22 @@ func TestCodexProfileCompletedItemsRegisterState(t *testing.T) {
 			if calls != 2 {
 				t.Fatalf("tool continuation replayed across candidates: calls=%d", calls)
 			}
-			foreign := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"original","input":[%s]}`, item)))
+			foreign := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"original","stream":true,"input":[%s]}`, item)))
 			foreign = foreign.WithContext(routing.WithCallerScope(foreign.Context(), "other-caller"))
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, foreign)
-			if rec.Code != 400 || !strings.Contains(rec.Body.String(), "state_origin_unknown") || calls != 2 {
-				t.Fatalf("state crossed caller boundary: %d calls=%d", rec.Code, calls)
+			if rec.Code != 200 || calls != 3 {
+				t.Fatalf("unknown history was locally rejected: %d calls=%d", rec.Code, calls)
 			}
 			keys := codexStateKeys(httptest.NewRequest("POST", "/v1/responses", nil), []byte(fmt.Sprintf(`{"input":[%s]}`, item)))
 			owner := h.manager.PrepareDispatchCandidate(routing.DispatchCandidate{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses"}, "original", "").Identity()
-			for _, change := range []func(*routing.Candidate){
-				func(c *routing.Candidate) { c.Model = "different-model" },
-				func(c *routing.Candidate) { c.Credential = "other-account" },
-			} {
-				other := owner
-				change(&other)
-				if allowed, reason := h.states.Allowed(keys, other); allowed || reason != "state_backend_incompatible" {
-					t.Fatalf("state crossed account/model boundary: allowed=%t reason=%s", allowed, reason)
-				}
+			if got, ok := h.states.Preference(keys, ""); !ok || got != owner {
+				t.Fatal("completed state lost issuing backend preference")
 			}
 			rec = httptest.NewRecorder()
-			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"original","input":[%s,{"type":"reasoning","encrypted_content":"unknown-state"}]}`, item))))
-			if rec.Code != 400 || calls != 2 {
-				t.Fatalf("unknown state was sent upstream: %d calls=%d", rec.Code, calls)
+			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"original","stream":true,"input":[%s,{"type":"reasoning","encrypted_content":"unknown-state"}]}`, item))))
+			if rec.Code != 200 || calls != 4 {
+				t.Fatalf("mixed known and unknown history was locally rejected: %d calls=%d", rec.Code, calls)
 			}
 		})
 	}
@@ -252,8 +294,8 @@ func TestCodexProfileUnfinishedStreamDoesNotRegisterState(t *testing.T) {
 			}
 			rec = httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"original","input":[{"type":"reasoning","encrypted_content":"unfinished-state"}]}`)))
-			if rec.Code != 400 || !strings.Contains(rec.Body.String(), "state_origin_unknown") || calls != 1 {
-				t.Fatalf("unfinished state registered: %d calls=%d body=%s", rec.Code, calls, rec.Body.String())
+			if calls != 2 || strings.Contains(rec.Body.String(), "state_origin_unknown") {
+				t.Fatalf("unknown history was locally rejected: %d calls=%d body=%s", rec.Code, calls, rec.Body.String())
 			}
 		})
 	}

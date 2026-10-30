@@ -105,7 +105,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		WriteUpstreamErrorResponse(w, nil, "ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
 		return
 	}
-	bodies, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(sh.endpointManager))
+	bodies, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
 		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环。
 		reason, message := "privacy_filter_failed", err.Error()
@@ -144,7 +144,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 	// 追踪循环轮数（用于 MaxLoops 限制）
 	loopCount := 0
 	// 请求级路由：流式请求只可能命中模型规则，非流改道天然不参与
-	route := planClaudeRoute(sh.endpointManager, r, bodyBytes, true, lifecycleManager.GetRequestID())
+	route := planClaudeRoute(sh.endpointManager, r, bodyBytes, true, lifecycleManager.GetRequestID(), sh.forwarder.states)
 	if subRoute := planSubscriptionRoute(sh.endpointManager, r, bodyBytes); subRoute != nil {
 		route = subRoute
 	}

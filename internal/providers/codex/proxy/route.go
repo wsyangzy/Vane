@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,6 +117,20 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 	if route.profile != nil {
 		h.serveProfileRouted(w, r, body, requestID, startTime, isStreaming, route.profile)
 		return
+	}
+	if owner, ok := h.states.Preference(codexStateKeys(r, body), routing.ExplicitTurn(r.Context(), r.Header)); ok && route.pool == nil {
+		model, _ := bodyrewrite.LookupTopLevelString(body, "model")
+		preferred := func(stage codexRouteStage) bool {
+			h.manager.mu.RLock()
+			defer h.manager.mu.RUnlock()
+			for _, ep := range h.manager.endpointsByChannel[stage.channel.ID] {
+				if (stage.groupID == 0 || stage.groupID == ep.CredentialGroupID) && stage.candidate(ep, model) == owner {
+					return true
+				}
+			}
+			return false
+		}
+		sort.SliceStable(route.stages, func(i, j int) bool { return preferred(route.stages[i]) && !preferred(route.stages[j]) })
 	}
 	ledger := &routing.Ledger{}
 	cfg := h.retryConfig()

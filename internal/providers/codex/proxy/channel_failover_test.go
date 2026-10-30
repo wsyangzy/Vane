@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -101,7 +102,13 @@ func TestProfileHealthScopeIgnoresLegacyParticipation(t *testing.T) {
 	if err != nil || len(legacy) != 0 {
 		t.Fatalf("legacy health endpoints = %d, err=%v", len(legacy), err)
 	}
-	pool.SetProfileRuntime(routing.NewProfileRuntime(routing.RuntimeConfig{Provider: "codex"}))
+	profile := routing.RoutingProfile{Provider: "codex", Enabled: true, IsDefault: true}
+	var candidates []routing.DispatchCandidate
+	for _, endpoint := range manager.PoolEndpoints(0, 0) {
+		profile.Members = append(profile.Members, routing.RoutingMember{ChannelID: endpoint.ChannelID, Enabled: true})
+		candidates = append(candidates, routing.DispatchCandidate{Provider: "codex", ChannelID: endpoint.ChannelID, GroupID: endpoint.CredentialGroupID, EndpointID: strconv.FormatInt(endpoint.ID, 10), Enabled: true})
+	}
+	pool.SetProfileRuntime(routing.NewProfileRuntime(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: candidates}))
 	endpoints, err := manager.GetHealthCheckEndpoints(context.Background(), false)
 	var total int
 	if err := db.QueryRow(`SELECT count(*) FROM codex_endpoints`).Scan(&total); err != nil {

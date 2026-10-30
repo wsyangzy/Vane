@@ -2,7 +2,6 @@ package privacy
 
 import (
 	"fmt"
-	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -26,10 +25,22 @@ type Snapshot struct {
 	restoration *Restoration
 }
 
+func (s *Snapshot) requiresMappings() bool {
+	for _, rule := range s.Rules {
+		if rule.Enabled && rule.Rule.usesTokens() {
+			return true
+		}
+	}
+	return false
+}
+
 // CompileRule 编译单条规则（regex 使用 Go RE2，无回溯，天然免疫 ReDoS）
 func CompileRule(rule Rule) (CompiledRule, error) {
 	if err := ValidateRule(rule); err != nil {
 		return CompiledRule{}, err
+	}
+	if rule.Action == ActionDetect || rule.Action == ActionBlock {
+		rule.Action = ActionRedact
 	}
 	compiled := CompiledRule{Rule: rule}
 	switch rule.MatchType {
@@ -95,10 +106,7 @@ type matchSpan struct {
 }
 
 // Apply 对请求 body 执行隐私过滤。
-//
-// 返回的 error 只会是 *PolicyError（fail_closed 短路），调用方必须用
-// errors.As 识别并短路返回，不得进入重试 / 故障转移 / 端点冷却；
-// 其余内部错误按 Settings.OnError 处理，fail_open 时记录跳过原因并透传原 body。
+// 扫描异常、未覆盖路径和超限不拒发；防护摘要由 Service 按配置记录。
 func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 	result := ApplyResult{Body: body, Action: ModeDisabled}
 	if s == nil {
@@ -125,25 +133,17 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 
 	matcher := walkerForPath(req.Path)
 	if matcher == nil {
-		// 未覆盖路径无法安全定位文本字段。不静默跳过：
-		// 漏扫是静默失败，必须让用户看见或直接拒发。
+		// 无法安全定位文本字段时保留原文，并通过防护记录提示漏扫。
 		result.SkippedReason = SkippedUnsupportedPath
 		result.ScanDuration = time.Since(started)
-		if s.Settings.UnsupportedPathAction == UnsupportedPathFailClosed {
-			return result, &PolicyError{
-				// 403：本地隐私策略主动拒发，与上游无关。不用 422 冒充提供商响应码。
-				StatusCode: http.StatusForbidden,
-				Code:       CodeUnsupportedPath,
-				Message:    fmt.Sprintf("path %q has no privacy field whitelist and unsupported_path_action is fail_closed", req.Path),
-				Result:     result,
-			}
-		}
 		return result, nil
 	}
 
 	segments, err := collectJSONTextSegments(body, matcher)
 	if err != nil {
-		return s.handleScanError(result, started, err)
+		result.SkippedReason = "scan_error"
+		result.ScanDuration = time.Since(started)
+		return result, nil
 	}
 	if len(segments) == 0 {
 		result.SkippedReason = SkippedNoText
@@ -151,15 +151,15 @@ func (s *Snapshot) Apply(req Request, body []byte) (ApplyResult, error) {
 		return result, nil
 	}
 
-	scanned, policyErr := s.scanSegments(&result, candidates, segments)
-	if policyErr != nil {
+	scanned := s.scanSegments(&result, candidates, segments)
+	if s.restoration != nil && s.restoration.skipped != "" {
+		// 无法保存完整映射时原文放行，避免发送无法还原或混淆实体的占位符。
+		result.SkippedReason = "mapping_capacity"
 		result.ScanDuration = time.Since(started)
-		policyErr.Result = result
-		return result, policyErr
+		return result, nil
 	}
 
-	// 替换结果无论全局模式都算出来：渠道可按自身隐私级别覆盖全局模式
-	// （三方中转强制脱敏、可信渠道仅检测），逐次尝试时再挑选实际发送的正文
+	// 仅脱敏模式生成替身；仅检测模式不改写、不创建还原映射。
 	if len(scanned) > 0 {
 		result.RedactedBody = replaceSegments(body, segments, scanned)
 		if s.Settings.Mode == ModeRedact {
@@ -183,11 +183,23 @@ func (s *Snapshot) candidateRules() []int {
 }
 
 // scanSegments 对文本段应用候选规则，返回需替换的段（段下标 -> 替换后文本）。
-// 超出 scan_max_bytes 时按 over_limit_action 处理。
-func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments []textSegment) (map[int]string, *PolicyError) {
+// 超出 scan_max_bytes 时按配置扫描前缀或跳过整次扫描，其余文本原样放行。
+func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments []textSegment) map[int]string {
 	limit := s.Settings.ScanMaxBytes
 	if limit <= 0 {
 		limit = DefaultScanMaxBytes
+	}
+	if s.Settings.OverLimitAction == OverLimitSkipScan {
+		// Check the whole budget before replacing any segment, so skip_scan
+		// always sends the original request rather than a partially masked body.
+		remaining := limit
+		for _, segment := range segments {
+			if int64(len(segment.Value)) > remaining {
+				result.SkippedReason = SkippedScanLimit
+				return nil
+			}
+			remaining -= int64(len(segment.Value))
+		}
 	}
 
 	hits := make(map[int64]*RuleHit)
@@ -203,17 +215,11 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 		text := seg.Value
 		remaining := limit - scannedBytes
 		if remaining <= 0 {
-			if s.Settings.OverLimitAction == OverLimitFailClosed {
-				return nil, s.newOverLimitError()
-			}
 			result.Truncated = true
 			result.SkippedReason = SkippedScanTruncated
 			break
 		}
 		if int64(len(text)) > remaining {
-			if s.Settings.OverLimitAction == OverLimitFailClosed {
-				return nil, s.newOverLimitError()
-			}
 			// 只扫描剩余预算内的前缀，其余文本透传
 			text = text[:remaining]
 			result.Truncated = true
@@ -230,6 +236,9 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 		for _, span := range spans {
 			rule := &s.Rules[span.ruleIdx]
 			action := rule.Action
+			if s.Settings.Mode == ModeDetect {
+				action = ActionDetect
+			}
 			hit := hits[rule.ID]
 			if hit == nil {
 				hit = &RuleHit{RuleID: rule.ID, RuleName: rule.Name, Source: rule.Source, Action: action, Kind: RuleKind(rule.Rule)}
@@ -238,11 +247,6 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 			hit.Count++
 			hit.Matches = append(hit.Matches, text[span.start:span.end])
 			result.HitCount++
-			// 规则自身是 detect 时永不替换；全局模式在 Apply 末尾决定是否采用替换结果
-			if action == ActionBlock {
-				result.RuleHits = sortedRuleHits(hits)
-				return nil, &PolicyError{StatusCode: http.StatusForbidden, Code: "privacy_sensitive_blocked", Message: "请求包含被设为拦截的敏感内容：" + kindLabels[RuleKind(rule.Rule)], Result: *result}
-			}
 			if action == ActionRedact {
 				redactSpans = append(redactSpans, span)
 			}
@@ -253,13 +257,12 @@ func (s *Snapshot) scanSegments(result *ApplyResult, candidates []int, segments 
 	}
 
 	result.RuleHits = sortedRuleHits(hits)
-	return replacements, nil
+	return replacements
 }
 
 // collectMatchSpans 按规则优先级收集命中区间；与更高优先级规则重叠的命中被丢弃。
 func (s *Snapshot) collectMatchSpans(candidates []int, text string) []matchSpan {
 	var accepted []matchSpan
-	// Blocking rules cannot be hidden by a higher-priority, overlapping mask.
 	var ordered, allowRules []int
 	for _, index := range candidates {
 		if s.Rules[index].Action == ActionAllow {
@@ -270,9 +273,6 @@ func (s *Snapshot) collectMatchSpans(candidates []int, text string) []matchSpan 
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		rank := func(index int) int {
-			if s.Rules[index].Action == ActionBlock {
-				return 0
-			}
 			if RuleKind(s.Rules[index].Rule) == "private_key" {
 				return 1
 			}
@@ -283,8 +283,8 @@ func (s *Snapshot) collectMatchSpans(candidates []int, text string) []matchSpan 
 	for _, ruleIdx := range ordered {
 		rule := &s.Rules[ruleIdx]
 		locations := findRuleMatches(rule, text)
-		if s.restoration != nil {
-			locations = append(locations, s.restoration.knownMatches(RuleKind(rule.Rule), text)...)
+		if s.restoration != nil && rule.Rule.usesTokens() {
+			locations = append(locations, s.restoration.knownMatches(rule.ID, text)...)
 		}
 		for _, loc := range locations {
 			if s.allowsMatch(allowRules, text[loc[0]:loc[1]]) {
@@ -398,8 +398,11 @@ func (s *Snapshot) applySpans(text string, spans []matchSpan, pseudo *pseudonymi
 }
 
 func (s *Snapshot) replacementFor(rule *CompiledRule, raw string, pseudo *pseudonymizer) string {
-	if s.restoration != nil {
-		return s.restoration.Replace(RuleKind(rule.Rule), raw, s.Settings.KeepKeyFormat)
+	if rule.Rule.usesTokens() {
+		if s.restoration != nil {
+			return s.restoration.replaceForRule(rule.Rule, raw)
+		}
+		return DefaultPlaceholder
 	}
 	if rule.ReplacementMode == ReplacementPseudonym {
 		return pseudo.replacementFor(rule.PseudonymKind, raw)
@@ -408,32 +411,6 @@ func (s *Snapshot) replacementFor(rule *CompiledRule, raw string, pseudo *pseudo
 		return DefaultPlaceholder
 	}
 	return rule.Placeholder
-}
-
-func (s *Snapshot) newOverLimitError() *PolicyError {
-	return &PolicyError{
-		StatusCode: http.StatusRequestEntityTooLarge,
-		Code:       CodeScanBodyTooLarge,
-		Message: fmt.Sprintf("scannable text exceeds scan_max_bytes (%d) and over_limit_action is fail_closed",
-			s.Settings.ScanMaxBytes),
-	}
-}
-
-// handleScanError 按 on_error 策略处理内部扫描错误。错误信息不含命中原文。
-func (s *Snapshot) handleScanError(result ApplyResult, started time.Time, err error) (ApplyResult, error) {
-	result.ScanDuration = time.Since(started)
-	if s.Settings.OnError == OnErrorFailClosed {
-		result.SkippedReason = CodeScanFailed
-		return result, &PolicyError{
-			// 403：本地隐私策略主动拒发，与上游无关。
-			StatusCode: http.StatusForbidden,
-			Code:       CodeScanFailed,
-			Message:    fmt.Sprintf("privacy scan failed and on_error is fail_closed: %v", err),
-			Result:     result,
-		}
-	}
-	result.SkippedReason = fmt.Sprintf("scan_error: %v", err)
-	return result, nil
 }
 
 func sortedRuleHits(hits map[int64]*RuleHit) []RuleHit {
@@ -471,9 +448,6 @@ func (s *Snapshot) ApplyToText(text string) ApplyResult {
 		hit.Count++
 		hit.Matches = append(hit.Matches, text[span.start:span.end])
 		result.HitCount++
-		if rule.Action == ActionBlock {
-			result.Action = ActionBlock
-		}
 		if rule.Action == ActionRedact {
 			redactSpans = append(redactSpans, span)
 		}
@@ -482,6 +456,11 @@ func (s *Snapshot) ApplyToText(text string) ApplyResult {
 	if len(redactSpans) > 0 {
 		replaced = s.applySpans(text, redactSpans, pseudo)
 		result.Changed = true
+	}
+	if s.restoration != nil && s.restoration.skipped != "" {
+		replaced = text
+		result.Changed = false
+		result.SkippedReason = "mapping_capacity"
 	}
 	result.Body = []byte(replaced)
 	result.RuleHits = sortedRuleHits(hits)

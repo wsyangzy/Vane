@@ -37,13 +37,17 @@ func NewForwarder(cfg *config.Config, endpointManager *endpoint.Manager) *Forwar
 }
 
 func (f *Forwarder) NewClient(timeout time.Duration) (*http.Client, error) {
+	if timeout <= 0 && f.config != nil {
+		timeout = f.config.GlobalTimeout
+	}
 	tr, err := f.transport.Default()
 	if err != nil {
 		return nil, err
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: tr,
+		Timeout:       timeout,
+		Transport:     tr,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}, nil
 }
 
@@ -70,8 +74,9 @@ func (f *Forwarder) ForwardRequestToEndpoint(ctx context.Context, r *http.Reques
 	}
 
 	client := &http.Client{
-		Timeout:   0, // 流式请求无超时
-		Transport: httpTransport,
+		Timeout:       0, // 流式请求无超时
+		Transport:     httpTransport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 
 	// 执行请求
@@ -146,7 +151,7 @@ func (f *Forwarder) CopyHeaders(src *http.Request, dst *http.Request, ep *endpoi
 		"Proxy-Authenticate",
 		"Proxy-Authorization",
 		"Te",
-		"Trailers",
+		"Trailer",
 		"Transfer-Encoding",
 		"Upgrade",
 	}

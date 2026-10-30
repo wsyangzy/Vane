@@ -336,8 +336,10 @@ func TestRoutingClassifierProcessesAllContextBeforeNetwork(t *testing.T) {
 	ctx := context.Background()
 	store := privacy.NewStore(a.storeDB)
 	require.NoError(t, store.EnsureSchema(ctx))
-	require.NoError(t, store.SaveSettings(ctx, privacy.DefaultSettings()))
-	_, err := store.CreateRule(ctx, privacy.Rule{Name: "private marker", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "PRIVATE", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementPlaceholder, Placeholder: "[redacted]", Source: privacy.SourceCustom})
+	settings := privacy.DefaultSettings()
+	settings.Mode = privacy.ModeRedact
+	require.NoError(t, store.SaveSettings(ctx, settings))
+	_, err := store.CreateRule(ctx, privacy.Rule{Name: "private marker", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "PRIVATE", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementReversible, Source: privacy.SourceCustom})
 	require.NoError(t, err)
 	a.privacyService = privacy.NewService(store)
 	require.NoError(t, a.privacyService.Reload(ctx))
@@ -346,7 +348,7 @@ func TestRoutingClassifierProcessesAllContextBeforeNetwork(t *testing.T) {
 	prompt, err := a.classifierPrompt(ctx, p, routing.TurnInput{CurrentUserMessage: "current PRIVATE", PreviousUserMessage: "previous PRIVATE", PreviousAssistantText: "assistant PRIVATE"})
 	require.NoError(t, err)
 	require.NotContains(t, prompt, "PRIVATE")
-	require.Equal(t, 3, strings.Count(prompt, "[redacted]"))
+	require.Equal(t, 3, strings.Count(prompt, "__REDACTED_"))
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal([]byte(prompt), &decoded))
 	require.Len(t, decoded["input"], 3)
@@ -365,7 +367,7 @@ func TestRoutingClassifierProcessesAllContextBeforeNetwork(t *testing.T) {
 	require.NotContains(t, limited.Input["current_user_message"], "PR")
 	require.Contains(t, limited.Input["current_user_message"], "[context truncated]")
 	require.True(t, strings.HasSuffix(limited.Input["current_user_message"], strings.Repeat("尾", 1000)))
-	settings := privacy.DefaultSettings()
+	settings = privacy.DefaultSettings()
 	settings.Mode = privacy.ModeDisabled
 	require.NoError(t, store.SaveSettings(ctx, settings))
 	require.NoError(t, a.privacyService.Reload(ctx))
@@ -378,8 +380,11 @@ func TestRoutingClassifierSendsRedactedInputWithSelectedMultiKeyCredential(t *te
 	ctx := context.Background()
 	store := privacy.NewStore(a.storeDB)
 	require.NoError(t, store.EnsureSchema(ctx))
+	settings := privacy.DefaultSettings()
+	settings.Mode = privacy.ModeRedact
+	require.NoError(t, store.SaveSettings(ctx, settings))
 	a.privacyService = privacy.NewService(store)
-	_, err := store.CreateRule(ctx, privacy.Rule{Name: "private", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "PRIVATE", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementPlaceholder, Placeholder: "[redacted]", Source: privacy.SourceCustom})
+	_, err := store.CreateRule(ctx, privacy.Rule{Name: "private", Enabled: true, MatchType: privacy.MatchTypeLiteral, Pattern: "PRIVATE", Action: privacy.ActionRedact, ReplacementMode: privacy.ReplacementReversible, Source: privacy.SourceCustom})
 	require.NoError(t, err)
 	require.NoError(t, a.privacyService.Reload(ctx))
 	sends := 0
@@ -389,7 +394,7 @@ func TestRoutingClassifierSendsRedactedInputWithSelectedMultiKeyCredential(t *te
 		require.Empty(t, r.Header.Get("X-Relay-Key"))
 		body, _ := io.ReadAll(r.Body)
 		require.NotContains(t, string(body), "PRIVATE")
-		require.Contains(t, string(body), "[redacted]")
+		require.Contains(t, string(body), "__REDACTED_")
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"type":"message","stop_reason":"end_turn","content":[{"type":"text","text":"{\"intent_id\":\"coding\",\"confidence\":0.95}"}],"usage":{"input_tokens":12,"output_tokens":4,"cache_read_input_tokens":3}}`)
 	}))

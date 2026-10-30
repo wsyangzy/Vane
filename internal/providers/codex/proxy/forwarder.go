@@ -24,6 +24,9 @@ type Forwarder struct {
 	transportProvider  *transport.Provider
 	timeout            time.Duration
 	useEndpointTimeout bool
+	// Read the current fallback for each new request; existing clients keep
+	// their timeout when settings are saved during an active response.
+	defaultTimeout func() time.Duration
 	// streaming 为 true 时使用 Streaming Transport，其响应头超时来自设置页
 	// 「请求控制 → 流式响应头超时」。Default Transport 固定 60s，长上下文 + 高推理
 	// 档位的首包经常超过它；超时后重放同一请求只会重复消耗上游额度。
@@ -132,11 +135,11 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 	if err != nil {
 		return nil, fmt.Errorf("创建转发客户端失败: %w", err)
 	}
-	if subscription.FromContext(r.Context()) != nil {
-		copyClient := *client
-		copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-		client = &copyClient
-	}
+	// Route selection owns the destination; a redirect must not silently replay
+	// the request (and its credentials) to another backend.
+	copyClient := *client
+	copyClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client = &copyClient
 	if err := beginCodexProfileSend(r.Context()); err != nil {
 		return nil, err
 	}
@@ -206,14 +209,24 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 
 func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) (*http.Client, error) {
 	client := f.client
+	timeout := client.Timeout
+	if f.useEndpointTimeout && f.defaultTimeout != nil {
+		if current := f.defaultTimeout(); current > 0 {
+			timeout = current
+		}
+	}
 	if f.transportProvider != nil {
 		tr, err := f.transport()
 		if err != nil {
 			return nil, err
 		}
-		client = &http.Client{Timeout: f.client.Timeout, Transport: tr}
+		client = &http.Client{Timeout: timeout, Transport: tr}
+	} else if timeout != client.Timeout {
+		clientCopy := *client
+		clientCopy.Timeout = timeout
+		client = &clientCopy
 	}
-	if !f.useEndpointTimeout || endpoint == nil || endpoint.Timeout <= 0 || endpoint.Timeout == f.timeout {
+	if !f.useEndpointTimeout || endpoint == nil || endpoint.Timeout <= 0 || endpoint.Timeout == client.Timeout {
 		return client, nil
 	}
 	clientCopy := *client
@@ -259,6 +272,7 @@ func copyHeaders(src, dst *http.Request) {
 	skipHeaders := map[string]bool{
 		"host":               true,
 		"authorization":      true,
+		"x-api-key":          true,
 		"x-relay-key":        true,
 		"chatgpt-account-id": true,
 	}
@@ -275,9 +289,12 @@ func copyHeaders(src, dst *http.Request) {
 
 // removeHopByHopHeaders 移除 hop-by-hop headers
 func removeHopByHopHeaders(req *http.Request) {
+	connections := req.Header.Values("Connection")
 	hopByHop := []string{
 		"Connection",
 		"Keep-Alive",
+		"Proxy-Authenticate",
+		"Proxy-Authorization",
 		"Transfer-Encoding",
 		"TE",
 		"Trailer",
@@ -285,5 +302,10 @@ func removeHopByHopHeaders(req *http.Request) {
 	}
 	for _, h := range hopByHop {
 		req.Header.Del(h)
+	}
+	for _, value := range connections {
+		for _, name := range strings.Split(value, ",") {
+			req.Header.Del(strings.TrimSpace(name))
+		}
 	}
 }
