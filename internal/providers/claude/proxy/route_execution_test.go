@@ -333,17 +333,11 @@ func TestRoutedClaudeSealedStateKeepsActualWriter(t *testing.T) {
 		req = req.WithContext(routing.WithCallerScope(req.Context(), caller))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		if i < 2 && rec.Code != 200 {
+		if rec.Code != 200 {
 			t.Fatalf("writer rejected: %d %s", rec.Code, rec.Body.String())
 		}
-		if i == 2 && rec.Code != 400 {
-			t.Fatalf("caller crossed state boundary: %d", rec.Code)
-		}
-		if i == 2 && !strings.Contains(rec.Body.String(), "state_origin_unknown") {
-			t.Fatalf("state rejection was unexplained: %s", rec.Body.String())
-		}
 	}
-	if sends.Load() != 3 {
-		t.Fatalf("expected X,Y,Y; got %d sends", sends.Load())
+	if sends.Load() != 5 {
+		t.Fatalf("expected X,Y,Y then caller B's own X,Y; got %d sends", sends.Load())
 	}
 }

@@ -180,6 +180,11 @@ func TestApplyPersistedLoggingConfigBeforeLogger(t *testing.T) {
 		);
 		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'level', 'info');
 		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'format', 'json');
+		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'file_enabled', 'false');
+		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'max_file_size', '2MB');
+		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'max_files', '3');
+		INSERT INTO settings (provider, category, key, value) VALUES ('global', 'logging', 'compress_rotated', 'false');
+		INSERT INTO settings (provider, category, key, value) VALUES ('codex', 'logging', 'file_enabled', 'true');
 	`)
 	if closeErr := db.Close(); closeErr != nil && err == nil {
 		err = closeErr
@@ -191,8 +196,10 @@ func TestApplyPersistedLoggingConfigBeforeLogger(t *testing.T) {
 	app := &App{
 		config: &config.Config{
 			Logging: config.LoggingConfig{
-				Level:  "debug",
-				Format: "text",
+				Level:           "debug",
+				Format:          "text",
+				FileEnabled:     true,
+				CompressRotated: true,
 			},
 			UsageTracking: config.UsageTrackingConfig{
 				DatabasePath: dbPath,
@@ -207,5 +214,8 @@ func TestApplyPersistedLoggingConfigBeforeLogger(t *testing.T) {
 	}
 	if app.config.Logging.Format != "json" {
 		t.Fatalf("expected persisted logging format json, got %q", app.config.Logging.Format)
+	}
+	if app.config.Logging.FileEnabled || app.config.Logging.MaxFileSize != "2MB" || app.config.Logging.MaxFiles != 3 || app.config.Logging.CompressRotated {
+		t.Fatalf("startup did not load global file preferences: %+v", app.config.Logging)
 	}
 }

@@ -1,7 +1,9 @@
 package codexproxy
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -15,17 +17,18 @@ import (
 
 // Handler 处理 Codex 代理请求
 type Handler struct {
-	subscriptions  *subscription.Controller
-	configMu       sync.RWMutex
-	manager        *EndpointManager
-	forwarder      *Forwarder
-	streamFwd      *Forwarder
-	tokenParser    *TokenParser
-	classifier     *ErrorClassifier
-	logger         *slog.Logger
-	usageTracker   *tracking.UsageTracker
-	privacyService *privacy.Service
-	states         *routing.StateTracker
+	profileResponse func(context.Context, routing.DispatchCandidate, int, http.Header, []byte)
+	subscriptions   *subscription.Controller
+	configMu        sync.RWMutex
+	manager         *EndpointManager
+	forwarder       *Forwarder
+	streamFwd       *Forwarder
+	tokenParser     *TokenParser
+	classifier      *ErrorClassifier
+	logger          *slog.Logger
+	usageTracker    *tracking.UsageTracker
+	privacyService  *privacy.Service
+	states          *routing.StateTracker
 
 	// retryCfg 同端点重试配置（来自设置页 retry.*）
 	retryCfg config.RetryConfig

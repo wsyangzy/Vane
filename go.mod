@@ -1,6 +1,6 @@
 module github.com/wsyangzy/Vane
 
-go 1.25.0
+go 1.27.3
 
 require (
 	github.com/andybalholm/brotli v1.2.0

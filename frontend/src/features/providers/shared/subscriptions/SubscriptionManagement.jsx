@@ -67,10 +67,10 @@ function SubscriptionDialog({ provider, channels, onUpdated, onClose }) {
   </div>);
 }
 
-export default function SubscriptionManagement({ provider, channels = [], onUpdated }) {
+export default function SubscriptionManagement({ provider, channels = [], onUpdated, className = '', disabled = false }) {
   const [open, setOpen] = useState(false);
   return <>
-    <Button type="button" variant="secondary" size="sm" icon={KeyRound} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>订阅管理</Button>
+    <Button type="button" variant="secondary" size="sm" icon={KeyRound} className={className} disabled={disabled} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>订阅管理</Button>
     {open && <SubscriptionDialog provider={provider} channels={channels} onUpdated={onUpdated} onClose={() => setOpen(false)} />}
   </>;
 }

@@ -58,6 +58,12 @@ func ValidateEndpoint(base string) error {
 }
 
 func (c *Controller) Authenticate(r *http.Request) (context.Context, bool, error) {
+	if caller, ok := routing.PoolCallerFromContext(r.Context()); ok {
+		if c.poolRuntime.Load() == nil || !c.poolRuntime.Load().ValidCaller(caller) || !AllowedPath(r) {
+			return r.Context(), true, errors.New("pool_request_rejected")
+		}
+		return r.Context(), true, nil
+	}
 	present := false
 	for k := range r.Header {
 		if strings.EqualFold(k, "X-Relay-Key") {

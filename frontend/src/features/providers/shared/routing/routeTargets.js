@@ -99,13 +99,29 @@ export const describeRouteSnapshot = (raw) => {
       return null;
     }
   }
-  if (!snapshot || typeof snapshot !== 'object' || !snapshot.kind) return null;
+  if (!snapshot || typeof snapshot !== 'object') return null;
+
+  // Unified dispatch stores its decision inside the trace rather than at the
+  // legacy snapshot root. Both providers persist this same trace contract.
+  if (!snapshot.kind && snapshot.profile_id && snapshot.decision?.kind) {
+    const decision = snapshot.decision;
+    const kind = decision.kind === 'model' ? 'model_rule' : decision.kind;
+    const label = { model_rule: '模型路由', mapping: '模型映射', non_stream: '非流改道', composite: '条件路由', intent: '意图路由', default: '默认编排', explicit: '指定资源' }[kind] || kind;
+    return {
+      kind,
+      title: `${label}（${snapshot.profile_name || `方案 #${snapshot.profile_id}`}${decision.rule_id ? ` · 规则 #${decision.rule_id}` : ''}）`,
+      mode: decision.mode === 'fallback' ? '默认编排失败后使用目标' : decision.mode === 'prefer' ? '优先规则目标' : '',
+      stage: decision.reused_turn ? '复用本轮决策' : '统一调度',
+    };
+  }
+  if (!snapshot.kind) return null;
 
   const kind = String(snapshot.kind);
   const target = Math.max(0, Math.trunc(Number(snapshot.target) || 0));
   const source = snapshot.pool_name || snapshot.channel || '激活渠道';
   const ruleName = `「${snapshot.name || `#${snapshot.id || '?'}`}」`;
   const titles = {
+    routing_classifier: '路由意图分类',
     // 规则挂在渠道上；早期快照没有 channel 字段
     pool: `账号池（${source}）`,
     model_rule: snapshot.pool_name ? `模型规则${ruleName}（${source}）` : snapshot.channel ? `模型规则${ruleName}（${snapshot.channel}）` : `模型规则${ruleName}`,

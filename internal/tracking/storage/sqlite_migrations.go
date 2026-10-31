@@ -395,6 +395,7 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		alterSQL    string
 		description string
 	}{
+		{checkColumn: "enabled", alterSQL: "ALTER TABLE codex_credential_groups ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1", description: "账号全局启停"},
 		{
 			checkColumn: "daily_cost_limit_usd",
 			alterSQL:    "ALTER TABLE codex_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0",
@@ -519,6 +520,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.rebuildModelPricingForProviderTierUnique(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureCodexCacheWritePrices(ctx); err != nil {
 		return err
 	}
 

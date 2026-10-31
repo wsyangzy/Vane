@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -22,6 +23,15 @@ var currentLogHandlers []*SimpleHandler
 // setupLogger 配置结构化日志
 // 按环境、provider 和月份分目录存储，并按日期切分文件。
 func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
+	for _, handler := range currentLogHandlers {
+		if handler != nil {
+			_ = handler.Close()
+		}
+	}
+	return buildLogger(cfg)
+}
+
+func buildLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHandler) {
 	logLevel := cfg.Level
 
 	var level slog.Level
@@ -37,14 +47,6 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 	default:
 		level = slog.LevelInfo
 	}
-
-	// 关闭旧的 handler（如果存在）
-	for _, h := range currentLogHandlers {
-		if h != nil {
-			h.Close()
-		}
-	}
-	currentLogHandlers = nil
 
 	var appRotator, claudeRotator, codexRotator, debugRotator *logging.FileRotator
 	// 设置文件日志
@@ -100,16 +102,19 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 
 	// 创建三个 SimpleHandler
 	appHandler := &SimpleHandler{
+		jsonFormat:               cfg.Format == "json",
 		level:                    level,
 		fileRotator:              appRotator,
 		disableFileResponseLimit: disableLimit,
 	}
 	claudeHandler := &SimpleHandler{
+		jsonFormat:               cfg.Format == "json",
 		level:                    level,
 		fileRotator:              claudeRotator,
 		disableFileResponseLimit: disableLimit,
 	}
 	codexHandler := &SimpleHandler{
+		jsonFormat:               cfg.Format == "json",
 		level:                    level,
 		fileRotator:              codexRotator,
 		disableFileResponseLimit: disableLimit,
@@ -117,6 +122,7 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 	var debugHandler *SimpleHandler
 	if debugRotator != nil {
 		debugHandler = &SimpleHandler{
+			jsonFormat:               cfg.Format == "json",
 			level:                    slog.LevelDebug,
 			fileRotator:              debugRotator,
 			disableFileResponseLimit: true,
@@ -150,11 +156,12 @@ func setupLogger(cfg config.LoggingConfig) (*slog.Logger, *logging.BroadcastHand
 		}
 	}
 
-	return slog.New(broadcastHandler), broadcastHandler
+	return slog.New(logging.NewReloadableHandler(broadcastHandler)), broadcastHandler
 }
 
 // SimpleHandler 简化的日志处理器
 type SimpleHandler struct {
+	jsonFormat               bool
 	level                    slog.Level
 	fileRotator              *logging.FileRotator
 	disableFileResponseLimit bool
@@ -165,7 +172,7 @@ func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= h.level
 }
 
-func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
+func (h *SimpleHandler) Handle(ctx context.Context, r slog.Record) error {
 	message := r.Message
 
 	var attrs []string
@@ -176,6 +183,9 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 
 	if len(attrs) > 0 {
 		message = message + " " + strings.Join(attrs, " ")
+	}
+	if h.jsonFormat {
+		message = r.Message
 	}
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
@@ -191,13 +201,30 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 		level = "ERROR"
 	}
 
+	formatMessage := func(message string) (string, error) {
+		if !h.jsonFormat {
+			return fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s\n", timestamp, pid, gid, level, message), nil
+		}
+		record := r.Clone()
+		record.Message = message
+		record.AddAttrs(slog.Int("pid", pid), slog.Int("gid", gid))
+		var buffer bytes.Buffer
+		if err := slog.NewJSONHandler(&buffer, nil).Handle(ctx, record); err != nil {
+			return "", err
+		}
+		return buffer.String(), nil
+	}
+
 	// 文件输出
 	if h.fileRotator != nil {
 		fileMessage := message
 		if !h.disableFileResponseLimit && len(message) > 500 {
 			fileMessage = message[:500] + "... (文件日志截断)"
 		}
-		formattedMessage := fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s\n", timestamp, pid, gid, level, fileMessage)
+		formattedMessage, err := formatMessage(fileMessage)
+		if err != nil {
+			return err
+		}
 		h.fileRotator.Write([]byte(formattedMessage))
 	}
 
@@ -208,8 +235,11 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 			displayMessage = displayMessage[:500] + "... (显示截断)"
 		}
 
-		consoleMessage := fmt.Sprintf("[%s] [PID:%d] [GID:%d] [%s] %s", timestamp, pid, gid, level, displayMessage)
-		fmt.Println(consoleMessage)
+		consoleMessage, err := formatMessage(displayMessage)
+		if err != nil {
+			return err
+		}
+		fmt.Print(consoleMessage)
 	}
 
 	return nil

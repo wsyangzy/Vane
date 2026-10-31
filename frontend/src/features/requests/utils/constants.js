@@ -31,12 +31,12 @@ export const PAGINATION_CONFIG = {
   PAGE_SIZE_OPTIONS: [10, 20, 50, 100]
 };
 
-// 默认筛选器状态（移除group筛选）
+// 资源筛选层级：提供商 -> 渠道 -> 凭证分组。
 export const DEFAULT_FILTERS = {
   status: 'all',
   model: '',
   channel: 'all',
-  endpoint: 'all',
+  group: 'all',
   provider: '',
   startDate: '',
   endDate: ''
@@ -51,8 +51,9 @@ export const TABLE_COLUMNS = [
   { id: 'status', label: '状态', alwaysVisible: false, width: 'auto' },
   { id: 'model', label: '模型', alwaysVisible: false, width: 'auto' },
   { id: 'reasoningEffort', label: '推理强度', alwaysVisible: false, width: 'auto' },
+  { id: 'serviceTier', label: '服务档位', alwaysVisible: false, width: 'auto' },
   { id: 'channel', label: '渠道', alwaysVisible: false, width: 'auto' },
-  { id: 'endpoint', label: '链路', alwaysVisible: false, width: 'auto' },
+  { id: 'endpoint', label: '请求调度', alwaysVisible: false, width: 'auto' },
   { id: 'duration', label: '用时/首字', alwaysVisible: false, width: 'auto' },
   { id: 'inputTokens', label: '输入', alwaysVisible: false, width: 'auto', align: 'right' },
   { id: 'outputTokens', label: '输出', alwaysVisible: false, width: 'auto', align: 'right' },
@@ -63,7 +64,7 @@ export const TABLE_COLUMNS = [
 
 // 默认可见的列（添加缓存创建/读取列）
 export const DEFAULT_VISIBLE_COLUMNS = [
-  'requestId', 'timestamp', 'provider', 'status', 'model', 'reasoningEffort', 'channel', 'endpoint',
+  'requestId', 'timestamp', 'provider', 'status', 'model', 'reasoningEffort', 'serviceTier', 'channel', 'endpoint',
   'duration', 'inputTokens', 'outputTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cost'
 ];
 

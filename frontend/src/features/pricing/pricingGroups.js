@@ -9,11 +9,22 @@ export const PRICING_SERVICE_TIERS = [
   { value: '', label: 'Standard' },
   { value: 'batch', label: 'Batch' },
   { value: 'flex', label: 'Flex' },
-  { value: 'fast', label: 'Fast mode' }
+  { value: 'fast', label: 'Fast' },
+  { value: 'ultrafast', label: 'Ultrafast' }
 ];
 
 export const serviceTierLabel = (tier) =>
   PRICING_SERVICE_TIERS.find((item) => item.value === tier)?.label || tier;
+
+export const groupPricingSpeeds = (records = []) => {
+  const groups = new Map();
+  for (const record of records) {
+    const key = ['batch', 'flex'].includes(record.serviceTier) ? 'flex_batch' : record.serviceTier || '';
+    if (!groups.has(key)) groups.set(key, { key, label: key === 'flex_batch' ? 'Flex/Batch' : serviceTierLabel(key), records: [] });
+    groups.get(key).records.push(record);
+  }
+  return [...groups.values()];
+};
 
 const tierOrder = (tier) => {
   const index = PRICING_SERVICE_TIERS.findIndex((item) => item.value === tier);
@@ -29,6 +40,9 @@ export const emptyTierValues = () => ({
   outputPrice: 0,
   cacheCreationPrice5m: 0,
   cacheCreationPrice1h: 0,
+  cacheWritePrice30m: 0,
+  cacheWritePrice12h: 0,
+  longContextCacheWritePrice12h: 0,
   cacheReadPrice: 0,
   longContextThreshold: 0,
   longContextInputPrice: 0,
@@ -45,6 +59,9 @@ export const tierValuesFromRecord = (record = {}) => ({
   outputPrice: record.outputPrice ?? 0,
   cacheCreationPrice5m: record.cacheCreationPrice5m ?? 0,
   cacheCreationPrice1h: record.cacheCreationPrice1h ?? 0,
+  cacheWritePrice30m: record.cacheWritePrice30m ?? record.cacheCreationPrice5m ?? 0,
+  cacheWritePrice12h: record.cacheWritePrice12h ?? 0,
+  longContextCacheWritePrice12h: record.longContextCacheWritePrice12h ?? 0,
   cacheReadPrice: record.cacheReadPrice ?? 0,
   longContextThreshold: record.longContextThreshold ?? 0,
   longContextInputPrice: record.longContextInputPrice ?? 0,

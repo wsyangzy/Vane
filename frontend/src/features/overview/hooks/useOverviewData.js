@@ -4,14 +4,13 @@
 // ============================================
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { fetchStatus, fetchConnections, fetchEndpoints, fetchGroups, formatUptime } from '@/services/http/api.js';
+import { fetchStatus, fetchConnections, formatUptime } from '@/services/http/api.js';
 import { useToast } from '@/shared/ui/index.js';
 import useSSE from '../../../shared/hooks/useSSE.js';
 
 const useOverviewData = () => {
   const [data, setData] = useState({
     status: { status: 'running', uptime: '加载中...' },
-    endpoints: { total: 0, healthy: 0, endpoints: [] },
     connections: {
       total_requests: 0,
       active_connections: 0,
@@ -24,11 +23,6 @@ const useOverviewData = () => {
       today_tokens: 0,            // 今日 tokens
       all_time_total_tokens: 0,   // 全部历史 tokens
       today_requests: 0           // 今日请求数
-    },
-    groups: {
-      active_group: null,
-      groups: [],
-      total_suspended_requests: 0
     },
     lastUpdate: null,
     loading: true
@@ -133,58 +127,6 @@ const useOverviewData = () => {
         }
       }
 
-      // 处理端点事件 - 需要计算 total 和 healthy
-      if (eventType === 'endpoint' || sseData.endpoints) {
-        console.log('🎯 [SSE] 处理端点事件');
-        const endpointData = sseData.endpoints || sseData;
-        // 如果推送的是数组，需要转换为我们的格式
-        if (Array.isArray(endpointData)) {
-          newData.endpoints = {
-            ...newData.endpoints,
-            endpoints: endpointData,
-            total: endpointData.length,
-            healthy: endpointData.filter(e => e.status === 'healthy').length
-          };
-        } else if (endpointData.endpoints && Array.isArray(endpointData.endpoints)) {
-          // 如果是包含 endpoints 数组的对象
-          newData.endpoints = {
-            ...newData.endpoints,
-            ...endpointData,
-            total: endpointData.total ?? endpointData.endpoints.length,
-            healthy: endpointData.healthy ?? endpointData.endpoints.filter(e => e.status === 'healthy').length
-          };
-        } else {
-          // 如果是对象格式，直接合并
-          newData.endpoints = { ...newData.endpoints, ...endpointData };
-        }
-      }
-
-      // 处理组事件 - 需要计算 active_group
-      if (eventType === 'group' || sseData.groups) {
-        console.log('👥 [SSE] 处理组事件');
-        const groupData = sseData.groups || sseData;
-        // 如果推送的是数组，需要转换为我们的格式
-        if (Array.isArray(groupData)) {
-          const activeGroup = groupData.find(g => g.is_active);
-          newData.groups = {
-            ...newData.groups,
-            groups: groupData,
-            active_group: activeGroup?.name || null
-          };
-        } else if (groupData.groups && Array.isArray(groupData.groups)) {
-          // 如果是包含 groups 数组的对象
-          const activeGroup = groupData.groups.find(g => g.is_active);
-          newData.groups = {
-            ...newData.groups,
-            ...groupData,
-            active_group: activeGroup?.name || groupData.active_group || null
-          };
-        } else {
-          // 直接合并
-          newData.groups = { ...newData.groups, ...groupData };
-        }
-      }
-
       newData.lastUpdate = new Date().toLocaleTimeString();
       return newData;
     });
@@ -200,11 +142,9 @@ const useOverviewData = () => {
         setData(prev => ({ ...prev, loading: true }));
       }
 
-      const [status, endpoints, connections, groups] = await Promise.all([
+      const [status, connections] = await Promise.all([
         fetchStatus(),
-        fetchEndpoints(),
-        fetchConnections(),
-        fetchGroups()
+        fetchConnections()
       ]);
 
       // 格式化 uptime - 只在还没有 startTimestamp 时使用 API 返回的值
@@ -233,9 +173,7 @@ const useOverviewData = () => {
       // 数据已经由 API 层处理好格式，直接使用
       setData(prevData => ({
         status: { ...prevData.status, ...formattedStatus },
-        endpoints: { ...prevData.endpoints, ...endpoints },
         connections: { ...prevData.connections, ...connections },
-        groups: { ...prevData.groups, ...groups },
         lastUpdate: new Date().toLocaleTimeString(),
         loading: false
       }));

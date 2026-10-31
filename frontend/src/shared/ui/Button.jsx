@@ -15,7 +15,7 @@ export const Button = ({
   ...props
 }) => {
   const variants = {
-    primary: 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md hover:shadow-lg',
+    primary: 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm',
     secondary: 'bg-slate-100 text-slate-600 hover:bg-slate-200',
     success: 'bg-emerald-600 text-white hover:bg-emerald-700',
     danger: 'bg-rose-600 text-white hover:bg-rose-700',
@@ -31,9 +31,9 @@ export const Button = ({
 
   const tooltipContent = tooltip ?? title;
   const buttonClassName = `
-        inline-flex items-center justify-center font-medium rounded-lg transition-all duration-200
+        motion-button inline-flex items-center justify-center font-medium rounded-lg
         ${variants[variant]} ${sizes[size]}
-        ${disabled || loading ? 'opacity-50 cursor-not-allowed' : 'hover:-translate-y-0.5'}
+        ${disabled || loading ? 'opacity-50 cursor-not-allowed' : ''}
         ${className}
       `;
 

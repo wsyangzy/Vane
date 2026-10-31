@@ -609,8 +609,8 @@ export const fetchTokenUsageData = async (provider = '') => {
 };
 
 /**
- * 获取按请求追踪条件聚合的 Token 使用分布
- * @param {Object} params - 请求追踪查询参数
+ * 获取本地 Claude / Codex 会话的 53 周用量分布
+ * @param {Object} params - 仅沿用 provider 与 model 筛选
  */
 export const fetchTokenUsageHeatmapData = async (params = {}) => {
   try {

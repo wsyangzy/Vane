@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-// Channel settings own model mapping; request rules are edited on entry pools.
+// Channel settings own model mapping; request rules are edited in dispatch profiles.
 export function useChannelFeatureTabs({ provider, channelId, modelMapping, tabs }) {
   const storageKey = `vane:channel-settings-tabs:${provider}:${channelId || 'new'}`;
   const [features, setFeatures] = useState(() => {

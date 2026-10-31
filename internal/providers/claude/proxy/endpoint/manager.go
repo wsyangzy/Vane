@@ -59,16 +59,18 @@ func (ep *Endpoint) RouteStateVersion() uint64 {
 
 // Manager manages endpoints and their health status
 type Manager struct {
-	endpoints    []*Endpoint
-	endpointsMu  sync.RWMutex // 保护 endpoints 切片的并发访问
-	config       *config.Config
-	client       *http.Client
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	fastTester   *FastTester
-	groupManager *GroupManager
-	keyManager   *KeyManager // 管理多 API Key 状态
+	healthProbesPaused atomic.Bool
+	poolRuntime        atomic.Pointer[routing.PoolRuntime]
+	endpoints          []*Endpoint
+	endpointsMu        sync.RWMutex // 保护 endpoints 切片的并发访问
+	config             *config.Config
+	client             *http.Client
+	ctx                context.Context
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
+	fastTester         *FastTester
+	groupManager       *GroupManager
+	keyManager         *KeyManager // 管理多 API Key 状态
 	// EventBus for decoupled event publishing
 	eventBus events.EventBus
 	// 健康检查完成回调（用于推送 Wails 事件）
@@ -238,6 +240,7 @@ func NewManager(cfg *config.Config) *Manager {
 		preferredEndpointKeys:  make(map[string]string),
 	}
 	manager.failoverEnabled.Store(cfg != nil && cfg.Failover.Enabled)
+	manager.healthProbesPaused.Store(cfg != nil && cfg.Health.PauseActiveProbes)
 
 	// Initialize endpoints
 	for _, endpointCfg := range cfg.Endpoints {
@@ -291,6 +294,7 @@ func (m *Manager) Stop() {
 // 旧实现：无锁直接写，与健康检查 goroutine 读 m.config/m.client 形成 race
 // 新实现：使用 endpointsMu 写锁（既有锁），保护配置字段的更新
 func (m *Manager) UpdateConfig(cfg *config.Config) {
+	m.healthProbesPaused.Store(cfg != nil && cfg.Health.PauseActiveProbes)
 	m.failoverEnabled.Store(cfg != nil && cfg.Failover.Enabled)
 	m.endpointsMu.Lock()
 	m.config = cfg

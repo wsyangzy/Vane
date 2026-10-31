@@ -25,7 +25,7 @@ const (
 
 	// 运行配置分类
 	CategoryLogging  = "logging"  // 日志级别/格式
-	CategoryTimezone = "timezone" // 全局时区
+	CategoryTimezone = "timezone" // 兼容旧数据；运行时固定使用北京时间，不再提供此设置
 )
 
 type SettingsProvider string
@@ -103,37 +103,23 @@ func NewSettingsService(store settingsstore.SettingsStore) *SettingsService {
 			CategoryAuth: {
 				Name:        CategoryAuth,
 				Label:       "访问鉴权",
-				Description: "配置代理服务的访问令牌",
+				Description: "Claude 与 Codex 共用的客户端接入鉴权",
 				Icon:        "🔐",
 				Order:       1,
-			},
-			CategoryStrategy: {
-				Name:        CategoryStrategy,
-				Label:       "路由策略",
-				Description: "配置渠道内端点选择策略",
-				Icon:        "🔀",
-				Order:       2,
 			},
 			CategoryHealth: {
 				Name:        CategoryHealth,
 				Label:       "健康检查",
-				Description: "配置端点健康检查参数",
+				Description: "仅检查默认调度方案内允许检测的端点；可在端点详情中单独跳过",
 				Icon:        "❤️",
 				Order:       3,
 			},
 			CategoryRetry: {
 				Name:        CategoryRetry,
-				Label:       "重试配置",
-				Description: "配置请求失败重试行为",
+				Label:       "调度保护",
+				Description: "Claude 与 Codex 共用的调度预算上限，与方案限制取较小值",
 				Icon:        "🔄",
 				Order:       4,
-			},
-			CategoryFailover: {
-				Name:        CategoryFailover,
-				Label:       "故障转移",
-				Description: "配置渠道间故障转移行为",
-				Icon:        "🔁",
-				Order:       5,
 			},
 			CategoryRequest: {
 				Name:        CategoryRequest,
@@ -145,8 +131,8 @@ func NewSettingsService(store settingsstore.SettingsStore) *SettingsService {
 			// CategoryStreaming 和 CategoryHotPool 不在前端设置页面展示，使用代码默认值。
 			CategoryTokenCounting: {
 				Name:        CategoryTokenCounting,
-				Label:       "Token 计数",
-				Description: "配置 Token 计数功能",
+				Label:       "Claude Token 预估",
+				Description: "配置 Claude 的 Token 预估接口，不影响请求用量统计和计费记录",
 				Icon:        "🔢",
 				Order:       7,
 			},
@@ -171,20 +157,12 @@ func NewSettingsService(store settingsstore.SettingsStore) *SettingsService {
 				Icon:        "📡",
 				Order:       0, // 最前（特殊处理，单独显示）
 			},
-			// 🔧 [P5.5 新增] Logging / Timezone 分类
 			CategoryLogging: {
 				Name:        CategoryLogging,
 				Label:       "日志设置",
-				Description: "配置日志级别和输出格式",
+				Description: "配置日志输出、文件轮转和归档保留",
 				Icon:        "📝",
 				Order:       10,
-			},
-			CategoryTimezone: {
-				Name:        CategoryTimezone,
-				Label:       "时区设置",
-				Description: "配置全局时区（影响所有时间显示）",
-				Icon:        "🕐",
-				Order:       11,
 			},
 		},
 	}

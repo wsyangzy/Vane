@@ -86,17 +86,7 @@ const ViewConfigPanel = ({
                 />
                 <span
                   aria-hidden="true"
-                  className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-md border transition-all ${
-                    isVisible
-                      ? col.alwaysVisible
-                        ? 'border-slate-200 bg-slate-100 text-slate-300'
-                        : 'border-indigo-500 bg-indigo-600 text-white shadow-sm shadow-indigo-500/20'
-                      : 'border-slate-300 bg-white text-transparent group-hover:border-indigo-300'
-                  } ${
-                    col.alwaysVisible
-                      ? ''
-                      : 'peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-200 peer-focus-visible:ring-offset-1'
-                  }`}
+                  className="checkbox-indicator"
                 >
                   {isVisible && <Check className="h-3 w-3" strokeWidth={3} />}
                 </span>

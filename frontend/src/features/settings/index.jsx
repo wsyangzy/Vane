@@ -1,3 +1,4 @@
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 // ============================================
 // Settings 页面 - 系统设置管理（可编辑）
 // (2025-12-08)
@@ -11,10 +12,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Server,
-  Shuffle,
   RotateCcw,
   HeartPulse,
-  ArrowLeftRight,
   Clock,
   Lock,
   Hash,
@@ -34,7 +33,6 @@ import {
   getAllSettings,
   batchUpdateSettings,
   resetCategorySettings,
-  resetSettingsByScope,
   getPortInfo,
   getCacheStatus,
   clearCache
@@ -50,10 +48,8 @@ import {
 // 分类名称到 Lucide 图标的映射
 const CATEGORY_ICONS = {
   server: Server,
-  strategy: Shuffle,
   retry: RotateCcw,
   health: HeartPulse,
-  failover: ArrowLeftRight,
   request: Clock,
   auth: Lock,
   token_counting: Hash,
@@ -62,22 +58,14 @@ const CATEGORY_ICONS = {
   cache: Gauge
 };
 
-const BALANCED_CATEGORY_ORDER = [
-  'token_counting',
-  'strategy',
-  'failover',
-  'cache',
-  'retention',
-  'logging'
-];
-
-const CATEGORY_ORDER = [
-  'auth',
-  'health',
-  'request',
-  'retry',
-  ...BALANCED_CATEGORY_ORDER
-];
+const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'token_counting', 'retention', 'logging', 'cache'];
+// Keep the columns independent and stable as descriptions wrap or values change.
+const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'logging', 'token_counting']);
+const LEGACY_CATEGORIES = new Set(['strategy', 'failover', 'timezone', 'streaming', 'hot_pool']);
+const CURRENT_KEYS = {
+  retry: ['max_total_attempts', 'max_total_duration'],
+  request: ['global_timeout', 'response_header_timeout', 'default_response_header_timeout']
+};
 
 const getCategoryOrder = (categoryName) => {
   const index = CATEGORY_ORDER.indexOf(categoryName);
@@ -94,6 +82,10 @@ const formatCacheHitRate = (hits = 0, misses = 0) => {
 
 // TTL 为 0 的缓存只靠写入失效刷新，不按时间过期
 const formatCacheTTL = (ttl) => (!ttl || ttl === '0s' ? '随写入失效' : ttl);
+const CACHE_DETAILS = {
+  'overview:queries': { label: '概览查询结果', description: '按日期与筛选条件缓存整页结果；仅存内存，最多 24 项，有效期不超过 30 秒。' },
+  'usage:local-index': { label: '本地会话索引', description: '缓存会话文件的用量元数据并保存到本机；重启可复用。清理后重新解析，不删除原始会话。' }
+};
 
 const formatCacheCapacity = (cache) => {
   const size = cache?.size ?? 0;
@@ -147,11 +139,11 @@ const CacheStatusPanel = ({
 
   return (
     <>
-      <div className="mt-4 rounded-xl bg-slate-50/80 px-3 py-2.5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="my-2 rounded-lg bg-slate-50/80 px-2.5 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={`inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs font-semibold ring-1 ring-inset ${
+              <span className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium ring-1 ring-inset ${
                 status?.enabled
                   ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                   : 'bg-slate-100 text-slate-500 ring-slate-200'
@@ -159,7 +151,7 @@ const CacheStatusPanel = ({
                 {status?.enabled ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
                 {status?.enabled ? '缓存已启用' : '缓存已禁用'}
               </span>
-              <span className="text-xs font-medium text-slate-500">
+              <span className="text-[11px] font-medium text-slate-500">
                 {summaryText}
               </span>
             </div>
@@ -202,23 +194,23 @@ const CacheStatusPanel = ({
           }}
         >
           <div
-            className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
+            className="flex max-h-[calc(100dvh-2rem)] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-xl"
             role="dialog"
             aria-modal="true"
             aria-labelledby="cache-status-title"
             onMouseDown={(event) => event.stopPropagation()}
           >
-            <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-w-0 items-start gap-3">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex min-w-0 items-start gap-2.5">
                 <div className="rounded-lg bg-indigo-50 p-2 text-indigo-600">
-                  <Gauge size={20} />
+                  <Gauge size={16} />
                 </div>
                 <div className="min-w-0">
-                  <h2 id="cache-status-title" className="text-lg font-semibold text-slate-900">
+                  <h2 id="cache-status-title" className="text-sm font-semibold text-slate-900">
                     缓存运行状态
                   </h2>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {summaryText} · 占用/上限表示当前 key 数 / 自动淘汰上限
+                  <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                    {summaryText} · 占用为查询项或索引文件数，上限为自动淘汰阈值
                   </p>
                 </div>
               </div>
@@ -245,7 +237,7 @@ const CacheStatusPanel = ({
                 <button
                   type="button"
                   onClick={() => setModalOpen(false)}
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
                   aria-label="关闭缓存状态弹窗"
                 >
                   <X size={18} />
@@ -260,8 +252,8 @@ const CacheStatusPanel = ({
               </div>
             )}
 
-            <div className="overflow-auto p-6">
-              <table className="w-full min-w-[760px] text-left text-sm">
+            <div className="min-h-0 overflow-auto p-4">
+              <table className="w-full min-w-[760px] text-left text-xs">
             <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-400">
               <tr>
                 <th className="px-3 py-2">名称</th>
@@ -294,35 +286,34 @@ const CacheStatusPanel = ({
                 return (
                   <tr key={cache.name} className="text-slate-600">
                     <td className="px-3 py-2">
-                      <span className="block max-w-[220px] truncate font-mono text-xs font-semibold text-slate-700">
-                        {cache.name}
-                      </span>
+                      <Tooltip asChild content={CACHE_DETAILS[cache.name]?.description}><div className="max-w-[260px]">
+                        {CACHE_DETAILS[cache.name] && <span className="block text-xs font-semibold text-slate-700">{CACHE_DETAILS[cache.name].label}</span>}
+                        <span className={`block break-all font-mono text-xs ${CACHE_DETAILS[cache.name] ? 'mt-0.5 text-slate-400' : 'font-semibold text-slate-700'}`}>{cache.name}</span>
+                      </div></Tooltip>
                     </td>
                     <td className="px-3 py-2">
-                      <span
+                      <Tooltip asChild content={cache.fixed ? '运行时状态缓存，不受「启用缓存」开关控制' : undefined}><span
                         className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                           cache.enabled
                             ? 'bg-emerald-50 text-emerald-700'
                             : 'bg-slate-100 text-slate-500'
                         }`}
-                        title={cache.fixed ? '运行时状态缓存，不受「启用缓存」开关控制' : undefined}
                       >
                         {cache.fixed ? '常驻' : cache.enabled ? '启用' : '禁用'}
-                      </span>
+                      </span></Tooltip>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-slate-500">{formatCacheTTL(cache.ttl)}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">{cache.name === 'usage:local-index' ? '文件变化时重建' : formatCacheTTL(cache.ttl)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheCapacity(cache)}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
                       {formatCacheHitRate(cache.hits, cache.misses)}
                       {cache.staleServed > 0 && (
-                        <span
+                        <Tooltip asChild content="数据库查询失败时返回旧值的次数"><span
                           className="ml-1.5 text-amber-600"
-                          title="数据库查询失败时返回旧值的次数"
                         >
                           · 旧值 {cache.staleServed}
-                        </span>
+                        </span></Tooltip>
                       )}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-500">
@@ -369,7 +360,6 @@ const SettingsPage = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [changes, setChanges] = useState({}); // 跟踪变更: { "category.key": newValue }
-  const [failoverProvider, setFailoverProvider] = useState('claude');
   const [saveMessage, setSaveMessage] = useState(null);
   const [initRetryAttempt, setInitRetryAttempt] = useState(0); // 初始化重试次数
   const [resetConfirm, setResetConfirm] = useState({ isOpen: false, category: '', label: '' }); // 重置确认弹窗
@@ -529,9 +519,8 @@ const SettingsPage = () => {
   const settingsByCategory = useMemo(() => {
     const grouped = {};
     for (const setting of settings) {
-      const provider = setting.provider || (setting.category === 'failover' ? 'claude' : 'global');
-      if (setting.category === 'failover' && provider !== failoverProvider) continue;
-      if (setting.category !== 'failover' && provider !== 'global') continue;
+      if ((setting.provider || 'global') !== 'global' || LEGACY_CATEGORIES.has(setting.category)) continue;
+      if (CURRENT_KEYS[setting.category] && !CURRENT_KEYS[setting.category].includes(setting.key)) continue;
       if (!grouped[setting.category]) {
         grouped[setting.category] = [];
       }
@@ -542,7 +531,7 @@ const SettingsPage = () => {
       grouped[category].sort((a, b) => a.display_order - b.display_order);
     }
     return grouped;
-  }, [settings, failoverProvider]);
+  }, [settings]);
 
   // 获取当前值（优先使用变更值）
   const getCurrentValue = useCallback((setting) => {
@@ -553,101 +542,15 @@ const SettingsPage = () => {
     return setting.value;
   }, [changes]);
 
-  // 获取渠道间故障转移开关状态
-  const getChannelFailoverEnabled = useCallback(() => {
-    const failoverSettings = settingsByCategory['failover'];
-    if (!failoverSettings) return true; // 默认开启
-    // 设置项 key 是 "enabled"，category 是 "failover"
-    const channelFailoverSetting = failoverSettings.find(s => s.key === 'enabled');
-    if (!channelFailoverSetting) return true;
-    const value = getCurrentValue(channelFailoverSetting);
-    return value === 'true' || value === true;
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 获取路由策略类型
-  const getStrategyType = useCallback(() => {
-    const strategySettings = settingsByCategory['strategy'];
-    if (!strategySettings) return 'priority';
-    const typeSetting = strategySettings.find(s => s.key === 'type');
-    if (!typeSetting) return 'priority';
-    return getCurrentValue(typeSetting);
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 获取循环重试开关状态
-  const getLoopRetryEnabled = useCallback(() => {
-    const failoverSettings = settingsByCategory['failover'];
-    if (!failoverSettings) return true;
-    const loopRetrySetting = failoverSettings.find(s => s.key === 'loop_retry');
-    if (!loopRetrySetting) return true;
-    const value = getCurrentValue(loopRetrySetting);
-    return value === 'true' || value === true;
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 获取跳过健康检测设置值
-  const getSkipHealthCheck = useCallback(() => {
-    const failoverSettings = settingsByCategory['failover'];
-    if (!failoverSettings) return false;
-    const skipHealthCheckSetting = failoverSettings.find(s => s.key === 'skip_health_check');
-    if (!skipHealthCheckSetting) return false;
-    const value = getCurrentValue(skipHealthCheckSetting);
-    return value === 'true' || value === true;
-  }, [settingsByCategory, getCurrentValue]);
-
-  // 判断设置项是否应该显示（条件显示逻辑）
-  const shouldShowSetting = useCallback((setting) => {
-    // 快速测试相关设置仅在 strategy.type === 'fastest' 时显示
-    if (setting.category === 'strategy' &&
-        ['fast_test_enabled', 'fast_test_cache_ttl', 'fast_test_timeout', 'fast_test_path'].includes(setting.key)) {
-      return getStrategyType() === 'fastest';
-    }
-
-    // loop_retry 和 max_loops 仅在渠道间故障转移开启时显示
-    if (setting.category === 'failover' && setting.key === 'loop_retry') {
-      return getChannelFailoverEnabled();
-    }
-
-    // max_loops 仅在 loop_retry === true 时显示
-    if (setting.category === 'failover' && setting.key === 'max_loops') {
-      return getChannelFailoverEnabled() && getLoopRetryEnabled();
-    }
-
-    // loop_retry_wait_timeout 仅在 loop_retry === true 时显示
-    if (setting.category === 'failover' && setting.key === 'loop_retry_wait_timeout') {
-      return getChannelFailoverEnabled() && getLoopRetryEnabled();
-    }
-
-    // skip_health_check 不再作为单独设置项显示，改为在循环重试弹窗内控制
-    if (setting.category === 'failover' && setting.key === 'skip_health_check') {
-      return false; // 始终隐藏，通过 loop_retry 弹窗控制
-    }
-
-    return true;
-  }, [getStrategyType, getChannelFailoverEnabled, getLoopRetryEnabled]);
-
-  // 判断设置项是否应该禁用（条件禁用逻辑）- 已通过 shouldShowSetting 处理
-  const shouldDisableSetting = useCallback(() => {
-    return false;
-  }, []);
-
-  // 获取禁用提示文案
-  const getDisabledReason = useCallback(() => {
-    return null;
-  }, []);
-
   // 处理设置变更
   const handleSettingChange = useCallback((category, key, value) => {
-    const provider = category === 'failover' ? failoverProvider : 'global';
+    const provider = 'global';
     const changeKey = `${provider}.${category}.${key}`;
     setChanges(prev => ({
       ...prev,
       [changeKey]: value
     }));
-  }, [failoverProvider]);
-
-  // 处理跳过健康检测变更（通过弹窗触发）
-  const handleSkipHealthCheckChange = useCallback((newValue) => {
-    handleSettingChange('failover', 'skip_health_check', newValue ? 'true' : 'false');
-  }, [handleSettingChange]);
+  }, []);
 
   // 保存所有变更
   const handleSave = useCallback(async () => {
@@ -675,15 +578,14 @@ const SettingsPage = () => {
         return setting?.requires_restart;
       });
 
+      // Reload clears stale messages; show the result after it has completed.
+      await loadSettings();
       setAutoHideMessage({
         type: 'success',
         text: requiresRestart
           ? '设置已保存。部分设置需要重启应用后生效。'
           : '设置已保存并生效'
       });
-
-      // 重新加载设置
-      await loadSettings();
     } catch (err) {
       setSaveMessage({ type: 'error', text: err.message || '保存失败' });
     } finally {
@@ -706,11 +608,7 @@ const SettingsPage = () => {
       setSaveMessage(null);
 
       if (isWails) {
-        if (category === 'failover') {
-          await resetSettingsByScope(failoverProvider, category);
-        } else {
-          await resetCategorySettings(category);
-        }
+        await resetCategorySettings(category);
       } else {
         await apiResetSettings(category);
       }
@@ -733,7 +631,7 @@ const SettingsPage = () => {
       setChanges(prev => {
         const newChanges = { ...prev };
         for (const key of Object.keys(newChanges)) {
-          if (key.startsWith(`${category === 'failover' ? failoverProvider : 'global'}.${category}.`)) {
+          if (key.startsWith(`global.${category}.`)) {
             delete newChanges[key];
           }
         }
@@ -744,7 +642,7 @@ const SettingsPage = () => {
     } finally {
       setSaving(false);
     }
-  }, [resetConfirm, isWails, setAutoHideMessage, loadCacheStatus, failoverProvider]);
+  }, [resetConfirm, isWails, setAutoHideMessage, loadCacheStatus]);
 
   // 取消重置操作
   const cancelResetCategory = useCallback(() => {
@@ -762,13 +660,13 @@ const SettingsPage = () => {
 
   // 撤销单项修改
   const handleRevertSetting = useCallback((category, key) => {
-    const provider = category === 'failover' ? failoverProvider : 'global';
+    const provider = 'global';
     const changeKey = `${provider}.${category}.${key}`;
     const newChanges = { ...changes };
     delete newChanges[changeKey];
     setChanges(newChanges);
     setAutoHideMessage({ type: 'info', text: '已撤销该项修改' });
-  }, [changes, setAutoHideMessage, failoverProvider]);
+  }, [changes, setAutoHideMessage]);
 
   const handleClearCache = useCallback(async (names = []) => {
     if (!isWails) return;
@@ -849,74 +747,61 @@ const SettingsPage = () => {
   }
 
   const orderedSettingCategories = categories
-    .filter(category => category.name !== 'server' && category.name !== 'timezone')
+    .filter(category => category.name !== 'server' && !LEGACY_CATEGORIES.has(category.name))
     .sort((a, b) => (
       getCategoryOrder(a.name) - getCategoryOrder(b.name) ||
-      (a.display_order ?? 0) - (b.display_order ?? 0)
+      (a.order ?? 0) - (b.order ?? 0)
     ));
-  const settingCategoriesByName = new Map(
-    orderedSettingCategories.map(category => [category.name, category])
-  );
-  const balancedCategoryStart = getCategoryOrder(BALANCED_CATEGORY_ORDER[0]);
-  const balancedCategoryEnd = getCategoryOrder(BALANCED_CATEGORY_ORDER.at(-1));
-  const leadingSettingCategories = orderedSettingCategories.filter(
-    category => getCategoryOrder(category.name) < balancedCategoryStart
-  );
-  const trailingSettingCategories = orderedSettingCategories.filter(
-    category => getCategoryOrder(category.name) > balancedCategoryEnd
-  );
-
+  const categoryColumns = [
+    orderedSettingCategories.filter(category => PRIMARY_COLUMN_CATEGORIES.has(category.name)),
+    orderedSettingCategories.filter(category => !PRIMARY_COLUMN_CATEGORIES.has(category.name))
+  ];
   const renderSettingCategory = (category, className = '') => {
-    if (category?.name === "failover") return null;
     if (!category) return null;
-    const categorySettings = settingsByCategory[category.name]?.filter(shouldShowSetting) || [];
+    const categorySettings = settingsByCategory[category.name] || [];
+    if (categorySettings.length === 0 && category.name !== 'cache') return null;
+    const enabledKey = category.name === 'health' ? 'active_probes_enabled' : category.name === 'logging' ? 'file_enabled' : null;
+    const enabledSetting = categorySettings.find(setting => setting.key === enabledKey);
+    const dependentDisabled = enabledSetting && String(getCurrentValue(enabledSetting)) === 'false';
+    const settingItems = categorySettings.map(setting => {
+      const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
+      const dependsOnSwitch = category.name === 'health'
+        ? setting.key !== enabledKey
+        : category.name === 'logging' && ['max_file_size', 'max_files', 'compress_rotated'].includes(setting.key);
+      return (
+        <SettingItem
+          key={changeKey}
+          setting={setting}
+          value={getCurrentValue(setting)}
+          onChange={handleSettingChange}
+          disabled={saving || Boolean(dependentDisabled && dependsOnSwitch)}
+          hasChange={changeKey in changes}
+          onRevert={handleRevertSetting}
+        />
+      );
+    });
     return (
       <SettingsSection
         key={category.name}
+        compact
         title={category.label}
         icon={CATEGORY_ICONS[category.name] || Settings}
-        description={category.description}
+        description={category.name === 'server' ? undefined : category.description}
         onReset={() => handleResetCategory(category.name, category.label)}
         resetDisabled={saving}
         className={className}
       >
-        {category.name === 'failover' && (
-          <div className="mb-3 inline-flex rounded-lg bg-slate-100 p-1">
-            {['claude', 'codex'].map(provider => (
-              <button
-                key={provider}
-                type="button"
-                onClick={() => setFailoverProvider(provider)}
-                className={`rounded-md px-4 py-1.5 text-sm font-medium transition-colors ${failoverProvider === provider ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                {provider === 'claude' ? 'Claude' : 'Codex'}
-              </button>
-            ))}
+        {category.name === 'server' ? (
+          <div className="grid items-center gap-3 py-2 sm:grid-cols-2">
+            <PortInfo portInfo={portInfo} loading={loading} />
+            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">{settingItems}</div>
           </div>
+        ) : settingItems}
+        {category.name === 'retry' && (
+          <p className="my-2 rounded-lg bg-indigo-50/60 px-2.5 py-2 text-[11px] leading-5 text-indigo-700">
+            候选渠道、调度策略、方案预算和等待恢复，请在 Claude 管理或 Codex 管理的调度方案中配置。
+          </p>
         )}
-        {categorySettings.map(setting => {
-          const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
-          const isSettingDisabled = saving || shouldDisableSetting(setting);
-          const disabledReason = getDisabledReason(setting);
-          // 为 loop_retry 传递跳过健康检测相关 props
-          const isLoopRetrySetting = setting.category === 'failover' && setting.key === 'loop_retry';
-          return (
-            <SettingItem
-              key={changeKey}
-              setting={setting}
-              value={getCurrentValue(setting)}
-              onChange={handleSettingChange}
-              disabled={isSettingDisabled}
-              disabledReason={disabledReason}
-              hasChange={changeKey in changes}
-              onRevert={handleRevertSetting}
-              {...(isLoopRetrySetting && {
-                skipHealthCheck: getSkipHealthCheck(),
-                onSkipHealthCheckChange: handleSkipHealthCheckChange
-              })}
-            />
-          );
-        })}
         {category.name === 'cache' && isWails && (
           <CacheStatusPanel
             status={cacheStatus}
@@ -937,7 +822,7 @@ const SettingsPage = () => {
   };
 
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="settings-workspace space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* CSS 动画定义 */}
       <style>{`
         @keyframes countdown {
@@ -961,10 +846,11 @@ const SettingsPage = () => {
             <p className="text-xs text-slate-500">大部分设置即时生效</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5">
           <Button
             icon={RefreshCw}
             variant="secondary"
+            size="sm"
             onClick={loadSettings}
             disabled={saving}
           >
@@ -973,6 +859,7 @@ const SettingsPage = () => {
           <Button
             icon={Save}
             variant="primary"
+            size="sm"
             onClick={handleSave}
             disabled={saving || !hasChanges}
             loading={saving}
@@ -991,7 +878,7 @@ const SettingsPage = () => {
       {/* 保存消息提示 */}
       {saveMessage && (
         <div className={`
-          flex items-center gap-3 px-4 py-3 rounded-lg text-sm relative overflow-hidden
+          flex items-center gap-2 px-3 py-2 rounded-lg text-xs relative overflow-hidden
           ${saveMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : ''}
           ${saveMessage.type === 'error' ? 'bg-rose-50 text-rose-700 border border-rose-200' : ''}
           ${saveMessage.type === 'info' ? 'bg-slate-50 text-slate-600 border border-slate-200' : ''}
@@ -1045,8 +932,8 @@ const SettingsPage = () => {
 
       {/* 未保存变更提示 */}
       {hasChanges && (
-        <div className="flex items-center justify-between px-4 py-3 rounded-lg bg-amber-50 border border-amber-200">
-          <div className="flex items-center gap-2 text-sm text-amber-700">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+          <div className="flex items-center gap-2 text-xs text-amber-700">
             <AlertCircle size={16} />
             您有 {Object.keys(changes).length} 项未保存的变更
           </div>
@@ -1062,63 +949,14 @@ const SettingsPage = () => {
         </div>
       )}
 
-      {/* 端口信息 (服务端口分类的特殊处理) */}
-      {categories.find(c => c.name === 'server') && (
-        <SettingsSection
-          title="服务端口"
-          icon={Server}
-          compact
-          onReset={() => handleResetCategory('server', '服务端口')}
-          resetDisabled={saving}
-        >
-          <div className="grid items-center gap-4 sm:grid-cols-2">
-            <PortInfo portInfo={portInfo} loading={loading} />
-            <div className="min-w-0 border-slate-100 sm:border-l sm:pl-4">
-              {settingsByCategory['server']?.filter(shouldShowSetting).map(setting => {
-                const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
-                return (
-                  <SettingItem
-                    key={changeKey}
-                    setting={setting}
-                    value={getCurrentValue(setting)}
-                    onChange={handleSettingChange}
-                    disabled={saving}
-                    hasChange={changeKey in changes}
-                    onRevert={handleRevertSetting}
-                  />
-                );
-              })}
-            </div>
+      {renderSettingCategory(categories.find(category => category.name === 'server'))}
+
+      <div className="settings-categories grid grid-cols-1 items-start gap-3 lg:grid-cols-2 lg:items-stretch">
+        {categoryColumns.map((column, index) => (
+          <div key={index} className="settings-column flex min-w-0 flex-col gap-3">
+            {column.map(category => renderSettingCategory(category, 'lg:grow'))}
           </div>
-        </SettingsSection>
-      )}
-
-      {/* 其他设置分类：普通卡片成对对齐，仅对中间高低差明显的卡片做组合布局。 */}
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
-          {leadingSettingCategories.map(category => renderSettingCategory(category))}
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
-          {BALANCED_CATEGORY_ORDER.slice(0, 2)
-            .map(name => settingCategoriesByName.get(name))
-            .filter(Boolean)
-            .map(category => renderSettingCategory(category))}
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch">
-          <div className="flex min-w-0 flex-col gap-6">
-            {renderSettingCategory(settingCategoriesByName.get('retention'))}
-            {renderSettingCategory(settingCategoriesByName.get('logging'), 'lg:flex-1')}
-          </div>
-          <div className="min-w-0 lg:h-full">
-            {renderSettingCategory(settingCategoriesByName.get('cache'), 'lg:h-full')}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 empty:hidden lg:grid-cols-2">
-          {trailingSettingCategories.map(category => renderSettingCategory(category))}
-        </div>
+        ))}
       </div>
 
       {/* 重置确认弹窗 */}

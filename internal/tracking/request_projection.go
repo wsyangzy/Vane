@@ -30,6 +30,8 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	routeSnapshot := req.RouteSnapshot
 	reasoningEffort := req.ReasoningEffort
 	serviceTier := req.ServiceTier
+	requestedTier, responseTier, tierSource := req.RequestedServiceTier, req.ResponseServiceTier, req.ServiceTierSource
+	cacheWrite30m, cacheWrite12h, cacheWriteTTLPricing := req.CacheWrite30mTokens, req.CacheWrite12hTokens, req.CacheWriteTTLPricing
 	privacyRedacted := req.PrivacyRedacted
 	privacySummary := req.PrivacySummary
 	isStreaming := req.IsStreaming
@@ -66,6 +68,7 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	billingRuleSnapshot := req.BillingRuleSnapshot
 	billingRules := append([]BillingRule(nil), req.BillingRules...)
 	billingRulesCaptured := req.BillingRulesCaptured
+	billingGroupMultiplier := req.BillingGroupMultiplier
 	req.mu.RUnlock()
 
 	var endTime *time.Time
@@ -101,31 +104,36 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 	var pricing ModelPricing
 	var hasPricing bool
 	var pricingModel, pricingTier string
-	var multiplier *EndpointMultiplier
-	var multiplierValue EndpointMultiplier
+	multiplierValue := DefaultEndpointMultiplier()
+	multiplierValue.ServiceTierSource = tierSource
+	multiplier := &multiplierValue
 
 	ut.mu.RLock()
-	pricing, pricingModel, pricingTier, hasPricing = lookupModelPricing(ut.pricing, provider, modelName, serviceTier)
-	if hasPricing && ut.endpointMu != nil {
+	if ut.endpointMu != nil {
 		for _, key := range endpointMultiplierLookupKeys(provider, channel, groupName, endpointName) {
 			if m, ok := ut.endpointMu[key]; ok {
 				multiplierValue = m
-				multiplier = &multiplierValue
 				break
 			}
 		}
 	}
-	ut.mu.RUnlock()
-	if multiplier == nil {
-		multiplierValue = DefaultEndpointMultiplier()
-		multiplier = &multiplierValue
-	}
 	if billingRulesCaptured {
+		multiplierValue.ServiceTierSource = tierSource
+		multiplierValue.CacheWriteTTLPricing = cacheWriteTTLPricing
 		multiplierValue.BillingRules = billingRules
 		if len(billingRules) > 0 {
+			if billingGroupMultiplier != nil {
+				copyBillingGroupMultipliers(&multiplierValue, *billingGroupMultiplier)
+			}
 			multiplierValue.BillingOutputTokenSource = billingOutputTokenSource
 		}
 	}
+	if provider == "codex" {
+		tierSource = billingServiceTierSource(multiplierValue)
+		serviceTier, _ = ResolveBillingServiceTier(requestedTier, responseTier, tierSource)
+	}
+	pricing, pricingModel, pricingTier, hasPricing = lookupModelPricing(ut.pricing, provider, modelName, serviceTier)
+	ut.mu.RUnlock()
 
 	if hasPricing {
 		usage := &TokenUsage{
@@ -135,6 +143,8 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 			BillableOutputTokens:     billableOutputTokens,
 			BillingOutputTokenSource: billingOutputTokenSource,
 			CacheCreationTokens:      cacheCreationTokens,
+			CacheWrite30mTokens:      cacheWrite30m,
+			CacheWrite12hTokens:      cacheWrite12h,
 			CacheCreation5mTokens:    cacheCreation5mTokens,
 			CacheCreation1hTokens:    cacheCreation1hTokens,
 			CacheReadTokens:          cacheReadTokens,
@@ -142,17 +152,20 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		}
 		var resolvedSnapshot *BillingDecisionSnapshot
 		cost, multiplierValue, resolvedSnapshot = calculateRequestCost(usage, pricing, multiplierValue, billingIdentity{
-			provider:     provider,
-			requestModel: modelName,
-			serviceTier:  serviceTier,
-			pricingModel: pricingModel,
-			pricingTier:  pricingTier,
+			provider:      provider,
+			requestModel:  modelName,
+			serviceTier:   serviceTier,
+			pricingModel:  pricingModel,
+			pricingTier:   pricingTier,
+			requestedTier: requestedTier,
+			responseTier:  responseTier,
+			tierSource:    tierSource,
 		})
 		multiplier = &multiplierValue
 		if snapshotJSON := billingDecisionSnapshotJSON(resolvedSnapshot); snapshotJSON != "" {
 			billingRuleSnapshot = snapshotJSON
 		}
-		// 组合规则模式下倍率被规则整体接管，落库的倍率快照需同步为规则的最终值
+		// 显示合并后的实际倍率，来源层次由计费快照记录。
 		if resolvedSnapshot != nil && resolvedSnapshot.RuleKey != "" {
 			costMultSnap = multiplierValue.CostMultiplier
 			inputCostMultSnap = multiplierValue.InputCostMultiplier
@@ -165,6 +178,12 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 			modelOutputCostMultSnap = multiplierValue.ModelOutputCostMultiplier
 			modelCacheReadCostMultSnap = multiplierValue.ModelCacheReadCostMultiplier
 		}
+	}
+	if !hasPricing && provider == "codex" {
+		billingRuleSnapshot = billingDecisionSnapshotJSON(unpricedBillingDecisionSnapshot(billingIdentity{
+			provider: provider, requestedTier: requestedTier, responseTier: responseTier,
+			serviceTier: serviceTier, tierSource: tierSource,
+		}))
 	}
 
 	return RequestDetail{

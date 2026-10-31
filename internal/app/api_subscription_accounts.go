@@ -49,6 +49,7 @@ func (a *App) setupSubscriptionAccounts(db *sql.DB) {
 		return
 	}
 	m.ConfigureLoginProxy(proxyURL, proxyLabel, closeProxy)
+	a.routingCLIProxy = proxyURL
 	a.subscriptionAccounts = m
 }
 
@@ -131,6 +132,17 @@ func (a *App) ManageSubscriptionAccounts(input SubscriptionAccountCommand) (Subs
 		}
 	default:
 		err = errors.New("未知的订阅账号操作")
+	}
+	if err == nil && result.Login != nil && result.Login.Account != nil {
+		result.Account = result.Login.Account
+	}
+	if err == nil && result.Account != nil && (input.Action == "import" || input.Action == "refresh" || input.Action == "login_status" || input.Action == "login_complete") {
+		a.poolMu.Lock()
+		runtime := a.poolRuntimes[input.Provider]
+		a.poolMu.Unlock()
+		if runtime != nil {
+			err = runtime.ClearRepair("account/" + result.Account.ID)
+		}
 	}
 	return result, err
 }

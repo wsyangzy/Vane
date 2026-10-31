@@ -3,48 +3,43 @@
 // ============================================================================
 // 端点编辑弹窗（name + base_url）
 // ============================================================================
-const EndpointToggleTile = ({ label, checked, onChange, disabled }) => {
+const EndpointToggleTile = ({ label, description, icon: Icon, checked, onChange, disabled }) => {
   const toggle = () => {
     if (!disabled) onChange?.(!checked);
   };
 
   return (
-    <div
+    <button
+      type="button"
       onClick={toggle}
-      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-colors ${
-        checked ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-white hover:bg-slate-50/60'
+      className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-3 text-left transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/30 ${
+        checked ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-white hover:bg-slate-50/60'
       } ${disabled ? 'cursor-not-allowed opacity-70' : ''}`}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          toggle();
-        }
-      }}
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
     >
-      <span className="min-w-0 truncate text-xs font-semibold text-slate-800">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        disabled={disabled}
-        onClick={(event) => {
-          event.stopPropagation();
-          toggle();
-        }}
-        className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${
-          checked ? 'border-emerald-500 bg-emerald-500' : 'border-slate-200 bg-slate-200'
-        } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      <span className="flex min-w-0 items-start gap-3">
+        {Icon && <span className="mt-0.5 rounded-lg bg-slate-100 p-1.5 text-slate-500"><Icon size={16} /></span>}
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-slate-800">{label}</span>
+          {description && <span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span>}
+        </span>
+      </span>
+      <span
+        aria-hidden="true"
+        className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
+          checked ? 'bg-indigo-500' : 'bg-slate-200'
+        }`}
       >
         <span
           className={`inline-block h-4 w-4 rounded-full bg-white shadow-sm ring-1 ring-black/5 transition-transform ${
             checked ? 'translate-x-4' : 'translate-x-0.5'
           }`}
         />
-      </button>
-    </div>
+      </span>
+    </button>
   );
 };
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 )
 
 type ClaudeCredentialGroupInfo struct {
+	Enabled                                bool                                        `json:"enabled"`
 	AuthMode                               string                                      `json:"auth_mode"`
 	Subscription                           *subscription.Binding                       `json:"subscription,omitempty"`
 	LocalKeyConfigured                     bool                                        `json:"local_key_configured"`
@@ -107,6 +109,7 @@ func (a *App) claudeCredentialGroupToInfo(ctx context.Context, groupStore claude
 		return ClaudeCredentialGroupInfo{}
 	}
 	info := ClaudeCredentialGroupInfo{
+		Enabled:                                group.Enabled,
 		AuthMode:                               group.AuthMode,
 		OfficialVerification:                   "not_verified",
 		ID:                                     group.ID,
@@ -199,6 +202,7 @@ func (a *App) refreshClaudeRuntimeAfterCredentialGroupChange(ctx context.Context
 			a.logger.Warn("⚠️ Claude 凭证分组变更后同步运行时端点失败", "error", err)
 		}
 	}
+	a.syncClaudeRouteConfig(ctx)
 	a.syncEndpointMultipliersToTracker(ctx)
 	a.emitEndpointUpdate()
 }
@@ -261,6 +265,9 @@ func (a *App) UpdateClaudeCredentialGroupByID(id int64, input CreateClaudeCreden
 	if err := svc.UpdateGroup(ctx, id, record); err != nil {
 		return ClaudeCredentialGroupInfo{}, err
 	}
+	if input.Token != "" || input.ApiKey != "" {
+		a.repairPoolGroup("claude", id)
+	}
 	updated, err := svc.GetByID(ctx, id)
 	if err != nil {
 		return ClaudeCredentialGroupInfo{}, err
@@ -273,8 +280,13 @@ func (a *App) UpdateClaudeCredentialGroupByID(id int64, input CreateClaudeCreden
 }
 
 func (a *App) DeleteClaudeCredentialGroupByID(id int64) error {
+	a.routingWriteMu.Lock()
+	defer a.routingWriteMu.Unlock()
 	a.mu.RLock()
 	svc := a.claudeCredentialGroupService
+	groupStore := a.claudeCredentialGroupStore
+	channelStore := a.channelStore
+	endpointStore := a.endpointStore
 	logger := a.logger
 	a.mu.RUnlock()
 	if svc == nil {
@@ -286,14 +298,17 @@ func (a *App) DeleteClaudeCredentialGroupByID(id int64) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := svc.DeleteGroup(ctx, id); err != nil {
+	if err := a.deleteCredentialGroup(ctx, "claude", id, func(tx *sql.Tx) error {
+		service := claudeservice.NewClaudeCredentialGroupService(groupStore.WithTx(tx), channelStore.WithTx(tx), endpointStore.WithTx(tx))
+		return service.DeleteGroup(ctx, id)
+	}); err != nil {
 		return err
 	}
 	if logger != nil {
 		logger.Info("✅ Claude 凭证分组已删除", "id", id)
 	}
 	a.refreshClaudeRuntimeAfterCredentialGroupChange(ctx)
-	return nil
+	return a.refreshRoutingAfterCredentialGroupDeletion(ctx)
 }
 
 func (a *App) SetDefaultClaudeCredentialGroup(id int64) error {

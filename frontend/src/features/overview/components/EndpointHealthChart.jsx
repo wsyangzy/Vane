@@ -1,287 +1,70 @@
-// ============================================
-// 端点健康状态图组件
-// 简化分类，跳过检测视为健康
-// 支持 Claude / Codex 分 Provider 切换查看
-// ============================================
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { KeyRound, RefreshCw } from 'lucide-react';
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { SegmentedTabs, Tooltip as UiTooltip } from '@/shared/ui/index.js';
+import { listRoutingProfiles } from '@/services/wails/dispatch.js';
+import { groupStateOptions, summarizeCredentialGroups } from '../credentialGroupStats.js';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Activity, CheckCircle2, EyeOff } from 'lucide-react';
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer
-} from 'recharts';
-import { fetchEndpointHealthData } from '@/services/http/api.js';
-import { getCodexEndpointHealthChart } from '@/services/wails/index.js';
-import { Tooltip as UiTooltip } from '@/shared/ui/index.js';
+const providers = [{ key: 'claude', label: 'Claude' }, { key: 'codex', label: 'Codex' }];
 
-// 健康状态配置
-const HEALTH_CONFIG = {
-  healthy: { name: '健康', color: '#10b981' },      // 绿色：检测通过
-  skipped: { name: '跳过检测', color: '#a855f7' },  // 紫色：跳过检测（假定健康）
-  unhealthy: { name: '异常', color: '#ef4444' },    // 红色：检测失败
-  excluded: { name: '不参与', color: '#cbd5e1' }    // 灰色：不参与检测
-};
-
-const EndpointHealthChart = () => {
+export default function CredentialGroupHealthChart() {
   const [provider, setProvider] = useState('claude');
-  const [healthData, setHealthData] = useState({ healthy: 0, unhealthy: 0, skipped: 0, excluded: 0 });
-  const [loading, setLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const refreshIntervalRef = useRef(null);
-
-  // 加载数据
-  const loadData = useCallback(async (showRefreshing = false) => {
-    if (showRefreshing) {
-      setIsRefreshing(true);
-    }
+  const [summaries, setSummaries] = useState({});
+  const [errors, setErrors] = useState({});
+  const [refreshing, setRefreshing] = useState(false);
+  const generation = useRef({ value: 0 });
+  const loadData = useCallback(async () => {
+    const current = ++generation.current.value;
+    setRefreshing(true);
     try {
-      const data = provider === 'codex'
-        ? await getCodexEndpointHealthChart()
-        : await fetchEndpointHealthData();
-      setHealthData({
-        healthy: data.healthy || 0,
-        unhealthy: data.unhealthy || 0,
-        skipped: data.skipped || 0,
-        excluded: data.excluded || 0
-      });
+      const workspace = await listRoutingProfiles(provider);
+      if (current !== generation.current.value) return;
+      setSummaries((previous) => ({ ...previous, [provider]: summarizeCredentialGroups(workspace) }));
+      setErrors((previous) => ({ ...previous, [provider]: '' }));
     } catch (error) {
-      console.error('加载端点健康数据失败:', error);
-      setHealthData({ healthy: 0, unhealthy: 0, skipped: 0, excluded: 0 });
+      if (current !== generation.current.value) return;
+      setErrors((previous) => ({ ...previous, [provider]: error?.message || '分组状态读取失败' }));
     } finally {
-      setLoading(false);
-      setIsRefreshing(false);
+      if (current === generation.current.value) setRefreshing(false);
     }
   }, [provider]);
 
-  // 切换 Provider 或初始加载时重新加载
   useEffect(() => {
-    setLoading(true);
-    loadData();
-  }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 定时刷新（每 30 秒）
-  useEffect(() => {
-    refreshIntervalRef.current = setInterval(() => {
-      loadData(false);
-    }, 30000);
-
+    const pending = generation.current;
+    const initial = setTimeout(loadData, 0);
+    const timer = setInterval(loadData, 30000);
+    const update = (event) => {
+      if (['endpoint_health', 'endpointHealth', 'credential_group_health'].includes(event.detail?.chart_type)) loadData();
+    };
+    document.addEventListener('chartUpdate', update);
     return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
-      }
+      ++pending.value;
+      clearTimeout(initial);
+      clearInterval(timer);
+      document.removeEventListener('chartUpdate', update);
     };
   }, [loadData]);
 
-  // 监听 SSE 图表更新事件（仅 Claude 端有 SSE 广播）
-  useEffect(() => {
-    const handleChartUpdate = (event) => {
-      if (provider !== 'claude') return;
-      const { chart_type, data } = event.detail || {};
-        if (chart_type === 'endpoint_health' || chart_type === 'endpointHealth') {
-          if (data) {
-            if (data.healthy !== undefined) {
-              setHealthData({
-                healthy: data.healthy || 0,
-                unhealthy: data.unhealthy || 0,
-                skipped: data.skipped || 0,
-                excluded: data.excluded || 0
-              });
-            } else if (data.labels && data.datasets) {
-              // Chart.js 格式兼容
-              const [healthy, unhealthy] = data.datasets[0]?.data || [0, 0];
-              setHealthData({ healthy, unhealthy, skipped: 0, excluded: 0 });
-            }
-            console.log('📊 [SSE] 端点健康图已更新');
-          }
-        }
-    };
-
-    document.addEventListener('chartUpdate', handleChartUpdate);
-    return () => {
-      document.removeEventListener('chartUpdate', handleChartUpdate);
-    };
-  }, [provider]);
-
-  // 手动刷新
-  const handleRefresh = () => {
-    loadData(true);
-  };
-
-  // 计算统计数据
-  // healthy 已包含跳过检测的端点（后端处理）
-  // inScopeTotal: 参与检测的端点数（健康 + 异常），不含 excluded
-  const inScopeTotal = healthData.healthy + healthData.unhealthy;
-  // 健康率：基于参与检测的端点
-  const healthPercent = inScopeTotal > 0 ? Math.round((healthData.healthy / inScopeTotal) * 100) : 0;
-
-  // 半圆图数据：健康（绿色）中包含跳过（紫色）、异常（红色）
-  // 为了在图中区分跳过检测的部分，将其单独显示
-  const actualHealthy = healthData.healthy - healthData.skipped; // 真正检测通过的
-  const chartData = [
-    { name: '健康', value: actualHealthy, color: HEALTH_CONFIG.healthy.color },
-    { name: '跳过检测', value: healthData.skipped, color: HEALTH_CONFIG.skipped.color },
-    { name: '异常', value: healthData.unhealthy, color: HEALTH_CONFIG.unhealthy.color }
-  ];
-
-  // 确定健康状态的显示样式
-  const getHealthStatus = () => {
-    if (inScopeTotal === 0) return { text: '无数据', color: 'text-slate-400', bg: 'bg-slate-50' };
-    if (healthPercent >= 90) return { text: '优秀', color: 'text-emerald-600', bg: 'bg-emerald-50' };
-    if (healthPercent >= 70) return { text: '良好', color: 'text-amber-600', bg: 'bg-amber-50' };
-    return { text: '警告', color: 'text-rose-600', bg: 'bg-rose-50' };
-  };
-
-  const status = getHealthStatus();
-
-  return (
-    <div className="bg-white p-6 rounded-2xl border border-slate-200/60 shadow-sm flex flex-col h-full">
-      <div className="flex justify-between items-start mb-1">
-        <div className="flex items-center space-x-2">
-          <div className="p-1.5 bg-emerald-50 text-emerald-500 rounded-md">
-            <Activity size={16} />
-          </div>
-          <h3 className="font-semibold text-slate-900">端点健康状态</h3>
-        </div>
-        <div className="flex items-center space-x-2">
-          {/* Provider Tab 切换 */}
-          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-            <button
-              onClick={() => setProvider('claude')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                provider === 'claude'
-                  ? 'bg-white text-orange-700 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              Claude
-            </button>
-            <button
-              onClick={() => setProvider('codex')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                provider === 'codex'
-                  ? 'bg-white text-blue-700 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              Codex
-            </button>
-          </div>
-          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${status.bg} ${status.color}`}>
-            {inScopeTotal > 0 ? `${healthPercent}%` : '-'} {status.text}
-          </span>
-          <UiTooltip content="刷新数据">
-            <button
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-50"
-              aria-label="刷新数据"
-            >
-              <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
-            </button>
-          </UiTooltip>
-        </div>
+  const summary = summaries[provider];
+  const error = errors[provider];
+  const chartData = groupStateOptions.map((option) => ({ ...option, value: summary?.counts[option.key] || 0 }));
+  return <section aria-label="凭证分组状态" className="flex h-full min-w-0 flex-col rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm">
+    <div className="mb-1 flex flex-wrap items-start justify-between gap-2">
+      <div className="flex items-center gap-2"><div className="rounded-md bg-emerald-50 p-1.5 text-emerald-500"><KeyRound size={16} /></div><h3 className="font-semibold text-slate-900">凭证分组状态</h3></div>
+      <div className="flex items-center gap-2"><SegmentedTabs tabs={providers} activeTab={provider} onChange={setProvider} className="grid-cols-2" buttonPaddingClass="px-2 py-1 text-xs" />
+        <UiTooltip content="刷新分组状态"><button type="button" aria-label="刷新分组状态" disabled={refreshing} onClick={loadData} className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:opacity-50"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button></UiTooltip>
       </div>
-      <p className="text-xs text-slate-500 mb-4">实时端点连通性监控</p>
-
-      <div className="flex-1 min-h-[180px] flex items-center justify-center relative">
-        {loading ? (
-          <div className="flex items-center text-slate-400">
-            <RefreshCw size={20} className="animate-spin mr-2" />
-            加载中...
-          </div>
-        ) : (
-          <>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  startAngle={180}
-                  endAngle={0}
-                  innerRadius={55}
-                  outerRadius={80}
-                  paddingAngle={2}
-                  dataKey="value"
-                  animationBegin={0}
-                  animationDuration={500}
-                >
-                  {chartData.map((entry, index) => (
-                    <Cell
-                      key={`cell-${index}`}
-                      fill={entry.color}
-                      stroke="none"
-                    />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="absolute inset-0 top-8 flex flex-col items-center justify-center pointer-events-none">
-              {inScopeTotal === 0 ? (
-                <EyeOff size={28} className="text-slate-400" />
-              ) : (
-                <CheckCircle2
-                  size={28}
-                  className={healthPercent >= 70 ? 'text-emerald-500' : 'text-rose-500'}
-                />
-              )}
-              <span className="text-2xl font-bold text-slate-900 mt-1">
-                {healthData.healthy}/{inScopeTotal}
-              </span>
-              <span className="text-xs text-slate-400">健康/参与检测</span>
-              {healthData.skipped > 0 && (
-                <span className="text-[11px] mt-1" style={{ color: HEALTH_CONFIG.skipped.color }}>
-                  含跳过 {healthData.skipped}
-                </span>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* 图例和详情 - 4列 */}
-      {!loading && (
-        <div className="grid grid-cols-4 gap-3 mt-2 pt-3 border-t border-slate-100">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center text-xs text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 mr-2" />
-              健康
-            </div>
-            <span className="font-mono text-sm font-semibold text-emerald-600">
-              {healthData.healthy}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center text-xs text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 mr-2" />
-              异常
-            </div>
-            <span className="font-mono text-sm font-semibold text-rose-600">
-              {healthData.unhealthy}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center text-xs text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full mr-2" style={{ backgroundColor: HEALTH_CONFIG.skipped.color }} />
-              跳过
-            </div>
-            <span className="font-mono text-sm font-semibold" style={{ color: HEALTH_CONFIG.skipped.color }}>
-              {healthData.skipped}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center text-xs text-slate-600">
-              <span className="w-2.5 h-2.5 rounded-full mr-2" style={{ backgroundColor: HEALTH_CONFIG.excluded.color }} />
-              不参与
-            </div>
-            <span className="font-mono text-sm font-semibold text-slate-500">
-              {healthData.excluded}
-            </span>
-          </div>
-        </div>
-      )}
     </div>
-  );
-};
-
-export default EndpointHealthChart;
+    <p className="mb-3 text-xs leading-5 text-slate-500">覆盖全部渠道，每个凭证分组计一次；任一路径可用即计入可用分组。</p>
+    {error && <p role="alert" className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-600 [overflow-wrap:anywhere]">{summary ? '刷新失败，保留上次状态：' : ''}{error}</p>}
+    {!summary ? <div className="flex min-h-[220px] flex-1 items-center justify-center text-sm text-slate-400">{refreshing ? '正在读取分组状态…' : '暂无分组状态'}</div> : <>
+      <div className="relative h-[190px] shrink-0">
+        {summary.total > 0 && <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={chartData} startAngle={180} endAngle={0} innerRadius={58} outerRadius={80} cx="50%" cy="70%" paddingAngle={2} dataKey="value" nameKey="label" isAnimationActive={false}>{chartData.map((item) => <Cell key={item.key} fill={item.color} stroke="none" />)}</Pie><Tooltip formatter={(value) => `${value} 个凭证分组`} /></PieChart></ResponsiveContainer>}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center pt-7"><span className="text-3xl font-semibold tabular-nums text-slate-900">{summary.usable}<span className="text-base text-slate-400"> / {summary.total}</span></span><span className="mt-1 text-xs text-slate-500">可用 / 全部分组</span><span className="mt-1 text-[11px] text-slate-400">{summary.channels.length} 个渠道{summary.total === 0 ? ' · 尚无凭证分组' : ''}</span></div>
+      </div>
+      <div className="grid grid-cols-2 gap-x-5 gap-y-2 border-t border-slate-100 pt-3 min-[1200px]:grid-cols-4">{chartData.map((item) => <div key={item.key} className="flex min-w-0 items-center justify-between gap-2 text-xs"><span className="inline-flex items-center gap-1.5 whitespace-nowrap text-slate-500"><i className="h-2 w-2 rounded-full" style={{ background: item.color }} />{item.label}</span><span className="font-semibold tabular-nums text-slate-700">{item.value}</span></div>)}</div>
+      <div className="mt-3 max-h-[180px] overflow-y-auto border-t border-slate-100 pt-1">{summary.channels.map((channel) => <div key={channel.id} className="flex min-w-0 items-center gap-3 border-b border-slate-50 py-2 last:border-0"><span className="min-w-0 flex-1 truncate text-xs font-medium text-slate-600">{channel.name}</span><span className="shrink-0 text-[11px] tabular-nums text-slate-400">{channel.groups.length} 分组</span><span className="inline-flex shrink-0 gap-2" aria-label={`${channel.name}分组状态`}>{groupStateOptions.filter((option) => channel.counts[option.key]).map((option) => <UiTooltip asChild content={`${option.label} ${channel.counts[option.key]} 个分组`} key={option.key}><span key={option.key} className="inline-flex items-center gap-1 text-[11px] tabular-nums text-slate-500"><i className="h-1.5 w-1.5 rounded-full" style={{ background: option.color }} />{channel.counts[option.key]}</span></UiTooltip>)}</span></div>)}</div>
+      <p className="mt-3 text-[10px] leading-4 text-slate-400">部分可用：分组内仍有可用路径。暂不可用：冷却、需修复或资源异常。待配置：缺少端点或凭证。此处不统计方案参与、余额或订阅额度。</p>
+    </>}
+  </section>;
+}

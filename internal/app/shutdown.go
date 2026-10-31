@@ -7,6 +7,16 @@ import (
 
 // shutdown 在 Wails 应用关闭时调用
 func (a *App) shutdown() {
+	if a.quotaRefreshCancel != nil {
+		a.quotaRefreshCancel()
+		select {
+		case <-a.quotaRefreshDone:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	if a.routingQuotaTransport != nil {
+		a.routingQuotaTransport.CloseIdleConnections()
+	}
 	if a.subscriptionAccounts != nil {
 		a.subscriptionAccounts.Close()
 	}

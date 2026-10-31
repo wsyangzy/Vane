@@ -55,6 +55,7 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		return CodexCredentialGroupInfo{}
 	}
 	info := CodexCredentialGroupInfo{
+		Enabled:  record.Enabled,
 		AuthMode: record.AuthMode, OfficialVerification: "not_verified",
 		ID:                                     record.ID,
 		ChannelID:                              record.ChannelID,
@@ -80,6 +81,8 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		BillingOutputTokenSource:               tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource),
 		ModelMultipliers:                       record.ModelMultipliers,
 		BillingRules:                           record.BillingRules,
+		ServiceTierSource:                      record.ServiceTierSource,
+		CacheWriteTTLPricing:                   record.CacheWriteTTLPricing,
 		CreatedAt:                              formatCodexTime(record.CreatedAt),
 		UpdatedAt:                              formatCodexTime(record.UpdatedAt),
 	}
@@ -161,6 +164,10 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 		if endpointMgr != nil && healthInScope {
 			lastFailCode, lastFailReason, _ = endpointMgr.GetFailureDetail(ep.ID)
 		}
+		lastCheck := ""
+		if healthInScope {
+			lastCheck = formatCodexTime(lastChecks[ep.ID])
+		}
 		info.Endpoints = append(info.Endpoints, CodexEndpointInfo{
 			ID:                       ep.ID,
 			ChannelID:                ep.ChannelID,
@@ -177,7 +184,7 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 			HealthState:              healthState,
 			HealthInScope:            healthInScope,
 			ResponseTimeMS:           responseTimeMS,
-			LastCheck:                formatCodexTime(lastChecks[ep.ID]),
+			LastCheck:                lastCheck,
 			LastFailCode:             lastFailCode,
 			LastFailReason:           lastFailReason,
 			Priority:                 ep.Priority,
@@ -209,15 +216,20 @@ func codexEndpointRuntimeHealth(
 	if channel == nil || endpoint == nil {
 		return false, "unchecked", false, 0
 	}
-	channelInScope := channel.IsActive
-	if channelFailoverEnabled {
-		channelInScope = channel.FailoverEnabled
+	if manager != nil && !manager.IsHealthCheckEnabled(endpoint.ID) {
+		return false, "disabled", false, 0
 	}
-	if !channelInScope || (!channelFailoverEnabled && manager != nil && activeChannelID != channel.ID) {
-		return false, "inactive", false, 0
-	}
-	if !endpoint.FailoverEnabled {
-		return false, "excluded", false, 0
+	if manager == nil || manager.PoolRuntime() == nil {
+		channelInScope := channel.IsActive
+		if channelFailoverEnabled {
+			channelInScope = channel.FailoverEnabled
+		}
+		if !channelInScope || (!channelFailoverEnabled && manager != nil && activeChannelID != channel.ID) {
+			return false, "inactive", false, 0
+		}
+		if !endpoint.FailoverEnabled {
+			return false, "excluded", false, 0
+		}
 	}
 	latency, hasLatency := latencies[endpoint.ID]
 	if latency > 0 {

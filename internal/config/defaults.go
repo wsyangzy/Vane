@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// BeijingTimezone is the fixed application timezone for display and statistics.
+const BeijingTimezone = "Asia/Shanghai"
+
 // NewDefaultConfig returns the runtime configuration baseline.
 // Runtime settings and provider records are loaded from SQLite after startup;
 // no filesystem configuration is required.
@@ -131,9 +134,7 @@ func (c *Config) setGlobalDefaults() {
 	if c.GlobalTimeout == 0 {
 		c.GlobalTimeout = 300 * time.Second
 	}
-	if c.Timezone == "" {
-		c.Timezone = "Asia/Shanghai"
-	}
+	c.Timezone = BeijingTimezone
 }
 
 func (c *Config) setGroupDefaults() {

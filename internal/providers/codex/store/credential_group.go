@@ -26,6 +26,7 @@ type CodexBillingRuleRecord struct {
 	ServiceTier                 string  `json:"service_tier"`
 	Context                     string  `json:"context"`
 	Mode                        string  `json:"mode"`
+	GroupMultiplierMode         string  `json:"group_multiplier_mode"`
 	CostMultiplier              float64 `json:"cost_multiplier"`
 	InputCostMultiplier         float64 `json:"input_cost_multiplier"`
 	OutputCostMultiplier        float64 `json:"output_cost_multiplier"`
@@ -46,17 +47,20 @@ const (
 // CodexCredentialGroupRecord 表示 Codex 渠道下可复用的凭证分组。
 // 端点引用分组后，可共享 API Key 与默认成本倍率。
 type CodexCredentialGroupRecord struct {
-	AuthMode          string                `json:"auth_mode"`
-	Subscription      *subscription.Binding `json:"subscription,omitempty"`
-	ID                int64                 `json:"id"`
-	ChannelID         int64                 `json:"channel_id"`
-	Name              string                `json:"name"`
-	ApiKey            string                `json:"api_key,omitempty"`
-	IsDefault         bool                  `json:"is_default"`
-	DailyCostLimitUSD float64               `json:"daily_cost_limit_usd"`
-	ModelPolicy       string                `json:"model_policy"`
-	ModelMapping      map[string]string     `json:"model_mapping"`
-	SupportedModels   []string              `json:"supported_models"`
+	ServiceTierSource    string                `json:"service_tier_source"`
+	CacheWriteTTLPricing bool                  `json:"cache_write_ttl_pricing"`
+	AuthMode             string                `json:"auth_mode"`
+	Subscription         *subscription.Binding `json:"subscription,omitempty"`
+	ID                   int64                 `json:"id"`
+	ChannelID            int64                 `json:"channel_id"`
+	Name                 string                `json:"name"`
+	ApiKey               string                `json:"api_key,omitempty"`
+	Enabled              bool                  `json:"enabled"`
+	IsDefault            bool                  `json:"is_default"`
+	DailyCostLimitUSD    float64               `json:"daily_cost_limit_usd"`
+	ModelPolicy          string                `json:"model_policy"`
+	ModelMapping         map[string]string     `json:"model_mapping"`
+	SupportedModels      []string              `json:"supported_models"`
 
 	CostMultiplier                         float64                            `json:"cost_multiplier"`
 	InputCostMultiplier                    float64                            `json:"input_cost_multiplier"`
@@ -120,7 +124,7 @@ func (s *SQLiteCodexCredentialGroupStore) getQuerier() interface {
 	return s.db
 }
 
-const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0),
+const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_default, 0), enabled,
 	COALESCE(daily_cost_limit_usd, 0),
 	COALESCE(model_policy, 'inherit'), COALESCE(model_mapping, '{}'), COALESCE(supported_models, '[]'),
 	COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0),
@@ -131,6 +135,7 @@ const codexCredentialGroupColumns = `id, channel_id, name, api_key, COALESCE(is_
 	COALESCE(disable_long_context_pricing, 0),
 	COALESCE(disable_service_tier_pricing, 1), COALESCE(service_tier_multipliers, '[]'),
 	COALESCE(billing_output_token_source, 'output_tokens'), COALESCE(model_multipliers, '[]'),
+	COALESCE(service_tier_source, 'response'), COALESCE(cache_write_ttl_pricing, 0),
 	COALESCE(billing_rules, '[]'), COALESCE(auth_mode,'group_credential'), COALESCE(subscription_config,'{}'),
 	COALESCE(created_at, ''), COALESCE(updated_at, '')`
 
@@ -163,8 +168,8 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 			long_context_cache_creation_cost_multiplier, long_context_cache_read_cost_multiplier,
 			disable_long_context_pricing,
 			disable_service_tier_pricing, service_tier_multipliers,
-			billing_output_token_source, model_multipliers, billing_rules, auth_mode, subscription_config
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			billing_output_token_source, model_multipliers, service_tier_source, cache_write_ttl_pricing, billing_rules, auth_mode, subscription_config
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, record.ChannelID, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultCodexModelPolicy(record.ModelPolicy), encodeCodexModelMapping(record.ModelMapping), encodeCodexSupportedModels(record.SupportedModels),
 		defaultCodexStoreMultiplier(record.CostMultiplier),
@@ -182,6 +187,7 @@ func (s *SQLiteCodexCredentialGroupStore) Create(ctx context.Context, record *Co
 		encodeCodexServiceTierMultipliers(record.ServiceTierMultipliers),
 		defaultBillingOutputTokenSource(record.BillingOutputTokenSource),
 		encodeCodexModelMultipliers(record.ModelMultipliers),
+		record.ServiceTierSource, boolToInt(record.CacheWriteTTLPricing),
 		encodeCodexBillingRules(record.BillingRules), defaultAuthMode(record.AuthMode), encodeSubscription(record.Subscription))
 	if err != nil {
 		return nil, fmt.Errorf("创建 Codex 凭证分组失败: %w", err)
@@ -291,7 +297,7 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 			long_context_output_cost_multiplier = ?, long_context_cache_creation_cost_multiplier = ?,
 			long_context_cache_read_cost_multiplier = ?, disable_long_context_pricing = ?,
 			disable_service_tier_pricing = ?, service_tier_multipliers = ?,
-			billing_output_token_source = ?, model_multipliers = ?, billing_rules = ?, auth_mode = ?, subscription_config = ?
+			billing_output_token_source = ?, model_multipliers = ?, service_tier_source = ?, cache_write_ttl_pricing = ?, billing_rules = ?, auth_mode = ?, subscription_config = ?
 		WHERE id = ?
 	`, record.Name, record.ApiKey, boolToInt(record.IsDefault), record.DailyCostLimitUSD,
 		defaultCodexModelPolicy(record.ModelPolicy), encodeCodexModelMapping(record.ModelMapping), encodeCodexSupportedModels(record.SupportedModels),
@@ -310,6 +316,7 @@ func (s *SQLiteCodexCredentialGroupStore) Update(ctx context.Context, record *Co
 		encodeCodexServiceTierMultipliers(record.ServiceTierMultipliers),
 		defaultBillingOutputTokenSource(record.BillingOutputTokenSource),
 		encodeCodexModelMultipliers(record.ModelMultipliers),
+		record.ServiceTierSource, boolToInt(record.CacheWriteTTLPricing),
 		encodeCodexBillingRules(record.BillingRules), defaultAuthMode(record.AuthMode), encodeSubscription(record.Subscription),
 		record.ID)
 	if err != nil {
@@ -454,7 +461,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&record.Name,
 		&record.ApiKey,
 		&isDefault,
-		&dailyCostLimitUSD,
+		&record.Enabled, &dailyCostLimitUSD,
 		&modelPolicy,
 		&modelMappingJSON,
 		&supportedModelsJSON,
@@ -473,7 +480,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 		&serviceTierMultipliersJSON,
 		&billingOutputTokenSource,
 		&modelMultipliersJSON,
-		&billingRulesJSON, &record.AuthMode, &subscriptionJSON,
+		&record.ServiceTierSource, &record.CacheWriteTTLPricing, &billingRulesJSON, &record.AuthMode, &subscriptionJSON,
 		&createdAt,
 		&updatedAt,
 	); err != nil {

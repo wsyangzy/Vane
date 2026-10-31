@@ -25,7 +25,8 @@ func (h *Handler) recordStart(requestID string, r *http.Request, isStreaming boo
 	h.usageTracker.RecordRequestStart(requestID, r.RemoteAddr, r.Header.Get("User-Agent"), r.Method, r.URL.Path, isStreaming)
 
 	opts := tracking.UpdateOptions{
-		Provider: strPtr("codex"),
+		Provider:             strPtr("codex"),
+		RequestedServiceTier: &serviceTier,
 	}
 	if channelName != "" {
 		opts.Channel = strPtr(channelName)
@@ -151,6 +152,8 @@ func buildTokenUsage(tr *TokenResult, billingOutputTokenSource string) *tracking
 		ReasoningTokens:          tr.ReasoningTokens,
 		BillingOutputTokenSource: tracking.NormalizeBillingOutputTokenSource(billingOutputTokenSource),
 		CacheCreationTokens:      tr.CacheWriteTokens,
+		CacheWrite30mTokens:      tr.CacheWrite30mTokens,
+		CacheWrite12hTokens:      tr.CacheWrite12hTokens,
 		CacheReadTokens:          tr.CacheReadTokens,
 		InputIncludesCacheRead:   true,
 	}
@@ -169,7 +172,7 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, groupName, endpointName))
 		if tokenResult.ServiceTier != "" {
 			serviceTier := tokenResult.ServiceTier
-			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ServiceTier: &serviceTier})
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ResponseServiceTier: &serviceTier})
 		}
 	} else {
 		modelName = requestModel
@@ -190,6 +193,10 @@ func (h *Handler) recordFailure(requestID string, startTime time.Time, reason st
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
 		tokens = buildTokenUsage(tokenResult, tracking.BillingOutputTokenSourceOutput)
+		if tokenResult.ServiceTier != "" {
+			tier := tokenResult.ServiceTier
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ResponseServiceTier: &tier})
+		}
 	} else {
 		modelName = requestModel
 	}
@@ -206,6 +213,10 @@ func (h *Handler) recordUpstreamFailure(requestID string, startTime time.Time, r
 	if tokenResult != nil {
 		modelName = pickModelName(tokenResult.Model, requestModel)
 		tokens = buildTokenUsage(tokenResult, tracking.BillingOutputTokenSourceOutput)
+		if tokenResult.ServiceTier != "" {
+			tier := tokenResult.ServiceTier
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ResponseServiceTier: &tier})
+		}
 	}
 	h.usageTracker.RecordRequestFinalFailureWithUpstreamStatus(requestID, modelName, "failed", reason, detail, duration, httpStatus, tokens)
 }
@@ -223,7 +234,7 @@ func (h *Handler) recordCancelled(requestID string, startTime time.Time, reason 
 		tokens = buildTokenUsage(tokenResult, h.endpointBillingOutputTokenSource(channelName, groupName, endpointName))
 		if tokenResult.ServiceTier != "" {
 			serviceTier := tokenResult.ServiceTier
-			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ServiceTier: &serviceTier})
+			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{ResponseServiceTier: &serviceTier})
 		}
 	}
 	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)

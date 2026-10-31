@@ -19,7 +19,7 @@ func (s *SQLiteModelPricingStore) scanModelPricing(row *sql.Row) (*ModelPricingR
 	err := row.Scan(
 		&record.ID, &record.ModelName, &provider, &record.ServiceTier,
 		&record.InputPrice, &record.OutputPrice,
-		&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice,
+		&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice, &record.CacheWritePrice30m, &record.CacheWritePrice12h, &record.LongContextCacheWritePrice12h,
 		&record.LongContextThreshold, &record.LongContextInputPrice,
 		&record.LongContextCacheReadPrice, &record.LongContextCacheWritePrice,
 		&record.LongContextOutputPrice,
@@ -86,7 +86,7 @@ func (s *SQLiteModelPricingStore) scanModelPricings(ctx context.Context, query s
 		err := rows.Scan(
 			&record.ID, &record.ModelName, &provider, &record.ServiceTier,
 			&record.InputPrice, &record.OutputPrice,
-			&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice,
+			&record.CacheCreationPrice5m, &record.CacheCreationPrice1h, &record.CacheReadPrice, &record.CacheWritePrice30m, &record.CacheWritePrice12h, &record.LongContextCacheWritePrice12h,
 			&record.LongContextThreshold, &record.LongContextInputPrice,
 			&record.LongContextCacheReadPrice, &record.LongContextCacheWritePrice,
 			&record.LongContextOutputPrice,

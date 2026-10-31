@@ -32,6 +32,9 @@ func visibleSettingRecords(records []*settingsstore.SettingRecord) []*settingsst
 	var basePort, scopedPort *settingsstore.SettingRecord
 	visible := make([]*settingsstore.SettingRecord, 0, len(records))
 	for _, record := range records {
+		if record == nil || !isVisibleSetting(record.Category, record.Key) {
+			continue
+		}
 		if record != nil && record.Category == settingsservice.CategoryServer {
 			switch record.Key {
 			case "preferred_port":
@@ -70,6 +73,22 @@ func visibleSettingRecords(records []*settingsstore.SettingRecord) []*settingsst
 		visible = append(visible, &clone)
 	}
 	return visible
+}
+
+// Compatibility records stay available to legacy runtime APIs, but do not
+// reappear as editable controls in the profile-based application's settings.
+func isVisibleSetting(category, key string) bool {
+	switch category {
+	case settingsservice.CategoryStrategy, settingsservice.CategoryFailover,
+		settingsservice.CategoryTimezone, settingsservice.CategoryStreaming, settingsservice.CategoryHotPool:
+		return false
+	case settingsservice.CategoryRetry:
+		return key == "max_total_attempts" || key == "max_total_duration"
+	case settingsservice.CategoryRequest:
+		return key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout"
+	default:
+		return true
+	}
 }
 
 // SettingInfo 设置信息（给前端用的结构体）
@@ -342,7 +361,6 @@ func (a *App) UpdateSetting(input UpdateSettingInput) error {
 func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 	a.mu.RLock()
 	settingsService := a.settingsService
-	settingsStore := a.settingsStore
 	logger := a.logger
 	a.mu.RUnlock()
 
@@ -357,21 +375,6 @@ func (a *App) BatchUpdateSettings(input BatchUpdateSettingsInput) error {
 	records := make([]*settingsstore.SettingRecord, 0, len(input.Settings))
 	for _, s := range input.Settings {
 		key := scopedSettingKey(s.Category, s.Key)
-		if key == "preferred_port_dev" && settingsStore != nil {
-			provider := s.Provider
-			if provider == "" {
-				provider = string(settingsservice.ProviderGlobal)
-			}
-			existing, err := settingsStore.GetScoped(ctx, provider, s.Category, key)
-			if err != nil {
-				return fmt.Errorf("检查 dev 首选端口设置失败: %w", err)
-			}
-			if existing == nil {
-				if err := settingsStore.SetScoped(ctx, provider, s.Category, key, s.Value); err != nil {
-					return fmt.Errorf("初始化 dev 首选端口设置失败: %w", err)
-				}
-			}
-		}
 		records = append(records, &settingsstore.SettingRecord{
 			Provider: s.Provider,
 			Category: s.Category,

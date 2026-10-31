@@ -1,7 +1,8 @@
 import { checkPoolEndpoint } from '@/services/wails/pools.js';
-import PoolWorkspace from '@/features/providers/shared/pools/PoolWorkspace.jsx';
+import DispatchWorkspace from '@/features/providers/shared/dispatch/DispatchWorkspace.jsx';
+import ChannelResourceGrid from '@/features/providers/shared/pools/ChannelResourceGrid.jsx';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { RefreshCw, Plus, Database, AlertTriangle } from 'lucide-react';
+import { Plus, Database, AlertTriangle } from 'lucide-react';
 import { Button, LoadingSpinner, ErrorMessage, useToast } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
@@ -13,11 +14,11 @@ import { ClaudeIcon } from '@/features/requests/components/ModelTag.jsx';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
 import { selectPersistedEndpoints } from '@/features/providers/shared/endpoints/endpointActions.js';
-import { nonStreamRouteSignature } from '@/features/providers/shared/routing/routeTargets.js';
 import { getCredentialGroupForEndpoint } from './utils/credentialGroups.js';
 import { buildClaudeEndpointCopyPayload } from './utils/endpointPayload.js';
-import { getEndpointStorageStatus, getEndpointRecords, createEndpointRecord, updateEndpointRecordByID, deleteEndpointRecordByID, activateEndpointRecordByID, setEndpointFailoverEnabledByID, setEndpointSkipHealthCheckByID, getChannels, createChannel, updateChannel, setChannelNonStreamRoute, setChannelPrivacyLevel, deleteChannel, getGroupsRaw, activateGroup, pauseGroup, resumeGroup, getNextAvailableChannel, getConfig, getSettingsByCategory, isInterChannelFailoverEnabled, isWailsEnvironment, subscribeToEvent, getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, createClaudeCredentialGroup, updateClaudeCredentialGroupByID, deleteClaudeCredentialGroupByID, setDefaultClaudeCredentialGroup } from '@/services/wails/index.js';
-import { hasClaudeCredential, getClaudeCredentialGroups, getDefaultClaudeCredentialGroup, buildClaudeEndpointCopyOptions, normalizeBool, parseSettingsBool, buildSuspendedEndpointKey } from './model.js';
+import { createChannelSetupCommitter } from '../shared/channelSetup.js';
+import { getEndpointStorageStatus, getEndpointRecords, createEndpointRecord, updateEndpointRecordByID, deleteEndpointRecordByID, activateEndpointRecordByID, setEndpointFailoverEnabledByID, setEndpointSkipHealthCheckByID, getChannels, createChannel, updateChannel, deleteChannel, getGroupsRaw, activateGroup, pauseGroup, resumeGroup, getNextAvailableChannel, getConfig, getSettingsByCategory, isInterChannelFailoverEnabled, isWailsEnvironment, subscribeToEvent, getSuspendedRequestsCount, getSuspendedEndpointCounts, getManualRetryRequestsCount, getManualRetryChannelCounts, createClaudeCredentialGroup, updateClaudeCredentialGroupByID, deleteClaudeCredentialGroupByID, setDefaultClaudeCredentialGroup } from '@/services/wails/index.js';
+import { hasClaudeCredential, getClaudeCredentialGroups, getDefaultClaudeCredentialGroup, buildClaudeEndpointCopyOptions, parseSettingsBool, buildSuspendedEndpointKey } from './model.js';
 import { DeleteChannelConfirmDialog } from './components/DeleteChannelConfirmDialog.jsx';
 import { DeleteCredentialGroupConfirmDialog } from './components/DeleteCredentialGroupConfirmDialog.jsx';
 import { PauseActiveChannelConfirmDialog } from './components/PauseActiveChannelConfirmDialog.jsx';
@@ -30,7 +31,7 @@ import { ChannelCard } from './components/ChannelCard.jsx';
 // Channels 页面
 // ============================================
 
-const ChannelsPage = ({ clientVersion }) => {
+const ChannelsPage = ({ clientVersion, onViewRequests }) => {
   const toast = useToast();
 
   // 存储模式状态
@@ -87,7 +88,8 @@ const ChannelsPage = ({ clientVersion }) => {
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormLoading, setCredentialGroupFormLoading] = useState(false);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
-  const [initialSetupChannelName, setInitialSetupChannelName] = useState('');
+  const [channelSetupDraft, setChannelSetupDraft] = useState(null);
+  const [commitChannelSetup] = useState(createChannelSetupCommitter);
 	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
   // 删除确认状态
@@ -263,6 +265,16 @@ const ChannelsPage = ({ clientVersion }) => {
       setChannelActionLoading(false);
     }
   }, [loadGroups, loadStorageStatus]);
+
+  const handleCheckEndpointHealth = async (endpoint) => {
+    setChannelActionLoading(true);
+    try {
+      await checkPoolEndpoint('claude', endpoint.id);
+      await Promise.all([loadStorageStatus({ throwOnError: true }), loadGroups(), loadChannelsMeta()]);
+    } finally {
+      setChannelActionLoading(false);
+    }
+  };
 
   const handleSetGroupEndpointFailover = useCallback(async (targetEndpoints = [], enabled) => {
     const targets = selectPersistedEndpoints(targetEndpoints);
@@ -488,11 +500,15 @@ const ChannelsPage = ({ clientVersion }) => {
 		(group) => Number(group.id) === Number(credentialGroupDetailTarget.group?.id)
 	  ) || credentialGroupDetailTarget.group
 	} : null;
-  const detailChannelName = detailTarget?.channel || detailTarget?.group || '';
+  const currentDetailTarget = detailTarget ? displayEndpoints.find((endpoint) => (
+    detailTarget.id ? Number(endpoint.id) === Number(detailTarget.id) : endpoint.name === detailTarget.name &&
+      (endpoint.channel || endpoint.group) === (detailTarget.channel || detailTarget.group)
+  )) || detailTarget : null;
+  const detailChannelName = currentDetailTarget?.channel || currentDetailTarget?.group || '';
   const detailChannelMeta = channelsMeta.find((item) => item?.name === detailChannelName) || null;
   const detailCredentialGroup = getCredentialGroupForEndpoint(
     credentialGroupsByChannel[detailChannelName] || [],
-    detailTarget
+    currentDetailTarget
   );
 
   const groupInfoMap = useMemo(() => {
@@ -504,10 +520,8 @@ const ChannelsPage = ({ clientVersion }) => {
   }, [groups]);
 
   const isEndpointInHealthScope = useCallback((ep) => {
-    const channel = ep?.group || ep?.channel || ep?.name || 'default';
-    const group = getCredentialGroupForEndpoint(credentialGroupsByChannel[channel] || [], ep);
-    return normalizeBool(ep?.failoverEnabled, true) && group?.enabled !== false;
-  }, [credentialGroupsByChannel]);
+    return (ep?.health_state || ep?.healthState) !== 'disabled';
+  }, []);
 
   const scopedDisplayEndpoints = useMemo(() => {
     return (displayEndpoints || []).map((ep) => ({
@@ -559,6 +573,7 @@ const ChannelsPage = ({ clientVersion }) => {
       });
 
       return {
+        id: meta?.id,
         name,
         website: meta?.website || '',
         channelPriority: meta?.priority ?? null,
@@ -613,41 +628,19 @@ const ChannelsPage = ({ clientVersion }) => {
   }, []);
 
   const handleCreateChannel = useCallback(async (payload) => {
-    let channelCreated = false;
-    try {
-      setChannelFormLoading(true);
-      setCreateChannelError('');
-
-      await createChannel(payload);
-      channelCreated = true;
-
-      const refreshedChannels = await loadChannelsMeta({ throwOnError: true });
-      const createdChannel = refreshedChannels.find((channel) => channel?.name === payload.name) || null;
-      if (!createdChannel) {
-        throw new Error('渠道已创建，但刷新后未找到该渠道，请刷新列表后继续配置');
-      }
-      setShowCreateChannel(false);
-      const defaultCredentialGroup = getDefaultClaudeCredentialGroup(createdChannel);
-      setInitialSetupChannelName(createdChannel.name);
-      setCredentialGroupFormMode(defaultCredentialGroup ? 'edit' : 'create');
-      setCredentialGroupFormChannel(createdChannel.name);
-      setEditingCredentialGroup(defaultCredentialGroup);
-      setCredentialGroupFormError('');
-      setShowCredentialGroupForm(true);
-    } catch (err) {
-      console.error('创建渠道失败:', err);
-      const message = getErrorMessage(err, '创建渠道失败');
-      if (channelCreated) {
-        setShowCreateChannel(false);
-        setCreateChannelError('');
-        setActionError(`渠道已创建，但刷新列表失败，请关闭此提示后点击页面刷新，再继续配置凭证分组和端点。\n${message}`);
-      } else {
-        setCreateChannelError(message);
-      }
-    } finally {
-      setChannelFormLoading(false);
+    if (channelsMeta.some((channel) => channel.name === payload.name)) {
+      setCreateChannelError('渠道名称已存在');
+      return;
     }
-  }, [loadChannelsMeta]);
+    setCreateChannelError('');
+    setChannelSetupDraft({ channel: payload });
+    setShowCreateChannel(false);
+    setCredentialGroupFormMode('create');
+    setCredentialGroupFormChannel(payload.name);
+    setEditingCredentialGroup({ name: '默认分组', isDefault: true });
+    setCredentialGroupFormError('');
+    setShowCredentialGroupForm(true);
+  }, [channelsMeta]);
 
   const handleOpenEditChannel = useCallback((channelName) => {
     const name = (channelName || '').trim();
@@ -659,48 +652,33 @@ const ChannelsPage = ({ clientVersion }) => {
       website: meta?.website || '',
       priority: meta?.priority ?? 0,
       modelMapping: meta?.modelMapping || {},
-      nonStreamRoute: meta?.nonStreamRoute || null,
-      privacyLevel: meta?.privacyLevel || ''
+      nonStreamRoute: meta?.nonStreamRoute || null
     });
     setShowEditChannel(true);
   }, [channelsMeta]);
 
   const handleUpdateChannel = useCallback(async (payload) => {
-    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
     try {
       setChannelFormLoading(true);
       setEditChannelError('');
 
-      await updateChannel(channelPayload);
-      if (editingChannel?.id > 0 && 'privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
-        await setChannelPrivacyLevel('claude', editingChannel.id, privacyLevel);
-      }
-      // 非流改道单独保存：只在确有变更时提交，避免仅改官网也重写路由配置
-      let routeWarnings = [];
-      if (editingChannel?.id > 0 && 'nonStreamRoute' in payload
-        && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
-        routeWarnings = (await setChannelNonStreamRoute('claude', editingChannel.id, nonStreamRoute)).warnings;
-      }
-
+      await updateChannel(payload);
       setShowEditChannel(false);
       setEditingChannel(null);
       await loadChannelsMeta();
       await loadGroups();
-      if (routeWarnings.length > 0) {
-        toast.warning(routeWarnings, '非流改道已保存，请留意');
-      }
     } catch (err) {
       console.error('更新渠道失败:', err);
       setEditChannelError(getErrorMessage(err, '更新渠道失败'));
     } finally {
       setChannelFormLoading(false);
     }
-  }, [editingChannel, loadChannelsMeta, loadGroups, toast]);
+  }, [loadChannelsMeta, loadGroups]);
 
   const openCreateCredentialGroupForm = useCallback((channelName) => {
     const name = String(channelName || '').trim();
     if (!name) return;
-    setInitialSetupChannelName('');
+    setChannelSetupDraft(null);
     setCredentialGroupFormMode('create');
     setCredentialGroupFormChannel(name);
     setEditingCredentialGroup(null);
@@ -711,7 +689,7 @@ const ChannelsPage = ({ clientVersion }) => {
   const openEditCredentialGroupForm = useCallback((channelName, group) => {
     const name = String(channelName || group?.channel || '').trim();
     if (!name || !group) return;
-    setInitialSetupChannelName('');
+    setChannelSetupDraft(null);
     setCredentialGroupFormMode('edit');
     setCredentialGroupFormChannel(name);
     setEditingCredentialGroup(group);
@@ -724,13 +702,26 @@ const ChannelsPage = ({ clientVersion }) => {
     setCredentialGroupFormChannel('');
     setEditingCredentialGroup(null);
     setCredentialGroupFormError('');
-    setInitialSetupChannelName('');
+    setChannelSetupDraft(null);
   }, []);
 
   const handleSaveCredentialGroup = useCallback(async (payload) => {
     const { copyEndpoints = [], ...groupPayload } = payload || {};
-    const shouldContinueInitialSetup = initialSetupChannelName === credentialGroupFormChannel;
-    const targetChannelName = credentialGroupFormChannel;
+    if (channelSetupDraft) {
+      const draftGroup = { ...groupPayload, id: -1, isDefault: true, modelPolicy: 'inherit' };
+      setChannelSetupDraft({ ...channelSetupDraft, group: draftGroup });
+      setShowCredentialGroupForm(false);
+      setCredentialGroupFormChannel('');
+      setEditingCredentialGroup(null);
+      setCredentialGroupFormError('');
+      // Draft groups also support client passthrough, which has no stored credential.
+      setEditingEndpoint(null);
+      setDefaultChannel(channelSetupDraft.channel.name);
+      setDefaultCredentialGroupId(draftGroup.id);
+      setLockChannel(true);
+      setShowForm(true);
+      return;
+    }
     let savedGroup = null;
     try {
       setCredentialGroupFormLoading(true);
@@ -758,9 +749,6 @@ const ChannelsPage = ({ clientVersion }) => {
     }
 
     closeCredentialGroupForm();
-    if (shouldContinueInitialSetup && savedGroup?.id && copyEndpoints.length === 0) {
-      openCreateEndpointForm(targetChannelName, savedGroup);
-    }
 
     try {
       await loadStorageStatus({ throwOnError: true });
@@ -775,11 +763,10 @@ const ChannelsPage = ({ clientVersion }) => {
     credentialGroupFormChannel,
     credentialGroupFormMode,
     editingCredentialGroup,
-    initialSetupChannelName,
+    channelSetupDraft,
     loadChannelsMeta,
     loadGroups,
-    loadStorageStatus,
-    openCreateEndpointForm
+    loadStorageStatus
   ]);
 
   const handleSetDefaultCredentialGroup = useCallback(async (_channelName, group) => {
@@ -845,9 +832,28 @@ const ChannelsPage = ({ clientVersion }) => {
 
   // 保存端点
   const handleSave = async (formData) => {
+    if (formLoading) return;
     setFormLoading(true);
     try {
-      if (editingEndpoint) {
+      if (channelSetupDraft) {
+        const { channel, group } = channelSetupDraft;
+        const groupPayload = { ...group };
+        delete groupPayload.id;
+        await commitChannelSetup({
+          create: () => createChannel(channel),
+          find: async () => (await getChannels()).find((item) => item.name === channel.name),
+          saveGroup: async (createdChannel) => {
+            const defaultGroup = getDefaultClaudeCredentialGroup(createdChannel);
+            return defaultGroup
+              ? updateClaudeCredentialGroupByID(defaultGroup.id, groupPayload)
+              : createClaudeCredentialGroup({ ...groupPayload, channel: channel.name });
+          },
+          saveEndpoint: (_channel, savedGroup) => createEndpointRecord({
+            ...formData, channel: channel.name, credentialGroupId: savedGroup.id
+          }),
+          remove: () => deleteChannel(channel.name, true)
+        });
+      } else if (editingEndpoint) {
         // 编辑模式
         await updateEndpointRecordByID(editingEndpoint.id, formData);
       } else {
@@ -859,9 +865,15 @@ const ChannelsPage = ({ clientVersion }) => {
       setDefaultChannel('');
       setDefaultCredentialGroupId(0);
       setLockChannel(false);
-      // 刷新列表
-      await loadStorageStatus();
-      await loadGroups();
+      const savedChannelSetup = Boolean(channelSetupDraft);
+      setChannelSetupDraft(null);
+      try {
+        await loadStorageStatus({ throwOnError: true });
+        await loadChannelsMeta({ throwOnError: true });
+        await loadGroups({ throwOnError: true });
+      } catch (err) {
+        setActionError(`${savedChannelSetup ? '渠道已创建' : '端点已保存'}，但列表刷新失败，请点击页面刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`);
+      }
     } catch (err) {
       console.error('保存失败:', err);
       throw err;
@@ -910,9 +922,9 @@ const ChannelsPage = ({ clientVersion }) => {
   }
 
   return (
-    <ModalPortalScope><div className="animate-fade-in">
+    <ModalPortalScope><div className="flex min-h-0 flex-1 flex-col animate-fade-in">
       {/* 页面标题 */}
-      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+      <div className="mb-3 flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
             <ClaudeIcon className="h-5 w-5" />
@@ -925,34 +937,24 @@ const ChannelsPage = ({ clientVersion }) => {
               )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} />
-          {/* 刷新按钮 */}
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={RefreshCw}
-            onClick={handleRefresh}
-            loading={loading || batchCheckLoading}
-          >
-            刷新
-          </Button>
 
-          {/* 新建渠道按钮 (SQLite 模式) */}
-          {isSqliteMode && (
-            <Button
-              icon={Plus}
-              onClick={() => {
-                setShowCreateChannel(true);
-              }}
-            >
-              添加渠道
-            </Button>
-          )}
-        </div>
       </div>
 
-      <PoolWorkspace provider="claude" refreshToken={headerLastUpdate}>
+      <DispatchWorkspace provider="claude" refreshToken={headerLastUpdate} onViewRequests={onViewRequests}
+        resourcesBusy={loading || batchCheckLoading}
+        onRefreshResources={handleRefresh}
+        resourceActions={<>
+          <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} className="dispatch-resource-action" disabled={loading || batchCheckLoading} />
+          {isSqliteMode && channelSections.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || batchCheckLoading} onClick={() => setShowCreateChannel(true)}>添加渠道</Button>}
+        </>} endpoints={displayEndpoints.map((endpoint) => {
+        const channel = channelsMeta.find((channel) => channel.name === endpoint.channel);
+        const group = getClaudeCredentialGroups(channel).find((group) => Number(group.id) === Number(endpoint.credentialGroupId)) || getDefaultClaudeCredentialGroup(channel);
+        return {
+          channelId: channel?.id, groupId: group?.id || 0,
+          endpointId: endpoint.credentialGroupId > 0 ? `${endpoint.channel}::g${endpoint.credentialGroupId}::${endpoint.name}` : buildSuspendedEndpointKey(endpoint),
+          name: endpoint.name, address: endpoint.url,
+        };
+      })} onError={(message) => toast.error(message)} onSuccess={(message) => toast.success(message)}>
       {/* 渠道分块列表 */}
       {channelSections.length === 0 ? (
         <div className="bg-white rounded-2xl border border-slate-200/60 shadow-sm p-10 text-center text-slate-500">
@@ -974,10 +976,10 @@ const ChannelsPage = ({ clientVersion }) => {
           )}
         </div>
        ) : (
-        <div aria-label="Claude 渠道列表" className="channel-resource-grid">
+        <ChannelResourceGrid provider="claude" label="Claude 渠道列表">
           {channelSections.map((section) => (
             <ChannelCard
-              key={section.name}
+              key={section.id ? `channel:${section.id}` : `legacy:${section.name}`}
               channelName={section.name}
               endpoints={section.endpoints}
               channelWebsite={section.website}
@@ -1000,6 +1002,7 @@ const ChannelsPage = ({ clientVersion }) => {
               onSetGroupEndpointFailover={isSqliteMode ? handleSetGroupEndpointFailover : undefined}
               onSetGroupEndpointSkipHealthCheck={isSqliteMode ? handleSetGroupEndpointSkipHealthCheck : undefined}
               onToggleEndpointSkipHealthCheck={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
+              onHealthEndpoint={handleCheckEndpointHealth}
               onActivate={async (channelName) => {
                 if (channelFailoverEnabled && section.groupInfo?.paused) {
                   setActionError(`激活失败：渠道「${channelName}」已暂停，无法激活。\n请先点击「恢复」后再激活该渠道。`);
@@ -1081,10 +1084,10 @@ const ChannelsPage = ({ clientVersion }) => {
               }}
             />
           ))}
-        </div>
+        </ChannelResourceGrid>
       )}
 
-      </PoolWorkspace>
+      </DispatchWorkspace>
 
       {/* 端点表单弹窗 */}
       {showForm && (
@@ -1092,10 +1095,14 @@ const ChannelsPage = ({ clientVersion }) => {
           endpoint={editingEndpoint}
           channels={channelOptions}
           existingEndpoints={isSqliteMode ? storageEndpoints : []}
-          credentialGroupsByChannel={credentialGroupsByChannel}
+          credentialGroupsByChannel={channelSetupDraft?.group ? {
+            ...credentialGroupsByChannel,
+            [channelSetupDraft.channel.name]: [channelSetupDraft.group]
+          } : credentialGroupsByChannel}
           defaultChannel={defaultChannel}
           defaultCredentialGroupId={defaultCredentialGroupId}
           lockChannel={lockChannel}
+          initialSetup={Boolean(channelSetupDraft)}
           onSave={handleSave}
           onCancel={() => {
             setShowForm(false);
@@ -1103,6 +1110,7 @@ const ChannelsPage = ({ clientVersion }) => {
             setDefaultChannel('');
             setDefaultCredentialGroupId(0);
             setLockChannel(false);
+            setChannelSetupDraft(null);
           }}
           loading={formLoading}
         />
@@ -1141,7 +1149,7 @@ const ChannelsPage = ({ clientVersion }) => {
           mode={credentialGroupFormMode}
           channelName={credentialGroupFormChannel}
           group={editingCredentialGroup}
-          continueToEndpoint={initialSetupChannelName === credentialGroupFormChannel}
+          continueToEndpoint={Boolean(channelSetupDraft)}
           loading={credentialGroupFormLoading}
           serverError={credentialGroupFormError}
           endpointCopyOptions={credentialGroupEndpointCopyOptions}
@@ -1260,8 +1268,10 @@ const ChannelsPage = ({ clientVersion }) => {
 
       <EndpointDetailModal
         onRestore={async (ep) => { await handleToggleEndpointFailover(ep, true); closeEndpointDetail(); }}
-        onHealth={async (ep) => { try { await checkPoolEndpoint('claude', ep.id); closeEndpointDetail(); await fetchData(); } catch (error) { setActionError(getErrorMessage(error)); } }}
-        endpoint={detailTarget}
+        onHealth={handleCheckEndpointHealth}
+        onToggleHealth={isSqliteMode ? handleToggleEndpointSkipHealthCheck : undefined}
+        busy={channelActionLoading}
+        endpoint={currentDetailTarget}
         credentialGroup={detailCredentialGroup}
         isOpen={detailOpen}
         isSqliteMode={isSqliteMode}

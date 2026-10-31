@@ -111,7 +111,7 @@ func (h *Handler) tryEndpointCycleForStage(
 			return cycleResult{routeChanged: true}
 		}
 		channel := h.manager.GetActiveChannel()
-		// 按本次尝试的目标渠道的隐私级别挑选正文，再做模型改写（只动顶层 model 字段）
+		// 使用本请求统一的隐私正文，再做模型改写（只动顶层 model 字段）
 		targetChannel := channel
 		if routed {
 			targetChannel = stage.channel
@@ -240,7 +240,9 @@ func (h *Handler) tryEndpointCycleForStage(
 		if resp != nil {
 			status = resp.StatusCode
 			if status == http.StatusUnauthorized && endpoint.AuthMode == subscription.ClientPassthrough && h.subscriptions != nil {
-				h.subscriptions.RejectCredential(r.Context())
+				if resp.Request != nil {
+					h.subscriptions.RejectCredential(resp.Request.Context())
+				}
 			}
 			errBody, errSummary = h.readErrorBody(resp)
 			errBody = []byte(subscription.Redact(r.Context(), string(errBody)))
@@ -356,7 +358,7 @@ func (h *Handler) tryEndpointCycleForStage(
 		}
 
 		// 上游明确给了 retry after 提示：先等够再发下一次，无论下一跳是换端点还是新一轮循环。
-		if wait := retryAfterHint(resp, reason); wait > 0 && subscription.FromContext(r.Context()) == nil && (!routed || routeFailure.Scope != routing.ScopeModel) {
+		if wait := retryAfterHint(resp, reason); wait > 0 && h.manager.PoolRuntime() == nil && subscription.FromContext(r.Context()) == nil && (!routed || routeFailure.Scope != routing.ScopeModel) {
 			h.logger.Info("[Codex 遵守上游 retry-after]",
 				"provider", "codex",
 				"request_id", requestID,
@@ -460,6 +462,9 @@ func (h *Handler) forwardWithRetry(
 	var lastErr error
 	attempts := 0
 
+	if h.manager.PoolRuntime() != nil {
+		maxAttempts = 1
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			delay := computeBackoff(attempt-1, retryCfg.BaseDelay, retryCfg.MaxDelay, retryCfg.Multiplier)
@@ -478,10 +483,12 @@ func (h *Handler) forwardWithRetry(
 
 		sendRequest, lease, admitErr := h.admitSubscription(r, endpoint, body)
 		if admitErr != nil {
+			routing.PoolAttemptFromContext(sendRequest.Context()).Finish(false)
 			return lastResp, admitErr, attempts
 		}
 		if err := routing.BudgetFromContext(r.Context()).Begin(r.Context()); err != nil {
 			lease.Finish(0, nil, nil, false)
+			routing.PoolAttemptFromContext(sendRequest.Context()).Finish(false)
 			return lastResp, err, attempts
 		}
 		if lastResp != nil {

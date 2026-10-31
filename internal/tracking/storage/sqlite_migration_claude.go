@@ -14,7 +14,8 @@ import (
 func (s *SQLiteAdapter) ensureClaudeCredentialGroupsSchema(ctx context.Context) error {
 	const ddl = `
 CREATE TABLE IF NOT EXISTS claude_credential_groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
     name TEXT NOT NULL,
     token TEXT NOT NULL DEFAULT '',
@@ -67,6 +68,7 @@ END;`
 		column string
 		ddl    string
 	}{
+		{"enabled", `ALTER TABLE claude_credential_groups ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`},
 		{"daily_cost_limit_usd", `ALTER TABLE claude_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0`},
 		{"model_policy", `ALTER TABLE claude_credential_groups ADD COLUMN model_policy TEXT NOT NULL DEFAULT 'inherit'`},
 		{"model_mapping", `ALTER TABLE claude_credential_groups ADD COLUMN model_mapping TEXT NOT NULL DEFAULT '{}'`},

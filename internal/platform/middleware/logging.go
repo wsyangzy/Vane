@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/tracking"
@@ -13,16 +14,23 @@ import (
 
 // LoggingMiddleware provides request/response logging
 type LoggingMiddleware struct {
-	logger               *slog.Logger
+	logger               atomic.Pointer[slog.Logger]
 	monitoringMiddleware *MonitoringMiddleware
 	usageTracker         *tracking.UsageTracker
 }
 
 // NewLoggingMiddleware creates a new logging middleware
 func NewLoggingMiddleware(logger *slog.Logger) *LoggingMiddleware {
-	return &LoggingMiddleware{
-		logger: logger,
+	middleware := &LoggingMiddleware{}
+	middleware.UpdateLogger(logger)
+	return middleware
+}
+
+func (lm *LoggingMiddleware) UpdateLogger(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
 	}
+	lm.logger.Store(logger)
 }
 
 // SetMonitoringMiddleware sets the monitoring middleware reference
@@ -96,7 +104,7 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 		}
 
 		// Store request info (request start logging handled by lifecycle manager)
-		lm.logger.Debug(fmt.Sprintf("📝 [请求接收] [%s] %s %s", connID, r.Method, r.URL.Path),
+		lm.logger.Load().Debug(fmt.Sprintf("📝 [请求接收] [%s] %s %s", connID, r.Method, r.URL.Path),
 			"method", r.Method,
 			"path", r.URL.Path,
 			"client_ip", clientIP,
@@ -130,7 +138,7 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 
 		// Log response details (completion logging handled by lifecycle manager)
 		statusEmoji := getStatusEmoji(finalStatusCode)
-		lm.logger.Debug(fmt.Sprintf("%s [请求详情] [%s] %s %s → %d (%s)", statusEmoji, connID, r.Method, r.URL.Path, finalStatusCode, formatDuration(duration)),
+		lm.logger.Load().Debug(fmt.Sprintf("%s [请求详情] [%s] %s %s → %d (%s)", statusEmoji, connID, r.Method, r.URL.Path, finalStatusCode, formatDuration(duration)),
 			"method", r.Method,
 			"path", r.URL.Path,
 			"endpoint", selectedEndpoint,
@@ -143,7 +151,7 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 
 		// Log slow requests as warnings
 		if duration > 10*time.Second {
-			lm.logger.Warn(fmt.Sprintf("🐌 Slow request detected [%s]", connID),
+			lm.logger.Load().Warn(fmt.Sprintf("🐌 Slow request detected [%s]", connID),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"endpoint", selectedEndpoint,
@@ -162,7 +170,7 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 				emoji = "❌"
 			}
 
-			lm.logger.Log(r.Context(), level, fmt.Sprintf("%s Error details", emoji),
+			lm.logger.Load().Log(r.Context(), level, fmt.Sprintf("%s Error details", emoji),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"endpoint", selectedEndpoint,

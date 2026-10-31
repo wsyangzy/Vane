@@ -5,6 +5,8 @@ import { readFileSync } from 'node:fs';
 import {
   buildInitialBillingRuleRows,
   createDefaultBillingRuleRow,
+  createBillingRuleRow,
+  getBillingRuleEffectiveMultipliers,
   parseBillingRuleRows
 } from './billingRuleRows.js';
 
@@ -14,8 +16,6 @@ test('组合规则用 Long context 开关替代上下文下拉选择', () => {
   assert.match(editorSource, /role="switch"/);
   assert.match(editorSource, /createBillingRuleRow\(\{ context: 'normal' \}\)/);
   assert.match(editorSource, /MultiplierSettingsModal/);
-  assert.match(editorSource, /defaultRule && <span[^>]*>默认规则<\/span>/);
-  assert.match(editorSource, /if \(isCatchAll\(row\)\) return 'Standard'/);
   assert.doesNotMatch(editorSource, /CONTEXT_OPTIONS/);
   assert.doesNotMatch(editorSource, /const RuleFields/);
 });
@@ -80,4 +80,85 @@ test('Long context 摘要换行但倍率编辑控件仍保持右对齐', () => {
 test('组合规则倍率摘要不使用浏览器原生悬浮提示', () => {
   assert.doesNotMatch(editorSource, /title=\{summary\}/);
   assert.doesNotMatch(editorSource, /title=\{longSummary\}/);
+});
+
+test('未指定关系的已有例外规则与新规则默认叠加，旧兜底不重复叠加', () => {
+  const rows = buildInitialBillingRuleRows([
+    { mode: 'multiplier', cost_multiplier: 1.5 },
+    { model: 'gpt-6.1-sol', service_tier: 'fast', context: 'normal', mode: 'multiplier', cost_multiplier: 1.25 },
+    { model: 'gpt-6.1-sol', service_tier: 'fast', context: 'long', mode: 'fixed', input_price: 8, group_multiplier_mode: 'override' }
+  ]);
+  assert.equal(rows[0].groupMultiplierMode, 'override');
+  assert.equal(rows[1].groupMultiplierMode, 'inherit');
+  assert.equal(rows[1].longContextGroupMultiplierMode, 'inherit');
+  const saved = parseBillingRuleRows(rows).payload;
+  assert.deepEqual(saved.map((rule) => rule.groupMultiplierMode), ['override', 'inherit', 'inherit']);
+  const fresh = createDefaultBillingRuleRow();
+  assert.equal(fresh.groupMultiplierMode, 'inherit');
+  assert.equal(fresh.costMultiplier, '1');
+  const fast = createBillingRuleRow({ model: 'gpt-6.1-sol', serviceTier: 'fast', costMultiplier: '5/4' });
+  assert.equal(fast.groupMultiplierMode, 'inherit');
+});
+
+test('例外规则的预览和保存始终叠加分组倍率，包括旧独立标记', () => {
+  const row = createBillingRuleRow({ model: 'gpt-6.1-sol', serviceTier: 'fast', costMultiplier: '5/4', inputCostMultiplier: '1/2' });
+  const group = { costMultiplier: '3/2', inputCostMultiplier: '4/3' };
+  let result = getBillingRuleEffectiveMultipliers(row, group);
+  assert.equal(result.total, 1.875);
+  assert.equal(result.inputCostMultiplier, 2 / 3);
+  row.groupMultiplierMode = 'override';
+  result = getBillingRuleEffectiveMultipliers(row, group);
+  assert.equal(result.total, 1.875);
+  assert.equal(result.inputCostMultiplier, 2 / 3);
+  const fallback = createDefaultBillingRuleRow();
+  assert.equal(parseBillingRuleRows([fallback, row]).payload[1].groupMultiplierMode, 'inherit');
+  row.mode = 'fixed';
+  row.groupMultiplierMode = 'inherit';
+  result = getBillingRuleEffectiveMultipliers(row, group);
+  assert.equal(result.total, 1.5);
+  assert.equal(result.inputCostMultiplier, 4 / 3);
+  row.longContextMode = 'multiplier';
+  row.longContextGroupMultiplierMode = 'override';
+  row.longContextCostMultiplier = '2';
+  row.longContextEnabled = true;
+  assert.equal(getBillingRuleEffectiveMultipliers(row, group, true).total, 3);
+  assert.equal(parseBillingRuleRows([fallback, row]).payload[2].groupMultiplierMode, 'inherit');
+});
+
+test('隐藏的旧默认倍率与分组倍率一致时合并为一次基础倍率，修改基础倍率后仍只乘一次', () => {
+  const group = { costMultiplier: '3/2' };
+  const rows = buildInitialBillingRuleRows([
+    { mode: 'multiplier', cost_multiplier: 1.5 },
+    { model: 'gpt-6.1-sol', service_tier: 'fast', context: 'normal', mode: 'multiplier', cost_multiplier: 1.25 }
+  ], group);
+  const saved = parseBillingRuleRows(rows).payload;
+  assert.equal(saved[0].costMultiplier, 1);
+  assert.equal(saved[0].groupMultiplierMode, 'inherit');
+  assert.equal(getBillingRuleEffectiveMultipliers(rows[0], group).total, 1.5);
+  assert.equal(getBillingRuleEffectiveMultipliers(rows[1], group).total, 1.875);
+  assert.equal(getBillingRuleEffectiveMultipliers(rows[0], { costMultiplier: 2 }).total, 2);
+  assert.equal(getBillingRuleEffectiveMultipliers(rows[1], { costMultiplier: 2 }).total, 2.5);
+});
+
+test('不同于分组基础倍率的旧默认配置保留原值', () => {
+  for (const legacy of [
+    { mode: 'multiplier', costMultiplier: 1.8 },
+    { mode: 'fixed', inputPrice: 2, outputPrice: 7 }
+  ]) {
+    const rows = buildInitialBillingRuleRows([legacy], { costMultiplier: 1.5 });
+    const saved = parseBillingRuleRows(rows).payload[0];
+    assert.equal(saved.groupMultiplierMode, 'override');
+    assert.equal(saved.mode, legacy.mode);
+    if (legacy.mode === 'fixed') {
+      assert.equal(saved.inputPrice, 2);
+      assert.equal(saved.outputPrice, 7);
+    } else assert.equal(saved.costMultiplier, 1.8);
+  }
+});
+
+test('只有基础倍率时可以保存组合模式，空白附加规则不能生成另一条默认规则', () => {
+  const base = createDefaultBillingRuleRow();
+  assert.equal(parseBillingRuleRows([base]).payload.length, 1);
+  const blank = createBillingRuleRow({ context: 'normal' });
+  assert.match(parseBillingRuleRows([base, blank]).error, /指定模型或服务档位/);
 });

@@ -1,0 +1,105 @@
+/* Visible checkboxes and custom marks share one appearance; hidden inputs also
+   power switches, so only their explicitly marked square indicators are styled. */
+input[type="checkbox"]:not(.sr-only),
+.checkbox-indicator {
+  box-sizing: border-box;
+  inline-size: 16px;
+  block-size: 16px;
+  flex-shrink: 0;
+  border: 1px solid var(--color-slate-300);
+  border-radius: 5px;
+  background-color: var(--color-white);
+  color: var(--color-white);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+  transition: border-color var(--duration-quick) ease,
+    background-color var(--duration-quick) ease,
+    box-shadow var(--duration-quick) ease;
+}
+
+input[type="checkbox"]:not(.sr-only) {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-block;
+  margin: 0;
+  padding: 0;
+  vertical-align: middle;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+  cursor: pointer;
+}
+
+.checkbox-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.checkbox-indicator > svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3;
+}
+
+label:hover input[type="checkbox"]:not(.sr-only):not(:disabled):not(:checked):not(:indeterminate),
+input[type="checkbox"]:not(.sr-only):not(:disabled):not(:checked):not(:indeterminate):hover,
+label:hover input[type="checkbox"]:not(:disabled):not(:checked):not(:indeterminate) + .checkbox-indicator {
+  border-color: var(--color-indigo-400);
+  background-color: var(--color-indigo-50);
+}
+
+input[type="checkbox"]:not(.sr-only):is(:checked, :indeterminate),
+input[type="checkbox"]:is(:checked, :indeterminate) + .checkbox-indicator {
+  border-color: var(--color-indigo-600);
+  background-color: var(--color-indigo-600);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--color-indigo-600) 20%, transparent);
+}
+
+input[type="checkbox"]:not(.sr-only):checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E");
+}
+
+input[type="checkbox"]:not(.sr-only):indeterminate {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M5 12h14'/%3E%3C/svg%3E");
+}
+
+input[type="checkbox"]:not(.sr-only):focus-visible,
+input[type="checkbox"]:focus-visible + .checkbox-indicator {
+  outline: 2px solid var(--color-indigo-300);
+  outline-offset: 2px;
+}
+
+input[type="checkbox"]:not(.sr-only):disabled,
+input[type="checkbox"]:disabled + .checkbox-indicator {
+  border-color: var(--color-slate-200);
+  background-color: var(--color-slate-100);
+  color: var(--color-slate-400);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+input[type="checkbox"]:not(.sr-only):disabled:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E");
+}
+
+input[type="checkbox"]:not(.sr-only):disabled:indeterminate {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M5 12h14'/%3E%3C/svg%3E");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input[type="checkbox"]:not(.sr-only),
+  .checkbox-indicator { transition: none; }
+}
+
+@media (forced-colors: active) {
+  input[type="checkbox"]:not(.sr-only) {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none !important;
+    box-shadow: none;
+  }
+  .checkbox-indicator { border-color: CanvasText; background-color: Canvas; color: CanvasText; box-shadow: none; }
+  input[type="checkbox"]:is(:checked, :indeterminate) + .checkbox-indicator { border-color: Highlight; background-color: Highlight; color: HighlightText; }
+  input[type="checkbox"]:disabled + .checkbox-indicator { border-color: GrayText; background-color: Canvas; color: GrayText; }
+}

@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 )
 
 func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) (CodexCredentialGroupInfo, error) {
@@ -23,6 +25,8 @@ func (a *App) CreateCodexCredentialGroup(input CreateCodexCredentialGroupInput) 
 	defer cancel()
 
 	record := codexCredentialGroupInputToRecord(input.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.ModelPolicy, input.ModelMapping, input.SupportedModels, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules)
+	record.ServiceTierSource = input.ServiceTierSource
+	record.CacheWriteTTLPricing = input.CacheWriteTTLPricing
 	record.AuthMode = input.AuthMode
 	record.Subscription = input.Subscription
 	created, err := credentialGroupService.CreateGroup(ctx, record)
@@ -62,6 +66,8 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 		return CodexCredentialGroupInfo{}, fmt.Errorf("Codex 凭证分组不存在: %d", id)
 	}
 	record := codexCredentialGroupInputToRecord(existing.ChannelID, input.Name, input.ApiKey, input.IsDefault, input.DailyCostLimitUSD, input.ModelPolicy, input.ModelMapping, input.SupportedModels, input.CostMultiplier, input.InputCostMultiplier, input.OutputCostMultiplier, input.CacheCreationCostMultiplier, input.CacheReadCostMultiplier, input.LongContextCostMultiplier, input.LongContextInputCostMultiplier, input.LongContextOutputCostMultiplier, input.LongContextCacheCreationCostMultiplier, input.LongContextCacheReadCostMultiplier, input.DisableLongContextPricing, input.BillingOutputTokenSource, input.ModelMultipliers, input.BillingRules)
+	record.ServiceTierSource = input.ServiceTierSource
+	record.CacheWriteTTLPricing = input.CacheWriteTTLPricing
 	record.AuthMode = input.AuthMode
 	record.Subscription = input.Subscription
 	if record.ApiKey == "" && input.AuthMode != subscription.ClientPassthrough {
@@ -85,6 +91,9 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 	if err := credentialGroupService.UpdateGroup(ctx, id, record); err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("更新 Codex 凭证分组失败: %w", err)
 	}
+	if input.ApiKey != "" && input.ApiKey != existing.ApiKey {
+		a.repairPoolGroup("codex", id)
+	}
 	updated, err := credentialGroupService.GetByID(ctx, id)
 	if err != nil {
 		return CodexCredentialGroupInfo{}, fmt.Errorf("读取更新后的 Codex 凭证分组失败: %w", err)
@@ -101,10 +110,15 @@ func (a *App) UpdateCodexCredentialGroupByID(id int64, input UpdateCodexCredenti
 }
 
 func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
+	a.routingWriteMu.Lock()
+	defer a.routingWriteMu.Unlock()
 	a.ensureCodexProviderService()
 
 	a.mu.RLock()
 	credentialGroupService := a.codexCredentialGroupService
+	groupStore := a.codexCredentialGroupStore
+	channelStore := a.codexChannelStore
+	endpointStore := a.codexEndpointStore
 	logger := a.logger
 	a.mu.RUnlock()
 	if credentialGroupService == nil {
@@ -119,7 +133,10 @@ func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := credentialGroupService.DeleteGroup(ctx, id); err != nil {
+	if err := a.deleteCredentialGroup(ctx, "codex", id, func(tx *sql.Tx) error {
+		service := codexservice.NewCodexCredentialGroupService(groupStore.WithTx(tx), channelStore.WithTx(tx), endpointStore.WithTx(tx))
+		return service.DeleteGroup(ctx, id)
+	}); err != nil {
 		return fmt.Errorf("删除 Codex 凭证分组失败: %w", err)
 	}
 	if logger != nil {
@@ -130,7 +147,7 @@ func (a *App) DeleteCodexCredentialGroupByID(id int64) error {
 	}
 	a.emitCodexProviderUpdate()
 	go a.syncEndpointMultipliersToTracker(context.Background())
-	return nil
+	return a.refreshRoutingAfterCredentialGroupDeletion(ctx)
 }
 
 func (a *App) SetDefaultCodexCredentialGroup(id int64) error {

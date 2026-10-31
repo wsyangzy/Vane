@@ -111,15 +111,12 @@ export const useFilters = (initialFilters = {}) => {
     }
 
     // 处理渠道筛选
-    if (filters.channel && filters.channel !== 'all') {
+    if (filters.provider && filters.channel && filters.channel !== 'all') {
       queryParams.channel = filters.channel;
     }
 
-    // 处理其他筛选条件
-    if (filters.endpoint && filters.endpoint !== 'all') {
-      queryParams.endpoint = filters.endpoint;
-    }
-    if (filters.group && filters.group !== 'all') {
+    // 三级选择明确提供商、渠道与凭证分组，沿用后端的 group 字段。
+    if (queryParams.channel && filters.group && filters.group !== 'all') {
       queryParams.group = filters.group;
     }
     if (filters.provider) {

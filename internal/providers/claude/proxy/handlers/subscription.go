@@ -25,6 +25,11 @@ type subscriptionAdmissionKey struct{}
 // Admission precedes the execution budget: losing a recovery race is a local
 // skip, not an upstream attempt. The same lease reaches the actual send.
 func (f *Forwarder) admitSubscription(ctx context.Context, ep *endpoint.Endpoint, model string) (context.Context, *subscription.Lease, error) {
+	var poolErr error
+	ctx, poolErr = f.admitPool(ctx, ep, model)
+	if poolErr != nil {
+		return ctx, nil, poolErr
+	}
 	if ep.Config.AuthMode != subscription.ClientPassthrough {
 		return ctx, nil, nil
 	}
@@ -34,12 +39,17 @@ func (f *Forwarder) admitSubscription(ctx context.Context, ep *endpoint.Endpoint
 	}
 	lease, err := f.subscriptions.Acquire(ctx, request.Binding, model)
 	if err != nil {
+		routing.PoolAttemptFromContext(ctx).Finish(false)
+		finishProfileAttempt(ctx, err)
 		return ctx, nil, err
 	}
 	return context.WithValue(ctx, subscriptionAdmissionKey{}, lease), lease, nil
 }
 
 func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *routeRun {
+	if runtime := em.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
+		return nil
+	}
 	request := subscription.FromContext(r.Context())
 	if request == nil {
 		return nil
@@ -48,7 +58,7 @@ func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *
 	decision := routing.Decision{Kind: routing.KindSubscription, Mode: routing.ModeFallback}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	cfg := em.RouteConfig()
-	if cfg != nil && r.URL.Path == claudeGenerationPath {
+	if cfg != nil && em.PoolRuntime() == nil && r.URL.Path == claudeGenerationPath {
 		streaming := false
 		var object struct {
 			Stream bool `json:"stream"`
@@ -87,6 +97,37 @@ func planSubscriptionRoute(em *endpoint.Manager, r *http.Request, body []byte) *
 }
 
 func (f *Forwarder) subscriptionEligibility(ctx context.Context, ep *endpoint.Endpoint, model string) (bool, string) {
+	if routing.ProfileRequestFromContext(ctx) != nil {
+		if _, ok := profileCandidate(ctx, f.poolChannelID(ep), ep.Config.CredentialGroupID, endpoint.EndpointKeyForConfig(ep.Config), model); !ok {
+			return false, "profile_candidate_not_authorized"
+		}
+		if ep.Config.AuthMode != subscription.ClientPassthrough {
+			return true, ""
+		}
+		if f.subscriptions == nil {
+			return false, "subscription_state_unavailable"
+		}
+		binding, err := f.subscriptions.ProfileBinding(ctx, f.poolChannelID(ep), ep.Config.CredentialGroupID)
+		if err != nil {
+			return false, "managed_account_not_authorized"
+		}
+		return f.subscriptions.Eligible(ctx, binding, model)
+	}
+	if runtime := f.endpointManager.PoolRuntime(); runtime != nil {
+		if account, ok := runtime.Account(f.poolChannelID(ep), ep.Config.CredentialGroupID); !ok || !account.Enabled {
+			return false, "account_disabled"
+		}
+	}
+	if _, ok := routing.PoolCallerFromContext(ctx); ok && ep.Config.AuthMode == subscription.ClientPassthrough {
+		if f.subscriptions == nil {
+			return false, "subscription_state_unavailable"
+		}
+		b, err := f.subscriptions.PoolBinding(ctx, f.poolChannelID(ep), ep.Config.CredentialGroupID)
+		if err != nil {
+			return false, "managed_account_not_authorized"
+		}
+		return f.subscriptions.Eligible(ctx, b, model)
+	}
 	request := subscription.FromContext(ctx)
 	if request != nil && (f.subscriptions == nil || !f.subscriptions.Valid(ctx, request.Binding)) {
 		return false, "subscription_binding_changed"
@@ -139,9 +180,32 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 			return nil, err
 		}
 	}
+	if reservation := profileAttempt(ctx); reservation != nil {
+		if !f.profileCandidateCurrent(reservation.Candidate(), ep) {
+			lease.Finish(0, nil, nil, false)
+			plan := routing.ProfileRequestFromContext(ctx)
+			plan.Skip(reservation.Candidate(), "candidate_configuration_changed")
+			finishProfileAttempt(ctx, errors.New("candidate_configuration_changed"))
+			return nil, errors.New("candidate_configuration_changed")
+		}
+		if err := reservation.Begin(ctx); err != nil {
+			lease.Finish(0, nil, nil, false)
+			finishProfileAttempt(ctx, err)
+			return nil, err
+		}
+		if health, _ := ctx.Value(profileHealthKey{}).(*profileHealth); health != nil {
+			health.sent = true
+		}
+	}
 	resp, err := client.Do(dst)
 	if err != nil {
+		finishProfileAttempt(ctx, err)
 		lease.Finish(0, nil, nil, false)
+		if ctx.Err() == nil {
+			routing.PoolAttemptFromContext(ctx).Fail(claudeRouteFailure(err), time.Time{})
+		} else {
+			routing.PoolAttemptFromContext(ctx).Finish(false)
+		}
 		if request != nil {
 			return nil, errors.New("subscription_transport_failed")
 		}
@@ -150,6 +214,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 	if request != nil && resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		resp.Body.Close()
 		lease.Finish(resp.StatusCode, nil, nil, false)
+		finishProfileAttempt(ctx, errors.New("subscription_redirect_rejected"))
 		return nil, errors.New("subscription_redirect_rejected")
 	}
 	if request != nil && resp.StatusCode == http.StatusUnauthorized && ep.Config.AuthMode == subscription.ClientPassthrough {
@@ -171,7 +236,7 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 		resp.Header.Del("Content-Encoding")
 		resp.Header.Del("Content-Length")
 	}
-	if request != nil {
+	if request != nil || routing.PoolAttemptFromContext(ctx) != nil || profileAttempt(ctx) != nil {
 		// Existing response processors forward decoded bytes. Decode before
 		// recovery observation as well, including the count_tokens path.
 		if err := decodeSubscriptionResponse(resp); err != nil {
@@ -191,13 +256,15 @@ func (f *Forwarder) sendClaude(ctx context.Context, src, dst *http.Request, ep *
 			}
 		}
 	}
+	observeClaudePool(resp, ctx)
+	f.observeClaudeProfile(resp, ctx)
 	return resp, nil
 }
 
 // The auxiliary path uses the same caller, credentials and bounded route as
 // Messages. In particular a 401 must reach the client instead of an estimate.
 func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.ResponseWriter, r *http.Request, body []byte, connID string, lifecycle RequestLifecycleManager) {
-	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", body, lifecycle, privacyLevelsFor(h.endpointManager))
+	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", body, lifecycle)
 	if err != nil {
 		if policy := AsPrivacyPolicyError(err); policy != nil {
 			WritePrivacyPolicyErrorResponse(w, policy)
@@ -207,6 +274,16 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 		return
 	}
 	run := planSubscriptionRoute(h.endpointManager, r, body)
+	if run == nil {
+		if runtime := h.endpointManager.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
+			preference := routing.WithStatePreference(r.Context(), h.forwarder.states, claudeStateKeys(r.Context(), body), routing.ExplicitTurn(r.Context(), r.Header))
+			run = planClaudeProfile(runtime.ProfileRuntime(), h.endpointManager.RouteConfig(), r.WithContext(preference), bodies.result.Body, true, connID)
+		} else {
+			run = planClaudePool(h.endpointManager.PoolRuntime(), h.endpointManager.RouteConfig(), r, body, true)
+		}
+	}
+	ctx = profileRouteContext(ctx, run, r)
+	defer run.endProfile()
 	run.initBudget(h.config.Retry)
 	run.watchSubscription(ctx, h.forwarder)
 	if lifecycle != nil {
@@ -225,6 +302,8 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 				continue
 			}
 			defer admission.Finish(0, nil, nil, false)
+			defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
+			defer finishProfileAttempt(attemptCtx, nil)
 			if err := beginRouteAttempt(ctx, run); err != nil {
 				lastErr = err
 				break
@@ -252,6 +331,9 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 			}
 			h.forwarder.CopyHeaders(r, req, ep)
 			resp, err := h.forwarder.sendClaude(attemptCtx, r, req, ep, requestBody, client)
+			if err != nil {
+				finishProfileAttempt(attemptCtx, err)
+			}
 			if err == nil && resp != nil {
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 					data, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -273,14 +355,14 @@ func (h *CountTokensHandler) handleSubscription(ctx context.Context, w http.Resp
 			run.rememberResponse(err)
 			run.ledger.Fail(candidate, claudeRouteFailure(err))
 			run.publishSnapshot()
-			if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
+			if run.pool == nil && run.profile == nil && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
 				break
 			}
 			if ctx.Err() != nil || claudeRouteFailure(err).Terminal {
 				break
 			}
 		}
-		if GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized || ctx.Err() != nil || run.budget.Stopped() || claudeRouteFailure(lastErr).Terminal {
+		if run.pool == nil && run.profile == nil && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized || ctx.Err() != nil || run.budget.Stopped() || claudeRouteFailure(lastErr).Terminal {
 			break
 		}
 		if !run.advance() {

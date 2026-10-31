@@ -3,7 +3,6 @@ package privacy
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -127,7 +126,7 @@ func TestEngineRuleHitsNeverSerializeRawMatches(t *testing.T) {
 	}
 }
 
-func TestEngineUnsupportedPathWarnsOrFailsClosed(t *testing.T) {
+func TestEngineUnsupportedPathRecordsAndPassesThroughLegacyPolicies(t *testing.T) {
 	body := []byte(`{"prompt":"号码 13800138000"}`)
 
 	warn := newTestSnapshot(t, redactSettings(), phoneRule())
@@ -145,16 +144,13 @@ func TestEngineUnsupportedPathWarnsOrFailsClosed(t *testing.T) {
 	strictSettings := redactSettings()
 	strictSettings.UnsupportedPathAction = UnsupportedPathFailClosed
 	strict := newTestSnapshot(t, strictSettings, phoneRule())
-	if _, err = strict.Apply(Request{Path: "/v1/unknown"}, body); err == nil {
-		t.Fatal("fail_closed must reject unsupported paths")
-	}
-	var policyErr *PolicyError
-	if !errors.As(err, &policyErr) || policyErr.Code != CodeUnsupportedPath {
-		t.Fatalf("expected PolicyError with unsupported-path code, got %v", err)
+	result, err = strict.Apply(Request{Path: "/v1/unknown"}, body)
+	if err != nil || result.SkippedReason != SkippedUnsupportedPath || !bytes.Equal(result.Body, body) {
+		t.Fatalf("legacy policy interrupted or changed unsupported request: %+v %v", result, err)
 	}
 }
 
-func TestEngineScanErrorHonoursOnErrorPolicy(t *testing.T) {
+func TestEngineScanErrorPassesThroughLegacyPolicies(t *testing.T) {
 	broken := []byte(`{"messages":[{"role":"user","content":"未闭合`)
 
 	open := newTestSnapshot(t, redactSettings(), phoneRule())
@@ -169,10 +165,9 @@ func TestEngineScanErrorHonoursOnErrorPolicy(t *testing.T) {
 	closedSettings := redactSettings()
 	closedSettings.OnError = OnErrorFailClosed
 	closed := newTestSnapshot(t, closedSettings, phoneRule())
-	_, err = closed.Apply(Request{Path: "/v1/messages"}, broken)
-	var policyErr *PolicyError
-	if !errors.As(err, &policyErr) || policyErr.Code != CodeScanFailed {
-		t.Fatalf("expected scan-failed PolicyError, got %v", err)
+	result, err = closed.Apply(Request{Path: "/v1/messages"}, broken)
+	if err != nil || result.SkippedReason != "scan_error" || !bytes.Equal(result.Body, broken) {
+		t.Fatalf("legacy policy interrupted or changed malformed request: %+v %v", result, err)
 	}
 }
 
@@ -236,7 +231,7 @@ func TestEngineRedactCaptureGroupKeepsFieldName(t *testing.T) {
 	}
 }
 
-func TestEngineScanBudgetTruncatesOrFailsClosed(t *testing.T) {
+func TestEngineScanBudgetTruncatesWithLegacyPolicies(t *testing.T) {
 	long := strings.Repeat("x", 400) + "13800138000"
 	body := []byte(`{"messages":[{"role":"user","content":"` + long + `"}]}`)
 
@@ -258,10 +253,9 @@ func TestEngineScanBudgetTruncatesOrFailsClosed(t *testing.T) {
 	closedSettings.ScanMaxBytes = 100
 	closedSettings.OverLimitAction = OverLimitFailClosed
 	closed := newTestSnapshot(t, closedSettings, phoneRule())
-	_, err = closed.Apply(Request{Path: "/v1/messages"}, body)
-	var policyErr *PolicyError
-	if !errors.As(err, &policyErr) || policyErr.Code != CodeScanBodyTooLarge {
-		t.Fatalf("expected body-too-large PolicyError, got %v", err)
+	result, err = closed.Apply(Request{Path: "/v1/messages"}, body)
+	if err != nil || !result.Truncated || result.SkippedReason != SkippedScanTruncated || !bytes.Equal(result.Body, body) {
+		t.Fatalf("legacy policy interrupted or changed unscanned text: %+v %v", result, err)
 	}
 }
 

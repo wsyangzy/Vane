@@ -14,6 +14,19 @@ import (
 //
 // RuleKey / RuleMode 仅在命中凭证分组的组合计费规则时有值。
 type BillingDecisionSnapshot struct {
+	RequestedServiceTier string  `json:"requested_service_tier,omitempty"`
+	ResponseServiceTier  string  `json:"response_service_tier,omitempty"`
+	BillingServiceTier   string  `json:"billing_service_tier,omitempty"`
+	ServiceTierSource    string  `json:"service_tier_source,omitempty"`
+	ServiceTierPolicy    string  `json:"service_tier_policy,omitempty"`
+	PricingFallback      string  `json:"pricing_fallback,omitempty"`
+	CacheWritePricing    string  `json:"cache_write_pricing,omitempty"`
+	CacheWrite30mTokens  int64   `json:"cache_write_30m_tokens,omitempty"`
+	CacheWrite12hTokens  int64   `json:"cache_write_12h_tokens,omitempty"`
+	CacheWrite30mPrice   float64 `json:"cache_write_30m_price,omitempty"`
+	CacheWrite12hPrice   float64 `json:"cache_write_12h_price,omitempty"`
+	CacheWrite30mCost    float64 `json:"cache_write_30m_cost,omitempty"`
+	CacheWrite12hCost    float64 `json:"cache_write_12h_cost,omitempty"`
 	// 命中的定价行标识。三者构成 model_pricing 的唯一键；PricingModel 可能是兜底行
 	// （_default / _codex_default），此时如实记录兜底行名而非请求模型名。
 	PricingProvider    string `json:"pricing_provider,omitempty"`
@@ -42,23 +55,28 @@ type BillingDecisionSnapshot struct {
 	CacheReadCostMultiplier       float64 `json:"cache_read_cost_multiplier"`
 	TotalCostMultiplier           float64 `json:"total_cost_multiplier"`
 
-	// 总倍率的来源分层：TotalCostMultiplier = GroupCostMultiplier × ModelCostMultiplier。
+	// 总倍率的来源分层：TotalCostMultiplier = GroupCostMultiplier × ModelCostMultiplier × RuleCostMultiplier。
 	// LongContextCostMultiplier 已折进分项倍率，仅在 long context 生效时记录来源。
 	GroupCostMultiplier       float64 `json:"group_cost_multiplier"`
 	ModelCostMultiplier       float64 `json:"model_cost_multiplier"`
 	LongContextCostMultiplier float64 `json:"long_context_cost_multiplier,omitempty"`
 
-	RuleKey  string `json:"rule_key,omitempty"`
-	RuleMode string `json:"rule_mode,omitempty"`
+	RuleKey                 string  `json:"rule_key,omitempty"`
+	RuleMode                string  `json:"rule_mode,omitempty"`
+	RuleGroupMultiplierMode string  `json:"rule_group_multiplier_mode,omitempty"`
+	RuleCostMultiplier      float64 `json:"rule_cost_multiplier,omitempty"`
 }
 
 // billingIdentity 标识本次计费的请求归属与命中的定价行。
 type billingIdentity struct {
-	provider     string // 请求 provider（claude / codex）
-	requestModel string // 请求实际使用的模型，组合规则选择器与模型倍率按它匹配
-	serviceTier  string // 请求档位（未归一化）
-	pricingModel string // 实际命中的定价行 model_name
-	pricingTier  string // 实际命中的定价行 service_tier，空串 = 标准档/兜底行
+	requestedTier string
+	responseTier  string
+	tierSource    string
+	provider      string // 请求 provider（claude / codex）
+	requestModel  string // 请求实际使用的模型，组合规则选择器与模型倍率按它匹配
+	serviceTier   string // 请求档位（未归一化）
+	pricingModel  string // 实际命中的定价行 model_name
+	pricingTier   string // 实际命中的定价行 service_tier，空串 = 标准档/兜底行
 }
 
 // billingFactors 是一次成本计算实际选用的单价与合并后的倍率。
@@ -96,6 +114,9 @@ func resolveBillingFactors(usage *TokenUsage, pricing *ModelPricing, m *Endpoint
 			usage.InputTokens > pricing.LongContextThreshold &&
 			pricing.LongContextInputPrice > 0 &&
 			pricing.LongContextOutputPrice > 0,
+	}
+	if pricing.CodexCachePricing {
+		f.cacheCreationPrice = pricing.CacheWritePrice30m
 	}
 	if f.longContextActive {
 		f.inputPrice = pricing.LongContextInputPrice
@@ -146,6 +167,9 @@ func buildBillingDecisionSnapshot(usage *TokenUsage, pricing ModelPricing, mult 
 	}
 
 	snapshot := &BillingDecisionSnapshot{
+		RequestedServiceTier: id.requestedTier,
+		ResponseServiceTier:  id.responseTier,
+		BillingServiceTier:   id.serviceTier,
 		PricingProvider:      defaultProvider(strings.TrimSpace(id.provider)),
 		PricingModel:         id.pricingModel,
 		PricingServiceTier:   id.pricingTier,
@@ -169,6 +193,25 @@ func buildBillingDecisionSnapshot(usage *TokenUsage, pricing ModelPricing, mult 
 		GroupCostMultiplier: ensurePositiveMultiplier(mult.CostMultiplier),
 		ModelCostMultiplier: ensurePositiveMultiplier(mult.ModelCostMultiplier),
 	}
+	_, snapshot.ServiceTierSource = ResolveBillingServiceTier(id.requestedTier, id.responseTier, id.tierSource)
+	if id.provider == "codex" {
+		snapshot.ServiceTierPolicy = NormalizeServiceTierSource(id.tierSource)
+	}
+	if id.pricingModel != id.requestModel {
+		snapshot.PricingFallback = "provider_default"
+	} else if normalizeServiceTierForPricing(id.serviceTier) != id.pricingTier {
+		snapshot.PricingFallback = "standard_price"
+	} else if id.provider == "codex" && strings.TrimSpace(id.serviceTier) != "" && NormalizeServiceTierForBilling(id.serviceTier) == "" {
+		snapshot.PricingFallback = "unresolved_tier"
+	}
+	if pricing.CodexCachePricing {
+		allocation := resolveCacheWriteAllocation(usage, &pricing, &mult, f)
+		snapshot.CacheWritePricing = allocation.reason
+		snapshot.CacheWrite30mTokens, snapshot.CacheWrite12hTokens = allocation.tokens30m, allocation.tokens12h
+		snapshot.CacheWrite30mPrice, snapshot.CacheWrite12hPrice = f.cacheCreationPrice, allocation.price12h
+		snapshot.CacheWrite30mCost = float64(allocation.tokens30m) * f.cacheCreationPrice / 1e6 * f.cacheCreationMult * f.totalMult
+		snapshot.CacheWrite12hCost = float64(allocation.tokens12h) * allocation.price12h / 1e6 * f.cacheCreationMult * f.totalMult
+	}
 	if f.longContextActive {
 		snapshot.LongContextCostMultiplier = ensurePositiveMultiplier(mult.LongContextCostMultiplier)
 	}
@@ -188,6 +231,23 @@ func billingDecisionSnapshotJSON(snapshot *BillingDecisionSnapshot) string {
 		return ""
 	}
 	return string(data)
+}
+
+// Tier evidence must survive even when the model has no configured price.
+func unpricedBillingDecisionSnapshot(id billingIdentity) *BillingDecisionSnapshot {
+	if id.provider != "codex" {
+		return nil
+	}
+	_, source := ResolveBillingServiceTier(id.requestedTier, id.responseTier, id.tierSource)
+	return &BillingDecisionSnapshot{
+		RequestedServiceTier: id.requestedTier,
+		ResponseServiceTier:  id.responseTier,
+		BillingServiceTier:   id.serviceTier,
+		ServiceTierSource:    source,
+		ServiceTierPolicy:    NormalizeServiceTierSource(id.tierSource),
+		PricingProvider:      id.provider,
+		PricingFallback:      "missing_price",
+	}
 }
 
 // lookupModelPricing 按 provider::model::tier → provider::model:: → legacy 裸模型名

@@ -1,23 +1,24 @@
 import { checkPoolEndpoint } from '@/services/wails/pools.js';
-import PoolWorkspace from '@/features/providers/shared/pools/PoolWorkspace.jsx';
+import DispatchWorkspace from '@/features/providers/shared/dispatch/DispatchWorkspace.jsx';
+import ChannelResourceGrid from '@/features/providers/shared/pools/ChannelResourceGrid.jsx';
 import { useCallback, useEffect, useState } from 'react';
-import { Database, Plus, RefreshCw, Settings } from 'lucide-react';
+import { Database, Plus } from 'lucide-react';
 import { Button, EmptyState, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
 import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
-import { nonStreamRouteSignature } from '@/features/providers/shared/routing/routeTargets.js';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
 import { buildCodexEndpointMutationPayload, selectPersistedEndpoints } from '@/features/providers/shared/endpoints/endpointActions.js';
-import { activateCodexChannel, activateCodexEndpoint, createCodexChannel, createCodexCredentialGroup, createCodexEndpoint, deleteCodexChannelByID, deleteCodexCredentialGroupByID, deleteCodexEndpointByID, getCodexChannels, getCodexGlobalConfig, getNextAvailableCodexChannel, getSettingsByScope, getCodexSuspendedCount, subscribeToEvent, setDefaultCodexCredentialGroup, setChannelNonStreamRoute, setChannelPrivacyLevel, setCodexChannelFailoverEnabled, updateCodexChannelByID, updateCodexCredentialGroupByID, updateCodexEndpointByID } from '@/services/wails/index.js';
+import { createChannelSetupCommitter } from '../shared/channelSetup.js';
+import { activateCodexChannel, activateCodexEndpoint, createCodexChannel, createCodexCredentialGroup, createCodexEndpoint, deleteCodexChannelByID, deleteCodexCredentialGroupByID, deleteCodexEndpointByID, getCodexChannels, getCodexGlobalConfig, getNextAvailableCodexChannel, getSettingsByScope, getCodexSuspendedCount, subscribeToEvent, setDefaultCodexCredentialGroup, setCodexChannelFailoverEnabled, updateCodexChannelByID, updateCodexCredentialGroupByID, updateCodexEndpointByID } from '@/services/wails/index.js';
 import { getCredentialGroups, hasCodexCredential, getDefaultCredentialGroup, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload } from './model.js';
 import { CodexLogo } from './components/CodexLogo.jsx';
 import { ChannelFormModal } from './components/ChannelFormModal.jsx';
 import { CredentialGroupFormModal } from './components/CredentialGroupFormModal.jsx';
 import { EndpointFormModal } from './components/EndpointFormModal.jsx';
 import { DeleteConfirmDialog } from './components/DeleteConfirmDialog.jsx';
+import { DeleteCredentialGroupConfirmDialog } from './components/DeleteCredentialGroupConfirmDialog.jsx';
 import { ActiveChannelPauseDialog } from './components/ActiveChannelPauseDialog.jsx';
-import { CodexGlobalConfigModal } from './components/CodexGlobalConfigModal.jsx';
 import { CodexEndpointDetailModal } from './components/CodexEndpointDetailModal.jsx';
 import { ChannelCard } from './components/ChannelCard.jsx';
 import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
@@ -25,7 +26,7 @@ import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
 // ============================================================================
 // 主页面
 // ============================================================================
-const CodexPage = ({ clientVersion }) => {
+const CodexPage = ({ clientVersion, onViewRequests }) => {
   const toast = useToast();
   const [channels, setChannels] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,8 +36,6 @@ const CodexPage = ({ clientVersion }) => {
   // Codex 挂起请求数（>0 时触发渠道卡片/端点 toggle 的 amber 警示色）
   const [suspendedCount, setSuspendedCount] = useState(0);
   const [channelFailoverEnabled, setChannelFailoverEnabled] = useState(false);
-  // Codex 全局配置弹窗
-  const [showGlobalConfig, setShowGlobalConfig] = useState(false);
   // Codex 全局配置（来自 ~/.codex/config.toml，所有渠道共用）
   const [globalConfig, setGlobalConfig] = useState({
     model: '',
@@ -46,7 +45,7 @@ const CodexPage = ({ clientVersion }) => {
     global_timeout_seconds: 300
   });
 
-  // 刷新全局配置（在 page mount + 弹窗保存成功后调用）
+  // 页面加载时读取全局配置，供端点详情展示。
   const loadGlobalConfig = useCallback(async () => {
     try {
       const data = await getCodexGlobalConfig();
@@ -76,7 +75,8 @@ const CodexPage = ({ clientVersion }) => {
   const [credentialGroupFormChannel, setCredentialGroupFormChannel] = useState(null);
   const [editingCredentialGroup, setEditingCredentialGroup] = useState(null);
   const [credentialGroupFormError, setCredentialGroupFormError] = useState('');
-  const [initialSetupChannelID, setInitialSetupChannelID] = useState(null);
+  const [channelSetupDraft, setChannelSetupDraft] = useState(null);
+  const [commitChannelSetup] = useState(createChannelSetupCommitter);
   const [deleteCredentialGroupTarget, setDeleteCredentialGroupTarget] = useState(null);
 	const [credentialGroupDetailTarget, setCredentialGroupDetailTarget] = useState(null);
 
@@ -236,51 +236,38 @@ const CodexPage = ({ clientVersion }) => {
 
   const handleSaveChannel = async (payload) => {
     const isCreating = channelFormMode !== 'edit' || !editingChannel;
-    const { nonStreamRoute, privacyLevel, ...channelPayload } = payload;
-    let channelCreated = false;
-    let routeWarnings = [];
+    if (isCreating) {
+      if (channels.some((channel) => channel.name === payload.name)) {
+        setChannelFormError('渠道名称已存在');
+        return;
+      }
+      const draftChannel = { ...payload, id: -1, credentialGroups: [], endpoints: [] };
+      setChannelSetupDraft({ channel: draftChannel });
+      closeChannelForm();
+      setCredentialGroupFormMode('create');
+      setCredentialGroupFormChannel(draftChannel);
+      setEditingCredentialGroup({ name: '默认分组', isDefault: true });
+      setCredentialGroupFormError('');
+      setShowCredentialGroupForm(true);
+      return;
+    }
     setActionLoading(channelFormMode === 'edit' ? 'update-channel' : 'create-channel');
     setChannelFormError('');
     try {
-      if (!isCreating) {
-        await updateCodexChannelByID(editingChannel.id, channelPayload);
-        if ('privacyLevel' in payload && (privacyLevel || '') !== (editingChannel.privacyLevel || '')) {
-          await setChannelPrivacyLevel('codex', editingChannel.id, privacyLevel);
-        }
-        // 非流改道单独保存：只在确有变更时提交
-        if ('nonStreamRoute' in payload
-          && nonStreamRouteSignature(nonStreamRoute) !== nonStreamRouteSignature(editingChannel.nonStreamRoute)) {
-          routeWarnings = (await setChannelNonStreamRoute('codex', editingChannel.id, nonStreamRoute)).warnings;
-        }
-      } else {
-        await createCodexChannel(channelPayload);
-        channelCreated = true;
-      }
-      const refreshedChannels = await fetchData({ silent: true, throwOnError: true });
-      if (isCreating) {
-        const createdChannel = refreshedChannels.find((channel) => channel?.name === payload.name);
-        if (!createdChannel) {
-          throw new Error('渠道已创建，但刷新后未找到该渠道，请刷新列表后继续配置');
-        }
-        closeChannelForm();
-        openCreateCredentialGroupForm(createdChannel, true);
-      } else {
-        closeChannelForm();
-        if (routeWarnings.length > 0) {
-          toast.warning(routeWarnings, '非流改道已保存，请留意');
-        }
-      }
+      await updateCodexChannelByID(editingChannel.id, payload);
     } catch (err) {
       const message = getFailoverToggleErrorMessage(err, '保存渠道失败');
-      if (channelCreated) {
-        closeChannelForm();
-        toast.error(`渠道已创建，但刷新列表失败，请点击刷新后继续配置凭证分组和端点。\n${message}`, '刷新失败');
-      } else {
-        setChannelFormError(message);
-        toast.error(message, '保存失败');
-      }
+      setChannelFormError(message);
+      toast.error(message, '保存失败');
+      return;
     } finally {
       setActionLoading('');
+    }
+    closeChannelForm();
+    try {
+      await fetchData({ silent: true, throwOnError: true });
+    } catch (err) {
+      toast.error(`渠道已保存，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
     }
   };
 
@@ -299,8 +286,8 @@ const CodexPage = ({ clientVersion }) => {
   };
 
   // ===== 凭证分组动作 =====
-  const openCreateCredentialGroupForm = (channel, isInitialSetup = false) => {
-    setInitialSetupChannelID(isInitialSetup ? channel?.id ?? null : null);
+  const openCreateCredentialGroupForm = (channel) => {
+    setChannelSetupDraft(null);
     setCredentialGroupFormMode('create');
     setCredentialGroupFormChannel(channel);
     setEditingCredentialGroup(null);
@@ -309,7 +296,7 @@ const CodexPage = ({ clientVersion }) => {
   };
 
   const openEditCredentialGroupForm = (channel, group) => {
-    setInitialSetupChannelID(null);
+    setChannelSetupDraft(null);
     setCredentialGroupFormMode('edit');
     setCredentialGroupFormChannel(channel);
     setEditingCredentialGroup(group);
@@ -322,7 +309,7 @@ const CodexPage = ({ clientVersion }) => {
     setCredentialGroupFormChannel(null);
     setEditingCredentialGroup(null);
     setCredentialGroupFormError('');
-    setInitialSetupChannelID(null);
+    setChannelSetupDraft(null);
   };
 
   const handleSaveCredentialGroup = async (payload) => {
@@ -330,7 +317,22 @@ const CodexPage = ({ clientVersion }) => {
     const { copyEndpoints = [], ...groupPayload } = payload || {};
     delete groupPayload.copyEndpointsFromGroupId;
     const targetChannel = credentialGroupFormChannel;
-    const shouldContinueInitialSetup = initialSetupChannelID === targetChannel.id;
+    if (channelSetupDraft) {
+      const draftGroup = { ...groupPayload, id: -1, isDefault: true, modelPolicy: 'inherit' };
+      const draftChannel = { ...channelSetupDraft.channel, credentialGroups: [draftGroup] };
+      setChannelSetupDraft({ channel: draftChannel, group: draftGroup });
+      setShowCredentialGroupForm(false);
+      setCredentialGroupFormChannel(null);
+      setEditingCredentialGroup(null);
+      setCredentialGroupFormError('');
+      setEndpointFormMode('create');
+      setEndpointFormChannel(draftChannel);
+      setEndpointFormCredentialGroup(draftGroup);
+      setEditingEndpoint(null);
+      setEndpointFormError('');
+      setShowEndpointForm(true);
+      return;
+    }
     let savedGroup = null;
     const loadingKey = credentialGroupFormMode === 'edit'
       ? `save-credential-group-${editingCredentialGroup?.id}`
@@ -364,9 +366,6 @@ const CodexPage = ({ clientVersion }) => {
     }
 
     closeCredentialGroupForm();
-    if (shouldContinueInitialSetup && savedGroup?.id && copyEndpoints.length === 0) {
-      openCreateEndpointForm(targetChannel, savedGroup);
-    }
 
     try {
       await fetchData({ silent: true, throwOnError: true });
@@ -434,9 +433,47 @@ const CodexPage = ({ clientVersion }) => {
     setEndpointFormCredentialGroup(null);
     setEditingEndpoint(null);
     setEndpointFormError('');
+    setChannelSetupDraft(null);
   };
 
   const handleSaveEndpoint = async ({ name, baseURL, credentialGroupId, failoverEnabled, skipHealthCheck, priority, timeoutSeconds }) => {
+    if (actionLoading) return;
+    if (channelSetupDraft) {
+      const { channel, group } = channelSetupDraft;
+      const groupPayload = { ...group };
+      delete groupPayload.id;
+      setActionLoading('create-endpoint');
+      setEndpointFormError('');
+      try {
+        await commitChannelSetup({
+          create: () => createCodexChannel(channel),
+          find: async () => (await getCodexChannels()).find((item) => item.name === channel.name),
+          saveGroup: async (createdChannel) => {
+            const defaultGroup = getDefaultCredentialGroup(createdChannel);
+            return defaultGroup
+              ? updateCodexCredentialGroupByID(defaultGroup.id, groupPayload)
+              : createCodexCredentialGroup({ ...groupPayload, channelId: createdChannel.id });
+          },
+          saveEndpoint: (createdChannel, savedGroup) => createCodexEndpoint({
+            channelId: createdChannel.id, credentialGroupId: savedGroup.id,
+            name, baseURL, failoverEnabled, skipHealthCheck, priority, timeoutSeconds
+          }),
+          remove: (createdChannel) => createdChannel ? deleteCodexChannelByID(createdChannel.id) : Promise.resolve()
+        });
+      } catch (err) {
+        setEndpointFormError(getErrorMessage(err, '创建渠道失败'));
+        return;
+      } finally {
+        setActionLoading('');
+      }
+      closeEndpointForm();
+      try {
+        await fetchData({ silent: true, throwOnError: true });
+      } catch (err) {
+        toast.error(`渠道已创建，但列表刷新失败，请点击刷新查看最新数据。\n${getErrorMessage(err, '未知错误')}`, '刷新失败');
+      }
+      return;
+    }
     if (endpointFormMode === 'edit') {
       if (!editingEndpoint) return;
       setActionLoading(`save-endpoint-${editingEndpoint.id}`);
@@ -580,6 +617,16 @@ const CodexPage = ({ clientVersion }) => {
     }
   };
 
+  const handleCheckEndpointHealth = async (endpoint) => {
+    setActionLoading(`check-health-endpoint-${endpoint.id}`);
+    try {
+      await checkPoolEndpoint('codex', endpoint.id);
+      await fetchData({ silent: true, throwOnError: true });
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const handleDeleteEndpoint = async () => {
     if (!deleteEndpointTarget) return;
     const epId = deleteEndpointTarget.endpoint.id;
@@ -609,10 +656,10 @@ const CodexPage = ({ clientVersion }) => {
   ).length;
 
   return (
-    <ModalPortalScope><div className="animate-fade-in">
+    <ModalPortalScope><div className="flex min-h-0 flex-1 flex-col animate-fade-in">
       {/* 页面标题 */}
-      <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
+      <div className="mb-3 flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-3">
+        <div className="flex min-h-9 min-w-0 items-center gap-2.5">
           <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
             <CodexLogo className="h-5 w-5" />
           </div>
@@ -624,32 +671,18 @@ const CodexPage = ({ clientVersion }) => {
               )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} />
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={RefreshCw}
-            onClick={() => fetchData()}
-            loading={loading}
-          >
-            刷新
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={Settings}
-            onClick={() => setShowGlobalConfig(true)}
-          >
-            Codex 配置
-          </Button>
-          <Button icon={Plus} onClick={openCreateChannelForm}>
-            添加渠道
-          </Button>
-        </div>
       </div>
 
-      <PoolWorkspace provider="codex" refreshToken={lastUpdate}>
+      <DispatchWorkspace provider="codex" refreshToken={lastUpdate} onViewRequests={onViewRequests}
+        resourcesBusy={loading || Boolean(actionLoading)}
+        onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
+        resourceActions={<>
+          <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
+          {channels.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} onClick={openCreateChannelForm}>添加渠道</Button>}
+        </>} endpoints={channels.flatMap((channel) => channel.endpoints.map((endpoint) => ({
+        channelId: channel.id, groupId: endpoint.credentialGroupId || getDefaultCredentialGroup(channel)?.id || 0, endpointId: String(endpoint.id),
+        name: endpoint.name, address: endpoint.baseURL,
+      })))} onError={(message) => toast.error(message)} onSuccess={(message) => toast.success(message)}>
       {error && (
         <div className="mb-4">
           <ErrorMessage message={error} onClose={() => setError('')} />
@@ -664,7 +697,7 @@ const CodexPage = ({ clientVersion }) => {
         <EmptyState
           icon={Database}
           title="暂无 Codex 渠道"
-          description="创建渠道和账号后，将账号加入池以开始调度。"
+          description="创建渠道和凭证分组后，在调度方案中选择参与成员。"
           action={
             <Button variant="primary" icon={Plus} onClick={openCreateChannelForm}>
               添加渠道
@@ -672,7 +705,7 @@ const CodexPage = ({ clientVersion }) => {
           }
         />
       ) : (
-        <div aria-label="Codex 渠道列表" className="channel-resource-grid">
+        <ChannelResourceGrid provider="codex" label="Codex 渠道列表">
           {channels.map((channel) => (
             <ChannelCard
               key={channel.id}
@@ -698,6 +731,7 @@ const CodexPage = ({ clientVersion }) => {
               onSetGroupEndpointFailover={handleSetGroupEndpointFailover}
               onSetGroupEndpointSkipHealthCheck={handleSetGroupEndpointSkipHealthCheck}
               onToggleEndpointSkipHealthCheck={handleToggleEndpointSkipHealthCheck}
+              onHealthEndpoint={handleCheckEndpointHealth}
               onEditEndpoint={openEditEndpointForm}
               onOpenEndpoint={(endpoint, channelOwner) =>
                 setEndpointDetailTarget({ endpoint, channelOwner })
@@ -707,10 +741,10 @@ const CodexPage = ({ clientVersion }) => {
               }
             />
           ))}
-        </div>
+        </ChannelResourceGrid>
       )}
 
-      </PoolWorkspace>
+      </DispatchWorkspace>
 
       {showChannelForm && (
         <ChannelFormModal
@@ -730,7 +764,7 @@ const CodexPage = ({ clientVersion }) => {
           mode={credentialGroupFormMode}
           channel={credentialGroupFormChannel}
           group={editingCredentialGroup}
-          continueToEndpoint={initialSetupChannelID === credentialGroupFormChannel?.id}
+          continueToEndpoint={Boolean(channelSetupDraft)}
           loading={
             credentialGroupFormMode === 'edit'
               ? actionLoading === `save-credential-group-${editingCredentialGroup?.id}`
@@ -762,6 +796,7 @@ const CodexPage = ({ clientVersion }) => {
           channel={endpointFormChannel}
           endpoint={editingEndpoint}
           credentialGroup={endpointFormCredentialGroup}
+          initialSetup={Boolean(channelSetupDraft)}
           loading={
             endpointFormMode === 'edit'
               ? actionLoading === `save-endpoint-${editingEndpoint?.id}`
@@ -776,7 +811,9 @@ const CodexPage = ({ clientVersion }) => {
       {selectedEndpointDetail?.endpoint && (
         <CodexEndpointDetailModal
           onRestore={async (ep) => { await handleToggleEndpointFailover(ep, true); setEndpointDetailTarget(null); }}
-          onHealth={async (ep) => { try { await checkPoolEndpoint('codex', ep.id); setEndpointDetailTarget(null); await fetchData({ silent: true }); } catch (error) { toast.error(getErrorMessage(error)); } }}
+          onHealth={handleCheckEndpointHealth}
+          onToggleHealth={handleToggleEndpointSkipHealthCheck}
+          busy={Boolean(actionLoading)}
           endpoint={selectedEndpointDetail.endpoint}
           channel={selectedEndpointDetail.channelOwner}
           globalConfig={globalConfig}
@@ -814,12 +851,10 @@ const CodexPage = ({ clientVersion }) => {
       )}
 
       {deleteCredentialGroupTarget && (
-        <DeleteConfirmDialog
-          title="删除凭证分组"
-          description={`即将从渠道「${deleteCredentialGroupTarget.channel?.name}」中删除凭证分组「${deleteCredentialGroupTarget.group?.name}」。`}
-          hint={deletingCredentialGroupEndpointCount > 0
-            ? `将同时删除组内 ${deletingCredentialGroupEndpointCount} 个端点。仅当这些端点全部不参与转移且未被激活时才能删除；历史请求记录会保留。`
-            : '该分组当前没有端点，确认后将删除此分组。默认分组不能删除。'}
+        <DeleteCredentialGroupConfirmDialog
+          channel={deleteCredentialGroupTarget.channel}
+          group={deleteCredentialGroupTarget.group}
+          endpointCount={deletingCredentialGroupEndpointCount}
           loading={actionLoading === `delete-credential-group-${deleteCredentialGroupTarget.group.id}`}
           onCancel={() => setDeleteCredentialGroupTarget(null)}
           onConfirm={handleDeleteCredentialGroup}
@@ -841,12 +876,6 @@ const CodexPage = ({ clientVersion }) => {
         />
       )}
 
-      {showGlobalConfig && (
-        <CodexGlobalConfigModal
-          onClose={() => setShowGlobalConfig(false)}
-          onSaved={loadGlobalConfig}
-        />
-      )}
     </div></ModalPortalScope>
   );
 };

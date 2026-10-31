@@ -27,8 +27,8 @@ type ChannelRecord struct {
 	// NonStreamRoute 渠道不接非流请求时，非流请求改道到的目标；nil 表示关闭。
 	// 只经 SetNonStreamRoute 写入，Update 不改动该列。
 	NonStreamRoute *routing.NonStreamRoute `json:"non_stream_route,omitempty"`
-	// PrivacyLevel 渠道隐私级别：""=跟随全局 / third_party / trusted。
-	// 只经 SetPrivacyLevel 写入，Update 不改动该列。
+	// PrivacyLevel 仅为旧数据库兼容保留，不参与隐私处理。
+	// Update 不改动该旧列。
 	PrivacyLevel string `json:"privacy_level,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -280,20 +280,6 @@ func (s *SQLiteChannelStore) Delete(ctx context.Context, name string) error {
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
-		return fmt.Errorf("渠道不存在: %s", name)
-	}
-	return nil
-}
-
-// SetPrivacyLevel 写入渠道隐私级别；空串表示跟随全局（落库为 NULL）。取值由调用方校验。
-func (s *SQLiteChannelStore) SetPrivacyLevel(ctx context.Context, name, level string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	res, err := s.execContext(ctx, `UPDATE channels SET privacy_level = ? WHERE name = ?`, nullIfEmpty(level), name)
-	if err != nil {
-		return fmt.Errorf("更新渠道隐私级别失败: %w", err)
-	}
-	if affected, _ := res.RowsAffected(); affected == 0 {
 		return fmt.Errorf("渠道不存在: %s", name)
 	}
 	return nil

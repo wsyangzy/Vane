@@ -163,10 +163,6 @@ func (s *EndpointService) configToRecord(cfg config.EndpointConfig) *store.Endpo
 		record.CooldownSeconds = &cd
 	}
 
-	if record.TimeoutSeconds == 0 {
-		record.TimeoutSeconds = 300 // 默认 5 分钟
-	}
-
 	return record
 }
 

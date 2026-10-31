@@ -15,7 +15,8 @@ func newClaudeCredentialGroupTestDB(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	_, err = db.Exec(`CREATE TABLE claude_credential_groups (
-		id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, name TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 1,
+id INTEGER PRIMARY KEY AUTOINCREMENT, channel TEXT NOT NULL, name TEXT NOT NULL,
 		token TEXT DEFAULT '', api_key TEXT DEFAULT '', is_default INTEGER DEFAULT 0,
 		daily_cost_limit_usd REAL DEFAULT 0, model_policy TEXT DEFAULT 'inherit',
 		model_mapping TEXT DEFAULT '{}', supported_models TEXT DEFAULT '[]',

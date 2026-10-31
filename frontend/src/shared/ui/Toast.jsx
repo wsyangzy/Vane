@@ -94,7 +94,7 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
       role={type === 'error' ? 'alert' : 'status'}
       data-open={entered && !exiting}
       className={`
-        t-toast flex items-start gap-3 p-4 rounded-xl border shadow-lg
+        t-toast pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-lg
         ${variant.bgColor} ${variant.borderColor}
         max-w-sm w-full ${entered && !exiting ? 'is-open' : ''}
       `}
@@ -174,7 +174,7 @@ const ToastContainer = ({ toasts, removeToast }) => {
           to   { stroke-dashoffset: ${RING_C}; }
         }
       `}</style>
-      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3">
+      <div className="toast-viewport fixed right-4 z-[9999] flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-y-auto overscroll-contain pointer-events-none">
         {toasts.map((toast) => (
           <ToastItem
             key={toast.id}

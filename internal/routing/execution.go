@@ -39,6 +39,7 @@ type Failure struct {
 }
 
 type ExecutionEvent struct {
+	Member    *PoolStage   `json:"member,omitempty"`
 	Candidate Candidate    `json:"candidate"`
 	Action    string       `json:"action"`
 	Reason    string       `json:"reason,omitempty"`
@@ -46,6 +47,7 @@ type ExecutionEvent struct {
 }
 
 type Ledger struct {
+	Member   *PoolStage `json:"-"`
 	tried    map[Candidate]bool
 	failures map[failureKey]Failure
 	Events   []ExecutionEvent `json:"events,omitempty"`
@@ -58,6 +60,10 @@ type failureKey struct {
 }
 
 func (l *Ledger) event(event ExecutionEvent) {
+	if l.Member != nil {
+		member := *l.Member
+		event.Member = &member
+	}
 	if len(l.Events) < 128 {
 		l.Events = append(l.Events, event)
 	} else {
@@ -83,7 +89,7 @@ func (l *Ledger) Allowed(c Candidate) (bool, string) {
 		case ScopeCredential:
 			match = failed.Credential == c.Credential
 		case ScopeModel:
-			match = failed.Credential == c.Credential && failed.Model == c.Model && failed.Endpoint == c.Endpoint
+			match = failed.Credential == c.Credential && failed.Model == c.Model
 		case ScopeCandidate:
 			match = failed == c
 		}
@@ -114,6 +120,8 @@ func (l *Ledger) Skip(c Candidate, reason string) {
 	l.event(ExecutionEvent{Candidate: c, Action: "skipped", Reason: reason})
 }
 
+func (l *Ledger) Wait(reason string) { l.event(ExecutionEvent{Action: "wait", Reason: reason}) }
+
 func (l *Ledger) LastSkipReason() string {
 	for i := len(l.Events) - 1; i >= 0; i-- {
 		if l.Events[i].Action == "skipped" {
@@ -139,6 +147,22 @@ type Budget struct {
 
 func NewBudget(maxAttempts int, maxDuration time.Duration) *Budget {
 	return &Budget{start: time.Now(), maxAttempts: maxAttempts, maxDuration: maxDuration}
+}
+
+// Limit combines profile and application ceilings without resetting elapsed
+// time or attempts when execution moves to another stage or provider adapter.
+func (b *Budget) Limit(maxAttempts int, maxDuration time.Duration) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if maxAttempts > 0 && (b.maxAttempts <= 0 || maxAttempts < b.maxAttempts) {
+		b.maxAttempts = maxAttempts
+	}
+	if maxDuration > 0 && (b.maxDuration <= 0 || maxDuration < b.maxDuration) {
+		b.maxDuration = maxDuration
+	}
 }
 
 func (b *Budget) Check() error {
@@ -285,3 +309,5 @@ func ErrorIdentity(body []byte) (code, kind, param string) {
 	}
 	return envelope.Code, envelope.Type, envelope.Param
 }
+
+func (l *Ledger) RetryRecovered() { l.tried = nil; l.failures = nil }

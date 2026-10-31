@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/wsyangzy/Vane/internal/platform/logging"
 	"github.com/wsyangzy/Vane/internal/tracking/debuglog"
 )
 
@@ -57,8 +59,8 @@ func (a *App) applyPersistedLoggingConfigBeforeLogger() {
 	rows, err := db.QueryContext(ctx, `
 		SELECT key, value
 		FROM settings
-		WHERE category = 'logging'
-		  AND key IN ('level', 'format')
+		WHERE provider = 'global' AND category = 'logging'
+		  AND key IN ('level', 'format', 'file_enabled', 'max_file_size', 'max_files', 'compress_rotated')
 	`)
 	if err != nil {
 		return
@@ -79,6 +81,22 @@ func (a *App) applyPersistedLoggingConfigBeforeLogger() {
 		case "format":
 			if isValidLoggingFormat(value) {
 				a.config.Logging.Format = strings.ToLower(value)
+			}
+		case "file_enabled", "compress_rotated":
+			if value == "true" || value == "false" {
+				if key == "file_enabled" {
+					a.config.Logging.FileEnabled = value == "true"
+				} else {
+					a.config.Logging.CompressRotated = value == "true"
+				}
+			}
+		case "max_file_size":
+			if size, err := logging.ParseSize(value); err == nil && size > 0 {
+				a.config.Logging.MaxFileSize = value
+			}
+		case "max_files":
+			if count, err := strconv.Atoi(value); err == nil && count > 0 {
+				a.config.Logging.MaxFiles = count
 			}
 		}
 	}
@@ -114,17 +132,33 @@ func (a *App) applyRuntimeLoggingConfig() {
 	if a.config == nil {
 		return
 	}
+	previousHandlers := currentLogHandlers
+	logger, broadcastHandler := buildLogger(a.config.Logging)
 	if a.logEmitter != nil {
-		a.logEmitter.Stop()
+		broadcastHandler.SetEventEmitter(a.logEmitter)
 	}
-
-	logger, broadcastHandler := setupLogger(a.config.Logging)
+	if a.logger != nil {
+		if handler, ok := a.logger.Handler().(*logging.ReloadableHandler); ok {
+			handler.Update(broadcastHandler)
+			logger = a.logger
+		}
+	}
+	// Every existing logger now targets the new output. In-flight log writes
+	// have finished before the old files are closed.
+	for _, handler := range previousHandlers {
+		if handler != nil {
+			_ = handler.Close()
+		}
+	}
 	slog.SetDefault(logger)
 	a.logger = logger
 	a.logHandler = broadcastHandler
 	a.logEmitter = broadcastHandler.Emitter
 
 	debuglog.SetDebugConfig(a.config)
+	if a.loggingMiddleware != nil {
+		a.loggingMiddleware.UpdateLogger(logger.With("provider", "claude"))
+	}
 	if a.codexHTTPHandler != nil {
 		a.codexHTTPHandler.UpdateLogger(logger)
 	}

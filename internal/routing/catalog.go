@@ -13,7 +13,7 @@ type CatalogChannel struct {
 	Active bool
 	// NonStream 渠道自身的非流改道配置；非 nil 说明它声明了不接非流请求
 	NonStream *NonStreamRoute
-	// PrivacyLevel 渠道隐私级别（third_party / trusted），空串为跟随全局
+	// PrivacyLevel 仅兼容旧渠道数据，不参与隐私决策。
 	PrivacyLevel string
 	Groups       []CatalogGroup
 }

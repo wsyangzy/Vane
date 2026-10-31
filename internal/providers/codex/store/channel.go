@@ -31,8 +31,8 @@ type CodexChannelRecord struct {
 	// NonStreamRoute 渠道不接非流请求时，非流请求改道到的目标；nil 表示关闭。
 	// 只经 SetNonStreamRoute 写入，UpdateByID 不改动该列。
 	NonStreamRoute *routing.NonStreamRoute `json:"non_stream_route,omitempty"`
-	// PrivacyLevel 渠道隐私级别：""=跟随全局 / third_party / trusted。
-	// 只经 SetPrivacyLevel 写入，UpdateByID 不改动该列。
+	// PrivacyLevel 仅为旧数据库兼容保留，不参与隐私处理。
+	// UpdateByID 不改动该旧列。
 	PrivacyLevel string `json:"privacy_level,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -322,20 +322,6 @@ func (s *SQLiteCodexChannelStore) SetFailoverEnabled(ctx context.Context, id int
 	}
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
-		return fmt.Errorf("Codex 渠道不存在: %d", id)
-	}
-	return nil
-}
-
-// SetPrivacyLevel 写入渠道隐私级别；空串表示跟随全局（落库为 NULL）。取值由调用方校验。
-func (s *SQLiteCodexChannelStore) SetPrivacyLevel(ctx context.Context, id int64, level string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	result, err := s.getQuerier().ExecContext(ctx, `UPDATE codex_channels SET privacy_level = ? WHERE id = ?`, nullIfEmpty(level), id)
-	if err != nil {
-		return fmt.Errorf("更新 Codex 渠道隐私级别失败: %w", err)
-	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
 		return fmt.Errorf("Codex 渠道不存在: %d", id)
 	}
 	return nil

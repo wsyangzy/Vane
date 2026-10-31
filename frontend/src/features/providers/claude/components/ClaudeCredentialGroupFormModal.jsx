@@ -20,7 +20,6 @@ const ClaudeCredentialGroupFormModal = ({
   loading = false,
   serverError = '',
   endpointCopyOptions = [],
-  channels = [],
   onClose,
   onSubmit
 }) => {
@@ -40,10 +39,10 @@ const ClaudeCredentialGroupFormModal = ({
     ...endpointCopyOptions
   ];
   const selectedCopyOption = copyChoices.find((option) => option.value === (formData.copyEndpointsFromGroupId || '')) || copyChoices[0];
-  const canCopyEndpoints = !isEdit && formData.authMode !== 'client_passthrough' && copyChoices.length > 1;
-  const credentialGroupTabs = canCopyEndpoints && copyEndpointsEnabled
+  const canCopyEndpoints = !continueToEndpoint && !isEdit && formData.authMode !== 'client_passthrough' && copyChoices.length > 1;
+  const credentialGroupTabs = (canCopyEndpoints && copyEndpointsEnabled
     ? CREDENTIAL_GROUP_CREATE_FORM_TABS
-    : CREDENTIAL_GROUP_FORM_TABS;
+    : CREDENTIAL_GROUP_FORM_TABS).filter((tab) => !continueToEndpoint || tab.key !== 'model');
 
   if (!open) return null;
 
@@ -237,8 +236,8 @@ const ClaudeCredentialGroupFormModal = ({
               <KeyRound size={18} />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑凭证分组' : '添加凭证分组'}</h2>
-              <p className="mt-0.5 text-xs text-slate-500">渠道：{channelName || formData.channel || '-'}</p>
+              <h2 className="text-lg font-semibold text-slate-900">{continueToEndpoint ? '添加渠道 · 2/3' : isEdit ? '编辑凭证分组' : '添加凭证分组'}</h2>
+              <p className="mt-0.5 text-xs text-slate-500">{continueToEndpoint ? '配置凭证分组 · ' : '渠道：'}{channelName || formData.channel || '-'}</p>
             </div>
           </div>
           <Tooltip content="关闭">
@@ -276,7 +275,7 @@ const ClaudeCredentialGroupFormModal = ({
                   activeTab={activeTab}
                   onChange={setActiveTab}
                   disabled={loading}
-                  className={credentialGroupTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'}
+                  className={credentialGroupTabs.length === 4 ? 'grid-cols-4' : credentialGroupTabs.length === 3 ? 'grid-cols-3' : 'grid-cols-2'}
                   buttonPaddingClass="px-2"
                 />
               </div>
@@ -310,7 +309,7 @@ const ClaudeCredentialGroupFormModal = ({
                   <label className="block text-sm font-medium text-slate-700">认证方式</label>
                   <CustomSelect value={formData.authMode} options={[{ value: 'group_credential', label: '分组凭证' }, { value: 'client_passthrough', label: '官方订阅' }]} onChange={(authMode) => updateField('authMode', authMode)} disabled={loading} />
                 </div>
-                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings value={formData.subscription} onChange={(value) => updateField('subscription', value)} channels={channels} localKeyConfigured={formData.localKeyConfigured} acknowledged={formData.localKeyAcknowledged} onAcknowledge={(value) => updateField('localKeyAcknowledged', value)} disabled={loading} /> : (
+                {formData.authMode === 'client_passthrough' ? <SubscriptionSettings value={formData.subscription} onChange={(value) => updateField('subscription', value)} disabled={loading} /> : (
                 <div className="space-y-3">
                   <SegmentedTabs
                     tabs={CLAUDE_CREDENTIAL_SECRET_TABS}
@@ -338,49 +337,51 @@ const ClaudeCredentialGroupFormModal = ({
 
                 )}
 
-                <div className={`grid gap-3 ${canCopyEndpoints ? 'md:grid-cols-2' : ''}`}>
-                  <button
-                    type="button"
-                    onClick={() => !loading && updateField('isDefault', !formData.isDefault)}
-                    className={`flex min-h-[68px] w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition-all duration-200 ${
-                      loading ? 'cursor-not-allowed opacity-70' : 'hover:border-slate-300'
-                    }`}
-                    disabled={loading}
-                  >
-                    <span className={`text-sm font-medium ${formData.isDefault ? 'text-indigo-700' : 'text-slate-600'}`}>
-                      设为渠道默认分组
-                    </span>
-                    <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
-                      formData.isDefault ? 'bg-indigo-500' : 'bg-slate-300'
-                    }`}>
-                      <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                        formData.isDefault ? 'translate-x-5' : 'translate-x-0'
-                      }`} />
-                    </div>
-                  </button>
-
-                  {canCopyEndpoints && (
+                {!continueToEndpoint && (
+                  <div className={`grid gap-3 ${canCopyEndpoints ? 'md:grid-cols-2' : ''}`}>
                     <button
                       type="button"
-                      onClick={() => !loading && updateCopyEndpointsEnabled(!copyEndpointsEnabled)}
+                      onClick={() => !loading && updateField('isDefault', !formData.isDefault)}
                       className={`flex min-h-[68px] w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition-all duration-200 ${
                         loading ? 'cursor-not-allowed opacity-70' : 'hover:border-slate-300'
                       }`}
                       disabled={loading}
                     >
-                      <span className={`text-sm font-medium ${copyEndpointsEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
-                        复制其他分组端点
+                      <span className={`text-sm font-medium ${formData.isDefault ? 'text-indigo-700' : 'text-slate-600'}`}>
+                        设为渠道默认分组
                       </span>
                       <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
-                        copyEndpointsEnabled ? 'bg-indigo-500' : 'bg-slate-300'
+                        formData.isDefault ? 'bg-indigo-500' : 'bg-slate-300'
                       }`}>
                         <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
-                          copyEndpointsEnabled ? 'translate-x-5' : 'translate-x-0'
+                          formData.isDefault ? 'translate-x-5' : 'translate-x-0'
                         }`} />
                       </div>
                     </button>
-                  )}
-                </div>
+
+                    {canCopyEndpoints && (
+                      <button
+                        type="button"
+                        onClick={() => !loading && updateCopyEndpointsEnabled(!copyEndpointsEnabled)}
+                        className={`flex min-h-[68px] w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition-all duration-200 ${
+                          loading ? 'cursor-not-allowed opacity-70' : 'hover:border-slate-300'
+                        }`}
+                        disabled={loading}
+                      >
+                        <span className={`text-sm font-medium ${copyEndpointsEnabled ? 'text-indigo-700' : 'text-slate-600'}`}>
+                          复制其他分组端点
+                        </span>
+                        <div className={`relative h-5 w-10 rounded-full transition-colors duration-200 ${
+                          copyEndpointsEnabled ? 'bg-indigo-500' : 'bg-slate-300'
+                        }`}>
+                          <div className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                            copyEndpointsEnabled ? 'translate-x-5' : 'translate-x-0'
+                          }`} />
+                        </div>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

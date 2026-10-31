@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/appdir"
 	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 	"github.com/wsyangzy/Vane/internal/platform/events"
 	"github.com/wsyangzy/Vane/internal/platform/logging"
@@ -28,14 +31,27 @@ import (
 	codexsubscription "github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
+	"github.com/wsyangzy/Vane/internal/routing"
 	routingservice "github.com/wsyangzy/Vane/internal/routing/service"
 	settingsservice "github.com/wsyangzy/Vane/internal/settings/service"
 	settingsstore "github.com/wsyangzy/Vane/internal/settings/store"
 	"github.com/wsyangzy/Vane/internal/subscriptions/accounts"
 	"github.com/wsyangzy/Vane/internal/tracking"
+	"github.com/wsyangzy/Vane/internal/tracking/sessionusage"
 )
 
 type App struct {
+	routingWriteMu        sync.Mutex
+	routingAffinityMu     sync.Mutex
+	poolMu                sync.Mutex
+	poolRuntimes          map[string]*routing.PoolRuntime
+	profileRuntimes       map[string]*routing.ProfileRuntime
+	quotaRefresher        *routing.QuotaRefresher
+	quotaRefreshCancel    context.CancelFunc
+	quotaRefreshDone      chan struct{}
+	quotaActivity         map[string]time.Time
+	routingQuotaTransport *http.Transport
+	routingCLIProxy       string
 	// Wails v3 应用与窗口引用
 	wailsApp *application.App
 	window   *application.WebviewWindow
@@ -57,6 +73,7 @@ type App struct {
 	usageSummaryCache      *appcache.Cache[usageSummaryDBSnapshot]
 	tokenUsageCache        *appcache.Cache[TokenUsageData]
 	endpointCostTodayCache *appcache.Cache[[]EndpointCostItem]
+	localUsageReader       *sessionusage.Reader
 
 	// 端点存储 (SQLite)
 	endpointStore   claudestore.EndpointStore      // 端点数据持久化
@@ -141,8 +158,9 @@ type App struct {
 
 func NewApp() *App {
 	a := &App{
-		startTime: time.Now(),
-		stopChan:  make(chan struct{}),
+		startTime:        time.Now(),
+		stopChan:         make(chan struct{}),
+		localUsageReader: sessionusage.NewPersistentReader(filepath.Join(appdir.Dir(), "cache", "local-usage-v1.gob")),
 	}
 	a.setupCacheRegistry()
 	a.appState.Store(int32(AppStateStarting))

@@ -105,7 +105,7 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 		WriteUpstreamErrorResponse(w, nil, "ResponseWriter does not support http.Flusher", http.StatusServiceUnavailable)
 		return
 	}
-	bodies, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(sh.endpointManager))
+	bodies, err := applyPrivacyFilter(ctx, sh.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
 		// 隐私策略拒绝：短路返回，不进入下面的重试与故障转移循环。
 		reason, message := "privacy_filter_failed", err.Error()
@@ -123,6 +123,9 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 	}
 	// bodyBytes 只用于路由决策与模型能力判断；实际外发正文在每次尝试时经 outboundBody 按渠道挑选
 	ctx = contextWithPrivacyBodies(ctx, bodies)
+	w, finishPrivacy := bodies.result.WrapResponse(w)
+	defer finishPrivacy()
+	flusher = w.(http.Flusher)
 	bodyBytes = bodies.result.Body
 	// 先准备 SSE 头但不提交状态码；若最终没有任何流字节，最终错误处理会清除这些头并透传 HTTP 错误。
 	sh.setStreamingHeaders(w)
@@ -141,10 +144,12 @@ func (sh *StreamingHandler) handleStreaming(ctx context.Context, w http.Response
 	// 追踪循环轮数（用于 MaxLoops 限制）
 	loopCount := 0
 	// 请求级路由：流式请求只可能命中模型规则，非流改道天然不参与
-	route := planClaudeRoute(sh.endpointManager, r, bodyBytes, true, lifecycleManager.GetRequestID())
+	route := planClaudeRoute(sh.endpointManager, r, bodyBytes, true, lifecycleManager.GetRequestID(), sh.forwarder.states)
 	if subRoute := planSubscriptionRoute(sh.endpointManager, r, bodyBytes); subRoute != nil {
 		route = subRoute
 	}
+	ctx = profileRouteContext(ctx, route, r)
+	defer route.endProfile()
 	sh.executeStreamingWithRetry(ctx, w, r, bodyBytes, lifecycleManager, flusher, triedChannels, triedEndpoints, loopCount, nil, route)
 }
 
@@ -171,6 +176,7 @@ func clearStreamingHeaders(w http.ResponseWriter) {
 // loopCount: 当前循环轮数（用于 MaxLoops 限制）
 // route: 请求级路由执行状态；非 nil 时只按阶段尝试目标，不触发跨渠道全局故障转移
 func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, lifecycleManager RequestLifecycleManager, flusher http.Flusher, triedChannels map[string]struct{}, triedEndpoints map[string]struct{}, loopCount int, previousErr error, route *routeRun) {
+	route.preferPool(sh.forwarder, bodyBytes)
 	route.initBudget(sh.config.Retry)
 	route.watchSubscription(ctx, sh.forwarder)
 	if route != nil {
@@ -378,6 +384,8 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 				break
 			}
 			defer admission.Finish(0, nil, nil, false)
+			defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
+			defer finishProfileAttempt(attemptCtx, nil)
 			if err := beginRouteAttempt(ctx, route); err != nil {
 				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
 				return
@@ -390,6 +398,9 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 			requestBody := rewriteBodyForRoute(sh.forwarder, lifecycleManager, outboundBody(ctx, ep, bodyBytes), ep, route)
 			resp, err := sh.forwarder.ForwardRequestToEndpoint(attemptCtx, r, requestBody, ep)
+			if err != nil {
+				finishProfileAttempt(attemptCtx, err)
+			}
 			// 🔧 [修复] 保存最后的响应，用于获取真实HTTP状态码
 			lastResp = resp
 			if err != nil && ctx.Err() != nil {
@@ -431,12 +442,17 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 
 				// 创建Token解析器和流式处理器
 				tokenParser := sh.tokenParserFactory.NewTokenParserWithUsageTracker(connID, sh.usageTracker)
-				processor := sh.streamProcessorFactory.NewStreamProcessor(tokenParser, sh.usageTracker, w, flusher, connID, ep.Config.Name)
+				streamWriter := w
+				if reservation := profileAttempt(attemptCtx); reservation != nil {
+					streamWriter = &profileResponseWriter{ResponseWriter: w, reservation: reservation}
+				}
+				processor := sh.streamProcessorFactory.NewStreamProcessor(tokenParser, sh.usageTracker, streamWriter, flusher, connID, ep.Config.Name)
 
 				slog.Info(fmt.Sprintf("🚀 [开始流式处理] [%s] 端点: %s", connID, ep.Config.Name))
 
 				// 执行流式处理并获取Token信息和模型名称
 				finalTokenUsage, modelName, err := processor.ProcessStreamWithRetry(ctx, resp)
+				finishProfileStream(attemptCtx, err)
 				if err != nil && ctx.Err() != nil {
 					slog.Info(fmt.Sprintf("🚫 [客户端取消检测] [%s] 流式处理期间检测到客户端取消，立即停止重试", connID))
 					lifecycleManager.CancelRequest("client disconnected during stream processing", nil)
@@ -587,7 +603,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			// globalAttemptCount: 全局尝试次数，用于限流策略
 			decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, true) // 流式请求: isStreaming=true
 			decision = route.failureDecision(sh.forwarder, ep, bodyBytes, lastErr, decision)
-			if ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized {
+			if (route == nil || route.pool == nil && route.profile == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized {
 				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "subscription_authentication_required", http.StatusUnauthorized, route)
 				return
 			}

@@ -33,6 +33,9 @@ import {
 } from 'lucide-react';
 import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
+import RequestDispatchDetails from './RequestDispatchDetails.jsx';
+import RequestPrivacyDetails from './RequestPrivacyDetails.jsx';
+import './requestDetail.css';
 import DurationBadge from './DurationBadge.jsx';
 import { formatCost, formatDuration, formatTimestamp } from '@/services/http/api.js';
 import { formatMultiplierDisplayValue } from '@/shared/lib/multiplier.js';
@@ -60,14 +63,14 @@ import {
 } from '../utils/endpointChain.js';
 import {
   formatReasoningFieldValue,
+  getRequestBillingMultiplierSources,
   getReasoningEffortMeta,
+  getRequestServiceTierMeta,
   getServiceTierMeta,
   getStreamOutcomeMeta,
   isThinkingTypeActive,
   getPrivacyDisplay,
   parseReasoningConfig,
-  PRIVACY_RULE_SOURCE_LABELS,
-  PRIVACY_STATE_STYLES,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
@@ -116,8 +119,8 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
   };
 
   return (
-    <div className="flex items-start justify-between py-2 border-b border-slate-100 last:border-b-0 group">
-      <div className="flex items-center gap-2 text-slate-500 min-w-[120px]">
+    <div className="request-detail-info-row flex items-start justify-between gap-3 py-2.5 border-b border-slate-100 last:border-b-0 group">
+      <div className="flex items-center gap-2 text-slate-500 min-w-[88px] shrink-0">
         <Icon className="w-4 h-4 flex-shrink-0" />
         <span className="text-sm font-medium">{label}</span>
       </div>
@@ -129,7 +132,7 @@ const InfoRow = ({ icon: Icon, label, value, copyable = false }) => {
           <Tooltip content={copied ? '已复制' : '复制'}>
             <button
               onClick={handleCopy}
-              className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 hover:scale-110 rounded transition-all"
+              className="motion-button rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
             >
               {copied ? (
                 <Check className="w-3.5 h-3.5 text-emerald-600" />
@@ -272,8 +275,8 @@ const FirstByteDetailBadge = ({ ms, status }) => {
 /**
  * 请求详情模态框主组件
  */
-const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
-  const [activeTab, setActiveTab] = useState('overview');
+const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialTab = 'overview' }) => {
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [copiedError, setCopiedError] = useState(false);
   const [copiedRequestId, setCopiedRequestId] = useState(false);
   // 记录「已展开此前失败跳」的请求 ID：弹窗组件常驻，换一条请求打开时自动回到收起状态
@@ -381,6 +384,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const cancelReason = request.cancel_reason || request.cancelReason || '';
 
   const endpointChain = getEndpointChainItems(request);
+  const dispatchTrace = request.dispatchTrace;
   const chainNodes = endpointChain.map((item, index) => {
     const node = parseChainNode(item, index + 1);
     if (!node.raw && !node.endpoint && !node.channel && !node.credentialGroup) return null;
@@ -463,18 +467,16 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
   const modelRewriteLabel = modelRewriteLabelMap[modelRewriteSource] || (modelRewriteSource ? '模型改写' : '');
   const hasModelRewrite = Boolean(modelRewriteLabel && modelRewriteTarget);
   const route = describeRouteSnapshot(request.routeSnapshot || request.route_snapshot);
+  const isRoutingClassifier = request.path === '/internal/routing/classify' || route?.kind === 'routing_classifier';
   const routeExecution = describeRouteExecution(request.routeSnapshot || request.route_snapshot);
   const reasoningRaw = request.reasoningEffort || request.reasoning_effort || '';
   const reasoning = parseReasoningConfig(reasoningRaw);
   const reasoningEffort = reasoning.effort || '';
   const reasoningEffortMeta = getReasoningEffortMeta(reasoningEffort);
   const hasReasoning = Object.keys(reasoning).length > 0;
-  const serviceTier = request.serviceTier || request.service_tier || '';
-  const serviceTierMeta = getServiceTierMeta(serviceTier);
+  const serviceTierMeta = getRequestServiceTierMeta(request);
   const privacy = getPrivacyDisplay(request);
-  const privacyRedacted = privacy.state !== 'none';
-  const privacyHits = privacy.hits;
-  const privacyDetectOnly = privacy.detectOnly;
+  const hasPrivacyRecord = privacy.state !== 'none';
 
   return renderModalPortal(
     <div className="fixed inset-0 z-[10000]">
@@ -491,17 +493,17 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
         }}
       >
         {/* 模态框内容 - 固定高度，内容区域滚动 */}
-      <div className="relative flex h-[80vh] max-h-[48rem] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200">
+      <div role="dialog" aria-modal="true" aria-labelledby="request-detail-title" className="request-detail-modal relative flex max-h-full w-full flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-in zoom-in-95 fade-in duration-200">
         {/* 头部 - 固定不滚动 */}
-        <div className="flex flex-shrink-0 items-center justify-between rounded-t-2xl border-b border-slate-100 bg-white px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-indigo-50 rounded-lg">
+        <div className="request-detail-header flex flex-shrink-0 items-center justify-between gap-3 border-b border-slate-100 bg-white px-5 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="shrink-0 p-2 bg-indigo-50 rounded-lg">
               <FileText className="w-5 h-5 text-indigo-600" />
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">请求详情</h2>
+            <div className="min-w-0">
+              <h2 id="request-detail-title" className="flex items-center gap-2 text-base font-semibold text-slate-900">请求详情<span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">{isCodexRequest ? 'Codex' : 'Claude'}</span></h2>
               <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-xs text-slate-400 font-mono">{request.requestId}</span>
+                <span className="min-w-0 truncate text-xs text-slate-400 font-mono" title={request.requestId}>{request.requestId}</span>
                 <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium ${streamColor}`}>
                   <StreamIcon className="w-3 h-3" />
                   {streamLabel}
@@ -511,28 +513,28 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
           </div>
           <div className="flex items-center gap-2">
             <kbd className="hidden sm:inline-block px-2 py-1 bg-slate-100 border border-slate-200 rounded text-xs text-slate-500">ESC</kbd>
-            <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-600">
+            <button onClick={onClose} aria-label="关闭请求详情" className="p-2 hover:bg-slate-100 rounded-lg transition-colors text-slate-400 hover:text-slate-600">
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
         {/* Tab 导航 - 固定不滚动 */}
-        <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-6 pt-4">
+        <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/50 px-5 py-3">
           <div className="flex gap-1 p-1 bg-slate-100/60 border border-slate-200/70 rounded-xl">
             {/* 无内容的标签置灰并标注"无"，仍可点击查看说明；等宽排布避免窄窗口下换行 */}
             {[
               { id: 'overview', label: '概览', icon: Activity },
               { id: 'tokens', label: 'Token 详情', icon: Database },
               { id: 'network', label: '网络信息', icon: Server },
-              { id: 'privacy', label: '隐私防护', icon: ShieldCheck, empty: !privacyRedacted },
-              { id: 'chain', label: '端点链路', icon: Layers, empty: chainNodes.length === 0 }
+              { id: 'privacy', label: '隐私防护', icon: ShieldCheck, empty: !hasPrivacyRecord },
+              { id: 'chain', label: '调度链路', icon: Layers, empty: !dispatchTrace && chainNodes.length === 0 }
             ].map((tab) => (
               <button
                 key={tab.id}
+                aria-label={tab.label}
                 onClick={() => setActiveTab(tab.id)}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
-                title={tab.empty ? `${tab.label}：本请求无记录` : undefined}
                 className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap px-2 py-2 rounded-lg text-sm font-medium transition-colors border ${
                   activeTab === tab.id
                     ? 'bg-white text-indigo-700 border-slate-200 shadow-sm'
@@ -552,24 +554,24 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
         </div>
 
         {/* 内容区域 - 自动填充剩余空间并滚动 */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-6 pl-6 pr-2">
+        <div className="request-detail-body min-h-0 flex-1 overflow-y-auto bg-slate-50/50 p-5">
           {/* 概览 Tab */}
           {activeTab === 'overview' && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* 状态 & 成本卡片 */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-xl p-4 border border-indigo-100">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-slate-600">请求状态</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-3.5">
+                  <div className="flex items-center gap-2">
                     <Activity className="w-4 h-4 text-indigo-500" />
+                    <span className="text-sm font-medium text-slate-600">请求状态</span>
                   </div>
                   <RequestStatusBadge status={request.status} />
                 </div>
 
-                <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-100">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-slate-600">总成本</span>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-100 bg-orange-50/70 p-3.5">
+                  <div className="flex items-center gap-2">
                     <DollarSign className="w-4 h-4 text-orange-500" />
+                    <span className="text-sm font-medium text-slate-600">{isRoutingClassifier ? '路由分类成本' : '总成本'}</span>
                   </div>
                   <div className="text-2xl font-bold text-orange-600 font-mono">
                     {formatCost(request.cost)}
@@ -577,6 +579,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 </div>
               </div>
 
+              <div className="request-detail-overview-grid">
               {/* 基本信息 */}
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
@@ -686,6 +689,12 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       </Tooltip>
                     </div>
                   )}
+                  {isCodexRequest && billingRuleSnapshot?.service_tier_source && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 py-3 text-xs text-slate-500">
+                    <span>请求：{getServiceTierMeta(billingRuleSnapshot.requested_service_tier)?.label || '未指定'}</span>
+                    <span>响应：{getServiceTierMeta(billingRuleSnapshot.response_service_tier)?.label || '未返回'}</span>
+                    <span className="font-medium text-slate-700">计费：{getServiceTierMeta(billingRuleSnapshot.billing_service_tier || 'standard')?.label} · {billingRuleSnapshot.service_tier_policy === 'rules' && '组合规则自动匹配 · '}{({ request: '按请求档位', response: '按响应档位', default: '使用默认档位', standard: '传统倍率固定 Standard 定价' })[billingRuleSnapshot.service_tier_source]}</span>
+                    {billingRuleSnapshot.pricing_fallback === 'missing_price' && <span className="text-amber-700">未配置模型价格，成本未计算</span>}
+                  </div>}
                   {/* 路由与模型改写都在回答"请求被改成了什么样"，放在一起看 */}
                   {route && (
                     <div className="flex items-start justify-between gap-4 py-3 border-t border-slate-100">
@@ -733,6 +742,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 </div>
               </div>
 
+              </div>
+
               {/* 计费详情 */}
               {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0 || billingRuleSnapshot?.rule_key) && (() => {
                 const calcUnitPrice = (cost, tokens) => {
@@ -762,8 +773,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const billableInputTokens = getBillableInputTokens(request)
                 const displayInputTokens = getDisplayInputTokens(request)
                 const inputDeductionTokens = Math.max(0, displayInputTokens - billableInputTokens)
-                const cache5mTokens = request.cacheCreation5mTokens || 0
-                const cache1hTokens = request.cacheCreation1hTokens || 0
+                const codexWrites = isCodexRequest && Boolean(snapshot?.cache_write_pricing)
+                const cache5mTokens = codexWrites ? 0 : request.cacheCreation5mTokens || 0
+                const cache1hTokens = codexWrites ? 0 : request.cacheCreation1hTokens || 0
                 const cacheCreationTokens = request.cacheCreationTokens || 0
 
                 const inputCost = request.inputCost || 0
@@ -773,14 +785,16 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const cache1hCost = request.cacheCreation1hCost || 0
                 const cacheCreationCost = request.cacheCreationCost || 0
 
-                // 端点倍率（默认 1.0）
-                const totalMultiplier = safeMultiplier(hasSnapshot ? snapshot.group_cost_multiplier : request.costMultiplier)
+                // 使用请求计费快照，避免以当前配置重写历史成本来源。
+                const multiplierSources = getRequestBillingMultiplierSources(request)
+                const totalMultiplier = multiplierSources.group
+                const ruleTotalMultiplier = multiplierSources.rule
                 const inputMultiplier = safeMultiplier(request.inputCostMultiplier)
                 const outputMultiplier = safeMultiplier(request.outputCostMultiplier)
                 const cacheReadMultiplier = safeMultiplier(request.cacheReadCostMultiplier)
                 const cache5mMultiplier = safeMultiplier(request.cacheCreationCostMultiplier)
                 const cache1hMultiplier = safeMultiplier(request.cacheCreationCostMultiplier1h)
-                const modelTotalMultiplier = safeMultiplier(hasSnapshot ? snapshot.model_cost_multiplier : request.modelCostMultiplier)
+                const modelTotalMultiplier = multiplierSources.model
                 const modelInputMultiplier = safeMultiplier(request.modelInputCostMultiplier)
                 const modelOutputMultiplier = safeMultiplier(request.modelOutputCostMultiplier)
                 const modelCacheReadMultiplier = safeMultiplier(request.modelCacheReadCostMultiplier)
@@ -790,10 +804,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   return combinedMultiplier > 0 ? effectivePrice / combinedMultiplier : effectivePrice
                 }
 
-                const formatPrice = (n) => `$${(n || 0).toFixed(6)}`
+                const formatPrice = (n, digits = 6) => `$${(n || 0).toFixed(digits)}`
                 const formatMultiplier = (n) => `× ${formatMultiplierDisplayValue(n, 3)}`
                 const isMultiplierAdjusted = (value) => Math.abs(safeMultiplier(value) - 1.0) > 0.000001
-                const combinedTotalMultiplier = totalMultiplier * modelTotalMultiplier
+                const combinedTotalMultiplier = multiplierSources.total
                 const removeTotalMultiplier = (cost) => combinedTotalMultiplier > 0 ? cost / combinedTotalMultiplier : cost
                 // 有快照直接取落库单价，无快照才反推。两条路径都在 token 为 0 时归零，
                 // 否则快照里的 1h 缓存兜底价会让没有 1h 用量的请求也长出一个单价徽章。
@@ -812,7 +826,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 const cache1hBasePrice = resolvePrice(cache1hTokens, 'cache_creation_1h_price',
                   () => calcBasePrice(calcUnitPrice(cache1hCost, cache1hTokens), cache1hMultiplier))
                 // 兼容旧数据：无分项 5m/1h 时，展示合并的缓存创建价格（旧数据无倍率字段，默认 1.0）
-                const hasSplitCache = cache5mTokens > 0 || cache1hTokens > 0
+                const hasSplitCache = codexWrites || cache5mTokens > 0 || cache1hTokens > 0
                 const aggregateCacheCreationPrice = hasSplitCache
                   ? 0
                   : resolvePrice(cacheCreationTokens, 'cache_creation_price',
@@ -836,7 +850,11 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   ? tokens * price / 1_000_000 * safeMultiplier(snapshot[snapshotField])
                   : removeTotalMultiplier(storedCost)
 
+                const writeRows = codexWrites ? ['30m', '12h'].filter((ttl) => snapshot[`cache_write_${ttl}_tokens`] > 0).map((ttl) => ({
+                  key: `cacheWrite${ttl}`, label: `${ttl} 缓存写入`, tokens: snapshot[`cache_write_${ttl}_tokens`], price: snapshot[`cache_write_${ttl}_price`] || 0, multiplierText: rowMultiplierText('cache_creation_cost_multiplier', cache5mMultiplier), cost: rowCost(snapshot[`cache_write_${ttl}_tokens`], snapshot[`cache_write_${ttl}_price`] || 0, 'cache_creation_cost_multiplier', snapshot[`cache_write_${ttl}_cost`] || 0)
+                })) : []
                 const priceBadges = [
+                  ...writeRows.filter((row) => row.price > 0).map((row) => ({ key: row.key, label: row.label, value: row.price, color: 'purple' })),
                   inputBasePrice > 0 && { key: 'input', label: '输入', value: inputBasePrice, color: 'blue' },
                   outputBasePrice > 0 && { key: 'output', label: '输出', value: outputBasePrice, color: 'emerald' },
                   cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadBasePrice, color: 'amber' },
@@ -846,7 +864,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 ].filter(Boolean)
 
                 const multiplierBadges = [
-                  { key: 'total', label: '总倍率', value: totalMultiplier, color: 'indigo' },
+                  multiplierSources.groupApplied && { key: 'total', label: multiplierSources.hasRuleSources ? '分组基础倍率' : '总倍率', value: totalMultiplier, color: 'indigo' },
+                  multiplierSources.hasRuleSources && { key: 'rule', label: '规则总倍率', value: ruleTotalMultiplier, color: 'sky' },
                   inputBasePrice > 0 && { key: 'input', label: '输入', value: inputMultiplier, color: 'slate' },
                   outputBasePrice > 0 && { key: 'output', label: '输出', value: outputMultiplier, color: 'indigo' },
                   cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadMultiplier, color: 'slate' },
@@ -882,6 +901,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 }
 
                 const formulaRows = [
+                  ...writeRows,
                   billableInputTokens > 0 && {
                     key: 'input',
                     label: isCodexRequest ? '输入(计费)' : '输入',
@@ -934,7 +954,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                       {hasSnapshot && (
                         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 pb-3 text-xs text-slate-600">
                           <span className="min-w-0 break-all font-semibold text-slate-700">
-                            定价 {snapshot.pricing_model || '-'}{snapshot.pricing_service_tier ? ` · ${snapshot.pricing_service_tier}` : ''}
+                            定价 {snapshot.pricing_model || '-'} · {getServiceTierMeta(snapshot.pricing_service_tier || 'standard')?.label}
                           </span>
                           <span className={snapshot.context_mode === 'long' ? 'font-semibold text-amber-600' : ''}>
                             {snapshot.context_mode === 'long' ? '长上下文单价' : '标准上下文单价'}
@@ -944,6 +964,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                               输入 {Number(snapshot.effective_input_tokens || 0).toLocaleString()} / 阈值 {Number(snapshot.long_context_threshold).toLocaleString()}
                             </span>
                           )}
+                          {snapshot.pricing_fallback && <span className="font-medium text-amber-700">{({ provider_default: '模型未配置，使用提供商默认价格', standard_price: '该档位未配置，使用 Standard 价格', unresolved_tier: '未确认实际档位，暂用 Standard 价格' })[snapshot.pricing_fallback]}</span>}
+                          {snapshot.cache_write_pricing && <span>{({ reported_ttl: '缓存写入按上游 TTL 分档', '30m_default': '缓存写入统一按 30m', '30m_missing_12h_price': '12h 未配置，缓存写入按 30m', '30m_missing_ttl_usage': '缺少有效 TTL 用量，缓存写入按 30m' })[snapshot.cache_write_pricing]}</span>}
                           {snapshot.rule_key && (
                             <span className="min-w-0 break-all font-semibold text-indigo-700">
                               组合规则 · {snapshot.rule_mode === 'fixed' ? '固定单价' : '倍率'} · {snapshot.rule_key}
@@ -996,7 +1018,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                             <div className="flex items-center justify-between">
                               <span className="text-slate-500">总成本（无分项明细）</span>
                               <span className="text-emerald-600 font-bold text-base font-mono">
-                                {formatPrice(totalCost)}
+                                {formatPrice(totalCost, 8)}
                               </span>
                             </div>
                           ) : formulaRows.length === 0 ? (
@@ -1017,17 +1039,27 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
 
                           {!hasNoBreakdown && (
                             <>
-                              <div className="pt-2 mt-2 border-t border-slate-200 flex items-center gap-2 font-mono">
+                              <div className="pt-2 mt-2 border-t border-slate-200 flex flex-wrap items-center gap-2 font-mono">
                                 <span className="text-slate-500">应用总倍率:</span>
+                                {multiplierSources.hasRuleSources ? <>
+                                  {multiplierSources.groupApplied && <>
+                                    <span className="text-indigo-600">分组基础 {formatMultiplierDisplayValue(totalMultiplier, 6)}</span>
+                                    <span>×</span>
+                                  </>}
+                                  <span className="text-sky-600">规则 {formatMultiplierDisplayValue(ruleTotalMultiplier, 6)}</span>
+                                  <span className="font-bold text-emerald-600">= {formatMultiplierDisplayValue(combinedTotalMultiplier, 6)}</span>
+                                  <span className="font-sans text-slate-500">{multiplierSources.groupApplied ? '按请求计费快照叠加分组基础倍率' : '按请求计费快照使用独立规则，分组基础倍率未参与'}</span>
+                                </> : <>
                                 <span className="font-bold text-indigo-500">{formatMultiplier(totalMultiplier)}</span>
                                 {isMultiplierAdjusted(modelTotalMultiplier) && (
                                   <span className="font-bold text-sky-600">{formatMultiplier(modelTotalMultiplier)}</span>
                                 )}
+                                </>}
                               </div>
                               <div className="pt-2 mt-2 border-t border-slate-200 flex items-center justify-between">
                                 <span className="text-slate-600 font-medium text-sm">合计</span>
                                 <span className="text-emerald-600 font-bold text-base font-mono">
-                                  {formatPrice(totalCost)}
+                                  {formatPrice(totalCost, 8)}
                                 </span>
                               </div>
                             </>
@@ -1071,7 +1103,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                             setCopiedError(true);
                             setTimeout(() => setCopiedError(false), 2000);
                           }}
-                          className="p-1 text-rose-400 hover:text-rose-600 hover:bg-rose-100/80 hover:scale-110 rounded transition-all"
+                          className="motion-button rounded p-1 text-rose-400 hover:bg-rose-100/80 hover:text-rose-600"
                         >
                           {copiedError ? (
                             <Check className="w-3.5 h-3.5 text-emerald-600" />
@@ -1139,6 +1171,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
           {/* 端点链路 Tab */}
           {activeTab === 'chain' && (
             <div className="space-y-4">
+              {dispatchTrace && <div className="rounded-xl border border-slate-200 bg-white"><RequestDispatchDetails trace={dispatchTrace} expanded /></div>}
+              {!dispatchTrace && <>
               {/* 统计摘要条 */}
               {chainNodes.length > 0 && (() => {
                 const uniqueChannels = new Set(chainNodes.map(n => n.channel).filter(Boolean));
@@ -1302,14 +1336,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                   部分记录缺少渠道信息（历史数据），新请求已使用结构化格式。
                 </div>
               )}
+              </>}
             </div>
           )}
 
           {/* Token 详情 Tab */}
           {activeTab === 'tokens' && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Token 卡片 - 基础 */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <TokenCard
                   icon={TrendingUp}
                   label="输入 Token"
@@ -1349,7 +1384,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
               )}
 
               {/* Token 卡片 - 缓存。缓存创建总计就是 5 分钟 + 1 小时之和，合进卡片说明，不再单占一格 */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 {isClaudeRequest && (
                   <>
                     <TokenCard
@@ -1367,6 +1402,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                     />
                   </>
                 )}
+                {isCodexRequest && request.cacheCreationTokens > 0 && (
+                  billingRuleSnapshot?.cache_write_pricing ? <>
+                    <TokenCard icon={Database} label="缓存写入 · 30m 计费" value={billingRuleSnapshot.cache_write_30m_tokens || 0}
+                      colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }} />
+                    <TokenCard icon={Database} label="缓存写入 · 12h 计费" value={billingRuleSnapshot.cache_write_12h_tokens || 0}
+                      colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }} />
+                  </> : <TokenCard icon={Database} label="缓存写入" value={request.cacheCreationTokens}
+                    colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }} />
+                )}
                 <TokenCard
                   icon={Zap}
                   label="缓存读取"
@@ -1375,7 +1419,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
                 />
                 <TokenCard
                   icon={Percent}
-                  label="缓存命中率"
+                  label="缓存命中概率"
                   displayValue={formatCacheHitRate(cacheHitRate)}
                   hint={isCodexRequest ? '缓存读取 ÷ 输入（Codex 输入已含缓存）' : '缓存读取 ÷ (输入 + 缓存创建 + 缓存读取)'}
                   colorClass={{ bg: 'bg-sky-50', border: 'border-sky-200', text: 'text-sky-600', icon: 'text-sky-600' }}
@@ -1418,7 +1462,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
 
           {/* 网络信息 Tab */}
           {activeTab === 'network' && (
-            <div className="space-y-4">
+            <div className="request-detail-network-grid">
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
                   <h3 className="text-sm font-semibold text-slate-900">请求结果</h3>
@@ -1471,62 +1515,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef }) => {
           )}
 
           {/* 隐私防护 Tab */}
-          {activeTab === 'privacy' && (
-            <div className="space-y-6">
-              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
-                  <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    隐私防护
-                  </h3>
-                </div>
-                <div className="p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <span className="text-sm font-medium text-slate-500">处理结果</span>
-                    <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${PRIVACY_STATE_STYLES[privacy.state]}`}>
-                      {privacy.label}
-                      {privacy.hitCount > 0 && <span className="opacity-70">· {privacy.hitCount} 处</span>}
-                    </span>
-                  </div>
-                  {!privacyRedacted && (
-                    <p className="mt-2 text-xs text-slate-500">
-                      本请求未命中任何隐私规则，请求正文按原样发往服务商。隐私防护关闭或路径不在扫描范围时同样显示为未命中。
-                    </p>
-                  )}
-                  {privacyDetectOnly && (
-                    <p className="mt-2 text-xs text-slate-500">
-                      当前为「仅检测」模式，命中已统计但请求正文未被改写。
-                    </p>
-                  )}
-                  {privacyHits.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {privacyHits.map((hit, index) => (
-                        <span
-                          key={`${hit.rule_id || index}-${hit.rule_name || ''}`}
-                          className="min-w-0 max-w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 break-words [overflow-wrap:anywhere]"
-                        >
-                          {(hit.rule_name || '规则')}
-                          {hit.source ? ` · ${PRIVACY_RULE_SOURCE_LABELS[hit.source] || hit.source}` : ''}
-                          {` × ${hit.count || 0}`}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {privacyRedacted && (
-                    <p className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-500">
-                      仅展示命中的规则与次数。命中的原文不会写入数据库、日志或本页面 —— 否则隐私防护本身就会变成一份客户信息的集中副本。
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {activeTab === 'privacy' && <RequestPrivacyDetails privacy={privacy} />}
+
         </div>
 
         {/* 底部操作栏 - 固定不滚动 */}
-        <div className="flex flex-shrink-0 items-center justify-between rounded-b-2xl border-t border-slate-100 bg-slate-50/80 px-6 py-4 backdrop-blur-sm">
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-white px-5 py-3">
           <div className="text-xs text-slate-500">
-            Request ID: <span className="font-mono text-slate-700">{request.requestId}</span>
+            {formatTimestamp(request.timestamp)}
           </div>
           <div className="flex items-center gap-2">
             <button

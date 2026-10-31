@@ -2,6 +2,7 @@
 // 提供实时日志查看功能
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { EventsOn, EventsOff } from '@/services/wails/runtime.js';
+import { normalizeLogEntry } from '../logPresentation.js';
 import {
   getRecentLogs,
   startLogStream,
@@ -75,7 +76,7 @@ export function useWailsLogs(options = {}) {
       setError(null);
       const recentLogs = await getRecentLogs(maxLogs);
       if (isMountedRef.current) {
-        setLogs(filterLogs(recentLogs || []));
+        setLogs(filterLogs((recentLogs || []).map(normalizeLogEntry)));
       }
     } catch (err) {
       console.error('❌ 加载历史日志失败:', err);
@@ -132,7 +133,7 @@ export function useWailsLogs(options = {}) {
 
         setLogs(prevLogs => {
           // 合并新日志，限制总数
-          const newLogs = [...prevLogs, ...batchLogs];
+          const newLogs = [...prevLogs, ...batchLogs.map(normalizeLogEntry)];
           return filterLogs(newLogs.slice(-maxLogs));
         });
       });

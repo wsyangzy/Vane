@@ -14,6 +14,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/privacy"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // generateRequestID 生成请求 ID（统一 req- 前缀）
@@ -62,6 +63,26 @@ func credentialGroupRefFromEndpoint(endpoint *CodexEndpoint) credentialGroupRef 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	requestID := generateRequestID()
+	if _, ok := routing.PoolCallerFromContext(r.Context()); ok {
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
+			return
+		}
+		if !subscription.AllowedPath(r) {
+			h.writeError(w, http.StatusForbidden, "pool_path_rejected")
+			return
+		}
+		r.Header = r.Header.Clone()
+		for name := range r.Header {
+			if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "X-Api-Key") || strings.EqualFold(name, "X-Relay-Key") || strings.EqualFold(name, "ChatGPT-Account-ID") {
+				delete(r.Header, name)
+			}
+		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		}
+	}
+
 	if sub := subscription.FromContext(r.Context()); sub != nil && strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
 		h.writeError(w, http.StatusUpgradeRequired, "使用 HTTP Responses 连接重试")
 		return
@@ -79,7 +100,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	originalBody := append([]byte(nil), body...)
 	if h.privacyService != nil {
+		turn := routing.ResolveTurn(r.Context(), r.Header, originalBody, "codex")
+		sessionKey := ""
+		if turn.ConversationID != "" {
+			sessionKey = "codex\x00" + routing.CallerScope(r.Context()) + "\x00" + turn.ConversationID + "\x00" + turn.BranchID
+		}
 		result, privacyErr := h.privacyService.Apply(r.Context(), privacy.Request{
+			SessionKey:   sessionKey,
 			RequestID:    requestID,
 			Path:         r.URL.Path,
 			Method:       r.Method,
@@ -99,10 +126,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusInternalServerError, "隐私防护处理失败")
 			return
 		}
-		// 挂到请求 ctx 上：每次尝试选定端点后按其渠道隐私级别挑选实际发送的正文
-		// （三方中转在全局「仅检测」下也强制脱敏、可信渠道只检测）。
-		// 脱敏摘要不在这里记：发往可信渠道时正文没被改写，提前记录会让请求详情误标「已脱敏」；
-		// 由 outboundBody 在第一次真正发出改写正文时记录。
+		// 挂到请求 ctx 上，全部端点尝试复用同一份隐私处理结果
+		var finishPrivacy func() error
+		w, finishPrivacy = result.WrapResponse(w)
+		defer finishPrivacy()
+		// 由 outboundBody 在第一次真正发出改写正文时记录摘要。
 		scanned := append([]byte(nil), originalBody...)
 		r = r.WithContext(contextWithCodexPrivacy(r.Context(), &codexPrivacyBodies{original: scanned, result: result}))
 		originalBody = result.Body

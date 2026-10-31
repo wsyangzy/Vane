@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 
 	pricingstore "github.com/wsyangzy/Vane/internal/pricing/store"
 	"github.com/wsyangzy/Vane/internal/tracking"
@@ -215,15 +216,20 @@ func (s *ModelPricingService) GetPricingCount(ctx context.Context) (int, error) 
 // 注意：CacheCreation 使用 5m 价格，因为大多数请求使用默认 5 分钟缓存
 func (s *ModelPricingService) ToTrackingPricing(record *pricingstore.ModelPricingRecord) tracking.ModelPricing {
 	return tracking.ModelPricing{
-		Input:                      record.InputPrice,
-		Output:                     record.OutputPrice,
-		CacheCreation:              record.CacheCreationPrice5m, // 使用 5m 价格作为默认
-		CacheRead:                  record.CacheReadPrice,
-		LongContextThreshold:       record.LongContextThreshold,
-		LongContextInputPrice:      record.LongContextInputPrice,
-		LongContextCacheReadPrice:  record.LongContextCacheReadPrice,
-		LongContextCacheWritePrice: record.LongContextCacheWritePrice,
-		LongContextOutputPrice:     record.LongContextOutputPrice,
+		Input:                         record.InputPrice,
+		CacheWritePrice30m:            record.CacheWritePrice30m,
+		CacheWritePrice12h:            record.CacheWritePrice12h,
+		LongContextCacheWritePrice12h: record.LongContextCacheWritePrice12h,
+		CacheCreation1h:               record.CacheCreationPrice1h,
+		CodexCachePricing:             record.Provider == "codex",
+		Output:                        record.OutputPrice,
+		CacheCreation:                 record.CacheCreationPrice5m, // 使用 5m 价格作为默认
+		CacheRead:                     record.CacheReadPrice,
+		LongContextThreshold:          record.LongContextThreshold,
+		LongContextInputPrice:         record.LongContextInputPrice,
+		LongContextCacheReadPrice:     record.LongContextCacheReadPrice,
+		LongContextCacheWritePrice:    record.LongContextCacheWritePrice,
+		LongContextOutputPrice:        record.LongContextOutputPrice,
 	}
 }
 
@@ -250,6 +256,11 @@ func (s *ModelPricingService) findExistingRecord(ctx context.Context, record *pr
 func (s *ModelPricingService) validateRecord(record *pricingstore.ModelPricingRecord) error {
 	if record.ModelName == "" {
 		return fmt.Errorf("模型名称不能为空")
+	}
+	for _, price := range []float64{record.CacheWritePrice30m, record.CacheWritePrice12h, record.LongContextCacheWritePrice12h} {
+		if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+			return fmt.Errorf("缓存写入价格必须是有效的非负数")
+		}
 	}
 	if record.InputPrice < 0 {
 		return fmt.Errorf("输入价格不能为负数")

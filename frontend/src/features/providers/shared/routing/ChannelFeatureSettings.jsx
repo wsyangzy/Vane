@@ -11,7 +11,7 @@ export default function ChannelFeatureSettings({ features, onToggle, disabled })
       <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
         <PanelsTopLeft size={15} />扩展设置
       </div>
-      <p className="text-xs leading-5 text-slate-400">开启后显示模型映射分页。模型路由和非流改道在账号池中配置。</p>
+      <p className="text-xs leading-5 text-slate-400">开启后显示模型映射分页。模型规则和非流规则在调度方案中配置。</p>
       <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/40 px-3">
         {FEATURES.map(({ key, label, description, Icon }) => (
           <div key={key} className="flex items-center justify-between gap-3 py-3">

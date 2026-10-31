@@ -1,5 +1,4 @@
 import { parseEndpointMultiplier, parseNonNegativeNumber, normalizeModelMapping, normalizeModelMultipliers, hasOwn, getExplicitModelMultipliers, mapSubscription } from './mapping.js';
-import { normalizeChannelPrivacyLevel } from './privacy.js';
 import { WailsApp, initWails } from './connection.js';
 import { mapNonStreamRoute } from './routing.js';
 
@@ -147,12 +146,17 @@ const normalizeCodexBillingRules = (records) => (Array.isArray(records) ? record
     const value = parseEndpointMultiplier(record?.[camel] ?? record?.[snake], 1);
     return value > 0 ? value : 1;
   };
+  const explicitGroupMode = record?.groupMultiplierMode ?? record?.group_multiplier_mode;
+  const catchAll = !String(record?.model || '').trim()
+    && !String(record?.serviceTier ?? record?.service_tier ?? '').trim()
+    && !String(record?.context || '').trim();
   return {
     model: String(record?.model || '').trim(),
     serviceTier: normalizeCodexServiceTier(record?.serviceTier ?? record?.service_tier),
     context: String(record?.context || '').trim().toLowerCase(),
     mode: record?.mode === 'fixed' ? 'fixed' : 'multiplier',
     costMultiplier: multiplier('costMultiplier', 'cost_multiplier'),
+    groupMultiplierMode: catchAll && explicitGroupMode !== 'inherit' ? 'override' : 'inherit',
     inputCostMultiplier: multiplier('inputCostMultiplier', 'input_cost_multiplier'),
     outputCostMultiplier: multiplier('outputCostMultiplier', 'output_cost_multiplier'),
     cacheCreationCostMultiplier: multiplier('cacheCreationCostMultiplier', 'cache_creation_cost_multiplier'),
@@ -170,6 +174,7 @@ const buildCodexBillingRulePayload = (records) => normalizeCodexBillingRules(rec
   context: record.context,
   mode: record.mode,
   cost_multiplier: record.costMultiplier,
+  group_multiplier_mode: record.groupMultiplierMode,
   input_cost_multiplier: record.inputCostMultiplier,
   output_cost_multiplier: record.outputCostMultiplier,
   cache_creation_cost_multiplier: record.cacheCreationCostMultiplier,
@@ -257,6 +262,8 @@ const mapCodexCredentialGroup = (group) => ({
   longContextCacheCreationCostMultiplier: group.longContextCacheCreationCostMultiplier ?? 1.0,
   longContextCacheReadCostMultiplier: group.longContextCacheReadCostMultiplier ?? 1.0,
   disableLongContextPricing: Boolean(group.disableLongContextPricing),
+  serviceTierSource: group.serviceTierSource || group.service_tier_source || 'response',
+  cacheWriteTTLPricing: Boolean(group.cacheWriteTTLPricing ?? group.cache_write_ttl_pricing),
   billingOutputTokenSource: group.billingOutputTokenSource || group.billing_output_token_source || 'output_tokens',
   modelMultipliers: normalizeCodexModelMultipliers(group.modelMultipliers || group.model_multipliers),
 	 billingRules: normalizeCodexBillingRules(group.billingRules || group.billing_rules),
@@ -290,7 +297,6 @@ const mapCodexChannel = (channel) => {
     failoverEnabled: channel.failover_enabled !== false,
     isActive: Boolean(channel.is_active),
     nonStreamRoute: mapNonStreamRoute(channel.non_stream_route || channel.nonStreamRoute),
-    privacyLevel: normalizeChannelPrivacyLevel(channel.privacy_level ?? channel.privacyLevel),
     credentialGroups: (channel.credential_groups || channel.credentialGroups || []).map(mapCodexCredentialGroup),
     endpoints: sortedEndpoints,
     createdAt: channel.created_at || channel.createdAt || channel.CreatedAt || '',
@@ -322,6 +328,8 @@ const buildCodexCredentialGroupPayload = (input) => {
     longContextCacheCreationCostMultiplier: parseEndpointMultiplier(input?.longContextCacheCreationCostMultiplier),
     longContextCacheReadCostMultiplier: parseEndpointMultiplier(input?.longContextCacheReadCostMultiplier),
     disableLongContextPricing: Boolean(input?.disableLongContextPricing),
+    serviceTierSource: input?.serviceTierSource || input?.service_tier_source || 'response',
+    cacheWriteTTLPricing: Boolean(input?.cacheWriteTTLPricing ?? input?.cache_write_ttl_pricing),
     billingOutputTokenSource: input?.billingOutputTokenSource || input?.billing_output_token_source || 'output_tokens'
   };
   if (input?.subscription) {

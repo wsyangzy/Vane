@@ -37,7 +37,7 @@ const getInitialClaudeCredentialSecretType = (group) => {
   return !hasToken && hasApiKey ? 'apiKey' : 'token';
 };
 
-const hasClaudeCredential = (group) => (isSubscriptionGroup(group) && group.localKeyConfigured) || [
+const hasClaudeCredential = (group) => (isSubscriptionGroup(group) && Boolean(group.subscription)) || [
   group?.token,
   group?.tokenMasked,
   group?.token_masked,

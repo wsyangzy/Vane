@@ -15,9 +15,9 @@ import (
 
 var stateVersionSequence atomic.Uint64
 
-// StateVersion identifies a runtime configuration incarnation, never a token.
-// Reloaded endpoint objects start at zero; in-place config updates reset the
-// slot to zero so old opaque state cannot follow a newly bound backend.
+// StateVersion identifies a backend binding, never a token. Endpoint reloads
+// retain it when destination and credentials are unchanged. Admission checks
+// use it to detect a configuration change between planning and sending.
 func StateVersion(slot *uint64) uint64 {
 	if version := atomic.LoadUint64(slot); version != 0 {
 		return version
@@ -32,13 +32,15 @@ func StateVersion(slot *uint64) uint64 {
 // StateTracker remembers only hashes and execution identities. Opaque content
 // stays in the request/response and is never persisted or logged here.
 type StateTracker struct {
-	mu     sync.Mutex
-	states map[string]stateOwner
-	turns  map[string]stateOwner
+	mu       sync.Mutex
+	states   map[string]stateOwner
+	turns    map[string]stateOwner
+	sequence uint64
 }
 type stateOwner struct {
 	candidate Candidate
 	expires   time.Time
+	observed  uint64
 }
 
 func NewStateTracker() *StateTracker {
@@ -64,22 +66,34 @@ func StateKey(ctx context.Context, kind, value string) string {
 	return stateKey(CallerScope(ctx), kind, value)
 }
 
-func (s *StateTracker) Allowed(keys []string, c Candidate) (bool, string) {
-	if len(keys) == 0 {
-		return true, ""
+// Preference is a best-effort route hint, never an admission check. Clients may
+// replay history from before startup, after expiry, or from another backend;
+// only the upstream can validate its opaque protocol state.
+func (s *StateTracker) Preference(keys []string, turn string) (Candidate, bool) {
+	if s == nil {
+		return Candidate{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
+	latest, found := s.turns[turn]
+	found = found && now.Before(latest.expires)
 	for _, key := range keys {
 		owner, ok := s.states[key]
-		if !ok || !time.Now().Before(owner.expires) {
-			return false, "state_origin_unknown"
-		}
-		if owner.candidate != c {
-			return false, "state_backend_incompatible"
+		if ok && now.Before(owner.expires) && (!found || owner.observed > latest.observed) {
+			latest, found = owner, true
 		}
 	}
-	return true, ""
+	return latest.candidate, found
+}
+
+type statePreferenceKey struct{}
+
+func WithStatePreference(ctx context.Context, tracker *StateTracker, keys []string, turn string) context.Context {
+	if candidate, ok := tracker.Preference(keys, turn); ok {
+		return context.WithValue(ctx, statePreferenceKey{}, candidate)
+	}
+	return ctx
 }
 
 func (s *StateTracker) Observe(keys []string, turn string, c Candidate) {
@@ -96,7 +110,8 @@ func (s *StateTracker) Observe(keys []string, turn string, c Candidate) {
 			delete(s.turns, key)
 		}
 	}
-	owner := stateOwner{candidate: c, expires: now.Add(time.Hour)}
+	s.sequence++
+	owner := stateOwner{candidate: c, expires: now.Add(time.Hour), observed: s.sequence}
 	for _, key := range keys {
 		// Existing ownership is immutable until expiry; another backend cannot
 		// claim somebody else's sealed value merely by echoing it.
@@ -110,13 +125,8 @@ func (s *StateTracker) Observe(keys []string, turn string, c Candidate) {
 }
 
 func (s *StateTracker) Preferred(turn string, c Candidate) bool {
-	if turn == "" {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	owner, ok := s.turns[turn]
-	return ok && time.Now().Before(owner.expires) && owner.candidate == c
+	owner, ok := s.Preference(nil, turn)
+	return ok && owner == c
 }
 
 // CaptureResponse calls observe only after a complete read. The adapter must

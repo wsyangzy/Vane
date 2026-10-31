@@ -261,3 +261,21 @@ test('network display state preserves unknown duration and streaming values', ()
     isStreaming: false,
   });
 });
+
+
+test('network summary uses correlated dispatch attempts and preserves an actual zero-send outcome', () => {
+  const a = { channel: 'A', credentialGroup: 'key-A', endpoint: 'primary' };
+  const b = { channel: 'B', credentialGroup: 'key-B', endpoint: 'fallback' };
+  const summary = summarizeEndpointAttempts({ endpoint: 'fallback', dispatchTrace: { attemptCount: 3, attempts: [a, b, b] } });
+  assert.equal(summary.attemptCount, 3);
+  assert.equal(summary.finalEndpointAttempts, 2);
+  assert.equal(summary.retryCount, 2);
+  assert.equal(summary.transferCount, 1);
+  assert.equal(summary.firstEndpoint, 'primary');
+  assert.equal(summary.finalEndpoint, 'fallback');
+  const blocked = summarizeEndpointAttempts({ dispatchTrace: { attemptCount: 0, attempts: [] } });
+  assert.equal(blocked.attemptCount, 0);
+  assert.equal(blocked.retryCount, 0);
+  assert.equal(blocked.finalEndpointAttempts, null);
+  assert.equal(blocked.firstEndpoint, '');
+});

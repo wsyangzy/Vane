@@ -1,0 +1,130 @@
+.request-filter-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, calc(100vw - 2rem));
+  container-type: inline-size;
+}
+
+.request-filter-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.request-filter-label {
+  display: block;
+  color: var(--color-slate-500);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1rem;
+}
+
+.request-filter-time {
+  display: grid;
+  max-width: 32rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.request-filter-conditions {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.request-filter-select > button {
+  width: 100%;
+  min-width: 0;
+  height: 2.25rem;
+}
+
+.request-filter-select > button > span {
+  min-width: 0;
+}
+
+.request-filter-panel .request-filter-range {
+  min-height: 2.25rem;
+}
+
+.request-filter-panel .date-time-range-boundary {
+  overflow: visible;
+  white-space: normal;
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
+.request-filter-channel-menu {
+  width: min(600px, calc(100vw - 2rem));
+  grid-template-columns: 100px minmax(0, 1fr) minmax(0, 1.2fr);
+}
+
+.request-filter-cascade-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.request-filter-cascade-column + .request-filter-cascade-column {
+  border-left: 1px solid var(--color-slate-100);
+}
+
+.request-filter-cascade-heading {
+  flex-shrink: 0;
+  padding: 0.625rem 0.75rem;
+  border-bottom: 1px solid var(--color-slate-100);
+  color: var(--color-slate-400);
+  font-size: 0.625rem;
+  line-height: 1rem;
+}
+
+.request-filter-cascade-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-block: 0.25rem;
+}
+
+@media (max-width: 560px) {
+  .request-filter-channel-menu {
+    grid-template-columns: 80px minmax(0, 1fr) minmax(0, 1.1fr);
+  }
+
+  .request-filter-channel-menu button {
+    padding-inline: 0.5rem;
+    gap: 0.25rem;
+  }
+}
+
+@container (max-width: 30rem) {
+  .request-filter-conditions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .request-filter-resource {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 25rem) {
+  .request-filter-time {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.375rem;
+  }
+}
+
+@container (max-width: 17rem) {
+  .request-filter-conditions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .request-filter-actions {
+    flex-wrap: wrap;
+  }
+
+  .request-filter-actions > div {
+    margin-left: auto;
+  }
+}

@@ -17,7 +17,19 @@ func (a *App) reloadCodexEndpointManager() error {
 	if manager == nil {
 		return nil
 	}
-	return manager.Reload()
+	if err := manager.Reload(); err != nil {
+		return err
+	}
+	if manager.PoolRuntime() != nil {
+		ctx, cancel := routeCtx()
+		defer cancel()
+		if _, err := a.refreshPoolRuntime(ctx, "codex"); err != nil {
+			a.closePoolRuntime("codex")
+			return err
+		}
+		a.publishPoolRuntime("codex")
+	}
+	return nil
 }
 
 func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {

@@ -1,371 +1,181 @@
-// LogsPage - 系统日志查看页面（主组件）
-// 点击行选中 + 批量复制
 import { useState, useMemo, useRef, useEffect, useDeferredValue, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
-import { useWailsLogs } from '@/features/log-viewer/hooks/useWailsLogs.js';
-import { FileText, RefreshCw, AlertCircle } from 'lucide-react';
+import { AlertCircle, Check, Copy, FileSearch, FilterX, RefreshCw, ScrollText, X } from 'lucide-react';
+import { useWailsLogs } from './hooks/useWailsLogs.js';
 import { LogEntry, LogControls, LogFilters } from './components/index.js';
-import { escapeRegex } from './components/LogEntry.jsx';
-import { SaveResultDialog } from '@/shared/ui/index.js';
-
-// 日志项固定高度（用于虚拟滚动）
-const LOG_ITEM_HEIGHT = 40;
-
+import LogDetailPanel from './components/LogDetailPanel.jsx';
+import { escapeRegex, formatLogText } from './logPresentation.js';
 import { saveLogFile } from '@/services/wails/index.js';
+import { SaveResultDialog, useToast } from '@/shared/ui/index.js';
+import './systemLogs.css';
 
-// 检测组件挂载状态
-function useComponentVisibility() {
-  return true;
+const LOG_ITEM_HEIGHT = 42;
+const MAX_LOGS = 1000;
+
+function LogRow({ index, style, data }) {
+  const log = data.logs[index];
+  return <div style={style}><LogEntry log={log} index={index} searchQuery={data.searchQuery} highlightRegex={data.highlightRegex}
+    isSelected={data.selectedLogs.has(log)} isInspected={data.inspectedLog === log} copied={data.copiedLog === log}
+    onToggleSelect={data.onToggleSelect} onInspect={data.onInspect} onCopy={data.onCopy} /></div>;
 }
 
-// 主页面组件
-function LogsPage() {
-  // 组件可见性
-  const isPageVisible = useComponentVisibility();
-
-  // 日志数据和操作
-  const {
-    logs,
-    loading,
-    error,
-    isStreaming,
-    start,
-    stop,
-    clear,
-    refresh,
-  } = useWailsLogs({
-    maxLogs: 1000,
-    autoStart: true,
-    isActive: isPageVisible,
-  });
-
-  // 本地状态
+export default function LogsPage() {
+  const toast = useToast();
+  const { logs, loading, error, isStreaming, start, stop, clear, refresh } = useWailsLogs({ maxLogs: MAX_LOGS, autoStart: true });
   const [searchQuery, setSearchQuery] = useState('');
   const [levelFilter, setLevelFilter] = useState('ALL');
   const [autoScroll, setAutoScroll] = useState(true);
-  const isInitialLoadRef = useRef(true);
-  const prevLogsLengthRef = useRef(0);
-
-  // 多选状态
-  const [selectedIndices, setSelectedIndices] = useState(new Set());
-
-  // 过滤器变更时清空选中
-  const handleLevelFilterChange = useCallback((nextLevel) => {
-    setLevelFilter(nextLevel);
-    setSelectedIndices(new Set());
-  }, []);
-
-  const handleSearchChange = useCallback((nextQuery) => {
-    setSearchQuery(nextQuery);
-    setSelectedIndices(new Set());
-  }, []);
-
-  // 切换单条日志选择
-  const handleToggleSelect = useCallback((index) => {
-    setSelectedIndices(prev => {
-      const next = new Set(prev);
-      if (next.has(index)) {
-        next.delete(index);
-      } else {
-        next.add(index);
-      }
-      return next;
-    });
-  }, []);
-
-  // 虚拟滚动相关 refs
+  const [selectedLogs, setSelectedLogs] = useState(new Set());
+  const [inspectedLog, setInspectedLog] = useState(null);
+  const [saveResult, setSaveResult] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(null);
+  const [actionError, setActionError] = useState('');
+  const copyTimer = useRef(null);
   const listRef = useRef(null);
+  const tableHeaderRef = useRef(null);
+  const scrollbarObserverRef = useRef(null);
   const containerRef = useRef(null);
   const [listHeight, setListHeight] = useState(400);
-  const setContainerRef = useCallback((node) => {
-    if (!node) return;
-    containerRef.current = node;
-    const nextHeight = node.clientHeight || 400;
-    setListHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-  }, []);
+  const deferredQuery = useDeferredValue(searchQuery);
+  const validLogs = useMemo(() => (Array.isArray(logs) ? logs : []).filter((log) => log && log.message != null), [logs]);
+  const filteredLogs = useMemo(() => {
+    const query = deferredQuery.toLowerCase();
+    return validLogs.filter((log) => (levelFilter === 'ALL' || log.level === levelFilter)
+      && (!query || String(log.message).toLowerCase().includes(query) || JSON.stringify(log.attrs || {}).toLowerCase().includes(query)));
+  }, [validLogs, levelFilter, deferredQuery]);
+  const highlightRegex = useMemo(() => deferredQuery ? new RegExp(`(${escapeRegex(deferredQuery)})`, 'gi') : null, [deferredQuery]);
+  const selected = useMemo(() => filteredLogs.filter((log) => selectedLogs.has(log)), [filteredLogs, selectedLogs]);
+  const stats = useMemo(() => {
+    const counts = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 };
+    validLogs.forEach((log) => { if (counts[log.level] !== undefined) counts[log.level]++; });
+    return counts;
+  }, [validLogs]);
 
+  const setContainerRef = useCallback((node) => {
+    containerRef.current = node;
+    if (node) setListHeight(node.clientHeight || 400);
+  }, []);
+  const setListOuterRef = useCallback((node) => {
+    scrollbarObserverRef.current?.disconnect();
+    const measure = () => tableHeaderRef.current?.style.setProperty('--system-log-scrollbar-width', `${node ? node.offsetWidth - node.clientWidth : 0}px`);
+    measure();
+    if (node) {
+      scrollbarObserverRef.current = new ResizeObserver(measure);
+      scrollbarObserverRef.current.observe(node);
+    }
+  }, []);
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
-    // The available space changes with window size and wrapped header controls.
-    const observer = new ResizeObserver(() => {
-      const nextHeight = Math.max(1, container.clientHeight);
-      setListHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-    });
+    const observer = new ResizeObserver(() => setListHeight(Math.max(1, container.clientHeight)));
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
-
-  // 搜索防抖 - 使用 useDeferredValue 延迟过滤计算
-  const deferredSearchQuery = useDeferredValue(searchQuery);
-
-  // 缓存正则表达式（仅在 deferredSearchQuery 变化时重新编译）
-  const highlightRegex = useMemo(() => {
-    if (!deferredSearchQuery) return null;
-    try {
-      return new RegExp(`(${escapeRegex(deferredSearchQuery)})`, 'gi');
-    } catch {
-      return null;
-    }
-  }, [deferredSearchQuery]);
-
-  // 保存结果弹窗状态
-  const [saveResult, setSaveResult] = useState(null);
-  const [showSaveDialog, setShowSaveDialog] = useState(false);
-
-  // 批量复制成功提示
-  const [copySuccess, setCopySuccess] = useState(false);
-
-  // 过滤日志（使用 deferredSearchQuery 实现防抖）
-  const filteredLogs = useMemo(() => {
-    // 防御性检查：确保 logs 是数组且元素有效
-    if (!Array.isArray(logs)) return [];
-
-    let result = logs.filter(log => log && log.message != null);
-
-    // 日志级别过滤
-    if (levelFilter !== 'ALL') {
-      result = result.filter(log => log.level === levelFilter);
-    }
-
-    // 搜索过滤（使用防抖后的查询值）
-    if (deferredSearchQuery) {
-      const query = deferredSearchQuery.toLowerCase();
-      result = result.filter(log =>
-        (log.message || '').toLowerCase().includes(query) ||
-        (log.attrs && JSON.stringify(log.attrs).toLowerCase().includes(query))
-      );
-    }
-
-    return result;
-  }, [logs, levelFilter, deferredSearchQuery]);
-
-  // 复制选中的日志
-  const handleCopySelected = useCallback(async () => {
-    if (selectedIndices.size === 0) return;
-
-    const sortedIndices = Array.from(selectedIndices).sort((a, b) => a - b);
-    const content = sortedIndices
-      .map(index => {
-        const log = filteredLogs[index];
-        if (!log) return '';
-        const timestamp = new Date(log.timestamp).toLocaleString('zh-CN', {
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour12: false,
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          fractionalSecondDigits: 3,
-        });
-        let logText = `[${timestamp}] [${log.level}] ${log.message}`;
-        if (log.attrs && Object.keys(log.attrs).length > 0) {
-          const attrsText = Object.entries(log.attrs)
-            .map(([key, value]) => `${key}=${value}`)
-            .join(' ');
-          logText += ` | ${attrsText}`;
-        }
-        return logText;
-      })
-      .filter(Boolean)
-      .join('\n');
-
-    try {
-      await navigator.clipboard.writeText(content);
-      setSelectedIndices(new Set());
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    } catch (err) {
-      console.error('批量复制失败:', err);
-    }
-  }, [selectedIndices, filteredLogs]);
-
-  // 统计信息
-  const stats = useMemo(() => {
-    const counts = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 };
-    if (!Array.isArray(logs)) return counts;
-
-    logs.forEach(log => {
-      if (log && counts[log.level] !== undefined) {
-        counts[log.level]++;
-      }
-    });
-    return counts;
-  }, [logs]);
-
-  // 自动滚动逻辑（适配虚拟滚动）
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  useEffect(() => () => scrollbarObserverRef.current?.disconnect(), []);
+  // Depend on the records themselves: the live buffer stays at 1000 entries as it rolls.
   useEffect(() => {
-    if (isInitialLoadRef.current && !loading && logs.length > 0) {
-      isInitialLoadRef.current = false;
-      prevLogsLengthRef.current = logs.length;
-      // 初始加载时滚动到底部
-      if (listRef.current) {
-        listRef.current.scrollToItem(filteredLogs.length - 1, 'end');
-      }
-      return;
-    }
+    if (autoScroll && !loading && filteredLogs.length) listRef.current?.scrollToItem(filteredLogs.length - 1, 'end');
+  }, [filteredLogs, autoScroll, loading, listHeight]);
 
-    const hasNewLogs = logs.length > prevLogsLengthRef.current;
-    if (autoScroll && hasNewLogs && !loading && listRef.current) {
-      // 使用虚拟列表的 scrollToItem 方法
-      listRef.current.scrollToItem(filteredLogs.length - 1, 'end');
-    }
-
-    prevLogsLengthRef.current = logs.length;
-  }, [logs.length, filteredLogs.length, autoScroll, loading]);
-
-  // 导出日志 (使用原生文件对话框)
-  const handleExport = async () => {
-    const content = filteredLogs
-      .map(log => `[${log.timestamp}] [${log.level}] ${log.message}`)
-      .join('\n');
-
-    // 生成默认文件名
-    const now = new Date();
-    const defaultFileName = `logs-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.txt`;
-
+  const handleLevelChange = (level) => { setLevelFilter(level); setSelectedLogs(new Set()); setInspectedLog(null); };
+  const handleSearchChange = (query) => { setSearchQuery(query); setSelectedLogs(new Set()); setInspectedLog(null); };
+  const toggleSelect = useCallback((log) => {
+    // Record identity keeps a selection attached to its log when the live buffer rolls.
+    setSelectedLogs((previous) => {
+      const next = new Set(filteredLogs.filter((entry) => previous.has(entry)));
+      if (next.has(log)) next.delete(log);
+      else next.add(log);
+      return next;
+    });
+  }, [filteredLogs]);
+  const inspect = useCallback((log) => setInspectedLog(log), []);
+  const copyLogs = useCallback(async (entries, kind) => {
+    if (!entries.length) return false;
     try {
-      const result = await saveLogFile(content, defaultFileName);
-
-      // 用户取消不显示弹窗
-      if (!result.success && result.error === 'cancelled') {
-        return;
-      }
-
-      // 显示结果弹窗
-      setSaveResult({
-        success: result.success,
-        fileName: result.file_name,
-        filePath: result.file_path,
-        fileSize: result.file_size,
-        error: result.error
-      });
-      setShowSaveDialog(true);
-    } catch (err) {
-      // API 调用失败
-      setSaveResult({
-        success: false,
-        error: err.message || '保存失败'
-      });
-      setShowSaveDialog(true);
+      await navigator.clipboard.writeText(entries.map(formatLogText).join('\n'));
+      setActionError('');
+      setCopyFeedback({ kind, log: entries.length === 1 ? entries[0] : null });
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopyFeedback(null), 2000);
+      return true;
+    } catch {
+      setActionError('复制日志失败，请重试。');
+      return false;
     }
-  };
-
-  // 清空日志
+  }, []);
+  const copyOne = useCallback((log) => copyLogs([log], 'single'), [copyLogs]);
+  const copySelected = async () => { if (await copyLogs(selected, 'selection')) setSelectedLogs(new Set()); };
   const handleClear = () => {
     clear();
-    isInitialLoadRef.current = true;
-    prevLogsLengthRef.current = 0;
+    setSelectedLogs(new Set());
+    setInspectedLog(null);
+    setActionError('');
+    setCopyFeedback(null);
+  };
+  const handleRefresh = () => { setActionError(''); setSelectedLogs(new Set()); return refresh(); };
+  const resetFilters = () => { handleLevelChange('ALL'); setSearchQuery(''); };
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setSaveResult(null);
+    const now = new Date();
+    const fileName = `logs-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}.txt`;
+    try {
+      const result = await saveLogFile(filteredLogs.map(formatLogText).join('\n'), fileName);
+      if (!result.success && result.error === 'cancelled') return;
+      if (result.success) toast.success(`已保存 ${result.file_name || fileName}`, '日志已导出');
+      else setSaveResult({ success: false, error: result.error });
+    } catch (err) {
+      setSaveResult({ success: false, error: err.message || '保存失败' });
+    } finally {
+      setExporting(false);
+    }
   };
 
-  return (
-    <div
-      className="flex min-h-0 flex-1 flex-col bg-white rounded-lg overflow-hidden border border-slate-200 shadow-sm"
-    >
-      {/* 页面头部 - 固定 */}
-      <div className="shrink-0 border-b border-slate-200 px-4 py-3">
-        {/* 标题栏 */}
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className="shrink-0 rounded-lg bg-slate-900 p-1.5 text-white shadow-sm">
-              <FileText size={20} />
-            </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="text-xl font-bold text-slate-900">系统日志</h1>
-              <p className="text-xs text-slate-500">
-                共 {logs.length} 条
-                {filteredLogs.length !== logs.length && ` · 筛选后 ${filteredLogs.length} 条`}
-              </p>
-            </div>
-          </div>
+  const itemData = useMemo(() => ({
+    logs: filteredLogs, searchQuery: deferredQuery, highlightRegex, selectedLogs, inspectedLog,
+    copiedLog: copyFeedback?.log, onToggleSelect: toggleSelect, onInspect: inspect, onCopy: copyOne
+  }), [filteredLogs, deferredQuery, highlightRegex, selectedLogs, inspectedLog, copyFeedback, toggleSelect, inspect, copyOne]);
+  const copySuccess = copyFeedback?.kind === 'selection';
+  const hasFilters = Boolean(searchQuery || levelFilter !== 'ALL');
 
-          <LogControls
-            isStreaming={isStreaming}
-            loading={loading}
-            logsCount={filteredLogs.length}
-            onToggleStream={isStreaming ? stop : start}
-            onRefresh={refresh}
-            onClear={handleClear}
-            onExport={handleExport}
-            selectedCount={selectedIndices.size}
-            onCopySelected={handleCopySelected}
-            copySuccess={copySuccess}
-          />
+  return <div className="system-logs-page">
+    <header className="system-logs-page-header">
+      <div className="system-logs-heading"><span className="system-logs-emblem"><ScrollText size={20} /></span><h1>系统日志</h1><span className="system-logs-caption">运行事件与诊断信息</span></div>
+      <LogControls isStreaming={isStreaming} loading={loading} exporting={exporting} logsCount={validLogs.length} exportCount={filteredLogs.length}
+        onToggleStream={isStreaming ? stop : start} onRefresh={handleRefresh} onClear={handleClear} onExport={handleExport} />
+    </header>
+    <section className="system-log-workspace" aria-label="系统日志工作区">
+      <LogFilters stats={stats} totalLogs={validLogs.length} levelFilter={levelFilter} onLevelFilterChange={handleLevelChange}
+        searchQuery={searchQuery} onSearchChange={handleSearchChange} autoScroll={autoScroll} onAutoScrollChange={setAutoScroll} />
+      {(error || actionError) && <div role="alert" className="system-log-error"><AlertCircle size={14} /><span>{error || actionError}</span>
+        {error ? <button type="button" className="system-log-action" onClick={handleRefresh} disabled={loading}><RefreshCw size={12} />重试</button> : <button type="button" className="system-log-icon" aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={13} /></button>}
+      </div>}
+      <div className="system-log-workspace-body">
+        <div className="system-log-table" role="table" aria-label="系统日志记录" aria-rowcount={filteredLogs.length + 1}>
+          <div ref={tableHeaderRef} role="row" className="system-log-table-header system-log-columns">
+            <div role="columnheader" className="system-log-selection"><input type="checkbox" className="system-log-checkbox" aria-label="全选筛选结果" checked={filteredLogs.length > 0 && selected.length === filteredLogs.length}
+              ref={(node) => { if (node) node.indeterminate = selected.length > 0 && selected.length < filteredLogs.length; }} disabled={!filteredLogs.length}
+              onChange={() => setSelectedLogs(selected.length === filteredLogs.length ? new Set() : new Set(filteredLogs))} /></div>
+            <div role="columnheader">时间</div><div role="columnheader">级别</div><div role="columnheader">日志消息</div><div role="columnheader" className="system-log-fields">附加字段</div><div role="columnheader" className="system-log-actions-heading">操作</div>
+          </div>
+          <div ref={setContainerRef} className="system-log-list-region" role="rowgroup">
+            {loading && !validLogs.length ? <div role="status" className="system-log-empty"><span className="system-log-empty-icon"><RefreshCw size={22} className="animate-spin" /></span><h2>正在读取日志</h2><p>加载最近的运行记录</p></div>
+              : !filteredLogs.length ? <div className="system-log-empty"><span className="system-log-empty-icon"><FileSearch size={24} /></span><h2>{error ? '暂时无法读取日志' : hasFilters ? '没有匹配的日志' : '暂无日志记录'}</h2><p>{error ? '请重试或刷新日志' : hasFilters ? '调整级别或关键词后重试' : isStreaming ? '新的运行事件将在这里实时显示' : '开始接收后查看新的运行事件'}</p>
+                {hasFilters && <button type="button" className="system-log-action" onClick={resetFilters}><FilterX size={13} />清除筛选</button>}</div>
+                : <List ref={listRef} outerRef={setListOuterRef} className="system-log-virtual-list scrollbar-visible" style={{ overflowX: 'hidden' }} height={listHeight} itemCount={filteredLogs.length} itemSize={LOG_ITEM_HEIGHT} width="100%" itemData={itemData}>{LogRow}</List>}
+          </div>
         </div>
-
-        {/* 过滤器栏 */}
-        <LogFilters
-          stats={stats}
-          levelFilter={levelFilter}
-          onLevelFilterChange={handleLevelFilterChange}
-          searchQuery={searchQuery}
-          onSearchChange={handleSearchChange}
-          autoScroll={autoScroll}
-          onAutoScrollChange={setAutoScroll}
-          totalLogs={logs.length}
-        />
+        {inspectedLog && <LogDetailPanel log={inspectedLog} copied={copyFeedback?.log === inspectedLog} onCopy={copyOne} onClose={() => setInspectedLog(null)} />}
       </div>
-
-      {/* 日志内容区域 - 虚拟滚动 */}
-      <div ref={setContainerRef} className="flex-1 overflow-hidden bg-white">
-        {loading && logs.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-400">
-            <RefreshCw size={24} className="animate-spin mr-2" />
-            加载中...
-          </div>
-        ) : error ? (
-          <div className="flex items-center justify-center h-full text-red-500">
-            <AlertCircle size={24} className="mr-2" />
-            {error}
-          </div>
-        ) : filteredLogs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400">
-            <FileText size={48} className="mb-2 opacity-50" />
-            <p className="text-lg">暂无日志</p>
-            {searchQuery || levelFilter !== 'ALL' ? (
-              <p className="text-sm mt-1">尝试调整搜索条件或过滤器</p>
-            ) : null}
-          </div>
-        ) : (
-          <List
-            ref={listRef}
-            height={listHeight || 400}
-            itemCount={filteredLogs.length}
-            itemSize={LOG_ITEM_HEIGHT}
-            width="100%"
-            itemData={{
-              logs: filteredLogs || [],
-              searchQuery: deferredSearchQuery || '',
-              highlightRegex: highlightRegex || null,
-              selectedIndices,
-              onToggleSelect: handleToggleSelect
-            }}
-          >
-            {({ index, style, data }) => (
-              <div style={style}>
-                <LogEntry
-                  log={data.logs[index]}
-                  index={index}
-                  searchQuery={data.searchQuery}
-                  highlightRegex={data.highlightRegex}
-                  isSelected={data.selectedIndices.has(index)}
-                  onToggleSelect={data.onToggleSelect}
-                />
-              </div>
-            )}
-          </List>
-        )}
-      </div>
-
-      {/* 保存结果弹窗 */}
-      <SaveResultDialog
-        isOpen={showSaveDialog}
-        result={saveResult}
-        onClose={() => setShowSaveDialog(false)}
-      />
-    </div>
-  );
+      <footer className="system-log-footer">
+        <div className="system-log-footer-summary"><span>显示 <strong>{filteredLogs.length}</strong> / {validLogs.length} 条</span><span className="system-log-retention">最多显示 {MAX_LOGS} 条</span>{selected.length > 0 && <span className="system-log-selected-count">已选 {selected.length} 条</span>}</div>
+        <div className="system-log-footer-actions">{selected.length > 0 && <button type="button" className="system-log-icon" aria-label="取消选择日志" onClick={() => setSelectedLogs(new Set())}><X size={13} /></button>}
+          <button type="button" className="system-log-action system-log-copy-selection" disabled={!selected.length} onClick={copySelected}>{copySuccess ? <Check size={13} /> : <Copy size={13} />}{copySuccess ? '已复制' : '复制所选'}</button>
+        </div>
+      </footer>
+    </section>
+    <SaveResultDialog isOpen={Boolean(saveResult)} result={saveResult} onClose={() => setSaveResult(null)} />
+  </div>;
 }
-
-export default LogsPage;

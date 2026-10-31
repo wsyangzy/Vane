@@ -40,6 +40,18 @@ type segmentMatcher func(path []pathElem) bool
 // 未覆盖路径仍由 Settings.UnsupportedPathAction 显式暴露给用户，不做静默跳过。
 func walkerForPath(requestPath string) segmentMatcher {
 	switch normalizeScanPath(requestPath) {
+	case "/internal/routing/classify":
+		return func(path []pathElem) bool {
+			if len(path) != 1 || path[0].Index >= 0 {
+				return false
+			}
+			switch path[0].Key {
+			case "current_user_message", "previous_user_message", "previous_assistant_text":
+				return true
+			default:
+				return false
+			}
+		}
 	case "/v1/messages", "/v1/messages/count_tokens":
 		return matchClaudeMessagesTextPath
 	case "/v1/responses", "/v1/responses/compact":
@@ -98,6 +110,7 @@ var protocolTopLevelKeys = map[string]bool{
 var protocolAnyLevelKeys = map[string]bool{
 	"type": true, "role": true, "id": true, "call_id": true, "tool_use_id": true, "tool_call_id": true,
 	"name": true, "status": true, "signature": true, "encrypted_content": true, "data": true,
+	"namespace": true, "server_label": true, "server_name": true, "thoughtSignature": true, "thought_signature": true,
 	"media_type": true, "mime_type": true, "cache_control": true, "file_id": true, "image_url": true,
 	"url": true, "detail": true, "format": true, "citations": true, "phase": true,
 }
@@ -113,8 +126,21 @@ func isProtocolStringPath(path []pathElem) bool {
 	if path[0].Index < 0 && protocolTopLevelKeys[path[0].Key] {
 		return true
 	}
+	if isToolArgumentPath(path) {
+		return false
+	}
 	for _, elem := range path {
 		if elem.Index < 0 && protocolAnyLevelKeys[elem.Key] {
+			return true
+		}
+	}
+	return false
+}
+
+// Tool input keys belong to the user's data, even when named id/name/url.
+func isToolArgumentPath(path []pathElem) bool {
+	for i, elem := range path {
+		if i > 1 && elem.Index < 0 && (elem.Key == "input" || elem.Key == "args" || elem.Key == "arguments") {
 			return true
 		}
 	}
@@ -136,7 +162,7 @@ func matchClaudeMessagesTextPath(path []pathElem) bool {
 	if path[0].Key != "system" && path[0].Key != "messages" {
 		return false
 	}
-	if last := path[len(path)-1]; last.Index < 0 && last.Key == "thinking" {
+	if last := path[len(path)-1]; last.Index < 0 && last.Key == "thinking" && !isToolArgumentPath(path) {
 		return false
 	}
 	return !isProtocolStringPath(path)
@@ -278,7 +304,9 @@ func walkJSONTextSegments(body []byte, match segmentMatcher, withPaths bool) ([]
 			// 只可能有空白/逗号/冒号，因此首个双引号即 token 起点。
 			if match != nil {
 				path := currentPath()
-				if match(path) {
+				// Encoded media remains opaque even inside tool arguments.
+				binary := strings.HasPrefix(tok, "data:") || len(path) > 1 && path[len(path)-1].Key == "data" && path[len(path)-2].Key == "source"
+				if !binary && match(path) {
 					gap := body[prevOffset:offset]
 					quote := bytes.IndexByte(gap, '"')
 					if quote < 0 {

@@ -1,34 +1,18 @@
 import { useState } from 'react';
-import { ArrowRight, Pencil, Plus, Trash2, XCircle } from 'lucide-react';
-import { Button, Input, SegmentedTabs, Tooltip } from '@/shared/ui/index.js';
+import { Pencil, Plus, XCircle } from 'lucide-react';
+import { Button, Input, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
-import NonStreamRouteEditor from '@/features/providers/shared/routing/NonStreamRouteEditor.jsx';
-import ChannelModelRoutesEditor from '@/features/providers/shared/routing/ChannelModelRoutesEditor.jsx';
-import ChannelPrivacyLevelSelector from '@/features/providers/shared/privacy/ChannelPrivacyLevelSelector.jsx';
-import ChannelFeatureSettings from '@/features/providers/shared/routing/ChannelFeatureSettings.jsx';
-import { useChannelFeatureTabs } from '@/features/providers/shared/routing/useChannelFeatureTabs.js';
-import { buildNonStreamRouteForm, nonStreamRouteFromForm, validateRouteTargets } from '@/features/providers/shared/routing/routeTargets.js';
-import { buildModelMappingPayload } from '@/features/providers/shared/routing/modelMapping.js';
 import { isWailsEnvironment } from '@/services/wails/index.js';
-import { buildInitialChannelForm, CODEX_CHANNEL_FORM_TABS, CODEX_CHANNEL_EDIT_FORM_TABS } from '../model.js';
+import { buildInitialChannelForm } from '../model.js';
 
 // ============================================================================
 // 渠道编辑弹窗（凭证分组在渠道卡片中独立维护）
 // ============================================================================
 const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serverError, onCancel, onSave }) => {
   const [formData, setFormData] = useState(() => buildInitialChannelForm(channel));
-  const [nonStreamForm, setNonStreamForm] = useState(() => buildNonStreamRouteForm(channel?.nonStreamRoute));
-  const [privacyLevel, setPrivacyLevel] = useState(() => channel?.privacyLevel || '');
-  const [activeTab, setActiveTab] = useState('basic');
   const [fieldError, setFieldError] = useState('');
   const isWails = isWailsEnvironment();
   const isEdit = mode === 'edit';
-  const channelId = Number(channel?.id) || 0;
-  const canEditNonStream = isEdit && channelId > 0;
-  const { features, toggleFeature, visibleTabs } = useChannelFeatureTabs({
-    provider: 'codex', channelId, modelMapping: channel?.modelMapping, nonStreamRoute: channel?.nonStreamRoute,
-    tabs: canEditNonStream ? CODEX_CHANNEL_EDIT_FORM_TABS : CODEX_CHANNEL_FORM_TABS
-  });
   const modalTopPadding = isWails ? 48 : 16;
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
@@ -40,44 +24,11 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
     }
   };
 
-  const updateMappingRow = (index, key, value) => {
-    setFormData((prev) => ({
-      ...prev,
-      modelMappingRows: (prev.modelMappingRows || []).map((row, rowIndex) =>
-        rowIndex === index ? { ...row, [key]: value } : row
-      )
-    }));
-    if (fieldError) {
-      setFieldError('');
-    }
-  };
-
-  const addMappingRow = () => {
-    setFormData((prev) => ({
-      ...prev,
-      modelMappingRows: [
-        ...(prev.modelMappingRows || []),
-        { sourceModel: '', targetModel: '' }
-      ]
-    }));
-  };
-
-  const removeMappingRow = (index) => {
-    setFormData((prev) => {
-      const nextRows = (prev.modelMappingRows || []).filter((_, rowIndex) => rowIndex !== index);
-      return {
-        ...prev,
-        modelMappingRows: nextRows.length > 0 ? nextRows : [{ sourceModel: '', targetModel: '' }]
-      };
-    });
-  };
-
   const handleSubmit = async (event) => {
     event.preventDefault();
 
     const name = formData.name.trim();
     if (!name) {
-      setActiveTab('basic');
       setFieldError('请填写渠道名');
       return;
     }
@@ -86,19 +37,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
     const hasPriority = priorityValue !== '';
     const parsedPriority = Number(priorityValue);
     if ((isEdit && !hasPriority) || (hasPriority && (!Number.isInteger(parsedPriority) || parsedPriority < 0))) {
-      setActiveTab('basic');
       setFieldError('优先级必须是 0 或更大的整数');
       return;
-    }
-
-    if (canEditNonStream && nonStreamForm.enabled) {
-      const routeError = validateRouteTargets(nonStreamForm.targets);
-      if (routeError) {
-        if (!features.nonStream) toggleFeature('nonStream');
-        setActiveTab('nonStream');
-        setFieldError(routeError);
-        return;
-      }
     }
 
     const payload = {
@@ -106,10 +46,10 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       apiKey: '',
       website: formData.website.trim(),
       model: formData.model.trim(),
-      modelMapping: buildModelMappingPayload(formData.modelMappingRows),
+      // Saving basic channel fields must preserve stored model mappings.
+      modelMapping: isEdit ? { ...(channel?.modelMapping || {}) } : {},
       priority: !isEdit && !hasPriority ? -1 : parsedPriority,
       failoverEnabled: formData.failoverEnabled,
-      ...(canEditNonStream ? { nonStreamRoute: nonStreamRouteFromForm(nonStreamForm), privacyLevel } : {})
     };
 
     await onSave?.(payload);
@@ -129,8 +69,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               {isEdit ? <Pencil size={18} /> : <Plus size={18} />}
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道'}</h2>
-              <p className="mt-0.5 text-xs text-slate-500">渠道保存基础信息；API Key 在凭证分组中维护，模型/推理/1M 在「Codex 配置」中全局调整</p>
+              <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道 · 1/3'}</h2>
+              <p className="mt-0.5 text-xs text-slate-500">{isEdit ? '渠道保存基础信息；凭证在分组中维护，调度方式在方案中设置' : '填写渠道信息，完成凭证和端点配置后统一创建；中途退出不保存'}</p>
             </div>
           </div>
           <Tooltip content="关闭">
@@ -139,6 +79,7 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               onClick={onCancel}
               className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
               disabled={loading}
+              aria-label="关闭"
             >
               <XCircle size={18} />
             </button>
@@ -146,16 +87,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
         </div>
 
         <form className="flex min-h-0 flex-1 flex-col overflow-hidden" onSubmit={handleSubmit} autoComplete="off">
-          <div className="flex-shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
-            <SegmentedTabs
-              tabs={visibleTabs}
-              activeTab={activeTab}
-              onChange={setActiveTab}
-              disabled={loading}
-              className="grid-flow-col auto-cols-fr"
-              buttonPaddingClass="px-2"
-            />
-          </div>
           <div className="space-y-3.5 overflow-y-auto px-6 py-5">
             {(fieldError || serverError) && (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -163,8 +94,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               </div>
             )}
 
-            {activeTab === 'basic' ? (
-              <>
             <div className="grid grid-cols-2 gap-4">
               <Input
                 label="渠道名"
@@ -236,82 +165,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               )}
             </div>
 
-            {canEditNonStream && (
-              <ChannelPrivacyLevelSelector value={privacyLevel} onChange={setPrivacyLevel} disabled={loading} />
-            )}
-            <ChannelFeatureSettings features={features} onToggle={toggleFeature} canEditRoutes={canEditNonStream} disabled={loading} />
-              </>
-            ) : activeTab === 'mapping' ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">模型映射</h3>
-                    <p className="mt-0.5 text-xs text-slate-500">请求模型精确命中后替换为该渠道支持的模型。</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={addMappingRow}
-                    className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                  >
-                    <Plus size={14} />
-                    添加
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {(formData.modelMappingRows || []).map((row, index) => (
-                    <div
-                      key={`codex-model-mapping-${index}`}
-                      className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr_auto] sm:items-center"
-                    >
-                      <input
-                        type="text"
-                        value={row.sourceModel}
-                        onChange={(event) => updateMappingRow(index, 'sourceModel', event.target.value)}
-                        placeholder="gpt-5.4-mini"
-                        className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                      <ArrowRight size={16} className="text-slate-400" />
-                      <input
-                        type="text"
-                        value={row.targetModel}
-                        onChange={(event) => updateMappingRow(index, 'targetModel', event.target.value)}
-                        placeholder="gpt-5-mini"
-                        className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                      <Tooltip content="删除映射">
-                        <button
-                          type="button"
-                          onClick={() => removeMappingRow(index)}
-                          className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </Tooltip>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-slate-400">未命中映射时，仍按基础信息中的渠道模型覆盖规则处理。</p>
-              </div>
-            ) : activeTab === 'modelRoutes' && canEditNonStream ? (
-              <ChannelModelRoutesEditor
-                provider="codex"
-                channelId={channelId}
-                channelName={channel?.name || ''}
-                disabled={loading}
-              />
-            ) : canEditNonStream ? (
-              <NonStreamRouteEditor
-                provider="codex"
-                channelId={channelId}
-                value={nonStreamForm}
-                onChange={(next) => {
-                  setNonStreamForm(next);
-                  if (fieldError) setFieldError('');
-                }}
-                disabled={loading}
-              />
-            ) : null}
           </div>
 
           <div className="flex flex-shrink-0 items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/40 px-6 py-3">

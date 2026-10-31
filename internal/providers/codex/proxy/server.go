@@ -46,6 +46,9 @@ func NewHTTPHandler(manager *EndpointManager, cfg ServerConfig, logger *slog.Log
 
 	transportProvider := transport.NewProvider(cfg.Config)
 	handler := NewHandlerWithTransport(manager, timeout, cfg.Retry, cfg.Failover, cfg.SuspensionMgr, logger, usageTracker, transportProvider, privacyService...)
+	if cfg.Config != nil {
+		handler.forwarder.defaultTimeout = func() time.Duration { return cfg.Config.GlobalTimeout }
+	}
 	httpHandler := &HTTPHandler{handler: handler}
 	httpHandler.UpdateLogger(logger)
 	return httpHandler

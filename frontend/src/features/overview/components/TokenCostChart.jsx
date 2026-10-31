@@ -18,6 +18,7 @@ import {
 import { fetchEndpointCostsData } from '@/services/http/api.js';
 import { Tooltip as UiTooltip, useToast } from '@/shared/ui/index.js';
 import { formatCacheHitRate } from '@/features/requests/utils/tokenDisplay.js';
+import { prepareGroupCosts } from '../credentialGroupStats.js';
 
 // 格式化 Token 数量
 const formatTokens = (value) => {
@@ -25,18 +26,6 @@ const formatTokens = (value) => {
   if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
   return value.toString();
 };
-
-const parseEndpointCostLabel = (label) => {
-  const name = String(label || '')
-  const match = name.match(/^(.*?)\s*\((.*?)\)\s*$/)
-  if (!match) {
-    return { endpoint: name, group: '' }
-  }
-  return {
-    endpoint: match[1]?.trim() || name,
-    group: match[2]?.trim() || ''
-  }
-}
 
 // 自定义 Tooltip
 const CustomTooltip = ({ active, payload }) => {
@@ -46,7 +35,6 @@ const CustomTooltip = ({ active, payload }) => {
   const providerLabel = item?.provider === 'codex' ? 'Codex' : 'Claude'
   const channelName = item?.channel || item?.channelName || '-'
   const groupName = item?.group || item?.groupName || '-'
-  const endpointName = item?.endpoint || item?.endpointName || item?.name || '-'
 
   return (
     <div className="min-w-[240px] max-w-[320px] bg-white p-3 rounded-lg shadow-lg border border-slate-100 text-sm">
@@ -62,12 +50,8 @@ const CustomTooltip = ({ active, payload }) => {
       </div>
       <div className="mb-2 space-y-1 border-b border-slate-100 pb-2">
         <div className="flex items-start justify-between gap-4 text-xs">
-          <span className="text-slate-400">分组</span>
+          <span className="text-slate-400">凭证分组</span>
           <span className="max-w-[190px] break-words text-right font-medium text-slate-700">{groupName}</span>
-        </div>
-        <div className="flex items-start justify-between gap-4 text-xs">
-          <span className="text-slate-400">端点</span>
-          <span className="max-w-[190px] break-words text-right font-medium text-slate-700">{endpointName}</span>
         </div>
       </div>
       {payload.map((entry, index) => (
@@ -102,13 +86,13 @@ const TokenCostChart = () => {
     }
     try {
       const data = await fetchEndpointCostsData(provider);
-      setChartData(data);
+      setChartData(prepareGroupCosts(data));
       lastErrorRef.current = '';
     } catch (error) {
-      console.error('加载端点成本数据失败:', error);
-      const message = error?.message || '端点成本数据加载失败';
+      console.error('加载凭证分组成本数据失败:', error);
+      const message = error?.message || '凭证分组成本数据加载失败';
       if (showRefreshing || lastErrorRef.current !== message) {
-        toast.error(message, '端点成本数据加载失败');
+        toast.error(message, '凭证分组成本数据加载失败');
       }
       lastErrorRef.current = message;
     } finally {
@@ -138,28 +122,10 @@ const TokenCostChart = () => {
   // 监听 SSE 图表更新事件
   useEffect(() => {
     const handleChartUpdate = (event) => {
-      const { chart_type, data } = event.detail || {};
+      const { chart_type } = event.detail || {};
       if (chart_type === 'endpoint_costs' || chart_type === 'endpointCosts') {
-        if (Array.isArray(data)) {
-          setChartData(data);
-        } else if (data?.labels && data?.datasets) {
-          // 如果是 Chart.js 格式，转换为 Recharts 格式
-          const tokensData = data.datasets.find(d => d.label?.includes('Token'))?.data || [];
-          const costData = data.datasets.find(d => d.label?.includes('成本') || d.label?.includes('Cost'))?.data || [];
-          const converted = data.labels.map((name, i) => {
-            const labelParts = parseEndpointCostLabel(name)
-            return {
-              name,
-              channel: '',
-              endpoint: labelParts.endpoint,
-              group: labelParts.group,
-              tokens: tokensData[i] || 0,
-              cost: costData[i] || 0
-            }
-          });
-          setChartData(converted);
-        }
-        console.log('📊 [SSE] 端点成本图已更新');
+        // Legacy endpoint broadcasts only invalidate; reload group aggregates.
+        loadData();
       }
     };
 
@@ -167,7 +133,7 @@ const TokenCostChart = () => {
     return () => {
       document.removeEventListener('chartUpdate', handleChartUpdate);
     };
-  }, []);
+  }, [loadData]);
 
   // 手动刷新
   const handleRefresh = () => {
@@ -181,7 +147,7 @@ const TokenCostChart = () => {
           <div className="p-1.5 bg-rose-50 text-rose-500 rounded-md">
             <DollarSign size={16} />
           </div>
-          <h3 className="font-semibold text-slate-900">当日端点 Token 成本</h3>
+          <h3 className="font-semibold text-slate-900">当日凭证分组 Token 成本</h3>
         </div>
         <UiTooltip content="刷新数据">
           <button
@@ -194,7 +160,7 @@ const TokenCostChart = () => {
           </button>
         </UiTooltip>
       </div>
-      <p className="text-xs text-slate-500 mb-4">Token 使用量与预估成本对照</p>
+      <p className="text-xs text-slate-500 mb-4">按提供商、渠道与凭证分组汇总，合并同一分组下全部端点的用量与成本。</p>
 
       <div className="h-[280px] w-full">
         {loading ? (
@@ -221,7 +187,6 @@ const TokenCostChart = () => {
                     : payload.value
                   return (
                     <text x={x} y={y + 12} textAnchor="middle" fill="#64748b" fontSize={11}>
-                      <title>{payload.value}</title>
                       {text}
                     </text>
                   )

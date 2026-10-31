@@ -9,7 +9,7 @@ import (
 
 // handleNonStreaming 处理非流式响应：读取完整 body，解析 token，写回客户端。
 // 返回 false 表示上游虽给了 2xx 但正文没读完整，端点不应被记为成功。
-func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int) bool {
+func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response, requestID string, startTime time.Time, requestModel, endpointName, groupName, channelName string, hopsTried int, beforeArchive ...func()) bool {
 	defer resp.Body.Close()
 
 	// 🆕 [详细日志] 非流式处理开始（emoji 风格，对齐 Claude 日志详细度）
@@ -103,6 +103,9 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		"provider", "codex", "request_id", requestID)
 
 	h.recordOutputSent(requestID)
+	for _, callback := range beforeArchive {
+		callback()
+	}
 	h.recordSuccess(requestID, startTime, resp.StatusCode, tokenResult, requestModel, endpointName, groupName, channelName)
 
 	// 复制响应头

@@ -53,7 +53,13 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 
 	// 分开计算 5m 和 1h 缓存成本
 	var cache5mCost, cache1hCost float64
-	if usage.CacheCreation5mTokens > 0 || usage.CacheCreation1hTokens > 0 {
+	if pricing.CodexCachePricing {
+		allocation := resolveCacheWriteAllocation(usage, pricing, &m, f)
+		// Codex TTL costs are retained in the decision snapshot; legacy TTL
+		// columns remain reserved for Claude's 5m/1h accounting.
+		cache5mCost = float64(allocation.tokens30m) * f.cacheCreationPrice / 1e6 * f.cacheCreationMult
+		cache1hCost = float64(allocation.tokens12h) * allocation.price12h / 1e6 * f.cacheCreationMult
+	} else if usage.CacheCreation5mTokens > 0 || usage.CacheCreation1hTokens > 0 {
 		// 有分开的缓存数据，分别计算
 		cache5mCost = float64(usage.CacheCreation5mTokens) * f.cacheCreationPrice / 1_000_000 * f.cacheCreationMult
 		cache1hCost = float64(usage.CacheCreation1hTokens) * f.cacheCreation1hPrice / 1_000_000 * f.cacheCreation1hMult
@@ -72,7 +78,7 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 	}
 	cacheCreationCost := cache5mCost + cache1hCost
 
-	return CostBreakdown{
+	result := CostBreakdown{
 		InputCost:           inputCost,
 		OutputCost:          outputCost,
 		CacheCreationCost:   cacheCreationCost,
@@ -81,6 +87,11 @@ func CalculateCost(usage *TokenUsage, pricing *ModelPricing, multiplier *Endpoin
 		CacheReadCost:       cacheReadCost,
 		TotalCost:           inputCost + outputCost + cacheCreationCost + cacheReadCost,
 	}
+	if pricing.CodexCachePricing {
+		result.CacheCreation5mCost = 0
+		result.CacheCreation1hCost = 0
+	}
+	return result
 }
 
 // CalculateCostFromTokens 从独立 token 计数计算成本（向后兼容便捷方法）

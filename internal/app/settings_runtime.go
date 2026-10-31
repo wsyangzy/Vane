@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/buildinfo"
+	"github.com/wsyangzy/Vane/internal/config"
 	"github.com/wsyangzy/Vane/internal/platform/netutil"
 	"github.com/wsyangzy/Vane/internal/privacy"
 	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
@@ -203,8 +204,13 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	a.config.Retry.BaseDelay = a.settingsService.GetDuration(ctx, settingsservice.CategoryRetry, "base_delay", a.config.Retry.BaseDelay)
 	a.config.Retry.MaxDelay = a.settingsService.GetDuration(ctx, settingsservice.CategoryRetry, "max_delay", a.config.Retry.MaxDelay)
 	a.config.Retry.Multiplier = a.settingsService.GetFloat(ctx, settingsservice.CategoryRetry, "multiplier", a.config.Retry.Multiplier)
+	// Current profile execution consumes these shared ceilings in both adapters.
+	// Legacy per-endpoint retry values above remain isolated compatibility data.
+	a.config.Retry.MaxTotalAttempts = a.settingsService.GetInt(ctx, settingsservice.CategoryRetry, "max_total_attempts", a.config.Retry.MaxTotalAttempts)
+	a.config.Retry.MaxTotalDuration = a.settingsService.GetDuration(ctx, settingsservice.CategoryRetry, "max_total_duration", a.config.Retry.MaxTotalDuration)
 
 	// 健康检查配置
+	a.config.Health.PauseActiveProbes = !a.settingsService.GetBool(ctx, settingsservice.CategoryHealth, "active_probes_enabled", !a.config.Health.PauseActiveProbes)
 	a.config.Health.CheckInterval = a.settingsService.GetDuration(ctx, settingsservice.CategoryHealth, "check_interval", a.config.Health.CheckInterval)
 	a.config.Health.Timeout = a.settingsService.GetDuration(ctx, settingsservice.CategoryHealth, "timeout", a.config.Health.Timeout)
 	a.config.Health.HealthPath = a.getSettingString(ctx, settingsservice.CategoryHealth, "health_path", a.config.Health.HealthPath)
@@ -314,10 +320,13 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	a.config.Streaming.ReadTimeout = a.settingsService.GetDuration(ctx, settingsservice.CategoryStreaming, "read_timeout", a.config.Streaming.ReadTimeout)
 	a.config.Streaming.MaxIdleTime = a.settingsService.GetDuration(ctx, settingsservice.CategoryStreaming, "max_idle_time", a.config.Streaming.MaxIdleTime)
 	a.config.Streaming.ResponseHeaderTimeout = a.settingsService.GetDuration(ctx, settingsservice.CategoryRequest, "response_header_timeout", a.config.Streaming.ResponseHeaderTimeout)
+	a.config.Streaming.DefaultResponseHeaderTimeout = a.settingsService.GetDuration(ctx, settingsservice.CategoryRequest, "default_response_header_timeout", a.config.Streaming.DefaultResponseHeaderTimeout)
 
 	// 访问控制配置
 	a.config.Auth.Enabled = a.settingsService.GetBool(ctx, settingsservice.CategoryAuth, "enabled", a.config.Auth.Enabled)
-	a.config.Auth.Token = a.getSettingString(ctx, settingsservice.CategoryAuth, "token", a.config.Auth.Token)
+	if token, err := a.settingsService.GetValue(ctx, settingsservice.CategoryAuth, "token"); err == nil {
+		a.config.Auth.Token = token
+	}
 
 	// Token 计数配置
 	a.config.TokenCounting.Enabled = a.settingsService.GetBool(ctx, settingsservice.CategoryTokenCounting, "enabled", a.config.TokenCounting.Enabled)
@@ -336,18 +345,19 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 		}
 	}
 
-	// 🔧 [P5.5.4 新增] Logging 日志配置（从 SQLite 同步）
-	oldLoggingLevel := a.config.Logging.Level
-	oldLoggingFormat := a.config.Logging.Format
+	oldLogging := a.config.Logging
 	a.config.Logging.Level = a.getSettingString(ctx, settingsservice.CategoryLogging, "level", a.config.Logging.Level)
 	a.config.Logging.Format = a.getSettingString(ctx, settingsservice.CategoryLogging, "format", a.config.Logging.Format)
-	if a.config.Logging.Level != oldLoggingLevel || a.config.Logging.Format != oldLoggingFormat {
+	a.config.Logging.FileEnabled = a.settingsService.GetBool(ctx, settingsservice.CategoryLogging, "file_enabled", a.config.Logging.FileEnabled)
+	a.config.Logging.MaxFileSize = a.getSettingString(ctx, settingsservice.CategoryLogging, "max_file_size", a.config.Logging.MaxFileSize)
+	a.config.Logging.MaxFiles = a.settingsService.GetInt(ctx, settingsservice.CategoryLogging, "max_files", a.config.Logging.MaxFiles)
+	a.config.Logging.CompressRotated = a.settingsService.GetBool(ctx, settingsservice.CategoryLogging, "compress_rotated", a.config.Logging.CompressRotated)
+	if a.config.Logging != oldLogging {
 		a.applyRuntimeLoggingConfig()
 	}
 
-	// 🔧 [P5.5.4 新增] Timezone 时区配置（从 SQLite 同步）
-	// 注意：时区变更标记为 RequiresRestart=true，运行时变更只影响后续新生成的时间戳
-	a.config.Timezone = a.getSettingString(ctx, settingsservice.CategoryTimezone, "global", a.config.Timezone)
+	// 固定使用北京时间，忽略旧数据库中的可选时区设置。
+	a.config.Timezone = config.BeijingTimezone
 
 	// Codex 代理与 Claude 代理共用主端口，始终启用路径路由。
 	a.config.CodexServer.Enabled = true
@@ -370,6 +380,10 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	}
 
 	a.applyCacheSettings(ctx)
+	if a.config.Health.PauseActiveProbes != previousConfig.Health.PauseActiveProbes {
+		a.emitEndpointUpdate()
+		a.emitCodexProviderStateUpdate()
+	}
 	return nil
 }
 

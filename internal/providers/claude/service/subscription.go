@@ -46,7 +46,7 @@ func (s *ClaudeCredentialGroupService) normalizeSubscription(ctx context.Context
 		return fmt.Errorf("订阅透传不保存 Token 或 API Key；请清空分组凭证")
 	}
 	if record.Subscription == nil {
-		return fmt.Errorf("请配置独立调用方本地密钥及备用授权")
+		return fmt.Errorf("请配置订阅凭证来源")
 	}
 	b := record.Subscription
 	if b.Action == "rebind" && b.AccountID != "" && existing != nil && existing.Subscription != nil && existing.Subscription.AccountID == b.AccountID {
@@ -78,8 +78,8 @@ func (s *ClaudeCredentialGroupService) normalizeSubscription(ctx context.Context
 	b.GroupID = record.ID
 	b.Channel = record.Channel
 	decoded, err := hex.DecodeString(b.KeyHash)
-	if err != nil || len(decoded) != 32 {
-		return fmt.Errorf("本地密钥哈希无效，请重新生成")
+	if b.KeyHash != "" && (err != nil || len(decoded) != 32) {
+		return fmt.Errorf("历史本地密钥哈希无效")
 	}
 	b.KeyHash = strings.ToLower(b.KeyHash)
 	if s.channelStore != nil {
@@ -96,7 +96,7 @@ func (s *ClaudeCredentialGroupService) normalizeSubscription(ctx context.Context
 				if group.ID != record.ID && b.AccountID != "" && group.AuthMode == subscription.ClientPassthrough && group.Subscription != nil && group.Subscription.AccountID == b.AccountID {
 					return fmt.Errorf("该订阅账号已绑定其他调用方，请使用独立订阅")
 				}
-				if group.ID != record.ID && group.AuthMode == subscription.ClientPassthrough && group.Subscription != nil && group.Subscription.KeyHash == b.KeyHash {
+				if b.KeyHash != "" && group.ID != record.ID && group.AuthMode == subscription.ClientPassthrough && group.Subscription != nil && group.Subscription.KeyHash == b.KeyHash {
 					return fmt.Errorf("本地密钥已绑定其他调用方，请生成独立密钥")
 				}
 			}

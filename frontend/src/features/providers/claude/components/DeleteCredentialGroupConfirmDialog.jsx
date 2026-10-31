@@ -1,9 +1,12 @@
 import { Trash2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
+import CredentialGroupRoutingImpact from '../../shared/credentials/CredentialGroupRoutingImpact.jsx';
+import useCredentialGroupRoutingImpact from '../../shared/credentials/useCredentialGroupRoutingImpact.js';
 
 const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onCancel, loading }) => {
   const endpointCount = Number(group?.endpointCount ?? group?.endpoint_count ?? 0);
+  const impact = useCredentialGroupRoutingImpact('claude', group?.id);
 
   return renderModalPortal(
     <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
@@ -32,6 +35,7 @@ const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onC
           </div>
         </div>
 
+        <div className="mb-4"><CredentialGroupRoutingImpact impact={impact} /></div>
         <div className="flex justify-end gap-3">
           <Button variant="ghost" onClick={onCancel} disabled={loading}>
             取消
@@ -41,7 +45,7 @@ const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onC
             icon={Trash2}
             onClick={() => onConfirm?.()}
             loading={loading}
-            disabled={loading}
+            disabled={loading || impact.loading || Boolean(impact.error)}
           >
             确认删除
           </Button>

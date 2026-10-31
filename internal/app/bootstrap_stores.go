@@ -147,6 +147,11 @@ func (a *App) setupModelPricingStore() {
 	if count == 0 {
 		a.initDefaultModelPricing(ctx)
 	}
+	if changed, err := a.modelPricingService.BackfillOfficialPrices(ctx); err != nil {
+		a.logger.Error("补齐 OpenAI 官方价格失败", "error", err)
+	} else if changed > 0 {
+		a.logger.Info("已补齐 OpenAI 官方价格", "rows", changed)
+	}
 
 	// 同步定价到 UsageTracker（用于成本计算）
 	a.syncPricingToTracker(ctx)

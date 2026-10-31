@@ -12,6 +12,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/privacy"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // 隐私策略短路时写入 lifecycle 的失败原因
@@ -28,29 +29,20 @@ type PrivacyFilter interface {
 	Apply(ctx context.Context, req privacy.Request, body []byte) (privacy.ApplyResult, error)
 }
 
-// privacyBodies 一次请求的隐私过滤结果：扫描只做一次，每次尝试按目标渠道的隐私级别挑选正文。
-//
-// 扫描不含渠道维度，因此放在重试循环之外；渠道隐私级别（三方中转强制脱敏、可信渠道只检测）
-// 由 forChannel 在选定端点后决定实际发送哪份正文——同一请求故障转移到不同渠道时，
-// 发往三方中转的永远是脱敏后的正文。
+// privacyBodies 保存一次全局隐私处理的结果，全部端点尝试使用同一正文。
 type privacyBodies struct {
 	original []byte
 	result   privacy.ApplyResult
-	levels   func(channel string) string
 	recorder RequestLifecycleManager
 	once     sync.Once
 }
 
-// forChannel 返回发往该渠道的正文，并在首次实际改写时记录脱敏摘要
-func (p *privacyBodies) forChannel(channel string) []byte {
+// forChannel 在首次实际发送替身时记录摘要；渠道不再参与隐私决策。
+func (p *privacyBodies) forChannel(_ string) []byte {
 	if p == nil {
 		return nil
 	}
-	level := ""
-	if p.levels != nil {
-		level = p.levels(channel)
-	}
-	body, redacted := p.result.SelectBody(level, p.original)
+	body, redacted := p.result.SelectBody(p.original)
 	if redacted && p.recorder != nil {
 		p.once.Do(func() {
 			summary := p.result
@@ -61,7 +53,7 @@ func (p *privacyBodies) forChannel(channel string) []byte {
 	return body
 }
 
-// forEndpoint 同 forChannel，以端点所属渠道为准
+// forEndpoint 复用统一结果，保留端点调用入口。
 func (p *privacyBodies) forEndpoint(ep *endpoint.Endpoint) []byte {
 	return p.forChannel(endpointRouteName(ep))
 }
@@ -76,7 +68,7 @@ func contextWithPrivacyBodies(ctx context.Context, bodies *privacyBodies) contex
 	return context.WithValue(ctx, privacyBodiesKey{}, bodies)
 }
 
-// outboundBody 选出发往该端点的正文：ctx 上有隐私正文集合时按渠道隐私级别挑选，否则原样使用 fallback。
+// outboundBody 返回本次请求统一处理的正文，没有隐私结果时使用 fallback。
 // 所有外发路径（常规、流式、auto_wait 恢复、路由阶段）都必须经过这里，不能直接用 bodyBytes。
 func outboundBody(ctx context.Context, ep *endpoint.Endpoint, fallback []byte) []byte {
 	if bodies, ok := ctx.Value(privacyBodiesKey{}).(*privacyBodies); ok && bodies != nil {
@@ -85,20 +77,7 @@ func outboundBody(ctx context.Context, ep *endpoint.Endpoint, fallback []byte) [
 	return fallback
 }
 
-// privacyLevelsFor 从端点管理器的路由快照读取渠道隐私级别
-func privacyLevelsFor(em *endpoint.Manager) func(channel string) string {
-	return func(channel string) string {
-		if em == nil {
-			return ""
-		}
-		return em.RouteConfig().PrivacyLevel(channel)
-	}
-}
-
-// applyPrivacyFilter 在转发前过滤请求体，返回按渠道挑选正文的结果。
-//
-// 调用位置固定在重试循环之外、每个请求一次；渠道级差异只影响挑选哪份正文，不重复扫描。
-// 全局模式为脱敏时，默认正文（跟随全局的渠道）就是脱敏后的正文。
+// applyPrivacyFilter 在重试循环外按全局策略过滤请求体，每个请求只处理一次。
 func applyPrivacyFilter(
 	ctx context.Context,
 	filter PrivacyFilter,
@@ -106,12 +85,13 @@ func applyPrivacyFilter(
 	providerType string,
 	body []byte,
 	lifecycleManager RequestLifecycleManager,
-	levels func(channel string) string,
 ) (*privacyBodies, error) {
+	if existing, ok := ctx.Value(privacyBodiesKey{}).(*privacyBodies); ok && existing != nil {
+		return existing, nil
+	}
 	bodies := &privacyBodies{
 		original: body,
 		result:   privacy.ApplyResult{Body: body, Action: privacy.ModeDisabled},
-		levels:   levels,
 		recorder: lifecycleManager,
 	}
 	if filter == nil {
@@ -122,6 +102,12 @@ func applyPrivacyFilter(
 		Method:       requestMethod(r),
 		ProviderType: providerType,
 		ContentType:  requestHeader(r, "Content-Type"),
+	}
+	if r != nil {
+		turn := routing.ResolveTurn(ctx, r.Header, body, providerType)
+		if turn.ConversationID != "" {
+			req.SessionKey = providerType + "\x00" + routing.CallerScope(ctx) + "\x00" + turn.ConversationID + "\x00" + turn.BranchID
+		}
 	}
 	if lifecycleManager != nil {
 		req.RequestID = lifecycleManager.GetRequestID()

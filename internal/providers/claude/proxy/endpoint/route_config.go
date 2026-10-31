@@ -16,16 +16,6 @@ type RouteConfig struct {
 	NonStreamRoutes map[string]*routing.NonStreamRoute
 	// ChannelNames 渠道 ID → 渠道名，用于解析以 ID 引用的路由目标
 	ChannelNames map[int64]string
-	// PrivacyLevels 渠道名 → 隐私级别（third_party / trusted）；未列出的渠道跟随全局
-	PrivacyLevels map[string]string
-}
-
-// PrivacyLevel 返回渠道隐私级别；未配置时为空串（跟随全局）
-func (c *RouteConfig) PrivacyLevel(channel string) string {
-	if c == nil || channel == "" {
-		return ""
-	}
-	return c.PrivacyLevels[channel]
 }
 
 // SetRouteConfig 发布新的路由快照；nil 表示关闭全部路由。

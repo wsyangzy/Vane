@@ -54,12 +54,22 @@ export function GetTokenUsageHeatmap(params) {
 }
 
 /**
+ * @param {app$0.UsageDashboardQuery} query
+ * @returns {$CancellablePromise<app$0.UsageDashboard>}
+ */
+export function GetUsageDashboard(query) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.UsageService.GetUsageDashboard", query).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
+}
+
+/**
  * @param {app$0.UsageStatsQueryParams} params
  * @returns {$CancellablePromise<app$0.UsageStatsData>}
  */
 export function GetUsageStats(params) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.UsageService.GetUsageStats", params).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -71,7 +81,7 @@ export function GetUsageStats(params) {
  */
 export function GetUsageSummary(startTimeStr, endTimeStr, provider) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.UsageService.GetUsageSummary", startTimeStr, endTimeStr, provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -81,5 +91,6 @@ const $$createType1 = app$0.RequestListResult.createFrom;
 const $$createType2 = app$0.TokenUsageData.createFrom;
 const $$createType3 = app$0.TokenUsageHeatmapDay.createFrom;
 const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = app$0.UsageStatsData.createFrom;
-const $$createType6 = app$0.UsageSummary.createFrom;
+const $$createType5 = app$0.UsageDashboard.createFrom;
+const $$createType6 = app$0.UsageStatsData.createFrom;
+const $$createType7 = app$0.UsageSummary.createFrom;

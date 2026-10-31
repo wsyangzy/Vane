@@ -2,9 +2,9 @@
 // 本包不依赖 proxy/store/service，只做规则编译、文本扫描与脱敏替换。
 //
 // 三条不可妥协的约束：
-//  1. 命中原文只允许出现在本地日志，禁止落库、禁止经 API 回传前端；
+//  1. 命中原文和还原映射仅存内存，禁止写日志、落库或经 API 回传前端；
 //  2. 未命中的请求体字节必须与客户端原始请求 byte-identical；
-//  3. 策略拒绝必须短路，不得进入重试 / 故障转移 / 端点冷却。
+//  3. 扫描异常放行，按配置决定是否记录，不主动拒发或触发额外重试。
 package privacy
 
 import (
@@ -19,23 +19,25 @@ const (
 	ModeRedact   = "redact"
 )
 
-// 扫描出错策略
+// 扫描出错策略。fail_closed 仅用于读取旧配置，运行时统一放行。
 const (
-	OnErrorFailOpen   = "fail_open"
-	OnErrorFailClosed = "fail_closed"
+	OnErrorFailOpen    = "fail_open"
+	OnErrorFailClosed  = "fail_closed"
+	OnErrorPassthrough = "passthrough"
 )
 
-// 超出扫描上限策略
+// 超出扫描上限策略。旧 fail_closed 配置统一迁移为扫描前缀。
 const (
 	OverLimitScanPrefix = "scan_prefix"
 	OverLimitFailClosed = "fail_closed"
+	OverLimitSkipScan   = "skip_scan"
 )
 
-// 未覆盖路径策略。白名单之外的路径无法安全扫描，
-// warn 放行并记录（前端可见），fail_closed 直接拒发。
+// 未覆盖路径统一放行，warn 记录防护摘要，passthrough 不记录；fail_closed 仅兼容旧配置。
 const (
-	UnsupportedPathWarn       = "warn"
-	UnsupportedPathFailClosed = "fail_closed"
+	UnsupportedPathWarn        = "warn"
+	UnsupportedPathFailClosed  = "fail_closed"
+	UnsupportedPathPassthrough = "passthrough"
 )
 
 // 规则匹配方式
@@ -43,19 +45,26 @@ const (
 	MatchTypeLiteral = "literal"
 	MatchTypeRegex   = "regex"
 	MatchTypeBuiltin = "builtin"
+	MatchTypePrefix  = "prefix"
 )
 
-// 规则动作
+// 规则用途只区分普通规则与额外放行。detect / block 兼容旧数据，编译时归为普通规则。
 const (
 	ActionDetect = "detect"
 	ActionRedact = "redact"
+	ActionBlock  = "block"
+	ActionAllow  = "allow"
 )
 
-// 替换模式。pseudonym 生成格式合法但虚构的替身值，
-// 使下游 AI 仍能区分多个实体；placeholder 使用固定占位符。
+// reversible / mask_only 均使用稳定编码，后者禁止回复还原。
+// *_key 保留密钥格式；placeholder / pseudonym 兼容旧配置。
 const (
-	ReplacementPlaceholder = "placeholder"
-	ReplacementPseudonym   = "pseudonym"
+	ReplacementPlaceholder   = "placeholder"
+	ReplacementPseudonym     = "pseudonym"
+	ReplacementReversible    = "reversible"
+	ReplacementReversibleKey = "reversible_key"
+	ReplacementMaskOnly      = "mask_only"
+	ReplacementMaskOnlyKey   = "mask_only_key"
 )
 
 // 规则来源
@@ -94,6 +103,16 @@ type Settings struct {
 	OverLimitAction       string `json:"over_limit_action"`
 	OnError               string `json:"on_error"`
 	UnsupportedPathAction string `json:"unsupported_path_action"`
+	// Deprecated matching options are read only to migrate existing databases.
+	// Runtime matching and actions come exclusively from Rule.
+	Categories   map[string]bool   `json:"categories"`
+	Words        []string          `json:"words"`
+	WordsAnyCase bool              `json:"words_any_case"`
+	Allow        []string          `json:"allow"`
+	Actions      map[string]string `json:"actions"`
+	// RestoreResponses controls response restoration independently of outbound masking.
+	RestoreResponses bool `json:"restore_responses"`
+	KeepKeyFormat    bool `json:"keep_key_format"`
 }
 
 // DefaultSettings 返回新装默认配置。
@@ -103,6 +122,7 @@ type Settings struct {
 func DefaultSettings() Settings {
 	return Settings{
 		Mode:                  ModeDetect,
+		RestoreResponses:      true,
 		ScanMaxBytes:          DefaultScanMaxBytes,
 		OverLimitAction:       OverLimitScanPrefix,
 		OnError:               OnErrorFailOpen,
@@ -112,6 +132,9 @@ func DefaultSettings() Settings {
 
 // ValidateSettings 校验引擎配置字段
 func ValidateSettings(s Settings) error {
+	if hasLegacyMatchingOptions(s) || s.KeepKeyFormat {
+		return fmt.Errorf("匹配配置已整合到防护规则，请在规则列表中修改")
+	}
 	switch s.Mode {
 	case ModeDisabled, ModeDetect, ModeRedact:
 	default:
@@ -121,21 +144,34 @@ func ValidateSettings(s Settings) error {
 		return fmt.Errorf("scan_max_bytes must be positive, got %d", s.ScanMaxBytes)
 	}
 	switch s.OverLimitAction {
-	case OverLimitScanPrefix, OverLimitFailClosed:
+	case OverLimitScanPrefix, OverLimitSkipScan, OverLimitFailClosed:
 	default:
 		return fmt.Errorf("invalid over_limit_action: %q", s.OverLimitAction)
 	}
 	switch s.OnError {
-	case OnErrorFailOpen, OnErrorFailClosed:
+	case OnErrorFailOpen, OnErrorPassthrough, OnErrorFailClosed:
 	default:
 		return fmt.Errorf("invalid on_error: %q", s.OnError)
 	}
 	switch s.UnsupportedPathAction {
-	case UnsupportedPathWarn, UnsupportedPathFailClosed:
+	case UnsupportedPathWarn, UnsupportedPathPassthrough, UnsupportedPathFailClosed:
 	default:
 		return fmt.Errorf("invalid unsupported_path_action: %q", s.UnsupportedPathAction)
 	}
 	return nil
+}
+
+func normalizeScanPolicies(s Settings) Settings {
+	if s.OnError == OnErrorFailClosed {
+		s.OnError = OnErrorFailOpen
+	}
+	if s.OverLimitAction == OverLimitFailClosed {
+		s.OverLimitAction = OverLimitScanPrefix
+	}
+	if s.UnsupportedPathAction == UnsupportedPathFailClosed {
+		s.UnsupportedPathAction = UnsupportedPathWarn
+	}
+	return s
 }
 
 // ValidateRule 校验单条规则字段（不含正则编译，编译交给 CompileRule）
@@ -147,12 +183,12 @@ func ValidateRule(r Rule) error {
 		return fmt.Errorf("rule pattern is required")
 	}
 	switch r.MatchType {
-	case MatchTypeLiteral, MatchTypeRegex, MatchTypeBuiltin:
+	case MatchTypeLiteral, MatchTypeRegex, MatchTypeBuiltin, MatchTypePrefix:
 	default:
 		return fmt.Errorf("invalid match_type: %q", r.MatchType)
 	}
 	switch r.Action {
-	case ActionDetect, ActionRedact:
+	case ActionDetect, ActionRedact, ActionBlock, ActionAllow:
 	default:
 		return fmt.Errorf("invalid action: %q", r.Action)
 	}
@@ -168,8 +204,17 @@ func ValidateRule(r Rule) error {
 		if !IsValidPseudonymKind(r.PseudonymKind) {
 			return fmt.Errorf("invalid pseudonym_kind: %q", r.PseudonymKind)
 		}
+	case ReplacementReversible, ReplacementReversibleKey, ReplacementMaskOnly, ReplacementMaskOnlyKey:
 	default:
 		return fmt.Errorf("invalid replacement_mode: %q", r.ReplacementMode)
 	}
 	return nil
+}
+
+func (r Rule) usesTokens() bool {
+	return r.Action == ActionRedact && (r.restoresResponses() || r.ReplacementMode == ReplacementMaskOnly || r.ReplacementMode == ReplacementMaskOnlyKey)
+}
+
+func (r Rule) restoresResponses() bool {
+	return r.ReplacementMode == ReplacementReversible || r.ReplacementMode == ReplacementReversibleKey
 }

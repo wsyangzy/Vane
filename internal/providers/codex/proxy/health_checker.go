@@ -82,6 +82,16 @@ func (h *HealthChecker) CheckNow() {
 	go h.checkAll()
 }
 
+func (h *HealthChecker) CheckOne(id int64) error {
+	for _, ep := range h.manager.PoolEndpoints(0, 0) {
+		if ep.ID == id {
+			h.checkEndpoint(ep)
+			return nil
+		}
+	}
+	return fmt.Errorf("端点不存在")
+}
+
 // GetLatencies 获取所有端点的延迟数据（供前端展示）
 func (h *HealthChecker) GetLatencies() map[int64]int64 {
 	h.mu.RLock()
@@ -161,7 +171,10 @@ func (h *HealthChecker) loop() {
 
 // checkAll 对所有端点执行一轮探测
 func (h *HealthChecker) checkAll() {
-	channelFailoverEnabled := h.cfg != nil && h.cfg.CodexFailover.Enabled
+	if h.cfg != nil && h.cfg.Health.PauseActiveProbes {
+		return
+	}
+	channelFailoverEnabled := h.manager.PoolRuntime() != nil || h.cfg != nil && h.cfg.CodexFailover.Enabled
 	endpoints, err := h.manager.GetHealthCheckEndpoints(context.Background(), channelFailoverEnabled)
 	if err != nil {
 		h.logger.Warn("加载 Codex 健康检查端点失败", "error", err)
@@ -176,7 +189,9 @@ func (h *HealthChecker) checkAll() {
 		wg.Add(1)
 		go func(endpoint *CodexEndpoint) {
 			defer wg.Done()
-			h.checkEndpoint(endpoint)
+			if h.manager.IsHealthCheckEnabled(endpoint.ID) {
+				h.checkEndpoint(endpoint)
+			}
 		}(ep)
 	}
 	wg.Wait()
@@ -185,6 +200,9 @@ func (h *HealthChecker) checkAll() {
 // checkEndpoint 对单个端点执行 HTTP GET base_url + healthPath 测量 RTT
 // timeout / healthPath 每次都动态读取，配置变更立即生效
 func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
+	if ep.AuthMode == "client_passthrough" {
+		return
+	}
 	_, timeout, healthPath := h.readHealthConfig()
 	url := buildProbeURL(ep.BaseURL, healthPath)
 	skipHealthState := ep.SkipHealthCheck

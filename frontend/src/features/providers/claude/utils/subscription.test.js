@@ -1,22 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, webcrypto } from 'node:crypto';
-import { generateLocalRelayKey, validateSubscription } from './subscription.js';
+import { validateSubscription } from './subscription.js';
 import { buildClaudeCredentialGroupPayload, mapClaudeCredentialGroup, buildCodexCredentialGroupPayload, mapCodexCredentialGroup, mapSubscriptionAccount } from '../../../../services/wails/index.js';
 
-test('local key stays at generation boundary and only SHA256 enters the bridge', async () => {
-  const { key, hash } = await generateLocalRelayKey(webcrypto);
-  const next = await generateLocalRelayKey(webcrypto);
-  assert.notEqual(key, next.key);
-  assert.equal(hash, createHash('sha256').update(key).digest('hex'));
-  const form = { authMode: 'client_passthrough', localKeyAcknowledged: true, subscription: { version: 2, enabled: true, keyHash: hash, backupTargets: [{ channelId: 5, groupId: 9, upstreamModel: 'model-y', rowId: 'ui-only' }] } };
-  assert.equal(validateSubscription(form), '');
-  const payload = buildClaudeCredentialGroupPayload(form);
-  assert.equal(payload.subscription.key_hash, hash);
-  assert.deepEqual(payload.subscription.backup_targets, [{ channel_id: 5, group_id: 9, upstream_model: 'model-y' }]);
-  assert.ok(!JSON.stringify(payload).includes(key));
-  assert.ok(!JSON.stringify(payload).includes('ui-only'));
-  assert.notEqual(validateSubscription({ ...form, localKeyAcknowledged: false }), '');
+test('subscription groups use application auth and preserve legacy scheduling fields without editing them', () => {
+  for (const build of [buildClaudeCredentialGroupPayload, buildCodexCredentialGroupPayload]) {
+    const form = { authMode: 'client_passthrough', subscription: { enabled: true, backupTargets: [] } };
+    assert.equal(validateSubscription(form), '');
+    assert.equal(build(form).subscription.key_hash, '');
+    const legacy = { ...form, localKeyAcknowledged: false, subscription: { ...form.subscription, keyHash: 'a'.repeat(64), backupTargets: [{ channelId: 5, groupId: 9, upstreamModel: 'model-y', rowId: 'ui-only' }] } };
+    assert.equal(validateSubscription(legacy), '');
+    const payload = build(legacy);
+    assert.equal(payload.subscription.key_hash, 'a'.repeat(64));
+    assert.deepEqual(payload.subscription.backup_targets, [{ channel_id: 5, group_id: 9, upstream_model: 'model-y' }]);
+    assert.ok(!JSON.stringify(payload).includes('ui-only'));
+  }
+  assert.notEqual(validateSubscription({ authMode: 'client_passthrough' }), '');
 });
 
 test('saved subscription maps disabled and unknown reset explicitly', () => {

@@ -79,6 +79,9 @@ type CodexChannelCandidateInfo struct {
 }
 
 type CodexCredentialGroupInfo struct {
+	ServiceTierSource                      string                                  `json:"serviceTierSource"`
+	CacheWriteTTLPricing                   bool                                    `json:"cacheWriteTTLPricing"`
+	Enabled                                bool                                    `json:"enabled"`
 	AuthMode                               string                                  `json:"auth_mode"`
 	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
 	LocalKeyConfigured                     bool                                    `json:"local_key_configured"`
@@ -177,6 +180,8 @@ type UpdateCodexChannelInput struct {
 }
 
 type CreateCodexCredentialGroupInput struct {
+	ServiceTierSource                      string                                  `json:"serviceTierSource"`
+	CacheWriteTTLPricing                   bool                                    `json:"cacheWriteTTLPricing"`
 	AuthMode                               string                                  `json:"auth_mode"`
 	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
 	ChannelID                              int64                                   `json:"channel_id"`
@@ -204,6 +209,8 @@ type CreateCodexCredentialGroupInput struct {
 }
 
 type UpdateCodexCredentialGroupInput struct {
+	ServiceTierSource                      string                                  `json:"serviceTierSource"`
+	CacheWriteTTLPricing                   bool                                    `json:"cacheWriteTTLPricing"`
 	AuthMode                               string                                  `json:"auth_mode"`
 	Subscription                           *subscription.Binding                   `json:"subscription,omitempty"`
 	Name                                   string                                  `json:"name"`

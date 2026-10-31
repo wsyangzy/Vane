@@ -5,11 +5,51 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+func TestEndpointTimeoutInheritanceSurvivesWrites(t *testing.T) {
+	for _, batch := range []bool{false, true} {
+		name := "single"
+		if batch {
+			name = "batch"
+		}
+		t.Run(name, func(t *testing.T) {
+			db, cleanup := createTestDB(t)
+			defer cleanup()
+			endpointStore := NewSQLiteEndpointStore(db)
+			ctx := context.Background()
+			for _, seconds := range []int{0, 300, 45} {
+				record := &EndpointRecord{Channel: "timeout", Name: strconv.Itoa(seconds), URL: "https://example.invalid", TimeoutSeconds: seconds}
+				var err error
+				if batch {
+					err = endpointStore.BatchCreate(ctx, []*EndpointRecord{record})
+				} else {
+					_, err = endpointStore.Create(ctx, record)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				stored, err := endpointStore.GetByChannelAndName(ctx, record.Channel, record.Name)
+				if err != nil || stored == nil || stored.TimeoutSeconds != seconds {
+					t.Fatalf("timeout %d did not survive create: %+v, %v", seconds, stored, err)
+				}
+				stored.TimeoutSeconds = 0
+				if err := endpointStore.UpdateByID(ctx, stored); err != nil {
+					t.Fatal(err)
+				}
+				stored, err = endpointStore.GetByID(ctx, stored.ID)
+				if err != nil || stored.TimeoutSeconds != 0 {
+					t.Fatalf("clearing an override did not preserve inheritance: %+v, %v", stored, err)
+				}
+			}
+		})
+	}
+}
 
 // createTestDB 创建测试用的 SQLite 数据库
 func createTestDB(t *testing.T) (*sql.DB, func()) {

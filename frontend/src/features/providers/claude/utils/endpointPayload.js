@@ -8,6 +8,6 @@ export const buildClaudeEndpointCopyPayload = (endpoint, channel, credentialGrou
   failoverEnabled: endpoint?.failoverEnabled ?? endpoint?.failover_enabled ?? true,
   skipHealthCheck: endpoint?.skipHealthCheck ?? endpoint?.skip_health_check ?? false,
   cooldownSeconds: endpoint?.cooldownSeconds ?? endpoint?.cooldown_seconds ?? null,
-  timeoutSeconds: endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 300,
+  timeoutSeconds: endpoint?.timeoutSeconds ?? endpoint?.timeout_seconds ?? 0,
   supportsCountTokens: endpoint?.supportsCountTokens ?? endpoint?.supports_count_tokens ?? false
 });

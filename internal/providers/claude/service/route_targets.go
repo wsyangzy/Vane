@@ -53,22 +53,6 @@ type nonStreamRouteSetter interface {
 	SetNonStreamRoute(ctx context.Context, name string, route *routing.NonStreamRoute) error
 }
 
-type privacyLevelSetter interface {
-	SetPrivacyLevel(ctx context.Context, name, level string) error
-}
-
-// SetPrivacyLevel 设置渠道隐私级别；level 须已由调用方用 privacy.NormalizeChannelLevel 规范化
-func (s *ChannelService) SetPrivacyLevel(ctx context.Context, name, level string) error {
-	if s == nil || s.store == nil {
-		return fmt.Errorf("渠道存储服务未启用")
-	}
-	setter, ok := s.store.(privacyLevelSetter)
-	if !ok {
-		return fmt.Errorf("当前渠道存储不支持隐私级别")
-	}
-	return setter.SetPrivacyLevel(ctx, strings.TrimSpace(name), level)
-}
-
 // SetNonStreamRoute 设置渠道的非流改道：渠道不接非流请求时，非流请求改送到这些目标。
 // route 为 nil 或没有目标表示关闭。目标必须是本 provider 下存在的其它渠道。
 func (s *ChannelService) SetNonStreamRoute(ctx context.Context, name string, route *routing.NonStreamRoute, catalog routing.Catalog) error {

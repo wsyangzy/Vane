@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -320,6 +321,9 @@ func ParseSize(sizeStr string) (int64, error) {
 	num, err := strconv.ParseInt(numStr, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid size format: %s", sizeStr)
+	}
+	if num <= 0 || num > math.MaxInt64/multiplier {
+		return 0, fmt.Errorf("size must be positive and fit in int64: %s", sizeStr)
 	}
 
 	return num * multiplier, nil

@@ -80,11 +80,8 @@ func TestCodexSealedFunctionArgumentsKeepTheirIssuingCandidate(t *testing.T) {
 	tracker := routing.NewStateTracker()
 	owner := routing.Candidate{Provider: "codex", Credential: "account-a"}
 	tracker.Observe(keys, "", owner)
-	if ok, _ := tracker.Allowed(keys, owner); !ok {
-		t.Fatal("issuing account rejected")
-	}
-	if ok, _ := tracker.Allowed(keys, routing.Candidate{Provider: "codex", Credential: "account-b"}); ok {
-		t.Fatal("sealed state crossed account boundary")
+	if got, ok := tracker.Preference(keys, ""); !ok || got != owner {
+		t.Fatal("issuing account was not preferred")
 	}
 	if len(codexStateKeys(r, []byte(`{"input":[{"type":"function_call","encrypted_function_args":[]} ]}`))) != 0 {
 		t.Fatal("unsealed function call treated as opaque")
@@ -192,18 +189,12 @@ func TestRoutedCodexSealedStateUsesActualWriterAndCaller(t *testing.T) {
 		req = req.WithContext(routing.WithCallerScope(req.Context(), caller))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		if i < 2 && rec.Code != 200 {
+		if rec.Code != 200 {
 			t.Fatalf("writer should remain usable: %d %s", rec.Code, rec.Body.String())
 		}
-		if i == 2 && rec.Code != 400 {
-			t.Fatalf("other caller used sealed state: %d", rec.Code)
-		}
-		if i == 2 && !strings.Contains(rec.Body.String(), "state_origin_unknown") {
-			t.Fatalf("state rejection was unexplained: %s", rec.Body.String())
-		}
 	}
-	if sends.Load() != 3 {
-		t.Fatalf("expected X,Y then only Y, no caller B send; got %d", sends.Load())
+	if sends.Load() != 5 {
+		t.Fatalf("expected X,Y then only Y, then caller B's own X,Y; got %d", sends.Load())
 	}
 }
 

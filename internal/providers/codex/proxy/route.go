@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,13 +18,19 @@ import (
 
 // codexRoute 一次请求的路由执行计划，只在本次请求内有效
 type codexRoute struct {
-	kind     routing.Kind
-	snapshot routing.Snapshot
-	stages   []codexRouteStage
+	profile    *routing.DispatchPlan
+	pool       *routing.PoolRuntime
+	waitStages []routing.PoolStage
+	kind       routing.Kind
+	snapshot   routing.Snapshot
+	stages     []codexRouteStage
 }
 
 // codexRouteStage 路由阶段：在 channel（groupID > 0 时只取该凭证分组）内跑一个端点周期
 type codexRouteStage struct {
+	member             *routing.PoolStage
+	route              *codexRoute
+	native             bool
 	subscriptionStatus func() *routing.SubscriptionSnapshot
 	execution          *routing.Ledger
 	budget             *routing.Budget
@@ -46,8 +53,14 @@ func (h *Handler) planCodexRoute(r *http.Request, body []byte, streaming bool, r
 	if h.manager == nil || r == nil || r.URL == nil {
 		return nil
 	}
+	if runtime := h.manager.PoolRuntime(); runtime != nil && runtime.ProfileRuntime() != nil {
+		return h.planProfileRoute(r, body, streaming, requestID, runtime.ProfileRuntime())
+	}
 	if subscription.FromContext(r.Context()) != nil {
 		return h.planSubscriptionRoute(r, body, streaming)
+	}
+	if runtime := h.manager.PoolRuntime(); runtime != nil {
+		return h.planPoolRoute(r, body, streaming, runtime)
 	}
 	if !isCodexGenerationPath(r.URL.Path) {
 		return nil
@@ -101,9 +114,36 @@ func (h *Handler) planCodexRoute(r *http.Request, body []byte, streaming bool, r
 // serveRouted 按阶段依次尝试：每个阶段只跑一个端点周期，不进入 loop_retry 轮次与挂起等待，
 // 也不触发渠道间故障转移——全局激活渠道全程不读写。
 func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byte, requestID string, startTime time.Time, isStreaming bool, route *codexRoute) {
+	if route.profile != nil {
+		h.serveProfileRouted(w, r, body, requestID, startTime, isStreaming, route.profile)
+		return
+	}
+	if owner, ok := h.states.Preference(codexStateKeys(r, body), routing.ExplicitTurn(r.Context(), r.Header)); ok && route.pool == nil {
+		model, _ := bodyrewrite.LookupTopLevelString(body, "model")
+		preferred := func(stage codexRouteStage) bool {
+			h.manager.mu.RLock()
+			defer h.manager.mu.RUnlock()
+			for _, ep := range h.manager.endpointsByChannel[stage.channel.ID] {
+				if (stage.groupID == 0 || stage.groupID == ep.CredentialGroupID) && stage.candidate(ep, model) == owner {
+					return true
+				}
+			}
+			return false
+		}
+		sort.SliceStable(route.stages, func(i, j int) bool { return preferred(route.stages[i]) && !preferred(route.stages[j]) })
+	}
 	ledger := &routing.Ledger{}
 	cfg := h.retryConfig()
-	budget := routing.NewBudget(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
+	attempts, duration := cfg.MaxTotalAttempts, cfg.MaxTotalDuration
+	if route.pool != nil {
+		if attempts <= 0 {
+			attempts = 10
+		}
+		if duration <= 0 {
+			duration = 60 * time.Second
+		}
+	}
+	budget := routing.NewBudget(attempts, duration)
 	r = r.WithContext(routing.WithBudget(r.Context(), budget))
 	var currentStage *codexRouteStage
 	defer func() {
@@ -121,42 +161,62 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 	quotaBlocked := false
 	requestModel := h.tokenParser.ParseModelFromBody(body)
 
-	for i := range route.stages {
-		stage := &route.stages[i]
-		stage.execution, stage.budget = ledger, budget
-		stage.stateKeys = codexStateKeys(r, body)
-		stage.turn = routing.ExplicitTurn(r.Context(), r.Header)
-		currentStage = stage
-		var failedIDs []int64
-		if err := r.Context().Err(); err != nil {
-			h.recordRouteSnapshot(requestID, stage.executionSnapshot())
-			h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", nil, requestModel)
-			return
+	for {
+		for i := range route.stages {
+			stage := &route.stages[i]
+			stage.execution, stage.budget = ledger, budget
+			ledger.Member = stage.member
+			stage.stateKeys = codexStateKeys(r, body)
+			stage.turn = routing.ExplicitTurn(r.Context(), r.Header)
+			currentStage = stage
+			var failedIDs []int64
+			if err := r.Context().Err(); err != nil {
+				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
+				h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled", nil, requestModel)
+				return
+			}
+			if err := budget.Check(); err != nil {
+				budget.Stop()
+				lastErr = err
+				break
+			}
+			result := h.tryEndpointCycleForStage(
+				w, r, body, requestID, startTime,
+				isStreaming, stage.channel.Name, requestModel,
+				&failedIDs, &endpointChain, &attemptCount, stage,
+			)
+			if result.completed {
+				return
+			}
+			lastErr = result.lastErr
+			lastSummary = result.lastSummary
+			if errors.Is(result.lastErr, errCredentialGroupDailyCostLimitExceeded) {
+				quotaBlocked = true
+			}
+			if result.lastUpstreamStatus > 0 {
+				lastUpstreamStatus = result.lastUpstreamStatus
+				lastUpstreamHeaders = result.lastUpstreamHeaders
+				lastUpstreamBody = result.lastUpstreamBody
+			}
+			h.logger.Info("[Codex 路由阶段失败]", "request_id", requestID, "kind", route.kind, "target", stage.index, "channel", stage.channel.Name)
 		}
-		if err := budget.Check(); err != nil {
-			budget.Stop()
-			lastErr = err
+		if route.pool == nil {
 			break
 		}
-		result := h.tryEndpointCycleForStage(
-			w, r, body, requestID, startTime,
-			isStreaming, stage.channel.Name, requestModel,
-			&failedIDs, &endpointChain, &attemptCount, stage,
-		)
-		if result.completed {
-			return
+		if next, ok := route.pool.NextRecoveryWith(route.waitStages, requestModel, func(member routing.PoolStage) (time.Time, bool) { return h.poolRecovery(r.Context(), member) }); ok && budget.Check() == nil {
+			ledger.Wait("waiting_for_account_recovery")
+			if currentStage != nil {
+				h.recordRouteSnapshot(requestID, currentStage.executionSnapshot())
+			}
+			if err := budget.Wait(r.Context(), time.Until(next)); err == nil {
+				ledger.RetryRecovered()
+				route.waitStages = nil
+				continue
+			} else {
+				lastErr = err
+			}
 		}
-		lastErr = result.lastErr
-		lastSummary = result.lastSummary
-		if errors.Is(result.lastErr, errCredentialGroupDailyCostLimitExceeded) {
-			quotaBlocked = true
-		}
-		if result.lastUpstreamStatus > 0 {
-			lastUpstreamStatus = result.lastUpstreamStatus
-			lastUpstreamHeaders = result.lastUpstreamHeaders
-			lastUpstreamBody = result.lastUpstreamBody
-		}
-		h.logger.Info("[Codex 路由阶段失败]", "request_id", requestID, "kind", route.kind, "target", stage.index, "channel", stage.channel.Name)
+		break
 	}
 
 	failureReason := route.kind.ExhaustedReason()

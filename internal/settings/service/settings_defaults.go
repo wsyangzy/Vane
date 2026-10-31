@@ -10,6 +10,25 @@ import (
 // InitDefaults 初始化默认设置
 func (s *SettingsService) InitDefaults(ctx context.Context) error {
 	defaults := s.GetAllDefaults()
+	// A new dev override starts with the existing port preference. Metadata
+	// synchronization must not replace an upgraded user's choice with 8087.
+	devPort, err := s.store.Get(ctx, CategoryServer, "preferred_port_dev")
+	if err != nil {
+		return err
+	}
+	if devPort == nil {
+		basePort, err := s.store.Get(ctx, CategoryServer, "preferred_port")
+		if err != nil {
+			return err
+		}
+		if basePort != nil {
+			for _, record := range defaults {
+				if record.Category == CategoryServer && record.Key == "preferred_port_dev" {
+					record.Value = basePort.Value
+				}
+			}
+		}
+	}
 
 	// 清理废弃的配置项
 	if err := s.cleanupDeprecatedSettings(ctx); err != nil {
@@ -144,9 +163,8 @@ func (s *SettingsService) GetAllDefaults() []*settingsstore.SettingRecord {
 	// Cache 设置
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryCache)...)
 
-	// Logging / Timezone 设置（SQLite）
+	// Logging 设置（SQLite）
 	defaults = append(defaults, s.getDefaultsForCategory(CategoryLogging)...)
-	defaults = append(defaults, s.getDefaultsForCategory(CategoryTimezone)...)
 
 	for _, record := range defaults {
 		if record.Provider == "" {
@@ -162,6 +180,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 	case CategoryServer:
 		return []*settingsstore.SettingRecord{
 			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
+			{Category: CategoryServer, Key: "preferred_port_dev", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "开发环境 API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
 		}
 
 	case CategoryStrategy:
@@ -175,17 +194,16 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 
 	case CategoryRetry:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryRetry, Key: "max_attempts", Value: "3", ValueType: ValueTypeInt, Label: "最大重试次数", Description: "请求失败后的最大重试次数", DisplayOrder: 1},
-			{Category: CategoryRetry, Key: "base_delay", Value: "1s", ValueType: ValueTypeDuration, Label: "基础延迟", Description: "首次重试前的等待时间", DisplayOrder: 2},
-			{Category: CategoryRetry, Key: "max_delay", Value: "30s", ValueType: ValueTypeDuration, Label: "最大延迟", Description: "重试延迟的上限", DisplayOrder: 3},
-			{Category: CategoryRetry, Key: "multiplier", Value: "2.0", ValueType: ValueTypeFloat, Label: "延迟倍数", Description: "每次重试延迟的倍增系数", DisplayOrder: 4},
+			{Category: CategoryRetry, Key: "max_total_attempts", Value: "10", ValueType: ValueTypeInt, Label: "总尝试次数上限", Description: "单次请求所有候选、渠道和阶段合计的上游发送次数，包含首次发送；范围 1–100", DisplayOrder: 1},
+			{Category: CategoryRetry, Key: "max_total_duration", Value: "60s", ValueType: ValueTypeDuration, Label: "调度等待时限", Description: "从调度开始计时，达到时限后不再发起新尝试或等待恢复；范围 1 秒至 10 分钟，不会中断已经开始的正常响应", DisplayOrder: 2},
 		}
 
 	case CategoryHealth:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryHealth, Key: "check_interval", Value: "30s", ValueType: ValueTypeDuration, Label: "检查间隔", Description: "健康检查的时间间隔", DisplayOrder: 1},
-			{Category: CategoryHealth, Key: "timeout", Value: "5s", ValueType: ValueTypeDuration, Label: "检查超时", Description: "健康检查的超时时间", DisplayOrder: 2},
-			{Category: CategoryHealth, Key: "health_path", Value: "/v1/models", ValueType: ValueTypeString, Label: "检查路径", Description: "健康检查请求的 API 路径", DisplayOrder: 3},
+			{Category: CategoryHealth, Key: "active_probes_enabled", Value: "true", ValueType: ValueTypeBool, Label: "主动健康检查", Description: "仅自动探测默认方案内允许检测的端点；关闭后保留手动检测和真实请求反馈", DisplayOrder: 0},
+			{Category: CategoryHealth, Key: "check_interval", Value: "30s", ValueType: ValueTypeDuration, Label: "检查间隔", Description: "Claude 与 Codex 默认方案内可检测端点的定时探测间隔；未参与的端点不探测", DisplayOrder: 1},
+			{Category: CategoryHealth, Key: "timeout", Value: "5s", ValueType: ValueTypeDuration, Label: "检查超时", Description: "单次健康探测的等待上限，不作为正常会话请求的超时", DisplayOrder: 2},
+			{Category: CategoryHealth, Key: "health_path", Value: "/v1/models", ValueType: ValueTypeString, Label: "检查路径", Description: "健康探测使用的 API 路径；实际请求可用性仍由调度与真实调用结果判断", DisplayOrder: 3},
 		}
 
 	case CategoryFailover:
@@ -203,10 +221,10 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 		// 请求控制配置
 		// 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "全局超时", Description: "非流式请求的默认超时时间", DisplayOrder: 1},
+			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "非流式默认超时", Description: "未单独配置端点超时时，非流式请求的总等待上限", DisplayOrder: 1},
 			{Category: CategoryRequest, Key: "response_header_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "流式响应头超时", Description: "流式请求等待服务端首次响应头的超时时间（Claude 与 Codex 共用）。长上下文 + 高推理档位首包可能超过 60s；超时后请求不会重放", DisplayOrder: 2},
+			{Category: CategoryRequest, Key: "default_response_header_timeout", Value: "60s", ValueType: ValueTypeDuration, Label: "非流式响应头超时", Description: "Claude 与 Codex 非流式请求等待上游响应头的上限，仍受端点或默认总超时约束", DisplayOrder: 3},
 			{Category: CategoryRequest, Key: "suspend_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "挂起等待超时", Description: "普通挂起等待端点恢复/渠道切换的最大时间", DisplayOrder: 3},
-			{Category: CategoryRequest, Key: "eof_retry_hint", Value: "false", ValueType: ValueTypeBool, Label: "EOF 重试提示", Description: "流式传输中断时发送可重试错误格式，让客户端自动重试", DisplayOrder: 4},
 		}
 
 	case CategoryStreaming:
@@ -218,14 +236,14 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 
 	case CategoryAuth:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryAuth, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用鉴权", Description: "是否启用 API 访问鉴权", DisplayOrder: 1},
-			{Category: CategoryAuth, Key: "token", Value: "", ValueType: ValueTypePassword, Label: "鉴权 Token", Description: "Bearer Token 值", DisplayOrder: 2},
+			{Category: CategoryAuth, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用访问鉴权", Description: "开启后，Claude 与 Codex 客户端接入 Vane 均需提供应用访问令牌", DisplayOrder: 1},
+			{Category: CategoryAuth, Key: "token", Value: "", ValueType: ValueTypePassword, Label: "应用访问令牌", Description: "客户端连接 Vane 时使用的令牌；接入配置可在对应管理页生成", DisplayOrder: 2},
 		}
 
 	case CategoryTokenCounting:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryTokenCounting, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用 Token 计数", Description: "是否启用 count_tokens 上游转发；关闭时由 Relay 本地估算", DisplayOrder: 1},
-			{Category: CategoryTokenCounting, Key: "estimation_ratio", Value: "4.0", ValueType: ValueTypeFloat, Label: "估算比例", Description: "Token 估算比例 (1 token ≈ N 字符)", DisplayOrder: 2},
+			{Category: CategoryTokenCounting, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "转发 Claude Token 预估", Description: "仅转发客户端发起的 Claude /count_tokens 请求；关闭后 API、订阅及调度方案接入均使用本地估算，不影响正常生成请求", DisplayOrder: 1},
+			{Category: CategoryTokenCounting, Key: "estimation_ratio", Value: "4.0", ValueType: ValueTypeFloat, Label: "本地估算比例", Description: "本地预估时平均每个 Token 对应的字符数，不作为实际请求的计费依据", DisplayOrder: 2},
 		}
 
 	case CategoryRetention:
@@ -263,31 +281,10 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 				{Value: "text", Label: "文本格式"},
 				{Value: "json", Label: "JSON 格式"},
 			}, DisplayOrder: 2},
-		}
-
-	// 🔧 [P5.5.3 新增] Timezone 全局时区
-	case CategoryTimezone:
-		return []*settingsstore.SettingRecord{
-			{Category: CategoryTimezone, Key: "global", Value: "Asia/Shanghai", ValueType: ValueTypeEnum, Label: "全局时区", Description: "影响所有时间戳显示（数据库、日志、UI）。修改后需重启应用生效。", EnumOptions: []settingsstore.EnumOption{
-				{Value: "Asia/Shanghai", Label: "中国（北京时间 UTC+8）"},
-				{Value: "Asia/Hong_Kong", Label: "香港（UTC+8）"},
-				{Value: "Asia/Taipei", Label: "台北（UTC+8）"},
-				{Value: "Asia/Tokyo", Label: "东京（UTC+9）"},
-				{Value: "Asia/Singapore", Label: "新加坡（UTC+8）"},
-				{Value: "Asia/Seoul", Label: "首尔（UTC+9）"},
-				{Value: "UTC", Label: "UTC（协调世界时）"},
-				{Value: "Europe/London", Label: "伦敦（UTC+0/+1）"},
-				{Value: "Europe/Paris", Label: "巴黎（UTC+1/+2）"},
-				{Value: "Europe/Berlin", Label: "柏林（UTC+1/+2）"},
-				{Value: "Europe/Moscow", Label: "莫斯科（UTC+3）"},
-				{Value: "America/New_York", Label: "纽约（UTC-5/-4）"},
-				{Value: "America/Chicago", Label: "芝加哥（UTC-6/-5）"},
-				{Value: "America/Denver", Label: "丹佛（UTC-7/-6）"},
-				{Value: "America/Los_Angeles", Label: "洛杉矶（UTC-8/-7）"},
-				{Value: "America/Sao_Paulo", Label: "圣保罗（UTC-3）"},
-				{Value: "Australia/Sydney", Label: "悉尼（UTC+10/+11）"},
-				{Value: "Pacific/Auckland", Label: "奥克兰（UTC+12/+13）"},
-			}, DisplayOrder: 1, RequiresRestart: true},
+			{Category: CategoryLogging, Key: "file_enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用文件日志", Description: "将日志写入本机文件；关闭后仍可查看运行期间的实时日志", DisplayOrder: 3},
+			{Category: CategoryLogging, Key: "max_file_size", Value: "100MB", ValueType: ValueTypeString, Label: "单文件轮转大小", Description: "单个活动日志达到此大小时归档；支持 B、KB、MB、GB，例如 100MB", DisplayOrder: 4},
+			{Category: CategoryLogging, Key: "max_files", Value: "10", ValueType: ValueTypeInt, Label: "归档保留数量", Description: "每类日志跨月份保留的归档文件数；在后续轮转时清理超额归档", DisplayOrder: 5},
+			{Category: CategoryLogging, Key: "compress_rotated", Value: "true", ValueType: ValueTypeBool, Label: "压缩归档日志", Description: "将新轮转的归档压缩为 gzip，减少磁盘占用", DisplayOrder: 6},
 		}
 
 	default:

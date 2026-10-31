@@ -1,4 +1,10 @@
 @import "tailwindcss";
+@import "../shared/ui/checkbox.css";
+
+@theme {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+}
 
 /* Wails v3 reads this CSS property to drag a frameless window. Interactive
    descendants override it so navigation and window buttons remain clickable. */
@@ -12,6 +18,11 @@
 }
 
 :root {
+  --font-caption: 11px;
+  --font-secondary: 12px;
+  --font-body: 13px;
+  --font-heading: 14px;
+  --text-muted: #64748b;
   --duration-quick: 150ms;
   --duration-fast: 250ms;
   --duration-medium: 350ms;
@@ -29,6 +40,10 @@
   --dropdown-pre-scale: 0.97;
   --dropdown-closing-scale: 0.99;
   --dropdown-ease: var(--ease-smooth-out);
+  --modal-open-dur: var(--duration-fast);
+  --modal-close-dur: var(--duration-quick);
+  --tooltip-open-dur: var(--duration-quick);
+  --tooltip-close-dur: 80ms;
 
   --pulse-dur: 1000ms;
   --pulse-count: 1;
@@ -50,6 +65,35 @@ html,
 body {
   height: 100%;
   overflow: hidden;
+}
+
+html {
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body { font-size: var(--font-body); line-height: 1.5; }
+:is(h1, h2, h3, h4) { letter-spacing: -.012em; }
+code, pre, .font-mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+@layer utilities {
+  .text-\[9px\], .text-\[10px\] { font-size: var(--font-caption); line-height: 1.45; }
+}
+
+@keyframes app-page-enter { from { opacity: 0; } to { opacity: 1; } }
+.app-content main > :not(style) { animation: app-page-enter var(--duration-quick) var(--ease-smooth-out); }
+
+/* Portal motion owns the surface entrance, avoiding two nested zooms. */
+[data-motion-portal], [data-motion-portal] .animate-in,
+.canvas-floating-layer > [data-motion-portal] > [class*="max-w-"] { animation: none !important; }
+
+button, [role="button"] {
+  transition: color var(--duration-quick) var(--ease-smooth-out), background-color var(--duration-quick) var(--ease-smooth-out), border-color var(--duration-quick) var(--ease-smooth-out), box-shadow var(--duration-quick) var(--ease-smooth-out);
+}
+input, textarea, select {
+  transition: border-color var(--duration-quick) var(--ease-smooth-out), box-shadow var(--duration-quick) var(--ease-smooth-out), background-color var(--duration-quick) var(--ease-smooth-out);
 }
 
 /* 自定义动画 */
@@ -106,7 +150,7 @@ body {
 }
 
 .animate-in.duration-500 {
-  --motion-enter-duration: var(--duration-very-slow);
+  --motion-enter-duration: var(--duration-fast);
 }
 
 .fade-in {
@@ -160,6 +204,17 @@ body {
   .t-dropdown { transition: none !important; }
 }
 
+.motion-tooltip {
+  opacity: 0;
+  transform: translateY(3px) scale(.98);
+  transition: opacity var(--tooltip-close-dur) ease-out, transform var(--tooltip-close-dur) ease-out;
+}
+.motion-tooltip[data-phase="open"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition-duration: var(--tooltip-open-dur);
+}
+
 /* transitions.dev: skeleton loader and reveal */
 .t-skel { position: relative; }
 .t-skel-skeleton,
@@ -206,6 +261,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+  .app-content main > :not(style) { animation: none; }
   .t-skel-skeleton, .t-skel-content {
     transition: none !important;
   }
@@ -213,7 +270,14 @@ body {
 }
 
 /* transitions.dev: toast open / close */
+.toast-viewport {
+  top: calc(var(--app-header-height, 0px) + 16px);
+  max-height: calc(100dvh - var(--app-header-height, 0px) - 32px);
+  padding-bottom: 4px;
+}
+
 .t-toast {
+  flex-shrink: 0;
   opacity: 0;
   transform: translateY(var(--toast-distance)) scale(var(--toast-scale));
   filter: blur(var(--toast-blur));
@@ -269,6 +333,19 @@ body {
   transform: scale(1.04);
 }
 
+.motion-button {
+  transition:
+    color var(--duration-quick) var(--ease-smooth-out),
+    background-color var(--duration-quick) var(--ease-smooth-out),
+    border-color var(--duration-quick) var(--ease-smooth-out),
+    opacity var(--duration-quick) var(--ease-smooth-out);
+}
+
+.motion-button:focus-visible {
+  outline: 2px solid #818cf8;
+  outline-offset: -2px;
+}
+
 .motion-control {
   transition:
     color var(--duration-quick) var(--ease-smooth-out),
@@ -320,6 +397,7 @@ body {
   .motion-tabs-label,
   .motion-kpi-card,
   .motion-kpi-icon,
+  .motion-button,
   .motion-control,
   .motion-content-dim,
   .heatmap-cell {

@@ -316,10 +316,10 @@ func TestActiveRequestToDetailUsesCodexServiceTier(t *testing.T) {
 	}
 
 	detail := tracker.ActiveRequestToDetail(req)
-	if detail.InputCostUSD != 3 {
-		t.Fatalf("expected Fast mode input cost 3 (1M * $3/1M), got %f", detail.InputCostUSD)
+	if detail.InputCostUSD != 1 {
+		t.Fatalf("expected traditional Standard input cost 1 (1M * $1/1M), got %f", detail.InputCostUSD)
 	}
-	if detail.ReasoningEffort != req.ReasoningEffort || detail.ServiceTier != req.ServiceTier {
+	if detail.ReasoningEffort != req.ReasoningEffort || detail.ServiceTier != ServiceTierStandard {
 		t.Fatalf("request metadata missing from hot-pool detail: %#v", detail)
 	}
 }

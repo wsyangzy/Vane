@@ -106,8 +106,20 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			if opts.ReasoningEffort != nil {
 				req.ReasoningEffort = *opts.ReasoningEffort
 			}
+			if opts.RequestedServiceTier != nil {
+				req.RequestedServiceTier = *opts.RequestedServiceTier
+			}
+			if opts.ResponseServiceTier != nil {
+				req.ResponseServiceTier = *opts.ResponseServiceTier
+			}
+			if opts.RequestedServiceTier != nil || opts.ResponseServiceTier != nil {
+				resolveActiveRequestServiceTier(req)
+			}
 			if opts.ServiceTier != nil {
 				req.ServiceTier = *opts.ServiceTier
+				if req.RequestedServiceTier == "" && opts.ResponseServiceTier == nil {
+					req.RequestedServiceTier = *opts.ServiceTier
+				}
 			}
 		})
 		if err != nil {

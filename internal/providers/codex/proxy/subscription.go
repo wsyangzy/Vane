@@ -25,22 +25,44 @@ func leaseFromContext(ctx context.Context) *subscription.Lease {
 }
 
 func (h *Handler) admitSubscription(r *http.Request, ep *CodexEndpoint, body []byte) (*http.Request, *subscription.Lease, error) {
+	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
+	var poolErr error
+	r, poolErr = h.admitPool(r, ep, model)
+	if poolErr != nil {
+		return r, nil, poolErr
+	}
 	if ep.AuthMode != subscription.ClientPassthrough {
 		return r, nil, nil
 	}
-	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
+	model, _ = bodyrewrite.LookupTopLevelString(body, "model")
 	if ok, reason := h.subscriptionEligibility(r.Context(), ep, model); !ok {
 		return r, nil, errors.New(reason)
 	}
 	sub := subscription.FromContext(r.Context())
 	lease, e := h.subscriptions.Acquire(r.Context(), sub.Binding, model)
 	if e != nil {
+		routing.PoolAttemptFromContext(r.Context()).Finish(false)
 		return r, nil, e
 	}
 	return r.WithContext(context.WithValue(r.Context(), subscriptionAdmissionKey{}, lease)), lease, nil
 }
 
 func (h *Handler) subscriptionEligibility(ctx context.Context, ep *CodexEndpoint, model string) (bool, string) {
+	if runtime := h.manager.PoolRuntime(); runtime != nil {
+		if account, ok := runtime.Account(ep.ChannelID, ep.CredentialGroupID); !ok || !account.Enabled {
+			return false, "account_disabled"
+		}
+	}
+	if _, ok := routing.PoolCallerFromContext(ctx); ok && ep.AuthMode == subscription.ClientPassthrough {
+		if h.subscriptions == nil {
+			return false, "subscription_state_unavailable"
+		}
+		b, err := h.subscriptions.PoolBinding(ctx, ep.ChannelID, ep.CredentialGroupID)
+		if err != nil {
+			return false, "managed_account_not_authorized"
+		}
+		return h.subscriptions.Eligible(ctx, b, model)
+	}
 	r := subscription.FromContext(ctx)
 	if r != nil && (h.subscriptions == nil || !h.subscriptions.Valid(ctx, r.Binding)) {
 		return false, "subscription_binding_changed"
@@ -71,7 +93,7 @@ func (h *Handler) planSubscriptionRoute(r *http.Request, body []byte, streaming 
 	route := &codexRoute{kind: routing.KindSubscription}
 	decision := routing.Decision{Kind: routing.KindSubscription, Mode: routing.ModeFallback}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
-	if source != nil && subscription.Path(r) == "/responses" {
+	if source != nil && h.manager.PoolRuntime() == nil && subscription.Path(r) == "/responses" {
 		if selected := routing.Decide(h.manager.ModelRules(source.ID), source.NonStreamRoute, model, streaming); selected.Routed() {
 			decision = selected
 			route.kind = selected.Kind

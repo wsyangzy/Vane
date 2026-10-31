@@ -2,6 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { fetchEndpointCostsData, fetchRequests, fetchTokenUsageData } from './api.js';
+import { getRequestServiceTierMeta } from '../../features/requests/utils/requestMetadata.js';
+
+test('请求列表档位采用计费快照并保留历史与进行中请求的原始档位', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    headers: { get: () => 'application/json' },
+    json: async () => ({
+      requests: [
+        { request_id: 'req-fast', provider: 'codex', service_tier: 'default', billing_rule_snapshot: JSON.stringify({ pricing_provider: 'codex', billing_service_tier: 'priority', service_tier_source: 'request', service_tier_policy: 'rules' }) },
+        { request_id: 'req-live', provider: 'codex', service_tier: 'priority' },
+        { request_id: 'req-old', provider: 'codex', service_tier: 'default' },
+        { request_id: 'req-flex', provider: 'codex', serviceTier: 'flex' },
+        { request_id: 'req-claude', provider: 'claude' }
+      ], total: 5, page: 1, pageSize: 10
+    })
+  });
+  try {
+    const { requests } = await fetchRequests({ limit: 10 });
+    assert.deepEqual(requests.map(request => getRequestServiceTierMeta(request)?.label ?? '—'), ['Fast', 'Fast', 'Standard', 'Flex', '—']);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('fetchRequests keeps an unselected endpoint empty instead of fabricating unknown', async () => {
   const originalFetch = globalThis.fetch;

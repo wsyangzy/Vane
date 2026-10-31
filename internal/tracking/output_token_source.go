@@ -74,6 +74,8 @@ func applyTokenUsageToActiveRequest(req *ActiveRequest, tokens *TokenUsage) {
 	req.BillingOutputTokenSource = source
 	req.BillableOutputTokens = BillableOutputTokens(tokens.OutputTokens, tokens.ReasoningTokens, source)
 	req.CacheCreationTokens = tokens.CacheCreationTokens
+	req.CacheWrite30mTokens = tokens.CacheWrite30mTokens
+	req.CacheWrite12hTokens = tokens.CacheWrite12hTokens
 	req.CacheCreation5mTokens = tokens.CacheCreation5mTokens
 	req.CacheCreation1hTokens = tokens.CacheCreation1hTokens
 	req.CacheReadTokens = tokens.CacheReadTokens

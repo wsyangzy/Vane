@@ -1,3 +1,4 @@
+import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { Maximize2, Minimize2, Minus, X } from 'lucide-react';
 import { useToast } from '@/shared/ui/index.js';
@@ -40,8 +41,8 @@ export default function WindowControls() {
   const button = 'flex h-8 w-11 shrink-0 items-center justify-center text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500';
 
   return <div className="desktop-window-controls flex shrink-0 items-center" aria-label="窗口操作">
-    <button type="button" aria-label="最小化窗口" title="最小化" className={`${button} hover:bg-slate-100 hover:text-slate-900`} onClick={() => run('Minimise')}><Minus size={15} /></button>
-    <button type="button" aria-label={maximised ? '还原窗口' : '最大化窗口'} title={maximised ? '还原' : '最大化'} className={`${button} hover:bg-slate-100 hover:text-slate-900`} onClick={() => run('ToggleMaximise')}>{maximised ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
-    <button type="button" aria-label="关闭窗口并隐藏到托盘" title="关闭窗口（隐藏到托盘）" className={`${button} hover:bg-rose-500 hover:text-white`} onClick={() => run('Close')}><X size={17} /></button>
+    <Tooltip asChild content="最小化"><button type="button" aria-label="最小化窗口" className={`${button} hover:bg-slate-100 hover:text-slate-900`} onClick={() => run('Minimise')}><Minus size={15} /></button></Tooltip>
+    <Tooltip asChild content={maximised ? '还原' : '最大化'}><button type="button" aria-label={maximised ? '还原窗口' : '最大化窗口'} className={`${button} hover:bg-slate-100 hover:text-slate-900`} onClick={() => run('ToggleMaximise')}>{maximised ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button></Tooltip>
+    <Tooltip asChild content="关闭窗口（隐藏到托盘）"><button type="button" aria-label="关闭窗口并隐藏到托盘" className={`${button} hover:bg-rose-500 hover:text-white`} onClick={() => run('Close')}><X size={17} /></button></Tooltip>
   </div>;
 }

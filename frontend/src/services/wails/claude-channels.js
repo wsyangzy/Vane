@@ -1,6 +1,5 @@
 import { normalizeModelMapping, hasOwn } from './mapping.js';
 import { mapClaudeCredentialGroup } from './claude-endpoints.js';
-import { normalizeChannelPrivacyLevel } from './privacy.js';
 import { WailsApp, initWails } from './connection.js';
 import { mapNonStreamRoute } from './routing.js';
 
@@ -167,7 +166,6 @@ const getChannels = async () => {
     priority: c.priority || 1,
     modelMapping: normalizeModelMapping(c.model_mapping || c.modelMapping),
     nonStreamRoute: mapNonStreamRoute(c.non_stream_route || c.nonStreamRoute),
-    privacyLevel: normalizeChannelPrivacyLevel(c.privacy_level ?? c.privacyLevel),
     createdAt: c.created_at || '',
     endpointCount: c.endpoint_count,
     credentialGroups: (c.credential_groups || c.credentialGroups || []).map(mapClaudeCredentialGroup)

@@ -1,13 +1,11 @@
-import { Activity, RotateCcw, ArrowRight, Database, KeyRound, Pencil, Server, Settings, XCircle } from 'lucide-react';
+import { ArrowRight, Database, KeyRound, Pencil, Server, Settings, XCircle } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
-import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import EndpointAvailabilityBar from '@/features/providers/shared/endpoints/EndpointAvailabilityBar.jsx';
 import ModelTag from '@/features/requests/components/ModelTag.jsx';
-import { ModelMappingPair } from '@/features/providers/shared/endpoints/detailParts.jsx';
+import { EndpointHealthSection, ResourceDetailShell, ModelMappingPair } from '@/features/providers/shared/endpoints/detailParts.jsx';
 import { formatLastCheck, formatDetailMultiplier, getDetailTimestamp } from '@/features/providers/shared/formatters.js';
-import { EndpointHealthBadge as CodexHealthBadge, EndpointLatencyBadge as CodexLatencyBadge, EndpointRequestFailureBadge as CodexRequestFailureBadge } from '@/features/providers/shared/endpoints/endpointBadges.jsx';
+import { EndpointHealthBadge as CodexHealthBadge, EndpointRequestFailureBadge as CodexRequestFailureBadge } from '@/features/providers/shared/endpoints/endpointBadges.jsx';
 import { DetailMetricCard, DetailChip, DetailPill, DetailTimeoutPill, DetailTimestampFooter } from './detailParts.jsx';
-import { RepeatOffIcon } from './endpointState.jsx';
 import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '../model.js';
 
 // ============================================================================
@@ -17,7 +15,7 @@ import { getDefaultCredentialGroup, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS } from '
 // 端点行（紧凑表格风，延续渠道管理页密度）：
 // 左侧 toggle = 激活；行整体点击展开内嵌编辑（base_url 直改即保存）
 // ============================================================================
-const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onRestore, onHealth }) => {
+const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, onEdit, onHealth, onToggleHealth, busy = false }) => {
   if (!endpoint) return null;
 
   const healthState = endpoint.healthState || endpoint.health_state || 'unchecked';
@@ -25,7 +23,6 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   const lastFailCode = Number(endpoint.lastFailCode || endpoint.last_fail_code || 0);
   const lastFailReason = endpoint.lastFailReason || endpoint.last_fail_reason || '';
   const hasFailDetail = (Number.isFinite(lastFailCode) && lastFailCode > 0) || !!lastFailReason;
-  const failoverEnabled = endpoint.failoverEnabled !== false;
   const endpointGroupID = Number(endpoint.credentialGroupId || endpoint.credential_group_id || 0);
   const credentialGroup = (channel?.credentialGroups || []).find((group) => Number(group.id) === endpointGroupID) ||
     getDefaultCredentialGroup(channel);
@@ -68,7 +65,7 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
   const createdAt = getDetailTimestamp(endpoint.createdAt, endpoint.created_at, endpoint.CreatedAt);
   const updatedAt = getDetailTimestamp(endpoint.updatedAt, endpoint.updated_at, endpoint.UpdatedAt);
   const rawLastCheck = endpoint.lastCheck || endpoint.last_check || endpoint.LastCheck;
-  const lastCheck = formatLastCheck(rawLastCheck || updatedAt);
+  const lastCheck = formatLastCheck(rawLastCheck);
   const modelMappingEntries = Object.entries(channel?.modelMapping || channel?.model_mapping || {})
     .map(([sourceModel, targetModel]) => [String(sourceModel || '').trim(), String(targetModel || '').trim()])
     .filter(([sourceModel, targetModel]) => sourceModel && targetModel);
@@ -130,97 +127,34 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
     }
   ];
 
-  return renderModalPortal(
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm animate-fade-in"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose?.();
-      }}
+  return (
+    <ResourceDetailShell
+      title={endpoint.name || '未命名端点'}
+      eyebrow={`Codex · ${channel?.name || '渠道'} · 端点详情`}
+      subtitle={endpoint.baseURL || endpoint.base_url || '未设置地址'}
+      icon={Server}
+      onClose={onClose}
+      actions={<Button variant="ghost" size="sm" icon={Pencil} onClick={() => onEdit?.(endpoint)}>编辑</Button>}
+      summary={<>
+        <CodexHealthBadge state={healthState} detail />
+        <DetailPill tone="slate" icon={Settings} mono>P{priority}</DetailPill>
+        <DetailTimeoutPill custom={hasCustomTimeout} value={timeoutLabel} tooltip={`${timeoutScope}: ${timeoutLabel}`} />
+        <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} detail hideWhenEmpty />
+      </>}
     >
-      <div
-        className="flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="border-b border-slate-100 px-6 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h2 className="truncate text-lg font-semibold text-slate-900">{endpoint.name || '未命名端点'}</h2>
-                <span className="inline-flex items-center rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                  {channel?.name || 'Codex'}
-                </span>
-              </div>
-              <p className="mt-1 truncate font-mono text-xs text-slate-500">{endpoint.baseURL || '<未设置 base_url>'}</p>
-            </div>
-
-            <div className="flex flex-shrink-0 items-center gap-2">
-              {!failoverEnabled && <Button variant="secondary" size="sm" icon={RotateCcw} onClick={() => onRestore?.(endpoint)}>恢复历史端点</Button>}
-              <Button variant="ghost" size="sm" icon={Activity} onClick={() => onHealth?.(endpoint)}>健康检测</Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                icon={Pencil}
-                onClick={() => onEdit?.(endpoint)}
-              >
-                编辑
-              </Button>
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                关闭
-              </Button>
-            </div>
-        </div>
-
-          <div className="mt-2 flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <CodexHealthBadge state={healthState} detail />
-            {!hasFailDetail && <CodexLatencyBadge ms={responseTimeMs} detail />}
-            <DetailPill tone="indigo" icon={Settings} mono>
-              P{priority}
-            </DetailPill>
-            <DetailTimeoutPill
-              custom={hasCustomTimeout}
-              value={timeoutLabel}
-              tooltip={`${timeoutScope}: ${timeoutLabel}`}
-            />
-            <DetailPill tone="indigo" icon={Database}>
-              <span className="leading-none">分组倍率</span>
-              <span className="font-mono leading-none">{formatDetailMultiplier(credentialGroup?.costMultiplier ?? 1)}</span>
-            </DetailPill>
-            {!failoverEnabled && <DetailPill tone="amber" icon={RepeatOffIcon}>历史停用</DetailPill>}
-
-            <DetailPill tone="sky" icon={Database}>
-              <span className="leading-none">{billingName}</span>
-              <span className="font-mono text-[9px] leading-none opacity-75">{billingSource}</span>
-            </DetailPill>
-            <CodexRequestFailureBadge failCode={lastFailCode} failReason={lastFailReason} detail hideWhenEmpty />
-            <span className="flex-shrink-0 whitespace-nowrap font-mono text-[10px] text-slate-400">
-              最后检查 {lastCheck}
-            </span>
-          </div>
-          {hasFailDetail && (
-            <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <XCircle size={16} className="text-rose-600" />
-                <div className="text-sm font-medium text-rose-800">异常详情</div>
-              </div>
-              <div className="space-y-2 text-sm">
-                {lastFailCode > 0 && (
-                  <div className="flex items-start gap-2">
-                    <span className="min-w-[70px] font-medium text-rose-600">状态码:</span>
-                    <span className="rounded bg-rose-100 px-2 py-0.5 font-mono text-rose-900">{lastFailCode}</span>
-                  </div>
-                )}
-                {lastFailReason && (
-                  <div className="flex items-start gap-2">
-                    <span className="min-w-[70px] font-medium text-rose-600">失败原因:</span>
-                    <span className="break-all text-rose-900">{lastFailReason}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="overflow-y-auto p-6">
+      <EndpointHealthSection
+        inScope={endpoint.healthInScope !== false && healthState !== 'disabled'}
+        skipped={endpoint.skipHealthCheck ?? endpoint.skip_health_check}
+        subscription={credentialGroup?.authMode === 'client_passthrough' || endpoint.authMode === 'client_passthrough'}
+        ms={responseTimeMs}
+        lastCheck={lastCheck}
+        onCheck={onHealth ? () => onHealth(endpoint) : undefined}
+        onToggle={onToggleHealth ? (skip) => onToggleHealth(endpoint, skip) : undefined}
+        disabled={busy}
+      />
+      {hasFailDetail && <DetailMetricCard label="最近异常" icon={XCircle}>
+        <p className="text-xs leading-relaxed text-rose-600 [overflow-wrap:anywhere]">{lastFailCode > 0 && <span className="mr-2 font-mono">HTTP {lastFailCode}</span>}{lastFailReason || '最近一次请求失败'}</p>
+      </DetailMetricCard>}
           <EndpointAvailabilityBar
             provider="codex"
             channel={channel?.name || ''}
@@ -268,10 +202,8 @@ const CodexEndpointDetailModal = ({ endpoint, channel, globalConfig, onClose, on
             </div>
           )}
 
-          <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
-        </div>
-      </div>
-    </div>
+      <DetailTimestampFooter createdAt={createdAt} updatedAt={updatedAt} />
+    </ResourceDetailShell>
   );
 };
 

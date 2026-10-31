@@ -101,6 +101,7 @@ func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) 
 		enrichEndpointChainCredentialGroups(record.Provider, record.EndpointChain, credentialGroupLookup)
 		result.Requests = append(result.Requests, record)
 	}
+	a.enrichRequestDiagnostics(ctx, result.Requests)
 
 	return result, nil
 }

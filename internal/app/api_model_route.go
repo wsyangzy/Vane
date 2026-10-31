@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wsyangzy/Vane/internal/privacy"
 	claudeproxyendpoint "github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 	claudeservice "github.com/wsyangzy/Vane/internal/providers/claude/service"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
@@ -274,6 +273,9 @@ func (a *App) SaveModelRoute(input SaveModelRouteInput) (RouteSaveResult, error)
 	}
 	ctx, cancel := routeCtx()
 	defer cancel()
+	if err := a.requireLegacyRouting(ctx, provider); err != nil {
+		return RouteSaveResult{}, err
+	}
 
 	catalog, err := a.routeCatalog(ctx, provider)
 	if err != nil {
@@ -313,6 +315,9 @@ func (a *App) DeleteModelRoute(id int64) error {
 	if existing == nil {
 		return fmt.Errorf("模型路由规则不存在: %d", id)
 	}
+	if err := a.requireLegacyRouting(ctx, existing.Provider); err != nil {
+		return err
+	}
 	if err := svc.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -335,6 +340,9 @@ func (a *App) SetModelRouteEnabled(id int64, enabled bool) error {
 	}
 	if existing == nil {
 		return fmt.Errorf("模型路由规则不存在: %d", id)
+	}
+	if err := a.requireLegacyRouting(ctx, existing.Provider); err != nil {
+		return err
 	}
 	if err := svc.SetEnabled(ctx, id, enabled); err != nil {
 		return err
@@ -463,6 +471,9 @@ func (a *App) SetChannelNonStreamRoute(provider string, channelID int64, input N
 	}
 	ctx, cancel := routeCtx()
 	defer cancel()
+	if err := a.requireLegacyRouting(ctx, provider); err != nil {
+		return RouteSaveResult{}, err
+	}
 
 	catalog, err := a.routeCatalog(ctx, provider)
 	if err != nil {
@@ -529,63 +540,10 @@ func (a *App) deleteChannelModelRoutes(ctx context.Context, provider string, cha
 	}
 }
 
-// SetChannelPrivacyLevel 设置渠道隐私级别（渠道编辑表单），保存后立即生效。
-// level：""=跟随全局 / third_party=三方中转（强制脱敏）/ trusted=可信渠道（只检测）。
-func (a *App) SetChannelPrivacyLevel(provider string, channelID int64, level string) error {
-	provider, err := normalizeProviderParam(provider)
-	if err != nil {
-		return err
-	}
-	normalized := privacy.NormalizeChannelLevel(strings.TrimSpace(level))
-	if strings.TrimSpace(level) != "" && normalized == privacy.ChannelLevelDefault {
-		return fmt.Errorf("隐私级别无效: %q（可选 third_party / trusted，留空跟随全局）", level)
-	}
-	ctx, cancel := routeCtx()
-	defer cancel()
-
-	catalog, err := a.routeCatalog(ctx, provider)
-	if err != nil {
-		return fmt.Errorf("获取渠道失败: %w", err)
-	}
-	channel := catalog.Channel(channelID)
-	if channel == nil {
-		return fmt.Errorf("渠道不存在: %d", channelID)
-	}
-
-	if provider == "codex" {
-		a.mu.RLock()
-		channelService := a.codexChannelService
-		a.mu.RUnlock()
-		if channelService == nil {
-			return fmt.Errorf("Codex 渠道服务未就绪，请稍后重试")
-		}
-		a.codexActivationMu.Lock()
-		err = channelService.SetPrivacyLevel(ctx, channelID, normalized)
-		if err == nil {
-			// Codex 运行时从渠道记录读取隐私级别，重载后生效
-			err = a.reloadCodexEndpointManager()
-		}
-		a.codexActivationMu.Unlock()
-		if err != nil {
-			return err
-		}
-		a.emitCodexProviderUpdate()
-		return nil
-	}
-
-	a.mu.RLock()
-	channelService := a.channelService
-	a.mu.RUnlock()
-	if channelService == nil {
-		return fmt.Errorf("渠道存储服务未启用")
-	}
-	if err := channelService.SetPrivacyLevel(ctx, channel.Name, normalized); err != nil {
-		return err
-	}
-	// Claude 运行时从路由快照读取隐私级别
-	a.syncClaudeRouteConfig(ctx)
-	a.emitEndpointUpdate()
-	return nil
+// SetChannelPrivacyLevel retains the desktop API signature for older callers.
+// Privacy decisions now belong exclusively to the global protection settings.
+func (a *App) SetChannelPrivacyLevel(_ string, _ int64, _ string) error {
+	return fmt.Errorf("渠道隐私级别已取消，请在隐私防护中统一设置")
 }
 
 // syncRouteRuntime 把已保存的路由配置发布到运行时；失败只记日志，运行时保留上一份快照。
@@ -599,6 +557,14 @@ func (a *App) syncRouteRuntime(ctx context.Context, provider string) {
 
 // syncClaudeRouteConfig 重建 Claude 路由快照：已启用规则 + 各渠道非流改道 + 渠道 ID→名称
 func (a *App) syncClaudeRouteConfig(ctx context.Context) {
+	if _, err := a.refreshPoolRuntime(ctx, "claude"); err != nil {
+		a.closePoolRuntime("claude")
+		if a.logger != nil {
+			a.logger.Error("Claude 账号池加载失败", "error", err)
+		}
+	} else {
+		a.publishPoolRuntime("claude")
+	}
 	a.mu.RLock()
 	endpointManager := a.endpointManager
 	logger := a.logger
@@ -633,7 +599,6 @@ func (a *App) buildClaudeRouteConfig(ctx context.Context) (*claudeproxyendpoint.
 		ModelRules:      make(map[string][]routing.ModelRule),
 		NonStreamRoutes: make(map[string]*routing.NonStreamRoute),
 		ChannelNames:    make(map[int64]string, len(catalog)),
-		PrivacyLevels:   make(map[string]string),
 	}
 	bySource := routing.RulesBySource(rules)
 	for _, channel := range catalog {
@@ -644,15 +609,20 @@ func (a *App) buildClaudeRouteConfig(ctx context.Context) (*claudeproxyendpoint.
 		if channelRules := bySource[channel.ID]; len(channelRules) > 0 {
 			cfg.ModelRules[channel.Name] = channelRules
 		}
-		if channel.PrivacyLevel != "" {
-			cfg.PrivacyLevels[channel.Name] = channel.PrivacyLevel
-		}
 	}
 	return cfg, nil
 }
 
 // syncCodexModelRules 把 Codex 已启用规则发布到端点管理器（渠道非流改道随 Reload 加载）
 func (a *App) syncCodexModelRules(ctx context.Context) {
+	if _, err := a.refreshPoolRuntime(ctx, "codex"); err != nil {
+		a.closePoolRuntime("codex")
+		if a.logger != nil {
+			a.logger.Error("Codex 账号池加载失败", "error", err)
+		}
+	} else {
+		a.publishPoolRuntime("codex")
+	}
 	a.mu.RLock()
 	manager := a.codexEndpointMgr
 	logger := a.logger

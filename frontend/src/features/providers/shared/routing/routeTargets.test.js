@@ -14,6 +14,23 @@ import {
   validateRouteTargets
 } from './routeTargets.js';
 
+test('classifier snapshots have a distinct route title for recorded classification costs', () => {
+  const route = describeRouteSnapshot('{"kind":"routing_classifier","profile_id":12}');
+  assert.equal(route.kind, 'routing_classifier');
+  assert.equal(route.title, '路由意图分类');
+});
+
+test('unified provider traces preserve route and mapping markers without depending on a model rewrite', () => {
+  for (const [decisionKind, kind, label] of [['model', 'model_rule', '模型路由'], ['mapping', 'mapping', '模型映射'], ['non_stream', 'non_stream', '非流改道'], ['composite', 'composite', '条件路由'], ['intent', 'intent', '意图路由']]) {
+    const snapshot = { profile_id: 12, profile_name: '日常中转', decision: { kind: decisionKind, rule_id: 3, mode: 'prefer', reused_turn: true } };
+    for (const raw of [snapshot, JSON.stringify(snapshot)]) {
+      assert.deepEqual(describeRouteSnapshot(raw), { kind, title: `${label}（日常中转 · 规则 #3）`, mode: '优先规则目标', stage: '复用本轮决策' });
+    }
+  }
+  assert.deepEqual(describeRouteSnapshot({ profile_id: 12, decision: { kind: 'default' } }), { kind: 'default', title: '默认编排（方案 #12）', mode: '', stage: '统一调度' });
+  assert.equal(describeRouteSnapshot({ profile_id: 12, decision: { kind: 'non_stream', mode: 'fallback' } }).mode, '默认编排失败后使用目标');
+});
+
 test('model route form validation reports the first missing field', () => {
   const rule = { name: 'haiku', matchModel: 'claude-haiku-*', priority: '0', targets: [{ channelId: 3 }] };
   assert.equal(validateModelRouteForm(rule), '');

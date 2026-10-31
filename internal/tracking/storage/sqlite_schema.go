@@ -19,6 +19,25 @@ func (s *SQLiteAdapter) InitSchema() error {
 	defer cancel()
 
 	s.logger.Info("正在初始化SQLite数据库Schema")
+	for _, table := range []string{"claude_credential_groups", "codex_credential_groups"} {
+		exists, err := s.tableExists(ctx, table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		enabled, err := s.columnExists(ctx, table, "enabled")
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			if _, err = s.backupDatabaseFile(ctx, "pre-account-pools"); err != nil {
+				return fmt.Errorf("账号池迁移前备份失败: %w", err)
+			}
+			break
+		}
+	}
 
 	// 🔧 [P1.2 新增] 首先创建/检查 schema_versions 表
 	// 用于追踪迁移执行状态，让迁移可观察、可回滚、可幂等

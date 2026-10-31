@@ -16,8 +16,8 @@ import (
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
 
-// CountTokensHandler 处理 /v1/messages/count_tokens 请求
-// 策略：优先转发到标记了 supports_count_tokens 的端点，失败则本地估算
+// CountTokensHandler handles client count requests. The global switch also
+// applies to subscription and pool callers before any upstream route is planned.
 type CountTokensHandler struct {
 	config          *config.Config
 	endpointManager *endpoint.Manager
@@ -48,23 +48,23 @@ type CountTokensResponse struct {
 	InputTokens int `json:"input_tokens"`
 }
 
-// Handle 处理count_tokens请求 - 极简逻辑
 func (h *CountTokensHandler) Handle(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte, connID string, lifecycleManager RequestLifecycleManager) {
-	if subscription.FromContext(ctx) != nil {
+	if h.config == nil || !h.config.TokenCounting.Enabled {
+		h.respondWithEstimation(w, bodyBytes, connID, lifecycleManager)
+		return
+	}
+	if subscription.FromContext(ctx) != nil || h.endpointManager.PoolRuntime() != nil {
 		h.handleSubscription(ctx, w, r, bodyBytes, connID, lifecycleManager)
 		return
 	}
 	slog.Info(fmt.Sprintf("🔢 [Token计数] [%s] 收到count_tokens请求", connID))
 
-	// 关闭 TokenCounting 时仍由 Relay 本地处理，不能把客户端发来的路径落穿到上游。
-	var supportedEndpoints []*endpoint.Endpoint
-	if h.config != nil && h.config.TokenCounting.Enabled {
-		candidates := h.getSupportedEndpoints()
-		supportedEndpoints = filterClaudeModelEndpoints(h.forwarder, candidates, bodyBytes)
-		if len(supportedEndpoints) == 0 && len(candidates) > 0 {
-			// 激活渠道的 count_tokens 端点都不支持该模型：本次请求借用其它渠道，不切换全局激活渠道
-			supportedEndpoints = h.countTokensEndpointsFromOtherChannels(bodyBytes)
-		}
+	candidates := h.getSupportedEndpoints()
+	supportedEndpoints := filterClaudeModelEndpoints(h.forwarder, candidates, bodyBytes)
+	if len(supportedEndpoints) == 0 && len(candidates) > 0 {
+		// Borrow a model-compatible channel for this request without changing the
+		// application's active channel.
+		supportedEndpoints = h.countTokensEndpointsFromOtherChannels(bodyBytes)
 	}
 
 	// 2. 如果有，尝试转发
@@ -143,7 +143,7 @@ func (h *CountTokensHandler) countTokensEndpointsFromOtherChannels(body []byte) 
 
 // tryForward 尝试转发到支持的端点
 func (h *CountTokensHandler) tryForward(ctx context.Context, r *http.Request, bodyBytes []byte, endpoints []*endpoint.Endpoint, connID string, lifecycleManager RequestLifecycleManager) ([]byte, bool, error) {
-	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager, privacyLevelsFor(h.endpointManager))
+	bodies, err := applyPrivacyFilter(ctx, h.privacyFilter, r, "claude", bodyBytes, lifecycleManager)
 	if err != nil {
 		return nil, false, err
 	}
@@ -262,7 +262,11 @@ func (h *CountTokensHandler) estimateTokens(bodyBytes []byte) (int, error) {
 	}
 
 	// 应用估算比例
-	estimatedTokens := int(float64(totalChars) / h.config.TokenCounting.EstimationRatio)
+	ratio := 4.0
+	if h.config != nil && h.config.TokenCounting.EstimationRatio > 0 {
+		ratio = h.config.TokenCounting.EstimationRatio
+	}
+	estimatedTokens := int(float64(totalChars) / ratio)
 
 	// 基础开销
 	estimatedTokens += 50

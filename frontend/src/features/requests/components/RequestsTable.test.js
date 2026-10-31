@@ -47,7 +47,7 @@ test('request display calculations preserve retry, transfer and token semantics'
 });
 
 test('request channel failover display is data-driven for Claude and Codex', () => {
-  assert.match(source, /requestHasInterChannelTransfer\(request\)/);
+  assert.equal(requestHasInterChannelTransfer({ provider: 'codex', endpointChain: [{ channel: 'A' }, { channel: 'B' }] }), true);
   assert.match(detailSource, /const showChannelInChain = requestHasInterChannelTransfer\(request\)/);
   assert.doesNotMatch(source, /provider === 'codex'\) return false/);
   assert.doesNotMatch(source, /provider \|\| 'claude'\) !== 'codex'/);
@@ -55,22 +55,20 @@ test('request channel failover display is data-driven for Claude and Codex', () 
 });
 
 test('request transfer indicators use the shared Route icon for Claude and Codex', () => {
-  const routeBadgeClass = 'inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-medium rounded-full border border-indigo-100 whitespace-nowrap';
   assert.match(source, /const channelTransferCount = countChannelSwitches\(getEndpointChainItems\(request\)\)/);
   assert.match(source, /aria-label=\{`渠道切换 \$\{channelTransferCount\} 次`\}/);
   assert.match(source, /<span>\{channelTransferCount\}<\/span>/);
   assert.doesNotMatch(source, /<Tooltip content="渠道间转移记录">/);
-  assert.equal(source.split(routeBadgeClass).length - 1, 2);
+  assert.equal(source.match(/<Route className="w-2\.5 h-2\.5" \/>/g)?.length, 1);
   assert.match(source, /<Route className="w-2\.5 h-2\.5" \/>/);
   assert.doesNotMatch(source, /<GitBranch/);
 });
 
-test('request channel selectors hide paused channels only while provider failover is enabled', () => {
-  assert.match(pageSource, /interChannelFailoverEnabled \? groups\.filter\(group => !group\.paused\) : groups/);
-  assert.match(pageSource, /codexChannels\.filter\(channel => channel\.failoverEnabled !== false\)/);
-  assert.match(pageSource, /getSettingsByScope\('codex', 'failover'\)/);
-  assert.match(pageSource, /visibleClaudeGroups\.map\(g => \(\{ \.\.\.g, provider: 'claude' \}\)\)/);
-  assert.match(pageSource, /const codexNames = visibleCodexChannels/);
+test('request tracing switches routing defaults without legacy channel activation or participation settings', () => {
+  const switcherSource = fs.readFileSync(new URL('./RoutingProfileSwitcher.jsx', import.meta.url), 'utf8');
+  assert.match(switcherSource, /listRoutingProfiles/);
+  assert.match(switcherSource, /setDefaultRoutingProfile/);
+  assert.doesNotMatch(pageSource + switcherSource, /activateGroup|activateCodexChannel|fetchInterChannelFailoverEnabled|getSettingsByScope/);
 });
 
 test('request detail modal portals the full-screen backdrop and preserves page positioning', () => {
@@ -128,8 +126,8 @@ test('request detail keeps cancellation out of the red error card and uses one f
 });
 
 test('request detail tabs flag empty privacy and chain content', () => {
-  assert.match(detailSource, /empty: !privacyRedacted/);
-  assert.match(detailSource, /empty: chainNodes\.length === 0/);
+  assert.match(detailSource, /empty: !hasPrivacyRecord/);
+  assert.match(detailSource, /empty: !dispatchTrace && chainNodes\.length === 0/);
 });
 
 test('request detail chain cards surface per-hop attempts and upstream status', () => {

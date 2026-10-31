@@ -9,7 +9,7 @@ export const MAX_GRAPH_ZOOM = 1.75;
 
 const centerY = (node) => node.y + node.height / 2;
 
-function connect(source, target, disabled) {
+function connect(source, target) {
   const x1 = source.x + source.width;
   const y1 = centerY(source);
   const x2 = target.x;
@@ -19,7 +19,6 @@ function connect(source, target, disabled) {
     key: `${source.key}/${target.key}`,
     source: source.key,
     target: target.key,
-    disabled,
     trunk: source.kind === 'channel',
     path: `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`
   };
@@ -47,7 +46,7 @@ export function buildChannelGraph(name, groups, endpoints) {
     children.forEach((endpoint, endpointIndex) => {
       const child = { ...ENDPOINT, y: cursor + endpointIndex * (ENDPOINT.height + ENDPOINT_GAP) + (spans[index] - (children.length * ENDPOINT.height + (children.length - 1) * ENDPOINT_GAP)) / 2, key: `endpoint:${endpoint.id}`, kind: 'endpoint', label: endpoint.name, endpoint, group };
       nodes.push(child);
-      links.push(connect(node, child, endpoint.excluded));
+      links.push(connect(node, child));
     });
     cursor += spans[index] + GROUP_GAP;
   });

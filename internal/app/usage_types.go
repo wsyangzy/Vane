@@ -4,10 +4,7 @@ import (
 	"time"
 )
 
-const (
-	usageDBQueryTimeout             = 8 * time.Second
-	tokenUsageHeatmapHourlyMaxRange = 7 * 24 * time.Hour
-)
+const usageDBQueryTimeout = 8 * time.Second
 
 type UsageSummary struct {
 	TotalRequests        int64   `json:"total_requests"`          // 运行时请求数

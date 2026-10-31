@@ -3,6 +3,7 @@ package privacy
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -27,6 +28,7 @@ type LegacyRule struct {
 // StoredRule 带持久化元数据的规则
 type StoredRule struct {
 	Rule
+	Kind      string    `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -99,6 +101,20 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO privacy_settings (id) VALUES (1)`); err != nil {
 		return fmt.Errorf("seed privacy_settings: %w", err)
 	}
+	if exists, err := s.hasColumn(ctx, "privacy_settings", "options_json"); err != nil {
+		return err
+	} else if !exists {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE privacy_settings ADD COLUMN options_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
+			return err
+		}
+	}
+	// Upgrade only the exact shipped preset; keep user-authored patterns intact.
+	if _, err := s.db.ExecContext(ctx, `UPDATE privacy_rules SET pattern = ?, name = ? WHERE source = ? AND pattern = ?`, privateKeyPattern, "完整私钥块", SourcePreset, `-----BEGIN [A-Z ]*PRIVATE KEY-----`); err != nil {
+		return err
+	}
+	if err := s.ensureActivitySchema(ctx); err != nil {
+		return err
+	}
 
 	if err := s.dropPlaintextSyntheticTables(ctx); err != nil {
 		return err
@@ -115,7 +131,7 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			return fmt.Errorf("reset mode after legacy migration: %w", err)
 		}
 	}
-	return nil
+	return s.migrateMatchingOptions(ctx)
 }
 
 // migrateLegacyRulesTable 旧结构（有 type 列、无 match_type 列）整表改名保留。
@@ -194,17 +210,23 @@ func (s *Store) LoadSettings(ctx context.Context) (Settings, error) {
 		return Settings{}, fmt.Errorf("privacy store not initialized")
 	}
 	var settings Settings
+	var options string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT mode, scan_max_bytes, over_limit_action, on_error, unsupported_path_action
+		SELECT mode, scan_max_bytes, over_limit_action, on_error, unsupported_path_action, options_json
 		FROM privacy_settings WHERE id = 1
 	`).Scan(&settings.Mode, &settings.ScanMaxBytes, &settings.OverLimitAction,
-		&settings.OnError, &settings.UnsupportedPathAction)
+		&settings.OnError, &settings.UnsupportedPathAction, &options)
 	if err == sql.ErrNoRows {
 		return DefaultSettings(), nil
 	}
 	if err != nil {
 		return Settings{}, fmt.Errorf("load privacy settings: %w", err)
 	}
+	extra := DefaultSettings()
+	if err := json.Unmarshal([]byte(options), &extra); err != nil {
+		return Settings{}, fmt.Errorf("invalid privacy options")
+	}
+	settings.Categories, settings.Words, settings.WordsAnyCase, settings.Allow, settings.Actions, settings.RestoreResponses, settings.KeepKeyFormat = extra.Categories, extra.Words, extra.WordsAnyCase, extra.Allow, extra.Actions, extra.RestoreResponses, extra.KeepKeyFormat
 	return settings, nil
 }
 
@@ -215,13 +237,18 @@ func (s *Store) SaveSettings(ctx context.Context, settings Settings) error {
 	if err := ValidateSettings(settings); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	settings = normalizeScanPolicies(settings)
+	options, err := runtimeOptionsJSON(settings)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
 		UPDATE privacy_settings
 		SET mode = ?, scan_max_bytes = ?, over_limit_action = ?, on_error = ?,
-		    unsupported_path_action = ?, updated_at = `+sqlNowExpr+`
+		    unsupported_path_action = ?, options_json = ?, updated_at = `+sqlNowExpr+`
 		WHERE id = 1
 	`, settings.Mode, settings.ScanMaxBytes, settings.OverLimitAction,
-		settings.OnError, settings.UnsupportedPathAction)
+		settings.OnError, settings.UnsupportedPathAction, string(options))
 	if err != nil {
 		return fmt.Errorf("save privacy settings: %w", err)
 	}
@@ -293,12 +320,23 @@ func (s *Store) CreateRule(ctx context.Context, rule Rule) (StoredRule, error) {
 }
 
 func (s *Store) insertRule(ctx context.Context, rule Rule) (int64, error) {
-	result, err := s.db.ExecContext(ctx, `
+	rule.ID = 0
+	return insertRule(ctx, s.db, rule)
+}
+
+func insertRule(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, rule Rule) (int64, error) {
+	var id any
+	if rule.ID != 0 {
+		id = rule.ID
+	}
+	result, err := db.ExecContext(ctx, `
 		INSERT INTO privacy_rules
-			(enabled, name, description, priority, match_type, pattern, action,
+			(id, enabled, name, description, priority, match_type, pattern, action,
 			 replacement_mode, placeholder, pseudonym_kind, source)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, boolToInt(rule.Enabled), rule.Name, rule.Description, rule.Priority,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, boolToInt(rule.Enabled), rule.Name, rule.Description, rule.Priority,
 		rule.MatchType, rule.Pattern, rule.Action,
 		rule.ReplacementMode, rule.Placeholder, rule.PseudonymKind, rule.Source)
 	if err != nil {
@@ -513,6 +551,7 @@ func scanStoredRule(scanner ruleScanner) (StoredRule, error) {
 		return StoredRule{}, err
 	}
 	rule.Enabled = enabled == 1
+	rule.Kind = RuleKind(rule.Rule)
 	rule.CreatedAt = parseTime(createdAt)
 	rule.UpdatedAt = parseTime(updatedAt)
 	return rule, nil

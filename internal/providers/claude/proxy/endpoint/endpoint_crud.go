@@ -6,6 +6,8 @@ package endpoint
 import (
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -43,6 +45,19 @@ func (m *Manager) SyncEndpoints(configs []config.EndpointConfig) {
 
 	// 使用写锁替换端点列表
 	m.endpointsMu.Lock()
+	for _, next := range endpoints {
+		for _, prior := range m.endpoints {
+			prior.mutex.RLock()
+			same := endpointKeyFromConfig(prior.Config) == endpointKeyFromConfig(next.Config) && sameBackendConfig(prior.Config, next.Config)
+			if same {
+				next.stateVersion = prior.RouteStateVersion()
+			}
+			prior.mutex.RUnlock()
+			if same {
+				break
+			}
+		}
+	}
 	m.endpoints = endpoints
 	m.endpointsMu.Unlock()
 	m.clearPreferredEndpoints()
@@ -256,8 +271,10 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 
 	// 更新配置
 	targetEndpoint.mutex.Lock()
+	if !sameBackendConfig(targetEndpoint.Config, cfg) {
+		atomic.StoreUint64(&targetEndpoint.stateVersion, 0)
+	}
 	targetEndpoint.Config = cfg
-	atomic.StoreUint64(&targetEndpoint.stateVersion, 0)
 	targetEndpoint.mutex.Unlock()
 	m.clearPreferredEndpoints()
 
@@ -306,6 +323,13 @@ func (m *Manager) UpdateEndpointConfig(oldEndpointKey string, cfg config.Endpoin
 
 	slog.Info(fmt.Sprintf("✏️ [端点管理] 更新端点配置: %s", newEndpointKey))
 	return nil
+}
+
+// Presentation, scheduling, billing and timeout changes do not rebind protocol state.
+func sameBackendConfig(a, b config.EndpointConfig) bool {
+	return a.URL == b.URL && a.CredentialGroupID == b.CredentialGroupID && a.AuthMode == b.AuthMode &&
+		a.Token == b.Token && a.ApiKey == b.ApiKey && slices.Equal(a.Tokens, b.Tokens) &&
+		slices.Equal(a.ApiKeys, b.ApiKeys) && maps.Equal(a.Headers, b.Headers)
 }
 
 // UpdateEndpointPriority updates the priority of an endpoint by name

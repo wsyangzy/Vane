@@ -28,60 +28,6 @@ import * as store$2 from "../settings/store/models.js";
 // @ts-ignore: Unused imports
 import * as accounts$0 from "../subscriptions/accounts/models.js";
 
-export class AccountPoolState {
-    /**
-     * Creates a new AccountPoolState instance.
-     * @param {Partial<AccountPoolState>} [$$source = {}] - The source object to create the AccountPoolState.
-     */
-    constructor($$source = {}) {
-        if (!("pools" in $$source)) {
-            /**
-             * @member
-             * @type {routing$0.Pool[]}
-             */
-            this["pools"] = [];
-        }
-        if (!("accounts" in $$source)) {
-            /**
-             * @member
-             * @type {PoolAccountInfo[]}
-             */
-            this["accounts"] = [];
-        }
-        if (!("cooldowns" in $$source)) {
-            /**
-             * @member
-             * @type {PoolCooldownInfo[]}
-             */
-            this["cooldowns"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AccountPoolState instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AccountPoolState}
-     */
-    static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType1;
-        const $$createField1_0 = $$createType3;
-        const $$createField2_0 = $$createType5;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("pools" in $$parsedSource) {
-            $$parsedSource["pools"] = $$createField0_0($$parsedSource["pools"]);
-        }
-        if ("accounts" in $$parsedSource) {
-            $$parsedSource["accounts"] = $$createField1_0($$parsedSource["accounts"]);
-        }
-        if ("cooldowns" in $$parsedSource) {
-            $$parsedSource["cooldowns"] = $$createField2_0($$parsedSource["cooldowns"]);
-        }
-        return new AccountPoolState(/** @type {Partial<AccountPoolState>} */($$parsedSource));
-    }
-}
-
 /**
  * BatchHealthCheckResult 批量健康检查结果
  */
@@ -167,7 +113,7 @@ export class BatchUpdateSettingsInput {
      * @returns {BatchUpdateSettingsInput}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType7;
+        const $$createField0_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("settings" in $$parsedSource) {
             $$parsedSource["settings"] = $$createField0_0($$parsedSource["settings"]);
@@ -213,7 +159,7 @@ export class CacheClearResult {
      * @returns {CacheClearResult}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType8;
+        const $$createField2_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("unknown_names" in $$parsedSource) {
             $$parsedSource["unknown_names"] = $$createField2_0($$parsedSource["unknown_names"]);
@@ -255,7 +201,7 @@ export class CacheStatus {
      * @returns {CacheStatus}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType10;
+        const $$createField1_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("caches" in $$parsedSource) {
             $$parsedSource["caches"] = $$createField1_0($$parsedSource["caches"]);
@@ -530,9 +476,9 @@ export class ChannelInfo {
      * @returns {ChannelInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType11;
-        const $$createField5_0 = $$createType13;
-        const $$createField9_0 = $$createType15;
+        const $$createField4_0 = $$createType5;
+        const $$createField5_0 = $$createType7;
+        const $$createField9_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("model_mapping" in $$parsedSource) {
             $$parsedSource["model_mapping"] = $$createField4_0($$parsedSource["model_mapping"]);
@@ -888,11 +834,11 @@ export class ClaudeCredentialGroupInfo {
      * @returns {ClaudeCredentialGroupInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType17;
-        const $$createField4_0 = $$createType19;
-        const $$createField16_0 = $$createType11;
-        const $$createField17_0 = $$createType8;
-        const $$createField30_0 = $$createType21;
+        const $$createField2_0 = $$createType11;
+        const $$createField4_0 = $$createType13;
+        const $$createField16_0 = $$createType5;
+        const $$createField17_0 = $$createType2;
+        const $$createField30_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
             $$parsedSource["subscription"] = $$createField2_0($$parsedSource["subscription"]);
@@ -936,7 +882,7 @@ export class ClearCacheInput {
      * @returns {ClearCacheInput}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType8;
+        const $$createField0_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("names" in $$parsedSource) {
             $$parsedSource["names"] = $$createField0_0($$parsedSource["names"]);
@@ -1131,10 +1077,10 @@ export class CodexChannelInfo {
      * @returns {CodexChannelInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType11;
-        const $$createField13_0 = $$createType13;
-        const $$createField15_0 = $$createType23;
-        const $$createField16_0 = $$createType25;
+        const $$createField6_0 = $$createType5;
+        const $$createField13_0 = $$createType7;
+        const $$createField15_0 = $$createType17;
+        const $$createField16_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("model_mapping" in $$parsedSource) {
             $$parsedSource["model_mapping"] = $$createField6_0($$parsedSource["model_mapping"]);
@@ -1158,6 +1104,20 @@ export class CodexCredentialGroupInfo {
      * @param {Partial<CodexCredentialGroupInfo>} [$$source = {}] - The source object to create the CodexCredentialGroupInfo.
      */
     constructor($$source = {}) {
+        if (!("serviceTierSource" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serviceTierSource"] = "";
+        }
+        if (!("cacheWriteTTLPricing" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cacheWriteTTLPricing"] = false;
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member
@@ -1392,30 +1352,30 @@ export class CodexCredentialGroupInfo {
      * @returns {CodexCredentialGroupInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType27;
-        const $$createField4_0 = $$createType29;
-        const $$createField14_0 = $$createType11;
-        const $$createField15_0 = $$createType8;
-        const $$createField28_0 = $$createType31;
-        const $$createField29_0 = $$createType33;
+        const $$createField4_0 = $$createType21;
+        const $$createField6_0 = $$createType23;
+        const $$createField16_0 = $$createType5;
+        const $$createField17_0 = $$createType2;
+        const $$createField30_0 = $$createType25;
+        const $$createField31_0 = $$createType27;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
-            $$parsedSource["subscription"] = $$createField2_0($$parsedSource["subscription"]);
+            $$parsedSource["subscription"] = $$createField4_0($$parsedSource["subscription"]);
         }
         if ("subscription_status" in $$parsedSource) {
-            $$parsedSource["subscription_status"] = $$createField4_0($$parsedSource["subscription_status"]);
+            $$parsedSource["subscription_status"] = $$createField6_0($$parsedSource["subscription_status"]);
         }
         if ("modelMapping" in $$parsedSource) {
-            $$parsedSource["modelMapping"] = $$createField14_0($$parsedSource["modelMapping"]);
+            $$parsedSource["modelMapping"] = $$createField16_0($$parsedSource["modelMapping"]);
         }
         if ("supportedModels" in $$parsedSource) {
-            $$parsedSource["supportedModels"] = $$createField15_0($$parsedSource["supportedModels"]);
+            $$parsedSource["supportedModels"] = $$createField17_0($$parsedSource["supportedModels"]);
         }
         if ("modelMultipliers" in $$parsedSource) {
-            $$parsedSource["modelMultipliers"] = $$createField28_0($$parsedSource["modelMultipliers"]);
+            $$parsedSource["modelMultipliers"] = $$createField30_0($$parsedSource["modelMultipliers"]);
         }
         if ("billingRules" in $$parsedSource) {
-            $$parsedSource["billingRules"] = $$createField29_0($$parsedSource["billingRules"]);
+            $$parsedSource["billingRules"] = $$createField31_0($$parsedSource["billingRules"]);
         }
         return new CodexCredentialGroupInfo(/** @type {Partial<CodexCredentialGroupInfo>} */($$parsedSource));
     }
@@ -1682,7 +1642,7 @@ export class CodexEndpointInfo {
      * @returns {CodexEndpointInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField32_0 = $$createType31;
+        const $$createField32_0 = $$createType25;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("modelMultipliers" in $$parsedSource) {
             $$parsedSource["modelMultipliers"] = $$createField32_0($$parsedSource["modelMultipliers"]);
@@ -2179,7 +2139,7 @@ export class CreateChannelInput {
      * @returns {CreateChannelInput}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType11;
+        const $$createField3_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("model_mapping" in $$parsedSource) {
             $$parsedSource["model_mapping"] = $$createField3_0($$parsedSource["model_mapping"]);
@@ -2372,10 +2332,10 @@ export class CreateClaudeCredentialGroupInput {
      * @returns {CreateClaudeCredentialGroupInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType17;
-        const $$createField9_0 = $$createType11;
-        const $$createField10_0 = $$createType8;
-        const $$createField23_0 = $$createType21;
+        const $$createField1_0 = $$createType11;
+        const $$createField9_0 = $$createType5;
+        const $$createField10_0 = $$createType2;
+        const $$createField23_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
             $$parsedSource["subscription"] = $$createField1_0($$parsedSource["subscription"]);
@@ -2479,7 +2439,7 @@ export class CreateCodexChannelInput {
      * @returns {CreateCodexChannelInput}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType11;
+        const $$createField4_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("model_mapping" in $$parsedSource) {
             $$parsedSource["model_mapping"] = $$createField4_0($$parsedSource["model_mapping"]);
@@ -2494,6 +2454,20 @@ export class CreateCodexCredentialGroupInput {
      * @param {Partial<CreateCodexCredentialGroupInput>} [$$source = {}] - The source object to create the CreateCodexCredentialGroupInput.
      */
     constructor($$source = {}) {
+        if (!("serviceTierSource" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serviceTierSource"] = "";
+        }
+        if (!("cacheWriteTTLPricing" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cacheWriteTTLPricing"] = false;
+        }
         if (!("auth_mode" in $$source)) {
             /**
              * @member
@@ -2672,26 +2646,26 @@ export class CreateCodexCredentialGroupInput {
      * @returns {CreateCodexCredentialGroupInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType27;
-        const $$createField19_0 = $$createType11;
-        const $$createField20_0 = $$createType8;
-        const $$createField22_0 = $$createType31;
-        const $$createField23_0 = $$createType33;
+        const $$createField3_0 = $$createType21;
+        const $$createField21_0 = $$createType5;
+        const $$createField22_0 = $$createType2;
+        const $$createField24_0 = $$createType25;
+        const $$createField25_0 = $$createType27;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
-            $$parsedSource["subscription"] = $$createField1_0($$parsedSource["subscription"]);
+            $$parsedSource["subscription"] = $$createField3_0($$parsedSource["subscription"]);
         }
         if ("modelMapping" in $$parsedSource) {
-            $$parsedSource["modelMapping"] = $$createField19_0($$parsedSource["modelMapping"]);
+            $$parsedSource["modelMapping"] = $$createField21_0($$parsedSource["modelMapping"]);
         }
         if ("supportedModels" in $$parsedSource) {
-            $$parsedSource["supportedModels"] = $$createField20_0($$parsedSource["supportedModels"]);
+            $$parsedSource["supportedModels"] = $$createField22_0($$parsedSource["supportedModels"]);
         }
         if ("modelMultipliers" in $$parsedSource) {
-            $$parsedSource["modelMultipliers"] = $$createField22_0($$parsedSource["modelMultipliers"]);
+            $$parsedSource["modelMultipliers"] = $$createField24_0($$parsedSource["modelMultipliers"]);
         }
         if ("billingRules" in $$parsedSource) {
-            $$parsedSource["billingRules"] = $$createField23_0($$parsedSource["billingRules"]);
+            $$parsedSource["billingRules"] = $$createField25_0($$parsedSource["billingRules"]);
         }
         return new CreateCodexCredentialGroupInput(/** @type {Partial<CreateCodexCredentialGroupInput>} */($$parsedSource));
     }
@@ -2824,7 +2798,7 @@ export class CreateCodexEndpointInput {
      * @returns {CreateCodexEndpointInput}
      */
     static createFrom($$source = {}) {
-        const $$createField14_0 = $$createType31;
+        const $$createField14_0 = $$createType25;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("modelMultipliers" in $$parsedSource) {
             $$parsedSource["modelMultipliers"] = $$createField14_0($$parsedSource["modelMultipliers"]);
@@ -3067,8 +3041,8 @@ export class CreateEndpointInput {
      * @returns {CreateEndpointInput}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType11;
-        const $$createField19_0 = $$createType21;
+        const $$createField6_0 = $$createType5;
+        const $$createField19_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("headers" in $$parsedSource) {
             $$parsedSource["headers"] = $$createField6_0($$parsedSource["headers"]);
@@ -3089,6 +3063,27 @@ export class CreateModelPricingInput {
      * @param {Partial<CreateModelPricingInput>} [$$source = {}] - The source object to create the CreateModelPricingInput.
      */
     constructor($$source = {}) {
+        if (!("cache_write_price_30m" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_30m"] = 0;
+        }
+        if (!("cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_12h"] = 0;
+        }
+        if (!("long_context_cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["long_context_cache_write_price_12h"] = 0;
+        }
         if (!("id" in $$source)) {
             /**
              * ID 仅更新时使用。带 ID 时按 ID 精确定位，因此编辑中改 provider 或改档位都能命中原行；
@@ -3302,6 +3297,104 @@ export class CredentialGroupDailyUsage {
     }
 }
 
+export class DispatchInput {
+    /**
+     * Creates a new DispatchInput instance.
+     * @param {Partial<DispatchInput>} [$$source = {}] - The source object to create the DispatchInput.
+     */
+    constructor($$source = {}) {
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (!("streaming" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["streaming"] = false;
+        }
+        if (!("conversation_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["conversation_id"] = "";
+        }
+        if (!("branch_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["branch_id"] = "";
+        }
+        if (!("turn_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["turn_id"] = "";
+        }
+        if (!("new_turn" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["new_turn"] = false;
+        }
+        if (!("current_user_message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["current_user_message"] = "";
+        }
+        if (!("previous_user_message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["previous_user_message"] = "";
+        }
+        if (!("previous_assistant_text" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["previous_assistant_text"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchInput instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchInput}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DispatchInput(/** @type {Partial<DispatchInput>} */($$parsedSource));
+    }
+}
+
 /**
  * EndpointAvailabilityData 端点可用性时间条数据（含窗口汇总）
  */
@@ -3370,7 +3463,7 @@ export class EndpointAvailabilityData {
      * @returns {EndpointAvailabilityData}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType35;
+        const $$createField0_0 = $$createType29;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("slices" in $$parsedSource) {
             $$parsedSource["slices"] = $$createField0_0($$parsedSource["slices"]);
@@ -3801,8 +3894,8 @@ export class EndpointKeysInfo {
      * @returns {EndpointKeysInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType37;
-        const $$createField2_0 = $$createType37;
+        const $$createField1_0 = $$createType31;
+        const $$createField2_0 = $$createType31;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tokens" in $$parsedSource) {
             $$parsedSource["tokens"] = $$createField1_0($$parsedSource["tokens"]);
@@ -4104,8 +4197,8 @@ export class EndpointRecordInfo {
      * @returns {EndpointRecordInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField10_0 = $$createType11;
-        const $$createField23_0 = $$createType21;
+        const $$createField10_0 = $$createType5;
+        const $$createField23_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("headers" in $$parsedSource) {
             $$parsedSource["headers"] = $$createField10_0($$parsedSource["headers"]);
@@ -4346,7 +4439,7 @@ export class KeysOverviewResult {
      * @returns {KeysOverviewResult}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType39;
+        const $$createField0_0 = $$createType33;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("endpoints" in $$parsedSource) {
             $$parsedSource["endpoints"] = $$createField0_0($$parsedSource["endpoints"]);
@@ -4364,6 +4457,27 @@ export class ModelPricingInfo {
      * @param {Partial<ModelPricingInfo>} [$$source = {}] - The source object to create the ModelPricingInfo.
      */
     constructor($$source = {}) {
+        if (!("cache_write_price_30m" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_30m"] = 0;
+        }
+        if (!("cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_12h"] = 0;
+        }
+        if (!("long_context_cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["long_context_cache_write_price_12h"] = 0;
+        }
         if (!("id" in $$source)) {
             /**
              * @member
@@ -4656,7 +4770,7 @@ export class ModelRouteInfo {
      * @returns {ModelRouteInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType41;
+        const $$createField8_0 = $$createType35;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField8_0($$parsedSource["targets"]);
@@ -4698,7 +4812,7 @@ export class NonStreamRouteInfo {
      * @returns {NonStreamRouteInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType41;
+        const $$createField1_0 = $$createType35;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField1_0($$parsedSource["targets"]);
@@ -4740,7 +4854,7 @@ export class NonStreamRouteInput {
      * @returns {NonStreamRouteInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType43;
+        const $$createField1_0 = $$createType37;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField1_0($$parsedSource["targets"]);
@@ -4819,115 +4933,38 @@ export class PoolAccountInfo {
     }
 }
 
-export class PoolCooldownInfo {
+export class PoolChannelInfo {
     /**
-     * Creates a new PoolCooldownInfo instance.
-     * @param {Partial<PoolCooldownInfo>} [$$source = {}] - The source object to create the PoolCooldownInfo.
+     * Creates a new PoolChannelInfo instance.
+     * @param {Partial<PoolChannelInfo>} [$$source = {}] - The source object to create the PoolChannelInfo.
      */
     constructor($$source = {}) {
-        if (!("channel_id" in $$source)) {
+        if (!("id" in $$source)) {
             /**
              * @member
              * @type {number}
              */
-            this["channel_id"] = 0;
+            this["id"] = 0;
         }
-        if (!("group_id" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["group_id"] = 0;
-        }
-        if (!("endpoint" in $$source)) {
+        if (!("name" in $$source)) {
             /**
              * @member
              * @type {string}
              */
-            this["endpoint"] = "";
-        }
-        if (!("model" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["model"] = "";
-        }
-        if (!("reason" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["reason"] = "";
-        }
-        if (!("until" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["until"] = "";
-        }
-        if (!("repair" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["repair"] = false;
-        }
-        if (!("probing" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["probing"] = false;
+            this["name"] = "";
         }
 
         Object.assign(this, $$source);
     }
 
     /**
-     * Creates a new PoolCooldownInfo instance from a string or object.
+     * Creates a new PoolChannelInfo instance from a string or object.
      * @param {any} [$$source = {}]
-     * @returns {PoolCooldownInfo}
+     * @returns {PoolChannelInfo}
      */
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PoolCooldownInfo(/** @type {Partial<PoolCooldownInfo>} */($$parsedSource));
-    }
-}
-
-export class PoolKeyResult {
-    /**
-     * Creates a new PoolKeyResult instance.
-     * @param {Partial<PoolKeyResult>} [$$source = {}] - The source object to create the PoolKeyResult.
-     */
-    constructor($$source = {}) {
-        if (!("key" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["key"] = "";
-        }
-        if (!("header" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["header"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new PoolKeyResult instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {PoolKeyResult}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new PoolKeyResult(/** @type {Partial<PoolKeyResult>} */($$parsedSource));
+        return new PoolChannelInfo(/** @type {Partial<PoolChannelInfo>} */($$parsedSource));
     }
 }
 
@@ -5132,7 +5169,7 @@ export class RequestListResult {
      * @returns {RequestListResult}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType45;
+        const $$createField0_0 = $$createType39;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("requests" in $$parsedSource) {
             $$parsedSource["requests"] = $$createField0_0($$parsedSource["requests"]);
@@ -5688,7 +5725,7 @@ export class RequestRecord {
      * @returns {RequestRecord}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType47;
+        const $$createField9_0 = $$createType41;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("endpoint_chain" in $$parsedSource) {
             $$parsedSource["endpoint_chain"] = $$createField9_0($$parsedSource["endpoint_chain"]);
@@ -5759,7 +5796,7 @@ export class RoutePreviewResult {
      * @returns {RoutePreviewResult}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType49;
+        const $$createField5_0 = $$createType43;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("stages" in $$parsedSource) {
             $$parsedSource["stages"] = $$createField5_0($$parsedSource["stages"]);
@@ -5882,7 +5919,7 @@ export class RouteSaveResult {
      * @returns {RouteSaveResult}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType8;
+        const $$createField1_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("warnings" in $$parsedSource) {
             $$parsedSource["warnings"] = $$createField1_0($$parsedSource["warnings"]);
@@ -5959,7 +5996,7 @@ export class RouteTargetChannelOption {
      * @returns {RouteTargetChannelOption}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType51;
+        const $$createField6_0 = $$createType45;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("groups" in $$parsedSource) {
             $$parsedSource["groups"] = $$createField6_0($$parsedSource["groups"]);
@@ -6152,8 +6189,8 @@ export class RouteTargetOptions {
      * @returns {RouteTargetOptions}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType53;
-        const $$createField1_0 = $$createType8;
+        const $$createField0_0 = $$createType47;
+        const $$createField1_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("channels" in $$parsedSource) {
             $$parsedSource["channels"] = $$createField0_0($$parsedSource["channels"]);
@@ -6162,6 +6199,195 @@ export class RouteTargetOptions {
             $$parsedSource["models"] = $$createField1_0($$parsedSource["models"]);
         }
         return new RouteTargetOptions(/** @type {Partial<RouteTargetOptions>} */($$parsedSource));
+    }
+}
+
+export class RoutingConfigurationCheck {
+    /**
+     * Creates a new RoutingConfigurationCheck instance.
+     * @param {Partial<RoutingConfigurationCheck>} [$$source = {}] - The source object to create the RoutingConfigurationCheck.
+     */
+    constructor($$source = {}) {
+        if (!("code" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["code"] = "";
+        }
+        if (!("passed" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["passed"] = false;
+        }
+        if (!("message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["message"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RoutingConfigurationCheck instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RoutingConfigurationCheck}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RoutingConfigurationCheck(/** @type {Partial<RoutingConfigurationCheck>} */($$parsedSource));
+    }
+}
+
+export class RoutingConfigurationStatus {
+    /**
+     * Creates a new RoutingConfigurationStatus instance.
+     * @param {Partial<RoutingConfigurationStatus>} [$$source = {}] - The source object to create the RoutingConfigurationStatus.
+     */
+    constructor($$source = {}) {
+        if (!("ready" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["ready"] = false;
+        }
+        if (!("checks" in $$source)) {
+            /**
+             * @member
+             * @type {RoutingConfigurationCheck[]}
+             */
+            this["checks"] = [];
+        }
+        if (!("channels" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channels"] = 0;
+        }
+        if (!("accounts" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["accounts"] = 0;
+        }
+        if (!("candidates" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["candidates"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RoutingConfigurationStatus instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RoutingConfigurationStatus}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType49;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("checks" in $$parsedSource) {
+            $$parsedSource["checks"] = $$createField1_0($$parsedSource["checks"]);
+        }
+        return new RoutingConfigurationStatus(/** @type {Partial<RoutingConfigurationStatus>} */($$parsedSource));
+    }
+}
+
+export class RoutingProfileState {
+    /**
+     * Creates a new RoutingProfileState instance.
+     * @param {Partial<RoutingProfileState>} [$$source = {}] - The source object to create the RoutingProfileState.
+     */
+    constructor($$source = {}) {
+        if (!("profiles" in $$source)) {
+            /**
+             * @member
+             * @type {routing$0.RoutingProfile[]}
+             */
+            this["profiles"] = [];
+        }
+        if (!("channels" in $$source)) {
+            /**
+             * @member
+             * @type {PoolChannelInfo[]}
+             */
+            this["channels"] = [];
+        }
+        if (!("accounts" in $$source)) {
+            /**
+             * @member
+             * @type {PoolAccountInfo[]}
+             */
+            this["accounts"] = [];
+        }
+        if (!("candidates" in $$source)) {
+            /**
+             * @member
+             * @type {routing$0.DispatchCandidate[]}
+             */
+            this["candidates"] = [];
+        }
+        if (!("quota" in $$source)) {
+            /**
+             * @member
+             * @type {routing$0.QuotaSnapshot[]}
+             */
+            this["quota"] = [];
+        }
+        if (!("balances" in $$source)) {
+            /**
+             * @member
+             * @type {routing$0.ManualBalance[]}
+             */
+            this["balances"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RoutingProfileState instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RoutingProfileState}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType51;
+        const $$createField1_0 = $$createType53;
+        const $$createField2_0 = $$createType55;
+        const $$createField3_0 = $$createType57;
+        const $$createField4_0 = $$createType59;
+        const $$createField5_0 = $$createType61;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("profiles" in $$parsedSource) {
+            $$parsedSource["profiles"] = $$createField0_0($$parsedSource["profiles"]);
+        }
+        if ("channels" in $$parsedSource) {
+            $$parsedSource["channels"] = $$createField1_0($$parsedSource["channels"]);
+        }
+        if ("accounts" in $$parsedSource) {
+            $$parsedSource["accounts"] = $$createField2_0($$parsedSource["accounts"]);
+        }
+        if ("candidates" in $$parsedSource) {
+            $$parsedSource["candidates"] = $$createField3_0($$parsedSource["candidates"]);
+        }
+        if ("quota" in $$parsedSource) {
+            $$parsedSource["quota"] = $$createField4_0($$parsedSource["quota"]);
+        }
+        if ("balances" in $$parsedSource) {
+            $$parsedSource["balances"] = $$createField5_0($$parsedSource["balances"]);
+        }
+        return new RoutingProfileState(/** @type {Partial<RoutingProfileState>} */($$parsedSource));
     }
 }
 
@@ -6305,7 +6531,7 @@ export class SaveModelRouteInput {
      * @returns {SaveModelRouteInput}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType43;
+        const $$createField8_0 = $$createType37;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField8_0($$parsedSource["targets"]);
@@ -6460,7 +6686,7 @@ export class SettingInfo {
      * @returns {SettingInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType55;
+        const $$createField9_0 = $$createType63;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("enum_options" in $$parsedSource) {
             $$parsedSource["enum_options"] = $$createField9_0($$parsedSource["enum_options"]);
@@ -6642,9 +6868,9 @@ export class SubscriptionAccountResult {
      * @returns {SubscriptionAccountResult}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType57;
-        const $$createField1_0 = $$createType58;
-        const $$createField2_0 = $$createType60;
+        const $$createField0_0 = $$createType65;
+        const $$createField1_0 = $$createType66;
+        const $$createField2_0 = $$createType68;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("accounts" in $$parsedSource) {
             $$parsedSource["accounts"] = $$createField0_0($$parsedSource["accounts"]);
@@ -6665,6 +6891,13 @@ export class SubscriptionConnectionCommand {
      * @param {Partial<SubscriptionConnectionCommand>} [$$source = {}] - The source object to create the SubscriptionConnectionCommand.
      */
     constructor($$source = {}) {
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
         if (!("pool_id" in $$source)) {
             /**
              * @member
@@ -6742,6 +6975,27 @@ export class SubscriptionConnectionResult {
      * @param {Partial<SubscriptionConnectionResult>} [$$source = {}] - The source object to create the SubscriptionConnectionResult.
      */
     constructor($$source = {}) {
+        if (!("profile_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["profile_id"] = 0;
+        }
+        if (!("profile_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["profile_name"] = "";
+        }
+        if (!("auth_enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["auth_enabled"] = false;
+        }
         if (!("config_path" in $$source)) {
             /**
              * @member
@@ -7308,7 +7562,7 @@ export class UpdateChannelInput {
      * @returns {UpdateChannelInput}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType11;
+        const $$createField3_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("model_mapping" in $$parsedSource) {
             $$parsedSource["model_mapping"] = $$createField3_0($$parsedSource["model_mapping"]);
@@ -7403,7 +7657,7 @@ export class UpdateCodexChannelInput {
      * @returns {UpdateCodexChannelInput}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType11;
+        const $$createField4_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("model_mapping" in $$parsedSource) {
             $$parsedSource["model_mapping"] = $$createField4_0($$parsedSource["model_mapping"]);
@@ -7418,6 +7672,20 @@ export class UpdateCodexCredentialGroupInput {
      * @param {Partial<UpdateCodexCredentialGroupInput>} [$$source = {}] - The source object to create the UpdateCodexCredentialGroupInput.
      */
     constructor($$source = {}) {
+        if (!("serviceTierSource" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serviceTierSource"] = "";
+        }
+        if (!("cacheWriteTTLPricing" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cacheWriteTTLPricing"] = false;
+        }
         if (!("auth_mode" in $$source)) {
             /**
              * @member
@@ -7589,26 +7857,26 @@ export class UpdateCodexCredentialGroupInput {
      * @returns {UpdateCodexCredentialGroupInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType27;
-        const $$createField18_0 = $$createType11;
-        const $$createField19_0 = $$createType8;
-        const $$createField21_0 = $$createType31;
-        const $$createField22_0 = $$createType33;
+        const $$createField3_0 = $$createType21;
+        const $$createField20_0 = $$createType5;
+        const $$createField21_0 = $$createType2;
+        const $$createField23_0 = $$createType25;
+        const $$createField24_0 = $$createType27;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
-            $$parsedSource["subscription"] = $$createField1_0($$parsedSource["subscription"]);
+            $$parsedSource["subscription"] = $$createField3_0($$parsedSource["subscription"]);
         }
         if ("modelMapping" in $$parsedSource) {
-            $$parsedSource["modelMapping"] = $$createField18_0($$parsedSource["modelMapping"]);
+            $$parsedSource["modelMapping"] = $$createField20_0($$parsedSource["modelMapping"]);
         }
         if ("supportedModels" in $$parsedSource) {
-            $$parsedSource["supportedModels"] = $$createField19_0($$parsedSource["supportedModels"]);
+            $$parsedSource["supportedModels"] = $$createField21_0($$parsedSource["supportedModels"]);
         }
         if ("modelMultipliers" in $$parsedSource) {
-            $$parsedSource["modelMultipliers"] = $$createField21_0($$parsedSource["modelMultipliers"]);
+            $$parsedSource["modelMultipliers"] = $$createField23_0($$parsedSource["modelMultipliers"]);
         }
         if ("billingRules" in $$parsedSource) {
-            $$parsedSource["billingRules"] = $$createField22_0($$parsedSource["billingRules"]);
+            $$parsedSource["billingRules"] = $$createField24_0($$parsedSource["billingRules"]);
         }
         return new UpdateCodexCredentialGroupInput(/** @type {Partial<UpdateCodexCredentialGroupInput>} */($$parsedSource));
     }
@@ -7728,7 +7996,7 @@ export class UpdateCodexEndpointInput {
      * @returns {UpdateCodexEndpointInput}
      */
     static createFrom($$source = {}) {
-        const $$createField13_0 = $$createType31;
+        const $$createField13_0 = $$createType25;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("modelMultipliers" in $$parsedSource) {
             $$parsedSource["modelMultipliers"] = $$createField13_0($$parsedSource["modelMultipliers"]);
@@ -7863,6 +8131,1087 @@ export class UpdateSettingInput {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new UpdateSettingInput(/** @type {Partial<UpdateSettingInput>} */($$parsedSource));
+    }
+}
+
+export class UsageDashboard {
+    /**
+     * Creates a new UsageDashboard instance.
+     * @param {Partial<UsageDashboard>} [$$source = {}] - The source object to create the UsageDashboard.
+     */
+    constructor($$source = {}) {
+        if (!("source" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (!("from" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["from"] = "";
+        }
+        if (!("to" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["to"] = "";
+        }
+        if (!("timezone" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["timezone"] = "";
+        }
+        if (!("updated_at" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["updated_at"] = "";
+        }
+        if (!("summary" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardMetrics}
+             */
+            this["summary"] = (new UsageDashboardMetrics());
+        }
+        if (!("days" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardDay[]}
+             */
+            this["days"] = [];
+        }
+        if (!("calendar" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardDay[]}
+             */
+            this["calendar"] = [];
+        }
+        if (!("projects" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardGroup[]}
+             */
+            this["projects"] = [];
+        }
+        if (!("models" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardGroup[]}
+             */
+            this["models"] = [];
+        }
+        if (!("providers" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardGroup[]}
+             */
+            this["providers"] = [];
+        }
+        if (!("credentials" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardGroup[]}
+             */
+            this["credentials"] = [];
+        }
+        if (!("model_options" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["model_options"] = [];
+        }
+        if (!("project_options" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["project_options"] = [];
+        }
+        if (!("credential_options" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardGroup[]}
+             */
+            this["credential_options"] = [];
+        }
+        if (!("unpriced_models" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["unpriced_models"] = [];
+        }
+        if (!("rows" in $$source)) {
+            /**
+             * @member
+             * @type {UsageDashboardRow[]}
+             */
+            this["rows"] = [];
+        }
+        if (!("row_count" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["row_count"] = 0;
+        }
+        if (!("page" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["page"] = 0;
+        }
+        if (!("page_size" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["page_size"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UsageDashboard instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UsageDashboard}
+     */
+    static createFrom($$source = {}) {
+        const $$createField5_0 = $$createType69;
+        const $$createField6_0 = $$createType71;
+        const $$createField7_0 = $$createType71;
+        const $$createField8_0 = $$createType73;
+        const $$createField9_0 = $$createType73;
+        const $$createField10_0 = $$createType73;
+        const $$createField11_0 = $$createType73;
+        const $$createField12_0 = $$createType2;
+        const $$createField13_0 = $$createType2;
+        const $$createField14_0 = $$createType73;
+        const $$createField15_0 = $$createType2;
+        const $$createField16_0 = $$createType75;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("summary" in $$parsedSource) {
+            $$parsedSource["summary"] = $$createField5_0($$parsedSource["summary"]);
+        }
+        if ("days" in $$parsedSource) {
+            $$parsedSource["days"] = $$createField6_0($$parsedSource["days"]);
+        }
+        if ("calendar" in $$parsedSource) {
+            $$parsedSource["calendar"] = $$createField7_0($$parsedSource["calendar"]);
+        }
+        if ("projects" in $$parsedSource) {
+            $$parsedSource["projects"] = $$createField8_0($$parsedSource["projects"]);
+        }
+        if ("models" in $$parsedSource) {
+            $$parsedSource["models"] = $$createField9_0($$parsedSource["models"]);
+        }
+        if ("providers" in $$parsedSource) {
+            $$parsedSource["providers"] = $$createField10_0($$parsedSource["providers"]);
+        }
+        if ("credentials" in $$parsedSource) {
+            $$parsedSource["credentials"] = $$createField11_0($$parsedSource["credentials"]);
+        }
+        if ("model_options" in $$parsedSource) {
+            $$parsedSource["model_options"] = $$createField12_0($$parsedSource["model_options"]);
+        }
+        if ("project_options" in $$parsedSource) {
+            $$parsedSource["project_options"] = $$createField13_0($$parsedSource["project_options"]);
+        }
+        if ("credential_options" in $$parsedSource) {
+            $$parsedSource["credential_options"] = $$createField14_0($$parsedSource["credential_options"]);
+        }
+        if ("unpriced_models" in $$parsedSource) {
+            $$parsedSource["unpriced_models"] = $$createField15_0($$parsedSource["unpriced_models"]);
+        }
+        if ("rows" in $$parsedSource) {
+            $$parsedSource["rows"] = $$createField16_0($$parsedSource["rows"]);
+        }
+        return new UsageDashboard(/** @type {Partial<UsageDashboard>} */($$parsedSource));
+    }
+}
+
+export class UsageDashboardDay {
+    /**
+     * Creates a new UsageDashboardDay instance.
+     * @param {Partial<UsageDashboardDay>} [$$source = {}] - The source object to create the UsageDashboardDay.
+     */
+    constructor($$source = {}) {
+        if (!("date" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["date"] = "";
+        }
+        if (!("requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["requests"] = 0;
+        }
+        if (!("sessions" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sessions"] = 0;
+        }
+        if (!("messages" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["messages"] = 0;
+        }
+        if (!("input_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["input_tokens"] = 0;
+        }
+        if (!("output_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["output_tokens"] = 0;
+        }
+        if (!("cache_read_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_read_tokens"] = 0;
+        }
+        if (!("cache_creation_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_creation_tokens"] = 0;
+        }
+        if (!("tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["tokens"] = 0;
+        }
+        if (!("cost_usd" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cost_usd"] = 0;
+        }
+        if (!("unpriced" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["unpriced"] = 0;
+        }
+        if (!("active_seconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_seconds"] = 0;
+        }
+        if (!("active_days" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_days"] = 0;
+        }
+        if (!("projects" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["projects"] = 0;
+        }
+        if (!("credential_groups" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["credential_groups"] = 0;
+        }
+        if (!("median_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["median_tokens"] = 0;
+        }
+        if (!("p90_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["p90_tokens"] = 0;
+        }
+        if (!("success_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["success_requests"] = 0;
+        }
+        if (!("failed_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["failed_requests"] = 0;
+        }
+        if (!("avg_duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["avg_duration_ms"] = 0;
+        }
+        if (!("cache_hit_rate" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["cache_hit_rate"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UsageDashboardDay instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UsageDashboardDay}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UsageDashboardDay(/** @type {Partial<UsageDashboardDay>} */($$parsedSource));
+    }
+}
+
+export class UsageDashboardGroup {
+    /**
+     * Creates a new UsageDashboardGroup instance.
+     * @param {Partial<UsageDashboardGroup>} [$$source = {}] - The source object to create the UsageDashboardGroup.
+     */
+    constructor($$source = {}) {
+        if (!("key" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["key"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("last_at" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["last_at"] = "";
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("channel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["channel"] = "";
+        }
+        if (!("group" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["group"] = "";
+        }
+        if (!("requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["requests"] = 0;
+        }
+        if (!("sessions" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sessions"] = 0;
+        }
+        if (!("messages" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["messages"] = 0;
+        }
+        if (!("input_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["input_tokens"] = 0;
+        }
+        if (!("output_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["output_tokens"] = 0;
+        }
+        if (!("cache_read_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_read_tokens"] = 0;
+        }
+        if (!("cache_creation_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_creation_tokens"] = 0;
+        }
+        if (!("tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["tokens"] = 0;
+        }
+        if (!("cost_usd" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cost_usd"] = 0;
+        }
+        if (!("unpriced" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["unpriced"] = 0;
+        }
+        if (!("active_seconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_seconds"] = 0;
+        }
+        if (!("active_days" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_days"] = 0;
+        }
+        if (!("projects" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["projects"] = 0;
+        }
+        if (!("credential_groups" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["credential_groups"] = 0;
+        }
+        if (!("median_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["median_tokens"] = 0;
+        }
+        if (!("p90_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["p90_tokens"] = 0;
+        }
+        if (!("success_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["success_requests"] = 0;
+        }
+        if (!("failed_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["failed_requests"] = 0;
+        }
+        if (!("avg_duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["avg_duration_ms"] = 0;
+        }
+        if (!("cache_hit_rate" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["cache_hit_rate"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UsageDashboardGroup instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UsageDashboardGroup}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UsageDashboardGroup(/** @type {Partial<UsageDashboardGroup>} */($$parsedSource));
+    }
+}
+
+export class UsageDashboardMetrics {
+    /**
+     * Creates a new UsageDashboardMetrics instance.
+     * @param {Partial<UsageDashboardMetrics>} [$$source = {}] - The source object to create the UsageDashboardMetrics.
+     */
+    constructor($$source = {}) {
+        if (!("requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["requests"] = 0;
+        }
+        if (!("sessions" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sessions"] = 0;
+        }
+        if (!("messages" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["messages"] = 0;
+        }
+        if (!("input_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["input_tokens"] = 0;
+        }
+        if (!("output_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["output_tokens"] = 0;
+        }
+        if (!("cache_read_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_read_tokens"] = 0;
+        }
+        if (!("cache_creation_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_creation_tokens"] = 0;
+        }
+        if (!("tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["tokens"] = 0;
+        }
+        if (!("cost_usd" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cost_usd"] = 0;
+        }
+        if (!("unpriced" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["unpriced"] = 0;
+        }
+        if (!("active_seconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_seconds"] = 0;
+        }
+        if (!("active_days" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_days"] = 0;
+        }
+        if (!("projects" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["projects"] = 0;
+        }
+        if (!("credential_groups" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["credential_groups"] = 0;
+        }
+        if (!("median_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["median_tokens"] = 0;
+        }
+        if (!("p90_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["p90_tokens"] = 0;
+        }
+        if (!("success_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["success_requests"] = 0;
+        }
+        if (!("failed_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["failed_requests"] = 0;
+        }
+        if (!("avg_duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["avg_duration_ms"] = 0;
+        }
+        if (!("cache_hit_rate" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["cache_hit_rate"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UsageDashboardMetrics instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UsageDashboardMetrics}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UsageDashboardMetrics(/** @type {Partial<UsageDashboardMetrics>} */($$parsedSource));
+    }
+}
+
+export class UsageDashboardQuery {
+    /**
+     * Creates a new UsageDashboardQuery instance.
+     * @param {Partial<UsageDashboardQuery>} [$$source = {}] - The source object to create the UsageDashboardQuery.
+     */
+    constructor($$source = {}) {
+        if (!("source" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["source"] = "";
+        }
+        if (!("period" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["period"] = "";
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("model" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model"] = "";
+        }
+        if (!("project" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["project"] = "";
+        }
+        if (!("credential" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["credential"] = "";
+        }
+        if (!("day" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["day"] = "";
+        }
+        if (!("search" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["search"] = "";
+        }
+        if (!("sort" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sort"] = "";
+        }
+        if (!("page" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["page"] = 0;
+        }
+        if (!("page_size" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["page_size"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UsageDashboardQuery instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UsageDashboardQuery}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UsageDashboardQuery(/** @type {Partial<UsageDashboardQuery>} */($$parsedSource));
+    }
+}
+
+export class UsageDashboardRow {
+    /**
+     * Creates a new UsageDashboardRow instance.
+     * @param {Partial<UsageDashboardRow>} [$$source = {}] - The source object to create the UsageDashboardRow.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("project" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["project"] = "";
+        }
+        if (!("channel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["channel"] = "";
+        }
+        if (!("group" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["group"] = "";
+        }
+        if (!("models" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["models"] = [];
+        }
+        if (!("first_at" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["first_at"] = "";
+        }
+        if (!("last_at" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["last_at"] = "";
+        }
+        if (!("status" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["status"] = "";
+        }
+        if (!("requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["requests"] = 0;
+        }
+        if (!("sessions" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sessions"] = 0;
+        }
+        if (!("messages" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["messages"] = 0;
+        }
+        if (!("input_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["input_tokens"] = 0;
+        }
+        if (!("output_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["output_tokens"] = 0;
+        }
+        if (!("cache_read_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_read_tokens"] = 0;
+        }
+        if (!("cache_creation_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_creation_tokens"] = 0;
+        }
+        if (!("tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["tokens"] = 0;
+        }
+        if (!("cost_usd" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cost_usd"] = 0;
+        }
+        if (!("unpriced" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["unpriced"] = 0;
+        }
+        if (!("active_seconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_seconds"] = 0;
+        }
+        if (!("active_days" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["active_days"] = 0;
+        }
+        if (!("projects" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["projects"] = 0;
+        }
+        if (!("credential_groups" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["credential_groups"] = 0;
+        }
+        if (!("median_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["median_tokens"] = 0;
+        }
+        if (!("p90_tokens" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["p90_tokens"] = 0;
+        }
+        if (!("success_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["success_requests"] = 0;
+        }
+        if (!("failed_requests" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["failed_requests"] = 0;
+        }
+        if (!("avg_duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["avg_duration_ms"] = 0;
+        }
+        if (!("cache_hit_rate" in $$source)) {
+            /**
+             * @member
+             * @type {number | null}
+             */
+            this["cache_hit_rate"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UsageDashboardRow instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UsageDashboardRow}
+     */
+    static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType2;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("models" in $$parsedSource) {
+            $$parsedSource["models"] = $$createField6_0($$parsedSource["models"]);
+        }
+        return new UsageDashboardRow(/** @type {Partial<UsageDashboardRow>} */($$parsedSource));
     }
 }
 
@@ -8272,7 +9621,7 @@ export class chainNode {
      * @returns {chainNode}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType11;
+        const $$createField9_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("headers" in $$parsedSource) {
             $$parsedSource["headers"] = $$createField9_0($$parsedSource["headers"]);
@@ -8282,64 +9631,79 @@ export class chainNode {
 }
 
 // Private type creation functions
-const $$createType0 = routing$0.Pool.createFrom;
+const $$createType0 = UpdateSettingInput.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = PoolAccountInfo.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = PoolCooldownInfo.createFrom;
-const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = UpdateSettingInput.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = $Create.Array($Create.Any);
-const $$createType9 = CacheStatusItem.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = $Create.Map($Create.Any, $Create.Any);
-const $$createType12 = NonStreamRouteInfo.createFrom;
-const $$createType13 = $Create.Nullable($$createType12);
-const $$createType14 = ClaudeCredentialGroupInfo.createFrom;
+const $$createType2 = $Create.Array($Create.Any);
+const $$createType3 = CacheStatusItem.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = $Create.Map($Create.Any, $Create.Any);
+const $$createType6 = NonStreamRouteInfo.createFrom;
+const $$createType7 = $Create.Nullable($$createType6);
+const $$createType8 = ClaudeCredentialGroupInfo.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = subscription$0.Binding.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);
+const $$createType12 = subscription$0.Pause.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = store$0.EndpointModelMultiplierRecord.createFrom;
 const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = subscription$0.Binding.createFrom;
-const $$createType17 = $Create.Nullable($$createType16);
-const $$createType18 = subscription$0.Pause.createFrom;
+const $$createType16 = CodexCredentialGroupInfo.createFrom;
+const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = CodexEndpointInfo.createFrom;
 const $$createType19 = $Create.Array($$createType18);
-const $$createType20 = store$0.EndpointModelMultiplierRecord.createFrom;
-const $$createType21 = $Create.Array($$createType20);
-const $$createType22 = CodexCredentialGroupInfo.createFrom;
+const $$createType20 = subscription$1.Binding.createFrom;
+const $$createType21 = $Create.Nullable($$createType20);
+const $$createType22 = subscription$1.Pause.createFrom;
 const $$createType23 = $Create.Array($$createType22);
-const $$createType24 = CodexEndpointInfo.createFrom;
+const $$createType24 = store$1.CodexModelMultiplierRecord.createFrom;
 const $$createType25 = $Create.Array($$createType24);
-const $$createType26 = subscription$1.Binding.createFrom;
-const $$createType27 = $Create.Nullable($$createType26);
-const $$createType28 = subscription$1.Pause.createFrom;
+const $$createType26 = store$1.CodexBillingRuleRecord.createFrom;
+const $$createType27 = $Create.Array($$createType26);
+const $$createType28 = EndpointAvailabilitySlice.createFrom;
 const $$createType29 = $Create.Array($$createType28);
-const $$createType30 = store$1.CodexModelMultiplierRecord.createFrom;
+const $$createType30 = KeyInfo.createFrom;
 const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = store$1.CodexBillingRuleRecord.createFrom;
+const $$createType32 = EndpointKeysInfo.createFrom;
 const $$createType33 = $Create.Array($$createType32);
-const $$createType34 = EndpointAvailabilitySlice.createFrom;
+const $$createType34 = RouteTargetInfo.createFrom;
 const $$createType35 = $Create.Array($$createType34);
-const $$createType36 = KeyInfo.createFrom;
+const $$createType36 = RouteTargetInput.createFrom;
 const $$createType37 = $Create.Array($$createType36);
-const $$createType38 = EndpointKeysInfo.createFrom;
+const $$createType38 = RequestRecord.createFrom;
 const $$createType39 = $Create.Array($$createType38);
-const $$createType40 = RouteTargetInfo.createFrom;
+const $$createType40 = chainNode.createFrom;
 const $$createType41 = $Create.Array($$createType40);
-const $$createType42 = RouteTargetInput.createFrom;
+const $$createType42 = RoutePreviewStage.createFrom;
 const $$createType43 = $Create.Array($$createType42);
-const $$createType44 = RequestRecord.createFrom;
+const $$createType44 = RouteTargetGroupOption.createFrom;
 const $$createType45 = $Create.Array($$createType44);
-const $$createType46 = chainNode.createFrom;
+const $$createType46 = RouteTargetChannelOption.createFrom;
 const $$createType47 = $Create.Array($$createType46);
-const $$createType48 = RoutePreviewStage.createFrom;
+const $$createType48 = RoutingConfigurationCheck.createFrom;
 const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = RouteTargetGroupOption.createFrom;
+const $$createType50 = routing$0.RoutingProfile.createFrom;
 const $$createType51 = $Create.Array($$createType50);
-const $$createType52 = RouteTargetChannelOption.createFrom;
+const $$createType52 = PoolChannelInfo.createFrom;
 const $$createType53 = $Create.Array($$createType52);
-const $$createType54 = store$2.EnumOption.createFrom;
+const $$createType54 = PoolAccountInfo.createFrom;
 const $$createType55 = $Create.Array($$createType54);
-const $$createType56 = accounts$0.Info.createFrom;
+const $$createType56 = routing$0.DispatchCandidate.createFrom;
 const $$createType57 = $Create.Array($$createType56);
-const $$createType58 = $Create.Nullable($$createType56);
-const $$createType59 = accounts$0.LoginInfo.createFrom;
-const $$createType60 = $Create.Nullable($$createType59);
+const $$createType58 = routing$0.QuotaSnapshot.createFrom;
+const $$createType59 = $Create.Array($$createType58);
+const $$createType60 = routing$0.ManualBalance.createFrom;
+const $$createType61 = $Create.Array($$createType60);
+const $$createType62 = store$2.EnumOption.createFrom;
+const $$createType63 = $Create.Array($$createType62);
+const $$createType64 = accounts$0.Info.createFrom;
+const $$createType65 = $Create.Array($$createType64);
+const $$createType66 = $Create.Nullable($$createType64);
+const $$createType67 = accounts$0.LoginInfo.createFrom;
+const $$createType68 = $Create.Nullable($$createType67);
+const $$createType69 = UsageDashboardMetrics.createFrom;
+const $$createType70 = UsageDashboardDay.createFrom;
+const $$createType71 = $Create.Array($$createType70);
+const $$createType72 = UsageDashboardGroup.createFrom;
+const $$createType73 = $Create.Array($$createType72);
+const $$createType74 = UsageDashboardRow.createFrom;
+const $$createType75 = $Create.Array($$createType74);

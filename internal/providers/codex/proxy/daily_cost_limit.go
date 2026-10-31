@@ -62,27 +62,55 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 			}
 			return nil, quotaSkipped, err
 		}
+		if endpoint.DailyCostLimitUSD > 0 {
+			usedUSD, _, usageErr := h.usageTracker.CredentialGroupDailyCost(ctx, "codex", channelName, endpoint.CredentialGroupName)
+			if usageErr != nil || usedUSD >= endpoint.DailyCostLimitUSD {
+				blocked = true
+				group := credentialGroupRefFromEndpoint(endpoint)
+				if !containsCredentialGroupRef(quotaSkipped, group) {
+					quotaSkipped = append(quotaSkipped, group)
+				}
+				continue
+			}
+		}
 		model := requestedModel
 		if stage != nil {
 			model = stage.candidate(endpoint, requestedModel).Model
 		}
-		if allowed, reason := h.subscriptionEligibility(ctx, endpoint, model); !allowed {
-			if stage != nil && stage.execution != nil {
-				stage.execution.Skip(stage.candidate(endpoint, requestedModel), reason)
-			}
-			locallyExcluded = true
-			localReason = reason
-			failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
-			continue
-		}
+
 		if stage != nil && stage.execution != nil {
 			candidate := stage.candidate(endpoint, requestedModel)
-			if h.states != nil {
-				if allowed, reason := h.states.Allowed(stage.stateKeys, candidate); !allowed {
+			eligible, eligibilityReason := h.subscriptionEligibility(ctx, endpoint, model)
+			if !eligible && !(stage.route != nil && stage.route.pool != nil && eligibilityReason == "subscription_paused") {
+				stage.execution.Skip(candidate, eligibilityReason)
+				locallyExcluded = true
+				localReason = eligibilityReason
+				failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+				continue
+			}
+			if stage.member != nil && stage.route != nil {
+				if stage.native && endpoint.AuthMode != "client_passthrough" {
+					stage.execution.Skip(candidate, "native_subscription_required")
+					failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+					locallyExcluded = true
+					continue
+				}
+				member := *stage.member
+				member.UpstreamModel = candidate.Model
+				member.Endpoint = candidate.Endpoint
+				stage.route.waitStages = append(stage.route.waitStages, member)
+				if !eligible {
+					stage.execution.Skip(candidate, eligibilityReason)
+					locallyExcluded = true
+					localReason = eligibilityReason
+					failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+					continue
+				}
+				if allowed, reason := stage.route.pool.Allowed(stage.channel.ID, endpoint.CredentialGroupID, candidate.Endpoint, candidate.Model); !allowed {
 					stage.execution.Skip(candidate, reason)
+					failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
 					locallyExcluded = true
 					localReason = reason
-					failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
 					continue
 				}
 			}
@@ -94,42 +122,18 @@ func (h *Handler) selectQuotaEligibleEndpointForModel(
 				continue
 			}
 		}
-		if endpoint.DailyCostLimitUSD <= 0 {
-			return endpoint, quotaSkipped, nil
+		if stage == nil || stage.execution == nil {
+			if allowed, reason := h.subscriptionEligibility(ctx, endpoint, model); !allowed {
+				if stage != nil && stage.execution != nil {
+					stage.execution.Skip(stage.candidate(endpoint, requestedModel), reason)
+				}
+				locallyExcluded = true
+				localReason = reason
+				failedIDs = appendUniqueInt64(failedIDs, endpoint.ID)
+				continue
+			}
 		}
-
-		usedUSD, _, usageErr := h.usageTracker.CredentialGroupDailyCost(
-			ctx,
-			"codex",
-			channelName,
-			endpoint.CredentialGroupName,
-		)
-		if usageErr == nil && usedUSD < endpoint.DailyCostLimitUSD {
-			return endpoint, quotaSkipped, nil
-		}
-
-		blocked = true
-		group := credentialGroupRefFromEndpoint(endpoint)
-		if !containsCredentialGroupRef(quotaSkipped, group) {
-			quotaSkipped = append(quotaSkipped, group)
-		}
-		if usageErr != nil {
-			h.logger.Warn("[Codex 凭证分组限额查询失败，跳过分组]",
-				"provider", "codex",
-				"channel", channelName,
-				"credential_group", endpoint.CredentialGroupName,
-				"limit_usd", endpoint.DailyCostLimitUSD,
-				"error", usageErr,
-			)
-		} else {
-			h.logger.Info("[Codex 凭证分组已达每日成本限额]",
-				"provider", "codex",
-				"channel", channelName,
-				"credential_group", endpoint.CredentialGroupName,
-				"used_usd", usedUSD,
-				"limit_usd", endpoint.DailyCostLimitUSD,
-			)
-		}
+		return endpoint, quotaSkipped, nil
 	}
 }
 

@@ -17,12 +17,27 @@ import (
 )
 
 func (run *routeRun) initBudget(cfg config.RetryConfig) {
+	if run != nil && run.profile != nil {
+		run.budget.Limit(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
+	}
 	if run != nil && run.budget == nil {
-		run.budget = routing.NewBudget(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
+		attempts, duration := cfg.MaxTotalAttempts, cfg.MaxTotalDuration
+		if run.pool != nil {
+			if attempts <= 0 {
+				attempts = 10
+			}
+			if duration <= 0 {
+				duration = 60 * time.Second
+			}
+		}
+		run.budget = routing.NewBudget(attempts, duration)
 	}
 }
 
 func (run *routeRun) candidate(f *Forwarder, ep *endpoint.Endpoint, body []byte) routing.Candidate {
+	if run != nil && run.current() != nil && run.current().candidate != nil {
+		return run.current().candidate.Identity()
+	}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	if run.upstreamModel() != "" {
 		model = run.upstreamModel()
@@ -52,6 +67,25 @@ func (run *routeRun) observeSubscription(ctx context.Context, f *Forwarder) {
 }
 
 func (run *routeRun) watchSubscription(ctx context.Context, f *Forwarder) {
+	if run != nil && run.profile != nil {
+		run.profileRecovery = func(candidate routing.DispatchCandidate) (time.Time, bool) {
+			ready, valid := f.endpointManager.PoolRuntime().HealthReadyAt(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model)
+			if !valid {
+				return time.Time{}, false
+			}
+			if candidate.CredentialMode != "managed" && candidate.CredentialMode != subscription.ClientPassthrough {
+				return ready, true
+			}
+			if f.subscriptions == nil {
+				return time.Time{}, false
+			}
+			quotaReady, ok := f.subscriptions.ProfileRecoveryTime(ctx, candidate.ChannelID, candidate.GroupID, candidate.Identity().Model)
+			if quotaReady.After(ready) {
+				ready = quotaReady
+			}
+			return ready, ok
+		}
+	}
 	if run != nil && run.subscription {
 		run.refresh = func() { run.observeSubscription(ctx, f) }
 	}
@@ -62,6 +96,9 @@ func claudeRouteFailure(err error) routing.Failure {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: err.Error()}
 	}
 	var response *EndpointError
+	if err != nil && strings.Contains(err.Error(), "timeout awaiting response headers") {
+		return routing.Failure{Scope: routing.ScopeRequest, Reason: "response_header_timeout", Terminal: true}
+	}
 	if !errors.As(err, &response) {
 		return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "network_error"}
 	}
@@ -101,7 +138,7 @@ func (run *routeRun) failureDecision(f *Forwarder, ep *endpoint.Endpoint, body [
 	if failure.Terminal {
 		return RetryDecision{FinalStatus: "error", Reason: failure.Reason}
 	}
-	if run.subscription {
+	if run.subscription || run.pool != nil || run.profile != nil {
 		return RetryDecision{SwitchEndpoint: true, Reason: failure.Reason}
 	}
 	// Network/overload backoff retains the existing bounded policy. Known
@@ -134,6 +171,9 @@ func beginRouteAttempt(ctx context.Context, run *routeRun) error {
 	}
 	if run == nil {
 		return nil
+	}
+	if run.profile != nil {
+		return run.budget.Check()
 	}
 	return run.budget.Begin(ctx)
 }

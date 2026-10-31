@@ -151,6 +151,7 @@ const GlobalAlerts = () => {
 
 function App() {
   const [activeTab, setActiveTab] = useState('overview');
+  const [requestProvider, setRequestProvider] = useState('');
   const [clientVersions, setClientVersions] = useState({ claude: '', codex: '' });
   const versionCheckRef = useRef(null);
 
@@ -239,15 +240,25 @@ function App() {
   // SSE 连接状态（用于全局状态指示）
   const { connectionStatus } = useSSE(handleStatusUpdate, { events: 'status' });
 
+  const openProviderRequests = useCallback((provider) => {
+    setRequestProvider(provider);
+    setActiveTab('requests');
+  }, []);
+
+  const navigateToTab = (tab) => {
+    setRequestProvider('');
+    setActiveTab(tab);
+  };
+
   // 渲染当前页面
   const renderPage = () => {
     const pages = {
       overview: <OverviewPage />,
-      channels: <ChannelsPage clientVersion={clientVersions.claude} />,
-      codex: <CodexPage clientVersion={clientVersions.codex} />,
+      channels: <ChannelsPage clientVersion={clientVersions.claude} onViewRequests={openProviderRequests} />,
+      codex: <CodexPage clientVersion={clientVersions.codex} onViewRequests={openProviderRequests} />,
       // 组管理页面已移除
       // groups: <GroupsPage />,
-      requests: <RequestsPage />,
+      requests: <RequestsPage key={requestProvider || 'all'} initialProvider={requestProvider} />,
       privacy: <PrivacyPage />,
       pricing: <PricingPage />,
       // 设置页面（可编辑）
@@ -263,19 +274,21 @@ function App() {
 
   const isLogsPage = activeTab === 'logs';
   const isRequestsPage = activeTab === 'requests';
+  const isProviderPage = activeTab === 'channels' || activeTab === 'codex';
+  const isWorkspacePage = isLogsPage || isProviderPage || activeTab === 'privacy';
 
   // Request pages can scroll when their toolbar and minimum table height exceed
-  // the viewport; logs retain their dedicated inner scroll area.
-  const contentClass = isLogsPage
+  // the viewport; workspaces own their inner scroll areas.
+  const contentClass = isWorkspacePage
     ? 'app-content relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden'
     : `app-content relative z-10 min-h-0 flex-1 overflow-y-auto${isRequestsPage ? ' scrollbar-visible' : ''}`;
 
-  const pageFrameClass = 'mx-auto w-full max-w-[1440px] px-6 lg:px-8 xl:px-10';
+  const pageFrameClass = 'mx-auto w-full min-w-0 px-3 pt-4 lg:px-4';
   const mainClass = isRequestsPage
-    ? `${pageFrameClass} flex h-full flex-col py-5`
-    : isLogsPage
-      ? `${pageFrameClass} flex min-h-0 flex-1 flex-col pt-5 pb-4`
-      : `${pageFrameClass} pt-5 pb-12`;
+    ? `${pageFrameClass} flex h-full flex-col pb-4`
+    : isWorkspacePage
+      ? `${pageFrameClass} flex min-h-0 flex-1 flex-col pb-4`
+      : `${pageFrameClass} pb-12`;
 
   return (
     <ToastProvider>
@@ -304,7 +317,7 @@ function App() {
         {/* 顶部导航 */}
         <Header
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={navigateToTab}
           connectionStatus={connectionStatus}
           proxyStatus={proxyStatus}
         />

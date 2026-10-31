@@ -198,11 +198,10 @@ const EndpointRow = ({
 
         {/* 操作按钮（常驻显示） */}
         <div className="flex flex-shrink-0 self-center items-center gap-0.5">
-          <button
+          <Tooltip asChild content={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}><button
             type="button"
             onClick={handleFailoverToggle}
             disabled={failoverToggleBlocked}
-            title={failoverToggleBlocked ? '至少保留一个参与转移的备用端点' : undefined}
             className={`${ENDPOINT_STATE_BUTTON_CLASS} ${
               failoverToggleBlocked
                 ? 'cursor-not-allowed text-indigo-300 opacity-60'
@@ -222,7 +221,7 @@ const EndpointRow = ({
             aria-pressed={failoverEnabled}
           >
             {failoverEnabled ? <Repeat size={12} /> : <RepeatOffIcon size={12} />}
-          </button>
+          </button></Tooltip>
           <button
             type="button"
             onClick={handleSkipHealthCheckToggle}

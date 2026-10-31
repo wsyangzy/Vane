@@ -1,6 +1,9 @@
-import { ArrowRight, Clock, RefreshCw } from 'lucide-react';
+import { useId, useState } from 'react';
+import { Activity, ArrowRight, Clock, Loader2, RefreshCw, ShieldCheck, ShieldOff, X } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
+import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModelTag from '../../../requests/components/ModelTag.jsx';
+import './resourceDetails.css';
 
 const DETAIL_CHIP_TONES = {
   default: {
@@ -47,23 +50,23 @@ export const DetailMetricCard = ({ label, icon: Icon, wide = false, density = 'n
   const config = METRIC_CARD_DENSITY[density] || METRIC_CARD_DENSITY.normal;
 
   return (
-    <div className={`${config.root} ${wide ? 'md:col-span-2' : ''}`}>
-      <div className={config.header}>
+    <section className={`rd-card ${config.root} ${wide ? 'md:col-span-2' : ''}`}>
+      <div className={`rd-card-heading ${config.header}`}>
         {Icon && (
           <span className={config.iconBox}>
             <Icon size={config.iconSize} />
           </span>
         )}
-        <span className="text-xs font-medium text-slate-500">{label}</span>
+        <h3 className="text-xs font-medium text-slate-500">{label}</h3>
       </div>
       <div className="min-w-0">{children}</div>
-    </div>
+    </section>
   );
 };
 
 export const DetailChip = ({ children, tone = 'slate', mono = false, variant = 'default' }) => (
   <span
-    className={`inline-flex min-h-7 items-center justify-center rounded-lg border px-2.5 text-xs font-semibold leading-none ${
+    className={`rd-chip inline-flex min-h-7 max-w-full flex-wrap items-center justify-center rounded-lg border px-2.5 text-xs font-semibold leading-none ${
       mono ? 'font-mono' : ''
     } ${getToneClass(tone, variant)}`}
   >
@@ -106,16 +109,71 @@ export const ModelMappingPair = ({ sourceModel, targetModel }) => (
 );
 
 export const DetailTimestampFooter = ({ createdAt, updatedAt, density = 'normal' }) => (
-  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-    <DetailMetricCard label="创建时间" icon={Clock} density={density}>
-      <span className="block truncate font-mono text-sm font-medium text-slate-700">
-        {createdAt}
-      </span>
-    </DetailMetricCard>
-    <DetailMetricCard label="更新时间" icon={RefreshCw} density={density}>
-      <span className="block truncate font-mono text-sm font-medium text-slate-700">
-        {updatedAt}
-      </span>
-    </DetailMetricCard>
-  </div>
+  <footer className="rd-timestamps" data-density={density}>
+    <span><Clock size={11} />创建时间 <time>{createdAt}</time></span>
+    <span><RefreshCw size={11} />更新时间 <time>{updatedAt}</time></span>
+  </footer>
 );
+
+export const ResourceDetailShell = ({ title, subtitle, eyebrow, icon: Icon, tone = 'endpoint', actions, summary, onClose, children }) => {
+  const titleId = useId();
+  return renderModalPortal(
+    <div className="rd-backdrop fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose?.();
+    }}>
+      <section role="dialog" aria-modal="true" aria-labelledby={titleId} data-detail-tone={tone} className="resource-detail-dialog flex max-h-[calc(100dvh-2rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl">
+        <header className="rd-header">
+          <div className="rd-heading">
+            <span className="rd-emblem">{Icon && <Icon size={19} />}</span>
+            <div className="min-w-0 flex-1">
+              <p className="rd-eyebrow">{eyebrow}</p>
+              <h2 id={titleId} className="rd-title">{title}</h2>
+            </div>
+            <div className="rd-actions">
+              {actions}
+              <Tooltip asChild content="关闭"><button type="button" className="rd-close" aria-label="关闭" onClick={onClose}><X size={16} /></button></Tooltip>
+            </div>
+          </div>
+          {subtitle && <div className="rd-subtitle">{subtitle}</div>}
+          {summary && <div className="rd-summary">{summary}</div>}
+        </header>
+        <div className="rd-body min-h-0 flex-1 overflow-y-auto">{children}</div>
+      </section>
+    </div>
+  );
+};
+
+export const EndpointHealthSection = ({ skipped, subscription, inScope = true, ms, lastCheck, onCheck, onToggle, disabled = false }) => {
+  const [pending, setPending] = useState('');
+  const [error, setError] = useState('');
+  const run = async (kind, callback) => {
+    if (pending || disabled) return;
+    setPending(kind);
+    setError('');
+    try { await callback(); }
+    catch (err) { setError(err?.message || String(err)); }
+    finally { setPending(''); }
+  };
+  const latency = Number(ms);
+  const hasLatency = inScope && !subscription && Number.isFinite(latency) && latency > 0;
+  return <section className="rd-health" aria-label="健康检查">
+    <div className="rd-health-heading">
+      <h3><Activity size={13} />健康检查</h3>
+      {onCheck && !subscription && <button type="button" className="rd-check-button" disabled={disabled || !!pending} onClick={() => run('check', onCheck)}>
+        {pending === 'check' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}{pending === 'check' ? '检测中…' : '立即检测'}
+      </button>}
+    </div>
+    <dl className="rd-health-metrics">
+      <div><dt>探测延迟</dt><dd className="rd-latency" data-tone={!hasLatency ? 'empty' : latency > 1000 ? 'slow' : latency > 500 ? 'medium' : 'fast'}>{hasLatency ? <>{Math.max(1, Math.round(latency))}<small>ms</small></> : <span>{!inScope ? '未开启' : subscription ? '不主动测速' : '未测速'}</span>}</dd></div>
+      <div><dt>检测方式</dt><dd>{!inScope ? '自动检测未开启' : subscription ? '真实请求验证' : skipped ? '仅测速' : '健康探测'}</dd></div>
+      <div><dt>最近检测</dt><dd className="rd-health-time">{!inScope ? '—' : lastCheck && lastCheck !== '-' ? lastCheck : '暂无检测记录'}</dd></div>
+    </dl>
+    {!subscription && onToggle && <div className="rd-health-toggle">
+      <span className="rd-health-toggle-icon">{skipped ? <ShieldOff size={15} /> : <ShieldCheck size={15} />}</span>
+      <span className="min-w-0 flex-1"><strong>跳过健康检查</strong><span>{inScope ? '跳过健康判定，仍保留自动测速。' : '加入当前默认方案的启用成员后生效。'}</span></span>
+      <button type="button" role="switch" aria-label="跳过健康检查" aria-checked={inScope && !!skipped} className="rd-health-switch" disabled={!inScope || disabled || !!pending} onClick={() => run('toggle', () => onToggle(!skipped))}><span /></button>
+    </div>}
+    <p className="rd-health-note">{!inScope ? '未参与当前默认方案，不发送后台探测。立即检测仅执行一次，不开启自动检测。' : subscription ? '订阅端点通过真实请求更新状态，不发送主动探测。' : '仅对当前默认方案的启用成员自动探测。延迟不代表模型首字节或生成耗时。'}</p>
+    {error && <p className="rd-inline-error" role="alert">{error}</p>}
+  </section>;
+};

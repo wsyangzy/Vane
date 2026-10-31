@@ -38,11 +38,12 @@ const REASONING_EFFORTS = {
 };
 
 const SERVICE_TIERS = {
+  ultrafast: ['Ultrafast', '超快速处理档位，使用独立的 Ultrafast 单价。', 'bg-rose-50 text-rose-700 border-rose-200'],
   auto: ['Auto', '请求让上游自动决定处理档位；仅凭请求无法确定最终计费档位。', 'bg-slate-50 text-slate-600 border-slate-200'],
   standard: ['Standard', '标准处理档位。', 'bg-indigo-50 text-indigo-700 border-indigo-200'],
   batch: ['Batch', '批处理定价档位；实际使用方式与可用性由上游决定。', 'bg-cyan-50 text-cyan-700 border-cyan-200'],
   flex: ['Flex', '弹性处理档位，通常以更慢响应和可能的资源暂不可用换取更低价格。', 'bg-emerald-50 text-emerald-700 border-emerald-200'],
-  fast: ['Fast mode', '快速或优先处理档位；priority 作为同义值归入此档。', 'bg-amber-50 text-amber-700 border-amber-200']
+  fast: ['Fast', '快速或优先处理档位；priority 作为同义值归入此档。', 'bg-amber-50 text-amber-700 border-amber-200']
 };
 
 export const parseReasoningConfig = (raw) => {
@@ -85,6 +86,31 @@ export const getServiceTierMeta = (value) => {
     description: '上游返回了当前界面未识别的服务档位，计费不会猜测对应配置。',
     className: 'bg-slate-50 text-slate-600 border-slate-200'
   } : null;
+};
+
+export const getRequestServiceTierMeta = (request) => {
+  const snapshot = request.billingRuleSnapshot;
+  // 使用成本计算时记录的档位；命中标准兜底价格不代表请求降为 Standard。
+  const tier = snapshot?.pricing_provider === 'codex' && snapshot.service_tier_source
+    ? snapshot.billing_service_tier || 'standard'
+    : request.serviceTier || request.service_tier || '';
+  return getServiceTierMeta(tier);
+};
+
+export const getRequestBillingMultiplierSources = (request) => {
+  const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 1;
+  const snapshot = request.billingRuleSnapshot;
+  const hasSnapshot = Boolean(snapshot?.context_mode);
+  const hasRuleSources = hasSnapshot && Boolean(snapshot.rule_key && snapshot.rule_group_multiplier_mode);
+  const groupApplied = !hasRuleSources || snapshot.rule_group_multiplier_mode !== 'override';
+  const group = positive(hasSnapshot ? snapshot.group_cost_multiplier : request.costMultiplier);
+  const model = positive(hasSnapshot ? snapshot.model_cost_multiplier : request.modelCostMultiplier);
+  const rule = hasRuleSources ? positive(snapshot.rule_cost_multiplier) : 1;
+  return {
+    group, model, rule, hasRuleSources, groupApplied,
+    ruleGroupMode: hasRuleSources ? snapshot.rule_group_multiplier_mode : '',
+    total: hasSnapshot ? positive(snapshot.total_cost_multiplier ?? group * model * rule) : group * model
+  };
 };
 
 // 请求终态（request_logs.stream_outcome）。它回答的是"客户端拿到完整结果了吗"，
@@ -132,7 +158,8 @@ const normalizePrivacySummary = (value) => ({
   changed: Boolean(value?.changed),
   action: typeof value?.action === 'string' ? value.action : '',
   hitCount: Number(value?.hit_count ?? 0),
-  hits: Array.isArray(value?.hits) ? value.hits : []
+  hits: Array.isArray(value?.hits) ? value.hits : [],
+  activity: value?.activity && typeof value.activity === 'object' && !Array.isArray(value.activity) ? value.activity : null
 });
 
 export const parsePrivacySummary = (value) => {
@@ -160,8 +187,19 @@ export const getPrivacyDisplay = (request) => {
   const flagged = Boolean(request?.privacyRedacted ?? request?.privacy_redacted);
   const hitCount = summary.hitCount || summary.hits.reduce((sum, hit) => sum + (hit.count || 0), 0);
 
+  if (summary.activity) {
+    const activity = summary.activity;
+    const state = Object.hasOwn(PRIVACY_ACTIVITY_LABELS, activity.state) ? activity.state : 'unknown';
+    return {
+      state, label: PRIVACY_ACTIVITY_LABELS[state],
+      hitCount: Math.max(0, Number(activity.hit_count) || 0),
+      hits: Array.isArray(activity.rule_hits) ? activity.rule_hits : [],
+      detectOnly: state === 'detected', activity
+    };
+  }
+
   if (!flagged && hitCount === 0) {
-    return { state: 'none', label: '未命中', hitCount: 0, hits: [], detectOnly: false };
+    return { state: 'none', label: '无脱敏摘要', hitCount: 0, hits: [], detectOnly: false };
   }
   const detectOnly = summary.action === 'detect' || !summary.changed;
   return {
@@ -173,8 +211,19 @@ export const getPrivacyDisplay = (request) => {
   };
 };
 
+export const PRIVACY_ACTIVITY_LABELS = {
+  redacted: '已脱敏', detected: '仅检测到', blocked: '已拒发', clean: '扫描无命中',
+  disabled: '防护关闭', skipped: '未完整扫描', truncated: '扫描已截断', unknown: '无扫描记录'
+};
+
 export const PRIVACY_STATE_STYLES = {
   redacted: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   detected: 'border-amber-200 bg-amber-50 text-amber-700',
+  blocked: 'border-rose-200 bg-rose-50 text-rose-700',
+  clean: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  disabled: 'border-slate-200 bg-slate-100 text-slate-600',
+  skipped: 'border-amber-200 bg-amber-50 text-amber-700',
+  truncated: 'border-amber-200 bg-amber-50 text-amber-700',
+  unknown: 'border-slate-200 bg-slate-50 text-slate-500',
   none: 'border-slate-200 bg-slate-50 text-slate-400'
 };

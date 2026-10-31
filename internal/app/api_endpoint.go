@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"time"
+
+	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 )
 
 // EndpointInfo 端点信息
@@ -80,6 +82,11 @@ func (a *App) GetEndpoints() []EndpointInfo {
 
 		if !status.LastCheck.IsZero() {
 			info.LastCheck = status.LastCheck.Format(time.RFC3339)
+		}
+		if !manager.IsHealthCheckEnabled(endpoint.EndpointKeyForConfig(ep.Config)) {
+			info.HealthState, info.Healthy = "disabled", false
+			info.ResponseTimeMs, info.ConsecutiveFail, info.LastFailCode = 0, 0, 0
+			info.LastCheck, info.LastFailReason = "", ""
 		}
 
 		result = append(result, info)

@@ -69,9 +69,11 @@ const buildInitialCredentialGroupForm = (group, channel) => ({
   longContextOutputCostMultiplier: formatMultiplierInputValue(group?.longContextOutputCostMultiplier ?? 1.0),
   longContextCacheCreationCostMultiplier: formatMultiplierInputValue(group?.longContextCacheCreationCostMultiplier ?? 1.0),
   longContextCacheReadCostMultiplier: formatMultiplierInputValue(group?.longContextCacheReadCostMultiplier ?? 1.0),
+  serviceTierSource: group?.serviceTierSource || 'response',
+  cacheWriteTTLPricing: Boolean(group?.cacheWriteTTLPricing),
   disableLongContextPricing: group ? Boolean(group.disableLongContextPricing) : true,  billingOutputTokenSource: group?.billingOutputTokenSource || 'output_tokens',
 	 billingMode: Array.isArray(group?.billingRules || group?.billing_rules) && (group?.billingRules || group?.billing_rules).length > 0 ? 'rules' : 'legacy',
-	 billingRuleRows: buildInitialBillingRuleRows(group?.billingRules || group?.billing_rules),
+	 billingRuleRows: buildInitialBillingRuleRows(group?.billingRules || group?.billing_rules, group),
   copyEndpointsFromGroupId: '',
   modelMultiplierRows: buildInitialModelMultiplierRows(group?.modelMultipliers || group?.model_multipliers || [])
 });
@@ -102,7 +104,7 @@ const CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS = [
 // 计费模式是二选一而非视图切换，故用单选卡片而非 SegmentedTabs——
 // 后者与弹窗顶部的视图标签视觉一致，会让用户误以为两种模式的配置都会生效。
 const CODEX_BILLING_MODES = [
-  { key: 'legacy', label: '传统倍率', description: '五项成本倍率直接相乘' },
+  { key: 'legacy', label: '传统倍率', description: 'Standard 单价 × 分项倍率，支持 Long context' },
   { key: 'rules', label: '组合规则', description: '按模型 / 档位 / 上下文匹配规则' }
 ];
 
@@ -175,7 +177,7 @@ const STANDARD_ENDPOINT_MULTIPLIER_FIELDS = [
   { label: '总成本倍率', key: 'costMultiplier' },
   { label: '输入成本倍率', key: 'inputCostMultiplier', priceKey: 'inputPrice' },
   { label: '输出成本倍率', key: 'outputCostMultiplier', priceKey: 'outputPrice' },
-  { label: '缓存创建倍率', key: 'cacheCreationCostMultiplier', priceKey: 'cacheCreationPrice5m' },
+  { label: '缓存写入倍率', key: 'cacheCreationCostMultiplier', priceKey: 'cacheWritePrice30m' },
   { label: '缓存读取倍率', key: 'cacheReadCostMultiplier', priceKey: 'cacheReadPrice' }
 ];
 
@@ -183,7 +185,7 @@ const LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS = [
   { label: 'Long context 总倍率', key: 'longContextCostMultiplier' },
   { label: 'Long context 输入倍率', key: 'longContextInputCostMultiplier', priceKey: 'longContextInputPrice' },
   { label: 'Long context 输出倍率', key: 'longContextOutputCostMultiplier', priceKey: 'longContextOutputPrice' },
-  { label: 'Long context 缓存创建倍率', key: 'longContextCacheCreationCostMultiplier', priceKey: 'longContextCacheWritePrice' },
+  { label: 'Long context 缓存写入倍率', key: 'longContextCacheCreationCostMultiplier', priceKey: 'longContextCacheWritePrice' },
   { label: 'Long context 缓存读取倍率', key: 'longContextCacheReadCostMultiplier', priceKey: 'longContextCacheReadPrice' }
 ];
 
@@ -213,7 +215,7 @@ const normalizeMultiplierValue = (value) => {
 
 const formatEndpointTimeoutInputValue = (value) => {
   const seconds = Number(value ?? 0);
-  if (!Number.isFinite(seconds) || seconds <= 0) return '0';
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
   return String(Math.trunc(seconds));
 };
 
@@ -237,16 +239,6 @@ const parseEndpointPriorityPayload = (value) => {
   return { priority: parsed };
 };
 
-// ============================================================================
-// Codex 全局配置弹窗（直接读写 ~/.codex/config.toml）
-// 字段：model / enable_1m_context（base_url 由后端自动同步）
-// 显式保存模式：点击「保存」才写入文件
-// ============================================================================
-const DEFAULT_CONFIG = {
-  model: '',
-  enable_1m_context: false
-};
-
-export { buildInitialChannelForm, CODEX_CHANNEL_FORM_TABS, CODEX_CHANNEL_EDIT_FORM_TABS, buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS, CODEX_BILLING_MODES, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS, STANDARD_ENDPOINT_MULTIPLIER_FIELDS, LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS, parseEndpointMultiplierPayload, CODEX_ENDPOINT_FORM_TABS, getNextCodexEndpointPriority, formatEndpointTimeoutInputValue, parseEndpointTimeoutPayload, parseEndpointPriorityPayload, DEFAULT_CONFIG, getDefaultCredentialGroup, normalizeMultiplierValue, getCredentialGroups, hasCodexCredential, sortEndpointsByPriority, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload };
+export { buildInitialChannelForm, CODEX_CHANNEL_FORM_TABS, CODEX_CHANNEL_EDIT_FORM_TABS, buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS, CODEX_BILLING_MODES, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS, STANDARD_ENDPOINT_MULTIPLIER_FIELDS, LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS, parseEndpointMultiplierPayload, CODEX_ENDPOINT_FORM_TABS, getNextCodexEndpointPriority, formatEndpointTimeoutInputValue, parseEndpointTimeoutPayload, parseEndpointPriorityPayload, getDefaultCredentialGroup, normalizeMultiplierValue, getCredentialGroups, hasCodexCredential, sortEndpointsByPriority, buildCodexEndpointCopyOptions, buildCodexEndpointCopyPayload };
 
 export const ENDPOINT_STATE_BUTTON_CLASS = 'inline-flex size-5 min-h-5 min-w-5 max-h-5 max-w-5 flex-shrink-0 appearance-none items-center justify-center rounded-md border-0 p-0 leading-none transition-colors duration-150';
