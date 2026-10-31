@@ -53,13 +53,13 @@ func TestResolveCodexBillingRuleUsesSpecificityThenSelectorPriority(t *testing.T
 	multiplier.ModelMultipliers = []ModelMultiplier{{Model: "gpt-test", CostMultiplier: 10, InputCostMultiplier: 10, OutputCostMultiplier: 10, CacheReadCostMultiplier: 10}}
 	multiplier.BillingRules = []BillingRule{
 		{Mode: BillingRuleModeMultiplier, CostMultiplier: 1, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
-		{Model: "gpt-test", Mode: BillingRuleModeMultiplier, CostMultiplier: 2, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
-		{ServiceTier: ServiceTierFast, Mode: BillingRuleModeMultiplier, CostMultiplier: 3, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
-		{Model: "gpt-test", ServiceTier: ServiceTierFast, Context: BillingContextLong, Mode: BillingRuleModeFixed, InputPrice: 7, OutputPrice: 11, CacheCreationPrice: 2, CacheReadPrice: 0.5},
+		{Model: "gpt-test", Mode: BillingRuleModeMultiplier, GroupMultiplierMode: BillingGroupMultiplierOverride, CostMultiplier: 2, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
+		{ServiceTier: ServiceTierFast, Mode: BillingRuleModeMultiplier, GroupMultiplierMode: BillingGroupMultiplierOverride, CostMultiplier: 3, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1},
+		{Model: "gpt-test", ServiceTier: ServiceTierFast, Context: BillingContextLong, Mode: BillingRuleModeFixed, GroupMultiplierMode: BillingGroupMultiplierOverride, InputPrice: 7, OutputPrice: 11, CacheCreationPrice: 2, CacheReadPrice: 0.5},
 	}
 
 	_, normalMultiplier, normalRule := resolveBillingForRequest(pricing, multiplier, &TokenUsage{InputTokens: 100}, "gpt-test", "priority")
-	if normalRule == nil || normalRule.Model != "gpt-test" || normalMultiplier.CostMultiplier != 2 {
+	if normalRule == nil || normalRule.Model != "gpt-test" || normalMultiplier.CostMultiplier != 18 {
 		t.Fatalf("expected model selector to win equal-specificity tie, rule=%+v multiplier=%+v", normalRule, normalMultiplier)
 	}
 
@@ -70,8 +70,8 @@ func TestResolveCodexBillingRuleUsesSpecificityThenSelectorPriority(t *testing.T
 		CacheReadTokens:        1_000_000,
 		InputIncludesCacheRead: true,
 	}, pricing, multiplier, billingIdentity{provider: "codex", requestModel: "gpt-test", serviceTier: "priority", pricingModel: "gpt-test"})
-	if math.Abs(cost.TotalCost-20.5) > 1e-9 {
-		t.Fatalf("expected one fixed tier+context rule to replace all multipliers, got %f", cost.TotalCost)
+	if math.Abs(cost.TotalCost-625.5) > 1e-9 {
+		t.Fatalf("expected fixed tier+context prices with group factors and without legacy model factors, got %f", cost.TotalCost)
 	}
 	snapshotJSON := billingDecisionSnapshotJSON(snapshot)
 	if !strings.Contains(snapshotJSON, `"rule_mode":"fixed"`) || !strings.Contains(snapshotJSON, `"rule_key":"model=gpt-test;tier=fast;context=long"`) {

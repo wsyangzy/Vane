@@ -41,6 +41,8 @@ func NormalizeServiceTierForBilling(value string) string {
 		return ServiceTierFlex
 	case "fast", "priority":
 		return ServiceTierFast
+	case "ultrafast":
+		return ServiceTierUltrafast
 	default:
 		return ""
 	}
@@ -112,9 +114,35 @@ func resolveBillingRule(rules []BillingRule, modelName, serviceTier, contextMode
 	return selected
 }
 
+// copyBillingGroupMultipliers copies only the base factors used by explicit
+// inheritance, without importing legacy model or long-context modifiers.
+func copyBillingGroupMultipliers(dst *EndpointMultiplier, group EndpointMultiplier) {
+	dst.DisableLongContextPricing = group.DisableLongContextPricing
+	dst.CostMultiplier = ensurePositiveMultiplier(group.CostMultiplier)
+	dst.InputCostMultiplier = ensurePositiveMultiplier(group.InputCostMultiplier)
+	dst.OutputCostMultiplier = ensurePositiveMultiplier(group.OutputCostMultiplier)
+	dst.CacheCreationCostMultiplier = ensurePositiveMultiplier(group.CacheCreationCostMultiplier)
+	dst.CacheCreationCostMultiplier1h = dst.CacheCreationCostMultiplier
+	dst.CacheReadCostMultiplier = ensurePositiveMultiplier(group.CacheReadCostMultiplier)
+}
+
+// DefaultBillingRuleGroupMultiplierMode makes every model/tier/context rule
+// inherit group factors, including records written by older clients. Only the
+// selector-free legacy fallback can contain the group rate already.
+func DefaultBillingRuleGroupMultiplierMode(mode string, catchAll bool) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "" && mode != BillingGroupMultiplierInherit && mode != BillingGroupMultiplierOverride {
+		return mode
+	}
+	if catchAll && mode != BillingGroupMultiplierInherit {
+		return BillingGroupMultiplierOverride
+	}
+	return BillingGroupMultiplierInherit
+}
+
 // resolveBillingForRequest 应用凭证分组的组合计费规则。规则列表为空时走 legacy
-// 链路（模型倍率 + 分组/端点倍率）；非空时命中的单条规则对本次请求具有最终决定权，
-// 不再叠加 legacy 的模型/档位/端点倍率。返回命中的规则供快照记录。
+// 链路（模型倍率 + 分组/端点倍率）；非空时只选中一条规则。例外规则始终叠加分组
+// 基础倍率；旧兜底保留已包含基础倍率的算法。legacy 模型和长上下文倍率不再叠加。
 func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usage *TokenUsage, modelName, serviceTier string) (ModelPricing, EndpointMultiplier, *BillingRule) {
 	if len(mult.BillingRules) == 0 {
 		resolved := ResolveEndpointMultiplierForModel(mult, modelName)
@@ -122,14 +150,24 @@ func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usa
 	}
 
 	contextMode := BillingContextNormal
-	if usage != nil && pricing.LongContextThreshold > 0 && usage.InputTokens > pricing.LongContextThreshold {
+	if !mult.DisableLongContextPricing && usage != nil && pricing.LongContextThreshold > 0 && usage.InputTokens > pricing.LongContextThreshold {
 		contextMode = BillingContextLong
 	}
 	rule := resolveBillingRule(mult.BillingRules, modelName, serviceTier, contextMode)
 	effectiveMultiplier := DefaultEndpointMultiplier()
+	effectiveMultiplier.DisableLongContextPricing = mult.DisableLongContextPricing
+	effectiveMultiplier.ServiceTierSource = mult.ServiceTierSource
+	effectiveMultiplier.CacheWriteTTLPricing = mult.CacheWriteTTLPricing
 	effectiveMultiplier.BillingOutputTokenSource = NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
 	if rule == nil {
+		copyBillingGroupMultipliers(&effectiveMultiplier, mult)
 		return pricing, effectiveMultiplier, nil
+	}
+	resolvedRule := *rule
+	resolvedRule.GroupMultiplierMode = DefaultBillingRuleGroupMultiplierMode(rule.GroupMultiplierMode, rule.Model == "" && rule.ServiceTier == "" && rule.Context == "")
+	rule = &resolvedRule
+	if rule.GroupMultiplierMode == BillingGroupMultiplierInherit {
+		copyBillingGroupMultipliers(&effectiveMultiplier, mult)
 	}
 
 	if rule.Mode == BillingRuleModeFixed {
@@ -137,6 +175,9 @@ func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usa
 		pricing.Output = rule.OutputPrice
 		pricing.CacheCreation = rule.CacheCreationPrice
 		pricing.CacheCreation1h = rule.CacheCreationPrice
+		pricing.CacheWritePrice30m = rule.CacheCreationPrice
+		pricing.CacheWritePrice12h = rule.CacheCreationPrice
+		pricing.LongContextCacheWritePrice12h = 0
 		pricing.CacheRead = rule.CacheReadPrice
 		pricing.LongContextThreshold = 0
 		pricing.LongContextInputPrice = 0
@@ -144,12 +185,12 @@ func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usa
 		pricing.LongContextCacheWritePrice = 0
 		pricing.LongContextCacheReadPrice = 0
 	} else {
-		effectiveMultiplier.CostMultiplier = ensurePositiveMultiplier(rule.CostMultiplier)
-		effectiveMultiplier.InputCostMultiplier = ensurePositiveMultiplier(rule.InputCostMultiplier)
-		effectiveMultiplier.OutputCostMultiplier = ensurePositiveMultiplier(rule.OutputCostMultiplier)
-		effectiveMultiplier.CacheCreationCostMultiplier = ensurePositiveMultiplier(rule.CacheCreationCostMultiplier)
-		effectiveMultiplier.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(rule.CacheCreationCostMultiplier)
-		effectiveMultiplier.CacheReadCostMultiplier = ensurePositiveMultiplier(rule.CacheReadCostMultiplier)
+		effectiveMultiplier.CostMultiplier *= ensurePositiveMultiplier(rule.CostMultiplier)
+		effectiveMultiplier.InputCostMultiplier *= ensurePositiveMultiplier(rule.InputCostMultiplier)
+		effectiveMultiplier.OutputCostMultiplier *= ensurePositiveMultiplier(rule.OutputCostMultiplier)
+		effectiveMultiplier.CacheCreationCostMultiplier *= ensurePositiveMultiplier(rule.CacheCreationCostMultiplier)
+		effectiveMultiplier.CacheCreationCostMultiplier1h *= ensurePositiveMultiplier(rule.CacheCreationCostMultiplier)
+		effectiveMultiplier.CacheReadCostMultiplier *= ensurePositiveMultiplier(rule.CacheReadCostMultiplier)
 	}
 
 	return pricing, effectiveMultiplier, rule
@@ -172,5 +213,19 @@ func calculateRequestCost(usage *TokenUsage, pricing ModelPricing, multiplier En
 	effectivePricing, effectiveMultiplier, rule := resolveBillingForRequest(pricing, multiplier, usage, id.requestModel, id.serviceTier)
 	cost := CalculateCost(usage, &effectivePricing, &effectiveMultiplier)
 	snapshot := buildBillingDecisionSnapshot(usage, effectivePricing, effectiveMultiplier, id, rule)
+	if snapshot != nil && rule != nil {
+		// Persist both the final factors and their sources. Request multiplier columns
+		// keep the combined values for consumers that do not understand rule snapshots.
+		snapshot.RuleGroupMultiplierMode = BillingGroupMultiplierOverride
+		snapshot.GroupCostMultiplier = 1
+		if rule.GroupMultiplierMode == BillingGroupMultiplierInherit {
+			snapshot.RuleGroupMultiplierMode = BillingGroupMultiplierInherit
+			snapshot.GroupCostMultiplier = ensurePositiveMultiplier(multiplier.CostMultiplier)
+		}
+		snapshot.RuleCostMultiplier = 1
+		if rule.Mode == BillingRuleModeMultiplier {
+			snapshot.RuleCostMultiplier = ensurePositiveMultiplier(rule.CostMultiplier)
+		}
+	}
 	return cost, effectiveMultiplier, snapshot
 }

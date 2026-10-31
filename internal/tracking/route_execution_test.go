@@ -68,7 +68,7 @@ func TestRouteExecutionSurvivesHotPoolSQLiteReplayAndMonthlyArchive(t *testing.T
 	if replayed != snapshot {
 		t.Fatal("failed archive replay dropped execution")
 	}
-	oldMonth := tracker.now().AddDate(0, -1, 0).Format("2006-01")
+	oldMonth := previousHistoryMonthStart(tracker.now()).Format("2006-01")
 	if _, err := tracker.GetWriteDB().Exec(`UPDATE request_logs SET start_time=?, end_time=?`, oldMonth+"-15 10:00:00", oldMonth+"-15 10:00:01"); err != nil {
 		t.Fatal(err)
 	}

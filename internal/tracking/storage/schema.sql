@@ -389,6 +389,8 @@ BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS codex_credential_groups (
+    service_tier_source TEXT NOT NULL DEFAULT 'response',
+    cache_write_ttl_pricing INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
 id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
@@ -483,6 +485,9 @@ END;
 -- 模型定价持久化在 SQLite，支持动态管理
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS model_pricing (
+    cache_write_price_30m REAL NOT NULL DEFAULT 0,
+    cache_write_price_12h REAL NOT NULL DEFAULT 0,
+    long_context_cache_write_price_12h REAL NOT NULL DEFAULT 0,
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     -- ========== 模型信息 ==========

@@ -107,7 +107,7 @@ func routingClassifierUsage(payload []byte) *tracking.TokenUsage {
 	if result == nil {
 		return nil
 	}
-	return &tracking.TokenUsage{InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, ReasoningTokens: result.ReasoningTokens, CacheReadTokens: result.CacheReadTokens, CacheCreationTokens: result.CacheWriteTokens, InputIncludesCacheRead: true}
+	return &tracking.TokenUsage{InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, ReasoningTokens: result.ReasoningTokens, CacheReadTokens: result.CacheReadTokens, CacheCreationTokens: result.CacheWriteTokens, CacheWrite30mTokens: result.CacheWrite30mTokens, CacheWrite12hTokens: result.CacheWrite12hTokens, InputIncludesCacheRead: true}
 }
 
 // The entire SSE body must end with a completed response. Text deltas or DONE

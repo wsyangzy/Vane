@@ -26,13 +26,13 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 	query := `
 		INSERT INTO model_pricing (
 			model_name, provider, service_tier, input_price, output_price,
-			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			cache_creation_price_5m, cache_creation_price_1h, cache_read_price, cache_write_price_30m, cache_write_price_12h, long_context_cache_write_price_12h,
 			long_context_threshold, long_context_input_price,
 			long_context_cache_read_price, long_context_cache_write_price,
 			long_context_output_price,
 			display_name, description, is_default,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'),
 			strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
 	`
@@ -66,7 +66,7 @@ func (s *SQLiteModelPricingStore) BatchCreate(ctx context.Context, records []*Mo
 
 		_, err = stmt.ExecContext(ctx,
 			record.ModelName, record.Provider, record.ServiceTier, record.InputPrice, record.OutputPrice,
-			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
+			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice, record.CacheWritePrice30m, record.CacheWritePrice12h, record.LongContextCacheWritePrice12h,
 			record.LongContextThreshold, record.LongContextInputPrice,
 			record.LongContextCacheReadPrice, record.LongContextCacheWritePrice,
 			record.LongContextOutputPrice,
@@ -103,12 +103,12 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 	query := `
 		INSERT INTO model_pricing (
 			model_name, provider, service_tier, input_price, output_price,
-			cache_creation_price_5m, cache_creation_price_1h, cache_read_price,
+			cache_creation_price_5m, cache_creation_price_1h, cache_read_price, cache_write_price_30m, cache_write_price_12h, long_context_cache_write_price_12h,
 			long_context_threshold, long_context_input_price,
 			long_context_cache_read_price, long_context_cache_write_price,
 			long_context_output_price,
 			display_name, description, is_default
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider, model_name, service_tier) DO UPDATE SET
 			provider = excluded.provider,
 			input_price = excluded.input_price,
@@ -116,6 +116,9 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 			cache_creation_price_5m = excluded.cache_creation_price_5m,
 			cache_creation_price_1h = excluded.cache_creation_price_1h,
 			cache_read_price = excluded.cache_read_price,
+			cache_write_price_30m = excluded.cache_write_price_30m,
+			cache_write_price_12h = excluded.cache_write_price_12h,
+			long_context_cache_write_price_12h = excluded.long_context_cache_write_price_12h,
 			long_context_threshold = excluded.long_context_threshold,
 			long_context_input_price = excluded.long_context_input_price,
 			long_context_cache_read_price = excluded.long_context_cache_read_price,
@@ -155,7 +158,7 @@ func (s *SQLiteModelPricingStore) BatchUpsert(ctx context.Context, records []*Mo
 
 		_, err = stmt.ExecContext(ctx,
 			record.ModelName, record.Provider, record.ServiceTier, record.InputPrice, record.OutputPrice,
-			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice,
+			record.CacheCreationPrice5m, record.CacheCreationPrice1h, record.CacheReadPrice, record.CacheWritePrice30m, record.CacheWritePrice12h, record.LongContextCacheWritePrice12h,
 			record.LongContextThreshold, record.LongContextInputPrice,
 			record.LongContextCacheReadPrice, record.LongContextCacheWritePrice,
 			record.LongContextOutputPrice,

@@ -6,16 +6,20 @@ import (
 
 // ModelPricing 模型定价配置
 type ModelPricing struct {
-	Input                      float64 // per 1M tokens
-	Output                     float64 // per 1M tokens
-	CacheCreation              float64 // per 1M tokens (5分钟缓存创建，1.25x input)
-	CacheCreation1h            float64 // per 1M tokens (1小时缓存创建，2x input)
-	CacheRead                  float64 // per 1M tokens (缓存读取)
-	LongContextThreshold       int64   // 原始输入 tokens 达到该值时启用，0 表示禁用
-	LongContextInputPrice      float64 // per 1M tokens
-	LongContextOutputPrice     float64 // per 1M tokens
-	LongContextCacheWritePrice float64 // per 1M tokens
-	LongContextCacheReadPrice  float64 // per 1M tokens
+	CacheWritePrice30m            float64 // Codex 30m cache writes, USD per 1M tokens
+	CacheWritePrice12h            float64
+	CodexCachePricing             bool
+	LongContextCacheWritePrice12h float64
+	Input                         float64 // per 1M tokens
+	Output                        float64 // per 1M tokens
+	CacheCreation                 float64 // per 1M tokens (5分钟缓存创建，1.25x input)
+	CacheCreation1h               float64 // per 1M tokens (1小时缓存创建，2x input)
+	CacheRead                     float64 // per 1M tokens (缓存读取)
+	LongContextThreshold          int64   // 原始输入 tokens 达到该值时启用，0 表示禁用
+	LongContextInputPrice         float64 // per 1M tokens
+	LongContextOutputPrice        float64 // per 1M tokens
+	LongContextCacheWritePrice    float64 // per 1M tokens
+	LongContextCacheReadPrice     float64 // per 1M tokens
 }
 
 type ModelMultiplier struct {
@@ -27,17 +31,20 @@ type ModelMultiplier struct {
 }
 
 const (
-	ServiceTierStandard = "standard"
-	ServiceTierBatch    = "batch"
-	ServiceTierFlex     = "flex"
-	ServiceTierFast     = "fast"
+	ServiceTierStandard  = "standard"
+	ServiceTierBatch     = "batch"
+	ServiceTierFlex      = "flex"
+	ServiceTierFast      = "fast"
+	ServiceTierUltrafast = "ultrafast"
 )
 
 const (
-	BillingRuleModeMultiplier = "multiplier"
-	BillingRuleModeFixed      = "fixed"
-	BillingContextNormal      = "normal"
-	BillingContextLong        = "long"
+	BillingRuleModeMultiplier      = "multiplier"
+	BillingRuleModeFixed           = "fixed"
+	BillingContextNormal           = "normal"
+	BillingContextLong             = "long"
+	BillingGroupMultiplierInherit  = "inherit"
+	BillingGroupMultiplierOverride = "override"
 )
 
 // BillingRule is a Codex credential-group billing policy. Empty selectors
@@ -47,6 +54,7 @@ type BillingRule struct {
 	ServiceTier                 string
 	Context                     string
 	Mode                        string
+	GroupMultiplierMode         string
 	CostMultiplier              float64
 	InputCostMultiplier         float64
 	OutputCostMultiplier        float64
@@ -64,6 +72,8 @@ type BillingRule struct {
 //  1. 细分倍率：在每个分项成本计算时相乘（默认 1.0 = 不影响）
 //  2. 总倍率：所有分项成本计算完成后，作为整体乘数应用（默认 1.0 = 不影响）
 type EndpointMultiplier struct {
+	ServiceTierSource                      string  // retained for older configs; runtime derives Standard or automatic rules
+	CacheWriteTTLPricing                   bool    // opt in to reported 30m/12h billing
 	CostMultiplier                         float64 // 总体倍率（默认 1.0，叠加在所有分项后）
 	InputCostMultiplier                    float64 // 输入成本倍率（默认 1.0）
 	OutputCostMultiplier                   float64 // 输出成本倍率（默认 1.0）

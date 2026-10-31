@@ -173,6 +173,10 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	if record.DailyCostLimitUSD < 0 {
 		return fmt.Errorf("每日成本限额不能小于 0")
 	}
+	if record.ServiceTierSource != "" && record.ServiceTierSource != "request" && record.ServiceTierSource != "response" {
+		return fmt.Errorf("未知的服务档位计费依据: %q", record.ServiceTierSource)
+	}
+	record.ServiceTierSource = tracking.NormalizeServiceTierSource(record.ServiceTierSource)
 	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
 	record.CostMultiplier = defaultCodexMultiplier(record.CostMultiplier)
 	record.InputCostMultiplier = defaultCodexMultiplier(record.InputCostMultiplier)
@@ -266,6 +270,10 @@ func normalizeCodexBillingRules(rules []store.CodexBillingRuleRecord) ([]store.C
 			return nil, fmt.Errorf("未知的 Codex 计费规则上下文: %q", rule.Context)
 		}
 		rule.Mode = strings.ToLower(strings.TrimSpace(rule.Mode))
+		rule.GroupMultiplierMode = tracking.DefaultBillingRuleGroupMultiplierMode(rule.GroupMultiplierMode, rule.Model == "" && rule.ServiceTier == "" && rule.Context == "")
+		if rule.GroupMultiplierMode != tracking.BillingGroupMultiplierInherit && rule.GroupMultiplierMode != tracking.BillingGroupMultiplierOverride {
+			return nil, fmt.Errorf("未知的 Codex 计费规则分组倍率关系: %q", rule.GroupMultiplierMode)
+		}
 		if rule.Mode != tracking.BillingRuleModeMultiplier && rule.Mode != tracking.BillingRuleModeFixed {
 			return nil, fmt.Errorf("未知的 Codex 计费规则模式: %q", rule.Mode)
 		}

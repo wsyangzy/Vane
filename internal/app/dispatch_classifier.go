@@ -212,6 +212,7 @@ func (a *App) callIntentClassifier(ctx context.Context, p routing.RoutingProfile
 			if usage != nil {
 				settledUsage.InputTokens, settledUsage.OutputTokens, settledUsage.ReasoningTokens = usage.InputTokens, usage.OutputTokens, usage.ReasoningTokens
 				settledUsage.CacheReadTokens, settledUsage.CacheCreationTokens = usage.CacheReadTokens, usage.CacheCreationTokens
+				settledUsage.CacheWrite30mTokens, settledUsage.CacheWrite12hTokens = usage.CacheWrite30mTokens, usage.CacheWrite12hTokens
 				settledUsage.CacheCreation5mTokens, settledUsage.CacheCreation1hTokens = usage.CacheCreation5mTokens, usage.CacheCreation1hTokens
 				settledUsage.InputIncludesCacheRead = usage.InputIncludesCacheRead
 			}

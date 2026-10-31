@@ -33,7 +33,7 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 
 	// 🚀 [架构修复] 支持 nil tokens，确保耗时信息总是被记录
 	var inputTokens, outputTokens, reasoningTokens, billableOutputTokens, cacheCreationTokens, cacheReadTokens int64
-	var cacheCreation5mTokens, cacheCreation1hTokens int64
+	var cacheCreation5mTokens, cacheCreation1hTokens, cacheWrite30mTokens, cacheWrite12hTokens int64
 	var billingOutputTokenSource string
 	inputIncludesCacheRead := false
 	if tokens != nil {
@@ -43,6 +43,8 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 		billableOutputTokens = ResolveBillableOutputTokens(tokens)
 		billingOutputTokenSource = tokens.BillingOutputTokenSource
 		cacheCreationTokens = tokens.CacheCreationTokens
+		cacheWrite30mTokens = tokens.CacheWrite30mTokens
+		cacheWrite12hTokens = tokens.CacheWrite12hTokens
 		cacheCreation5mTokens = tokens.CacheCreation5mTokens
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
 		cacheReadTokens = tokens.CacheReadTokens
@@ -86,6 +88,8 @@ func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens
 					BillableOutputTokens:     billableOutputTokens,
 					BillingOutputTokenSource: billingOutputTokenSource,
 					CacheCreationTokens:      cacheCreationTokens,
+					CacheWrite30mTokens:      cacheWrite30mTokens,
+					CacheWrite12hTokens:      cacheWrite12hTokens,
 					CacheCreation5mTokens:    cacheCreation5mTokens,
 					CacheCreation1hTokens:    cacheCreation1hTokens,
 					CacheReadTokens:          cacheReadTokens,
@@ -164,7 +168,7 @@ func (ut *UsageTracker) recordRequestFinalFailure(requestID, modelName, status, 
 
 	// 处理Token信息（失败/取消时可能有也可能没有）
 	var inputTokens, outputTokens, reasoningTokens, billableOutputTokens, cacheCreationTokens, cacheReadTokens int64
-	var cacheCreation5mTokens, cacheCreation1hTokens int64 // 🔧 [修复] 2025-12-11: 添加 5m/1h 缓存字段
+	var cacheCreation5mTokens, cacheCreation1hTokens, cacheWrite30mTokens, cacheWrite12hTokens int64 // 🔧 [修复] 2025-12-11: 添加 5m/1h 缓存字段
 	var billingOutputTokenSource string
 	inputIncludesCacheRead := false
 	if tokens != nil {
@@ -174,6 +178,8 @@ func (ut *UsageTracker) recordRequestFinalFailure(requestID, modelName, status, 
 		billableOutputTokens = ResolveBillableOutputTokens(tokens)
 		billingOutputTokenSource = tokens.BillingOutputTokenSource
 		cacheCreationTokens = tokens.CacheCreationTokens
+		cacheWrite30mTokens = tokens.CacheWrite30mTokens
+		cacheWrite12hTokens = tokens.CacheWrite12hTokens
 		cacheCreation5mTokens = tokens.CacheCreation5mTokens
 		cacheCreation1hTokens = tokens.CacheCreation1hTokens
 		cacheReadTokens = tokens.CacheReadTokens
@@ -195,6 +201,8 @@ func (ut *UsageTracker) recordRequestFinalFailure(requestID, modelName, status, 
 			BillableOutputTokens:     billableOutputTokens,
 			BillingOutputTokenSource: billingOutputTokenSource,
 			CacheCreationTokens:      cacheCreationTokens,
+			CacheWrite30mTokens:      cacheWrite30mTokens,
+			CacheWrite12hTokens:      cacheWrite12hTokens,
 			CacheCreation5mTokens:    cacheCreation5mTokens,
 			CacheCreation1hTokens:    cacheCreation1hTokens,
 			CacheReadTokens:          cacheReadTokens,

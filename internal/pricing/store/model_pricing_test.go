@@ -197,6 +197,7 @@ func newModelPricingTestStore(t *testing.T) *SQLiteModelPricingStore {
 
 	if _, err = db.Exec(`
 CREATE TABLE model_pricing (
+ cache_write_price_30m REAL NOT NULL DEFAULT 0, cache_write_price_12h REAL NOT NULL DEFAULT 0, long_context_cache_write_price_12h REAL NOT NULL DEFAULT 0,
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     model_name TEXT NOT NULL,
     provider TEXT NOT NULL DEFAULT 'claude',

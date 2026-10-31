@@ -193,6 +193,13 @@ func TestUsageDashboardPricingIncludesCacheAndUnknownModelsStayUnpriced(t *testi
 	if !known || math.Abs(cost-.00048) > 1e-12 {
 		t.Fatalf("cache cost=%f known=%v", cost, known)
 	}
+	call.CacheWrite = 10
+	price.CacheWritePrice30m, price.CacheWritePrice12h = 1.25, 99
+	cost, _ = dashboardLocalCost(call, price)
+	if math.Abs(cost-.0004925) > 1e-12 {
+		t.Fatalf("local estimates must use 30m write prices without TTL counters: %.8f", cost)
+	}
+	call.CacheWrite = 0
 	price.LongContextThreshold = 99
 	price.LongContextInputPrice = 30
 	price.LongContextOutputPrice = 40

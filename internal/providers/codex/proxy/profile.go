@@ -239,11 +239,15 @@ func profileUsage(result *TokenResult) (tokens, cached int64) {
 	return result.InputTokens + result.OutputTokens, result.CacheReadTokens
 }
 
-func codexAttemptUsage(result *TokenResult, complete bool) routing.AttemptUsage {
+func codexAttemptUsage(result *TokenResult, complete bool, requestedTier ...string) routing.AttemptUsage {
 	if result == nil {
 		return routing.AttemptUsage{Complete: complete}
 	}
-	return routing.AttemptUsage{Known: true, Complete: complete, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, ReasoningTokens: result.ReasoningTokens, CacheReadTokens: result.CacheReadTokens, CacheCreationTokens: result.CacheWriteTokens, InputIncludesCacheRead: true, ServiceTier: result.ServiceTier}
+	tier := ""
+	if len(requestedTier) > 0 {
+		tier = requestedTier[0]
+	}
+	return routing.AttemptUsage{RequestedServiceTier: tier, CacheWrite30mTokens: result.CacheWrite30mTokens, CacheWrite12hTokens: result.CacheWrite12hTokens, Known: true, Complete: complete, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, ReasoningTokens: result.ReasoningTokens, CacheReadTokens: result.CacheReadTokens, CacheCreationTokens: result.CacheWriteTokens, InputIncludesCacheRead: true, ServiceTier: result.ServiceTier}
 }
 
 func codexProfileProtocolSuccess(path string, data []byte) bool {
@@ -412,7 +416,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			if resp.StatusCode >= 400 {
 				raw, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				attempt.SetUsage(codexAttemptUsage(h.tokenParser.ParseNonStreaming(raw), true))
+				attempt.SetUsage(codexAttemptUsage(h.tokenParser.ParseNonStreaming(raw), true, extractServiceTier(body)))
 				h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, raw)
 				failure := codexRouteFailure(resp.StatusCode, raw, nil)
 				code, kind, _ := routing.ErrorIdentity(raw)
@@ -465,7 +469,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 							quotaFailure = true
 						}
 					}
-					attempt.SetUsage(codexAttemptUsage(observed.usage, success))
+					attempt.SetUsage(codexAttemptUsage(observed.usage, success, extractServiceTier(body)))
 					finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
 					if streamErr != nil {
 						annotateLastChainError(&chain, 0, streamErr.Error(), resp.Header, false)
@@ -499,7 +503,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, raw)
 			success := readErr == nil && codexProfileProtocolSuccess(subscription.Path(sendRequest), raw)
 			usage := h.tokenParser.ParseNonStreaming(raw)
-			attempt.SetUsage(codexAttemptUsage(usage, success))
+			attempt.SetUsage(codexAttemptUsage(usage, success, extractServiceTier(body)))
 			tokens, cached := profileUsage(usage)
 			attempt.SetCachedTokens(cached)
 			if !success {

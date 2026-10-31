@@ -29,6 +29,38 @@ func TestNormalizeCodexBillingRulesRequiresDefaultAndNormalizesSelectors(t *test
 	}
 }
 
+func TestNormalizeCodexBillingRuleGroupRelationship(t *testing.T) {
+	for _, mode := range []string{"", "override", " Inherit ", "invalid"} {
+		t.Run(mode, func(t *testing.T) {
+			rules, err := normalizeCodexBillingRules([]store.CodexBillingRuleRecord{{Mode: tracking.BillingRuleModeFixed, GroupMultiplierMode: mode}})
+			if mode == "invalid" {
+				require.ErrorContains(t, err, "分组倍率关系")
+				return
+			}
+			require.NoError(t, err)
+			want := tracking.BillingGroupMultiplierOverride
+			if mode == " Inherit " {
+				want = tracking.BillingGroupMultiplierInherit
+			}
+			require.Equal(t, want, rules[0].GroupMultiplierMode)
+		})
+	}
+}
+
+func TestNormalizeCodexAddedRulesAlwaysUseGroupInheritance(t *testing.T) {
+	rules, err := normalizeCodexBillingRules([]store.CodexBillingRuleRecord{
+		{Mode: "fixed", InputPrice: 2},
+		{Model: "gpt-6.1-sol", ServiceTier: "priority", Context: "normal", Mode: "fixed", InputPrice: 4},
+		{Model: "gpt-6.1-sol", ServiceTier: "fast", Context: "long", Mode: "fixed", GroupMultiplierMode: "override", InputPrice: 8},
+		{Model: "other", Mode: "fixed", GroupMultiplierMode: "override", InputPrice: 2},
+	})
+	require.NoError(t, err)
+	require.Equal(t, tracking.BillingGroupMultiplierOverride, rules[0].GroupMultiplierMode)
+	require.Equal(t, tracking.BillingGroupMultiplierInherit, rules[1].GroupMultiplierMode)
+	require.Equal(t, tracking.BillingGroupMultiplierInherit, rules[2].GroupMultiplierMode)
+	require.Equal(t, tracking.BillingGroupMultiplierInherit, rules[3].GroupMultiplierMode)
+}
+
 func TestCodexCredentialGroupDeletion(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

@@ -10,6 +10,10 @@ import (
 
 // ModelPricingInfo 模型定价信息（给前端用的结构体）
 type ModelPricingInfo struct {
+	CacheWritePrice30m            float64 `json:"cache_write_price_30m"`
+	CacheWritePrice12h            float64 `json:"cache_write_price_12h"`
+	LongContextCacheWritePrice12h float64 `json:"long_context_cache_write_price_12h"`
+
 	ID                         int64   `json:"id"`
 	ModelName                  string  `json:"model_name"`
 	Provider                   string  `json:"provider"`     // 提供商: claude/codex
@@ -33,6 +37,10 @@ type ModelPricingInfo struct {
 
 // CreateModelPricingInput 创建模型定价的输入参数
 type CreateModelPricingInput struct {
+	CacheWritePrice30m            float64 `json:"cache_write_price_30m"`
+	CacheWritePrice12h            float64 `json:"cache_write_price_12h"`
+	LongContextCacheWritePrice12h float64 `json:"long_context_cache_write_price_12h"`
+
 	// ID 仅更新时使用。带 ID 时按 ID 精确定位，因此编辑中改 provider 或改档位都能命中原行；
 	// 不带则按 (provider, model_name, service_tier) 三元组定位。
 	ID                         int64   `json:"id"`
@@ -210,22 +218,25 @@ func (a *App) CreateModelPricing(input CreateModelPricingInput) error {
 	}
 
 	record := &pricingstore.ModelPricingRecord{
-		ModelName:                  input.ModelName,
-		Provider:                   provider,
-		ServiceTier:                input.ServiceTier,
-		DisplayName:                input.DisplayName,
-		Description:                input.Description,
-		InputPrice:                 input.InputPrice,
-		OutputPrice:                input.OutputPrice,
-		CacheCreationPrice5m:       input.CacheCreationPrice5m,
-		CacheCreationPrice1h:       input.CacheCreationPrice1h,
-		CacheReadPrice:             input.CacheReadPrice,
-		LongContextThreshold:       input.LongContextThreshold,
-		LongContextInputPrice:      input.LongContextInputPrice,
-		LongContextCacheReadPrice:  input.LongContextCacheReadPrice,
-		LongContextCacheWritePrice: input.LongContextCacheWritePrice,
-		LongContextOutputPrice:     input.LongContextOutputPrice,
-		IsDefault:                  input.IsDefault,
+		ModelName:                     input.ModelName,
+		Provider:                      provider,
+		ServiceTier:                   input.ServiceTier,
+		CacheWritePrice30m:            input.CacheWritePrice30m,
+		CacheWritePrice12h:            input.CacheWritePrice12h,
+		LongContextCacheWritePrice12h: input.LongContextCacheWritePrice12h,
+		DisplayName:                   input.DisplayName,
+		Description:                   input.Description,
+		InputPrice:                    input.InputPrice,
+		OutputPrice:                   input.OutputPrice,
+		CacheCreationPrice5m:          input.CacheCreationPrice5m,
+		CacheCreationPrice1h:          input.CacheCreationPrice1h,
+		CacheReadPrice:                input.CacheReadPrice,
+		LongContextThreshold:          input.LongContextThreshold,
+		LongContextInputPrice:         input.LongContextInputPrice,
+		LongContextCacheReadPrice:     input.LongContextCacheReadPrice,
+		LongContextCacheWritePrice:    input.LongContextCacheWritePrice,
+		LongContextOutputPrice:        input.LongContextOutputPrice,
+		IsDefault:                     input.IsDefault,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -262,23 +273,26 @@ func (a *App) UpdateModelPricing(modelName string, input CreateModelPricingInput
 	}
 
 	record := &pricingstore.ModelPricingRecord{
-		ID:                         input.ID,
-		ModelName:                  modelName, // 使用参数中的 modelName
-		Provider:                   provider,
-		ServiceTier:                input.ServiceTier,
-		DisplayName:                input.DisplayName,
-		Description:                input.Description,
-		InputPrice:                 input.InputPrice,
-		OutputPrice:                input.OutputPrice,
-		CacheCreationPrice5m:       input.CacheCreationPrice5m,
-		CacheCreationPrice1h:       input.CacheCreationPrice1h,
-		CacheReadPrice:             input.CacheReadPrice,
-		LongContextThreshold:       input.LongContextThreshold,
-		LongContextInputPrice:      input.LongContextInputPrice,
-		LongContextCacheReadPrice:  input.LongContextCacheReadPrice,
-		LongContextCacheWritePrice: input.LongContextCacheWritePrice,
-		LongContextOutputPrice:     input.LongContextOutputPrice,
-		IsDefault:                  input.IsDefault,
+		ID:                            input.ID,
+		ModelName:                     modelName, // 使用参数中的 modelName
+		Provider:                      provider,
+		ServiceTier:                   input.ServiceTier,
+		CacheWritePrice30m:            input.CacheWritePrice30m,
+		CacheWritePrice12h:            input.CacheWritePrice12h,
+		LongContextCacheWritePrice12h: input.LongContextCacheWritePrice12h,
+		DisplayName:                   input.DisplayName,
+		Description:                   input.Description,
+		InputPrice:                    input.InputPrice,
+		OutputPrice:                   input.OutputPrice,
+		CacheCreationPrice5m:          input.CacheCreationPrice5m,
+		CacheCreationPrice1h:          input.CacheCreationPrice1h,
+		CacheReadPrice:                input.CacheReadPrice,
+		LongContextThreshold:          input.LongContextThreshold,
+		LongContextInputPrice:         input.LongContextInputPrice,
+		LongContextCacheReadPrice:     input.LongContextCacheReadPrice,
+		LongContextCacheWritePrice:    input.LongContextCacheWritePrice,
+		LongContextOutputPrice:        input.LongContextOutputPrice,
+		IsDefault:                     input.IsDefault,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -386,23 +400,26 @@ func (a *App) pricingRecordToInfo(r *pricingstore.ModelPricingRecord) ModelPrici
 	}
 
 	info := ModelPricingInfo{
-		ID:                         r.ID,
-		ModelName:                  r.ModelName,
-		Provider:                   provider,
-		ServiceTier:                r.ServiceTier,
-		DisplayName:                r.DisplayName,
-		Description:                r.Description,
-		InputPrice:                 r.InputPrice,
-		OutputPrice:                r.OutputPrice,
-		CacheCreationPrice5m:       r.CacheCreationPrice5m,
-		CacheCreationPrice1h:       r.CacheCreationPrice1h,
-		CacheReadPrice:             r.CacheReadPrice,
-		LongContextThreshold:       r.LongContextThreshold,
-		LongContextInputPrice:      r.LongContextInputPrice,
-		LongContextCacheReadPrice:  r.LongContextCacheReadPrice,
-		LongContextCacheWritePrice: r.LongContextCacheWritePrice,
-		LongContextOutputPrice:     r.LongContextOutputPrice,
-		IsDefault:                  r.IsDefault,
+		ID:                            r.ID,
+		ModelName:                     r.ModelName,
+		Provider:                      provider,
+		ServiceTier:                   r.ServiceTier,
+		CacheWritePrice30m:            r.CacheWritePrice30m,
+		CacheWritePrice12h:            r.CacheWritePrice12h,
+		LongContextCacheWritePrice12h: r.LongContextCacheWritePrice12h,
+		DisplayName:                   r.DisplayName,
+		Description:                   r.Description,
+		InputPrice:                    r.InputPrice,
+		OutputPrice:                   r.OutputPrice,
+		CacheCreationPrice5m:          r.CacheCreationPrice5m,
+		CacheCreationPrice1h:          r.CacheCreationPrice1h,
+		CacheReadPrice:                r.CacheReadPrice,
+		LongContextThreshold:          r.LongContextThreshold,
+		LongContextInputPrice:         r.LongContextInputPrice,
+		LongContextCacheReadPrice:     r.LongContextCacheReadPrice,
+		LongContextCacheWritePrice:    r.LongContextCacheWritePrice,
+		LongContextOutputPrice:        r.LongContextOutputPrice,
+		IsDefault:                     r.IsDefault,
 	}
 
 	if !r.CreatedAt.IsZero() {

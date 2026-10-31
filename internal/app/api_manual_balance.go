@@ -171,8 +171,8 @@ func (a *App) settleManualBalance(s *routingstore.ProfileStore, settlement routi
 		}
 	}
 	u := settlement.Usage
-	usage := &tracking.TokenUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, ReasoningTokens: u.ReasoningTokens, CacheReadTokens: u.CacheReadTokens, CacheCreationTokens: u.CacheCreationTokens, CacheCreation5mTokens: u.CacheCreation5mTokens, CacheCreation1hTokens: u.CacheCreation1hTokens, InputIncludesCacheRead: u.InputIncludesCacheRead}
-	cost, priced := a.usageTracker.CalculateAttemptCost(c.Provider, channel, group, endpoint, c.Identity().Model, u.ServiceTier, usage)
+	usage := &tracking.TokenUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, ReasoningTokens: u.ReasoningTokens, CacheReadTokens: u.CacheReadTokens, CacheCreationTokens: u.CacheCreationTokens, CacheWrite30mTokens: u.CacheWrite30mTokens, CacheWrite12hTokens: u.CacheWrite12hTokens, CacheCreation5mTokens: u.CacheCreation5mTokens, CacheCreation1hTokens: u.CacheCreation1hTokens, InputIncludesCacheRead: u.InputIncludesCacheRead}
+	cost, priced := a.usageTracker.CalculateAttemptCost(c.Provider, channel, group, endpoint, c.Identity().Model, u.ServiceTier, usage, u.RequestedServiceTier)
 	if _, err := routing.CostToUSD(cost); err != nil {
 		cost, priced = 0, false
 	}

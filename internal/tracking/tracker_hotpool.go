@@ -166,8 +166,18 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 	return ut.hotPool.Update(requestID, func(req *ActiveRequest) {
 		req.BillingRules = append([]BillingRule(nil), mult.BillingRules...)
 		req.BillingRulesCaptured = true
+		req.ServiceTierSource = NormalizeServiceTierSource(mult.ServiceTierSource)
+		if req.Provider == "codex" {
+			req.ServiceTierSource = billingServiceTierSource(mult)
+		}
+		req.CacheWriteTTLPricing = mult.CacheWriteTTLPricing
+		resolveActiveRequestServiceTier(req)
 		req.BillingRuleSnapshot = ""
+		req.BillingGroupMultiplier = nil
 		if len(mult.BillingRules) > 0 {
+			groupSnapshot := DefaultEndpointMultiplier()
+			copyBillingGroupMultipliers(&groupSnapshot, mult)
+			req.BillingGroupMultiplier = &groupSnapshot
 			billingOutputTokenSource := mult.BillingOutputTokenSource
 			mult = DefaultEndpointMultiplier()
 			mult.BillingOutputTokenSource = billingOutputTokenSource

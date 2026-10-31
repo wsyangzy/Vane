@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+func previousHistoryMonthStart(now time.Time) time.Time {
+	// Anchor to day 1 so subtracting a month cannot overflow a shorter month.
+	return time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location())
+}
+
 func newHistoryArchiveTestTracker(t *testing.T) (*UsageTracker, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -73,7 +78,7 @@ func TestNewUsageTrackerArchivesClosedMonthsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create first tracker: %v", err)
 	}
-	oldMonth := first.now().AddDate(0, -1, 0).Format("2006-01")
+	oldMonth := previousHistoryMonthStart(first.now()).Format("2006-01")
 	insertHistoryRequest(t, first, "startup-archive", oldMonth+"-15 10:00:00", "completed", "claude", 0)
 	if err := first.Close(); err != nil {
 		t.Fatalf("close first tracker: %v", err)
@@ -107,7 +112,7 @@ func TestNewUsageTrackerArchivesClosedMonthsOnStartup(t *testing.T) {
 
 func TestArchiveOldestClosedMonthMovesOnlyTrackingData(t *testing.T) {
 	tracker, archiveDir := newHistoryArchiveTestTracker(t)
-	oldMonth := tracker.now().AddDate(0, -1, 0).Format("2006-01")
+	oldMonth := previousHistoryMonthStart(tracker.now()).Format("2006-01")
 	oldDay := oldMonth + "-15"
 	today := tracker.now().Format("2006-01-02")
 	insertHistoryRequest(t, tracker, "archive-old", oldDay+" 10:00:00", "completed", "codex", 0)
@@ -158,7 +163,7 @@ func TestArchiveOldestClosedMonthMovesOnlyTrackingData(t *testing.T) {
 
 func TestArchiveClosedMonthLeavesNonTerminalRequestActive(t *testing.T) {
 	tracker, archiveDir := newHistoryArchiveTestTracker(t)
-	oldMonth := tracker.now().AddDate(0, -1, 0).Format("2006-01")
+	oldMonth := previousHistoryMonthStart(tracker.now()).Format("2006-01")
 	oldDay := oldMonth + "-15"
 	insertHistoryRequest(t, tracker, "archive-complete", oldDay+" 10:00:00", "completed", "claude", 0)
 	insertHistoryRequest(t, tracker, "archive-pending", oldDay+" 11:00:00", "pending", "claude", 0)
@@ -196,7 +201,7 @@ func TestArchiveClosedMonthLeavesNonTerminalRequestActive(t *testing.T) {
 
 func TestHistoryRecoveryKeepsActiveDuplicate(t *testing.T) {
 	tracker, archiveDir := newHistoryArchiveTestTracker(t)
-	oldDay := tracker.now().AddDate(0, -1, 0).Format("2006-01") + "-15"
+	oldDay := previousHistoryMonthStart(tracker.now()).Format("2006-01") + "-15"
 	insertHistoryRequest(t, tracker, "archive-duplicate", oldDay+" 10:00:00", "completed", "claude", 0)
 	if _, moved, err := tracker.archiveOldestClosedMonth(context.Background()); err != nil || !moved {
 		t.Fatalf("archive request: moved=%v err=%v", moved, err)
@@ -306,7 +311,7 @@ func TestUsageStatsTotalsCachesArchiveMonths(t *testing.T) {
 
 func TestMonthlyArchiveIncludesLegacyTerminalStatuses(t *testing.T) {
 	tracker, archiveDir := newHistoryArchiveTestTracker(t)
-	oldMonth := tracker.now().AddDate(0, -1, 0).Format("2006-01")
+	oldMonth := previousHistoryMonthStart(tracker.now()).Format("2006-01")
 	oldDay := oldMonth + "-15"
 	insertHistoryRequest(t, tracker, "archive-legacy", oldDay+" 10:00:00", "partial_recovery", "codex", 0)
 
@@ -328,7 +333,7 @@ func TestMonthlyArchiveIncludesLegacyTerminalStatuses(t *testing.T) {
 
 func TestHistoryQueriesMergeActiveAndArchive(t *testing.T) {
 	tracker, _ := newHistoryArchiveTestTracker(t)
-	oldTime := tracker.now().AddDate(0, -1, 0)
+	oldTime := previousHistoryMonthStart(tracker.now())
 	oldDay := oldTime.Format("2006-01-02")
 	currentTime := tracker.now()
 	insertHistoryRequest(t, tracker, "history-query-old", oldDay+" 10:00:00", "completed", "codex", 0)

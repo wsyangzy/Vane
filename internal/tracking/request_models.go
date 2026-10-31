@@ -93,6 +93,8 @@ type RequestCompleteData struct {
 
 // TokenUsage token使用统计
 type TokenUsage struct {
+	CacheWrite30mTokens      int64
+	CacheWrite12hTokens      int64
 	InputTokens              int64
 	OutputTokens             int64
 	ReasoningTokens          int64
@@ -108,6 +110,8 @@ type TokenUsage struct {
 // UpdateOptions 统一的请求更新选项
 // 支持可选字段更新，只更新非nil的字段
 type UpdateOptions struct {
+	RequestedServiceTier *string
+	ResponseServiceTier  *string
 	EndpointName         *string        // 端点名称
 	EndpointChain        *string        // 端点链路（形如 "A -> B -> C"）
 	Channel              *string        // 渠道标签

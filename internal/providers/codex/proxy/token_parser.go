@@ -16,14 +16,16 @@ import (
 
 // TokenResult 解析结果
 type TokenResult struct {
-	InputTokens      int64
-	OutputTokens     int64
-	ReasoningTokens  int64
-	TotalTokens      int64
-	CacheReadTokens  int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
-	CacheWriteTokens int64 // GPT-5.6+ cache_write_tokens（写入缓存的输入部分）
-	Model            string
-	ServiceTier      string
+	CacheWrite30mTokens int64
+	CacheWrite12hTokens int64
+	InputTokens         int64
+	OutputTokens        int64
+	ReasoningTokens     int64
+	TotalTokens         int64
+	CacheReadTokens     int64 // Responses API 中的 cached_tokens（输入命中缓存的部分）
+	CacheWriteTokens    int64 // GPT-5.6+ cache_write_tokens（写入缓存的输入部分）
+	Model               string
+	ServiceTier         string
 }
 
 // UpstreamStreamError 表示 OpenAI/Codex 以 HTTP 200 SSE 流返回的错误事件。
@@ -89,14 +91,21 @@ func tokenCountValue(v flexibleTokenCount) int64 {
 
 // openAIInputTokensDetails Responses API 输入 token 详情
 type openAIInputTokensDetails struct {
-	CachedTokens     flexibleTokenCount `json:"cached_tokens"`
-	CacheWriteTokens flexibleTokenCount `json:"cache_write_tokens"`
+	CacheWriteTokensDetails *openAICacheWriteTokensDetails `json:"cache_write_tokens_details"`
+	CachedTokens            flexibleTokenCount             `json:"cached_tokens"`
+	CacheWriteTokens        flexibleTokenCount             `json:"cache_write_tokens"`
 }
 
 // openAIPromptTokensDetails Chat Completions API 中的提示词 token 详情（部分实现提供）
 type openAIPromptTokensDetails struct {
-	CachedTokens     flexibleTokenCount `json:"cached_tokens"`
-	CacheWriteTokens flexibleTokenCount `json:"cache_write_tokens"`
+	CacheWriteTokensDetails *openAICacheWriteTokensDetails `json:"cache_write_tokens_details"`
+	CachedTokens            flexibleTokenCount             `json:"cached_tokens"`
+	CacheWriteTokens        flexibleTokenCount             `json:"cache_write_tokens"`
+}
+
+type openAICacheWriteTokensDetails struct {
+	TTL30mTokens flexibleTokenCount `json:"ttl_30m_tokens"`
+	TTL12hTokens flexibleTokenCount `json:"ttl_12h_tokens"`
 }
 
 // openAIOutputTokensDetails Responses API 输出 token 详情
@@ -243,6 +252,24 @@ func buildResult(model, serviceTier string, usage *openAIUsage) *TokenResult {
 	}
 	input, output, cacheRead, cacheWrite, reasoning := resolveUsage(usage)
 	// 容错：如果两种字段都未提供任何 token，视为无效（避免污染数据）
+	var writeDetails *openAICacheWriteTokensDetails
+	if usage.InputTokensDetails != nil {
+		writeDetails = usage.InputTokensDetails.CacheWriteTokensDetails
+	}
+	if writeDetails == nil && usage.InputTokenDetails != nil {
+		writeDetails = usage.InputTokenDetails.CacheWriteTokensDetails
+	}
+	if writeDetails == nil && usage.PromptTokensDetails != nil {
+		writeDetails = usage.PromptTokensDetails.CacheWriteTokensDetails
+	}
+	var write30m, write12h int64
+	if writeDetails != nil {
+		write30m = tokenCountValue(writeDetails.TTL30mTokens)
+		write12h = tokenCountValue(writeDetails.TTL12hTokens)
+		if cacheWrite == 0 && write30m >= 0 && write12h >= 0 && write30m <= input && write12h <= input-write30m {
+			cacheWrite = write30m + write12h
+		}
+	}
 	if input == 0 && output == 0 && cacheRead == 0 && cacheWrite == 0 && reasoning == 0 && usage.TotalTokens == 0 {
 		return nil
 	}
@@ -251,14 +278,16 @@ func buildResult(model, serviceTier string, usage *openAIUsage) *TokenResult {
 		total = input + output
 	}
 	return &TokenResult{
-		InputTokens:      input,
-		OutputTokens:     output,
-		ReasoningTokens:  reasoning,
-		TotalTokens:      total,
-		CacheReadTokens:  cacheRead,
-		CacheWriteTokens: cacheWrite,
-		Model:            model,
-		ServiceTier:      strings.ToLower(strings.TrimSpace(serviceTier)),
+		InputTokens:         input,
+		OutputTokens:        output,
+		ReasoningTokens:     reasoning,
+		TotalTokens:         total,
+		CacheReadTokens:     cacheRead,
+		CacheWriteTokens:    cacheWrite,
+		CacheWrite30mTokens: write30m,
+		CacheWrite12hTokens: write12h,
+		Model:               model,
+		ServiceTier:         strings.ToLower(strings.TrimSpace(serviceTier)),
 	}
 }
 

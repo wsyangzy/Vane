@@ -76,6 +76,8 @@ func (m *schemaMigrator) ensureCodexChannelsSchema(ctx context.Context, db *sql.
 				UPDATE codex_channels SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00' WHERE id = NEW.id;
 			END`,
 		`CREATE TABLE IF NOT EXISTS codex_credential_groups (
+    service_tier_source TEXT NOT NULL DEFAULT 'response',
+    cache_write_ttl_pricing INTEGER NOT NULL DEFAULT 0,
 				enabled INTEGER NOT NULL DEFAULT 1,
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 				channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,
@@ -237,6 +239,8 @@ func (m *schemaMigrator) ensureCodexCredentialGroupSchema(ctx context.Context, d
 	}{
 		{"codex_endpoints", "credential_group_id", `ALTER TABLE codex_endpoints ADD COLUMN credential_group_id INTEGER`},
 		{"codex_endpoints", "api_key", `ALTER TABLE codex_endpoints ADD COLUMN api_key TEXT NOT NULL DEFAULT ''`},
+		{"codex_credential_groups", "service_tier_source", `ALTER TABLE codex_credential_groups ADD COLUMN service_tier_source TEXT NOT NULL DEFAULT 'response'`},
+		{"codex_credential_groups", "cache_write_ttl_pricing", `ALTER TABLE codex_credential_groups ADD COLUMN cache_write_ttl_pricing INTEGER NOT NULL DEFAULT 0`},
 		{"codex_credential_groups", "enabled", `ALTER TABLE codex_credential_groups ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1`},
 		{"codex_credential_groups", "daily_cost_limit_usd", `ALTER TABLE codex_credential_groups ADD COLUMN daily_cost_limit_usd REAL NOT NULL DEFAULT 0`},
 		{"codex_credential_groups", "model_policy", `ALTER TABLE codex_credential_groups ADD COLUMN model_policy TEXT NOT NULL DEFAULT 'inherit'`},

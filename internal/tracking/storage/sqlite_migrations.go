@@ -522,6 +522,9 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 	if err := s.rebuildModelPricingForProviderTierUnique(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureCodexCacheWritePrices(ctx); err != nil {
+		return err
+	}
 
 	return nil
 }

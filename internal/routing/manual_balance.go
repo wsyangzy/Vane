@@ -118,6 +118,9 @@ type AttemptUsage struct {
 	CacheReadTokens, CacheCreationTokens, CacheCreation5mTokens, CacheCreation1hTokens int64
 	InputIncludesCacheRead                                                             bool
 	ServiceTier                                                                        string
+	RequestedServiceTier                                                               string
+	CacheWrite30mTokens                                                                int64
+	CacheWrite12hTokens                                                                int64
 }
 
 type AttemptSettlement struct {

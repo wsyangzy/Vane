@@ -81,6 +81,8 @@ func buildCodexCredentialGroupInfo(record *codexstore.CodexCredentialGroupRecord
 		BillingOutputTokenSource:               tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource),
 		ModelMultipliers:                       record.ModelMultipliers,
 		BillingRules:                           record.BillingRules,
+		ServiceTierSource:                      record.ServiceTierSource,
+		CacheWriteTTLPricing:                   record.CacheWriteTTLPricing,
 		CreatedAt:                              formatCodexTime(record.CreatedAt),
 		UpdatedAt:                              formatCodexTime(record.UpdatedAt),
 	}

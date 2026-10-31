@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	pricingservice "github.com/wsyangzy/Vane/internal/pricing/service"
 	pricingstore "github.com/wsyangzy/Vane/internal/pricing/store"
 	claudeservice "github.com/wsyangzy/Vane/internal/providers/claude/service"
 	claudestore "github.com/wsyangzy/Vane/internal/providers/claude/store"
@@ -137,7 +138,7 @@ func (a *App) initDefaultModelPricing(ctx context.Context) {
 			CacheCreationPrice1h: 0.50,  // 0.25 * 2.0
 			CacheReadPrice:       0.025, // 0.25 * 0.1
 		},
-		// ========== Codex 模型定价（OpenAI 格式，无 cache 概念）==========
+		// Codex 兼容模型与未知模型的兜底价；目录内模型由下方官方价格替换。
 		{
 			ModelName:   "o3",
 			DisplayName: "O3",
@@ -171,6 +172,22 @@ func (a *App) initDefaultModelPricing(ctx context.Context) {
 			IsDefault:   true,
 			Description: "Codex 默认定价方案",
 		},
+	}
+
+	// This path only runs for an empty pricing table. Seed published models with
+	// current official prices before backfill starts preserving existing rows.
+	catalog, err := pricingservice.OpenAIPriceCatalog()
+	if err != nil {
+		a.logger.Error("读取初始官方价格失败", "error", err)
+		return
+	}
+	for i, seed := range defaultPricings {
+		for _, official := range catalog.Records {
+			if seed.Provider == official.Provider && seed.ModelName == official.ModelName && seed.ServiceTier == official.ServiceTier {
+				defaultPricings[i] = official
+				break
+			}
+		}
 	}
 
 	if err := a.modelPricingStore.BatchUpsert(ctx, defaultPricings); err != nil {
@@ -376,6 +393,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					groupDisableLongContextPricing := false
 					groupModelMultipliers := []tracking.ModelMultiplier(nil)
 					groupBillingRules := []tracking.BillingRule(nil)
+					groupTierSource, groupCacheTTL := "response", false
 					billingOutputTokenSource := "output_tokens"
 					if group != nil {
 						groupName = group.Name
@@ -392,6 +410,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						groupDisableLongContextPricing = group.DisableLongContextPricing
 						groupModelMultipliers = codexModelMultipliersToTracking(group.ModelMultipliers)
 						groupBillingRules = codexBillingRulesToTracking(group.BillingRules)
+						groupTierSource, groupCacheTTL = group.ServiceTierSource, group.CacheWriteTTLPricing
 						billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(group.BillingOutputTokenSource)
 					}
 					if groupName == "" && ep.CredentialGroupID > 0 {
@@ -415,6 +434,8 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 						BillingOutputTokenSource:               billingOutputTokenSource,
 						ModelMultipliers:                       mergeTrackingModelMultipliers(codexModelMultipliersToTracking(ep.ModelMultipliers), groupModelMultipliers),
 						BillingRules:                           groupBillingRules,
+						ServiceTierSource:                      groupTierSource,
+						CacheWriteTTLPricing:                   groupCacheTTL,
 					}
 					legacyKey := tracking.EndpointMultiplierKey("codex", ch.Name, ep.Name)
 					groupKey := tracking.EndpointMultiplierGroupKey("codex", ch.Name, groupName, ep.Name)
@@ -491,6 +512,7 @@ func codexBillingRulesToTracking(records []codexstore.CodexBillingRuleRecord) []
 			ServiceTier:                 record.ServiceTier,
 			Context:                     record.Context,
 			Mode:                        record.Mode,
+			GroupMultiplierMode:         record.GroupMultiplierMode,
 			CostMultiplier:              record.CostMultiplier,
 			InputCostMultiplier:         record.InputCostMultiplier,
 			OutputCostMultiplier:        record.OutputCostMultiplier,
