@@ -110,6 +110,10 @@ test('bundled release catalog starts with the current version and keeps entries 
   assert.equal(normalizeReleaseVersion(catalog.currentVersion), normalizeReleaseVersion(versionMatch[1]));
   assert.equal(new Set(versions).size, versions.length);
   assert.equal(versions[0], normalizeReleaseVersion(catalog.currentVersion));
-  assert.equal(summary.message.length, 5);
+  const expectedItemCount = catalog.releases[0].sections.reduce(
+    (count, section) => count + section.items.length, 0
+  );
+  assert.ok(expectedItemCount > 0);
+  assert.equal(summary.message.length, expectedItemCount);
   assert.ok(summary.message.every((item) => item.length <= 48));
 });
