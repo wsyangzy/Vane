@@ -17,6 +17,29 @@ export const FIXED_PRICE_FIELDS = [
 
 const read = (rule, camel, snake, fallback) => rule?.[camel] ?? rule?.[snake] ?? fallback;
 const longKey = (key) => `longContext${key[0].toUpperCase()}${key.slice(1)}`;
+const savedGroupMultiplierMode = (rule) => {
+  if (!isCatchAllRule(rule)) return 'inherit';
+  const explicit = read(rule, 'groupMultiplierMode', 'group_multiplier_mode', '');
+  if (explicit === 'inherit' || explicit === 'override') return explicit;
+  return isCatchAllRule(rule) ? 'override' : 'inherit';
+};
+
+export const getBillingRuleEffectiveMultipliers = (row, group = {}, longContext = false) => {
+  const fieldKey = (key) => longContext ? longKey(key) : key;
+  const inherit = longContext || !isCatchAllRule({ ...row, context: row?.baseContext })
+    || row?.groupMultiplierMode !== 'override';
+  const fixed = row?.[fieldKey('mode')] === 'fixed';
+  const positive = (value) => {
+    const parsed = parseMultiplierExpression(value, Number.NaN);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  };
+  const groupTotal = inherit ? positive(group.costMultiplier) : 1;
+  const ruleTotal = fixed ? 1 : positive(row?.[fieldKey('costMultiplier')]);
+  const factors = Object.fromEntries(MULTIPLIER_FIELDS.slice(1).map(({ key }) => [key,
+    (inherit ? positive(group[key]) : 1) * (fixed ? 1 : positive(row?.[fieldKey(key)]))
+  ]));
+  return { inherit, fixed, groupTotal, ruleTotal, total: groupTotal * ruleTotal, ...factors };
+};
 const selectorKey = (rule) => JSON.stringify([
   String(read(rule, 'model', 'model', '')).trim(),
   String(read(rule, 'serviceTier', 'service_tier', '')).trim()
@@ -43,9 +66,11 @@ export const createBillingRuleRow = (rule = {}, longRule = null) => ({
   serviceTier: String(read(rule, 'serviceTier', 'service_tier', '')),
   baseContext: String(read(rule, 'context', 'context', '')),
   mode: read(rule, 'mode', 'mode', 'multiplier') === 'fixed' ? 'fixed' : 'multiplier',
+  groupMultiplierMode: isCatchAllRule(rule) ? read(rule, 'groupMultiplierMode', 'group_multiplier_mode', 'inherit') : 'inherit',
   ...readRuleFields(rule),
   longContextEnabled: Boolean(longRule),
   longContextMode: read(longRule, 'mode', 'mode', read(rule, 'mode', 'mode', 'multiplier')) === 'fixed' ? 'fixed' : 'multiplier',
+  longContextGroupMultiplierMode: 'inherit',
   ...readRuleFields(longRule, 'longContext')
 });
 
@@ -53,12 +78,24 @@ const isCatchAllRule = (rule) => !String(read(rule, 'model', 'model', '')).trim(
   && !String(read(rule, 'serviceTier', 'service_tier', '')).trim()
   && !String(read(rule, 'context', 'context', '')).trim();
 
-export const buildInitialBillingRuleRows = (rules) => {
+export const buildInitialBillingRuleRows = (rules, group = null) => {
   if (!Array.isArray(rules) || rules.length === 0) return [];
 
   const longRules = new Map();
   const baseRules = [];
-  for (const rule of rules) {
+  for (const savedRule of rules) {
+    // Model/tier/context rules always inherit, including older override records.
+    // The old catch-all already contains the group rate and must not double it.
+    let rule = { ...savedRule, groupMultiplierMode: savedGroupMultiplierMode(savedRule) };
+    // A legacy default copied the group factors. Keep one source of those
+    // factors when the hidden default and the group still describe the same rate.
+    if (group && isCatchAllRule(rule) && rule.mode !== 'fixed' && rule.groupMultiplierMode === 'override'
+      && MULTIPLIER_FIELDS.every(({ key }) => {
+        const snake = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+        return parseMultiplierExpression(read(rule, key, snake, 1), 1) === parseMultiplierExpression(read(group, key, snake, 1), 1);
+      })) {
+      rule = { ...rule, groupMultiplierMode: 'inherit', ...Object.fromEntries(MULTIPLIER_FIELDS.map(({ key }) => [key, 1])) };
+    }
     if (String(read(rule, 'context', 'context', '')).trim() === 'long') {
       longRules.set(selectorKey(rule), rule);
     } else {
@@ -100,7 +137,9 @@ const parseRule = (row, mode, context, prefix = '') => {
     model: String(row?.model || '').trim(),
     serviceTier: String(row?.serviceTier || '').trim(),
     context,
-    mode
+    mode,
+    groupMultiplierMode: !context && !String(row?.model || '').trim() && !String(row?.serviceTier || '').trim()
+      && row?.groupMultiplierMode === 'override' ? 'override' : 'inherit'
   };
   const fields = mode === 'fixed' ? FIXED_PRICE_FIELDS : MULTIPLIER_FIELDS;
   for (const field of fields) {
@@ -126,6 +165,9 @@ export const parseBillingRuleRows = (rows) => {
   for (const row of rows) {
     const model = String(row?.model || '').trim();
     const serviceTier = String(row?.serviceTier || '').trim();
+    if (!model && !serviceTier && row?.baseContext === 'normal') {
+      return { error: '请为附加规则指定模型或服务档位' };
+    }
     const baseContext = !model && !serviceTier
       ? ''
       : (row?.baseContext === '' ? '' : 'normal');

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Calculator,
   Clock,
+  Database,
   Gauge,
   KeyRound,
   Layers3,
@@ -77,7 +78,10 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
   const modelMultipliers = group?.modelMultipliers || group?.model_multipliers || [];
 	const billingRules = group?.billingRules || group?.billing_rules || [];
 	const combinationBillingEnabled = provider === 'codex' && billingRules.length > 0;
+  const visibleBillingRules = billingRules.filter((rule) => String(rule.model || '').trim()
+    || String(rule.serviceTier ?? rule.service_tier ?? '').trim() || String(rule.context || '').trim());
   const longContextEnabled = !Boolean(group?.disableLongContextPricing ?? group?.disable_long_context_pricing);
+  const cacheWriteTTLPricing = Boolean(group?.cacheWriteTTLPricing ?? group?.cache_write_ttl_pricing);
 
   useEffect(() => {
     let cancelled = false;
@@ -153,27 +157,60 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
               )}
             </DetailMetricCard>
 
+            {provider === 'codex' && (
+              <>
+                <DetailMetricCard label="缓存写入计费" icon={Database} density="compact" wide>
+                  <div className="text-xs font-medium text-slate-700">{cacheWriteTTLPricing ? '按 30m / 12h 分档' : '统一按 30m'}</div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-500">
+                    {cacheWriteTTLPricing
+                      ? '按上游报告的时长用量分档；缺少 12h 单价或分档用量时回退 30m。'
+                      : '使用 30m 写入单价；未报告缓存写入用量时不额外计费。'}
+                  </p>
+                </DetailMetricCard>
+              </>
+            )}
+
 			{combinationBillingEnabled ? (
+			  <>
+			  <DetailMetricCard label="分组基础倍率" icon={Calculator} density="compact" wide>
+                <div className="flex flex-wrap gap-1.5">
+                  {standardMultiplierItems(provider, group).map(([label, value]) => <DetailChip key={label} mono variant={variant}><span className="mr-1 font-sans text-[10px] text-slate-500">{label}</span>{formatDetailMultiplier(value ?? 1)}</DetailChip>)}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">模型、档位及 Long context 规则始终叠加分组基础倍率。</p>
+                <p className="mt-1 text-[11px] text-slate-500">Long context：{longContextEnabled ? '已开启，按模型阈值匹配' : '已关闭，使用普通上下文单价和规则'}</p>
+			  </DetailMetricCard>
 			  <DetailMetricCard label="组合计费规则" icon={Calculator} density="compact" wide>
 				<div className="divide-y divide-slate-100">
-				  {billingRules.map((rule, index) => {
+				  {visibleBillingRules.map((rule, index) => {
 					const fixed = rule.mode === 'fixed';
-					const selector = [rule.model || '全部模型', rule.serviceTier || rule.service_tier || '全部档位', rule.context || '全部上下文'].join(' / ');
+					const tier = rule.serviceTier || rule.service_tier || '';
+					const tierLabel = { standard: 'Standard', default: 'Standard', batch: 'Batch', flex: 'Flex', fast: 'Fast', priority: 'Fast', ultrafast: 'Ultrafast' }[tier] || tier || '全部档位';
+					const contextLabel = { normal: '普通上下文', long: 'Long context' }[rule.context] || rule.context || '全部上下文';
+					const selector = [rule.model || '全部模型', tierLabel, contextLabel].join(' / ');
+                    const groupTotal = Number(group.costMultiplier ?? group.cost_multiplier ?? 1);
+                    const ruleTotal = fixed ? 1 : Number(rule.costMultiplier ?? rule.cost_multiplier ?? 1);
+                    const relationship = fixed ? `固定单价 × 分组总 ${formatDetailMultiplier(groupTotal)}`
+                      : `分组 ${formatDetailMultiplier(groupTotal)} × 规则 ${formatDetailMultiplier(ruleTotal)} = 总 ${formatDetailMultiplier(groupTotal * ruleTotal)}`;
 					const values = fixed
 					  ? `输入 $${rule.inputPrice ?? rule.input_price ?? 0} · 输出 $${rule.outputPrice ?? rule.output_price ?? 0} · 写入 $${rule.cacheCreationPrice ?? rule.cache_creation_price ?? 0} · 读取 $${rule.cacheReadPrice ?? rule.cache_read_price ?? 0}`
-					  : `总 ${formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)} · 输入 ${formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)} · 输出 ${formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)}`;
+					  : `总 ${formatDetailMultiplier(rule.costMultiplier ?? rule.cost_multiplier ?? 1)} · 输入 ${formatDetailMultiplier(rule.inputCostMultiplier ?? rule.input_cost_multiplier ?? 1)} · 输出 ${formatDetailMultiplier(rule.outputCostMultiplier ?? rule.output_cost_multiplier ?? 1)} · 缓存写入 ${formatDetailMultiplier(rule.cacheCreationCostMultiplier ?? rule.cache_creation_cost_multiplier ?? 1)} · 缓存读取 ${formatDetailMultiplier(rule.cacheReadCostMultiplier ?? rule.cache_read_cost_multiplier ?? 1)}`;
 					return (
 					  <div key={`${selector}-${index}`} className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0">
 						<span className="min-w-0 break-all text-xs font-medium text-slate-700">{selector}</span>
 						<span className="min-w-0 break-all font-mono text-[11px] text-slate-500">{fixed ? '固定单价' : '倍率'} · {values}</span>
+                        <span className="basis-full break-words text-[11px] text-slate-500">{relationship}</span>
 					  </div>
 					);
 				  })}
 				</div>
+                {visibleBillingRules.length === 0 && <p className="text-xs text-slate-500">暂无附加规则。</p>}
+                {visibleBillingRules.some((rule) => rule.mode === 'fixed') && <p className="mt-2 text-[11px] text-slate-400">固定单价单位：USD / 1M tokens</p>}
 			  </DetailMetricCard>
+			  </>
 			) : (
 			  <>
 			<DetailMetricCard label="普通计费倍率" icon={Calculator} density="compact" wide>
+              {provider === 'codex' && <p className="mb-2 text-[11px] text-slate-500">固定使用 Standard 定价。</p>}
               <div className="flex flex-wrap gap-1.5">
                 {standardMultiplierItems(provider, group).map(([label, value]) => (
                   <DetailChip key={label} mono variant={variant}>
@@ -200,7 +237,7 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
               </DetailMetricCard>
             )}
 
-            <DetailMetricCard label="模型专属倍率" icon={KeyRound} density="compact">
+            <DetailMetricCard label="模型专属倍率" icon={KeyRound} density="compact" wide={provider !== 'codex'}>
               {modelMultipliers.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">
                   {modelMultipliers.map((item, index) => (

@@ -11,7 +11,7 @@ test('pricing form gives每个档位独立一页，而不是让模型单选一�
   // 每个档位一页，共用同一套价格字段组件
   assert.match(source, /<TierPriceFields/);
   assert.match(source, /values=\{values\}/);
-  assert.match(source, /errors=\{errors\.tiers\?\.\[tab\.tier\] \|\| \{\}\}/);
+  assert.match(source, /errors=\{errors\.tiers\?\.\[tier\] \|\| \{\}\}/);
   // 单选档位的下拉必须消失——它正是「一个模型只能配一个档位」的来源
   assert.doesNotMatch(source, /serviceTier'\s*,\s*value\)/);
   assert.doesNotMatch(source, /activeTab\s*===\s*'standard'/);

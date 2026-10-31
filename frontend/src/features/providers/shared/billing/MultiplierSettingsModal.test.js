@@ -15,8 +15,8 @@ test('multiplier settings shows the selected model pricing as a filling referenc
   assert.match(source, /定价对照/);
   // 实际单价 = 基础单价 × 分项倍率 × 总倍率，与 tracker.go CalculateCost 的叠加口径一致
   assert.match(source, /basePrice \* resolveMultiplier\(key\) \* totalMultiplier/);
-  // 无 priceKey 的字段即总倍率，不能参与自身的单价换算
-  assert.match(source, /fields\.find\(\(field\) => !field\.priceKey\)/);
+  // 总倍率单独配置；固定单价字段不能被误当作总倍率。
+  assert.match(source, /const totalField = fields\.find\([\s\S]*?longContextCostMultiplier\|costMultiplier/);
   // 定价拉取失败只是少了参考，不能阻断倍率配置
   assert.match(source, /\.catch\(\(\) => \{\}\)/);
 });

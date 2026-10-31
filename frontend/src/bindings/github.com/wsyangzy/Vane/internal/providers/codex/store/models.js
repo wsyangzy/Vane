@@ -40,6 +40,13 @@ export class CodexBillingRuleRecord {
              */
             this["mode"] = "";
         }
+        if (!("group_multiplier_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["group_multiplier_mode"] = "";
+        }
         if (!("cost_multiplier" in $$source)) {
             /**
              * @member

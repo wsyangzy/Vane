@@ -47,6 +47,7 @@ import {
   emptyTierValues,
   tierValuesFromRecord,
   groupPricingsByModel,
+  groupPricingSpeeds,
   buildTierPayloads
 } from './pricingGroups.js';
 import './pricing.css';
@@ -69,7 +70,8 @@ const PRICE_FIELDS = {
     { field: 'inputPrice', label: '输入（未缓存）', term: 'Input', description: '未命中缓存、也未单独按缓存写入计价的输入 Token。' },
     { field: 'outputPrice', label: '输出（含推理）', term: 'Output', description: '模型生成的内容及计入输出的推理 Token，推理用量不重复叠加。' },
     { field: 'cacheReadPrice', label: '缓存输入', term: 'Cached input', description: '复用已有提示词缓存的输入 Token，即缓存读取。' },
-    { field: 'cacheCreationPrice5m', label: '缓存写入', term: 'Cache write', description: '仅对单独收取缓存写入费用并报告写入用量的模型或中转站生效。' },
+    { field: 'cacheWritePrice30m', label: '缓存写入 · 30 分钟', term: '30m write', description: '默认缓存写入单价；只有上游报告写入用量时计费，不重复计算普通输入。' },
+    { field: 'cacheWritePrice12h', label: '缓存写入 · 12 小时', term: '12h write', description: '可选；分组启用 TTL 分档计费且上游返回分档用量时生效，否则仍按 30m。' },
   ],
 };
 const priceFields = (provider) => PRICE_FIELDS[provider] || PRICE_FIELDS.claude;
@@ -77,7 +79,8 @@ const LONG_CONTEXT_FIELDS = {
   inputPrice: 'longContextInputPrice',
   outputPrice: 'longContextOutputPrice',
   cacheReadPrice: 'longContextCacheReadPrice',
-  cacheCreationPrice5m: 'longContextCacheWritePrice',
+  cacheWritePrice30m: 'longContextCacheWritePrice',
+  cacheWritePrice12h: 'longContextCacheWritePrice12h',
 };
 const LONG_CONTEXT_PRICE_FIELDS = PRICE_FIELDS.codex.map(({ field, label }) => [LONG_CONTEXT_FIELDS[field], label]);
 const officialPricingURL = (provider) => provider === 'codex'
@@ -87,7 +90,7 @@ const officialPricingURL = (provider) => provider === 'codex'
 // 档位是定价的维度，一个模型可同时配置多份价格。
 const BASIC_TAB = { key: 'basic', label: '基础信息' };
 const tierTabKey = (tier) => `tier:${tier}`;
-const TAB_GRID_COLS = { 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' };
+const TAB_GRID_COLS = { 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5', 6: 'grid-cols-6' };
 
 const usePricingDialog = (onCancel, loading) => {
   const dialogRef = useRef(null);
@@ -127,7 +130,7 @@ const usePricingDialog = (onCancel, loading) => {
 
 const PriceInput = ({ definition, field = definition.field, values, error, disabled, onChange }) => {
   const inputId = useId();
-  return <Tooltip asChild content={<><span className="block text-[11px] text-slate-300">{definition.term}</span>{definition.description}</>}><div className="pricing-field-card">
+  return <Tooltip asChild content={<><span className="block text-[11px] text-slate-300">{definition.term}</span>{definition.description}</>}><div className="pricing-field-card" data-field={definition.field}>
     <label htmlFor={inputId} className="pricing-field-title">{definition.label}</label>
     <span id={`${inputId}-description`} className="sr-only">{definition.term}。{definition.description}</span>
     <div className="pricing-field-value">
@@ -194,6 +197,7 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
   // errors: { modelName, submit, tiers: { '': { inputPrice: '...' } } }
   const [errors, setErrors] = useState({});
   const [activeTab, setActiveTab] = useState('basic');
+  const [discountTier, setDiscountTier] = useState('flex');
 
   const handleChange = (field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -274,7 +278,8 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
     if (newErrors.modelName) {
       setActiveTab('basic');
     } else if (firstBadTier) {
-      setActiveTab(tierTabKey(firstBadTier.value));
+      if (['batch', 'flex'].includes(firstBadTier.value)) setDiscountTier(firstBadTier.value);
+      setActiveTab(tierTabKey(firstBadTier.value === 'batch' ? 'flex' : firstBadTier.value));
     }
     return !newErrors.modelName && Object.keys(tierErrors).length === 0;
   };
@@ -314,8 +319,8 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
   const showTierTabs = formData.provider === 'codex';
   const visibleFormTabs = [
     BASIC_TAB,
-    ...(showTierTabs ? PRICING_SERVICE_TIERS : PRICING_SERVICE_TIERS.filter((t) => t.value === ''))
-      .map(({ value, label }) => ({ key: tierTabKey(value), label, tier: value }))
+    ...(showTierTabs ? PRICING_SERVICE_TIERS.filter((t) => t.value !== 'batch') : PRICING_SERVICE_TIERS.filter((t) => t.value === ''))
+      .map(({ value, label }) => ({ key: tierTabKey(value), label: value === 'flex' ? 'Flex/Batch' : label, tier: value }))
   ];
 
   // 切到 Claude 时若正停留在档位 tab，回落到标准档，避免停在已隐藏的 tab 上
@@ -387,7 +392,7 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
             <div className={`pricing-form-tabs grid ${TAB_GRID_COLS[visibleFormTabs.length] || 'grid-cols-5'}`} role="group" aria-label="定价配置">
               {visibleFormTabs.map((tab) => {
                 // 未启用的档位在 tab 上就能看出来，不用逐页点开确认
-                const configured = tab.tier === '' || formData.tiers[tab.tier]?.enabled;
+                const configured = tab.tier === '' || formData.tiers[tab.tier]?.enabled || (tab.tier === 'flex' && formData.tiers.batch?.enabled);
                 return (
                   <button
                     key={tab.key}
@@ -471,7 +476,7 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
 
             {formData.provider === 'codex' && (
               <p className="pricing-basic-wide pricing-form-note">
-                标准档为兜底定价；Batch / Flex / Fast 可分别启用，仅在上游返回对应档位时命中。
+                Speed 按请求的最终计费档位匹配；Flex/Batch 保留独立价格。缓存写入默认使用 30m，12h 需在凭证分组中启用分档计费。
               </p>
             )}
               </div>
@@ -480,17 +485,19 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
             {/* 每个档位一页：标准档与各档位子行各自持有一套完整价格 */}
             {visibleFormTabs.map((tab) => {
               if (tab.tier === undefined || activeTab !== tab.key) return null;
-              const values = formData.tiers[tab.tier];
-              const tierEnabled = tab.tier === '' || values.enabled;
+              const tier = tab.tier === 'flex' ? discountTier : tab.tier;
+              const values = formData.tiers[tier];
+              const tierEnabled = tier === '' || values.enabled;
               return (
                 <div key={tab.key} className="space-y-3">
-                  {tab.tier === '' ? (
+                  {tab.tier === 'flex' && <div className="pricing-tier-tabs" role="group" aria-label="Flex 或 Batch 价格">{['flex', 'batch'].map((value) => <button type="button" key={value} aria-pressed={discountTier === value} onClick={() => setDiscountTier(value)}>{serviceTierLabel(value)}</button>)}</div>}
+                  {tier === '' ? (
                     <p className="pricing-form-note">
                       标准档是该模型的兜底定价，始终生效；未单独配置的档位一律回落到这里计费。
                     </p>
                   ) : (
                     <button type="button" role="switch" aria-checked={values.enabled}
-                      onClick={() => handleTierToggle(tab.tier)}
+                      onClick={() => handleTierToggle(tier)}
                       className={`flex w-full items-center justify-between gap-3 rounded-lg border p-2.5 text-left transition-colors ${
                         values.enabled
                           ? 'border-violet-200 bg-violet-50 shadow-sm'
@@ -499,11 +506,11 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
                     >
                       <span>
                         <span className={`text-sm font-medium ${values.enabled ? 'text-violet-700' : 'text-slate-600'}`}>
-                          启用 {tab.label} 档位定价
+                          启用 {serviceTierLabel(tier)} 档位定价
                         </span>
                         <span className="block text-[11px] text-slate-400">
                           {values.enabled
-                            ? '上游返回该档位时按下方价格计费'
+                            ? '最终计费档位匹配时使用下方价格'
                             : '未启用时该档位回落到标准档价格'}
                         </span>
                       </span>
@@ -521,9 +528,9 @@ const PricingForm = ({ pricing, initialProvider = 'claude', onSave, onCancel, lo
                     <TierPriceFields
                       provider={formData.provider}
                       values={values}
-                      errors={errors.tiers?.[tab.tier] || {}}
-                      onChange={(field, value) => handleTierChange(tab.tier, field, value)}
-                      onSuggestCache={() => suggestCachePrices(tab.tier)}
+                      errors={errors.tiers?.[tier] || {}}
+                      onChange={(field, value) => handleTierChange(tier, field, value)}
+                      onSuggestCache={() => suggestCachePrices(tier)}
                     />
                   )}
                 </div>
@@ -632,6 +639,8 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
   const [selectedTier, setSelectedTier] = useState('');
   const records = [...(group.standard ? [group.standard] : []), ...group.tiers];
   const pricing = records.find((record) => record.serviceTier === selectedTier) || records[0] || {};
+  const speeds = groupPricingSpeeds(records);
+  const selectedSpeed = speeds.find((speed) => speed.records.includes(pricing));
   const providerLabel = group.provider === 'codex' ? 'Codex' : 'Claude';
   const ProviderIcon = group.provider === 'codex' ? CodexLogo : ClaudeIcon;
   const fields = priceFields(group.provider);
@@ -651,7 +660,8 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
       <p className="pricing-model-id">{group.modelName}</p>
       {group.description && <p className="pricing-model-description">{group.description}</p>}
     </header>
-    {records.length > 1 && <div className="pricing-tier-tabs" role="group" aria-label="计费档位">{records.map((record) => <button type="button" key={record.serviceTier} aria-pressed={record === pricing} onClick={() => setSelectedTier(record.serviceTier)}>{serviceTierLabel(record.serviceTier)}</button>)}</div>}
+    {speeds.length > 1 && <div className="pricing-tier-tabs" role="group" aria-label="Speed">{speeds.map((speed) => <button type="button" key={speed.key} aria-pressed={speed === selectedSpeed} onClick={() => setSelectedTier(speed.records[0].serviceTier)}>{speed.label}</button>)}</div>}
+    {selectedSpeed?.key === 'flex_batch' && selectedSpeed.records.length > 1 && <div className="pricing-tier-tabs" role="group" aria-label="Flex 或 Batch 价格">{selectedSpeed.records.map((record) => <button type="button" key={record.serviceTier} aria-pressed={record === pricing} onClick={() => setSelectedTier(record.serviceTier)}>{serviceTierLabel(record.serviceTier)}</button>)}</div>}
     <div className="pricing-rate-heading"><span>{records.length > 1 ? 'Token 单价' : serviceTierLabel(pricing.serviceTier || '')}</span><span>USD / 100 万 Token</span></div>
     <dl className="pricing-rate-list">{fields.map(({ field, label }) => <div key={field} data-field={field}><dt>{label}</dt><dd><span>$</span>{pricing[field] ?? '—'}</dd></div>)}</dl>
     {group.provider === 'codex' && pricing.longContextThreshold > 0 && <details className="pricing-long-context"><summary><span>长上下文单价</span><span>&gt; {pricing.longContextThreshold.toLocaleString()} Token<ChevronDown size={12} /></span></summary><dl className="pricing-rate-list">{fields.map(({ field, label }) => <div key={field} data-field={field}><dt>{label}</dt><dd><span>$</span>{pricing[LONG_CONTEXT_FIELDS[field]] ?? '—'}</dd></div>)}</dl></details>}

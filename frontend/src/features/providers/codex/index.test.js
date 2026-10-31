@@ -55,7 +55,7 @@ test('credential-group long-context billing uses a switch and detailed multiplie
   assert.match(source, /Long context 总倍率/);
   assert.match(source, /Long context 输入/);
   assert.match(source, /Long context 输出/);
-  assert.match(source, /Long context 缓存创建/);
+  assert.match(source, /Long context 缓存写入/);
   assert.match(source, /Long context 缓存读取/);
 });
 
@@ -64,7 +64,7 @@ test('credential-group standard multipliers are configured in the same modal as 
   assert.match(source, /handleStandardMultiplierSave/);
   // 每个分项倍率都要能指到对应单价，弹窗才能给出「基础单价 → 实际单价」对照
   assert.match(source, /priceKey: 'inputPrice'/);
-  assert.match(source, /priceKey: 'cacheCreationPrice5m'/);
+  assert.match(source, /priceKey: 'cacheWritePrice30m'/);
   assert.match(source, /priceKey: 'longContextCacheWritePrice'/);
 });
 
@@ -184,6 +184,6 @@ test('Codex billing mode uses radio cards instead of view tabs', () => {
   assert.match(source, /aria-checked=\{selected\}/);
   assert.match(source, /仅所选模式生效/);
   // 两种模式各自带说明，避免用户不清楚切换的后果
-  assert.match(source, /五项成本倍率直接相乘/);
+  assert.match(source, /Standard 单价 × 分项倍率，支持 Long context/);
   assert.match(source, /按模型 \/ 档位 \/ 上下文匹配规则/);
 });

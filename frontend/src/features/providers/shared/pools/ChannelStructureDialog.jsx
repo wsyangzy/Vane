@@ -3,12 +3,13 @@ import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, us
 import { Clock3, Info, KeyRound, Layers, Loader2, Maximize2, Minus, MoreVertical, Network, Pencil, Plus, RefreshCw, Server, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { ModalPortalContext, renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SubscriptionStatus } from '@/features/providers/shared/subscriptions/SubscriptionSettings.jsx';
+import ChannelDetailModal from './ChannelDetailModal.jsx';
 import { buildChannelGraph, fitChannelGraph, MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM, zoomChannelGraph } from './channelGraph.js';
 
 const iconButton = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-40';
 const menuItem = 'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-slate-600 hover:bg-slate-100 focus-visible:bg-slate-100 focus-visible:outline-none disabled:opacity-40';
 
-export default function ChannelStructureDialog({ name, groups, endpoints, busy, onClose, onEdit, onDelete, onAddGroup, onOpenGroup, onEditGroup, onDeleteGroup, onAddEndpoint, onOpenEndpoint, onEditEndpoint, onDeleteEndpoint, onHealthEndpoint, onToggleEndpointSkipHealthCheck }) {
+export default function ChannelStructureDialog({ provider, name, website, groups, endpoints, busy, onClose, onEdit, onDelete, onAddGroup, onOpenGroup, onEditGroup, onDeleteGroup, onAddEndpoint, onOpenEndpoint, onEditEndpoint, onDeleteEndpoint, onHealthEndpoint, onToggleEndpointSkipHealthCheck }) {
   const titleId = useId();
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
@@ -24,6 +25,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
   const [manualView, setManualView] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [selectedKey, setSelectedKey] = useState(null);
+  const [channelDetailOpen, setChannelDetailOpen] = useState(false);
   const [menu, setMenu] = useState(null);
   const [endpointAction, setEndpointAction] = useState('');
   const [actionError, setActionError] = useState('');
@@ -103,7 +105,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
     const element = menuRef.current;
     const shell = dialogRef.current;
     element.style.maxHeight = `${Math.min(420, shell.clientHeight - 16)}px`;
-    const left = menu.x + element.offsetWidth > shell.clientWidth - 8 ? menu.x - element.offsetWidth - 12 : menu.x;
+    const left = menu.x + element.offsetWidth > shell.clientWidth - 8 ? menu.left - element.offsetWidth - 6 : menu.x;
     element.style.left = `${Math.max(8, Math.min(left, shell.clientWidth - element.offsetWidth - 8))}px`;
     element.style.top = `${Math.max(8, Math.min(menu.y, shell.clientHeight - element.offsetHeight - 8))}px`;
     if (menu.keyboard) element.querySelector('button:not(:disabled)')?.focus();
@@ -140,13 +142,23 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
     menuAnchorRef.current = event.currentTarget;
     setActionError('');
     setSelectedKey(node.key);
-    setMenu({ key: node.key, keyboard: event.type === 'keydown' || event.type === 'click' && event.detail === 0, x: (atPointer ? event.clientX : rect.right + 6) - shell.left, y: (atPointer ? event.clientY : rect.top) - shell.top });
+    setMenu({ key: node.key, keyboard: event.type === 'keydown', x: (atPointer ? event.clientX : rect.right + 6) - shell.left, left: (atPointer ? event.clientX : rect.left) - shell.left, y: (atPointer ? event.clientY : rect.top) - shell.top });
   };
   // Provider forms and confirmation dialogs continue to own all mutations.
   const openAction = (callback, ...args) => {
     setMenu(null);
     setManualView(view);
     callback?.(...args);
+  };
+  const openNodeDetail = (event, node) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (hasOperation) return;
+    menuAnchorRef.current = event.currentTarget;
+    setSelectedKey(node.key);
+    if (node.kind === 'channel') openAction(() => setChannelDetailOpen(true));
+    else if (node.kind === 'group') openAction(onOpenGroup, node.group);
+    else openAction(onOpenEndpoint, node.endpoint.original);
   };
   const runEndpointAction = async (kind, callback) => {
     if (controlsBusy) return;
@@ -218,7 +230,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
               const latency = Number(node.endpoint?.latencyMs);
               const hasLatency = !isSubscription && Number.isFinite(latency) && latency > 0 && node.endpoint?.inScope !== false;
               const latencyLabel = node.endpoint?.inScope === false ? '未开启' : hasLatency ? `${Math.max(1, Math.round(latency))}ms` : isSubscription ? '请求验证' : latency < 0 ? '测速失败' : '未测速';
-              return <button key={node.key} type="button" data-mindmap-node={node.key} data-node-kind={node.kind} aria-label={`${node.kind === 'channel' ? '渠道' : node.kind === 'group' ? '凭证分组' : '端点'}节点 ${node.label}`} aria-haspopup="menu" aria-expanded={menu?.key === node.key} className={`channel-flow-node absolute cursor-pointer text-left outline-none ${selected ? 'is-selected' : ''}`} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={(event) => openNodeMenu(event, node)} onContextMenu={(event) => openNodeMenu(event, node, true)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') openNodeMenu(event, node); }}>
+              return <button key={node.key} type="button" data-mindmap-node={node.key} data-node-kind={node.kind} aria-label={`${node.kind === 'channel' ? '渠道' : node.kind === 'group' ? '凭证分组' : '端点'}节点 ${node.label}`} aria-haspopup="menu" aria-expanded={menu?.key === node.key} className={`channel-flow-node absolute cursor-pointer text-left outline-none ${selected ? 'is-selected' : ''}`} style={{ left: node.x, top: node.y, width: node.width, height: node.height }} onClick={() => { setSelectedKey(node.key); setMenu(null); }} onDoubleClick={(event) => openNodeDetail(event, node)} onContextMenu={(event) => openNodeMenu(event, node, true)} onKeyDown={(event) => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') openNodeMenu(event, node); }}>
                 {node.kind !== 'channel' && <span aria-hidden="true" className="channel-node-port is-input" />}
                 {(node.kind === 'channel' && groups.length > 0 || node.kind === 'group' && node.endpointCount > 0) && <span aria-hidden="true" className="channel-node-port is-output" />}
                 <span className="channel-node-heading">
@@ -242,7 +254,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
           </div>
         </div>
         <footer inert={hasOperation} className="flex h-8 shrink-0 items-center justify-between gap-3 border-t border-slate-200/50 px-4 text-[10px] text-slate-400">
-          <span>点击节点操作 · 右键父节点添加</span>
+          <span>双击查看详情 · 右键操作菜单</span>
           <span>拖动画布 · 滚轮缩放</span>
         </footer>
 
@@ -264,6 +276,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
             {menuNode.kind === 'endpoint' && <p className="mt-1 text-[10px] text-slate-400 [overflow-wrap:anywhere]">{menuNode.endpoint.url}</p>}
           </div>
           {menuNode.kind === 'channel' && <>
+            <button type="button" role="menuitem" className={menuItem} onClick={() => openAction(() => setChannelDetailOpen(true))}><Info size={13} />查看渠道详情</button>
             <button type="button" role="menuitem" className={menuItem} disabled={controlsBusy} onClick={() => openAction(onAddGroup)}><Plus size={14} />添加凭证分组</button>
             <button type="button" role="menuitem" className={menuItem} disabled={controlsBusy} onClick={() => openAction(onEdit)}><Pencil size={13} />编辑渠道</button>
             <button type="button" role="menuitem" className={`${menuItem} text-rose-600 hover:bg-rose-50`} disabled={controlsBusy} onClick={() => openAction(onDelete)}><Trash2 size={13} />删除渠道</button>
@@ -290,6 +303,7 @@ export default function ChannelStructureDialog({ name, groups, endpoints, busy, 
           </>}
         </div>}
         <div ref={modalScope?.setTarget} className="channel-canvas-overlays" />
+        {channelDetailOpen && <ChannelDetailModal provider={provider} name={name} website={website} graph={graph} busy={controlsBusy} onClose={() => setChannelDetailOpen(false)} onEdit={onEdit ? () => { setChannelDetailOpen(false); openAction(onEdit); } : undefined} />}
       </section>
     </div>,
     { root: true }

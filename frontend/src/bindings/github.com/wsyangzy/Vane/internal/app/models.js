@@ -1104,6 +1104,20 @@ export class CodexCredentialGroupInfo {
      * @param {Partial<CodexCredentialGroupInfo>} [$$source = {}] - The source object to create the CodexCredentialGroupInfo.
      */
     constructor($$source = {}) {
+        if (!("serviceTierSource" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serviceTierSource"] = "";
+        }
+        if (!("cacheWriteTTLPricing" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cacheWriteTTLPricing"] = false;
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member
@@ -1338,30 +1352,30 @@ export class CodexCredentialGroupInfo {
      * @returns {CodexCredentialGroupInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType21;
-        const $$createField4_0 = $$createType23;
-        const $$createField14_0 = $$createType5;
-        const $$createField15_0 = $$createType2;
-        const $$createField28_0 = $$createType25;
-        const $$createField29_0 = $$createType27;
+        const $$createField4_0 = $$createType21;
+        const $$createField6_0 = $$createType23;
+        const $$createField16_0 = $$createType5;
+        const $$createField17_0 = $$createType2;
+        const $$createField30_0 = $$createType25;
+        const $$createField31_0 = $$createType27;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
-            $$parsedSource["subscription"] = $$createField2_0($$parsedSource["subscription"]);
+            $$parsedSource["subscription"] = $$createField4_0($$parsedSource["subscription"]);
         }
         if ("subscription_status" in $$parsedSource) {
-            $$parsedSource["subscription_status"] = $$createField4_0($$parsedSource["subscription_status"]);
+            $$parsedSource["subscription_status"] = $$createField6_0($$parsedSource["subscription_status"]);
         }
         if ("modelMapping" in $$parsedSource) {
-            $$parsedSource["modelMapping"] = $$createField14_0($$parsedSource["modelMapping"]);
+            $$parsedSource["modelMapping"] = $$createField16_0($$parsedSource["modelMapping"]);
         }
         if ("supportedModels" in $$parsedSource) {
-            $$parsedSource["supportedModels"] = $$createField15_0($$parsedSource["supportedModels"]);
+            $$parsedSource["supportedModels"] = $$createField17_0($$parsedSource["supportedModels"]);
         }
         if ("modelMultipliers" in $$parsedSource) {
-            $$parsedSource["modelMultipliers"] = $$createField28_0($$parsedSource["modelMultipliers"]);
+            $$parsedSource["modelMultipliers"] = $$createField30_0($$parsedSource["modelMultipliers"]);
         }
         if ("billingRules" in $$parsedSource) {
-            $$parsedSource["billingRules"] = $$createField29_0($$parsedSource["billingRules"]);
+            $$parsedSource["billingRules"] = $$createField31_0($$parsedSource["billingRules"]);
         }
         return new CodexCredentialGroupInfo(/** @type {Partial<CodexCredentialGroupInfo>} */($$parsedSource));
     }
@@ -2440,6 +2454,20 @@ export class CreateCodexCredentialGroupInput {
      * @param {Partial<CreateCodexCredentialGroupInput>} [$$source = {}] - The source object to create the CreateCodexCredentialGroupInput.
      */
     constructor($$source = {}) {
+        if (!("serviceTierSource" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serviceTierSource"] = "";
+        }
+        if (!("cacheWriteTTLPricing" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cacheWriteTTLPricing"] = false;
+        }
         if (!("auth_mode" in $$source)) {
             /**
              * @member
@@ -2618,26 +2646,26 @@ export class CreateCodexCredentialGroupInput {
      * @returns {CreateCodexCredentialGroupInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType21;
-        const $$createField19_0 = $$createType5;
-        const $$createField20_0 = $$createType2;
-        const $$createField22_0 = $$createType25;
-        const $$createField23_0 = $$createType27;
+        const $$createField3_0 = $$createType21;
+        const $$createField21_0 = $$createType5;
+        const $$createField22_0 = $$createType2;
+        const $$createField24_0 = $$createType25;
+        const $$createField25_0 = $$createType27;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
-            $$parsedSource["subscription"] = $$createField1_0($$parsedSource["subscription"]);
+            $$parsedSource["subscription"] = $$createField3_0($$parsedSource["subscription"]);
         }
         if ("modelMapping" in $$parsedSource) {
-            $$parsedSource["modelMapping"] = $$createField19_0($$parsedSource["modelMapping"]);
+            $$parsedSource["modelMapping"] = $$createField21_0($$parsedSource["modelMapping"]);
         }
         if ("supportedModels" in $$parsedSource) {
-            $$parsedSource["supportedModels"] = $$createField20_0($$parsedSource["supportedModels"]);
+            $$parsedSource["supportedModels"] = $$createField22_0($$parsedSource["supportedModels"]);
         }
         if ("modelMultipliers" in $$parsedSource) {
-            $$parsedSource["modelMultipliers"] = $$createField22_0($$parsedSource["modelMultipliers"]);
+            $$parsedSource["modelMultipliers"] = $$createField24_0($$parsedSource["modelMultipliers"]);
         }
         if ("billingRules" in $$parsedSource) {
-            $$parsedSource["billingRules"] = $$createField23_0($$parsedSource["billingRules"]);
+            $$parsedSource["billingRules"] = $$createField25_0($$parsedSource["billingRules"]);
         }
         return new CreateCodexCredentialGroupInput(/** @type {Partial<CreateCodexCredentialGroupInput>} */($$parsedSource));
     }
@@ -3035,6 +3063,27 @@ export class CreateModelPricingInput {
      * @param {Partial<CreateModelPricingInput>} [$$source = {}] - The source object to create the CreateModelPricingInput.
      */
     constructor($$source = {}) {
+        if (!("cache_write_price_30m" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_30m"] = 0;
+        }
+        if (!("cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_12h"] = 0;
+        }
+        if (!("long_context_cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["long_context_cache_write_price_12h"] = 0;
+        }
         if (!("id" in $$source)) {
             /**
              * ID 仅更新时使用。带 ID 时按 ID 精确定位，因此编辑中改 provider 或改档位都能命中原行；
@@ -4408,6 +4457,27 @@ export class ModelPricingInfo {
      * @param {Partial<ModelPricingInfo>} [$$source = {}] - The source object to create the ModelPricingInfo.
      */
     constructor($$source = {}) {
+        if (!("cache_write_price_30m" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_30m"] = 0;
+        }
+        if (!("cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cache_write_price_12h"] = 0;
+        }
+        if (!("long_context_cache_write_price_12h" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["long_context_cache_write_price_12h"] = 0;
+        }
         if (!("id" in $$source)) {
             /**
              * @member
@@ -7602,6 +7672,20 @@ export class UpdateCodexCredentialGroupInput {
      * @param {Partial<UpdateCodexCredentialGroupInput>} [$$source = {}] - The source object to create the UpdateCodexCredentialGroupInput.
      */
     constructor($$source = {}) {
+        if (!("serviceTierSource" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serviceTierSource"] = "";
+        }
+        if (!("cacheWriteTTLPricing" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["cacheWriteTTLPricing"] = false;
+        }
         if (!("auth_mode" in $$source)) {
             /**
              * @member
@@ -7773,26 +7857,26 @@ export class UpdateCodexCredentialGroupInput {
      * @returns {UpdateCodexCredentialGroupInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType21;
-        const $$createField18_0 = $$createType5;
-        const $$createField19_0 = $$createType2;
-        const $$createField21_0 = $$createType25;
-        const $$createField22_0 = $$createType27;
+        const $$createField3_0 = $$createType21;
+        const $$createField20_0 = $$createType5;
+        const $$createField21_0 = $$createType2;
+        const $$createField23_0 = $$createType25;
+        const $$createField24_0 = $$createType27;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("subscription" in $$parsedSource) {
-            $$parsedSource["subscription"] = $$createField1_0($$parsedSource["subscription"]);
+            $$parsedSource["subscription"] = $$createField3_0($$parsedSource["subscription"]);
         }
         if ("modelMapping" in $$parsedSource) {
-            $$parsedSource["modelMapping"] = $$createField18_0($$parsedSource["modelMapping"]);
+            $$parsedSource["modelMapping"] = $$createField20_0($$parsedSource["modelMapping"]);
         }
         if ("supportedModels" in $$parsedSource) {
-            $$parsedSource["supportedModels"] = $$createField19_0($$parsedSource["supportedModels"]);
+            $$parsedSource["supportedModels"] = $$createField21_0($$parsedSource["supportedModels"]);
         }
         if ("modelMultipliers" in $$parsedSource) {
-            $$parsedSource["modelMultipliers"] = $$createField21_0($$parsedSource["modelMultipliers"]);
+            $$parsedSource["modelMultipliers"] = $$createField23_0($$parsedSource["modelMultipliers"]);
         }
         if ("billingRules" in $$parsedSource) {
-            $$parsedSource["billingRules"] = $$createField22_0($$parsedSource["billingRules"]);
+            $$parsedSource["billingRules"] = $$createField24_0($$parsedSource["billingRules"]);
         }
         return new UpdateCodexCredentialGroupInput(/** @type {Partial<UpdateCodexCredentialGroupInput>} */($$parsedSource));
     }
@@ -8447,6 +8531,20 @@ export class UsageDashboardGroup {
              */
             this["name"] = "";
         }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("last_at" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["last_at"] = "";
+        }
         if (!("provider" in $$source)) {
             /**
              * @member
@@ -8895,6 +8993,13 @@ export class UsageDashboardRow {
              */
             this["id"] = "";
         }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
         if (!("provider" in $$source)) {
             /**
              * @member
@@ -9101,10 +9206,10 @@ export class UsageDashboardRow {
      * @returns {UsageDashboardRow}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType2;
+        const $$createField6_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("models" in $$parsedSource) {
-            $$parsedSource["models"] = $$createField5_0($$parsedSource["models"]);
+            $$parsedSource["models"] = $$createField6_0($$parsedSource["models"]);
         }
         return new UsageDashboardRow(/** @type {Partial<UsageDashboardRow>} */($$parsedSource));
     }

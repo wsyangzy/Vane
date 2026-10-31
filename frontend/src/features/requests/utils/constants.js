@@ -51,6 +51,7 @@ export const TABLE_COLUMNS = [
   { id: 'status', label: '状态', alwaysVisible: false, width: 'auto' },
   { id: 'model', label: '模型', alwaysVisible: false, width: 'auto' },
   { id: 'reasoningEffort', label: '推理强度', alwaysVisible: false, width: 'auto' },
+  { id: 'serviceTier', label: '服务档位', alwaysVisible: false, width: 'auto' },
   { id: 'channel', label: '渠道', alwaysVisible: false, width: 'auto' },
   { id: 'endpoint', label: '请求调度', alwaysVisible: false, width: 'auto' },
   { id: 'duration', label: '用时/首字', alwaysVisible: false, width: 'auto' },
@@ -63,7 +64,7 @@ export const TABLE_COLUMNS = [
 
 // 默认可见的列（添加缓存创建/读取列）
 export const DEFAULT_VISIBLE_COLUMNS = [
-  'requestId', 'timestamp', 'provider', 'status', 'model', 'reasoningEffort', 'channel', 'endpoint',
+  'requestId', 'timestamp', 'provider', 'status', 'model', 'reasoningEffort', 'serviceTier', 'channel', 'endpoint',
   'duration', 'inputTokens', 'outputTokens', 'cacheCreationTokens', 'cacheReadTokens', 'cost'
 ];
 

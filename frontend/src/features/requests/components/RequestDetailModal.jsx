@@ -63,7 +63,9 @@ import {
 } from '../utils/endpointChain.js';
 import {
   formatReasoningFieldValue,
+  getRequestBillingMultiplierSources,
   getReasoningEffortMeta,
+  getRequestServiceTierMeta,
   getServiceTierMeta,
   getStreamOutcomeMeta,
   isThinkingTypeActive,
@@ -472,8 +474,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
   const reasoningEffort = reasoning.effort || '';
   const reasoningEffortMeta = getReasoningEffortMeta(reasoningEffort);
   const hasReasoning = Object.keys(reasoning).length > 0;
-  const serviceTier = request.serviceTier || request.service_tier || '';
-  const serviceTierMeta = getServiceTierMeta(serviceTier);
+  const serviceTierMeta = getRequestServiceTierMeta(request);
   const privacy = getPrivacyDisplay(request);
   const hasPrivacyRecord = privacy.state !== 'none';
 
@@ -688,6 +689,12 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                       </Tooltip>
                     </div>
                   )}
+                  {isCodexRequest && billingRuleSnapshot?.service_tier_source && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 py-3 text-xs text-slate-500">
+                    <span>请求：{getServiceTierMeta(billingRuleSnapshot.requested_service_tier)?.label || '未指定'}</span>
+                    <span>响应：{getServiceTierMeta(billingRuleSnapshot.response_service_tier)?.label || '未返回'}</span>
+                    <span className="font-medium text-slate-700">计费：{getServiceTierMeta(billingRuleSnapshot.billing_service_tier || 'standard')?.label} · {billingRuleSnapshot.service_tier_policy === 'rules' && '组合规则自动匹配 · '}{({ request: '按请求档位', response: '按响应档位', default: '使用默认档位', standard: '传统倍率固定 Standard 定价' })[billingRuleSnapshot.service_tier_source]}</span>
+                    {billingRuleSnapshot.pricing_fallback === 'missing_price' && <span className="text-amber-700">未配置模型价格，成本未计算</span>}
+                  </div>}
                   {/* 路由与模型改写都在回答"请求被改成了什么样"，放在一起看 */}
                   {route && (
                     <div className="flex items-start justify-between gap-4 py-3 border-t border-slate-100">
@@ -766,8 +773,9 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 const billableInputTokens = getBillableInputTokens(request)
                 const displayInputTokens = getDisplayInputTokens(request)
                 const inputDeductionTokens = Math.max(0, displayInputTokens - billableInputTokens)
-                const cache5mTokens = request.cacheCreation5mTokens || 0
-                const cache1hTokens = request.cacheCreation1hTokens || 0
+                const codexWrites = isCodexRequest && Boolean(snapshot?.cache_write_pricing)
+                const cache5mTokens = codexWrites ? 0 : request.cacheCreation5mTokens || 0
+                const cache1hTokens = codexWrites ? 0 : request.cacheCreation1hTokens || 0
                 const cacheCreationTokens = request.cacheCreationTokens || 0
 
                 const inputCost = request.inputCost || 0
@@ -777,14 +785,16 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 const cache1hCost = request.cacheCreation1hCost || 0
                 const cacheCreationCost = request.cacheCreationCost || 0
 
-                // 端点倍率（默认 1.0）
-                const totalMultiplier = safeMultiplier(hasSnapshot ? snapshot.group_cost_multiplier : request.costMultiplier)
+                // 使用请求计费快照，避免以当前配置重写历史成本来源。
+                const multiplierSources = getRequestBillingMultiplierSources(request)
+                const totalMultiplier = multiplierSources.group
+                const ruleTotalMultiplier = multiplierSources.rule
                 const inputMultiplier = safeMultiplier(request.inputCostMultiplier)
                 const outputMultiplier = safeMultiplier(request.outputCostMultiplier)
                 const cacheReadMultiplier = safeMultiplier(request.cacheReadCostMultiplier)
                 const cache5mMultiplier = safeMultiplier(request.cacheCreationCostMultiplier)
                 const cache1hMultiplier = safeMultiplier(request.cacheCreationCostMultiplier1h)
-                const modelTotalMultiplier = safeMultiplier(hasSnapshot ? snapshot.model_cost_multiplier : request.modelCostMultiplier)
+                const modelTotalMultiplier = multiplierSources.model
                 const modelInputMultiplier = safeMultiplier(request.modelInputCostMultiplier)
                 const modelOutputMultiplier = safeMultiplier(request.modelOutputCostMultiplier)
                 const modelCacheReadMultiplier = safeMultiplier(request.modelCacheReadCostMultiplier)
@@ -794,10 +804,10 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                   return combinedMultiplier > 0 ? effectivePrice / combinedMultiplier : effectivePrice
                 }
 
-                const formatPrice = (n) => `$${(n || 0).toFixed(6)}`
+                const formatPrice = (n, digits = 6) => `$${(n || 0).toFixed(digits)}`
                 const formatMultiplier = (n) => `× ${formatMultiplierDisplayValue(n, 3)}`
                 const isMultiplierAdjusted = (value) => Math.abs(safeMultiplier(value) - 1.0) > 0.000001
-                const combinedTotalMultiplier = totalMultiplier * modelTotalMultiplier
+                const combinedTotalMultiplier = multiplierSources.total
                 const removeTotalMultiplier = (cost) => combinedTotalMultiplier > 0 ? cost / combinedTotalMultiplier : cost
                 // 有快照直接取落库单价，无快照才反推。两条路径都在 token 为 0 时归零，
                 // 否则快照里的 1h 缓存兜底价会让没有 1h 用量的请求也长出一个单价徽章。
@@ -816,7 +826,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 const cache1hBasePrice = resolvePrice(cache1hTokens, 'cache_creation_1h_price',
                   () => calcBasePrice(calcUnitPrice(cache1hCost, cache1hTokens), cache1hMultiplier))
                 // 兼容旧数据：无分项 5m/1h 时，展示合并的缓存创建价格（旧数据无倍率字段，默认 1.0）
-                const hasSplitCache = cache5mTokens > 0 || cache1hTokens > 0
+                const hasSplitCache = codexWrites || cache5mTokens > 0 || cache1hTokens > 0
                 const aggregateCacheCreationPrice = hasSplitCache
                   ? 0
                   : resolvePrice(cacheCreationTokens, 'cache_creation_price',
@@ -840,7 +850,11 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                   ? tokens * price / 1_000_000 * safeMultiplier(snapshot[snapshotField])
                   : removeTotalMultiplier(storedCost)
 
+                const writeRows = codexWrites ? ['30m', '12h'].filter((ttl) => snapshot[`cache_write_${ttl}_tokens`] > 0).map((ttl) => ({
+                  key: `cacheWrite${ttl}`, label: `${ttl} 缓存写入`, tokens: snapshot[`cache_write_${ttl}_tokens`], price: snapshot[`cache_write_${ttl}_price`] || 0, multiplierText: rowMultiplierText('cache_creation_cost_multiplier', cache5mMultiplier), cost: rowCost(snapshot[`cache_write_${ttl}_tokens`], snapshot[`cache_write_${ttl}_price`] || 0, 'cache_creation_cost_multiplier', snapshot[`cache_write_${ttl}_cost`] || 0)
+                })) : []
                 const priceBadges = [
+                  ...writeRows.filter((row) => row.price > 0).map((row) => ({ key: row.key, label: row.label, value: row.price, color: 'purple' })),
                   inputBasePrice > 0 && { key: 'input', label: '输入', value: inputBasePrice, color: 'blue' },
                   outputBasePrice > 0 && { key: 'output', label: '输出', value: outputBasePrice, color: 'emerald' },
                   cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadBasePrice, color: 'amber' },
@@ -850,7 +864,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 ].filter(Boolean)
 
                 const multiplierBadges = [
-                  { key: 'total', label: '总倍率', value: totalMultiplier, color: 'indigo' },
+                  multiplierSources.groupApplied && { key: 'total', label: multiplierSources.hasRuleSources ? '分组基础倍率' : '总倍率', value: totalMultiplier, color: 'indigo' },
+                  multiplierSources.hasRuleSources && { key: 'rule', label: '规则总倍率', value: ruleTotalMultiplier, color: 'sky' },
                   inputBasePrice > 0 && { key: 'input', label: '输入', value: inputMultiplier, color: 'slate' },
                   outputBasePrice > 0 && { key: 'output', label: '输出', value: outputMultiplier, color: 'indigo' },
                   cacheReadBasePrice > 0 && { key: 'cacheRead', label: '缓存读取', value: cacheReadMultiplier, color: 'slate' },
@@ -886,6 +901,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 }
 
                 const formulaRows = [
+                  ...writeRows,
                   billableInputTokens > 0 && {
                     key: 'input',
                     label: isCodexRequest ? '输入(计费)' : '输入',
@@ -938,7 +954,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                       {hasSnapshot && (
                         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-100 pb-3 text-xs text-slate-600">
                           <span className="min-w-0 break-all font-semibold text-slate-700">
-                            定价 {snapshot.pricing_model || '-'}{snapshot.pricing_service_tier ? ` · ${snapshot.pricing_service_tier}` : ''}
+                            定价 {snapshot.pricing_model || '-'} · {getServiceTierMeta(snapshot.pricing_service_tier || 'standard')?.label}
                           </span>
                           <span className={snapshot.context_mode === 'long' ? 'font-semibold text-amber-600' : ''}>
                             {snapshot.context_mode === 'long' ? '长上下文单价' : '标准上下文单价'}
@@ -948,6 +964,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                               输入 {Number(snapshot.effective_input_tokens || 0).toLocaleString()} / 阈值 {Number(snapshot.long_context_threshold).toLocaleString()}
                             </span>
                           )}
+                          {snapshot.pricing_fallback && <span className="font-medium text-amber-700">{({ provider_default: '模型未配置，使用提供商默认价格', standard_price: '该档位未配置，使用 Standard 价格', unresolved_tier: '未确认实际档位，暂用 Standard 价格' })[snapshot.pricing_fallback]}</span>}
+                          {snapshot.cache_write_pricing && <span>{({ reported_ttl: '缓存写入按上游 TTL 分档', '30m_default': '缓存写入统一按 30m', '30m_missing_12h_price': '12h 未配置，缓存写入按 30m', '30m_missing_ttl_usage': '缺少有效 TTL 用量，缓存写入按 30m' })[snapshot.cache_write_pricing]}</span>}
                           {snapshot.rule_key && (
                             <span className="min-w-0 break-all font-semibold text-indigo-700">
                               组合规则 · {snapshot.rule_mode === 'fixed' ? '固定单价' : '倍率'} · {snapshot.rule_key}
@@ -1000,7 +1018,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                             <div className="flex items-center justify-between">
                               <span className="text-slate-500">总成本（无分项明细）</span>
                               <span className="text-emerald-600 font-bold text-base font-mono">
-                                {formatPrice(totalCost)}
+                                {formatPrice(totalCost, 8)}
                               </span>
                             </div>
                           ) : formulaRows.length === 0 ? (
@@ -1021,17 +1039,27 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
 
                           {!hasNoBreakdown && (
                             <>
-                              <div className="pt-2 mt-2 border-t border-slate-200 flex items-center gap-2 font-mono">
+                              <div className="pt-2 mt-2 border-t border-slate-200 flex flex-wrap items-center gap-2 font-mono">
                                 <span className="text-slate-500">应用总倍率:</span>
+                                {multiplierSources.hasRuleSources ? <>
+                                  {multiplierSources.groupApplied && <>
+                                    <span className="text-indigo-600">分组基础 {formatMultiplierDisplayValue(totalMultiplier, 6)}</span>
+                                    <span>×</span>
+                                  </>}
+                                  <span className="text-sky-600">规则 {formatMultiplierDisplayValue(ruleTotalMultiplier, 6)}</span>
+                                  <span className="font-bold text-emerald-600">= {formatMultiplierDisplayValue(combinedTotalMultiplier, 6)}</span>
+                                  <span className="font-sans text-slate-500">{multiplierSources.groupApplied ? '按请求计费快照叠加分组基础倍率' : '按请求计费快照使用独立规则，分组基础倍率未参与'}</span>
+                                </> : <>
                                 <span className="font-bold text-indigo-500">{formatMultiplier(totalMultiplier)}</span>
                                 {isMultiplierAdjusted(modelTotalMultiplier) && (
                                   <span className="font-bold text-sky-600">{formatMultiplier(modelTotalMultiplier)}</span>
                                 )}
+                                </>}
                               </div>
                               <div className="pt-2 mt-2 border-t border-slate-200 flex items-center justify-between">
                                 <span className="text-slate-600 font-medium text-sm">合计</span>
                                 <span className="text-emerald-600 font-bold text-base font-mono">
-                                  {formatPrice(totalCost)}
+                                  {formatPrice(totalCost, 8)}
                                 </span>
                               </div>
                             </>
@@ -1373,6 +1401,15 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                       colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }}
                     />
                   </>
+                )}
+                {isCodexRequest && request.cacheCreationTokens > 0 && (
+                  billingRuleSnapshot?.cache_write_pricing ? <>
+                    <TokenCard icon={Database} label="缓存写入 · 30m 计费" value={billingRuleSnapshot.cache_write_30m_tokens || 0}
+                      colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }} />
+                    <TokenCard icon={Database} label="缓存写入 · 12h 计费" value={billingRuleSnapshot.cache_write_12h_tokens || 0}
+                      colorClass={{ bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-600', icon: 'text-violet-600' }} />
+                  </> : <TokenCard icon={Database} label="缓存写入" value={request.cacheCreationTokens}
+                    colorClass={{ bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-600', icon: 'text-purple-600' }} />
                 )}
                 <TokenCard
                   icon={Zap}

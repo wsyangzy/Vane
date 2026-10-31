@@ -1,6 +1,23 @@
 // Compact and comfortable widths include padding. They are allocation weights,
 // not minimum widths: selected columns must always fit inside the table region.
-const widths = { requestId: [82, 112], timestamp: [60, 142], provider: [46, 64], requestType: [40, 62], status: [54, 78], model: [114, 190], reasoningEffort: [64, 80], channel: [60, 108], endpoint: [88, 150], duration: [86, 132], inputTokens: [38, 62], outputTokens: [38, 62], cacheCreationTokens: [40, 70], cacheReadTokens: [40, 70], cost: [60, 78] };
+const widths = {
+  requestId: [82, 112],
+  timestamp: [60, 142],
+  provider: [50, 72],
+  requestType: [40, 62],
+  status: [64, 90],
+  model: [100, 148],
+  reasoningEffort: [62, 82],
+  serviceTier: [70, 96],
+  channel: [72, 112],
+  endpoint: [72, 112],
+  duration: [108, 156],
+  inputTokens: [38, 62],
+  outputTokens: [38, 62],
+  cacheCreationTokens: [40, 70],
+  cacheReadTokens: [40, 70],
+  cost: [60, 78],
+};
 
 // A complete page fills the available body. A short last page keeps that same
 // row density, while smaller windows and larger page sizes scroll naturally.

@@ -93,6 +93,7 @@
 .pricing-fields-grid { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 8px; padding: 12px; }
 .pricing-field-card { display: flex; min-width: 0; flex: 1 1 calc((100% - 16px) / 3); flex-direction: column; gap: 4px; }
 .pricing-fields-section[data-provider="codex"] .pricing-field-card { flex-basis: calc((100% - 8px) / 2); }
+.pricing-fields-section[data-provider="codex"] .pricing-field-card[data-field="cacheReadPrice"] { flex-basis: 100%; }
 .pricing-field-title { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-caption); line-height: 16px; font-weight: 400; color: #64748b; }
 .pricing-field-value, .pricing-currency-input { min-width: 0; }
 .pricing-field-value { margin-top: auto; }
@@ -100,6 +101,8 @@
 .pricing-currency-input > span { position: absolute; top: 50%; left: 10px; transform: translateY(-50%); pointer-events: none; font-size: 12px; color: var(--text-muted); }
 .pricing-currency-input > input, .pricing-threshold > input { width: 100%; min-width: 0; height: 34px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; padding: 0 9px 0 25px; font-size: 12px; font-variant-numeric: tabular-nums; color: #1e293b; outline: none; }
 .pricing-currency-input > input { height: 32px; }
+.pricing-form-dialog input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.pricing-form-dialog input[type="number"]::-webkit-inner-spin-button, .pricing-form-dialog input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .pricing-currency-input > input:focus, .pricing-threshold > input:focus { border-color: #818cf8; box-shadow: 0 0 0 2px #eef2ff; }
 .pricing-currency-input > input:disabled { background: #f8fafc; color: var(--text-muted); }
 .pricing-currency-input > input[aria-invalid="true"], .pricing-threshold > input[aria-invalid="true"] { border-color: #fda4af; }

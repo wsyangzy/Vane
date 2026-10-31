@@ -19,6 +19,33 @@ const modelFieldType = (name, field) => {
   return type;
 };
 
+test('计费档位依据与缓存 TTL 设置跨越 Wails 输入输出边界', () => {
+  for (const name of ['CodexCredentialGroupInfo', 'CreateCodexCredentialGroupInput', 'UpdateCodexCredentialGroupInput']) {
+    assert.equal(modelFieldType(name, 'serviceTierSource'), 'string');
+    assert.equal(modelFieldType(name, 'cacheWriteTTLPricing'), 'boolean');
+  }
+  const group = wailsApi.mapCodexCredentialGroup({ serviceTierSource: 'request', cacheWriteTTLPricing: true });
+  assert.equal(group.serviceTierSource, 'request');
+  assert.equal(group.cacheWriteTTLPricing, true);
+  const payload = wailsApi.buildCodexCredentialGroupPayload(group);
+  assert.equal(payload.serviceTierSource, 'request');
+  assert.equal(payload.cacheWriteTTLPricing, true);
+  const defaults = wailsApi.buildCodexCredentialGroupPayload({});
+  assert.equal(defaults.serviceTierSource, 'response');
+  assert.equal(defaults.cacheWriteTTLPricing, false);
+});
+
+test('Codex 新缓存价格完整往返桥接层并由生成绑定声明', () => {
+  const mapped = wailsApi.mapModelPricingRecord({ model_name: 'test', provider: 'codex', service_tier: 'ultrafast', cache_write_price_30m: 15, cache_write_price_12h: 30, long_context_cache_write_price_12h: 60 });
+  const payload = wailsApi.buildModelPricingPayload(mapped);
+  for (const [field, value] of Object.entries({ cache_write_price_30m: 15, cache_write_price_12h: 30, long_context_cache_write_price_12h: 60 })) {
+    assert.equal(payload[field], value);
+    for (const model of ['ModelPricingInfo', 'CreateModelPricingInput']) assert.equal(modelFieldType(model, field), 'number');
+  }
+  assert.equal(payload.service_tier, 'ultrafast');
+  assert.equal(wailsApi.mapModelPricingRecord({ cache_write_price_30m: 0, cache_creation_price_5m: 9 }).cacheWritePrice30m, 0);
+});
+
 
 test('generated RequestRecord model includes request network fields', () => {
   for (const field of ['client_ip', 'user_agent', 'method', 'path']) {
@@ -268,11 +295,32 @@ test('Codex credential-group bridge preserves sparse combination billing rules',
   });
   assert.equal(mapped.billingRules[0].serviceTier, 'fast');
   assert.equal(mapped.billingRules[0].cacheCreationPrice, 9.375);
+  assert.equal(mapped.billingRules[0].groupMultiplierMode, 'inherit');
 
   const payload = wailsApi.buildCodexCredentialGroupPayload({ billingRules: mapped.billingRules });
   assert.equal(payload.billingRules[0].service_tier, 'fast');
   assert.equal(payload.billingRules[0].mode, 'fixed');
   assert.equal(payload.billingRules[0].output_price, 45);
+  assert.equal(payload.billingRules[0].group_multiplier_mode, 'inherit');
+  mapped.billingRules[0].groupMultiplierMode = 'inherit';
+  const stacked = wailsApi.buildCodexCredentialGroupPayload({ billingRules: mapped.billingRules });
+  assert.equal(stacked.billingRules[0].group_multiplier_mode, 'inherit');
+  assert.equal(wailsApi.mapCodexCredentialGroup({ billing_rules: stacked.billingRules }).billingRules[0].groupMultiplierMode, 'inherit');
+});
+
+test('Codex 模型和档位规则在载入与保存时始终叠加，旧兜底保持原倍率', () => {
+  const mapped = wailsApi.mapCodexCredentialGroup({
+    costMultiplier: 1.5,
+    billing_rules: [
+      { mode: 'multiplier', cost_multiplier: 1.5 },
+      { model: 'gpt-6.1-sol', service_tier: 'fast', context: 'normal', mode: 'multiplier', cost_multiplier: 1.25 },
+      { model: 'gpt-6.1-sol', service_tier: 'fast', context: 'long', mode: 'multiplier', cost_multiplier: 2, group_multiplier_mode: 'override' }
+    ]
+  });
+  assert.deepEqual(mapped.billingRules.map(rule => rule.groupMultiplierMode), ['override', 'inherit', 'inherit']);
+  const payload = wailsApi.buildCodexCredentialGroupPayload({ billingRules: mapped.billingRules });
+  assert.deepEqual(payload.billingRules.map(rule => rule.group_multiplier_mode), ['override', 'inherit', 'inherit']);
+  assert.equal(payload.billingRules[1].cost_multiplier, 1.25);
 });
 
 test('Claude credential-group bridge preserves long-context billing fields', () => {

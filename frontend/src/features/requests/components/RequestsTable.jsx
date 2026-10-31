@@ -21,6 +21,7 @@ import {
 } from '../utils/endpointChain.js';
 import {
   getReasoningEffortMeta,
+  getRequestServiceTierMeta,
   isThinkingTypeActive,
   parseReasoningConfig
 } from '../utils/requestMetadata.js';
@@ -160,6 +161,15 @@ const renderCell = (column, request, onViewDispatch) => {
       );
     case 'channel':
       return <ChannelCell request={request} compact={column.layoutWidth < 88} />;
+    case 'serviceTier': {
+      const tier = getRequestServiceTierMeta(request);
+      if (!tier) return <span className="text-xs text-slate-400">—</span>;
+      return <Tooltip content={tier.description} className="min-w-0 max-w-full">
+        <span aria-label={`服务档位：${tier.label}`} className={`block max-w-full truncate rounded border py-0.5 text-[11px] font-medium ${compact ? 'px-1' : 'px-2'} ${tier.className}`}>
+          {tier.label}
+        </span>
+      </Tooltip>;
+    }
     case 'endpoint':
       return <RequestRouteCell request={request} compact={column.layoutWidth < 112} onViewDetails={onViewDispatch ? () => onViewDispatch(request) : undefined} />;
     case 'duration':
@@ -301,7 +311,7 @@ const RequestsTable = ({
                   className="min-w-0 whitespace-nowrap px-0.5 py-2.5 font-medium text-[11px] text-center align-middle"
                   scope="col"
                 >
-                  <span className="block truncate">{col.layoutWidth < 58 ? ({ reasoningEffort: '推理', cacheCreationTokens: '创建', cacheReadTokens: '读取', requestId: '请求 ID', requestType: '类型' }[col.id] || col.label) : col.label}</span>
+                  <span className="block truncate">{col.layoutWidth < 58 ? ({ serviceTier: '档位', reasoningEffort: '推理', cacheCreationTokens: '创建', cacheReadTokens: '读取', requestId: '请求 ID', requestType: '类型' }[col.id] || col.label) : col.label}</span>
                 </th>
               ))}
             </tr>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowRight, Eye, EyeOff, KeyRound, Plus, Trash2, XCircle } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, KeyRound, Pencil, Plus, Trash2, XCircle } from 'lucide-react';
 import { Button, CustomSelect, Input, SegmentedTabs, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import SubscriptionSettings from '@/features/providers/shared/subscriptions/SubscriptionSettings.jsx';
@@ -7,9 +7,10 @@ import { validateSubscription } from '@/features/providers/shared/subscriptions/
 import EndpointCopyNameEditorStep, { EndpointCopySourcePicker } from '@/features/providers/shared/endpoints/EndpointCopyNameEditorStep.jsx';
 import ModelMultiplierEditor from '@/features/providers/shared/billing/ModelMultiplierEditor.jsx';
 import MultiplierSettingsModal from '@/features/providers/shared/billing/MultiplierSettingsModal.jsx';
+import { getCacheWritePolicyLabel } from '@/features/providers/shared/billing/multiplierPricing.js';
 import BillingRuleEditor, { createDefaultBillingRuleRow, parseBillingRuleRows } from './BillingRuleEditor.jsx';
 import { buildModelMappingPayload } from '@/features/providers/shared/routing/modelMapping.js';
-import { MULTIPLIER_EXPRESSION_HELP, parseModelMultiplierRows } from '@/features/providers/shared/billing/modelMultiplierRows.js';
+import { parseModelMultiplierRows } from '@/features/providers/shared/billing/modelMultiplierRows.js';
 import { isWailsEnvironment } from '@/services/wails/index.js';
 import { buildInitialCredentialGroupForm, CODEX_CREDENTIAL_GROUP_FORM_TABS, CODEX_CREDENTIAL_GROUP_CREATE_FORM_TABS, CODEX_BILLING_MODES, BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS, STANDARD_ENDPOINT_MULTIPLIER_FIELDS, LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS, parseEndpointMultiplierPayload } from '../model.js';
 
@@ -27,6 +28,20 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
   const modalBottomPadding = 16;
   const modalMaxHeight = `calc(100vh - ${modalTopPadding + modalBottomPadding}px)`;
   const isEdit = mode === 'edit';
+  const longContextFields = LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS.map((field) => ({
+    ...field,
+    multiplierKey: field.key.replace(/^longContext([A-Z])/, (_, letter) => letter.toLowerCase())
+  }));
+  const renderMultiplierSummary = (fields) => (
+    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
+      {fields.map(({ key, label }) => (
+        <span key={key} className="rounded-md border border-slate-200 bg-white px-2 py-1">
+          {label.replace(/Long context |成本倍率|倍率/g, '')}
+          {key.toLowerCase().includes('cachecreation') && `（${getCacheWritePolicyLabel(formData.cacheWriteTTLPricing)}）`} {formData[key]}x
+        </span>
+      ))}
+    </div>
+  );
   const [formStep, setFormStep] = useState('details');
   const [copyStepEndpoints, setCopyStepEndpoints] = useState([]);
   const [copyEndpointsEnabled, setCopyEndpointsEnabled] = useState(false);
@@ -115,7 +130,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 		...prev,
 		billingMode,
 		billingRuleRows: billingMode === 'rules' && prev.billingRuleRows.length === 0
-		  ? [createDefaultBillingRuleRow(prev)]
+		  ? [createDefaultBillingRuleRow()]
 		  : prev.billingRuleRows
 	  }));
 	  if (fieldError) setFieldError('');
@@ -191,6 +206,8 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 	}
     return {
       name,
+	  serviceTierSource: formData.serviceTierSource,
+	  cacheWriteTTLPricing: formData.cacheWriteTTLPricing,
       authMode: formData.authMode, subscription: formData.subscription,
       apiKey,
       isDefault: formData.isDefault,
@@ -239,7 +256,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
         className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl"
         style={{ maxHeight: modalMaxHeight }}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-6 py-4">
           <div className="flex items-start gap-3">
             <div className="rounded-xl bg-slate-900 p-2 text-white shadow-sm">
               <KeyRound size={18} />
@@ -262,7 +279,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
           </Tooltip>
         </div>
 
-        <form className="min-h-0 flex-1 overflow-y-auto" onSubmit={handleSubmit} autoComplete="off">
+        <form className={`min-h-0 flex-1 ${formStep === 'copyNames' ? 'overflow-y-auto' : 'flex flex-col overflow-hidden'}`} onSubmit={handleSubmit} autoComplete="off">
           {formStep === 'copyNames' ? (
             <EndpointCopyNameEditorStep
               endpoints={copyStepEndpoints}
@@ -278,7 +295,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
             />
           ) : (
             <>
-              <div className="border-b border-slate-100 bg-slate-50/70 px-6 py-3">
+              <div className="shrink-0 border-b border-slate-100 bg-slate-50/70 px-6 py-3">
                 <SegmentedTabs
                   tabs={credentialGroupTabs}
                   activeTab={activeTab}
@@ -289,7 +306,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                 />
               </div>
 
-              <div className="px-6 py-5">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
             {(fieldError || serverError) && (
               <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                 {fieldError || serverError}
@@ -526,16 +543,23 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
 				  </div>
 				</div>
 
-				<div>
-				  <label className="mb-1.5 block text-sm font-medium text-slate-700">默认输出计费口径</label>
-				  <CustomSelect
-					options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
-					value={formData.billingOutputTokenSource}
-					onChange={(value) => updateField('billingOutputTokenSource', value)}
-					size="md"
-					fullWidth
-				  />
-				</div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="min-w-0">
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">默认输出计费口径</label>
+                    <CustomSelect
+                      options={BILLING_OUTPUT_TOKEN_SOURCE_OPTIONS}
+                      value={formData.billingOutputTokenSource}
+                      onChange={(value) => updateField('billingOutputTokenSource', value)}
+                      size="md"
+                      fullWidth
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">缓存写入计费</label>
+                    <CustomSelect options={[{ value: '30m', label: '统一使用 30m write（默认）' }, { value: 'ttl', label: '按上游 30m / 12h 用量分档' }]} value={formData.cacheWriteTTLPricing ? 'ttl' : '30m'} onChange={(value) => updateField('cacheWriteTTLPricing', value === 'ttl')} disabled={loading} size="md" fullWidth />
+                    <p className="mt-1.5 text-xs text-slate-400">缺少 12h 单价或分档用量时使用 30m；未报告写入量时不额外计费。</p>
+                  </div>
+                </div>
 
 				{formData.billingMode === 'legacy' ? (
 				  <>
@@ -543,27 +567,21 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="text-sm font-medium text-slate-700">普通成本倍率</div>
-                      <div className="mt-0.5 text-xs text-slate-500">未命中 Long context 阈值时使用以下倍率</div>
+                      <div className="mt-0.5 text-xs text-slate-500">使用 Standard 定价。</div>
                     </div>
-                    <Button type="button" variant="secondary" size="sm" onClick={() => setStandardMultiplierSettingsOpen(true)} disabled={loading}>编辑</Button>
+                    <Button type="button" variant="secondary" size="sm" icon={Pencil} onClick={() => setStandardMultiplierSettingsOpen(true)} disabled={loading}>编辑</Button>
                   </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                    {STANDARD_ENDPOINT_MULTIPLIER_FIELDS.map(({ key, label }) => (
-                      <div key={key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                        <div className="truncate text-[11px] text-slate-400">{label.replace(/成本倍率|倍率/, '') || '总'}</div>
-                        <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{formData[key]}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-xs text-slate-400">成本倍率直接作为该分组下 Codex 端点的计费倍率，{MULTIPLIER_EXPRESSION_HELP}</p>
+                  {renderMultiplierSummary(STANDARD_ENDPOINT_MULTIPLIER_FIELDS)}
                 </div>
 
                 {standardMultiplierSettingsOpen && (
                   <MultiplierSettingsModal
                     title="普通成本倍率"
-                    description="未命中 Long context 阈值时应用以下倍率。"
+                    description="Standard 定价"
                     fields={STANDARD_ENDPOINT_MULTIPLIER_FIELDS}
                     values={formData}
+                    pricingServiceTier="standard"
+                    cacheWriteTTLPricing={formData.cacheWriteTTLPricing}
                     disabled={loading}
                     onCancel={() => setStandardMultiplierSettingsOpen(false)}
                     onSave={handleStandardMultiplierSave}
@@ -573,6 +591,7 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                 <button
                   type="button"
                   role="switch"
+                  aria-label="Long context 计费"
                   aria-checked={!formData.disableLongContextPricing}
                   onClick={handleLongContextToggle}
                   className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
@@ -604,25 +623,21 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                         <div className="text-sm font-medium text-slate-700">Long context 倍率已配置</div>
                         <div className="mt-0.5 text-xs text-slate-500">命中阈值后使用以下倍率</div>
                       </div>
-                      <Button type="button" variant="secondary" size="sm" onClick={() => setLongContextSettingsOpen(true)} disabled={loading}>编辑</Button>
+                      <Button type="button" variant="secondary" size="sm" icon={Pencil} onClick={() => setLongContextSettingsOpen(true)} disabled={loading}>编辑</Button>
                     </div>
-                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                      {LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS.map(({ key, label }) => (
-                        <div key={key} className="rounded-lg border border-slate-200 bg-white px-2.5 py-2">
-                          <div className="truncate text-[11px] text-slate-400">{label.replace('Long context ', '')}</div>
-                          <div className="mt-0.5 truncate text-sm font-medium text-slate-700">{formData[key]}</div>
-                        </div>
-                      ))}
-                    </div>
+                    {renderMultiplierSummary(LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS)}
                   </div>
                 )}
 
                 {longContextSettingsOpen && (
                   <MultiplierSettingsModal
                     title="Long context 成本倍率"
-                    description="命中模型 Long context 阈值后应用以下倍率。"
-                    fields={LONG_CONTEXT_ENDPOINT_MULTIPLIER_FIELDS}
+                    description="预览已包含普通倍率。"
+                    fields={longContextFields}
                     values={formData}
+                    pricingServiceTier="standard"
+                    cacheWriteTTLPricing={formData.cacheWriteTTLPricing}
+                    inheritedMultipliers={formData}
                     disabled={loading}
                     onCancel={() => setLongContextSettingsOpen(false)}
                     onSave={handleLongContextSave}
@@ -637,22 +652,49 @@ const CredentialGroupFormModal = ({ mode, channel, group, continueToEndpoint = f
                 />
 				  </>
 				) : (
+				  <>
+				  <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+				    <div className="flex items-center justify-between gap-3">
+				      <div className="min-w-0">
+				        <div className="text-sm font-medium text-slate-700">分组基础倍率</div>
+				        <p className="mt-1 text-xs leading-relaxed text-slate-500">模型、档位及 Long context 规则均在分组基础倍率上继续相乘。</p>
+				      </div>
+				      <Button type="button" variant="secondary" size="sm" icon={Pencil} onClick={() => setStandardMultiplierSettingsOpen(true)} disabled={loading}>编辑</Button>
+				    </div>
+                    {renderMultiplierSummary(STANDARD_ENDPOINT_MULTIPLIER_FIELDS)}
+				    <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-slate-700">Long context 计费</div>
+                        <p className="mt-1 text-[11px] text-slate-500">{formData.disableLongContextPricing ? '已关闭，使用普通上下文单价和规则。' : '已开启，超过模型阈值后使用长上下文单价并匹配 Long context 规则。'}</p>
+                      </div>
+                      <button type="button" role="switch" aria-label="Long context 计费" aria-checked={!formData.disableLongContextPricing} disabled={loading}
+                        onClick={() => updateField('disableLongContextPricing', !formData.disableLongContextPricing)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 rounded-full disabled:opacity-50 ${formData.disableLongContextPricing ? 'bg-slate-300' : 'bg-indigo-600'}`}>
+                        <span className={`absolute top-0.5 size-4 rounded-full bg-white shadow ${formData.disableLongContextPricing ? 'translate-x-0.5' : 'translate-x-[1.125rem]'}`} />
+                      </button>
+                    </div>
+				  </div>
+				  {standardMultiplierSettingsOpen && <MultiplierSettingsModal title="分组基础倍率" fields={STANDARD_ENDPOINT_MULTIPLIER_FIELDS} values={formData} pricingServiceTier="standard" cacheWriteTTLPricing={formData.cacheWriteTTLPricing} disabled={loading} onCancel={() => setStandardMultiplierSettingsOpen(false)} onSave={handleStandardMultiplierSave} />}
 				  <BillingRuleEditor
 					rows={formData.billingRuleRows}
+					groupMultipliers={formData}
+                    longContextEnabled={!formData.disableLongContextPricing}
+                    cacheWriteTTLPricing={formData.cacheWriteTTLPricing}
 					onChange={updateBillingRuleRows}
 					disabled={loading}
 				  />
+				  </>
 				)}
               </div>
             )}
 
-            <div className="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
+              </div>
+            <div className="flex shrink-0 justify-end gap-3 border-t border-slate-100 bg-white px-6 py-4">
               <Button type="button" variant="ghost" onClick={onCancel} disabled={loading}>取消</Button>
               <Button type="submit" variant="primary" loading={loading}>
                 {isEdit ? '保存分组' : (continueToEndpoint || copyEndpointsEnabled ? '下一步' : '添加分组')}
               </Button>
             </div>
-              </div>
             </>
           )}
         </form>

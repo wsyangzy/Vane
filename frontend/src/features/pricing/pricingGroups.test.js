@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   groupPricingsByModel,
+  groupPricingSpeeds,
   buildTierPayloads,
   emptyTierValues,
   tierValuesFromRecord,
@@ -11,6 +12,28 @@ import {
 
 test('基础定价的默认档位显示为 Standard，保存值仍为空档位', () => {
   assert.equal(serviceTierLabel(''), 'Standard');
+});
+
+test('Speed 聚合保留 Flex 与 Batch 独立价格，并包含 Ultrafast', () => {
+  const groups = groupPricingSpeeds([
+    { serviceTier: '', inputPrice: 2 },
+    { serviceTier: 'flex', inputPrice: 1 },
+    { serviceTier: 'batch', inputPrice: .8 },
+    { serviceTier: 'fast', inputPrice: 4 },
+    { serviceTier: 'ultrafast', inputPrice: 12 }
+  ]);
+  assert.deepEqual(groups.map((g) => g.label), ['Standard', 'Flex/Batch', 'Fast', 'Ultrafast']);
+  assert.deepEqual(groups[1].records.map((r) => [r.serviceTier, r.inputPrice]), [['flex', 1], ['batch', .8]]);
+});
+
+test('保存档位计划携带 30m、12h 和长上下文写入价格', () => {
+  const values = tierValuesFromRecord({ id: 7, cacheWritePrice30m: 5, cacheWritePrice12h: 10, longContextCacheWritePrice12h: 20 });
+  const { saves } = buildTierPayloads({ provider: 'codex', modelName: 'test', tiers: { '': emptyTierValues(), ultrafast: values } });
+  const ultra = saves.find((s) => s.serviceTier === 'ultrafast');
+  assert.equal(ultra.cacheWritePrice30m, 5);
+  assert.equal(ultra.cacheWritePrice12h, 10);
+  assert.equal(ultra.longContextCacheWritePrice12h, 20);
+  assert.equal(tierValuesFromRecord({ cacheWritePrice30m: 0, cacheCreationPrice5m: 8 }).cacheWritePrice30m, 0);
 });
 
 const row = (overrides) => ({
