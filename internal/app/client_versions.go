@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
@@ -68,12 +66,7 @@ func (a *App) GetClaudeCodeVersion() string {
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		// Windows 下隐藏命令行窗口（CREATE_NO_WINDOW = 0x08000000）
-		if runtime.GOOS == "windows" {
-			cmd.SysProcAttr = &syscall.SysProcAttr{
-				HideWindow: true,
-			}
-		}
+		hideClientCommandWindow(cmd)
 
 		err := cmd.Run()
 		if err != nil {
@@ -159,12 +152,7 @@ func (a *App) GetCodexVersion() string {
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		// Windows 下隐藏命令行窗口（CREATE_NO_WINDOW = 0x08000000）
-		if runtime.GOOS == "windows" {
-			cmd.SysProcAttr = &syscall.SysProcAttr{
-				HideWindow: true,
-			}
-		}
+		hideClientCommandWindow(cmd)
 
 		err := cmd.Run()
 		if err != nil {
