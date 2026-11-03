@@ -23,7 +23,7 @@ func TestPoolChannelSchemaUpgradePreservesExistingPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := routing.Pool{Provider: "codex", Name: "existing", Default: true, Strategy: routing.PoolSequential,
-		KeyHash: "preserved-key-hash", Members: []routing.PoolMember{{1, 11, routing.TierPrimary}, {2, 22, routing.TierBackup}},
+		KeyHash: "preserved-key-hash", Members: []routing.PoolMember{{ChannelID: 1, GroupID: 11, Tier: routing.TierPrimary}, {ChannelID: 2, GroupID: 22, Tier: routing.TierBackup}},
 		Rules: []routing.ModelRule{{ID: 1, Name: "existing-rule", MatchModel: "test-*", Mode: "prefer", Targets: []routing.Target{{ChannelID: 2, GroupID: 22}}}}}
 	if err = s.Save(ctx, &p); err != nil {
 		t.Fatal(err)
@@ -44,11 +44,11 @@ func TestPoolChannelSchemaUpgradePreservesExistingPool(t *testing.T) {
 	if got[0].ID != p.ID || got[0].KeyHash != p.KeyHash || !got[0].Default || !reflect.DeepEqual(got[0].Members, p.Members) || !reflect.DeepEqual(got[0].Rules, p.Rules) {
 		t.Fatalf("upgrade changed existing configuration: %+v", got[0])
 	}
-	if !reflect.DeepEqual(got[0].Channels, []routing.PoolChannel{{1, routing.TierPrimary}, {2, routing.TierBackup}}) {
+	if !reflect.DeepEqual(got[0].Channels, []routing.PoolChannel{{ChannelID: 1, Tier: routing.TierPrimary}, {ChannelID: 2, Tier: routing.TierBackup}}) {
 		t.Fatalf("old memberships were not interpreted as channels: %+v", got[0].Channels)
 	}
 	// A channel with no selected groups must survive reopening the pool.
-	got[0].Channels = append(got[0].Channels, routing.PoolChannel{3, routing.TierPrimary})
+	got[0].Channels = append(got[0].Channels, routing.PoolChannel{ChannelID: 3, Tier: routing.TierPrimary})
 	if err = s.Save(ctx, &got[0]); err != nil {
 		t.Fatal(err)
 	}
