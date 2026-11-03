@@ -180,7 +180,11 @@ INSERT INTO model_pricing (
 		inputPrice                                                float64
 		longInput, longCacheRead, longCacheWrite, longOutputPrice float64
 	)
-	if err := adapter.GetReadDB().QueryRowContext(ctx, `
+	// Schema migration does not use the fixture setup context. Give this
+	// verification query its own deadline after migration has completed.
+	queryCtx, cancelQuery := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelQuery()
+	if err := adapter.GetReadDB().QueryRowContext(queryCtx, `
 		SELECT input_price, long_context_threshold, long_context_input_price,
 			long_context_cache_read_price, long_context_cache_write_price,
 			long_context_output_price

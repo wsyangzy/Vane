@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"syscall"
 	"testing"
 	"time"
@@ -339,8 +340,13 @@ func TestErrorRecoveryManager_ClassifyError_SyscallErrors(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		mockErr := &mockSyscallError{errno: tc.errno}
-		errorCtx := erm.ClassifyError(mockErr, "test", "endpoint", "group", 1)
+		var fixtureErr error = &mockSyscallError{errno: tc.errno}
+		if tc.errno == syscall.ETIMEDOUT {
+			// Use the dial operation to identify connection timeouts; errno text
+			// differs between platforms and does not identify the request phase.
+			fixtureErr = &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: tc.errno}}
+		}
+		errorCtx := erm.ClassifyError(fixtureErr, "test", "endpoint", "group", 1)
 
 		if errorCtx.ErrorType != tc.expected {
 			t.Errorf("For syscall error %v, expected %v, got %v", tc.errno, tc.expected, errorCtx.ErrorType)
