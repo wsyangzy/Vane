@@ -1,7 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { credentialGroupRoutingImpact } from './dispatchState.js';
-import { addProfileChannel, candidateHealthPresentation, classifierInputNotice, dispatchReason, editableProfile, mappingTargetAllowed, moveProfileChannel, newRoutingProfile, quotaPresentation, selectProfileChannels, setIntentRoutingEnabled, stateCompatibilityLabel, summarizeIntentTraces, updateProfileMembers, validateProfileDraft } from './dispatchState.js';
+import { addProfileChannel, candidateHealthPresentation, classifierInputNotice, dispatchReason, editableProfile, mappingTargetAllowed, moveProfileChannel, newRoutingProfile as createRoutingProfile, quotaPresentation, selectProfileChannels, setIntentRoutingEnabled, stateCompatibilityLabel, summarizeIntentTraces, updateProfileMembers, validateProfileDraft } from './dispatchState.js';
+
+const newRoutingProfile = (provider, isDefault) => createRoutingProfile(provider, isDefault, { maxAttempts: 10, maxDurationMs: 60000, waitForRecovery: true });
+
+test('new profiles use saved global budgets and existing profiles retain explicit limits', () => {
+  const saved = { maxAttempts: 24, maxDurationMs: 150000, waitForRecovery: false };
+  const profile = createRoutingProfile('codex', false, saved);
+  profile.name = '使用全局初始值';
+  assert.equal(profile.maxAttempts, 24);
+  assert.equal(profile.maxDurationMs, 150000);
+  assert.equal(profile.waitForRecovery, false);
+  assert.equal(validateProfileDraft(profile), '');
+  const existing = editableProfile({ ...profile, maxAttempts: 3, maxDurationMs: 10000 });
+  assert.equal(existing.maxAttempts, 3);
+  assert.equal(existing.maxDurationMs, 10000);
+  assert.match(validateProfileDraft({ ...createRoutingProfile('codex'), name: '未读取设置' }), /尝试次数/);
+});
 
 test('health presentation distinguishes disabled resources, credential repair and timed recovery', () => {
   const disabled = candidateHealthPresentation({ enabled: false, health: { coolingDown: true, reason: 'account_disabled', until: '2026-10-23T10:00:00Z' } });
@@ -164,11 +180,11 @@ test('credential deletion impact includes members, rules, wildcard channels and 
   const profile = (id, name, patch = {}) => ({ id, name, members: [], rules: [], intents: [], classifier: null, ...patch });
   const workspaces = [
     { provider: 'claude', accounts: [{ groupId: 44, channelId: 7 }], profiles: [
-      profile(1, 'member', { members: [{ groupId: 44, channelId: 7, enabled: true }] }),
-      profile(2, 'disabled reference', { members: [{ groupId: 44, channelId: 7, enabled: false }] }),
+      profile(1, 'member', { members: [{ profileId: 1, groupId: 44, channelId: 7, enabled: true }] }),
+      profile(2, 'disabled reference', { members: [{ profileId: 2, groupId: 44, channelId: 7, enabled: false }] }),
       profile(3, 'model rule', { rules: [{ targets: [{ groupId: 44, channelId: 7 }] }] }),
       profile(4, 'intent rule', { intents: [{ targets: [{ groupId: 44, channelId: 7 }] }] }),
-      profile(5, 'wildcard', { members: [{ groupId: 0, channelId: 7, enabled: true }] }),
+      profile(5, 'wildcard', { members: [{ profileId: 5, groupId: 0, channelId: 7, enabled: true }] }),
       profile(6, 'other channel', { members: [{ groupId: 0, channelId: 8, enabled: true }] }),
       profile(7, 'profile expansion', { rules: [{ targets: [{ profileId: 2, groupId: 44 }] }] }),
     ] },
@@ -178,7 +194,7 @@ test('credential deletion impact includes members, rules, wildcard channels and 
     ] },
   ];
   const impact = credentialGroupRoutingImpact(workspaces, 'claude', 44);
-  assert.deepEqual(impact.map((item) => item.id), [1, 2, 3, 4, 5, 9]);
+  assert.deepEqual(impact.map((item) => item.id), [1, 3, 4, 5, 9]);
   assert.equal(impact[0].losesLastMember, true);
   assert.equal(impact[1].losesLastMember, false);
   assert.equal(impact.at(-1).classifierReference, true);

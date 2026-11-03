@@ -55,9 +55,9 @@ test('request channel failover display is data-driven for Claude and Codex', () 
 });
 
 test('request transfer indicators use the shared Route icon for Claude and Codex', () => {
-  assert.match(source, /const channelTransferCount = countChannelSwitches\(getEndpointChainItems\(request\)\)/);
-  assert.match(source, /aria-label=\{`渠道切换 \$\{channelTransferCount\} 次`\}/);
-  assert.match(source, /<span>\{channelTransferCount\}<\/span>/);
+  assert.match(source, /getRequestResourcePath\(request\)/);
+  assert.match(source, /aria-label=\{`调用资源切换 \$\{transferCount\} 次`\}/);
+  assert.match(source, /<span>\{transferCount\}<\/span>/);
   assert.doesNotMatch(source, /<Tooltip content="渠道间转移记录">/);
   assert.equal(source.match(/<Route className="w-2\.5 h-2\.5" \/>/g)?.length, 1);
   assert.match(source, /<Route className="w-2\.5 h-2\.5" \/>/);

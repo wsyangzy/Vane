@@ -14,8 +14,10 @@ import (
 
 type RuntimeConfig struct {
 	Provider         string
+	RuleDefaults     *RuleDefaults
 	Profiles         []RoutingProfile
 	Candidates       []DispatchCandidate
+	Catalog          Catalog
 	Classify         ClassifierCall
 	PrepareCandidate func(DispatchCandidate, string, string) DispatchCandidate
 	Supports         func(DispatchCandidate, string) bool
@@ -57,6 +59,16 @@ type DispatchTraceEvent struct {
 	Scope     FailureScope `json:"failure_scope,omitempty"`
 }
 
+// DispatchRouteSource is the default orchestration choice before applying a
+// rule. It is explanatory configuration evidence, never an upstream attempt.
+type DispatchRouteSource struct {
+	ChannelID   int64  `json:"channel_id,omitempty"`
+	GroupID     int64  `json:"group_id,omitempty"`
+	ChannelName string `json:"channel_name,omitempty"`
+	GroupName   string `json:"group_name,omitempty"`
+	Unavailable bool   `json:"unavailable,omitempty"`
+}
+
 // DispatchTrace is the persistence boundary. It deliberately has no profile
 // descriptions, input, caller/session identifiers, quota error text or secrets.
 type DispatchTrace struct {
@@ -64,6 +76,8 @@ type DispatchTrace struct {
 	Provider        string               `json:"provider"`
 	ProfileID       int64                `json:"profile_id"`
 	ProfileName     string               `json:"profile_name"`
+	RequestedModel  string               `json:"requested_model,omitempty"`
+	DefaultSource   *DispatchRouteSource `json:"default_source,omitempty"`
 	Strategy        string               `json:"strategy"`
 	AffinityMode    AffinityMode         `json:"affinity_mode"`
 	Decision        DispatchDecision     `json:"decision"`
@@ -91,6 +105,8 @@ type DispatchPlan struct {
 	Preview            bool                  `json:"preview"`
 	Turn               TurnInput             `json:"-"`
 	Budget             *Budget               `json:"-"`
+	requestedModel     string                // The incoming model can differ from Model after turn reuse.
+	defaultSource      *DispatchRouteSource
 	state              *dispatchRequestState
 }
 
@@ -151,11 +167,17 @@ func (r *ProfileRuntime) Replace(config RuntimeConfig) {
 	type resources struct {
 		Profiles   []RoutingProfile
 		Candidates []DispatchCandidate
+		Catalog    Catalog
 	}
-	data, _ := json.Marshal(resources{config.Profiles, config.Candidates})
+	data, _ := json.Marshal(resources{config.Profiles, config.Candidates, config.Catalog})
 	var copy resources
 	_ = json.Unmarshal(data, &copy)
 	config.Profiles, config.Candidates = copy.Profiles, copy.Candidates
+	config.Catalog = copy.Catalog
+	if config.RuleDefaults != nil {
+		defaults := *config.RuleDefaults
+		config.RuleDefaults = &defaults
+	}
 	healthEndpoints := make(map[string]struct{})
 	if profile, ok := runtimeProfile(config, 0); ok {
 		for _, candidate := range config.Candidates {
@@ -289,13 +311,13 @@ func ResolveDecision(p RoutingProfile, model string, streaming bool, intentID st
 		if mode == "" {
 			mode = ModePrefer
 		}
-		return DispatchDecision{Kind: rule.Kind, RuleID: rule.ID, IntentID: intentID, Mode: mode, Targets: rule.Targets, FallbackToDefault: boolDefault(rule.FallbackToDefault, rule.Kind != "non_stream" && rule.Kind != "mapping")}
+		return DispatchDecision{Kind: rule.Kind, RuleID: rule.ID, IntentID: intentID, Mode: mode, Targets: rule.Targets, FallbackToDefault: boolDefault(rule.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)}
 	}
 	for _, in := range p.Intents {
 		if !in.Enabled || in.ID != intentID {
 			continue
 		}
-		decision := DispatchDecision{Kind: "intent", IntentID: in.ID, Mode: in.Mode, Targets: in.Targets, FallbackToDefault: boolDefault(in.FallbackToDefault, true)}
+		decision := DispatchDecision{Kind: "intent", IntentID: in.ID, Mode: in.Mode, Targets: in.Targets, FallbackToDefault: boolDefault(in.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)}
 		if decision.Mode == "" {
 			decision.Mode = ModePrefer
 		}
@@ -310,7 +332,7 @@ func ResolveDecision(p RoutingProfile, model string, streaming bool, intentID st
 					if mode == "" {
 						mode = ModePrefer
 					}
-					decision.FallbackIntents = append(decision.FallbackIntents, IntentRoute{fallback.ID, mode, fallback.Targets, boolDefault(fallback.FallbackToDefault, true)})
+					decision.FallbackIntents = append(decision.FallbackIntents, IntentRoute{fallback.ID, mode, fallback.Targets, boolDefault(fallback.FallbackToDefault, DefaultRuleDefaults().FallbackToDefault)})
 					next, found = fallback.FallbackIntent, true
 					break
 				}
@@ -465,7 +487,7 @@ func (r *ProfileRuntime) Plan(ctx context.Context, profileID int64, model string
 	config := r.snapshot()
 	now := r.now()
 	p, exists := runtimeProfile(config, profileID)
-	plan := DispatchPlan{RequestID: fmt.Sprintf("dispatch-%d-%d", now.UnixNano(), dispatchRequestSequence.Add(1)), Profile: p, Model: model, Turn: turn, Preview: preview, Stages: []DispatchPlanStage{}, Evaluations: []CandidateEvaluation{}, EligibleCandidates: []DispatchCandidate{}}
+	plan := DispatchPlan{RequestID: fmt.Sprintf("dispatch-%d-%d", now.UnixNano(), dispatchRequestSequence.Add(1)), Profile: p, Model: model, requestedModel: model, Turn: turn, Preview: preview, Stages: []DispatchPlanStage{}, Evaluations: []CandidateEvaluation{}, EligibleCandidates: []DispatchCandidate{}}
 	plan.state = &dispatchRequestState{runtime: r, created: now, publish: config.OnTrace}
 	if !exists {
 		plan.Error = "routing_profile_missing"
@@ -536,10 +558,27 @@ func (r *ProfileRuntime) Plan(ctx context.Context, profileID int64, model string
 			plan.Decision = ResolveDecision(p, model, streaming, sameTurn.intent)
 		}
 	}
+	plan.Decision = applyRuleDefaults(p, plan.Decision, config.RuleDefaults)
 	if owner, ok := ctx.Value(statePreferenceKey{}).(Candidate); ok {
 		preferred = &owner
 	}
 	plan.state.previous = preferred
+	if plan.Decision.Kind != "default" {
+		// Evaluate the same default orchestration without reserving a resource,
+		// advancing rotation or producing events. Legacy active channels can be
+		// outside this profile and must never be used as the rule's origin.
+		baseline := DispatchPlan{Profile: p, Model: plan.Model, Decision: DispatchDecision{Kind: "default"}, state: &dispatchRequestState{previous: preferred}}
+		r.populateDispatchPlan(ctx, config, &baseline, preferred, now)
+		plan.defaultSource = &DispatchRouteSource{Unavailable: true}
+		if len(baseline.EligibleCandidates) > 0 {
+			first := baseline.EligibleCandidates[0]
+			source := &DispatchRouteSource{ChannelID: first.ChannelID, GroupID: first.GroupID}
+			if channel := config.Catalog.Channel(first.ChannelID); channel != nil {
+				source.ChannelName, source.GroupName = channel.Name, channel.GroupName(first.GroupID)
+			}
+			plan.defaultSource = source
+		}
+	}
 	r.populateDispatchPlan(ctx, config, &plan, preferred, now)
 	return plan
 }
@@ -962,7 +1001,11 @@ func (r *ProfileRuntime) rememberFailure(plan *DispatchPlan, candidate DispatchC
 }
 
 func (p *DispatchPlan) Trace() DispatchTrace {
-	trace := DispatchTrace{RequestID: p.RequestID, Provider: p.Profile.Provider, ProfileID: p.Profile.ID, ProfileName: p.Profile.Name, Strategy: p.Profile.Strategy, AffinityMode: p.Profile.AffinityMode, Decision: p.Decision, Intent: p.Intent, StopReason: p.Error, Candidates: []DispatchTraceEvent{}}
+	trace := DispatchTrace{RequestID: p.RequestID, Provider: p.Profile.Provider, ProfileID: p.Profile.ID, ProfileName: p.Profile.Name, RequestedModel: p.requestedModel, Strategy: p.Profile.Strategy, AffinityMode: p.Profile.AffinityMode, Decision: p.Decision, Intent: p.Intent, StopReason: p.Error, Candidates: []DispatchTraceEvent{}}
+	if p.defaultSource != nil {
+		source := *p.defaultSource
+		trace.DefaultSource = &source
+	}
 	if p.state == nil {
 		return trace
 	}

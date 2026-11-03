@@ -58,6 +58,16 @@ test('dispatch input explicitly allowlists fields and configuration checks prese
   assert.equal(status.ready, false); assert.equal(status.checks[0].passed, false);
 });
 
+test('trace bridge retains the original model and public default source without adding sends', () => {
+  const result = mapDispatchTrace({ requested_model: 'original-model', default_source: { channel_id: 1, group_id: 11, channel_name: '历史渠道', group_name: '历史分组', credential: 'never-forward-this' }, candidates: [], attempts: 0 });
+  assert.equal(result.requestedModel, 'original-model');
+  assert.deepEqual(result.defaultSource, { channelId: 1, groupId: 11, channelName: '历史渠道', groupName: '历史分组', unavailable: false });
+  assert.equal(result.attempts, 0);
+  assert.deepEqual(result.candidates, []);
+  assert.equal(mapDispatchTrace({}).defaultSource, null);
+  assert.equal(mapDispatchTrace({ default_source: { unavailable: true } }).defaultSource.unavailable, true);
+});
+
 test('dispatch bridge resolves actual generated methods and DispatchPlan fields', () => {
   const bridge = readFileSync(new URL('./dispatch.js', import.meta.url), 'utf8');
   const service = readFileSync(new URL('../../bindings/github.com/wsyangzy/Vane/internal/desktop/api/routingservice.js', import.meta.url), 'utf8');

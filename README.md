@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.0.1-blue.svg" alt="Version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License">
   <img src="https://img.shields.io/badge/Go-1.27.3-00ADD8.svg" alt="Go">
@@ -29,6 +29,8 @@ Vane 延续 AI Relay Forwarder / Claude Request Forwarder 的开发历史，以�
 
 自动健康探测仅覆盖各提供商当前默认调度方案的启用成员；未参与的渠道、分组和无可用凭证的资源显示“未开启”，不发送后台探测。没有启用的默认方案时不进行自动探测。设置中的“主动健康检查”为 Claude 与 Codex 共用的总开关，关闭后停止发起自动探测，端点显示“未开启”并隐藏旧延迟；手动检测和真实请求反馈仍可使用。切换方案或修改成员后按新范围执行；订阅端点始终通过真实请求验证。手动“立即检测”只执行一次，不开启自动检测；方案内“跳过健康检查”仍保留延迟测速，仅跳过健康判定。
 
+「设置 → 调度保护」统一配置 Claude / Codex 的总尝试次数、调度等待时限、恢复等待、首次冷却时间、连续失败递增倍数与最长冷却时间，以及所有规则共用的一个默认回退开关。模型 / 条件路由、模型映射、非流改道和意图路由选择「跟随全局」时采用该配置，规则内明确的允许或禁止优先；已有方案保留自己的预算上限，与全局限制取较小值，新建方案从当前全局预算初始化。设置保存后生效；新的冷却参数用于后续失败，已进入冷却的资源保留原到期时间，正在处理的请求保留已采用的规则决策。上游有效的 `Retry-After` 优先于本地冷却时间，调度预算耗尽后停止等待与新尝试，不中断已开始的正常响应。
+
 ## 主要功能
 
 - **多提供商接入**：Claude 与 Codex 分别管理，支持多渠道、凭证分组、多个上游端点。
@@ -42,7 +44,35 @@ Vane 延续 AI Relay Forwarder / Claude Request Forwarder 的开发历史，以�
 
 请求列表中的「请求调度」显示本次采用的方案，多次尝试和未发送会单独标记。单击可预览决策与调用路径，再点击「查看完整调度」进入请求详情的调度链路页签；普通双击请求行仍从概览打开。
 
-![Vane overview](docs/images/overview.png)
+## 应用界面
+
+以下截图来自 v1.0.1 的实际前端界面，使用示例渠道、请求和用量数据，不包含真实凭证或用户会话。
+
+### 用量概览
+
+按本地会话或代理请求查看 Token、费用、趋势与模型分布，支持按提供商、周期和项目筛选。
+
+![Vane v1.0.1 用量概览](docs/images/overview.png)
+
+### 渠道与调度方案
+
+Claude 与 Codex 分别管理渠道资源，通过调度方案组织渠道、凭证分组、路由规则和候选预览。
+
+![Vane v1.0.1 渠道与调度方案](docs/images/endpoints.png)
+
+### 请求追踪
+
+查看真实发送的渠道与端点、请求结果、Token 和费用；通过请求调度入口展开模型路由、重试与完整调用链。
+
+![Vane v1.0.1 请求追踪](docs/images/requests.png)
+
+### 调度保护设置
+
+统一配置 Claude 与 Codex 的请求预算、恢复等待、临时故障冷却及规则默认回退，单条规则可以明确覆盖回退设置。
+
+![Vane v1.0.1 调度保护设置](docs/images/settings.png)
+
+## 功能与行为说明
 
 隐私防护默认仅检测，密钥预设需要在「导入预设」中启用。顶部「关闭」不扫描；「仅检测」记录命中，原文放行；「脱敏」统一替换敏感值，额外放行规则除外。运行设置中的「回复还原」独立控制回复文本和工具参数中的编码还原，不影响发送前脱敏。扫描出错或路径未覆盖时原文放行，可分别选择是否写入防护记录；还原映射超限时始终记录并原文放行。超过扫描上限时可选择扫描前缀、其余原样放行，或跳过整次扫描并原文放行；默认扫描前缀。隐私模块不主动拒绝请求。旧警告和拦截规则迁移为普通规则，跟随顶部模式。全部 Claude / Codex 渠道统一使用这一入口，旧渠道的可信／中转级别不再参与判断。同一请求的重试与故障转移复用同一份处理结果。
 
@@ -60,7 +90,7 @@ Codex 组合计费将「分组基础倍率」与模型、服务档位和上下�
 
 ## 下载与运行
 
-发布后可从 [Vane Releases](https://github.com/wsyangzy/Vane/releases) 下载。
+当前版本为 **v1.0.1**，可从 [v1.0.1 发布页](https://github.com/wsyangzy/Vane/releases/tag/v1.0.1) 或 [全部 Releases](https://github.com/wsyangzy/Vane/releases) 下载。
 
 当前发布工作流打包 Windows x64，资产名称为 `Vane-windows-amd64.zip`。macOS、Linux 提供源码构建配置。
 
@@ -105,6 +135,8 @@ Windows 输出位于 `build/bin/Vane.exe`，开发版本为 `build/bin/Vane-dev.
 ## 配置与数据目录
 
 运行设置由代码默认值初始化，并保存在应用自己的 SQLite 数据库中。渠道、凭证、端点、模型定价、代理、日志和故障转移等配置通过应用界面管理。
+
+设置页的“调度保护”统一控制 Claude 与 Codex。“端点冷却时等待重试”默认开启，所有候选暂时不可用时，在本次请求剩余的调度时限和尝试次数内等待恢复；关闭后直接返回失败。保存后对新请求生效，已有方案的旧等待开关不再决定运行行为。方案自身的时间和次数限制与全局上限取较小值；客户端取消会结束等待，已经开始的正常响应不受调度时限中断。
 
 | 平台 | 默认应用数据目录 |
 | --- | --- |
@@ -217,7 +249,7 @@ git diff --check
 
 ## 发布与版本
 
-Vane 使用三段版本号，初始版本为 `1.0.0`；Windows 文件资源采用对应的四段数字版本 `1.0.0.0`。版本权威值位于 `internal/buildinfo/buildinfo.go` 的 `Version`；Wails、平台资源、构建默认值和 `frontend/src/app/release-notes.json` 应与之保持一致。链接器注入使用 `github.com/wsyangzy/Vane/internal/buildinfo.Version` 等完整变量路径。
+Vane 使用三段版本号，当前版本为 `1.0.1`；Windows 文件资源采用对应的四段数字版本 `1.0.1.0`。版本权威值位于 `internal/buildinfo/buildinfo.go` 的 `Version`；Wails、平台资源、构建默认值和 `frontend/src/app/release-notes.json` 应与之保持一致。链接器注入使用 `github.com/wsyangzy/Vane/internal/buildinfo.Version` 等完整变量路径。
 
 需要调整版本时，可在 Bash 环境运行 `bash scripts/release/release.sh <版本号> "发布说明"`，审核版本文件与发布说明后再单独提交。该脚本只更新文件；不自动提交、打标签或推送。
 
@@ -230,7 +262,7 @@ GitHub Actions 分为持续检查与标签发布：
 
 CI 对仅修改 Markdown 或 `docs/` 的 PR 保留检查名称，跳过前端和 Go 平台任务中的步骤。CI 使用只读仓库权限；PR 的新提交会取消同一 PR 的旧运行，每个任务均设置超时。普通提交、PR 与手动 CI 检查只产生测试所需的前端中间资源。
 
-发布流程只接受三段数字版本标签，例如 `v1.0.0`，不提供手动发布入口。标签必须与 `internal/buildinfo/buildinfo.go`、发布说明的当前版本及版本条目一致；完整 CI 通过后才编译发布程序。发布资产为 `Vane-windows-amd64.zip` 和 `checksums.txt`，只有最终发布任务拥有仓库写入权限。
+发布流程只接受三段数字版本标签，例如 `v1.0.1`，不提供手动发布入口。标签必须与 `internal/buildinfo/buildinfo.go`、发布说明的当前版本及版本条目一致；完整 CI 通过后才编译发布程序。发布资产为 `Vane-windows-amd64.zip` 和 `checksums.txt`，只有最终发布任务拥有仓库写入权限。
 
 旧项目标签不随仓库迁移上传。旧历史中仅由标签引用的提交通过 `archive/legacy-history` 分支保留。
 
@@ -240,4 +272,11 @@ CI 对仅修改 Markdown 或 `docs/` 的 PR 保留检查名称，跳过前端和
 
 项目采用 [MIT License](LICENSE)。原项目作者和贡献者的版权声明继续保留。
 
-感谢原项目作者与贡献者，以及 [Wails](https://wails.io)、Go、React 和相关开源依赖。项目最初受 [xinhai-ai/endpoint_forwarder](https://github.com/xinhai-ai/endpoint_forwarder) 启发。
+## 鸣谢
+
+感谢原项目作者、贡献者和以下开源项目的工作与启发：
+
+- [xiaozhaodong/cc-forwarder](https://github.com/xiaozhaodong/cc-forwarder)：使用 Go 实现的 Claude API 智能转发器，提供 Web 管理、请求追踪、分组管理与自动故障转移。
+- [yetone/magpie](https://github.com/yetone/magpie)：面向 AI 编程工具的桌面模型网关，将不同模型接入集中到统一入口。
+- [xinhai-ai/endpoint_forwarder](https://github.com/xinhai-ai/endpoint_forwarder)：项目最初的灵感来源。
+- [Wails](https://wails.io)、[Go](https://go.dev)、[React](https://react.dev) 及相关开源依赖：支撑桌面宿主、代理运行时与应用界面。

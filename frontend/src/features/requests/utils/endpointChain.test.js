@@ -1,5 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getRequestResourcePath } from './endpointChain.js';
+
+test('resource tooltip follows group and endpoint changes even within the same channel', () => {
+  const attempts = [
+    { channel: 'A', credentialGroup: 'primary', endpoint: 'one' },
+    { channel: 'A', credentialGroup: 'primary', endpoint: 'one' },
+    { channel: 'A', credentialGroup: 'backup', endpoint: 'one' },
+    { channel: 'A', credentialGroup: 'backup', endpoint: 'two' },
+    { channel: 'B', credentialGroup: 'default', endpoint: 'three' },
+  ];
+  const path = getRequestResourcePath({ channel: 'old-active', dispatchTrace: { attemptCount: 5, attempts, skipped: [{ channel: 'unused' }] } });
+  assert.deepEqual(path.map(node => [node.channel, node.credentialGroup, node.endpoint, node.attempts]), [
+    ['A', 'primary', 'one', 2], ['A', 'backup', 'one', 1], ['A', 'backup', 'two', 1], ['B', 'default', 'three', 1],
+  ]);
+  assert.equal(getRequestResourcePath({ channel: 'old-active', endpoint: 'old', dispatchTrace: { attemptCount: 0, attempts: [] } }).length, 0);
+});
+
+test('resource tooltip supports direct and legacy calls without assigning final resources to earlier hops', () => {
+  const [direct] = getRequestResourcePath({ provider: 'codex', channel: 'A', group: 'plus', endpoint: 'primary' });
+  assert.deepEqual([direct.channel, direct.credentialGroup, direct.endpoint], ['A', 'plus', 'primary']);
+  const legacy = getRequestResourcePath({ channel: 'final', groupName: 'final-group', endpointChain: ['old', 'next'] });
+  assert.deepEqual(legacy.map(node => node.channel), ['', '']);
+  assert.deepEqual(legacy.map(node => node.credentialGroup), ['', '']);
+  assert.deepEqual(getRequestResourcePath({}), []);
+});
 
 import {
   chainHasMultipleChannels,
@@ -196,6 +221,39 @@ test('request channel label never treats a Codex credential group as its channel
   assert.equal(getChannelLabel?.({ provider: 'codex', group: '订阅' }, [], ''), '');
   assert.equal(getChannelLabel?.({ provider: 'claude', group: 'Claude 兼容渠道' }, [], ''), 'Claude 兼容渠道');
   assert.equal(getChannelLabel?.({ provider: 'codex', channel: '合租巴士' }, [], ''), '合租巴士');
+});
+
+test('request channel labels use actual profile attempts and ignore active or skipped channels', () => {
+  for (const provider of ['claude', 'codex']) {
+    for (const kind of ['default', 'non_stream']) {
+      const request = {
+        provider,
+        channel: '旧激活渠道',
+        dispatchTrace: {
+          decision: { kind },
+          attemptCount: 2,
+          attempts: [{ channel: '方案渠道 A' }, { channel: '实际改道渠道 B' }],
+          skipped: [{ channel: '未使用的非流改道渠道' }],
+        },
+      };
+      assert.equal(endpointChainUtils.getRequestChannelLabel(request, [{ channel: '旧链路渠道' }]), '实际改道渠道 B');
+      request.dispatchTrace.attempts = [];
+      request.dispatchTrace.attemptCount = 0;
+      assert.equal(endpointChainUtils.getRequestChannelLabel(request, [{ channel: '旧链路渠道' }]), '待调度');
+      request.dispatchTrace.finished = true;
+      assert.equal(endpointChainUtils.getRequestChannelLabel(request), '未发送');
+      request.dispatchTrace.finished = false;
+      request.dispatchTrace.stopReason = 'route_unavailable';
+      assert.equal(endpointChainUtils.getRequestChannelLabel(request), '未发送');
+    }
+  }
+});
+
+test('legacy request channel labels prefer the last recorded hop and retain direct fallbacks', () => {
+  const request = { provider: 'codex', channel: '旧激活渠道' };
+  assert.equal(endpointChainUtils.getRequestChannelLabel(request, [{ channel: '起始渠道' }, { channel: '最终渠道' }]), '最终渠道');
+  assert.equal(endpointChainUtils.getRequestChannelLabel(request), '旧激活渠道');
+  assert.equal(endpointChainUtils.getRequestChannelLabel({ provider: 'codex' }), '-');
 });
 
 test('summarizeEndpointAttempts separates retries from adjacent identity transfers', () => {

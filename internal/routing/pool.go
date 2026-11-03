@@ -93,8 +93,9 @@ type AccountState struct {
 }
 
 type PoolConfig struct {
-	Pools    []Pool
-	Accounts []AccountState
+	Pools          []Pool
+	Accounts       []AccountState
+	CooldownPolicy CooldownPolicy
 }
 
 type poolCallerKey struct{}
@@ -374,7 +375,7 @@ func (r *PoolRuntime) acquire(channel, group int64, endpoint, model string, lega
 				} else {
 					c.Probing = false
 					if !r.now().Before(c.Until) {
-						c.Until = r.now().Add(30 * time.Second)
+						c.Until = r.now().Add(r.config.CooldownPolicy.delay(c.Failures))
 					}
 					r.cooldowns[k] = c
 				}
@@ -406,13 +407,7 @@ func (r *PoolRuntime) Fail(channel, group int64, endpoint, model string, f Failu
 	c.Probing = false
 	delete(r.leases, k)
 	c.Repair = f.Scope == ScopeCredential
-	delay := 30 * time.Second
-	for n := 1; n < c.Failures && delay < 5*time.Minute; n++ {
-		delay *= 2
-	}
-	if delay > 5*time.Minute {
-		delay = 5 * time.Minute
-	}
+	delay := r.config.CooldownPolicy.delay(c.Failures)
 	c.Until = r.now().Add(delay)
 	if retryAt.After(r.now()) {
 		c.Until = retryAt

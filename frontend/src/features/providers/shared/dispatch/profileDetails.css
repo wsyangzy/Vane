@@ -32,6 +32,7 @@
 .dp-badge[data-tone="success"] { color: #047857; background: #ecfdf5; }
 .dp-badge[data-tone="warning"] { color: #b45309; background: #fffbeb; }
 .dp-badge[data-tone="accent"] { color: #4f46e5; background: #eef2ff; }
+.dp-badge[data-tone="danger"] { color: #be123c; background: #fff1f2; }
 .dp-icon-button { display: inline-flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 7px; color: #64748b; }
 .dp-icon-button:hover:not(:disabled) { color: #4f46e5; background: #eef2ff; }
 .dp-icon-button[data-danger]:hover:not(:disabled) { color: #e11d48; background: #fff1f2; }

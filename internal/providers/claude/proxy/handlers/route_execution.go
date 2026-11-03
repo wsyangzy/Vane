@@ -18,6 +18,10 @@ import (
 
 func (run *routeRun) initBudget(cfg config.RetryConfig) {
 	if run != nil && run.profile != nil {
+		if !run.recoveryPolicySet {
+			run.profile.Profile.WaitForRecovery = !cfg.DisableRecoveryWait
+			run.recoveryPolicySet = true
+		}
 		run.budget.Limit(cfg.MaxTotalAttempts, cfg.MaxTotalDuration)
 	}
 	if run != nil && run.budget == nil {

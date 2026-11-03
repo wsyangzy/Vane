@@ -88,6 +88,31 @@ export const getEndpointChainItems = (request) => {
   return parseEndpointChain(request?.endpoint_chain);
 };
 
+export const getRequestResourcePath = (request = {}) => {
+  const trace = request.dispatchTrace;
+  if (trace?.attemptCount === 0) return [];
+  const source = trace?.attempts?.length ? trace.attempts : getEndpointChainItems(request);
+  const nodes = source.map((item, index) => parseChainNode(item, index + 1));
+  if (!nodes.length && !trace && (request.channel || request.endpoint || request.endpoint_name)) {
+    nodes.push(parseChainNode({ channel: request.channel, endpoint: request.endpoint || request.endpoint_name }));
+  }
+  // A single legacy hop may omit its channel/group. Multi-hop history cannot
+  // safely borrow the final request's names for earlier attempts.
+  if (nodes.length === 1) {
+    nodes[0].channel ||= getRequestChannelLabel(request, nodes, '');
+    const group = getRequestCredentialGroupLabel(request, nodes);
+    nodes[0].credentialGroup ||= group === '-' ? '' : group;
+  }
+  const path = [];
+  for (const node of nodes) {
+    const previous = path.at(-1);
+    const sameResource = previous && ['channel', 'credentialGroup', 'endpoint'].every(key => previous[key] === node[key]);
+    if (sameResource) previous.attempts += Math.max(1, node.attempts || 0);
+    else path.push({ ...node, attempts: Math.max(1, node.attempts || 0) });
+  }
+  return path;
+};
+
 export const getRequestCredentialGroupLabel = (request = {}, chainNodes = []) => {
   const credentialGroup = String(chainNodes[chainNodes.length - 1]?.credentialGroup || '').trim();
   if (credentialGroup) return credentialGroup;
@@ -102,13 +127,22 @@ export const getRequestCredentialGroupLabel = (request = {}, chainNodes = []) =>
 };
 
 export const getRequestChannelLabel = (request = {}, chainNodes = [], fallback = '-') => {
-  const directChannel = String(request.channel || '').trim();
-  if (directChannel) return directChannel;
+  // A profile's candidates (including skipped reroute targets) are not sends.
+  // Older records may still carry the legacy active channel in request.channel.
+  const trace = request.dispatchTrace;
+  if (trace) {
+    const attemptedChannel = String(trace.attempts?.at(-1)?.channel || '').trim();
+    if (attemptedChannel) return attemptedChannel;
+    if (trace.attemptCount === 0) return trace.finished || trace.stopReason ? '未发送' : '待调度';
+  }
 
   for (let index = chainNodes.length - 1; index >= 0; index -= 1) {
     const channel = String(chainNodes[index]?.channel || '').trim();
     if (channel) return channel;
   }
+
+  const directChannel = String(request.channel || '').trim();
+  if (directChannel) return directChannel;
 
   if (String(request.provider || '').toLowerCase() !== 'codex') {
     return String(request.group || '').trim() || fallback;

@@ -1,21 +1,22 @@
 // Compact and comfortable widths include padding. They are allocation weights,
 // not minimum widths: selected columns must always fit inside the table region.
 const widths = {
-  requestId: [82, 112],
-  timestamp: [60, 142],
-  provider: [50, 72],
+  requestId: [82, 104],
+  timestamp: [132, 156],
+  provider: [48, 60],
   requestType: [40, 62],
-  status: [64, 90],
-  model: [100, 148],
-  reasoningEffort: [62, 82],
-  serviceTier: [70, 96],
-  channel: [72, 112],
-  endpoint: [72, 112],
-  duration: [108, 156],
-  inputTokens: [38, 62],
-  outputTokens: [38, 62],
-  cacheCreationTokens: [40, 70],
-  cacheReadTokens: [40, 70],
+  status: [64, 80],
+  // Include the brand icon and two mapping/routing indicators before ellipsis.
+  model: [152, 208],
+  reasoningEffort: [54, 70],
+  serviceTier: [66, 84],
+  channel: [92, 132],
+  endpoint: [112, 156],
+  duration: [108, 148],
+  inputTokens: [44, 64],
+  outputTokens: [44, 64],
+  cacheCreationTokens: [44, 60],
+  cacheReadTokens: [44, 60],
   cost: [60, 78],
 };
 
@@ -27,15 +28,16 @@ export function requestRowHeight(regionHeight, headerHeight, pageSize) {
   return Math.max(40, (Math.max(0, Number(regionHeight) || 0) - Math.max(0, Number(headerHeight) || 0) - 1) / Math.max(1, Number(pageSize) || 10));
 }
 
-export function requestColumnLayout(columns, availableWidth) {
+export function requestColumnLayout(columns, availableWidth, showDate = true) {
   const budget = Number.isFinite(availableWidth) && availableWidth > 0 ? availableWidth : 900;
   if (!columns.length) return { columns: [], tableWidth: 0 };
-  const compact = columns.reduce((sum, column) => sum + (widths[column.id]?.[0] || 64), 0);
-  const flexible = columns.reduce((sum, column) => { const [min, ideal] = widths[column.id] || [64, 100]; return sum + ideal - min; }, 0);
+  const columnWidths = (id) => id === 'timestamp' && !showDate ? [68, 80] : widths[id] || [64, 100];
+  const compact = columns.reduce((sum, column) => sum + columnWidths(column.id)[0], 0);
+  const flexible = columns.reduce((sum, column) => { const [min, ideal] = columnWidths(column.id); return sum + ideal - min; }, 0);
   const scale = Math.max(0, budget - compact) / flexible;
   return {
     columns: columns.map((column) => {
-      const [base, ideal] = widths[column.id] || [64, 100];
+      const [base, ideal] = columnWidths(column.id);
       return { ...column, layoutWidth: budget < compact ? base * budget / compact : base + (ideal - base) * scale };
     }),
     tableWidth: budget,

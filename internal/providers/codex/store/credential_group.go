@@ -334,14 +334,14 @@ func (s *SQLiteCodexCredentialGroupStore) DeleteByID(ctx context.Context, id int
 	defer s.mu.Unlock()
 
 	if s.tx != nil {
-		return deleteInactiveCodexCredentialGroup(ctx, s.tx, id)
+		return deleteCodexCredentialGroup(ctx, s.tx, id)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("开启 Codex 凭证分组删除事务失败: %w", err)
 	}
 	defer tx.Rollback()
-	if err := deleteInactiveCodexCredentialGroup(ctx, tx, id); err != nil {
+	if err := deleteCodexCredentialGroup(ctx, tx, id); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -350,9 +350,9 @@ func (s *SQLiteCodexCredentialGroupStore) DeleteByID(ctx context.Context, id int
 	return nil
 }
 
-// Check the live state and delete both resources in one transaction, so an
-// endpoint cannot become eligible between the guard and the deletion.
-func deleteInactiveCodexCredentialGroup(ctx context.Context, tx *sql.Tx, id int64) error {
+// Routing references are checked by the application in this same transaction.
+// Legacy activation and failover flags do not decide profile participation.
+func deleteCodexCredentialGroup(ctx context.Context, tx *sql.Tx, id int64) error {
 	var isDefault bool
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_default, 0) FROM codex_credential_groups WHERE id = ?`, id).Scan(&isDefault); err != nil {
 		if err == sql.ErrNoRows {
@@ -364,21 +364,8 @@ func deleteInactiveCodexCredentialGroup(ctx context.Context, tx *sql.Tx, id int6
 		return fmt.Errorf("默认凭证分组不能删除")
 	}
 
-	var participating, active int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(CASE WHEN COALESCE(failover_enabled, 1) != 0 THEN 1 END),
-		       COUNT(CASE WHEN COALESCE(is_active, 0) != 0 THEN 1 END)
-		FROM codex_endpoints WHERE credential_group_id = ?`, id).Scan(&participating, &active); err != nil {
-		return fmt.Errorf("检查 Codex 凭证分组端点状态失败: %w", err)
-	}
-	if active > 0 {
-		return fmt.Errorf("凭证分组仍有 %d 个激活端点，请先切换激活端点后再删除", active)
-	}
-	if participating > 0 {
-		return fmt.Errorf("凭证分组仍有 %d 个端点参与故障转移，请先全部取消参与后再删除", participating)
-	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM codex_endpoints WHERE credential_group_id = ?`, id); err != nil {
-		return fmt.Errorf("删除 Codex 凭证分组内停用端点失败: %w", err)
+		return fmt.Errorf("删除 Codex 凭证分组内端点失败: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM codex_credential_groups WHERE id = ?`, id)
 	if err != nil {

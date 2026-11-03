@@ -1,6 +1,7 @@
-import { Activity, Check, ChevronDown, Fingerprint, ListOrdered, Route, Send, Waves, X } from 'lucide-react';
+import { Activity, Check, ChevronDown, Fingerprint, FolderKey, ListOrdered, Route, Send, Server, Waves, X } from 'lucide-react';
 import { affinityOptions, dispatchReason, strategyOptions } from '@/features/providers/shared/dispatch/dispatchState.js';
 import { formatDuration } from '@/services/http/api.js';
+import ModelTag from './ModelTag.jsx';
 import './requestDispatch.css';
 
 const optionLabel = (options, value) => options.find(item => item.value === value)?.label.split(' · ')[0] || value;
@@ -85,7 +86,21 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
     </>}
     {!!trace.attempts.length && <ol className="request-dispatch-attempts" aria-label="实际调用路径">{trace.attempts.map((attempt, index) => <li key={`${attempt.key}/${index}`} data-result={attempt.action}>
       <span className="request-dispatch-sequence" aria-label={`第 ${index + 1} 次尝试`}>{String(index + 1).padStart(2, '0')}</span>
-      <div className="request-dispatch-resource"><strong>{attempt.channel}</strong><span>{attempt.credentialGroup} / {attempt.endpoint}</span>{expanded && <div className="request-dispatch-model">{attempt.model || '模型未记录'} · {({ responses: 'Responses', messages: 'Messages' })[attempt.protocol] || attempt.protocol || '协议未记录'}</div>}{attempt.reason && <small>{eventReason(attempt.reason)}{attempt.scope && ` · 作用域：${scopeLabels[attempt.scope] || attempt.scope}`}</small>}
+      <div className="request-dispatch-resource">
+        {expanded ? <div className="request-dispatch-resource-info">
+          <div className="request-dispatch-resource-header" tabIndex={0} aria-label="渠道、分组和端点">
+            <div className="request-dispatch-channel"><span className="request-dispatch-channel-icon"><Route size={13} aria-hidden="true" /></span><strong>{attempt.channel || '渠道未记录'}</strong></div>
+            <dl className="request-dispatch-targets">
+              <div className="request-dispatch-target" data-kind="group"><dt><FolderKey size={12} aria-hidden="true" />分组</dt><dd>{attempt.credentialGroup || '未记录'}</dd></div>
+              <div className="request-dispatch-target" data-kind="endpoint"><dt><Server size={12} aria-hidden="true" />端点</dt><dd>{attempt.endpoint || '未记录'}</dd></div>
+            </dl>
+          </div>
+          <div className="request-dispatch-technical">
+            <ModelTag model={attempt.model} compact className="h-[22px]!" title={`模型：${attempt.model || '未记录'}`} />
+            <span className="request-dispatch-protocol"><span>协议</span><code>{({ responses: 'Responses', messages: 'Messages' })[attempt.protocol] || attempt.protocol || '未记录'}</code></span>
+          </div>
+        </div> : <><strong>{attempt.channel}</strong><span>{attempt.credentialGroup} / {attempt.endpoint}</span></>}
+        {attempt.reason && <small>{eventReason(attempt.reason)}{attempt.scope && ` · 作用域：${scopeLabels[attempt.scope] || attempt.scope}`}</small>}
         {expanded && attempt.events?.length > 0 && <DispatchEvents attempt={attempt} />}
       </div>
       <div className="request-dispatch-result"><span>{!expanded && (attempt.action === 'success' ? <Check size={12} aria-hidden="true" /> : attempt.action === 'failed' ? <X size={12} aria-hidden="true" /> : <Activity size={12} aria-hidden="true" />)}{actionLabels[attempt.action] || '处理中'}</span>{attempt.durationMs != null && <small>{formatDuration(attempt.durationMs)}</small>}{attempt.statusCode > 0 && <small>HTTP {attempt.statusCode}</small>}</div>

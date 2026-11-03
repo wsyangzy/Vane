@@ -7,6 +7,7 @@ import useCredentialGroupRoutingImpact from '../../shared/credentials/useCredent
 const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onCancel, loading }) => {
   const endpointCount = Number(group?.endpointCount ?? group?.endpoint_count ?? 0);
   const impact = useCredentialGroupRoutingImpact('claude', group?.id);
+  const isDefault = Boolean(group?.isDefault ?? group?.is_default);
 
   return renderModalPortal(
     <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 animate-fade-in pt-[20vh]">
@@ -28,11 +29,12 @@ const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onC
 
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm mb-4">
           <div className="font-medium">
-            {endpointCount > 0 ? `该分组仍被 ${endpointCount} 个端点引用` : '仅未被端点引用的非默认分组可以删除'}
+            {endpointCount > 0 ? `将同时删除组内 ${endpointCount} 个端点` : '该分组当前没有端点'}
           </div>
           <div className="text-xs text-amber-700 mt-2">
-            默认分组或仍被端点引用的分组不能删除；如需删除，请先切换端点使用其他分组。
+            未被任何调度方案引用时可以删除，历史请求记录会保留。
           </div>
+          {isDefault && <p className="mt-2 text-xs">该分组是渠道默认分组，请先将其他分组设为默认后再删除。</p>}
         </div>
 
         <div className="mb-4"><CredentialGroupRoutingImpact impact={impact} /></div>
@@ -45,7 +47,7 @@ const DeleteCredentialGroupConfirmDialog = ({ channelName, group, onConfirm, onC
             icon={Trash2}
             onClick={() => onConfirm?.()}
             loading={loading}
-            disabled={loading || impact.loading || Boolean(impact.error)}
+            disabled={loading || isDefault || impact.loading || Boolean(impact.error) || impact.profiles.length > 0}
           >
             确认删除
           </Button>

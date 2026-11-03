@@ -79,6 +79,37 @@ func dispatchTestApp(t *testing.T, provider string) (*App, []routing.PoolMember)
 	return a, members
 }
 
+func TestDispatchRuleSourceNamesReachPersistedTraceForBothProviders(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		t.Run(provider, func(t *testing.T) {
+			a, members := dispatchTestApp(t, provider)
+			profile := routing.DefaultProfile(provider)
+			profile.Name, profile.IsDefault, profile.Strategy = "source trace", true, routing.StrategyOrder
+			profile.Members = []routing.RoutingMember{{ChannelID: members[0].ChannelID, GroupID: members[0].GroupID, Enabled: true}}
+			profile.Rules = []routing.RoutingRule{{Enabled: true, Kind: "model", MatchModel: "test", Targets: []routing.RouteTarget{{ChannelID: members[1].ChannelID, GroupID: members[1].GroupID}}}}
+			profile, err := a.SaveRoutingProfile(profile)
+			require.NoError(t, err)
+			plan, err := a.PreviewDispatch(DispatchInput{Provider: provider, ProfileID: profile.ID, Model: "test", Streaming: true})
+			require.NoError(t, err)
+			trace := plan.Trace()
+			require.NotNil(t, trace.DefaultSource)
+			require.Equal(t, members[0].ChannelID, trace.DefaultSource.ChannelID)
+			require.Equal(t, members[0].GroupID, trace.DefaultSource.GroupID)
+			require.NotEmpty(t, trace.DefaultSource.ChannelName)
+			require.NotEmpty(t, trace.DefaultSource.GroupName)
+			require.Zero(t, trace.Attempts)
+			require.Equal(t, members[1].ChannelID, plan.EligibleCandidates[0].ChannelID)
+			s, err := a.profileStore(context.Background())
+			require.NoError(t, err)
+			require.NoError(t, s.SaveTrace(context.Background(), trace))
+			loaded, err := a.ListDispatchTraces(provider, 10)
+			require.NoError(t, err)
+			require.Len(t, loaded, 1)
+			require.Equal(t, trace.DefaultSource, loaded[0].DefaultSource)
+		})
+	}
+}
+
 func TestDispatchHealthSeparatesDisabledRepairAndCooldown(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

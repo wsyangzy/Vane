@@ -26,6 +26,21 @@ test('responsive layout respects hidden fields and does not mutate selection or 
   assert.deepEqual(requestColumnLayout([], 900), { columns: [], tableWidth: 0 });
 });
 
+test('date ranges reserve a full timestamp while today gives that space to labels and icons', () => {
+  const selected = TABLE_COLUMNS.filter((column) => DEFAULT_VISIBLE_COLUMNS.includes(column.id));
+  for (const width of [900, 1440, 1780]) {
+    const today = requestColumnLayout(selected, width, false);
+    const dated = requestColumnLayout(selected, width, true);
+    const column = (layout, id) => layout.columns.find((item) => item.id === id);
+    assert.ok(column(dated, 'timestamp').layoutWidth > column(today, 'timestamp').layoutWidth);
+    assert.ok(column(today, 'model').layoutWidth > column(dated, 'model').layoutWidth);
+    for (const layout of [today, dated]) {
+      assert.ok(column(layout, 'model').layoutWidth > column(layout, 'serviceTier').layoutWidth);
+      assert.ok(Math.abs(layout.columns.reduce((sum, item) => sum + item.layoutWidth, 0) - width) < 0.001);
+    }
+  }
+});
+
 test('complete request pages fill the viewport while short pages preserve density', () => {
   for (const height of [480, 640, 900]) {
     const rowHeight = requestRowHeight(height, 36, 10);

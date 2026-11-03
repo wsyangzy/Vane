@@ -270,8 +270,12 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		requestID, modelName, inputTokens, outputTokens, inputTokens+outputTokens, cacheReadTokens, durationMs),
 		"provider", "codex", "request_id", requestID)
 
-	prepareArchive(nil, true)
-	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
+	qualityReason := ""
+	if !streamCompleted {
+		qualityReason = "incomplete_stream"
+	}
+	prepareArchive(nil, streamCompleted)
+	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName, qualityReason)
 	return nil, true
 }
 

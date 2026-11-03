@@ -270,6 +270,8 @@ func codexProfileProtocolSuccess(path string, data []byte) bool {
 func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, body []byte, requestID string, start time.Time, streaming bool, plan *routing.DispatchPlan) {
 	runtime := h.manager.PoolRuntime().ProfileRuntime()
 	globalBudget := h.retryConfig()
+	// Snapshot the global policy for this request, ignoring the legacy profile flag.
+	plan.Profile.WaitForRecovery = !globalBudget.DisableRecoveryWait
 	plan.Budget.Limit(globalBudget.MaxTotalAttempts, globalBudget.MaxTotalDuration)
 	r = r.WithContext(routing.WithProfileRequest(r.Context(), plan))
 	var chain []chainNode

@@ -269,6 +269,7 @@ const ModelTag = ({
   originalModel = '',
   rewriteTarget = '',
   routeSnapshot,
+  routePath,
   compact = false
 }) => {
   const modelStyle = getModelStyle(model);
@@ -279,11 +280,11 @@ const ModelTag = ({
     ? (compact ? '-translate-y-[1.5px]' : '-translate-y-px')
     : '';
   const displayName = (!model || model === 'unknown') ? '-' : model;
-  const rewriteIndicator = getRewriteIndicator(rewriteSource);
+  const rewriteIndicator = routePath === '' ? null : getRewriteIndicator(rewriteSource);
   const rewriteTitle = rewriteIndicator
-    ? `${rewriteIndicator.label}: ${originalModel || '-'} -> ${rewriteTarget || displayName}`
+    ? `${originalModel || '原模型未记录'} → ${rewriteTarget || displayName}`
     : '';
-  const route = describeRouteSnapshot(routeSnapshot);
+  const route = routePath === '' ? null : describeRouteSnapshot(routeSnapshot);
   const routeIndicator = route?.kind === 'model_rule'
     ? { label: '模型路由', Icon: Route, classes: 'text-sky-600' }
     : route?.kind === 'non_stream'
@@ -296,7 +297,6 @@ const ModelTag = ({
             ? { label: '意图路由', Icon: Sparkles, classes: 'text-violet-500' }
             : route?.kind === 'pool' ? { label: '账号池', Icon: Layers, classes: 'text-slate-500' } : null;
   const RouteIcon = routeIndicator?.Icon;
-  const routeTitle = routeIndicator ? `${routeIndicator.label}：${[route.title, route.mode, route.stage].filter(Boolean).join(' · ')}` : '';
   const tag = (
     <span
       className={`model-tag inline-flex h-[26px] items-center justify-center whitespace-nowrap rounded-md border py-0 align-middle font-normal leading-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${compact ? 'min-w-0 max-w-full gap-1 px-1 text-[11px]' : 'w-fit max-w-none gap-1 px-2 text-xs'} ${modelStyle.classes} ${className}`}
@@ -314,7 +314,7 @@ const ModelTag = ({
   );
 
   return (
-    <Tooltip className={compact ? 'min-w-0 max-w-full' : ''} content={[title || rewriteTitle || displayName, routeTitle].filter(Boolean).join('；')}>
+    <Tooltip className={compact ? 'min-w-0 max-w-full' : ''} contentClassName={routePath ? 'whitespace-pre-line text-left' : ''} content={title || routePath || rewriteTitle || displayName}>
       {tag}
     </Tooltip>
   );

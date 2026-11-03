@@ -321,7 +321,35 @@ func (s *SQLiteClaudeCredentialGroupStore) DeleteByID(ctx context.Context, id in
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result, err := s.getQuerier().ExecContext(ctx, `DELETE FROM claude_credential_groups WHERE id = ?`, id)
+	if s.tx != nil {
+		return deleteClaudeCredentialGroup(ctx, s.tx, id)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("开启 Claude 凭证分组删除事务失败: %w", err)
+	}
+	defer tx.Rollback()
+	if err := deleteClaudeCredentialGroup(ctx, tx, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func deleteClaudeCredentialGroup(ctx context.Context, tx *sql.Tx, id int64) error {
+	var isDefault bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(is_default, 0) FROM claude_credential_groups WHERE id = ?`, id).Scan(&isDefault); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("Claude 凭证分组不存在: %d", id)
+		}
+		return err
+	}
+	if isDefault {
+		return fmt.Errorf("默认凭证分组不能删除")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM endpoints WHERE credential_group_id = ?`, id); err != nil {
+		return fmt.Errorf("删除 Claude 凭证分组内端点失败: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM claude_credential_groups WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("删除 Claude 凭证分组失败: %w", err)
 	}

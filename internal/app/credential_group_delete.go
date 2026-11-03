@@ -27,6 +27,13 @@ func (a *App) deleteCredentialGroup(ctx context.Context, provider string, groupI
 		return err
 	}
 	defer tx.Rollback()
+	channelID, err := a.credentialGroupChannelID(ctx, tx, provider, groupID)
+	if err != nil {
+		return err
+	}
+	if err := routingstore.CheckCredentialGroupReferences(ctx, tx, provider, channelID, groupID); err != nil {
+		return err
+	}
 	if err := deleteGroup(tx); err != nil {
 		return err
 	}
@@ -34,6 +41,31 @@ func (a *App) deleteCredentialGroup(ctx context.Context, provider string, groupI
 		return err
 	}
 	return tx.Commit()
+}
+
+func (a *App) credentialGroupChannelID(ctx context.Context, tx *sql.Tx, provider string, groupID int64) (int64, error) {
+	if provider == "codex" {
+		group, err := a.codexCredentialGroupStore.WithTx(tx).GetByID(ctx, groupID)
+		if err != nil {
+			return 0, err
+		}
+		if group == nil {
+			return 0, errors.New("Codex 凭证分组不存在")
+		}
+		return group.ChannelID, nil
+	}
+	group, err := a.claudeCredentialGroupStore.WithTx(tx).GetByID(ctx, groupID)
+	if err != nil {
+		return 0, err
+	}
+	if group == nil {
+		return 0, errors.New("Claude 凭证分组不存在")
+	}
+	channel, err := a.channelStore.WithTx(tx).Get(ctx, group.Channel)
+	if err != nil || channel == nil {
+		return 0, err
+	}
+	return channel.ID, nil
 }
 
 func (a *App) refreshRoutingAfterCredentialGroupDeletion(ctx context.Context) error {

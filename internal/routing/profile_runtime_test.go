@@ -22,6 +22,99 @@ func runtimeTestTurn(id string) TurnInput {
 	return TurnInput{ConversationID: "conversation", TurnID: id, NewTurn: true, CurrentUserMessage: "PRIVATE_CURRENT_TEXT", PreviousUserMessage: "PRIVATE_PREVIOUS_TEXT", PreviousAssistantText: "PRIVATE_ASSISTANT_TEXT"}
 }
 
+func TestRuleTraceCapturesDefaultSourceWithoutSendingOrChangingSelection(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, mapped := range []string{"", "mapped-model"} {
+			t.Run(provider+"/"+mapped, func(t *testing.T) {
+				cfg := runtimeTestConfig()
+				cfg.Provider, cfg.Profiles[0].Provider = provider, provider
+				cfg.Profiles[0].Strategy = StrategyRotate
+				cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "model", Enabled: true, MatchModel: "gpt-test", Targets: []RouteTarget{{ChannelID: 2, GroupID: 3, UpstreamModel: mapped}}}}
+				cfg.Catalog = Catalog{{ID: 99, Name: "unrelated active", Active: true}, {ID: 1, Name: "original channel", Groups: []CatalogGroup{{ID: 1, Name: "original group"}}}}
+				for i := range cfg.Candidates {
+					cfg.Candidates[i].Provider = provider
+					cfg.Candidates[i].AccountIDHash = "PRIVATE_ACCOUNT_HASH"
+				}
+				r := NewProfileRuntime(cfg)
+				cfg.Catalog[1].Name = "renamed channel"
+				var plan DispatchPlan
+				for range 3 {
+					plan = r.Plan(context.Background(), 1, "gpt-test", false, TurnInput{}, false)
+					source := plan.Trace().DefaultSource
+					if source == nil || source.ChannelID != 1 || source.GroupID != 1 || source.ChannelName != "original channel" || source.GroupName != "original group" || source.Unavailable {
+						t.Fatalf("missing default source or borrowed legacy active channel: %+v", source)
+					}
+					if plan.Trace().Attempts != 0 || len(plan.Trace().Candidates) != 0 || len(r.scheduler.loads) != 0 || len(r.scheduler.rotation) != 0 || len(r.affinity) != 0 {
+						t.Fatal("capturing the source changed sends, rotation, loads or affinity")
+					}
+					source.ChannelName = "modified returned trace"
+					if plan.Trace().DefaultSource.ChannelName != "original channel" {
+						t.Fatal("a returned trace mutated the captured source")
+					}
+				}
+				if actual := runtimeTestSend(t, r, &plan, 0); actual.ChannelID != 2 || actual.GroupID != 3 {
+					t.Fatalf("recording the source changed the rule destination: %+v", actual)
+				}
+				data, err := json.Marshal(plan.Trace())
+				var persisted DispatchTrace
+				if err != nil || json.Unmarshal(data, &persisted) != nil || persisted.DefaultSource == nil || persisted.DefaultSource.ChannelName != "original channel" || persisted.RequestedModel != "gpt-test" || persisted.Attempts != 1 || len(persisted.Candidates) == 0 || persisted.Candidates[0].Candidate.Channel != "2" {
+					t.Fatalf("source was lost or confused with an actual attempt: %s (err=%v)", data, err)
+				}
+				sourceData, _ := json.Marshal(persisted.DefaultSource)
+				if strings.Contains(string(sourceData), "PRIVATE") {
+					t.Fatal("default source contains a credential identity")
+				}
+				r.Replace(cfg)
+				if plan.Trace().DefaultSource.ChannelName != "original channel" {
+					t.Fatal("a runtime refresh changed a historical source")
+				}
+			})
+		}
+	}
+}
+
+func TestRuleDefaultSourceUsesCurrentEligibilityAndKeepsUnavailableExplicit(t *testing.T) {
+	for _, reason := range []string{"healthy", "model", "cooldown", "membership", "quota"} {
+		t.Run(reason, func(t *testing.T) {
+			cfg := runtimeTestConfig()
+			cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "model", Enabled: true, MatchModel: "gpt-test", Targets: []RouteTarget{{ChannelID: 2, GroupID: 3}}}}
+			cfg.Supports = func(c DispatchCandidate, model string) bool {
+				return reason != "model" || c.ChannelID != 1 || c.GroupID != 1
+			}
+			switch reason {
+			case "cooldown":
+				cfg.Candidates[0].Health.CoolingDown = true
+			case "membership":
+				cfg.Profiles[0].Members[0].Enabled = false
+			case "quota":
+				cfg.Candidates[0].Quota.Windows = []QuotaSnapshot{dispatchTestWindow(time.Now(), 100, time.Hour)}
+			}
+			r := NewProfileRuntime(cfg)
+			plan := r.Plan(context.Background(), 1, "gpt-test", false, TurnInput{}, false)
+			source := plan.Trace().DefaultSource
+			wantGroup := int64(1)
+			if reason != "healthy" {
+				wantGroup = 2
+			}
+			if source == nil || source.ChannelID != 1 || source.GroupID != wantGroup || source.Unavailable {
+				t.Fatalf("default source ignored eligibility: %+v", source)
+			}
+			cfg.Profiles[0].Members = nil
+			r.Replace(cfg)
+			unavailable := r.Plan(context.Background(), 1, "gpt-test", false, TurnInput{}, false)
+			if source = unavailable.Trace().DefaultSource; source == nil || !source.Unavailable || source.ChannelID != 0 || unavailable.EligibleCandidates[0].ChannelID != 2 {
+				t.Fatalf("unavailable default was confused with the direct target: %+v", source)
+			}
+			cfg.Profiles[0].Rules = nil
+			r.Replace(cfg)
+			plain := r.Plan(context.Background(), 1, "gpt-test", false, TurnInput{}, false)
+			if plain.Trace().DefaultSource != nil {
+				t.Fatal("default orchestration invented a rule source")
+			}
+		})
+	}
+}
+
 func TestAutomaticHealthScopeFollowsOnlyDefaultMembers(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
 		t.Run(provider, func(t *testing.T) {
@@ -190,7 +283,7 @@ func TestProfileRuntimeRulePriority(t *testing.T) {
 		}
 	}
 	p.Rules = p.Rules[:2]
-	if got := ResolveDecision(p, "gpt-test", false, "coding"); got.RuleID != 2 || got.FallbackToDefault {
+	if got := ResolveDecision(p, "gpt-test", false, "coding"); got.RuleID != 2 || !got.FallbackToDefault {
 		t.Fatalf("non-stream priority/default fallback wrong: %+v", got)
 	}
 	if got := ResolveDecision(p, "gpt-test", true, "coding"); got.RuleID != 1 {
@@ -205,7 +298,7 @@ func TestProfileRuntimeRuleModesAndFallbackOption(t *testing.T) {
 		mode string
 		flag *bool
 		want []int64
-	}{{"model default", "model", ModePrefer, nil, []int64{3, 1, 2}}, {"non-stream default", "non_stream", ModePrefer, nil, []int64{3}}, {"explicit disabled", "model", ModePrefer, boolPointer(false), []int64{3}}, {"non-stream explicit enabled", "non_stream", ModePrefer, boolPointer(true), []int64{3, 1, 2}}, {"fallback starts default", "model", ModeFallback, boolPointer(false), []int64{1, 2, 3}}} {
+	}{{"model default", "model", ModePrefer, nil, []int64{3, 1, 2}}, {"non-stream default", "non_stream", ModePrefer, nil, []int64{3, 1, 2}}, {"explicit disabled", "model", ModePrefer, boolPointer(false), []int64{3}}, {"non-stream explicit disabled", "non_stream", ModePrefer, boolPointer(false), []int64{3}}, {"non-stream explicit enabled", "non_stream", ModePrefer, boolPointer(true), []int64{3, 1, 2}}, {"fallback starts default", "model", ModeFallback, boolPointer(false), []int64{1, 2, 3}}} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := runtimeTestConfig()
 			cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: tc.kind, Enabled: true, MatchModel: "gpt-test", Mode: tc.mode, Targets: []RouteTarget{{ChannelID: 2, GroupID: 3}}, FallbackToDefault: tc.flag}}
@@ -251,7 +344,7 @@ func TestMappingUsesModelRoutingWithinSelectedResources(t *testing.T) {
 			for i := range cfg.Candidates {
 				cfg.Candidates[i].Provider = provider
 			}
-			cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "mapping", Enabled: true, MatchModel: "client-alias", Targets: []RouteTarget{{ChannelID: 1, GroupID: 2, UpstreamModel: "supported-model"}}}}
+			cfg.Profiles[0].Rules = []RoutingRule{{ID: 1, Kind: "mapping", Enabled: true, MatchModel: "client-alias", Targets: []RouteTarget{{ChannelID: 1, GroupID: 2, UpstreamModel: "supported-model"}}, FallbackToDefault: boolPointer(false)}}
 			if err := ValidateProfile(&cfg.Profiles[0]); err != nil {
 				t.Fatal(err)
 			}
@@ -263,6 +356,11 @@ func TestMappingUsesModelRoutingWithinSelectedResources(t *testing.T) {
 			actual := r.Plan(context.Background(), 1, "client-alias", false, runtimeTestTurn("mapping"), false)
 			if got := runtimeTestSend(t, r, &actual, 0); got.Identity() != preview.EligibleCandidates[0].Identity() {
 				t.Fatalf("mapping preview differs from actual dispatch: %+v", got)
+			}
+			data, err := json.Marshal(actual.Trace())
+			var captured DispatchTrace
+			if err != nil || json.Unmarshal(data, &captured) != nil || captured.RequestedModel != "client-alias" || len(captured.Candidates) == 0 || captured.Candidates[0].Candidate.Model != "supported-model" {
+				t.Fatalf("trace lost the original or rewritten model: %s (err=%v)", data, err)
 			}
 			unmatched := r.Preview(context.Background(), 1, "other-model", true, TurnInput{})
 			if unmatched.Decision.Kind != "default" || unmatched.EligibleCandidates[0].Identity().Model != "other-model" {
@@ -424,6 +522,9 @@ func TestProfileRuntimeToolsReuseDecisionWithoutClassificationOrRotation(t *test
 	}
 	turn.NewTurn, turn.Continuation = false, true
 	tool := r.Plan(context.Background(), 1, "changed-client-alias", true, turn, false)
+	if tool.Trace().RequestedModel != "changed-client-alias" {
+		t.Fatal("turn reuse overwrote the current request's original model")
+	}
 	if !tool.Decision.ReusedTurn || tool.Model != "gpt-test" || runtimeTestSend(t, r, &tool, 0).GroupID != 1 || calls.Load() != 1 {
 		t.Fatalf("tool continuation reclassified/rerouted: %+v", tool)
 	}

@@ -1,5 +1,5 @@
 import Tooltip from '@/shared/ui/Tooltip.jsx';
-import { ChevronRight, Clock3, GitBranch, Layers, Pencil, Server, SlidersHorizontal, Sparkles, Star, Trash2 } from 'lucide-react';
+import { Ban, CheckCircle2, ChevronRight, Clock3, GitBranch, Layers, Pencil, Server, SlidersHorizontal, Sparkles, Star, Trash2 } from 'lucide-react';
 import { affinityOptions, candidateModeOptions, profileChannelIds, strategyOptions } from './dispatchState.js';
 import './profileDetails.css';
 
@@ -19,13 +19,13 @@ export default function ProfileOverview({ profile, channels, busy, onSetDefault,
   return <section className="dp-card" aria-label="方案概况">
     <header className="dp-profile-header">
       <div className="dp-profile-title">
-        <div className="dp-profile-name"><h3>{profile.name}</h3><span className="dp-badge" data-tone={profile.enabled ? 'success' : 'muted'}>{profile.enabled ? '已启用' : '已停用'}</span>{profile.isDefault && <span className="dp-badge" data-tone="accent"><Star size={10} />默认方案</span>}</div>
+        <div className="dp-profile-name"><h3>{profile.name}</h3><span className="dp-badge" data-tone={profile.isDefault ? 'success' : profile.enabled ? 'muted' : 'danger'}>{profile.isDefault ? <><CheckCircle2 size={11} />当前使用</> : profile.enabled ? '可切换' : <><Ban size={11} />已停用</>}</span></div>
         <p>方案概况<span>修订 {profile.revision}</span></p>
       </div>
       <div className="dp-profile-actions" aria-label="方案操作">
-        <Tooltip asChild content={profile.isDefault ? undefined : !profile.enabled ? '请先启用方案，再设为默认' : '设为默认方案'}><button type="button" className="dp-icon-button" aria-label="设为默认方案" disabled={busy || profile.isDefault || !profile.enabled} onClick={onSetDefault}><Star size={14} className={profile.isDefault ? 'fill-amber-400 text-amber-500' : ''} /></button></Tooltip>
+        <Tooltip asChild content={profile.isDefault ? undefined : !profile.enabled ? '此方案已停用，请先编辑并恢复启用' : '切换至此调度方案'}><button type="button" className="dp-icon-button" aria-label={profile.isDefault ? '当前调度方案' : '切换至此调度方案'} disabled={busy || profile.isDefault || !profile.enabled} onClick={onSetDefault}><Star size={14} className={profile.isDefault ? 'fill-amber-400 text-amber-500' : ''} /></button></Tooltip>
         <Tooltip asChild content="编辑调度方案"><button type="button" className="dp-icon-button" aria-label="编辑调度方案" disabled={busy} onClick={onEdit}><Pencil size={14} /></button></Tooltip>
-        <Tooltip asChild content={profile.isDefault ? '默认方案不能删除' : '删除调度方案'}><button type="button" className="dp-icon-button" data-danger aria-label="删除调度方案" disabled={busy || profile.isDefault} onClick={onDelete}><Trash2 size={14} /></button></Tooltip>
+        <Tooltip asChild content={profile.isDefault ? '当前方案不能删除，请先切换到其他方案' : '删除调度方案'}><button type="button" className="dp-icon-button" data-danger aria-label="删除调度方案" disabled={busy || profile.isDefault} onClick={onDelete}><Trash2 size={14} /></button></Tooltip>
       </div>
     </header>
 

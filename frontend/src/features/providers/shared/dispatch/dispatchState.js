@@ -21,8 +21,8 @@ export function mappingTargetAllowed(profile, target) {
 export const classifierInputLimits = { text: 4000, previousUserMessage: 1000, previousAssistantText: 1000 };
 export const classifierInputNotice = (key, value) => { const length = [...value].length, limit = classifierInputLimits[key]; return `${length} / ${limit} 字符${length > limit ? ' · 超出部分将保留头尾并标记截断' : ''}`; };
 
-export function newRoutingProfile(provider, isDefault = false) {
-  return { id: 0, provider, name: '', enabled: true, isDefault, candidateMode: 'ordered_channels', strategy: 'smart', affinityMode: 'turn', maxAttempts: 10, maxDurationMs: 60000, waitForRecovery: false, revision: 0, members: [], rules: [], intents: [], classifier: null };
+export function newRoutingProfile(provider, isDefault = false, policy) {
+  return { id: 0, provider, name: '', enabled: true, isDefault, candidateMode: 'ordered_channels', strategy: 'smart', affinityMode: 'turn', maxAttempts: policy?.maxAttempts ?? '', maxDurationMs: policy?.maxDurationMs ?? '', waitForRecovery: policy?.waitForRecovery ?? false, revision: 0, members: [], rules: [], intents: [], classifier: null };
 }
 
 export function editableProfile(profile, createKey = () => crypto.randomUUID()) {
@@ -72,7 +72,7 @@ export function validateProfileDraft(profile) {
   if (!profile.name.trim()) return '请输入调度方案名称';
   if (!Number.isInteger(Number(profile.maxAttempts)) || Number(profile.maxAttempts) < 1 || Number(profile.maxAttempts) > 100) return '尝试次数需为 1–100 的整数';
   if (!Number.isFinite(Number(profile.maxDurationMs)) || Number(profile.maxDurationMs) < 1000 || Number(profile.maxDurationMs) > 600000) return '调度预算需为 1–600 秒';
-  if (profile.isDefault && !profile.enabled) return '默认方案必须启用';
+  if (profile.isDefault && !profile.enabled) return '当前方案必须保持可用，请先切换到其他方案后再停用';
   const ids = profile.intents.map((intent) => intent.id.trim());
   if (ids.some((id) => !id) || new Set(ids).size !== ids.length) return '意图 ID 不能为空或重复';
   if (profile.intents.some((intent) => intent.fallbackIntent && !ids.includes(intent.fallbackIntent))) return '回退意图必须指向现有意图';
@@ -129,11 +129,12 @@ export function credentialGroupRoutingImpact(workspaces, provider, groupId) {
   if (!id) return [];
   const workspace = workspaces.find((item) => item.provider === provider);
   const account = workspace?.accounts.find((item) => item.groupId === id);
-  const matches = (target) => !target.profileId && (target.groupId === id || (target.groupId === 0 && account && target.channelId === account.channelId));
+  const matchesGroup = (target) => target.groupId === id || (target.groupId === 0 && account && target.channelId === account.channelId);
+  const matchesTarget = (target) => !target.profileId && matchesGroup(target);
   return workspaces.flatMap((workspace) => workspace.profiles.flatMap((profile) => {
     const ownsGroup = workspace.provider === provider;
-    const memberReference = ownsGroup && profile.members.some(matches);
-    const targetReference = ownsGroup && [...profile.rules, ...profile.intents].some((rule) => rule.targets.some(matches));
+    const memberReference = ownsGroup && profile.members.some((member) => member.enabled && matchesGroup(member));
+    const targetReference = ownsGroup && [...profile.rules, ...profile.intents].some((rule) => rule.targets.some(matchesTarget));
     const classifierReference = (profile.classifier?.provider || workspace.provider) === provider && profile.classifier?.groupId === id;
     if (!memberReference && !targetReference && !classifierReference) return [];
     const losesLastMember = ownsGroup && profile.members.some((member) => member.enabled && member.groupId === id) && !profile.members.some((member) => member.enabled && member.groupId !== id);

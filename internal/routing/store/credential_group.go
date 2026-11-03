@@ -3,13 +3,56 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/wsyangzy/Vane/internal/routing"
 )
 
-// RemoveCredentialGroupReferences joins the resource deletion transaction, so a
-// failed deletion or profile update cannot leave only half of the change saved.
+// CheckCredentialGroupReferences runs inside the resource deletion transaction.
+// Selected members in any profile and explicit targets retain their resources.
+func CheckCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider string, channelID, groupID int64) error {
+	profiles, err := loadCredentialGroupProfiles(ctx, tx)
+	if err != nil {
+		return err
+	}
+	matches := func(target routing.RouteTarget) bool {
+		return target.ProfileID == 0 && (target.GroupID == groupID || (target.GroupID == 0 && channelID > 0 && target.ChannelID == channelID))
+	}
+	var references []string
+	for _, profile := range profiles {
+		referenced := false
+		if profile.Provider == provider {
+			for _, member := range profile.Members {
+				referenced = referenced || (member.Enabled && matches(routing.RouteTarget{ChannelID: member.ChannelID, GroupID: member.GroupID}))
+			}
+			for _, rule := range profile.Rules {
+				referenced = referenced || slices.ContainsFunc(rule.Targets, matches)
+			}
+			for _, intent := range profile.Intents {
+				referenced = referenced || slices.ContainsFunc(intent.Targets, matches)
+			}
+		}
+		if classifier := profile.Classifier; classifier != nil {
+			classifierProvider := classifier.Provider
+			if classifierProvider == "" {
+				classifierProvider = profile.Provider
+			}
+			referenced = referenced || (classifierProvider == provider && classifier.GroupID == groupID)
+		}
+		if referenced {
+			references = append(references, fmt.Sprintf("%s「%s」", profile.Provider, profile.Name))
+		}
+	}
+	if len(references) > 0 {
+		return fmt.Errorf("凭证分组仍被调度方案引用，不能删除：%s。请先在方案中移除该分组或更换目标", strings.Join(references, "、"))
+	}
+	return nil
+}
+
+// RemoveCredentialGroupReferences clears saved deselections after the reference
+// check has ruled out selected members, rule targets and classifiers.
 func RemoveCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider string, groupID int64) error {
 	_, err := pruneCredentialGroupReferences(ctx, tx, provider, func(_, id int64) bool { return id == groupID && id > 0 })
 	return err
@@ -39,33 +82,43 @@ func (s *ProfileStore) PruneMissingCredentialGroupReferences(ctx context.Context
 	return tx.Commit()
 }
 
-func pruneCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider string, removed func(int64, int64) bool) (bool, error) {
-	if !validProfileProvider(provider) {
-		return false, sql.ErrNoRows
-	}
+func loadCredentialGroupProfiles(ctx context.Context, tx *sql.Tx) ([]*routing.RoutingProfile, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT `+profileColumns+` FROM routing_profiles ORDER BY id`)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	var profiles []*routing.RoutingProfile
 	for rows.Next() {
 		profile, err := scanProfile(rows)
 		if err != nil {
 			rows.Close()
-			return false, err
+			return nil, err
 		}
 		profiles = append(profiles, profile)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
+		return nil, err
+	}
+	for _, profile := range profiles {
+		if err := loadProfileChildren(ctx, tx, profile); err != nil {
+			return nil, err
+		}
+	}
+	return profiles, nil
+}
+
+func pruneCredentialGroupReferences(ctx context.Context, tx *sql.Tx, provider string, removed func(int64, int64) bool) (bool, error) {
+	if !validProfileProvider(provider) {
+		return false, sql.ErrNoRows
+	}
+	profiles, err := loadCredentialGroupProfiles(ctx, tx)
+	if err != nil {
 		return false, err
 	}
 	changed := false
 	for _, profile := range profiles {
-		if err := loadProfileChildren(ctx, tx, profile); err != nil {
-			return false, err
-		}
 		if !pruneProfileCredentialGroups(profile, provider, removed) {
 			continue
 		}

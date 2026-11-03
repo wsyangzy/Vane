@@ -96,13 +96,13 @@ const ToastItem = ({ id, type = 'info', title, message, duration, onClose }) => 
       className={`
         t-toast pointer-events-auto flex items-start gap-3 p-4 rounded-xl border shadow-lg
         ${variant.bgColor} ${variant.borderColor}
-        max-w-sm w-full ${entered && !exiting ? 'is-open' : ''}
+        w-max max-w-[min(24rem,calc(100vw-2rem))] ${entered && !exiting ? 'is-open' : ''}
       `}
     >
       <IconComponent size={20} className={`flex-shrink-0 mt-0.5 ${variant.iconColor}`} />
       <div className="flex-1 min-w-0">
         {title && (
-          <p className={`text-sm font-semibold ${variant.titleColor}`}>{title}</p>
+          <p className={`text-sm font-semibold [overflow-wrap:anywhere] ${variant.titleColor}`}>{title}</p>
         )}
         {Array.isArray(message) ? (
           <ul className="mt-1.5 list-disc space-y-1 pl-4 text-sm leading-5 text-slate-600 marker:text-blue-400">
@@ -174,7 +174,7 @@ const ToastContainer = ({ toasts, removeToast }) => {
           to   { stroke-dashoffset: ${RING_C}; }
         }
       `}</style>
-      <div className="toast-viewport fixed right-4 z-[9999] flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-3 overflow-y-auto overscroll-contain pointer-events-none">
+      <div className="toast-viewport fixed right-4 z-[9999] flex w-max max-w-[calc(100vw-2rem)] flex-col items-end gap-3 overflow-y-auto overscroll-contain pointer-events-none">
         {toasts.map((toast) => (
           <ToastItem
             key={toast.id}

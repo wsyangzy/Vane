@@ -8,7 +8,7 @@ info:
   productName: "Vane"
   productIdentifier: "io.github.wsyangzy.vane"
   description: "Local AI Gateway, Routing and Request Tracing"
-  version: "1.0.0"
+  version: "1.0.1"
 
 dev_mode:
   root_path: .

@@ -25,6 +25,12 @@ func (ut *UsageTracker) RecordRequestSuccessWithHTTPStatus(requestID, modelName 
 	ut.recordRequestSuccess(requestID, modelName, tokens, duration, httpStatus, true, "")
 }
 
+// RecordRequestSuccessWithHTTPStatusAndQuality preserves both the real upstream
+// status and stream completeness when the response has already been forwarded.
+func (ut *UsageTracker) RecordRequestSuccessWithHTTPStatusAndQuality(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int, failureReason string) {
+	ut.recordRequestSuccess(requestID, modelName, tokens, duration, httpStatus, true, failureReason)
+}
+
 func (ut *UsageTracker) recordRequestSuccess(requestID, modelName string, tokens *TokenUsage, duration time.Duration, httpStatus int, httpStatusIsUpstream bool, failureReason string) {
 	if ut.config == nil || !ut.config.Enabled {
 		return

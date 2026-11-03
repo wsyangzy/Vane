@@ -208,6 +208,7 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	// Legacy per-endpoint retry values above remain isolated compatibility data.
 	a.config.Retry.MaxTotalAttempts = a.settingsService.GetInt(ctx, settingsservice.CategoryRetry, "max_total_attempts", a.config.Retry.MaxTotalAttempts)
 	a.config.Retry.MaxTotalDuration = a.settingsService.GetDuration(ctx, settingsservice.CategoryRetry, "max_total_duration", a.config.Retry.MaxTotalDuration)
+	a.config.Retry.DisableRecoveryWait = !a.settingsService.GetBool(ctx, settingsservice.CategoryRetry, "wait_for_recovery", true)
 
 	// 健康检查配置
 	a.config.Health.PauseActiveProbes = !a.settingsService.GetBool(ctx, settingsservice.CategoryHealth, "active_probes_enabled", !a.config.Health.PauseActiveProbes)
@@ -380,6 +381,15 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 	}
 
 	a.applyCacheSettings(ctx)
+	cooldown, ruleDefaults := a.settingsService.RoutingPolicy(ctx)
+	a.poolMu.Lock()
+	for _, runtime := range a.poolRuntimes {
+		runtime.SetCooldownPolicy(cooldown)
+	}
+	for _, runtime := range a.profileRuntimes {
+		runtime.SetRuleDefaults(ruleDefaults)
+	}
+	a.poolMu.Unlock()
 	if a.config.Health.PauseActiveProbes != previousConfig.Health.PauseActiveProbes {
 		a.emitEndpointUpdate()
 		a.emitCodexProviderStateUpdate()

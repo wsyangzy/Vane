@@ -46,6 +46,8 @@ type routeRun struct {
 	index           int
 	// quotaBlocked 有阶段因凭证分组每日限额被整体跳过；一次都没发出请求时据此回 429
 	quotaBlocked bool
+
+	recoveryPolicySet bool
 }
 
 func (run *routeRun) publishSnapshot() {

@@ -74,6 +74,7 @@ import {
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
 import { describeFailureReason } from '../utils/failureSummary.js';
+import { getRequestOutcome } from '../utils/requestOutcome.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
 // last_failure_reason 只存原样保存的上游正文或传输层错误文本，标签"原始信息"。
@@ -377,7 +378,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
   const StreamIcon = request.isStreaming ? Waves : RefreshCw;
   const streamLabel = request.isStreaming ? '流式' : '非流式';
   const streamColor = request.isStreaming ? 'text-blue-600 bg-blue-50' : 'text-slate-600 bg-slate-50';
-  const streamOutcomeMeta = getStreamOutcomeMeta(request.streamOutcome || request.stream_outcome);
+  const streamOutcomeMeta = getStreamOutcomeMeta(getRequestOutcome(request));
   const cacheHitRate = getRequestCacheHitRate(request);
   const isFailure = isFailureStatus(request.status);
   const isCancelled = isCancelledStatus(request.status);
@@ -565,7 +566,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                     <Activity className="w-4 h-4 text-indigo-500" />
                     <span className="text-sm font-medium text-slate-600">请求状态</span>
                   </div>
-                  <RequestStatusBadge status={request.status} />
+                  <RequestStatusBadge request={request} />
                 </div>
 
                 <div className="flex items-center justify-between gap-3 rounded-xl border border-orange-100 bg-orange-50/70 p-3.5">
@@ -1469,7 +1470,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 </div>
                 <div className="px-4">
                   <InfoRow icon={Server} label="HTTP 状态码" value={networkHTTPStatus > 0 ? networkHTTPStatus : '-'} />
-                  <InfoRow icon={Activity} label="请求状态" value={<RequestStatusBadge status={request.status} />} />
+                  <InfoRow icon={Activity} label="请求状态" value={<RequestStatusBadge request={request} />} />
                   <InfoRow icon={Waves} label="请求类型" value={networkDisplayState.isStreaming == null ? '-' : (networkDisplayState.isStreaming ? '流式' : '非流式')} />
                   <InfoRow
                     icon={CheckCircle2}

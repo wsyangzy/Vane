@@ -1,4 +1,4 @@
-import { getEndpointChainItems, parseChainNode } from './endpointChain.js';
+import { getEndpointChainItems, getRequestResourcePath, parseChainNode } from './endpointChain.js';
 
 const parseSnapshot = (value) => {
   if (typeof value === 'string') {
@@ -43,6 +43,8 @@ export function readRequestDispatchTrace(request, resources = []) {
       // Grouped hop diagnostics are totals, not individual attempt timings or
       // statuses. Keep their names without assigning those totals to a retry.
       ...(captured?.attempts > 1 ? {} : captured),
+      channelId: String(candidate.channel ?? ''),
+      groupId: String(groupId ?? ''),
       channel: captured?.channel || channel?.name || key.channel || `渠道 #${candidate.channel || '未知'}`,
       credentialGroup: captured?.credentialGroup || group?.name || (groupId && groupId !== '0' ? `分组 #${groupId}` : '分组未记录'),
       endpoint: captured?.endpoint || endpointName || (endpointId ? `端点 #${endpointId}` : '端点未记录'),
@@ -92,14 +94,47 @@ export function readRequestDispatchTrace(request, resources = []) {
     }
   }
   const rawCount = Number(snapshot.attempts);
+  const targets = (snapshot.decision.targets || []).map(target => {
+    const channelId = String(target.channel_id ?? target.channelId ?? '');
+    const groupId = String(target.group_id ?? target.groupId ?? '0');
+    const targetProfileId = target.profile_id ?? target.profileId;
+    const configuredModel = target.upstream_model || target.upstreamModel || '';
+    if (targetProfileId > 0) return { label: `方案 #${targetProfileId}`, model: configuredModel, configuredModel };
+    const channel = resources.find(item => item.provider === provider && String(item.id) === channelId);
+    const historical = attempts.find(item => item.channelId === channelId && (groupId === '0' || item.groupId === groupId));
+    const group = channel?.credentialGroups?.find(item => String(item.id) === groupId);
+    return {
+      label: [historical?.channel || channel?.name || `渠道 #${channelId}`, groupId === '0' ? '全部分组' : historical?.credentialGroup || group?.name || `分组 #${groupId}`].join(' / '),
+      model: configuredModel || historical?.model || '',
+      configuredModel,
+    };
+  });
+  const source = snapshot.default_source || snapshot.defaultSource;
+  let defaultSource = null;
+  if (source && typeof source === 'object') {
+    const channelId = String(source.channel_id ?? source.channelId ?? '');
+    const groupId = String(source.group_id ?? source.groupId ?? '');
+    const channel = resources.find(item => item.provider === provider && String(item.id) === channelId);
+    const group = channel?.credentialGroups?.find(item => String(item.id) === groupId);
+    defaultSource = {
+      channelId,
+      groupId,
+      channel: source.channel_name || source.channelName || channel?.name || (channelId ? `渠道 #${channelId}` : ''),
+      credentialGroup: source.group_name || source.groupName || group?.name || (groupId && groupId !== '0' ? `分组 #${groupId}` : ''),
+      unavailable: !!source.unavailable,
+    };
+  }
   return {
     provider,
     requestId: snapshot.request_id || snapshot.requestId || request.requestId || request.request_id || '',
     profileId,
     profileName: snapshot.profile_name || snapshot.profileName || `方案 #${profileId}`,
+    requestedModel: snapshot.requested_model || snapshot.requestedModel || '',
+    defaultSource,
     strategy: snapshot.strategy || '',
     affinityMode: snapshot.affinity_mode || snapshot.affinityMode || '',
     decision: snapshot.decision,
+    targets,
     decisionLabel: dispatchDecisionLabel(snapshot.decision.kind),
     attemptCount: Math.max(attempts.length, Number.isFinite(rawCount) ? rawCount : 0),
     attempts,
@@ -114,3 +149,32 @@ export function readRequestDispatchTrace(request, resources = []) {
     finished: !!(snapshot.finished_at || snapshot.finishedAt),
   };
 }
+
+export const describeRequestRoutePath = (request = {}) => {
+  const trace = request.dispatchTrace || readRequestDispatchTrace(request);
+  const sourceModel = request.originalModelName || request.original_model_name || trace?.requestedModel || '';
+  const targetModel = request.modelRewriteTarget || request.model_rewrite_target || request.model || '';
+  // Destinations come only from sends. The saved default source explains where
+  // the route began; it is not another upstream attempt.
+  const nodes = trace?.attempts?.length ? trace.attempts : getRequestResourcePath({ ...request, dispatchTrace: trace });
+  if (!nodes.length) {
+    return !trace && sourceModel && targetModel && sourceModel !== targetModel ? `${sourceModel} → ${targetModel}` : '';
+  }
+  const paths = [];
+  for (const node of nodes) {
+    const actualModel = node.model || targetModel || sourceModel || '模型未记录';
+    const modelLabel = sourceModel && sourceModel !== actualModel ? `${sourceModel} → ${actualModel}` : actualModel;
+    const resource = [node.channel, node.credentialGroup].filter(Boolean).join(' / ') || '渠道未记录';
+    const previous = paths.at(-1);
+    if (previous?.model === modelLabel) {
+      if (previous.resources.at(-1) !== resource) previous.resources.push(resource);
+    } else paths.push({ model: modelLabel, resources: [resource] });
+  }
+  const snapshot = parseSnapshot(request.routeSnapshot || request.route_snapshot);
+  const source = trace?.decision?.kind !== 'default' ? trace?.defaultSource : null;
+  const origin = source?.unavailable ? '默认渠道不可用'
+    : [source?.channel, source?.credentialGroup].filter(Boolean).join(' / ')
+      || (!trace && snapshot?.kind ? snapshot.channel : '');
+  if (origin && paths[0].resources[0] !== origin) paths[0].resources.unshift(origin);
+  return paths.map(path => `${path.model}\n${path.resources.join(' → ')}`).join('\n\n');
+};
