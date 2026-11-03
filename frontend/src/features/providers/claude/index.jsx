@@ -940,7 +940,7 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
 
       </div>
 
-      <DispatchWorkspace provider="claude" refreshToken={headerLastUpdate} onViewRequests={onViewRequests}
+      <DispatchWorkspace provider="claude" refreshToken={channelsMeta} onViewRequests={onViewRequests}
         resourcesBusy={loading || batchCheckLoading}
         onRefreshResources={handleRefresh}
         resourceActions={<>

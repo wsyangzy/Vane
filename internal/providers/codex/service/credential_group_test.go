@@ -77,8 +77,8 @@ func TestCodexCredentialGroupDeletion(t *testing.T) {
 		{name: "disabled endpoints in inactive channel"},
 		{name: "empty group", empty: true},
 		{name: "default group remains protected", isDefault: true, wantError: "默认凭证分组不能删除"},
-		{name: "one participating endpoint protects whole group", participating: true, wantError: "1 个端点参与故障转移"},
-		{name: "disabled but active endpoint remains protected", activeEndpoint: true, wantError: "1 个激活端点"},
+		{name: "legacy failover participation does not block deletion", participating: true},
+		{name: "legacy activation does not block deletion", activeEndpoint: true},
 		{name: "group deletion failure restores both endpoints", failGroupWrite: true, wantError: "forced group failure"},
 		{name: "joins caller transaction", outerRollback: true},
 	} {

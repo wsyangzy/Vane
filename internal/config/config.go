@@ -57,6 +57,8 @@ type RetryConfig struct {
 	// 任何一个预算耗尽都会终止重试，返回客户端
 	MaxTotalAttempts int           // 全局最大总尝试次数（含所有端点+渠道，默认 10）
 	MaxTotalDuration time.Duration // 全局最大重试总时长（默认 60s）
+	// The zero value enables recovery waiting for existing configurations.
+	DisableRecoveryWait bool
 }
 
 type HealthConfig struct {

@@ -80,7 +80,9 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 		return err
 	}
 	candidates := a.dispatchCandidates(provider, pool, catalog, accounts, quota)
-	cfg := routing.RuntimeConfig{Provider: provider, Profiles: profiles, Candidates: candidates, Classify: a.callIntentClassifier}
+	cfg := routing.RuntimeConfig{Provider: provider, Profiles: profiles, Candidates: candidates, Catalog: catalog, Classify: a.callIntentClassifier}
+	_, ruleDefaults := a.settingsService.RoutingPolicy(ctx)
+	cfg.RuleDefaults = &ruleDefaults
 	cfg.OnSettlement = func(settlement routing.AttemptSettlement) { a.settleManualBalance(s, settlement) }
 	cfg.CheckAdmission = func(c routing.DispatchCandidate) string {
 		b, err := currentManualBalance(s, c)

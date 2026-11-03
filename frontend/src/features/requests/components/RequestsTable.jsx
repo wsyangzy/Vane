@@ -13,11 +13,15 @@ import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import Pagination from './Pagination.jsx';
 import RequestRouteCell from './RequestRouteCell.jsx';
+import RequestChannelTooltip from './RequestChannelTooltip.jsx';
+import { describeRequestRoutePath } from '../utils/dispatchTrace.js';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
 import { requestColumnLayout, requestRowHeight } from '../utils/tableLayout.js';
 import {
-  countChannelSwitches,
   getEndpointChainItems,
+  getRequestChannelLabel,
+  getRequestResourcePath,
+  parseChainNode,
 } from '../utils/endpointChain.js';
 import {
   getReasoningEffortMeta,
@@ -53,19 +57,23 @@ const getReasoningDisplay = (raw, compact) => {
 };
 
 const ChannelCell = ({ request, compact }) => {
-  const channelLabel = request.channel || '-';
-  const channelTransferCount = countChannelSwitches(getEndpointChainItems(request));
+  const chain = getEndpointChainItems(request);
+  const channelLabel = getRequestChannelLabel(request, chain.map(parseChainNode));
+  const nodes = getRequestResourcePath(request);
+  const transferCount = Math.max(0, nodes.length - 1);
+  const tooltip = <RequestChannelTooltip nodes={nodes} channelLabel={channelLabel} />;
+  const tooltipClasses = 'border-slate-200! bg-white! text-slate-700! max-w-[min(640px,calc(100vw-16px))]!';
 
   return (
     <span className="inline-flex w-full max-w-full items-center justify-center gap-1 min-w-0">
-      <span className="min-w-0 truncate text-purple-600 text-xs font-medium">{channelLabel}</span>
-      {channelTransferCount > 0 && (
-        <Tooltip asChild content={`渠道切换 ${channelTransferCount} 次`}><span
+      <Tooltip asChild content={tooltip} contentClassName={tooltipClasses}><span className="min-w-0 truncate text-purple-600 text-xs font-medium">{channelLabel}</span></Tooltip>
+      {transferCount > 0 && (
+        <Tooltip asChild content={tooltip} contentClassName={tooltipClasses}><span
           className={`inline-flex shrink-0 items-center gap-0.5 py-0.5 text-indigo-600 text-[10px] font-medium rounded whitespace-nowrap ${compact ? '' : 'border border-indigo-100 bg-indigo-50 px-1'}`}
-          aria-label={`渠道切换 ${channelTransferCount} 次`}
+          aria-label={`调用资源切换 ${transferCount} 次`}
         >
           <Route className="w-2.5 h-2.5" />
-          {!compact && <span>{channelTransferCount}</span>}
+          {!compact && <span>{transferCount}</span>}
         </span></Tooltip>
       )}
     </span>
@@ -102,7 +110,7 @@ const LatencyCell = ({ request, compact }) => compact ? (
  * @param {Object} column - 列配置及当前分配宽度
  * @param {Object} request - 请求数据
  */
-const renderCell = (column, request, onViewDispatch) => {
+const renderCell = (column, request, onViewDispatch, showDate) => {
   const columnId = column.id;
   const compact = column.layoutWidth < 100;
   const tokenText = (value) => value == null ? '—' : column.layoutWidth < 62 ? formatNumber(Number(value)) : value;
@@ -121,8 +129,8 @@ const renderCell = (column, request, onViewDispatch) => {
       );
     case 'timestamp': {
       const fullTime = formatTimestamp(request.timestamp);
-      const time = column.layoutWidth < 90 ? fullTime.split(' ').at(-1) : column.layoutWidth < 132 ? fullTime.replace(/^\d{4}\//, '') : fullTime;
-      return <Tooltip asChild content={fullTime}><span className="block truncate text-[11px] tabular-nums text-gray-400">{time}</span></Tooltip>;
+      const time = showDate ? fullTime : fullTime.split(' ').at(-1);
+      return <Tooltip asChild content={`请求时间：${fullTime}`}><span className="block truncate text-[11px] tabular-nums text-gray-400">{time}</span></Tooltip>;
     }
     case 'provider':
       const providerValue = request.provider || 'claude';
@@ -147,16 +155,18 @@ const renderCell = (column, request, onViewDispatch) => {
         </span>
       );
     case 'status':
-      return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge status={request.status} /></span>;
+      return <span className={`inline-flex max-w-full [&>div]:max-w-full [&>div]:gap-1 [&>div]:px-1 [&>div]:text-[11px] ${column.layoutWidth < 58 ? '[&_svg]:hidden' : ''}`}><RequestStatusBadge request={request} /></span>;
     case 'model':
       return (
         <ModelTag
           compact
+          className="h-[22px]!"
           model={request.model}
           rewriteSource={request.modelRewriteSource || request.model_rewrite_source || ''}
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
           routeSnapshot={request.routeSnapshot || request.route_snapshot}
+          routePath={describeRequestRoutePath(request)}
         />
       );
     case 'channel':
@@ -194,7 +204,7 @@ const renderCell = (column, request, onViewDispatch) => {
 /**
  * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
  */
-const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onViewDispatch }) => {
+const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onViewDispatch, showDate }) => {
   const clickTimer = useRef(null);
 
   useEffect(() => () => clearTimeout(clickTimer.current), []);
@@ -220,7 +230,7 @@ const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onVi
       <tr style={{ height: rowHeight }}>
         {columns.map((column) => (
           <td key={column.id} className={`min-w-0 px-0.5 ${column.id === 'endpoint' ? 'py-0.5' : 'py-1.5'} text-center align-middle whitespace-nowrap`}>
-            <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{renderCell(column, request, onViewDispatch)}</div>
+            <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{renderCell(column, request, onViewDispatch, showDate)}</div>
           </td>
         ))}
       </tr>
@@ -241,6 +251,7 @@ const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onVi
  * @param {Array} props.columnConfigs - 列配置数组
  * @param {Function} props.onRowDoubleClick - 双击行回调
  * @param {Function} props.onViewDispatch - 打开当前请求的完整调度详情
+ * @param {boolean} props.showDate - 跨日或自定义范围显示完整日期时间
  */
 const RequestsTable = ({
   summary,
@@ -251,6 +262,7 @@ const RequestsTable = ({
   onPageSizeChange,
   visibleColumns = [],
   columnConfigs = [],
+  showDate = true,
   onRowDoubleClick,
   onViewDispatch
 }) => {
@@ -283,16 +295,15 @@ const RequestsTable = ({
 
   // 获取可见的列配置
   const visibleColumnConfigs = columnConfigs.filter(col => visibleColumns.includes(col.id));
-  const layout = requestColumnLayout(visibleColumnConfigs, tableWidth);
+  const layout = requestColumnLayout(visibleColumnConfigs, tableWidth, showDate);
   const rowHeight = requestRowHeight(bodyHeight, 0, pagination.pageSize);
-  const showScrollbar = rowHeight * requests.length > bodyHeight;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       {summary}
 
       {/* 表格 */}
-      <div ref={regionRef} role="region" aria-label="请求明细表格" tabIndex={0} className={`${showScrollbar ? 'scrollbar-visible ' : ''}relative min-h-0 min-w-0 flex-1 overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500`}>
+      <div ref={regionRef} role="region" aria-label="请求明细表格" tabIndex={0} className="scrollbar-visible relative min-h-0 min-w-0 flex-1 overflow-auto focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-500">
         {loading && (
           <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
             <LoadingSpinner text="加载请求数据..." />
@@ -330,6 +341,7 @@ const RequestsTable = ({
                 key={req.rawRequestId || req.requestId}
                 request={req}
                 rowHeight={rowHeight}
+                showDate={showDate}
                 columns={layout.columns}
                 onCopyId={handleCopyId}
                 onDoubleClick={onRowDoubleClick}

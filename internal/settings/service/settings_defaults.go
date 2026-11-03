@@ -3,6 +3,9 @@ package service
 import (
 	"context"
 	"log/slog"
+	"strconv"
+
+	"github.com/wsyangzy/Vane/internal/routing"
 
 	settingsstore "github.com/wsyangzy/Vane/internal/settings/store"
 )
@@ -10,6 +13,25 @@ import (
 // InitDefaults 初始化默认设置
 func (s *SettingsService) InitDefaults(ctx context.Context) error {
 	defaults := s.GetAllDefaults()
+	// Seed the unified preference once from the former model routing default.
+	// SyncMetadata preserves an existing unified value and explicit rule overrides.
+	ruleFallback, err := s.store.Get(ctx, CategoryRetry, "rule_fallback_to_default")
+	if err != nil {
+		return err
+	}
+	if ruleFallback == nil {
+		legacy, err := s.store.Get(ctx, CategoryRetry, "model_rule_fallback")
+		if err != nil {
+			return err
+		}
+		if legacy != nil && (legacy.Value == "true" || legacy.Value == "false") {
+			for _, record := range defaults {
+				if record.Category == CategoryRetry && record.Key == "rule_fallback_to_default" {
+					record.Value = legacy.Value
+				}
+			}
+		}
+	}
 	// A new dev override starts with the existing port preference. Metadata
 	// synchronization must not replace an upgraded user's choice with 8087.
 	devPort, err := s.store.Get(ctx, CategoryServer, "preferred_port_dev")
@@ -179,8 +201,8 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 	switch category {
 	case CategoryServer:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
-			{Category: CategoryServer, Key: "preferred_port_dev", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "开发环境 API 服务首选端口", DisplayOrder: 1, RequiresRestart: true},
+			{Category: CategoryServer, Key: "preferred_port", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "Vane 代理服务监听的端口。", DisplayOrder: 1, RequiresRestart: true},
+			{Category: CategoryServer, Key: "preferred_port_dev", Value: "8087", ValueType: ValueTypeInt, Label: "首选端口", Description: "开发环境代理服务监听的端口。", DisplayOrder: 1, RequiresRestart: true},
 		}
 
 	case CategoryStrategy:
@@ -193,17 +215,23 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 		}
 
 	case CategoryRetry:
+		cooldown, rules := routing.DefaultCooldownPolicy(), routing.DefaultRuleDefaults()
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryRetry, Key: "max_total_attempts", Value: "10", ValueType: ValueTypeInt, Label: "总尝试次数上限", Description: "单次请求所有候选、渠道和阶段合计的上游发送次数，包含首次发送；范围 1–100", DisplayOrder: 1},
-			{Category: CategoryRetry, Key: "max_total_duration", Value: "60s", ValueType: ValueTypeDuration, Label: "调度等待时限", Description: "从调度开始计时，达到时限后不再发起新尝试或等待恢复；范围 1 秒至 10 分钟，不会中断已经开始的正常响应", DisplayOrder: 2},
+			{Category: CategoryRetry, Key: "max_total_attempts", Value: "10", ValueType: ValueTypeInt, Label: "总尝试次数上限", Description: "单次请求向上游发送的总次数，含首次发送。", DisplayOrder: 1},
+			{Category: CategoryRetry, Key: "max_total_duration", Value: "60s", ValueType: ValueTypeDuration, Label: "调度等待时限", Description: "单次请求可用于尝试与等待恢复的总时长。", DisplayOrder: 2},
+			{Category: CategoryRetry, Key: "wait_for_recovery", Value: "true", ValueType: ValueTypeBool, Label: "端点冷却时等待重试", Description: "所有候选暂时不可用时，等待冷却结束再重试。", DisplayOrder: 3},
+			{Category: CategoryRetry, Key: "cooldown_initial", Value: strconv.FormatFloat(cooldown.Initial.Seconds(), 'f', -1, 64) + "s", ValueType: ValueTypeDuration, Label: "首次冷却时间", Description: "临时故障后，资源首次恢复尝试前的等待时间。", DisplayOrder: 4},
+			{Category: CategoryRetry, Key: "cooldown_multiplier", Value: strconv.FormatFloat(cooldown.Multiplier, 'f', -1, 64), ValueType: ValueTypeFloat, Label: "连续失败递增倍数", Description: "连续失败时，冷却时间每次递增的倍数。", DisplayOrder: 5},
+			{Category: CategoryRetry, Key: "cooldown_max", Value: strconv.FormatFloat(cooldown.Maximum.Seconds(), 'f', -1, 64) + "s", ValueType: ValueTypeDuration, Label: "最长冷却时间", Description: "连续失败时，本地冷却时间的上限。", DisplayOrder: 6},
+			{Category: CategoryRetry, Key: "rule_fallback_to_default", Value: strconv.FormatBool(rules.FallbackToDefault), ValueType: ValueTypeBool, Label: "规则目标失败后回到默认编排", Description: "规则目标无法完成请求时，使用当前方案的默认编排继续尝试。", DisplayOrder: 7},
 		}
 
 	case CategoryHealth:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryHealth, Key: "active_probes_enabled", Value: "true", ValueType: ValueTypeBool, Label: "主动健康检查", Description: "仅自动探测默认方案内允许检测的端点；关闭后保留手动检测和真实请求反馈", DisplayOrder: 0},
-			{Category: CategoryHealth, Key: "check_interval", Value: "30s", ValueType: ValueTypeDuration, Label: "检查间隔", Description: "Claude 与 Codex 默认方案内可检测端点的定时探测间隔；未参与的端点不探测", DisplayOrder: 1},
-			{Category: CategoryHealth, Key: "timeout", Value: "5s", ValueType: ValueTypeDuration, Label: "检查超时", Description: "单次健康探测的等待上限，不作为正常会话请求的超时", DisplayOrder: 2},
-			{Category: CategoryHealth, Key: "health_path", Value: "/v1/models", ValueType: ValueTypeString, Label: "检查路径", Description: "健康探测使用的 API 路径；实际请求可用性仍由调度与真实调用结果判断", DisplayOrder: 3},
+			{Category: CategoryHealth, Key: "active_probes_enabled", Value: "true", ValueType: ValueTypeBool, Label: "主动健康检查", Description: "定期探测默认方案中可检测端点的连通性。", DisplayOrder: 0},
+			{Category: CategoryHealth, Key: "check_interval", Value: "30s", ValueType: ValueTypeDuration, Label: "检查间隔", Description: "两次定时健康探测之间的间隔。", DisplayOrder: 1},
+			{Category: CategoryHealth, Key: "timeout", Value: "5s", ValueType: ValueTypeDuration, Label: "检查超时", Description: "单次健康探测的最长等待时间。", DisplayOrder: 2},
+			{Category: CategoryHealth, Key: "health_path", Value: "/v1/models", ValueType: ValueTypeString, Label: "检查路径", Description: "健康探测访问的 API 路径。", DisplayOrder: 3},
 		}
 
 	case CategoryFailover:
@@ -221,9 +249,9 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 		// 请求控制配置
 		// 移除 allow_retry_on_exhausted，始终保持连接挂起
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "非流式默认超时", Description: "未单独配置端点超时时，非流式请求的总等待上限", DisplayOrder: 1},
-			{Category: CategoryRequest, Key: "response_header_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "流式响应头超时", Description: "流式请求等待服务端首次响应头的超时时间（Claude 与 Codex 共用）。长上下文 + 高推理档位首包可能超过 60s；超时后请求不会重放", DisplayOrder: 2},
-			{Category: CategoryRequest, Key: "default_response_header_timeout", Value: "60s", ValueType: ValueTypeDuration, Label: "非流式响应头超时", Description: "Claude 与 Codex 非流式请求等待上游响应头的上限，仍受端点或默认总超时约束", DisplayOrder: 3},
+			{Category: CategoryRequest, Key: "global_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "非流式默认超时", Description: "非流式请求从发送到完成的默认时限。", DisplayOrder: 1},
+			{Category: CategoryRequest, Key: "response_header_timeout", Value: "300s", ValueType: ValueTypeDuration, Label: "流式响应头超时", Description: "流式请求等待上游首次响应头的最长时间。", DisplayOrder: 2},
+			{Category: CategoryRequest, Key: "default_response_header_timeout", Value: "60s", ValueType: ValueTypeDuration, Label: "非流式响应头超时", Description: "非流式请求等待上游首次响应头的最长时间。", DisplayOrder: 3},
 			{Category: CategoryRequest, Key: "suspend_wait_timeout", Value: "120s", ValueType: ValueTypeDuration, Label: "挂起等待超时", Description: "普通挂起等待端点恢复/渠道切换的最大时间", DisplayOrder: 3},
 		}
 
@@ -236,27 +264,27 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 
 	case CategoryAuth:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryAuth, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用访问鉴权", Description: "开启后，Claude 与 Codex 客户端接入 Vane 均需提供应用访问令牌", DisplayOrder: 1},
-			{Category: CategoryAuth, Key: "token", Value: "", ValueType: ValueTypePassword, Label: "应用访问令牌", Description: "客户端连接 Vane 时使用的令牌；接入配置可在对应管理页生成", DisplayOrder: 2},
+			{Category: CategoryAuth, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "启用访问鉴权", Description: "校验接入 Vane 的客户端是否持有应用访问令牌。", DisplayOrder: 1},
+			{Category: CategoryAuth, Key: "token", Value: "", ValueType: ValueTypePassword, Label: "应用访问令牌", Description: "客户端接入 Vane 时使用的身份凭证。", DisplayOrder: 2},
 		}
 
 	case CategoryTokenCounting:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryTokenCounting, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "转发 Claude Token 预估", Description: "仅转发客户端发起的 Claude /count_tokens 请求；关闭后 API、订阅及调度方案接入均使用本地估算，不影响正常生成请求", DisplayOrder: 1},
-			{Category: CategoryTokenCounting, Key: "estimation_ratio", Value: "4.0", ValueType: ValueTypeFloat, Label: "本地估算比例", Description: "本地预估时平均每个 Token 对应的字符数，不作为实际请求的计费依据", DisplayOrder: 2},
+			{Category: CategoryTokenCounting, Key: "enabled", Value: "false", ValueType: ValueTypeBool, Label: "转发 Claude Token 预估", Description: "将 Claude 的 Token 预估请求交由上游处理。", DisplayOrder: 1},
+			{Category: CategoryTokenCounting, Key: "estimation_ratio", Value: "4.0", ValueType: ValueTypeFloat, Label: "本地估算比例", Description: "本地预估时，每个 Token 对应的平均字符数。", DisplayOrder: 2},
 		}
 
 	case CategoryRetention:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求记录保留天数，0 表示永久保留；历史请求自动按自然月归档分库", DisplayOrder: 1},
+			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求历史的保留时长，0 表示永久保留。", DisplayOrder: 1},
 		}
 
 	case CategoryCache:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryCache, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用缓存", Description: "启用统计聚合读路径缓存，不影响请求转发和计费事实记录；端口检测、CLI 版本等运行时缓存始终启用", DisplayOrder: 1},
-			{Category: CategoryCache, Key: "fallback_ttl", Value: "5m", ValueType: ValueTypeDuration, Label: "兜底刷新时间", Description: "请求记录写入后统计缓存会立即按受影响范围刷新；此值只是兜底，超过该时长无论是否有写入都重新查库", DisplayOrder: 2},
-			{Category: CategoryCache, Key: "max_entries", Value: "1000", ValueType: ValueTypeInt, Label: "最大条目数", Description: "每类缓存最多保留的 key 数量", DisplayOrder: 3},
-			{Category: CategoryCache, Key: "stale_on_error", Value: "true", ValueType: ValueTypeBool, Label: "错误时使用旧值", Description: "数据库瞬时错误时允许统计聚合展示旧值", DisplayOrder: 4},
+			{Category: CategoryCache, Key: "enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用缓存", Description: "复用统计查询结果，减少重复读取数据库。", DisplayOrder: 1},
+			{Category: CategoryCache, Key: "fallback_ttl", Value: "5m", ValueType: ValueTypeDuration, Label: "兜底刷新时间", Description: "统计缓存的最长有效时间。", DisplayOrder: 2},
+			{Category: CategoryCache, Key: "max_entries", Value: "1000", ValueType: ValueTypeInt, Label: "最大条目数", Description: "每类缓存最多保留的条目数。", DisplayOrder: 3},
+			{Category: CategoryCache, Key: "stale_on_error", Value: "true", ValueType: ValueTypeBool, Label: "错误时使用旧值", Description: "数据库读取失败时，使用已有缓存维持统计展示。", DisplayOrder: 4},
 		}
 
 	case CategoryHotPool:
@@ -271,20 +299,20 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 	// 🔧 [P5.5.2 新增] Logging 日志配置
 	case CategoryLogging:
 		return []*settingsstore.SettingRecord{
-			{Category: CategoryLogging, Key: "level", Value: "info", ValueType: ValueTypeEnum, Label: "日志级别", Description: "日志详细程度，debug 用于排查问题", EnumOptions: []settingsstore.EnumOption{
+			{Category: CategoryLogging, Key: "level", Value: "info", ValueType: ValueTypeEnum, Label: "日志级别", Description: "记录日志的最低严重级别。", EnumOptions: []settingsstore.EnumOption{
 				{Value: "debug", Label: "调试 (Debug)"},
 				{Value: "info", Label: "信息 (Info)"},
 				{Value: "warn", Label: "警告 (Warn)"},
 				{Value: "error", Label: "错误 (Error)"},
 			}, DisplayOrder: 1},
-			{Category: CategoryLogging, Key: "format", Value: "text", ValueType: ValueTypeEnum, Label: "日志格式", Description: "文本格式适合阅读，JSON 格式适合日志采集系统", EnumOptions: []settingsstore.EnumOption{
+			{Category: CategoryLogging, Key: "format", Value: "text", ValueType: ValueTypeEnum, Label: "日志格式", Description: "日志内容的输出格式。", EnumOptions: []settingsstore.EnumOption{
 				{Value: "text", Label: "文本格式"},
 				{Value: "json", Label: "JSON 格式"},
 			}, DisplayOrder: 2},
-			{Category: CategoryLogging, Key: "file_enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用文件日志", Description: "将日志写入本机文件；关闭后仍可查看运行期间的实时日志", DisplayOrder: 3},
-			{Category: CategoryLogging, Key: "max_file_size", Value: "100MB", ValueType: ValueTypeString, Label: "单文件轮转大小", Description: "单个活动日志达到此大小时归档；支持 B、KB、MB、GB，例如 100MB", DisplayOrder: 4},
-			{Category: CategoryLogging, Key: "max_files", Value: "10", ValueType: ValueTypeInt, Label: "归档保留数量", Description: "每类日志跨月份保留的归档文件数；在后续轮转时清理超额归档", DisplayOrder: 5},
-			{Category: CategoryLogging, Key: "compress_rotated", Value: "true", ValueType: ValueTypeBool, Label: "压缩归档日志", Description: "将新轮转的归档压缩为 gzip，减少磁盘占用", DisplayOrder: 6},
+			{Category: CategoryLogging, Key: "file_enabled", Value: "true", ValueType: ValueTypeBool, Label: "启用文件日志", Description: "将运行日志保存到本机文件。", DisplayOrder: 3},
+			{Category: CategoryLogging, Key: "max_file_size", Value: "100MB", ValueType: ValueTypeString, Label: "单文件轮转大小", Description: "单个日志文件触发归档的大小。", DisplayOrder: 4},
+			{Category: CategoryLogging, Key: "max_files", Value: "10", ValueType: ValueTypeInt, Label: "归档保留数量", Description: "每类日志保留的归档文件数量。", DisplayOrder: 5},
+			{Category: CategoryLogging, Key: "compress_rotated", Value: "true", ValueType: ValueTypeBool, Label: "压缩归档日志", Description: "压缩归档日志，减少磁盘占用。", DisplayOrder: 6},
 		}
 
 	default:

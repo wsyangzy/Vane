@@ -132,7 +132,8 @@ func (a *App) refreshPoolRuntime(ctx context.Context, provider string) (*routing
 	}
 	// Legacy pools remain in SQLite; only resource identities and health are
 	// loaded into the application runtime. Profiles own all participation.
-	cfg := routing.PoolConfig{Accounts: accounts}
+	cooldown, _ := a.settingsService.RoutingPolicy(ctx)
+	cfg := routing.PoolConfig{Accounts: accounts, CooldownPolicy: cooldown}
 	if a.poolRuntimes == nil {
 		a.poolRuntimes = map[string]*routing.PoolRuntime{}
 	}

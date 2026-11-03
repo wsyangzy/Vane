@@ -25,8 +25,9 @@ import {
 } from 'lucide-react';
 import { Button, ErrorMessage, ConfirmDialog } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
-import { SettingItem, SettingsSection, PortInfo } from './components/index.js';
+import { SettingItem, SettingsSection, PortInfo, DispatchSettingsHelp } from './components/index.js';
 import { buildSettingsUpdates } from './settingsUpdates.js';
+import { dispatchSettingGroups } from '@/shared/lib/dispatchPolicy.js';
 import {
   isWailsEnvironment,
   getSettingCategories,
@@ -63,7 +64,7 @@ const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'token_counting', 
 const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'logging', 'token_counting']);
 const LEGACY_CATEGORIES = new Set(['strategy', 'failover', 'timezone', 'streaming', 'hot_pool']);
 const CURRENT_KEYS = {
-  retry: ['max_total_attempts', 'max_total_duration'],
+  retry: dispatchSettingGroups.flatMap((group) => group.keys),
   request: ['global_timeout', 'response_header_timeout', 'default_response_header_timeout']
 };
 
@@ -763,7 +764,7 @@ const SettingsPage = () => {
     const enabledKey = category.name === 'health' ? 'active_probes_enabled' : category.name === 'logging' ? 'file_enabled' : null;
     const enabledSetting = categorySettings.find(setting => setting.key === enabledKey);
     const dependentDisabled = enabledSetting && String(getCurrentValue(enabledSetting)) === 'false';
-    const settingItems = categorySettings.map(setting => {
+    const renderSettingItem = (setting) => {
       const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
       const dependsOnSwitch = category.name === 'health'
         ? setting.key !== enabledKey
@@ -779,7 +780,8 @@ const SettingsPage = () => {
           onRevert={handleRevertSetting}
         />
       );
-    });
+    };
+    const settingItems = categorySettings.map(setting => renderSettingItem(setting));
     return (
       <SettingsSection
         key={category.name}
@@ -796,12 +798,8 @@ const SettingsPage = () => {
             <PortInfo portInfo={portInfo} loading={loading} />
             <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">{settingItems}</div>
           </div>
-        ) : settingItems}
-        {category.name === 'retry' && (
-          <p className="my-2 rounded-lg bg-indigo-50/60 px-2.5 py-2 text-[11px] leading-5 text-indigo-700">
-            候选渠道、调度策略、方案预算和等待恢复，请在 Claude 管理或 Codex 管理的调度方案中配置。
-          </p>
-        )}
+        ) : category.name === 'retry' ? dispatchSettingGroups.map((group) => <div key={group.title} className="min-w-0 py-2 first:pt-1"><h4 className="mb-1 border-b border-slate-100 pb-2 text-[11px] font-semibold text-slate-700">{group.title}</h4>{categorySettings.filter((setting) => group.keys.includes(setting.key)).map(renderSettingItem)}</div>) : settingItems}
+        {category.name === 'retry' && <DispatchSettingsHelp />}
         {category.name === 'cache' && isWails && (
           <CacheStatusPanel
             status={cacheStatus}

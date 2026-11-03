@@ -323,8 +323,10 @@ const SettingItem = ({
 
   // 其他类型使用文本/数字输入框
   const isAttemptLimit = setting.category === 'retry' && setting.key === 'max_total_attempts';
-  const min = setting.category === 'retention' && setting.key === 'retention_days' ? 0 : undefined;
-  const max = isAttemptLimit ? 100 : setting.category === 'server' ? 65535 : undefined;
+  const isCooldownMultiplier = setting.category === 'retry' && setting.key === 'cooldown_multiplier';
+  const isLogFileSize = setting.category === 'logging' && setting.key === 'max_file_size';
+  const min = isCooldownMultiplier ? 1 : setting.category === 'retention' && setting.key === 'retention_days' ? 0 : undefined;
+  const max = isCooldownMultiplier ? 10 : isAttemptLimit ? 100 : setting.category === 'server' ? 65535 : undefined;
 
   return (
     <div className="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 group">
@@ -362,7 +364,8 @@ const SettingItem = ({
             step={config.step}
             min={isAttemptLimit ? 1 : min ?? (valueType === 'float' ? 0.1 : config.type === 'number' ? 1 : undefined)}
             max={max}
-            placeholder={config.placeholder}
+            placeholder={isLogFileSize ? '如 100MB' : config.placeholder}
+            title={isLogFileSize ? '支持 B、KB、MB、GB' : undefined}
             className={`
               h-8 w-full px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700
               font-mono text-right

@@ -673,7 +673,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
         </div>
       </div>
 
-      <DispatchWorkspace provider="codex" refreshToken={lastUpdate} onViewRequests={onViewRequests}
+      <DispatchWorkspace provider="codex" refreshToken={channels} onViewRequests={onViewRequests}
         resourcesBusy={loading || Boolean(actionLoading)}
         onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
         resourceActions={<>

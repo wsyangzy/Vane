@@ -39,7 +39,7 @@ type RoutingProfile struct {
 	AffinityMode    AffinityMode      `json:"affinity_mode"`
 	MaxAttempts     int               `json:"max_attempts"`
 	MaxDuration     time.Duration     `json:"max_duration"`
-	WaitForRecovery bool              `json:"wait_for_recovery"`
+	WaitForRecovery bool              `json:"wait_for_recovery"` // Legacy storage/API field; request adapters apply the global policy.
 	Members         []RoutingMember   `json:"members"`
 	Rules           []RoutingRule     `json:"rules"`
 	Intents         []IntentRule      `json:"intents"`

@@ -140,8 +140,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 原始 body，故障转移时每个分组都从同一份请求重新计算自己的策略。
 	channelName := ""
 	if h.manager != nil {
-		if ch := h.manager.GetActiveChannel(); ch != nil {
-			channelName = ch.Name
+		// Profile scheduling selects resources per request. The legacy active
+		// channel may be outside the profile and must not label an unsent request.
+		if runtime := h.manager.PoolRuntime(); runtime == nil || runtime.ProfileRuntime() == nil {
+			if ch := h.manager.GetActiveChannel(); ch != nil {
+				channelName = ch.Name
+			}
 		}
 	}
 	body = originalBody

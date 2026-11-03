@@ -8,8 +8,70 @@ import (
 	"github.com/wsyangzy/Vane/internal/routing"
 )
 
-func TestRemoveCredentialGroupReferencesPreservesOtherTargetsAndProviders(t *testing.T) {
-	s, db := newProfileTestStore(t)
+func TestCredentialGroupDeletionChecksEveryRoutingReference(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		edit    func(*routing.RoutingProfile)
+		blocked bool
+	}{
+		{"member", func(p *routing.RoutingProfile) {
+			p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 44, Enabled: true}}
+		}, true},
+		{"deselected member", func(p *routing.RoutingProfile) { p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 44}} }, false},
+		{"disabled profile", func(p *routing.RoutingProfile) {
+			p.Enabled = false
+			p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 44, Enabled: true}}
+		}, true},
+		{"all channel groups", func(p *routing.RoutingProfile) {
+			p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 0, Enabled: true}}
+		}, true},
+		{"other channel", func(p *routing.RoutingProfile) { p.Members = []routing.RoutingMember{{ChannelID: 8, GroupID: 0}} }, false},
+		{"model target", func(p *routing.RoutingProfile) {
+			p.Rules = []routing.RoutingRule{{Kind: "model", Name: "model", MatchModel: "gpt-*", Targets: []routing.RouteTarget{{ChannelID: 7, GroupID: 44}}}}
+		}, true},
+		{"non-stream channel target", func(p *routing.RoutingProfile) {
+			p.Rules = []routing.RoutingRule{{Kind: "non_stream", Name: "non-stream", Targets: []routing.RouteTarget{{ChannelID: 7}}}}
+		}, true},
+		{"intent target", func(p *routing.RoutingProfile) {
+			p.Intents = []routing.IntentRule{{ID: "coding", Name: "coding", Targets: []routing.RouteTarget{{ChannelID: 7, GroupID: 44}}}}
+		}, true},
+		{"classifier", func(p *routing.RoutingProfile) { p.Classifier = &routing.ClassifierConfig{ChannelID: 7, GroupID: 44} }, true},
+		{"cross-provider classifier", func(p *routing.RoutingProfile) {
+			p.Provider = "codex"
+			p.Classifier = &routing.ClassifierConfig{Provider: "claude", ChannelID: 7, GroupID: 44}
+		}, true},
+		{"same group ID in another provider", func(p *routing.RoutingProfile) {
+			p.Provider = "codex"
+			p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 44}}
+		}, false},
+		{"unused group", func(p *routing.RoutingProfile) { p.Members = []routing.RoutingMember{{ChannelID: 7, GroupID: 45}} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, db := newProfileTestStore(t)
+			ctx := context.Background()
+			p := routing.DefaultProfile("claude")
+			p.Name = "referencing-profile"
+			tc.edit(&p)
+			require.NoError(t, s.Save(ctx, &p))
+			tx, err := db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			err = CheckCredentialGroupReferences(ctx, tx, "claude", 7, 44)
+			if tc.blocked {
+				require.ErrorContains(t, err, p.Name)
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, tx.Rollback())
+			stored, err := s.Get(ctx, p.Provider, p.ID)
+			require.NoError(t, err)
+			require.Equal(t, p.Revision, stored.Revision)
+			require.Equal(t, p.Members, stored.Members)
+		})
+	}
+}
+
+func TestPruneMissingCredentialGroupReferencesPreservesOtherTargetsAndProviders(t *testing.T) {
+	s, _ := newProfileTestStore(t)
 	ctx := context.Background()
 	p := routing.DefaultProfile("claude")
 	p.Name = "affected"
@@ -34,10 +96,9 @@ func TestRemoveCredentialGroupReferencesPreservesOtherTargetsAndProviders(t *tes
 	require.NoError(t, s.Save(ctx, &p))
 	beforeRevision := p.Revision
 
-	tx, err := db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	require.NoError(t, RemoveCredentialGroupReferences(ctx, tx, "claude", 44))
-	require.NoError(t, tx.Commit())
+	require.NoError(t, s.PruneMissingCredentialGroupReferences(ctx, "claude", routing.Catalog{
+		{ID: 7, Groups: []routing.CatalogGroup{{ID: 45}}}, {ID: 8},
+	}))
 
 	got, err := s.Get(ctx, "claude", p.ID)
 	require.NoError(t, err)

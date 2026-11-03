@@ -68,6 +68,159 @@ func TestCodexProfileRecordsActualResourcesBeforeArchival(t *testing.T) {
 	}
 }
 
+func TestCodexProfileStreamCompletenessMatchesArchivedOutcome(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprint(complete), func(t *testing.T) {
+			tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { tracker.Close() })
+			calls := 0
+			raw := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial text\"}\n\n"
+			if complete {
+				raw += "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}\n\n"
+			}
+			h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if strings.HasPrefix(r.URL.Path, "/first") {
+					w.WriteHeader(http.StatusForbidden)
+					io.WriteString(w, `{"error":{"code":"AccessDenied"}}`)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, raw)
+			})
+			h.usageTracker = tracker
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`)))
+			if err := tracker.ForceFlush(); err != nil {
+				t.Fatal(err)
+			}
+			details, err := tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 10})
+			if err != nil || len(details) != 1 {
+				t.Fatalf("missing archived request: %v %+v", err, details)
+			}
+			detail := details[0]
+			wantOutcome, wantReason := tracking.StreamOutcomeIncomplete, "incomplete_stream"
+			if complete {
+				wantOutcome, wantReason = tracking.StreamOutcomeCompleted, ""
+			}
+			var archivedTrace routing.DispatchTrace
+			if err := json.Unmarshal([]byte(detail.RouteSnapshot), &archivedTrace); err != nil {
+				t.Fatal(err)
+			}
+			if detail.StreamOutcome != wantOutcome || detail.FailureReason != wantReason || archivedTrace.Successful != complete || trace.Successful != complete {
+				t.Fatalf("request outcome contradicts dispatch: outcome=%s reason=%s trace=%+v", detail.StreamOutcome, detail.FailureReason, archivedTrace)
+			}
+			if rec.Code != 200 || rec.Body.String() != raw || calls != 2 || detail.Status != "completed" || detail.HTTPStatusCode == nil || *detail.HTTPStatusCode != 200 || !detail.HTTPStatusIsUpstream {
+				t.Fatalf("response fidelity or attempt count changed: code=%d body=%q calls=%d detail=%+v", rec.Code, rec.Body.String(), calls, detail)
+			}
+		})
+	}
+}
+
+func TestCodexProfileWithoutSendsDoesNotRecordLegacyActiveChannel(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		for _, credentialRejected := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%t/credential_rejected=%t", streaming, credentialRejected), func(t *testing.T) {
+				tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { tracker.Close() })
+				sends := 0
+				h, runtime, _ := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) { sends++ })
+				h.usageTracker = tracker
+				h.manager.activeChannel = &store.CodexChannelRecord{ID: 99, Name: "outside-profile"}
+				profile := routing.DefaultProfile("codex")
+				profile.ID, profile.Name, profile.IsDefault = 7, "current-profile", true
+				profile.Members = []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}}
+				candidate := routing.DispatchCandidate{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: credentialRejected}
+				runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{candidate}})
+				if credentialRejected {
+					h.manager.endpointsByChannel[1][0].AuthMode = subscription.ClientPassthrough
+				}
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"test","stream":%t,"input":"hello"}`, streaming))))
+				if err := tracker.ForceFlush(); err != nil {
+					t.Fatal(err)
+				}
+				details, err := tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 10})
+				if err != nil || len(details) != 1 {
+					t.Fatalf("missing request: %v %+v", err, details)
+				}
+				detail := details[0]
+				var trace routing.DispatchTrace
+				if err := json.Unmarshal([]byte(detail.RouteSnapshot), &trace); err != nil {
+					t.Fatal(err)
+				}
+				if sends != 0 || trace.Attempts != 0 || trace.ProfileID != 7 || trace.FinishedAt == nil {
+					t.Fatalf("expected a finished profile request without sends: sends=%d trace=%+v", sends, trace)
+				}
+				if detail.Channel != "" || detail.EndpointName != "" || detail.EndpointChain != "" {
+					t.Fatalf("unsent request inherited resources: channel=%q endpoint=%q chain=%q", detail.Channel, detail.EndpointName, detail.EndpointChain)
+				}
+				if h.manager.GetActiveChannel().ID != 99 {
+					t.Fatal("profile request changed global activation")
+				}
+			})
+		}
+	}
+}
+
+func TestCodexProfileTrackingOnlyRecordsNonStreamTargetWhenUsed(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", streaming), func(t *testing.T) {
+			tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 50, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { tracker.Close() })
+			h, runtime, _ := newProfileCodexFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				if streaming {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n")
+				} else {
+					io.WriteString(w, `{"status":"completed","output":[]}`)
+				}
+			})
+			h.usageTracker = tracker
+			h.manager.activeChannel = &store.CodexChannelRecord{ID: 99, Name: "outside-profile"}
+			profile := routing.DefaultProfile("codex")
+			profile.ID, profile.Name, profile.IsDefault = 7, "current-profile", true
+			profile.Members = []routing.RoutingMember{{ChannelID: 1, GroupID: 11, Enabled: true}}
+			profile.Rules = []routing.RoutingRule{{ID: 1, Enabled: true, Kind: "non_stream", Mode: routing.ModePrefer, Targets: []routing.RouteTarget{{ChannelID: 2, GroupID: 22}}}}
+			runtime.Replace(routing.RuntimeConfig{Provider: "codex", Profiles: []routing.RoutingProfile{profile}, Candidates: []routing.DispatchCandidate{
+				{Provider: "codex", ChannelID: 1, GroupID: 11, EndpointID: "1", Protocol: "responses", Enabled: true},
+				{Provider: "codex", ChannelID: 2, GroupID: 22, EndpointID: "2", Protocol: "responses", Enabled: true},
+			}})
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"test","stream":%t,"input":"hello"}`, streaming))))
+			details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 10})
+			if err != nil || len(details) != 1 {
+				t.Fatalf("missing request: %v %+v", err, details)
+			}
+			detail := details[0]
+			wantChannel, wantDecision := "second", "non_stream"
+			if streaming {
+				wantChannel, wantDecision = "first", "default"
+			}
+			var trace routing.DispatchTrace
+			if err := json.Unmarshal([]byte(detail.RouteSnapshot), &trace); err != nil {
+				t.Fatal(err)
+			}
+			var chain []chainNode
+			if err := json.Unmarshal([]byte(detail.EndpointChain), &chain); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusOK || detail.Channel != wantChannel || trace.Decision.Kind != wantDecision || trace.Attempts != 1 || len(chain) != 1 || chain[0].Channel != wantChannel {
+				t.Fatalf("incorrect actual channel: status=%d channel=%q trace=%+v chain=%+v", rec.Code, detail.Channel, trace, chain)
+			}
+		})
+	}
+}
+
 func newProfileCodexFixture(t *testing.T, upstream http.HandlerFunc, settlements ...func(routing.AttemptSettlement)) (*Handler, *routing.ProfileRuntime, *routing.DispatchTrace) {
 	t.Helper()
 	server := httptest.NewServer(upstream)
@@ -287,6 +440,8 @@ func TestCodexProfileUnfinishedStreamDoesNotRegisterState(t *testing.T) {
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"started\"}\n\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"unfinished-state\"}}\n\n"+ending)
 			})
+			// Keep state ownership assertions independent of recovery retries.
+			h.UpdateConfig(config.RetryConfig{MaxAttempts: 3, DisableRecoveryWait: true}, config.FailoverConfig{Enabled: true})
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"original","stream":true,"input":"first"}`)))
 			if trace.Successful || !trace.ResponseStarted || calls != 1 {

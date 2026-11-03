@@ -274,6 +274,7 @@ const RequestsPage = ({ initialProvider = '' }) => {
             />
           }
           requests={displayRequests}
+          showDate={activeRange !== 'today'}
           loading={loading}
           pagination={pagination}
           onPageChange={handlePageChange}

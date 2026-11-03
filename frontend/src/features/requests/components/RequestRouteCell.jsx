@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, Route, X } from 'lucide-react';
+import { Tooltip } from '@/shared/ui/index.js';
 import { getEndpointChainItems, parseChainNode } from '../utils/endpointChain.js';
 import RequestDispatchDetails from './RequestDispatchDetails.jsx';
 
@@ -41,12 +42,14 @@ export default function RequestRouteCell({ request, onViewDetails, compact = fal
   }, [open, close]);
   if (!trace && !legacyEndpoint) return <span className="text-[11px] text-slate-400">未记录</span>;
   return <>
+    <Tooltip asChild content={open ? '' : trace ? `调度方案：${trace.profileName}；${trace.decisionLabel}；${trace.attemptCount} 次上游尝试` : `历史端点：${legacyEndpoint}`}>
     <button ref={trigger} type="button" className="request-route-cell" data-compact={compact} aria-label={`查看请求调度 ${trace?.profileName || legacyEndpoint}${trace ? `，${trace.decisionLabel}，${trace.attemptCount} 次上游尝试` : '，历史链路'}`} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined}
       onClick={event => { event.stopPropagation(); keyboardOpen.current = event.detail === 0; setOpen(previous => !previous); }} onDoubleClick={event => event.stopPropagation()}>
       <Route className="request-route-icon" size={12} aria-hidden="true" /><span className="request-route-name">{trace?.profileName || legacyEndpoint}</span>
-      {trace && (trace.attemptCount > 1 || trace.attemptCount === 0) && <span className="request-route-count" data-empty={trace.attemptCount === 0}>{trace.attemptCount === 0 ? '未发送' : `${trace.attemptCount}次`}</span>}
+      {trace && (trace.attemptCount > 1 || trace.attemptCount === 0) && <span className="request-route-count" data-empty={trace.attemptCount === 0}>{trace.attemptCount === 0 ? trace.finished || trace.stopReason ? '未发送' : '待调度' : `${trace.attemptCount}次`}</span>}
       {!trace && <span className="request-route-history">历史</span>}
     </button>
+    </Tooltip>
     {open && createPortal(<div ref={panel} id={panelId} role="dialog" aria-label="请求调度" className="request-route-popover" style={position} onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
       <div className="request-route-popover-header"><span><Route size={13} aria-hidden="true" />请求调度</span><button type="button" aria-label="关闭请求调度" onClick={() => close(true)}><X size={14} /></button></div>
       <div className="request-route-popover-body">

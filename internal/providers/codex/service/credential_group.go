@@ -135,8 +135,7 @@ func (s *CodexCredentialGroupService) DeleteGroup(ctx context.Context, id int64)
 	if existing.IsDefault {
 		return fmt.Errorf("默认凭证分组不能删除")
 	}
-	// The store rechecks activation/participation and deletes the group's
-	// inactive endpoints atomically with the group record.
+	// The application checks routing references before this atomic resource deletion.
 	return s.groupStore.DeleteByID(ctx, id)
 }
 

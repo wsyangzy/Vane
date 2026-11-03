@@ -83,7 +83,7 @@ func isVisibleSetting(category, key string) bool {
 		settingsservice.CategoryTimezone, settingsservice.CategoryStreaming, settingsservice.CategoryHotPool:
 		return false
 	case settingsservice.CategoryRetry:
-		return key == "max_total_attempts" || key == "max_total_duration"
+		return settingsservice.IsCurrentRetrySetting(key)
 	case settingsservice.CategoryRequest:
 		return key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout"
 	default:

@@ -145,6 +145,10 @@ func TestSettingsAdaptLegacyRowsWithoutReinterpretingRetryValues(t *testing.T) {
 		{"retry", "base_delay", "5s"},
 		{"retry", "max_delay", "40s"},
 		{"retry", "multiplier", "3"},
+		{"retry", "model_rule_fallback", "false"},
+		{"retry", "mapping_rule_fallback", "true"},
+		{"retry", "non_stream_rule_fallback", "false"},
+		{"retry", "intent_rule_fallback", "true"},
 		{"request", "eof_retry_hint", "true"},
 		{"request", "suspend_wait_timeout", "90s"},
 	}
@@ -188,8 +192,8 @@ func TestSettingsAdaptLegacyRowsWithoutReinterpretingRetryValues(t *testing.T) {
 			budgets++
 		}
 	}
-	if budgets != 2 {
-		t.Fatalf("expected both dispatch budget controls, got %d", budgets)
+	if budgets != 7 {
+		t.Fatalf("expected dispatch budgets, recovery, cooldown and rule defaults, got %d", budgets)
 	}
 	for _, old := range legacy {
 		record, err := store.Get(ctx, old.category, old.key)

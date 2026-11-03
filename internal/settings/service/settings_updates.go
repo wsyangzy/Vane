@@ -30,6 +30,9 @@ func (s *SettingsService) SetScoped(ctx context.Context, provider SettingsProvid
 	if err := validateSettingValue(provider, category, key, value); err != nil {
 		return err
 	}
+	if err := s.validateCooldownUpdate(ctx, []*settingsstore.SettingRecord{{Category: category, Key: key, Value: value}}); err != nil {
+		return err
+	}
 	if err := s.validateAuthUpdate(ctx, []*settingsstore.SettingRecord{{Provider: string(provider), Category: category, Key: key, Value: value}}); err != nil {
 		return err
 	}
@@ -121,6 +124,9 @@ func (s *SettingsService) UpdateAndApply(ctx context.Context, records []*setting
 		}
 		previous = append(previous, old)
 	}
+	if err := s.validateCooldownUpdate(ctx, records); err != nil {
+		return err
+	}
 	if err := s.validateAuthUpdate(ctx, records); err != nil {
 		return err
 	}
@@ -164,11 +170,17 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 	if category == CategoryTimezone {
 		return fmt.Errorf("时区固定为北京时间（UTC+8），不支持修改")
 	}
+	if category == CategoryRetry {
+		switch key {
+		case "model_rule_fallback", "mapping_rule_fallback", "non_stream_rule_fallback", "intent_rule_fallback":
+			return fmt.Errorf("各类规则的默认回退已合并，请修改全局规则回退设置")
+		}
+	}
 	// Validate the controls offered by the current settings page. Hidden legacy
 	// records keep their compatibility contracts.
 	current := category == CategoryServer || category == CategoryHealth || category == CategoryAuth ||
 		category == CategoryTokenCounting || category == CategoryCache || category == CategoryLogging ||
-		category == CategoryRetry && (key == "max_total_attempts" || key == "max_total_duration") ||
+		category == CategoryRetry && IsCurrentRetrySetting(key) ||
 		category == CategoryRequest && (key == "global_timeout" || key == "response_header_timeout" || key == "default_response_header_timeout") ||
 		category == CategoryRetention && key == "retention_days"
 	if current {
@@ -245,6 +257,20 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 			duration, err := time.ParseDuration(value)
 			if err != nil || duration < time.Second || duration > 10*time.Minute {
 				return fmt.Errorf("调度等待时限必须在 1 秒至 10 分钟之间")
+			}
+		}
+	}
+	if category == CategoryRetry {
+		switch key {
+		case "cooldown_initial", "cooldown_max":
+			duration, err := time.ParseDuration(value)
+			if err != nil || duration < time.Second || duration > time.Hour {
+				return fmt.Errorf("冷却时间必须在 1 秒至 1 小时之间")
+			}
+		case "cooldown_multiplier":
+			number, err := strconv.ParseFloat(value, 64)
+			if err != nil || math.IsNaN(number) || math.IsInf(number, 0) || number < 1 || number > 10 {
+				return fmt.Errorf("连续失败递增倍数必须在 1–10 之间")
 			}
 		}
 	}

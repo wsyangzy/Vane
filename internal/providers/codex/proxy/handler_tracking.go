@@ -160,7 +160,7 @@ func buildTokenUsage(tr *TokenResult, billingOutputTokenSource string) *tracking
 }
 
 // recordSuccess 记录请求成功
-func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, groupName, channelName string) {
+func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatus int, tokenResult *TokenResult, requestModel, endpointName, groupName, channelName string, qualityReason ...string) {
 	if h.usageTracker == nil {
 		return
 	}
@@ -178,7 +178,11 @@ func (h *Handler) recordSuccess(requestID string, startTime time.Time, httpStatu
 		modelName = requestModel
 	}
 	h.snapshotEndpointMultiplier(requestID, channelName, groupName, endpointName, modelName)
-	h.usageTracker.RecordRequestSuccessWithHTTPStatus(requestID, modelName, tokens, duration, httpStatus)
+	reason := ""
+	if len(qualityReason) > 0 {
+		reason = qualityReason[0]
+	}
+	h.usageTracker.RecordRequestSuccessWithHTTPStatusAndQuality(requestID, modelName, tokens, duration, httpStatus, reason)
 }
 
 // recordFailure 记录没有拿到上游 HTTP 响应的最终失败：不接受也不记录状态码，
