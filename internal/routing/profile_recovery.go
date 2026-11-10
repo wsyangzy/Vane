@@ -14,7 +14,7 @@ func (r *ProfileRuntime) NextRecovery(plan *DispatchPlan, external func(Dispatch
 	}
 	plan.state.mu.Lock()
 	defer plan.state.mu.Unlock()
-	if plan.state.reserved || plan.state.responseStarted || plan.state.successful || plan.state.stopped != "" {
+	if plan.state.reserved || plan.state.responseStarted || plan.state.successful || plan.state.stopped != "" || plan.state.recoveryWaited {
 		return time.Time{}, false
 	}
 	config := r.snapshot()
@@ -111,9 +111,10 @@ func (r *ProfileRuntime) Recover(ctx context.Context, plan *DispatchPlan) bool {
 	state := plan.state
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.reserved || state.responseStarted || state.successful || state.stopped != "" {
+	if state.reserved || state.responseStarted || state.successful || state.stopped != "" || state.recoveryWaited {
 		return false
 	}
+	state.recoveryWaited = true
 	config := r.snapshot()
 	_, exists := runtimeProfile(config, plan.Profile.ID)
 	if !exists {

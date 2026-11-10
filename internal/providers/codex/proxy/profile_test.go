@@ -3,10 +3,14 @@ package codexproxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -326,6 +330,124 @@ func TestCodexProfileStartedStreamDoesNotReplayOrClaimSuccess(t *testing.T) {
 		t.Fatalf("started stream replayed/claimed success: calls=%d trace=%+v body=%s", calls, trace, rec.Body.String())
 	}
 }
+
+func TestCodexProfileKeepsProviderErrorSeparateFromRetryBudgetStop(t *testing.T) {
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 20, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tracker.Close() })
+	const upstreamBody = `{"error":{"message":"invalid key"}}`
+	h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, upstreamBody)
+	})
+	h.usageTracker = tracker
+	h.UpdateConfig(config.RetryConfig{MaxTotalAttempts: 1}, config.FailoverConfig{Enabled: true})
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","input":"hello"}`)))
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatal(err)
+	}
+	details, err := tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 1})
+	if err != nil || len(details) != 1 {
+		t.Fatalf("request detail=%+v error=%v", details, err)
+	}
+	var chain []chainNode
+	if err := json.Unmarshal([]byte(details[0].EndpointChain), &chain); err != nil {
+		t.Fatal(err)
+	}
+	var saved routing.DispatchTrace
+	if err := json.Unmarshal([]byte(details[0].RouteSnapshot), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if details[0].FailureReason != "retry_budget_exhausted" || details[0].LastFailureReason != upstreamBody || saved.StopReason != "retry_budget_exhausted" || trace.Successful || len(chain) != 1 || chain[0].Error != upstreamBody {
+		t.Fatalf("classification/raw response conflated: detail=%+v saved=%+v trace=%+v chain=%+v", details[0], saved, trace, chain)
+	}
+}
+
+func TestCodexProfileKeepsUpstreamSSEErrorWhenRetryBudgetEnds(t *testing.T) {
+	tracker, err := tracking.NewUsageTracker(&tracking.Config{Enabled: true, DatabasePath: filepath.Join(t.TempDir(), "usage.db"), BufferSize: 20, BatchSize: 5, FlushInterval: time.Hour, CleanupInterval: time.Hour, MaxRetry: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tracker.Close() })
+	h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"error\":{\"message\":\"invalid key\"}}\n\n")
+	})
+	h.usageTracker = tracker
+	h.UpdateConfig(config.RetryConfig{MaxTotalAttempts: 1}, config.FailoverConfig{Enabled: true})
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/responses", strings.NewReader("{\"model\":\"test\",\"stream\":true,\"input\":\"hello\"}")))
+	if err := tracker.ForceFlush(); err != nil {
+		t.Fatal(err)
+	}
+	details, err := tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 1})
+	if err != nil || len(details) != 1 {
+		t.Fatalf("request detail=%+v error=%v", details, err)
+	}
+	var chain []chainNode
+	if err := json.Unmarshal([]byte(details[0].EndpointChain), &chain); err != nil {
+		t.Fatal(err)
+	}
+	if trace.Successful || details[0].FailureReason != "retry_budget_exhausted" || details[0].LastFailureReason != "{\"type\":\"error\",\"error\":{\"message\":\"invalid key\"}}" || len(chain) != 1 || chain[0].Error != details[0].LastFailureReason {
+		t.Fatalf("SSE source error was lost: detail=%+v trace=%+v chain=%+v", details[0], trace, chain)
+	}
+}
+
+func TestCodexProfileTreatsCompletedStreamAsSuccessWhenTransportEndsUncleanly(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = profileRoundTripper(func(r *http.Request) (*http.Response, error) {
+		body, err := os.ReadFile("testdata/profile-stream-completed-then-error.sse")
+		if err != nil {
+			return nil, err
+		}
+		trace := httptrace.ContextClientTrace(r.Context())
+		trace.GotConn(httptrace.GotConnInfo{Conn: profileTestConn{}})
+		trace.WroteRequest(httptrace.WroteRequestInfo{})
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: &profileErrorReader{Reader: strings.NewReader(string(body)), err: errors.New("unexpected EOF")}, Request: r}, nil
+	})
+	h, _, trace := newProfileCodexFixture(t, func(w http.ResponseWriter, _ *http.Request) {})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"test","stream":true,"input":"hello"}`)))
+	if rec.Code != http.StatusOK || !trace.Successful || !strings.Contains(rec.Body.String(), "response.completed") {
+		t.Fatalf("completed stream was not preserved: status=%d trace=%+v body=%s", rec.Code, trace, rec.Body.String())
+	}
+}
+
+type profileRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f profileRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type profileErrorReader struct {
+	Reader *strings.Reader
+	err    error
+}
+
+type profileTestConn struct{}
+
+func (profileTestConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (profileTestConn) Write([]byte) (int, error)        { return 0, io.EOF }
+func (profileTestConn) Close() error                     { return nil }
+func (profileTestConn) LocalAddr() net.Addr              { return profileTestAddr("local") }
+func (profileTestConn) RemoteAddr() net.Addr             { return profileTestAddr("remote") }
+func (profileTestConn) SetDeadline(time.Time) error      { return nil }
+func (profileTestConn) SetReadDeadline(time.Time) error  { return nil }
+func (profileTestConn) SetWriteDeadline(time.Time) error { return nil }
+
+type profileTestAddr string
+
+func (a profileTestAddr) Network() string { return "test" }
+func (a profileTestAddr) String() string  { return string(a) }
+
+func (r *profileErrorReader) Read(p []byte) (int, error) {
+	if r.Reader.Len() == 0 {
+		return 0, r.err
+	}
+	return r.Reader.Read(p)
+}
+
+func (r *profileErrorReader) Close() error { return nil }
 
 func TestCodexProfileSealedStateAndResponseIDRemainWithTheirCandidate(t *testing.T) {
 	var paths []string

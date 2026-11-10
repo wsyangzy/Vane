@@ -114,6 +114,7 @@ type UpdateOptions struct {
 	ResponseServiceTier  *string
 	EndpointName         *string        // 端点名称
 	EndpointChain        *string        // 端点链路（形如 "A -> B -> C"）
+	LastFailureReason    *string        // 最后一次失败的原始详情
 	Channel              *string        // 渠道标签
 	GroupName            *string        // 组名称
 	Status               *string        // 状态

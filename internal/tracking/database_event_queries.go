@@ -299,6 +299,10 @@ func (ut *UsageTracker) buildFlexibleUpdateQuery(event RequestEvent) (string, []
 		setParts = append(setParts, "endpoint_chain = ?")
 		args = append(args, *opts.EndpointChain)
 	}
+	if opts.LastFailureReason != nil {
+		setParts = append(setParts, "last_failure_reason = ?")
+		args = append(args, *opts.LastFailureReason)
+	}
 	if opts.Channel != nil {
 		setParts = append(setParts, "channel = ?")
 		args = append(args, *opts.Channel)

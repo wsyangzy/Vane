@@ -162,6 +162,19 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		h.logger.Error(fmt.Sprintf("❌ [Codex流式失败] [%s] 端点: %s, 已处理 %d 字节, 错误: %v",
 			requestID, endpointName, bytesProcessed, scanErr),
 			"provider", "codex", "request_id", requestID)
+		if streamCompleted && downstreamStreamErr == nil {
+			flushPending()
+			h.logger.Warn("[Codex 流式收尾异常] 已收到完成事件，按成功记录",
+				"provider", "codex",
+				"request_id", requestID,
+				"endpoint", endpointName,
+				"bytes_processed", bytesProcessed,
+				"error", scanErr,
+			)
+			prepareArchive(nil, true)
+			h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
+			return nil, true
+		}
 		if !headersWritten {
 			return &UpstreamStreamError{
 				Type:    "stream_read_error",
@@ -169,18 +182,6 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 			}, false
 		}
 		if isContextCanceledError(scanErr) {
-			if streamCompleted {
-				h.logger.Warn("[Codex 流式收尾取消] 已收到完成事件，按成功记录",
-					"provider", "codex",
-					"request_id", requestID,
-					"endpoint", endpointName,
-					"bytes_processed", bytesProcessed,
-					"error", scanErr,
-				)
-				prepareArchive(nil, true)
-				h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName)
-				return nil, true
-			}
 			if outputSentRecorded {
 				h.logger.Warn("[Codex 流式下游取消] 已输出内容后连接取消，按客户端取消记录",
 					"provider", "codex",

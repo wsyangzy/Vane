@@ -61,6 +61,11 @@ func TestBudgetStopsSendsAndBoundsWait(t *testing.T) {
 	if !errors.Is(b.Wait(context.Background(), time.Hour), ErrBudgetExhausted) {
 		t.Fatal("wait ignored duration")
 	}
+	b = NewBudget(10, time.Millisecond)
+	started := time.Now()
+	if !errors.Is(b.WaitRecovery(context.Background(), time.Hour), ErrBudgetExhausted) || time.Since(started) > 50*time.Millisecond {
+		t.Fatal("recovery wait consumed the full budget instead of stopping when recovery cannot fit")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	b = NewBudget(10, time.Hour)

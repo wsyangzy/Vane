@@ -253,6 +253,29 @@ func (b *Budget) Wait(ctx context.Context, delay time.Duration) error {
 	return nil
 }
 
+// WaitRecovery returns immediately when the endpoint recovery is beyond this
+// request's remaining budget, instead of idling until the budget expires.
+func (b *Budget) WaitRecovery(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b != nil {
+		b.mu.Lock()
+		if err := b.checkLocked(); err != nil {
+			b.stopped = true
+			b.mu.Unlock()
+			return err
+		}
+		if b.maxDuration > 0 && delay >= b.maxDuration-time.Since(b.start) {
+			b.stopped = true
+			b.mu.Unlock()
+			return ErrBudgetExhausted
+		}
+		b.mu.Unlock()
+	}
+	return b.Wait(ctx, delay)
+}
+
 func (b *Budget) Stop() {
 	if b != nil {
 		b.mu.Lock()

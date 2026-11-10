@@ -57,6 +57,9 @@ func (ut *UsageTracker) RecordRequestUpdate(requestID string, opts UpdateOptions
 			if opts.EndpointChain != nil {
 				req.EndpointChain = *opts.EndpointChain
 			}
+			if opts.LastFailureReason != nil {
+				req.LastFailureReason = *opts.LastFailureReason
+			}
 			if opts.Channel != nil {
 				req.Channel = *opts.Channel
 			}

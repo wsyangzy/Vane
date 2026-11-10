@@ -121,6 +121,7 @@ type dispatchRequestState struct {
 	stopped         string
 	created         time.Time
 	finished        *time.Time
+	recoveryWaited  bool
 	events          []DispatchTraceEvent
 	stateRejected   map[Candidate]string
 	turnKey         string
