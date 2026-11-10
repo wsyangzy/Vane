@@ -15,7 +15,7 @@ import (
 func decodeSubscriptionResponse(resp *http.Response) error {
 	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
 	switch encoding {
-	case "gzip", "deflate", "br", "compress":
+	case "gzip", "deflate", "br", "compress", "zstd":
 	default:
 		return nil
 	}
@@ -24,10 +24,10 @@ func decodeSubscriptionResponse(resp *http.Response) error {
 	if err != nil {
 		return err
 	}
-	// The existing Brotli wrapper already owns its source; other decoders
-	// close only decoder state, so retain the actual HTTP body closer.
+	// The existing Brotli and zstd wrappers already own their source; other
+	// decoders close only decoder state, so retain the actual HTTP body closer.
 	resp.Body = decoded
-	if encoding != "br" {
+	if encoding != "br" && encoding != "zstd" {
 		resp.Body = &subscriptionDecodedResponse{ReadCloser: decoded, source: raw}
 	}
 	resp.Header.Del("Content-Encoding")

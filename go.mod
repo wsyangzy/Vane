@@ -6,6 +6,7 @@ require (
 	github.com/andybalholm/brotli v1.2.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/uuid v1.6.0
+	github.com/klauspost/compress v1.18.3
 	github.com/pelletier/go-toml/v2 v2.2.2
 	github.com/stretchr/testify v1.11.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.96

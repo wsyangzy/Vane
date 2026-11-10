@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 )
 
@@ -45,6 +46,13 @@ func decodeCodexSubscriptionResponse(resp *http.Response) error {
 		}
 	case "br":
 		reader = brotli.NewReader(raw)
+	case "zstd":
+		var decoder *zstd.Decoder
+		decoder, err = zstd.NewReader(raw, zstd.WithDecoderConcurrency(1))
+		if err == nil {
+			rc := decoder.IOReadCloser()
+			reader, closer = rc, rc
+		}
 	case "deflate":
 		br := bufio.NewReader(raw)
 		header, e := br.Peek(2)

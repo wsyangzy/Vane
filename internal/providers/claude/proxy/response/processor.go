@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 )
 
 // Processor handles response processing including decompression
@@ -56,6 +57,11 @@ func (p *Processor) DecompressStreamReader(resp *http.Response) (io.ReadCloser, 
 		lzwReader := lzw.NewReader(resp.Body, lzw.MSB, 8)
 		return lzwReader, nil
 
+	case "zstd":
+		// 客户端（如 Claude Code）声明支持 zstd 时，部分上游（如 DeepSeek）会返回 zstd 编码；
+		// 未解码的字节会被当成明文转发并导致 token 解析失败
+		return NewZstdReadCloser(resp.Body)
+
 	default:
 		// 未知编码，记录警告但返回原始读取器以保持兼容性
 		slog.Warn(fmt.Sprintf("⚠️ [流式解压] 未知的内容编码: %s, 使用原始流", contentEncoding))
@@ -75,6 +81,30 @@ func (brc *brotliReadCloser) Read(p []byte) (int, error) {
 
 func (brc *brotliReadCloser) Close() error {
 	return brc.closer.Close()
+}
+
+// zstdReadCloser 关闭时同时释放解码器与上游 body；zstd.Decoder 自身的 Close 不关闭源
+type zstdReadCloser struct {
+	decoder *zstd.Decoder
+	source  io.Closer
+}
+
+// NewZstdReadCloser 以同步模式解码，逐块产出数据以保持 SSE 的流式特性
+func NewZstdReadCloser(source io.ReadCloser) (io.ReadCloser, error) {
+	decoder, err := zstd.NewReader(source, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zstd stream reader: %w", err)
+	}
+	return &zstdReadCloser{decoder: decoder, source: source}, nil
+}
+
+func (z *zstdReadCloser) Read(p []byte) (int, error) {
+	return z.decoder.Read(p)
+}
+
+func (z *zstdReadCloser) Close() error {
+	z.decoder.Close()
+	return z.source.Close()
 }
 
 // ReadAndDecompressResponse reads and decompresses the response body based on Content-Encoding
@@ -102,6 +132,17 @@ func (p *Processor) ReadAndDecompressResponse(ctx context.Context, resp *http.Re
 		return p.decompressBrotli(ctx, bodyBytes, endpointName)
 	case "compress":
 		return p.decompressLZW(ctx, bodyBytes, endpointName)
+	case "zstd":
+		reader, err := NewZstdReadCloser(io.NopCloser(bytes.NewReader(bodyBytes)))
+		if err != nil {
+			return nil, err
+		}
+		defer reader.Close()
+		decompressedBytes, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress zstd content: %w", err)
+		}
+		return decompressedBytes, nil
 	case "identity":
 		// Identity means no encoding
 		return bodyBytes, nil
