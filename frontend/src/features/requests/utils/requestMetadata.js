@@ -99,17 +99,18 @@ export const getRequestServiceTierMeta = (request) => {
 
 export const getRequestBillingMultiplierSources = (request) => {
   const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 1;
+  const nonNegative = (value) => value !== null && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 1;
   const snapshot = request.billingRuleSnapshot;
   const hasSnapshot = Boolean(snapshot?.context_mode);
   const hasRuleSources = hasSnapshot && Boolean(snapshot.rule_key && snapshot.rule_group_multiplier_mode);
   const groupApplied = !hasRuleSources || snapshot.rule_group_multiplier_mode !== 'override';
-  const group = positive(hasSnapshot ? snapshot.group_cost_multiplier : request.costMultiplier);
+  const group = nonNegative(hasSnapshot ? snapshot.group_cost_multiplier : request.costMultiplier);
   const model = positive(hasSnapshot ? snapshot.model_cost_multiplier : request.modelCostMultiplier);
   const rule = hasRuleSources ? positive(snapshot.rule_cost_multiplier) : 1;
   return {
     group, model, rule, hasRuleSources, groupApplied,
     ruleGroupMode: hasRuleSources ? snapshot.rule_group_multiplier_mode : '',
-    total: hasSnapshot ? positive(snapshot.total_cost_multiplier ?? group * model * rule) : group * model
+    total: hasSnapshot ? nonNegative(snapshot.total_cost_multiplier ?? group * model * rule) : group * model
   };
 };
 

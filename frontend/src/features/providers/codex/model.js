@@ -41,7 +41,6 @@ const buildInitialChannelForm = (channel) => ({
   name: channel?.name || '',
   website: channel?.website || '',
   model: channel?.model || '',
-  priority: channel ? String(channel.priority ?? 0) : '',
   failoverEnabled: channel?.failoverEnabled !== false,
   modelMappingRows: buildInitialModelMappingRows(channel?.modelMapping)
 });

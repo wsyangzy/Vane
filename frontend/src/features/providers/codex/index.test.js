@@ -19,7 +19,6 @@ const source = await import('node:fs').then(({ readFileSync }) => [
   'components/ChannelCard.jsx',
   'index.jsx',
 ].map((name) => readFileSync(new URL(name, import.meta.url), 'utf8')).join('\n'));
-const wailsApiSource = await import('node:fs').then(({ readFileSync }) => readFileSync(new URL('../../../services/wails/codex.js', import.meta.url), 'utf8'));
 
 test('Codex endpoint mutations preserve endpoint identity and requested state', () => {
   assert.deepEqual(buildCodexEndpointMutationPayload({
@@ -80,22 +79,6 @@ test('Codex resource management leaves reasoning effort to the client', () => {
   assert.doesNotMatch(source, /写入顶层 model_reasoning_effort 字段/);
   assert.doesNotMatch(source, /globalConfig\.reasoning_effort/);
   assert.doesNotMatch(source, /effective_reasoning_effort/);
-});
-
-test('Codex channel priority follows the Claude create and edit flow', () => {
-  assert.match(source, /const priorityValue = String\(formData\.priority \?\? ''\)\.trim\(\)/);
-  assert.match(source, /priority:\s*!isEdit && !hasPriority \? -1 : parsedPriority/);
-  assert.match(source, /channelFailoverEnabled && \(/);
-  assert.match(source, /留空按现有顺序自动分配；填写已有优先级时交换/);
-  assert.match(wailsApiSource, /priority:\s*Number\.parseInt\(input\?\.priority, 10\) \|\| 0/);
-  assert.doesNotMatch(wailsApiSource, /priority:\s*Math\.max\(0, Number\.parseInt\(input\?\.priority/);
-});
-
-test('Codex failover channel form places model before priority in equal columns', () => {
-  assert.match(source, /className=\{channelFailoverEnabled \? 'grid grid-cols-1 gap-4 sm:grid-cols-2' : 'grid grid-cols-1 gap-4'\}/);
-  const modelIndex = source.indexOf('模型（可选）');
-  const priorityIndex = source.indexOf('>优先级</span>');
-  assert.ok(modelIndex >= 0 && priorityIndex > modelIndex, 'model should be rendered before priority');
 });
 
 test('Codex channel creation keeps credentials out of the channel modal', () => {

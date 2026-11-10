@@ -14,14 +14,11 @@ const CreateChannelModal = ({
   loading = false,
   serverError = '',
   mode = 'create',
-  initialValue = null,
-  channelFailoverEnabled = false
+  initialValue = null
 }) => {
   const isEdit = mode === 'edit';
-  const showPriority = isEdit || channelFailoverEnabled;
   const [name, setName] = useState(() => (isEdit ? (initialValue?.name || '') : ''));
   const [website, setWebsite] = useState(() => (isEdit ? (initialValue?.website || '') : ''));
-  const [priority, setPriority] = useState(() => (isEdit ? String(initialValue?.priority ?? 1) : ''));
   const [error, setError] = useState('');
 
   if (!open) return null;
@@ -33,7 +30,7 @@ const CreateChannelModal = ({
           <div>
             <h2 className="text-lg font-semibold text-slate-900">{isEdit ? '编辑渠道' : '添加渠道 · 1/3'}</h2>
             <p className="text-xs text-slate-500 mt-1">
-              {isEdit ? '修改渠道官网与优先级' : '填写渠道信息，完成凭证和端点配置后统一创建；中途退出不保存'}
+              {isEdit ? '修改渠道官网' : '填写渠道信息，完成凭证和端点配置后统一创建；中途退出不保存'}
             </p>
           </div>
           <Tooltip content="关闭">
@@ -56,18 +53,12 @@ const CreateChannelModal = ({
               setError('请输入渠道名称');
               return;
             }
-            const priorityValue = priority.trim();
-            const hasPriority = priorityValue !== '';
-            const parsedPriority = Number(priorityValue);
-            if ((isEdit && !hasPriority) || (hasPriority && (!Number.isInteger(parsedPriority) || parsedPriority < 1))) {
-              setError('优先级必须是 1 或更大的整数');
-              return;
-            }
             setError('');
             onSubmit?.({
               name: trimmedName,
               website: website.trim(),
-              priority: priorityValue,
+              // Keep legacy resource order out of the channel form.
+              priority: isEdit ? (initialValue?.priority ?? 1) : 0,
               // Saving basic channel fields must preserve stored model mappings.
               modelMapping: isEdit ? { ...(initialValue?.modelMapping || {}) } : {},
             });
@@ -83,43 +74,23 @@ const CreateChannelModal = ({
             )}
 
           <div className="space-y-4">
-            <div className={showPriority ? 'grid grid-cols-1 gap-4 sm:grid-cols-3' : ''}>
-              <div className={showPriority ? 'sm:col-span-2' : ''}>
-                <label className="block text-sm font-medium text-slate-700">
-                  渠道名称 <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="例如：official / backup / openai"
-                  autoComplete="off"
-                  data-form-type="other"
-                  className={`mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 ${
-                    isEdit ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''
-                  }`}
-                  disabled={loading || isEdit}
-                />
-                {isEdit && (
-                  <p className="text-xs text-slate-400 mt-1">渠道名称用于关联端点，不支持修改</p>
-                )}
-              </div>
-
-              {showPriority && (
-                <div>
-                  <label className="block text-sm font-medium text-slate-700">优先级</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value)}
-                    placeholder={isEdit ? undefined : '留空自动分配'}
-                    autoComplete="off"
-                    data-form-type="other"
-                    className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    disabled={loading}
-                  />
-                </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700">
+                渠道名称 <span className="text-rose-500">*</span>
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如：official / backup / openai"
+                autoComplete="off"
+                data-form-type="other"
+                className={`mt-1 w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 ${
+                  isEdit ? 'disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed' : ''
+                }`}
+                disabled={loading || isEdit}
+              />
+              {isEdit && (
+                <p className="text-xs text-slate-400 mt-1">渠道名称用于关联端点，不支持修改</p>
               )}
             </div>
 

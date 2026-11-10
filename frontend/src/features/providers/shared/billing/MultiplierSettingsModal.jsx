@@ -82,7 +82,7 @@ const MultiplierSettingsModal = ({
   const totalMultiplier = totalField ? resolveMultiplier(getFieldKey(totalField)) : 1;
   const inheritedMultiplier = (key) => {
     const value = parseMultiplierExpression(inheritedMultipliers?.[key], Number.NaN);
-    return Number.isFinite(value) && value > 0 ? value : 1;
+    return Number.isFinite(value) && value >= 0 ? value : 1;
   };
   const groupTotalMultiplier = inheritedMultiplier('costMultiplier');
   const standardOnly = String(pricingServiceTier ?? '').trim() !== '' && normalizePricingTier(pricingServiceTier) === '';

@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import ConfirmDialog from '@/shared/ui/ConfirmDialog.jsx';
+import { parseMultiplierExpression } from '@/shared/lib/multiplier.js';
 import { Plus, Trash2, ArrowRight, XCircle, KeyRound, Eye, EyeOff } from 'lucide-react';
 import { Button, CustomSelect, SegmentedTabs, Tooltip } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
@@ -32,6 +34,7 @@ const ClaudeCredentialGroupFormModal = ({
   const [showApiKey, setShowApiKey] = useState(false);
   const [credentialSecretType, setCredentialSecretType] = useState(() => getInitialClaudeCredentialSecretType(group));
   const [formStep, setFormStep] = useState('details');
+  const [pendingFreeGroup, setPendingFreeGroup] = useState(null);
   const [copyStepEndpoints, setCopyStepEndpoints] = useState([]);
   const [copyEndpointsEnabled, setCopyEndpointsEnabled] = useState(false);
   const copyChoices = [
@@ -201,6 +204,15 @@ const ClaudeCredentialGroupFormModal = ({
     </div>
   );
 
+  const saveGroup = async (payload) => {
+    if (loading) return;
+    if (parseMultiplierExpression(payload.costMultiplier) === 0) {
+      setPendingFreeGroup(payload);
+      return;
+    }
+    await onSubmit?.(payload);
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const payload = buildSubmitPayload();
@@ -218,13 +230,13 @@ const ClaudeCredentialGroupFormModal = ({
       return;
     }
 
-    await onSubmit?.({ ...payload, copyEndpoints: [] });
+    await saveGroup({ ...payload, copyEndpoints: [] });
   };
 
   const handleConfirmCopyNames = async (editedEndpoints) => {
     const payload = buildSubmitPayload();
     if (!payload) return;
-    await onSubmit?.({ ...payload, copyEndpoints: editedEndpoints });
+    await saveGroup({ ...payload, copyEndpoints: editedEndpoints });
   };
 
   return renderModalPortal(
@@ -544,6 +556,21 @@ const ClaudeCredentialGroupFormModal = ({
             </>
           )}
         </form>
+        <ConfirmDialog
+          isOpen={!!pendingFreeGroup}
+          title="设为免费分组？"
+          message={`“${pendingFreeGroup?.name || ''}”的总倍率为 0。保存后，该分组后续请求的成本将按 0 记录，Token 用量仍照常统计。`}
+          confirmText="确认免费并保存"
+          cancelText="返回修改"
+          variant="info"
+          onCancel={() => setPendingFreeGroup(null)}
+          onConfirm={async () => {
+            if (loading || !pendingFreeGroup) return;
+            const payload = pendingFreeGroup;
+            setPendingFreeGroup(null);
+            await onSubmit?.(payload);
+          }}
+        />
       </div>
     </div>
   );

@@ -746,14 +746,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
               </div>
 
               {/* 计费详情 */}
-              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0 || billingRuleSnapshot?.rule_key) && (() => {
+              {((request.cost || 0) > 0 || (request.inputCost || 0) > 0 || (request.outputCost || 0) > 0 || billingRuleSnapshot?.context_mode) && (() => {
                 const calcUnitPrice = (cost, tokens) => {
                   if (!tokens || tokens <= 0) return 0
                   return (cost / tokens) * 1_000_000
                 }
                 const safeMultiplier = (value) => {
                   const parsed = Number(value)
-                  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1.0
+                  return value !== null && value !== '' && Number.isFinite(parsed) && parsed >= 0 ? parsed : 1.0
                 }
 
                 // 计费决策快照：后端在成本计算时无条件落库的命中定价行、生效单价与各层倍率。

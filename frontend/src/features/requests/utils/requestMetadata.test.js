@@ -135,3 +135,20 @@ test('anthropic thinking type adaptive is labelled and treated as an active stat
   assert.equal(isThinkingTypeActive(''), false);
   assert.equal(isThinkingTypeActive('ADAPTIVE'), true);
 });
+
+test('免费分组在请求计费来源中保留零倍率，并保留缺失字段的默认值', () => {
+  for (const request of [
+    { costMultiplier: 0 },
+    { costMultiplier: 999, billingRuleSnapshot: { context_mode: 'normal', group_cost_multiplier: 0, total_cost_multiplier: 0 } },
+    { billingRuleSnapshot: { context_mode: 'long', rule_key: 'default', rule_group_multiplier_mode: 'inherit', group_cost_multiplier: 0, rule_cost_multiplier: 2, total_cost_multiplier: 0 } }
+  ]) {
+    const result = getRequestBillingMultiplierSources(request);
+    assert.equal(result.group, 0);
+    assert.equal(result.total, 0);
+    assert.equal(result.model, 1);
+    assert.equal(result.groupApplied, true);
+  }
+  for (const value of [undefined, null, '', -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(getRequestBillingMultiplierSources({ costMultiplier: value }).group, 1);
+  }
+});

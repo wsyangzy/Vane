@@ -4,6 +4,7 @@ import { Clock3, Info, KeyRound, Layers, Loader2, Maximize2, Minus, MoreVertical
 import { ModalPortalContext, renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SubscriptionStatus } from '@/features/providers/shared/subscriptions/SubscriptionSettings.jsx';
 import ChannelDetailModal from './ChannelDetailModal.jsx';
+import { formatMultiplierDisplayValue, parseMultiplierExpression } from '@/shared/lib/multiplier.js';
 import { buildChannelGraph, fitChannelGraph, MAX_GRAPH_ZOOM, MIN_GRAPH_ZOOM, zoomChannelGraph } from './channelGraph.js';
 
 const iconButton = 'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500 disabled:opacity-40';
@@ -22,6 +23,13 @@ export default function ChannelStructureDialog({ provider, name, website, groups
   const operationRef = useRef(false);
   const [closing, setClosing] = useState(false);
   const [viewport, setViewport] = useState({ width: 780, height: 330 });
+  const zoomStorageKey = `vane.channel-canvas-zoom.${provider}`;
+  const [savedZoom, setSavedZoom] = useState(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem(zoomStorageKey));
+      return typeof value === 'number' && Number.isFinite(value) && value >= MIN_GRAPH_ZOOM && value <= MAX_GRAPH_ZOOM ? value : null;
+    } catch { return null; }
+  });
   const [manualView, setManualView] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [selectedKey, setSelectedKey] = useState(null);
@@ -30,7 +38,14 @@ export default function ChannelStructureDialog({ provider, name, website, groups
   const [endpointAction, setEndpointAction] = useState('');
   const [actionError, setActionError] = useState('');
   const graph = useMemo(() => buildChannelGraph(name, groups, endpoints), [name, groups, endpoints]);
-  const view = manualView || fitChannelGraph(graph, viewport);
+  const view = useMemo(() => manualView || (savedZoom === null ? fitChannelGraph(graph, viewport) : {
+    zoom: savedZoom,
+    x: (viewport.width - graph.width * savedZoom) / 2,
+    y: (viewport.height - graph.height * savedZoom) / 2
+  }), [manualView, savedZoom, graph, viewport]);
+  useEffect(() => {
+    try { localStorage.setItem(zoomStorageKey, JSON.stringify(view.zoom)); } catch { /* Keep zoom for this visit. */ }
+  }, [zoomStorageKey, view.zoom]);
   const menuNode = graph.nodes.find((node) => node.key === menu?.key);
   const controlsBusy = busy || !!endpointAction;
   const menuSubscription = menuNode?.group?.authMode === 'client_passthrough';
@@ -195,7 +210,7 @@ export default function ChannelStructureDialog({ provider, name, website, groups
 
   return renderModalPortal(
     <div className={`channel-workspace-backdrop fixed inset-0 z-[100] flex items-center justify-center px-6 pb-5 pt-10 ${closing ? 'is-closing' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}>
-      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`channel-workspace t-modal ${closing ? 'is-closing' : 'is-open'} relative flex max-h-[calc(100dvh-5rem)] max-w-full flex-col overflow-hidden rounded-2xl border border-slate-200 shadow-xl`} style={{ width: hasOperation ? 940 : Math.min(860, Math.max(560, graph.width + 100)), height: hasOperation ? 660 : Math.min(600, Math.max(320, graph.height + 142)) }}>
+      <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`channel-workspace t-modal ${closing ? 'is-closing' : 'is-open'} relative flex max-h-[calc(100dvh-5rem)] max-w-full flex-col overflow-hidden rounded-2xl border border-slate-200 shadow-xl`} style={{ width: 1040, height: hasOperation ? 720 : Math.min(720, Math.max(480, graph.height + 180)) }}>
         <header inert={hasOperation} className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200/60 px-4 py-3">
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="channel-resource-emblem !h-8 !w-8"><Network size={16} /></div>
@@ -211,7 +226,7 @@ export default function ChannelStructureDialog({ provider, name, website, groups
             <span aria-label="当前缩放比例" className="w-9 text-center tabular-nums text-slate-500">{Math.round(view.zoom * 100)}%</span>
             <button type="button" className={iconButton} aria-label="放大画布" disabled={view.zoom >= MAX_GRAPH_ZOOM} onClick={() => zoom(1.2)}><Plus size={13} /></button>
             <span className="mx-1 h-3 w-px bg-slate-200" />
-            <Tooltip asChild content="适应窗口"><button type="button" className={iconButton} aria-label="适应窗口" onClick={() => { setManualView(null); setMenu(null); }}><Maximize2 size={13} /></button></Tooltip>
+            <Tooltip asChild content="适应窗口"><button type="button" className={iconButton} aria-label="适应窗口" onClick={() => { setSavedZoom(null); setManualView(null); setMenu(null); }}><Maximize2 size={13} /></button></Tooltip>
           </div>
         </div>
 
@@ -226,6 +241,7 @@ export default function ChannelStructureDialog({ provider, name, website, groups
             {graph.nodes.map((node) => {
               const isSubscription = node.group?.authMode === 'client_passthrough';
               const selected = selectedKey === node.key;
+              const groupMultiplier = parseMultiplierExpression(node.group?.costMultiplier, 1);
               const Icon = node.kind === 'channel' ? Layers : node.kind === 'group' ? KeyRound : Server;
               const latency = Number(node.endpoint?.latencyMs);
               const hasLatency = !isSubscription && Number.isFinite(latency) && latency > 0 && node.endpoint?.inScope !== false;
@@ -242,6 +258,7 @@ export default function ChannelStructureDialog({ provider, name, website, groups
                 <span className="channel-node-content">
                   <span className="channel-node-title-row">
                     <span className="channel-node-name block min-w-0 flex-1 truncate">{node.label}</span>
+                    {node.kind === 'group' && <Tooltip asChild content={groupMultiplier === 0 ? '总倍率为 0，该分组免费' : `分组总倍率 ${formatMultiplierDisplayValue(groupMultiplier)}`}><span className="channel-node-multiplier" data-free={groupMultiplier === 0} aria-label={`分组总倍率 ${groupMultiplier === 0 ? '0，免费' : formatMultiplierDisplayValue(groupMultiplier)}`}>{groupMultiplier === 0 ? '免费' : formatMultiplierDisplayValue(groupMultiplier)}</span></Tooltip>}
                     {node.kind === 'endpoint' && <Tooltip asChild content={node.endpoint?.inScope === false ? '未参与当前默认方案，不发送后台探测' : isSubscription ? '订阅端点由真实请求验证，不主动测速' : hasLatency ? `最近一次探测延迟 ${latencyLabel}，不代表模型生成耗时` : '暂无有效探测延迟，可在节点菜单中立即检测'}><span className="channel-node-latency" data-tone={!hasLatency ? 'empty' : latency > 1000 ? 'slow' : latency > 500 ? 'medium' : 'fast'} aria-label={`探测延迟 ${latencyLabel}`}><Clock3 size={9} />{latencyLabel}</span></Tooltip>}
                   </span>
                   {node.kind === 'channel' && <span className="channel-node-meta">{groups.length} 个分组<span className="text-slate-300">·</span>{endpoints.length} 个端点</span>}

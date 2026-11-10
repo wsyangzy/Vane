@@ -33,14 +33,6 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       return;
     }
 
-    const priorityValue = String(formData.priority ?? '').trim();
-    const hasPriority = priorityValue !== '';
-    const parsedPriority = Number(priorityValue);
-    if ((isEdit && !hasPriority) || (hasPriority && (!Number.isInteger(parsedPriority) || parsedPriority < 0))) {
-      setFieldError('优先级必须是 0 或更大的整数');
-      return;
-    }
-
     const payload = {
       name,
       apiKey: '',
@@ -48,7 +40,8 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
       model: formData.model.trim(),
       // Saving basic channel fields must preserve stored model mappings.
       modelMapping: isEdit ? { ...(channel?.modelMapping || {}) } : {},
-      priority: !isEdit && !hasPriority ? -1 : parsedPriority,
+      // Keep legacy resource order out of the channel form.
+      priority: isEdit ? (channel?.priority ?? 0) : -1,
       failoverEnabled: formData.failoverEnabled,
     };
 
@@ -131,38 +124,18 @@ const ChannelFormModal = ({ mode, channel, channelFailoverEnabled, loading, serv
               </div>
             )}
 
-            <div className={channelFailoverEnabled ? 'grid grid-cols-1 gap-4 sm:grid-cols-2' : 'grid grid-cols-1 gap-4'}>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700">模型（可选）</label>
-                <input
-                  type="text"
-                  value={formData.model}
-                  onChange={(event) => updateField('model', event.target.value)}
-                  placeholder="留空 = 使用 Codex 全局配置中的默认模型"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                <p className="mt-1 text-xs text-slate-400">
-                  填入后该渠道将覆盖全局 model；不同渠道支持的模型可能不同
-                </p>
-              </div>
-
-              {channelFailoverEnabled && (
-                <label className="block">
-                  <span className="mb-1.5 block text-sm font-medium text-slate-700">优先级</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={formData.priority}
-                    onChange={(event) => updateField('priority', event.target.value)}
-                    placeholder={isEdit ? undefined : '留空自动分配'}
-                    className="h-[42px] w-full rounded-lg border border-slate-200 px-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  <p className="mt-1 text-xs text-slate-400">
-                    {isEdit ? '数字越小越优先，相同则交换' : '留空按现有顺序自动分配；填写已有优先级时交换'}
-                  </p>
-                </label>
-              )}
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-slate-700">模型（可选）</label>
+              <input
+                type="text"
+                value={formData.model}
+                onChange={(event) => updateField('model', event.target.value)}
+                placeholder="留空 = 使用 Codex 全局配置中的默认模型"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                填入后该渠道将覆盖全局 model；不同渠道支持的模型可能不同
+              </p>
             </div>
 
           </div>

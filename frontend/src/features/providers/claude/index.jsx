@@ -1121,7 +1121,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
           open
           loading={channelFormLoading}
           serverError={createChannelError}
-          channelFailoverEnabled={channelFailoverEnabled}
           onClose={() => setShowCreateChannel(false)}
           onSubmit={handleCreateChannel}
         />
@@ -1134,7 +1133,6 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
           serverError={editChannelError}
           mode="edit"
           initialValue={editingChannel}
-          channelFailoverEnabled={channelFailoverEnabled}
           onClose={() => {
             setShowEditChannel(false);
             setEditingChannel(null);
