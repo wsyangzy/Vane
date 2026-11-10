@@ -5,12 +5,18 @@ package codexproxy
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/platform/transport"
@@ -32,6 +38,83 @@ type Forwarder struct {
 	// 档位的首包经常超过它；超时后重放同一请求只会重复消耗上游额度。
 	streaming bool
 	logger    *slog.Logger
+}
+
+var unsentRetryDelays = []time.Duration{250 * time.Millisecond, time.Second}
+
+type retryUnsentRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (t retryUnsentRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	req := request
+	_, marked := request.Header["Idempotency-Key"]
+	if _, ok := request.Header["X-Idempotency-Key"]; ok {
+		marked = true
+	}
+	if !marked && request.Method != http.MethodGet && request.Method != http.MethodHead && (request.Body == nil || request.Body == http.NoBody || request.GetBody != nil) {
+		req = request.Clone(request.Context())
+		req.Header = request.Header.Clone()
+		req.Header["X-Idempotency-Key"] = nil
+	}
+	for attempt := 0; ; attempt++ {
+		var fresh, http2, wrote atomic.Bool
+		trace := &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) {
+				fresh.Store(!info.Reused)
+				if conn, ok := info.Conn.(interface{ ConnectionState() tls.ConnectionState }); ok {
+					http2.Store(conn.ConnectionState().NegotiatedProtocol == "h2")
+				}
+			},
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				if info.Err == nil {
+					wrote.Store(true)
+				}
+			},
+		}
+		response, err := t.next.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+		if err == nil || !fresh.Load() || http2.Load() || !retryableUnsentError(err, wrote.Load()) || attempt >= len(unsentRetryDelays) || request.Body != nil && request.Body != http.NoBody && request.GetBody == nil {
+			return response, err
+		}
+		if !waitForUnsentRetry(req.Context(), unsentRetryDelays[attempt]) {
+			return nil, req.Context().Err()
+		}
+		retry := req.Clone(req.Context())
+		retry.Header = req.Header.Clone()
+		if request.Body != nil && request.Body != http.NoBody {
+			body, bodyErr := request.GetBody()
+			if bodyErr != nil {
+				return nil, bodyErr
+			}
+			retry.Body = body
+		}
+		req = retry
+	}
+}
+
+func retryableUnsentError(err error, wrote bool) bool {
+	if err == nil {
+		return false
+	}
+	var networkErr *net.OpError
+	if errors.As(err, &networkErr) && networkErr.Op == "write" || errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "http: server closed idle connection") {
+		return true
+	}
+	return !wrote && (errors.Is(err, io.EOF) || errors.As(err, &networkErr) && networkErr.Op == "read" && !networkErr.Timeout())
+}
+
+func waitForUnsentRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // NewForwarder 创建转发器实例
@@ -220,10 +303,17 @@ func (f *Forwarder) clientForEndpoint(endpoint *CodexEndpoint) (*http.Client, er
 		if err != nil {
 			return nil, err
 		}
-		client = &http.Client{Timeout: timeout, Transport: tr}
-	} else if timeout != client.Timeout {
+		client = &http.Client{Timeout: timeout, Transport: retryUnsentRoundTripper{next: tr}}
+	} else {
 		clientCopy := *client
-		clientCopy.Timeout = timeout
+		if timeout != client.Timeout {
+			clientCopy.Timeout = timeout
+		}
+		next := clientCopy.Transport
+		if next == nil {
+			next = http.DefaultTransport
+		}
+		clientCopy.Transport = retryUnsentRoundTripper{next: next}
 		client = &clientCopy
 	}
 	if !f.useEndpointTimeout || endpoint == nil || endpoint.Timeout <= 0 || endpoint.Timeout == client.Timeout {

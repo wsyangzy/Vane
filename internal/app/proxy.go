@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/platform/middleware"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy"
 	codexproxy "github.com/wsyangzy/Vane/internal/providers/codex/proxy"
 	"github.com/wsyangzy/Vane/internal/routing"
@@ -248,7 +249,7 @@ func (a *App) initCodexProxy() {
 	a.syncCodexModelRules(context.Background())
 
 	// 创建 HealthChecker（参数动态从 a.config.Health.* 读取，设置页改动下一轮即生效）
-	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger)
+	hc := codexproxy.NewHealthChecker(mgr, a.config, a.logger, transport.NewProvider(a.config))
 	// 按设置项决定是否启动定时探测；保留实例以供 GetLatencies 等接口使用
 	// 与 Claude 端对齐：仅当 Enabled + LoopRetry + SkipHealthCheck 三者都为 true 时才跳过
 	if mgr.PoolRuntime() != nil || !a.config.CodexFailover.ShouldSkipHealthCheck() {

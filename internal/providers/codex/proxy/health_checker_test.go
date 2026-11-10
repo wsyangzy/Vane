@@ -4,12 +4,14 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
 	"github.com/wsyangzy/Vane/internal/routing"
 )
 
@@ -242,5 +244,28 @@ func TestHealthCheckerSkippedEndpointStillRecordsLatencyWithoutChangingHealth(t 
 	}
 	if manager.IsHealthy(endpointID) {
 		t.Fatalf("expected skipped endpoint probe not to change routing health")
+	}
+}
+
+func TestHealthCheckerUsesConfiguredProxyTransport(t *testing.T) {
+	var requests atomic.Int32
+	proxyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodGet || r.URL.Host != "provider.invalid" || r.URL.Path != "/v1/models" {
+			t.Errorf("proxy request=%s %s, want GET http://provider.invalid/v1/models", r.Method, r.URL)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxyServer.Close()
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Proxy: config.ProxyConfig{Enabled: true, Type: "http", URL: proxyURL.String()}, Health: config.HealthConfig{Timeout: time.Second}}
+	manager := NewEndpointManager(nil, nil, nil, nil)
+	checker := NewHealthChecker(manager, cfg, nil, transport.NewProvider(cfg))
+	checker.checkEndpoint(&CodexEndpoint{ID: 9, Name: "proxied", BaseURL: "http://provider.invalid"})
+	if requests.Load() != 1 || checker.GetLatencies()[9] < 0 {
+		t.Fatalf("configured proxy was not used: requests=%d latencies=%v", requests.Load(), checker.GetLatencies())
 	}
 }

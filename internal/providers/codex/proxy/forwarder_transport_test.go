@@ -27,7 +27,7 @@ func TestHTTPSettingsApplyToNewClientsWithoutChangingInflightClients(t *testing.
 	if err != nil || next.Timeout != 24*time.Second || old.Timeout != 12*time.Second {
 		t.Fatal("live update did not isolate new and existing clients")
 	}
-	if next.Transport.(*http.Transport).ResponseHeaderTimeout != 8*time.Second {
+	if next.Transport.(retryUnsentRoundTripper).next.(*http.Transport).ResponseHeaderTimeout != 8*time.Second {
 		t.Fatal("non-streaming response header setting was not applied")
 	}
 	explicit, err := h.handler.forwarder.clientForEndpoint(&CodexEndpoint{Timeout: time.Second})
@@ -35,7 +35,7 @@ func TestHTTPSettingsApplyToNewClientsWithoutChangingInflightClients(t *testing.
 		t.Fatal("endpoint timeout must take precedence over the default")
 	}
 	stream, err := h.handler.streamFwd.clientForEndpoint(&CodexEndpoint{Timeout: time.Second})
-	if err != nil || stream.Timeout != 0 || stream.Transport.(*http.Transport).ResponseHeaderTimeout != 16*time.Second {
+	if err != nil || stream.Timeout != 0 || stream.Transport.(retryUnsentRoundTripper).next.(*http.Transport).ResponseHeaderTimeout != 16*time.Second {
 		t.Fatal("streaming header timeout changed the stream duration limit")
 	}
 }
@@ -70,8 +70,9 @@ func TestForwarderUsesConfiguredTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr, ok := client.Transport.(*http.Transport)
-	if !ok || tr.Proxy == nil {
+	wrapped, ok := client.Transport.(retryUnsentRoundTripper)
+	tr, transportOK := wrapped.next.(*http.Transport)
+	if !ok || !transportOK || tr.Proxy == nil {
 		t.Fatal("Codex forwarder did not use the configured HTTP transport")
 	}
 	got, err := tr.Proxy(&http.Request{URL: &url.URL{Scheme: "https", Host: "api.example.com"}})
@@ -91,8 +92,9 @@ func TestStreamingForwarderUsesStreamingTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr, ok := client.Transport.(*http.Transport)
-	if !ok || tr.ResponseHeaderTimeout != 7*time.Minute {
+	wrapped, ok := client.Transport.(retryUnsentRoundTripper)
+	tr, transportOK := wrapped.next.(*http.Transport)
+	if !ok || !transportOK || tr.ResponseHeaderTimeout != 7*time.Minute {
 		t.Fatalf("streaming forwarder did not use Streaming.ResponseHeaderTimeout: %+v", client.Transport)
 	}
 }

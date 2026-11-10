@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/transport"
 )
 
 const (
@@ -28,8 +29,9 @@ const (
 
 // HealthChecker 定时对端点执行网络延迟探测
 type HealthChecker struct {
-	manager *EndpointManager
-	cfg     *config.Config // 动态读取 Health.* 字段，配置热生效
+	manager           *EndpointManager
+	cfg               *config.Config // 动态读取 Health.* 字段，配置热生效
+	transportProvider *transport.Provider
 
 	mu         sync.RWMutex
 	latencies  map[int64]int64     // endpoint ID -> latency ms (-1 表示超时/不可达)
@@ -43,17 +45,22 @@ type HealthChecker struct {
 // NewHealthChecker 创建健康检查器实例
 // 参数 cfg 用于运行时动态读取 health.check_interval / timeout / health_path，
 // 设置页改动后下一次 ticker / 探测即生效，无需重启。
-func NewHealthChecker(manager *EndpointManager, cfg *config.Config, logger *slog.Logger) *HealthChecker {
+func NewHealthChecker(manager *EndpointManager, cfg *config.Config, logger *slog.Logger, providers ...*transport.Provider) *HealthChecker {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var transportProvider *transport.Provider
+	if len(providers) > 0 {
+		transportProvider = providers[0]
+	}
 	return &HealthChecker{
-		manager:    manager,
-		cfg:        cfg,
-		latencies:  make(map[int64]int64),
-		lastChecks: make(map[int64]time.Time),
-		stopCh:     make(chan struct{}),
-		logger:     logger,
+		manager:           manager,
+		cfg:               cfg,
+		transportProvider: transportProvider,
+		latencies:         make(map[int64]int64),
+		lastChecks:        make(map[int64]time.Time),
+		stopCh:            make(chan struct{}),
+		logger:            logger,
 	}
 }
 
@@ -229,8 +236,20 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ep.APIKey))
 	}
 
-	// 每次探测用独立 client（开销小且确保 timeout 生效不依赖 client.Timeout）
-	client := &http.Client{Timeout: timeout}
+	var roundTripper http.RoundTripper = http.DefaultTransport
+	if h.transportProvider != nil {
+		configured, transportErr := h.transportProvider.Default()
+		if transportErr != nil {
+			h.logger.Warn("创建 Codex 健康探测传输失败", "endpoint", ep.Name, "error", transportErr)
+			h.recordLatency(ep.ID, -1)
+			if !skipHealthState {
+				h.manager.MarkUnhealthyWithDetail(ep.ID, 0, transportErr.Error())
+			}
+			return
+		}
+		roundTripper = configured
+	}
+	client := &http.Client{Timeout: timeout, Transport: retryUnsentRoundTripper{next: roundTripper}}
 
 	start := time.Now()
 	resp, err := client.Do(req)
