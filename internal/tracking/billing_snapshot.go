@@ -137,20 +137,20 @@ func resolveBillingFactors(usage *TokenUsage, pricing *ModelPricing, m *Endpoint
 		f.cacheCreation1hPrice = f.inputPrice * 2.0
 	}
 
-	f.inputMult = ensurePositiveMultiplier(m.InputCostMultiplier) * ensurePositiveMultiplier(m.ModelInputCostMultiplier)
-	f.outputMult = ensurePositiveMultiplier(m.OutputCostMultiplier) * ensurePositiveMultiplier(m.ModelOutputCostMultiplier)
-	f.cacheReadMult = ensurePositiveMultiplier(m.CacheReadCostMultiplier) * ensurePositiveMultiplier(m.ModelCacheReadCostMultiplier)
-	f.cacheCreationMult = ensurePositiveMultiplier(m.CacheCreationCostMultiplier)
-	f.cacheCreation1hMult = ensurePositiveMultiplier(m.CacheCreationCostMultiplier1h)
+	f.inputMult = m.normalizeMultiplier(m.InputCostMultiplier) * ensurePositiveMultiplier(m.ModelInputCostMultiplier)
+	f.outputMult = m.normalizeMultiplier(m.OutputCostMultiplier) * ensurePositiveMultiplier(m.ModelOutputCostMultiplier)
+	f.cacheReadMult = m.normalizeMultiplier(m.CacheReadCostMultiplier) * ensurePositiveMultiplier(m.ModelCacheReadCostMultiplier)
+	f.cacheCreationMult = m.normalizeMultiplier(m.CacheCreationCostMultiplier)
+	f.cacheCreation1hMult = m.normalizeMultiplier(m.CacheCreationCostMultiplier1h)
 	if f.longContextActive {
-		longMult := ensurePositiveMultiplier(m.LongContextCostMultiplier)
-		f.inputMult *= ensurePositiveMultiplier(m.LongContextInputCostMultiplier) * longMult
-		f.outputMult *= ensurePositiveMultiplier(m.LongContextOutputCostMultiplier) * longMult
-		f.cacheReadMult *= ensurePositiveMultiplier(m.LongContextCacheReadCostMultiplier) * longMult
-		f.cacheCreationMult *= ensurePositiveMultiplier(m.LongContextCacheCreationCostMultiplier) * longMult
-		f.cacheCreation1hMult *= ensurePositiveMultiplier(m.LongContextCacheCreationCostMultiplier) * longMult
+		longMult := m.normalizeMultiplier(m.LongContextCostMultiplier)
+		f.inputMult *= m.normalizeMultiplier(m.LongContextInputCostMultiplier) * longMult
+		f.outputMult *= m.normalizeMultiplier(m.LongContextOutputCostMultiplier) * longMult
+		f.cacheReadMult *= m.normalizeMultiplier(m.LongContextCacheReadCostMultiplier) * longMult
+		f.cacheCreationMult *= m.normalizeMultiplier(m.LongContextCacheCreationCostMultiplier) * longMult
+		f.cacheCreation1hMult *= m.normalizeMultiplier(m.LongContextCacheCreationCostMultiplier) * longMult
 	}
-	f.totalMult = ensurePositiveMultiplier(m.CostMultiplier) * ensurePositiveMultiplier(m.ModelCostMultiplier)
+	f.totalMult = m.normalizeMultiplier(m.CostMultiplier) * ensurePositiveMultiplier(m.ModelCostMultiplier)
 	return f
 }
 
@@ -190,7 +190,7 @@ func buildBillingDecisionSnapshot(usage *TokenUsage, pricing ModelPricing, mult 
 		CacheReadCostMultiplier:       f.cacheReadMult,
 		TotalCostMultiplier:           f.totalMult,
 
-		GroupCostMultiplier: ensurePositiveMultiplier(mult.CostMultiplier),
+		GroupCostMultiplier: mult.normalizeMultiplier(mult.CostMultiplier),
 		ModelCostMultiplier: ensurePositiveMultiplier(mult.ModelCostMultiplier),
 	}
 	_, snapshot.ServiceTierSource = ResolveBillingServiceTier(id.requestedTier, id.responseTier, id.tierSource)
@@ -213,7 +213,7 @@ func buildBillingDecisionSnapshot(usage *TokenUsage, pricing ModelPricing, mult 
 		snapshot.CacheWrite12hCost = float64(allocation.tokens12h) * allocation.price12h / 1e6 * f.cacheCreationMult * f.totalMult
 	}
 	if f.longContextActive {
-		snapshot.LongContextCostMultiplier = ensurePositiveMultiplier(mult.LongContextCostMultiplier)
+		snapshot.LongContextCostMultiplier = mult.normalizeMultiplier(mult.LongContextCostMultiplier)
 	}
 	if rule != nil {
 		snapshot.RuleKey = billingRuleKey(*rule)

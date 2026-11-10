@@ -72,6 +72,8 @@ type BillingRule struct {
 //  1. 细分倍率：在每个分项成本计算时相乘（默认 1.0 = 不影响）
 //  2. 总倍率：所有分项成本计算完成后，作为整体乘数应用（默认 1.0 = 不影响）
 type EndpointMultiplier struct {
+	// Configured distinguishes explicit zero rates from omitted legacy Go fields.
+	Configured                             bool    `json:"configured,omitempty"`
 	ServiceTierSource                      string  // retained for older configs; runtime derives Standard or automatic rules
 	CacheWriteTTLPricing                   bool    // opt in to reported 30m/12h billing
 	CostMultiplier                         float64 // 总体倍率（默认 1.0，叠加在所有分项后）

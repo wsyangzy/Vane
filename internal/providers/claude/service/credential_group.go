@@ -223,17 +223,17 @@ func (s *ClaudeCredentialGroupService) normalizeAndValidate(ctx context.Context,
 	if record.DailyCostLimitUSD < 0 {
 		return fmt.Errorf("每日成本限额不能小于 0")
 	}
-	record.CostMultiplier = normalizePositiveMultiplier(record.CostMultiplier)
-	record.InputCostMultiplier = normalizePositiveMultiplier(record.InputCostMultiplier)
-	record.OutputCostMultiplier = normalizePositiveMultiplier(record.OutputCostMultiplier)
-	record.CacheCreationCostMultiplier = normalizePositiveMultiplier(record.CacheCreationCostMultiplier)
-	record.CacheCreationCostMultiplier1h = normalizePositiveMultiplier(record.CacheCreationCostMultiplier1h)
-	record.CacheReadCostMultiplier = normalizePositiveMultiplier(record.CacheReadCostMultiplier)
-	record.LongContextCostMultiplier = normalizePositiveMultiplier(record.LongContextCostMultiplier)
-	record.LongContextInputCostMultiplier = normalizePositiveMultiplier(record.LongContextInputCostMultiplier)
-	record.LongContextOutputCostMultiplier = normalizePositiveMultiplier(record.LongContextOutputCostMultiplier)
-	record.LongContextCacheCreationCostMultiplier = normalizePositiveMultiplier(record.LongContextCacheCreationCostMultiplier)
-	record.LongContextCacheReadCostMultiplier = normalizePositiveMultiplier(record.LongContextCacheReadCostMultiplier)
+	record.CostMultiplier = normalizeClaudeGroupMultiplier(record.CostMultiplier)
+	record.InputCostMultiplier = normalizeClaudeGroupMultiplier(record.InputCostMultiplier)
+	record.OutputCostMultiplier = normalizeClaudeGroupMultiplier(record.OutputCostMultiplier)
+	record.CacheCreationCostMultiplier = normalizeClaudeGroupMultiplier(record.CacheCreationCostMultiplier)
+	record.CacheCreationCostMultiplier1h = normalizeClaudeGroupMultiplier(record.CacheCreationCostMultiplier1h)
+	record.CacheReadCostMultiplier = normalizeClaudeGroupMultiplier(record.CacheReadCostMultiplier)
+	record.LongContextCostMultiplier = normalizeClaudeGroupMultiplier(record.LongContextCostMultiplier)
+	record.LongContextInputCostMultiplier = normalizeClaudeGroupMultiplier(record.LongContextInputCostMultiplier)
+	record.LongContextOutputCostMultiplier = normalizeClaudeGroupMultiplier(record.LongContextOutputCostMultiplier)
+	record.LongContextCacheCreationCostMultiplier = normalizeClaudeGroupMultiplier(record.LongContextCacheCreationCostMultiplier)
+	record.LongContextCacheReadCostMultiplier = normalizeClaudeGroupMultiplier(record.LongContextCacheReadCostMultiplier)
 	modelMultipliers, err := normalizeEndpointModelMultipliers(record.ModelMultipliers)
 	if err != nil {
 		return err
@@ -303,4 +303,12 @@ func normalizeClaudeSupportedModels(models []string) []string {
 		return nil
 	}
 	return result
+}
+
+// Zero is an explicit free rate; only negative legacy values use the default.
+func normalizeClaudeGroupMultiplier(value float64) float64 {
+	if value < 0 {
+		return 1
+	}
+	return value
 }

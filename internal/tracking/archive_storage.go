@@ -241,16 +241,16 @@ func (am *ArchiveManager) batchInsert(events []*ArchiveEvent) error {
 			costBreakdown.CacheReadCost,
 			costBreakdown.TotalCost,
 			// 倍率快照（默认 1.0）
-			defaultMultiplier(req.CostMultiplier),
-			defaultMultiplier(req.InputCostMultiplier),
-			defaultMultiplier(req.OutputCostMultiplier),
-			defaultMultiplier(req.CacheCreationCostMultiplier),
-			defaultMultiplier(req.CacheCreationCostMultiplier1h),
-			defaultMultiplier(req.CacheReadCostMultiplier),
-			defaultMultiplier(req.ModelCostMultiplier),
-			defaultMultiplier(req.ModelInputCostMultiplier),
-			defaultMultiplier(req.ModelOutputCostMultiplier),
-			defaultMultiplier(req.ModelCacheReadCostMultiplier),
+			defaultMultiplier(req.CostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.InputCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.OutputCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.CacheCreationCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.CacheCreationCostMultiplier1h, req.BillingRulesCaptured),
+			defaultMultiplier(req.CacheReadCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.ModelCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.ModelInputCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.ModelOutputCostMultiplier, req.BillingRulesCaptured),
+			defaultMultiplier(req.ModelCacheReadCostMultiplier, req.BillingRulesCaptured),
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert request %s: %w", req.RequestID, err)
@@ -311,9 +311,9 @@ func defaultProvider(p string) string {
 	return p
 }
 
-// defaultMultiplier 返回倍率值，<= 0 时回退到 1.0（不影响成本）。
-func defaultMultiplier(v float64) float64 {
-	if v <= 0 {
+// defaultMultiplier 保留已捕获的零倍率，旧归档中未设置的零值仍回退到 1.0。
+func defaultMultiplier(v float64, captured bool) float64 {
+	if v < 0 || v == 0 && !captured {
 		return 1.0
 	}
 	return v

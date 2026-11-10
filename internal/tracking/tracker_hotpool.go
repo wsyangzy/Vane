@@ -173,7 +173,10 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 		req.CacheWriteTTLPricing = mult.CacheWriteTTLPricing
 		resolveActiveRequestServiceTier(req)
 		req.BillingRuleSnapshot = ""
-		req.BillingGroupMultiplier = nil
+		groupSnapshot := mult
+		groupSnapshot.ModelMultipliers = append([]ModelMultiplier(nil), mult.ModelMultipliers...)
+		groupSnapshot.BillingRules = nil
+		req.BillingGroupMultiplier = &groupSnapshot
 		if len(mult.BillingRules) > 0 {
 			groupSnapshot := DefaultEndpointMultiplier()
 			copyBillingGroupMultipliers(&groupSnapshot, mult)
@@ -182,12 +185,12 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 			mult = DefaultEndpointMultiplier()
 			mult.BillingOutputTokenSource = billingOutputTokenSource
 		}
-		req.CostMultiplier = ensurePositiveMultiplier(mult.CostMultiplier)
-		req.InputCostMultiplier = ensurePositiveMultiplier(mult.InputCostMultiplier)
-		req.OutputCostMultiplier = ensurePositiveMultiplier(mult.OutputCostMultiplier)
-		req.CacheCreationCostMultiplier = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier)
-		req.CacheCreationCostMultiplier1h = ensurePositiveMultiplier(mult.CacheCreationCostMultiplier1h)
-		req.CacheReadCostMultiplier = ensurePositiveMultiplier(mult.CacheReadCostMultiplier)
+		req.CostMultiplier = mult.normalizeMultiplier(mult.CostMultiplier)
+		req.InputCostMultiplier = mult.normalizeMultiplier(mult.InputCostMultiplier)
+		req.OutputCostMultiplier = mult.normalizeMultiplier(mult.OutputCostMultiplier)
+		req.CacheCreationCostMultiplier = mult.normalizeMultiplier(mult.CacheCreationCostMultiplier)
+		req.CacheCreationCostMultiplier1h = mult.normalizeMultiplier(mult.CacheCreationCostMultiplier1h)
+		req.CacheReadCostMultiplier = mult.normalizeMultiplier(mult.CacheReadCostMultiplier)
 		req.ModelCostMultiplier = ensurePositiveMultiplier(mult.ModelCostMultiplier)
 		req.ModelInputCostMultiplier = ensurePositiveMultiplier(mult.ModelInputCostMultiplier)
 		req.ModelOutputCostMultiplier = ensurePositiveMultiplier(mult.ModelOutputCostMultiplier)
@@ -195,6 +198,14 @@ func (ut *UsageTracker) UpdateActiveRequestMultiplier(requestID string, mult End
 		req.BillingOutputTokenSource = NormalizeBillingOutputTokenSource(mult.BillingOutputTokenSource)
 		req.BillableOutputTokens = BillableOutputTokens(req.OutputTokens, req.ReasoningTokens, req.BillingOutputTokenSource)
 	})
+}
+
+// normalizeMultiplier preserves explicit zero while retaining defaults for legacy partial structs.
+func (m EndpointMultiplier) normalizeMultiplier(value float64) float64 {
+	if m.Configured && value == 0 {
+		return 0
+	}
+	return ensurePositiveMultiplier(value)
 }
 
 // ensurePositiveMultiplier 倍率值 <= 0 时回退到 1.0（不影响成本）

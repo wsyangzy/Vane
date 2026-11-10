@@ -121,6 +121,9 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		multiplierValue.ServiceTierSource = tierSource
 		multiplierValue.CacheWriteTTLPricing = cacheWriteTTLPricing
 		multiplierValue.BillingRules = billingRules
+		if billingGroupMultiplier != nil && len(billingRules) == 0 {
+			multiplierValue = *billingGroupMultiplier
+		}
 		if len(billingRules) > 0 {
 			if billingGroupMultiplier != nil {
 				copyBillingGroupMultipliers(&multiplierValue, *billingGroupMultiplier)
@@ -186,6 +189,13 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		}))
 	}
 
+	resolveSnapshot := func(value float64, accessor func(*EndpointMultiplier) float64) float64 {
+		if billingRulesCaptured && value >= 0 {
+			return value
+		}
+		return normalizeMultiplierSnapshot(value, multiplier, accessor)
+	}
+
 	return RequestDetail{
 		ID:                            0, // 热池中的请求还没有数据库ID
 		RequestID:                     requestID,
@@ -238,16 +248,16 @@ func (ut *UsageTracker) ActiveRequestToDetail(req *ActiveRequest) RequestDetail 
 		CacheCreation1hCostUSD:        cost.CacheCreation1hCost,
 		CacheReadCostUSD:              cost.CacheReadCost,
 		TotalCostUSD:                  cost.TotalCost,
-		CostMultiplier:                normalizeMultiplierSnapshot(costMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CostMultiplier }),
-		InputCostMultiplier:           normalizeMultiplierSnapshot(inputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.InputCostMultiplier }),
-		OutputCostMultiplier:          normalizeMultiplierSnapshot(outputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.OutputCostMultiplier }),
-		CacheCreationCostMultiplier:   normalizeMultiplierSnapshot(cacheCreationCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier }),
-		CacheCreationCostMultiplier1h: normalizeMultiplierSnapshot(cacheCreationCostMult1hSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier1h }),
-		CacheReadCostMultiplier:       normalizeMultiplierSnapshot(cacheReadCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.CacheReadCostMultiplier }),
-		ModelCostMultiplier:           normalizeMultiplierSnapshot(modelCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelCostMultiplier }),
-		ModelInputCostMultiplier:      normalizeMultiplierSnapshot(modelInputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelInputCostMultiplier }),
-		ModelOutputCostMultiplier:     normalizeMultiplierSnapshot(modelOutputCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelOutputCostMultiplier }),
-		ModelCacheReadCostMultiplier:  normalizeMultiplierSnapshot(modelCacheReadCostMultSnap, multiplier, func(m *EndpointMultiplier) float64 { return m.ModelCacheReadCostMultiplier }),
+		CostMultiplier:                resolveSnapshot(costMultSnap, func(m *EndpointMultiplier) float64 { return m.CostMultiplier }),
+		InputCostMultiplier:           resolveSnapshot(inputCostMultSnap, func(m *EndpointMultiplier) float64 { return m.InputCostMultiplier }),
+		OutputCostMultiplier:          resolveSnapshot(outputCostMultSnap, func(m *EndpointMultiplier) float64 { return m.OutputCostMultiplier }),
+		CacheCreationCostMultiplier:   resolveSnapshot(cacheCreationCostMultSnap, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier }),
+		CacheCreationCostMultiplier1h: resolveSnapshot(cacheCreationCostMult1hSnap, func(m *EndpointMultiplier) float64 { return m.CacheCreationCostMultiplier1h }),
+		CacheReadCostMultiplier:       resolveSnapshot(cacheReadCostMultSnap, func(m *EndpointMultiplier) float64 { return m.CacheReadCostMultiplier }),
+		ModelCostMultiplier:           resolveSnapshot(modelCostMultSnap, func(m *EndpointMultiplier) float64 { return m.ModelCostMultiplier }),
+		ModelInputCostMultiplier:      resolveSnapshot(modelInputCostMultSnap, func(m *EndpointMultiplier) float64 { return m.ModelInputCostMultiplier }),
+		ModelOutputCostMultiplier:     resolveSnapshot(modelOutputCostMultSnap, func(m *EndpointMultiplier) float64 { return m.ModelOutputCostMultiplier }),
+		ModelCacheReadCostMultiplier:  resolveSnapshot(modelCacheReadCostMultSnap, func(m *EndpointMultiplier) float64 { return m.ModelCacheReadCostMultiplier }),
 		CreatedAt:                     startTime,
 		UpdatedAt:                     ut.now(),
 	}
@@ -260,7 +270,7 @@ func normalizeMultiplierSnapshot(snapshot float64, current *EndpointMultiplier, 
 		return snapshot
 	}
 	if current != nil {
-		if v := accessor(current); v > 0 {
+		if v := accessor(current); v > 0 || current.Configured && v == 0 {
 			return v
 		}
 	}

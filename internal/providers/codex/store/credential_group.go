@@ -504,7 +504,7 @@ func scanCodexCredentialGroupRow(scanner interface {
 }
 
 func defaultCodexStoreMultiplier(value float64) float64 {
-	if value <= 0 {
+	if value < 0 {
 		return 1.0
 	}
 	return value

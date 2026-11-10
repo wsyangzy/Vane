@@ -9,6 +9,7 @@ import (
 // DefaultEndpointMultiplier 返回默认端点倍率（全部为 1.0）
 func DefaultEndpointMultiplier() EndpointMultiplier {
 	return EndpointMultiplier{
+		Configured:                             true,
 		CostMultiplier:                         1.0,
 		InputCostMultiplier:                    1.0,
 		OutputCostMultiplier:                   1.0,
@@ -118,12 +119,12 @@ func resolveBillingRule(rules []BillingRule, modelName, serviceTier, contextMode
 // inheritance, without importing legacy model or long-context modifiers.
 func copyBillingGroupMultipliers(dst *EndpointMultiplier, group EndpointMultiplier) {
 	dst.DisableLongContextPricing = group.DisableLongContextPricing
-	dst.CostMultiplier = ensurePositiveMultiplier(group.CostMultiplier)
-	dst.InputCostMultiplier = ensurePositiveMultiplier(group.InputCostMultiplier)
-	dst.OutputCostMultiplier = ensurePositiveMultiplier(group.OutputCostMultiplier)
-	dst.CacheCreationCostMultiplier = ensurePositiveMultiplier(group.CacheCreationCostMultiplier)
+	dst.CostMultiplier = group.normalizeMultiplier(group.CostMultiplier)
+	dst.InputCostMultiplier = group.normalizeMultiplier(group.InputCostMultiplier)
+	dst.OutputCostMultiplier = group.normalizeMultiplier(group.OutputCostMultiplier)
+	dst.CacheCreationCostMultiplier = group.normalizeMultiplier(group.CacheCreationCostMultiplier)
 	dst.CacheCreationCostMultiplier1h = dst.CacheCreationCostMultiplier
-	dst.CacheReadCostMultiplier = ensurePositiveMultiplier(group.CacheReadCostMultiplier)
+	dst.CacheReadCostMultiplier = group.normalizeMultiplier(group.CacheReadCostMultiplier)
 }
 
 // DefaultBillingRuleGroupMultiplierMode makes every model/tier/context rule
@@ -166,6 +167,9 @@ func resolveBillingForRequest(pricing ModelPricing, mult EndpointMultiplier, usa
 	resolvedRule := *rule
 	resolvedRule.GroupMultiplierMode = DefaultBillingRuleGroupMultiplierMode(rule.GroupMultiplierMode, rule.Model == "" && rule.ServiceTier == "" && rule.Context == "")
 	rule = &resolvedRule
+	if mult.Configured && mult.CostMultiplier == 0 {
+		rule.GroupMultiplierMode = BillingGroupMultiplierInherit
+	}
 	if rule.GroupMultiplierMode == BillingGroupMultiplierInherit {
 		copyBillingGroupMultipliers(&effectiveMultiplier, mult)
 	}
@@ -220,7 +224,7 @@ func calculateRequestCost(usage *TokenUsage, pricing ModelPricing, multiplier En
 		snapshot.GroupCostMultiplier = 1
 		if rule.GroupMultiplierMode == BillingGroupMultiplierInherit {
 			snapshot.RuleGroupMultiplierMode = BillingGroupMultiplierInherit
-			snapshot.GroupCostMultiplier = ensurePositiveMultiplier(multiplier.CostMultiplier)
+			snapshot.GroupCostMultiplier = multiplier.normalizeMultiplier(multiplier.CostMultiplier)
 		}
 		snapshot.RuleCostMultiplier = 1
 		if rule.Mode == BillingRuleModeMultiplier {

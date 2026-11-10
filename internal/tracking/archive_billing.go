@@ -25,6 +25,9 @@ func (am *ArchiveManager) calculateCost(req *ActiveRequest) CostBreakdown {
 		multiplierValue.ServiceTierSource = req.ServiceTierSource
 		multiplierValue.CacheWriteTTLPricing = req.CacheWriteTTLPricing
 		multiplierValue.BillingRules = append([]BillingRule(nil), req.BillingRules...)
+		if req.BillingGroupMultiplier != nil && len(req.BillingRules) == 0 {
+			multiplierValue = *req.BillingGroupMultiplier
+		}
 		if len(req.BillingRules) > 0 {
 			if req.BillingGroupMultiplier != nil {
 				copyBillingGroupMultipliers(&multiplierValue, *req.BillingGroupMultiplier)

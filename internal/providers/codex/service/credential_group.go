@@ -177,16 +177,16 @@ func (s *CodexCredentialGroupService) normalizeAndValidate(ctx context.Context, 
 	}
 	record.ServiceTierSource = tracking.NormalizeServiceTierSource(record.ServiceTierSource)
 	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
-	record.CostMultiplier = defaultCodexMultiplier(record.CostMultiplier)
-	record.InputCostMultiplier = defaultCodexMultiplier(record.InputCostMultiplier)
-	record.OutputCostMultiplier = defaultCodexMultiplier(record.OutputCostMultiplier)
-	record.CacheCreationCostMultiplier = defaultCodexMultiplier(record.CacheCreationCostMultiplier)
-	record.CacheReadCostMultiplier = defaultCodexMultiplier(record.CacheReadCostMultiplier)
-	record.LongContextCostMultiplier = defaultCodexMultiplier(record.LongContextCostMultiplier)
-	record.LongContextInputCostMultiplier = defaultCodexMultiplier(record.LongContextInputCostMultiplier)
-	record.LongContextOutputCostMultiplier = defaultCodexMultiplier(record.LongContextOutputCostMultiplier)
-	record.LongContextCacheCreationCostMultiplier = defaultCodexMultiplier(record.LongContextCacheCreationCostMultiplier)
-	record.LongContextCacheReadCostMultiplier = defaultCodexMultiplier(record.LongContextCacheReadCostMultiplier)
+	record.CostMultiplier = normalizeCodexGroupMultiplier(record.CostMultiplier)
+	record.InputCostMultiplier = normalizeCodexGroupMultiplier(record.InputCostMultiplier)
+	record.OutputCostMultiplier = normalizeCodexGroupMultiplier(record.OutputCostMultiplier)
+	record.CacheCreationCostMultiplier = normalizeCodexGroupMultiplier(record.CacheCreationCostMultiplier)
+	record.CacheReadCostMultiplier = normalizeCodexGroupMultiplier(record.CacheReadCostMultiplier)
+	record.LongContextCostMultiplier = normalizeCodexGroupMultiplier(record.LongContextCostMultiplier)
+	record.LongContextInputCostMultiplier = normalizeCodexGroupMultiplier(record.LongContextInputCostMultiplier)
+	record.LongContextOutputCostMultiplier = normalizeCodexGroupMultiplier(record.LongContextOutputCostMultiplier)
+	record.LongContextCacheCreationCostMultiplier = normalizeCodexGroupMultiplier(record.LongContextCacheCreationCostMultiplier)
+	record.LongContextCacheReadCostMultiplier = normalizeCodexGroupMultiplier(record.LongContextCacheReadCostMultiplier)
 	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)
 	if err != nil {
 		return err
@@ -316,4 +316,12 @@ func normalizeCodexBillingRules(rules []store.CodexBillingRuleRecord) ([]store.C
 		return nil, fmt.Errorf("Codex 组合计费规则必须且只能包含一条默认规则")
 	}
 	return normalized, nil
+}
+
+// Zero is an explicit free rate; only negative legacy values use the default.
+func normalizeCodexGroupMultiplier(value float64) float64 {
+	if value < 0 {
+		return 1
+	}
+	return value
 }

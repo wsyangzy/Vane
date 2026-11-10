@@ -2,6 +2,7 @@ package tracking
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -237,4 +238,106 @@ func TestCombinationLongContextSwitchIsCapturedAcrossAccountingPaths(t *testing.
 			require.InDelta(t, want, archive.calculateCost(&replayed).TotalCost, 1e-12)
 		})
 	}
+}
+
+func TestFreeGroupCostsAndSnapshotsSurviveConfigurationChanges(t *testing.T) {
+	for _, provider := range []string{"claude", "codex"} {
+		for _, mode := range []string{"ordinary", BillingRuleModeMultiplier, BillingRuleModeFixed} {
+			t.Run(provider+"/"+mode, func(t *testing.T) {
+				pool := NewHotPool(DefaultHotPoolConfig())
+				defer pool.Close()
+				mult := DefaultEndpointMultiplier()
+				mult.CostMultiplier = 0
+				if mode != "ordinary" {
+					mult.BillingRules = []BillingRule{{Mode: mode, GroupMultiplierMode: BillingGroupMultiplierOverride,
+						CostMultiplier: 2, InputCostMultiplier: 1, OutputCostMultiplier: 1, CacheCreationCostMultiplier: 1, CacheReadCostMultiplier: 1,
+						InputPrice: 4, OutputPrice: 20, CacheCreationPrice: 3, CacheReadPrice: .2}}
+				}
+				key := EndpointMultiplierGroupKey(provider, "channel", "free", "main")
+				prices := map[string]ModelPricing{ModelPricingKey(provider, "test", ""): {
+					Input: 4, Output: 20, CacheCreation: 3, CacheCreation1h: 6, CacheRead: .2,
+					LongContextThreshold: 100, LongContextInputPrice: 8, LongContextOutputPrice: 40,
+				}}
+				tracker := &UsageTracker{hotPool: pool, pricing: prices, endpointMu: map[string]EndpointMultiplier{key: mult}}
+				req := NewActiveRequest("free-group", "", "", "POST", "/", true)
+				req.Provider, req.Channel, req.GroupName, req.EndpointName, req.ModelName = provider, "channel", "free", "main", "test"
+				req.InputTokens, req.OutputTokens, req.CacheReadTokens, req.CacheCreationTokens = 1000000, 2000, 10000, 5000
+				require.NoError(t, pool.Add(req))
+				require.NoError(t, tracker.UpdateActiveRequestMultiplier(req.RequestID, mult))
+				attempt, known := tracker.CalculateAttemptCost(provider, "channel", "free", "main", "test", "default", &TokenUsage{InputTokens: 1000000})
+				require.True(t, known)
+				require.Zero(t, attempt)
+				mult.CostMultiplier = 9
+				tracker.endpointMu[key] = mult
+				detail := tracker.ActiveRequestToDetail(req)
+				require.Zero(t, detail.TotalCostUSD)
+				require.Zero(t, detail.CostMultiplier)
+				require.EqualValues(t, 1000000, detail.InputTokens)
+				archive := &ArchiveManager{pricing: prices, endpointMu: tracker.endpointMu}
+				for range 2 {
+					require.Equal(t, CostBreakdown{}, archive.calculateCost(req))
+				}
+				var snapshot BillingDecisionSnapshot
+				require.NoError(t, json.Unmarshal([]byte(req.BillingRuleSnapshot), &snapshot))
+				require.Zero(t, snapshot.TotalCostMultiplier)
+				require.Zero(t, snapshot.GroupCostMultiplier)
+				data, err := json.Marshal(req)
+				require.NoError(t, err)
+				var replayed ActiveRequest
+				require.NoError(t, json.Unmarshal(data, &replayed))
+				require.Zero(t, tracker.ActiveRequestToDetail(&replayed).TotalCostUSD)
+				require.Equal(t, CostBreakdown{}, archive.calculateCost(&replayed))
+				require.Zero(t, defaultMultiplier(replayed.CostMultiplier, replayed.BillingRulesCaptured))
+			})
+		}
+	}
+}
+
+func TestConfiguredZeroComponentOnlyRemovesItsOwnCost(t *testing.T) {
+	mult := DefaultEndpointMultiplier()
+	mult.InputCostMultiplier, mult.CacheReadCostMultiplier = 0, 0
+	cost, _, snapshot := calculateRequestCost(&TokenUsage{InputTokens: 1000000, OutputTokens: 1000000, CacheReadTokens: 1000000},
+		ModelPricing{Input: 4, Output: 20, CacheRead: .2}, mult, billingIdentity{})
+	require.Zero(t, cost.InputCost)
+	require.Zero(t, cost.CacheReadCost)
+	require.Equal(t, 20.0, cost.OutputCost)
+	require.Zero(t, snapshot.InputCostMultiplier)
+	require.Zero(t, snapshot.CacheReadCostMultiplier)
+	// Legacy structs may omit optional fields and still use the original default rate.
+	require.Equal(t, 1.0, defaultMultiplier(0, false))
+	require.Equal(t, 4.0, CalculateCost(&TokenUsage{InputTokens: 1000000}, &ModelPricing{Input: 4}, &EndpointMultiplier{}).TotalCost)
+}
+
+func TestFreeGroupArchivePersistsZeroRateAndTokenUsage(t *testing.T) {
+	adapter, err := NewSQLiteAdapter(DatabaseConfig{DatabasePath: filepath.Join(t.TempDir(), "usage.db")})
+	require.NoError(t, err)
+	require.NoError(t, adapter.Open())
+	defer adapter.Close()
+	require.NoError(t, adapter.InitSchema())
+	pool := NewHotPool(DefaultHotPoolConfig())
+	defer pool.Close()
+	mult := DefaultEndpointMultiplier()
+	mult.CostMultiplier = 0
+	tracker := &UsageTracker{hotPool: pool}
+	req := NewActiveRequest("free-persisted", "", "", "POST", "/v1/responses", true)
+	req.Provider, req.ModelName = "codex", "test"
+	req.InputTokens, req.OutputTokens, req.Status = 1000000, 5000, "completed"
+	require.NoError(t, pool.Add(req))
+	require.NoError(t, tracker.UpdateActiveRequestMultiplier(req.RequestID, mult))
+	archive := &ArchiveManager{adapter: adapter, config: DefaultArchiveManagerConfig(), pricing: map[string]ModelPricing{
+		ModelPricingKey("codex", "test", ""): {Input: 4, Output: 20},
+	}}
+	require.NoError(t, archive.batchInsert([]*ArchiveEvent{{Request: req}}))
+	var totalCost, costMultiplier float64
+	var inputTokens, outputTokens int64
+	var snapshotJSON string
+	require.NoError(t, adapter.GetWriteDB().QueryRow(`SELECT total_cost_usd, cost_multiplier, input_tokens, output_tokens, billing_rule_snapshot FROM request_logs WHERE request_id=?`, req.RequestID).
+		Scan(&totalCost, &costMultiplier, &inputTokens, &outputTokens, &snapshotJSON))
+	require.Zero(t, totalCost)
+	require.Zero(t, costMultiplier)
+	require.EqualValues(t, 1000000, inputTokens)
+	require.EqualValues(t, 5000, outputTokens)
+	var snapshot BillingDecisionSnapshot
+	require.NoError(t, json.Unmarshal([]byte(snapshotJSON), &snapshot))
+	require.Zero(t, snapshot.TotalCostMultiplier)
 }

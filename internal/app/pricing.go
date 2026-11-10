@@ -309,6 +309,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 				// Claude 的 API Key 与计费配置归属凭证分组；端点只表示线路配置。
 				// 历史端点倍率字段保留为兼容存储，但不再参与运行时计费（与 Codex 一致）。
 				multiplier := tracking.EndpointMultiplier{
+					Configured:                             true,
 					CostMultiplier:                         groupCostMultiplier,
 					InputCostMultiplier:                    groupInputMultiplier,
 					OutputCostMultiplier:                   groupOutputMultiplier,
@@ -419,6 +420,7 @@ func (a *App) syncEndpointMultipliersToTracker(ctx context.Context) {
 					// Codex 的 API Key 与计费配置归属凭证分组；端点只表示 base_url 线路配置。
 					// 历史端点倍率字段保留为兼容存储，但不再参与运行时计费。
 					multiplier := tracking.EndpointMultiplier{
+						Configured:                             true,
 						CostMultiplier:                         groupCostMultiplier,
 						InputCostMultiplier:                    groupInputMultiplier,
 						OutputCostMultiplier:                   groupOutputMultiplier,
@@ -559,7 +561,7 @@ func mergeTrackingModelMultipliers(primary, fallback []tracking.ModelMultiplier)
 }
 
 func defaultPositiveMultiplier(value float64) float64 {
-	if value <= 0 {
+	if value < 0 {
 		return 1.0
 	}
 	return value

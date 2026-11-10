@@ -513,7 +513,7 @@ func defaultAuthMode(mode string) string {
 }
 
 func defaultClaudeGroupStoreMultiplier(value float64) float64 {
-	if value <= 0 {
+	if value < 0 {
 		return 1.0
 	}
 	return value
