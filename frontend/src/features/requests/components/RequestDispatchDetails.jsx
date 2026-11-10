@@ -65,6 +65,20 @@ function DispatchDiagnostics({ trace }) {
   </details>;
 }
 
+function RuleTargets({ trace }) {
+  if (trace.decision.kind === 'default' || !trace.targets?.length) return null;
+  const status = target => target.attempted ? '已发送'
+    : target.attempted === null ? '方案引用，按成员调度'
+      : `未执行：${target.skipReasons.length ? target.skipReasons.map(eventReason).join('、') : '未进入候选'}`;
+  return <div className="request-dispatch-rule-targets">
+    {trace.ruleExecuted === false && <p className="request-dispatch-stop">{trace.decisionLabel}的目标均未执行{trace.attempts.length ? '，实际发送来自默认编排' : ''}。</p>}
+    <ul aria-label="规则目标执行状态">{trace.targets.map((target, index) => <li key={`${target.label}/${index}`} data-attempted={String(target.attempted)}>
+      <span>{String(index + 1).padStart(2, '0')} · {target.label}{target.configuredModel && ` · ${target.configuredModel}`}</span>
+      <small>{status(target)}</small>
+    </li>)}</ul>
+  </div>;
+}
+
 export default function RequestDispatchDetails({ trace, expanded = false }) {
   if (!trace) return null;
   const pending = !trace.finished && !trace.successful && !trace.stopReason;
@@ -80,6 +94,7 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
       {trace.decision.reused_turn && <span>复用本轮决策</span>}
       {trace.waitMs > 0 && <span>等待 {formatDuration(trace.waitMs)}</span>}
     </div>
+    <RuleTargets trace={trace} />
     {expanded && <>
       <dl className="request-dispatch-summary"><div><dt>调度结果</dt><dd>{result}</dd></div><div><dt>上游尝试</dt><dd>{trace.attemptCount} 次</dd></div><div><dt>候选跳过</dt><dd>{trace.skipped.length} 条</dd></div><div><dt>等待恢复</dt><dd>{formatDuration(trace.waitMs)}</dd></div></dl>
       <h4 className="request-dispatch-section-title">实际发送路径</h4>
@@ -102,6 +117,7 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
         </div> : <><strong>{attempt.channel}</strong><span>{attempt.credentialGroup} / {attempt.endpoint}</span></>}
         {attempt.reason && <small>{eventReason(attempt.reason)}{attempt.scope && ` · 作用域：${scopeLabels[attempt.scope] || attempt.scope}`}</small>}
         {expanded && attempt.events?.length > 0 && <DispatchEvents attempt={attempt} />}
+        {expanded && attempt.error && <details className="request-dispatch-upstream-error"><summary>{attempt.local ? '本地传输错误' : '渠道原始错误'}</summary><pre>{attempt.error}</pre></details>}
       </div>
       <div className="request-dispatch-result"><span>{!expanded && (attempt.action === 'success' ? <Check size={12} aria-hidden="true" /> : attempt.action === 'failed' ? <X size={12} aria-hidden="true" /> : <Activity size={12} aria-hidden="true" />)}{actionLabels[attempt.action] || '处理中'}</span>{attempt.durationMs != null && <small>{formatDuration(attempt.durationMs)}</small>}{attempt.statusCode > 0 && <small>HTTP {attempt.statusCode}</small>}</div>
     </li>)}</ol>}

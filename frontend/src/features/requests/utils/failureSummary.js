@@ -12,7 +12,7 @@ export const FAILURE_REASON_DETAILS = Object.freeze({
   no_healthy_endpoints: '当前渠道没有可用端点，请求未转发到提供商',
   no_supported_model_endpoint: '当前渠道没有支持该模型的端点，请求未转发到提供商',
   daily_cost_limit_exceeded: '凭证分组已达每日成本限额，请求未转发到提供商',
-  retry_budget_exhausted: '全局重试预算已耗尽',
+  retry_budget_exhausted: 'Vane 已达到本次请求重试上限并停止继续尝试',
   suspension_timeout: '挂起等待端点恢复超时',
   all_channels_unavailable: '所有渠道均已尝试，没有可用的故障转移渠道',
   max_loops_exceeded: '已达最大循环轮数，等待手动重试',

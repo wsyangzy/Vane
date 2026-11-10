@@ -167,6 +167,7 @@ const renderCell = (column, request, onViewDispatch, showDate) => {
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}
           routeSnapshot={request.routeSnapshot || request.route_snapshot}
           routePath={describeRequestRoutePath(request)}
+          routeExecuted={request.dispatchTrace?.ruleExecuted ?? null}
         />
       );
     case 'channel':

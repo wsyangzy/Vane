@@ -270,6 +270,7 @@ const ModelTag = ({
   rewriteTarget = '',
   routeSnapshot,
   routePath,
+  routeExecuted = null,
   compact = false
 }) => {
   const modelStyle = getModelStyle(model);
@@ -284,7 +285,11 @@ const ModelTag = ({
   const rewriteTitle = rewriteIndicator
     ? `${originalModel || '原模型未记录'} → ${rewriteTarget || displayName}`
     : '';
-  const route = routePath === '' ? null : describeRouteSnapshot(routeSnapshot);
+  // A matched rule whose targets were never sent (all skipped, fallen back to
+  // default orchestration) must not look like a rerouted request. A route
+  // rewrite proves a target send even when the saved trace missed the attempt.
+  const routeNotExecuted = routeExecuted === false && rewriteSource !== 'route';
+  const route = routePath === '' || routeNotExecuted ? null : describeRouteSnapshot(routeSnapshot);
   const routeIndicator = route?.kind === 'model_rule'
     ? { label: '模型路由', Icon: Route, classes: 'text-sky-600' }
     : route?.kind === 'non_stream'

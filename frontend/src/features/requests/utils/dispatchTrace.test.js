@@ -214,6 +214,35 @@ test('dispatch trace distinguishes actual attempts, repeated retries, skipped re
   assert.equal(result.skipped.length, 1);
 });
 
+test('request detail attaches only endpoint-chain errors to the matching send', () => {
+	const a = candidate('codex', 1, 11, 101);
+	const b = candidate('codex', 2, 21, 201);
+	const request = { provider: 'codex', route_snapshot: trace([
+		{ candidate: a, action: 'attempt' }, { candidate: a, action: 'failed', reason: 'upstream_error' },
+		{ candidate: b, action: 'attempt' }, { candidate: b, action: 'failed', reason: 'network_error' },
+	], { stop_reason: 'retry_budget_exhausted' }), endpoint_chain: [
+		{ hop: 1, channel: '渠道 A', credential_group: '分组 A', endpoint: '主端点', status_code: 403, error: '{"error":"forbidden"}', local: false },
+		{ hop: 2, channel: '渠道 B', credential_group: '分组 B', endpoint: '备用端点', error: 'EOF', local: true },
+	], failure_reason: 'retry_budget_exhausted', last_failure_reason: 'EOF' };
+	const result = readRequestDispatchTrace(request, resources);
+	assert.deepEqual(result.attempts.map(item => [item.error, item.statusCode, item.local]), [
+		['{"error":"forbidden"}', 403, false], ['EOF', 0, true],
+	]);
+	assert.equal(result.stopReason, 'retry_budget_exhausted');
+	assert.equal(request.last_failure_reason, 'EOF');
+});
+
+test('aggregate endpoint errors attach only to the last retry for that endpoint', () => {
+	const a = candidate('codex', 1, 11, 101);
+	const result = readRequestDispatchTrace({ provider: 'codex', route_snapshot: trace([
+		{ candidate: a, action: 'attempt' }, { candidate: a, action: 'failed' },
+		{ candidate: a, action: 'attempt' }, { candidate: a, action: 'failed' },
+	], { attempts: 2 }), endpoint_chain: [
+		{ hop: 1, channel: '渠道 A', credential_group: '分组 A', endpoint: '主端点', attempts: 2, error: 'EOF' },
+	] }, resources);
+	assert.deepEqual(result.attempts.map(item => item.error || ''), ['', 'EOF']);
+});
+
 test('Claude resource keys and managed credentials resolve without leaking account identity', () => {
   const c = { ...candidate('claude', 1, 11, 'Claude 渠道::g11::主端点'), credential: 'account:PRIVATE_ACCOUNT_HASH' };
   const result = readRequestDispatchTrace({ provider: 'claude', routeSnapshot: trace([{ candidate: c, action: 'attempt' }]) }, resources);
@@ -235,6 +264,39 @@ test('historical path names and hop diagnostics survive renamed or deleted resou
   const deleted = readRequestDispatchTrace({ routeSnapshot: trace([{ candidate: c, action: 'attempt' }]) });
   assert.equal(deleted.attempts[0].channel, '渠道 #1');
   assert.equal(deleted.attempts[0].endpoint, '端点 #101');
+});
+
+test('rule targets report whether they were sent and why skipped targets never ran', () => {
+  for (const provider of ['claude', 'codex']) {
+    const fallback = { ...candidate(provider, 1, 11, 101), model: 'client-model' };
+    const first = { ...candidate(provider, 2, 21, 201), model: 'target-model' };
+    const second = { ...candidate(provider, 3, 31, 301), model: 'backup-model' };
+    const decision = { kind: 'non_stream', mode: 'prefer', targets: [{ channel_id: 2, group_id: 21, upstream_model: 'target-model' }, { channel_id: 3, group_id: 0, upstream_model: 'backup-model' }] };
+    const skippedAll = readRequestDispatchTrace({ provider, routeSnapshot: trace([
+      { candidate: first, action: 'skipped', reason: 'credential_repair_required' },
+      { candidate: second, action: 'skipped', reason: 'cooldown' },
+      { candidate: second, action: 'skipped', reason: 'cooldown' },
+      { candidate: fallback, action: 'attempt' }, { candidate: fallback, action: 'failed', reason: 'upstream_unavailable' },
+    ], { decision }) }, resources);
+    assert.equal(skippedAll.ruleExecuted, false);
+    assert.deepEqual(skippedAll.targets.map(item => [item.attempted, item.skipReasons]), [[false, ['credential_repair_required']], [false, ['cooldown']]]);
+
+    const executed = readRequestDispatchTrace({ provider, routeSnapshot: trace([
+      { candidate: first, action: 'skipped', reason: 'credential_repair_required' },
+      { candidate: second, action: 'attempt' }, { candidate: second, action: 'success' },
+    ], { decision }) }, resources);
+    assert.equal(executed.ruleExecuted, true);
+    assert.deepEqual(executed.targets.map(item => item.attempted), [false, true]);
+
+    // The same group serving the original model belongs to the default stage.
+    const defaultOnTargetGroup = readRequestDispatchTrace({ provider, routeSnapshot: trace([
+      { candidate: { ...first, model: 'client-model' }, action: 'attempt' },
+    ], { decision: { ...decision, targets: [decision.targets[0]] } }) }, resources);
+    assert.equal(defaultOnTargetGroup.ruleExecuted, false);
+  }
+  const unknown = readRequestDispatchTrace({ routeSnapshot: trace([], { decision: { kind: 'non_stream', targets: [{ profile_id: 9 }] } }) }, resources);
+  assert.equal(unknown.ruleExecuted, null);
+  assert.equal(readRequestDispatchTrace({ routeSnapshot: trace([]) }, resources).ruleExecuted, null);
 });
 
 test('admission rejection has zero upstream attempts and old records never inherit the current profile', () => {

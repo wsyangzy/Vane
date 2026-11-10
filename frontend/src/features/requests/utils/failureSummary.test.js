@@ -16,6 +16,10 @@ test('extractFailureCode reads the classification before legacy detail suffixes'
   assert.equal(extractFailureCode(''), '');
 });
 
+test('retry budget message identifies Vane as the stop source', () => {
+	assert.equal(describeFailureReason('retry_budget_exhausted'), 'Vane 已达到本次请求重试上限并停止继续尝试');
+});
+
 test('shouldNotifyFailure only fires for terminal or local rejections', () => {
   assert.equal(shouldNotifyFailure('endpoint_exhausted'), true);
   assert.equal(shouldNotifyFailure('daily_cost_limit_exceeded: All groups reached limit'), true);

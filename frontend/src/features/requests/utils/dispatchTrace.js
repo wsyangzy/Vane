@@ -25,9 +25,15 @@ export function readRequestDispatchTrace(request, resources = []) {
     const key = parseChainNode(endpointId);
     // A historical hop can cover several retries on the same endpoint.
     let offset = index;
+    let aggregateLastAttempt = true;
     const old = index < 0 ? null : history.find(node => {
-      offset -= Math.max(1, node.attempts || 0);
-      return offset < 0;
+      const count = Math.max(1, node.attempts || 0);
+      if (offset < count) {
+        aggregateLastAttempt = offset === count - 1;
+        return true;
+      }
+      offset -= count;
+      return false;
     });
     const groupId = (String(candidate.credential || '').match(/^\d+\/(\d+)$/)?.[1]) ?? (endpointId.match(/::g(\d+)::/)?.[1]) ?? endpoint?.credentialGroupId ?? endpoint?.credential_group_id;
     const group = (channel?.credentialGroups || []).find(item => String(item.id) === String(groupId));
@@ -42,7 +48,7 @@ export function readRequestDispatchTrace(request, resources = []) {
     return {
       // Grouped hop diagnostics are totals, not individual attempt timings or
       // statuses. Keep their names without assigning those totals to a retry.
-      ...(captured?.attempts > 1 ? {} : captured),
+      ...(captured?.attempts > 1 ? (aggregateLastAttempt ? { error: captured.error, local: captured.local } : {}) : captured),
       channelId: String(candidate.channel ?? ''),
       groupId: String(groupId ?? ''),
       channel: captured?.channel || channel?.name || key.channel || `渠道 #${candidate.channel || '未知'}`,
@@ -99,7 +105,12 @@ export function readRequestDispatchTrace(request, resources = []) {
     const groupId = String(target.group_id ?? target.groupId ?? '0');
     const targetProfileId = target.profile_id ?? target.profileId;
     const configuredModel = target.upstream_model || target.upstreamModel || '';
-    if (targetProfileId > 0) return { label: `方案 #${targetProfileId}`, model: configuredModel, configuredModel };
+    // Profile references expand to members the snapshot does not record, so
+    // their execution cannot be attributed from candidate identities.
+    if (targetProfileId > 0) return { label: `方案 #${targetProfileId}`, model: configuredModel, configuredModel, attempted: null, skipReasons: [] };
+    // A target channel can also be a default member; its configured model
+    // separates a rule send from a default-stage send to the same group.
+    const matches = item => item.channelId === channelId && (groupId === '0' || item.groupId === groupId) && (!configuredModel || item.model === configuredModel);
     const channel = resources.find(item => item.provider === provider && String(item.id) === channelId);
     const historical = attempts.find(item => item.channelId === channelId && (groupId === '0' || item.groupId === groupId));
     const group = channel?.credentialGroups?.find(item => String(item.id) === groupId);
@@ -107,8 +118,14 @@ export function readRequestDispatchTrace(request, resources = []) {
       label: [historical?.channel || channel?.name || `渠道 #${channelId}`, groupId === '0' ? '全部分组' : historical?.credentialGroup || group?.name || `分组 #${groupId}`].join(' / '),
       model: configuredModel || historical?.model || '',
       configuredModel,
+      attempted: attempts.some(matches),
+      skipReasons: [...new Set(skipped.filter(matches).map(item => item.reason).filter(Boolean))],
     };
   });
+  // null: undeterminable (default orchestration or profile-reference targets).
+  const ruleExecuted = snapshot.decision.kind === 'default' || !targets.length || targets.some(item => item.attempted === null)
+    ? null
+    : targets.some(item => item.attempted);
   const source = snapshot.default_source || snapshot.defaultSource;
   let defaultSource = null;
   if (source && typeof source === 'object') {
@@ -135,6 +152,7 @@ export function readRequestDispatchTrace(request, resources = []) {
     affinityMode: snapshot.affinity_mode || snapshot.affinityMode || '',
     decision: snapshot.decision,
     targets,
+    ruleExecuted,
     decisionLabel: dispatchDecisionLabel(snapshot.decision.kind),
     attemptCount: Math.max(attempts.length, Number.isFinite(rawCount) ? rawCount : 0),
     attempts,

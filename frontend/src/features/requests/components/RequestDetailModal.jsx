@@ -100,8 +100,8 @@ const isCancelledStatus = (status) => ['cancelled', 'canceled'].includes(String(
 const getFailureDetail = (request) => {
   if (!isFailureStatus(request.status)) return { text: '', isRaw: false };
   const raw = request.last_failure_reason || request.lastFailureReason || '';
-  if (raw) return { text: String(raw), isRaw: true };
   const reason = request.failure_reason || request.failureReason || '';
+  if (raw && raw !== reason) return { text: String(raw), isRaw: true };
   return { text: describeFailureReason(reason), isRaw: false };
 };
 
