@@ -162,6 +162,7 @@ const renderCell = (column, request, onViewDispatch, showDate) => {
           compact
           className="h-[22px]!"
           model={request.model}
+          provider={request.provider}
           rewriteSource={request.modelRewriteSource || request.model_rewrite_source || ''}
           originalModel={request.originalModelName || request.original_model_name || ''}
           rewriteTarget={request.modelRewriteTarget || request.model_rewrite_target || request.model || ''}

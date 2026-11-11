@@ -1,0 +1,15 @@
+{
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "as_of": "2026-11-11",
+  "records": [
+    {
+      "model_name": "claude-fable-5-2",
+      "provider": "claude",
+      "input_price": 8,
+      "output_price": 40,
+      "cache_creation_price_5m": 10,
+      "cache_creation_price_1h": 16,
+      "cache_read_price": 0.2
+    }
+  ]
+}

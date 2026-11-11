@@ -250,22 +250,34 @@ func unpricedBillingDecisionSnapshot(id billingIdentity) *BillingDecisionSnapsho
 	}
 }
 
-// lookupModelPricing 按 provider::model::tier → provider::model:: → legacy 裸模型名
-// → provider 兜底行的顺序查找定价，并返回实际命中的定价行标识。
-//
-// 兜底价本身也是 model_pricing 的普通记录（_default 归 claude、_codex_default 归 codex），
-// 所以命中兜底行时快照记录的是兜底行名，而不是请求模型名。
+// lookupModelPricing 优先查找模型的档位价、标准价和 legacy 裸模型名，
+// 未命中时使用同一 provider 标记为默认的标准行，最后兼容旧的固定名称兜底行。
+// 返回真实定价行标识，使快照能区分请求模型与实际用于计算的默认模型。
 func lookupModelPricing(pricingMap map[string]ModelPricing, provider, modelName, serviceTier string) (ModelPricing, string, string, bool) {
 	if pricingMap == nil {
 		return ModelPricing{}, "", "", false
 	}
 	keys := modelPricingLookupKeys(provider, modelName, serviceTier)
-	keys = append(keys, defaultModelPricingKey(provider))
 	for _, key := range keys {
 		if candidate, ok := pricingMap[key]; ok {
 			pricingModel, pricingTier := splitModelPricingKey(key)
 			return candidate, pricingModel, pricingTier, true
 		}
+	}
+	providerPrefix := defaultProvider(strings.TrimSpace(provider)) + modelPricingKeySeparator
+	for key, candidate := range pricingMap {
+		if !candidate.IsDefault || !strings.HasPrefix(key, providerPrefix) {
+			continue
+		}
+		pricingModel, pricingTier := splitModelPricingKey(key)
+		if pricingTier == "" {
+			return candidate, pricingModel, pricingTier, true
+		}
+	}
+	key := defaultModelPricingKey(provider)
+	if candidate, ok := pricingMap[key]; ok {
+		pricingModel, pricingTier := splitModelPricingKey(key)
+		return candidate, pricingModel, pricingTier, true
 	}
 	return ModelPricing{}, "", "", false
 }

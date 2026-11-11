@@ -1,0 +1,135 @@
+{
+  "source": "https://api-docs.deepseek.com/quick_start/pricing; https://docs.z.ai/guides/overview/pricing; https://platform.kimi.ai/docs/pricing/chat; https://www.alibabacloud.com/help/en/model-studio/model-pricing",
+  "as_of": "2026-11-11",
+  "records": [
+    {
+      "model_name": "deepseek-flash",
+      "provider": "claude",
+      "input_price": 0.3,
+      "output_price": 1.2,
+      "cache_creation_price_5m": 0.3,
+      "cache_creation_price_1h": 0.3,
+      "cache_read_price": 0.006,
+      "description": "DeepSeek V4.1 Flash peak price; cache hit uses peak rate"
+    },
+    {
+      "model_name": "deepseek-v4.1-flash",
+      "provider": "claude",
+      "input_price": 0.3,
+      "output_price": 1.2,
+      "cache_creation_price_5m": 0.3,
+      "cache_creation_price_1h": 0.3,
+      "cache_read_price": 0.006,
+      "description": "DeepSeek V4.1 Flash peak price; cache hit uses peak rate"
+    },
+    {
+      "model_name": "deepseek-v4-pro",
+      "provider": "claude",
+      "input_price": 1.32,
+      "output_price": 3.96,
+      "cache_creation_price_5m": 1.32,
+      "cache_creation_price_1h": 1.32,
+      "cache_read_price": 0.044,
+      "description": "DeepSeek V4 Pro peak price; cache hit uses peak rate"
+    },
+    {
+      "model_name": "glm-5.3",
+      "provider": "claude",
+      "input_price": 1.4,
+      "output_price": 4.4,
+      "cache_creation_price_5m": 1.4,
+      "cache_creation_price_1h": 1.4,
+      "cache_read_price": 0.26
+    },
+    {
+      "model_name": "glm-5.3-flash",
+      "provider": "claude",
+      "input_price": 0.15,
+      "output_price": 0.5,
+      "cache_creation_price_5m": 0.15,
+      "cache_creation_price_1h": 0.15,
+      "cache_read_price": 0.03
+    },
+    {
+      "model_name": "glm-5",
+      "provider": "claude",
+      "input_price": 1.0,
+      "output_price": 3.2,
+      "cache_creation_price_5m": 1.0,
+      "cache_creation_price_1h": 1.0,
+      "cache_read_price": 0.2
+    },
+    {
+      "model_name": "glm-4.7",
+      "provider": "claude",
+      "input_price": 0.6,
+      "output_price": 2.2,
+      "cache_creation_price_5m": 0.6,
+      "cache_creation_price_1h": 0.6,
+      "cache_read_price": 0.11
+    },
+    {
+      "model_name": "kimi-k3.1-pro",
+      "provider": "claude",
+      "input_price": 2.0,
+      "output_price": 10.0,
+      "cache_creation_price_5m": 2.0,
+      "cache_creation_price_1h": 4.0,
+      "cache_read_price": 0.2
+    },
+    {
+      "model_name": "kimi-k3.1-pro-highspeed",
+      "provider": "claude",
+      "input_price": 4.0,
+      "output_price": 20.0,
+      "cache_creation_price_5m": 4.0,
+      "cache_creation_price_1h": 8.0,
+      "cache_read_price": 0.2
+    },
+    {
+      "model_name": "kimi-k3",
+      "provider": "claude",
+      "input_price": 3.0,
+      "output_price": 15.0,
+      "cache_creation_price_5m": 3.0,
+      "cache_creation_price_1h": 6.0,
+      "cache_read_price": 0.3
+    },
+    {
+      "model_name": "qwen3.8-max",
+      "provider": "claude",
+      "input_price": 2.0,
+      "output_price": 6.0,
+      "cache_creation_price_5m": 2.5,
+      "cache_creation_price_1h": 2.5,
+      "cache_read_price": 0.4
+    },
+    {
+      "model_name": "qwen3.7-plus",
+      "provider": "claude",
+      "input_price": 0.4,
+      "output_price": 1.6,
+      "cache_creation_price_5m": 0.5,
+      "cache_creation_price_1h": 0.5,
+      "cache_read_price": 0.08
+    },
+    {
+      "model_name": "qwen3.6-plus",
+      "provider": "claude",
+      "input_price": 0.5,
+      "output_price": 3.0,
+      "cache_creation_price_5m": 0.625,
+      "cache_creation_price_1h": 0.625,
+      "cache_read_price": 0.1
+    },
+    {
+      "model_name": "qwen3-coder-flash",
+      "provider": "claude",
+      "input_price": 0.3,
+      "output_price": 1.5,
+      "cache_creation_price_5m": 0.375,
+      "cache_creation_price_1h": 0.375,
+      "cache_read_price": 0.06
+    }
+  ]
+}

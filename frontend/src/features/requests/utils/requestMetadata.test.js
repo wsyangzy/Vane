@@ -5,12 +5,27 @@ import {
   getReasoningEffortMeta,
   getRequestServiceTierMeta,
   getRequestBillingMultiplierSources,
+  getRequestPricingFallback,
   getServiceTierMeta,
   getStreamOutcomeMeta,
   isThinkingTypeActive,
   getPrivacyDisplay,
   parseReasoningConfig
 } from './requestMetadata.js';
+
+test('默认模型定价标注使用请求快照中的实际模型，并兼容缺少标志的旧快照', () => {
+  const snapshot = { context_mode: 'normal', pricing_model: 'claude-sonnet-5-5', pricing_fallback: 'provider_default' };
+  const request = { model: 'claude-fable-5-2', billingRuleSnapshot: snapshot };
+  assert.deepEqual(getRequestPricingFallback(request), {
+    reason: 'provider_default', label: '模型未配置定价，使用默认模型定价', model: 'claude-sonnet-5-5'
+  });
+  assert.equal(getRequestPricingFallback({ ...request, billingRuleSnapshot: { ...snapshot, pricing_fallback: '' } }).model, 'claude-sonnet-5-5');
+  assert.equal(getRequestPricingFallback({ model: 'claude-fable-5-2' }), null, '没有快照的历史记录不能猜测曾使用默认定价');
+  assert.equal(getRequestPricingFallback({ ...request, billingRuleSnapshot: { pricing_model: 'claude-fable-5-2' } }), null);
+  assert.deepEqual(getRequestPricingFallback({ billingRuleSnapshot: { pricing_fallback: 'standard_price', pricing_model: 'same-model' } }), {
+    reason: 'standard_price', label: '该档位未配置，使用 Standard 价格', model: ''
+  });
+});
 
 test('请求计费公式使用快照区分分组、规则与最终倍率，并兼容旧快照', () => {
   const snapshot = { context_mode: 'normal', rule_key: 'fast', rule_group_multiplier_mode: 'inherit', group_cost_multiplier: 1.5, rule_cost_multiplier: 1.25, total_cost_multiplier: 1.875 };

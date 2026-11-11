@@ -64,6 +64,7 @@ import {
 import {
   formatReasoningFieldValue,
   getRequestBillingMultiplierSources,
+  getRequestPricingFallback,
   getReasoningEffortMeta,
   getRequestServiceTierMeta,
   getServiceTierMeta,
@@ -362,6 +363,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
   const visibleOutputTokenCount = Math.max(0, outputTokenCount - reasoningTokenCount);
   const billingOutputTokenSource = request.billingOutputTokenSource || 'output_tokens';
   const billingRuleSnapshot = request.billingRuleSnapshot || null;
+  const pricingFallback = getRequestPricingFallback(request);
   const billableOutputTokenCount = request.billableOutputTokens ?? outputTokenCount;
   const totalTokens = getDisplayTotalTokens(request);
   const inputPercent = totalTokens > 0 ? Math.round((inputTokenCount / totalTokens) * 100) : 0;
@@ -640,7 +642,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="p-4">
                   <div className="flex items-center justify-between py-3">
                     <span className="text-sm font-medium text-slate-500">模型名称</span>
-                    <ModelTag model={request.model} />
+                    <ModelTag model={request.model} provider={request.provider} />
                   </div>
                   {hasReasoning && (
                     <div className="border-t border-slate-100 pt-3 mt-1 space-y-2">
@@ -965,7 +967,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                               输入 {Number(snapshot.effective_input_tokens || 0).toLocaleString()} / 阈值 {Number(snapshot.long_context_threshold).toLocaleString()}
                             </span>
                           )}
-                          {snapshot.pricing_fallback && <span className="font-medium text-amber-700">{({ provider_default: '模型未配置，使用提供商默认价格', standard_price: '该档位未配置，使用 Standard 价格', unresolved_tier: '未确认实际档位，暂用 Standard 价格' })[snapshot.pricing_fallback]}</span>}
+                          {pricingFallback && <span className="min-w-0 font-medium text-amber-700 [overflow-wrap:anywhere]">{pricingFallback.label}{pricingFallback.model && `：${pricingFallback.model}`}</span>}
                           {snapshot.cache_write_pricing && <span>{({ reported_ttl: '缓存写入按上游 TTL 分档', '30m_default': '缓存写入统一按 30m', '30m_missing_12h_price': '12h 未配置，缓存写入按 30m', '30m_missing_ttl_usage': '缺少有效 TTL 用量，缓存写入按 30m' })[snapshot.cache_write_pricing]}</span>}
                           {snapshot.rule_key && (
                             <span className="min-w-0 break-all font-semibold text-indigo-700">

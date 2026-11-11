@@ -12,21 +12,20 @@
 .pricing-list-count { font-size: var(--font-caption); line-height: 18px; color: #64748b; font-variant-numeric: tabular-nums; }
 .pricing-model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); align-items: stretch; gap: 12px; }
 .pricing-model-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; color: #475569; }
-.pricing-model-card[data-default="true"] { border-color: #c7d2fe; box-shadow: 0 0 0 1px #eef2ff; }
+.pricing-model-card[data-default="true"] { border-color: #fbbf24; box-shadow: 0 0 0 1px #fef3c7; }
 .pricing-model-header { padding: 9px 12px 10px; }
 .pricing-model-topline, .pricing-model-identity, .pricing-model-actions { display: flex; align-items: center; }
 .pricing-model-topline { justify-content: space-between; gap: 8px; margin-bottom: 3px; }
 .pricing-model-identity { min-width: 0; flex: 1; gap: 8px; }
 .pricing-provider-icon { display: inline-flex; width: 24px; height: 24px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 7px; color: #c56848; background: #fff5ef; }
 .pricing-model-card[data-provider="codex"] .pricing-provider-icon { color: #334155; background: #f1f5f9; }
-.pricing-default-badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 5px; padding: 2px 6px; font-size: var(--font-caption); line-height: 15px; font-weight: 500; }
-.pricing-default-badge { color: #a16207; background: #fffbeb; }
+.pricing-default-badge { display: inline-flex; width: 16px; height: 18px; flex-shrink: 0; align-items: center; justify-content: center; color: #d97706; }
 .pricing-model-actions { flex-shrink: 0; gap: 2px; }
 .pricing-model-actions > button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 7px; color: var(--text-muted); transition: color var(--duration-quick), background-color var(--duration-quick); }
 .pricing-model-actions > button:hover { background: #eef2ff; color: #4f46e5; }
 .pricing-model-actions > button[data-danger]:hover { background: #fff1f2; color: #e11d48; }
 .pricing-model-actions > button:focus-visible, .pricing-tier-tabs > button:focus-visible, .pricing-text-action:focus-visible { outline: 2px solid #818cf8; outline-offset: -2px; }
-.pricing-model-header h3 { min-width: 0; overflow-wrap: anywhere; font-size: var(--font-heading); font-weight: 650; line-height: 21px; color: #0f172a; }
+.pricing-model-header h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-heading); font-weight: 650; line-height: 21px; color: #0f172a; }
 .pricing-model-id { max-width: 100%; margin-top: 4px; overflow-wrap: anywhere; font-family: var(--font-sans); font-size: var(--font-caption); font-weight: 400; line-height: 17px; color: #6b7280; }
 .pricing-model-description { margin-top: 3px; overflow-wrap: anywhere; font-size: var(--font-secondary); line-height: 18px; color: #64748b; }
 .pricing-tier-tabs { display: flex; flex-wrap: wrap; gap: 3px; margin: 0 12px 8px; border: 1px solid #f1f5f9; border-radius: 7px; padding: 3px; background: #f8fafc; }

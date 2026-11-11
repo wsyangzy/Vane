@@ -97,6 +97,25 @@ export const getRequestServiceTierMeta = (request) => {
   return getServiceTierMeta(tier);
 };
 
+export const getRequestPricingFallback = (request) => {
+  const snapshot = request.billingRuleSnapshot;
+  const model = String(snapshot?.pricing_model || '').trim();
+  const requestModel = String(request.model || request.modelName || request.model_name || '').trim();
+  const reason = snapshot?.pricing_fallback || (model && requestModel && model !== requestModel ? 'provider_default' : '');
+  const labels = {
+    provider_default: '模型未配置定价，使用默认模型定价',
+    standard_price: '该档位未配置，使用 Standard 价格',
+    unresolved_tier: '未确认实际档位，暂用 Standard 价格',
+    missing_price: '模型和默认定价均未配置，成本未计算'
+  };
+  if (!labels[reason]) return null;
+  return {
+    reason,
+    label: labels[reason],
+    model: reason === 'provider_default' ? model : ''
+  };
+};
+
 export const getRequestBillingMultiplierSources = (request) => {
   const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 1;
   const nonNegative = (value) => value !== null && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 1;

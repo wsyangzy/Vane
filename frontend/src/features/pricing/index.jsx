@@ -649,7 +649,8 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
       <div className="pricing-model-topline">
         <div className="pricing-model-identity">
           <Tooltip asChild content={providerLabel}><span className="pricing-provider-icon" role="img" aria-label={providerLabel}><ProviderIcon className="h-4 w-4" /></span></Tooltip>
-          <h3>{group.displayName || group.modelName}</h3>
+          <h3 title={group.displayName || group.modelName}>{group.displayName || group.modelName}</h3>
+          {group.isDefault && <Tooltip asChild content="默认定价"><span className="pricing-default-badge" role="img" aria-label="默认定价"><Star size={13} className="fill-current" /></span></Tooltip>}
         </div>
         <div className="pricing-model-actions">
         {!group.isDefault && <Tooltip asChild content="设为默认定价"><button type="button" aria-label={`设为默认定价 ${group.modelName}`} onClick={() => onSetDefault(group.modelName)}><Star size={13} /></button></Tooltip>}
@@ -665,7 +666,7 @@ const PricingCard = ({ group, onEdit, onDelete, onSetDefault }) => {
     <div className="pricing-rate-heading"><span>{records.length > 1 ? 'Token 单价' : serviceTierLabel(pricing.serviceTier || '')}</span><span>USD / 100 万 Token</span></div>
     <dl className="pricing-rate-list">{fields.map(({ field, label }) => <div key={field} data-field={field}><dt>{label}</dt><dd><span>$</span>{pricing[field] ?? '—'}</dd></div>)}</dl>
     {group.provider === 'codex' && pricing.longContextThreshold > 0 && <details className="pricing-long-context"><summary><span>长上下文单价</span><span>&gt; {pricing.longContextThreshold.toLocaleString()} Token<ChevronDown size={12} /></span></summary><dl className="pricing-rate-list">{fields.map(({ field, label }) => <div key={field} data-field={field}><dt>{label}</dt><dd><span>$</span>{pricing[LONG_CONTEXT_FIELDS[field]] ?? '—'}</dd></div>)}</dl></details>}
-    <footer className="pricing-model-footer"><span className="pricing-model-footer-label">{group.isDefault && <span className="pricing-default-badge"><Star size={10} className="fill-current" />默认定价</span>}{records.length > 1 ? <span>{records.length} 个计费档位</span> : !group.isDefault && '标准定价'}</span><span>更新于 {group.updatedAt || '—'}</span></footer>
+    <footer className="pricing-model-footer"><span className="pricing-model-footer-label">{records.length > 1 ? <span>{records.length} 个计费档位</span> : !group.isDefault && '标准定价'}</span><span>更新于 {group.updatedAt || '—'}</span></footer>
   </article>;
 };
 

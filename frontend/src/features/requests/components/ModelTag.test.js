@@ -1,8 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { getModelBrand } from '../utils/modelBrand.js';
 
 const source = fs.readFileSync(new URL('./ModelTag.jsx', import.meta.url), 'utf8');
+
+test('model brands survive versions, namespaces, case and mini variants', () => {
+  const examples = {
+    deepseek: ['deepseek-v4.1-flash', 'deepseek-ai/DeepSeek-V4-Pro', 'deepseek-mini'],
+    glm: ['glm-5.3', 'z-ai/GLM-4.7-Flash'],
+    kimi: ['kimi-k3.1-pro', 'moonshotai/Kimi-K2.6', 'moonshot-v1-128k'],
+    qwen: ['qwen3.8-max', 'Qwen/Qwen3-Coder-Plus'],
+    claude: ['claude-sonnet-4-5', 'opus-4.7'],
+    openai: ['gpt-6.1-sol', 'o3-mini', 'openai/codex-mini-latest']
+  };
+  for (const [brand, models] of Object.entries(examples)) {
+    for (const model of models) {
+      assert.equal(getModelBrand(model, 'claude'), brand, model);
+      assert.equal(getModelBrand(model, 'codex'), brand, model);
+    }
+  }
+});
+
+test('unknown and empty models use the request provider icon', () => {
+  for (const model of ['', null, undefined, 'unknown', '-', 'custom-model', 'my-mini', 'notdeepseek']) {
+    assert.equal(getModelBrand(model, 'claude'), 'claude');
+    assert.equal(getModelBrand(model, 'codex'), 'codex');
+  }
+  assert.equal(getModelBrand('custom-model'), 'claude');
+});
 
 test('model tag keeps the full name and rewrite indicator on one line', () => {
   assert.match(source, /whitespace-nowrap/);

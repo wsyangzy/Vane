@@ -34,6 +34,24 @@ func TestBundledOpenAIPricesCoverPublishedSpeedsAndCacheWrites(t *testing.T) {
 	require.False(t, seen["codex/gpt-5/ultrafast"], "do not fabricate unsupported speed prices")
 }
 
+func TestBundledClaudeFable52PricesMatchOfficialStandardRates(t *testing.T) {
+	catalog, err := ClaudePriceCatalog()
+	require.NoError(t, err)
+	require.Equal(t, "2026-11-11", catalog.AsOf)
+	require.Equal(t, "https://platform.claude.com/docs/en/about-claude/pricing", catalog.Source)
+	require.Len(t, catalog.Records, 1)
+	row := catalog.Records[0]
+	require.Equal(t, "claude", row.Provider)
+	require.Equal(t, "claude-fable-5-2", row.ModelName)
+	require.Empty(t, row.ServiceTier)
+	require.Equal(t, 8.0, row.InputPrice)
+	require.Equal(t, 40.0, row.OutputPrice)
+	require.Equal(t, 10.0, row.CacheCreationPrice5m)
+	require.Equal(t, 16.0, row.CacheCreationPrice1h)
+	require.Equal(t, .2, row.CacheReadPrice, "Fable 5.2 cache reads use 0.025x input, not the legacy 0.1x default")
+	require.Zero(t, row.LongContextThreshold, "the full 1M context window uses standard pricing")
+}
+
 func TestCacheWritePriceValidationAndTrackingMapping(t *testing.T) {
 	s := &ModelPricingService{}
 	for _, invalid := range []float64{-1, math.NaN(), math.Inf(1)} {

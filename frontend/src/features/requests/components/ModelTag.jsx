@@ -6,6 +6,9 @@
 import { GitBranch, Layers, Replace, Route, Sparkles, Split } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { describeRouteSnapshot } from '@/features/providers/shared/routing/routeTargets.js';
+import { CodexLogo } from '@/features/providers/codex/components/CodexLogo.jsx';
+import { getModelBrand } from '../utils/modelBrand.js';
+import { DeepSeekIcon, GLMIcon, KimiIcon, QwenIcon } from './ModelBrandIcons.jsx';
 
 const BRAND_ICON_CLASS = 'h-3 w-3 shrink-0';
 const CLAUDE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0';
@@ -36,19 +39,21 @@ export const ClaudeIcon = ({ className = '' }) => (
   </svg>
 );
 
-const GenericModelIcon = ({ className = '' }) => (
-  <span
-    aria-hidden="true"
-    className={`${className} flex items-center justify-center`}
-  >
-    <span className="h-1.5 w-1.5 rounded-full bg-current" />
-  </span>
-);
-
 const MODEL_ICONS = {
   openai: OpenAIIcon,
   claude: ClaudeIcon,
-  generic: GenericModelIcon
+  codex: CodexLogo,
+  deepseek: DeepSeekIcon,
+  glm: GLMIcon,
+  kimi: KimiIcon,
+  qwen: QwenIcon
+};
+
+const MODEL_BRAND_CLASSES = {
+  deepseek: 'bg-blue-50 text-blue-700 border-blue-200',
+  glm: 'bg-sky-50 text-sky-700 border-sky-200',
+  kimi: 'bg-slate-50 text-slate-800 border-slate-200',
+  qwen: 'bg-violet-50 text-violet-700 border-violet-200'
 };
 
 const createModelStyle = (classes, icon = 'generic') => ({
@@ -191,6 +196,8 @@ const getModelStyle = (modelName) => {
   }
 
   const lowerName = modelName.toLowerCase();
+  const brand = getModelBrand(modelName);
+  if (MODEL_BRAND_CLASSES[brand]) return createModelStyle(MODEL_BRAND_CLASSES[brand], brand);
 
   const claudeColorClasses = getClaudeColorClasses(lowerName);
   if (claudeColorClasses) {
@@ -263,6 +270,7 @@ const getRewriteIndicator = (source) => {
  */
 const ModelTag = ({
   model,
+  provider = 'claude',
   className = '',
   title,
   rewriteSource = '',
@@ -274,12 +282,15 @@ const ModelTag = ({
   compact = false
 }) => {
   const modelStyle = getModelStyle(model);
-  const BrandIcon = MODEL_ICONS[modelStyle.icon] || GenericModelIcon;
-  // Segoe UI's g/p descenders put GPT names below the line-box center.
-  // Lift the text's visible center while keeping the icon centered in the tag.
-  const nameAlignment = modelStyle.icon === 'openai'
-    ? (compact ? '-translate-y-[1.5px]' : '-translate-y-px')
-    : '';
+  const brand = getModelBrand(model, provider);
+  const BrandIcon = MODEL_ICONS[brand];
+  // Segoe UI's lowercase glyphs sit below the flex line-box center. Align
+  // their visible center with the brand and route icons at each label size.
+  const nameAlignment = MODEL_BRAND_CLASSES[brand]
+    ? (compact ? '-translate-y-[1.5px]' : '-translate-y-[2px]')
+    : brand === 'openai'
+      ? (compact ? '-translate-y-[1.5px]' : '-translate-y-px')
+      : '';
   const displayName = (!model || model === 'unknown') ? '-' : model;
   const rewriteIndicator = routePath === '' ? null : getRewriteIndicator(rewriteSource);
   const rewriteTitle = rewriteIndicator
@@ -304,9 +315,10 @@ const ModelTag = ({
   const RouteIcon = routeIndicator?.Icon;
   const tag = (
     <span
+      data-model-brand={brand}
       className={`model-tag inline-flex h-[26px] items-center justify-center whitespace-nowrap rounded-md border py-0 align-middle font-normal leading-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] transition-colors ${compact ? 'min-w-0 max-w-full gap-1 px-1 text-[11px]' : 'w-fit max-w-none gap-1 px-2 text-xs'} ${modelStyle.classes} ${className}`}
     >
-      <BrandIcon className={modelStyle.icon === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
+      <BrandIcon className={brand === 'claude' ? CLAUDE_ICON_CLASS : BRAND_ICON_CLASS} />
       <span className={`model-tag-name block leading-4 ${nameAlignment} ${compact ? 'min-w-0 overflow-hidden text-ellipsis' : ''}`}>{displayName}</span>
       {rewriteIndicator && !(rewriteSource === 'route' && routeIndicator) && !(rewriteSource === 'mapping' && route?.kind === 'mapping') && (
         <Replace

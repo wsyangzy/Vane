@@ -6,6 +6,7 @@ import (
 
 // ModelPricing 模型定价配置
 type ModelPricing struct {
+	IsDefault                     bool    // provider-selected default row, used when a model has no price
 	CacheWritePrice30m            float64 // Codex 30m cache writes, USD per 1M tokens
 	CacheWritePrice12h            float64
 	CodexCachePricing             bool

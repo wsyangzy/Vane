@@ -111,7 +111,7 @@ export default function RequestDispatchDetails({ trace, expanded = false }) {
             </dl>
           </div>
           <div className="request-dispatch-technical">
-            <ModelTag model={attempt.model} compact className="h-[22px]!" title={`模型：${attempt.model || '未记录'}`} />
+            <ModelTag model={attempt.model} provider={trace.provider} compact className="h-[22px]!" title={`模型：${attempt.model || '未记录'}`} />
             <span className="request-dispatch-protocol"><span>协议</span><code>{({ responses: 'Responses', messages: 'Messages' })[attempt.protocol] || attempt.protocol || '未记录'}</code></span>
           </div>
         </div> : <><strong>{attempt.channel}</strong><span>{attempt.credentialGroup} / {attempt.endpoint}</span></>}

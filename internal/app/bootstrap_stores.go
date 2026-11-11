@@ -152,6 +152,16 @@ func (a *App) setupModelPricingStore() {
 	} else if changed > 0 {
 		a.logger.Info("已补齐 OpenAI 官方价格", "rows", changed)
 	}
+	if changed, err := a.modelPricingService.BackfillClaudePrices(ctx); err != nil {
+		a.logger.Error("补齐 Claude 官方价格失败", "error", err)
+	} else if changed > 0 {
+		a.logger.Info("已补齐 Claude 官方价格", "rows", changed)
+	}
+	if changed, err := a.modelPricingService.BackfillClaudeCompatiblePrices(ctx); err != nil {
+		a.logger.Error("补齐 Claude 接入模型价格失败", "error", err)
+	} else if changed > 0 {
+		a.logger.Info("已补齐 Claude 接入模型价格", "rows", changed)
+	}
 
 	// 同步定价到 UsageTracker（用于成本计算）
 	a.syncPricingToTracker(ctx)

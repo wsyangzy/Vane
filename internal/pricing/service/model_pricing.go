@@ -216,6 +216,7 @@ func (s *ModelPricingService) GetPricingCount(ctx context.Context) (int, error) 
 // 注意：CacheCreation 使用 5m 价格，因为大多数请求使用默认 5 分钟缓存
 func (s *ModelPricingService) ToTrackingPricing(record *pricingstore.ModelPricingRecord) tracking.ModelPricing {
 	return tracking.ModelPricing{
+		IsDefault:                     record.IsDefault,
 		Input:                         record.InputPrice,
 		CacheWritePrice30m:            record.CacheWritePrice30m,
 		CacheWritePrice12h:            record.CacheWritePrice12h,

@@ -118,6 +118,11 @@ func (ut *UsageTracker) GetPricing(modelName string) ModelPricing {
 			return pricing
 		}
 	}
+	// Legacy events have no provider context; use Claude's configured default
+	// before the old Config default, which is empty in the desktop application.
+	if pricing, _, _, found := lookupModelPricing(ut.pricing, "claude", "", ""); found {
+		return pricing
+	}
 	return ut.config.DefaultPricing
 }
 
