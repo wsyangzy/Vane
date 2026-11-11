@@ -126,27 +126,12 @@ export const useFilters = (initialFilters = {}) => {
     return queryParams;
   }, [filters]);
 
-  // 检查是否有活动筛选器
-  const hasActiveFilters = useMemo(() => {
-    const defaultFilters = createInitialFilters();
-    return Object.entries(filters).some(([key, value]) => {
-      if (key === 'startDate' || key === 'endDate') {
-        return value && value !== '';
-      }
-      return value && value !== defaultFilters[key] && value !== 'all' && value !== '';
-    });
-  }, [filters]);
-
   // 活动筛选器数量
   const activeFiltersCount = useMemo(() => {
     const defaultFilters = createInitialFilters();
-    return Object.entries(filters).filter(([key, value]) => {
-      if (key === 'startDate' || key === 'endDate') {
-        return value && value !== '';
-      }
-      return value && value !== defaultFilters[key] && value !== 'all' && value !== '';
-    }).length;
+    return Object.entries(filters).filter(([key, value]) => value !== defaultFilters[key]).length;
   }, [filters]);
+  const hasActiveFilters = activeFiltersCount > 0;
 
   return {
     filters,

@@ -11,12 +11,12 @@ export default function ChannelFilterSelect({ channels = [], provider = '', chan
   const menuRef = useRef(null);
   const menuId = useId();
   const currentProvider = channels.find(item => item.provider === branch.provider) || channels[0];
-  const currentChannel = currentProvider?.channels.find(item => item.name === branch.channel) || currentProvider?.channels[0];
+  const currentChannel = currentProvider?.channels.find(item => item.name === branch.channel);
   const displayLabel = requestFilterPath(channels, { provider, channel, group });
 
   const browseProvider = (item) => setBranch({
     provider: item.provider,
-    channel: (item.provider === provider && item.channels.some(candidate => candidate.name === channel) ? channel : item.channels[0]?.name) || ''
+    channel: item.provider === provider && item.channels.some(candidate => candidate.name === channel) ? channel : ''
   });
   const closeMenu = () => {
     setIsOpen(false);
@@ -121,7 +121,9 @@ export default function ChannelFilterSelect({ channels = [], provider = '', chan
             <div className="request-filter-cascade-heading">{currentProvider?.label || '提供商'} · 渠道</div>
             <div className="request-filter-cascade-list">
               {currentProvider && <button type="button" onClick={() => select(currentProvider.provider)}
-                className={itemClass(provider === currentProvider.provider && (!channel || channel === 'all'))}>
+                onMouseEnter={() => setBranch({ provider: currentProvider.provider, channel: '' })}
+                onFocus={() => setBranch({ provider: currentProvider.provider, channel: '' })}
+                className={itemClass(!currentChannel)}>
                 <span>全部渠道</span>{provider === currentProvider.provider && (!channel || channel === 'all') && <Check size={13} className="shrink-0" />}
               </button>}
               {currentProvider?.channels.map(item => (

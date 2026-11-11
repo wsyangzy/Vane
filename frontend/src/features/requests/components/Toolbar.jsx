@@ -5,7 +5,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 // ============================================
 
 import { useEffect, useRef } from 'react';
-import { Filter, Settings2, ChevronDown } from 'lucide-react';
+import { Filter, FilterX, Settings2, ChevronDown } from 'lucide-react';
 import { SegmentedTabs } from '@/shared/ui/index.js';
 import { TIME_RANGE_OPTIONS } from '../utils/constants.js';
 import ViewConfigPanel from './ViewConfigPanel.jsx';
@@ -25,6 +25,8 @@ const TIME_RANGE_TABS = TIME_RANGE_OPTIONS.map(({ value, label }) => ({
  * @param {Function} props.onTimeRangeChange - 时间范围变更回调
  * @param {boolean} props.isFilterOpen - 筛选面板是否打开
  * @param {Function} props.onFilterToggle - 筛选面板切换回调
+ * @param {boolean} props.hasActiveFilters - 是否存在高级筛选条件，不含快捷时间档位
+ * @param {Function} props.onClearFilters - 清除筛选回调
  * @param {boolean} props.isViewConfigOpen - 列配置面板是否打开
  * @param {Function} props.onViewConfigToggle - 列配置面板切换回调
  * @param {Function} props.onRefresh - 刷新回调
@@ -40,6 +42,8 @@ const Toolbar = ({
   onTimeRangeChange,
   isFilterOpen = false,
   onFilterToggle,
+  hasActiveFilters = false,
+  onClearFilters,
   isViewConfigOpen = false,
   onViewConfigToggle,
   onRefresh,
@@ -86,7 +90,7 @@ const Toolbar = ({
             type="button"
             onClick={onFilterToggle}
             className="requests-tool-button motion-control"
-            data-active={isFilterOpen}
+            data-active={isFilterOpen || hasActiveFilters}
             aria-label="筛选"
             aria-expanded={isFilterOpen}
           >
@@ -98,6 +102,17 @@ const Toolbar = ({
           </button></Tooltip>
           {filterPanel}
         </div>
+
+        {hasActiveFilters && (
+          <Tooltip asChild content="清除筛选"><button
+            type="button"
+            onClick={onClearFilters}
+            className="requests-tool-button motion-control"
+            aria-label="清除筛选"
+          >
+            <FilterX className="w-4 h-4" />
+          </button></Tooltip>
+        )}
       </div>
 
       <div className="requests-command-group" role="group" aria-label="视图操作">

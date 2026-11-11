@@ -14,7 +14,7 @@ import { useColumnConfig } from './hooks/useColumnConfig.js';
 import { useTimeRange } from './hooks/useTimeRange.js';
 import { useAutoRefresh } from './hooks/useAutoRefresh.js';
 import { FiltersPanel, StatsOverview, RequestsTable, Toolbar, RequestDetailModal } from './components/index.js';
-import { PAGINATION_CONFIG } from './utils/constants.js';
+import { DEFAULT_FILTERS, PAGINATION_CONFIG } from './utils/constants.js';
 import { buildRequestFilterResources } from './utils/filterResources.js';
 import { readRequestDispatchTrace } from './utils/dispatchTrace.js';
 
@@ -51,6 +51,8 @@ const RequestsPage = ({ initialProvider = '' }) => {
   const {
     filters,
     updateFilters,
+    resetFilters,
+    hasActiveFilters,
     buildQueryParams
   } = useFilters({ provider: initialProvider });
 
@@ -67,6 +69,13 @@ const RequestsPage = ({ initialProvider = '' }) => {
     updateFilters(timeRange);
     setPagination(prev => ({ ...prev, page: 1 }));
   });
+
+  // 快捷时间档位单独展示；高级筛选中的自定义时间仍可一键清除。
+  const hasAdvancedFilters = hasActiveFilters && (
+    !activeRange || Object.entries(DEFAULT_FILTERS).some(([key, value]) => (
+      key !== 'startDate' && key !== 'endDate' && filters[key] !== value
+    ))
+  );
 
   // 分页状态
   const [pagination, setPagination] = useState({
@@ -186,6 +195,12 @@ const RequestsPage = ({ initialProvider = '' }) => {
     setPagination(prev => ({ ...prev, page: 1 }));
   };
 
+  const handleClearFilters = () => {
+    resetFilters();
+    selectRange('today');
+    setIsFilterOpen(false);
+  };
+
   // 页码变更
   const handlePageChange = (newPage) => {
     setPagination(prev => ({ ...prev, page: newPage }));
@@ -241,6 +256,8 @@ const RequestsPage = ({ initialProvider = '' }) => {
           onTimeRangeChange={selectRange}
           isFilterOpen={isFilterOpen}
           onFilterToggle={handleFilterToggle}
+          hasActiveFilters={hasAdvancedFilters}
+          onClearFilters={handleClearFilters}
           isViewConfigOpen={isViewConfigOpen}
           onViewConfigToggle={handleViewConfigToggle}
           onRefresh={loadData}
