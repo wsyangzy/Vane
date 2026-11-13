@@ -160,8 +160,23 @@ type ChainNode struct {
 	Error      string `json:"error,omitempty"`
 	// Headers 失败响应的诊断头白名单（server、cf-ray、x-request-id、retry-after 等），见 tracking.DiagnosticHeaders
 	Headers map[string]string `json:"headers,omitempty"`
-	// Local 本跳失败没有拿到上游 HTTP 响应（连接失败、超时、TLS 错误等），Error 是本地错误文本
+	// Local 本跳没有拿到上游 HTTP 响应；Error 记录发送前拒绝原因或连接、超时、TLS 错误。
 	Local bool `json:"local,omitempty"`
+}
+
+func (rsm *RequestStateManager) AnnotateEndpointChainSkip(reason string) string {
+	rsm.endpointChainMu.Lock()
+	defer rsm.endpointChainMu.Unlock()
+	if len(rsm.endpointChain) == 0 {
+		return ""
+	}
+	last := &rsm.endpointChain[len(rsm.endpointChain)-1]
+	// A later rejected retry must not replace evidence from an actual send.
+	if last.Attempts == 0 {
+		last.Error, last.Local = reason, true
+	}
+	data, _ := json.Marshal(rsm.endpointChain)
+	return string(data)
 }
 
 // closeLastHopLocked 结束最后一跳的计时；调用方需持有 endpointChainMu

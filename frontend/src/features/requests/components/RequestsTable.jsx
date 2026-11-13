@@ -5,7 +5,7 @@
 // ============================================
 
 import { useState, useRef, useEffect } from 'react';
-import { Waves, RefreshCw, Route } from 'lucide-react';
+import { Waves, RefreshCw, Route, Layers, Calculator, Search, ChevronRight } from 'lucide-react';
 import { LoadingSpinner, Tooltip } from '@/shared/ui/index.js';
 import { formatCost, formatDuration, formatNumber, formatTimestamp } from '@/services/http/api.js';
 import DurationBadge from './DurationBadge.jsx';
@@ -16,7 +16,7 @@ import RequestRouteCell from './RequestRouteCell.jsx';
 import RequestChannelTooltip from './RequestChannelTooltip.jsx';
 import { describeRequestRoutePath } from '../utils/dispatchTrace.js';
 import { getDisplayInputTokens } from '../utils/tokenDisplay.js';
-import { requestColumnLayout, requestRowHeight } from '../utils/tableLayout.js';
+import { auxiliaryColumnLayout, requestColumnLayout, requestRowHeight } from '../utils/tableLayout.js';
 import {
   getEndpointChainItems,
   getRequestChannelLabel,
@@ -24,11 +24,13 @@ import {
   parseChainNode,
 } from '../utils/endpointChain.js';
 import {
+  getAuxiliaryRequestMeta,
   getReasoningEffortMeta,
   getRequestServiceTierMeta,
   isThinkingTypeActive,
   parseReasoningConfig
 } from '../utils/requestMetadata.js';
+import './requestAuxiliary.css';
 
 const getReasoningDisplay = (raw, compact) => {
   const reasoning = parseReasoningConfig(raw);
@@ -110,14 +112,14 @@ const LatencyCell = ({ request, compact }) => compact ? (
  * @param {Object} column - 列配置及当前分配宽度
  * @param {Object} request - 请求数据
  */
-const renderCell = (column, request, onViewDispatch, showDate) => {
+const renderCell = (column, request, onViewDispatch, showDate, auxiliary) => {
   const columnId = column.id;
   const compact = column.layoutWidth < 100;
   const tokenText = (value) => value == null ? '—' : column.layoutWidth < 62 ? formatNumber(Number(value)) : value;
   switch (columnId) {
     case 'requestId':
-      const StreamIcon = request.isStreaming ? Waves : RefreshCw;
-      const streamTitle = request.isStreaming ? '流式请求' : '常规请求';
+      const StreamIcon = auxiliary ? auxiliary.kind === 'model_catalog' ? Layers : auxiliary.kind === 'token_count' ? Calculator : Search : request.isStreaming ? Waves : RefreshCw;
+      const streamTitle = auxiliary ? `辅助请求 · ${auxiliary.label} · ${request.method} ${request.path}` : request.isStreaming ? '流式请求' : '常规请求';
       const iconColor = request.isStreaming ? 'text-blue-500' : 'text-slate-400';
       return (
         <div className="flex w-full min-w-0 items-center justify-center gap-1 text-blue-600 font-mono text-[11px] group-hover:text-indigo-600 transition-colors">
@@ -151,7 +153,7 @@ const renderCell = (column, request, onViewDispatch, showDate) => {
             ? 'border-blue-200 bg-blue-50 text-blue-700'
             : 'border-slate-200 bg-slate-50 text-slate-600'
         }`}>
-          {request.isStreaming ? '流式' : '非流'}
+          {auxiliary ? '辅助' : request.isStreaming ? '流式' : '非流'}
         </span>
       );
     case 'status':
@@ -162,6 +164,8 @@ const renderCell = (column, request, onViewDispatch, showDate) => {
           compact
           className="h-[22px]!"
           model={request.model}
+          method={request.method}
+          path={request.path}
           provider={request.provider}
           rewriteSource={request.modelRewriteSource || request.model_rewrite_source || ''}
           originalModel={request.originalModelName || request.original_model_name || ''}
@@ -203,11 +207,25 @@ const renderCell = (column, request, onViewDispatch, showDate) => {
   }
 };
 
-/**
- * RequestRow - 单行请求数据（支持单击复制、双击查看详情）
- */
+const AuxiliaryRequestContent = ({ request, meta, onViewDetails }) => {
+  const Icon = meta.kind === 'model_catalog' ? Layers : meta.kind === 'token_count' ? Calculator : Search;
+  return <div className="request-auxiliary-description" aria-label={`辅助请求：${meta.label}，${request.method} ${request.path}`}>
+    <Tooltip asChild content={`辅助请求 · ${meta.label}${request.model && request.model !== 'unknown' ? ` · 模型 ${request.model}` : ''}`}>
+      <span className="request-auxiliary-purpose"><Icon size={12} aria-hidden="true" /><strong>{meta.label}</strong></span>
+    </Tooltip>
+    <span className="request-auxiliary-method">{String(request.method).toUpperCase()}</span>
+    <code className="request-auxiliary-path" title={request.path}>{request.path}</code>
+    {onViewDetails && <Tooltip asChild content="查看辅助请求详情"><button type="button" className="request-auxiliary-details" aria-label={`查看辅助请求 ${request.requestId} 详情`}
+      onClick={event => { event.stopPropagation(); onViewDetails(request); }} onDoubleClick={event => event.stopPropagation()}>
+      <ChevronRight size={13} aria-hidden="true" />
+    </button></Tooltip>}
+  </div>;
+};
+
+/** 单击复制、双击查看详情；辅助请求的公共字段与普通请求使用同一列。 */
 const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onViewDispatch, showDate }) => {
   const clickTimer = useRef(null);
+  const auxiliary = getAuxiliaryRequestMeta(request);
 
   useEffect(() => () => clearTimeout(clickTimer.current), []);
 
@@ -226,13 +244,16 @@ const RequestRow = ({ request, columns, rowHeight, onCopyId, onDoubleClick, onVi
 
   return (
     <tbody
-      className="group cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50/80"
+      className={`group cursor-pointer border-b border-gray-100 transition-colors ${auxiliary ? 'request-auxiliary-row' : 'hover:bg-gray-50/80'}`}
+      data-request-kind={auxiliary ? 'auxiliary' : 'generation'}
       onClick={handleRowClick}
     >
-      <tr style={{ height: rowHeight }}>
-        {columns.map((column) => (
-          <td key={column.id} className={`min-w-0 px-0.5 ${column.id === 'endpoint' ? 'py-0.5' : 'py-1.5'} text-center align-middle whitespace-nowrap`}>
-            <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{renderCell(column, request, onViewDispatch, showDate)}</div>
+      <tr style={{ height: auxiliary ? 40 : rowHeight }}>
+        {(auxiliary ? auxiliaryColumnLayout(columns) : columns).map((column) => (
+          <td key={column.id} data-column-id={column.id} colSpan={column.colSpan || 1} className={`min-w-0 px-0.5 ${column.id === 'endpoint' ? 'py-0.5' : 'py-1.5'} text-center align-middle whitespace-nowrap`}>
+            <div className="min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap [&>span]:max-w-full [&>span]:min-w-0">{auxiliary && column.id === 'model'
+              ? <AuxiliaryRequestContent request={request} meta={auxiliary} onViewDetails={onDoubleClick} />
+              : renderCell(column, request, onViewDispatch, showDate, auxiliary)}</div>
           </td>
         ))}
       </tr>

@@ -115,7 +115,7 @@ func (ut *UsageTracker) archiveScopedCacheKey(month string, opts *QueryOptions) 
 		return queryOptsCacheKey(opts)
 	}
 	return fmt.Sprintf("full|p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|env=%s",
-		opts.Provider, opts.Channel, opts.ModelName, opts.EndpointName,
+		opts.Provider, opts.Channel, queryModelCacheKey(opts), opts.EndpointName,
 		opts.GroupName, opts.Status, opts.Environment)
 }
 
@@ -158,10 +158,7 @@ func (ut *UsageTracker) queryUsageStatsTotalsFromSource(ctx context.Context, db 
 			query += " AND start_time <= ?"
 			args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 		}
-		if opts.ModelName != "" {
-			query += " AND model_name = ?"
-			args = append(args, opts.ModelName)
-		}
+		query, args = appendModelQueryFilter(query, args, opts)
 		if opts.Channel != "" {
 			query += " AND channel = ?"
 			args = append(args, opts.Channel)

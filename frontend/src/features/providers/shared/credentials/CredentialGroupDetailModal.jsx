@@ -142,7 +142,7 @@ const CredentialGroupDetailModal = ({ provider, channel, channelName, group, onC
                     <div><dt>每日限额</dt><dd>{limitUSD > 0 ? formatUSD(limitUSD) : '不限额'}</dd></div>
                     <div><dt>剩余额度</dt><dd>{limitUSD > 0 ? formatUSD(usage?.remainingUSD) : '不限额'}</dd></div>
                   </dl>
-                  <div className="rd-reset"><span>按当前计费配置统计成本</span><span>下次重置 {formatResetAt(usage?.resetAt)}</span></div>
+                  <div className="rd-reset"><span>按请求实际计费成本累计</span><span>下次重置 {formatResetAt(usage?.resetAt)}</span></div>
                   {limitUSD > 0 && (
                     <div className="mt-3">
                       <div className="mb-1 flex items-center justify-between text-[11px] text-slate-400">

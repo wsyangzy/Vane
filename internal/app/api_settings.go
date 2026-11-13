@@ -80,7 +80,7 @@ func visibleSettingRecords(records []*settingsstore.SettingRecord) []*settingsst
 func isVisibleSetting(category, key string) bool {
 	switch category {
 	case settingsservice.CategoryStrategy, settingsservice.CategoryFailover,
-		settingsservice.CategoryTimezone, settingsservice.CategoryStreaming, settingsservice.CategoryHotPool:
+		settingsservice.CategoryTimezone, settingsservice.CategoryStreaming, settingsservice.CategoryHotPool, settingsservice.CategorySearch:
 		return false
 	case settingsservice.CategoryRetry:
 		return settingsservice.IsCurrentRetrySetting(key)

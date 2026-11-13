@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { CheckCircle2, ChevronDown } from 'lucide-react';
 import { motionDuration } from '@/shared/hooks/usePresence.js';
@@ -20,7 +20,7 @@ export const CustomSelect = ({
   const [isOpen, setIsOpen] = useState(false);
   const [isRendered, setIsRendered] = useState(false);
   const [dropdownState, setDropdownState] = useState('');
-  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0, isUpward: false });
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0, maxHeight: 240, isUpward: false });
   const containerRef = useRef(null);
   const buttonRef = useRef(null);
   const dropdownRef = useRef(null);
@@ -32,30 +32,31 @@ export const CustomSelect = ({
   const updatePosition = useCallback(() => {
     if (buttonRef.current && dropdownRef.current) {
       const buttonRect = buttonRef.current.getBoundingClientRect();
-      const dropdownHeight = dropdownRef.current.offsetHeight || 200;
+      const dropdown = dropdownRef.current;
       const dropdownWidth = Math.min(
-        descriptive ? 360 : wrapOptions ? Math.max(320, buttonRect.width) : Math.max(buttonRect.width, dropdownRef.current.offsetWidth),
-        window.innerWidth - 16
+        descriptive ? Math.max(360, buttonRect.width) : wrapOptions ? Math.max(320, buttonRect.width) : Math.max(buttonRect.width, dropdown.offsetWidth),
+        Math.max(0, window.innerWidth - 16)
       );
+      // Measure wrapped descriptions at their final width before the first
+      // paint. A height measured at the portal's initial width can misplace an
+      // upward-opening menu or make it overlap its trigger.
+      if (descriptive || wrapOptions) dropdown.style.width = `${dropdownWidth}px`;
+      else dropdown.style.minWidth = `${Math.min(buttonRect.width, dropdownWidth)}px`;
+      const heightLimit = descriptive ? 400 : 240;
+      const dropdownHeight = Math.min(heightLimit, (dropdown.firstElementChild?.scrollHeight || dropdown.offsetHeight) + 2);
       const viewportHeight = window.innerHeight;
-      const spaceBelow = viewportHeight - buttonRect.bottom;
-      const spaceAbove = buttonRect.top;
+      const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - 12);
+      const spaceAbove = Math.max(0, buttonRect.top - 12);
       const shouldOpenUpward = spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(heightLimit, shouldOpenUpward ? spaceAbove : spaceBelow);
       const maxLeft = Math.max(8, window.innerWidth - dropdownWidth - 8);
-      const left = Math.min(Math.max(8, descriptive ? buttonRect.right - dropdownWidth : buttonRect.left), maxLeft);
-      const unclampedTop = shouldOpenUpward
-        ? buttonRect.top - dropdownHeight - 4
+      const left = Math.min(Math.max(8, buttonRect.left), maxLeft);
+      const top = shouldOpenUpward
+        ? buttonRect.top - Math.min(dropdownHeight, maxHeight) - 4
         : buttonRect.bottom + 4;
-      const top = Math.min(
-        Math.max(8, unclampedTop),
-        Math.max(8, viewportHeight - dropdownHeight - 8)
-      );
-
-      setDropdownPosition({
-        top,
-        left,
-        width: descriptive || wrapOptions ? dropdownWidth : buttonRect.width,
-        isUpward: shouldOpenUpward
+      const next = { top, left, width: descriptive || wrapOptions ? dropdownWidth : Math.min(buttonRect.width, dropdownWidth), maxHeight, isUpward: shouldOpenUpward };
+      setDropdownPosition(previous => {
+        return Object.keys(next).every(key => next[key] === previous[key]) ? previous : next;
       });
     }
   }, [descriptive, wrapOptions]);
@@ -67,9 +68,14 @@ export const CustomSelect = ({
     setIsOpen(true);
   }, []);
 
-  const closeDropdown = useCallback(() => {
+  const closeDropdown = useCallback((immediate = false) => {
     if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
     setIsOpen(false);
+    if (immediate) {
+      setIsRendered(false);
+      setDropdownState('');
+      return;
+    }
     setDropdownState('is-closing');
     const closeDuration = motionDuration('--dropdown-close-dur', 150);
     closeTimerRef.current = window.setTimeout(() => {
@@ -91,27 +97,31 @@ export const CustomSelect = ({
     if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isRendered) return undefined;
-
-    let frameId;
-    const refreshPosition = () => {
-      updatePosition();
-      window.cancelAnimationFrame(frameId);
-      frameId = window.requestAnimationFrame(updatePosition);
-    };
+    updatePosition();
     const animatedAncestor = containerRef.current?.closest('.animate-in');
-    refreshPosition();
-    window.addEventListener('scroll', refreshPosition, true);
-    window.addEventListener('resize', refreshPosition);
-    animatedAncestor?.addEventListener('animationend', refreshPosition);
+    animatedAncestor?.addEventListener('animationend', updatePosition);
     return () => {
-      window.cancelAnimationFrame(frameId);
-      window.removeEventListener('scroll', refreshPosition, true);
-      window.removeEventListener('resize', refreshPosition);
-      animatedAncestor?.removeEventListener('animationend', refreshPosition);
+      animatedAncestor?.removeEventListener('animationend', updatePosition);
     };
-  }, [isRendered, updatePosition]);
+  }, [isRendered, updatePosition, options]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handleScroll = event => {
+      // Scrolling the option list keeps it open. Scrolling any containing page
+      // dismisses the portal, so it cannot remain over an unrelated field.
+      if (!dropdownRef.current?.contains(event.target)) closeDropdown(true);
+    };
+    const handleResize = () => closeDropdown(true);
+    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [closeDropdown, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -129,10 +139,10 @@ export const CustomSelect = ({
       if (event.key === 'Escape') closeDropdown();
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('pointerdown', handleClickOutside);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [closeDropdown, isOpen]);
@@ -176,14 +186,14 @@ export const CustomSelect = ({
         left: `${dropdownPosition.left}px`,
         ...(descriptive || wrapOptions ? { width: `${dropdownPosition.width}px` } : { minWidth: `${dropdownPosition.width}px` }),
         maxWidth: 'calc(100vw - 16px)',
-        maxHeight: descriptive ? 'min(400px, calc(100dvh - 16px))' : '240px'
+        maxHeight: `${dropdownPosition.maxHeight}px`
       }}
       role="listbox"
       inert={!isOpen}
       aria-hidden={!isOpen}
       aria-label={ariaLabel || placeholder}
     >
-      <div className={descriptive ? 'max-h-[min(400px,calc(100dvh-16px))] overflow-y-auto p-1.5' : 'max-h-[240px] overflow-y-auto py-1'}>
+      <div className={descriptive ? 'overflow-y-auto overscroll-contain p-1.5' : 'overflow-y-auto overscroll-contain py-1'} style={{ maxHeight: `${Math.max(0, dropdownPosition.maxHeight - 2)}px` }}>
         {options.map((option) => {
           const isSelected = option.value === value;
           return (
@@ -192,13 +202,15 @@ export const CustomSelect = ({
               type="button"
               role="option"
               aria-selected={isSelected}
+              aria-disabled={Boolean(option.disabled)}
+              disabled={option.disabled}
               onClick={() => handleSelect(option.value)}
               className={`
-                flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left transition-colors
+                flex w-full min-w-0 cursor-pointer items-center justify-between gap-2 px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45
                 ${descriptive ? 'rounded-md' : ''}
                 ${isSelected
                   ? 'bg-indigo-50 font-medium text-indigo-600'
-                  : 'text-slate-600 hover:bg-slate-50'
+                  : 'text-slate-600 enabled:hover:bg-slate-50'
                 }
               `}
             >

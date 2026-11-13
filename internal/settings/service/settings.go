@@ -22,6 +22,7 @@ const (
 	CategoryHotPool       = "hot_pool"
 	CategoryCache         = "cache"
 	CategoryServer        = "server"
+	CategorySearch        = "search"
 
 	// 运行配置分类
 	CategoryLogging  = "logging"  // 日志级别/格式
@@ -139,7 +140,7 @@ func NewSettingsService(store settingsstore.SettingsStore) *SettingsService {
 			CategoryRetention: {
 				Name:        CategoryRetention,
 				Label:       "数据保留",
-				Description: "请求历史的保存期限",
+				Description: "请求历史的保存期限与归档位置",
 				Icon:        "📦",
 				Order:       8,
 			},

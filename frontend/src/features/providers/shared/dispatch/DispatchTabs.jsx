@@ -12,6 +12,9 @@ function positionIndicator(root, indicator, animate) {
     void indicator.offsetWidth;
     indicator.style.transition = previousTransition;
   }
+  const right = active.offsetLeft + active.offsetWidth;
+  if (active.offsetLeft < root.scrollLeft) root.scrollLeft = active.offsetLeft;
+  else if (right > root.scrollLeft + root.clientWidth) root.scrollLeft = right - root.clientWidth;
 }
 
 export default function DispatchTabs({ tabs, value, onChange, label, id }) {

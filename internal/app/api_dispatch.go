@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/handlers"
 	claudeservice "github.com/wsyangzy/Vane/internal/providers/claude/service"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
+	codexstore "github.com/wsyangzy/Vane/internal/providers/codex/store"
 	"github.com/wsyangzy/Vane/internal/routing"
 	routingstore "github.com/wsyangzy/Vane/internal/routing/store"
 )
@@ -62,11 +64,19 @@ func (a *App) profileStore(ctx context.Context) (*routingstore.ProfileStore, err
 	if err := s.EnsureSchema(ctx); err != nil {
 		return nil, err
 	}
+	if err := codexstore.EnsureSearchSchema(ctx, db); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
 // Called while poolMu is held. Resource snapshots never contain credentials.
 func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *routing.PoolRuntime, catalog routing.Catalog, accounts []routing.AccountState) error {
+	if provider == "codex" {
+		if err := a.migrateCodexSearch(ctx); err != nil {
+			return err
+		}
+	}
 	s, err := a.profileStore(ctx)
 	if err != nil {
 		return err
@@ -92,7 +102,7 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 		if b.Exhausted() {
 			return "manual_balance_exhausted"
 		}
-		return ""
+		return a.dispatchDailyCostAdmission(c)
 	}
 	prepareHealth := func(c routing.DispatchCandidate) routing.DispatchCandidate {
 		c.Health = dispatchCandidateHealth(pool, c)
@@ -186,6 +196,45 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 	}
 	a.quotaRefresher.Seed(quota)
 	return nil
+}
+
+// Daily limits use the same settled local cost as the credential-group panel.
+// Check during planning and again at send time so skipped resources retain the
+// exact reason even when a request falls through to another channel.
+func (a *App) dispatchDailyCostAdmission(c routing.DispatchCandidate) string {
+	var channel, group string
+	var limit float64
+	if c.Provider == "codex" && a.codexEndpointMgr != nil {
+		for _, ep := range a.codexEndpointMgr.PoolEndpoints(c.ChannelID, c.GroupID) {
+			if strconv.FormatInt(ep.ID, 10) == c.EndpointID {
+				if ch := a.codexEndpointMgr.ChannelByID(c.ChannelID); ch != nil {
+					channel = ch.Name
+				}
+				group, limit = ep.CredentialGroupName, ep.DailyCostLimitUSD
+				break
+			}
+		}
+	} else if c.Provider == "claude" && a.endpointManager != nil {
+		for _, ep := range a.endpointManager.GetAllEndpoints() {
+			if ep.Config.CredentialGroupID == c.GroupID && claudeendpoint.EndpointKeyForConfig(ep.Config) == c.EndpointID {
+				channel, group, limit = claudeendpoint.ChannelKey(ep), ep.Config.CredentialGroupName, ep.Config.DailyCostLimitUSD
+				break
+			}
+		}
+	}
+	if limit <= 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	used, _, err := a.usageTracker.CredentialGroupDailyCost(ctx, c.Provider, channel, group)
+	if err != nil {
+		return "daily_cost_state_unavailable"
+	}
+	if used >= limit {
+		return "daily_cost_limit_exceeded"
+	}
+	return ""
 }
 
 func (a *App) dispatchCandidates(provider string, pool *routing.PoolRuntime, catalog routing.Catalog, accounts []routing.AccountState, quota []routing.QuotaSnapshot) []routing.DispatchCandidate {
@@ -324,6 +373,9 @@ func (a *App) ListRoutingProfiles(provider string) (RoutingProfileState, error) 
 	if err != nil {
 		return RoutingProfileState{}, err
 	}
+	if err := a.populateSearchPolicies(ctx, profiles); err != nil {
+		return RoutingProfileState{}, err
+	}
 	accounts, infos, err := a.poolAccounts(ctx, provider, catalog)
 	if err != nil {
 		return RoutingProfileState{}, err
@@ -359,6 +411,10 @@ func (a *App) ListRoutingProfiles(provider string) (RoutingProfileState, error) 
 }
 
 func (a *App) SaveRoutingProfile(input routing.RoutingProfile) (routing.RoutingProfile, error) {
+	return a.saveRoutingProfile(input, nil)
+}
+
+func (a *App) saveRoutingProfile(input routing.RoutingProfile, beforeCommit func(context.Context, *sql.Tx, int64) error) (routing.RoutingProfile, error) {
 	a.routingWriteMu.Lock()
 	defer a.routingWriteMu.Unlock()
 	ctx, cancel := routeCtx()
@@ -410,7 +466,12 @@ func (a *App) SaveRoutingProfile(input routing.RoutingProfile) (routing.RoutingP
 	if err != nil {
 		return input, err
 	}
-	if err = s.Save(ctx, &input); err != nil {
+	if input.Provider == "codex" {
+		if err := a.migrateCodexSearch(ctx); err != nil {
+			return input, err
+		}
+	}
+	if err = s.SaveWith(ctx, &input, beforeCommit); err != nil {
 		return input, err
 	}
 	_, err = a.refreshPoolRuntime(ctx, input.Provider)
@@ -611,5 +672,18 @@ func (a *App) GetRoutingProfile(provider string, id int64) (*routing.RoutingProf
 	if err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, provider, id)
+	if provider == "codex" {
+		if err := a.migrateCodexSearch(ctx); err != nil {
+			return nil, err
+		}
+	}
+	p, err := s.Get(ctx, provider, id)
+	if err != nil {
+		return nil, err
+	}
+	views := []routing.RoutingProfile{*p}
+	if err := a.populateSearchPolicies(ctx, views); err != nil {
+		return nil, err
+	}
+	return &views[0], nil
 }

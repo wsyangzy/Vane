@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { ChevronDown, CircleHelp, FlaskConical, GitBranch, Play, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { Button } from '@/shared/ui/index.js';
 import { classifyIntent, previewDispatch } from '@/services/wails/dispatch.js';
@@ -21,10 +21,12 @@ function Candidates({ entries, channels, accounts }) {
   })}</ol>;
 }
 
-export default function PreviewPanel({ provider, selected, channels, accounts, busy, perform }) {
+export default function PreviewPanel({ provider, selected, channels, accounts, busy, perform, embedded = false }) {
   const [input, setInput] = useState({ model: '', streaming: true, conversationId: '', branchId: '', turnId: '', newTurn: false, text: '', previousUserMessage: '', previousAssistantText: '' });
   const [preview, setPreview] = useState(null);
   const [classification, setClassification] = useState(null);
+  const [contextOpen, setContextOpen] = useState(false);
+  const contextId = useId();
   const previewButton = useRef(null);
   const classificationButton = useRef(null);
   const previewRevision = useRef(0);
@@ -50,13 +52,16 @@ export default function PreviewPanel({ provider, selected, channels, accounts, b
     if (revision === classificationRevision.current) setClassification(result);
   });
 
-  return <section className="dp-card" aria-label="模拟调度">
-    <header className="dp-card-header"><div className="dp-heading"><FlaskConical size={15} /><h3>模拟调度</h3></div><span className="dp-badge">只读预览</span></header>
+  return <section className={embedded ? 'dp-preview-panel' : 'dp-card dp-preview-card'} aria-label="模拟调度设置">
+    {!embedded && <header className="dp-card-header"><div className="dp-heading"><FlaskConical size={15} /><h3>模拟调度</h3></div><p className="dp-description dp-preview-description">使用已保存的方案，不发送业务请求、不占用候选或推进轮询。</p><span className="dp-badge">只读预览</span></header>}
     <div className="dp-preview-body">
-      <p className="dp-description">使用已保存的方案，不发送业务请求、不占用候选或推进轮询。</p>
+      {embedded && <p className="dp-description">使用已保存的方案，不发送业务请求、不占用候选或推进轮询。</p>}
+      <div className="dp-preview-controls t-acc" data-open={contextOpen}>
       <div className="dp-preview-request"><label className="dp-field">请求模型<input className={control} placeholder={provider === 'codex' ? '例如 gpt-5' : '例如 claude-sonnet-4-5'} value={input.model} onChange={(event) => update({ model: event.target.value })} /></label><div className="dp-preview-actions"><label className="dp-check"><input type="checkbox" checked={input.streaming} onChange={(event) => update({ streaming: event.target.checked })} />流式请求</label><Button ref={previewButton} type="button" size="sm" variant="secondary" className="dp-action" icon={Play} disabled={busy || !input.model.trim()} onClick={runPreview}>预览候选</Button></div></div>
 
-      <details className="dp-disclosure dp-request-context"><summary><GitBranch size={13} /><span>会话与轮次</span><small>可选</small><ChevronDown size={13} className="dp-chevron" /></summary><div className="dp-context-fields">{[['conversationId', '会话 ID'], ['turnId', '轮次 ID'], ['branchId', '分支 ID']].map(([key, label]) => <label key={key} className="dp-field">{label}<input className={control} value={input[key]} onChange={(event) => update({ [key]: event.target.value })} /></label>)}<label className="dp-check dp-new-turn"><input type="checkbox" checked={input.newTurn} onChange={(event) => update({ newTurn: event.target.checked })} />开始新轮次</label></div></details>
+      <button type="button" className="dp-request-context t-acc-head" aria-expanded={contextOpen} aria-controls={contextId} onClick={() => setContextOpen(open => !open)}><GitBranch size={13} /><span>会话与轮次</span><small>可选</small><span className="t-acc-chevron"><ChevronDown size={13} /></span></button>
+      <div id={contextId} className="t-acc-panel" aria-hidden={!contextOpen} inert={!contextOpen}><div className="t-acc-panel-inner"><div className="dp-context-fields">{[['conversationId', '会话 ID'], ['turnId', '轮次 ID'], ['branchId', '分支 ID']].map(([key, label]) => <label key={key} className="dp-field">{label}<input className={control} value={input[key]} onChange={(event) => update({ [key]: event.target.value })} /></label>)}<label className="dp-check dp-new-turn"><input type="checkbox" checked={input.newTurn} onChange={(event) => update({ newTurn: event.target.checked })} />开始新轮次</label></div></div></div>
+      </div>
 
       {preview && <div className="dp-preview-result"><div className="dp-section-heading"><h4>候选预览结果</h4><div className="dp-result-actions"><span>{preview.candidates.filter((entry) => entry.eligible).length} / {preview.candidates.length} 个可参与</span><button type="button" className="dp-result-clear" aria-label="清除候选结果" disabled={busy} onClick={() => { previewRevision.current += 1; setPreview(null); previewButton.current?.focus(); }}><X size={12} />清除结果</button></div></div><p className="dp-result-decision">决策：{ruleKindLabel(preview.decision.kind || 'default')}{preview.decision.ruleId ? ` · 规则 ${preview.decision.ruleId}` : ''}{preview.decision.intentId ? ` · 意图 ${preview.decision.intentId}` : ''}{preview.decision.fallback ? ' · 已回退' : ''}{preview.stopReason ? ` · ${dispatchReason(preview.stopReason)}` : ''}</p><Candidates entries={preview.candidates} channels={channels} accounts={accounts} /><p className="dp-footnote">Vane 近期负载来自本地请求观测，tokens 和请求数按 1 小时半衰期衰减，用于调度排序。</p></div>}
     </div>

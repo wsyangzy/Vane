@@ -244,6 +244,10 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 		resp.Body.Close()
 		return nil, fmt.Errorf("subscription_redirect_rejected")
 	}
+	if err := adaptCodexModelCatalog(r, resp); err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
 	if endpoint.AuthMode == subscription.ClientPassthrough {
 		observeCodexSubscriptionResponse(resp, leaseFromContext(r.Context()), subscription.Path(r))
 	}

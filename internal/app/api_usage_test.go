@@ -130,6 +130,15 @@ func TestRequestDetailToRecordUsesEndpointChainAsHistoricalRetryFloor(t *testing
 	}
 }
 
+func TestRequestDetailToRecordPreservesAdmissionEvidenceWithoutRetryFloor(t *testing.T) {
+	record := requestDetailToRecord(tracking.RequestDetail{RequestID: "req-skipped", FailureReason: "account_cooling_down",
+		EndpointChain: `[{"channel":"A","endpoint":"one","local":true,"error":"account_cooling_down"},{"channel":"B","endpoint":"two","local":true,"error":"account_cooling_down"}]`,
+	})
+	if record.RetryCount != 0 || len(record.EndpointChain) != 2 || record.EndpointChain[0].Error != "account_cooling_down" || !record.EndpointChain[1].Local {
+		t.Fatalf("admission rejection lost at UI boundary or counted as retry: %+v", record)
+	}
+}
+
 func TestRequestDetailToRecordShowsOnlyProviderHTTPStatus(t *testing.T) {
 	provider := 200
 	if got := requestDetailToRecord(tracking.RequestDetail{

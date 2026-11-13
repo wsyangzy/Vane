@@ -1,3 +1,32 @@
+// Classify by method and endpoint: a missing model or zero usage does not
+// distinguish auxiliary calls from failed or empty generation requests.
+export const getAuxiliaryRequestMeta = ({ method = '', path = '' } = {}) => {
+  const endpoint = String(path).split('?')[0].replace(/\/$/, '');
+  const verb = String(method).toUpperCase();
+  if (verb === 'GET' && ['/v1/models', '/models', '/backend-api/codex/models'].includes(endpoint)) {
+    return { kind: 'model_catalog', label: '模型目录' };
+  }
+  if (verb === 'POST' && ['/v1/messages/count_tokens', '/messages/count_tokens'].includes(endpoint)) {
+    return { kind: 'token_count', label: 'Token 计数' };
+  }
+  if (verb === 'POST' && /^(?:\/v1|\/backend-api\/codex)?\/alpha\/search(?:\/(native|service))?$/.test(endpoint)) {
+    const label = endpoint.endsWith('/native') ? '原生搜索' : endpoint.endsWith('/service') ? '搜索适配' : '搜索';
+    return { kind: 'search', label };
+  }
+  return null;
+};
+
+export const getRequestModelFallback = ({ method = '', path = '' } = {}) => {
+  const endpoint = String(path).split('?')[0].replace(/\/$/, '');
+  if (String(method).toUpperCase() === 'GET' && ['/v1/models', '/models', '/backend-api/codex/models'].includes(endpoint)) {
+    return { label: '模型列表', title: '模型列表查询，不指定生成模型', icon: 'list' };
+  }
+  if (String(method).toUpperCase() === 'POST' && ['/v1/images/generations', '/images/generations', '/v1/images/edits', '/images/edits'].includes(endpoint)) {
+    return { label: '图像请求', title: '图像请求，模型未记录', icon: 'image' };
+  }
+  return null;
+};
+
 export const REASONING_FIELD_LABELS = {
   effort: '推理强度',
   mode: '推理模式',

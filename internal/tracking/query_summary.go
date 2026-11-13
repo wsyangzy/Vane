@@ -79,10 +79,7 @@ func queryUsageSummaryFromSource(ctx context.Context, db *sql.DB, opts *QueryOpt
 		query += " AND date <= ?"
 		args = append(args, opts.EndDate.Format("2006-01-02"))
 	}
-	if opts.ModelName != "" {
-		query += " AND model_name = ?"
-		args = append(args, opts.ModelName)
-	}
+	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.EndpointName != "" {
 		query += " AND endpoint_name = ?"
 		args = append(args, opts.EndpointName)

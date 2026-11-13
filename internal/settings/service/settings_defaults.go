@@ -277,6 +277,7 @@ func (s *SettingsService) getDefaultsForCategory(category string) []*settingssto
 	case CategoryRetention:
 		return []*settingsstore.SettingRecord{
 			{Category: CategoryRetention, Key: "retention_days", Value: "0", ValueType: ValueTypeInt, Label: "数据保留天数", Description: "请求历史的保留时长，0 表示永久保留。", DisplayOrder: 1},
+			{Category: CategoryRetention, Key: "archive_directory", Value: "", ValueType: ValueTypeString, Label: "历史归档保存路径", Description: "留空使用默认目录。按运行环境分别保存；切换时复制已有归档，旧目录保留副本。", DisplayOrder: 2},
 		}
 
 	case CategoryCache:

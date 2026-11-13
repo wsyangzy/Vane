@@ -282,7 +282,8 @@ export const fetchUsageStats = async (params = {}) => {
   const queryParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value !== null && value !== undefined && value !== '') {
-      queryParams.append(key, value.toString());
+      if (Array.isArray(value)) value.forEach(item => queryParams.append(key, item));
+      else queryParams.append(key, value.toString());
     }
   });
 
@@ -445,7 +446,8 @@ export const fetchRequests = async (params = {}) => {
   const queryParams = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value !== null && value !== undefined && value !== '') {
-      queryParams.append(key, value.toString());
+      if (Array.isArray(value)) value.forEach(item => queryParams.append(key, item));
+      else queryParams.append(key, value.toString());
     }
   });
 

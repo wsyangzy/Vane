@@ -11,6 +11,126 @@ import { Create as $Create } from "@wailsio/runtime";
 import * as time$0 from "../../../../../time/models.js";
 
 /**
+ * Activity contains metadata only. Neither request bodies, matched strings nor
+ * reversible mappings are persisted. Keep at most 5,000 entries for 30 days.
+ */
+export class Activity {
+    /**
+     * Creates a new Activity instance.
+     * @param {Partial<Activity>} [$$source = {}] - The source object to create the Activity.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["id"] = 0;
+        }
+        if (!("request_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["request_id"] = "";
+        }
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("path" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["path"] = "";
+        }
+        if (!("created_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["created_at"] = null;
+        }
+        if (!("state" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["state"] = "";
+        }
+        if (!("hit_count" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["hit_count"] = 0;
+        }
+        if (!("rule_hits" in $$source)) {
+            /**
+             * @member
+             * @type {RuleHit[]}
+             */
+            this["rule_hits"] = [];
+        }
+        if (!("scan_duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["scan_duration_ms"] = 0;
+        }
+        if (!("skipped_reason" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["skipped_reason"] = "";
+        }
+        if (!("truncated" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["truncated"] = false;
+        }
+        if (!("restored_count" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["restored_count"] = 0;
+        }
+        if (!("restore_skipped" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["restore_skipped"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Activity instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Activity}
+     */
+    static createFrom($$source = {}) {
+        const $$createField7_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("rule_hits" in $$parsedSource) {
+            $$parsedSource["rule_hits"] = $$createField7_0($$parsedSource["rule_hits"]);
+        }
+        return new Activity(/** @type {Partial<Activity>} */($$parsedSource));
+    }
+}
+
+/**
  * BuiltinMatcherInfo 内置匹配器的可选项（供前端新建规则时选择）
  */
 export class BuiltinMatcherInfo {
@@ -170,6 +290,13 @@ export class Overview {
      * @param {Partial<Overview>} [$$source = {}] - The source object to create the Overview.
      */
     constructor($$source = {}) {
+        if (!("activity" in $$source)) {
+            /**
+             * @member
+             * @type {Activity[]}
+             */
+            this["activity"] = [];
+        }
         if (!("settings" in $$source)) {
             /**
              * @member
@@ -230,34 +357,38 @@ export class Overview {
      * @returns {Overview}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType0;
-        const $$createField1_0 = $$createType2;
-        const $$createField2_0 = $$createType4;
-        const $$createField3_0 = $$createType6;
-        const $$createField4_0 = $$createType8;
-        const $$createField5_0 = $$createType9;
-        const $$createField6_0 = $$createType11;
+        const $$createField0_0 = $$createType3;
+        const $$createField1_0 = $$createType4;
+        const $$createField2_0 = $$createType6;
+        const $$createField3_0 = $$createType8;
+        const $$createField4_0 = $$createType10;
+        const $$createField5_0 = $$createType12;
+        const $$createField6_0 = $$createType13;
+        const $$createField7_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("activity" in $$parsedSource) {
+            $$parsedSource["activity"] = $$createField0_0($$parsedSource["activity"]);
+        }
         if ("settings" in $$parsedSource) {
-            $$parsedSource["settings"] = $$createField0_0($$parsedSource["settings"]);
+            $$parsedSource["settings"] = $$createField1_0($$parsedSource["settings"]);
         }
         if ("rules" in $$parsedSource) {
-            $$parsedSource["rules"] = $$createField1_0($$parsedSource["rules"]);
+            $$parsedSource["rules"] = $$createField2_0($$parsedSource["rules"]);
         }
         if ("legacy_rules" in $$parsedSource) {
-            $$parsedSource["legacy_rules"] = $$createField2_0($$parsedSource["legacy_rules"]);
+            $$parsedSource["legacy_rules"] = $$createField3_0($$parsedSource["legacy_rules"]);
         }
         if ("unscanned_paths" in $$parsedSource) {
-            $$parsedSource["unscanned_paths"] = $$createField3_0($$parsedSource["unscanned_paths"]);
+            $$parsedSource["unscanned_paths"] = $$createField4_0($$parsedSource["unscanned_paths"]);
         }
         if ("presets" in $$parsedSource) {
-            $$parsedSource["presets"] = $$createField4_0($$parsedSource["presets"]);
+            $$parsedSource["presets"] = $$createField5_0($$parsedSource["presets"]);
         }
         if ("pseudonym_kinds" in $$parsedSource) {
-            $$parsedSource["pseudonym_kinds"] = $$createField5_0($$parsedSource["pseudonym_kinds"]);
+            $$parsedSource["pseudonym_kinds"] = $$createField6_0($$parsedSource["pseudonym_kinds"]);
         }
         if ("builtin_matchers" in $$parsedSource) {
-            $$parsedSource["builtin_matchers"] = $$createField6_0($$parsedSource["builtin_matchers"]);
+            $$parsedSource["builtin_matchers"] = $$createField7_0($$parsedSource["builtin_matchers"]);
         }
         return new Overview(/** @type {Partial<Overview>} */($$parsedSource));
     }
@@ -310,7 +441,7 @@ export class Preset {
      * @returns {Preset}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType13;
+        const $$createField3_0 = $$createType17;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("rules" in $$parsedSource) {
             $$parsedSource["rules"] = $$createField3_0($$parsedSource["rules"]);
@@ -374,6 +505,13 @@ export class PreviewResult {
      * @param {Partial<PreviewResult>} [$$source = {}] - The source object to create the PreviewResult.
      */
     constructor($$source = {}) {
+        if (!("blocked" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["blocked"] = false;
+        }
         if (!("output" in $$source)) {
             /**
              * @member
@@ -412,10 +550,10 @@ export class PreviewResult {
      * @returns {PreviewResult}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType15;
+        const $$createField4_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("rule_hits" in $$parsedSource) {
-            $$parsedSource["rule_hits"] = $$createField3_0($$parsedSource["rule_hits"]);
+            $$parsedSource["rule_hits"] = $$createField4_0($$parsedSource["rule_hits"]);
         }
         return new PreviewResult(/** @type {Partial<PreviewResult>} */($$parsedSource));
     }
@@ -430,6 +568,13 @@ export class RequestPreviewResult {
      * @param {Partial<RequestPreviewResult>} [$$source = {}] - The source object to create the RequestPreviewResult.
      */
     constructor($$source = {}) {
+        if (!("blocked" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["blocked"] = false;
+        }
         if (!("supported" in $$source)) {
             /**
              * Supported 路径是否在扫描范围内；false 时请求会按「路径未被覆盖时」策略处理
@@ -491,14 +636,14 @@ export class RequestPreviewResult {
      * @returns {RequestPreviewResult}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType15;
-        const $$createField6_0 = $$createType17;
+        const $$createField6_0 = $$createType1;
+        const $$createField7_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("rule_hits" in $$parsedSource) {
-            $$parsedSource["rule_hits"] = $$createField5_0($$parsedSource["rule_hits"]);
+            $$parsedSource["rule_hits"] = $$createField6_0($$parsedSource["rule_hits"]);
         }
         if ("fields" in $$parsedSource) {
-            $$parsedSource["fields"] = $$createField6_0($$parsedSource["fields"]);
+            $$parsedSource["fields"] = $$createField7_0($$parsedSource["fields"]);
         }
         return new RequestPreviewResult(/** @type {Partial<RequestPreviewResult>} */($$parsedSource));
     }
@@ -621,6 +766,13 @@ export class RuleHit {
      * @param {Partial<RuleHit>} [$$source = {}] - The source object to create the RuleHit.
      */
     constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["kind"] = undefined;
+        }
         if (!("rule_id" in $$source)) {
             /**
              * @member
@@ -715,6 +867,58 @@ export class Settings {
              */
             this["unsupported_path_action"] = "";
         }
+        if (!("categories" in $$source)) {
+            /**
+             * Deprecated matching options are read only to migrate existing databases.
+             * Runtime matching and actions come exclusively from Rule.
+             * @member
+             * @type {{ [_ in string]?: boolean }}
+             */
+            this["categories"] = {};
+        }
+        if (!("words" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["words"] = [];
+        }
+        if (!("words_any_case" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["words_any_case"] = false;
+        }
+        if (!("allow" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["allow"] = [];
+        }
+        if (!("actions" in $$source)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: string }}
+             */
+            this["actions"] = {};
+        }
+        if (!("restore_responses" in $$source)) {
+            /**
+             * RestoreResponses controls response restoration independently of outbound masking.
+             * @member
+             * @type {boolean}
+             */
+            this["restore_responses"] = false;
+        }
+        if (!("keep_key_format" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["keep_key_format"] = false;
+        }
 
         Object.assign(this, $$source);
     }
@@ -725,7 +929,23 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
+        const $$createField5_0 = $$createType20;
+        const $$createField6_0 = $$createType13;
+        const $$createField8_0 = $$createType13;
+        const $$createField9_0 = $$createType21;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("categories" in $$parsedSource) {
+            $$parsedSource["categories"] = $$createField5_0($$parsedSource["categories"]);
+        }
+        if ("words" in $$parsedSource) {
+            $$parsedSource["words"] = $$createField6_0($$parsedSource["words"]);
+        }
+        if ("allow" in $$parsedSource) {
+            $$parsedSource["allow"] = $$createField8_0($$parsedSource["allow"]);
+        }
+        if ("actions" in $$parsedSource) {
+            $$parsedSource["actions"] = $$createField9_0($$parsedSource["actions"]);
+        }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }
 }
@@ -823,6 +1043,13 @@ export class StoredRule {
              */
             this["source"] = "";
         }
+        if (!("kind" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["kind"] = "";
+        }
         if (!("created_at" in $$source)) {
             /**
              * @member
@@ -901,21 +1128,25 @@ export class UnscannedPathStat {
 }
 
 // Private type creation functions
-const $$createType0 = Settings.createFrom;
-const $$createType1 = StoredRule.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = LegacyRule.createFrom;
-const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = UnscannedPathStat.createFrom;
+const $$createType0 = RuleHit.createFrom;
+const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = Activity.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = Settings.createFrom;
+const $$createType5 = StoredRule.createFrom;
 const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = Preset.createFrom;
+const $$createType7 = LegacyRule.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = $Create.Array($Create.Any);
-const $$createType10 = BuiltinMatcherInfo.createFrom;
-const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = Rule.createFrom;
-const $$createType13 = $Create.Array($$createType12);
-const $$createType14 = RuleHit.createFrom;
+const $$createType9 = UnscannedPathStat.createFrom;
+const $$createType10 = $Create.Array($$createType9);
+const $$createType11 = Preset.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = $Create.Array($Create.Any);
+const $$createType14 = BuiltinMatcherInfo.createFrom;
 const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = PreviewField.createFrom;
+const $$createType16 = Rule.createFrom;
 const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = PreviewField.createFrom;
+const $$createType19 = $Create.Array($$createType18);
+const $$createType20 = $Create.Map($Create.Any, $Create.Any);
+const $$createType21 = $Create.Map($Create.Any, $Create.Any);

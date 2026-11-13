@@ -38,6 +38,7 @@ export const parseChainNode = (item, hop) => {
     const headers = item.headers && typeof item.headers === 'object' && !Array.isArray(item.headers) ? item.headers : {};
     // 本跳没有拿到上游响应（网络/超时），error 是本地错误文本
     const local = Boolean(item.local);
+    const skipReason = item.skip_reason || item.skipReason || (local && attempts === 0 && /^(account_|subscription_|profile_|candidate_)[a-z_]+$/.test(error) ? error : '');
     const raw = channel
       ? `${channel}::${credentialGroup ? `${credentialGroup}::` : ''}${endpoint}`
       : endpoint;
@@ -52,6 +53,7 @@ export const parseChainNode = (item, hop) => {
       durationMs,
       headers,
       local,
+      ...(skipReason ? { skipReason } : {}),
       hop: item.hop || hop,
     };
   }
@@ -92,8 +94,8 @@ export const getRequestResourcePath = (request = {}) => {
   const trace = request.dispatchTrace;
   if (trace?.attemptCount === 0) return [];
   const source = trace?.attempts?.length ? trace.attempts : getEndpointChainItems(request);
-  const nodes = source.map((item, index) => parseChainNode(item, index + 1));
-  if (!nodes.length && !trace && (request.channel || request.endpoint || request.endpoint_name)) {
+  const nodes = source.map((item, index) => parseChainNode(item, index + 1)).filter(node => !node.skipReason);
+  if (!nodes.length && !source.length && !trace && (request.channel || request.endpoint || request.endpoint_name)) {
     nodes.push(parseChainNode({ channel: request.channel, endpoint: request.endpoint || request.endpoint_name }));
   }
   // A single legacy hop may omit its channel/group. Multi-hop history cannot
@@ -136,6 +138,8 @@ export const getRequestChannelLabel = (request = {}, chainNodes = [], fallback =
     if (trace.attemptCount === 0) return trace.finished || trace.stopReason ? '未发送' : '待调度';
   }
 
+  if (chainNodes.length > 0 && chainNodes.every(node => node.skipReason)) return '未发送';
+
   for (let index = chainNodes.length - 1; index >= 0; index -= 1) {
     const channel = String(chainNodes[index]?.channel || '').trim();
     if (channel) return channel;
@@ -174,11 +178,12 @@ export const countChannelSwitches = (items = []) => {
 };
 
 export const requestHasInterChannelTransfer = (request = {}) => (
-  chainHasMultipleChannels(getEndpointChainItems(request))
+  chainHasMultipleChannels(getEndpointChainItems(request).filter(item => !parseChainNode(item).skipReason))
 );
 
 export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
-  const nodes = parsedNodes || getEndpointChainItems(request).map((item, index) => parseChainNode(item, index + 1));
+  const allNodes = parsedNodes || getEndpointChainItems(request).map((item, index) => parseChainNode(item, index + 1));
+  const nodes = allNodes.filter(node => !node.skipReason);
   const directEndpoint = request.endpoint || request.endpoint_name || '';
   const rawRetryCount = Number(request.retry_count ?? request.retryCount ?? 0);
   const storedRetryCount = Number.isFinite(rawRetryCount) ? Math.max(0, Math.trunc(rawRetryCount)) : 0;
@@ -216,6 +221,10 @@ export const summarizeEndpointAttempts = (request = {}, parsedNodes) => {
       firstEndpoint: attempts[0]?.endpoint || nodes[0]?.endpoint || '',
       finalEndpoint: final?.endpoint || nodes.at(-1)?.endpoint || '',
     };
+  }
+
+  if (allNodes.length > 0 && nodes.length === 0) {
+    return { attemptCount: 0, finalEndpointAttempts: 0, retryCount: 0, transferCount: 0, transferred: false, firstEndpoint: '', finalEndpoint: '' };
   }
 
   return {

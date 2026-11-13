@@ -160,12 +160,12 @@ func TestWalkerChatCompletionsIsScanned(t *testing.T) {
 }
 
 func TestScanPathNormalization(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/responses", "/responses", "/responses/compact", "/v1/responses?x=1", "/chat/completions", "/v1/chat/completions/"} {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/responses", "/responses", "/responses/compact", "/v1/responses?x=1", "/chat/completions", "/v1/chat/completions/", "/v1/alpha/search", "/alpha/search/native", "/v1/alpha/search/service", "/backend-api/codex/alpha/search/service?x=1"} {
 		if !IsScannablePath(path) {
 			t.Errorf("%s must be scannable", path)
 		}
 	}
-	for _, path := range []string{"/v1/models", "/v1/alpha/search", "/v1/embeddings", ""} {
+	for _, path := range []string{"/v1/models", "/v1/alpha/search/other", "/v1/embeddings", ""} {
 		if IsScannablePath(path) {
 			t.Errorf("%s must not be scannable", path)
 		}

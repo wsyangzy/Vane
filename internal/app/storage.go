@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wsyangzy/Vane/internal/buildinfo"
 	"github.com/wsyangzy/Vane/internal/platform/appdir"
 	"github.com/wsyangzy/Vane/internal/tracking"
 )
@@ -42,13 +41,16 @@ func (a *App) setupUsageTracker() {
 
 	// 定价配置完全从 SQLite 加载。
 	// 初始化时使用空定价，后续由 syncPricingToTracker() 从数据库加载
-	archiveEnvironment := "dev"
-	if strings.EqualFold(buildinfo.BuildMode, "release") {
-		archiveEnvironment = "release"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	archiveRoot, err := savedArchiveRoot(ctx, dbPath)
+	cancel()
+	if err != nil {
+		a.logger.Error("读取历史归档保存路径失败", "error", err)
+		return
 	}
 	trackingConfig := &tracking.Config{
 		Enabled:          a.config.UsageTracking.Enabled,
-		Environment:      archiveEnvironment,
+		Environment:      historyEnvironment(),
 		DatabasePath:     dbPath,
 		Database:         a.config.UsageTracking.Database,
 		BufferSize:       a.config.UsageTracking.BufferSize,
@@ -56,12 +58,11 @@ func (a *App) setupUsageTracker() {
 		FlushInterval:    a.config.UsageTracking.FlushInterval,
 		MaxRetry:         a.config.UsageTracking.MaxRetry,
 		RetentionDays:    a.config.UsageTracking.RetentionDays,
-		ArchiveDirectory: filepath.Join(appdir.GetDataDir(), "archive", archiveEnvironment),
+		ArchiveDirectory: filepath.Join(archiveRoot, historyEnvironment()),
 		ModelPricing:     nil,                     // 定价从 SQLite model_pricing 表加载
 		DefaultPricing:   tracking.ModelPricing{}, // 默认定价从 SQLite 加载
 	}
 
-	var err error
 	a.usageTracker, err = tracking.NewUsageTracker(trackingConfig, a.config.Timezone)
 	if err != nil {
 		a.logger.Error("使用追踪器初始化失败", "error", err)

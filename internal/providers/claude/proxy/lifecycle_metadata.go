@@ -39,6 +39,14 @@ func (rlm *RequestLifecycleManager) SetEndpoint(endpointName, groupName, channel
 	}
 }
 
+// RecordEndpointSkip persists a pre-send rejection without inventing an attempt.
+func (rlm *RequestLifecycleManager) RecordEndpointSkip(reason string) {
+	chain := rlm.stateManager.AnnotateEndpointChainSkip(reason)
+	if rlm.usageTracker != nil && chain != "" {
+		rlm.usageTracker.RecordRequestUpdate(rlm.GetRequestID(), tracking.UpdateOptions{EndpointChain: &chain})
+	}
+}
+
 // snapshotEndpointMultiplier 从 UsageTracker 端点倍率缓存中读取当前端点的倍率
 // 并写入到 ActiveRequest 的快照字段。这样在归档/查询时可以展示该请求实际使用的倍率。
 func (rlm *RequestLifecycleManager) snapshotEndpointMultiplier(endpointName, groupName, channel string) {

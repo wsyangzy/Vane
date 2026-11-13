@@ -26,6 +26,12 @@ func (s *RoutingService) GetRoutingProfile(provider string, id int64) (*routing.
 func (s *RoutingService) SaveRoutingProfile(profile routing.RoutingProfile) (routing.RoutingProfile, error) {
 	return s.app.SaveRoutingProfile(profile)
 }
+func (s *RoutingService) SaveCodexRoutingProfile(input app.CodexRoutingProfileInput) (routing.RoutingProfile, error) {
+	return s.app.SaveCodexRoutingProfile(input)
+}
+func (s *RoutingService) GetCodexSearchAPIKey(profileID int64, vendor string) (string, error) {
+	return s.app.GetCodexSearchAPIKey(profileID, vendor)
+}
 func (s *RoutingService) DeleteRoutingProfile(provider string, id int64) error {
 	return s.app.DeleteRoutingProfile(provider, id)
 }

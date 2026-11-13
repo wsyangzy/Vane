@@ -162,7 +162,7 @@ func (c *DBRequestCounter) Get(opts *QueryOptions) (int64, bool) {
 
 	// 检查是否仅包含 provider 过滤（其他字段必须为零值/空）
 	if opts != nil {
-		if opts.ModelName != "" || opts.Channel != "" || opts.EndpointName != "" ||
+		if len(queryModelNames(opts)) > 0 || opts.Channel != "" || opts.EndpointName != "" ||
 			opts.GroupName != "" || opts.Status != "" ||
 			opts.StartDate != nil || opts.EndDate != nil {
 			return 0, false // 复杂过滤，无法使用内存计数

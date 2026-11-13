@@ -60,6 +60,15 @@ export function DeleteRoutingProfile(provider, id) {
 }
 
 /**
+ * @param {number} profileID
+ * @param {string} vendor
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetCodexSearchAPIKey(profileID, vendor) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.GetCodexSearchAPIKey", profileID, vendor);
+}
+
+/**
  * @param {string} provider
  * @returns {$CancellablePromise<app$0.RouteTargetOptions>}
  */
@@ -177,6 +186,16 @@ export function PreviewRoute(provider, sourceChannelID, model, streaming) {
 export function RefreshRoutingQuota(provider, channelID, groupID, model) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.RefreshRoutingQuota", provider, channelID, groupID, model).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType15($result);
+    }));
+}
+
+/**
+ * @param {app$0.CodexRoutingProfileInput} input
+ * @returns {$CancellablePromise<routing$0.RoutingProfile>}
+ */
+export function SaveCodexRoutingProfile(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveCodexRoutingProfile", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
     }));
 }
 

@@ -1,8 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { fetchEndpointCostsData, fetchRequests, fetchTokenUsageData } from './api.js';
+import { fetchEndpointCostsData, fetchRequests, fetchTokenUsageData, fetchUsageStats } from './api.js';
 import { getRequestServiceTierMeta } from '../../features/requests/utils/requestMetadata.js';
+
+test('request and stats HTTP query serialization keeps separate exact model names', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async url => {
+    urls.push(new URL(url, 'http://localhost'));
+    return { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ requests: [], total: 0 }) };
+  };
+  try {
+    const models = ['gpt-6-astra', 'custom,model'];
+    await fetchRequests({ models });
+    await fetchUsageStats({ models });
+    urls.forEach(url => assert.deepEqual(url.searchParams.getAll('models'), models));
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test('请求列表档位采用计费快照并保留历史与进行中请求的原始档位', async () => {
   const originalFetch = globalThis.fetch;

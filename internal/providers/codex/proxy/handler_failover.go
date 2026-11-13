@@ -1,10 +1,12 @@
 package codexproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -119,6 +121,8 @@ func (h *Handler) tryEndpointCycleForStage(
 		attemptBody := h.outboundBody(r, requestID, targetChannel, originalBody)
 		var attemptRewrite modelRewriteResult
 		switch {
+		case isCodexImageRequest(r) || isCodexSearchRequest(r):
+			attemptRewrite = modelRewriteResult{Body: attemptBody}
 		case routed && stage.upstreamModel != "":
 			attemptRewrite = rewriteModelForRoute(attemptBody, stage.upstreamModel, h.logger, requestID)
 		case routed:
@@ -127,7 +131,7 @@ func (h *Handler) tryEndpointCycleForStage(
 			attemptRewrite = rewriteModelForEndpoint(attemptBody, endpoint, channel, h.logger, requestID)
 		}
 		body = attemptRewrite.Body
-		requestModel = h.tokenParser.ParseModelFromBody(body)
+		requestModel = h.requestModel(r, body)
 		if h.usageTracker != nil && attemptRewrite.Source != "" {
 			h.usageTracker.RecordRequestUpdate(requestID, tracking.UpdateOptions{
 				OriginalModelName:  strPtr(attemptRewrite.OriginalModel),
@@ -214,6 +218,23 @@ func (h *Handler) tryEndpointCycleForStage(
 			return cycleResult{completed: true}
 		}
 
+		// Validate before archival so automatic search can still try its service
+		// when a nominally successful endpoint returns a different protocol.
+		if fwdErr == nil && resp != nil && resp.StatusCode < 400 && isCodexSearchRequest(r) {
+			data, readErr := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(data))
+			if readErr != nil || len(data) > 8<<20 || !codexProfileProtocolSuccess("/alpha/search", data) {
+				fwdErr = errors.New("上游响应不符合原生搜索协议，或搜索正文未完整读取")
+				annotateLastChainError(endpointChain, resp.StatusCode, fwdErr.Error(), resp.Header, true)
+				if h.trySearchFallback(w, r, originalBody, requestID, startTime, *endpointChain) {
+					return cycleResult{completed: true}
+				}
+				// Keep the existing native-only response processing and its precise
+				// tracking classification if no service is configured.
+				fwdErr = nil
+			}
+		}
 		// 成功路径：无错误且 status < 400
 		if fwdErr == nil && resp != nil && resp.StatusCode < 400 {
 			if routed && h.states != nil {
@@ -263,7 +284,7 @@ func (h *Handler) tryEndpointCycleForStage(
 			if errors.Is(fwdErr, routing.ErrBudgetExhausted) {
 				return cycleResult{lastErr: fwdErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
 			}
-			routeFailure = codexRouteFailure(status, errBody, fwdErr)
+			routeFailure = codexRequestFailure(r, status, errBody, fwdErr)
 			if stage.execution != nil {
 				stage.execution.Fail(stage.candidate(endpoint, requestedModel), routeFailure)
 				h.recordRouteSnapshot(requestID, stage.executionSnapshot())
@@ -295,6 +316,9 @@ func (h *Handler) tryEndpointCycleForStage(
 					"endpoints_tried", len(*endpointChain),
 					"channel", channelName,
 				)
+				if h.trySearchFallback(w, r, originalBody, requestID, startTime, *endpointChain) {
+					return cycleResult{completed: true}
+				}
 				h.recordUpstreamFailure(requestID, startTime, "server_error", detail, resp.StatusCode, nil, requestModel)
 				h.passthroughWithBody(w, resp, errBody)
 				return cycleResult{completed: true}
@@ -316,6 +340,9 @@ func (h *Handler) tryEndpointCycleForStage(
 				"endpoints_tried", len(*endpointChain),
 				"channel", channelName,
 			)
+			if h.trySearchFallback(w, r, originalBody, requestID, startTime, *endpointChain) {
+				return cycleResult{completed: true}
+			}
 			h.recordFailure(requestID, startTime, "network_error", detail, nil, requestModel)
 			h.writeError(w, http.StatusBadGateway, detail)
 			return cycleResult{completed: true}
@@ -353,7 +380,8 @@ func (h *Handler) tryEndpointCycleForStage(
 		_, isStreamEvent := fwdErr.(*UpstreamStreamError)
 		annotateLastChainError(endpointChain, status, chainText, respHeaders, resp == nil && !isStreamEvent)
 		h.recordForwarding(requestID, endpoint.Name, channelName, requestModel, *endpointChain)
-		if !routed || routeFailure.Scope == routing.ScopeEndpoint {
+		unsupportedPath := (isCodexImageRequest(r) || isCodexSearchRequest(r)) && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed)
+		if !unsupportedPath && (!routed || routeFailure.Scope == routing.ScopeEndpoint) {
 			h.manager.MarkUnhealthyWithDetail(endpoint.ID, status, reason)
 		}
 

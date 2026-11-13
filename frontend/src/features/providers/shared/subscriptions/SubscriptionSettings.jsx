@@ -43,7 +43,7 @@ export default function SubscriptionSettings({ provider = 'claude', value, onCha
         ...(binding.accountId && !accounts.some((account) => account.id === binding.accountId && account.enabled && account.status !== 'sign_in_required') ? [{ value: binding.accountId, label: '原绑定账号不可用，请重新选择' }] : [])
       ]} onChange={(accountId) => update({ accountId, action: '' })} disabled={disabled} />
       {accountsError && <p className="text-xs text-amber-700">{accountsError}</p>}
-      <p className="text-xs text-slate-500">账号在页面右上方「订阅管理 → 订阅账号」中登录或导入；更换绑定后旧账号的额度状态不会沿用。</p>
+      <p className="text-xs text-slate-500">账号在页面右上方「订阅管理」中登录或导入；更换绑定后旧账号的额度状态不会沿用。</p>
     </div>
     <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={Boolean(binding.enabled)} onChange={(e) => update({ enabled: e.target.checked })} disabled={disabled} className="accent-indigo-600" />允许使用官方订阅</label>
     <p className="text-xs leading-5 text-slate-500">此处管理订阅凭证绑定。参与渠道、备用目标和转移顺序在调度方案中配置；客户端使用应用设置中的代理令牌接入。</p>
@@ -51,7 +51,10 @@ export default function SubscriptionSettings({ provider = 'claude', value, onCha
       <div className="flex flex-wrap gap-2"><Button type="button" variant="secondary" disabled={disabled} onClick={() => update({ action: binding.action === 'verify' ? '' : 'verify' })}><RefreshCw size={13} />请求验证恢复</Button>{!binding.accountId && <Button type="button" variant="secondary" disabled={disabled} onClick={() => update({ action: binding.action === 'rebind' ? '' : 'rebind' })}><KeyRound size={13} />重新绑定订阅</Button>}</div>
       {binding.action && <p className="text-xs text-amber-700">{binding.action === 'verify' ? '保存后允许下一条真实请求验证；不会立刻发请求或标记额度恢复。' : '保存后视为新的订阅身份，原绑定的暂停与恢复事件不再适用。请确保客户端使用新的独立订阅。'}</p>}
     </div>}
-    <p className="text-xs leading-5 text-slate-500">保存分组并加入默认调度方案后，在页面右上方「订阅管理 → 客户端接入」预览、复制或应用接入配置。官方端点在渠道资源中管理。{provider === 'codex' ? '支持 models、responses 和原生 compact；接入配置使用 HTTP 传输。' : '可复制当前 PowerShell 窗口的临时启动命令，或应用到 settings.json。'}</p>
+    <div className="space-y-2 text-xs leading-5 text-slate-500">
+      {!binding.accountId && <p>使用客户端凭证透传时，先在本机 {provider === 'codex' ? 'Codex' : 'Claude Code'} 完成官方登录。</p>}
+      <p>保存分组并加入默认调度方案后，打开右上方「客户端配置」，生成预览并应用专用模板。{binding.accountId ? '使用 Vane 托管账号，无需客户端官方登录。' : '模板会自动补充代理认证，无需手动填写请求头。'}</p>
+    </div>
 
   </div>;
 }

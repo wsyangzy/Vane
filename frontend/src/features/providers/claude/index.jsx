@@ -8,7 +8,7 @@ import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import ModalPortalScope from '@/shared/ui/ModalPortalScope.jsx';
 import useEndpointsData from '@/features/providers/claude/hooks/useEndpointsData.js';
 import { EndpointForm, DeleteConfirmDialog } from './components/index.js';
-import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
+import SubscriptionManagement, { ClientConnectionButton } from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { ClaudeIcon } from '@/features/requests/components/ModelTag.jsx';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
@@ -944,6 +944,7 @@ const ChannelsPage = ({ clientVersion, onViewRequests }) => {
         resourcesBusy={loading || batchCheckLoading}
         onRefreshResources={handleRefresh}
         resourceActions={<>
+          <ClientConnectionButton provider="claude" onUpdated={handleRefresh} className="dispatch-resource-action" disabled={loading || batchCheckLoading} />
           <SubscriptionManagement provider="claude" channels={channelsMeta} onUpdated={handleRefresh} className="dispatch-resource-action" disabled={loading || batchCheckLoading} />
           {isSqliteMode && channelSections.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || batchCheckLoading} onClick={() => setShowCreateChannel(true)}>添加渠道</Button>}
         </>} endpoints={displayEndpoints.map((endpoint) => {

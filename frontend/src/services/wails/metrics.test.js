@@ -52,3 +52,19 @@ test('request lists and usage stats forward the credential group with its channe
     assert.equal(params.endpoint, scope.endpoint);
   }
 });
+
+test('requests and stats preserve multiple exact model names including commas', async () => {
+  const calls = [];
+  const api = await bridge({
+    GetRequests: async params => { calls.push(params); return { requests: [], total: 0 }; },
+    GetUsageStats: async params => { calls.push(params); return {}; }
+  });
+  const models = ['gpt-6-astra', 'custom,model'];
+  await api.getRequests({ models });
+  await api.getUsageStats({ models });
+  calls.forEach(params => assert.deepEqual(params.models, models));
+  calls.length = 0;
+  await api.getRequests({ model: 'legacy' });
+  assert.equal(calls[0].model, 'legacy');
+  assert.deepEqual(calls[0].models, []);
+});

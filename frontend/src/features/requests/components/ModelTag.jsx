@@ -3,12 +3,13 @@
 // 2025-12-01 09:30:08
 // ============================================
 
-import { GitBranch, Layers, Replace, Route, Sparkles, Split } from 'lucide-react';
+import { GitBranch, Image, Layers, Replace, Route, Sparkles, Split } from 'lucide-react';
 import { Tooltip } from '@/shared/ui/index.js';
 import { describeRouteSnapshot } from '@/features/providers/shared/routing/routeTargets.js';
 import { CodexLogo } from '@/features/providers/codex/components/CodexLogo.jsx';
 import { getModelBrand } from '../utils/modelBrand.js';
 import { DeepSeekIcon, GLMIcon, KimiIcon, QwenIcon } from './ModelBrandIcons.jsx';
+import { getRequestModelFallback } from '../utils/requestMetadata.js';
 
 const BRAND_ICON_CLASS = 'h-3 w-3 shrink-0';
 const CLAUDE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0';
@@ -270,6 +271,8 @@ const getRewriteIndicator = (source) => {
  */
 const ModelTag = ({
   model,
+  method = '',
+  path = '',
   provider = 'claude',
   className = '',
   title,
@@ -283,7 +286,8 @@ const ModelTag = ({
 }) => {
   const modelStyle = getModelStyle(model);
   const brand = getModelBrand(model, provider);
-  const BrandIcon = MODEL_ICONS[brand];
+  const fallback = !model || model === 'unknown' || model === '-' ? getRequestModelFallback({ method, path }) : null;
+  const BrandIcon = fallback ? fallback.icon === 'list' ? Layers : Image : MODEL_ICONS[brand];
   // Segoe UI's lowercase glyphs sit below the flex line-box center. Align
   // their visible center with the brand and route icons at each label size.
   const nameAlignment = MODEL_BRAND_CLASSES[brand]
@@ -291,7 +295,7 @@ const ModelTag = ({
     : brand === 'openai'
       ? (compact ? '-translate-y-[1.5px]' : '-translate-y-px')
       : '';
-  const displayName = (!model || model === 'unknown') ? '-' : model;
+  const displayName = fallback?.label || ((!model || model === 'unknown') ? '-' : model);
   const rewriteIndicator = routePath === '' ? null : getRewriteIndicator(rewriteSource);
   const rewriteTitle = rewriteIndicator
     ? `${originalModel || '原模型未记录'} → ${rewriteTarget || displayName}`
@@ -331,7 +335,7 @@ const ModelTag = ({
   );
 
   return (
-    <Tooltip className={compact ? 'min-w-0 max-w-full' : ''} contentClassName={routePath ? 'whitespace-pre-line text-left' : ''} content={title || routePath || rewriteTitle || displayName}>
+    <Tooltip className={compact ? 'min-w-0 max-w-full' : ''} contentClassName={routePath ? 'whitespace-pre-line text-left' : ''} content={title || fallback?.title || routePath || rewriteTitle || displayName}>
       {tag}
     </Tooltip>
   );

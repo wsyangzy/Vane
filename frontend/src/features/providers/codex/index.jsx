@@ -4,7 +4,7 @@ import ChannelResourceGrid from '@/features/providers/shared/pools/ChannelResour
 import { useCallback, useEffect, useState } from 'react';
 import { Database, Plus } from 'lucide-react';
 import { Button, EmptyState, ErrorMessage, LoadingSpinner, useToast } from '@/shared/ui/index.js';
-import SubscriptionManagement from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
+import SubscriptionManagement, { ClientConnectionButton } from '@/features/providers/shared/subscriptions/SubscriptionManagement.jsx';
 import ClientVersionBadge from '@/features/providers/shared/ClientVersionBadge.jsx';
 import { getErrorMessage, getFailoverToggleErrorMessage } from '@/features/providers/shared/formatters.js';
 import CredentialGroupDetailModal from '@/features/providers/shared/credentials/CredentialGroupDetailModal.jsx';
@@ -677,6 +677,7 @@ const CodexPage = ({ clientVersion, onViewRequests }) => {
         resourcesBusy={loading || Boolean(actionLoading)}
         onRefreshResources={() => fetchData({ silent: true, throwOnError: true })}
         resourceActions={<>
+          <ClientConnectionButton provider="codex" onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
           <SubscriptionManagement provider="codex" channels={channels} onUpdated={() => fetchData({ silent: true, throwOnError: true })} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} />
           {channels.length > 0 && <Button type="button" size="sm" icon={Plus} className="dispatch-resource-action" disabled={loading || Boolean(actionLoading)} onClick={openCreateChannelForm}>添加渠道</Button>}
         </>} endpoints={channels.flatMap((channel) => channel.endpoints.map((endpoint) => ({

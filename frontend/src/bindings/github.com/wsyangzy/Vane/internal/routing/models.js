@@ -779,6 +779,66 @@ export class DispatchPlanStage {
 }
 
 /**
+ * DispatchRouteSource is the default orchestration choice before applying a
+ * rule. It is explanatory configuration evidence, never an upstream attempt.
+ */
+export class DispatchRouteSource {
+    /**
+     * Creates a new DispatchRouteSource instance.
+     * @param {Partial<DispatchRouteSource>} [$$source = {}] - The source object to create the DispatchRouteSource.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["channel_id"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["group_id"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["channel_name"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["group_name"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["unavailable"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DispatchRouteSource instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DispatchRouteSource}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DispatchRouteSource(/** @type {Partial<DispatchRouteSource>} */($$parsedSource));
+    }
+}
+
+/**
  * DispatchTrace is the persistence boundary. It deliberately has no profile
  * descriptions, input, caller/session identifiers, quota error text or secrets.
  */
@@ -815,6 +875,20 @@ export class DispatchTrace {
              * @type {string}
              */
             this["profile_name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["requested_model"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {DispatchRouteSource | null | undefined}
+             */
+            this["default_source"] = undefined;
         }
         if (!("strategy" in $$source)) {
             /**
@@ -910,18 +984,22 @@ export class DispatchTrace {
      * @returns {DispatchTrace}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType11;
-        const $$createField7_0 = $$createType12;
-        const $$createField8_0 = $$createType19;
+        const $$createField5_0 = $$createType19;
+        const $$createField8_0 = $$createType11;
+        const $$createField9_0 = $$createType12;
+        const $$createField10_0 = $$createType21;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("default_source" in $$parsedSource) {
+            $$parsedSource["default_source"] = $$createField5_0($$parsedSource["default_source"]);
+        }
         if ("decision" in $$parsedSource) {
-            $$parsedSource["decision"] = $$createField6_0($$parsedSource["decision"]);
+            $$parsedSource["decision"] = $$createField8_0($$parsedSource["decision"]);
         }
         if ("intent" in $$parsedSource) {
-            $$parsedSource["intent"] = $$createField7_0($$parsedSource["intent"]);
+            $$parsedSource["intent"] = $$createField9_0($$parsedSource["intent"]);
         }
         if ("candidates" in $$parsedSource) {
-            $$parsedSource["candidates"] = $$createField8_0($$parsedSource["candidates"]);
+            $$parsedSource["candidates"] = $$createField10_0($$parsedSource["candidates"]);
         }
         return new DispatchTrace(/** @type {Partial<DispatchTrace>} */($$parsedSource));
     }
@@ -971,7 +1049,7 @@ export class DispatchTraceEvent {
      * @returns {DispatchTraceEvent}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType20;
+        const $$createField0_0 = $$createType22;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("candidate" in $$parsedSource) {
             $$parsedSource["candidate"] = $$createField0_0($$parsedSource["candidate"]);
@@ -1693,7 +1771,7 @@ export class QuotaView {
      * @returns {QuotaView}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType22;
+        const $$createField0_0 = $$createType24;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("windows" in $$parsedSource) {
             $$parsedSource["windows"] = $$createField0_0($$parsedSource["windows"]);
@@ -1905,6 +1983,7 @@ export class RoutingProfile {
         }
         if (!("wait_for_recovery" in $$source)) {
             /**
+             * Legacy storage/API field; request adapters apply the global policy.
              * @member
              * @type {boolean}
              */
@@ -1938,6 +2017,13 @@ export class RoutingProfile {
              */
             this["classifier"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {SearchPolicy | null | undefined}
+             */
+            this["search"] = undefined;
+        }
         if (!("revision" in $$source)) {
             /**
              * @member
@@ -1955,10 +2041,11 @@ export class RoutingProfile {
      * @returns {RoutingProfile}
      */
     static createFrom($$source = {}) {
-        const $$createField11_0 = $$createType24;
-        const $$createField12_0 = $$createType26;
-        const $$createField13_0 = $$createType28;
-        const $$createField14_0 = $$createType30;
+        const $$createField11_0 = $$createType26;
+        const $$createField12_0 = $$createType28;
+        const $$createField13_0 = $$createType30;
+        const $$createField14_0 = $$createType32;
+        const $$createField15_0 = $$createType34;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("members" in $$parsedSource) {
             $$parsedSource["members"] = $$createField11_0($$parsedSource["members"]);
@@ -1971,6 +2058,9 @@ export class RoutingProfile {
         }
         if ("classifier" in $$parsedSource) {
             $$parsedSource["classifier"] = $$createField14_0($$parsedSource["classifier"]);
+        }
+        if ("search" in $$parsedSource) {
+            $$parsedSource["search"] = $$createField15_0($$parsedSource["search"]);
         }
         return new RoutingProfile(/** @type {Partial<RoutingProfile>} */($$parsedSource));
     }
@@ -2087,6 +2177,73 @@ export class RoutingRule {
 }
 
 /**
+ * SearchPolicy is public profile configuration. Credentials are stored separately
+ * by the Codex adapter and never enter scheduling snapshots or diagnostic traces.
+ */
+export class SearchPolicy {
+    /**
+     * Creates a new SearchPolicy instance.
+     * @param {Partial<SearchPolicy>} [$$source = {}] - The source object to create the SearchPolicy.
+     */
+    constructor($$source = {}) {
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
+        if (!("vendor" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["vendor"] = "";
+        }
+        if (!("endpoint" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["endpoint"] = "";
+        }
+        if (!("timeout" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Duration}
+             */
+            this["timeout"] = time$0.Duration.$zero;
+        }
+        if (!("max_results" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max_results"] = 0;
+        }
+        if (!("has_api_key" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["has_api_key"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SearchPolicy instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SearchPolicy}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SearchPolicy(/** @type {Partial<SearchPolicy>} */($$parsedSource));
+    }
+}
+
+/**
  * Target 路由目标。用 ID 引用渠道与凭证分组，渠道改名不会让配置失效。
  */
 export class Target {
@@ -2159,16 +2316,20 @@ const $$createType14 = $Create.Array($$createType13);
 const $$createType15 = CandidateEvaluation.createFrom;
 const $$createType16 = $Create.Array($$createType15);
 const $$createType17 = $Create.Array($$createType0);
-const $$createType18 = DispatchTraceEvent.createFrom;
-const $$createType19 = $Create.Array($$createType18);
-const $$createType20 = Candidate.createFrom;
-const $$createType21 = QuotaSnapshot.createFrom;
-const $$createType22 = $Create.Array($$createType21);
-const $$createType23 = RoutingMember.createFrom;
+const $$createType18 = DispatchRouteSource.createFrom;
+const $$createType19 = $Create.Nullable($$createType18);
+const $$createType20 = DispatchTraceEvent.createFrom;
+const $$createType21 = $Create.Array($$createType20);
+const $$createType22 = Candidate.createFrom;
+const $$createType23 = QuotaSnapshot.createFrom;
 const $$createType24 = $Create.Array($$createType23);
-const $$createType25 = RoutingRule.createFrom;
+const $$createType25 = RoutingMember.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = IntentRule.createFrom;
+const $$createType27 = RoutingRule.createFrom;
 const $$createType28 = $Create.Array($$createType27);
-const $$createType29 = ClassifierConfig.createFrom;
-const $$createType30 = $Create.Nullable($$createType29);
+const $$createType29 = IntentRule.createFrom;
+const $$createType30 = $Create.Array($$createType29);
+const $$createType31 = ClassifierConfig.createFrom;
+const $$createType32 = $Create.Nullable($$createType31);
+const $$createType33 = SearchPolicy.createFrom;
+const $$createType34 = $Create.Nullable($$createType33);

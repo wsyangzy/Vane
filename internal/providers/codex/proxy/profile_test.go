@@ -47,6 +47,13 @@ func TestCodexProfileRecordsActualResourcesBeforeArchival(t *testing.T) {
 				}
 			})
 			h.usageTracker = tracker
+			tracker.UpdatePricing(map[string]tracking.ModelPricing{tracking.ModelPricingKey("codex", "test", ""): {Input: 10, Output: 20}})
+			first, second := tracking.DefaultEndpointMultiplier(), tracking.DefaultEndpointMultiplier()
+			first.CostMultiplier, second.CostMultiplier = 100, 0.1
+			tracker.UpdateEndpointMultipliers(map[string]tracking.EndpointMultiplier{
+				tracking.EndpointMultiplierGroupKey("codex", "first", "first", "first"):    first,
+				tracking.EndpointMultiplierGroupKey("codex", "second", "second", "second"): second,
+			})
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":"test","stream":%t,"input":"client text"}`, streaming))))
 			details, _, err := tracker.QueryRequestDetailsWithHotPool(context.Background(), &tracking.QueryOptions{Limit: 10})
@@ -67,6 +74,18 @@ func TestCodexProfileRecordsActualResourcesBeforeArchival(t *testing.T) {
 			}
 			if !trace.Successful || trace.Attempts != 2 {
 				t.Fatalf("final diagnostic record missing: %+v", trace)
+			}
+			if err := tracker.ForceFlush(); err != nil {
+				t.Fatal(err)
+			}
+			for _, resource := range []struct {
+				name string
+				cost float64
+			}{{"first", 0}, {"second", 0.000014}} {
+				used, _, err := tracker.CredentialGroupDailyCost(context.Background(), "codex", resource.name, resource.name)
+				if err != nil || used < resource.cost-1e-12 || used > resource.cost+1e-12 {
+					t.Fatalf("cost attributed to %s = %.12f, want %.12f (err=%v)", resource.name, used, resource.cost, err)
+				}
 			}
 		})
 	}

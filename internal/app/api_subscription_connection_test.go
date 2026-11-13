@@ -56,13 +56,15 @@ func TestUnifiedClientConnectionPreviewUsesApplicationAuthAndDefaultProfile(t *t
 			require.Equal(t, profile.ID, status.ProfileID)
 			require.Equal(t, profile.Name, status.ProfileName)
 			require.NotContains(t, status.Snippet+status.Command, a.config.Auth.Token)
-			input.Action, input.LocalKey = "preview", "old-group-key"
-			_, err = a.ManageSubscriptionConnection(input)
-			require.ErrorContains(t, err, "application_auth_required")
-			input.LocalKey = a.config.Auth.Token
+			input.Action = "preview"
 			preview, err := a.ManageSubscriptionConnection(input)
 			require.NoError(t, err)
+			if provider == "codex" {
+				require.True(t, strings.HasSuffix(preview.BaseURL, "/v1"))
+			}
 			request := httptest.NewRequest(http.MethodPost, "/responses", nil)
+			request.Header.Set("Authorization", "Bearer client-official-credential")
+			remainingAuth := "Bearer client-official-credential"
 			if provider == "claude" {
 				var settings struct {
 					Env map[string]string `json:"env"`
@@ -75,20 +77,23 @@ func TestUnifiedClientConnectionPreviewUsesApplicationAuthAndDefaultProfile(t *t
 				var settings struct {
 					Providers map[string]struct {
 						Headers map[string]string `toml:"http_headers"`
+						Bearer  string            `toml:"experimental_bearer_token"`
 					} `toml:"model_providers"`
 				}
 				require.NoError(t, toml.Unmarshal([]byte(preview.Snippet), &settings))
 				for _, config := range settings.Providers {
-					request.Header.Set("X-Relay-Key", config.Headers["X-Relay-Key"])
+					require.NotContains(t, config.Headers, "X-Relay-Key")
+					require.Equal(t, a.config.Auth.Token, config.Bearer)
+					request.Header.Set("Authorization", "Bearer "+config.Bearer)
 				}
+				remainingAuth = ""
 			}
-			request.Header.Set("Authorization", "Bearer client-official-credential")
 			ctx, handled, err := a.authenticateRoutingProfile(request, provider)
 			require.NoError(t, err)
 			require.True(t, handled)
 			require.Equal(t, "profile:"+provider, routing.CallerScope(ctx))
 			require.Empty(t, request.Header.Get("X-Relay-Key"))
-			require.Equal(t, "Bearer client-official-credential", request.Header.Get("Authorization"))
+			require.Equal(t, remainingAuth, request.Header.Get("Authorization"))
 			_, err = os.Stat(path)
 			require.True(t, os.IsNotExist(err), "preview must not create the client config")
 			a.config.Auth.Enabled = false
@@ -214,7 +219,7 @@ func TestUnifiedClientConnectionRejectsStaleDefaultAndKeepsRestoreAvailable(t *t
 	}
 }
 
-func TestCodexGlobalConfigKeepsSubscriptionRouteAndIPv6(t *testing.T) {
+func TestCodexGlobalConfigMigratesSubscriptionRouteToUnifiedModeTwoAndIPv6(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	path, _ := subscriptionConfigPath("codex")
 	os.WriteFile(path, []byte("model_provider = \"relay_subscription\"\n[model_providers.relay_subscription]\nbase_url = \"http://[::1]:9000/backend-api/codex\"\nrequires_openai_auth = true\n[model_providers.relay_subscription.http_headers]\nX-Relay-Key = 'keep-local-key'\n"), 0600)
@@ -223,7 +228,103 @@ func TestCodexGlobalConfigKeepsSubscriptionRouteAndIPv6(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)
-	if !strings.Contains(string(got), "http://[::1]:9000/backend-api/codex") || !strings.Contains(string(got), "keep-local-key") {
-		t.Fatal("model settings replaced subscription connection")
+	var parsed map[string]any
+	require.NoError(t, toml.Unmarshal(got, &parsed))
+	p := parsed["model_providers"].(map[string]any)["OpenAI"].(map[string]any)
+	if parsed["model_provider"] != "OpenAI" || p["name"] != "OpenAI" || p["base_url"] != "http://[::1]:9000/v1" || p["requires_openai_auth"] != false || p["experimental_bearer_token"] != "vane-local" {
+		t.Fatal("ordinary settings did not migrate legacy subscription connection")
 	}
+}
+
+func TestCodexConnectionCatalogPreviewApplyAndRestore(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("requires Windows DPAPI")
+	}
+	a, _, path := connectionTestApp(t, "codex")
+	original := []byte("model = 'keep-model'\n[features]\ngoals = false\n")
+	require.NoError(t, os.WriteFile(path, original, 0600))
+	catalogPath := filepath.Join(filepath.Dir(path), "codex-models.json")
+	catalog := []byte(`{"models":[{"slug":"keep-model","base_instructions":"Local model instructions"}]}`)
+	require.NoError(t, os.WriteFile(catalogPath, catalog, 0600))
+	authPath := filepath.Join(filepath.Dir(path), "auth.json")
+	require.NoError(t, os.WriteFile(authPath, []byte("existing-official-login"), 0600))
+	for _, mode := range []string{"local", "remote"} {
+		input := SubscriptionConnectionCommand{Provider: "codex", Action: "preview", ModelCatalogMode: mode, ModelCatalogPath: catalogPath}
+		preview, err := a.ManageSubscriptionConnection(input)
+		require.NoError(t, err)
+		require.Equal(t, mode, preview.ModelCatalogMode)
+		before, err := os.ReadFile(path)
+		require.NoError(t, err)
+		input.Action, input.ProfileID, input.Revision, input.BindingVersion, input.ContentRevision = "apply", preview.ProfileID, preview.Revision, preview.BindingVersion, preview.ContentRevision
+		// Changing the selection after a preview must not write a different config.
+		input.ModelCatalogMode = "remote"
+		if mode == "remote" {
+			input.ModelCatalogMode = "local"
+		}
+		_, err = a.ManageSubscriptionConnection(input)
+		require.ErrorContains(t, err, "重新预览")
+		input.ModelCatalogMode = mode
+		if mode == "local" {
+			require.NoError(t, os.WriteFile(catalogPath, []byte(`{"data":[{"id":"not-a-native-catalog"}]}`), 0600))
+			_, err = a.ManageSubscriptionConnection(input)
+			require.ErrorContains(t, err, "model_catalog_json 无效")
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			require.NoError(t, os.WriteFile(catalogPath, catalog, 0600))
+		}
+		applied, err := a.ManageSubscriptionConnection(input)
+		require.NoError(t, err)
+		require.True(t, applied.BackupAvailable)
+		status, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "status"})
+		require.NoError(t, err)
+		require.Equal(t, mode, status.ModelCatalogMode)
+		require.Equal(t, catalogPath, status.ModelCatalogPath)
+		var parsed map[string]any
+		actual, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, toml.Unmarshal(actual, &parsed))
+		require.Equal(t, "keep-model", parsed["model"])
+		require.Equal(t, false, parsed["features"].(map[string]any)["goals"])
+		if mode == "local" {
+			require.Equal(t, catalogPath, parsed["model_catalog_json"])
+		} else {
+			require.NotContains(t, parsed, "model_catalog_json")
+		}
+	}
+	status, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "status"})
+	require.NoError(t, err)
+	_, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "restore", Revision: status.Revision})
+	require.NoError(t, err)
+	actual, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, actual)
+	actual, err = os.ReadFile(catalogPath)
+	require.NoError(t, err)
+	require.Equal(t, catalog, actual)
+	actual, err = os.ReadFile(authPath)
+	require.NoError(t, err)
+	require.Equal(t, "existing-official-login", string(actual))
+}
+
+func TestCodexConnectionCatalogStatusCanRepairMissingFile(t *testing.T) {
+	a, _, path := connectionTestApp(t, "codex")
+	status, err := a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "status"})
+	require.NoError(t, err)
+	require.Equal(t, "local", status.ModelCatalogMode, "new configurations start with the local file option")
+	require.Equal(t, filepath.Join(filepath.Dir(path), "codex-models.json"), status.ModelCatalogPath)
+	require.NoError(t, os.WriteFile(path, []byte("model_catalog_json = 'missing-models.json'\n"), 0600))
+	status, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "status"})
+	require.NoError(t, err)
+	require.Equal(t, "local", status.ModelCatalogMode)
+	require.Equal(t, "missing-models.json", status.ModelCatalogPath)
+	_, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "preview", ModelCatalogMode: "remote"})
+	require.NoError(t, err, "switching to remote can repair a missing local catalog")
+	_, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "choose_model_catalog"})
+	require.ErrorContains(t, err, "桌面应用")
+	require.NoError(t, os.WriteFile(path, []byte("broken = ["), 0600))
+	_, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "status"})
+	require.NoError(t, err, "damaged TOML must not disable status and restore")
+	_, err = a.ManageSubscriptionConnection(SubscriptionConnectionCommand{Provider: "codex", Action: "preview", ModelCatalogMode: "remote"})
+	require.ErrorContains(t, err, "config.toml 无效")
 }

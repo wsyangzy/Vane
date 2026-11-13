@@ -289,6 +289,7 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 	}
 	baseHandler := codexproxy.NewHTTPHandler(a.codexEndpointMgr, cfg, a.logger, a.usageTracker, a.privacyService)
 	baseHandler.SetSubscriptionController(a.codexSubscriptions)
+	baseHandler.SetSearchConfigProvider(a.codexSearchConfig)
 	baseHandler.SetProfileResponseObserver(func(_ context.Context, c routing.DispatchCandidate, status int, headers http.Header, body []byte) {
 		a.observeRoutingQuota(c, status, headers, body)
 	})
@@ -312,12 +313,16 @@ func (a *App) registerCodexRoutes(mux *http.ServeMux) {
 		"/v1/completions",
 		"/v1/models",
 		"/v1/embeddings",
+		"/v1/images",
+		"/v1/alpha/search",
 		"/v1/responses",
 		"/responses",
 		"/chat/completions",
 		"/completions",
 		"/models",
 		"/embeddings",
+		"/images",
+		"/alpha/search",
 	}
 	var registeredPaths []string
 	for _, path := range codexBasePaths {

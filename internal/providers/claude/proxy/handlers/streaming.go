@@ -376,6 +376,10 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 			attemptCtx, admission, admitErr := sh.forwarder.admitSubscription(ctx, ep, route.candidate(sh.forwarder, ep, bodyBytes).Model)
 			if admitErr != nil {
+				recordAdmissionSkip(lifecycleManager, admitErr)
+				if lastErr == nil {
+					lastErr = &admissionFailure{admitErr}
+				}
 				localAdmissionRejected = true
 				if route != nil {
 					route.ledger.Skip(route.candidate(sh.forwarder, ep, bodyBytes), admitErr.Error())
@@ -603,6 +607,10 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			// globalAttemptCount: 全局尝试次数，用于限流策略
 			decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, true) // 流式请求: isStreaming=true
 			decision = route.failureDecision(sh.forwarder, ep, bodyBytes, lastErr, decision)
+			if failure := claudeRouteFailure(lastErr); failure.Reason == "auxiliary_endpoint_unsupported" {
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, failure.Reason, http.StatusBadGateway, route)
+				return
+			}
 			if (route == nil || route.pool == nil && route.profile == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(lastErr, nil) == http.StatusUnauthorized {
 				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "subscription_authentication_required", http.StatusUnauthorized, route)
 				return

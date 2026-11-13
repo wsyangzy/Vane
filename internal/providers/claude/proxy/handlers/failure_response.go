@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,7 +22,7 @@ func failoverTerminationStatusCode(lastErr error, lastResp *http.Response) int {
 }
 
 // localFailureBody 请求从未拿到提供商响应时给客户端的正文：只回 Relay 的失败分类标识，
-// 不编造提供商响应；该标识不写入追踪（追踪已有 failure_reason 列，人类可读的说明由前端按分类渲染）。
+// 不编造提供商响应；前端把具体的本地原因与提供商原文分别展示。
 func localFailureBody(reason, upstreamMsg string) string {
 	if upstreamMsg != "" {
 		return upstreamMsg
@@ -37,6 +38,15 @@ func failRequest(lifecycleManager RequestLifecycleManager, reason, detail string
 	}
 	lifecycleManager.FailRequest(reason, detail)
 }
+
+// Skip annotation is optional for adapters that do not persist endpoint chains.
+func recordAdmissionSkip(lifecycle RequestLifecycleManager, err error) {
+	if recorder, ok := lifecycle.(interface{ RecordEndpointSkip(string) }); ok {
+		recorder.RecordEndpointSkip(err.Error())
+	}
+}
+
+type admissionFailure struct{ error }
 
 func (rh *RegularHandler) writeFailoverTermination(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, errText string, isLoopLimit bool, connID string) {
 	// 传递 nil 而不是 err，保留端点在 SetEndpointLastRequestFail 中设置的真实失败原因。
@@ -105,6 +115,11 @@ func (sh *StreamingHandler) writeStreamingFailoverTermination(w http.ResponseWri
 }
 
 func (sh *StreamingHandler) writeStreamingEndpointExhausted(w http.ResponseWriter, r *http.Request, lifecycleManager RequestLifecycleManager, failedEndpointNames []string, lastErr error, connID string) {
+	var rejected *admissionFailure
+	if errors.As(lastErr, &rejected) && lifecycleManager.GetAttemptCount() == 0 {
+		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, rejected.Error(), http.StatusBadGateway)
+		return
+	}
 	sh.writeStreamingTerminalFailure(w, r, lifecycleManager, failedEndpointNames, lastErr, "endpoint_exhausted", http.StatusBadGateway)
 	slog.Warn(fmt.Sprintf("⚠️ [当前渠道端点耗尽] [%s] err=%s", connID, ExtractUpstreamErrorMessage(lastErr)))
 }

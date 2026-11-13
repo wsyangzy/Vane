@@ -20,6 +20,21 @@ const widths = {
   cost: [60, 78],
 };
 
+// Auxiliary descriptions can use adjacent model-only fields while shared fields
+// retain the same table coordinates, even when columns are hidden or reordered.
+export function auxiliaryColumnLayout(columns) {
+  const cells = [];
+  const descriptionFields = new Set(['reasoningEffort', 'serviceTier']);
+  for (const column of columns) {
+    const previous = cells.at(-1);
+    if (previous?.id === 'model' && descriptionFields.has(column.id)) {
+      previous.colSpan += 1;
+      previous.layoutWidth += column.layoutWidth;
+    } else cells.push({ ...column, colSpan: 1 });
+  }
+  return cells;
+}
+
 // A complete page fills the available body. A short last page keeps that same
 // row density, while smaller windows and larger page sizes scroll naturally.
 export function requestRowHeight(regionHeight, headerHeight, pageSize) {

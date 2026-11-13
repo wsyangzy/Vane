@@ -27,6 +27,13 @@ export function CheckPortAvailable(port) {
 }
 
 /**
+ * @returns {$CancellablePromise<string>}
+ */
+export function ChooseHistoryArchiveDirectory() {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.SettingsService.ChooseHistoryArchiveDirectory");
+}
+
+/**
  * @returns {$CancellablePromise<app$0.SettingInfo[]>}
  */
 export function GetAllSettings() {
@@ -45,11 +52,20 @@ export function GetConfigSourceInfo() {
 }
 
 /**
+ * @returns {$CancellablePromise<app$0.DataStoragePaths>}
+ */
+export function GetDataStoragePaths() {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.SettingsService.GetDataStoragePaths").then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<app$0.PortInfo>}
  */
 export function GetPortInfo() {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.SettingsService.GetPortInfo").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -69,7 +85,7 @@ export function GetSetting(category, key) {
  */
 export function GetSettingCategories() {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.SettingsService.GetSettingCategories").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -98,7 +114,7 @@ export function GetSettingsByScope(input) {
  */
 export function GetSettingsStorageStatus() {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.SettingsService.GetSettingsStorageStatus").then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType8($result);
     }));
 }
 
@@ -139,7 +155,8 @@ const $$createType0 = app$0.SettingInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = app$0.ConfigSourceInfo.createFrom;
 const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = app$0.PortInfo.createFrom;
-const $$createType5 = app$0.CategoryInfo.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = app$0.SettingsStorageStatus.createFrom;
+const $$createType4 = app$0.DataStoragePaths.createFrom;
+const $$createType5 = app$0.PortInfo.createFrom;
+const $$createType6 = app$0.CategoryInfo.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = app$0.SettingsStorageStatus.createFrom;

@@ -137,6 +137,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 
 	// 追踪最后一次端点错误，用于最终失败时输出提供商原始响应
 	var lastErr error
+	var lastAdmissionErr error
 
 	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，不读写全局激活渠道
 	route := planClaudeRoute(rh.endpointManager, r, bodyBytes, false, connID, rh.forwarder.states)
@@ -312,6 +313,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				}
 				attemptCtx, admission, admitErr := rh.forwarder.admitSubscription(ctx, ep, route.candidate(rh.forwarder, ep, bodyBytes).Model)
 				if admitErr != nil {
+					lastAdmissionErr = admitErr
+					recordAdmissionSkip(lifecycleManager, admitErr)
 					if route != nil {
 						route.ledger.Skip(route.candidate(rh.forwarder, ep, bodyBytes), admitErr.Error())
 						route.publishSnapshot()
@@ -412,6 +415,10 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				// globalAttemptCount: 全局尝试次数，用于限流策略
 				decision := retryMgr.ShouldRetryWithDecision(errorCtx, attempt, globalAttemptCount, false) // 常规请求: isStreaming=false
 				decision = route.failureDecision(rh.forwarder, ep, bodyBytes, err, decision)
+				if failure := claudeRouteFailure(err); failure.Reason == "auxiliary_endpoint_unsupported" {
+					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), err, failure.Reason, http.StatusBadGateway, route)
+					return
+				}
 				if (route == nil || route.pool == nil && route.profile == nil) && ep.Config.AuthMode == subscription.ClientPassthrough && GetStatusCodeFromError(err, nil) == http.StatusUnauthorized {
 					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), err, "subscription_authentication_required", http.StatusUnauthorized, route)
 					return
@@ -694,6 +701,10 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	}
 
 	// 🚀 [状态机重构] Phase 4: 最终失败处理（不挂起）
+	if lifecycleManager.GetAttemptCount() == 0 && lastAdmissionErr != nil {
+		rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastAdmissionErr, lastAdmissionErr.Error(), http.StatusBadGateway)
+		return
+	}
 	rh.writeRegularEndpointExhausted(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, connID)
 }
 

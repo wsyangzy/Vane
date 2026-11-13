@@ -39,6 +39,13 @@ func (m *EndpointManager) PrepareDispatchCandidate(c routing.DispatchCandidate, 
 		return c
 	}
 	c.StateVersion = routing.StateVersion(&ep.stateVersion)
+	if c.Protocol == "images" {
+		c.Enabled = c.Enabled && ep.AuthMode != subscription.ClientPassthrough
+		return c
+	}
+	if c.Protocol == "search" {
+		return c
+	}
 	if override != "" {
 		c.UpstreamModel = override
 	} else {
@@ -114,6 +121,16 @@ func beginCodexProfileSend(ctx context.Context) error {
 }
 
 func (h *Handler) planProfileRoute(r *http.Request, body []byte, streaming bool, requestID string, runtime *routing.ProfileRuntime) *codexRoute {
+	if isCodexSearchRequest(r) {
+		plan := runtime.PlanNative(r.Context(), 0, h.requestModel(r, body), "search")
+		plan.RequestID = requestID
+		return &codexRoute{kind: routing.KindPool, profile: &plan}
+	}
+	if isCodexImageRequest(r) {
+		plan := runtime.PlanNative(r.Context(), 0, h.requestModel(r, body), "images")
+		plan.RequestID = requestID
+		return &codexRoute{kind: routing.KindPool, profile: &plan}
+	}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	turn := routing.ResolveTurn(r.Context(), r.Header, body, "codex")
 	keys := codexStateKeys(r, body)
@@ -263,6 +280,13 @@ func codexProfileProtocolSuccess(path string, data []byte) bool {
 		_, list := frame["data"].([]any)
 		return models || frame["object"] == "list" && list
 	}
+	if path == "/alpha/search" {
+		_, ok := frame["output"].(string)
+		return ok
+	}
+	if path == "/images/generations" || path == "/images/edits" {
+		return codexImageProtocolSuccess(frame)
+	}
 	if path == "/responses/compact" {
 		_, output := frame["output"].([]any)
 		return output && (frame["object"] == "response.compaction" || frame["type"] == "response.compaction")
@@ -300,6 +324,9 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 	if plan.Error != "" && !(plan.Error == "route_unavailable" && plan.Profile.WaitForRecovery) {
 		plan.End(plan.Error)
 		publishProgress()
+		if h.trySearchFallback(w, r, body, requestID, start, chain) {
+			return
+		}
 		h.recordFailure(requestID, start, plan.Error, plan.Error, nil, plan.Model)
 		h.writeError(w, http.StatusServiceUnavailable, plan.Error)
 		return
@@ -330,7 +357,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					continue
 				}
 				used, _, err := h.usageTracker.CredentialGroupDailyCost(r.Context(), "codex", channel.Name, ep.CredentialGroupName)
-				if err != nil || used >= ep.DailyCostLimitUSD {
+				if err != nil {
+					plan.Skip(candidate, "daily_cost_state_unavailable")
+					continue
+				}
+				if used >= ep.DailyCostLimitUSD {
 					plan.Skip(candidate, "daily_cost_limit_exceeded")
 					continue
 				}
@@ -386,7 +417,10 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				continue
 			}
 			outbound := h.outboundBody(r, requestID, channel, body)
-			rewrite := rewriteModelForRoute(outbound, candidate.Identity().Model, h.logger, requestID)
+			rewrite := modelRewriteResult{Body: outbound}
+			if !isCodexImageRequest(r) && !isCodexSearchRequest(r) {
+				rewrite = rewriteModelForRoute(outbound, candidate.Identity().Model, h.logger, requestID)
+			}
 			beforeSend := func() error {
 				if err := attempt.Begin(sendRequest.Context()); err != nil {
 					return err
@@ -425,7 +459,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				resp.Body.Close()
 				attempt.SetUsage(codexAttemptUsage(h.tokenParser.ParseNonStreaming(raw), true, extractServiceTier(body)))
 				h.observeProfileResponse(sendRequest.Context(), candidate, resp.StatusCode, resp.Header, raw)
-				failure := codexRouteFailure(resp.StatusCode, raw, nil)
+				failure := codexRequestFailure(sendRequest, resp.StatusCode, raw, nil)
 				code, kind, _ := routing.ErrorIdentity(raw)
 				for _, identifier := range []string{code, kind} {
 					switch identifier {
@@ -516,7 +550,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			tokens, cached := profileUsage(usage)
 			attempt.SetCachedTokens(cached)
 			if !success {
-				failure := codexRouteFailure(resp.StatusCode, raw, readErr)
+				failure := codexRequestFailure(sendRequest, resp.StatusCode, raw, readErr)
 				finish(tokens, false, failure, routing.RetryAfter(resp.Header, time.Now()))
 				if resp.StatusCode >= 400 {
 					lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(raw, failure.Reason))
@@ -600,6 +634,9 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		}
 	} else {
 		publishProgress()
+	}
+	if h.trySearchFallback(w, r, body, requestID, start, chain) {
+		return
 	}
 	if lastResponse != nil {
 		lastResponse.Body = io.NopCloser(bytes.NewReader(lastBody))

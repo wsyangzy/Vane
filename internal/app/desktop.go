@@ -126,7 +126,7 @@ func (a *App) OpenLogDir() error {
 }
 
 func (a *App) OpenDataDir() error {
-	return a.openDirectory(appdir.GetDataDir(), "数据目录")
+	return a.openDirectory(filepath.Dir(a.getEffectiveUsageDBPath()), "数据目录")
 }
 
 func (a *App) OpenClaudeConfigDir() error {

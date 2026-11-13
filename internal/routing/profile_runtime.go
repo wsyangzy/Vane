@@ -111,6 +111,7 @@ type DispatchPlan struct {
 }
 
 type dispatchRequestState struct {
+	native          *nativeDispatchPolicy
 	mu              sync.Mutex
 	runtime         *ProfileRuntime
 	ledger          Ledger
@@ -255,7 +256,7 @@ func profileRuleTier(rule RoutingRule) int {
 		if rule.RequireStream != nil || rule.IntentID != "" {
 			return 2
 		}
-		if !strings.Contains(rule.MatchModel, "*") {
+		if tier, _ := specificity(rule.MatchModel); tier == 0 {
 			return 0
 		}
 		return 1
@@ -485,11 +486,15 @@ func (r *ProfileRuntime) remembered(key string, now time.Time, preview bool) (pr
 }
 
 func (r *ProfileRuntime) Plan(ctx context.Context, profileID int64, model string, streaming bool, turn TurnInput, preview bool) DispatchPlan {
-	config := r.snapshot()
+	return r.plan(ctx, profileID, model, streaming, turn, preview, nil)
+}
+
+func (r *ProfileRuntime) plan(ctx context.Context, profileID int64, model string, streaming bool, turn TurnInput, preview bool, native *nativeDispatchPolicy) DispatchPlan {
+	config := native.apply(r.snapshot())
 	now := r.now()
 	p, exists := runtimeProfile(config, profileID)
 	plan := DispatchPlan{RequestID: fmt.Sprintf("dispatch-%d-%d", now.UnixNano(), dispatchRequestSequence.Add(1)), Profile: p, Model: model, requestedModel: model, Turn: turn, Preview: preview, Stages: []DispatchPlanStage{}, Evaluations: []CandidateEvaluation{}, EligibleCandidates: []DispatchCandidate{}}
-	plan.state = &dispatchRequestState{runtime: r, created: now, publish: config.OnTrace}
+	plan.state = &dispatchRequestState{runtime: r, created: now, publish: config.OnTrace, native: native}
 	if !exists {
 		plan.Error = "routing_profile_missing"
 		return plan
@@ -620,6 +625,11 @@ func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config Runtim
 					compatibility[id] = "incompatible"
 				} else {
 					compatibility[id] = "compatible"
+				}
+			}
+			if reason == "" && config.CheckAdmission != nil {
+				if admissionReason := config.CheckAdmission(c); admissionReason != "" {
+					reason = safeDispatchReason(admissionReason, "candidate_unavailable")
 				}
 			}
 			seen[id] = true

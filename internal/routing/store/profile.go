@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS routing_profile_intents (
  fallback_intent TEXT NOT NULL DEFAULT '', fallback_to_default INTEGER, PRIMARY KEY(profile_id,id));
 CREATE TABLE IF NOT EXISTS routing_profile_classifier_config (
  profile_id INTEGER PRIMARY KEY REFERENCES routing_profiles(id) ON DELETE CASCADE, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS routing_profile_search_config (
+ profile_id INTEGER PRIMARY KEY REFERENCES routing_profiles(id) ON DELETE CASCADE, payload TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS routing_quota_snapshots (
  provider TEXT NOT NULL CHECK(provider IN ('claude','codex')), channel_id INTEGER NOT NULL, group_id INTEGER NOT NULL,
  model_scope TEXT NOT NULL, window_name TEXT NOT NULL, payload TEXT NOT NULL, observed_at TEXT NOT NULL,
@@ -240,6 +242,15 @@ func loadProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingProf
 		return err
 	}
 	var config string
+	err = tx.QueryRowContext(ctx, `SELECT payload FROM routing_profile_search_config WHERE profile_id=?`, p.ID).Scan(&config)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal([]byte(config), &p.Search); err != nil {
+			return err
+		}
+	}
 	err = tx.QueryRowContext(ctx, `SELECT payload FROM routing_profile_classifier_config WHERE profile_id=?`, p.ID).Scan(&config)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -252,6 +263,12 @@ func loadProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingProf
 
 // Save updates the caller only after commit, including defaults and child IDs.
 func (s *ProfileStore) Save(ctx context.Context, profile *routing.RoutingProfile) error {
+	return s.SaveWith(ctx, profile, nil)
+}
+
+// SaveWith lets a provider commit its private configuration atomically with the
+// profile revision. The callback is not run for rejected or stale edits.
+func (s *ProfileStore) SaveWith(ctx context.Context, profile *routing.RoutingProfile, beforeCommit func(context.Context, *sql.Tx, int64) error) error {
 	if profile == nil {
 		return errors.New("profile_missing")
 	}
@@ -329,6 +346,11 @@ func (s *ProfileStore) Save(ctx context.Context, profile *routing.RoutingProfile
 	if err = ensureRuntimeDefault(ctx, tx, p.Provider); err != nil {
 		return err
 	}
+	if beforeCommit != nil {
+		if err := beforeCommit(ctx, tx, p.ID); err != nil {
+			return err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -379,6 +401,17 @@ func writeProfileChildren(ctx context.Context, tx *sql.Tx, p *routing.RoutingPro
 			return err
 		}
 	}
+	if p.Search != nil {
+		public := *p.Search
+		public.HasAPIKey = false
+		config, err := json.Marshal(public)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO routing_profile_search_config(profile_id,payload) VALUES(?,?)`, p.ID, string(config)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -412,7 +445,7 @@ func validateProfileTargets(ctx context.Context, tx *sql.Tx, p *routing.RoutingP
 }
 
 func deleteProfileChildren(ctx context.Context, tx *sql.Tx, id int64) error {
-	for _, table := range []string{"routing_profile_members", "routing_profile_rules", "routing_profile_intents", "routing_profile_classifier_config"} {
+	for _, table := range []string{"routing_profile_members", "routing_profile_rules", "routing_profile_intents", "routing_profile_classifier_config", "routing_profile_search_config"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE profile_id=?`, id); err != nil {
 			return err
 		}

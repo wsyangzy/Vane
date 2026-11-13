@@ -394,6 +394,11 @@ func (a *App) applySettingsToConfig(runRetentionMaintenance bool) error {
 		a.emitEndpointUpdate()
 		a.emitCodexProviderStateUpdate()
 	}
+	if runRetentionMaintenance {
+		if err := a.applyHistoryArchiveDirectory(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

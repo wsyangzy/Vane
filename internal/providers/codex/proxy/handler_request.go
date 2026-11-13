@@ -91,6 +91,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Body == nil {
 		r.Body = http.NoBody
 	}
+	if isCodexSearchRequest(r) {
+		r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	}
 	// 1. 读取并缓存请求体（重试时需要重放）
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -139,7 +142,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 模型改写必须等候选端点（及其凭证分组）选定后再执行；这里保留隐私处理后的
 	// 原始 body，故障转移时每个分组都从同一份请求重新计算自己的策略。
 	channelName := ""
-	if h.manager != nil {
+	if h.manager != nil && !isCodexSearchRequest(r) {
 		// Profile scheduling selects resources per request. The legacy active
 		// channel may be outside the profile and must not label an unsent request.
 		if runtime := h.manager.PoolRuntime(); runtime == nil || runtime.ProfileRuntime() == nil {
@@ -153,9 +156,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 2. 检测是否流式请求
 	isStreaming := bytes.Contains(body, []byte(`"stream":true`)) ||
 		bytes.Contains(body, []byte(`"stream": true`))
+	if isCodexSearchRequest(r) {
+		isStreaming = false
+	}
 
 	// 3. 从请求体提取模型名（用于在响应未携带 model 时填充）
-	requestModel := h.tokenParser.ParseModelFromBody(originalBody)
+	requestModel := h.requestModel(r, originalBody)
 
 	// 3b. 从请求体提取 reasoning 配置（Codex 请求体 reasoning: {effort, mode, summary}）
 	reasoningJSON := extractReasoning(body)
@@ -180,6 +186,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 5. 记录请求开始（追踪：Provider=codex + 渠道 + 请求体模型）
 	h.recordStart(requestID, r, isStreaming, channelName, requestModel, modelRewriteResult{}, reasoningJSON, serviceTier)
+	if isCodexSearchRequest(r) {
+		if h.serveSearchAdapter(w, r, originalBody, requestID, startTime) {
+			return
+		}
+		// Explicit native aliases retain their original path in tracking, while
+		// outbound requests use the canonical upstream search resource.
+		if strings.HasSuffix(r.URL.Path, "/native") {
+			r = r.Clone(r.Context())
+			r.URL.Path = strings.TrimSuffix(r.URL.Path, "/native")
+		}
+		isStreaming = false
+	}
+	if isCodexImageRequest(r) && isStreaming {
+		h.recordFailure(requestID, startTime, "image_streaming_unsupported", "图像接口目前支持非流式转发", nil, requestModel)
+		h.writeError(w, http.StatusBadRequest, "image_streaming_unsupported")
+		return
+	}
 
 	// 请求级路由（模型规则 > 非流改道）：命中后只按阶段尝试目标，全局激活渠道全程不读写
 	if route := h.planCodexRoute(r, originalBody, isStreaming, requestID); route != nil {
@@ -399,6 +422,9 @@ outerLoop:
 		"loops_tried", maxLoops,
 		"channel", channelName,
 	)
+	if h.trySearchFallback(w, r, originalBody, requestID, startTime, endpointChain) {
+		return
+	}
 	if lastUpstreamStatus > 0 {
 		h.recordUpstreamFailure(requestID, startTime, failureReason, detail, lastUpstreamStatus, nil, requestModel)
 	} else {

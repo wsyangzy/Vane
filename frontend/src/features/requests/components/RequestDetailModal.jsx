@@ -35,6 +35,7 @@ import RequestStatusBadge from './RequestStatusBadge.jsx';
 import ModelTag from './ModelTag.jsx';
 import RequestDispatchDetails from './RequestDispatchDetails.jsx';
 import RequestPrivacyDetails from './RequestPrivacyDetails.jsx';
+import LocalRequestFailure from './LocalRequestFailure.jsx';
 import './requestDetail.css';
 import DurationBadge from './DurationBadge.jsx';
 import { formatCost, formatDuration, formatTimestamp } from '@/services/http/api.js';
@@ -50,7 +51,6 @@ import {
   isCacheInclusiveProvider
 } from '../utils/tokenDisplay.js';
 import {
-  collectFailedHops,
   extractUpstreamErrorMessage,
   formatUpstreamErrorText,
   getEndpointChainItems,
@@ -74,15 +74,11 @@ import {
   parseReasoningConfig,
   REASONING_FIELD_LABELS
 } from '../utils/requestMetadata.js';
-import { describeFailureReason } from '../utils/failureSummary.js';
+import { describeFailureReason, getRequestFailureDetails } from '../utils/failureSummary.js';
 import { getRequestOutcome } from '../utils/requestOutcome.js';
 import { describeRouteSnapshot, describeRouteExecution } from '@/features/providers/shared/routing/routeTargets.js';
 
-// last_failure_reason 只存原样保存的上游正文或传输层错误文本，标签"原始信息"。
-// 没有它的失败只剩 Relay 的分类（failure_reason），按分类渲染一句说明，标签"失败原因"，
-// 与 HTTP 状态码来源无关：正文读取失败这类记录带着真实上游 200，详情却是本地错误文本。
-// 分类文案与右上角提示共用 failureSummary，避免两处说法不一致。
-// 取消不在此列：它是客户端主动断开，单独以中性样式展示，不混进红色错误卡片。
+// Provider responses, local processing and cancellation each have their own presentation.
 const FAILURE_STATUSES = new Set([
   'failed',
   'error',
@@ -97,14 +93,6 @@ const FAILURE_STATUSES = new Set([
 
 const isFailureStatus = (status) => FAILURE_STATUSES.has(String(status || '').toLowerCase());
 const isCancelledStatus = (status) => ['cancelled', 'canceled'].includes(String(status || '').toLowerCase());
-
-const getFailureDetail = (request) => {
-  if (!isFailureStatus(request.status)) return { text: '', isRaw: false };
-  const raw = request.last_failure_reason || request.lastFailureReason || '';
-  const reason = request.failure_reason || request.failureReason || '';
-  if (raw && raw !== reason) return { text: String(raw), isRaw: true };
-  return { text: describeFailureReason(reason), isRaw: false };
-};
 
 /**
  * 信息行组件
@@ -434,14 +422,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
     if (index === total - 1) return '最终';
     return '中转';
   };
-  const { text: failureDetail, isRaw: failureDetailIsRaw } = getFailureDetail(request);
+  const failureDetails = getRequestFailureDetails(request);
+  const failureDetail = failureDetails.upstreamDetail;
   // 失败跳（最后一跳在前）：新链路逐跳记录了上游状态码、原文与诊断头
-  const failedHops = isFailure ? collectFailedHops(chainNodes) : [];
+  const failedHops = isFailure ? failureDetails.upstreamHops : [];
   const showEarlierHops = earlierHopsRequestId === request.requestId;
   const setShowEarlierHops = (toggle) => {
     setEarlierHopsRequestId(toggle(showEarlierHops) ? request.requestId : null);
   };
-  const failureCode = request.failure_reason || request.failureReason || '';
   // 复制内容：逐跳的状态码、原始正文与诊断头，排查时可直接贴给服务商
   const errorText = failedHops.length > 0
     ? failedHops.map((hop) => [
@@ -642,7 +630,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 <div className="p-4">
                   <div className="flex items-center justify-between py-3">
                     <span className="text-sm font-medium text-slate-500">模型名称</span>
-                    <ModelTag model={request.model} provider={request.provider} />
+                    <ModelTag model={request.model} provider={request.provider} method={request.method} path={request.path} />
                   </div>
                   {hasReasoning && (
                     <div className="border-t border-slate-100 pt-3 mt-1 space-y-2">
@@ -1090,13 +1078,14 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                 </div>
               )}
 
-              {/* 错误信息：失败判定与 getFailureDetail 共用 FAILURE_STATUSES */}
-              {isFailure && (
+              {isFailure && failureDetails.showLocal && <LocalRequestFailure details={failureDetails} />}
+              {/* Only actual provider responses belong in the upstream error card. */}
+              {isFailure && failureDetails.hasUpstream && (
                 <div className="min-w-0 max-w-full overflow-hidden rounded-xl border border-rose-200 bg-rose-50">
                   <div className="px-4 py-3 bg-rose-100/50 border-b border-rose-200 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-rose-900 flex items-center gap-2">
                       <AlertCircle className="w-4 h-4" />
-                      错误信息
+                      {failureDetails.category || '上游错误'}
                     </h3>
                     {errorText && (
                       <Tooltip content={copiedError ? '已复制' : '复制错误信息'}>
@@ -1118,13 +1107,6 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                     )}
                   </div>
                   <div className="min-w-0 max-w-full space-y-2 overflow-hidden p-4">
-                    {failureCode && (
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-slate-500">失败分类</span>
-                        <span className="rounded-md border border-rose-200 bg-rose-100/60 px-1.5 py-0.5 font-mono text-rose-700">{failureCode}</span>
-                        {describeFailureReason(failureCode) && <span className="text-slate-600">{describeFailureReason(failureCode)}</span>}
-                      </div>
-                    )}
                     {failedHops.length > 0 ? (
                       <div className="divide-y divide-rose-200/70">
                         {/* 默认只列最终跳；转移过的早先失败跳按需展开，避免卡片随转移次数无限变长 */}
@@ -1156,7 +1138,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                         )}
                         {failureDetail && (
                           <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
-                            <span className="shrink-0 font-medium text-slate-600">{failureDetailIsRaw ? '原始信息：' : '失败原因：'}</span>
+                            <span className="shrink-0 font-medium text-slate-600">原始信息：</span>
                             <span className="w-0 min-w-0 flex-1 whitespace-pre-wrap break-all leading-6 text-rose-700 [overflow-wrap:anywhere]">{failureDetail}</span>
                           </div>
                         )}
@@ -1243,7 +1225,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                         const channelLabel = node.channel || '未知渠道';
                         const groupLabel = node.credentialGroup || '';
                         const endpointLabel = node.endpoint || node.raw || '-';
-                        const endpointError = node.error || '';
+                        const endpointError = node.error || (node.skipReason ? describeFailureReason(node.skipReason) || node.skipReason : '');
                         const routeLabel = [
                           showChannelInChain ? channelLabel : '',
                           groupLabel,
@@ -1312,6 +1294,7 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                                       HTTP {node.statusCode}
                                     </span>
                                   )}
+                                  {node.skipReason && <span className="shrink-0 rounded border border-amber-200 bg-amber-50 px-1.5 py-px text-[11px] font-medium text-amber-800">未发送</span>}
                                   <span className={`shrink-0 text-[11px] ${
                                     isSingle ? 'text-indigo-500' : isFirst ? 'text-blue-400' : isLast ? 'text-emerald-500' : 'text-slate-400'
                                   }`}>
@@ -1319,8 +1302,8 @@ const RequestDetailModal = ({ isOpen, onClose, request, positioningRef, initialT
                                   </span>
                                 </div>
                                 {endpointError && (
-                                  <div className="mt-1.5 min-w-0 rounded-md border border-rose-100 bg-rose-50/80 px-2 py-1 text-[11px] leading-relaxed text-rose-700 break-words [overflow-wrap:anywhere]">
-                                    <span className="shrink-0 font-medium text-rose-600">错误：</span>
+                                  <div className={`mt-1.5 min-w-0 rounded-md border px-2 py-1 text-[11px] leading-relaxed break-words [overflow-wrap:anywhere] ${node.local ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-rose-100 bg-rose-50/80 text-rose-700'}`}>
+                                    <span className="shrink-0 font-medium">{node.skipReason ? '跳过原因：' : node.local ? '本地传输：' : '上游错误：'}</span>
                                     <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{endpointError}</span>
                                   </div>
                                 )}

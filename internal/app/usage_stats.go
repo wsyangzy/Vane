@@ -77,6 +77,7 @@ func (a *App) GetUsageStats(params UsageStatsQueryParams) (UsageStatsData, error
 			StartDate:    &startTime,
 			EndDate:      &endTime,
 			ModelName:    params.Model,
+			ModelNames:   params.Models,
 			Channel:      params.Channel, // 渠道筛选
 			EndpointName: params.Endpoint,
 			GroupName:    params.Group,

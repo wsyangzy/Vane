@@ -21,6 +21,7 @@ func TestMatchModelWildcardIsCaseInsensitive(t *testing.T) {
 		{"claude-*-5", "claude-opus-4", false},
 		{"claude-opus-5", "Claude-Opus-5", true},
 		{"claude-opus-5", "claude-opus-5-5", false},
+		{"claude-(sonnet|opus)-*", "claude-sonnet-5", false},
 		{"", "claude", false},
 		{"claude", "", false},
 	}

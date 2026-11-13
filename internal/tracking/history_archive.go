@@ -27,10 +27,10 @@ type sqliteColumn struct {
 }
 
 func (ut *UsageTracker) reconcileHistoryArchives() error {
-	if ut == nil || ut.config == nil || ut.config.ArchiveDirectory == "" || ut.config.DatabasePath == ":memory:" {
+	if ut == nil || ut.config == nil || ut.ArchiveDirectory() == "" || ut.config.DatabasePath == ":memory:" {
 		return nil
 	}
-	if err := os.MkdirAll(ut.config.ArchiveDirectory, 0755); err != nil {
+	if err := os.MkdirAll(ut.ArchiveDirectory(), 0755); err != nil {
 		return fmt.Errorf("创建历史归档目录失败: %w", err)
 	}
 
@@ -85,7 +85,7 @@ func (ut *UsageTracker) reconcileHistoryArchives() error {
 }
 
 func (ut *UsageTracker) archiveClosedMonths(ctx context.Context) error {
-	if ut == nil || ut.config == nil || ut.config.ArchiveDirectory == "" || ut.config.DatabasePath == ":memory:" {
+	if ut == nil || ut.config == nil || ut.ArchiveDirectory() == "" || ut.config.DatabasePath == ":memory:" {
 		return nil
 	}
 

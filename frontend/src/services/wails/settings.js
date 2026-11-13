@@ -1,5 +1,18 @@
 import { WailsApp, initWails } from './connection.js';
 
+export const getDataStoragePaths = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  const paths = await WailsApp.GetDataStoragePaths();
+  return { databasePath: paths.database_path, archiveDirectory: paths.archive_directory, defaultArchiveRoot: paths.default_archive_root, environment: paths.environment };
+};
+
+export const chooseHistoryArchiveDirectory = async () => {
+  await initWails();
+  if (!WailsApp) throw new Error('Wails not available');
+  return WailsApp.ChooseHistoryArchiveDirectory();
+};
+
 // ============================================
 // 系统设置管理 API (SQLite)
 // ============================================
@@ -39,6 +52,26 @@ const getSettingCategories = async () => {
   }));
 };
 
+const mapSettingRecord = (s) => ({
+  id: s.id,
+  provider: s.provider,
+  category: s.category,
+  key: s.key,
+  value: s.value,
+  value_type: s.value_type,
+  label: s.label,
+  description: s.description,
+  display_order: s.display_order,
+  requires_restart: s.requires_restart,
+  enum_options: (s.enum_options || []).map(option => ({
+    value: option.value,
+    label: option.label,
+    description: option.description
+  })),
+  created_at: s.created_at,
+  updated_at: s.updated_at
+});
+
 /**
  * 获取所有设置
  * @returns {Promise<Array>} - 设置数组
@@ -48,20 +81,7 @@ const getAllSettings = async () => {
   if (!WailsApp) throw new Error('Wails not available');
 
   const settings = await WailsApp.GetAllSettings();
-  return (settings || []).map(s => ({
-    id: s.id,
-    provider: s.provider,
-    category: s.category,
-    key: s.key,
-    value: s.value,
-    value_type: s.value_type,
-    label: s.label,
-    description: s.description,
-    display_order: s.display_order,
-    requires_restart: s.requires_restart,
-    created_at: s.created_at,
-    updated_at: s.updated_at
-  }));
+  return (settings || []).map(mapSettingRecord);
 };
 
 /**
@@ -74,20 +94,7 @@ const getSettingsByCategory = async (category) => {
   if (!WailsApp) throw new Error('Wails not available');
 
   const settings = await WailsApp.GetSettingsByCategory(category);
-  return (settings || []).map(s => ({
-    id: s.id,
-    provider: s.provider,
-    category: s.category,
-    key: s.key,
-    value: s.value,
-    value_type: s.value_type,
-    label: s.label,
-    description: s.description,
-    display_order: s.display_order,
-    requires_restart: s.requires_restart,
-    created_at: s.created_at,
-    updated_at: s.updated_at
-  }));
+  return (settings || []).map(mapSettingRecord);
 };
 
 /**
@@ -101,20 +108,7 @@ const getSetting = async (category, key) => {
   if (!WailsApp) throw new Error('Wails not available');
 
   const s = await WailsApp.GetSetting(category, key);
-  return {
-    id: s.id,
-    provider: s.provider,
-    category: s.category,
-    key: s.key,
-    value: s.value,
-    value_type: s.value_type,
-    label: s.label,
-    description: s.description,
-    display_order: s.display_order,
-    requires_restart: s.requires_restart,
-    created_at: s.created_at,
-    updated_at: s.updated_at
-  };
+  return mapSettingRecord(s);
 };
 
 /**
@@ -229,4 +223,4 @@ const checkPortAvailable = async (port) => {
   return await WailsApp.CheckPortAvailable(port);
 };
 
-export { getSettingsStorageStatus, getSettingCategories, getAllSettings, getSettingsByCategory, getSetting, updateSetting, batchUpdateSettings, getSettingsByScope, resetSettingsByScope, resetCategorySettings, getPortInfo, updatePreferredPort, checkPortAvailable };
+export { mapSettingRecord, getSettingsStorageStatus, getSettingCategories, getAllSettings, getSettingsByCategory, getSetting, updateSetting, batchUpdateSettings, getSettingsByScope, resetSettingsByScope, resetCategorySettings, getPortInfo, updatePreferredPort, checkPortAvailable };

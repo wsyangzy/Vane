@@ -12,11 +12,10 @@ import {
   AlertCircle,
   CheckCircle2,
   Server,
-  RotateCcw,
+  Clock3,
   HeartPulse,
-  Clock,
+  RotateCcw,
   Lock,
-  Hash,
   Archive,
   X,
   FileText,
@@ -27,6 +26,8 @@ import { Button, ErrorMessage, ConfirmDialog } from '@/shared/ui/index.js';
 import { renderModalPortal } from '@/shared/ui/modalPortal.js';
 import { SettingItem, SettingsSection, PortInfo, DispatchSettingsHelp } from './components/index.js';
 import { buildSettingsUpdates } from './settingsUpdates.js';
+import HistoryStorageSettings from './components/HistoryStorageSettings.jsx';
+import { isSystemSetting, sharedRuntimeSettingSections, systemSettingCategories } from '@/shared/lib/settingsSections.js';
 import { dispatchSettingGroups } from '@/shared/lib/dispatchPolicy.js';
 import {
   isWailsEnvironment,
@@ -49,24 +50,18 @@ import {
 // 分类名称到 Lucide 图标的映射
 const CATEGORY_ICONS = {
   server: Server,
-  retry: RotateCcw,
+  request: Clock3,
   health: HeartPulse,
-  request: Clock,
+  retry: RotateCcw,
   auth: Lock,
-  token_counting: Hash,
   retention: Archive,
   logging: FileText,
   cache: Gauge
 };
 
-const CATEGORY_ORDER = ['auth', 'health', 'request', 'retry', 'token_counting', 'retention', 'logging', 'cache'];
+const CATEGORY_ORDER = ['auth', 'request', 'health', 'retry', 'retention', 'logging', 'cache'];
 // Keep the columns independent and stable as descriptions wrap or values change.
-const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'logging', 'token_counting']);
-const LEGACY_CATEGORIES = new Set(['strategy', 'failover', 'timezone', 'streaming', 'hot_pool']);
-const CURRENT_KEYS = {
-  retry: dispatchSettingGroups.flatMap((group) => group.keys),
-  request: ['global_timeout', 'response_header_timeout', 'default_response_header_timeout']
-};
+const PRIMARY_COLUMN_CATEGORIES = new Set(['auth', 'request', 'retention', 'logging']);
 
 const getCategoryOrder = (categoryName) => {
   const index = CATEGORY_ORDER.indexOf(categoryName);
@@ -520,8 +515,7 @@ const SettingsPage = () => {
   const settingsByCategory = useMemo(() => {
     const grouped = {};
     for (const setting of settings) {
-      if ((setting.provider || 'global') !== 'global' || LEGACY_CATEGORIES.has(setting.category)) continue;
-      if (CURRENT_KEYS[setting.category] && !CURRENT_KEYS[setting.category].includes(setting.key)) continue;
+      if (!isSystemSetting(setting)) continue;
       if (!grouped[setting.category]) {
         grouped[setting.category] = [];
       }
@@ -748,7 +742,7 @@ const SettingsPage = () => {
   }
 
   const orderedSettingCategories = categories
-    .filter(category => category.name !== 'server' && !LEGACY_CATEGORIES.has(category.name))
+    .filter(category => category.name !== 'server' && systemSettingCategories.includes(category.name))
     .sort((a, b) => (
       getCategoryOrder(a.name) - getCategoryOrder(b.name) ||
       (a.order ?? 0) - (b.order ?? 0)
@@ -761,14 +755,14 @@ const SettingsPage = () => {
     if (!category) return null;
     const categorySettings = settingsByCategory[category.name] || [];
     if (categorySettings.length === 0 && category.name !== 'cache') return null;
+    const sharedSection = sharedRuntimeSettingSections.find(section => section.category === category.name);
     const enabledKey = category.name === 'health' ? 'active_probes_enabled' : category.name === 'logging' ? 'file_enabled' : null;
     const enabledSetting = categorySettings.find(setting => setting.key === enabledKey);
     const dependentDisabled = enabledSetting && String(getCurrentValue(enabledSetting)) === 'false';
     const renderSettingItem = (setting) => {
       const changeKey = `${setting.provider || 'global'}.${setting.category}.${setting.key}`;
-      const dependsOnSwitch = category.name === 'health'
-        ? setting.key !== enabledKey
-        : category.name === 'logging' && ['max_file_size', 'max_files', 'compress_rotated'].includes(setting.key);
+      if (setting.category === 'retention' && setting.key === 'archive_directory') return <HistoryStorageSettings key={changeKey} setting={setting} value={getCurrentValue(setting)} onChange={handleSettingChange} disabled={saving} hasChange={changeKey in changes} onRevert={handleRevertSetting} refreshKey={settings} />;
+      const dependsOnSwitch = category.name === 'health' ? setting.key !== enabledKey : category.name === 'logging' && ['max_file_size', 'max_files', 'compress_rotated'].includes(setting.key);
       return (
         <SettingItem
           key={changeKey}
@@ -786,9 +780,9 @@ const SettingsPage = () => {
       <SettingsSection
         key={category.name}
         compact
-        title={category.label}
+        title={sharedSection?.title || category.label}
         icon={CATEGORY_ICONS[category.name] || Settings}
-        description={category.name === 'server' ? undefined : category.description}
+        description={sharedSection ? `Claude / Codex 共用 · ${sharedSection.description}` : category.name === 'server' ? undefined : category.description}
         onReset={() => handleResetCategory(category.name, category.label)}
         resetDisabled={saving}
         className={className}
@@ -798,7 +792,7 @@ const SettingsPage = () => {
             <PortInfo portInfo={portInfo} loading={loading} />
             <div className="min-w-0 border-slate-100 sm:border-l sm:pl-3">{settingItems}</div>
           </div>
-        ) : category.name === 'retry' ? dispatchSettingGroups.map((group) => <div key={group.title} className="min-w-0 py-2 first:pt-1"><h4 className="mb-1 border-b border-slate-100 pb-2 text-[11px] font-semibold text-slate-700">{group.title}</h4>{categorySettings.filter((setting) => group.keys.includes(setting.key)).map(renderSettingItem)}</div>) : settingItems}
+        ) : category.name === 'retry' ? dispatchSettingGroups.map(group => <div key={group.title} className="min-w-0 py-2 first:pt-1"><h4 className="mb-1 border-b border-slate-100 pb-2 text-[11px] font-semibold text-slate-700">{group.title}</h4>{categorySettings.filter(setting => group.keys.includes(setting.key)).map(renderSettingItem)}</div>) : settingItems}
         {category.name === 'retry' && <DispatchSettingsHelp />}
         {category.name === 'cache' && isWails && (
           <CacheStatusPanel
@@ -820,7 +814,7 @@ const SettingsPage = () => {
   };
 
   return (
-    <div className="settings-workspace space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
+    <div className="settings-workspace space-y-3">
       {/* CSS 动画定义 */}
       <style>{`
         @keyframes countdown {
@@ -841,7 +835,7 @@ const SettingsPage = () => {
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="text-xl font-bold text-slate-900">系统设置</h1>
-            <p className="text-xs text-slate-500">大部分设置即时生效</p>
+            <p className="text-xs text-slate-500">应用通用设置与 Claude / Codex 共用参数</p>
           </div>
         </div>
         <div className="flex items-center gap-1.5">

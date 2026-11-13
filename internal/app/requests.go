@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/tracking"
@@ -40,6 +41,7 @@ func buildRequestQueryOptions(params RequestQueryParams, timezone string, limit,
 		StartDate:    &startTime,
 		EndDate:      &endTime,
 		ModelName:    params.Model,
+		ModelNames:   params.Models,
 		Channel:      params.Channel,
 		EndpointName: params.Endpoint,
 		GroupName:    params.Group,
@@ -111,7 +113,14 @@ func requestDetailToRecord(r tracking.RequestDetail) RequestRecord {
 	endpointChain := parseEndpointChain(r.EndpointChain)
 	retryCount := r.RetryCount
 	// Historical endpoint_chain nodes provide a lower bound for routing attempts, not an exact transport retry count.
-	if chainRetryFloor := len(endpointChain) - 1; chainRetryFloor > retryCount {
+	chainAttempts := 0
+	for _, node := range endpointChain {
+		if node.Local && node.Attempts == 0 && (strings.HasPrefix(node.Error, "account_") || strings.HasPrefix(node.Error, "subscription_") || strings.HasPrefix(node.Error, "profile_") || strings.HasPrefix(node.Error, "candidate_")) {
+			continue
+		}
+		chainAttempts++
+	}
+	if chainRetryFloor := chainAttempts - 1; chainRetryFloor > retryCount {
 		retryCount = chainRetryFloor
 	}
 	record := RequestRecord{

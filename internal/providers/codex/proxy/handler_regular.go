@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,15 @@ func (h *Handler) handleNonStreaming(w http.ResponseWriter, resp *http.Response,
 		detail := err.Error()
 		// 上游 HTTP 层已经响应过（2xx），只是正文没读完：追踪记它的真实状态码，客户端才收本地 502。
 		h.recordUpstreamFailure(requestID, startTime, "network_error", detail, resp.StatusCode, nil, requestModel)
+		h.writeError(w, http.StatusBadGateway, detail)
+		return false
+	}
+
+	// Legacy dispatch also serves native search. A text/model-catalog response
+	// with HTTP 200 is not a successful search tool response.
+	if resp.Request != nil && strings.HasSuffix(resp.Request.URL.Path, "/alpha/search") && !codexProfileProtocolSuccess("/alpha/search", respBody) {
+		detail := "上游响应不符合原生搜索协议：缺少有效的 output 字符串或返回了错误对象"
+		h.recordUpstreamFailure(requestID, startTime, "response_read_error", detail, resp.StatusCode, nil, requestModel)
 		h.writeError(w, http.StatusBadGateway, detail)
 		return false
 	}

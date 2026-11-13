@@ -73,7 +73,7 @@ const RequestsPage = ({ initialProvider = '' }) => {
   // 快捷时间档位单独展示；高级筛选中的自定义时间仍可一键清除。
   const hasAdvancedFilters = hasActiveFilters && (
     !activeRange || Object.entries(DEFAULT_FILTERS).some(([key, value]) => (
-      key !== 'startDate' && key !== 'endDate' && filters[key] !== value
+      key !== 'startDate' && key !== 'endDate' && (Array.isArray(value) ? filters[key]?.length > 0 : filters[key] !== value)
     ))
   );
 

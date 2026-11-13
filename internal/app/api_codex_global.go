@@ -8,12 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	codexconfig "github.com/wsyangzy/Vane/internal/providers/codex/clientconfig"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 )
-
-// codexDefaultProviderName 当 config.toml 中 model_provider 字段为空时使用的约定名称
-const codexDefaultProviderName = "vane"
 
 const codexGlobalSettingsCategory = "codex_global"
 
@@ -158,24 +156,12 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 	original := append([]byte(nil), content...)
 	text := string(content)
 
-	// 1. 决定 model_provider 名（沿用 config.toml 现有值 > 约定默认值）
-	providerName := strings.TrimSpace(readCodexTopLevelString(text, "model_provider"))
-	if providerName == "" {
-		providerName = codexDefaultProviderName
-	}
-
-	// 2. 自动计算 base_url（取自系统 server 配置）
+	// 1. 自动计算 base_url（取自系统 server 配置）
 	baseURL := a.computeCodexProxyBaseURL()
-	// Subscription setup owns a separate provider route; model settings must
-	// not turn it back into a generic /v1 provider on the next save.
-	if providerName == codexservice.SubscriptionClientProvider {
-		baseURL = strings.TrimSuffix(baseURL, "/v1") + "/backend-api/codex"
-	}
 
-	// 3. 写 Relay 管理的顶层字段；model_reasoning_effort 由客户端管理，保持原值
+	// 2. 写 Vane 管理的模型字段；model_reasoning_effort 由客户端管理，保持原值
 	topValues := map[string]codexconfig.TopLevelValue{
-		"model":          {Value: strings.TrimSpace(input.Model), Quoted: true},
-		"model_provider": {Value: providerName, Quoted: true},
+		"model": {Value: strings.TrimSpace(input.Model), Quoted: true},
 	}
 	if input.Enable1MContext {
 		topValues["model_context_window"] = codexconfig.TopLevelValue{Value: codexconfig.ContextWindow1M, Quoted: false}
@@ -189,13 +175,23 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 		updated = codexconfig.RemoveCodexTopLevelConfig(updated, []string{"model_context_window"})
 	}
 
-	// 4. 写 [model_providers.{name}].base_url（自动同步系统代理地址）
-	updated, err = upsertCodexProviderBaseURL(updated, providerName, baseURL)
-	if err != nil {
-		return fmt.Errorf("写入 base_url 失败: %w", err)
+	// 3. 生成统一的客户端接入配置（自动同步系统代理地址和鉴权）
+	localKey := "vane-local"
+	a.mu.RLock()
+	if a.config != nil && a.config.Auth.Enabled {
+		localKey = a.config.Auth.Token
 	}
+	a.mu.RUnlock()
+	if !validRoutingAuthToken(localKey) {
+		return fmt.Errorf("应用级代理令牌无效，请先在设置中保存有效令牌")
+	}
+	rendered, _, _, err := codexservice.RenderClientConfig([]byte(updated), baseURL, localKey, a.clientConnectionManaged("codex"))
+	if err != nil {
+		return fmt.Errorf("生成 Codex 接入配置失败: %w", err)
+	}
+	updated = string(rendered)
 
-	// 5. 写回文件（带回滚保护）
+	// 4. 写回文件（带回滚保护）
 	if err := codexconfig.WriteCodexFile(path, []byte(updated)); err != nil {
 		if rollbackErr := codexconfig.RestoreCodexFile(path, original, existed); rollbackErr != nil {
 			return fmt.Errorf("写入 config.toml 失败 (%s): %w；回滚也失败: %v", path, err, rollbackErr)
@@ -215,7 +211,7 @@ func (a *App) UpdateCodexGlobalConfig(input CodexGlobalConfigInput) error {
 	if a.logger != nil {
 		a.logger.Info("✅ Codex 全局配置已更新",
 			"path", path,
-			"provider_name", providerName,
+			"provider_name", codexservice.ClientProviderID,
 			"model", input.Model,
 			"enable_1m_context", input.Enable1MContext,
 			"base_url", baseURL,
@@ -250,29 +246,15 @@ func (a *App) computeCodexProxyBaseURL() string {
 // readCodexTopLevelString 从 TOML 顶层（首个 section 之前）读取一个字符串/数字字段的值
 // 兼容带引号与不带引号两种情形；返回不含引号的原始值
 func readCodexTopLevelString(content, key string) string {
-	lines := codexconfig.SplitCodexLines(content)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			break // 进入 section，停止查找
-		}
-		if !codexconfig.IsTopLevelTomlAssignment(trimmed, key) {
-			continue
-		}
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		value := strings.TrimSpace(parts[1])
-		// 去掉行内注释
-		if idx := strings.Index(value, "#"); idx >= 0 {
-			value = strings.TrimSpace(value[:idx])
-		}
-		// 去掉引号
-		if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-			value = value[1 : len(value)-1]
-		}
+	var config map[string]any
+	if toml.Unmarshal([]byte(strings.TrimPrefix(content, "\ufeff")), &config) != nil {
+		return ""
+	}
+	switch value := config[key].(type) {
+	case string:
 		return value
+	case int64:
+		return strconv.FormatInt(value, 10)
 	}
 	return ""
 }
@@ -281,7 +263,7 @@ func readCodexTopLevelString(content, key string) string {
 // - section 存在 + base_url 行存在 → 替换值
 // - section 存在 + base_url 行不存在 → 在 section 头部追加
 // - section 不存在 → 在文件末尾新建一个最简 section
-func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, error) {
+func upsertCodexProviderBaseURL(content, providerName, baseURL string, localKeys ...string) (string, error) {
 	if providerName == "" {
 		return "", fmt.Errorf("provider_name 不能为空")
 	}
@@ -289,6 +271,7 @@ func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, 
 	header := codexconfig.CodexProviderSectionHeader(providerName)
 	headers := codexconfig.CodexProviderSectionHeaders(providerName)
 	newLine := fmt.Sprintf(`base_url = "%s"`, codexconfig.EscapeTomlString(baseURL))
+	catalogLine := fmt.Sprintf(`model_catalog_url = "%s"`, codexconfig.EscapeTomlString(strings.TrimRight(baseURL, "/")+"/models"))
 
 	sectionStart := -1
 	sectionEnd := len(lines) // 默认到文件末尾
@@ -309,6 +292,10 @@ func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, 
 
 	// Section 不存在 → 在文件末尾新建
 	if sectionStart == -1 {
+		localKey := "vane-local"
+		if len(localKeys) > 0 {
+			localKey = localKeys[0]
+		}
 		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
 			lines = append(lines, "")
 		}
@@ -316,27 +303,41 @@ func upsertCodexProviderBaseURL(content, providerName, baseURL string) (string, 
 			header,
 			fmt.Sprintf(`name = "%s"`, codexconfig.EscapeTomlString(providerName)),
 			newLine,
+			catalogLine,
 			fmt.Sprintf(`wire_api = "%s"`, codexconfig.WireAPI),
-			"requires_openai_auth = true",
+			"requires_openai_auth = false",
+			fmt.Sprintf(`experimental_bearer_token = "%s"`, codexconfig.EscapeTomlString(localKey)),
 			"",
 		)
 		return codexconfig.JoinCodexLines(lines), nil
 	}
 
-	// Section 存在 → 找 base_url 行替换；找不到 → 在 section header 之后插入
+	// The catalog follows the same local listener, including port changes. Other
+	// provider fields (authentication and extension headers) remain client-owned.
 	lines[sectionStart] = header
+	baseFound, catalogFound := false, false
 	for i := sectionStart + 1; i < sectionEnd; i++ {
 		trimmed := strings.TrimSpace(lines[i])
 		if codexconfig.IsTopLevelTomlAssignment(trimmed, "base_url") {
 			lines[i] = newLine
-			return codexconfig.JoinCodexLines(lines), nil
+			baseFound = true
+		}
+		if codexconfig.IsTopLevelTomlAssignment(trimmed, "model_catalog_url") {
+			lines[i] = catalogLine
+			catalogFound = true
 		}
 	}
-	// 找不到 base_url 行：插入到 section header 后第一行
+	missing := []string{}
+	if !baseFound {
+		missing = append(missing, newLine)
+	}
+	if !catalogFound {
+		missing = append(missing, catalogLine)
+	}
 	insertAt := sectionStart + 1
-	updated := make([]string, 0, len(lines)+1)
+	updated := make([]string, 0, len(lines)+len(missing))
 	updated = append(updated, lines[:insertAt]...)
-	updated = append(updated, newLine)
+	updated = append(updated, missing...)
 	updated = append(updated, lines[insertAt:]...)
 	return codexconfig.JoinCodexLines(updated), nil
 }

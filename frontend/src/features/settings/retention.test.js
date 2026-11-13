@@ -5,10 +5,11 @@ import test from 'node:test';
 const settingsSource = readFileSync(new URL('./index.jsx', import.meta.url), 'utf8');
 const settingItemSource = readFileSync(new URL('./components/SettingItem.jsx', import.meta.url), 'utf8');
 
-test('retention UI keeps only retention days as a user setting', () => {
+test('retention UI exposes the archive path alongside retention days', () => {
   assert.doesNotMatch(settingsSource, /max_active_database_size_mb|cleanup_interval/);
   assert.doesNotMatch(settingItemSource, /max_active_database_size_mb|活动数据库大小上限/);
   assert.match(settingItemSource, /setting\.key === 'retention_days' \? 0 : undefined/);
+  assert.match(settingsSource, /HistoryStorageSettings/);
 });
 
 test('conditional settings do not change category cards to full-width rows', () => {

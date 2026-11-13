@@ -59,7 +59,7 @@ func TestSettingsServiceScopesFailoverByProvider(t *testing.T) {
 	}
 }
 
-func TestRetentionSettingsExposeOnlyRetentionDays(t *testing.T) {
+func TestRetentionSettingsExposeDaysAndArchiveDirectory(t *testing.T) {
 	svc, db := newSettingsServiceTestStore(t)
 	ctx := context.Background()
 	if _, err := db.Exec(`
@@ -77,7 +77,7 @@ func TestRetentionSettingsExposeOnlyRetentionDays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settings) != 1 || settings[0].Key != "retention_days" {
+	if len(settings) != 2 || settings[0].Key != "retention_days" || settings[1].Key != "archive_directory" {
 		t.Fatalf("unexpected retention settings: %+v", settings)
 	}
 

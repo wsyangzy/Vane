@@ -20,9 +20,12 @@ test('routing profile contract preserves nullable fallbacks, strings and duratio
     members: [{ profile_id: 12, channel_id: 3, group_id: 8, position: 0, weight: 5, enabled: false, upstream_model: 'gpt-mapped' }],
     rules: [{ id: 1, profile_id: 12, enabled: true, kind: 'model', name: '模型', priority: 10, match_model: 'gpt-*', require_stream: false, intent_id: '', mode: 'prefer', targets: [{ profile_id: 7, channel_id: 0, group_id: 0, upstream_model: '' }], fallback_to_default: false }, { id: 2, profile_id: 12, enabled: true, kind: 'non_stream', name: '', priority: 20, match_model: '', intent_id: '', mode: 'fallback', targets: [], require_stream: null, fallback_to_default: null }],
     intents: [{ id: 'coding-v2', profile_id: 12, name: '编程', description: '代码修改', enabled: true, priority: 3, targets: [{ profile_id: 0, channel_id: 3, group_id: 8, upstream_model: 'gpt-mapped' }], mode: 'prefer', fallback_intent: '', fallback_to_default: true }],
-    classifier: { enabled: true, provider: 'claude', channel_id: 9, group_id: 10, model: 'claude-fast', timeout: 8000000000, confidence: 0.75, failure_mode: 'previous' }
+    classifier: { enabled: true, provider: 'claude', channel_id: 9, group_id: 10, model: 'claude-fast', timeout: 8000000000, confidence: 0.75, failure_mode: 'previous' },
+    search: { mode: 'auto', vendor: 'brave', endpoint: 'https://api.search.brave.com/res/v1/web/search', timeout: 12000000000, max_results: 4, has_api_key: false }
   };
   const model = mapRoutingProfile(dto);
+  assert.equal(model.search.timeoutMs, 12000);
+  model.search.apiKey = 'search-secret-never-in-profile';
   assert.equal(model.maxDurationMs, 31000); assert.equal(model.classifier.timeoutMs, 8000);
   assert.equal(model.rules[0].requireStream, false); assert.equal(model.rules[1].requireStream, null);
   assert.equal(model.intents[0].id, 'coding-v2'); assert.equal(model.revision, 4);
@@ -31,6 +34,7 @@ test('routing profile contract preserves nullable fallbacks, strings and duratio
   assert.deepEqual(payload, dto);
   assert.equal(JSON.stringify(payload).includes('ui-only-row-key'), false);
   assert.equal(JSON.stringify(payload).includes('never-forward-this'), false);
+  assert.equal(JSON.stringify(payload).includes('search-secret-never-in-profile'), false);
 });
 
 test('workspace and quota mapping distinguish unknown from numeric zero across model scopes', () => {

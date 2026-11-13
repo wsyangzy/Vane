@@ -1,7 +1,38 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TABLE_COLUMNS, DEFAULT_VISIBLE_COLUMNS } from './constants.js';
-import { requestColumnLayout, requestRowHeight } from './tableLayout.js';
+import { auxiliaryColumnLayout, requestColumnLayout, requestRowHeight } from './tableLayout.js';
+
+test('auxiliary descriptions span only adjacent model fields and preserve shared column coordinates', () => {
+  const selections = [
+    TABLE_COLUMNS,
+    TABLE_COLUMNS.filter(column => DEFAULT_VISIBLE_COLUMNS.includes(column.id)),
+    TABLE_COLUMNS.filter(column => ['requestId', 'timestamp', 'model', 'duration'].includes(column.id)),
+    ['model', 'status', 'reasoningEffort', 'duration', 'serviceTier'].map(id => TABLE_COLUMNS.find(column => column.id === id)),
+    TABLE_COLUMNS.filter(column => !['model', 'reasoningEffort'].includes(column.id)),
+  ];
+  for (const selection of selections) {
+    const original = requestColumnLayout(selection, 1200).columns;
+    const before = structuredClone(original);
+    const cells = auxiliaryColumnLayout(original);
+    let index = 0;
+    for (const cell of cells) {
+      assert.equal(cell.id, original[index].id);
+      assert.equal(cell.layoutWidth, original.slice(index, index + cell.colSpan).reduce((sum, column) => sum + column.layoutWidth, 0));
+      if (cell.colSpan > 1) {
+        assert.equal(cell.id, 'model');
+        assert.ok(original.slice(index + 1, index + cell.colSpan).every(column => ['reasoningEffort', 'serviceTier'].includes(column.id)));
+      }
+      index += cell.colSpan;
+    }
+    assert.equal(index, original.length);
+    assert.deepEqual(original, before);
+  }
+  const cells = auxiliaryColumnLayout(requestColumnLayout(TABLE_COLUMNS, 1200).columns);
+  assert.equal(cells.find(column => column.id === 'model').colSpan, 3);
+  assert.equal(cells.find(column => column.id === 'status').colSpan, 1);
+  assert.equal(cells.find(column => column.id === 'duration').colSpan, 1);
+});
 
 test('resizing fits every selected field into one row without horizontal scrolling', () => {
   for (const selected of [TABLE_COLUMNS.filter((column) => DEFAULT_VISIBLE_COLUMNS.includes(column.id)), TABLE_COLUMNS]) {

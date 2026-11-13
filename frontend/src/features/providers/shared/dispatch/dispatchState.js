@@ -1,3 +1,4 @@
+import { defaultSearchPolicy } from '../../codex/searchPolicy.js';
 export const strategyOptions = [
   { value: 'smart', label: '智能 · smart', menuDescription: '综合可用性与并发，适合日常中转。', description: '优先可用凭证、分散并发；有有效额度反馈时，再参考额度与重置时间。', note: '中转站无需提供额度接口；没有额度反馈时，主要按并发与配置顺序选择。' },
   { value: 'order', label: '配置顺序 · order', menuDescription: '优先排在前面的资源，不可用时再切换。', description: '持续使用排序靠前的可用凭证，遇到失败或不可用时再切换。' },
@@ -18,21 +19,57 @@ export function setIntentRoutingEnabled(profile, enabled) {
 export function mappingTargetAllowed(profile, target) {
   return !target.profileId && profile.members.some((member) => member.enabled && member.channelId === target.channelId && (member.groupId === 0 || member.groupId === target.groupId));
 }
+
+export function ruleDraftIssue(profile, rule) {
+  if (['model', 'mapping', 'composite'].includes(rule.kind) && !rule.matchModel?.trim()) return '填写客户端请求模型';
+  if (['model', 'mapping', 'composite'].includes(rule.kind) && /^regex:\s*$/i.test(rule.matchModel?.trim())) return '填写 regex: 后的正则表达式';
+  if (rule.kind === 'intent' && !profile.intents.some(intent => intent.id && intent.id === rule.intentId)) return '选择匹配意图';
+  if (!rule.targets?.length) return '添加至少一个处理目标';
+  if (rule.targets.some(target => target.targetKind === 'profile' ? !(target.profileId > 0) : !(target.profileId > 0 || target.channelId > 0))) return '选择目标渠道或方案';
+  if (rule.kind === 'mapping') {
+    if (rule.targets.some(target => !mappingTargetAllowed(profile, target))) return '选择本方案已参与的渠道 / 分组';
+    if (rule.targets.some(target => !target.upstreamModel?.trim())) return '填写映射后的实际模型';
+  }
+  return '';
+}
+
+export function ruleTargetLabels(targets, { profiles = [], channels = [], accounts = [] }) {
+  return targets.map(target => {
+    let label;
+    if (target.profileId || target.targetKind === 'profile') {
+      label = target.profileId ? `方案：${profiles.find(profile => profile.id === target.profileId)?.name || `#${target.profileId}`}` : '待选择方案';
+    } else if (target.channelId) {
+      const channel = channels.find(item => item.id === target.channelId)?.name || `渠道 #${target.channelId}`;
+      const group = target.groupId
+        ? accounts.find(account => account.channelId === target.channelId && account.groupId === target.groupId)?.groupName || `分组 #${target.groupId}`
+        : '全部分组';
+      label = `${channel} / ${group}`;
+    } else label = '待选择渠道';
+    return target.upstreamModel?.trim() ? `${label} → ${target.upstreamModel.trim()}` : label;
+  });
+}
 export const classifierInputLimits = { text: 4000, previousUserMessage: 1000, previousAssistantText: 1000 };
 export const classifierInputNotice = (key, value) => { const length = [...value].length, limit = classifierInputLimits[key]; return `${length} / ${limit} 字符${length > limit ? ' · 超出部分将保留头尾并标记截断' : ''}`; };
 
 export function newRoutingProfile(provider, isDefault = false, policy) {
-  return { id: 0, provider, name: '', enabled: true, isDefault, candidateMode: 'ordered_channels', strategy: 'smart', affinityMode: 'turn', maxAttempts: policy?.maxAttempts ?? '', maxDurationMs: policy?.maxDurationMs ?? '', waitForRecovery: policy?.waitForRecovery ?? false, revision: 0, members: [], rules: [], intents: [], classifier: null };
+  return { id: 0, provider, name: '', enabled: true, isDefault, candidateMode: 'ordered_channels', strategy: 'smart', affinityMode: 'turn', maxAttempts: policy?.maxAttempts ?? '', maxDurationMs: policy?.maxDurationMs ?? '', waitForRecovery: policy?.waitForRecovery ?? false, revision: 0, members: [], rules: [], intents: [], classifier: null, search: provider === 'codex' ? defaultSearchPolicy() : null };
 }
 
 export function editableProfile(profile, createKey = () => crypto.randomUUID()) {
   const copy = structuredClone(profile);
+  if (copy.provider === 'codex') copy.search = { ...defaultSearchPolicy(), ...copy.search };
   copy.rules = copy.rules.map((rule) => ({ ...rule, rowKey: createKey(), targets: rule.targets.map((target) => ({ ...target, rowKey: createKey() })) }));
   copy.intents = copy.intents.map((intent) => ({ ...intent, rowKey: createKey(), targets: intent.targets.map((target) => ({ ...target, rowKey: createKey() })) }));
   return copy;
 }
 
 export const profileChannelIds = (profile) => [...new Set(profile.members.map((member) => member.channelId))];
+
+export function profileSwitchBlockReason(profile) {
+  if (!profile.enabled) return '方案已停用';
+  if (!profile.members.some((member) => member.enabled)) return '无参与分组';
+  return '';
+}
 
 export function moveProfileChannel(profile, channelId, delta) {
   const ids = profileChannelIds(profile);
@@ -70,20 +107,35 @@ export function updateProfileMembers(profile, channelId, groupIds, patch) {
 
 export function validateProfileDraft(profile) {
   if (!profile.name.trim()) return '请输入调度方案名称';
+  if (profile.provider === 'codex' && profile.search) {
+    const search = profile.search;
+    if (!['auto', 'native', 'service'].includes(search.mode)) return '请选择有效的搜索线路';
+    if (!Number.isInteger(Number(search.maxResults)) || Number(search.maxResults) < 1 || Number(search.maxResults) > 20) return '搜索结果数需为 1–20 的整数';
+    if (!Number.isFinite(Number(search.timeoutMs)) || Number(search.timeoutMs) < 1000 || Number(search.timeoutMs) > 120000) return '搜索超时需为 1–120 秒';
+    if (search.endpoint || search.mode === 'service') {
+      try {
+        const endpoint = new URL(search.endpoint);
+        if (!['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) return '搜索服务地址需为完整的 HTTP(S) 接口地址';
+      } catch { return '请输入完整的搜索服务接口地址'; }
+    }
+    if (search.apiKey && /\s/.test(search.apiKey)) return '搜索服务 API Key 不能包含空白';
+  }
   if (!Number.isInteger(Number(profile.maxAttempts)) || Number(profile.maxAttempts) < 1 || Number(profile.maxAttempts) > 100) return '尝试次数需为 1–100 的整数';
   if (!Number.isFinite(Number(profile.maxDurationMs)) || Number(profile.maxDurationMs) < 1000 || Number(profile.maxDurationMs) > 600000) return '调度预算需为 1–600 秒';
   if (profile.isDefault && !profile.enabled) return '当前方案必须保持可用，请先切换到其他方案后再停用';
+  if (profile.isDefault && profileSwitchBlockReason(profile)) return '当前方案至少需要一个参与分组，请先添加渠道并启用分组';
   const ids = profile.intents.map((intent) => intent.id.trim());
   if (ids.some((id) => !id) || new Set(ids).size !== ids.length) return '意图 ID 不能为空或重复';
   if (profile.intents.some((intent) => intent.fallbackIntent && !ids.includes(intent.fallbackIntent))) return '回退意图必须指向现有意图';
   if (profile.rules.some((rule) => ['model', 'mapping', 'composite'].includes(rule.kind) && !rule.matchModel.trim())) return '模型路由或映射需要填写请求模型';
+  if (profile.rules.some((rule) => ['model', 'mapping', 'composite'].includes(rule.kind) && /^regex:\s*$/i.test(rule.matchModel.trim()))) return '填写 regex: 后的正则表达式';
   if (profile.rules.some((rule) => rule.enabled && rule.kind === 'mapping' && (!rule.targets.length || rule.targets.some((target) => !mappingTargetAllowed(profile, target) || !target.upstreamModel?.trim())))) return '模型映射需选择本方案已参与的渠道 / 分组，并填写实际模型';
   if (profile.rules.some((rule) => rule.kind === 'intent' && !ids.includes(rule.intentId))) return '意图规则需要选择现有意图';
   return '';
 }
 
 const reasonLabels = { manual_balance_exhausted: '手动余额已耗尽', manual_balance_unavailable: '暂时无法读取手动余额，未发送请求', routing_profile_missing: '尚未建立启用的默认调度方案，请先在调度方案中配置', unified_default_profile_required: '默认方案必须启用并至少包含一个启用的凭证分组', disabled: '已停用', account_disabled: '凭证分组已全局停用', account_missing: '凭证分组不存在', candidate_disabled: '端点或凭证配置不可用', credential_missing: '缺少凭证', credential_rejected: '上游拒绝凭证，请更新后重试', endpoint_unavailable: '端点暂不可用', upstream_unavailable: '上游暂不可用', repair_required: '凭证需要修复', credential_repair_required: '凭证需要修复', account_repair_required: '凭证需要修复', account_probe_in_progress: '恢复探测中', cooling_down: '健康冷却中', cooldown: '健康冷却中', account_cooling_down: '健康冷却中', state_origin_unknown: '无法确认会话状态来源，请在当前接入下新建会话', state_backend_incompatible: '会话状态属于其他账号、模型或端点', model_unavailable: '模型不可用', model_unsupported: '模型不受支持', protocol_incompatible: '协议不兼容', max_concurrent: '达到并发上限', concurrency_limit: '达到并发上限', quota_exhausted: '额度耗尽', profile_disabled: '目标方案已停用', no_candidates: '没有有效候选', budget_exhausted: '调度预算已用完', retry_budget_exhausted: 'Vane 已达到本次请求重试上限并停止继续尝试', response_started: '响应已开始，禁止重放' };
-export const dispatchReason = (reason) => reasonLabels[reason] || (reason?.startsWith('quota_unknown') ? '额度未知，按负载或顺序退化' : reason?.startsWith('quota_stale') ? '额度已过期，按负载或顺序退化' : reason || '符合资格');
+export const dispatchReason = (reason) => ({ daily_cost_limit_exceeded: '凭证分组已达每日成本限额', daily_cost_state_unavailable: '暂时无法读取每日成本，未发送请求' }[reason]) || reasonLabels[reason] || (reason?.startsWith('quota_unknown') ? '额度未知，按负载或顺序退化' : reason?.startsWith('quota_stale') ? '额度已过期，按负载或顺序退化' : reason || '符合资格');
 
 export function candidateHealthPresentation(candidate) {
   const health = candidate.health || {};

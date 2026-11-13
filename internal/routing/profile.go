@@ -44,6 +44,7 @@ type RoutingProfile struct {
 	Rules           []RoutingRule     `json:"rules"`
 	Intents         []IntentRule      `json:"intents"`
 	Classifier      *ClassifierConfig `json:"classifier,omitempty"`
+	Search          *SearchPolicy     `json:"search,omitempty"`
 	Revision        int64             `json:"revision"`
 }
 
@@ -191,6 +192,14 @@ func mappingTargetAllowed(p RoutingProfile, target RouteTarget) bool {
 
 // ValidateProfile normalizes defaults but never infers members from legacy pools.
 func ValidateProfile(p *RoutingProfile) error {
+	if p.Search != nil {
+		if p.Provider != "codex" {
+			return errors.New("search_provider_invalid")
+		}
+		if err := p.Search.Validate(); err != nil {
+			return err
+		}
+	}
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Provider != "claude" && p.Provider != "codex" {
 		return errors.New("provider_invalid")
@@ -299,6 +308,9 @@ func ValidateProfile(p *RoutingProfile) error {
 		case "model", "mapping", "composite":
 			if strings.TrimSpace(r.MatchModel) == "" {
 				return errors.New("rule_model_missing")
+			}
+			if err := ValidateModelPattern(r.MatchModel); err != nil {
+				return err
 			}
 		case "non_stream":
 		case "intent":

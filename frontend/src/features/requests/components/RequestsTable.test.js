@@ -118,7 +118,8 @@ test('request detail keeps cancellation out of the red error card and uses one f
   // 取消不是错误：FAILURE_STATUSES 不含 cancelled，取消走独立的中性卡片
   assert.doesNotMatch(detailSource.match(/const FAILURE_STATUSES = new Set\(\[([\s\S]*?)\]\)/)?.[1] || '', /'cancelled'/);
   assert.match(detailSource, /\{isCancelled && \(/);
-  assert.match(detailSource, /\{isFailure && \(/);
+  assert.match(detailSource, /\{isFailure && failureDetails\.hasUpstream && \(/);
+  assert.match(detailSource, /\{isFailure && failureDetails\.showLocal && <LocalRequestFailure/);
   // 错误卡片不再维护第二份手写状态列表
   assert.doesNotMatch(detailSource, /\['failed', 'error', 'cancelled', 'timeout', 'partial_failed'\]\.includes/);
   // 全页统一"流式 / 非流式"

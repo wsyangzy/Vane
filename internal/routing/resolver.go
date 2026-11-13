@@ -8,6 +8,7 @@ package routing
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -106,14 +107,45 @@ func NormalizeMode(mode string) string {
 	}
 }
 
-// MatchModel 按模型路由规则的语义匹配：大小写不敏感，支持 * 通配（匹配任意长度）。
+func modelRegexp(pattern string) (expression string, ok bool) {
+	pattern = strings.TrimSpace(pattern)
+	if len(pattern) >= len("regex:") && strings.EqualFold(pattern[:len("regex:")], "regex:") {
+		return strings.TrimSpace(pattern[len("regex:"):]), true
+	}
+	return "", false
+}
+
+func compileModelRegexp(expression string) (*regexp.Regexp, error) {
+	if expression == "" {
+		return nil, fmt.Errorf("正则表达式不能为空")
+	}
+	// Keep escapes such as \D and \S intact; case folding belongs in the regexp.
+	return regexp.Compile("(?i)^(?:" + expression + ")$")
+}
+
+// ValidateModelPattern rejects invalid regex: rules before they can be persisted.
+// Plain names and * patterns retain their existing literal/glob semantics.
+func ValidateModelPattern(pattern string) error {
+	if expression, ok := modelRegexp(pattern); ok {
+		if _, err := compileModelRegexp(expression); err != nil {
+			return fmt.Errorf("模型正则表达式无效：%w", err)
+		}
+	}
+	return nil
+}
+
+// MatchModel 忽略大小写，匹配完整模型名：支持精确名称、* 通配和 regex: RE2 正则。
 func MatchModel(pattern, model string) bool {
-	pattern = strings.ToLower(strings.TrimSpace(pattern))
-	model = strings.ToLower(strings.TrimSpace(model))
+	pattern = strings.TrimSpace(pattern)
+	model = strings.TrimSpace(model)
 	if pattern == "" || model == "" {
 		return false
 	}
-	return globMatch(pattern, model)
+	if expression, ok := modelRegexp(pattern); ok {
+		compiled, err := compileModelRegexp(expression)
+		return err == nil && compiled.MatchString(model)
+	}
+	return globMatch(strings.ToLower(pattern), strings.ToLower(model))
 }
 
 // MatchSupportedModel 按凭证分组 supported_models 的语义匹配：
@@ -127,7 +159,7 @@ func MatchSupportedModel(entry, model string) bool {
 	if !strings.Contains(entry, "*") {
 		return entry == model
 	}
-	return MatchModel(entry, model)
+	return globMatch(strings.ToLower(entry), strings.ToLower(model))
 }
 
 // globMatch 只支持 *，贪心匹配并在失配时回溯到最近一个 *
@@ -155,20 +187,23 @@ func globMatch(pattern, s string) bool {
 	return p == len(pattern)
 }
 
-// specificity 规则特异度：tier 0 精确、1 通配、2 纯 *；prefix 为通配前的字面前缀长度
+// specificity 规则特异度：精确 > 通配 > 正则 > 纯 *；prefix 为通配前的字面前缀长度。
 func specificity(pattern string) (tier, prefix int) {
 	pattern = strings.TrimSpace(pattern)
+	if _, ok := modelRegexp(pattern); ok {
+		return 2, 0
+	}
 	star := strings.IndexByte(pattern, '*')
 	if star < 0 {
 		return 0, len(pattern)
 	}
 	if strings.Trim(pattern, "*") == "" {
-		return 2, 0
+		return 3, 0
 	}
 	return 1, star
 }
 
-// RuleLess 规则排序：精确 > 通配（字面前缀越长越优先）> 纯 *，其次 priority 小者优先，最后 id。
+// RuleLess 规则排序：精确 > 通配（字面前缀越长越优先）> 正则 > 纯 *，其次 priority 小者优先，最后 id。
 func RuleLess(a, b *ModelRule) bool {
 	tierA, prefixA := specificity(a.MatchModel)
 	tierB, prefixB := specificity(b.MatchModel)

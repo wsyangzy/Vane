@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -105,6 +106,11 @@ func claudeRouteFailure(err error) routing.Failure {
 	}
 	if !errors.As(err, &response) {
 		return routing.Failure{Scope: routing.ScopeEndpoint, Reason: "network_error"}
+	}
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed {
+		if target, parseErr := url.Parse(response.URL); parseErr == nil && (strings.HasSuffix(target.Path, "/v1/alpha/search") || strings.HasSuffix(target.Path, "/v1/messages/count_tokens")) {
+			return routing.Failure{Scope: routing.ScopeRequest, Reason: "auxiliary_endpoint_unsupported", Terminal: true}
+		}
 	}
 	if response.StatusCode == http.StatusUnauthorized {
 		return routing.Failure{Scope: routing.ScopeCredential, Reason: "credential_rejected"}

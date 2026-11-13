@@ -117,11 +117,14 @@ func (ut *UsageTracker) archiveMonthIntersects(month string, startTime, endTime 
 }
 
 func (ut *UsageTracker) hasHistoryArchives() (bool, error) {
-	if ut == nil || ut.config == nil || ut.config.ArchiveDirectory == "" {
+	if ut == nil || ut.config == nil {
 		return false, nil
 	}
 	ut.historyMu.RLock()
 	defer ut.historyMu.RUnlock()
+	if ut.config.ArchiveDirectory == "" {
+		return false, nil
+	}
 	files, err := ut.historyArchiveFilesLocked()
 	return len(files) > 0, err
 }

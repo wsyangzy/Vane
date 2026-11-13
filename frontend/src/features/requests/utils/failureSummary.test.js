@@ -6,8 +6,80 @@ import {
   describeFailureReason,
   extractFailureCode,
   failureNeedsManualIntervention,
+  getRequestFailureDetails,
   shouldNotifyFailure
 } from './failureSummary.js';
+
+test('failure cards separate real upstream replies from local pre-send rejection', () => {
+  const upstream = getRequestFailureDetails({ failure_reason: 'auxiliary_endpoint_unsupported', http_status_is_upstream: true, http_status_code: 404,
+    last_failure_reason: '{"error":{"message":"Invalid URL"}}', endpoint_chain: [{ endpoint: 'one', attempts: 1, status_code: 404, error: 'Invalid URL' }] });
+  assert.equal(upstream.hasUpstream, true);
+  assert.equal(upstream.showLocal, false);
+  assert.equal(upstream.category, '辅助接口不受支持');
+  assert.equal(upstream.upstreamHops[0].error, 'Invalid URL');
+  const local = getRequestFailureDetails({ failure_reason: 'account_cooling_down', last_failure_reason: 'account_cooling_down', http_status_is_upstream: false,
+    endpoint_chain: [{ endpoint: 'one', local: true, error: 'account_cooling_down' }] });
+  assert.equal(local.hasUpstream, false);
+  assert.equal(local.localTitle, '请求未发送');
+  assert.equal(local.localSummary, '端点处于冷却中');
+  assert.equal(local.localDetail, '');
+  assert.equal(local.upstreamHops.length, 0);
+});
+
+test('mixed failures put local transport details in a separate card', () => {
+  const detail = getRequestFailureDetails({ failure_reason: 'endpoint_exhausted', http_status_is_upstream: true, http_status_code: 503,
+    endpoint_chain: [{ endpoint: 'one', status_code: 503, attempts: 1, error: 'upstream unavailable' }, { endpoint: 'two', attempts: 1, local: true, error: 'dial tcp: timeout' }] });
+  assert.equal(detail.hasUpstream, true);
+  assert.equal(detail.showLocal, true);
+  assert.equal(detail.localTitle, '未收到上游响应');
+  assert.deepEqual(detail.upstreamHops.map(hop => hop.endpoint), ['one']);
+  assert.deepEqual(detail.localHops.map(hop => hop.error), ['dial tcp: timeout']);
+});
+
+test('search configuration failures and actual service errors remain separate', () => {
+  const local = getRequestFailureDetails({ failure_reason: 'search_cached_unsupported', http_status_is_upstream: false });
+  assert.equal(local.localTitle, '请求未发送');
+  assert.equal(local.hasUpstream, false);
+  const upstream = getRequestFailureDetails({ failure_reason: 'search_upstream_error', http_status_is_upstream: true,
+    http_status_code: 429, last_failure_reason: '{"detail":"search quota exhausted"}',
+    endpoint_chain: [{ endpoint: 'Tavily', attempts: 1, status_code: 429, error: '{"detail":"search quota exhausted"}' }] });
+  assert.equal(upstream.showLocal, false);
+  assert.equal(upstream.upstreamStatus, 429);
+  assert.equal(upstream.upstreamDetail, '{"detail":"search quota exhausted"}');
+});
+
+test('old records without upstream evidence do not claim endpoints were all attempted', () => {
+  const detail = getRequestFailureDetails({ failure_reason: 'endpoint_exhausted', http_status_is_upstream: false });
+  assert.equal(detail.hasUpstream, false);
+  assert.equal(detail.showLocal, true);
+  assert.equal(detail.localSummary, '未记录具体的本地失败原因');
+});
+
+test('local outcomes use warning notifications and response processing stays separate from upstream errors', () => {
+  const toast = buildFailureToast({ provider: 'codex', failure_reason: 'account_cooling_down', http_status_is_upstream: false });
+  assert.deepEqual(toast, { type: 'warning', title: 'Codex 请求未发送', message: ['端点处于冷却中'] });
+  const detail = getRequestFailureDetails({ failure_reason: 'response_read_error', http_status_is_upstream: true, http_status_code: 200, last_failure_reason: 'unexpected EOF' });
+  assert.equal(detail.hasUpstream, false);
+  assert.equal(detail.localTitle, '本地响应处理失败');
+  assert.equal(detail.localDetail, 'unexpected EOF');
+  const withChain = getRequestFailureDetails({ failure_reason: 'response_read_error', http_status_is_upstream: true, http_status_code: 200,
+    last_failure_reason: 'unexpected EOF', endpoint_chain: [{ endpoint: 'one', attempts: 1, status_code: 200 }] });
+  assert.equal(withChain.hasUpstream, false);
+  assert.equal(withChain.showLocal, true);
+  assert.equal(withChain.localTitle, '本地响应处理失败');
+  assert.equal(withChain.upstreamHops.length, 0);
+  assert.equal(buildFailureToast({ failure_reason: 'response_read_error', http_status_is_upstream: true, http_status_code: 200 }).type, 'warning');
+});
+
+test('a skipped fallback does not hide a real upstream error or imply the whole request was unsent', () => {
+  const detail = getRequestFailureDetails({ failure_reason: 'endpoint_exhausted', http_status_is_upstream: true, http_status_code: 503,
+    dispatchTrace: { attemptCount: 0 }, endpoint_chain: [{ endpoint: 'one', attempts: 1, status_code: 503, error: 'unavailable' },
+      { endpoint: 'two', local: true, error: 'account_cooling_down' }] });
+  assert.equal(detail.hasUpstream, true);
+  assert.equal(detail.showLocal, true);
+  assert.equal(detail.localTitle, '部分目标未发送');
+  assert.equal(detail.localSummary, '端点处于冷却中');
+});
 
 test('extractFailureCode reads the classification before legacy detail suffixes', () => {
   assert.equal(extractFailureCode('endpoint_exhausted'), 'endpoint_exhausted');

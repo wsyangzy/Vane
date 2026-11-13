@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getRequestResourcePath } from './endpointChain.js';
 
+test('pre-send skipped endpoints are not counted as sends or resource history', () => {
+  const request = { channel: 'A', endpoint: 'one', endpoint_chain: [{ channel: 'A', endpoint: 'one', error: 'account_cooling_down', attempts: 0, local: true }] };
+  assert.equal(parseChainNode(request.endpoint_chain[0]).skipReason, 'account_cooling_down');
+  assert.equal(summarizeEndpointAttempts(request).attemptCount, 0);
+  assert.deepEqual(getRequestResourcePath(request), []);
+});
+
 test('resource tooltip follows group and endpoint changes even within the same channel', () => {
   const attempts = [
     { channel: 'A', credentialGroup: 'primary', endpoint: 'one' },

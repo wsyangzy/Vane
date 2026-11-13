@@ -155,10 +155,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		query += " AND start_time <= ?"
 		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 	}
-	if opts.ModelName != "" {
-		query += " AND model_name = ?"
-		args = append(args, opts.ModelName)
-	}
+	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.Channel != "" {
 		query += " AND channel = ?"
 		args = append(args, opts.Channel)
@@ -314,10 +311,7 @@ func (ut *UsageTracker) countRequestDetailsFromSource(ctx context.Context, db *s
 		query += " AND start_time <= ?"
 		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 	}
-	if opts.ModelName != "" {
-		query += " AND model_name = ?"
-		args = append(args, opts.ModelName)
-	}
+	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.Channel != "" {
 		query += " AND channel = ?"
 		args = append(args, opts.Channel)

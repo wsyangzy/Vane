@@ -3,12 +3,13 @@
 // 2025-12-01 11:29:41
 // ============================================
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Filter, X, Check, RotateCcw } from 'lucide-react';
 import { CustomSelect } from '@/shared/ui/index.js';
 import { DEFAULT_FILTERS, STATUS_SELECT_OPTIONS } from '../utils/constants.js';
 import { getTodayTimeRange } from '../hooks/useFilters.js';
 import ChannelFilterSelect from './ChannelFilterSelect.jsx';
+import ModelFilterSelect from './ModelFilterSelect.jsx';
 import DateTimeRangePicker from './DateTimePicker.jsx';
 import './filtersPanel.css';
 
@@ -107,15 +108,6 @@ const FiltersPanelContent = ({
     setDraftFilters(createDefaultDraftFilters());
   };
 
-  // 模型选项（格式化为 CustomSelect 需要的格式）
-  const modelOptions = useMemo(() => {
-    const options = models.map(model => {
-      const modelName = typeof model === 'string' ? model : (model.model_name || model.name || '');
-      return { value: modelName, label: modelName };
-    }).filter(opt => opt.value);
-    return [{ value: '', label: '所有模型' }, ...options];
-  }, [models]);
-
   const handleChannelChange = (selection) => setDraftFilters(previous => ({ ...previous, ...selection }));
 
   return (
@@ -182,17 +174,8 @@ const FiltersPanelContent = ({
           </div>
           <div className="min-w-0 space-y-1.5">
             <span className="request-filter-label">模型</span>
-            <CustomSelect
-              options={modelOptions}
-              value={draftFilters.model}
-              onChange={(value) => updateDraftFilter('model', value)}
-              size="sm"
-              placeholder="全部"
-              fullWidth
-              ariaLabel="筛选模型"
-              className="request-filter-select"
-              wrapOptions
-            />
+            <ModelFilterSelect models={models} value={draftFilters.models}
+              onChange={(value) => updateDraftFilter('models', value)} />
           </div>
         </div>
       </div>

@@ -1,9 +1,88 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { credentialGroupRoutingImpact } from './dispatchState.js';
+import { credentialGroupRoutingImpact, profileSwitchBlockReason, ruleDraftIssue, ruleTargetLabels } from './dispatchState.js';
 import { addProfileChannel, candidateHealthPresentation, classifierInputNotice, dispatchReason, editableProfile, mappingTargetAllowed, moveProfileChannel, newRoutingProfile as createRoutingProfile, quotaPresentation, selectProfileChannels, setIntentRoutingEnabled, stateCompatibilityLabel, summarizeIntentTraces, updateProfileMembers, validateProfileDraft } from './dispatchState.js';
 
 const newRoutingProfile = (provider, isDefault) => createRoutingProfile(provider, isDefault, { maxAttempts: 10, maxDurationMs: 60000, waitForRecovery: true });
+
+test('profile switching requires an enabled profile with a participating group for both providers', () => {
+  for (const provider of ['claude', 'codex']) {
+    const profile = { ...newRoutingProfile(provider), name: '待配置方案' };
+    assert.equal(profileSwitchBlockReason(profile), '无参与分组');
+    assert.equal(validateProfileDraft(profile), '', 'an incomplete non-default profile can still be saved');
+    assert.match(validateProfileDraft({ ...profile, isDefault: true }), /至少需要一个参与分组/);
+    profile.members = [{ channelId: 1, groupId: 11, enabled: false }];
+    assert.equal(profileSwitchBlockReason(profile), '无参与分组');
+    profile.members.push({ channelId: 2, groupId: 22, enabled: true });
+    assert.equal(profileSwitchBlockReason(profile), '');
+    assert.equal(validateProfileDraft({ ...profile, isDefault: true }), '');
+    profile.enabled = false;
+    assert.equal(profileSwitchBlockReason(profile), '方案已停用');
+    assert.match(validateProfileDraft({ ...profile, isDefault: true }), /必须保持可用/);
+  }
+});
+
+test('dispatch reasons distinguish a reached daily limit from unavailable cost data', () => {
+  assert.equal(dispatchReason('daily_cost_limit_exceeded'), '凭证分组已达每日成本限额');
+  assert.equal(dispatchReason('daily_cost_state_unavailable'), '暂时无法读取每日成本，未发送请求');
+});
+
+test('collapsed rule targets identify channels, scoped groups, profiles and model rewrites', () => {
+  const resources = {
+    channels: [{ id: 1, name: 'ZeroCat' }, { id: 2, name: '备用' }],
+    accounts: [{ channelId: 2, groupId: 11, groupName: '其他渠道分组' }, { channelId: 1, groupId: 11, groupName: '特惠' }],
+    profiles: [{ id: 3, name: '常用' }]
+  };
+  assert.deepEqual(ruleTargetLabels([
+    { channelId: 1, groupId: 11, upstreamModel: ' luna-v2 ' },
+    { channelId: 2, groupId: 0 },
+    { profileId: 3 },
+    { targetKind: 'profile', profileId: 0 },
+    { channelId: 0 },
+    { channelId: 9, groupId: 99 },
+  ], resources), ['ZeroCat / 特惠 → luna-v2', '备用 / 全部分组', '方案：常用', '待选择方案', '待选择渠道', '渠道 #9 / 分组 #99']);
+});
+
+test('new rules require usable conditions and every target before another rule is added', () => {
+  for (const provider of ['claude', 'codex']) {
+    const profile = { ...newRoutingProfile(provider), members: [{ channelId: 1, groupId: 11, enabled: true }], intents: [{ id: 'coding' }] };
+    const rule = { kind: 'model', matchModel: '  ', targets: [] };
+    assert.match(ruleDraftIssue(profile, rule), /请求模型/);
+    rule.matchModel = 'gpt-*';
+    assert.match(ruleDraftIssue(profile, rule), /至少一个/);
+    rule.targets.push({ channelId: 0, profileId: 0 });
+    assert.match(ruleDraftIssue(profile, rule), /渠道或方案/);
+    rule.targets[0].channelId = 1;
+    assert.equal(ruleDraftIssue(profile, rule), '');
+    rule.targets.push({ targetKind: 'profile', profileId: 0, channelId: 1 });
+    assert.match(ruleDraftIssue(profile, rule), /渠道或方案/);
+    rule.targets[1].profileId = 2;
+    assert.equal(ruleDraftIssue(profile, rule), '');
+    assert.match(ruleDraftIssue(profile, { kind: 'non_stream', targets: [] }), /至少一个/);
+    assert.equal(ruleDraftIssue(profile, { kind: 'non_stream', targets: [{ profileId: 2 }] }), '');
+    assert.match(ruleDraftIssue(profile, { kind: 'intent', intentId: '', targets: [{ channelId: 1 }] }), /匹配意图/);
+    assert.equal(ruleDraftIssue(profile, { kind: 'intent', intentId: 'coding', targets: [{ channelId: 1 }] }), '');
+    const mapping = { kind: 'mapping', matchModel: 'client-model', targets: [{ channelId: 1, groupId: 11, upstreamModel: ' ' }] };
+    assert.match(ruleDraftIssue(profile, mapping), /实际模型/);
+    mapping.targets[0].upstreamModel = 'actual-model';
+    assert.equal(ruleDraftIssue(profile, mapping), '');
+    mapping.targets[0].groupId = 12;
+    assert.match(ruleDraftIssue(profile, mapping), /已参与/);
+  }
+});
+
+test('regexp model rules retain their expression through editing and reject an empty expression', () => {
+  for (const provider of ['claude', 'codex']) {
+    const profile = { ...newRoutingProfile(provider), name: '正则路由', rules: [{ kind: 'model', enabled: true, matchModel: String.raw`regex:gpt-\D+`, targets: [{ channelId: 2 }] }] };
+    const edited = editableProfile(profile, () => 'stable-key');
+    assert.equal(edited.rules[0].matchModel, String.raw`regex:gpt-\D+`);
+    assert.equal(ruleDraftIssue(edited, edited.rules[0]), '');
+    assert.equal(validateProfileDraft(edited), '');
+    edited.rules[0].matchModel = ' ReGeX:  ';
+    assert.match(ruleDraftIssue(edited, edited.rules[0]), /正则表达式/);
+    assert.match(validateProfileDraft(edited), /正则表达式/);
+  }
+});
 
 test('new profiles use saved global budgets and existing profiles retain explicit limits', () => {
   const saved = { maxAttempts: 24, maxDurationMs: 150000, waitForRecovery: false };

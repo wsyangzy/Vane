@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -169,6 +170,15 @@ func validateSettingValue(provider SettingsProvider, category, key, value string
 	}
 	if category == CategoryTimezone {
 		return fmt.Errorf("时区固定为北京时间（UTC+8），不支持修改")
+	}
+	if category == CategorySearch {
+		return fmt.Errorf("搜索配置已移至 Codex 调度方案")
+	}
+	if category == CategoryRetention && key == "archive_directory" {
+		if value != "" && (!filepath.IsAbs(value) || strings.ContainsAny(value, "\r\n\x00") || strings.TrimSpace(value) != value) {
+			return fmt.Errorf("历史归档路径必须为本机绝对路径，或留空使用默认目录")
+		}
+		return nil
 	}
 	if category == CategoryRetry {
 		switch key {

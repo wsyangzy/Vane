@@ -286,7 +286,7 @@ const SettingItem = ({
               disabled={disabled}
             />
           )}
-          <div className={`relative ${setting.key === 'token' ? 'w-[clamp(144px,17vw,220px)]' : 'w-[104px]'}`}>
+          <div className={`relative ${setting.key === 'token' || setting.category === 'search' ? 'w-[clamp(144px,17vw,220px)]' : 'w-[104px]'}`}>
             <input
               type={showSecret ? 'text' : 'password'}
               aria-label={displayLabel}
@@ -325,6 +325,7 @@ const SettingItem = ({
   const isAttemptLimit = setting.category === 'retry' && setting.key === 'max_total_attempts';
   const isCooldownMultiplier = setting.category === 'retry' && setting.key === 'cooldown_multiplier';
   const isLogFileSize = setting.category === 'logging' && setting.key === 'max_file_size';
+  const isSearchEndpoint = setting.category === 'search' && setting.key === 'endpoint';
   const min = isCooldownMultiplier ? 1 : setting.category === 'retention' && setting.key === 'retention_days' ? 0 : undefined;
   const max = isCooldownMultiplier ? 10 : isAttemptLimit ? 100 : setting.category === 'server' ? 65535 : undefined;
 
@@ -354,7 +355,7 @@ const SettingItem = ({
             disabled={disabled}
           />
         )}
-        <div className={`relative ${setting.key === 'health_path' ? 'w-[160px]' : 'w-[104px]'}`}>
+        <div className={`relative ${isSearchEndpoint ? 'w-[clamp(160px,24vw,280px)]' : setting.key === 'health_path' ? 'w-[160px]' : 'w-[104px]'}`}>
           <input
             type={config.type}
             aria-label={displayLabel}
@@ -368,7 +369,7 @@ const SettingItem = ({
             title={isLogFileSize ? '支持 B、KB、MB、GB' : undefined}
             className={`
               h-8 w-full px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700
-              font-mono text-right
+              font-mono ${isSearchEndpoint ? 'text-left' : 'text-right'}
               focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500
               ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
             `}

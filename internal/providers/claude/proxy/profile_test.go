@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,10 +12,69 @@ import (
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/config"
+	"github.com/wsyangzy/Vane/internal/platform/middleware"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/routing"
+	"github.com/wsyangzy/Vane/internal/tracking"
 )
+
+func TestClaudeProfileFailoverChargesOnlyTheActualSuccessfulGroup(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/a/") {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					io.WriteString(w, `{"error":{"type":"api_error"}}`)
+					return
+				}
+				if streaming {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"test\",\"usage\":{\"input_tokens\":10}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"type":"message","model":"test","content":[],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`)
+			}))
+			t.Cleanup(server.Close)
+			cfg := &config.Config{Retry: config.RetryConfig{MaxAttempts: 1, MaxTotalAttempts: 3, MaxTotalDuration: time.Second * 3}}
+			cfg.Endpoints = []config.EndpointConfig{
+				{Name: "same-name", Channel: "A", CredentialGroupID: 11, CredentialGroupName: "same-group", URL: server.URL + "/a", SkipHealthCheck: true},
+				{Name: "same-name", Channel: "B", CredentialGroupID: 22, CredentialGroupName: "same-group", URL: server.URL + "/b", SkipHealthCheck: true},
+			}
+			h, manager := profileClaudeHandler(t, cfg, 3, nil)
+			tracker := newLifecycleTestTracker(t)
+			tracker.UpdatePricing(map[string]tracking.ModelPricing{tracking.ModelPricingKey("claude", "test", ""): {Input: 10, Output: 20}})
+			first, second := tracking.DefaultEndpointMultiplier(), tracking.DefaultEndpointMultiplier()
+			first.CostMultiplier, second.CostMultiplier = 100, 0.1
+			tracker.UpdateEndpointMultipliers(map[string]tracking.EndpointMultiplier{
+				tracking.EndpointMultiplierGroupKey("claude", "A", "same-group", "same-name"): first,
+				tracking.EndpointMultiplierGroupKey("claude", "B", "same-group", "same-name"): second,
+			})
+			h.SetUsageTracker(tracker)
+			h.monitoringMiddleware = middleware.NewMonitoringMiddleware(manager)
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(fmt.Sprintf(`{"model":"test","stream":%t,"messages":[],"max_tokens":16}`, streaming)))
+			req = req.WithContext(context.WithValue(req.Context(), "conn_id", "failover-billing"))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if err := tracker.ForceFlush(); err != nil {
+				t.Fatal(err)
+			}
+			for _, resource := range []struct {
+				channel string
+				cost    float64
+			}{{"A", 0}, {"B", 0.000014}} {
+				used, _, err := tracker.CredentialGroupDailyCost(context.Background(), "claude", resource.channel, "same-group")
+				if err != nil || used < resource.cost-1e-12 || used > resource.cost+1e-12 {
+					t.Fatalf("cost attributed to %s = %.12f, want %.12f (err=%v)", resource.channel, used, resource.cost, err)
+				}
+			}
+		})
+	}
+}
 
 func profileClaudeHandler(t *testing.T, cfg *config.Config, attempts int, trace func(routing.DispatchTrace), settlements ...func(routing.AttemptSettlement)) (*Handler, *endpoint.Manager) {
 	t.Helper()

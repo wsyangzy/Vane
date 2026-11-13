@@ -35,6 +35,9 @@ func Path(r *http.Request) string {
 		return ""
 	}
 	p := r.URL.Path
+	if strings.HasSuffix(p, "/alpha/search/native") || strings.HasSuffix(p, "/alpha/search/service") {
+		p = p[:strings.LastIndex(p, "/")]
+	}
 	if strings.HasPrefix(p, "/backend-api/codex/") {
 		return strings.TrimPrefix(p, "/backend-api/codex")
 	}
@@ -44,6 +47,8 @@ func AllowedPath(r *http.Request) bool {
 	switch Path(r) {
 	case "/models":
 		return r.Method == http.MethodGet
+	case "/alpha/search":
+		return r.Method == http.MethodPost
 	case "/responses", "/responses/compact":
 		return r.Method == http.MethodPost || (r.Method == http.MethodGet && strings.EqualFold(r.Header.Get("Upgrade"), "websocket"))
 	default:

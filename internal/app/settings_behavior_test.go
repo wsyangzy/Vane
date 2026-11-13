@@ -180,6 +180,7 @@ func TestVisibleSettingsPersistReachRuntimeAndReset(t *testing.T) {
 		{Category: "token_counting", Key: "enabled", Value: "true"},
 		{Category: "token_counting", Key: "estimation_ratio", Value: "2.5"},
 		{Category: "retention", Key: "retention_days", Value: "7"},
+		{Category: "retention", Key: "archive_directory", Value: filepath.Join(t.TempDir(), "archive")},
 		{Category: "cache", Key: "enabled", Value: "false"},
 		{Category: "cache", Key: "fallback_ttl", Value: "2m"},
 		{Category: "cache", Key: "max_entries", Value: "128"},

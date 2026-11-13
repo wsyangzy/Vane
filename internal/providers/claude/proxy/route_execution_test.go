@@ -60,6 +60,80 @@ func TestRoutedClaudeStreamingStateRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaudeAuxiliaryFailureAndAdmissionEvidence(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		status    int
+		blocked   bool
+		streaming bool
+	}{{"unsupported_path", 404, false, false}, {"unsupported_method", 405, false, false}, {"admission_cooldown", 0, true, false}, {"admission_cooldown_streaming", 0, true, true}} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var sends atomic.Int32
+			raw := `{"error":{"message":"Invalid URL (POST /v1/alpha/search)","type":"invalid_request_error"}}`
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sends.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(scenario.status)
+				_, _ = io.WriteString(w, raw)
+			}))
+			defer server.Close()
+			cfg := &config.Config{Retry: config.RetryConfig{MaxAttempts: 2, MaxTotalAttempts: 5}, Endpoints: []config.EndpointConfig{{Name: "source", Channel: "A", CredentialGroupID: 11, URL: server.URL, SkipHealthCheck: true, Timeout: time.Second}}}
+			manager := endpoint.NewManager(cfg)
+			manager.SetRouteConfig(&endpoint.RouteConfig{ChannelNames: map[int64]string{1: "A"}})
+			if err := manager.ManualActivateGroup("A"); err != nil {
+				t.Fatal(err)
+			}
+			pool := routing.NewPoolRuntime(routing.PoolConfig{Accounts: []routing.AccountState{{ChannelID: 1, GroupID: 11, Enabled: true}}}, nil, nil)
+			manager.SetPoolRuntime(pool)
+			if scenario.blocked {
+				if err := pool.Fail(1, 11, "", "", routing.Failure{Scope: routing.ScopeEndpoint, Reason: "network_error"}, time.Time{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tracker := newLifecycleTestTracker(t)
+			h := NewHandler(manager, cfg)
+			h.SetUsageTracker(tracker)
+			h.monitoringMiddleware = middleware.NewMonitoringMiddleware(manager)
+			for i := 0; i < 2; i++ {
+				req := httptest.NewRequest("POST", "/v1/alpha/search", strings.NewReader(fmt.Sprintf(`{"stream":%t,"commands":{"search_query":[{"q":"test"}]}}`, scenario.streaming)))
+				req = req.WithContext(context.WithValue(req.Context(), "conn_id", fmt.Sprintf("auxiliary-%s-%d", scenario.name, i)))
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, req)
+				if scenario.blocked {
+					if rec.Code != 502 || sends.Load() != 0 {
+						t.Fatalf("blocked request sent: status=%d sends=%d", rec.Code, sends.Load())
+					}
+				} else if rec.Code != scenario.status || rec.Body.String() != raw || sends.Load() != int32(i+1) || len(pool.Cooldowns()) != 0 {
+					t.Fatalf("auxiliary response changed or cooled endpoint: status=%d sends=%d cooldowns=%+v body=%s", rec.Code, sends.Load(), pool.Cooldowns(), rec.Body.String())
+				}
+			}
+			if err := tracker.ForceFlush(); err != nil {
+				t.Fatal(err)
+			}
+			details, err := tracker.QueryRequestDetails(context.Background(), &tracking.QueryOptions{Limit: 10})
+			if err != nil || len(details) != 2 {
+				t.Fatalf("details=%d err=%v", len(details), err)
+			}
+			for _, detail := range details {
+				var hops []ChainNode
+				if err := json.Unmarshal([]byte(detail.EndpointChain), &hops); err != nil {
+					t.Fatal(err)
+				}
+				if len(hops) != 1 {
+					t.Fatalf("unexpected hops: %+v", hops)
+				}
+				if scenario.blocked {
+					if detail.FailureReason != "account_cooling_down" || detail.HTTPStatusIsUpstream || hops[0].Attempts != 0 || hops[0].Error != "account_cooling_down" {
+						t.Fatalf("admission evidence missing: detail=%+v hops=%+v", detail, hops)
+					}
+				} else if detail.FailureReason != "auxiliary_endpoint_unsupported" || !detail.HTTPStatusIsUpstream || detail.LastFailureReason != raw || hops[0].Attempts != 1 {
+					t.Fatalf("upstream evidence missing: %+v hops=%+v", detail, hops)
+				}
+			}
+		})
+	}
+}
+
 func TestRoutedClaudeCancelAndOutputStopReplay(t *testing.T) {
 	t.Run("cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

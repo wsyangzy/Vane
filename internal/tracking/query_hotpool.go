@@ -151,7 +151,7 @@ func queryOptsCacheKey(opts *QueryOptions) string {
 	}
 	// 仅使用影响 count 结果的过滤字段（不包含 limit/offset/sort）
 	return fmt.Sprintf("p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|env=%s|sd=%v|ed=%v",
-		opts.Provider, opts.Channel, opts.ModelName, opts.EndpointName,
+		opts.Provider, opts.Channel, queryModelCacheKey(opts), opts.EndpointName,
 		opts.GroupName, opts.Status, opts.Environment, opts.StartDate, opts.EndDate)
 }
 
@@ -240,8 +240,17 @@ func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
 		}
 	}
 	// 模型过滤
-	if opts.ModelName != "" && modelName != opts.ModelName {
-		return false
+	if names := queryModelNames(opts); len(names) > 0 {
+		matched := false
+		for _, name := range names {
+			if modelName == name {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	// 渠道过滤
 	if opts.Channel != "" && channel != opts.Channel {

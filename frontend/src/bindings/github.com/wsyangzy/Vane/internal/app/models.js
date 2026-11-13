@@ -1947,6 +1947,46 @@ export class CodexProviderStorageStatus {
     }
 }
 
+export class CodexRoutingProfileInput {
+    /**
+     * Creates a new CodexRoutingProfileInput instance.
+     * @param {Partial<CodexRoutingProfileInput>} [$$source = {}] - The source object to create the CodexRoutingProfileInput.
+     */
+    constructor($$source = {}) {
+        if (!("profile" in $$source)) {
+            /**
+             * @member
+             * @type {routing$0.RoutingProfile}
+             */
+            this["profile"] = (new routing$0.RoutingProfile());
+        }
+        if (!("search_api_key" in $$source)) {
+            /**
+             * nil retains the selected service's credential; empty explicitly removes it.
+             * @member
+             * @type {string | null}
+             */
+            this["search_api_key"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CodexRoutingProfileInput instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {CodexRoutingProfileInput}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType28;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("profile" in $$parsedSource) {
+            $$parsedSource["profile"] = $$createField0_0($$parsedSource["profile"]);
+        }
+        return new CodexRoutingProfileInput(/** @type {Partial<CodexRoutingProfileInput>} */($$parsedSource));
+    }
+}
+
 export class ConfigInfo {
     /**
      * Creates a new ConfigInfo instance.
@@ -3297,6 +3337,55 @@ export class CredentialGroupDailyUsage {
     }
 }
 
+export class DataStoragePaths {
+    /**
+     * Creates a new DataStoragePaths instance.
+     * @param {Partial<DataStoragePaths>} [$$source = {}] - The source object to create the DataStoragePaths.
+     */
+    constructor($$source = {}) {
+        if (!("database_path" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["database_path"] = "";
+        }
+        if (!("archive_directory" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["archive_directory"] = "";
+        }
+        if (!("default_archive_root" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["default_archive_root"] = "";
+        }
+        if (!("environment" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["environment"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DataStoragePaths instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DataStoragePaths}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DataStoragePaths(/** @type {Partial<DataStoragePaths>} */($$parsedSource));
+    }
+}
+
 export class DispatchInput {
     /**
      * Creates a new DispatchInput instance.
@@ -3463,7 +3552,7 @@ export class EndpointAvailabilityData {
      * @returns {EndpointAvailabilityData}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType29;
+        const $$createField0_0 = $$createType30;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("slices" in $$parsedSource) {
             $$parsedSource["slices"] = $$createField0_0($$parsedSource["slices"]);
@@ -3894,8 +3983,8 @@ export class EndpointKeysInfo {
      * @returns {EndpointKeysInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType31;
-        const $$createField2_0 = $$createType31;
+        const $$createField1_0 = $$createType32;
+        const $$createField2_0 = $$createType32;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tokens" in $$parsedSource) {
             $$parsedSource["tokens"] = $$createField1_0($$parsedSource["tokens"]);
@@ -4439,7 +4528,7 @@ export class KeysOverviewResult {
      * @returns {KeysOverviewResult}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType33;
+        const $$createField0_0 = $$createType34;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("endpoints" in $$parsedSource) {
             $$parsedSource["endpoints"] = $$createField0_0($$parsedSource["endpoints"]);
@@ -4770,7 +4859,7 @@ export class ModelRouteInfo {
      * @returns {ModelRouteInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType35;
+        const $$createField8_0 = $$createType36;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField8_0($$parsedSource["targets"]);
@@ -4812,7 +4901,7 @@ export class NonStreamRouteInfo {
      * @returns {NonStreamRouteInfo}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType35;
+        const $$createField1_0 = $$createType36;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField1_0($$parsedSource["targets"]);
@@ -4854,7 +4943,7 @@ export class NonStreamRouteInput {
      * @returns {NonStreamRouteInput}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType37;
+        const $$createField1_0 = $$createType38;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField1_0($$parsedSource["targets"]);
@@ -5169,7 +5258,7 @@ export class RequestListResult {
      * @returns {RequestListResult}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType39;
+        const $$createField0_0 = $$createType40;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("requests" in $$parsedSource) {
             $$parsedSource["requests"] = $$createField0_0($$parsedSource["requests"]);
@@ -5230,6 +5319,14 @@ export class RequestQueryParams {
              */
             this["model"] = "";
         }
+        if (!("models" in $$source)) {
+            /**
+             * 多模型任选其一；非空时优先于 model
+             * @member
+             * @type {string[]}
+             */
+            this["models"] = [];
+        }
         if (!("channel" in $$source)) {
             /**
              * 可选：渠道名称
@@ -5272,7 +5369,11 @@ export class RequestQueryParams {
      * @returns {RequestQueryParams}
      */
     static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("models" in $$parsedSource) {
+            $$parsedSource["models"] = $$createField6_0($$parsedSource["models"]);
+        }
         return new RequestQueryParams(/** @type {Partial<RequestQueryParams>} */($$parsedSource));
     }
 }
@@ -5725,7 +5826,7 @@ export class RequestRecord {
      * @returns {RequestRecord}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType41;
+        const $$createField9_0 = $$createType42;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("endpoint_chain" in $$parsedSource) {
             $$parsedSource["endpoint_chain"] = $$createField9_0($$parsedSource["endpoint_chain"]);
@@ -5796,7 +5897,7 @@ export class RoutePreviewResult {
      * @returns {RoutePreviewResult}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType43;
+        const $$createField5_0 = $$createType44;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("stages" in $$parsedSource) {
             $$parsedSource["stages"] = $$createField5_0($$parsedSource["stages"]);
@@ -5996,7 +6097,7 @@ export class RouteTargetChannelOption {
      * @returns {RouteTargetChannelOption}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType45;
+        const $$createField6_0 = $$createType46;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("groups" in $$parsedSource) {
             $$parsedSource["groups"] = $$createField6_0($$parsedSource["groups"]);
@@ -6189,7 +6290,7 @@ export class RouteTargetOptions {
      * @returns {RouteTargetOptions}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType47;
+        const $$createField0_0 = $$createType48;
         const $$createField1_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("channels" in $$parsedSource) {
@@ -6295,7 +6396,7 @@ export class RoutingConfigurationStatus {
      * @returns {RoutingConfigurationStatus}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType49;
+        const $$createField1_0 = $$createType50;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("checks" in $$parsedSource) {
             $$parsedSource["checks"] = $$createField1_0($$parsedSource["checks"]);
@@ -6531,7 +6632,7 @@ export class SaveModelRouteInput {
      * @returns {SaveModelRouteInput}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType37;
+        const $$createField8_0 = $$createType38;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField8_0($$parsedSource["targets"]);
@@ -6954,6 +7055,20 @@ export class SubscriptionConnectionCommand {
              */
             this["content_revision"] = "";
         }
+        if (!("model_catalog_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model_catalog_mode"] = "";
+        }
+        if (!("model_catalog_path" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model_catalog_path"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -7086,6 +7201,20 @@ export class SubscriptionConnectionResult {
              * @type {string}
              */
             this["content_revision"] = "";
+        }
+        if (!("model_catalog_mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model_catalog_mode"] = "";
+        }
+        if (!("model_catalog_path" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["model_catalog_path"] = "";
         }
 
         Object.assign(this, $$source);
@@ -9339,6 +9468,14 @@ export class UsageStatsQueryParams {
              */
             this["model"] = "";
         }
+        if (!("models" in $$source)) {
+            /**
+             * 多模型任选其一；非空时优先于 model
+             * @member
+             * @type {string[]}
+             */
+            this["models"] = [];
+        }
         if (!("channel" in $$source)) {
             /**
              * 可选：渠道筛选
@@ -9381,7 +9518,11 @@ export class UsageStatsQueryParams {
      * @returns {UsageStatsQueryParams}
      */
     static createFrom($$source = {}) {
+        const $$createField5_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("models" in $$parsedSource) {
+            $$parsedSource["models"] = $$createField5_0($$parsedSource["models"]);
+        }
         return new UsageStatsQueryParams(/** @type {Partial<UsageStatsQueryParams>} */($$parsedSource));
     }
 }
@@ -9659,30 +9800,30 @@ const $$createType24 = store$1.CodexModelMultiplierRecord.createFrom;
 const $$createType25 = $Create.Array($$createType24);
 const $$createType26 = store$1.CodexBillingRuleRecord.createFrom;
 const $$createType27 = $Create.Array($$createType26);
-const $$createType28 = EndpointAvailabilitySlice.createFrom;
-const $$createType29 = $Create.Array($$createType28);
-const $$createType30 = KeyInfo.createFrom;
-const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = EndpointKeysInfo.createFrom;
-const $$createType33 = $Create.Array($$createType32);
-const $$createType34 = RouteTargetInfo.createFrom;
-const $$createType35 = $Create.Array($$createType34);
-const $$createType36 = RouteTargetInput.createFrom;
-const $$createType37 = $Create.Array($$createType36);
-const $$createType38 = RequestRecord.createFrom;
-const $$createType39 = $Create.Array($$createType38);
-const $$createType40 = chainNode.createFrom;
-const $$createType41 = $Create.Array($$createType40);
-const $$createType42 = RoutePreviewStage.createFrom;
-const $$createType43 = $Create.Array($$createType42);
-const $$createType44 = RouteTargetGroupOption.createFrom;
-const $$createType45 = $Create.Array($$createType44);
-const $$createType46 = RouteTargetChannelOption.createFrom;
-const $$createType47 = $Create.Array($$createType46);
-const $$createType48 = RoutingConfigurationCheck.createFrom;
-const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = routing$0.RoutingProfile.createFrom;
-const $$createType51 = $Create.Array($$createType50);
+const $$createType28 = routing$0.RoutingProfile.createFrom;
+const $$createType29 = EndpointAvailabilitySlice.createFrom;
+const $$createType30 = $Create.Array($$createType29);
+const $$createType31 = KeyInfo.createFrom;
+const $$createType32 = $Create.Array($$createType31);
+const $$createType33 = EndpointKeysInfo.createFrom;
+const $$createType34 = $Create.Array($$createType33);
+const $$createType35 = RouteTargetInfo.createFrom;
+const $$createType36 = $Create.Array($$createType35);
+const $$createType37 = RouteTargetInput.createFrom;
+const $$createType38 = $Create.Array($$createType37);
+const $$createType39 = RequestRecord.createFrom;
+const $$createType40 = $Create.Array($$createType39);
+const $$createType41 = chainNode.createFrom;
+const $$createType42 = $Create.Array($$createType41);
+const $$createType43 = RoutePreviewStage.createFrom;
+const $$createType44 = $Create.Array($$createType43);
+const $$createType45 = RouteTargetGroupOption.createFrom;
+const $$createType46 = $Create.Array($$createType45);
+const $$createType47 = RouteTargetChannelOption.createFrom;
+const $$createType48 = $Create.Array($$createType47);
+const $$createType49 = RoutingConfigurationCheck.createFrom;
+const $$createType50 = $Create.Array($$createType49);
+const $$createType51 = $Create.Array($$createType28);
 const $$createType52 = PoolChannelInfo.createFrom;
 const $$createType53 = $Create.Array($$createType52);
 const $$createType54 = PoolAccountInfo.createFrom;

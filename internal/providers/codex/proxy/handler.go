@@ -10,6 +10,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/config"
 	"github.com/wsyangzy/Vane/internal/platform/transport"
 	"github.com/wsyangzy/Vane/internal/privacy"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/search"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/routing"
 	"github.com/wsyangzy/Vane/internal/tracking"
@@ -18,6 +19,7 @@ import (
 // Handler 处理 Codex 代理请求
 type Handler struct {
 	profileResponse func(context.Context, routing.DispatchCandidate, int, http.Header, []byte)
+	searchConfig    func(context.Context) (search.Config, error)
 	subscriptions   *subscription.Controller
 	configMu        sync.RWMutex
 	manager         *EndpointManager

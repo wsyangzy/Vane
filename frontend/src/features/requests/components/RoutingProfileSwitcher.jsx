@@ -2,7 +2,7 @@ import Tooltip from '@/shared/ui/Tooltip.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, ChevronDown, Loader2, RefreshCw, Star } from 'lucide-react';
 import { listRoutingProfiles, setDefaultRoutingProfile } from '@/services/wails/dispatch.js';
-import { strategyOptions } from '@/features/providers/shared/dispatch/dispatchState.js';
+import { dispatchReason, profileSwitchBlockReason, strategyOptions } from '@/features/providers/shared/dispatch/dispatchState.js';
 import { getErrorMessage } from '@/shared/lib/errorMessage.js';
 import { ClaudeIcon } from './ModelTag.jsx';
 import { CodexLogo } from '@/features/providers/codex/components/CodexLogo.jsx';
@@ -80,7 +80,7 @@ export default function RoutingProfileSwitcher() {
   }, [isOpen]);
 
   const selectProfile = async (provider, profile) => {
-    if (switchingRef.current || states[provider].loading || states[provider].error || !profile.enabled || profile.isDefault || !profile.members.some((member) => member.enabled)) return;
+    if (switchingRef.current || states[provider].loading || states[provider].error || profile.isDefault || profileSwitchBlockReason(profile)) return;
     switchingRef.current = true;
     setSwitching({ provider, id: profile.id });
     setSwitchErrors((previous) => ({ ...previous, [provider]: '' }));
@@ -89,7 +89,7 @@ export default function RoutingProfileSwitcher() {
       // Only the successful desktop operation confirms a default change.
       setStates((previous) => ({ ...previous, [provider]: { ...previous[provider], profiles: previous[provider].profiles.map((item) => ({ ...item, isDefault: item.id === profile.id })) } }));
     } catch (error) {
-      setSwitchErrors((previous) => ({ ...previous, [provider]: getErrorMessage(error, '默认方案切换失败') }));
+      setSwitchErrors((previous) => ({ ...previous, [provider]: dispatchReason(getErrorMessage(error, '默认方案切换失败')) }));
     } finally {
       await reload(provider);
       switchingRef.current = false;
@@ -125,13 +125,13 @@ export default function RoutingProfileSwitcher() {
             {!state.profiles.length && !state.error && <p className="requests-profile-empty">{state.loading ? '正在加载方案…' : `尚无方案，请在 ${label} 管理中创建。`}</p>}
             {state.profiles.map((profile) => {
               const members = profile.members.filter((member) => member.enabled);
-              const unavailable = !profile.enabled || !members.length;
+              const unavailable = profileSwitchBlockReason(profile);
               const isSwitching = switching?.provider === id && switching.id === profile.id;
               return <button type="button" key={profile.id} className="requests-profile-option" data-active={profile.isDefault}
-                disabled={Boolean(switching) || state.loading || Boolean(state.error) || profile.isDefault || unavailable}
+                disabled={Boolean(switching) || state.loading || Boolean(state.error) || profile.isDefault || Boolean(unavailable)}
                 aria-current={profile.isDefault ? 'true' : undefined} aria-label={`${label}：${profile.name}${profile.isDefault ? '，当前默认' : ''}`}
                 onClick={() => { void selectProfile(id, profile); }}>
-                <span className="requests-profile-option-copy"><span className="requests-profile-name">{profile.name}</span><span className="requests-profile-meta">{!profile.enabled ? '方案已停用' : !members.length ? '无参与分组' : `${strategyLabel(profile.strategy)} · ${new Set(members.map((member) => member.channelId)).size} 渠道`}</span></span>
+                <span className="requests-profile-option-copy"><span className="requests-profile-name">{profile.name}</span><span className="requests-profile-meta">{unavailable || `${strategyLabel(profile.strategy)} · ${new Set(members.map((member) => member.channelId)).size} 渠道`}</span></span>
                 {isSwitching ? <Loader2 size={13} className="animate-spin" /> : profile.isDefault ? <Check size={13} /> : <Star size={12} className="requests-profile-set-default" />}
               </button>;
             })}

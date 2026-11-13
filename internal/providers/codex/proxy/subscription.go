@@ -25,6 +25,9 @@ func leaseFromContext(ctx context.Context) *subscription.Lease {
 }
 
 func (h *Handler) admitSubscription(r *http.Request, ep *CodexEndpoint, body []byte) (*http.Request, *subscription.Lease, error) {
+	if isCodexImageRequest(r) && ep.AuthMode == subscription.ClientPassthrough {
+		return r, nil, errors.New("image_endpoint_unsupported")
+	}
 	model, _ := bodyrewrite.LookupTopLevelString(body, "model")
 	var poolErr error
 	r, poolErr = h.admitPool(r, ep, model)

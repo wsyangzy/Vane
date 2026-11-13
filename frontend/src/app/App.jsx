@@ -5,6 +5,7 @@
 
 import { useState, Suspense, lazy, useCallback, useEffect, useRef } from 'react';
 import Header from '@/app/layout/Header.jsx';
+import EditContextMenu from '@/shared/ui/EditContextMenu.jsx';
 import { LoadingSpinner, ToastProvider, useToast, PortConflictDialog } from '@/shared/ui/index.js';
 import useSSE from '@/shared/hooks/useSSE.js';
 import { fetchRequests, isWailsEnvironment } from '@/services/http/api.js';
@@ -292,6 +293,7 @@ function App() {
 
   return (
     <ToastProvider>
+      <EditContextMenu />
       <GlobalAlerts />
 
       {/* 端口冲突对话框 - 使用独立的显示状态，避免成功后被自动关闭 */}

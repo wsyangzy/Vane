@@ -91,6 +91,9 @@ func (s *ModelRouteService) Save(ctx context.Context, record *routingstore.Model
 	case len(working.Targets) == 0:
 		return nil, nil, fmt.Errorf("至少需要一个路由目标")
 	}
+	if err := routing.ValidateModelPattern(working.MatchModel); err != nil {
+		return nil, nil, err
+	}
 	if err := catalog.Validate(working.Targets); err != nil {
 		return nil, nil, err
 	}

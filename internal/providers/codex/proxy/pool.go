@@ -123,6 +123,12 @@ func observeCodexPool(resp *http.Response, ctx context.Context, path string) {
 			return false, routing.Failure{}
 		}
 		if status >= 400 {
+			if (path == "/images/generations" || path == "/images/edits") && (status == 404 || status == 405) {
+				return false, routing.Failure{Scope: routing.ScopeCandidate, Reason: "image_endpoint_unsupported"}
+			}
+			if path == "/alpha/search" && (status == 404 || status == 405) {
+				return false, routing.Failure{Scope: routing.ScopeCandidate, Reason: "auxiliary_endpoint_unsupported"}
+			}
 			return false, codexRouteFailure(status, data, nil)
 		}
 		success := false
@@ -151,6 +157,10 @@ func observeCodexPool(resp *http.Response, ctx context.Context, path string) {
 			}
 			if path == "/models" {
 				_, success = response["models"].([]any)
+			} else if path == "/images/generations" || path == "/images/edits" {
+				success = codexImageProtocolSuccess(response)
+			} else if path == "/alpha/search" {
+				_, success = response["output"].(string)
 			} else if path == "/responses/compact" {
 				_, output := response["output"].([]any)
 				success = output && (response["object"] == "response.compaction" || typ == "response.compaction")

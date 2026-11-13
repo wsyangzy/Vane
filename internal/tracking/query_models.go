@@ -9,6 +9,7 @@ type QueryOptions struct {
 	StartDate    *time.Time
 	EndDate      *time.Time
 	ModelName    string
+	ModelNames   []string // Matches any listed model; takes precedence over ModelName.
 	Channel      string
 	EndpointName string
 	GroupName    string

@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { DEFAULT_FILTERS } from '../utils/constants.js';
+import { normalizeModelSelection } from '../utils/modelFilter.js';
 
 /**
  * 获取当天时间范围
@@ -105,9 +106,9 @@ export const useFilters = (initialFilters = {}) => {
       queryParams.status = filters.status;
     }
 
-    // 处理模型筛选 - 空字符串表示不筛选
-    if (filters.model && filters.model !== '') {
-      queryParams.model = filters.model;
+    const selectedModels = normalizeModelSelection(filters.models);
+    if (selectedModels.length) {
+      queryParams.models = selectedModels;
     }
 
     // 处理渠道筛选
@@ -129,7 +130,7 @@ export const useFilters = (initialFilters = {}) => {
   // 活动筛选器数量
   const activeFiltersCount = useMemo(() => {
     const defaultFilters = createInitialFilters();
-    return Object.entries(filters).filter(([key, value]) => value !== defaultFilters[key]).length;
+    return Object.entries(filters).filter(([key, value]) => Array.isArray(value) ? value.length > 0 : value !== defaultFilters[key]).length;
   }, [filters]);
   const hasActiveFilters = activeFiltersCount > 0;
 

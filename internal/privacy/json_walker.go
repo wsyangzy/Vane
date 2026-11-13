@@ -56,6 +56,8 @@ func walkerForPath(requestPath string) segmentMatcher {
 		return matchClaudeMessagesTextPath
 	case "/v1/responses", "/v1/responses/compact":
 		return matchCodexResponsesTextPath
+	case "/v1/alpha/search", "/v1/alpha/search/native", "/v1/alpha/search/service":
+		return matchCodexSearchTextPath
 	case "/v1/chat/completions":
 		return matchChatCompletionsTextPath
 	default:
@@ -70,8 +72,11 @@ func normalizeScanPath(requestPath string) string {
 		requestPath = requestPath[:idx]
 	}
 	requestPath = strings.TrimRight(requestPath, "/")
+	if strings.HasPrefix(requestPath, "/backend-api/codex/alpha/search") {
+		requestPath = strings.TrimPrefix(requestPath, "/backend-api/codex")
+	}
 	switch requestPath {
-	case "/responses", "/responses/compact", "/chat/completions":
+	case "/responses", "/responses/compact", "/chat/completions", "/alpha/search", "/alpha/search/native", "/alpha/search/service":
 		return "/v1" + requestPath
 	}
 	return requestPath
@@ -179,6 +184,26 @@ func matchCodexResponsesTextPath(path []pathElem) bool {
 		return false
 	}
 	return !isProtocolStringPath(path)
+}
+
+// Search commands contain user text alongside opaque native state and references.
+// Query text, find patterns and conversation text may be rewritten; domains and
+// refs are protocol, while encrypted search context must stay byte-identical.
+func matchCodexSearchTextPath(path []pathElem) bool {
+	if matchCodexResponsesTextPath(path) {
+		return true
+	}
+	if len(path) != 4 || path[0].Key != "commands" || path[0].Index >= 0 || path[1].Index >= 0 || path[2].Index < 0 || path[3].Index >= 0 {
+		return false
+	}
+	switch path[1].Key {
+	case "search_query", "image_query":
+		return path[3].Key == "q"
+	case "find":
+		return path[3].Key == "pattern"
+	default:
+		return false
+	}
 }
 
 // matchChatCompletionsTextPath OpenAI 兼容 /v1/chat/completions：扫描 messages 下全部非协议字符串，

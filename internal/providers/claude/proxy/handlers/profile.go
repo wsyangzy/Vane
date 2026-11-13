@@ -237,6 +237,9 @@ func (f *Forwarder) observeClaudeProfile(resp *http.Response, ctx context.Contex
 	}
 	health, _ := ctx.Value(profileHealthKey{}).(*profileHealth)
 	body := &profileResponseBody{ReadCloser: resp.Body, reservation: reservation, health: health, status: resp.StatusCode, headers: resp.Header.Clone(), stream: strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream"), observer: observer}
+	if resp.Request != nil && resp.Request.URL != nil {
+		body.url = resp.Request.URL.String()
+	}
 	body.usage.Exempt, _ = ctx.Value(profileBillingExemptKey{}).(bool)
 	if health != nil {
 		health.response = body
@@ -286,6 +289,7 @@ type profileResponseBody struct {
 	health                         *profileHealth
 	quota                          bool
 	status                         int
+	url                            string
 	headers                        http.Header
 	stream                         bool
 	observer                       func(routing.DispatchCandidate, int, http.Header, []byte)
@@ -304,13 +308,13 @@ func (b *profileResponseBody) inspect(data []byte) {
 		b.quota = true
 	}
 	if b.status >= 400 {
-		b.failure = claudeRouteFailure(&EndpointError{StatusCode: b.status, Body: data})
+		b.failure = claudeRouteFailure(&EndpointError{StatusCode: b.status, Body: data, URL: b.url})
 	}
 	routing.JSONFrames(data, func(frame map[string]any) {
 		typ, _ := frame["type"].(string)
 		if typ == "error" || frame["error"] != nil {
 			raw, _ := json.Marshal(map[string]any{"type": typ, "error": frame["error"]})
-			b.failure = claudeRouteFailure(&EndpointError{StatusCode: b.status, Body: raw})
+			b.failure = claudeRouteFailure(&EndpointError{StatusCode: b.status, Body: raw, URL: b.url})
 			if b.observer != nil {
 				b.observer(b.reservation.Candidate(), b.status, b.headers.Clone(), raw)
 			}

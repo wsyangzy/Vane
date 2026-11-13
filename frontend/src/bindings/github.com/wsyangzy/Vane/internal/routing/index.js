@@ -13,6 +13,7 @@ export {
     DispatchDecision,
     DispatchPlan,
     DispatchPlanStage,
+    DispatchRouteSource,
     DispatchTrace,
     DispatchTraceEvent,
     FailureScope,
@@ -29,5 +30,6 @@ export {
     RoutingMember,
     RoutingProfile,
     RoutingRule,
+    SearchPolicy,
     Target
 } from "./models.js";

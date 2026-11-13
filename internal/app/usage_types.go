@@ -107,16 +107,17 @@ type RequestListResult struct {
 }
 
 type RequestQueryParams struct {
-	Page      int    `json:"page"`
-	PageSize  int    `json:"page_size"`
-	StartDate string `json:"start_date"` // 格式：2025-12-05T00:00 或 2025-12-05T00:00:00+08:00
-	EndDate   string `json:"end_date"`   // 格式：2025-12-05T23:59 或 2025-12-05T23:59:59+08:00
-	Status    string `json:"status"`     // 可选：completed, failed, pending 等
-	Model     string `json:"model"`      // 可选：模型名称
-	Channel   string `json:"channel"`    // 可选：渠道名称
-	Endpoint  string `json:"endpoint"`   // 可选：端点名称
-	Group     string `json:"group"`      // 可选：组名称
-	Provider  string `json:"provider"`   // 可选：提供商标识 claude/codex
+	Page      int      `json:"page"`
+	PageSize  int      `json:"page_size"`
+	StartDate string   `json:"start_date"` // 格式：2025-12-05T00:00 或 2025-12-05T00:00:00+08:00
+	EndDate   string   `json:"end_date"`   // 格式：2025-12-05T23:59 或 2025-12-05T23:59:59+08:00
+	Status    string   `json:"status"`     // 可选：completed, failed, pending 等
+	Model     string   `json:"model"`      // 可选：模型名称
+	Models    []string `json:"models"`     // 多模型任选其一；非空时优先于 model
+	Channel   string   `json:"channel"`    // 可选：渠道名称
+	Endpoint  string   `json:"endpoint"`   // 可选：端点名称
+	Group     string   `json:"group"`      // 可选：组名称
+	Provider  string   `json:"provider"`   // 可选：提供商标识 claude/codex
 }
 
 type chainNode struct {
@@ -148,15 +149,16 @@ type UsageStatsData struct {
 }
 
 type UsageStatsQueryParams struct {
-	Period    string `json:"period"`     // 时间周期: "1h", "1d", "7d", "30d", "90d"
-	StartDate string `json:"start_date"` // 开始时间（优先于 period）
-	EndDate   string `json:"end_date"`   // 结束时间（优先于 period）
-	Status    string `json:"status"`     // 可选：状态筛选
-	Model     string `json:"model"`      // 可选：模型筛选
-	Channel   string `json:"channel"`    // 可选：渠道筛选
-	Endpoint  string `json:"endpoint"`   // 可选：端点筛选
-	Group     string `json:"group"`      // 可选：组筛选
-	Provider  string `json:"provider"`   // 可选：提供商标识 claude/codex
+	Period    string   `json:"period"`     // 时间周期: "1h", "1d", "7d", "30d", "90d"
+	StartDate string   `json:"start_date"` // 开始时间（优先于 period）
+	EndDate   string   `json:"end_date"`   // 结束时间（优先于 period）
+	Status    string   `json:"status"`     // 可选：状态筛选
+	Model     string   `json:"model"`      // 可选：模型筛选
+	Models    []string `json:"models"`     // 多模型任选其一；非空时优先于 model
+	Channel   string   `json:"channel"`    // 可选：渠道筛选
+	Endpoint  string   `json:"endpoint"`   // 可选：端点筛选
+	Group     string   `json:"group"`      // 可选：组筛选
+	Provider  string   `json:"provider"`   // 可选：提供商标识 claude/codex
 }
 
 type TokenUsageData struct {

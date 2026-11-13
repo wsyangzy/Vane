@@ -83,7 +83,11 @@ func observeClaudePool(resp *http.Response, ctx context.Context) {
 			return false, routing.Failure{}
 		}
 		if status >= 400 {
-			return false, claudeRouteFailure(&EndpointError{StatusCode: status, Body: data})
+			response := &EndpointError{StatusCode: status, Body: data}
+			if resp.Request != nil && resp.Request.URL != nil {
+				response.URL = resp.Request.URL.String()
+			}
+			return false, claudeRouteFailure(response)
 		}
 		success := false
 		var failure routing.Failure

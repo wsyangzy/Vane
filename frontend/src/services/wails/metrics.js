@@ -11,7 +11,8 @@ import { WailsApp, initWails } from './connection.js';
  * @param {string} params.start_date - 开始时间（优先于 period）
  * @param {string} params.end_date - 结束时间（优先于 period）
  * @param {string} params.status - 状态筛选
- * @param {string} params.model - 模型筛选
+ * @param {string} params.model - 单模型筛选（兼容旧调用）
+ * @param {string[]} params.models - 多模型筛选
  * @param {string} params.endpoint - 端点筛选
  * @param {string} params.group - 组筛选
  * @returns {Promise<Object>} - 统计数据
@@ -28,6 +29,7 @@ const getUsageStats = async (params = {}) => {
     end_date: params.end_date || '',
     status: params.status || '',
     model: params.model || '',
+    models: params.models || [],
     channel: params.channel || '',
     endpoint: params.endpoint || '',
     group: params.group || '',
@@ -112,6 +114,7 @@ const getRequests = async (params = {}) => {
     end_date: params.end_date || params.end_time || params.endDate || '',
     status: params.status || '',
     model: params.model || '',
+    models: params.models || [],
     channel: params.channel || '',
     endpoint: params.endpoint || '',
     group: params.group || '',

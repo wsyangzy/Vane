@@ -1,7 +1,6 @@
 package app
 
 import (
-	"crypto/subtle"
 	"errors"
 	"net"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/wsyangzy/Vane/internal/platform/clientconfig"
 	claudesub "github.com/wsyangzy/Vane/internal/providers/claude/proxy/subscription"
 	claudeservice "github.com/wsyangzy/Vane/internal/providers/claude/service"
+	codexconfig "github.com/wsyangzy/Vane/internal/providers/codex/clientconfig"
 	codexsub "github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 	"github.com/wsyangzy/Vane/internal/routing"
@@ -20,34 +20,38 @@ import (
 )
 
 type SubscriptionConnectionCommand struct {
-	ProfileID       int64  `json:"profile_id"`
-	PoolID          int64  `json:"pool_id"`
-	Provider        string `json:"provider"`
-	Action          string `json:"action"`
-	GroupID         int64  `json:"group_id"`
-	LocalKey        string `json:"local_key"`
-	Revision        string `json:"revision"`
-	BindingVersion  int64  `json:"binding_version"`
-	ContentRevision string `json:"content_revision"`
+	ProfileID        int64  `json:"profile_id"`
+	PoolID           int64  `json:"pool_id"`
+	Provider         string `json:"provider"`
+	Action           string `json:"action"`
+	GroupID          int64  `json:"group_id"`
+	LocalKey         string `json:"local_key"`
+	Revision         string `json:"revision"`
+	BindingVersion   int64  `json:"binding_version"`
+	ContentRevision  string `json:"content_revision"`
+	ModelCatalogMode string `json:"model_catalog_mode"`
+	ModelCatalogPath string `json:"model_catalog_path"`
 }
 
 type SubscriptionConnectionResult struct {
-	ProfileID       int64  `json:"profile_id"`
-	ProfileName     string `json:"profile_name"`
-	AuthEnabled     bool   `json:"auth_enabled"`
-	ConfigPath      string `json:"config_path"`
-	BaseURL         string `json:"base_url"`
-	Running         bool   `json:"running"`
-	BackupAvailable bool   `json:"backup_available"`
-	Revision        string `json:"revision"`
-	BindingVersion  int64  `json:"binding_version"`
-	EndpointReady   bool   `json:"endpoint_ready"`
-	OfficialURL     string `json:"official_url"`
-	Managed         bool   `json:"managed"`
-	OfficialEnabled bool   `json:"official_enabled"`
-	Snippet         string `json:"snippet"`
-	Command         string `json:"command"`
-	ContentRevision string `json:"content_revision"`
+	ProfileID        int64  `json:"profile_id"`
+	ProfileName      string `json:"profile_name"`
+	AuthEnabled      bool   `json:"auth_enabled"`
+	ConfigPath       string `json:"config_path"`
+	BaseURL          string `json:"base_url"`
+	Running          bool   `json:"running"`
+	BackupAvailable  bool   `json:"backup_available"`
+	Revision         string `json:"revision"`
+	BindingVersion   int64  `json:"binding_version"`
+	EndpointReady    bool   `json:"endpoint_ready"`
+	OfficialURL      string `json:"official_url"`
+	Managed          bool   `json:"managed"`
+	OfficialEnabled  bool   `json:"official_enabled"`
+	Snippet          string `json:"snippet"`
+	Command          string `json:"command"`
+	ContentRevision  string `json:"content_revision"`
+	ModelCatalogMode string `json:"model_catalog_mode"`
+	ModelCatalogPath string `json:"model_catalog_path"`
 }
 
 var subscriptionConnectionMu sync.Mutex
@@ -92,7 +96,7 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		return result, errors.New("legacy_pool_entry_retired: 请使用应用级代理鉴权接入统一调度")
 	}
 	switch input.Action {
-	case "status", "preview", "apply", "restore":
+	case "status", "preview", "apply", "restore", "choose_model_catalog":
 	default:
 		return result, errors.New("未知的订阅接入操作")
 	}
@@ -104,6 +108,28 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		return result, err
 	}
 	result.ConfigPath = path
+	if input.Action == "choose_model_catalog" {
+		if input.Provider != "codex" {
+			return result, errors.New("仅 Codex 支持选择模型目录文件")
+		}
+		if a.wailsApp == nil {
+			return result, errors.New("文件选择需要在桌面应用中使用，也可直接填写本地文件路径")
+		}
+		selected, err := a.wailsApp.Dialog.OpenFile().CanChooseFiles(true).CanChooseDirectories(false).
+			AddFilter("Codex 模型目录 (*.json)", "*.json").SetDirectory(filepath.Dir(path)).
+			SetTitle("选择 Codex 模型目录").PromptForSingleSelection()
+		for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+			if cause.Error() == "cancelled by user" {
+				return result, nil
+			}
+		}
+		if err != nil || selected == "" {
+			return result, err
+		}
+		result.ModelCatalogPath, _, err = codexconfig.ReadModelCatalog(selected)
+		result.ModelCatalogMode = "local"
+		return result, err
+	}
 	current, err := clientconfig.Read(path)
 	if err != nil {
 		return result, err
@@ -119,6 +145,31 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		result.Revision = current.Revision()
 		result.BackupAvailable = clientconfig.BackupAvailable(path)
 		return result, err
+	}
+	if input.Provider == "codex" {
+		catalog, err := codexservice.ClientModelCatalogFromConfig(current.Data)
+		if err != nil && input.Action != "status" {
+			return result, err
+		}
+		// Keep status and encrypted restore available even for a damaged TOML.
+		// Preview still reports the parse error before generating any content.
+		if err != nil {
+			catalog = codexservice.ClientModelCatalog{Mode: "local"}
+		}
+		result.ModelCatalogMode, result.ModelCatalogPath = catalog.Mode, catalog.Path
+		if !current.Exists {
+			result.ModelCatalogMode = "local"
+		}
+		if result.ModelCatalogPath == "" {
+			result.ModelCatalogPath = filepath.Join(filepath.Dir(path), "codex-models.json")
+			for _, name := range []string{"codex-models.json", "models.json"} {
+				candidate := filepath.Join(filepath.Dir(path), name)
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					result.ModelCatalogPath = candidate
+					break
+				}
+			}
+		}
 	}
 	status := a.GetSystemStatus()
 	result.Running = status.ProxyRunning
@@ -137,7 +188,7 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 	}
 	result.BaseURL = "http://" + net.JoinHostPort(host, strconv.Itoa(status.ProxyPort))
 	if input.Provider == "codex" {
-		result.BaseURL += "/backend-api/codex"
+		result.BaseURL += "/v1"
 		result.OfficialURL = codexsub.OfficialBaseURL
 	} else {
 		result.OfficialURL = claudesub.OfficialOrigin
@@ -155,33 +206,7 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 	}
 	result.ProfileID, result.ProfileName = profile.ID, profile.Name
 	result.BindingVersion = profile.Revision
-	result.Managed = true
-	if profile.ID != 0 {
-		a.poolMu.Lock()
-		runtime := a.profileRuntimes[input.Provider]
-		a.poolMu.Unlock()
-		if runtime != nil {
-			targets := []routing.RouteTarget{{ProfileID: profile.ID}}
-			for _, rule := range profile.Rules {
-				if rule.Enabled {
-					targets = append(targets, rule.Targets...)
-				}
-			}
-			for _, intent := range profile.Intents {
-				if intent.Enabled {
-					targets = append(targets, intent.Targets...)
-				}
-			}
-			// A reachable passthrough member needs the client's official login.
-			// This is a client credential requirement, never a fixed route.
-			for _, candidate := range runtime.ExpandTargets(profile, targets, "") {
-				if candidate.Enabled && candidate.CredentialMode == "client_passthrough" {
-					result.Managed = false
-					break
-				}
-			}
-		}
-	}
+	result.Managed = a.clientConnectionManaged(input.Provider)
 	configuration, err := a.CheckRoutingConfiguration(input.Provider)
 	if err != nil {
 		return result, err
@@ -199,16 +224,21 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 	}
 	key := "vane-local"
 	if auth.Enabled {
-		key = input.LocalKey
-		if !validRoutingAuthToken(key) || subtle.ConstantTimeCompare([]byte(key), []byte(auth.Token)) != 1 {
-			return result, errors.New("application_auth_required: 请输入设置中保存的应用级代理令牌")
+		key = auth.Token
+		if !validRoutingAuthToken(key) {
+			return result, errors.New("应用级代理令牌无效，请先在设置中保存有效令牌")
 		}
 	}
 	var updated, snippet []byte
 	if input.Provider == "claude" {
 		updated, snippet, result.Command, err = claudeservice.RenderSubscriptionClient(current.Data, result.BaseURL, key, result.Managed)
 	} else {
-		updated, snippet, result.Command, err = codexservice.RenderSubscriptionClient(current.Data, result.BaseURL, key, result.Managed)
+		updated, snippet, result.Command, err = codexservice.RenderClientConfig(current.Data, result.BaseURL, key, result.Managed,
+			codexservice.ClientModelCatalog{Mode: input.ModelCatalogMode, Path: input.ModelCatalogPath})
+		if err == nil {
+			catalog, _ := codexservice.ClientModelCatalogFromConfig(updated)
+			result.ModelCatalogMode, result.ModelCatalogPath = catalog.Mode, catalog.Path
+		}
 	}
 	if err != nil {
 		return result, err
@@ -234,4 +264,36 @@ func (a *App) ManageSubscriptionConnection(input SubscriptionConnectionCommand) 
 		result.Revision = (clientconfig.Snapshot{Data: updated, Exists: true}).Revision()
 	}
 	return result, nil
+}
+
+// Authentication depends on the resources reachable by the default profile,
+// not on which management screen initiated the configuration update.
+func (a *App) clientConnectionManaged(provider string) bool {
+	a.poolMu.Lock()
+	runtime := a.profileRuntimes[provider]
+	a.poolMu.Unlock()
+	if runtime == nil {
+		return true
+	}
+	profile, ok := runtime.Profile(0)
+	if !ok {
+		return true
+	}
+	targets := []routing.RouteTarget{{ProfileID: profile.ID}}
+	for _, rule := range profile.Rules {
+		if rule.Enabled {
+			targets = append(targets, rule.Targets...)
+		}
+	}
+	for _, intent := range profile.Intents {
+		if intent.Enabled {
+			targets = append(targets, intent.Targets...)
+		}
+	}
+	for _, candidate := range runtime.ExpandTargets(profile, targets, "") {
+		if candidate.Enabled && candidate.CredentialMode == "client_passthrough" {
+			return false
+		}
+	}
+	return true
 }

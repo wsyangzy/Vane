@@ -34,7 +34,7 @@ export const PAGINATION_CONFIG = {
 // 资源筛选层级：提供商 -> 渠道 -> 凭证分组。
 export const DEFAULT_FILTERS = {
   status: 'all',
-  model: '',
+  models: [],
   channel: 'all',
   group: 'all',
   provider: '',

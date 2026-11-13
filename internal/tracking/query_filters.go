@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -46,6 +47,43 @@ func queryEnvironment(opts *QueryOptions) string {
 	return normalizeTrackingEnvironment(opts.Environment)
 }
 
+func queryModelNames(opts *QueryOptions) []string {
+	if opts == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var names []string
+	for _, name := range opts.ModelNames {
+		name = strings.TrimSpace(name)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 && opts.ModelName != "" {
+		names = append(names, opts.ModelName)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func queryModelCacheKey(opts *QueryOptions) string {
+	encoded, _ := json.Marshal(queryModelNames(opts))
+	return string(encoded)
+}
+
+func appendModelQueryFilter(query string, args []any, opts *QueryOptions) (string, []any) {
+	names := queryModelNames(opts)
+	if len(names) == 0 {
+		return query, args
+	}
+	query += " AND model_name IN (" + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + ")"
+	for _, name := range names {
+		args = append(args, name)
+	}
+	return query, args
+}
+
 // requestLogsHasColumn 月度归档库的表结构复制自归档当时的活动库，可能缺后加的列
 func requestLogsHasColumn(ctx context.Context, db *sql.DB, column string) (bool, error) {
 	var count int
@@ -71,10 +109,7 @@ func (ut *UsageTracker) appendRequestQueryFilters(query string, args []any, opts
 		query += " AND start_time <= ?"
 		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 	}
-	if opts.ModelName != "" {
-		query += " AND model_name = ?"
-		args = append(args, opts.ModelName)
-	}
+	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.Channel != "" {
 		query += " AND channel = ?"
 		args = append(args, opts.Channel)

@@ -6,6 +6,14 @@ import (
 
 type SettingsService struct{ app *app.App }
 
+func (s *SettingsService) GetDataStoragePaths() app.DataStoragePaths {
+	return s.app.GetDataStoragePaths()
+}
+
+func (s *SettingsService) ChooseHistoryArchiveDirectory() (string, error) {
+	return s.app.ChooseHistoryArchiveDirectory()
+}
+
 func (s *SettingsService) GetSettingsStorageStatus() app.SettingsStorageStatus {
 	return s.app.GetSettingsStorageStatus()
 }

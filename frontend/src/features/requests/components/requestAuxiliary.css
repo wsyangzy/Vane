@@ -1,0 +1,11 @@
+.request-auxiliary-row { background: #f8fafc; box-shadow: inset 2px 0 #cbd5e1; }
+.request-auxiliary-row:hover { background: #f1f5f9; }
+.request-auxiliary-description { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 6px; padding-inline: 4px; font-size: 11px; line-height: 18px; white-space: nowrap; }
+.request-auxiliary-purpose { display: inline-flex; min-width: 0; flex-shrink: 0; align-items: center; gap: 4px; color: #64748b; }
+.request-auxiliary-purpose > svg { flex-shrink: 0; color: #94a3b8; }
+.request-auxiliary-purpose > strong { font-size: 11px; font-weight: 500; }
+.request-auxiliary-method { flex-shrink: 0; padding: 0 4px; border: 1px solid #e2e8f0; border-radius: 4px; color: #64748b; background: #fff; font-family: var(--font-mono); font-size: 10px; line-height: 16px; }
+.request-auxiliary-path { min-width: 0; overflow: hidden; color: #334155; font-family: var(--font-mono); font-size: 11px; text-overflow: ellipsis; }
+.request-auxiliary-details { display: grid; width: 18px; height: 22px; flex-shrink: 0; place-items: center; border-radius: 4px; color: #94a3b8; cursor: pointer; }
+.request-auxiliary-details:hover { color: #4f46e5; background: #e0e7ff; }
+.request-auxiliary-details:focus-visible { outline: 2px solid #818cf8; outline-offset: -2px; color: #4f46e5; }

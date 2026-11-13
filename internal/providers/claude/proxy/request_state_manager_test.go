@@ -75,3 +75,24 @@ func TestRequestStateManagerAnnotatesEmptyBodyAndLocalFailures(t *testing.T) {
 		t.Fatalf("a failure without an upstream response must be marked local: %#v", nodes[1])
 	}
 }
+
+func TestEndpointAdmissionSkipKeepsSendCountAndPriorResponse(t *testing.T) {
+	manager := NewRequestStateManager("req-admission")
+	manager.AppendEndpointChain("A", "g", "one")
+	var nodes []ChainNode
+	if err := json.Unmarshal([]byte(manager.AnnotateEndpointChainSkip("account_cooling_down")), &nodes); err != nil {
+		t.Fatal(err)
+	}
+	if nodes[0].Attempts != 0 || nodes[0].Error != "account_cooling_down" || !nodes[0].Local || nodes[0].StatusCode != 0 {
+		t.Fatalf("skip fabricated an upstream attempt: %+v", nodes[0])
+	}
+	manager.AppendEndpointChain("A", "g", "two")
+	manager.IncrementAttempt()
+	manager.AnnotateEndpointChainError(503, "real response", nil)
+	if err := json.Unmarshal([]byte(manager.AnnotateEndpointChainSkip("account_cooling_down")), &nodes); err != nil {
+		t.Fatal(err)
+	}
+	if nodes[1].StatusCode != 503 || nodes[1].Error != "real response" || nodes[1].Local {
+		t.Fatalf("later admission failure replaced upstream evidence: %+v", nodes[1])
+	}
+}

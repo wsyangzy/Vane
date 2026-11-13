@@ -17,7 +17,7 @@ func (r *ProfileRuntime) NextRecovery(plan *DispatchPlan, external func(Dispatch
 	if plan.state.reserved || plan.state.responseStarted || plan.state.successful || plan.state.stopped != "" || plan.state.recoveryWaited {
 		return time.Time{}, false
 	}
-	config := r.snapshot()
+	config := plan.state.native.apply(r.snapshot())
 	now := r.now()
 	var next time.Time
 	for _, evaluation := range plan.Evaluations {
@@ -115,7 +115,7 @@ func (r *ProfileRuntime) Recover(ctx context.Context, plan *DispatchPlan) bool {
 		return false
 	}
 	state.recoveryWaited = true
-	config := r.snapshot()
+	config := state.native.apply(r.snapshot())
 	_, exists := runtimeProfile(config, plan.Profile.ID)
 	if !exists {
 		return false

@@ -159,6 +159,11 @@ func (run *routeRun) terminalFailure(lastErr error) (string, int) {
 			return run.profile.Error, http.StatusBadRequest
 		}
 	}
+	if attempts, _ := run.budget.Stats(); attempts == 0 {
+		if reason := run.ledger.LastSkipReason(); strings.HasPrefix(reason, "account_") {
+			return reason, http.StatusBadGateway
+		}
+	}
 	if lastErr != nil {
 		return run.kind.ExhaustedReason(), http.StatusBadGateway
 	}
@@ -326,7 +331,13 @@ func routeStageEndpoints(ctx context.Context, forwarder *Forwarder, usageTracker
 		candidates = filterClaudeModelEndpoints(forwarder, candidates, body)
 	}
 	var quotaBlocked bool
-	candidates, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, usageTracker, candidates)
+	candidates, quotaBlocked = filterCredentialGroupDailyCostLimits(ctx, usageTracker, candidates, func(ep *endpoint.Endpoint, reason string) {
+		candidate := run.candidate(forwarder, ep, body)
+		run.ledger.Skip(candidate, reason)
+		if run.profile != nil && stage.candidate != nil {
+			run.profile.Skip(*stage.candidate, reason)
+		}
+	})
 	run.ledger.Member = stage.member
 	run.recovery = func(member routing.PoolStage) (time.Time, bool) { return forwarder.poolRecovery(ctx, member) }
 	eligible := candidates[:0:0]

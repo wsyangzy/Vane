@@ -12,6 +12,40 @@ import {
   getPrivacyDisplay,
   parseReasoningConfig
 } from './requestMetadata.js';
+import { getAuxiliaryRequestMeta, getRequestModelFallback } from './requestMetadata.js';
+
+test('auxiliary rows recognize known endpoints across providers without guessing from models or usage', () => {
+  for (const path of ['/v1/models', '/models/', '/backend-api/codex/models?client_version=1']) {
+    assert.deepEqual(getAuxiliaryRequestMeta({ method: 'get', path }), { kind: 'model_catalog', label: '模型目录' });
+  }
+  for (const path of ['/v1/messages/count_tokens', '/messages/count_tokens']) {
+    assert.equal(getAuxiliaryRequestMeta({ method: 'POST', path, model: 'claude-fable-5-2' }).kind, 'token_count');
+  }
+  for (const path of ['/v1/alpha/search', '/alpha/search/', '/backend-api/codex/alpha/search']) {
+    assert.equal(getAuxiliaryRequestMeta({ method: 'POST', path }).kind, 'search');
+  }
+  for (const prefix of ['/v1/alpha/search', '/alpha/search', '/backend-api/codex/alpha/search']) {
+    assert.deepEqual(getAuxiliaryRequestMeta({ method: 'POST', path: `${prefix}/native` }), { kind: 'search', label: '原生搜索' });
+    assert.deepEqual(getAuxiliaryRequestMeta({ method: 'POST', path: `${prefix}/service` }), { kind: 'search', label: '搜索适配' });
+  }
+  for (const path of ['/v1/responses', '/v1/messages', '/v1/responses/compact', '/v1/images/generations', '/v1/images/edits', '/unknown']) {
+    assert.equal(getAuxiliaryRequestMeta({ method: 'POST', path, model: '', inputTokens: 0 }), null);
+  }
+  assert.equal(getAuxiliaryRequestMeta({ method: 'POST', path: '/v1/models' }), null);
+  assert.equal(getAuxiliaryRequestMeta({ method: 'GET', path: '/v1/alpha/search' }), null);
+  assert.equal(getAuxiliaryRequestMeta({ method: 'GET', path: '/v1/models/fake' }), null);
+  assert.equal(getAuxiliaryRequestMeta(), null);
+});
+
+test('model-less catalog queries and unrecorded image models have distinct labels', () => {
+  for (const path of ['/v1/models', '/models', '/backend-api/codex/models?client_version=1']) {
+    assert.equal(getRequestModelFallback({ method: 'GET', path }).label, '模型列表');
+  }
+  assert.equal(getRequestModelFallback({ method: 'POST', path: '/v1/images/generations' }).title, '图像请求，模型未记录');
+  assert.equal(getRequestModelFallback({ method: 'POST', path: '/images/edits' }).icon, 'image');
+  assert.equal(getRequestModelFallback({ method: 'GET', path: '/v1/models/model-1' }), null);
+  assert.equal(getRequestModelFallback({ method: 'POST', path: '/v1/responses' }), null);
+});
 
 test('默认模型定价标注使用请求快照中的实际模型，并兼容缺少标志的旧快照', () => {
   const snapshot = { context_mode: 'normal', pricing_model: 'claude-sonnet-5-5', pricing_fallback: 'provider_default' };
