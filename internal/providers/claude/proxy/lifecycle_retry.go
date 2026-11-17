@@ -7,6 +7,7 @@ import (
 
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/endpoint"
 	"github.com/wsyangzy/Vane/internal/providers/claude/proxy/handlers"
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 // IncrementAttempt 线程安全地增加尝试计数
@@ -56,8 +57,7 @@ func (rlm *RequestLifecycleManager) CheckRetryBudget() (exhausted bool, reason s
 	if rlm.budgetMaxAttempts > 0 {
 		current := rlm.GetAttemptCount()
 		if current >= rlm.budgetMaxAttempts {
-			return true, fmt.Sprintf("retry budget exhausted: %d attempts (limit=%d)",
-				current, rlm.budgetMaxAttempts)
+			return true, routing.StopRetryAttemptsExhausted
 		}
 	}
 
@@ -65,8 +65,7 @@ func (rlm *RequestLifecycleManager) CheckRetryBudget() (exhausted bool, reason s
 	if rlm.budgetMaxDuration > 0 && !rlm.budgetStartTime.IsZero() {
 		elapsed := time.Since(rlm.budgetStartTime)
 		if elapsed >= rlm.budgetMaxDuration {
-			return true, fmt.Sprintf("retry budget exhausted: %v elapsed (limit=%v)",
-				elapsed.Round(time.Millisecond), rlm.budgetMaxDuration)
+			return true, routing.StopRetryDeadlineExceeded
 		}
 	}
 

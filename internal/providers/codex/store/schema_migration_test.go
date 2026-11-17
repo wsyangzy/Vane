@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +27,47 @@ func TestEnsureCodexChannelsSchemaAllowsDuplicateEndpointsAcrossCredentialGroups
 		VALUES (?, ?, ?, ?)
 	`, channelID, githubGroupID, "主站直连", "https://anyrouter.top"); err != nil {
 		t.Fatalf("expected duplicate endpoint name/base_url across credential groups to be allowed: %v", err)
+	}
+}
+
+func TestEndpointPathStrategyMigrationPreservesHistoryAndExplicitSelections(t *testing.T) {
+	ctx := context.Background()
+	for _, preexistingColumn := range []bool{false, true} {
+		t.Run(fmt.Sprint(preexistingColumn), func(t *testing.T) {
+			db := newCodexSchemaTestDB(t)
+			createLegacyCodexEndpointSchema(t, db)
+			channelID := insertCodexSchemaTestChannel(t, db, "migration")
+			id := insertLegacyCodexSchemaTestEndpoint(t, db, channelID, "legacy", "https://root.invalid")
+			if _, err := db.Exec(`ALTER TABLE codex_endpoints ADD COLUMN skip_health_check INTEGER NOT NULL DEFAULT 0`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`UPDATE codex_endpoints SET skip_health_check=1 WHERE id=?`, id); err != nil {
+				t.Fatal(err)
+			}
+			want := "legacy"
+			if preexistingColumn {
+				if _, err := db.Exec(`ALTER TABLE codex_endpoints ADD COLUMN path_strategy TEXT NOT NULL DEFAULT 'legacy'`); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := db.Exec(`UPDATE codex_endpoints SET path_strategy='base' WHERE id=?`, id); err != nil {
+					t.Fatal(err)
+				}
+				want = "base"
+			}
+			m := &schemaMigrator{}
+			for range 2 {
+				if err := m.ensureCodexChannelsSchema(ctx, db); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ep, err := NewSQLiteCodexEndpointStore(db).GetByID(ctx, id)
+			if err != nil || ep == nil {
+				t.Fatalf("read migrated endpoint: %+v %v", ep, err)
+			}
+			if ep.PathStrategy != want || !ep.SkipHealthCheck || ep.BaseURL != "https://root.invalid" {
+				t.Fatalf("migration changed behavior: %+v", ep)
+			}
+		})
 	}
 }
 

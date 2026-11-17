@@ -256,6 +256,11 @@ func (s *SQLiteAdapter) migrateSchema(ctx context.Context) error {
 		description string
 	}{
 		{
+			checkColumn: "path_strategy",
+			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN path_strategy TEXT NOT NULL DEFAULT 'legacy'",
+			description: "Codex 端点显式路径策略，历史端点保持原有行为",
+		},
+		{
 			checkColumn: "skip_health_check",
 			alterSQL:    "ALTER TABLE codex_endpoints ADD COLUMN skip_health_check INTEGER NOT NULL DEFAULT 0",
 			description: "Codex 端点跳过健康检查字段",

@@ -379,7 +379,7 @@ func TestCodexProfileKeepsProviderErrorSeparateFromRetryBudgetStop(t *testing.T)
 	if err := json.Unmarshal([]byte(details[0].RouteSnapshot), &saved); err != nil {
 		t.Fatal(err)
 	}
-	if details[0].FailureReason != "retry_budget_exhausted" || details[0].LastFailureReason != upstreamBody || saved.StopReason != "retry_budget_exhausted" || trace.Successful || len(chain) != 1 || chain[0].Error != upstreamBody {
+	if details[0].FailureReason != routing.StopRetryAttemptsExhausted || details[0].LastFailureReason != upstreamBody || saved.StopReason != routing.StopRetryAttemptsExhausted || trace.Successful || len(chain) != 1 || chain[0].Error != upstreamBody {
 		t.Fatalf("classification/raw response conflated: detail=%+v saved=%+v trace=%+v chain=%+v", details[0], saved, trace, chain)
 	}
 }
@@ -408,7 +408,7 @@ func TestCodexProfileKeepsUpstreamSSEErrorWhenRetryBudgetEnds(t *testing.T) {
 	if err := json.Unmarshal([]byte(details[0].EndpointChain), &chain); err != nil {
 		t.Fatal(err)
 	}
-	if trace.Successful || details[0].FailureReason != "retry_budget_exhausted" || details[0].LastFailureReason != "{\"type\":\"error\",\"error\":{\"message\":\"invalid key\"}}" || len(chain) != 1 || chain[0].Error != details[0].LastFailureReason {
+	if trace.Successful || details[0].FailureReason != routing.StopRetryAttemptsExhausted || details[0].LastFailureReason != "{\"type\":\"error\",\"error\":{\"message\":\"invalid key\"}}" || len(chain) != 1 || chain[0].Error != details[0].LastFailureReason {
 		t.Fatalf("SSE source error was lost: detail=%+v trace=%+v chain=%+v", details[0], trace, chain)
 	}
 }

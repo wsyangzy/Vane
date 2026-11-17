@@ -133,16 +133,50 @@ func (l *Ledger) LastSkipReason() string {
 
 var ErrBudgetExhausted = errors.New("retry_budget_exhausted")
 
+const (
+	StopRetryAttemptsExhausted = "retry_attempts_exhausted"
+	StopRetryDeadlineExceeded  = "retry_deadline_exceeded"
+	StopRecoveryOutsideBudget  = "recovery_outside_budget"
+)
+
+// BudgetError keeps the legacy sentinel available to callers while preserving
+// the condition that stopped this request's execution.
+type BudgetError struct{ Reason string }
+
+func (e *BudgetError) Error() string { return e.Reason }
+func (e *BudgetError) Unwrap() error { return ErrBudgetExhausted }
+
+func BudgetStopReason(err error) string {
+	var stop *BudgetError
+	if errors.As(err, &stop) {
+		return stop.Reason
+	}
+	if errors.Is(err, ErrBudgetExhausted) {
+		return ErrBudgetExhausted.Error()
+	}
+	return ""
+}
+
+func IsBudgetStopReason(reason string) bool {
+	switch reason {
+	case "retry_budget_exhausted", StopRetryAttemptsExhausted, StopRetryDeadlineExceeded, StopRecoveryOutsideBudget:
+		return true
+	}
+	return false
+}
+
 // Budget limits new sends and waits. It deliberately does not install a
 // deadline on an accepted response: a healthy long-running stream may finish.
 type Budget struct {
-	mu          sync.Mutex
-	start       time.Time
-	maxAttempts int
-	maxDuration time.Duration
-	attempts    int
-	waited      time.Duration
-	stopped     bool
+	mu           sync.Mutex
+	start        time.Time
+	maxAttempts  int
+	maxDuration  time.Duration
+	attempts     int
+	waited       time.Duration
+	stopped      bool
+	stopReason   string
+	nextRecovery time.Time
 }
 
 func NewBudget(maxAttempts int, maxDuration time.Duration) *Budget {
@@ -175,11 +209,14 @@ func (b *Budget) Check() error {
 }
 
 func (b *Budget) checkLocked() error {
+	if b.stopped {
+		return &BudgetError{Reason: b.stopReason}
+	}
 	if b.maxAttempts > 0 && b.attempts >= b.maxAttempts {
-		return ErrBudgetExhausted
+		return b.stopLocked(StopRetryAttemptsExhausted)
 	}
 	if b.maxDuration > 0 && time.Since(b.start) >= b.maxDuration {
-		return ErrBudgetExhausted
+		return b.stopLocked(StopRetryDeadlineExceeded)
 	}
 	return nil
 }
@@ -223,6 +260,10 @@ func (b *Budget) Wait(ctx context.Context, delay time.Duration) error {
 		}
 	}
 	if delay <= 0 {
+		if limited {
+			b.Stop(StopRetryDeadlineExceeded)
+			return &BudgetError{Reason: StopRetryDeadlineExceeded}
+		}
 		return nil
 	}
 	start := time.Now()
@@ -243,8 +284,8 @@ func (b *Budget) Wait(ctx context.Context, delay time.Duration) error {
 		return waitErr
 	}
 	if limited {
-		b.Stop()
-		return ErrBudgetExhausted
+		b.Stop(StopRetryDeadlineExceeded)
+		return &BudgetError{Reason: StopRetryDeadlineExceeded}
 	}
 	if err := b.Check(); err != nil {
 		b.Stop()
@@ -261,28 +302,73 @@ func (b *Budget) WaitRecovery(ctx context.Context, delay time.Duration) error {
 	}
 	if b != nil {
 		b.mu.Lock()
+		b.nextRecovery = time.Now().Add(delay)
 		if err := b.checkLocked(); err != nil {
 			b.stopped = true
 			b.mu.Unlock()
 			return err
 		}
 		if b.maxDuration > 0 && delay >= b.maxDuration-time.Since(b.start) {
-			b.stopped = true
+			err := b.stopLocked(StopRecoveryOutsideBudget)
 			b.mu.Unlock()
-			return ErrBudgetExhausted
+			return err
 		}
 		b.mu.Unlock()
 	}
 	return b.Wait(ctx, delay)
 }
 
-func (b *Budget) Stop() {
+func (b *Budget) stopLocked(reason string) error {
+	b.stopped, b.stopReason = true, reason
+	return &BudgetError{Reason: reason}
+}
+
+func (b *Budget) Stop(reasons ...string) {
 	if b != nil {
 		b.mu.Lock()
-		b.stopped = true
+		if !b.stopped {
+			if len(reasons) > 0 && IsBudgetStopReason(reasons[0]) {
+				b.stopLocked(reasons[0])
+			} else if b.checkLocked() == nil {
+				b.stopLocked(ErrBudgetExhausted.Error())
+			}
+		}
 		b.mu.Unlock()
 	}
 }
+
+func (b *Budget) Reason() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stopReason
+}
+
+// Limits and NextRecoveryAt expose public scheduling evidence only.
+func (b *Budget) Limits() (int, int64) {
+	if b == nil {
+		return 0, 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.maxAttempts, b.maxDuration.Milliseconds()
+}
+
+func (b *Budget) NextRecoveryAt() *time.Time {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.nextRecovery.IsZero() {
+		return nil
+	}
+	at := b.nextRecovery
+	return &at
+}
+
 func (b *Budget) Stopped() bool {
 	if b == nil {
 		return false

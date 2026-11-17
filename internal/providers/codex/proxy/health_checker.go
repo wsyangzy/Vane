@@ -10,6 +10,7 @@ package codexproxy
 import (
 	"context"
 	"fmt"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/pathpolicy"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -211,17 +212,24 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 		return
 	}
 	_, timeout, healthPath := h.readHealthConfig()
-	url := buildProbeURL(ep.BaseURL, healthPath)
+	targetURL := buildProbeURL(ep.BaseURL, healthPath)
+	if pathpolicy.Normalize(ep.PathStrategy) != pathpolicy.Legacy {
+		probePath := healthPath
+		if !strings.HasPrefix(probePath, "/") {
+			probePath = "/" + probePath
+		}
+		targetURL = pathpolicy.Resolve(ep.BaseURL, &url.URL{Path: probePath}, ep.PathStrategy, false)
+	}
 	skipHealthState := ep.SkipHealthCheck
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		h.logger.Error("构建探测请求失败",
 			"endpoint", ep.Name,
-			"url", url,
+			"url", targetURL,
 			"error", err,
 		)
 		h.recordLatency(ep.ID, -1)
@@ -259,7 +267,7 @@ func (h *HealthChecker) checkEndpoint(ep *CodexEndpoint) {
 	if err != nil {
 		h.logger.Warn("Codex 端点探测失败",
 			"endpoint", ep.Name,
-			"url", url,
+			"url", targetURL,
 			"error", err,
 			"elapsed_ms", latencyMs,
 		)

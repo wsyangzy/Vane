@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/pathpolicy"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/providers/codex/store"
 	"github.com/wsyangzy/Vane/internal/tracking"
@@ -162,10 +163,11 @@ func updateCodexEndpointStoreRecord(ctx context.Context, endpointStore store.Cod
 		record.CacheReadCostMultiplier,
 		record.BillingOutputTokenSource,
 		record.ModelMultipliers,
+		record.PathStrategy,
 	)
 }
 
-func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord) error {
+func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []store.CodexModelMultiplierRecord, pathStrategies ...string) error {
 	name = strings.TrimSpace(name)
 	baseURL = strings.TrimSpace(baseURL)
 	apiKey = strings.TrimSpace(apiKey)
@@ -208,9 +210,16 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 			}
 		}
 	}
+	pathStrategy := pathpolicy.Normalize(existing.PathStrategy)
+	if len(pathStrategies) > 0 {
+		pathStrategy = pathpolicy.Normalize(pathStrategies[0])
+	}
+	if err := pathpolicy.Validate(pathStrategy); err != nil {
+		return err
+	}
 	groupChanged := existing.CredentialGroupID != credentialGroupID
 
-	if !groupChanged && existing.Name == name && existing.BaseURL == baseURL && existing.CredentialGroupID == credentialGroupID && existing.ApiKey == apiKey && existing.FailoverEnabled == failoverEnabled && existing.SkipHealthCheck == skipHealthCheck && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
+	if !groupChanged && pathpolicy.Normalize(existing.PathStrategy) == pathStrategy && existing.Name == name && existing.BaseURL == baseURL && existing.CredentialGroupID == credentialGroupID && existing.ApiKey == apiKey && existing.FailoverEnabled == failoverEnabled && existing.SkipHealthCheck == skipHealthCheck && existing.Priority == priority && existing.TimeoutSeconds == timeoutSeconds && existing.CostMultiplier == costMultiplier && existing.InputCostMultiplier == inputCostMultiplier && existing.OutputCostMultiplier == outputCostMultiplier && existing.CacheReadCostMultiplier == cacheReadCostMultiplier && existing.BillingOutputTokenSource == billingOutputTokenSource && reflect.DeepEqual(existing.ModelMultipliers, normalizedModelMultipliers) {
 		return nil
 	}
 
@@ -269,7 +278,7 @@ func (s *CodexEndpointService) UpdateEndpointByID(ctx context.Context, id int64,
 			}
 		}
 
-		return endpointStore.Update(ctx, id, name, baseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers)
+		return endpointStore.Update(ctx, id, name, baseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, normalizedModelMultipliers, pathStrategy)
 	}); err != nil {
 		if switchedActiveEndpoint {
 			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -318,7 +327,7 @@ func (s *CodexEndpointService) RestoreEndpoint(ctx context.Context, record *stor
 			}
 		}
 
-		if err := endpointStore.Update(ctx, record.ID, record.Name, record.BaseURL, record.CredentialGroupID, record.ApiKey, record.FailoverEnabled, record.SkipHealthCheck, record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, record.BillingOutputTokenSource, record.ModelMultipliers); err != nil {
+		if err := endpointStore.Update(ctx, record.ID, record.Name, record.BaseURL, record.CredentialGroupID, record.ApiKey, record.FailoverEnabled, record.SkipHealthCheck, record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, record.BillingOutputTokenSource, record.ModelMultipliers, record.PathStrategy); err != nil {
 			return fmt.Errorf("恢复 Codex 端点记录失败: %w", err)
 		}
 		if record.IsActive {
@@ -555,6 +564,10 @@ func normalizeAndValidateCodexEndpoint(record *store.CodexEndpointRecord) error 
 	}
 	record.Name = strings.TrimSpace(record.Name)
 	record.BaseURL = strings.TrimSpace(record.BaseURL)
+	record.PathStrategy = pathpolicy.Normalize(record.PathStrategy)
+	if err := pathpolicy.Validate(record.PathStrategy); err != nil {
+		return err
+	}
 	record.ApiKey = strings.TrimSpace(record.ApiKey)
 	record.BillingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(record.BillingOutputTokenSource)
 	modelMultipliers, err := normalizeCodexModelMultipliers(record.ModelMultipliers)

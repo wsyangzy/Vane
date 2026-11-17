@@ -233,6 +233,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var lastUpstreamStatus int
 	var lastUpstreamHeaders http.Header
 	var lastUpstreamBody []byte
+	var lastUpstreamInvalidStream bool
 	suspendedOnce := false
 	activeChannelID := int64(0)
 
@@ -295,6 +296,7 @@ outerLoop:
 					lastUpstreamStatus = 0
 					lastUpstreamHeaders = nil
 					lastUpstreamBody = nil
+					lastUpstreamInvalidStream = false
 					failedIDs = failedIDs[:0]
 					continue outerLoop
 				}
@@ -310,6 +312,7 @@ outerLoop:
 					lastUpstreamStatus = result.lastUpstreamStatus
 					lastUpstreamHeaders = result.lastUpstreamHeaders
 					lastUpstreamBody = result.lastUpstreamBody
+					lastUpstreamInvalidStream = result.lastUpstreamInvalidStream
 				}
 				if !h.failoverConfig().Enabled {
 					break
@@ -431,6 +434,10 @@ outerLoop:
 		h.recordFailure(requestID, startTime, failureReason, detail, nil, requestModel)
 	}
 	if lastUpstreamStatus > 0 {
+		if isStreaming && lastUpstreamInvalidStream {
+			h.writeInvalidStreamFailure(w)
+			return
+		}
 		response := &http.Response{
 			StatusCode: lastUpstreamStatus,
 			Header:     lastUpstreamHeaders,

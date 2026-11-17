@@ -38,6 +38,7 @@ type CodexEndpoint struct {
 	ModelMapping         map[string]string
 	SupportedModels      []string
 	Name                 string
+	PathStrategy         string
 	BaseURL              string
 	APIKey               string
 	IsActive             bool
@@ -262,7 +263,7 @@ func (m *EndpointManager) inheritStateVersionsLocked(next map[int64][]*CodexEndp
 		for _, ep := range endpoints {
 			for _, prior := range m.endpointsByChannel[channelID] {
 				if prior.ID == ep.ID && prior.CredentialGroupID == ep.CredentialGroupID &&
-					prior.AuthMode == ep.AuthMode && prior.BaseURL == ep.BaseURL && prior.APIKey == ep.APIKey {
+					prior.AuthMode == ep.AuthMode && prior.PathStrategy == ep.PathStrategy && prior.BaseURL == ep.BaseURL && prior.APIKey == ep.APIKey {
 					ep.stateVersion = routing.StateVersion(&prior.stateVersion)
 					break
 				}
@@ -477,6 +478,7 @@ func (m *EndpointManager) loadChannelEndpoints(ctx context.Context, channel *sto
 			SupportedModels:      supportedModels,
 			Name:                 record.Name,
 			BaseURL:              record.BaseURL,
+			PathStrategy:         record.PathStrategy,
 			APIKey:               apiKey,
 			IsActive:             record.IsActive,
 			FailoverEnabled:      record.FailoverEnabled,

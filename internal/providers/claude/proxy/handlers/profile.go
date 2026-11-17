@@ -92,7 +92,7 @@ func (run *routeRun) endProfile() {
 	if run != nil && run.profile != nil {
 		reason := run.profile.Trace().StopReason
 		if run.budget.Stopped() {
-			reason = "retry_budget_exhausted"
+			reason = run.budget.Reason()
 		}
 		if reason == "" {
 			reason = run.ledger.LastSkipReason()

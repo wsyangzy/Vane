@@ -194,11 +194,11 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 	// 这个检查能在递归层级累计超过预算时及时终止
 	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 		if route != nil {
-			route.budget.Stop()
+			route.budget.Stop(reason)
 			route.publishSnapshot()
 		}
 		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+		sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), previousErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 		return
 	}
 
@@ -331,7 +331,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 		// 路由阶段之间共享全局重试预算：预算耗尽即停止，不再进入后续目标
 		if exhausted, reason := checkRouteBudget(route, lifecycleManager); exhausted {
 			slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+			sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 			return
 		}
 		triedEndpoints[epKey] = struct{}{}
@@ -366,12 +366,12 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			}
 
 			// 尝试连接端点
-			if exhausted, _ := lifecycleManager.CheckRetryBudget(); exhausted {
+			if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 				if route != nil {
-					route.budget.Stop()
+					route.budget.Stop(reason)
 					route.publishSnapshot()
 				}
-				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 				return
 			}
 			attemptCtx, admission, admitErr := sh.forwarder.admitSubscription(ctx, ep, route.candidate(sh.forwarder, ep, bodyBytes).Model)
@@ -391,7 +391,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 			defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
 			defer finishProfileAttempt(attemptCtx, nil)
 			if err := beginRouteAttempt(ctx, route); err != nil {
-				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+				sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 				return
 			}
 			var attemptCandidate routing.Candidate
@@ -741,7 +741,7 @@ func (sh *StreamingHandler) executeStreamingWithRetry(ctx context.Context, w htt
 							lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
 							return
 						}
-						sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+						sh.writeStreamingTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 						return
 					}
 					continue

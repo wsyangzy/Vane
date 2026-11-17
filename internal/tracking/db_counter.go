@@ -164,7 +164,7 @@ func (c *DBRequestCounter) Get(opts *QueryOptions) (int64, bool) {
 	if opts != nil {
 		if len(queryModelNames(opts)) > 0 || opts.Channel != "" || opts.EndpointName != "" ||
 			opts.GroupName != "" || opts.Status != "" ||
-			opts.StartDate != nil || opts.EndDate != nil {
+			opts.StartDate != nil || opts.EndDate != nil || opts.CompletedSince != nil || opts.CompletedBefore != nil {
 			return 0, false // 复杂过滤，无法使用内存计数
 		}
 		if opts.Environment != "" && c.environment != "" && opts.Environment != c.environment {

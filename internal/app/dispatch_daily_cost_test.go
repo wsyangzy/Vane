@@ -70,11 +70,33 @@ func TestDispatchDailyCostAdmissionPreservesLimitReasonAndRechecksSends(t *testi
 					if event.Candidate == candidate.Identity() {
 						require.Equal(t, "skipped", event.Action)
 						require.Equal(t, "daily_cost_limit_exceeded", event.Reason)
+						require.NotNil(t, event.Blockage)
+						require.Equal(t, "first", event.Blockage.ChannelName)
+						require.Equal(t, "first", event.Blockage.GroupName)
+						require.NotNil(t, event.Blockage.DailyUsedUSD)
+						require.Equal(t, 5.0, *event.Blockage.DailyUsedUSD)
+						require.Equal(t, 5.0, *event.Blockage.DailyLimitUSD)
+						require.Equal(t, "automatic", event.Blockage.Recovery)
+						require.NotNil(t, event.Blockage.RecoverAt)
+						require.Equal(t, 0, event.Blockage.RecoverAt.Hour())
+						require.True(t, event.Blockage.RecoverAt.After(time.Now()))
 						found = true
 					}
 				}
 				require.True(t, found, "a skipped group must keep its daily-limit diagnosis")
 			}
+			pool := a.poolRuntimes[provider]
+			require.NoError(t, pool.Fail(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model, routing.Failure{Scope: routing.ScopeCandidate, Reason: "network_error"}, time.Now().Add(time.Hour)))
+			input := DispatchRecoveryInput{Provider: provider, ChannelID: candidate.ChannelID, GroupID: candidate.GroupID, EndpointID: candidate.EndpointID, Model: candidate.Identity().Model}
+			states, err := a.GetDispatchRecovery(input)
+			require.NoError(t, err)
+			require.Len(t, states, 1)
+			require.Equal(t, "daily_cost_limit_exceeded", states[0].Blockage.Reason)
+			require.False(t, states[0].CanRetry, "health retries cannot bypass the daily cost limit")
+			_, err = a.RetryDispatchCandidate(input)
+			require.Error(t, err)
+			allowed, _ := pool.HealthAllowed(candidate.ChannelID, candidate.GroupID, candidate.EndpointID, candidate.Identity().Model)
+			require.False(t, allowed, "refused retry must preserve the health gate")
 			a.usageTracker = nil
 			require.Equal(t, "daily_cost_state_unavailable", a.dispatchDailyCostAdmission(candidate))
 		})

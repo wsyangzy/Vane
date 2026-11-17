@@ -130,8 +130,8 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 	// 🔧 [P5.3] 全局重试预算检查 - 在每次进入重试循环前检查
 	if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 		slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-		lifecycleManager.FailRequest("retry_budget_exhausted", "")
-		WriteUpstreamErrorResponse(w, nil, "retry_budget_exhausted", http.StatusGatewayTimeout)
+		lifecycleManager.FailRequest(reason, "")
+		WriteUpstreamErrorResponse(w, nil, reason, http.StatusGatewayTimeout)
 		return
 	}
 
@@ -271,7 +271,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 			// 路由阶段之间共享全局重试预算：预算耗尽即停止，不再进入后续目标
 			if exhausted, reason := checkRouteBudget(route, lifecycleManager); exhausted {
 				slog.Warn(fmt.Sprintf("⏰ [全局重试预算耗尽] [%s] %s", connID, reason))
-				rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+				rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 				return
 			}
 			triedEndpoints[epKey] = struct{}{}
@@ -303,12 +303,12 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				default:
 				}
 
-				if exhausted, _ := lifecycleManager.CheckRetryBudget(); exhausted {
+				if exhausted, reason := lifecycleManager.CheckRetryBudget(); exhausted {
 					if route != nil {
-						route.budget.Stop()
+						route.budget.Stop(reason)
 						route.publishSnapshot()
 					}
-					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 					return
 				}
 				attemptCtx, admission, admitErr := rh.forwarder.admitSubscription(ctx, ep, route.candidate(rh.forwarder, ep, bodyBytes).Model)
@@ -325,7 +325,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 				defer routing.PoolAttemptFromContext(attemptCtx).Finish(false)
 				defer finishProfileAttempt(attemptCtx, nil)
 				if err := beginRouteAttempt(ctx, route); err != nil {
-					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+					rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 					return
 				}
 				var attemptCandidate routing.Candidate
@@ -528,7 +528,7 @@ func (rh *RegularHandler) HandleRegularRequestUnifiedWithRetry(ctx context.Conte
 									lifecycleManager.CancelRequest("client disconnected during retry delay", nil)
 									return
 								}
-								rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, "retry_budget_exhausted", http.StatusGatewayTimeout, route)
+								rh.writeRegularTerminalFailure(w, r, lifecycleManager, stringSetKeys(triedEndpoints), lastErr, retryBudgetStopReason(route, lifecycleManager), http.StatusGatewayTimeout, route)
 								return
 							}
 							continue

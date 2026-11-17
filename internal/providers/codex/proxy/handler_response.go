@@ -62,3 +62,20 @@ func (h *Handler) writeError(w http.ResponseWriter, status int, message string) 
 		_, _ = io.WriteString(w, message)
 	}
 }
+
+// writeInvalidStreamFailure terminates only responses rejected by stream
+// validation before output. Upstream evidence is recorded separately; arbitrary
+// HTML/JSON must not become the final response to a streaming client.
+func (h *Handler) writeInvalidStreamFailure(w http.ResponseWriter) {
+	w.Header().Del("Content-Encoding")
+	w.Header().Del("Content-Length")
+	w.Header().Del("Transfer-Encoding")
+	w.Header().Del("Connection")
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusBadGateway)
+	_, _ = io.WriteString(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"code\":\"invalid_stream_response\",\"message\":\"上游未返回有效的流式响应，请稍后重试。\"}}\n\n")
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}

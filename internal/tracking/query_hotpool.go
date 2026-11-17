@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"time"
 
 	appcache "github.com/wsyangzy/Vane/internal/platform/cache"
 
@@ -16,6 +17,9 @@ import (
 // 🔧 [修复] 2025-12-11: 正确处理分页，确保返回数量不超过 limit
 func (ut *UsageTracker) QueryRequestDetailsWithHotPool(ctx context.Context, opts *QueryOptions) ([]RequestDetail, int64, error) {
 	opts = ut.scopedQueryOptions(opts)
+	if opts.CompletedSince != nil || opts.CompletedBefore != nil {
+		return ut.queryCompletedRequestsWithHotPool(ctx, opts)
+	}
 	var results []RequestDetail
 
 	// 获取分页参数
@@ -150,9 +154,9 @@ func queryOptsCacheKey(opts *QueryOptions) string {
 		return ""
 	}
 	// 仅使用影响 count 结果的过滤字段（不包含 limit/offset/sort）
-	return fmt.Sprintf("p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|env=%s|sd=%v|ed=%v",
+	return fmt.Sprintf("p=%s|c=%s|m=%s|e=%s|g=%s|s=%s|env=%s|sd=%v|ed=%v|cs=%v|cb=%v",
 		opts.Provider, opts.Channel, queryModelCacheKey(opts), opts.EndpointName,
-		opts.GroupName, opts.Status, opts.Environment, opts.StartDate, opts.EndDate)
+		opts.GroupName, opts.Status, opts.Environment, opts.StartDate, opts.EndDate, opts.CompletedSince, opts.CompletedBefore)
 }
 
 // getCachedDBCount 获取上次成功的 count（无缓存时返回 0）
@@ -220,6 +224,10 @@ func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
 	endpointName := req.EndpointName
 	groupName := req.GroupName
 	startTime := req.StartTime
+	var completedAt time.Time
+	if req.EndTime != nil {
+		completedAt = req.EndTime.Truncate(time.Second)
+	}
 	provider := req.Provider
 	req.mu.RUnlock()
 
@@ -275,8 +283,61 @@ func activeRequestMatchesFilters(req *ActiveRequest, opts *QueryOptions) bool {
 	if opts.EndDate != nil && startTime.After(*opts.EndDate) {
 		return false
 	}
+	if opts.CompletedSince != nil && (completedAt.IsZero() || completedAt.Before(*opts.CompletedSince)) {
+		return false
+	}
+	if opts.CompletedBefore != nil && (completedAt.IsZero() || !completedAt.Before(*opts.CompletedBefore)) {
+		return false
+	}
 
 	return true
+}
+
+// Completed requests must retain one order while moving from the hot pool into
+// SQLite. The normal list intentionally puts active requests first; using that
+// order for incremental pagination can skip or repeat terminal failures.
+func (ut *UsageTracker) queryCompletedRequestsWithHotPool(ctx context.Context, opts *QueryOptions) ([]RequestDetail, int64, error) {
+	hot := ut.getFilteredHotPoolRequests(opts)
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	dbOpts := *opts
+	dbOpts.Offset = 0
+	dbOpts.Limit = max(opts.Offset, 0) + limit + len(hot)
+	persisted, err := ut.QueryRequestDetails(ctx, &dbOpts)
+	if err != nil {
+		return nil, 0, err
+	}
+	count, err := ut.CountRequestDetails(ctx, opts)
+	if err != nil {
+		return nil, 0, err
+	}
+	seen := make(map[string]bool, len(persisted)+len(hot))
+	merged := make([]RequestDetail, 0, len(persisted)+len(hot))
+	for _, request := range persisted {
+		seen[request.RequestID] = true
+		merged = append(merged, request)
+	}
+	for _, request := range hot {
+		if seen[request.RequestID] {
+			continue
+		}
+		seen[request.RequestID] = true
+		if request.EndTime != nil && ut.location != nil {
+			localEnd := request.EndTime.In(ut.location)
+			request.EndTime = &localEnd
+		}
+		merged = append(merged, request)
+		count++
+	}
+	sort.Slice(merged, func(i, j int) bool { return completedRequestBefore(merged[i], merged[j]) })
+	start := max(opts.Offset, 0)
+	if start >= len(merged) {
+		return []RequestDetail{}, int64(count), nil
+	}
+	end := min(start+limit, len(merged))
+	return merged[start:end], int64(count), nil
 }
 
 // GetHotPoolRequestCount 获取热池中符合条件的请求数量

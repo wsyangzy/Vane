@@ -373,6 +373,7 @@ func ensureAttachedHistorySchema(ctx context.Context, conn *sql.Conn) error {
 	statements := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS history_archive.idx_history_request_id ON request_logs(request_id)`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_start ON request_logs(start_time)`,
+		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_completion ON request_logs(end_time, request_id) WHERE end_time IS NOT NULL`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_provider ON request_logs(provider)`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_request_environment_start ON request_logs(environment, start_time)`,
 		`CREATE INDEX IF NOT EXISTS history_archive.idx_history_summary_date ON usage_summary(date)`,

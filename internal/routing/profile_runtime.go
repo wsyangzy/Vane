@@ -24,6 +24,7 @@ type RuntimeConfig struct {
 	Compatible       func(context.Context, DispatchCandidate) (bool, string)
 	OnTrace          func(DispatchTrace)
 	CheckAdmission   func(DispatchCandidate) string
+	DescribeBlockage func(DispatchCandidate, string) *Blockage
 	OnSettlement     func(AttemptSettlement)
 }
 
@@ -57,6 +58,7 @@ type DispatchTraceEvent struct {
 	Action    string       `json:"action"`
 	Reason    string       `json:"reason,omitempty"`
 	Scope     FailureScope `json:"failure_scope,omitempty"`
+	Blockage  *Blockage    `json:"blockage,omitempty"`
 }
 
 // DispatchRouteSource is the default orchestration choice before applying a
@@ -85,6 +87,9 @@ type DispatchTrace struct {
 	Candidates      []DispatchTraceEvent `json:"candidates"`
 	Attempts        int                  `json:"attempts"`
 	WaitMS          int64                `json:"wait_ms"`
+	MaxAttempts     int                  `json:"max_attempts,omitempty"`
+	MaxDurationMS   int64                `json:"max_duration_ms,omitempty"`
+	NextRecoveryAt  *time.Time           `json:"next_recovery_at,omitempty"`
 	ResponseStarted bool                 `json:"response_started"`
 	Successful      bool                 `json:"successful"`
 	StopReason      string               `json:"stop_reason,omitempty"`
@@ -663,6 +668,11 @@ func (r *ProfileRuntime) populateDispatchPlan(ctx context.Context, config Runtim
 			}
 		}
 		evaluations = append(evaluations, rejected...)
+		for i := range evaluations {
+			if !evaluations[i].Eligible {
+				evaluations[i].Blockage = describeBlockage(config, evaluations[i].Candidate, evaluations[i].Reason)
+			}
+		}
 		planned := DispatchPlanStage{Index: index, Kind: stage.kind, Evaluations: evaluations, EligibleCandidates: []DispatchCandidate{}}
 		for _, evaluation := range evaluations {
 			if evaluation.Eligible {
@@ -765,7 +775,7 @@ func (r *ProfileRuntime) Reserve(ctx context.Context, plan *DispatchPlan, candid
 		return nil, errors.New(reason)
 	}
 	if err := plan.Budget.Check(); err != nil {
-		state.stopped = "retry_budget_exhausted"
+		state.stopped = BudgetStopReason(err)
 		return nil, err
 	}
 	if check := r.snapshot().CheckAdmission; check != nil {
@@ -888,6 +898,10 @@ func (a *DispatchReservation) Finish(tokens int64, successful bool, failure Fail
 	a.mu.Unlock()
 	state := a.plan.state
 	now := state.runtime.now()
+	var blockage *Blockage
+	if committed && !successful {
+		blockage = describeBlockage(state.runtime.snapshot(), a.candidate, safeDispatchReason(failure.Reason, "upstream_failure"))
+	}
 	state.mu.Lock()
 	state.reserved = false
 	state.runtime.scheduler.Release(a.candidate, tokens, committed && successful, now)
@@ -902,7 +916,7 @@ func (a *DispatchReservation) Finish(tokens int64, successful bool, failure Fail
 			failure.Scope = ScopeCandidate
 		}
 		state.ledger.Fail(a.candidate.Identity(), failure)
-		state.appendEvent(DispatchTraceEvent{Candidate: a.candidate.Identity(), Action: "failed", Reason: failure.Reason, Scope: failure.Scope})
+		state.appendEvent(DispatchTraceEvent{Candidate: a.candidate.Identity(), Action: "failed", Reason: failure.Reason, Scope: failure.Scope, Blockage: blockage})
 		state.runtime.rememberFailure(a.plan, a.candidate)
 		if state.responseStarted || failure.Terminal || failure.Scope == ScopeRequest {
 			state.stopped = failure.Reason
@@ -1030,10 +1044,15 @@ func (p *DispatchPlan) Trace() DispatchTrace {
 	}
 	for _, evaluation := range p.Evaluations {
 		if !evaluation.Eligible && len(trace.Candidates) < 128 {
-			trace.Candidates = append(trace.Candidates, DispatchTraceEvent{Candidate: evaluation.Candidate.Identity(), Action: "skipped", Reason: safeDispatchReason(evaluation.Reason, "candidate_unavailable")})
+			trace.Candidates = append(trace.Candidates, DispatchTraceEvent{Candidate: evaluation.Candidate.Identity(), Action: "skipped", Reason: safeDispatchReason(evaluation.Reason, "candidate_unavailable"), Blockage: evaluation.Blockage})
 		}
 	}
 	trace.Attempts, trace.WaitMS = p.Budget.Stats()
+	trace.MaxAttempts, trace.MaxDurationMS = p.Budget.Limits()
+	trace.NextRecoveryAt = p.Budget.NextRecoveryAt()
+	if !trace.Successful && p.Budget.Stopped() {
+		trace.StopReason = p.Budget.Reason()
+	}
 	return trace
 }
 
@@ -1041,6 +1060,7 @@ func (p *DispatchPlan) Skip(candidate DispatchCandidate, reason string) {
 	if p.state == nil || p.Preview {
 		return
 	}
+	blockage := describeBlockage(p.state.runtime.snapshot(), candidate, reason)
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
 	reason = safeDispatchReason(reason, "candidate_unavailable")
@@ -1050,7 +1070,7 @@ func (p *DispatchPlan) Skip(candidate DispatchCandidate, reason string) {
 		}
 		p.state.stateRejected[candidate.Identity()] = reason
 	}
-	p.state.appendEvent(DispatchTraceEvent{Candidate: candidate.Identity(), Action: "skipped", Reason: reason})
+	p.state.appendEvent(DispatchTraceEvent{Candidate: candidate.Identity(), Action: "skipped", Reason: reason, Blockage: blockage})
 }
 
 // End publishes the exhausted/cancelled terminal trace when no attempt can

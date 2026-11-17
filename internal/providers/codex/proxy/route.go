@@ -158,6 +158,7 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 	var lastUpstreamStatus int
 	var lastUpstreamHeaders http.Header
 	var lastUpstreamBody []byte
+	var lastUpstreamInvalidStream bool
 	quotaBlocked := false
 	requestModel := h.tokenParser.ParseModelFromBody(body)
 
@@ -197,6 +198,7 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 				lastUpstreamStatus = result.lastUpstreamStatus
 				lastUpstreamHeaders = result.lastUpstreamHeaders
 				lastUpstreamBody = result.lastUpstreamBody
+				lastUpstreamInvalidStream = result.lastUpstreamInvalidStream
 			}
 			h.logger.Info("[Codex 路由阶段失败]", "request_id", requestID, "kind", route.kind, "target", stage.index, "channel", stage.channel.Name)
 		}
@@ -208,7 +210,7 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 			if currentStage != nil {
 				h.recordRouteSnapshot(requestID, currentStage.executionSnapshot())
 			}
-			if err := budget.Wait(r.Context(), time.Until(next)); err == nil {
+			if err := budget.WaitRecovery(r.Context(), time.Until(next)); err == nil {
 				ledger.RetryRecovered()
 				route.waitStages = nil
 				continue
@@ -224,7 +226,9 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 		h.recordRouteSnapshot(requestID, currentStage.executionSnapshot())
 	}
 	if errors.Is(lastErr, routing.ErrBudgetExhausted) {
-		failureReason = "retry_budget_exhausted"
+		failureReason = routing.BudgetStopReason(lastErr)
+	} else if budget.Stopped() {
+		failureReason = budget.Reason()
 	}
 	detail := lastSummary
 	if strings.TrimSpace(detail) == "" && lastErr != nil {
@@ -250,6 +254,10 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 			detail = message
 		}
 		h.recordUpstreamFailure(requestID, startTime, failureReason, detail, lastUpstreamStatus, nil, requestModel)
+		if isStreaming && lastUpstreamInvalidStream {
+			h.writeInvalidStreamFailure(w)
+			return
+		}
 		h.passthroughWithBody(w, &http.Response{
 			StatusCode: lastUpstreamStatus,
 			Header:     lastUpstreamHeaders,
@@ -261,7 +269,7 @@ func (h *Handler) serveRouted(w http.ResponseWriter, r *http.Request, body []byt
 	// 上游从未给出 HTTP 响应：追踪不记状态码，给客户端的码只是协议必需
 	statusCode := http.StatusServiceUnavailable
 	switch {
-	case errors.Is(lastErr, routing.ErrBudgetExhausted):
+	case errors.Is(lastErr, routing.ErrBudgetExhausted) || budget.Stopped():
 		statusCode = http.StatusGatewayTimeout
 	case strings.HasPrefix(failureReason, "state_"):
 		statusCode = http.StatusBadRequest

@@ -60,6 +60,14 @@ func (s *RoutingService) CheckPoolEndpoint(provider string, id int64) error {
 	return s.app.CheckPoolEndpoint(provider, id)
 }
 
+func (s *RoutingService) GetDispatchRecovery(input app.DispatchRecoveryInput) ([]app.DispatchCandidateRecovery, error) {
+	return s.app.GetDispatchRecovery(input)
+}
+
+func (s *RoutingService) RetryDispatchCandidate(input app.DispatchRecoveryInput) ([]app.DispatchCandidateRecovery, error) {
+	return s.app.RetryDispatchCandidate(input)
+}
+
 func (s *RoutingService) ListModelRoutes(provider string, sourceChannelID int64) ([]app.ModelRouteInfo, error) {
 	return s.app.ListModelRoutes(provider, sourceChannelID)
 }

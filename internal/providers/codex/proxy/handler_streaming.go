@@ -49,6 +49,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 256*1024)
+	scanner.Split(splitCodexSSEWireLine)
 
 	var lastResult *TokenResult
 	var bytesProcessed int64
@@ -56,105 +57,84 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	var outputSentRecorded bool
 	var downstreamStreamErr *UpstreamStreamError
 	var streamCompleted bool
-	var pendingLines [][]byte
-	var pendingBytes int
-	currentEvent := ""
-
-	writeLine := func(line []byte) {
+	var pending []byte
+	var decoder codexSSEDecoder
+	writeBytes := func(data []byte) {
 		writeHeaders()
-		if !outputSentRecorded && len(bytes.TrimSpace(line)) > 0 {
+		if !outputSentRecorded && len(bytes.TrimSpace(data)) > 0 {
 			h.recordOutputSent(requestID)
 			outputSentRecorded = true
 		}
-		w.Write(line)
-		w.Write([]byte("\n"))
+		_, _ = w.Write(data)
 		if canFlush {
 			flusher.Flush()
 		}
 	}
 	flushPending := func() {
-		if len(pendingLines) == 0 {
-			return
-		}
-		for _, pending := range pendingLines {
-			writeLine(pending)
-		}
-		pendingLines = nil
-		pendingBytes = 0
-	}
-	bufferLine := func(line []byte) {
-		copied := append([]byte(nil), line...)
-		pendingLines = append(pendingLines, copied)
-		pendingBytes += len(copied) + 1
-		if pendingBytes >= maxPreOutputStreamBufferBytes {
-			flushPending()
+		if len(pending) > 0 {
+			writeBytes(pending)
+			pending = nil
 		}
 	}
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		bytesProcessed += int64(len(line)) + 1 // +1 for trailing newline
-
-		if eventName, ok := parseSSEEventName(line); ok {
-			currentEvent = eventName
+	restoreFailure := func(failure *UpstreamStreamError) (*UpstreamStreamError, bool) {
+		if resp.Request != nil {
+			failure.Message = subscription.Redact(resp.Request.Context(), failure.Message)
 		}
-
-		if streamErr := h.tokenParser.ParseStreamingErrorLine(line); streamErr != nil {
-			if resp.Request != nil {
-				streamErr.Message = subscription.Redact(resp.Request.Context(), streamErr.Message)
-			}
-			if !headersWritten {
-				// The caller may still fail over. Restore the consumed SSE event so
-				// the final exhausted response keeps the upstream 200 and raw body.
-				raw := make([]byte, 0, pendingBytes+len(line)+1)
-				for _, pending := range pendingLines {
-					raw = append(raw, pending...)
-					raw = append(raw, '\n')
-				}
-				raw = append(raw, line...)
-				raw = append(raw, '\n', '\n')
-				resp.Body = io.NopCloser(bytes.NewReader(raw))
-				h.logger.Warn("[Codex 流式上游错误] 输出前捕获到可转移错误",
-					"provider", "codex",
-					"request_id", requestID,
-					"endpoint", endpointName,
-					"error", streamErr.Error(),
-				)
-				return streamErr, false
-			}
-			downstreamStreamErr = streamErr
+		// Only the bounded, consumed prefix is retained for provenance. Never
+		// send unvalidated bytes just to free the pre-output buffer.
+		resp.Body = io.NopCloser(bytes.NewReader(append([]byte(nil), pending...)))
+		return failure, false
+	}
+	processEvent := func(event *codexSSEEvent) *UpstreamStreamError {
+		if event == nil {
+			return nil
 		}
-
-		// 解析 token（流式最终 chunk 可能包含 usage）
-		if result, isDone := h.tokenParser.ParseStreamingLine(line); isDone {
-			streamCompleted = true
-		} else if result != nil {
-			// 🆕 [详细日志] 首次从 response 事件提取到模型时记录
+		if result, _ := h.tokenParser.ParseStreamingLine(append([]byte("data: "), event.data...)); result != nil {
+			lastResult = result
 			if !modelLogged && result.Model != "" {
-				h.logger.Info(fmt.Sprintf("🎯 [Codex模型提取] [%s] 从response事件提取模型: %s",
-					requestID, result.Model),
-					"provider", "codex", "request_id", requestID)
+				h.logger.Info("[Codex 模型提取]", "request_id", requestID, "model", result.Model)
 				modelLogged = true
 			}
-			// 🆕 [详细日志] 首次提取到 token 用量时记录（input/output/cached 任一非零即视为获取到）
 			if !usageLogged && (result.InputTokens > 0 || result.OutputTokens > 0 || result.CacheReadTokens > 0) {
-				h.logger.Info(fmt.Sprintf("🎯 [Codex Usage] [%s] 提取token信息: input=%d, output=%d, cached=%d",
-					requestID, result.InputTokens, result.OutputTokens, result.CacheReadTokens),
-					"provider", "codex", "request_id", requestID)
+				h.logger.Info("[Codex Usage]", "request_id", requestID, "input_tokens", result.InputTokens, "output_tokens", result.OutputTokens, "cache_read_tokens", result.CacheReadTokens)
 				usageLogged = true
 			}
-			lastResult = result
 		}
-		if isCodexStreamCompletionLine(currentEvent, line) {
-			streamCompleted = true
+		if !headersWritten {
+			pending = append(pending, event.raw...)
 		}
-
-		if !headersWritten && !isLikelyCodexOutputLine(currentEvent, line) {
-			bufferLine(line)
-			continue
+		if event.err != nil {
+			if resp.Request != nil {
+				event.err.Message = subscription.Redact(resp.Request.Context(), event.err.Message)
+			}
+			if !headersWritten {
+				return event.err
+			}
+			downstreamStreamErr = event.err
 		}
-		flushPending()
-		writeLine(line)
+		streamCompleted = streamCompleted || event.completed
+		if headersWritten {
+			writeBytes(event.raw)
+		} else if event.err == nil && (event.output || event.completed) {
+			flushPending()
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		bytesProcessed += int64(len(line))
+		if err := processEvent(decoder.wireLine(line)); err != nil {
+			return restoreFailure(err)
+		}
+		if !headersWritten && len(pending)+len(decoder.raw) >= maxPreOutputStreamBufferBytes {
+			pending = append(pending, decoder.raw...)
+			return restoreFailure(invalidCodexStream("stream_prelude_too_large", "上游响应在有效输出前超过缓冲上限"))
+		}
+	}
+	// Several compatible servers omit the final blank line. Preserve this
+	// accepted framing without accepting an arbitrary JSON body as SSE.
+	if err := processEvent(decoder.end()); err != nil {
+		return restoreFailure(err)
 	}
 
 	// 🆕 [详细日志] 扫描器错误检测：非 nil 视为流式中断；nil 视为正常完成
@@ -176,10 +156,7 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 			return nil, true
 		}
 		if !headersWritten {
-			return &UpstreamStreamError{
-				Type:    "stream_read_error",
-				Message: scanErr.Error(),
-			}, false
+			return restoreFailure(&UpstreamStreamError{Type: "stream_read_error", Code: "stream_read_error", Message: scanErr.Error()})
 		}
 		if isContextCanceledError(scanErr) {
 			if outputSentRecorded {
@@ -198,12 +175,8 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		// 上游 HTTP 层这次是真给过响应的（200），流是在那之后断的，就记它的真实状态码。
 		// 原先这里固定写 502，是一个提供商从未返回过的码。
 		prepareArchive(nil, false)
-		h.recordUpstreamFailure(requestID, startTime, "network_error", scanErr.Error(), resp.StatusCode, nil, requestModel)
+		h.recordUpstreamFailure(requestID, startTime, "network_error", scanErr.Error(), resp.StatusCode, lastResult, requestModel)
 		return nil, false
-	} else {
-		h.logger.Info(fmt.Sprintf("✅ [Codex流式完成] [%s] 端点: %s, 已处理 %d 字节",
-			requestID, endpointName, bytesProcessed),
-			"provider", "codex", "request_id", requestID)
 	}
 
 	if downstreamStreamErr != nil {
@@ -215,12 +188,20 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 		)
 		// 记上游真实给出的状态码（这条响应 HTTP 层就是 200，错误只在 SSE 事件里）。
 		// 200 + failed 是准确的：它说明失败发生在流中途，而不是连接或鉴权阶段。
-		prepareArchive(nil, false)
-		h.recordUpstreamFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), resp.StatusCode, nil, requestModel)
+		prepareArchive(downstreamStreamErr, false)
+		h.recordUpstreamFailure(requestID, startTime, "server_error", downstreamStreamErr.Error(), resp.StatusCode, lastResult, requestModel)
 		return nil, false
 	}
 
+	if !headersWritten && !streamCompleted {
+		return restoreFailure(codexStreamPreludeError(pending))
+	}
 	flushPending()
+	if streamCompleted {
+		h.logger.Info("[Codex 流式完成]", "request_id", requestID, "endpoint", endpointName, "bytes_processed", bytesProcessed)
+	} else {
+		h.logger.Warn("[Codex 流式响应未完整结束]", "request_id", requestID, "endpoint", endpointName, "bytes_processed", bytesProcessed)
+	}
 
 	// 🆕 [Codex 生命周期] 增强的完成日志（含端点、渠道、token、状态码、耗时、跳数）
 	durationMs := time.Since(startTime).Milliseconds()
@@ -278,50 +259,6 @@ func (h *Handler) handleStreaming(w http.ResponseWriter, resp *http.Response, re
 	prepareArchive(nil, streamCompleted)
 	h.recordSuccess(requestID, startTime, resp.StatusCode, lastResult, requestModel, endpointName, groupName, channelName, qualityReason)
 	return nil, true
-}
-
-func parseSSEEventName(line []byte) (string, bool) {
-	trimmed := bytes.TrimSpace(line)
-	const eventPrefix = "event:"
-	if !bytes.HasPrefix(trimmed, []byte(eventPrefix)) {
-		return "", false
-	}
-	return strings.TrimSpace(string(trimmed[len(eventPrefix):])), true
-}
-
-func isLikelyCodexOutputLine(eventName string, line []byte) bool {
-	eventName = strings.ToLower(strings.TrimSpace(eventName))
-	if strings.Contains(eventName, "delta") ||
-		strings.Contains(eventName, "content") ||
-		strings.Contains(eventName, "output_text") {
-		return true
-	}
-	trimmed := bytes.TrimSpace(line)
-	if !bytes.HasPrefix(trimmed, sseDataPrefix) {
-		return false
-	}
-	payload := bytes.TrimSpace(trimmed[len(sseDataPrefix):])
-	if bytes.Equal(payload, sseDoneMarker) {
-		return true
-	}
-	payloadLower := bytes.ToLower(payload)
-	return bytes.Contains(payloadLower, []byte(`"choices"`)) ||
-		bytes.Contains(payloadLower, []byte(`"delta"`)) ||
-		bytes.Contains(payloadLower, []byte(`"content"`)) ||
-		bytes.Contains(payloadLower, []byte(`"output_text"`))
-}
-
-func isCodexStreamCompletionLine(eventName string, line []byte) bool {
-	eventName = strings.ToLower(strings.TrimSpace(eventName))
-	trimmed := bytes.TrimSpace(line)
-	if !bytes.HasPrefix(trimmed, sseDataPrefix) {
-		return false
-	}
-	if eventName == "response.completed" {
-		return true
-	}
-	payload := bytes.ToLower(bytes.TrimSpace(trimmed[len(sseDataPrefix):]))
-	return bytes.Contains(payload, []byte(`"response.completed"`))
 }
 
 func isContextCanceledError(err error) bool {

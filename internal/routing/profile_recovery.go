@@ -32,12 +32,20 @@ func (r *ProfileRuntime) NextRecovery(plan *DispatchPlan, external func(Dispatch
 		if hardFailure(plan.state.ledger, candidate.Identity()) {
 			continue
 		}
+		if candidate.Balance.Exhausted() || evaluation.Blockage != nil && (evaluation.Blockage.Recovery == "manual" || evaluation.Blockage.Recovery == "unknown") {
+			continue
+		}
 		var ready time.Time
+		if evaluation.Blockage != nil && evaluation.Blockage.Recovery == "automatic" && evaluation.Blockage.RecoverAt != nil {
+			ready = *evaluation.Blockage.RecoverAt
+		}
 		if candidate.Health.CoolingDown {
 			if candidate.Health.Until.IsZero() {
 				continue
 			}
-			ready = candidate.Health.Until
+			if candidate.Health.Until.After(ready) {
+				ready = candidate.Health.Until
+			}
 		}
 		blockedUnknown := false
 		for _, q := range candidate.Quota.Windows {

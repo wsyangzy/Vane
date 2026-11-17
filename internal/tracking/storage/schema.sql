@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
 -- 索引优化
 CREATE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id);
 CREATE INDEX IF NOT EXISTS idx_request_logs_start_time ON request_logs(start_time);
+CREATE INDEX IF NOT EXISTS idx_request_logs_completion ON request_logs(end_time, request_id) WHERE end_time IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_request_logs_status ON request_logs(status);
 CREATE INDEX IF NOT EXISTS idx_request_logs_model ON request_logs(model_name);
 CREATE INDEX IF NOT EXISTS idx_request_logs_channel ON request_logs(channel);
@@ -437,6 +438,7 @@ BEGIN
 END;
 
 CREATE TABLE IF NOT EXISTS codex_endpoints (
+    path_strategy TEXT NOT NULL DEFAULT 'legacy',
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     channel_id INTEGER NOT NULL REFERENCES codex_channels(id) ON DELETE CASCADE,

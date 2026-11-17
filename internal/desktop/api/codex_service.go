@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/wsyangzy/Vane/internal/app"
+	codexservice "github.com/wsyangzy/Vane/internal/providers/codex/service"
 )
 
 type CodexService struct{ app *app.App }
@@ -100,4 +101,8 @@ func (s *CodexService) GetCodexGlobalConfig() (app.CodexGlobalConfigInfo, error)
 
 func (s *CodexService) UpdateCodexGlobalConfig(input app.CodexGlobalConfigInput) error {
 	return s.app.UpdateCodexGlobalConfig(input)
+}
+
+func (s *CodexService) ProbeCodexEndpoint(input codexservice.EndpointProbeInput) (codexservice.EndpointProbeResult, error) {
+	return s.app.ProbeCodexEndpoint(input)
 }

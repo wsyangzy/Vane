@@ -286,7 +286,7 @@ func TestRoutedCodexFinalExecutionSnapshotPersistsBeforeArchive(t *testing.T) {
 				t.Fatalf("missing trace: %+v", snapshot)
 			}
 			if exhausted {
-				if snapshot.Attempts != 1 || snapshot.StopReason != "retry_budget_exhausted" || snapshot.WaitMs == 0 {
+				if snapshot.Attempts != 1 || snapshot.StopReason != routing.StopRetryDeadlineExceeded || snapshot.WaitMs == 0 || snapshot.MaxAttempts != 2 || snapshot.MaxDurationMS != 100 {
 					t.Fatalf("lost final budget stats: %+v", snapshot)
 				}
 			} else if snapshot.Attempts != 2 || snapshot.StopReason != "" {

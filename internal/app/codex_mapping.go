@@ -177,6 +177,7 @@ func (a *App) buildCodexChannelInfo(record *codexstore.CodexChannelRecord, endpo
 			ApiKeyMasked:             maskToken(ep.ApiKey),
 			Name:                     ep.Name,
 			BaseURL:                  ep.BaseURL,
+			PathStrategy:             ep.PathStrategy,
 			IsActive:                 ep.IsActive,
 			FailoverEnabled:          ep.FailoverEnabled,
 			SkipHealthCheck:          ep.SkipHealthCheck,

@@ -1085,6 +1085,7 @@ id INTEGER PRIMARY KEY AUTOINCREMENT,
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE codex_endpoints (
+ path_strategy TEXT NOT NULL DEFAULT 'legacy',
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			channel_id INTEGER NOT NULL,
 			credential_group_id INTEGER,

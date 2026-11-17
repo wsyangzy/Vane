@@ -12,6 +12,7 @@ import (
 // reasons only. Candidate remains unchanged so its baseline Load can be reused
 // when reserving; Load is the effective account load used for this decision.
 type CandidateEvaluation struct {
+	Blockage           *Blockage         `json:"blockage,omitempty"`
 	Candidate          DispatchCandidate `json:"candidate"`
 	Eligible           bool              `json:"eligible"`
 	Reason             string            `json:"reason"`

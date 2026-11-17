@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -276,7 +277,7 @@ func TestPoolRecoveryWaitUsesBudget(t *testing.T) {
 		t.Fatal("missing recovery")
 	}
 	budget := NewBudget(10, 10*time.Millisecond)
-	if err := budget.Wait(context.Background(), time.Until(next)); err != ErrBudgetExhausted {
+	if err := budget.Wait(context.Background(), time.Until(next)); !errors.Is(err, ErrBudgetExhausted) || BudgetStopReason(err) != StopRetryDeadlineExceeded {
 		t.Fatalf("unbounded wait: %v", err)
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wsyangzy/Vane/internal/platform/transport"
+	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/pathpolicy"
 	"github.com/wsyangzy/Vane/internal/providers/codex/proxy/subscription"
 	"github.com/wsyangzy/Vane/internal/routing"
 )
@@ -178,13 +179,13 @@ func (f *Forwarder) Forward(r *http.Request, body []byte, endpoint *CodexEndpoin
 		}
 	}
 	// 构建目标 URL
-	targetURL := buildTargetURL(endpoint.BaseURL, r.URL)
+	targetURL := pathpolicy.Resolve(endpoint.BaseURL, r.URL, endpoint.PathStrategy, false)
 	if endpoint.AuthMode == subscription.ClientPassthrough {
 		targetURL = subscription.TargetURL(r, endpoint.BaseURL, true)
 	} else if _, poolCaller := routing.PoolCallerFromContext(r.Context()); subscription.FromContext(r.Context()) != nil || poolCaller || routing.ProfileRequestFromContext(r.Context()) != nil {
 		copyURL := *r.URL
 		copyURL.Path = subscription.Path(r)
-		targetURL = buildTargetURL(endpoint.BaseURL, &copyURL)
+		targetURL = pathpolicy.Resolve(endpoint.BaseURL, &copyURL, endpoint.PathStrategy, true)
 	}
 
 	// 创建新请求

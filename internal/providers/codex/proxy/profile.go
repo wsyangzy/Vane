@@ -187,6 +187,7 @@ type codexProfileStream struct {
 	failed     bool
 	eof        bool
 	errorFrame []byte
+	decoder    codexSSEDecoder
 }
 
 func (b *codexProfileStream) Read(data []byte) (int, error) {
@@ -206,41 +207,31 @@ func (b *codexProfileStream) Read(data []byte) (int, error) {
 		if len(bytes.TrimSpace(b.line)) > 0 {
 			b.frame(bytes.TrimSpace(b.line))
 		}
+		b.observeEvent(b.decoder.end())
 	}
 	return n, err
 }
 
 func (b *codexProfileStream) frame(line []byte) {
-	if result, _ := b.handler.tokenParser.ParseStreamingLine(line); result != nil {
+	b.observeEvent(b.decoder.line(line))
+}
+
+func (b *codexProfileStream) observeEvent(event *codexSSEEvent) {
+	if event == nil {
+		return
+	}
+	if result, _ := b.handler.tokenParser.ParseStreamingLine(append([]byte("data: "), event.data...)); result != nil {
 		b.usage = result
 	}
-	if !bytes.HasPrefix(line, []byte("data:")) {
-		return
-	}
-	var frame map[string]any
-	if json.Unmarshal(bytes.TrimSpace(line[5:]), &frame) != nil {
-		return
-	}
-	typ, _ := frame["type"].(string)
-	if typ == "error" || typ == "response.failed" || typ == "response.incomplete" || frame["error"] != nil {
+	if event.err != nil {
 		b.failed = true
-		b.errorFrame = append(b.errorFrame[:0], bytes.TrimSpace(line[5:])...)
+		b.errorFrame = append(b.errorFrame[:0], event.data...)
 	}
-	response := frame
-	if nested, ok := frame["response"].(map[string]any); ok {
-		response = nested
+	b.completed = b.completed || event.completed
+	if (b.failed || b.completed) && b.request != nil && event.frame != nil {
+		b.handler.observeProfileResponse(b.request.Context(), b.candidate, b.status, b.headers, event.data)
 	}
-	if response["error"] != nil || response["status"] == "failed" || response["status"] == "incomplete" {
-		b.failed = true
-		b.errorFrame = append(b.errorFrame[:0], bytes.TrimSpace(line[5:])...)
-	}
-	if typ == "response.completed" || response["status"] == "completed" {
-		b.completed = true
-	}
-	if (b.failed || b.completed) && b.request != nil {
-		b.handler.observeProfileResponse(b.request.Context(), b.candidate, b.status, b.headers, bytes.TrimSpace(line[5:]))
-	}
-	for _, key := range codexResponseStateKeys(b.request, frame) {
+	for _, key := range codexResponseStateKeys(b.request, event.frame) {
 		if len(b.keys) >= 256 {
 			break
 		}
@@ -332,6 +323,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 	var lastResponse *http.Response
+	var lastResponseInvalidStream bool
 	var lastBody []byte
 	var lastUpstreamError string
 	lastFailure := "route_unavailable"
@@ -369,7 +361,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			attempt, err := runtime.Reserve(r.Context(), plan, candidate)
 			if err != nil {
 				if errors.Is(err, routing.ErrBudgetExhausted) {
-					lastFailure = "retry_budget_exhausted"
+					lastFailure = routing.BudgetStopReason(err)
 					break
 				}
 				plan.Skip(candidate, err.Error())
@@ -472,6 +464,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
 				publishProgress()
 				lastFailure, lastResponse, lastBody = failure.Reason, resp, raw
+				lastResponseInvalidStream = false
 				if resp.StatusCode == http.StatusUnauthorized && h.subscriptions != nil {
 					h.subscriptions.RejectCredential(sendRequest.Context())
 				}
@@ -506,6 +499,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					failure = routing.Failure{Scope: routing.ScopeCandidate, Reason: "incomplete_response"}
 					if streamErr != nil {
 						failure = codexRouteFailure(http.StatusOK, nil, streamErr)
+						if streamErr.Type == "invalid_stream_response" {
+							failure = routing.Failure{Scope: routing.ScopeCandidate, Reason: streamErr.Code}
+						} else if streamErr.Type == "response_incomplete" {
+							failure = routing.Failure{Scope: routing.ScopeCandidate, Reason: "incomplete_response"}
+						}
 						switch streamErr.Code {
 						case "usage_limit_reached", "usage_limit_exceeded", "quota_exceeded", "insufficient_quota", "model_usage_limit_reached":
 							quotaFailure = true
@@ -515,7 +513,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 					finish(tokens, success, failure, routing.RetryAfter(resp.Header, time.Now()))
 					if streamErr != nil {
 						lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(observed.errorFrame, streamErr.Error()))
-						annotateLastChainError(&chain, 0, lastUpstreamError, resp.Header, false)
+						annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
 					}
 					publishProgress()
 				}
@@ -533,6 +531,12 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				if streamErr != nil {
 					lastBody, _ = io.ReadAll(resp.Body)
 					lastResponse = resp
+					lastResponseInvalidStream = streamErr.InvalidProtocol
+					if lastResponseInvalidStream {
+						lastUpstreamError = subscription.Redact(sendRequest.Context(), chainBodyText(lastBody, streamErr.Error()))
+						annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
+						publishProgress()
+					}
 				}
 				continue
 			}
@@ -560,6 +564,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 				annotateLastChainError(&chain, resp.StatusCode, lastUpstreamError, resp.Header, false)
 				publishProgress()
 				lastFailure, lastResponse, lastBody = failure.Reason, resp, raw
+				lastResponseInvalidStream = false
 				if failure.Terminal {
 					break
 				}
@@ -607,7 +612,7 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		}
 		if err := plan.Budget.WaitRecovery(r.Context(), time.Until(next)); err != nil {
 			if errors.Is(err, routing.ErrBudgetExhausted) {
-				lastFailure = "retry_budget_exhausted"
+				lastFailure = routing.BudgetStopReason(err)
 			} else {
 				lastFailure = "client_cancelled"
 			}
@@ -617,8 +622,11 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 			break
 		}
 	}
+	if plan.Budget.Stopped() {
+		lastFailure = plan.Budget.Reason()
+	}
 	plan.End(lastFailure)
-	if lastFailure == "retry_budget_exhausted" {
+	if routing.IsBudgetStopReason(lastFailure) {
 		trace := plan.Trace()
 		trace.StopReason = lastFailure
 		if h.usageTracker != nil {
@@ -644,12 +652,20 @@ func (h *Handler) serveProfileRouted(w http.ResponseWriter, r *http.Request, bod
 		if detail == "" {
 			detail = lastFailure
 		}
+		if streaming && lastResponseInvalidStream {
+			detail = subscription.Redact(r.Context(), chainBodyText(lastBody, detail))
+		}
 		h.recordUpstreamFailure(requestID, start, lastFailure, detail, lastResponse.StatusCode, nil, plan.Model)
+		if streaming && lastResponseInvalidStream {
+			lastResponse.Body.Close()
+			h.writeInvalidStreamFailure(w)
+			return
+		}
 		h.passthroughWithBody(w, lastResponse, lastBody)
 		return
 	}
 	status := http.StatusServiceUnavailable
-	if lastFailure == "retry_budget_exhausted" {
+	if routing.IsBudgetStopReason(lastFailure) {
 		status = http.StatusGatewayTimeout
 	} else if strings.HasPrefix(lastFailure, "state_") {
 		status = http.StatusBadRequest

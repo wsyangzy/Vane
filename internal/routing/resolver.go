@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // 路由模式
@@ -290,17 +291,20 @@ func (k Kind) ExhaustedReason() string {
 
 // Snapshot request_logs.route_snapshot 的内容。只记录规则标识与阶段序号，不含请求内容。
 type Snapshot struct {
-	PoolID       int64                 `json:"pool_id,omitempty"`
-	PoolName     string                `json:"pool_name,omitempty"`
-	Member       *PoolStage            `json:"member,omitempty"`
-	Subscription *SubscriptionSnapshot `json:"subscription,omitempty"`
-	Execution    *Ledger               `json:"execution,omitempty"`
-	Attempts     int                   `json:"attempts,omitempty"`
-	WaitMs       int64                 `json:"wait_ms,omitempty"`
-	StopReason   string                `json:"stop_reason,omitempty"`
-	Kind         Kind                  `json:"kind"`
-	ID           int64                 `json:"id,omitempty"`
-	Name         string                `json:"name,omitempty"`
+	PoolID         int64                 `json:"pool_id,omitempty"`
+	PoolName       string                `json:"pool_name,omitempty"`
+	Member         *PoolStage            `json:"member,omitempty"`
+	Subscription   *SubscriptionSnapshot `json:"subscription,omitempty"`
+	Execution      *Ledger               `json:"execution,omitempty"`
+	Attempts       int                   `json:"attempts,omitempty"`
+	WaitMs         int64                 `json:"wait_ms,omitempty"`
+	MaxAttempts    int                   `json:"max_attempts,omitempty"`
+	MaxDurationMS  int64                 `json:"max_duration_ms,omitempty"`
+	NextRecoveryAt *time.Time            `json:"next_recovery_at,omitempty"`
+	StopReason     string                `json:"stop_reason,omitempty"`
+	Kind           Kind                  `json:"kind"`
+	ID             int64                 `json:"id,omitempty"`
+	Name           string                `json:"name,omitempty"`
 	// Channel 非流改道 / 模型能力改道的来源渠道
 	Channel string `json:"channel,omitempty"`
 	Mode    string `json:"mode,omitempty"`

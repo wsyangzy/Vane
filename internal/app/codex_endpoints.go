@@ -61,6 +61,7 @@ func (a *App) CreateCodexEndpoint(input CreateCodexEndpointInput) error {
 		ApiKey:                   input.ApiKey,
 		Name:                     input.Name,
 		BaseURL:                  input.BaseURL,
+		PathStrategy:             input.PathStrategy,
 		FailoverEnabled:          input.FailoverEnabled == nil || *input.FailoverEnabled,
 		SkipHealthCheck:          input.SkipHealthCheck,
 		Priority:                 priority,
@@ -224,6 +225,10 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 	if input.BillingOutputTokenSource != nil {
 		billingOutputTokenSource = tracking.NormalizeBillingOutputTokenSource(*input.BillingOutputTokenSource)
 	}
+	pathStrategy := previous.PathStrategy
+	if input.PathStrategy != nil {
+		pathStrategy = *input.PathStrategy
+	}
 	modelMultipliers := previous.ModelMultipliers
 	if input.ModelMultipliers != nil {
 		modelMultipliers = input.ModelMultipliers
@@ -276,7 +281,7 @@ func (a *App) UpdateCodexEndpointByID(id int64, input UpdateCodexEndpointInput) 
 		return cause
 	}
 
-	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers); err != nil {
+	if err := endpointService.UpdateEndpointByID(ctx, id, input.Name, input.BaseURL, credentialGroupID, apiKey, failoverEnabled, skipHealthCheck, priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, billingOutputTokenSource, modelMultipliers, pathStrategy); err != nil {
 		return restoreUpdated(fmt.Errorf("更新 Codex 端点失败: %w", err))
 	}
 	if err := a.reloadCodexEndpointManager(); err != nil {

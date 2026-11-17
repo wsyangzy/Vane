@@ -224,10 +224,18 @@ id INTEGER PRIMARY KEY AUTOINCREMENT,
 		return err
 	}
 
+	existsPathStrategy, err := sqliteColumnExists(ctx, db, "codex_endpoints", "path_strategy")
+	if err != nil {
+		return err
+	}
+	if !existsPathStrategy {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE codex_endpoints ADD COLUMN path_strategy TEXT NOT NULL DEFAULT 'legacy'`); err != nil {
+			return fmt.Errorf("添加 Codex 端点路径策略失败: %w", err)
+		}
+	}
 	if err := m.ensureCodexEndpointCredentialGroupUniqueConstraints(ctx, db); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -422,8 +430,10 @@ func (m *schemaMigrator) rebuildCodexEndpointsForCredentialGroupUniqueness(ctx c
 			api_key TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL,
 			base_url TEXT NOT NULL,
+			path_strategy TEXT NOT NULL DEFAULT 'legacy',
 			is_active INTEGER NOT NULL DEFAULT 0,
 			failover_enabled INTEGER NOT NULL DEFAULT 1,
+			skip_health_check INTEGER NOT NULL DEFAULT 0,
 			priority INTEGER NOT NULL DEFAULT 0,
 			timeout_seconds INTEGER NOT NULL DEFAULT 0,
 			cost_multiplier REAL NOT NULL DEFAULT 1.0,
@@ -436,14 +446,14 @@ func (m *schemaMigrator) rebuildCodexEndpointsForCredentialGroupUniqueness(ctx c
 			updated_at DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now', 'localtime') || '+08:00')
 		)`,
 		`INSERT INTO codex_endpoints_group_scoped_unique (
-			id, channel_id, credential_group_id, api_key, name, base_url, is_active,
-			failover_enabled, priority, timeout_seconds, cost_multiplier,
+			id, channel_id, credential_group_id, api_key, name, base_url, is_active, path_strategy,
+			failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier,
 			input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier,
 			billing_output_token_source, model_multipliers, created_at, updated_at
 		)
 		SELECT
-			id, channel_id, credential_group_id, api_key, name, base_url, is_active,
-			failover_enabled, priority, timeout_seconds, cost_multiplier,
+			id, channel_id, credential_group_id, api_key, name, base_url, is_active, path_strategy,
+			failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier,
 			input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier,
 			billing_output_token_source, model_multipliers, created_at, updated_at
 		FROM codex_endpoints`,

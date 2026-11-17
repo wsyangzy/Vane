@@ -90,6 +90,136 @@ export class BalanceEntry {
 }
 
 /**
+ * Blockage is public diagnostic evidence captured when admission fails. It must
+ * never contain credentials, account hashes, request content or upstream bodies.
+ */
+export class Blockage {
+    /**
+     * Creates a new Blockage instance.
+     * @param {Partial<Blockage>} [$$source = {}] - The source object to create the Blockage.
+     */
+    constructor($$source = {}) {
+        if (!("provider" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["provider"] = "";
+        }
+        if (!("channel_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["channel_id"] = 0;
+        }
+        if (!("group_id" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["group_id"] = 0;
+        }
+        if (!("endpoint_id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["endpoint_id"] = "";
+        }
+        if (!("channel_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["channel_name"] = "";
+        }
+        if (!("group_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["group_name"] = "";
+        }
+        if (!("endpoint_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["endpoint_name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["model"] = undefined;
+        }
+        if (!("reason" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["reason"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["cause"] = undefined;
+        }
+        if (!("recovery" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["recovery"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {time$0.Time | null | undefined}
+             */
+            this["recover_at"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["daily_used_usd"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["daily_limit_usd"] = undefined;
+        }
+        if (!("observed_at" in $$source)) {
+            /**
+             * @member
+             * @type {time$0.Time}
+             */
+            this["observed_at"] = null;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Blockage instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Blockage}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Blockage(/** @type {Partial<Blockage>} */($$parsedSource));
+    }
+}
+
+/**
  * Candidate identifies an execution choice, not just its network endpoint.
  * Credential is an internal config identity; it must never contain a secret.
  */
@@ -174,6 +304,13 @@ export class CandidateEvaluation {
      * @param {Partial<CandidateEvaluation>} [$$source = {}] - The source object to create the CandidateEvaluation.
      */
     constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {Blockage | null | undefined}
+             */
+            this["blockage"] = undefined;
+        }
         if (!("candidate" in $$source)) {
             /**
              * @member
@@ -254,14 +391,18 @@ export class CandidateEvaluation {
      * @returns {CandidateEvaluation}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType0;
-        const $$createField7_0 = $$createType1;
+        const $$createField0_0 = $$createType1;
+        const $$createField1_0 = $$createType2;
+        const $$createField8_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("blockage" in $$parsedSource) {
+            $$parsedSource["blockage"] = $$createField0_0($$parsedSource["blockage"]);
+        }
         if ("candidate" in $$parsedSource) {
-            $$parsedSource["candidate"] = $$createField0_0($$parsedSource["candidate"]);
+            $$parsedSource["candidate"] = $$createField1_0($$parsedSource["candidate"]);
         }
         if ("load" in $$parsedSource) {
-            $$parsedSource["load"] = $$createField7_0($$parsedSource["load"]);
+            $$parsedSource["load"] = $$createField8_0($$parsedSource["load"]);
         }
         return new CandidateEvaluation(/** @type {Partial<CandidateEvaluation>} */($$parsedSource));
     }
@@ -500,10 +641,10 @@ export class DispatchCandidate {
      * @returns {DispatchCandidate}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType3;
-        const $$createField15_0 = $$createType4;
-        const $$createField16_0 = $$createType5;
-        const $$createField17_0 = $$createType1;
+        const $$createField0_0 = $$createType5;
+        const $$createField15_0 = $$createType6;
+        const $$createField16_0 = $$createType7;
+        const $$createField17_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("balance" in $$parsedSource) {
             $$parsedSource["balance"] = $$createField0_0($$parsedSource["balance"]);
@@ -593,8 +734,8 @@ export class DispatchDecision {
      * @returns {DispatchDecision}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType7;
-        const $$createField6_0 = $$createType9;
+        const $$createField4_0 = $$createType9;
+        const $$createField6_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField4_0($$parsedSource["targets"]);
@@ -692,12 +833,12 @@ export class DispatchPlan {
      * @returns {DispatchPlan}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType10;
-        const $$createField2_0 = $$createType11;
-        const $$createField3_0 = $$createType12;
-        const $$createField5_0 = $$createType14;
-        const $$createField6_0 = $$createType16;
-        const $$createField7_0 = $$createType17;
+        const $$createField1_0 = $$createType12;
+        const $$createField2_0 = $$createType13;
+        const $$createField3_0 = $$createType14;
+        const $$createField5_0 = $$createType16;
+        const $$createField6_0 = $$createType18;
+        const $$createField7_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("profile" in $$parsedSource) {
             $$parsedSource["profile"] = $$createField1_0($$parsedSource["profile"]);
@@ -765,8 +906,8 @@ export class DispatchPlanStage {
      * @returns {DispatchPlanStage}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType16;
-        const $$createField3_0 = $$createType17;
+        const $$createField2_0 = $$createType18;
+        const $$createField3_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("evaluations" in $$parsedSource) {
             $$parsedSource["evaluations"] = $$createField2_0($$parsedSource["evaluations"]);
@@ -939,6 +1080,27 @@ export class DispatchTrace {
              */
             this["wait_ms"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["max_attempts"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["max_duration_ms"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {time$0.Time | null | undefined}
+             */
+            this["next_recovery_at"] = undefined;
+        }
         if (!("response_started" in $$source)) {
             /**
              * @member
@@ -984,10 +1146,10 @@ export class DispatchTrace {
      * @returns {DispatchTrace}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType19;
-        const $$createField8_0 = $$createType11;
-        const $$createField9_0 = $$createType12;
-        const $$createField10_0 = $$createType21;
+        const $$createField5_0 = $$createType21;
+        const $$createField8_0 = $$createType13;
+        const $$createField9_0 = $$createType14;
+        const $$createField10_0 = $$createType23;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("default_source" in $$parsedSource) {
             $$parsedSource["default_source"] = $$createField5_0($$parsedSource["default_source"]);
@@ -1039,6 +1201,13 @@ export class DispatchTraceEvent {
              */
             this["failure_scope"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {Blockage | null | undefined}
+             */
+            this["blockage"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -1049,10 +1218,14 @@ export class DispatchTraceEvent {
      * @returns {DispatchTraceEvent}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType22;
+        const $$createField0_0 = $$createType24;
+        const $$createField4_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("candidate" in $$parsedSource) {
             $$parsedSource["candidate"] = $$createField0_0($$parsedSource["candidate"]);
+        }
+        if ("blockage" in $$parsedSource) {
+            $$parsedSource["blockage"] = $$createField4_0($$parsedSource["blockage"]);
         }
         return new DispatchTraceEvent(/** @type {Partial<DispatchTraceEvent>} */($$parsedSource));
     }
@@ -1259,7 +1432,7 @@ export class IntentRoute {
      * @returns {IntentRoute}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType7;
+        const $$createField2_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField2_0($$parsedSource["targets"]);
@@ -1354,7 +1527,7 @@ export class IntentRule {
      * @returns {IntentRule}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType7;
+        const $$createField6_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField6_0($$parsedSource["targets"]);
@@ -1771,7 +1944,7 @@ export class QuotaView {
      * @returns {QuotaView}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType24;
+        const $$createField0_0 = $$createType26;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("windows" in $$parsedSource) {
             $$parsedSource["windows"] = $$createField0_0($$parsedSource["windows"]);
@@ -2041,11 +2214,11 @@ export class RoutingProfile {
      * @returns {RoutingProfile}
      */
     static createFrom($$source = {}) {
-        const $$createField11_0 = $$createType26;
-        const $$createField12_0 = $$createType28;
-        const $$createField13_0 = $$createType30;
-        const $$createField14_0 = $$createType32;
-        const $$createField15_0 = $$createType34;
+        const $$createField11_0 = $$createType28;
+        const $$createField12_0 = $$createType30;
+        const $$createField13_0 = $$createType32;
+        const $$createField14_0 = $$createType34;
+        const $$createField15_0 = $$createType36;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("members" in $$parsedSource) {
             $$parsedSource["members"] = $$createField11_0($$parsedSource["members"]);
@@ -2167,7 +2340,7 @@ export class RoutingRule {
      * @returns {RoutingRule}
      */
     static createFrom($$source = {}) {
-        const $$createField10_0 = $$createType7;
+        const $$createField10_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("targets" in $$parsedSource) {
             $$parsedSource["targets"] = $$createField10_0($$parsedSource["targets"]);
@@ -2298,38 +2471,40 @@ export class Target {
 }
 
 // Private type creation functions
-const $$createType0 = DispatchCandidate.createFrom;
-const $$createType1 = LoadView.createFrom;
-const $$createType2 = ManualBalance.createFrom;
-const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = HealthState.createFrom;
-const $$createType5 = QuotaView.createFrom;
-const $$createType6 = RouteTarget.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = IntentRoute.createFrom;
+const $$createType0 = Blockage.createFrom;
+const $$createType1 = $Create.Nullable($$createType0);
+const $$createType2 = DispatchCandidate.createFrom;
+const $$createType3 = LoadView.createFrom;
+const $$createType4 = ManualBalance.createFrom;
+const $$createType5 = $Create.Nullable($$createType4);
+const $$createType6 = HealthState.createFrom;
+const $$createType7 = QuotaView.createFrom;
+const $$createType8 = RouteTarget.createFrom;
 const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = RoutingProfile.createFrom;
-const $$createType11 = DispatchDecision.createFrom;
-const $$createType12 = IntentResult.createFrom;
-const $$createType13 = DispatchPlanStage.createFrom;
-const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = CandidateEvaluation.createFrom;
+const $$createType10 = IntentRoute.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = RoutingProfile.createFrom;
+const $$createType13 = DispatchDecision.createFrom;
+const $$createType14 = IntentResult.createFrom;
+const $$createType15 = DispatchPlanStage.createFrom;
 const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = $Create.Array($$createType0);
-const $$createType18 = DispatchRouteSource.createFrom;
-const $$createType19 = $Create.Nullable($$createType18);
-const $$createType20 = DispatchTraceEvent.createFrom;
-const $$createType21 = $Create.Array($$createType20);
-const $$createType22 = Candidate.createFrom;
-const $$createType23 = QuotaSnapshot.createFrom;
-const $$createType24 = $Create.Array($$createType23);
-const $$createType25 = RoutingMember.createFrom;
+const $$createType17 = CandidateEvaluation.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = $Create.Array($$createType2);
+const $$createType20 = DispatchRouteSource.createFrom;
+const $$createType21 = $Create.Nullable($$createType20);
+const $$createType22 = DispatchTraceEvent.createFrom;
+const $$createType23 = $Create.Array($$createType22);
+const $$createType24 = Candidate.createFrom;
+const $$createType25 = QuotaSnapshot.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = RoutingRule.createFrom;
+const $$createType27 = RoutingMember.createFrom;
 const $$createType28 = $Create.Array($$createType27);
-const $$createType29 = IntentRule.createFrom;
+const $$createType29 = RoutingRule.createFrom;
 const $$createType30 = $Create.Array($$createType29);
-const $$createType31 = ClassifierConfig.createFrom;
-const $$createType32 = $Create.Nullable($$createType31);
-const $$createType33 = SearchPolicy.createFrom;
+const $$createType31 = IntentRule.createFrom;
+const $$createType32 = $Create.Array($$createType31);
+const $$createType33 = ClassifierConfig.createFrom;
 const $$createType34 = $Create.Nullable($$createType33);
+const $$createType35 = SearchPolicy.createFrom;
+const $$createType36 = $Create.Nullable($$createType35);

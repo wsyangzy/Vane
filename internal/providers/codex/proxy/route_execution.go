@@ -31,8 +31,10 @@ func (s *codexRouteStage) executionSnapshot() string {
 	}
 	snapshot.Execution = s.execution
 	snapshot.Attempts, snapshot.WaitMs = s.budget.Stats()
+	snapshot.MaxAttempts, snapshot.MaxDurationMS = s.budget.Limits()
+	snapshot.NextRecoveryAt = s.budget.NextRecoveryAt()
 	if s.budget.Stopped() {
-		snapshot.StopReason = "retry_budget_exhausted"
+		snapshot.StopReason = s.budget.Reason()
 	}
 	return snapshot.JSON(s.index)
 }
@@ -52,7 +54,7 @@ func codexRouteFailure(status int, body []byte, err error) routing.Failure {
 		return routing.Failure{Scope: routing.ScopeModel, Reason: code}
 	}
 	if errors.Is(err, routing.ErrBudgetExhausted) {
-		return routing.Failure{Scope: routing.ScopeRequest, Reason: "retry_budget_exhausted", Terminal: true}
+		return routing.Failure{Scope: routing.ScopeRequest, Reason: routing.BudgetStopReason(err), Terminal: true}
 	}
 	if status == 400 || (status == 0 || status == 200) && (kind == "invalid_request_error" || kind == "bad_request") {
 		return routing.Failure{Scope: routing.ScopeRequest, Reason: "invalid_request", Terminal: true}

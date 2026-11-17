@@ -407,7 +407,7 @@ func TestClaudeProfileWaitForRecoverySharesBudgetAndDoesNotSendEarly(t *testing.
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"test","stream":false,"messages":[{"role":"user","content":"hello"}],"max_tokens":16}`)))
 			if exhausted {
-				if sends != 0 || trace.StopReason != "retry_budget_exhausted" {
+				if sends != 0 || trace.StopReason != routing.StopRecoveryOutsideBudget {
 					t.Fatalf("budget not shared: sends=%d trace=%+v", sends, trace)
 				}
 			} else if sends != 1 || !trace.Successful || trace.WaitMS <= 0 {

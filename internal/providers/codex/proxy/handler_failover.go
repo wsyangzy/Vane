@@ -18,14 +18,15 @@ import (
 
 // cycleResult 端点循环结果
 type cycleResult struct {
-	completed           bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
-	routeChanged        bool   // true: 共享活跃渠道已变化，外层应按新渠道重建请求路由
-	lastErr             error  // 最后一次端点失败的错误
-	lastStatus          int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
-	lastSummary         string // 最后一次上游错误响应摘要
-	lastUpstreamStatus  int
-	lastUpstreamHeaders http.Header
-	lastUpstreamBody    []byte
+	completed                 bool   // true: 响应已写给客户端；false: 端点耗尽，外层 loop 决定是否再来一轮
+	routeChanged              bool   // true: 共享活跃渠道已变化，外层应按新渠道重建请求路由
+	lastErr                   error  // 最后一次端点失败的错误
+	lastStatus                int    // 最后一次端点失败的 HTTP 状态码（0 = 网络错误）
+	lastSummary               string // 最后一次上游错误响应摘要
+	lastUpstreamStatus        int
+	lastUpstreamHeaders       http.Header
+	lastUpstreamBody          []byte
+	lastUpstreamInvalidStream bool
 }
 
 // tryEndpointCycle 单轮端点列表遍历（含每个端点的同端点重试）
@@ -103,6 +104,7 @@ func (h *Handler) tryEndpointCycleForStage(
 	var lastUpstreamStatus int
 	var lastUpstreamHeaders http.Header
 	var lastUpstreamBody []byte
+	var lastUpstreamInvalidStream bool
 	if routed && stage.snapshotJSON != "" {
 		h.recordRouteSnapshot(requestID, stage.snapshotJSON)
 	}
@@ -271,6 +273,8 @@ func (h *Handler) tryEndpointCycleForStage(
 			lastUpstreamStatus = status
 			lastUpstreamHeaders = resp.Header.Clone()
 			lastUpstreamBody = append([]byte(nil), errBody...)
+			var streamErr *UpstreamStreamError
+			lastUpstreamInvalidStream = isStreaming && errors.As(fwdErr, &streamErr) && streamErr.InvalidProtocol
 		} else if streamErr, ok := fwdErr.(*UpstreamStreamError); ok {
 			// status 留 0：响应已被流式路径消费掉，这里拿不到上游的状态码。
 			// 链路里显示成空白，而不是编一个从未返回过的 429/401。
@@ -282,7 +286,7 @@ func (h *Handler) tryEndpointCycleForStage(
 		var routeFailure routing.Failure
 		if routed {
 			if errors.Is(fwdErr, routing.ErrBudgetExhausted) {
-				return cycleResult{lastErr: fwdErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
+				return cycleResult{lastErr: fwdErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody, lastUpstreamInvalidStream: lastUpstreamInvalidStream}
 			}
 			routeFailure = codexRequestFailure(r, status, errBody, fwdErr)
 			if stage.execution != nil {
@@ -320,6 +324,11 @@ func (h *Handler) tryEndpointCycleForStage(
 					return cycleResult{completed: true}
 				}
 				h.recordUpstreamFailure(requestID, startTime, "server_error", detail, resp.StatusCode, nil, requestModel)
+				if lastUpstreamInvalidStream {
+					resp.Body.Close()
+					h.writeInvalidStreamFailure(w)
+					return cycleResult{completed: true}
+				}
 				h.passthroughWithBody(w, resp, errBody)
 				return cycleResult{completed: true}
 			}
@@ -398,7 +407,7 @@ func (h *Handler) tryEndpointCycleForStage(
 					h.recordRouteSnapshot(requestID, stage.executionSnapshot())
 				}
 				if errors.Is(waitErr, routing.ErrBudgetExhausted) {
-					return cycleResult{lastErr: waitErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody}
+					return cycleResult{lastErr: waitErr, lastUpstreamStatus: lastUpstreamStatus, lastUpstreamHeaders: lastUpstreamHeaders, lastUpstreamBody: lastUpstreamBody, lastUpstreamInvalidStream: lastUpstreamInvalidStream}
 				}
 				h.recordFailure(requestID, startTime, "client_cancelled", "client_canceled_during_retry_after", nil, requestModel)
 				return cycleResult{completed: true}
@@ -422,6 +431,7 @@ func (h *Handler) tryEndpointCycleForStage(
 				result.lastUpstreamStatus = lastUpstreamStatus
 				result.lastUpstreamHeaders = lastUpstreamHeaders
 				result.lastUpstreamBody = lastUpstreamBody
+				result.lastUpstreamInvalidStream = lastUpstreamInvalidStream
 			}
 			return result
 		}

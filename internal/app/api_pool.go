@@ -11,13 +11,14 @@ import (
 )
 
 type PoolAccountInfo struct {
-	ChannelID   int64  `json:"channel_id"`
-	ChannelName string `json:"channel_name"`
-	GroupID     int64  `json:"group_id"`
-	GroupName   string `json:"group_name"`
-	Enabled     bool   `json:"enabled"`
-	Managed     bool   `json:"managed"`
-	AuthMode    string `json:"auth_mode"`
+	ChannelID      int64   `json:"channel_id"`
+	ChannelName    string  `json:"channel_name"`
+	GroupID        int64   `json:"group_id"`
+	GroupName      string  `json:"group_name"`
+	CostMultiplier float64 `json:"cost_multiplier"`
+	Enabled        bool    `json:"enabled"`
+	Managed        bool    `json:"managed"`
+	AuthMode       string  `json:"auth_mode"`
 }
 type PoolChannelInfo struct {
 	ID   int64  `json:"id"`
@@ -79,6 +80,7 @@ func (a *App) poolAccounts(ctx context.Context, provider string, catalog routing
 				}
 				state.Enabled = record.Enabled
 				info.AuthMode = record.AuthMode
+				info.CostMultiplier = record.CostMultiplier
 				if record.Subscription != nil && record.Subscription.AccountID != "" {
 					state.Managed = true
 					state.Identity = "account/" + record.Subscription.AccountID
@@ -93,6 +95,7 @@ func (a *App) poolAccounts(ctx context.Context, provider string, catalog routing
 				}
 				state.Enabled = record.Enabled
 				info.AuthMode = record.AuthMode
+				info.CostMultiplier = record.CostMultiplier
 				if record.Subscription != nil && record.Subscription.AccountID != "" {
 					state.Managed = true
 					state.Identity = "account/" + record.Subscription.AccountID

@@ -3,6 +3,8 @@ package proxy
 import (
 	"testing"
 	"time"
+
+	"github.com/wsyangzy/Vane/internal/routing"
 )
 
 func TestRetryBudget_InitOnce(t *testing.T) {
@@ -43,8 +45,8 @@ func TestRetryBudget_ExhaustedByAttempts(t *testing.T) {
 	if !exhausted {
 		t.Error("budget should be exhausted after 3 attempts with limit=3")
 	}
-	if reason == "" {
-		t.Error("reason should not be empty")
+	if reason != routing.StopRetryAttemptsExhausted {
+		t.Errorf("wrong attempt stop reason: %s", reason)
 	}
 }
 
@@ -60,7 +62,7 @@ func TestRetryBudget_ExhaustedByDuration(t *testing.T) {
 	if !exhausted {
 		t.Error("budget should be exhausted after duration exceeded")
 	}
-	if reason == "" {
-		t.Error("reason should not be empty")
+	if reason != routing.StopRetryDeadlineExceeded {
+		t.Errorf("wrong deadline stop reason: %s", reason)
 	}
 }

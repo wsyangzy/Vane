@@ -37,6 +37,9 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		return nil, err
 	}
 	sort.Slice(details, func(i, j int) bool {
+		if opts.CompletedSince != nil || opts.CompletedBefore != nil {
+			return completedRequestBefore(details[i], details[j])
+		}
 		if !details[i].StartTime.Equal(details[j].StartTime) {
 			return details[i].StartTime.After(details[j].StartTime)
 		}
@@ -52,6 +55,19 @@ func (ut *UsageTracker) QueryRequestDetails(ctx context.Context, opts *QueryOpti
 		end = start + opts.Limit
 	}
 	return details[start:end], nil
+}
+
+func completedRequestBefore(a, b RequestDetail) bool {
+	if a.EndTime != nil && b.EndTime != nil {
+		// SQLite stores configured local wall time without a zone. Its driver
+		// may scan that value as UTC; comparing instants to hot-pool times would
+		// move a request to another page when archival completes.
+		left, right := a.EndTime.Format("2006-01-02 15:04:05"), b.EndTime.Format("2006-01-02 15:04:05")
+		if left != right {
+			return left < right
+		}
+	}
+	return a.RequestID < b.RequestID
 }
 
 func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *sql.DB, opts *QueryOptions) ([]RequestDetail, error) {
@@ -155,6 +171,7 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		query += " AND start_time <= ?"
 		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 	}
+	query, args = ut.appendCompletionQueryFilters(query, args, opts)
 	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.Channel != "" {
 		query += " AND channel = ?"
@@ -213,7 +230,11 @@ func (ut *UsageTracker) queryRequestDetailsFromSource(ctx context.Context, db *s
 		args = append(args, opts.Provider)
 	}
 
-	query += " ORDER BY start_time DESC, request_id DESC"
+	if opts.CompletedSince != nil || opts.CompletedBefore != nil {
+		query += " ORDER BY substr(end_time, 1, 19) ASC, request_id ASC"
+	} else {
+		query += " ORDER BY start_time DESC, request_id DESC"
+	}
 
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
@@ -311,6 +332,7 @@ func (ut *UsageTracker) countRequestDetailsFromSource(ctx context.Context, db *s
 		query += " AND start_time <= ?"
 		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 	}
+	query, args = ut.appendCompletionQueryFilters(query, args, opts)
 	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.Channel != "" {
 		query += " AND channel = ?"

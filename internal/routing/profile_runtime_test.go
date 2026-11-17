@@ -595,7 +595,7 @@ func TestProfileRuntimeBudgetSpansRuleAndDefaultStagesAndCommitAvoidsDoubleCharg
 	if _, err := r.Reserve(ctx, &plan, plan.EligibleCandidates[2]); !errors.Is(err, ErrBudgetExhausted) {
 		t.Fatalf("cross-stage budget was reset: %v", err)
 	}
-	if trace := plan.Trace(); trace.Attempts != 2 || trace.StopReason != "retry_budget_exhausted" {
+	if trace := plan.Trace(); trace.Attempts != 2 || trace.StopReason != StopRetryAttemptsExhausted {
 		t.Fatalf("wrong trace budget: %+v", trace)
 	}
 }

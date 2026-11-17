@@ -84,6 +84,21 @@ func appendModelQueryFilter(query string, args []any, opts *QueryOptions) (strin
 	return query, args
 }
 
+// Completion notifications use whole-second windows because archived request
+// timestamps are stored at second precision. Keep the hot-pool predicate equal
+// to the SQL predicate while a completed request moves between these sources.
+func (ut *UsageTracker) appendCompletionQueryFilters(query string, args []any, opts *QueryOptions) (string, []any) {
+	if opts.CompletedSince != nil {
+		query += " AND end_time >= ?"
+		args = append(args, ut.formatStartTimeQueryBound(*opts.CompletedSince))
+	}
+	if opts.CompletedBefore != nil {
+		query += " AND end_time < ?"
+		args = append(args, ut.formatStartTimeQueryBound(*opts.CompletedBefore))
+	}
+	return query, args
+}
+
 // requestLogsHasColumn 月度归档库的表结构复制自归档当时的活动库，可能缺后加的列
 func requestLogsHasColumn(ctx context.Context, db *sql.DB, column string) (bool, error) {
 	var count int
@@ -109,6 +124,7 @@ func (ut *UsageTracker) appendRequestQueryFilters(query string, args []any, opts
 		query += " AND start_time <= ?"
 		args = append(args, ut.formatEndTimeQueryBound(*opts.EndDate))
 	}
+	query, args = ut.appendCompletionQueryFilters(query, args, opts)
 	query, args = appendModelQueryFilter(query, args, opts)
 	if opts.Channel != "" {
 		query += " AND channel = ?"

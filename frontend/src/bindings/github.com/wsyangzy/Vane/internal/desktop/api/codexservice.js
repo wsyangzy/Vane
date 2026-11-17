@@ -9,6 +9,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as app$0 from "../../app/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as service$0 from "../../providers/codex/service/models.js";
 
 /**
  * @param {number} id
@@ -154,6 +157,16 @@ export function GetNextAvailableCodexChannel(excludeID) {
 }
 
 /**
+ * @param {service$0.EndpointProbeInput} input
+ * @returns {$CancellablePromise<service$0.EndpointProbeResult>}
+ */
+export function ProbeCodexEndpoint(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.CodexService.ProbeCodexEndpoint", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType8($result);
+    }));
+}
+
+/**
  * @param {number} id
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
@@ -225,3 +238,4 @@ const $$createType4 = app$0.CodexProviderStorageStatus.createFrom;
 const $$createType5 = app$0.CodexProviderInfo.createFrom;
 const $$createType6 = $Create.Array($$createType5);
 const $$createType7 = app$0.CodexChannelCandidateInfo.createFrom;
+const $$createType8 = service$0.EndpointProbeResult.createFrom;

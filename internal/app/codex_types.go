@@ -151,6 +151,7 @@ type CodexEndpointInfo struct {
 	ModelMultipliers                       []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
 	CreatedAt                              string                                  `json:"created_at"`
 	UpdatedAt                              string                                  `json:"updated_at"`
+	PathStrategy                           string                                  `json:"path_strategy"`
 }
 
 type CreateCodexChannelInput struct {
@@ -252,6 +253,7 @@ type CreateCodexEndpointInput struct {
 	CacheReadCostMultiplier  float64                                 `json:"cacheReadCostMultiplier"` // 默认 1.0
 	BillingOutputTokenSource string                                  `json:"billingOutputTokenSource"`
 	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	PathStrategy             string                                  `json:"path_strategy"`
 }
 
 type UpdateCodexEndpointInput struct {
@@ -269,4 +271,5 @@ type UpdateCodexEndpointInput struct {
 	CacheReadCostMultiplier  *float64                                `json:"cacheReadCostMultiplier"`
 	BillingOutputTokenSource *string                                 `json:"billingOutputTokenSource"`
 	ModelMultipliers         []codexstore.CodexModelMultiplierRecord `json:"modelMultipliers"`
+	PathStrategy             *string                                 `json:"path_strategy"`
 }

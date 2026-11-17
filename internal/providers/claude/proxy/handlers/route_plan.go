@@ -87,7 +87,7 @@ func (run *routeRun) advance() bool {
 			}
 			run.ledger.Wait("waiting_for_account_recovery")
 			run.publishSnapshot()
-			if run.budget.Wait(run.poolCtx, time.Until(next)) != nil {
+			if run.budget.WaitRecovery(run.poolCtx, time.Until(next)) != nil {
 				return false
 			}
 			run.profileRuntime.Recover(run.poolCtx, run.profile)
@@ -105,7 +105,7 @@ func (run *routeRun) advance() bool {
 		if next, ok := run.pool.NextRecoveryWith(run.waitStages, run.poolModel, run.recovery); ok {
 			run.ledger.Wait("waiting_for_account_recovery")
 			run.publishSnapshot()
-			if err := run.budget.Wait(run.poolCtx, time.Until(next)); err == nil {
+			if err := run.budget.WaitRecovery(run.poolCtx, time.Until(next)); err == nil {
 				run.index = 0
 				run.ledger.RetryRecovered()
 				run.waitStages = nil
@@ -141,8 +141,10 @@ func (run *routeRun) stageSnapshotJSON() string {
 	run.snapshot.Execution = &run.ledger
 	run.snapshot.Member = stage.member
 	run.snapshot.Attempts, run.snapshot.WaitMs = run.budget.Stats()
+	run.snapshot.MaxAttempts, run.snapshot.MaxDurationMS = run.budget.Limits()
+	run.snapshot.NextRecoveryAt = run.budget.NextRecoveryAt()
 	if run.budget.Stopped() {
-		run.snapshot.StopReason = "retry_budget_exhausted"
+		run.snapshot.StopReason = run.budget.Reason()
 	}
 	return run.snapshot.JSON(stage.index)
 }
@@ -151,10 +153,10 @@ func (run *routeRun) stageSnapshotJSON() string {
 // 有上游响应时由调用方透传最后一次真实响应；一次都没发出请求说明路由配置当前无法服务这条请求，
 // 回 400 而不是 5xx：Claude Code 会按 CLAUDE_CODE_MAX_RETRIES 重试 5xx，把一次调用放大成十几条记录。
 func (run *routeRun) terminalFailure(lastErr error) (string, int) {
+	if run.budget.Stopped() {
+		return run.budget.Reason(), http.StatusGatewayTimeout
+	}
 	if run.profile != nil {
-		if run.budget.Stopped() {
-			return "retry_budget_exhausted", http.StatusGatewayTimeout
-		}
 		if run.profile.Error != "" {
 			return run.profile.Error, http.StatusBadRequest
 		}
@@ -428,10 +430,27 @@ func checkRouteBudget(run *routeRun, lifecycleManager RequestLifecycleManager) (
 	}
 	exhausted, reason := lifecycleManager.CheckRetryBudget()
 	if exhausted {
-		run.budget.Stop()
+		run.budget.Stop(reason)
 		run.publishSnapshot()
 	}
 	return exhausted, reason
+}
+
+func retryBudgetStopReason(run *routeRun, lifecycle RequestLifecycleManager) string {
+	if run != nil {
+		if reason := run.budget.Reason(); reason != "" {
+			return reason
+		}
+		if err := run.budget.Check(); err != nil {
+			return routing.BudgetStopReason(err)
+		}
+	}
+	if lifecycle != nil {
+		if exhausted, reason := lifecycle.CheckRetryBudget(); exhausted && routing.IsBudgetStopReason(reason) {
+			return reason
+		}
+	}
+	return routing.ErrBudgetExhausted.Error()
 }
 
 func (run *routeRun) preferPool(f *Forwarder, body []byte) {

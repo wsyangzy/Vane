@@ -6,18 +6,20 @@ import (
 
 // QueryOptions represents options for querying usage data
 type QueryOptions struct {
-	StartDate    *time.Time
-	EndDate      *time.Time
-	ModelName    string
-	ModelNames   []string // Matches any listed model; takes precedence over ModelName.
-	Channel      string
-	EndpointName string
-	GroupName    string
-	Status       string
-	Provider     string // 提供商过滤: claude/codex，空字符串表示不过滤
-	Environment  string // 运行环境过滤: dev/release；空字符串由 UsageTracker 自动填充
-	Limit        int
-	Offset       int
+	StartDate       *time.Time
+	EndDate         *time.Time
+	CompletedSince  *time.Time // Inclusive completion-time bound, independent of request start time.
+	CompletedBefore *time.Time // Exclusive completion-time bound.
+	ModelName       string
+	ModelNames      []string // Matches any listed model; takes precedence over ModelName.
+	Channel         string
+	EndpointName    string
+	GroupName       string
+	Status          string
+	Provider        string // 提供商过滤: claude/codex，空字符串表示不过滤
+	Environment     string // 运行环境过滤: dev/release；空字符串由 UsageTracker 自动填充
+	Limit           int
+	Offset          int
 }
 
 // UsageSummary represents a summary of usage data

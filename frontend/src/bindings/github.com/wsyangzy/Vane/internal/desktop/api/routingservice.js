@@ -69,12 +69,22 @@ export function GetCodexSearchAPIKey(profileID, vendor) {
 }
 
 /**
+ * @param {app$0.DispatchRecoveryInput} input
+ * @returns {$CancellablePromise<app$0.DispatchCandidateRecovery[]>}
+ */
+export function GetDispatchRecovery(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.GetDispatchRecovery", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
  * @param {string} provider
  * @returns {$CancellablePromise<app$0.RouteTargetOptions>}
  */
 export function GetRouteTargetOptions(provider) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.GetRouteTargetOptions", provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType2($result);
+        return $$createType4($result);
     }));
 }
 
@@ -85,7 +95,7 @@ export function GetRouteTargetOptions(provider) {
  */
 export function GetRoutingProfile(provider, id) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.GetRoutingProfile", provider, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType6($result);
     }));
 }
 
@@ -96,7 +106,7 @@ export function GetRoutingProfile(provider, id) {
  */
 export function ListDispatchTraces(provider, limit) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListDispatchTraces", provider, limit).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType8($result);
     }));
 }
 
@@ -108,7 +118,7 @@ export function ListDispatchTraces(provider, limit) {
  */
 export function ListManualBalanceEntries(provider, channelID, groupID) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListManualBalanceEntries", provider, channelID, groupID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType10($result);
     }));
 }
 
@@ -118,7 +128,7 @@ export function ListManualBalanceEntries(provider, channelID, groupID) {
  */
 export function ListManualBalances(provider) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListManualBalances", provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType10($result);
+        return $$createType12($result);
     }));
 }
 
@@ -129,7 +139,7 @@ export function ListManualBalances(provider) {
  */
 export function ListModelRoutes(provider, sourceChannelID) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListModelRoutes", provider, sourceChannelID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType14($result);
     }));
 }
 
@@ -139,7 +149,7 @@ export function ListModelRoutes(provider, sourceChannelID) {
  */
 export function ListRoutingProfiles(provider) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListRoutingProfiles", provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType15($result);
     }));
 }
 
@@ -149,7 +159,7 @@ export function ListRoutingProfiles(provider) {
  */
 export function ListRoutingQuota(provider) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.ListRoutingQuota", provider).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType17($result);
     }));
 }
 
@@ -159,7 +169,7 @@ export function ListRoutingQuota(provider) {
  */
 export function PreviewDispatch(input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.PreviewDispatch", input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType18($result);
     }));
 }
 
@@ -172,7 +182,7 @@ export function PreviewDispatch(input) {
  */
 export function PreviewRoute(provider, sourceChannelID, model, streaming) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.PreviewRoute", provider, sourceChannelID, model, streaming).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType19($result);
     }));
 }
 
@@ -185,7 +195,17 @@ export function PreviewRoute(provider, sourceChannelID, model, streaming) {
  */
 export function RefreshRoutingQuota(provider, channelID, groupID, model) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.RefreshRoutingQuota", provider, channelID, groupID, model).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType17($result);
+    }));
+}
+
+/**
+ * @param {app$0.DispatchRecoveryInput} input
+ * @returns {$CancellablePromise<app$0.DispatchCandidateRecovery[]>}
+ */
+export function RetryDispatchCandidate(input) {
+    return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.RetryDispatchCandidate", input).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
     }));
 }
 
@@ -195,7 +215,7 @@ export function RefreshRoutingQuota(provider, channelID, groupID, model) {
  */
 export function SaveCodexRoutingProfile(input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveCodexRoutingProfile", input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType5($result);
     }));
 }
 
@@ -205,7 +225,7 @@ export function SaveCodexRoutingProfile(input) {
  */
 export function SaveModelRoute(input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveModelRoute", input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType20($result);
     }));
 }
 
@@ -215,7 +235,7 @@ export function SaveModelRoute(input) {
  */
 export function SaveRoutingProfile(profile) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SaveRoutingProfile", profile).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType5($result);
     }));
 }
 
@@ -227,7 +247,7 @@ export function SaveRoutingProfile(profile) {
  */
 export function SetChannelNonStreamRoute(provider, channelID, input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.SetChannelNonStreamRoute", provider, channelID, input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType20($result);
     }));
 }
 
@@ -265,28 +285,30 @@ export function SetModelRouteEnabled(id, enabled) {
  */
 export function UpdateManualBalance(input) {
     return $Call.ByName("github.com/wsyangzy/Vane/internal/desktop/api.RoutingService.UpdateManualBalance", input).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType21($result);
     }));
 }
 
 // Private type creation functions
 const $$createType0 = app$0.RoutingConfigurationStatus.createFrom;
 const $$createType1 = routing$0.IntentResult.createFrom;
-const $$createType2 = app$0.RouteTargetOptions.createFrom;
-const $$createType3 = routing$0.RoutingProfile.createFrom;
-const $$createType4 = $Create.Nullable($$createType3);
-const $$createType5 = routing$0.DispatchTrace.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = routing$0.BalanceEntry.createFrom;
+const $$createType2 = app$0.DispatchCandidateRecovery.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = app$0.RouteTargetOptions.createFrom;
+const $$createType5 = routing$0.RoutingProfile.createFrom;
+const $$createType6 = $Create.Nullable($$createType5);
+const $$createType7 = routing$0.DispatchTrace.createFrom;
 const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = routing$0.ManualBalance.createFrom;
+const $$createType9 = routing$0.BalanceEntry.createFrom;
 const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = app$0.ModelRouteInfo.createFrom;
+const $$createType11 = routing$0.ManualBalance.createFrom;
 const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = app$0.RoutingProfileState.createFrom;
-const $$createType14 = routing$0.QuotaSnapshot.createFrom;
-const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = routing$0.DispatchPlan.createFrom;
-const $$createType17 = app$0.RoutePreviewResult.createFrom;
-const $$createType18 = app$0.RouteSaveResult.createFrom;
-const $$createType19 = $Create.Nullable($$createType9);
+const $$createType13 = app$0.ModelRouteInfo.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = app$0.RoutingProfileState.createFrom;
+const $$createType16 = routing$0.QuotaSnapshot.createFrom;
+const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = routing$0.DispatchPlan.createFrom;
+const $$createType19 = app$0.RoutePreviewResult.createFrom;
+const $$createType20 = app$0.RouteSaveResult.createFrom;
+const $$createType21 = $Create.Nullable($$createType11);

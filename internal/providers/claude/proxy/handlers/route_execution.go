@@ -97,6 +97,9 @@ func (run *routeRun) watchSubscription(ctx context.Context, f *Forwarder) {
 }
 
 func claudeRouteFailure(err error) routing.Failure {
+	if errors.Is(err, routing.ErrBudgetExhausted) {
+		return routing.Failure{Scope: routing.ScopeRequest, Reason: routing.BudgetStopReason(err), Terminal: true}
+	}
 	if subscription.IsLocalError(err) {
 		return routing.Failure{Scope: routing.ScopeCandidate, Reason: err.Error()}
 	}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -28,18 +29,17 @@ func buildRequestQueryOptions(params RequestQueryParams, timezone string, limit,
 		}
 	}
 
-	if startTime.IsZero() {
+	completionQuery := params.CompletedSince != "" || params.CompletedBefore != ""
+	if startTime.IsZero() && !completionQuery {
 		now := time.Now().In(loc)
 		startTime = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	}
-	if endTime.IsZero() {
+	if endTime.IsZero() && !completionQuery {
 		now := time.Now().In(loc)
 		endTime = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
 	}
 
-	return &tracking.QueryOptions{
-		StartDate:    &startTime,
-		EndDate:      &endTime,
+	opts := &tracking.QueryOptions{
 		ModelName:    params.Model,
 		ModelNames:   params.Models,
 		Channel:      params.Channel,
@@ -50,9 +50,37 @@ func buildRequestQueryOptions(params RequestQueryParams, timezone string, limit,
 		Limit:        limit,
 		Offset:       offset,
 	}
+	if !startTime.IsZero() {
+		opts.StartDate = &startTime
+	}
+	if !endTime.IsZero() {
+		opts.EndDate = &endTime
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, params.CompletedSince); err == nil {
+		opts.CompletedSince = &parsed
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, params.CompletedBefore); err == nil {
+		opts.CompletedBefore = &parsed
+	}
+	return opts
 }
 
 func (a *App) GetRequests(params RequestQueryParams) (RequestListResult, error) {
+	for name, value := range map[string]string{"completed_since": params.CompletedSince, "completed_before": params.CompletedBefore} {
+		if value != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil || parsed.Nanosecond() != 0 {
+				return RequestListResult{}, fmt.Errorf("%s must be an RFC3339 timestamp at whole-second precision", name)
+			}
+		}
+	}
+	if params.CompletedSince != "" && params.CompletedBefore != "" {
+		since, _ := time.Parse(time.RFC3339Nano, params.CompletedSince)
+		before, _ := time.Parse(time.RFC3339Nano, params.CompletedBefore)
+		if !since.Before(before) {
+			return RequestListResult{}, fmt.Errorf("completed_since must precede completed_before")
+		}
+	}
 	a.mu.RLock()
 	usageTracker := a.usageTracker
 	cfg := a.config

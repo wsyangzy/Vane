@@ -26,6 +26,7 @@ type CodexEndpointRecord struct {
 	ApiKey            string  `json:"api_key,omitempty"`
 	Name              string  `json:"name"`
 	BaseURL           string  `json:"base_url"`
+	PathStrategy      string  `json:"path_strategy"`
 	IsActive          bool    `json:"is_active"`
 	FailoverEnabled   bool    `json:"failover_enabled"`
 	SkipHealthCheck   bool    `json:"skip_health_check"`
@@ -58,7 +59,7 @@ type CodexEndpointStore interface {
 	GetMaxPriorityByChannel(ctx context.Context, channelID int64) (int, error)
 	GetActiveByChannelID(ctx context.Context, channelID int64) (*CodexEndpointRecord, error)
 	ListByChannelID(ctx context.Context, channelID int64) ([]*CodexEndpointRecord, error)
-	Update(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []CodexModelMultiplierRecord) error
+	Update(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []CodexModelMultiplierRecord, pathStrategy ...string) error
 	DeleteByID(ctx context.Context, id int64) error
 	SetActive(ctx context.Context, id int64) error
 
@@ -99,7 +100,7 @@ func (s *SQLiteCodexEndpointStore) getQuerier() interface {
 	return s.db
 }
 
-const codexEndpointColumns = `id, channel_id, COALESCE(credential_group_id, 0), COALESCE(api_key, ''), name, base_url, COALESCE(is_active, 0), COALESCE(failover_enabled, 1), COALESCE(skip_health_check, 0), COALESCE(priority, 0), COALESCE(timeout_seconds, 0), COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0), COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(billing_output_token_source, 'output_tokens'), COALESCE(model_multipliers, '[]'), COALESCE(created_at, ''), COALESCE(updated_at, '')`
+const codexEndpointColumns = `id, channel_id, COALESCE(credential_group_id, 0), COALESCE(api_key, ''), name, base_url, COALESCE(is_active, 0), COALESCE(failover_enabled, 1), COALESCE(skip_health_check, 0), COALESCE(priority, 0), COALESCE(timeout_seconds, 0), COALESCE(cost_multiplier, 1.0), COALESCE(input_cost_multiplier, 1.0), COALESCE(output_cost_multiplier, 1.0), COALESCE(cache_read_cost_multiplier, 1.0), COALESCE(billing_output_token_source, 'output_tokens'), COALESCE(model_multipliers, '[]'), COALESCE(created_at, ''), COALESCE(updated_at, ''), COALESCE(path_strategy, 'legacy')`
 
 func (s *SQLiteCodexEndpointStore) Create(ctx context.Context, record *CodexEndpointRecord) (*CodexEndpointRecord, error) {
 	s.mu.Lock()
@@ -118,8 +119,8 @@ func (s *SQLiteCodexEndpointStore) Create(ctx context.Context, record *CodexEndp
 		return nil, fmt.Errorf("base_url 不能为空")
 	}
 
-	query := `INSERT INTO codex_endpoints (channel_id, credential_group_id, api_key, name, base_url, is_active, failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier, billing_output_token_source, model_multipliers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	result, err := s.getQuerier().ExecContext(ctx, query, record.ChannelID, nullInt64IfZero(record.CredentialGroupID), record.ApiKey, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), boolToInt(record.SkipHealthCheck), record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, defaultBillingOutputTokenSource(record.BillingOutputTokenSource), encodeCodexModelMultipliers(record.ModelMultipliers))
+	query := `INSERT INTO codex_endpoints (channel_id, credential_group_id, api_key, name, base_url, is_active, failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier, billing_output_token_source, model_multipliers, path_strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	result, err := s.getQuerier().ExecContext(ctx, query, record.ChannelID, nullInt64IfZero(record.CredentialGroupID), record.ApiKey, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), boolToInt(record.SkipHealthCheck), record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, defaultBillingOutputTokenSource(record.BillingOutputTokenSource), encodeCodexModelMultipliers(record.ModelMultipliers), defaultPathStrategy(record.PathStrategy))
 	if err != nil {
 		return nil, fmt.Errorf("创建 Codex 端点失败: %w", err)
 	}
@@ -253,7 +254,7 @@ func (s *SQLiteCodexEndpointStore) ListByChannelID(ctx context.Context, channelI
 	return result, nil
 }
 
-func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []CodexModelMultiplierRecord) error {
+func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, baseURL string, credentialGroupID int64, apiKey string, failoverEnabled bool, skipHealthCheck bool, priority, timeoutSeconds int, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier float64, billingOutputTokenSource string, modelMultipliers []CodexModelMultiplierRecord, pathStrategy ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -265,7 +266,7 @@ func (s *SQLiteCodexEndpointStore) Update(ctx context.Context, id int64, name, b
 	}
 
 	result, err := execWithSQLiteBusyRetry(ctx, func() (sql.Result, error) {
-		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET name = ?, base_url = ?, credential_group_id = ?, api_key = ?, failover_enabled = ?, skip_health_check = ?, priority = ?, timeout_seconds = ?, cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?, cache_read_cost_multiplier = ?, billing_output_token_source = ?, model_multipliers = ? WHERE id = ?`, name, baseURL, nullInt64IfZero(credentialGroupID), apiKey, boolToInt(failoverEnabled), boolToInt(skipHealthCheck), priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, defaultBillingOutputTokenSource(billingOutputTokenSource), encodeCodexModelMultipliers(modelMultipliers), id)
+		return s.getQuerier().ExecContext(ctx, `UPDATE codex_endpoints SET name = ?, base_url = ?, credential_group_id = ?, api_key = ?, failover_enabled = ?, skip_health_check = ?, priority = ?, timeout_seconds = ?, cost_multiplier = ?, input_cost_multiplier = ?, output_cost_multiplier = ?, cache_read_cost_multiplier = ?, billing_output_token_source = ?, model_multipliers = ?, path_strategy = COALESCE(?, path_strategy) WHERE id = ?`, name, baseURL, nullInt64IfZero(credentialGroupID), apiKey, boolToInt(failoverEnabled), boolToInt(skipHealthCheck), priority, timeoutSeconds, costMultiplier, inputCostMultiplier, outputCostMultiplier, cacheReadCostMultiplier, defaultBillingOutputTokenSource(billingOutputTokenSource), encodeCodexModelMultipliers(modelMultipliers), optionalPathStrategy(pathStrategy), id)
 	})
 	if err != nil {
 		return fmt.Errorf("更新 Codex 端点失败: %w", err)
@@ -309,7 +310,7 @@ func (s *SQLiteCodexEndpointStore) Restore(ctx context.Context, record *CodexEnd
 	if !record.UpdatedAt.IsZero() {
 		updatedAt = record.UpdatedAt.Format(time.RFC3339Nano)
 	}
-	_, err := s.getQuerier().ExecContext(ctx, `INSERT INTO codex_endpoints (id, channel_id, credential_group_id, api_key, name, base_url, is_active, failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier, billing_output_token_source, model_multipliers, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.ChannelID, nullInt64IfZero(record.CredentialGroupID), record.ApiKey, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), boolToInt(record.SkipHealthCheck), record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, defaultBillingOutputTokenSource(record.BillingOutputTokenSource), encodeCodexModelMultipliers(record.ModelMultipliers), createdAt, updatedAt)
+	_, err := s.getQuerier().ExecContext(ctx, `INSERT INTO codex_endpoints (id, channel_id, credential_group_id, api_key, name, base_url, is_active, failover_enabled, skip_health_check, priority, timeout_seconds, cost_multiplier, input_cost_multiplier, output_cost_multiplier, cache_read_cost_multiplier, billing_output_token_source, model_multipliers, created_at, updated_at, path_strategy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, record.ID, record.ChannelID, nullInt64IfZero(record.CredentialGroupID), record.ApiKey, record.Name, record.BaseURL, boolToInt(record.IsActive), boolToInt(record.FailoverEnabled), boolToInt(record.SkipHealthCheck), record.Priority, record.TimeoutSeconds, record.CostMultiplier, record.InputCostMultiplier, record.OutputCostMultiplier, record.CacheReadCostMultiplier, defaultBillingOutputTokenSource(record.BillingOutputTokenSource), encodeCodexModelMultipliers(record.ModelMultipliers), createdAt, updatedAt, defaultPathStrategy(record.PathStrategy))
 	if err != nil {
 		return fmt.Errorf("恢复已删除 Codex 端点失败: %w", err)
 	}
@@ -430,6 +431,7 @@ func scanCodexEndpointRow(scanner interface {
 		&modelMultipliersRaw,
 		&createdAt,
 		&updatedAt,
+		&record.PathStrategy,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -497,4 +499,17 @@ func decodeCodexModelMultipliers(raw string) []CodexModelMultiplierRecord {
 		return nil
 	}
 	return rules
+}
+
+func defaultPathStrategy(value string) string {
+	if value == "" {
+		return "legacy"
+	}
+	return value
+}
+func optionalPathStrategy(values []string) any {
+	if len(values) == 0 {
+		return nil
+	}
+	return defaultPathStrategy(values[0])
 }

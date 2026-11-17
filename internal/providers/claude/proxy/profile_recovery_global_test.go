@@ -55,9 +55,12 @@ func TestClaudeGlobalRecoveryPolicyOverridesStoredProfile(t *testing.T) {
 						t.Fatalf("global default did not recover: sends=%d trace=%+v body=%s", sends, trace, rec.Body.String())
 					}
 				} else {
-					wantReason := map[string]string{"disabled": "route_unavailable", "budget": "retry_budget_exhausted"}[scenario]
+					wantReason := map[string]string{"disabled": "route_unavailable", "budget": routing.StopRecoveryOutsideBudget}[scenario]
 					if sends != 0 || trace.StopReason != wantReason || scenario == "disabled" && trace.WaitMS != 0 {
 						t.Fatalf("recovery boundary failed: sends=%d trace=%+v body=%s", sends, trace, rec.Body.String())
+					}
+					if scenario == "budget" && (trace.Attempts != 0 || trace.WaitMS != 0 || trace.NextRecoveryAt == nil || trace.MaxDurationMS != 5) {
+						t.Fatalf("recovery stop lost scheduling evidence: %+v", trace)
 					}
 				}
 			})

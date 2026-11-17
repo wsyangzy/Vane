@@ -94,6 +94,9 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 	_, ruleDefaults := a.settingsService.RoutingPolicy(ctx)
 	cfg.RuleDefaults = &ruleDefaults
 	cfg.OnSettlement = func(settlement routing.AttemptSettlement) { a.settleManualBalance(s, settlement) }
+	cfg.DescribeBlockage = func(c routing.DispatchCandidate, reason string) *routing.Blockage {
+		return a.dispatchBlockage(pool, c, reason)
+	}
 	cfg.CheckAdmission = func(c routing.DispatchCandidate) string {
 		b, err := currentManualBalance(s, c)
 		if err != nil {
@@ -202,26 +205,7 @@ func (a *App) refreshRoutingRuntime(ctx context.Context, provider string, pool *
 // Check during planning and again at send time so skipped resources retain the
 // exact reason even when a request falls through to another channel.
 func (a *App) dispatchDailyCostAdmission(c routing.DispatchCandidate) string {
-	var channel, group string
-	var limit float64
-	if c.Provider == "codex" && a.codexEndpointMgr != nil {
-		for _, ep := range a.codexEndpointMgr.PoolEndpoints(c.ChannelID, c.GroupID) {
-			if strconv.FormatInt(ep.ID, 10) == c.EndpointID {
-				if ch := a.codexEndpointMgr.ChannelByID(c.ChannelID); ch != nil {
-					channel = ch.Name
-				}
-				group, limit = ep.CredentialGroupName, ep.DailyCostLimitUSD
-				break
-			}
-		}
-	} else if c.Provider == "claude" && a.endpointManager != nil {
-		for _, ep := range a.endpointManager.GetAllEndpoints() {
-			if ep.Config.CredentialGroupID == c.GroupID && claudeendpoint.EndpointKeyForConfig(ep.Config) == c.EndpointID {
-				channel, group, limit = claudeendpoint.ChannelKey(ep), ep.Config.CredentialGroupName, ep.Config.DailyCostLimitUSD
-				break
-			}
-		}
-	}
+	channel, group, _, limit := a.dispatchResource(c)
 	if limit <= 0 {
 		return ""
 	}
@@ -340,6 +324,11 @@ func dispatchCandidateHealth(pool *routing.PoolRuntime, c routing.DispatchCandid
 		if state.CoolingDown && !cooldown.Repair && cooldown.Until.After(state.Until) {
 			state.Until = cooldown.Until
 		}
+	}
+	if state.Reason == "account_probe_in_progress" {
+		// An in-flight half-open probe stays blocked even after its original
+		// cooldown deadline. Only the lease owner can finish that verification.
+		state.Until = time.Time{}
 	}
 	return state
 }

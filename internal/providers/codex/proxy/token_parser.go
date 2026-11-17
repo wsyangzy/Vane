@@ -35,9 +35,10 @@ type TokenResult struct {
 // 凭 message 里的关键字反推出 429/401/402 写进转移链路，
 // 与提供商真正返回过的状态码在追踪里无法区分。重试判断改用下面的 type/code 文本。
 type UpstreamStreamError struct {
-	Type    string
-	Code    string
-	Message string
+	Type            string
+	Code            string
+	Message         string
+	InvalidProtocol bool // The response was rejected before output, rather than a valid upstream SSE error.
 }
 
 func (e *UpstreamStreamError) Error() string {
@@ -404,32 +405,11 @@ func (p *TokenParser) ParseStreamingErrorLine(line []byte) *UpstreamStreamError 
 	if len(payload) == 0 || bytes.Equal(payload, sseDoneMarker) {
 		return nil
 	}
-	if !bytes.Contains(payload, []byte(`"error"`)) &&
-		!bytes.Contains(payload, []byte(`"response.failed"`)) {
-		return nil
+	event := parseCodexSSEEvent("", payload)
+	if event.err != nil && event.err.Type != "invalid_stream_response" {
+		return event.err
 	}
-
-	var envelope openAIStreamErrorEnvelope
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return nil
-	}
-
-	detail := parseStreamErrorDetail(envelope.Error)
-	if detail == nil && envelope.Response != nil {
-		detail = parseStreamErrorDetail(envelope.Response.Error)
-	}
-	if detail == nil && !strings.Contains(strings.ToLower(envelope.Type), "failed") {
-		return nil
-	}
-	if detail == nil {
-		detail = &openAIStreamErrorDetail{Message: "upstream stream failed"}
-	}
-
-	return &UpstreamStreamError{
-		Type:    firstNonEmpty(detail.Type, envelope.Type),
-		Code:    detail.Code,
-		Message: string(payload),
-	}
+	return nil
 }
 
 func firstNonEmpty(values ...string) string {

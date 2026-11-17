@@ -5,6 +5,7 @@
 export {
     AffinityMode,
     BalanceEntry,
+    Blockage,
     Candidate,
     CandidateEvaluation,
     CandidateMode,

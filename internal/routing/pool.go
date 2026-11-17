@@ -433,6 +433,43 @@ func (r *PoolRuntime) ClearRepair(identity string) error {
 	}
 	return r.saveLocked()
 }
+
+// RequestRetry opens matching health gates for an explicit user retry. It does
+// not report success, reset backoff, change participation or touch quota/balance.
+// Existing half-open leases retain ownership and cannot be interrupted.
+func (r *PoolRuntime) RequestRetry(channel, group int64, endpoint, model string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	account, exists := r.account(channel, group)
+	if !exists {
+		return errors.New("account_missing")
+	}
+	identity := account.Identity
+	if identity == "" {
+		identity = r.identity(channel, group)
+	}
+	previous := map[cooldownKey]Cooldown{}
+	for key, state := range r.cooldowns {
+		if key.identity != identity || key.endpoint != "" && key.endpoint != endpoint || key.model != "" && key.model != model {
+			continue
+		}
+		if state.Probing {
+			return errors.New("account_probe_in_progress")
+		}
+		previous[key] = state
+	}
+	for key, state := range previous {
+		state.Repair, state.Until = false, r.now()
+		r.cooldowns[key] = state
+	}
+	if err := r.saveLocked(); err != nil {
+		for key, state := range previous {
+			r.cooldowns[key] = state
+		}
+		return err
+	}
+	return nil
+}
 func (r *PoolRuntime) cooldownsLocked() []Cooldown {
 	out := make([]Cooldown, 0, len(r.cooldowns))
 	for _, c := range r.cooldowns {
